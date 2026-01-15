@@ -1,0 +1,66 @@
+# P03 Module Contract: Causal Inference
+# Phase: R4 - Knowledge Graph Construction
+# Dossier: §D.3.1 stage_42_causal_inference
+
+module_id: consolidation.causal_inference
+version: v1
+
+input_event_types:
+  - p03.relationships.built.v1
+
+output_event_types:
+  - p03.causality.inferred.v1
+
+latency_budget_ms: 200
+
+side_effects:
+  - read:st_kg_edges
+  - read:st_hipp_events  # Temporal sequences
+
+idempotent: true
+
+fabric_capabilities:
+  - infer_causality
+
+failure_modes:
+  - code: INSUFFICIENT_DATA
+    policy: skip
+    description: Need min_observations to infer causality
+  - code: GRANGER_TEST_FAILED
+    policy: skip
+  - code: SPURIOUS_CORRELATION
+    policy: flag_uncertain
+
+description: |
+  Causal Inference Module (R4 Phase)
+
+  Detects temporal causal relationships using Granger causality:
+  - Tests if event sequence X predicts event sequence Y
+  - Adds CAUSES edges to knowledge graph
+
+  Granger Causality Test:
+  - Null hypothesis: X does not Granger-cause Y
+  - Reject if p-value < significance_threshold
+  - Uses VAR (Vector Autoregression) model
+
+  Configuration:
+  - max_lag: 3 (time periods to consider)
+  - significance_threshold: 0.05 (p-value cutoff)
+  - min_observations: 10 (minimum data points)
+  - edge_type: CAUSES
+
+  Causal Edge Properties:
+  - relation_type: CAUSES
+  - lag: Time lag of causation
+  - granger_f_stat: Test statistic
+  - p_value: Statistical significance
+  - confidence: 1 - p_value
+
+  Safeguards:
+  - Bonferroni correction for multiple comparisons
+  - Spurious correlation detection
+  - Confounding variable check (when possible)
+
+  Output:
+  - envelope.causal_edges: Array of CAUSES edges
+  - envelope.causal_stats: {tested, significant, spurious_flagged}

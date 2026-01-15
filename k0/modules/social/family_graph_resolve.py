@@ -2,7 +2,9 @@
 M07: social.family_graph_resolve - Family Graph Resolver (Social Context Attribution)
 
 Resolves social relationships and family context for episodic memories:
-- Queries st_relationships for family graph (5 relationship types)
+- Queries st_kg_edges for family graph (ADR-K022: PostgreSQL-only, no Neo4j)
+- Supports 9 relationship types: SPOUSE_OF, PARENT_OF, CHILD_OF, SIBLING_OF,
+  CARETAKER_OF, GRANDPARENT_OF, GRANDCHILD_OF, FRIEND_OF, COLLEAGUE_OF
 - Infers relationships from co-occurrence patterns when DB lookup fails (Issue 4.1.2)
 - Computes participant roles relative to actor
 - Derives social context using Dunbar layers (Issue 4.1.3)
@@ -10,7 +12,7 @@ Resolves social relationships and family context for episodic memories:
 
 Performance target: <=8ms P95 (cached lookups)
 Contract: k0/contracts/modules/social.family_graph_resolve.v1.yaml
-ADR: docs/architecture/decisions-K0/modules/k008.1-family-graph-resolver.md
+ADR: docs/architecture/decisions-K0/k022-remove-neo4j-postgresql-graph.md
 
 Usage:
     result = await run(envelope)
@@ -74,6 +76,10 @@ _cache_stats = {
         "CHILD_OF": 0,
         "CARETAKER_OF": 0,
         "SIBLING_OF": 0,
+        "GRANDPARENT_OF": 0,
+        "GRANDCHILD_OF": 0,
+        "FRIEND_OF": 0,
+        "COLLEAGUE_OF": 0,
     },
 }
 
@@ -222,6 +228,14 @@ def _map_participant_roles(
             roles[participant_id] = "CAREGIVER"
         elif rel_type == "SIBLING_OF":
             roles[participant_id] = "SIBLING"
+        elif rel_type == "GRANDPARENT_OF":
+            roles[participant_id] = "GRANDCHILD"
+        elif rel_type == "GRANDCHILD_OF":
+            roles[participant_id] = "GRANDPARENT"
+        elif rel_type == "FRIEND_OF":
+            roles[participant_id] = "FRIEND"
+        elif rel_type == "COLLEAGUE_OF":
+            roles[participant_id] = "COLLEAGUE"
         else:
             # Issue 4.1.2: Try name pattern inference as fallback
             inferred = _infer_from_name_pattern(actor_id, participant_id)

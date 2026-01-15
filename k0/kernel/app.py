@@ -43,7 +43,7 @@ from ..obs import (
     update_log_context,
 )
 from ..outbox import DriverWorkerPool, RetryScheduler
-from ..ports import command, drivers, observe, query, sse
+from ..ports import admin, command, drivers, observe, query, sse
 from ..qos import QoSMetrics
 from ..receipts import ReceiptIssuer, ReceiptSigner
 from ..storage import (
@@ -331,18 +331,44 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         except Exception:  # pragma: no cover - defensive logging guard
             logger.exception("Failed to trigger driver worker pool")
 
-    # Sink 3: SSE fan-out (placeholder for future SSE streaming implementation)
-    # Note: SSE fan-out requires SSE server state management which is not yet
-    # fully implemented. This sink will be completed when SSE streaming is ready.
+    # Sink 3: SSE fan-out - broadcasts bus events to SSE subscribers
+    # Note: SSE server is initialized during lifespan startup, so we need to
+    # lazily access it via app.state.sse_server
     async def sse_fan_out_sink(message: BusMessage) -> None:
-        """Fan out WAL events to SSE subscribers."""
+        """Fan out WAL events to SSE subscribers via SSE server broadcast."""
         try:
-            # TODO: Implement SSE fan-out when SSE streaming is ready
-            # This will involve:
-            # 1. Query SSE subscribers for this topic/tenant/space
-            # 2. Send event to matching subscriptions
-            # 3. Track delivery and backpressure
-            pass
+            # Lazily get SSE server from app state (initialized in lifespan)
+            sse_server = getattr(app.state, "sse_server", None)
+            if sse_server is None:
+                return  # SSE server not available yet or disabled
+
+            # Only broadcast pipeline events (not internal system events)
+            if not message.topic or message.topic.startswith("internal."):
+                return
+
+            # Import BroadcastEvent here to avoid circular import
+            # Parse payload
+            import json
+
+            from ..sse.server import BroadcastEvent
+
+            try:
+                payload = json.loads(message.payload.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                payload = {"raw": message.payload.decode("utf-8", errors="replace")}
+
+            # Create broadcast event
+            event = BroadcastEvent(
+                topic=message.topic,
+                tenant_id=message.metadata.get("tenant_id", "default"),
+                space_id=message.space_id or "default",
+                op_kind=message.topic.upper().replace(".", "_"),
+                payload=payload,
+            )
+
+            # Broadcast to subscribers
+            await sse_server.broadcast(event)
+
         except Exception:  # pragma: no cover - defensive logging guard
             logger.exception("Failed to fan out to SSE subscribers")
 
@@ -383,6 +409,16 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.include_router(sse.router)
     app.include_router(observe.router)
     app.include_router(drivers.router)
+
+    # Admin router - only in non-production mode
+    # Security: Admin endpoints expose internal scheduler state and manual triggers
+    # These should NEVER be accessible in production deployments
+    if settings.environment.lower() != "production":
+        app.include_router(admin.router)
+        logger.info(
+            "Admin router enabled (non-production mode)",
+            extra={"environment": settings.environment},
+        )
 
     # PostgreSQL settings for async pool initialization (done in lifespan)
     postgres_settings = PostgresSettings()
@@ -670,6 +706,36 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         feature_flags = await _init_feature_flags()
         app.state.feature_flags = feature_flags
 
+        # Phase 0.5: Initialize SSE Server for real-time event streaming
+        logger.info("Initializing SSE Server...")
+        try:
+            from ..drivers.sse_outbox_driver import set_sse_server
+            from ..sse.server import SSEServer
+
+            sse_server = SSEServer(
+                wal=write_ahead_log,
+                offset_store=offset_store,
+                observability=observability_emitter,
+                acl_path=settings.sse_acl_path,
+                qos=dependency_provider.qos,
+            )
+            app.state.sse_server = sse_server
+
+            # Wire SSE server into outbox driver
+            set_sse_server(sse_server)
+
+            logger.info(
+                "SSE Server initialized",
+                extra={
+                    "max_batch": sse_server.max_batch,
+                    "max_pending_events": sse_server.max_pending_events,
+                    "disconnect_threshold": sse_server.disconnect_threshold,
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize SSE Server: {e}", exc_info=True)
+            app.state.sse_server = None
+
         # Phase 1: Initialize Model Registry (replaces legacy _preload_models)
         logger.info("Initializing model registry...")
         model_registry = await _init_model_registry()
@@ -745,7 +811,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         from pathlib import Path
 
         from ..pipelines.protocol import PipelineContext
-        from ..runtime import ModuleRegistry, PipelineRunner, PipelineSpec, set_module_registry
+        from ..runtime import ModuleRegistry, PipelineSpec, set_module_registry
 
         try:
             logger.info("Loading declarative pipelines from YAML specifications...")
@@ -799,12 +865,15 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                         extra={
                             "pipeline_id": spec.pipeline_id,
                             "version": spec.version,
+                            "runner_type": spec.runner_type,
                             "spec_path": str(spec_path),
                         },
                     )
 
-                    # Create pipeline runner
-                    runner = PipelineRunner(spec, registry)
+                    # Create pipeline runner via factory (generic dispatch)
+                    from ..runtime.runner_factory import create_runner
+
+                    runner = create_runner(spec, registry)
 
                     # Create syscalls adapter with required capabilities
                     from ..kernel.syscalls import Syscalls
@@ -898,6 +967,11 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                 from ..bus.core import BusMessage
 
                 pipeline_id = scheduled.pipeline_id
+                # Debug: Log the pipelines dict state
+                logger.debug(
+                    f"execute_pipeline_async called, pipelines keys: {list(pipelines.keys())}",
+                    extra={"pipeline_id": pipeline_id, "pipelines_count": len(pipelines)},
+                )
                 runner = pipelines.get(pipeline_id)
                 if runner:
                     logger.info(
@@ -935,6 +1009,9 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                         "batch_size": (
                             event.context.get("batch_size", 100) if event.context else 100
                         ),
+                        # Pass trigger context (reason, options) to pipeline runner
+                        # This enables tenant_id/space_id overrides from manual triggers
+                        "context": event.context or {},
                     }
                     trigger_message = BusMessage(
                         topic=(
@@ -1071,6 +1148,17 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     logger.info("Model registry shutdown complete")
                 except Exception:
                     logger.exception("Error shutting down model registry")
+
+            # Shutdown SSE Server - clear global reference
+            logger.info("Shutting down SSE Server...")
+            try:
+                from ..drivers.sse_outbox_driver import set_sse_server
+
+                set_sse_server(None)
+                app.state.sse_server = None
+                logger.info("SSE Server shutdown complete")
+            except Exception:
+                logger.exception("Error shutting down SSE Server")
 
             # M2 R2.3: Record clean shutdown timestamp (for crash fencing)
             import time
@@ -1553,6 +1641,12 @@ def _compose_error(
     }
     if hint:
         error["hint"] = hint
+    if budgets:
+        error["budgets"] = budgets
+    return {"error": error}
+    if budgets:
+        error["budgets"] = budgets
+    return {"error": error}
     if budgets:
         error["budgets"] = budgets
     return {"error": error}

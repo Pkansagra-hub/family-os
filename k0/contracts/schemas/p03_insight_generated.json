@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "p03.insight.generated.v1",
+  "title": "P03 Insight Generated Event",
+  "description": "Emitted when R5 generates a creative insight via BGT-SM. Issue 8.1.13: Added idempotency support.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "cycle_id",
+    "tenant_id",
+    "space_id",
+    "insight_id",
+    "insight_type",
+    "generated_at",
+    "idempotency_key"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique event identifier (ULID)"
+    },
+    "cycle_id": {
+      "type": "string",
+      "description": "Consolidation cycle identifier"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier"
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Space identifier"
+    },
+    "insight_id": {
+      "type": "string",
+      "description": "Insight identifier (st_sem.sem_id)"
+    },
+    "insight_type": {
+      "type": "string",
+      "enum": [
+        "BRIDGE",
+        "PATTERN",
+        "ANOMALY",
+        "PREDICTION",
+        "COUNTERFACTUAL",
+        "ASSOCIATION",
+        "TREND"
+      ],
+      "description": "Type of insight from R5 DreamExplorer"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "description": "Deterministic key for deduplication. Pattern: {cycle_id}:insight:{insight_id}",
+      "pattern": "^[^:]+:insight:[^:]+$"
+    },
+    "generated_at": {
+      "type": "integer",
+      "description": "Unix timestamp (milliseconds) when insight generated"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable insight description (natural_language field)"
+    },
+    "novelty_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "How novel/unexpected this insight is"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Overall confidence score (from relevance_score)"
+    },
+    "concept_a_id": {
+      "type": "string",
+      "description": "First concept in the bisociative association"
+    },
+    "concept_b_id": {
+      "type": "string",
+      "description": "Second concept in the bisociative association"
+    },
+    "pmi_score": {
+      "type": "number",
+      "description": "Pointwise mutual information score"
+    },
+    "relevance_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "How relevant to user context"
+    },
+    "supporting_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of episode/event IDs supporting this insight"
+    }
+  },
+  "additionalProperties": false
+}

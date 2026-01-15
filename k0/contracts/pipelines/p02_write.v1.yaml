@@ -36,7 +36,7 @@ required_capabilities:
   - st_vec.write                # NEW (ADR-K003) - M23 inline embedding write
   - st_pipeline_processed.write
   - st_outbox.write
-  - st_relationships.read
+  - st_kg_edges.read            # ADR-K022: Changed from st_relationships.read
 
 dag:
   # STAGE 10: DG Pattern Separation

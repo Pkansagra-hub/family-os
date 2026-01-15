@@ -445,9 +445,18 @@ class ManualTriggerEngine(TriggerEngine):
             },
         )
 
-    def fire(self) -> bool:
+    def fire(self, context: dict[str, Any] | None = None) -> bool:
         """
         Manually fire the trigger.
+
+        Args:
+            context: Optional context dict to include in the trigger event.
+                     For P03, this can include:
+                     - reason: Human-readable reason for manual trigger
+                     - options.skip_r5: Skip R5 dream phase
+                     - options.max_events: Override batch size limit
+                     - options.space_id: Target specific space (debug)
+                     - options.tenant_id: Target specific tenant (debug)
 
         Returns:
             True if trigger was fired, False if not running
@@ -460,7 +469,7 @@ class ManualTriggerEngine(TriggerEngine):
             )
             return False
 
-        event = self._create_event()
+        event = self._create_event(context=context)
         self._record_fire(event)
         self._callback(event)
 
@@ -472,6 +481,7 @@ class ManualTriggerEngine(TriggerEngine):
                 "trigger_id": self.spec.id,
                 "pipeline_id": self.pipeline_id,
                 "fire_count": self._fire_count,
+                "has_context": context is not None,
             },
         )
 

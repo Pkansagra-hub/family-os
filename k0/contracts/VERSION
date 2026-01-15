@@ -101,7 +101,7 @@ artifacts:
   pipelines:
     - file: pipelines/p02_write.v1.yaml
       version: v1
-      sha256: 3d3ee3acb03ab7c57bc1856961e4dbc0efb5ad64c7ba5740671685cde677d266
+      sha256: 6c59721a87ab311de348ae45160a04c034f63b64dbbe16dc48d20f052888ec6b
     - file: pipelines/p08_embedding_management.v2.yaml
       version: v3
       sha256: 24cbcd38daa16d4b40d85e0a891c80d10f5bbad98e425991eb19b35441193290

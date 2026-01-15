@@ -1,0 +1,58 @@
+# P03 Module Contract: SimHash Deduplicator
+# Phase: R3 - Near-Duplicate Detection
+# Dossier: §D.3.1 stage_30_simhash_dedup, §4.3, Appendix C.4
+
+module_id: consolidation.simhash_deduplicator
+version: v1
+
+input_event_types:
+  - p03.episodes.built.v1
+
+output_event_types:
+  - p03.dedup.complete.v1
+
+latency_budget_ms: 100
+
+side_effects:
+  - read:st_hipp_events  # Existing simhash values
+
+idempotent: true
+
+fabric_capabilities:
+  - detect_duplicates
+
+failure_modes:
+  - code: HASH_COLLISION
+    policy: semantic_verify
+    description: Use embedding similarity to verify true duplicates
+  - code: HASH_NOT_COMPUTED
+    policy: skip
+    description: Skip events without simhash
+
+description: |
+  SimHash Deduplicator Module (R3 Phase)
+
+  Detects near-duplicate events/episodes using SimHash:
+  - 64-bit locality-sensitive hash
+  - Hamming distance threshold for similarity
+
+  Algorithm:
+  1. Compute 64-bit SimHash from text content
+  2. Build LSH index for efficient lookup
+  3. Find candidates within Hamming distance threshold
+  4. Verify with embedding cosine similarity (optional)
+
+  Configuration:
+  - hash_bits: 64
+  - hamming_threshold: 3 (≤3 bit differences = duplicate)
+  - verify_with_embedding: true
+  - embedding_threshold: 0.95
+
+  Deduplication Strategies:
+  - merge_to_older: Keep older, enrich with newer
+  - merge_to_higher_importance: Keep more important
+  - keep_both_linked: Create duplicate relationship
+
+  Output:
+  - envelope.duplicates: Array of {source_id, target_id, similarity, action}
+  - envelope.dedup_stats: {candidates, verified, merged, kept}

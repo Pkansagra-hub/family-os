@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "p03.phase.complete.v1",
+  "title": "P03 Phase Complete Event",
+  "description": "Emitted when each R0-R8 phase completes (progress tracking)",
+  "type": "object",
+  "required": [
+    "event_id",
+    "cycle_id",
+    "tenant_id",
+    "space_id",
+    "phase",
+    "completed_at"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique event identifier (ULID)"
+    },
+    "cycle_id": {
+      "type": "string",
+      "description": "Consolidation cycle identifier"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier"
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Space identifier"
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"],
+      "description": "Completed phase identifier"
+    },
+    "phase_name": {
+      "type": "string",
+      "description": "Human-readable phase name"
+    },
+    "started_at": {
+      "type": "integer",
+      "description": "Unix timestamp (seconds) when phase started"
+    },
+    "completed_at": {
+      "type": "integer",
+      "description": "Unix timestamp (seconds) when phase completed"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "description": "Phase duration in milliseconds"
+    },
+    "items_processed": {
+      "type": "integer",
+      "default": 0,
+      "description": "Number of items processed in this phase"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["SUCCESS", "PARTIAL", "SKIPPED", "FAILED"],
+      "description": "Phase completion status"
+    }
+  },
+  "additionalProperties": false
+}

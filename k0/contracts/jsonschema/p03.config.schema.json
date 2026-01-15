@@ -1,0 +1,254 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://familyos.ai/schemas/k0/p03.config.schema.json",
+  "title": "P03 Consolidation Pipeline Configuration",
+  "description": "Schema for P03 sleep-cycle consolidation pipeline configuration parameters",
+  "type": "object",
+  "required": [],
+  "properties": {
+    "p03.schedule.enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable scheduled consolidation"
+    },
+    "p03.schedule.cron": {
+      "type": "string",
+      "default": "0 3 * * *",
+      "pattern": "^[0-9*,/-]+ [0-9*,/-]+ [0-9*,/-]+ [0-9*,/-]+ [0-9*,/-]+$",
+      "description": "Cron schedule expression for consolidation cycles"
+    },
+    "p03.schedule.interval_seconds": {
+      "type": "integer",
+      "default": 5400,
+      "minimum": 60,
+      "maximum": 86400,
+      "description": "Interval trigger in seconds (default: 90 min)"
+    },
+    "p03.batch.size": {
+      "type": "integer",
+      "default": 1000,
+      "minimum": 100,
+      "maximum": 5000,
+      "description": "Events per consolidation cycle"
+    },
+    "p03.batch.max_events_per_cycle": {
+      "type": "integer",
+      "default": 10000,
+      "minimum": 1000,
+      "maximum": 50000,
+      "description": "Hard cap on events per cycle"
+    },
+    "p03.batch.timeout_seconds": {
+      "type": "integer",
+      "default": 300,
+      "minimum": 60,
+      "maximum": 600,
+      "description": "Maximum cycle duration in seconds"
+    },
+    "p03.reconciliation.thresholds.reinforce_min": {
+      "type": "number",
+      "default": 0.85,
+      "minimum": 0.80,
+      "maximum": 0.95,
+      "description": "REINFORCE decision threshold (cosine similarity)"
+    },
+    "p03.reconciliation.thresholds.extend_min": {
+      "type": "number",
+      "default": 0.60,
+      "minimum": 0.50,
+      "maximum": 0.75,
+      "description": "EXTEND minimum threshold (cosine similarity)"
+    },
+    "p03.reconciliation.thresholds.extend_max": {
+      "type": "number",
+      "default": 0.85,
+      "minimum": 0.75,
+      "maximum": 0.90,
+      "description": "EXTEND maximum threshold (cosine similarity)"
+    },
+    "p03.reconciliation.thresholds.contradict_threshold": {
+      "type": "number",
+      "default": 0.30,
+      "minimum": 0.20,
+      "maximum": 0.45,
+      "description": "CONTRADICT decision threshold (cosine similarity)"
+    },
+    "p03.reconciliation.thresholds.novelty_min": {
+      "type": "number",
+      "default": 0.70,
+      "minimum": 0.60,
+      "maximum": 0.85,
+      "description": "CREATE novelty minimum threshold"
+    },
+    "p03.decay.thresholds.prune": {
+      "type": "number",
+      "default": 0.01,
+      "minimum": 0.005,
+      "maximum": 0.05,
+      "description": "Decay threshold for TOMBSTONE action"
+    },
+    "p03.decay.thresholds.archive": {
+      "type": "number",
+      "default": 0.10,
+      "minimum": 0.05,
+      "maximum": 0.20,
+      "description": "Decay threshold for ARCHIVE action"
+    },
+    "p03.decay.thresholds.active": {
+      "type": "number",
+      "default": 0.30,
+      "minimum": 0.20,
+      "maximum": 0.50,
+      "description": "Decay threshold for ACTIVE status"
+    },
+    "p03.confidence.thresholds.canonical_min": {
+      "type": "number",
+      "default": 0.50,
+      "minimum": 0.40,
+      "maximum": 0.70,
+      "description": "Minimum confidence for canonical status"
+    },
+    "p03.confidence.thresholds.high": {
+      "type": "number",
+      "default": 0.80,
+      "minimum": 0.70,
+      "maximum": 0.90,
+      "description": "High confidence threshold (use without verification)"
+    },
+    "p03.confidence.thresholds.medium": {
+      "type": "number",
+      "default": 0.50,
+      "minimum": 0.40,
+      "maximum": 0.65,
+      "description": "Medium confidence threshold (use with caution)"
+    },
+    "p03.confidence.thresholds.low": {
+      "type": "number",
+      "default": 0.30,
+      "minimum": 0.20,
+      "maximum": 0.45,
+      "description": "Low confidence threshold (queue for P06 clarification)"
+    },
+    "p03.phases.r5_dream.enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable R5 dream phase"
+    },
+    "p03.phases.r5_dream.skip_on_backlog": {
+      "type": "boolean",
+      "default": true,
+      "description": "Skip R5 phase if backlogged"
+    },
+    "p03.phases.r5_dream.backlog_threshold": {
+      "type": "integer",
+      "default": 5000,
+      "minimum": 1000,
+      "maximum": 10000,
+      "description": "Backlog threshold for skipping R5 phase"
+    },
+    "p03.active_learning.enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable P06 gap detection"
+    },
+    "p03.active_learning.max_gaps_per_cycle": {
+      "type": "integer",
+      "default": 50,
+      "minimum": 10,
+      "maximum": 200,
+      "description": "Maximum gaps emitted per cycle"
+    },
+    "p03.gaps.thresholds.entropy_min": {
+      "type": "number",
+      "default": 0.50,
+      "minimum": 0.30,
+      "maximum": 0.70,
+      "description": "Minimum entropy threshold for gap detection"
+    },
+    "p03.gaps.thresholds.priority_high": {
+      "type": "number",
+      "default": 0.70,
+      "minimum": 0.60,
+      "maximum": 0.85,
+      "description": "High priority gap threshold"
+    },
+    "p03.gaps.thresholds.priority_low": {
+      "type": "number",
+      "default": 0.30,
+      "minimum": 0.20,
+      "maximum": 0.45,
+      "description": "Low priority gap threshold"
+    },
+    "p03.anchors.thresholds.drift": {
+      "type": "number",
+      "default": 0.40,
+      "minimum": 0.25,
+      "maximum": 0.55,
+      "description": "Anchor drift threshold for split"
+    },
+    "p03.concurrency.parallel_workers": {
+      "type": "integer",
+      "default": 4,
+      "minimum": 1,
+      "maximum": 16,
+      "description": "Number of parallel workers"
+    },
+    "p03.concurrency.max_concurrent_cycles": {
+      "type": "integer",
+      "default": 2,
+      "minimum": 1,
+      "maximum": 4,
+      "description": "Maximum concurrent consolidation cycles"
+    },
+    "p03.thompson.priors.reinforce.alpha": {
+      "type": "integer",
+      "default": 17,
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Thompson sampling alpha prior for REINFORCE"
+    },
+    "p03.thompson.priors.reinforce.beta": {
+      "type": "integer",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Thompson sampling beta prior for REINFORCE"
+    },
+    "p03.thompson.priors.extend_lower.alpha": {
+      "type": "integer",
+      "default": 12,
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Thompson sampling alpha prior for EXTEND_LOWER"
+    },
+    "p03.thompson.priors.extend_lower.beta": {
+      "type": "integer",
+      "default": 8,
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Thompson sampling beta prior for EXTEND_LOWER"
+    }
+  },
+  "examples": [
+    {
+      "p03.schedule.enabled": true,
+      "p03.schedule.cron": "0 3 * * *",
+      "p03.schedule.interval_seconds": 5400,
+      "p03.batch.size": 1000,
+      "p03.batch.max_events_per_cycle": 10000,
+      "p03.batch.timeout_seconds": 300,
+      "p03.reconciliation.thresholds.reinforce_min": 0.85,
+      "p03.reconciliation.thresholds.extend_min": 0.60,
+      "p03.reconciliation.thresholds.extend_max": 0.85,
+      "p03.reconciliation.thresholds.contradict_threshold": 0.30,
+      "p03.reconciliation.thresholds.novelty_min": 0.70,
+      "p03.phases.r5_dream.enabled": true,
+      "p03.phases.r5_dream.skip_on_backlog": true,
+      "p03.phases.r5_dream.backlog_threshold": 5000,
+      "p03.active_learning.enabled": true,
+      "p03.active_learning.max_gaps_per_cycle": 50,
+      "p03.concurrency.parallel_workers": 4,
+      "p03.concurrency.max_concurrent_cycles": 2
+    }
+  ]
+}

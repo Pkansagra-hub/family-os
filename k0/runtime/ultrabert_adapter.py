@@ -336,6 +336,223 @@ INGRESS_TO_ACTIVITY = {
     "OTHER": "routine",
 }
 
+# ============================================================================
+# Entity Filtering Configuration
+# ============================================================================
+
+# Minimum entity text length after stripping punctuation/whitespace
+ENTITY_MIN_LENGTH = int(os.getenv("K0_ENTITY_MIN_LENGTH", "3"))
+
+# Minimum confidence threshold for extracted entities (0.0-1.0)
+ENTITY_MIN_CONFIDENCE = float(os.getenv("K0_ENTITY_MIN_CONFIDENCE", "0.65"))
+
+# Stop words to filter out - common words that are not meaningful entities
+ENTITY_STOP_WORDS: frozenset[str] = frozenset(
+    {
+        # Articles and determiners
+        "a",
+        "an",
+        "the",
+        "this",
+        "that",
+        "these",
+        "those",
+        # Prepositions
+        "at",
+        "by",
+        "for",
+        "from",
+        "in",
+        "of",
+        "on",
+        "to",
+        "with",
+        "about",
+        "after",
+        "before",
+        "between",
+        "into",
+        "through",
+        "during",
+        "under",
+        "over",
+        "above",
+        "below",
+        "up",
+        "down",
+        "out",
+        "off",
+        "away",
+        # Conjunctions
+        "and",
+        "or",
+        "but",
+        "nor",
+        "so",
+        "yet",
+        "both",
+        "either",
+        "neither",
+        # Pronouns
+        "i",
+        "me",
+        "my",
+        "mine",
+        "we",
+        "us",
+        "our",
+        "ours",
+        "you",
+        "your",
+        "yours",
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "hers",
+        "it",
+        "its",
+        "they",
+        "them",
+        "their",
+        "theirs",
+        "who",
+        "whom",
+        "whose",
+        # Common verbs
+        "is",
+        "am",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+        "can",
+        "shall",
+        # Adverbs
+        "very",
+        "really",
+        "just",
+        "also",
+        "too",
+        "only",
+        "even",
+        "still",
+        # Misc fragments
+        "day",
+        "day of",
+        "time",
+        "place",
+        "way",
+        "thing",
+        "things",
+        "some",
+        "any",
+        "all",
+        "each",
+        "every",
+        "no",
+        "not",
+        "none",
+        # Punctuation-only (should be caught by length filter too)
+        ".",
+        ",",
+        "!",
+        "?",
+        ";",
+        ":",
+        "-",
+        "'",
+        '"',
+        "(",
+        ")",
+        "[",
+        "]",
+    }
+)
+
+
+def _clean_entity_text(text: str) -> str:
+    """Strip leading/trailing punctuation and whitespace from entity text."""
+    import string
+
+    # Strip whitespace first
+    text = text.strip()
+    # Strip common punctuation from both ends
+    punct_chars = string.punctuation + "''" "—–"
+    return text.strip(punct_chars).strip()
+
+
+def _is_complete_word(entity_text: str, source_text: str) -> bool:
+    """Check if entity appears as a complete word in source text.
+
+    This robustly filters sub-word tokenization artifacts like:
+    - "Chipot" from "Chipotle"
+    - "Fur" from "Für Elise"
+    - "San" from "San Francisco" (when extracted alone)
+
+    Returns True if entity appears with word boundaries (whitespace/punctuation/start/end).
+    """
+    import re
+
+    if not entity_text or not source_text:
+        return True  # Can't validate, assume ok
+
+    # Escape special regex chars and match as whole word
+    # \b matches word boundaries (between \w and \W)
+    pattern = r"\b" + re.escape(entity_text) + r"\b"
+    return bool(re.search(pattern, source_text, re.IGNORECASE))
+
+
+def _is_valid_entity(text: str, confidence: float, source_text: str | None = None) -> bool:
+    """Check if entity passes quality filters.
+
+    Filters:
+    1. Minimum length (default 3 chars after cleaning)
+    2. Not a common stop word
+    3. Minimum confidence threshold
+    4. Not pure punctuation/numbers
+    5. Must be a complete word in source (not a sub-word fragment)
+    """
+    cleaned = _clean_entity_text(text)
+
+    # Length check
+    if len(cleaned) < ENTITY_MIN_LENGTH:
+        return False
+
+    # Stop word check (case-insensitive) - keep minimal set
+    if cleaned.lower() in ENTITY_STOP_WORDS:
+        return False
+
+    # Confidence check
+    if confidence < ENTITY_MIN_CONFIDENCE:
+        return False
+
+    # Must contain at least one letter
+    if not any(c.isalpha() for c in cleaned):
+        return False
+
+    # Word boundary check - reject sub-word fragments
+    if source_text and not _is_complete_word(cleaned, source_text):
+        return False
+
+    return True
+
 
 # ============================================================================
 # Singleton Client Management
@@ -611,28 +828,42 @@ def extract_entities(text: str) -> list[EntityResult]:
 
         entities = []
 
-        # Process family entities
+        # Process family entities with filtering
         for ent in result.entities:
+            raw_text = ent.get("text", "")
+            confidence = ent.get("confidence", 0.8)
+
+            if not _is_valid_entity(raw_text, confidence, source_text=text):
+                continue
+
+            cleaned_text = _clean_entity_text(raw_text)
             entities.append(
                 EntityResult(
-                    text=ent.get("text", ""),
+                    text=cleaned_text,
                     label=ent.get("label", "UNKNOWN"),
                     start=ent.get("start", ent.get("start_token", 0)),
                     end=ent.get("end", ent.get("end_token", 0)),
-                    confidence=ent.get("confidence", 0.8),
+                    confidence=confidence,
                     source="ultrabert_family",
                 )
             )
 
-        # Process general entities
+        # Process general entities with filtering
         for ent in result.general_entities:
+            raw_text = ent.get("text", "")
+            confidence = ent.get("confidence", 0.8)
+
+            if not _is_valid_entity(raw_text, confidence, source_text=text):
+                continue
+
+            cleaned_text = _clean_entity_text(raw_text)
             entities.append(
                 EntityResult(
-                    text=ent.get("text", ""),
+                    text=cleaned_text,
                     label=ent.get("label", "UNKNOWN"),
                     start=ent.get("start", ent.get("start_token", 0)),
                     end=ent.get("end", ent.get("end_token", 0)),
-                    confidence=ent.get("confidence", 0.8),
+                    confidence=confidence,
                     source="ultrabert_general",
                 )
             )
@@ -883,3 +1114,130 @@ def full_analysis(text: str) -> dict[str, Any] | None:
     except Exception as e:
         logger.error(f"UltraBERT full analysis failed: {e}")
         return None
+
+
+def extract_ner_for_storage(text: str) -> dict[str, Any]:
+    """
+    Extract UltraBERT outputs in format suitable for st_hipp_events storage.
+
+    Returns the raw UltraBERT output from all heads in a format
+    that can be stored in st_hipp_events columns.
+
+    Issue: 4.4.1 - P02 stores raw output, P03 R4 processes it.
+    Issue: 0053 - Full UltraBERT capability storage (relations, safety, nli)
+
+    Args:
+        text: Input text to analyze.
+
+    Returns:
+        Dict with:
+            - ner_entities_json: Merged ner_family + ner_general entities
+            - temporal_json: Temporal expressions from temporal head
+            - intent_category: User intent classification
+            - ingress_category: Routing category
+            - ultrabert_version: Model version used
+            - extracted_relations_json: Relationship types (parent_of, spouse_of, etc.)
+            - safety_familyos_band: Safety band (GREEN/AMBER/RED/CRISIS)
+            - safety_familyos_subcategory: Detailed safety subcategory
+            - nli_label: NLI result (entailment/neutral/contradiction)
+            - nli_confidence: NLI confidence score
+            - sentiment_confidence: Sentiment confidence score
+    """
+    import json
+
+    client = get_ultrabert_client()
+    if client is None:
+        return {
+            "ner_entities_json": "[]",
+            "temporal_json": "[]",
+            "intent_category": None,
+            "ingress_category": None,
+            "ultrabert_version": None,
+            "extracted_relations_json": "[]",
+            "safety_familyos_band": None,
+            "safety_familyos_subcategory": None,
+            "nli_label": None,
+            "nli_confidence": None,
+            "sentiment_confidence": None,
+        }
+
+    try:
+        result = _get_full_analysis_result(text)
+        if result is None:
+            result = client.analyze(text)
+
+        # Build NER entities JSON (ner_family + ner_general merged)
+        # Apply the same quality filtering as extract_entities()
+        # This format matches what UltraBERTEntityExtractor expects
+        filtered_family = []
+        for ent in result.entities or []:
+            raw_text = ent.get("text", "")
+            confidence = ent.get("confidence", 0.8)
+            if _is_valid_entity(raw_text, confidence, source_text=text):
+                ent_copy = dict(ent)
+                ent_copy["text"] = _clean_entity_text(raw_text)
+                filtered_family.append(ent_copy)
+
+        filtered_general = []
+        for ent in result.general_entities or []:
+            raw_text = ent.get("text", "")
+            confidence = ent.get("confidence", 0.8)
+            if _is_valid_entity(raw_text, confidence, source_text=text):
+                ent_copy = dict(ent)
+                ent_copy["text"] = _clean_entity_text(raw_text)
+                filtered_general.append(ent_copy)
+
+        ner_entities = {
+            "ner_family": {"entities": filtered_family},
+            "ner_general": {"entities": filtered_general},
+        }
+
+        # Build temporal JSON
+        temporal = {"entities": result.temporal or []}
+
+        # Extract relations (new in migration 0053)
+        # UltraBERT returns list like ["parent_of"] or ["spouse_of", "caretaker_of"]
+        relations = getattr(result, "relations", []) or []
+
+        # Extract safety band and subcategory (new in migration 0053)
+        # safety_familyos returns GREEN/AMBER/RED/CRISIS
+        safety_band = getattr(result, "safety", None)
+        safety_subcategory = getattr(result, "safety_subcategory", None)
+
+        # Extract NLI (new in migration 0053)
+        nli_label = getattr(result, "nli", None)
+        nli_confidence = getattr(result, "nli_confidence", None)
+
+        # Sentiment confidence
+        sentiment_confidence = getattr(result, "sentiment_confidence", None)
+
+        return {
+            "ner_entities_json": json.dumps(ner_entities),
+            "temporal_json": json.dumps(temporal),
+            "intent_category": result.intent,
+            "ingress_category": result.ingress,
+            "ultrabert_version": getattr(client, "VERSION", "2.1.0"),
+            # New fields from migration 0053
+            "extracted_relations_json": json.dumps(relations),
+            "safety_familyos_band": safety_band,
+            "safety_familyos_subcategory": safety_subcategory,
+            "nli_label": nli_label,
+            "nli_confidence": nli_confidence,
+            "sentiment_confidence": sentiment_confidence,
+        }
+
+    except Exception as e:
+        logger.error(f"UltraBERT NER extraction for storage failed: {e}")
+        return {
+            "ner_entities_json": "[]",
+            "temporal_json": "[]",
+            "intent_category": None,
+            "ingress_category": None,
+            "ultrabert_version": None,
+            "extracted_relations_json": "[]",
+            "safety_familyos_band": None,
+            "safety_familyos_subcategory": None,
+            "nli_label": None,
+            "nli_confidence": None,
+            "sentiment_confidence": None,
+        }

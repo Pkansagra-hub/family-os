@@ -34,6 +34,10 @@ DEVICE_ID = "device-test-1"
 SCHEMA_URI = "schema://memory.delta"
 SCHEMA_VERSION = "1.0"
 
+# Memory Model: Single-User Mode
+# All events are attributed to ONE user (the owner of this memory system)
+PRIMARY_ACTOR_ID = "Prince"
+
 # PostgreSQL connection settings (matches docker-compose.yml)
 PG_HOST = "localhost"
 PG_PORT = "5432"
@@ -192,7 +196,7 @@ def submit_envelope(signing_key: SigningKey):
         "topic": "memory.delta",
         "schema_uri": SCHEMA_URI,
         "schema_version": SCHEMA_VERSION,
-        "actor": "actor-test-123",
+        "actor": PRIMARY_ACTOR_ID,  # Single-user mode: all events from ONE user
         "device_id": DEVICE_ID,
         "band": "GREEN",
         "policy_version": "2025-09-28",

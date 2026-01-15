@@ -1,0 +1,1270 @@
+%%{ init: { "theme": "base", "themeVariables": { "primaryColor": "#3498db", "secondaryColor": "#2ecc71", "tertiaryColor": "#e74c3c" } } }%%
+flowchart TB
+    subgraph LEGEND["Legend"]
+        direction LR
+        L1["🔷 Core Types/Contracts"]
+        L2["🟢 State Containers"]
+        L3["🟡 Execution Engine"]
+        L4["🟣 Cross-Cutting Concerns"]
+        L5["⬜ External K0 Dependencies"]
+        L6["🔶 Phase Implementations"]
+        L7["🗄️ Database Tables"]
+        L8["⚙️ Algorithms"]
+        L9["🟪 Modules"]
+        L10["🔵 Layer Writers"]
+        L11["🟧 Event Emitters"]
+        L12["🔴 Security/Feedback"]
+        L13["🌐 API Endpoints"]
+        L14["💾 Cache"]
+        L15["💜 Learning"]
+        L16["🟨 Maintenance"]
+        L17["🟩 Ops/Observability"]
+        L18["💙 QoS/Budgets"]
+    end
+
+    %% ===========================================================================
+    %% P03 ROOT FILES - INTERNAL DEPENDENCIES
+    %% ===========================================================================
+
+    subgraph P03_ROOT["P03 Root Files (k0/pipelines/p03/)"]
+        direction TB
+
+        %% === LAYER 0: Foundation (No internal P03 deps) ===
+        subgraph L0_FOUNDATION["Layer 0: Foundation"]
+            CONTEXT["context.py<br/>P03CycleContext<br/>generate_ulid()"]
+        end
+
+        %% === LAYER 1: Core Types (Depends on L0) ===
+        subgraph L1_TYPES["Layer 1: Core Types"]
+            RUNNER_CONTRACT["runner_contract.py<br/>P03PhaseId, P03PhaseStatus<br/>PHASE_CONTRACTS, SKIP_TRANSITIONS"]
+            EVENT_STATE["event_state.py<br/>P03EventState<br/>ReconciliationAction, PruneDecision"]
+        end
+
+        %% === LAYER 2: Data Structures (Depends on L0, L1) ===
+        subgraph L2_DATA["Layer 2: Data Structures"]
+            OBSERVABILITY["observability.py<br/>P03ObservabilityContext<br/>P03Error, R1PhaseMetrics"]
+            PHASE_OUTPUTS["phase_outputs.py<br/>P03PhaseOutputs<br/>EpisodeCluster, HebbianEdgeUpdate"]
+            STAGED_WRITES["staged_writes.py<br/>P03StagedWrites<br/>WriteOperation, StagedWrite"]
+        end
+
+        %% === LAYER 3: Top-Level Containers (Depends on L0-L2) ===
+        subgraph L3_CONTAINERS["Layer 3: Containers"]
+            ENVELOPE["envelope.py<br/>P03BatchEnvelope"]
+            SERIALIZER["serializer.py<br/>P03EnvelopeSerializer<br/>PhaseCheckpoint"]
+        end
+
+        %% === LAYER 4: Execution Contracts (Depends on L0-L3) ===
+        subgraph L4_EXECUTION["Layer 4: Execution"]
+            PHASE_INTERFACE["phase_interface.py<br/>P03PhaseProtocol<br/>P03PhaseResult, P03CycleResult"]
+            CHECKPOINT["checkpoint.py<br/>P03Checkpoint<br/>CheckpointStoreProtocol"]
+            DETERMINISTIC["deterministic.py<br/>P03SeededRNG, P03SkipPolicy<br/>derive_cycle_seed()"]
+            OFFSET_MANAGER["offset_manager.py<br/>OffsetDecision, OffsetAction<br/>P03OffsetManager"]
+        end
+
+        %% === LAYER 5: Sequential Runner (Depends on L0-L4) ===
+        subgraph L5_RUNNER["Layer 5: Runner"]
+            SEQUENTIAL_RUNNER["sequential_runner.py<br/>P03SequentialRunner<br/>PhaseTimelineEntry"]
+        end
+
+        %% === LAYER 6: Domain Features (Depends on L0-L4) ===
+        subgraph L6_FEATURES["Layer 6: Features"]
+            GAP_EMITTER["gap_emitter.py<br/>P03GapEmitter<br/>GapType, GapEmitResult"]
+            OUTBOX_PUBLISHER["outbox_publisher.py<br/>P03OutboxPublisher<br/>PublishResult"]
+            AUDIT_LOGGER["audit_logger.py<br/>P03AuditLogger<br/>AuditAction"]
+            RETENTION["retention.py<br/>RetentionJobResult<br/>DailyAuditSummary"]
+            EXPLAINABILITY["explainability.py<br/>MemoryExplanation<br/>AuditRepository"]
+            ERASURE["erasure.py<br/>ErasureScope<br/>ErasureRequest"]
+            FEEDBACK_CONSUMER["feedback_consumer.py<br/>P03FeedbackConsumer<br/>FeedbackType"]
+        end
+    end
+
+    %% ===========================================================================
+    %% PHASE IMPLEMENTATIONS (k0/pipelines/p03/phases/)
+    %% ===========================================================================
+
+    subgraph P03_PHASES["Phase Implementations (k0/pipelines/p03/phases/)"]
+        direction TB
+
+        subgraph R0_PHASE["R0: Batch Selection"]
+            R0_BATCH_SELECTOR["r0_batch_selector.py<br/>R0BatchSelector<br/>R0Config"]
+            R0_STEPS["Steps:<br/>1. Fetch offset from st_offsets<br/>2. Query eligible events<br/>3. Load embeddings from st_vec<br/>4. Build P03BatchEnvelope"]
+        end
+
+        subgraph R1_PHASE["R1: Importance Scoring"]
+            R1_IMPORTANCE["r1_importance_scorer.py<br/>R1ImportanceScorer<br/>R1Config"]
+            R1_STEPS["Steps:<br/>1. Load importance weights<br/>2. Score events via algorithm<br/>3. Log audit records<br/>4. Update event states"]
+        end
+
+        subgraph R2_PHASE["R2: Episodic Integration"]
+            R2_EPISODIC["r2_episodic_integrator.py<br/>R2EpisodicIntegrator<br/>R2Config"]
+            R2_STEPS["Steps:<br/>1. Split events into sequences<br/>2. Cluster via DBSCAN<br/>3. Compute centroids<br/>4. Track quality metrics<br/>5. Adaptive eps/min_samples"]
+        end
+
+        subgraph R3_PHASE["R3: Dedup & Decay"]
+            R3_DEDUP["r3_dedup_decay.py<br/>R3DedupDecay<br/>R3Config, R3Stores"]
+            R3_STEPS["Steps:<br/>1. Duplicate detection<br/>2. Novelty scoring<br/>3. Decay computation<br/>4. Retention evaluation<br/>5. Immunity check<br/>6. Prune audit logging<br/>7. Reconciliation (4.3.13)<br/>  → Query truth layers<br/>  → Compute similarity<br/>  → Set action on events"]
+        end
+
+        subgraph R4_PHASE["R4: KG Consolidation"]
+            R4_KG["r4_kg_consolidator.py<br/>R4KGConsolidator<br/>R4Config, R4PhaseStats"]
+            R4_STEPS["Steps:<br/>1. Entity extraction (NER)<br/>2. Disambiguation<br/>3. Ambiguous resolution<br/>4. Confidence routing<br/>5. Entity merging<br/>6. Hebbian edge discovery<br/>7. Granger causality<br/>8. Edge feedback"]
+        end
+
+        subgraph R5_PHASE["R5: Dream Exploration"]
+            R5_DREAM["r5_dream_explorer.py<br/>R5DreamExplorer<br/>R5Config, R5Mode"]
+            R5_CONFIG["r5_config.py<br/>─────────────<br/>R5Config<br/>R5Mode (Enum)<br/>P03_FF_R5_MODE<br/>get_default_r5_config()"]
+            R5_STEPS["Steps:<br/>1. Check skip conditions<br/>  (mode, inputs, budget)<br/>2. Run CPN counterfactuals<br/>3. Run TPN-MCTS simulation<br/>4. Run BGT-SM bisociative<br/>5. Run SPC-UQ reconstruction<br/>6. Run TDL-HCO optimization<br/>7. Filter and rank outputs"]
+        end
+
+        subgraph R6_PHASE["R6: Staging"]
+            R6_STAGING["r6_staging.py<br/>R6Staging<br/>R6Inputs, R6Coordinator"]
+            R6_STEPS["Steps:<br/>1. Extract R1-R5 outputs<br/>2. Create coordinator<br/>3. Mark consolidation status<br/>4. Assemble truth writes<br/>5. Assemble KG writes<br/>6. Validate manifest<br/>7. Generate summary"]
+        end
+
+        subgraph R7_PHASE["R7: Truth Writer"]
+            R7_TRUTH["r7_truth_writer.py<br/>R7TruthWriter<br/>R7Config"]
+            R7_STEPS["Steps:<br/>1. Get staged writes from R6<br/>2. Route to layer writers<br/>3. Execute within UoW<br/>4. Handle version conflicts<br/>5. Commit transaction"]
+        end
+
+        subgraph R8_PHASE["R8: Event Emission"]
+            R8_EMITTER["r8_event_emitter.py<br/>R8EventEmitter<br/>R8Config"]
+            R8_STEPS["Steps:<br/>1. Emit consolidation.complete<br/>2. Emit pattern.detected<br/>3. Emit truth events<br/>4. Emit gap.detected<br/>5. Update st_hipp_events status"]
+        end
+    end
+
+    %% ===========================================================================
+    %% DATABASE TABLES
+    %% ===========================================================================
+
+    subgraph DB_TABLES["Database Tables (PostgreSQL)"]
+        direction TB
+
+        subgraph R0_TABLES["R0 Database Access"]
+            ST_OFFSETS[("st_offsets<br/>─────────────<br/>subscriber_id<br/>topic<br/>space_id<br/>tenant_id<br/>offset")]
+            ST_HIPP_EVENTS[("st_hipp_events<br/>─────────────<br/>event_id, wal_pos<br/>tenant_id, space_id<br/>text, simhash_hex<br/>embedding_id, embedding_status<br/>consolidation_status<br/>sentiment_score, sentiment_label<br/>dominant_emotions_json<br/>ner_entities_json<br/>temporal_json")]
+            ST_VEC[("st_vec<br/>─────────────<br/>event_id<br/>vector (768-dim)<br/>vector_dim<br/>status")]
+        end
+
+        subgraph R1_TABLES["R1 Database Access"]
+            ST_CONSOLIDATION_AUDIT[("st_consolidation_audit<br/>─────────────<br/>audit_id<br/>cycle_id, space_id<br/>action, confidence<br/>inputs_json<br/>outputs_json<br/>explanation")]
+            ST_IMPORTANCE_WEIGHTS[("st_importance_weights<br/>─────────────<br/>space_id<br/>sentiment_weight<br/>affect_weight<br/>novelty_weight<br/>social_weight<br/>sample_count")]
+        end
+
+        subgraph R2_TABLES["R2 Database Access"]
+            ST_EPS_PARAMS[("st_clustering_params<br/>─────────────<br/>space_id<br/>eps, min_samples<br/>silhouette_avg<br/>last_updated")]
+            ST_CLUSTER_QUALITY[("st_cluster_quality<br/>─────────────<br/>cluster_id<br/>cohesion_score<br/>silhouette_score<br/>event_count")]
+        end
+
+        subgraph R3_TABLES["R3 Database Access"]
+            ST_ACCESS_LOG[("st_access_log<br/>─────────────<br/>entity_id<br/>access_timestamp<br/>accessor_id<br/>access_type")]
+            ST_PRUNED_ENTITIES[("st_pruned_entities<br/>─────────────<br/>entity_id<br/>pruned_at<br/>embedding<br/>reason")]
+            ST_NOVELTY_WEIGHTS[("st_novelty_weights<br/>─────────────<br/>space_id<br/>category<br/>bonus_multiplier<br/>decay_factor")]
+            ST_PRUNE_AUDIT[("st_prune_audit<br/>─────────────<br/>decision_id<br/>entity_id<br/>action<br/>reason, confidence")]
+        end
+
+        subgraph R4_TABLES["R4 Database Access"]
+            ST_KG_ENTITIES[("st_kg_entities<br/>─────────────<br/>entity_id<br/>canonical_name<br/>entity_type<br/>aliases, embedding<br/>observation_count<br/>confidence")]
+            ST_KG_EDGES[("st_kg_edges<br/>─────────────<br/>edge_id<br/>source_id, target_id<br/>relation_type<br/>weight, confidence<br/>causal_direction")]
+            ST_ENTITY_MERGES[("st_entity_merges<br/>─────────────<br/>merge_id<br/>source_ids<br/>target_id<br/>merge_reason")]
+            ST_MERGE_THRESHOLDS[("st_merge_thresholds<br/>─────────────<br/>entity_type<br/>threshold<br/>sample_count")]
+            ST_CAUSALITY_THRESHOLDS[("st_causality_thresholds<br/>─────────────<br/>category<br/>threshold<br/>confidence")]
+        end
+
+        subgraph R5_TABLES["R5 Database Access"]
+            ST_MCTS_DECISIONS[("st_mcts_decisions<br/>─────────────<br/>decision_id<br/>space_id, cycle_id<br/>selected_node_id<br/>expected_value<br/>visit_count<br/>depth, path_json<br/>algorithm, created_at")]
+            ST_MCTS_SHADOW[("st_mcts_shadow_log<br/>─────────────<br/>log_id<br/>decision_id<br/>predicted_outcome<br/>actual_outcome<br/>error, created_at")]
+        end
+
+        subgraph R6_TABLES["R6 Database Access"]
+            ST_EPI[("st_epi<br/>─────────────<br/>episode_id<br/>cluster_id<br/>centroid_embedding<br/>member_event_ids")]
+            ST_SEM[("st_sem<br/>─────────────<br/>semantic_id<br/>entity_id<br/>attribute, value")]
+            ST_KG_DOM[("st_kg_dom<br/>─────────────<br/>domain_id<br/>entity_id<br/>domain_type")]
+            ST_OUTBOX[("st_outbox<br/>─────────────<br/>entry_id<br/>topic, payload<br/>status, retry_count")]
+            ST_LEARNING_QUEUE[("st_learning_queue<br/>─────────────<br/>queue_id<br/>gap_type<br/>entity_id<br/>priority")]
+        end
+
+        subgraph R7_TABLES["R7 Database Access (via Layer Writers)"]
+            ST_PROCEDURAL[("st_procedural<br/>─────────────<br/>routine_id<br/>tenant_id, space_id<br/>pattern_type<br/>confidence")]
+            ST_SOCIAL[("st_social<br/>─────────────<br/>relationship_id<br/>source_entity_id<br/>target_entity_id<br/>relationship_type")]
+            ST_PROSPECTIVE[("st_prospective<br/>─────────────<br/>intention_id<br/>target_date<br/>reminder_text<br/>confidence")]
+            ST_VEC_WRITE[("st_vec (WRITE)<br/>─────────────<br/>embedding_id<br/>vector<br/>status=COMMITTED")]
+            ST_ENTITY_MERGES[("st_entity_merges<br/>─────────────<br/>merge_id<br/>source_ids<br/>target_id<br/>merge_reason")]
+        end
+
+        subgraph R8_TABLES["R8 Database Access"]
+            ST_OUTBOX_EMIT[("st_outbox (EMIT)<br/>─────────────<br/>topic: p03.*<br/>payload_json<br/>fingerprint")]
+        end
+
+        subgraph FEEDBACK_TABLES["Feedback Security Tables"]
+            ST_FEEDBACK_SIGNALS[("st_feedback_signals<br/>─────────────<br/>signal_id<br/>space_id, user_id<br/>device_id<br/>content, created_at")]
+            ST_FEEDBACK_QUARANTINE[("st_feedback_quarantine<br/>─────────────<br/>quarantine_id<br/>signal_id, space_id<br/>reason, severity<br/>detected_at<br/>auto_release_at<br/>reviewed_at<br/>reviewed_by<br/>decision")]
+        end
+
+        subgraph LEARNING_TABLES["Learning Tables"]
+            ST_LEARNED_WEIGHTS[("st_learned_weights<br/>─────────────<br/>space_id<br/>weight_type<br/>value, confidence<br/>updated_at")]
+            ST_DECAY_FEEDBACK[("st_decay_feedback<br/>─────────────<br/>feedback_id<br/>entity_id<br/>feedback_type<br/>salience_delta")]
+        end
+
+        subgraph OPS_TABLES["Ops Tables"]
+            ST_DLQ[("st_dlq<br/>─────────────<br/>id, dlq_id<br/>driver, phase<br/>error_type, error_code<br/>payload, attempts<br/>status")]
+        end
+    end
+
+    %% ===========================================================================
+    %% ALGORITHMS (k0/modules/consolidation/algorithms/)
+    %% ===========================================================================
+
+    subgraph ALGORITHMS["Algorithms (k0/modules/consolidation/algorithms/)"]
+        direction TB
+
+        subgraph R1_ALGORITHMS["R1 Uses"]
+            ALG_IMPORTANCE_SCORER["importance_scorer.py<br/>─────────────<br/>ImportanceScorer<br/>ImportanceWeights<br/>ImportanceBreakdown<br/>─────────────<br/>Formula:<br/>importance = (emotional +<br/>novelty + social) ×<br/>event_type_multiplier"]
+            ALG_IMPORTANCE_LEARNER["importance_weight_learner.py<br/>─────────────<br/>ImportanceWeightLearner<br/>Learns optimal weights<br/>from feedback signals"]
+        end
+
+        subgraph R2_ALGORITHMS["R2 Uses"]
+            ALG_EPISODE_SPLITTER["episode_splitter.py<br/>─────────────<br/>EpisodeSplitter<br/>SplitConfig<br/>─────────────<br/>Splits by: time gaps,<br/>geohash, entity bounds"]
+            ALG_EPISODIC_DBSCAN["episodic_dbscan.py<br/>─────────────<br/>EpisodicDBSCAN<br/>DBSCANParams<br/>─────────────<br/>Composite distance:<br/>semantic + temporal"]
+            ALG_CENTROID["centroid_calculator.py<br/>─────────────<br/>CentroidCalculator<br/>CentroidResult<br/>WeightingStrategy"]
+            ALG_CLUSTER_QUALITY["cluster_quality.py<br/>─────────────<br/>ClusterQualityTracker<br/>ClusterQualityMetrics<br/>Silhouette score"]
+            ALG_EPS_ADJUSTER["eps_adjuster.py<br/>─────────────<br/>EpsAdjuster<br/>EpsAdjustmentConfig<br/>Adaptive learning"]
+            ALG_MIN_SAMPLES["min_samples_adjuster.py<br/>─────────────<br/>MinSamplesAdjuster<br/>MinSamplesConfig"]
+            ALG_COMPOSITE_DIST["composite_distance.py<br/>─────────────<br/>CompositeDistance<br/>DBSCANParams<br/>─────────────<br/>Formula:<br/>(1-w)×cosine + w×temporal<br/>temporal_weight: 0.3<br/>max_gap: 4 hours"]
+        end
+
+        subgraph R3_ALGORITHMS["R3 Uses"]
+            ALG_SIMHASH["simhasher.py<br/>─────────────<br/>SimHasher<br/>64-bit fingerprint<br/>Hamming distance"]
+            ALG_TWO_STAGE["two_stage_dedup.py<br/>─────────────<br/>TwoStageDeduplicator<br/>Exact + fuzzy dedup"]
+            ALG_DECAY["decay_engine.py<br/>─────────────<br/>UnifiedDecayEngine<br/>DecayConfig<br/>Exponential decay"]
+            ALG_DUPLICATE["duplicate_detector.py<br/>─────────────<br/>DuplicateDetector<br/>DuplicationResult"]
+            ALG_IMMUNITY["immunity_checker.py<br/>─────────────<br/>ImmunityChecker<br/>ImmunityLevel<br/>Protects anchors"]
+            ALG_RETENTION["retention_enforcer.py<br/>─────────────<br/>RetentionEnforcer<br/>KEEP/ARCHIVE/TOMBSTONE"]
+            ALG_NOVELTY["novelty_bonus_learner.py<br/>─────────────<br/>AdaptiveNoveltyBonusLearner<br/>BonusAdjustment"]
+            ALG_PRUNE_AUDIT["prune_audit_logger.py<br/>─────────────<br/>PruneAuditLogger<br/>PruneDecisionContext"]
+            ALG_REGRET["prune_regret_detector.py<br/>─────────────<br/>PruneRegretDetector<br/>RegretMatch"]
+            ALG_ACCESS["access_tracker.py<br/>─────────────<br/>AccessTracker<br/>BayesianLambdaEstimator"]
+            ALG_MINHASH["minhash_lsh.py<br/>─────────────<br/>MinHashLSH<br/>AdaptiveDeduplicationStrategy<br/>Scale optimization"]
+            ALG_RECONCILIATION["reconciliation_engine.py<br/>─────────────<br/>ReconciliationEngine<br/>ReconciliationConfig<br/>ReconciliationDecision<br/>─────────────<br/>Thresholds:<br/>≥0.85 REINFORCE<br/>0.60-0.84 EXTEND<br/>0.40-0.59 EVOLVE<br/><0.40 CONTRADICT/CREATE"]
+        end
+
+        subgraph R4_ALGORITHMS["R4 Uses"]
+            ALG_ENTITY_EXTRACTOR["entity_extractor.py<br/>─────────────<br/>UltraBERTEntityExtractor<br/>ExtractedEntity<br/>KGEntityType<br/>─────────────<br/>NER with UltraBERT"]
+            ALG_ENTITY_DISAMBIG["entity_disambiguator.py<br/>─────────────<br/>EntityDisambiguator<br/>Per-type weight matching"]
+            ALG_AMBIG_RESOLVER["ambiguous_resolver.py<br/>─────────────<br/>AmbiguousEntityResolver<br/>Context hierarchy"]
+            ALG_CONFIDENCE["confidence_router.py<br/>─────────────<br/>ConfidenceRouter<br/>ConfidenceBand<br/>Routes to P06 gaps"]
+            ALG_MERGE_THRESHOLD["merge_threshold_learner.py<br/>─────────────<br/>AdaptiveMergeThresholds<br/>Learned per entity type"]
+            ALG_ENTITY_MERGER["entity_merger.py<br/>─────────────<br/>EntityMerger<br/>Cascade merge support"]
+            ALG_HEBBIAN["hebbian_learner.py<br/>─────────────<br/>HebbianLearner<br/>HebbianConfig<br/>Adaptive learning rates"]
+            ALG_GRANGER["granger_causality.py<br/>─────────────<br/>GrangerCausalityInference<br/>CausalEdge<br/>Temporal precedence"]
+            ALG_CAUSALITY_THRESH["causality_thresholds.py<br/>─────────────<br/>AdaptiveCausalityThresholds<br/>CausalCategoryClassifier<br/>Per-category thresholds"]
+            ALG_EDGE_DEMOTION["edge_demotion.py<br/>─────────────<br/>CausalEdgeFeedbackProcessor<br/>CausalEdgeStalenessChecker<br/>Boost/demote edges"]
+        end
+
+        subgraph R5_ALGORITHMS["R5 Uses (k0/modules/consolidation/algorithms/)"]
+            ALG_CPN["cpn.py<br/>─────────────<br/>CausalPerturbationNetwork<br/>CPNConfig<br/>─────────────<br/>Counterfactual analysis<br/>of causal relationships"]
+            ALG_MCTS["mcts.py<br/>─────────────<br/>TemporalProjectionMCTS<br/>MCTSConfig<br/>─────────────<br/>Monte Carlo tree search<br/>for future projection"]
+            ALG_MCTS_ADAPTIVE["mcts_adaptive.py<br/>─────────────<br/>AdaptiveRolloutAllocator<br/>RolloutAllocationResult<br/>─────────────<br/>Allocates rollouts based<br/>on branch complexity"]
+            ALG_BGT_SM["bgt_sm.py<br/>─────────────<br/>BisociativeGraphTraversal<br/>BGTConfig<br/>─────────────<br/>Cross-domain insight<br/>discovery via graph"]
+            ALG_SPC_UQ["spc_uq.py<br/>─────────────<br/>EpisodicSimulator<br/>SPCConfig<br/>─────────────<br/>Reconstructs episodes<br/>with uncertainty quant"]
+            ALG_TDL_HCO["tdl_hco.py<br/>─────────────<br/>TemporalDifferenceLearning<br/>TDLConfig<br/>─────────────<br/>Hierarchical credit<br/>optimization learning"]
+            ALG_MCTS_SHADOW["mcts_shadow.py<br/>─────────────<br/>ShadowOutcomeTracker<br/>ShadowValidationResult<br/>─────────────<br/>Tracks MCTS predictions<br/>vs actual outcomes"]
+        end
+
+        subgraph R6_ALGORITHMS["R6 Uses (via k0/modules/consolidation/staging/)"]
+            ALG_R6_COORDINATOR["r6_coordinator.py<br/>─────────────<br/>R6Coordinator<br/>R6CoordinatorConfig<br/>Orchestrates sub-components"]
+            ALG_STATUS_MARKER["consolidation_status_marker.py<br/>ConsolidationStatusMarker"]
+            ALG_DEDUP_META["dedup_metadata.py<br/>DedupMetadataPopulator"]
+            ALG_RECONCILE["reconciliation_recorder.py<br/>ReconciliationRecorder"]
+            ALG_IDEMPOTENCY["idempotency_key_gen.py<br/>IdempotencyKeyGenerator"]
+            ALG_TRUTH_ASSEMBLER["truth_write_assembler.py<br/>TruthWriteAssembler"]
+            ALG_TRUTH_QUERY["truth_query_service.py<br/>─────────────<br/>TruthQueryService<br/>TruthCandidate<br/>─────────────<br/>Queries:<br/>st_epi, st_sem<br/>st_procedural<br/>st_social, st_prospective<br/>via JOIN to st_vec"]
+            ALG_KG_ASSEMBLER["kg_write_assembler.py<br/>KGWriteAssembler"]
+            ALG_OUTBOX_ASSEMBLER["outbox_event_assembler.py<br/>OutboxEventAssembler"]
+            ALG_MANIFEST["manifest_validator.py<br/>ManifestValidator"]
+        end
+
+        subgraph OTHER_ALGORITHMS["Other Available Algorithms"]
+            ALG_ENTITY["entity_extractor.py<br/>EntityExtractor"]
+        end
+    end
+
+    %% ===========================================================================
+    %% CONSOLIDATION MODULES (k0/modules/consolidation/)
+    %% ===========================================================================
+
+    subgraph CONSOLIDATION_MODULES["Consolidation Modules (k0/modules/consolidation/)"]
+        direction TB
+
+        subgraph MOD_BATCH_SELECTOR["batch_selector.py (M37)"]
+            MOD_BATCH["batch_selector.py<br/>─────────────<br/>Module wrapper for R0<br/>Adapts R0BatchSelector<br/>to module registry interface"]
+            MOD_BATCH_FLOW["Flow:<br/>1. Parse trigger payload<br/>2. Build R0Config<br/>3. Call R0BatchSelector<br/>4. Return batch result"]
+        end
+
+        subgraph MOD_STAGING["staging/ (R6 Sub-Components)"]
+            STAG_R6_COORD["r6_coordinator.py<br/>R6Coordinator<br/>R6CoordinatorConfig<br/>R6CoordinatorResult"]
+            STAG_STATUS["status_marker.py<br/>ConsolidationStatusMarker<br/>StatusResult"]
+            STAG_DEDUP["dedup_metadata.py<br/>DedupMetadataPopulator<br/>DuplicationResult"]
+            STAG_RECON["reconciliation_recorder.py<br/>ReconciliationRecorder"]
+            STAG_IDEMP["idempotency.py<br/>IdempotencyKeyGenerator"]
+            STAG_TRUTH_ASM["truth_write_assembler.py<br/>TruthWriteAssembler"]
+            STAG_KG_ASM["kg_write_assembler.py<br/>KGWriteAssembler"]
+            STAG_OUTBOX_ASM["outbox_assembler.py<br/>OutboxEventAssembler"]
+            STAG_MANIFEST["manifest_validator.py<br/>ManifestValidator"]
+            STAG_SUMMARY["summary_generator.py<br/>SummaryGenerator"]
+            STAG_R6_OUT["r6_output.py<br/>R6Output, StagedEventUpdate<br/>ReconciliationSummary"]
+            STAG_TRUTH_QUERY["truth_query_service.py<br/>─────────────<br/>TruthQueryService<br/>TruthCandidate<br/>─────────────<br/>JOINs st_epi/st_sem<br/>to st_vec for vectors"]
+        end
+
+        subgraph MOD_TRUTH_WRITER["truth_writer/ (R7 Sub-Components)"]
+            TW_ROUTER["router.py<br/>DecisionRouter<br/>WriteMode (ATOMIC/PARTIAL)<br/>LayerWriterProtocol"]
+            TW_TRANSACTION["transaction.py<br/>TransactionCoordinator<br/>TransactionConfig<br/>TransactionResult<br/>OptimisticLockError"]
+            TW_OUTBOX["outbox.py<br/>OutboxWriter<br/>OutboxWriteConfig<br/>OutboxStagingResult"]
+            TW_RESULT["result.py<br/>WriteResult<br/>LayerWriteResult"]
+        end
+
+        subgraph MOD_TW_LAYERS["truth_writer/layers/"]
+            TW_EPISODIC["episodic.py<br/>EpisodicLayerWriter<br/>EpisodeWriteData"]
+            TW_SEMANTIC["semantic.py<br/>SemanticLayerWriter<br/>PatternWriteData<br/>PatternAction"]
+            TW_KG["kg.py<br/>KGLayerWriter<br/>EntityWriteData<br/>EdgeWriteData<br/>EntityAction"]
+            TW_PROCEDURAL["procedural.py<br/>ProceduralLayerWriter"]
+            TW_PROSPECTIVE["prospective.py<br/>ProspectiveLayerWriter"]
+            TW_SOCIAL["social.py<br/>SocialLayerWriter"]
+            TW_VECTOR["vector.py<br/>VectorLayerWriter"]
+        end
+
+        subgraph MOD_DREAM["dream/ (R5 Sub-Components)"]
+            DREAM_EXPLORER["dream_explorer.py<br/>─────────────<br/>DreamExplorer<br/>DreamExplorerConfig<br/>DreamExplorationResult<br/>─────────────<br/>Orchestrates all 6<br/>dream algorithms"]
+            DREAM_CONFIG["config.py<br/>─────────────<br/>DreamConfig<br/>AlgorithmWeights<br/>QualityThresholds"]
+            DREAM_MODELS["models.py<br/>─────────────<br/>DreamInsight<br/>InsightType (Enum)<br/>InsightConfidence<br/>DreamOutput"]
+            DREAM_BUDGET["compute_budget.py<br/>─────────────<br/>ComputeBudgetManager<br/>BudgetAllocation<br/>─────────────<br/>Allocates compute<br/>across algorithms"]
+        end
+
+        subgraph MOD_EMISSION["emission/ (R8 Sub-Components)"]
+            EMIT_EMITTER["emitter.py<br/>EventEmitter<br/>EventTopic (Enum)<br/>EmitResult<br/>CircuitBreakerConfig"]
+            EMIT_GAP["gap_emitter.py<br/>GapEmitterModule<br/>GapEmitterConfig<br/>GapEmitStats"]
+        end
+    end
+
+    %% ===========================================================================
+    %% EXTERNAL K0 DEPENDENCIES
+    %% ===========================================================================
+
+    subgraph K0_EXTERNAL["External K0 Dependencies"]
+        direction TB
+        K0_STORAGE["k0/storage/<br/>OutboxEntry, OutboxStore<br/>DeadLetterQueue"]
+        K0_BUS["k0/bus/<br/>BusDispatcher<br/>BusMessage"]
+        K0_FEEDBACK["k0/feedback/<br/>P03FeedbackPayload<br/>FEEDBACK_SIGNAL_P03_V1"]
+        K0_UOW["k0/uow/<br/>UnitOfWork"]
+        K0_MODULES["k0/modules/consolidation/<br/>staging, truth_writer"]
+        K0_METRICS["k0/obs/metrics.py<br/>MetricsExporter<br/>counter(), gauge()"]
+        K0_TRACING["k0/obs/tracing.py<br/>TracerFactory<br/>Span, Context"]
+        K0_DRIVERS["k0/drivers/<br/>PostgresDriver<br/>asyncpg"]
+        K0_POLICY["k0/policy/<br/>PolicyStamp, PrivacyBand<br/>location_privacy"]
+        K0_DLQ["k0/storage/dlq.py<br/>DeadLetterQueue<br/>DeadLetter"]
+    end
+
+    %% ===========================================================================
+    %% P03 SUBDIRECTORIES (api/, cache/, feedback/)
+    %% ===========================================================================
+
+    subgraph P03_SUBDIRS["P03 Subdirectories"]
+        direction TB
+
+        subgraph API_DIR["api/ (Manual Review)"]
+            API_QUARANTINE_REVIEW["quarantine_review.py<br/>─────────────<br/>QuarantineReviewAPI<br/>ReviewDecision (RELEASE/DISCARD)<br/>QuarantineRecord<br/>PendingReviewsResult<br/>─────────────<br/>Manual review of quarantined<br/>feedback signals"]
+        end
+
+        subgraph CACHE_DIR["cache/ (LRU Caching)"]
+            CACHE_EMBEDDING["embedding_cache.py<br/>─────────────<br/>P03EmbeddingCache<br/>CacheEntry<br/>─────────────<br/>LRU cache for embeddings<br/>Hit/miss/eviction metrics<br/>TTL expiration (1 hour)<br/>Priority: HIGH/MEDIUM/LOW"]
+        end
+
+        subgraph FEEDBACK_DIR["feedback/ (Security Detection)"]
+            FB_ANOMALY["anomaly_detector.py<br/>─────────────<br/>P03LearningAnomalyDetector<br/>AnomalyResult<br/>AnomalyType enum<br/>─────────────<br/>Detects:<br/>• LOW_ENTROPY (bot-like)<br/>• REPETITIVE_CONTENT<br/>• STATISTICAL_OUTLIER<br/>• SUSPICIOUS_PATTERN"]
+            FB_QUARANTINE["quarantine_detector.py<br/>─────────────<br/>QuarantineDetector<br/>QuarantineResult<br/>QuarantineReason enum<br/>QuarantineSeverity enum<br/>─────────────<br/>Checks & quarantines:<br/>• RATE_LIMIT<br/>• VELOCITY_SPIKE<br/>• ANOMALY<br/>• ENTROPY"]
+            FB_RATE_LIMITER["rate_limiter.py<br/>─────────────<br/>FeedbackRateLimiter<br/>RateLimitResult<br/>─────────────<br/>Sliding window algorithm<br/>100 signals/min default<br/>Per-user/device limits"]
+            FB_VELOCITY["velocity_detector.py<br/>─────────────<br/>VelocityAnomalyDetector<br/>VelocityResult<br/>─────────────<br/>Detects sudden spikes<br/>10x baseline threshold<br/>5min recent vs 1hr baseline"]
+        end
+
+        subgraph LEARNING_DIR["learning/ (Adaptive Learning)"]
+            LEARN_ASYNC_AUDIT["async_audit.py<br/>─────────────<br/>AsyncAuditLogger<br/>AuditRecord<br/>─────────────<br/>Non-blocking batched writes<br/>30s write interval<br/>Max 50 records/batch"]
+            LEARN_FEEDBACK_QUEUE["feedback_queue.py<br/>─────────────<br/>FeedbackQueue<br/>FeedbackSignal<br/>─────────────<br/>Max 1000 depth<br/>10% sampling on overflow<br/>asyncio.Queue based"]
+            LEARN_ANOMALY["learning_anomaly_detector.py<br/>─────────────<br/>P03LearningAnomalyDetector<br/>LearningAnomalyResult<br/>LearningAnomalyType enum<br/>─────────────<br/>Detects:<br/>• PARAMETER_DRIFT (>20%)<br/>• CONTRADICTORY_SIGNALS<br/>• FORMULA_REGRESSION<br/>• QUALITY_DEGRADATION"]
+        end
+
+        subgraph MAINTENANCE_DIR["maintenance/ (Scheduled Jobs)"]
+            MAINT_QUARANTINE_CLEANUP["quarantine_cleanup.py<br/>─────────────<br/>QuarantineAutoReleaseJob<br/>AutoReleaseResult<br/>─────────────<br/>48h auto-release<br/>15min job interval<br/>100 batch size"]
+        end
+
+        subgraph OPS_DIR["ops/ (Observability & Resilience)"]
+            OPS_CIRCUIT["circuit_breaker.py<br/>─────────────<br/>P03CircuitBreaker<br/>P03CircuitBreakerState<br/>P03CircuitBreakerConfig<br/>─────────────<br/>States: CLOSED→OPEN→HALF_OPEN<br/>5 failures to open<br/>60s reset timeout"]
+            OPS_ALERTING["alerting.py<br/>─────────────<br/>Prometheus Alert Rules<br/>P03_ALERT_THRESHOLDS<br/>P03_SLO_TARGETS<br/>─────────────<br/>Cycle, Queue, Learning,<br/>Security, Performance alerts"]
+            OPS_TRACING["tracing.py<br/>─────────────<br/>P03ConsolidationTracer<br/>PHASE_NAMES<br/>─────────────<br/>OpenTelemetry spans<br/>R0-R8 phase hierarchy<br/>Uses K0 TracerFactory"]
+            OPS_METRICS["metrics.py<br/>─────────────<br/>P03MetricsRegistry<br/>DecisionType, GapType<br/>─────────────<br/>1540 lines of metrics<br/>Uses K0 MetricsExporter"]
+            OPS_ERROR_HANDLER["error_handler.py<br/>─────────────<br/>P03ErrorHandler<br/>P03ErrorContext<br/>─────────────<br/>Routes to retry/DLQ<br/>Classifies: TRANSIENT,<br/>VALIDATION, LOGIC, FATAL"]
+            OPS_DLQ["dlq_store.py<br/>─────────────<br/>P03DLQStore<br/>P03DLQRecord<br/>─────────────<br/>Enriched DLQ records<br/>Uses K0 DeadLetterQueue"]
+            OPS_HEALTH["health.py<br/>─────────────<br/>P03HealthCheck<br/>ComponentHealth<br/>─────────────<br/>Liveness/Readiness probes"]
+            OPS_BACKOFF["backoff.py<br/>─────────────<br/>ExponentialBackoff<br/>RetryConfig<br/>─────────────<br/>Jittered exponential backoff<br/>For transient errors"]
+            OPS_BUS_CIRCUIT["bus_circuit.py<br/>─────────────<br/>BusDispatcherCircuitBreaker<br/>EventPriority enum<br/>EmissionResult<br/>─────────────<br/>R8 bus emission circuit<br/>Fallback: outbox queue<br/>CRITICAL/NORMAL/LOW priority"]
+            OPS_CONTEXT_PROP["context_propagation.py<br/>─────────────<br/>P03TraceContextPropagator<br/>P03BaggageKeys<br/>P03ContextSnapshot<br/>─────────────<br/>OpenTelemetry baggage<br/>cycle_id, tenant_id, space_id<br/>Inject/extract for events"]
+            OPS_EDGE_CASE["edge_case_handler.py<br/>─────────────<br/>P03EdgeCaseHandler<br/>EdgeCaseType enum<br/>EdgeCaseResult<br/>─────────────<br/>IDLE_CYCLE, CORRUPTED_EMBEDDING<br/>BACKLOG_OVERFLOW, KG_EXPLOSION<br/>MEMORY_PRESSURE handling"]
+            OPS_ERROR_CLASS["error_classifier.py<br/>─────────────<br/>P03ErrorCategory enum<br/>classify_exception()<br/>─────────────<br/>TRANSIENT→retry<br/>VALIDATION→DLQ<br/>LOGIC→DLQ+alert<br/>FATAL→circuit break"]
+            OPS_FAISS_CIRCUIT["faiss_circuit.py<br/>─────────────<br/>FAISSCircuitBreaker<br/>SimilarityResult<br/>─────────────<br/>R2 similarity search circuit<br/>Fallback: brute-force SQL<br/>10k limit on fallback"]
+            OPS_FORMULA_CMP["formula_comparison.py<br/>─────────────<br/>FormulaComparator<br/>FormulaComparisonResult<br/>ComparisonMetric<br/>─────────────<br/>Welch's t-test (p<0.05)<br/>Min 1000 samples<br/>Canary rollout decisions"]
+            OPS_FORMULA_TRACE["formula_tracing.py<br/>─────────────<br/>FormulaTracer<br/>TraceLevel (USER/OPS/DEBUG)<br/>TraceContext, TraceStep<br/>─────────────<br/>1% sampling, 100% on error<br/>USER: 90d, DEBUG: 7d<br/>Step-by-step computation"]
+            OPS_LOGGING["logging.py<br/>─────────────<br/>P03LogContextManager<br/>P03_REQUIRED_FIELDS<br/>─────────────<br/>Structured logging schema<br/>cycle_context(), phase_context()<br/>PII redaction"]
+            OPS_MODULE_METRICS["module_metrics.py<br/>─────────────<br/>@module_metric decorator<br/>ModuleMetricContext<br/>MODULE_NAMES (M18-M25)<br/>─────────────<br/>Per-module instrumentation<br/>Latency, throughput, errors"]
+            OPS_P08_CIRCUIT["p08_circuit.py<br/>─────────────<br/>P08EmbeddingCircuitBreaker<br/>─────────────<br/>R4 entity embedding circuit<br/>Fallback: cached st_vec<br/>Queue for later embed"]
+            OPS_PARTIAL_FAIL["partial_failure.py<br/>─────────────<br/>P03PartialFailureStrategy<br/>P03BatchResult, P03EventResult<br/>PartialFailureHandler<br/>─────────────<br/>COMMIT_PARTIAL (default)<br/>ROLLBACK_ALL, QUARANTINE_BATCH"]
+            OPS_PHASE_LOGGER["phase_logger.py<br/>─────────────<br/>PhaseLogger<br/>PHASE_INFO_EVENTS<br/>PHASE_DEBUG_EVENTS<br/>─────────────<br/>Phase-specific log levels<br/>R0-R8 event matrix"]
+            OPS_QUARANTINE_METRICS["quarantine_metrics.py<br/>─────────────<br/>QuarantineMetricsCollector<br/>QuarantineStats<br/>─────────────<br/>by_reason, by_severity<br/>review_latency, pending_count<br/>rate_limit, velocity metrics"]
+            OPS_RETRY_CONFIG["retry_config.py<br/>─────────────<br/>P03RetryConfig<br/>PHASE_RETRY_OVERRIDES<br/>─────────────<br/>R0: 5 attempts (lock)<br/>R7: 10 attempts (critical)<br/>Exponential backoff+jitter"]
+            OPS_SECURITY["security.py<br/>─────────────<br/>CrossSpaceAuditor<br/>PROTECTED_TABLES<br/>RLSViolation<br/>─────────────<br/>RLS policy monitoring<br/>Cross-space leakage detection<br/>pg_stat_statements audit"]
+            OPS_SHADOW_CMP["shadow_comparator.py<br/>─────────────<br/>ShadowModeComparator<br/>ShadowOutcome enum<br/>PROMOTION_CRITERIA<br/>─────────────<br/>Baseline vs learned comparison<br/>improve>5%, regress<2%<br/>1000 sample minimum"]
+        end
+
+        subgraph SECURITY_DIR["security/ (Privacy & Compliance)"]
+            SEC_AUDIT["audit_trail.py<br/>─────────────<br/>P03AuditTrail<br/>AuditEntry<br/>AuditAction enum<br/>─────────────<br/>Debug/explainability<br/>In-memory, 1000 max"]
+            SEC_RLS["rls_verifier.py<br/>─────────────<br/>RLSHealthReport<br/>PolicyInfo<br/>verify_rls_enabled()<br/>─────────────<br/>Checks RLS on 6 tables<br/>Startup + periodic"]
+            SEC_PRIVACY["privacy_band.py<br/>─────────────<br/>PrivacyBandEnforcer<br/>PrivacyBand enum<br/>BandConstraints<br/>─────────────<br/>GREEN/AMBER/RED bands<br/>Controls external sharing"]
+            SEC_TOMBSTONE["tombstone.py<br/>─────────────<br/>TombstoneState enum<br/>TombstoneInfo<br/>soft_delete()<br/>─────────────<br/>7-day retention for undo<br/>ACTIVE→TOMBSTONED→DELETED"]
+            SEC_LOCATION["location_masking.py<br/>─────────────<br/>MaskedLocation<br/>mask_for_external_api()<br/>─────────────<br/>Masks location for LLM calls<br/>Uses K0 location_privacy"]
+            SEC_FINGERPRINT["fingerprint.py<br/>─────────────<br/>ContentFingerprint<br/>fingerprint_text()<br/>fingerprint_event()<br/>─────────────<br/>SHA-256 deduplication"]
+            SEC_INPUT["input_sanitizer.py<br/>─────────────<br/>InputSanitizer<br/>sanitize_input()<br/>─────────────<br/>XSS/injection prevention<br/>HTML entity encoding"]
+            SEC_TOKEN["token_redactor.py<br/>─────────────<br/>TokenRedactor<br/>REDACTED_PATTERNS<br/>─────────────<br/>Masks API keys/tokens<br/>For audit logging"]
+            SEC_DEVICE_RETENTION["device_retention.py<br/>─────────────<br/>DeviceRetentionPolicy<br/>RetentionAction enum<br/>RetentionDecision<br/>─────────────<br/>Band-based retention:<br/>GREEN:365d, AMBER:180d<br/>RED:90d, TOMBSTONE:7d"]
+            SEC_QUERY_AUDITOR["query_auditor.py<br/>─────────────<br/>CrossSpaceAuditor<br/>QueryViolation<br/>SecurityReport<br/>─────────────<br/>Scans pg_stat_statements<br/>Detects missing space_id<br/>Weekly audit (168h)"]
+        end
+
+        subgraph QOS_DIR["qos/ (Quality of Service)"]
+            QOS_BATCH_SIZER["adaptive_batch_sizer.py<br/>─────────────<br/>P03AdaptiveBatchSizer<br/>BatchSizeCategory enum<br/>BatchSizeProfile<br/>─────────────<br/>SMALL:100, MEDIUM:1000<br/>LARGE:10000 events<br/>Contention-aware sizing"]
+            QOS_CONTEXT["context_integration.py<br/>─────────────<br/>P03QoSContext<br/>P03BudgetSnapshot<br/>─────────────<br/>fanout_budget: 1000<br/>top_k_budget: 500<br/>Wraps K0 QoSContext"]
+            QOS_LEARNING_BUDGET["learning_budget.py<br/>─────────────<br/>P03LearningBudgetTracker<br/>LearningOperation enum<br/>LearningBudgetConfig<br/>─────────────<br/>Max 5% of cycle time<br/>Per-op limits (50-500ms)"]
+            QOS_PHASE_METRICS["phase_metrics.py<br/>─────────────<br/>P03PhaseLatencyTracker<br/>LatencyTarget<br/>SLOComplianceLevel<br/>─────────────<br/>R0-R8 P50/P95/P99 targets<br/>EXCELLENT/GOOD/WARNING/BREACH"]
+            QOS_QUERY_METRICS["query_metrics.py<br/>─────────────<br/>P03QueryMetrics<br/>QueryType enum<br/>QueryThresholds<br/>─────────────<br/>Fast<10ms, Normal<50ms<br/>Slow<200ms, Critical<1s"]
+            QOS_RESOURCE_METRICS["resource_metrics.py<br/>─────────────<br/>P03ResourceTracker<br/>MemoryPressureLevel enum<br/>ResourceTarget<br/>─────────────<br/>Memory: 512MB/cycle<br/>CPU: 2 cores, DB: 10 conn"]
+            QOS_SCHEDULER["scheduler_integration.py<br/>─────────────<br/>P03SchedulerIntegration<br/>P03SchedulerProfile<br/>P03Band (GREEN/AMBER/RED)<br/>─────────────<br/>Token-based WDRR<br/>BATCH/SIMILARITY/DREAM profiles"]
+            QOS_THROUGHPUT["throughput_tracker.py<br/>─────────────<br/>P03ThroughputTracker<br/>ThroughputTargets<br/>ThroughputComplianceLevel<br/>─────────────<br/>1000 events/cycle<br/>40 cycles/hour = 40k/hr"]
+        end
+    end
+
+    %% ===========================================================================
+    %% INTERNAL DEPENDENCY ARROWS (ROOT FILES)
+    %% ===========================================================================
+
+    %% L1 depends on L0
+    RUNNER_CONTRACT --> CONTEXT
+    EVENT_STATE -.->|"(standalone)"| CONTEXT
+
+    %% L2 depends on L0, L1
+    OBSERVABILITY --> CONTEXT
+    PHASE_OUTPUTS -.->|"TYPE_CHECKING"| K0_MODULES
+    STAGED_WRITES --> CONTEXT
+
+    %% L3 depends on L0-L2
+    ENVELOPE --> CONTEXT
+    ENVELOPE --> EVENT_STATE
+    ENVELOPE --> OBSERVABILITY
+    ENVELOPE --> PHASE_OUTPUTS
+    ENVELOPE --> RUNNER_CONTRACT
+    ENVELOPE --> STAGED_WRITES
+
+    SERIALIZER --> CONTEXT
+    SERIALIZER --> EVENT_STATE
+    SERIALIZER --> OBSERVABILITY
+    SERIALIZER --> PHASE_OUTPUTS
+    SERIALIZER --> STAGED_WRITES
+
+    %% L4 depends on L0-L3
+    PHASE_INTERFACE --> OBSERVABILITY
+    PHASE_INTERFACE --> RUNNER_CONTRACT
+    PHASE_INTERFACE -.->|"TYPE_CHECKING"| ENVELOPE
+
+    CHECKPOINT --> CONTEXT
+    CHECKPOINT --> RUNNER_CONTRACT
+
+    DETERMINISTIC --> RUNNER_CONTRACT
+
+    OFFSET_MANAGER --> CHECKPOINT
+    OFFSET_MANAGER --> RUNNER_CONTRACT
+    OFFSET_MANAGER -.->|"TYPE_CHECKING"| ENVELOPE
+    OFFSET_MANAGER -.->|"TYPE_CHECKING"| PHASE_INTERFACE
+    OFFSET_MANAGER -.->|"TYPE_CHECKING"| K0_UOW
+
+    %% L5 depends on L0-L4
+    SEQUENTIAL_RUNNER --> OBSERVABILITY
+    SEQUENTIAL_RUNNER --> PHASE_INTERFACE
+    SEQUENTIAL_RUNNER --> RUNNER_CONTRACT
+    SEQUENTIAL_RUNNER -.->|"TYPE_CHECKING"| ENVELOPE
+
+    %% L6 Feature dependencies
+    GAP_EMITTER --> K0_STORAGE
+    GAP_EMITTER -.->|"TYPE_CHECKING"| ENVELOPE
+    GAP_EMITTER -.->|"TYPE_CHECKING"| PHASE_OUTPUTS
+    GAP_EMITTER -.->|"TYPE_CHECKING"| K0_UOW
+
+    OUTBOX_PUBLISHER --> K0_BUS
+    OUTBOX_PUBLISHER --> K0_STORAGE
+
+    AUDIT_LOGGER --> CONTEXT
+
+    FEEDBACK_CONSUMER --> K0_FEEDBACK
+    FEEDBACK_CONSUMER -.->|"TYPE_CHECKING"| K0_BUS
+
+    %% ===========================================================================
+    %% R0 PHASE DEPENDENCIES
+    %% ===========================================================================
+
+    %% R0 imports from root files
+    R0_BATCH_SELECTOR --> CHECKPOINT
+    R0_BATCH_SELECTOR --> CONTEXT
+    R0_BATCH_SELECTOR --> ENVELOPE
+    R0_BATCH_SELECTOR --> EVENT_STATE
+    R0_BATCH_SELECTOR --> OBSERVABILITY
+    R0_BATCH_SELECTOR --> PHASE_INTERFACE
+    R0_BATCH_SELECTOR --> RUNNER_CONTRACT
+
+    %% R0 database access
+    R0_BATCH_SELECTOR ==>|"READ offset"| ST_OFFSETS
+    R0_BATCH_SELECTOR ==>|"SELECT eligible events"| ST_HIPP_EVENTS
+    R0_BATCH_SELECTOR ==>|"LOAD embeddings"| ST_VEC
+
+    %% ===========================================================================
+    %% R1 PHASE DEPENDENCIES
+    %% ===========================================================================
+
+    %% R1 imports from root files
+    R1_IMPORTANCE --> AUDIT_LOGGER
+    R1_IMPORTANCE --> OBSERVABILITY
+    R1_IMPORTANCE --> PHASE_INTERFACE
+    R1_IMPORTANCE --> PHASE_OUTPUTS
+    R1_IMPORTANCE --> RUNNER_CONTRACT
+
+    %% R1 uses algorithms
+    R1_IMPORTANCE ==>|"uses"| ALG_IMPORTANCE_SCORER
+    ALG_IMPORTANCE_SCORER -.->|"loads learned weights"| ALG_IMPORTANCE_LEARNER
+
+    %% R1 database access
+    R1_IMPORTANCE ==>|"WRITE audit records"| ST_CONSOLIDATION_AUDIT
+    ALG_IMPORTANCE_SCORER -.->|"READ learned weights"| ST_IMPORTANCE_WEIGHTS
+
+    %% ===========================================================================
+    %% RUNNER TO PHASES CONNECTION
+    %% ===========================================================================
+
+    SEQUENTIAL_RUNNER ==>|"orchestrates"| R0_BATCH_SELECTOR
+    SEQUENTIAL_RUNNER ==>|"orchestrates"| R1_IMPORTANCE
+    SEQUENTIAL_RUNNER ==>|"orchestrates"| R2_EPISODIC
+    SEQUENTIAL_RUNNER ==>|"orchestrates"| R3_DEDUP
+    SEQUENTIAL_RUNNER ==>|"orchestrates"| R4_KG
+    SEQUENTIAL_RUNNER ==>|"orchestrates"| R5_DREAM
+    SEQUENTIAL_RUNNER ==>|"orchestrates"| R6_STAGING
+    SEQUENTIAL_RUNNER ==>|"orchestrates"| R7_TRUTH
+    SEQUENTIAL_RUNNER ==>|"orchestrates"| R8_EMITTER
+
+    %% ===========================================================================
+    %% R2 PHASE DEPENDENCIES
+    %% ===========================================================================
+
+    %% R2 imports from root files
+    R2_EPISODIC --> OBSERVABILITY
+    R2_EPISODIC --> PHASE_INTERFACE
+    R2_EPISODIC --> PHASE_OUTPUTS
+    R2_EPISODIC --> RUNNER_CONTRACT
+
+    %% R2 uses algorithms
+    R2_EPISODIC ==>|"uses"| ALG_EPISODE_SPLITTER
+    R2_EPISODIC ==>|"uses"| ALG_EPISODIC_DBSCAN
+    R2_EPISODIC ==>|"uses"| ALG_CENTROID
+    R2_EPISODIC ==>|"uses"| ALG_CLUSTER_QUALITY
+    R2_EPISODIC -.->|"adaptive"| ALG_EPS_ADJUSTER
+    R2_EPISODIC -.->|"adaptive"| ALG_MIN_SAMPLES
+
+    %% R2 database access
+    R2_EPISODIC -.->|"READ/WRITE params"| ST_EPS_PARAMS
+    R2_EPISODIC -.->|"WRITE quality"| ST_CLUSTER_QUALITY
+
+    %% ===========================================================================
+    %% R3 PHASE DEPENDENCIES
+    %% ===========================================================================
+
+    %% R3 imports from root files
+    R3_DEDUP --> OBSERVABILITY
+    R3_DEDUP --> PHASE_INTERFACE
+    R3_DEDUP --> RUNNER_CONTRACT
+
+    %% R3 uses algorithms (all 11 sub-components)
+    R3_DEDUP ==>|"4.3.1"| ALG_SIMHASH
+    R3_DEDUP ==>|"4.3.2"| ALG_TWO_STAGE
+    R3_DEDUP ==>|"4.3.3"| ALG_DECAY
+    R3_DEDUP ==>|"4.3.4"| ALG_RETENTION
+    R3_DEDUP ==>|"4.3.5"| ALG_ACCESS
+    R3_DEDUP ==>|"4.3.6"| ALG_REGRET
+    R3_DEDUP ==>|"4.3.7"| ALG_DUPLICATE
+    R3_DEDUP ==>|"4.3.8"| ALG_NOVELTY
+    R3_DEDUP ==>|"4.3.9"| ALG_IMMUNITY
+    R3_DEDUP ==>|"4.3.10"| ALG_PRUNE_AUDIT
+    R3_DEDUP ==>|"4.3.11"| ALG_MINHASH
+    R3_DEDUP ==>|"4.3.13"| ALG_RECONCILIATION
+
+    %% R3 reconciliation uses TruthQueryService
+    ALG_RECONCILIATION ==>|"queries"| ALG_TRUTH_QUERY
+    ALG_TRUTH_QUERY ==>|"READ"| ST_EPI
+    ALG_TRUTH_QUERY ==>|"READ"| ST_SEM
+    ALG_TRUTH_QUERY ==>|"READ"| ST_VEC
+
+    %% R3 database access
+    R3_DEDUP ==>|"READ/WRITE"| ST_ACCESS_LOG
+    R3_DEDUP ==>|"READ/WRITE"| ST_PRUNED_ENTITIES
+    R3_DEDUP ==>|"READ"| ST_NOVELTY_WEIGHTS
+    R3_DEDUP ==>|"WRITE"| ST_PRUNE_AUDIT
+
+    %% ===========================================================================
+    %% R4 PHASE DEPENDENCIES
+    %% ===========================================================================
+
+    %% R4 imports from root files
+    R4_KG --> OBSERVABILITY
+    R4_KG --> PHASE_INTERFACE
+    R4_KG --> PHASE_OUTPUTS
+    R4_KG --> RUNNER_CONTRACT
+
+    %% R4 uses algorithms (4.4.1-4.4.11)
+    R4_KG ==>|"4.4.1"| ALG_ENTITY_EXTRACTOR
+    R4_KG ==>|"4.4.2"| ALG_ENTITY_DISAMBIG
+    R4_KG ==>|"4.4.4"| ALG_AMBIG_RESOLVER
+    R4_KG ==>|"4.4.5"| ALG_CONFIDENCE
+    R4_KG ==>|"4.4.6"| ALG_MERGE_THRESHOLD
+    R4_KG ==>|"4.4.7"| ALG_ENTITY_MERGER
+    R4_KG ==>|"4.4.8"| ALG_HEBBIAN
+    R4_KG ==>|"4.4.9"| ALG_GRANGER
+    R4_KG ==>|"4.4.10"| ALG_CAUSALITY_THRESH
+    R4_KG ==>|"4.4.11"| ALG_EDGE_DEMOTION
+
+    %% R4 database access
+    R4_KG ==>|"READ/WRITE"| ST_KG_ENTITIES
+    R4_KG ==>|"READ/WRITE"| ST_KG_EDGES
+    R4_KG ==>|"WRITE"| ST_ENTITY_MERGES
+    R4_KG -.->|"READ"| ST_MERGE_THRESHOLDS
+    R4_KG -.->|"READ"| ST_CAUSALITY_THRESHOLDS
+
+    %% ===========================================================================
+    %% R5 PHASE DEPENDENCIES
+    %% ===========================================================================
+
+    %% R5 imports from root files
+    R5_DREAM --> OBSERVABILITY
+    R5_DREAM --> PHASE_INTERFACE
+    R5_DREAM --> PHASE_OUTPUTS
+    R5_DREAM --> RUNNER_CONTRACT
+    R5_DREAM --> R5_CONFIG
+
+    %% R5 uses dream module components
+    R5_DREAM ==>|"uses"| DREAM_EXPLORER
+    DREAM_EXPLORER --> DREAM_CONFIG
+    DREAM_EXPLORER --> DREAM_MODELS
+    DREAM_EXPLORER --> DREAM_BUDGET
+
+    %% R5 uses algorithms (CPN, MCTS, BGT-SM, SPC-UQ, TDL-HCO)
+    R5_DREAM ==>|"counterfactual"| ALG_CPN
+    R5_DREAM ==>|"simulation"| ALG_MCTS
+    R5_DREAM ==>|"adaptive rollout"| ALG_MCTS_ADAPTIVE
+    R5_DREAM ==>|"bisociative"| ALG_BGT_SM
+    R5_DREAM ==>|"reconstruction"| ALG_SPC_UQ
+    R5_DREAM ==>|"TD learning"| ALG_TDL_HCO
+    R5_DREAM ==>|"shadow validation"| ALG_MCTS_SHADOW
+
+    %% R5 database access
+    R5_DREAM ==>|"WRITE decisions"| ST_MCTS_DECISIONS
+    ALG_MCTS_SHADOW ==>|"WRITE shadow log"| ST_MCTS_SHADOW
+
+    %% R5 reads from earlier phases
+    R5_DREAM -.->|"READ clusters"| ST_EPI
+    R5_DREAM -.->|"READ KG"| ST_KG_ENTITIES
+    R5_DREAM -.->|"READ edges"| ST_KG_EDGES
+
+    %% ===========================================================================
+    %% R6 PHASE DEPENDENCIES
+    %% ===========================================================================
+
+    %% R6 imports from root files
+    R6_STAGING --> EVENT_STATE
+    R6_STAGING --> OBSERVABILITY
+    R6_STAGING --> PHASE_INTERFACE
+    R6_STAGING --> PHASE_OUTPUTS
+    R6_STAGING --> RUNNER_CONTRACT
+
+    %% R6 uses staging module components
+    R6_STAGING ==>|"5.1.1"| ALG_R6_COORDINATOR
+    ALG_R6_COORDINATOR --> ALG_STATUS_MARKER
+    ALG_R6_COORDINATOR --> ALG_DEDUP_META
+    ALG_R6_COORDINATOR --> ALG_RECONCILE
+    ALG_R6_COORDINATOR --> ALG_IDEMPOTENCY
+    ALG_R6_COORDINATOR --> ALG_TRUTH_ASSEMBLER
+    ALG_R6_COORDINATOR --> ALG_KG_ASSEMBLER
+    ALG_R6_COORDINATOR --> ALG_OUTBOX_ASSEMBLER
+    ALG_R6_COORDINATOR --> ALG_MANIFEST
+
+    %% R6 receives R5 outputs
+    R6_STAGING -.->|"consumes R5 output"| R5_DREAM
+
+    %% R6 database access (stages writes for R7)
+    R6_STAGING ==>|"STAGE writes"| ST_EPI
+    R6_STAGING ==>|"STAGE writes"| ST_SEM
+    R6_STAGING ==>|"STAGE writes"| ST_KG_DOM
+    R6_STAGING ==>|"STAGE events"| ST_OUTBOX
+    R6_STAGING ==>|"STAGE gaps"| ST_LEARNING_QUEUE
+    R6_STAGING ==>|"UPDATE status"| ST_HIPP_EVENTS
+
+    %% ===========================================================================
+    %% R7 PHASE DEPENDENCIES
+    %% ===========================================================================
+
+    %% R7 imports from root files
+    R7_TRUTH --> OBSERVABILITY
+    R7_TRUTH --> PHASE_INTERFACE
+    R7_TRUTH --> STAGED_WRITES
+    R7_TRUTH --> RUNNER_CONTRACT
+
+    %% R7 uses truth_writer module components
+    R7_TRUTH ==>|"uses"| TW_ROUTER
+    R7_TRUTH ==>|"uses"| TW_TRANSACTION
+    TW_ROUTER --> TW_RESULT
+    TW_TRANSACTION --> TW_ROUTER
+    TW_TRANSACTION --> TW_OUTBOX
+
+    %% R7 layer writers
+    TW_ROUTER ==>|"routes to"| TW_EPISODIC
+    TW_ROUTER ==>|"routes to"| TW_SEMANTIC
+    TW_ROUTER ==>|"routes to"| TW_KG
+    TW_ROUTER ==>|"routes to"| TW_PROCEDURAL
+    TW_ROUTER ==>|"routes to"| TW_PROSPECTIVE
+    TW_ROUTER ==>|"routes to"| TW_SOCIAL
+    TW_ROUTER ==>|"routes to"| TW_VECTOR
+
+    %% R7 database access (via layer writers)
+    TW_EPISODIC ==>|"WRITE"| ST_EPI
+    TW_SEMANTIC ==>|"WRITE"| ST_SEM
+    TW_KG ==>|"WRITE"| ST_KG_ENTITIES
+    TW_KG ==>|"WRITE"| ST_KG_EDGES
+    TW_KG ==>|"WRITE"| ST_ENTITY_MERGES
+    TW_PROCEDURAL ==>|"WRITE"| ST_PROCEDURAL
+    TW_PROSPECTIVE ==>|"WRITE"| ST_PROSPECTIVE
+    TW_SOCIAL ==>|"WRITE"| ST_SOCIAL
+    TW_VECTOR ==>|"WRITE"| ST_VEC_WRITE
+    TW_OUTBOX ==>|"STAGE"| ST_OUTBOX
+
+    %% ===========================================================================
+    %% R8 PHASE DEPENDENCIES
+    %% ===========================================================================
+
+    %% R8 imports from root files
+    R8_EMITTER --> OBSERVABILITY
+    R8_EMITTER --> PHASE_INTERFACE
+    R8_EMITTER --> RUNNER_CONTRACT
+
+    %% R8 uses emission module components
+    R8_EMITTER ==>|"uses"| EMIT_EMITTER
+    R8_EMITTER ==>|"uses"| EMIT_GAP
+
+    %% R8 database access
+    EMIT_EMITTER ==>|"EMIT events"| ST_OUTBOX_EMIT
+    EMIT_GAP ==>|"EMIT gaps"| ST_OUTBOX_EMIT
+    EMIT_GAP ==>|"PERSIST gaps"| ST_LEARNING_QUEUE
+    R8_EMITTER ==>|"FINALIZE status"| ST_HIPP_EVENTS
+
+    %% ===========================================================================
+    %% MODULE WRAPPER DEPENDENCIES
+    %% ===========================================================================
+
+    %% batch_selector.py module wrapper
+    MOD_BATCH --> R0_BATCH_SELECTOR
+    MOD_BATCH -.->|"TYPE_CHECKING"| ENVELOPE
+    MOD_BATCH -.->|"TYPE_CHECKING"| PHASE_INTERFACE
+
+    %% staging module internal dependencies
+    STAG_R6_COORD --> STAG_STATUS
+    STAG_R6_COORD --> STAG_DEDUP
+    STAG_R6_COORD --> STAG_RECON
+    STAG_R6_COORD --> STAG_IDEMP
+    STAG_R6_COORD --> STAG_TRUTH_ASM
+    STAG_R6_COORD --> STAG_KG_ASM
+    STAG_R6_COORD --> STAG_OUTBOX_ASM
+    STAG_R6_COORD --> STAG_MANIFEST
+    STAG_R6_COORD --> STAG_SUMMARY
+    STAG_R6_COORD --> STAG_R6_OUT
+
+    %% R6 phase uses staging module
+    R6_STAGING ==>|"uses"| STAG_R6_COORD
+
+    %% Emission event topics
+    EMIT_EMITTER -.->|"p03.consolidation.complete.v1"| K0_BUS
+    EMIT_EMITTER -.->|"p03.pattern.detected.v1"| K0_BUS
+    EMIT_EMITTER -.->|"p03.truth.*.v1"| K0_BUS
+    EMIT_GAP -.->|"p03.gap.detected.v1"| K0_BUS
+
+    %% ===========================================================================
+    %% API SUBDIRECTORY DEPENDENCIES
+    %% ===========================================================================
+
+    %% Quarantine Review API
+    API_QUARANTINE_REVIEW -.->|"TYPE_CHECKING"| K0_METRICS
+    API_QUARANTINE_REVIEW ==>|"SELECT pending"| ST_FEEDBACK_QUARANTINE
+    API_QUARANTINE_REVIEW ==>|"UPDATE decision"| ST_FEEDBACK_QUARANTINE
+
+    %% ===========================================================================
+    %% CACHE SUBDIRECTORY DEPENDENCIES
+    %% ===========================================================================
+
+    %% Embedding Cache
+    CACHE_EMBEDDING --> K0_METRICS
+    CACHE_EMBEDDING -.->|"cache hit/miss"| K0_METRICS
+
+    %% ===========================================================================
+    %% FEEDBACK SUBDIRECTORY DEPENDENCIES
+    %% ===========================================================================
+
+    %% Anomaly Detector
+    FB_ANOMALY -.->|"TYPE_CHECKING"| K0_METRICS
+    FB_ANOMALY ==>|"SELECT recent signals"| ST_FEEDBACK_SIGNALS
+    FB_ANOMALY -.->|"entropy check"| FB_QUARANTINE
+
+    %% Quarantine Detector (orchestrator)
+    FB_QUARANTINE --> K0_METRICS
+    FB_QUARANTINE --> FB_RATE_LIMITER
+    FB_QUARANTINE --> FB_VELOCITY
+    FB_QUARANTINE ==>|"INSERT quarantine"| ST_FEEDBACK_QUARANTINE
+    FB_QUARANTINE ==>|"SELECT signals"| ST_FEEDBACK_SIGNALS
+
+    %% Rate Limiter
+    FB_RATE_LIMITER --> K0_METRICS
+    FB_RATE_LIMITER ==>|"COUNT signals in window"| ST_FEEDBACK_SIGNALS
+
+    %% Velocity Detector
+    FB_VELOCITY -.->|"TYPE_CHECKING"| K0_METRICS
+    FB_VELOCITY ==>|"COUNT recent vs baseline"| ST_FEEDBACK_SIGNALS
+
+    %% Feedback Consumer uses these detectors
+    FEEDBACK_CONSUMER -.->|"uses"| FB_QUARANTINE
+    FEEDBACK_CONSUMER -.->|"uses"| FB_ANOMALY
+
+    %% ===========================================================================
+    %% LEARNING SUBDIRECTORY DEPENDENCIES
+    %% ===========================================================================
+
+    %% Async Audit Logger - batched writes
+    LEARN_ASYNC_AUDIT --> K0_METRICS
+    LEARN_ASYNC_AUDIT ==>|"batch INSERT (30s interval)"| ST_CONSOLIDATION_AUDIT
+    R0_BATCH_SELECTOR -.->|"audit"| LEARN_ASYNC_AUDIT
+    R1_IMPORTANCE -.->|"audit"| LEARN_ASYNC_AUDIT
+    R2_EPISODIC -.->|"audit"| LEARN_ASYNC_AUDIT
+    R3_DEDUP -.->|"audit"| LEARN_ASYNC_AUDIT
+    R4_KG -.->|"audit"| LEARN_ASYNC_AUDIT
+    R5_DREAM -.->|"audit"| LEARN_ASYNC_AUDIT
+    R6_STAGING -.->|"audit"| LEARN_ASYNC_AUDIT
+
+    %% Feedback Queue - overflow sampling
+    LEARN_FEEDBACK_QUEUE --> K0_METRICS
+    LEARN_FEEDBACK_QUEUE -.->|"overflow sampling"| LEARN_ANOMALY
+    FEEDBACK_CONSUMER --> LEARN_FEEDBACK_QUEUE
+
+    %% Learning Anomaly Detector
+    LEARN_ANOMALY --> K0_METRICS
+    LEARN_ANOMALY ==>|"SELECT weight history"| ST_LEARNED_WEIGHTS
+    LEARN_ANOMALY ==>|"SELECT decay feedback"| ST_DECAY_FEEDBACK
+    LEARN_ANOMALY -.->|"parameter drift alert"| K0_METRICS
+    LEARN_ANOMALY -.->|"contradictory signal alert"| K0_METRICS
+    LEARN_ANOMALY -.->|"formula regression alert"| K0_METRICS
+
+    %% ===========================================================================
+    %% MAINTENANCE SUBDIRECTORY DEPENDENCIES
+    %% ===========================================================================
+
+    %% Quarantine Cleanup Job - 48h auto-release
+    MAINT_QUARANTINE_CLEANUP --> K0_METRICS
+    MAINT_QUARANTINE_CLEANUP ==>|"SELECT stale quarantine"| ST_FEEDBACK_QUARANTINE
+    MAINT_QUARANTINE_CLEANUP ==>|"UPDATE release status"| ST_FEEDBACK_QUARANTINE
+    MAINT_QUARANTINE_CLEANUP ==>|"INSERT released signals"| ST_FEEDBACK_SIGNALS
+    MAINT_QUARANTINE_CLEANUP -.->|"15min interval, 100 batch"| K0_METRICS
+
+    %% ===========================================================================
+    %% OPS SUBDIRECTORY DEPENDENCIES
+    %% ===========================================================================
+
+    %% Circuit Breaker - protects external calls
+    OPS_CIRCUIT --> K0_METRICS
+    R4_KG -.->|"wrapped by"| OPS_CIRCUIT
+    R6_STAGING -.->|"wrapped by"| OPS_CIRCUIT
+    R7_TRUTH -.->|"wrapped by"| OPS_CIRCUIT
+    R8_EMITTER -.->|"wrapped by"| OPS_CIRCUIT
+
+    %% Tracing - spans for all phases
+    OPS_TRACING --> K0_TRACING
+    SEQUENTIAL_RUNNER --> OPS_TRACING
+    R0_BATCH_SELECTOR --> OPS_TRACING
+    R1_IMPORTANCE --> OPS_TRACING
+    R2_EPISODIC --> OPS_TRACING
+    R3_DEDUP --> OPS_TRACING
+    R4_KG --> OPS_TRACING
+    R5_DREAM --> OPS_TRACING
+    R6_STAGING --> OPS_TRACING
+    R7_TRUTH --> OPS_TRACING
+    R8_EMITTER --> OPS_TRACING
+
+    %% Metrics Registry
+    OPS_METRICS --> K0_METRICS
+    SEQUENTIAL_RUNNER --> OPS_METRICS
+    R0_BATCH_SELECTOR --> OPS_METRICS
+    R1_IMPORTANCE --> OPS_METRICS
+    R2_EPISODIC --> OPS_METRICS
+    R3_DEDUP --> OPS_METRICS
+    R4_KG --> OPS_METRICS
+    R5_DREAM --> OPS_METRICS
+    R6_STAGING --> OPS_METRICS
+    R7_TRUTH --> OPS_METRICS
+    R8_EMITTER --> OPS_METRICS
+
+    %% Error Handler - routes to DLQ
+    OPS_ERROR_HANDLER --> OPS_DLQ
+    OPS_ERROR_HANDLER --> K0_METRICS
+    SEQUENTIAL_RUNNER -.->|"on error"| OPS_ERROR_HANDLER
+
+    %% DLQ Store
+    OPS_DLQ --> K0_DLQ
+    OPS_DLQ ==>|"INSERT enriched record"| ST_DLQ
+    OPS_DLQ --> K0_METRICS
+
+    %% Alerting - Prometheus rules
+    OPS_ALERTING --> K0_METRICS
+    OPS_ALERTING -.->|"SLO targets"| OPS_METRICS
+
+    %% Health endpoints
+    OPS_HEALTH --> OPS_CIRCUIT
+    OPS_HEALTH --> OPS_METRICS
+    OPS_HEALTH --> K0_DRIVERS
+
+    %% Exponential Backoff
+    OPS_BACKOFF --> K0_METRICS
+    OPS_ERROR_HANDLER --> OPS_BACKOFF
+
+    %% Bus Dispatcher Circuit Breaker
+    OPS_BUS_CIRCUIT --> OPS_CIRCUIT
+    OPS_BUS_CIRCUIT --> K0_METRICS
+    OPS_BUS_CIRCUIT --> K0_BUS
+    R8_EMITTER -.->|"emit via"| OPS_BUS_CIRCUIT
+    EMIT_EMITTER -.->|"emit via"| OPS_BUS_CIRCUIT
+    OPS_BUS_CIRCUIT -.->|"fallback"| ST_OUTBOX
+
+    %% Context Propagation
+    OPS_CONTEXT_PROP --> K0_TRACING
+    OPS_CONTEXT_PROP --> OPS_TRACING
+    SEQUENTIAL_RUNNER -.->|"attach baggage"| OPS_CONTEXT_PROP
+    R8_EMITTER -.->|"inject context"| OPS_CONTEXT_PROP
+
+    %% Edge Case Handler
+    OPS_EDGE_CASE --> K0_METRICS
+    OPS_EDGE_CASE --> OPS_CIRCUIT
+    SEQUENTIAL_RUNNER -.->|"detect edge cases"| OPS_EDGE_CASE
+
+    %% Error Classifier
+    OPS_ERROR_CLASS --> RUNNER_CONTRACT
+    OPS_ERROR_HANDLER --> OPS_ERROR_CLASS
+
+    %% FAISS Circuit Breaker
+    OPS_FAISS_CIRCUIT --> OPS_CIRCUIT
+    OPS_FAISS_CIRCUIT --> K0_METRICS
+    R2_EPISODIC -.->|"similarity search"| OPS_FAISS_CIRCUIT
+    OPS_FAISS_CIRCUIT -.->|"fallback"| ST_VEC
+
+    %% Formula Comparison
+    OPS_FORMULA_CMP --> OPS_METRICS
+    OPS_SHADOW_CMP -.->|"uses"| OPS_FORMULA_CMP
+
+    %% Formula Tracing
+    OPS_FORMULA_TRACE --> OPS_METRICS
+    OPS_FORMULA_TRACE --> K0_METRICS
+    ALG_IMPORTANCE_SCORER -.->|"trace"| OPS_FORMULA_TRACE
+    ALG_HEBBIAN -.->|"trace"| OPS_FORMULA_TRACE
+    ALG_DECAY -.->|"trace"| OPS_FORMULA_TRACE
+
+    %% Logging Context Manager
+    OPS_LOGGING --> K0_METRICS
+    SEQUENTIAL_RUNNER --> OPS_LOGGING
+    OPS_PHASE_LOGGER --> OPS_LOGGING
+
+    %% Module Metrics
+    OPS_MODULE_METRICS --> OPS_METRICS
+    R1_IMPORTANCE -.->|"@module_metric"| OPS_MODULE_METRICS
+    R2_EPISODIC -.->|"@module_metric"| OPS_MODULE_METRICS
+    R3_DEDUP -.->|"@module_metric"| OPS_MODULE_METRICS
+    R4_KG -.->|"@module_metric"| OPS_MODULE_METRICS
+    R7_TRUTH -.->|"@module_metric"| OPS_MODULE_METRICS
+
+    %% P08 Embedding Circuit Breaker
+    OPS_P08_CIRCUIT --> OPS_CIRCUIT
+    OPS_P08_CIRCUIT --> K0_METRICS
+    R4_KG -.->|"entity embedding"| OPS_P08_CIRCUIT
+    OPS_P08_CIRCUIT -.->|"fallback"| ST_VEC
+
+    %% Partial Failure Handler
+    OPS_PARTIAL_FAIL --> OPS_DLQ
+    OPS_PARTIAL_FAIL --> K0_METRICS
+    OPS_ERROR_HANDLER --> OPS_PARTIAL_FAIL
+    R7_TRUTH -.->|"batch result"| OPS_PARTIAL_FAIL
+
+    %% Phase Logger
+    OPS_PHASE_LOGGER --> K0_METRICS
+    R0_BATCH_SELECTOR -.->|"log"| OPS_PHASE_LOGGER
+    R1_IMPORTANCE -.->|"log"| OPS_PHASE_LOGGER
+    R2_EPISODIC -.->|"log"| OPS_PHASE_LOGGER
+    R3_DEDUP -.->|"log"| OPS_PHASE_LOGGER
+    R4_KG -.->|"log"| OPS_PHASE_LOGGER
+    R5_DREAM -.->|"log"| OPS_PHASE_LOGGER
+    R6_STAGING -.->|"log"| OPS_PHASE_LOGGER
+    R7_TRUTH -.->|"log"| OPS_PHASE_LOGGER
+    R8_EMITTER -.->|"log"| OPS_PHASE_LOGGER
+
+    %% Quarantine Metrics
+    OPS_QUARANTINE_METRICS --> K0_METRICS
+    FB_QUARANTINE --> OPS_QUARANTINE_METRICS
+    FB_RATE_LIMITER --> OPS_QUARANTINE_METRICS
+    FB_VELOCITY --> OPS_QUARANTINE_METRICS
+    MAINT_QUARANTINE_CLEANUP --> OPS_QUARANTINE_METRICS
+
+    %% Retry Config
+    OPS_RETRY_CONFIG --> OPS_BACKOFF
+    OPS_ERROR_HANDLER --> OPS_RETRY_CONFIG
+
+    %% Cross-Space Security Auditor
+    OPS_SECURITY --> K0_DRIVERS
+    OPS_SECURITY --> OPS_METRICS
+    OPS_SECURITY ==>|"audit queries"| ST_LEARNED_WEIGHTS
+    OPS_SECURITY ==>|"audit queries"| ST_CONSOLIDATION_AUDIT
+    SEC_RLS -.->|"uses"| OPS_SECURITY
+
+    %% Shadow Mode Comparator
+    OPS_SHADOW_CMP --> OPS_METRICS
+    OPS_SHADOW_CMP --> K0_METRICS
+    ALG_IMPORTANCE_LEARNER -.->|"shadow compare"| OPS_SHADOW_CMP
+    ALG_HEBBIAN -.->|"shadow compare"| OPS_SHADOW_CMP
+
+    %% ===========================================================================
+    %% SECURITY SUBDIRECTORY DEPENDENCIES
+    %% ===========================================================================
+
+    %% Audit Trail - debug explainability
+    SEC_AUDIT --> K0_METRICS
+    SEC_AUDIT ==>|"INSERT audit events"| ST_CONSOLIDATION_AUDIT
+    SEQUENTIAL_RUNNER -.->|"audit"| SEC_AUDIT
+
+    %% RLS Verifier - row-level security
+    SEC_RLS --> K0_DRIVERS
+    SEC_RLS ==>|"VERIFY RLS"| ST_LEARNED_WEIGHTS
+    SEC_RLS ==>|"VERIFY RLS"| ST_CONSOLIDATION_AUDIT
+    SEC_RLS ==>|"VERIFY RLS"| ST_FEEDBACK_SIGNALS
+    SEQUENTIAL_RUNNER -.->|"startup check"| SEC_RLS
+
+    %% Privacy Band Enforcer
+    SEC_PRIVACY --> K0_POLICY
+    SEC_PRIVACY --> K0_METRICS
+    R8_EMITTER -.->|"check band"| SEC_PRIVACY
+    EMIT_EMITTER -.->|"check band"| SEC_PRIVACY
+
+    %% Tombstone - soft delete
+    SEC_TOMBSTONE --> K0_METRICS
+    SEC_TOMBSTONE ==>|"UPDATE deleted_at"| ST_HIPP_EVENTS
+    SEC_TOMBSTONE ==>|"UPDATE deleted_at"| ST_EPI
+    SEC_TOMBSTONE ==>|"UPDATE deleted_at"| ST_SEM
+    ERASURE -.->|"uses"| SEC_TOMBSTONE
+
+    %% Location Masking
+    SEC_LOCATION --> K0_POLICY
+    SEC_LOCATION --> K0_METRICS
+    SEC_PRIVACY -.->|"uses"| SEC_LOCATION
+
+    %% Fingerprint - deduplication
+    SEC_FINGERPRINT --> K0_METRICS
+    R3_DEDUP -.->|"hash content"| SEC_FINGERPRINT
+    ALG_SIMHASH -.->|"uses"| SEC_FINGERPRINT
+
+    %% Input Sanitizer
+    SEC_INPUT --> K0_METRICS
+    R0_BATCH_SELECTOR -.->|"sanitize"| SEC_INPUT
+
+    %% Token Redactor
+    SEC_TOKEN --> K0_METRICS
+    SEC_AUDIT -.->|"redact tokens"| SEC_TOKEN
+
+    %% Device Retention Policy
+    SEC_DEVICE_RETENTION --> K0_METRICS
+    SEC_DEVICE_RETENTION -.->|"band-based"| SEC_PRIVACY
+    RETENTION -.->|"uses"| SEC_DEVICE_RETENTION
+    SEC_TOMBSTONE -.->|"retention rules"| SEC_DEVICE_RETENTION
+
+    %% Query Auditor
+    SEC_QUERY_AUDITOR --> K0_DRIVERS
+    SEC_QUERY_AUDITOR --> SEC_RLS
+    SEC_QUERY_AUDITOR ==>|"scan pg_stat_statements"| K0_DRIVERS
+    OPS_SECURITY -.->|"uses"| SEC_QUERY_AUDITOR
+
+    %% ===========================================================================
+    %% QOS SUBDIRECTORY DEPENDENCIES
+    %% ===========================================================================
+
+    %% Adaptive Batch Sizer
+    QOS_BATCH_SIZER --> K0_METRICS
+    QOS_BATCH_SIZER --> QOS_SCHEDULER
+    R0_BATCH_SELECTOR -.->|"batch size"| QOS_BATCH_SIZER
+    OPS_EDGE_CASE -.->|"contention"| QOS_BATCH_SIZER
+
+    %% QoS Context Integration
+    QOS_CONTEXT --> K0_METRICS
+    QOS_CONTEXT -.->|"wraps"| K0_UOW
+    R1_IMPORTANCE -.->|"consume fanout"| QOS_CONTEXT
+    R2_EPISODIC -.->|"consume top_k"| QOS_CONTEXT
+    R4_KG -.->|"consume fanout"| QOS_CONTEXT
+
+    %% Learning Budget Tracker
+    QOS_LEARNING_BUDGET --> K0_METRICS
+    QOS_LEARNING_BUDGET --> QOS_PHASE_METRICS
+    ALG_HEBBIAN -.->|"track budget"| QOS_LEARNING_BUDGET
+    ALG_IMPORTANCE_LEARNER -.->|"track budget"| QOS_LEARNING_BUDGET
+    ALG_EPISODIC_DBSCAN -.->|"track budget"| QOS_LEARNING_BUDGET
+
+    %% Phase Latency Metrics
+    QOS_PHASE_METRICS --> K0_METRICS
+    QOS_PHASE_METRICS --> OPS_METRICS
+    SEQUENTIAL_RUNNER --> QOS_PHASE_METRICS
+    R0_BATCH_SELECTOR --> QOS_PHASE_METRICS
+    R1_IMPORTANCE --> QOS_PHASE_METRICS
+    R2_EPISODIC --> QOS_PHASE_METRICS
+    R3_DEDUP --> QOS_PHASE_METRICS
+    R4_KG --> QOS_PHASE_METRICS
+    R5_DREAM --> QOS_PHASE_METRICS
+    R6_STAGING --> QOS_PHASE_METRICS
+    R7_TRUTH --> QOS_PHASE_METRICS
+    R8_EMITTER --> QOS_PHASE_METRICS
+
+    %% Query Metrics
+    QOS_QUERY_METRICS --> K0_METRICS
+    QOS_QUERY_METRICS --> K0_DRIVERS
+    R0_BATCH_SELECTOR -.->|"query timing"| QOS_QUERY_METRICS
+    R4_KG -.->|"query timing"| QOS_QUERY_METRICS
+    R7_TRUTH -.->|"query timing"| QOS_QUERY_METRICS
+
+    %% Resource Metrics
+    QOS_RESOURCE_METRICS --> K0_METRICS
+    QOS_RESOURCE_METRICS --> OPS_METRICS
+    SEQUENTIAL_RUNNER -.->|"resource tracking"| QOS_RESOURCE_METRICS
+    OPS_EDGE_CASE -.->|"memory pressure"| QOS_RESOURCE_METRICS
+
+    %% Scheduler Integration
+    QOS_SCHEDULER --> K0_METRICS
+    QOS_SCHEDULER -.->|"uses"| K0_UOW
+    SEQUENTIAL_RUNNER --> QOS_SCHEDULER
+    QOS_BATCH_SIZER --> QOS_SCHEDULER
+
+    %% Throughput Tracker
+    QOS_THROUGHPUT --> K0_METRICS
+    QOS_THROUGHPUT --> OPS_METRICS
+    SEQUENTIAL_RUNNER -.->|"cycle completed"| QOS_THROUGHPUT
+    OPS_ALERTING -.->|"SLO check"| QOS_THROUGHPUT
+
+    %% Composite Distance Algorithm
+    ALG_COMPOSITE_DIST --> K0_METRICS
+    ALG_EPISODIC_DBSCAN --> ALG_COMPOSITE_DIST
+    R2_EPISODIC ==>|"uses"| ALG_COMPOSITE_DIST
+
+    %% ===========================================================================
+    %% STYLING
+    %% ===========================================================================
+
+    classDef foundation fill:#1a365d,stroke:#2c5282,color:#fff,stroke-width:2px
+    classDef types fill:#2b6cb0,stroke:#3182ce,color:#fff,stroke-width:2px
+    classDef data fill:#2f855a,stroke:#38a169,color:#fff,stroke-width:2px
+    classDef container fill:#b7791f,stroke:#d69e2e,color:#fff,stroke-width:2px
+    classDef execution fill:#805ad5,stroke:#9f7aea,color:#fff,stroke-width:2px
+    classDef runner fill:#c53030,stroke:#e53e3e,color:#fff,stroke-width:2px
+    classDef feature fill:#4a5568,stroke:#718096,color:#fff,stroke-width:2px
+    classDef external fill:#718096,stroke:#a0aec0,color:#fff,stroke-width:1px,stroke-dasharray: 5 5
+    classDef phase fill:#dd6b20,stroke:#ed8936,color:#fff,stroke-width:2px
+    classDef database fill:#2d3748,stroke:#4a5568,color:#fff,stroke-width:2px
+    classDef algorithm fill:#319795,stroke:#38b2ac,color:#fff,stroke-width:2px
+    classDef steps fill:#553c9a,stroke:#805ad5,color:#fff,stroke-width:1px,font-size:10px
+
+    class CONTEXT foundation
+    class RUNNER_CONTRACT,EVENT_STATE types
+    class OBSERVABILITY,PHASE_OUTPUTS,STAGED_WRITES data
+    class ENVELOPE,SERIALIZER container
+    class PHASE_INTERFACE,CHECKPOINT,DETERMINISTIC,OFFSET_MANAGER execution
+    class SEQUENTIAL_RUNNER runner
+    class GAP_EMITTER,OUTBOX_PUBLISHER,AUDIT_LOGGER,RETENTION,EXPLAINABILITY,ERASURE,FEEDBACK_CONSUMER feature
+    class K0_STORAGE,K0_BUS,K0_FEEDBACK,K0_UOW,K0_MODULES external
+    class R0_BATCH_SELECTOR,R1_IMPORTANCE,R2_EPISODIC,R3_DEDUP,R4_KG,R5_DREAM,R6_STAGING,R7_TRUTH,R8_EMITTER phase
+    class ST_OFFSETS,ST_HIPP_EVENTS,ST_VEC,ST_CONSOLIDATION_AUDIT,ST_IMPORTANCE_WEIGHTS,ST_EPS_PARAMS,ST_CLUSTER_QUALITY,ST_ACCESS_LOG,ST_PRUNED_ENTITIES,ST_NOVELTY_WEIGHTS,ST_PRUNE_AUDIT database
+    class ST_KG_ENTITIES,ST_KG_EDGES,ST_ENTITY_MERGES,ST_MERGE_THRESHOLDS,ST_CAUSALITY_THRESHOLDS database
+    class ST_MCTS_DECISIONS,ST_MCTS_SHADOW database
+    class ST_EPI,ST_SEM,ST_KG_DOM,ST_OUTBOX,ST_LEARNING_QUEUE database
+    class ST_PROCEDURAL,ST_SOCIAL,ST_PROSPECTIVE,ST_VEC_WRITE,ST_OUTBOX_EMIT database
+    class ALG_IMPORTANCE_SCORER,ALG_IMPORTANCE_LEARNER,ALG_ENTITY algorithm
+    class ALG_EPISODE_SPLITTER,ALG_EPISODIC_DBSCAN,ALG_CENTROID,ALG_CLUSTER_QUALITY,ALG_EPS_ADJUSTER,ALG_MIN_SAMPLES algorithm
+    class ALG_SIMHASH,ALG_TWO_STAGE,ALG_DECAY,ALG_DUPLICATE,ALG_IMMUNITY,ALG_RETENTION,ALG_NOVELTY,ALG_PRUNE_AUDIT,ALG_REGRET,ALG_ACCESS,ALG_MINHASH algorithm
+    class ALG_ENTITY_EXTRACTOR,ALG_ENTITY_DISAMBIG,ALG_AMBIG_RESOLVER,ALG_CONFIDENCE,ALG_MERGE_THRESHOLD,ALG_ENTITY_MERGER,ALG_HEBBIAN,ALG_GRANGER,ALG_CAUSALITY_THRESH,ALG_EDGE_DEMOTION algorithm
+    class ALG_CPN,ALG_MCTS,ALG_MCTS_ADAPTIVE,ALG_BGT_SM,ALG_SPC_UQ,ALG_TDL_HCO,ALG_MCTS_SHADOW algorithm
+    class ALG_R6_COORDINATOR,ALG_STATUS_MARKER,ALG_DEDUP_META,ALG_RECONCILE,ALG_IDEMPOTENCY,ALG_TRUTH_ASSEMBLER,ALG_KG_ASSEMBLER,ALG_OUTBOX_ASSEMBLER,ALG_MANIFEST algorithm
+    class R0_STEPS,R1_STEPS,R2_STEPS,R3_STEPS,R4_STEPS,R5_STEPS,R6_STEPS,R7_STEPS,R8_STEPS steps
+
+    %% Module and Layer Writer styling
+    classDef module fill:#6b21a8,stroke:#7c3aed,color:#fff,stroke-width:2px
+    classDef layerwriter fill:#0891b2,stroke:#06b6d4,color:#fff,stroke-width:2px
+    classDef emitter fill:#ea580c,stroke:#f97316,color:#fff,stroke-width:2px
+    classDef dream fill:#a855f7,stroke:#c084fc,color:#fff,stroke-width:2px
+
+    class MOD_BATCH,MOD_BATCH_FLOW module
+    class DREAM_EXPLORER,DREAM_CONFIG,DREAM_MODELS,DREAM_BUDGET dream
+    class R5_CONFIG dream
+    class STAG_R6_COORD,STAG_STATUS,STAG_DEDUP,STAG_RECON,STAG_IDEMP,STAG_TRUTH_ASM,STAG_KG_ASM,STAG_OUTBOX_ASM,STAG_MANIFEST,STAG_SUMMARY,STAG_R6_OUT module
+    class TW_ROUTER,TW_TRANSACTION,TW_OUTBOX,TW_RESULT module
+    class TW_EPISODIC,TW_SEMANTIC,TW_KG,TW_PROCEDURAL,TW_PROSPECTIVE,TW_SOCIAL,TW_VECTOR layerwriter
+    class EMIT_EMITTER,EMIT_GAP emitter
+
+    %% API, Cache, Feedback styling
+    classDef api fill:#0d9488,stroke:#14b8a6,color:#fff,stroke-width:2px
+    classDef cache fill:#0284c7,stroke:#0ea5e9,color:#fff,stroke-width:2px
+    classDef security fill:#dc2626,stroke:#ef4444,color:#fff,stroke-width:2px
+    classDef learning fill:#7c3aed,stroke:#8b5cf6,color:#fff,stroke-width:2px
+    classDef maintenance fill:#ca8a04,stroke:#eab308,color:#fff,stroke-width:2px
+    classDef ops fill:#059669,stroke:#10b981,color:#fff,stroke-width:2px
+
+    class API_QUARANTINE_REVIEW api
+    class CACHE_EMBEDDING cache
+    class FB_ANOMALY,FB_QUARANTINE,FB_RATE_LIMITER,FB_VELOCITY security
+    class ST_FEEDBACK_SIGNALS,ST_FEEDBACK_QUARANTINE database
+    class K0_METRICS,K0_TRACING,K0_DRIVERS,K0_POLICY,K0_DLQ external
+
+    %% Learning components
+    class LEARN_ASYNC_AUDIT,LEARN_FEEDBACK_QUEUE,LEARN_ANOMALY learning
+    class ST_LEARNED_WEIGHTS,ST_DECAY_FEEDBACK database
+
+    %% Maintenance components
+    class MAINT_QUARANTINE_CLEANUP maintenance
+
+    %% Ops components
+    class OPS_CIRCUIT,OPS_TRACING,OPS_METRICS,OPS_ERROR_HANDLER,OPS_DLQ,OPS_ALERTING,OPS_HEALTH,OPS_BACKOFF ops
+    class OPS_BUS_CIRCUIT,OPS_CONTEXT_PROP,OPS_EDGE_CASE,OPS_ERROR_CLASS,OPS_FAISS_CIRCUIT ops
+    class OPS_FORMULA_CMP,OPS_FORMULA_TRACE,OPS_LOGGING,OPS_MODULE_METRICS,OPS_P08_CIRCUIT ops
+    class OPS_PARTIAL_FAIL,OPS_PHASE_LOGGER,OPS_QUARANTINE_METRICS,OPS_RETRY_CONFIG,OPS_SECURITY,OPS_SHADOW_CMP ops
+    class ST_DLQ database
+
+    %% Security components
+    class SEC_AUDIT,SEC_RLS,SEC_PRIVACY,SEC_TOMBSTONE,SEC_LOCATION,SEC_FINGERPRINT,SEC_INPUT,SEC_TOKEN security
+    class SEC_DEVICE_RETENTION,SEC_QUERY_AUDITOR security
+
+    %% QoS components
+    classDef qos fill:#4338ca,stroke:#6366f1,color:#fff,stroke-width:2px
+    class QOS_BATCH_SIZER,QOS_CONTEXT,QOS_LEARNING_BUDGET,QOS_PHASE_METRICS qos
+    class QOS_QUERY_METRICS,QOS_RESOURCE_METRICS,QOS_SCHEDULER,QOS_THROUGHPUT qos
+
+    %% Composite Distance Algorithm
+    class ALG_COMPOSITE_DIST algorithm
+
+```

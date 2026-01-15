@@ -122,6 +122,8 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
    - 9.5 [P03 ↔ P05 Attention Contract](#95-p03--p05-attention-contract)
    - 9.6 [P03 Output Events](#96-p03-output-events)
    - 9.7 [Contract Validation](#97-contract-validation)
+   - 9.8 [P21 Feedback Integration](#98-p21-feedback-integration)
+   - 9.9 [Feedback System Invariants (Two-System Architecture)](#99-feedback-system-invariants-two-system-architecture)
 
 3. [Testing Strategy](#10-testing-strategy)
     - 10.1 [Test Architecture Overview](#101-test-architecture-overview)
@@ -6601,6 +6603,407 @@ P03_SHADOW_OUTCOME_SIGNIFICANCE = 0.10  # Score must differ by 0.10 to count as 
 - TPN-MCTS: Use fixed seed for rollout sampling in CI
 - CPN: Perturbation order deterministic when sorted by entity_id
 
+#### 4.6.8 R5 current status
+
+ 🧠 R5 Dream Phase — Comprehensive Input/Output/Persistence Analysis
+
+ 📊 High-Level Data Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          R5 DREAM EXPLORER PHASE                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                    DreamExplorerInput                                │  │
+│  │  (from R0-R4 phases, stored in envelope)                             │  │
+│  ├──────────────────────────────────────────────────────────────────────┤  │
+│  │  • cycle_id: str                                                     │  │
+│  │  • tenant_id: str                                                    │  │
+│  │  • space_id: str                                                     │  │
+│  │  • recent_episodes: List[EpisodeCluster]  ← from R2 (r2_clusters)    │  │
+│  │  • kg_entities: List[KGEntity]            ← from R4 (r4_new_entities)│  │
+│  │  • kg_edges: List[KGEdge]                 ← from R4 (r4_new_edges)   │  │
+│  │  • event_states: List[P03EventState]      ← from envelope.events    │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                      DreamExplorer.explore()                         │  │
+│  │                                                                      │  │
+│  │  Runs 5 algorithms in parallel (with TDL-HCO after):                 │  │
+│  │                                                                      │  │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐               │  │
+│  │  │  BGT-SM  │ │   CPN    │ │  SPC-UQ  │ │TPN-MCTS  │ → parallel    │  │
+│  │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘               │  │
+│  │       │            │            │            │                       │  │
+│  │       ▼            ▼            ▼            ▼                       │  │
+│  │   Insights   Counterfact-  Prospective  Scenarios                   │  │
+│  │              uals          Memories     (internal)                  │  │
+│  │                                                                      │  │
+│  │  ┌──────────┐                                                        │  │
+│  │  │ TDL-HCO  │ → runs after parallel phase                           │  │
+│  │  └────┬─────┘                                                        │  │
+│  │       ▼                                                              │  │
+│  │   Routine                                                            │  │
+│  │   Optimizations                                                      │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                    DreamExplorerOutput                               │  │
+│  │                                                                      │  │
+│  │  • insights: List[Insight]                 → from BGT-SM             │  │
+│  │  • counterfactuals: List[CounterfactualScenario] → from CPN          │  │
+│  │  • prospective_memories: List[ProspectiveMemory] → from SPC-UQ       │  │
+│  │  • routine_optimizations: List[RoutineOptimization] → from TDL-HCO   │  │
+│  │  • mcts_decisions_evaluated: int           → from TPN-MCTS           │  │
+│  │  • compute_ms: int                                                   │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+##### 🔬 Algorithm-by-Algorithm Analysis
+
+###### **1. BGT-SM (Bisociative Graph Traversal for Semantic Memory)**
+
+| Aspect | Details |
+|--------|---------|
+| **Purpose** | Discover non-obvious connections between concepts |
+| **Algorithm** | Random Walk with Restart (RWR) + PMI scoring |
+| **Input Required** | `kg_entities` (min 1), `kg_edges` (min 1), seed entities |
+| **Output Type** | `List[Insight]` |
+| **Target Table** | `st_sem` with `pattern_type='INSIGHT'` |
+
+**Input Fields Used:**
+- `input_data.kg_entities` → Graph nodes
+- `input_data.kg_edges` → Graph edges
+- `input_data.recent_episodes` → Seed entity selection (via `entity_ids` attribute)
+
+**Skip Conditions:**
+```python
+# Skip if no KG data
+if not input_data.kg_entities or not input_data.kg_edges:
+    return []
+
+# Skip if no seed entities found
+seed_entity_ids = self._select_seed_entities(input_data)
+if not seed_entity_ids:
+    return []
+```
+
+**Seed Selection Logic (ISSUE FOUND):**
+```python
+# From episodes (returns [] - EpisodeCluster has no entity_ids)
+entity_ids = getattr(episode, "entity_ids", [])
+
+# From entities (returns 0 - KGEntity has no observation_count)
+obs_count = getattr(entity, "observation_count", 0)
+if entity_id and obs_count >= 5:  # Threshold never met
+```
+
+**Output Schema (Insight):**
+```python
+@dataclass(frozen=True)
+class Insight:
+    insight_id: str              # ULID
+    insight_type: str            # ASSOCIATION, PATTERN, etc.
+    description: str             # Human-readable
+    confidence: float            # 0.0-1.0
+    supporting_evidence: Tuple[str, ...]
+    novelty_score: float         # 0.0-1.0
+    concept_a_id: Optional[str]  # First connected concept
+    concept_b_id: Optional[str]  # Second connected concept
+    pmi_score: Optional[float]   # log2 surprise score
+    semantic_distance: float     # 0.0-1.0
+    serendipity_score: float     # novelty × relevance × actionability
+```
+
+---
+
+##### **2. CPN (Causal Perturbation Network)**
+
+| Aspect | Details |
+|--------|---------|
+| **Purpose** | Generate "what-if" counterfactual scenarios |
+| **Algorithm** | Causal DAG traversal + perturbation |
+| **Input Required** | Episodes with emotion, CAUSES edges |
+| **Output Type** | `List[CounterfactualScenario]` |
+| **Target Table** | `st_prospective` with `intention_type='COUNTERFACTUAL'` |
+
+**Input Fields Used:**
+- `input_data.recent_episodes` → High-emotion episodes for analysis
+- `input_data.kg_edges` → Only edges with `relationship_type == 'CAUSES'`
+
+**Skip Conditions:**
+```python
+# Skip if no regret-worthy episodes found
+regret_events = self._select_regret_events(episodes, rng)
+if not regret_events:
+    return []
+
+# Skip if no causal edges (only CAUSES edges count)
+edge_lookup = self._build_edge_lookup(kg_edges)
+# Only includes edges where rel_type == "CAUSES"
+```
+
+**Issue Found:** R4 produces 0 causal edges:
+```
+"R4: Causal inference complete - 0 causal edges from 37 candidate edges"
+```
+
+**Output Schema (CounterfactualScenario):**
+```python
+@dataclass(frozen=True)
+class CounterfactualScenario:
+    scenario_id: str
+    scenario_type: str          # UPWARD, DOWNWARD, SEMIFACTUAL
+    base_episode_id: str
+    perturbation_target: str    # What was changed
+    original_outcome: str
+    counterfactual_outcome: str
+    plausibility: float         # 0.0-1.0
+    success_probability: float  # 0.0-1.0
+    utility_delta: float        # Expected value change
+```
+
+---
+
+##### **3. SPC-UQ (Schematic Pattern Completion with Uncertainty Quantification)**
+
+| Aspect | Details |
+|--------|---------|
+| **Purpose** | Generate prospective memories from incomplete episodes |
+| **Algorithm** | Bayesian schema completion |
+| **Input Required** | Episodes with gaps/fragments |
+| **Output Type** | `List[ProspectiveMemory]` |
+| **Target Table** | `st_prospective` with `intention_type='GOAL/REMINDER/etc.'` |
+
+**Input Fields Used:**
+- `input_data.recent_episodes` → Episodes with incomplete data
+- Episode fields: `location_hint`, `participants_json`, `activity_type`
+
+**Skip Conditions:**
+- Episodes must have gaps (missing location, time, participants, etc.)
+- Minimum confidence threshold for reconstructions
+
+**Output Schema (ProspectiveMemory):**
+```python
+@dataclass(frozen=True)
+class ProspectiveMemory:
+    prosp_id: str
+    intention_type: str         # GOAL, REMINDER, DEADLINE, HABIT
+    description: str
+    trigger_condition: str      # When/what triggers
+    action_to_take: str
+    deadline_ts: Optional[int]  # MILLISECONDS
+    importance: float           # 0.0-1.0
+    confidence: float           # 0.0-1.0
+    source_episode_id: Optional[str]
+```
+
+---
+
+#### **4. TDL-HCO (Temporal Difference Learning for Habit/Cognitive Optimization)**
+
+| Aspect | Details |
+|--------|---------|
+| **Purpose** | Identify bottlenecks in behavioral routines |
+| **Algorithm** | TD(0) value function learning |
+| **Input Required** | Routines with min 2-3 occurrences |
+| **Output Type** | `List[RoutineOptimization]` |
+| **Target Table** | `st_procedural` |
+
+**Input Fields Used:**
+- Episodes → Grouped by temporal/activity patterns
+- Requires min `P03_TDL_MIN_ROUTINE_OCCURRENCES = 3` occurrences
+
+**Skip Conditions:**
+```python
+# Skip if no routines detected
+if not routines:
+    return []
+```
+
+**Output Schema (RoutineOptimization):**
+```python
+@dataclass(frozen=True)
+class RoutineOptimization:
+    routine_id: str
+    routine_name: str
+    bottleneck_step: str        # Description of bottleneck
+    bottleneck_position: int    # Position in sequence
+    value_drop: float           # Value lost at bottleneck
+    suggested_action: str
+    expected_improvement: float
+    confidence: float           # 0.0-1.0
+```
+
+---
+
+#### **5. TPN-MCTS (Temporal Projection Network with Monte Carlo Tree Search)**
+
+| Aspect | Details |
+|--------|---------|
+| **Purpose** | Forward simulation of future scenarios |
+| **Algorithm** | UCT selection + rollout simulation |
+| **Input Required** | Episodes, KG context |
+| **Output Type** | Internal scenarios (used by other algorithms) |
+| **Target Table** | `st_mcts_decisions` + `st_mcts_shadow_log` |
+
+**Rollout Allocation (per decision type):**
+```python
+ROLLOUT_ALLOCATION = {
+    ENTITY_MERGE: 100,
+    ENTITY_SPLIT: 100,
+    CAUSAL_EDGE: 50,
+    CLUSTER_ASSIGN: 30,
+    MEMORY_REINFORCE: 20,
+    DECAY_TUNE: 10,
+    NOVELTY_ADJUST: 10,
+}
+```
+
+**Output Schema (MCTSDecisionRecord):**
+```python
+@dataclass(frozen=True)
+class MCTSDecisionRecord:
+    decision_id: str
+    cycle_id: str
+    decision_type: str
+    context: Dict[str, Any]
+    rollouts_allocated: int
+    rollouts_executed: int
+    early_termination: bool
+    termination_reason: str
+    chosen_action: Optional[str]
+    value_estimate: float
+    confidence_interval_width: float
+    compute_ms: int
+```
+
+---
+
+### 📦 Persistence Layer Mapping
+
+| Algorithm | Output Type | Target Table | Pattern/Type Field | Writer Class |
+|-----------|-------------|--------------|-------------------|--------------|
+| **BGT-SM** | `Insight` | `st_sem` | `pattern_type='INSIGHT'` | `SemanticLayerWriter` |
+| **CPN** | `CounterfactualScenario` | `st_prospective` | `intention_type='COUNTERFACTUAL'` | `ProspectiveLayerWriter` |
+| **SPC-UQ** | `ProspectiveMemory` | `st_prospective` | `intention_type='GOAL/REMINDER'` | `ProspectiveLayerWriter` |
+| **TDL-HCO** | `RoutineOptimization` | `st_procedural` | - | `ProceduralLayerWriter` |
+| **TPN-MCTS** | `MCTSDecisionRecord` | `st_mcts_decisions` | - | `MCTSDecisionPersister` |
+
+---
+
+### 🔄 Staging & Write Flow
+
+```
+R5 Phase Output
+      │
+      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  R5PhaseOutputs (stored in envelope.phases)                     │
+│  • r5_insights: List[Insight]                                   │
+│  • r5_counterfactuals: List[CounterfactualScenario]             │
+│  • r5_routine_optimizations: List[RoutineOptimization]          │
+│  • r5_prospective_memories: List[ProspectiveMemory]             │
+└─────────────────────────────────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  R6 STAGING PHASE                                               │
+│  • R6Coordinator.execute()                                      │
+│  • TruthWriteAssembler.assemble_all()                           │
+│    - assemble_insight_writes()     → StagedWrite for st_sem     │
+│    - assemble_counterfactual_writes() → StagedWrite for st_prosp│
+│    - assemble_routine_optimization_writes() → StagedWrite       │
+│    - assemble_prospective_writes() → StagedWrite                │
+└─────────────────────────────────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  R6Output (ready for R7)                                        │
+│  • staged_truth_writes: Tuple[StagedWrite, ...]                 │
+│  • staged_kg_writes: Tuple[StagedWrite, ...]                    │
+│  • staged_outbox_events: Tuple[OutboxEvent, ...]                │
+└─────────────────────────────────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  R7 TRUTH WRITER PHASE                                          │
+│  • DecisionRouter routes to per-layer writers:                  │
+│    - SemanticLayerWriter → st_sem (insights)                    │
+│    - ProspectiveLayerWriter → st_prospective (counterfactuals)  │
+│    - ProceduralLayerWriter → st_procedural (optimizations)      │
+│  • TransactionCoordinator: atomic commit                        │
+└─────────────────────────────────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  POSTGRESQL (k0_kernel database)                                │
+│  • st_sem (pattern_type='INSIGHT')                              │
+│  • st_prospective (intention_type='COUNTERFACTUAL')             │
+│  • st_procedural                                                │
+│  • st_mcts_decisions (MCTS traces)                              │
+│  • st_mcts_shadow_log (shadow mode)                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 🛠️ Current Issues Identified
+
+| Issue | Algorithm | Root Cause | Fix Required |
+|-------|-----------|------------|--------------|
+| **No seed entities** | BGT-SM | `EpisodeCluster` has no `entity_ids`, `KGEntity` has no `observation_count` | Add `source_event_ids` length as proxy or add missing fields |
+| **No causal edges** | CPN | R4 Granger inference produces 0 CAUSES edges | Need more data or lower threshold in R4 |
+| **No routines detected** | TDL-HCO | Fewer than 3 occurrences of patterns | Need more consolidation cycles |
+| **No gaps found** | SPC-UQ | Episodes are complete | Expected behavior |
+| **MCTS not persisting** | TPN-MCTS | Decisions generated but not persisted | Check `MCTSDecisionPersister.persist()` call |
+
+---
+
+### 📋 Database Table Schemas (R5 targets)
+
+**st_sem (Insights)**
+```sql
+pattern_id, tenant_id, space_id, pattern_type, pattern_name,
+source_episodes_json, confidence_score, novelty_score, pmi_score,
+semantic_distance, concept_a_id, concept_b_id, insight_type,
+relevance_score, serendipity_score, observation_count,
+first_observed_at, last_observed_at, created_at, updated_at,
+valid_from, archival_status
+```
+
+**st_prospective (Counterfactuals + Prospective Memories)**
+```sql
+intention_id, tenant_id, space_id, actor_id, intention_type,
+intention_description, target_date, target_context, status,
+inferred_from_json, inference_confidence, observation_count,
+confidence_score, decay_factor, archival_status,
+created_at, updated_at, valid_from, valid_to
+```
+
+**st_procedural (Routine Optimizations)**
+```sql
+routine_id, tenant_id, space_id, actor_id, routine_name,
+routine_category, temporal_anchor, day_pattern, frequency,
+regularity_score, action_sequence_json, typical_duration_minutes,
+source_episodes_json, source_episode_count, observation_count,
+confidence_score, last_observed_at, streak_count, decay_factor,
+archival_status, created_at, updated_at, valid_from, valid_to
+```
+
+**st_mcts_decisions (MCTS Traces)**
+```sql
+decision_id, cycle_id, decision_type, context_json,
+rollouts_allocated, rollouts_executed, early_termination,
+termination_reason, chosen_action, value_estimate,
+confidence_interval_width, compute_ms, created_at_ms
+
 ---
 
 ### 4.7 R6 — Staging Table Updates
@@ -6723,38 +7126,57 @@ K0 already provides these concurrency primitives that P03 will use:
 
 #### 4.10.2 K0 Enhancement: Advisory Lock Service
 
+**Status**: ✅ IMPLEMENTED (Issue 1.3.4)
+
 **Gap**: K0 lacks a distributed locking primitive for pipelines that need single-writer semantics per partition (tenant/space).
 
-**Proposed K0 Component**: `k0/sync/advisory_lock.py`
+**Implemented K0 Component**: `k0/db/advisory_lock.py`
 
 ```python
-# Proposed K0 API
+# Implemented K0 API (Issue 1.3.4)
 class AdvisoryLockService:
-    """K0 kernel service for distributed advisory locks."""
+    """K0 kernel service for distributed advisory locks using PostgreSQL."""
 
     async def acquire(
         self,
         lock_key: str,
         holder_id: str,
-        ttl_seconds: int = 300
+        *,
+        blocking: bool = False,
+        timeout_ms: int | None = None,
     ) -> LockResult:
-        """Acquire an advisory lock with TTL-based expiry."""
+        """Acquire an advisory lock using pg_try_advisory_lock()."""
         ...
 
     async def release(self, lock_key: str, holder_id: str) -> bool:
-        """Release a held lock."""
+        """Release a held lock using pg_advisory_unlock()."""
         ...
 
-    async def heartbeat(self, lock_key: str, holder_id: str) -> bool:
-        """Extend lock TTL while processing."""
+    async def is_held_globally(self, lock_key: str) -> bool:
+        """Check if lock is held by any connection via pg_locks."""
         ...
+
+# Utility functions
+def hash_lock_key(lock_key: str) -> int:
+    """Convert string lock key to bigint for pg_advisory_lock."""
+    ...
+
+def make_p03_lock_key(tenant_id: str, space_id: str) -> str:
+    """Create P03-specific lock key: P03:{tenant_id}:{space_id}."""
+    ...
 ```
 
 **P03 Requirement**: Per-space consolidation locks to prevent concurrent cycles on same space.
 
 **Lock Key Pattern**: `{pipeline_id}:{tenant_id}:{space_id}`
 
-**ADR Required**: `k0XX-advisory-lock-service.md`
+**Syscalls** (in `k0/kernel/syscalls.py`):
+
+- `lock_acquire(lock_key, holder_id, blocking=False, timeout_ms=None)` — Capability: `advisory_lock.acquire`
+- `lock_release(lock_key, holder_id)` — Capability: `advisory_lock.release`
+- `lock_is_held(lock_key)` — Capability: `advisory_lock.read`
+
+**ADR Required**: ~~`k0XX-advisory-lock-service.md`~~ → SUPERSEDED by PostgreSQL native implementation
 
 #### 4.10.3 K0 Enhancement: Partitioned Pipeline Execution
 
@@ -7345,6 +7767,191 @@ def calculate_importance_score(gap: GapRecord) -> float:
 
     return base_score * recency_boost * type_weight
 ```
+
+### 5.3A Implicit Gap Resolution (GapAutoResolver)
+
+> **Status**: IMPLEMENTED
+> **Implementation**: `k0/modules/consolidation/gap_auto_resolver.py`
+> **Integration Point**: R0 Batch Selector phase
+
+#### 5.3A.1 Design Philosophy
+
+**"Don't ask users questions they've already answered."**
+
+The GapAutoResolver provides a **preemptive resolution path** that runs before P06 Active Learning asks explicit questions. When users naturally provide clarifying context in normal conversation, the system should be smart enough to recognize it and resolve pending gaps automatically.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     IMPLICIT vs EXPLICIT GAP RESOLUTION                      │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                         IMPLICIT PATH (R0)                           │   │
+│   │                        (GapAutoResolver)                             │   │
+│   │                                                                      │   │
+│   │   User Chat ──► P02 NER ──► Entities ──► Match against gaps?        │   │
+│   │                                                │                     │   │
+│   │                                    ┌───────────┴───────────┐         │   │
+│   │                                    │                       │         │   │
+│   │                              confidence ≥ 0.75      confidence < 0.75│   │
+│   │                                    │                       │         │   │
+│   │                                    ▼                       ▼         │   │
+│   │                         Auto-resolve gap        Gap remains PENDING  │   │
+│   │                         (silent, no question)   (proceed to P06)     │   │
+│   │                                                                      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                        EXPLICIT PATH (P06)                           │   │
+│   │                    (Active Learning Questions)                       │   │
+│   │                                                                      │   │
+│   │   Gap PENDING for grace period ──► P06 Question Framer ──► User Q   │   │
+│   │                                                                      │   │
+│   │   Grace Period: 24-72 hours (configurable)                          │   │
+│   │   Rationale: Give implicit resolution a chance before asking        │   │
+│   │                                                                      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.3A.2 Resolution Algorithm
+
+```python
+class GapAutoResolver:
+    """
+    Automatically resolves gaps from user context.
+
+    When a user mentions "Lincoln Elementary" in a new event, we check
+    pending gaps like "AMBIGUOUS_ENTITY: Lincoln School" and auto-resolve
+    if the match is strong enough.
+    """
+
+    # Minimum confidence to auto-resolve
+    AUTO_RESOLVE_THRESHOLD = 0.75
+
+    # Minimum similarity score for entity matching
+    MIN_SIMILARITY = 0.6
+
+    async def process_entities(
+        self,
+        entities: List[Dict[str, Any]],
+        source_event_id: Optional[str] = None,
+        event_texts: Optional[List[str]] = None,
+    ) -> int:
+        """
+        Process extracted entities and auto-resolve matching gaps.
+
+        Two-pass matching:
+        1. NER-based: Match extracted entities against gap candidates
+        2. Text-based: Fallback keyword matching in raw event text
+        """
+        await self.load_pending_gaps()
+
+        if not self._pending_gaps:
+            return 0
+
+        all_candidates = []
+
+        # Pass 1: NER entity matching
+        for entity in entities:
+            candidates = self.match_entity_to_gaps(
+                entity_text=entity.get("text", ""),
+                entity_label=entity.get("label", "UNKNOWN"),
+                source_event_id=source_event_id,
+            )
+            all_candidates.extend(candidates)
+
+        # Pass 2: Raw text fallback
+        if event_texts:
+            text_candidates = self._match_text_to_gaps(event_texts, source_event_id)
+            all_candidates.extend(text_candidates)
+
+        # Deduplicate: keep highest confidence per gap
+        best_by_gap = {}
+        for cand in all_candidates:
+            if cand.gap_id not in best_by_gap or cand.confidence > best_by_gap[cand.gap_id].confidence:
+                best_by_gap[cand.gap_id] = cand
+
+        return await self.resolve_gaps(list(best_by_gap.values()))
+```
+
+#### 5.3A.3 Matching Strategies
+
+**Jaccard Similarity**:
+
+```python
+def _similarity(s1: str, s2: str) -> float:
+    """Simple Jaccard similarity for entity matching."""
+    words1 = set(s1.lower().split())
+    words2 = set(s2.lower().split())
+    intersection = words1 & words2
+    union = words1 | words2
+    return len(intersection) / len(union) if union else 0.0
+```
+
+**Scoring Bonuses**:
+
+| Bonus Type | Condition | Bonus |
+|------------|-----------|-------|
+| Label Match | Entity label matches gap type (LOCATION, PERSON, ORG) | +0.10 |
+| Specificity | New entity extends candidate (e.g., "Lincoln" → "Lincoln Elementary") | +0.15 |
+| Substring | Candidate is substring of new entity | +0.10 |
+
+**Final Score**: `min(1.0, base_similarity + specificity_bonus + label_bonus)`
+
+#### 5.3A.4 Resolution Persistence
+
+When a gap is resolved implicitly:
+
+```sql
+UPDATE st_learning_queue
+SET status = 'RESOLVED',
+    resolution_type = 'IMPLICIT',
+    resolution_data_json = '{
+      "resolved_value": "Lincoln Elementary School",
+      "source_event_id": "01HQX...",
+      "match_reason": "entity_match(sim=0.82, spec=0.15)",
+      "confidence": 0.97,
+      "resolved_at": 1704931200000
+    }',
+    answered_at = 1704931200000
+WHERE id = $1 AND status = 'PENDING';
+```
+
+#### 5.3A.5 P06 Grace Period Integration
+
+P06 Active Learning MUST check for implicit resolution before generating questions:
+
+```python
+# P06 Question Generator - Filter out recently-resolved and grace-period gaps
+query = """
+    SELECT * FROM st_learning_queue
+    WHERE status = 'PENDING'
+      AND resolution_type IS NULL           -- Not implicitly resolved
+      AND created_at < $1                   -- Grace period expired
+      AND (expires_at IS NULL OR expires_at > $2)
+    ORDER BY importance_score DESC
+    LIMIT 10
+"""
+grace_period_ms = 24 * 60 * 60 * 1000  # 24 hours default
+```
+
+**Configuration**:
+
+| Parameter | Default | Env Var | Description |
+|-----------|---------|---------|-------------|
+| `implicit_grace_period_hours` | 24 | `P03_IMPLICIT_GRACE_PERIOD_HOURS` | Hours to wait before P06 asks |
+| `auto_resolve_threshold` | 0.75 | `P03_AUTO_RESOLVE_THRESHOLD` | Min confidence for implicit resolution |
+| `min_similarity` | 0.60 | `P03_MIN_SIMILARITY` | Min Jaccard similarity for matching |
+
+#### 5.3A.6 Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `p03_gaps_auto_resolved_total` | Counter | Gaps resolved via implicit path |
+| `p03_gaps_checked_for_implicit` | Counter | Gaps evaluated for implicit match |
+| `p03_implicit_match_confidence` | Histogram | Confidence distribution of matches |
+| `p03_implicit_resolution_latency_ms` | Histogram | Time to check and resolve |
 
 ### 5.4 Bayesian Anchor Points (User Modeling)
 
@@ -9295,8 +9902,22 @@ CREATE TABLE st_learning_queue (
   last_attempt_at INTEGER,
 
   -- Resolution
-  resolution_type TEXT,                  -- 'USER_ANSWER', 'INFERRED', 'EXPIRED'
+  resolution_type TEXT CHECK(resolution_type IN (
+    'USER_ANSWER',    -- Explicit answer from P06 question
+    'IMPLICIT',       -- Auto-resolved by GapAutoResolver (user context matched)
+    'INFERRED',       -- System inferred from other signals
+    'EXPIRED',        -- Max wait time exceeded without resolution
+    'DISMISSED'       -- User explicitly declined to answer
+  )),
   resolution_data_json TEXT,             -- Answer or inference result
+  -- Example for IMPLICIT:
+  -- {
+  --   "resolved_value": "Lincoln Elementary School",
+  --   "source_event_id": "01HQX...",
+  --   "match_reason": "entity_match(sim=0.82, spec=0.15)",
+  --   "confidence": 0.97,
+  --   "resolved_at": 1704931200000
+  -- }
 
   -- Consolidation Cycle
   consolidation_cycle_id TEXT,           -- Which P03 cycle detected this
@@ -13189,7 +13810,7 @@ P03 must be able to deterministically associate a user-provided answer with the 
 **Producer requirement** (K1 / UI / command client):
 
 - Any event that is intended to answer a P03 gap **MUST** include:
-    - `body.correlation.gap_id` (ULID string)
+  - `body.correlation.gap_id` (ULID string)
 - `body.correlation` **MUST NOT** contain PII.
 
 **Illustrative body fragment** (schema-specific fields omitted):
@@ -13902,6 +14523,330 @@ def test_cluster_correction_signal():
 **Coverage Report**: CI pipeline generates coverage report showing all signal types tested.
 
 **Rationale**: Ensures no learning signals are lost at the P21 integration boundary. Complete coverage validates schema completeness.
+
+---
+
+### 9.9 Feedback System Invariants (Two-System Architecture)
+
+> **Status**: COMPLETE
+> **Related**: [FEEDBACK.md](../../k0/ports/FEEDBACK.md), [Idea-0001: Active Learning Loop](../architecture/ideas/0001-active-learning-loop.md)
+
+P03 participates in **two distinct feedback systems** with different purposes, ports, and invariants. Understanding this separation is critical for correct implementation.
+
+#### 9.9.1 Two-System Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                         TWO FEEDBACK SYSTEMS ARCHITECTURE                                │
+│                                                                                          │
+│  ┌───────────────────────────────────────┐  ┌───────────────────────────────────────┐   │
+│  │  SYSTEM 1: MEMORY FORMATION FEEDBACK  │  │  SYSTEM 2: MODEL REFINEMENT FEEDBACK  │   │
+│  │         (Gap Resolution Loop)          │  │        (Algorithm Tuning Loop)        │   │
+│  │                                        │  │                                        │   │
+│  │  Purpose: Add NEW FACTS to memory      │  │  Purpose: TUNE WEIGHTS/THRESHOLDS     │   │
+│  │                                        │  │                                        │   │
+│  │  Port: Command Port                    │  │  Port: Obs Port                        │   │
+│  │  Endpoint: POST /k0/command.submit     │  │  Endpoint: POST /k0/obs.emit           │   │
+│  │  Topic: memory.delta                   │  │  Kind: feedback                        │   │
+│  │                                        │  │                                        │   │
+│  │  Payload:                              │  │  Payload:                              │   │
+│  │  {                                     │  │  {                                     │   │
+│  │    "topic": "memory.delta",            │  │    "kind": "feedback",                 │   │
+│  │    "body": {                           │  │    "pipeline_id": "P03",               │   │
+│  │      "correlation": {                  │  │    "signal_class": "SALIENCE_ADJ",     │   │
+│  │        "gap_id": "01HQX..."            │  │    "payload": { ... }                  │   │
+│  │      },                                │  │  }                                     │   │
+│  │      "content": { "text": "..." }      │  │                                        │   │
+│  │    }                                   │  │                                        │   │
+│  │  }                                     │  │                                        │   │
+│  │                                        │  │                                        │   │
+│  │  Result: New st_hipp_events row        │  │  Result: st_learned_weights update     │   │
+│  │  Persists: User's actual answer        │  │  Persists: Algorithm adjustments       │   │
+│  │  Closes: gap in st_learning_queue      │  │  Trains: Formulas (R1-R7)              │   │
+│  │                                        │  │                                        │   │
+│  └───────────────────────────────────────┘  └───────────────────────────────────────┘   │
+│                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 9.9.2 System 1: Memory Formation Feedback (Gap Resolution)
+
+**Purpose**: Complete the gap resolution loop by ingesting user answers as new memory events.
+
+**Flow**:
+
+```
+P03 detects gap → st_learning_queue (PENDING) → p03.gap.detected.v1
+       ↓
+P06 processes → curiosity.intent.v1 (SSE) → K1 Curiosity Agent
+       ↓
+K1 renders question → UI → User answers
+       ↓
+User response → Command Port (memory.delta) → P02 → st_hipp_events
+       ↓
+P03 next cycle → Parse body.correlation.gap_id → Resolve gap → Update truth
+```
+
+**Port Contract**:
+
+| Property | Value |
+|----------|-------|
+| **Port** | Command Port |
+| **Endpoint** | `POST /k0/command.submit` |
+| **Topic** | `memory.delta` (same as any memory write) |
+| **Signature** | Full envelope integrity (sig, envelope_sha256) |
+| **Storage** | st_hipp_events (persisted as memory) |
+
+**Envelope Structure** (Answer to Gap):
+
+```json
+{
+  "cognitive_trace_id": "...",
+  "tenant_id": "TENANT_001",
+  "space_id": "SPACE_family",
+  "topic": "memory.delta",
+  "schema_uri": "familyos://schemas/memory/v1",
+  "schema_version": "1.0",
+  "actor": "user:principal_123",
+  "device_id": "DEVICE_phone",
+  "band": "GREEN",
+  "policy_version": "1.0",
+  "ts": "2026-01-12T10:30:00Z",
+  "sig": "...",
+  "sig_alg": "ECDSA_P256_SHA256",
+  "sig_kid": "did:device:phone#2026-01",
+  "envelope_sha256": "...",
+  "body": {
+    "correlation": {
+      "gap_id": "01HQX9W3Q4Y6K7A8B9C0D1E2"
+    },
+    "content": {
+      "text": "Sarah is my colleague from CorePower Yoga",
+      "entities": [
+        { "name": "Sarah", "type": "PERSON", "qualifier": "colleague" },
+        { "name": "CorePower Yoga", "type": "ORGANIZATION" }
+      ]
+    }
+  }
+}
+```
+
+**Why Command Port (NOT Obs Port)**:
+
+- User's answer is **new factual content** that becomes a memory event
+- Answer must be persisted in `st_hipp_events` with full provenance
+- Answer participates in future consolidation cycles
+- Full envelope integrity (signature, hash) required for trust
+
+#### 9.9.3 System 2: Model Refinement Feedback (Algorithm Tuning)
+
+**Purpose**: Tune P03's learning formulas (importance weights, decay rates, thresholds) based on behavioral signals.
+
+**Flow**:
+
+```
+K1 detects signal (correction, hedging, grounding) → FeedbackEnvelope
+       ↓
+POST /k0/obs.emit (kind: feedback) → P21 FeedbackPipeline
+       ↓
+P21 validates → st_feedback_signals → feedback.signal.p03 (bus topic)
+       ↓
+P03FeedbackHandler → Route to learning module → st_learned_weights update
+```
+
+**Port Contract**:
+
+| Property | Value |
+|----------|-------|
+| **Port** | Obs Port |
+| **Endpoint** | `POST /k0/obs.emit` |
+| **Kind** | `feedback` |
+| **Validation** | P21 FeedbackSchemaRegistry |
+| **Storage** | st_feedback_signals → st_learned_weights |
+
+**FeedbackEnvelope Structure**:
+
+```json
+{
+  "kind": "feedback",
+  "feedback_id": "FB_01HQY...",
+  "pipeline_id": "P03",
+  "signal_class": "SALIENCE_ADJUSTMENT",
+  "correlation": {
+    "event_ids": ["EVT_01HQX..."],
+    "session_id": "SESSION_abc123",
+    "cognitive_trace_id": "..."
+  },
+  "provenance": {
+    "source": "K1_CorrectionParser",
+    "detected_at": 1736677800000,
+    "confidence": 0.85
+  },
+  "payload": {
+    "feedback_type": "SALIENCE_ADJUSTMENT",
+    "entity_id": "PERSON_sarah_123",
+    "salience_delta": 0.15,
+    "was_helpful": true
+  }
+}
+```
+
+**Why Obs Port (NOT Command Port)**:
+
+- Feedback is **about existing memories**, not new content
+- Signals tune algorithm parameters, not create facts
+- No user-facing content to persist as memory
+- Lighter-weight envelope (no full signature chain)
+
+#### 9.9.4 System Invariants
+
+**INV-MEM-1: Gap ID Round-Trip**
+
+```
+gap_id sent OUT with question (curiosity.intent.v1)
+  MUST come back IN with answer (body.correlation.gap_id)
+```
+
+**INV-MEM-2: Gap ID Format**
+
+```
+gap_id MUST be ULID (26 characters, monotonic, sortable)
+Format: 01HQX9W3Q4Y6K7A8B9C0D1E2
+```
+
+**INV-MEM-3: Gap ID Location in Answer**
+
+```
+gap_id MUST be at: envelope.body.correlation.gap_id
+NOT in envelope header, NOT a top-level field
+```
+
+**INV-MEM-4: Answer Creates Memory**
+
+```
+User answer to gap question MUST result in new st_hipp_events row
+Answer participates in future P03 consolidation cycles
+```
+
+**INV-MEM-5: Status Transitions**
+
+```
+st_learning_queue.status transitions:
+  PENDING → ASKED → ANSWERED → RESOLVED (forward only)
+  PENDING → RESOLVED (implicit resolution via GapAutoResolver)
+  PENDING → EXPIRED (TTL exceeded)
+
+Never: RESOLVED → PENDING, ASKED → PENDING
+```
+
+**INV-MEM-6: Resolution Type Mutex**
+
+```
+st_learning_queue.resolution_type is mutually exclusive:
+  - USER_ANSWER: Explicit answer from P06 question
+  - IMPLICIT: Auto-resolved by GapAutoResolver
+  - INFERRED: System inferred from other signals
+  - EXPIRED: Max wait time exceeded
+  - DISMISSED: User declined to answer
+
+A gap can only have ONE resolution_type. Never both USER_ANSWER and IMPLICIT.
+```
+
+**INV-MEM-7: Grace Period**
+
+```
+P06 MUST NOT ask questions for gaps younger than grace_period_hours
+Default: 24 hours (configurable: 24-72 hours via P03_IMPLICIT_GRACE_PERIOD_HOURS)
+Allows GapAutoResolver time to find implicit answers
+```
+
+**INV-MEM-8: Attention Budget**
+
+```
+P06 question rate limited by AttentionBudget:
+  - Max tokens: 3 per day per user
+  - Refill rate: 1 token per 8 hours
+  - Question costs: 1 token
+  - Never exceed max_tokens
+```
+
+**INV-MODEL-1: Feedback Is Not Memory**
+
+```
+FeedbackEnvelope (Obs Port) MUST NOT create st_hipp_events rows
+Feedback signals tune weights, they don't add facts
+```
+
+**INV-MODEL-2: Signal Targeting**
+
+```
+FeedbackEnvelope.correlation.event_ids MUST reference existing events
+Signals are ABOUT memories, not creating new ones
+```
+
+**INV-MODEL-3: Weight Bounds**
+
+```
+All weight adjustments MUST respect bounds:
+  - salience_delta: [-1.0, +1.0] (clamped)
+  - importance_override: [0.0, 1.0] (clamped)
+  - decay_lambda_delta: bounded by MIN_LAMBDA, MAX_LAMBDA
+```
+
+**INV-MODEL-4: Idempotent Updates**
+
+```
+Same FeedbackEnvelope (by envelope_id) processed twice
+  MUST have same effect as processing once
+st_feedback_signals.consumed_at prevents double-processing
+```
+
+**INV-MODEL-5: Signal Confidence Weighting**
+
+```
+All formula adjustments MUST be weighted by signal.confidence
+Low-confidence signals have proportionally smaller effect
+```
+
+#### 9.9.5 Decision Tree: Which Port to Use?
+
+```
+Is the data NEW FACTUAL CONTENT that should become a memory?
+    │
+    ├─► YES → Command Port (memory.delta)
+    │         Examples:
+    │         • User answer to gap question
+    │         • User correction ("Actually, it was Tuesday")
+    │         • User providing new information
+    │
+    └─► NO → Is it a signal ABOUT existing memories?
+              │
+              ├─► YES → Obs Port (kind: feedback)
+              │         Examples:
+              │         • Grounding signal (memory was helpful)
+              │         • Decay reversal (pruned memory was needed)
+              │         • Salience adjustment (importance change)
+              │
+              └─► NO → Not a feedback system concern
+```
+
+#### 9.9.6 Topic & Event Summary
+
+**System 1 (Memory Formation) Topics**:
+
+| Topic | Direction | Purpose |
+|-------|-----------|---------|
+| `p03.gap.detected.v1` | P03 → P06 | Gap detected during consolidation |
+| `curiosity.intent.v1` | P06 → K1 (SSE) | Intent for K1 to ask question |
+| `memory.delta` | K1 → P02 (Command) | User's answer to gap |
+
+**System 2 (Model Refinement) Topics**:
+
+| Topic | Direction | Purpose |
+|-------|-----------|---------|
+| `feedback.signal.p03` | P21 → P03 (Bus) | Validated feedback signal |
+
+**Key Insight**: System 1 creates a **closed loop** (gap → question → answer → resolution). System 2 is a **continuous stream** of behavioral signals that gradually improve algorithm quality.
 
 ---
 
@@ -28278,6 +29223,7 @@ class AdaptiveThreshold:
 ```
 
 **Feedback Signal**:
+
 - Success = Memory was queried and used correctly
 - Failure = Memory miss or user correction
 

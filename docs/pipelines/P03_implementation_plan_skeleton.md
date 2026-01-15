@@ -5394,10 +5394,43 @@
 
 ## Milestone 7 — Closed-loop learning (safe, incremental rollout)
 
+> **Architectural Note: Two-System Feedback Architecture**
+>
+> P03 participates in **two distinct feedback systems** with different purposes and ports:
+>
+> | System | Port | Purpose | Creates |
+> |--------|------|---------|--------|
+> | **Memory Formation** | Command Port (`memory.delta`) | Add NEW FACTS (user answers) | st_hipp_events row |
+> | **Model Refinement** | Obs Port (`kind: feedback`) | TUNE WEIGHTS/THRESHOLDS | st_learned_weights update |
+>
+> **Invariants** (see Dossier Section 9.9 for complete list):
+> - **INV-MEM-1**: gap_id round-trip (out with question, back with answer in `body.correlation.gap_id`)
+> - **INV-MEM-4**: User answer creates st_hipp_events row (answer IS memory)
+> - **INV-MODEL-1**: FeedbackEnvelope (Obs Port) does NOT create st_hipp_events (feedback tunes, not creates)
+>
+> **Implicit vs Explicit Gap Resolution**:
+> - Milestone 7 implements **explicit feedback** paths (P21 → P03, P06 → P03)
+> - Milestone 8 (Epic 8.2) implements **implicit resolution** via GapAutoResolver
+> - Priority: Try implicit first (GapAutoResolver in R0), then explicit (P06) after grace period (24-72 hours)
+>
+> See: Dossier Section 9.9 "Feedback System Invariants", Section 5.3A "Implicit Gap Resolution"
+
 ### Epic 7.1 — Feedback ingestion (P21 → P03)
+
+> **System**: Model Refinement Feedback (Obs Port)
+>
+> This epic implements **System 2: Model Refinement Feedback** which tunes algorithm weights.
+> FeedbackEnvelopes arrive via Obs Port and update st_learned_weights — they do NOT create memories.
+>
+> **Key Invariants** (Dossier Section 9.9.4):
+> - INV-MODEL-1: Feedback is not memory (no st_hipp_events rows)
+> - INV-MODEL-2: Signals target existing events (correlation.event_ids)
+> - INV-MODEL-3: Weight bounds enforced (clamped values)
+> - INV-MODEL-4: Idempotent updates (consumed_at prevents double-processing)
 
 > **References**:
 >
+> - **Dossier Section 9.9: Feedback System Invariants (Two-System Architecture)** ← CRITICAL
 > - Dossier Section 5.7: P03 Feedback Handler Implementation
 > - Dossier Section 5.7.1: Handler Architecture
 > - Dossier Section 5.7.2: Bus Subscription Registration
@@ -7205,11 +7238,35 @@
 
 ### Epic 8.2 — P06 Active Learning integration
 
+> **System**: Memory Formation Feedback (Command Port)
+>
+> This epic implements **System 1: Memory Formation Feedback** (the gap resolution loop).
+> User answers to gap questions arrive via Command Port (`memory.delta`) and become st_hipp_events rows.
+>
+> **Two-System Architecture** (Dossier Section 9.9):
+>
+> | Aspect | This Epic (8.2) | Epic 7.1 |
+> |--------|-----------------|----------|
+> | **System** | Memory Formation | Model Refinement |
+> | **Port** | Command Port | Obs Port |
+> | **Topic** | `memory.delta` | `feedback.signal.p03` |
+> | **Creates** | st_hipp_events (new facts) | st_learned_weights (tuning) |
+> | **Invariants** | INV-MEM-1 through INV-MEM-8 | INV-MODEL-1 through INV-MODEL-5 |
+>
+> **Key Invariants** (Dossier Section 9.9.4):
+> - **INV-MEM-1**: gap_id round-trip — gap_id sent with question MUST come back with answer
+> - **INV-MEM-3**: gap_id location — `envelope.body.correlation.gap_id` (not header)
+> - **INV-MEM-4**: Answer creates memory — user response becomes st_hipp_events row
+> - **INV-MEM-6**: Resolution type mutex — gap is IMPLICIT or USER_ANSWER, never both
+> - **INV-MEM-7**: Grace period — P06 waits 24-72 hours before asking (allows implicit resolution)
+
 > **References**:
 >
+> - **Dossier Section 9.9: Feedback System Invariants (Two-System Architecture)** ← CRITICAL
 > - Dossier Section 5: P06 Active Learning Integration (5.1–5.7)
 > - Dossier Section 5.2: Gap detection during reconciliation (gap types + algorithm)
 > - Dossier Section 5.3: Entropy scanning (proactive gap detection)
+> - Dossier Section 5.3A: Implicit Gap Resolution (GapAutoResolver)
 > - Dossier Section 5.6: Attention budget integration (token bucket)
 > - Dossier Section 6.11: `st_learning_queue` schema (gap queue)
 > - Dossier Section 9.3: P03 → P06 contract + `p06.gap.resolved.v1` (9.3.1–9.3.3)
@@ -7446,6 +7503,81 @@
   - Contract-breaking changes fail tests.
 - **References**:
   - Dossier: `docs/pipelines/P03_consolidation_dossier_v2.md` (Section 9.3; Section 6.11)
+
+---
+
+#### Issue 8.2.14 — GapAutoResolver implicit resolution (R0 preemptive path)
+
+- **Goal**: Implement implicit gap resolution that auto-resolves gaps when users naturally provide clarifying context.
+- **Deliverables**:
+  - `GapAutoResolver` class that:
+    - Loads pending `AMBIGUOUS_ENTITY` gaps from `st_learning_queue`
+    - Matches extracted NER entities against gap candidates using Jaccard similarity
+    - Applies label matching bonus (+0.10) and specificity bonus (+0.15)
+    - Auto-resolves gaps when confidence ≥ 0.75
+    - Updates `st_learning_queue.status = 'RESOLVED'` with `resolution_type = 'IMPLICIT'`
+  - Two-pass matching strategy:
+    1. NER-based: Match extracted entities against gap candidates
+    2. Text-based: Fallback keyword matching in raw event text
+  - Integration with R0 Batch Selector phase
+- **Acceptance Criteria**:
+  - Gaps matching incoming entities with confidence ≥ 0.75 are auto-resolved
+  - Resolution includes `match_reason`, `source_event_id`, and `resolved_at` timestamp
+  - Implicit resolutions marked with `resolution_type = 'IMPLICIT'` (distinguishable from explicit P06 answers)
+  - P06 question generation excludes gaps with `resolution_type = 'IMPLICIT'`
+- **Design Philosophy**:
+  - "Don't ask users questions they've already answered"
+  - System should be smart enough to recognize clarifying context in normal conversation
+- **References**:
+  - Dossier: `docs/pipelines/P03_consolidation_dossier_v2.md` (Section 5.3A "Implicit Gap Resolution")
+  - Implementation: `k0/modules/consolidation/gap_auto_resolver.py`
+
+---
+
+#### Issue 8.2.15 — P06 grace period configuration (implicit resolution window)
+
+- **Goal**: Ensure P06 waits for implicit resolution before generating explicit questions.
+- **Deliverables**:
+  - Grace period configuration:
+    - `P03_IMPLICIT_GRACE_PERIOD_HOURS` (default: 24 hours)
+    - Configurable range: 24-72 hours
+  - P06 question generator filter:
+    - Exclude gaps where `created_at + grace_period > now()`
+    - Exclude gaps where `resolution_type = 'IMPLICIT'`
+  - Metrics for grace period effectiveness:
+    - `p03_gaps_resolved_during_grace_period` counter
+    - `p03_gaps_escalated_to_p06` counter (gaps that passed grace period without implicit resolution)
+- **Acceptance Criteria**:
+  - New gaps are not immediately eligible for P06 questions
+  - Grace period is configurable via environment variable
+  - Metrics track implicit vs explicit resolution rates
+- **Rationale**:
+  - Give the GapAutoResolver time to find implicit resolutions before bothering users
+  - Reduces question fatigue while maintaining gap closure rate
+- **References**:
+  - Dossier: `docs/pipelines/P03_consolidation_dossier_v2.md` (Section 5.3A.5 "P06 Grace Period Integration")
+
+---
+
+#### Issue 8.2.16 — Implicit resolution observability + metrics
+
+- **Goal**: Make implicit resolution path observable for tuning and debugging.
+- **Deliverables**:
+  - Metrics:
+    - `p03_gaps_auto_resolved_total` (counter by gap_type)
+    - `p03_gaps_checked_for_implicit` (counter)
+    - `p03_implicit_match_confidence` (histogram)
+    - `p03_implicit_resolution_latency_ms` (histogram)
+  - Structured logs:
+    - `gap_auto_resolved`: gap_id, gap_type, resolved_value, confidence, match_reason
+    - `gap_implicit_match_failed`: gap_id, best_confidence, threshold
+  - GapAutoResolverStats dataclass for aggregated stats
+- **Acceptance Criteria**:
+  - Operators can see implicit resolution rate vs explicit P06 rate
+  - Match confidence distribution visible for threshold tuning
+  - Latency tracked for performance optimization
+- **References**:
+  - Dossier: `docs/pipelines/P03_consolidation_dossier_v2.md` (Section 5.3A.6 "Metrics")
 
 ### Epic 8.3 — K0 Kernel integration (Appendix D)
 

@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "p03.consolidation.complete.v1",
+  "title": "P03 Consolidation Complete Event",
+  "description": "Emitted when P03 consolidation cycle completes successfully",
+  "type": "object",
+  "required": [
+    "event_id",
+    "cycle_id",
+    "tenant_id",
+    "space_id",
+    "started_at",
+    "completed_at",
+    "events_processed"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique event identifier (ULID)"
+    },
+    "cycle_id": {
+      "type": "string",
+      "description": "Consolidation cycle identifier (ULID)"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier"
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Space identifier"
+    },
+    "started_at": {
+      "type": "integer",
+      "description": "Unix timestamp (seconds) when cycle started"
+    },
+    "completed_at": {
+      "type": "integer",
+      "description": "Unix timestamp (seconds) when cycle completed"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "description": "Total cycle duration in milliseconds"
+    },
+    "events_processed": {
+      "type": "integer",
+      "description": "Number of st_hipp_events processed"
+    },
+    "episodes_created": {
+      "type": "integer",
+      "default": 0,
+      "description": "Number of new episodes (st_epi) created"
+    },
+    "patterns_discovered": {
+      "type": "integer",
+      "default": 0,
+      "description": "Number of semantic patterns (st_sem) discovered"
+    },
+    "kg_entities_added": {
+      "type": "integer",
+      "default": 0,
+      "description": "Number of KG entities (st_kg_dom) added"
+    },
+    "kg_edges_added": {
+      "type": "integer",
+      "default": 0,
+      "description": "Number of KG edges (st_kg_edges) added"
+    },
+    "gaps_detected": {
+      "type": "integer",
+      "default": 0,
+      "description": "Number of P06 gaps detected"
+    },
+    "prune_count": {
+      "type": "integer",
+      "default": 0,
+      "description": "Number of events archived/tombstoned"
+    },
+    "error_count": {
+      "type": "integer",
+      "default": 0,
+      "description": "Number of events that failed processing"
+    }
+  },
+  "additionalProperties": false
+}

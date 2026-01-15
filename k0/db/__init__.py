@@ -32,11 +32,34 @@ Quick Start:
     await shutdown_pool()
 """
 
-from .connection import (
-    connection_scope,
-    read_only_scope,
-    savepoint_scope,
-    transaction_scope,
+from .advisory_lock import (
+    AdvisoryLockService,
+    AdvisoryLockServiceProtocol,
+    LockInfo,
+    LockResult,
+    configure_lock_service,
+    get_advisory_lock_service,
+    hash_lock_key,
+    make_p03_lock_key,
+    reset_lock_service,
+)
+from .connection import connection_scope, read_only_scope, savepoint_scope, transaction_scope
+from .context_helper import (
+    clear_context,
+    get_current_space_id,
+    get_current_tenant_id,
+    get_current_user_id,
+    isolated_read_scope,
+    isolation_scope,
+    p03_isolation_scope,
+    set_full_context,
+    set_local_full_context,
+    set_local_space_context,
+    set_local_tenant_context,
+    set_space_context,
+    set_tenant_context,
+    set_user_context,
+    space_isolation_scope,
 )
 from .params import bind_params, bulk_params, dict_to_positional, named_to_positional
 from .pool import AsyncPgPool, PoolStats, configure_pool, get_pool, shutdown_pool
@@ -55,6 +78,16 @@ from .types import (
 )
 
 __all__ = [
+    # Advisory Lock
+    "AdvisoryLockService",
+    "AdvisoryLockServiceProtocol",
+    "LockInfo",
+    "LockResult",
+    "configure_lock_service",
+    "get_advisory_lock_service",
+    "hash_lock_key",
+    "make_p03_lock_key",
+    "reset_lock_service",
     # Pool
     "AsyncPgPool",
     "PoolStats",
@@ -66,6 +99,22 @@ __all__ = [
     "read_only_scope",
     "savepoint_scope",
     "transaction_scope",
+    # Context Helper (RLS)
+    "clear_context",
+    "get_current_space_id",
+    "get_current_tenant_id",
+    "get_current_user_id",
+    "isolated_read_scope",
+    "isolation_scope",
+    "p03_isolation_scope",
+    "set_full_context",
+    "set_local_full_context",
+    "set_local_space_context",
+    "set_local_tenant_context",
+    "set_space_context",
+    "set_tenant_context",
+    "set_user_context",
+    "space_isolation_scope",
     # Query
     "QueryBuilder",
     "convert_sqlite_query",

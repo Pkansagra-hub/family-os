@@ -305,10 +305,7 @@ def diff_tables_with_master(tables: list[StorageTableInfo], master_path: Path) -
         - scanned_count: number of tables found in migrations
         - registered_count: number of tables in master doc
     """
-    from governance.k0.scripts.markdown_parser import (
-        MarkdownRegistry,
-        extract_backtick_value,
-    )
+    from governance.k0.scripts.markdown_parser import MarkdownRegistry, extract_backtick_value
 
     registry = MarkdownRegistry(master_path)
 
@@ -412,7 +409,8 @@ def diff_indexes_with_master(indexes: list[IndexInfo], master_path: Path) -> dic
         # Pattern to find index tables and extract index names
         # Index names are in backticks in first column
         # Use [a-z0-9_]+ to include numbers (e.g., idx_wal_envelope_sha256)
-        index_pattern = re.compile(r"\|\s*`(idx_[a-z0-9_]+)`\s*\|")
+        # Support both idx_ and ix_ prefixes (legacy naming)
+        index_pattern = re.compile(r"\|\s*`((?:idx|ix)_[a-z0-9_]+)`\s*\|")
         for match in index_pattern.finditer(content):
             registered.add(match.group(1))
 

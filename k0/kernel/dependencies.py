@@ -183,6 +183,12 @@ class RequestDependencyProvider:
         assert self.tracer_factory is not None  # nosec - post-init guarantee
         return self.tracer_factory
 
+    @property
+    def qos(self) -> QoSContext:
+        """Expose a QoS context for app-level components like SSE server."""
+
+        return self._qos_context()
+
     def _default_scheduler_factory(self, settings: KernelSettings) -> Scheduler:
         qos_settings = getattr(settings, "qos")
         fanout_max = int(getattr(qos_settings, "fanout_max"))

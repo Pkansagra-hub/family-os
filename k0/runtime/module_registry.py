@@ -222,14 +222,36 @@ class ModuleRegistry:
         except Exception as e:
             raise ModuleLoadError(f"Failed to load implementation for {module_id}: {e}") from e
 
+    # Subdirectory search paths for place-agnostic module resolution
+    # Order matters: more specific paths first, then common locations
+    _SUBDIRECTORY_SEARCH_PATHS: list[str] = [
+        "",  # Direct path: k0.modules.<domain>.<action>
+        "algorithms",  # k0.modules.<domain>.algorithms.<action>
+        "staging",  # k0.modules.<domain>.staging.<action>
+        "truth_writer",  # k0.modules.<domain>.truth_writer.<action>
+        "emission",  # k0.modules.<domain>.emission.<action>
+    ]
+
     def _load_implementation(self, module_id: ModuleID) -> ModuleCallable:
         """
-        Lazy load module implementation.
+        Lazy load module implementation with place-agnostic resolution.
+
+        Tries multiple paths to find the module, making it location-independent.
+        This allows modules to be organized in subdirectories (algorithms/, staging/, etc.)
+        without requiring exact path specification in contracts.
+
+        Search order:
+            1. k0.modules.<domain>.<action> (direct)
+            2. k0.modules.<domain>.algorithms.<action>
+            3. k0.modules.<domain>.staging.<action>
+            4. k0.modules.<domain>.truth_writer.<action>
+            5. k0.modules.<domain>.emission.<action>
 
         Convention:
-            module_id "hippocampus.pattern_separate:v1"
-            -> import k0.modules.hippocampus.pattern_separate
-            -> call pattern_separate.run()
+            module_id "consolidation.hebbian_learner:v1"
+            -> tries k0.modules.consolidation.hebbian_learner
+            -> tries k0.modules.consolidation.algorithms.hebbian_learner (found!)
+            -> call hebbian_learner.run()
 
         Args:
             module_id: Full module ID with version
@@ -238,36 +260,59 @@ class ModuleRegistry:
             Module run function
 
         Raises:
-            ImportError: If module cannot be imported
+            ImportError: If module cannot be imported from any search path
             AttributeError: If module doesn't have 'run' function
         """
         # Parse module_id
         base_id, version = module_id.split(":")
         domain, action = base_id.split(".", 1)
 
-        # Construct import path: k0.modules.<domain>.<action>
-        module_path = f"k0.modules.{domain}.{action}"
+        # Try each search path until we find the module
+        module = None
+        tried_paths: list[str] = []
+        successful_path: str = ""
 
-        logger.debug(
-            f"Loading module implementation: {module_id}",
-            extra={"module_id": module_id, "import_path": module_path},
-        )
+        for subdir in self._SUBDIRECTORY_SEARCH_PATHS:
+            if subdir:
+                module_path = f"k0.modules.{domain}.{subdir}.{action}"
+            else:
+                module_path = f"k0.modules.{domain}.{action}"
 
-        # Import module
-        try:
-            module = importlib.import_module(module_path)
-        except ImportError as e:
-            raise ImportError(f"Cannot import module {module_path} for {module_id}: {e}") from e
+            tried_paths.append(module_path)
+
+            try:
+                module = importlib.import_module(module_path)
+                successful_path = module_path
+                logger.debug(
+                    f"Found module at: {module_path}",
+                    extra={"module_id": module_id, "import_path": module_path},
+                )
+                break
+            except ImportError:
+                # Try next path
+                continue
+
+        if module is None:
+            raise ImportError(
+                f"Cannot import module for {module_id}. " f"Tried paths: {tried_paths}"
+            )
 
         # Get 'run' function
         if not hasattr(module, "run"):
-            raise AttributeError(f"Module {module_path} does not have 'run' function")
+            raise AttributeError(
+                f"Module {successful_path} does not have 'run' function. "
+                f"Available attributes: {[a for a in dir(module) if not a.startswith('_')]}"
+            )
 
         run_func = getattr(module, "run")
 
         logger.debug(
             f"Loaded module implementation: {module_id}",
-            extra={"module_id": module_id, "import_path": module_path},
+            extra={
+                "module_id": module_id,
+                "resolved_path": successful_path,
+                "tried_paths": tried_paths,
+            },
         )
 
         return run_func

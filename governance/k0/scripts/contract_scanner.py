@@ -390,7 +390,8 @@ def diff_event_schemas_with_master(
     if section_match:
         section = section_match.group(0)
         # Extract schema names from table rows (first column)
-        schema_pattern = re.compile(r"\|\s*`([a-z_.]+)`\s*\|")
+        # Include digits for p03, p06, etc.
+        schema_pattern = re.compile(r"\|\s*`([a-z0-9_.]+)`\s*\|")
         for match in schema_pattern.finditer(section):
             schema_name = match.group(1)
             registered.add(schema_name)

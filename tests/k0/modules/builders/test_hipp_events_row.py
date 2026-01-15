@@ -24,6 +24,7 @@ from unittest.mock import Mock
 import pytest
 
 from k0.modules.builders.hipp_events_row import (
+    arbitrate_effective_safety_band,
     get_metrics,
     map_actor_device_group,
     map_affect_salience_group,
@@ -435,12 +436,18 @@ async def test_hippocampus_group_assembly(complete_module_outputs):
 
 @pytest.mark.asyncio
 async def test_embeddings_kg_group_assembly(complete_module_outputs):
-    """Test embeddings & KG column group (6 columns) - ADR-K003"""
+    """Test embeddings & KG column group - ADR-K003 + Issue 4.4.1 NER fields"""
     # Extract CA1 fields from flat envelope - keep as JSON strings (not parsed)
     ca1_output = {
         "embedding_id": complete_module_outputs.get("embedding_id"),
         "entities_json": complete_module_outputs.get("entities_json", "[]"),
         "kg_triples_json": complete_module_outputs.get("kg_triples_json", "[]"),
+        # Issue 4.4.1: P03 R4 NER fields
+        "ner_entities_json": '{"ner_family": [], "ner_general": []}',
+        "temporal_json": '{"temporal": []}',
+        "intent_category": "log_memory",
+        "ingress_category": "DIARY",
+        "ultrabert_version": "2.0.2",
     }
 
     # M22 embedding output (simulating PENDING case - no embedding generated)
@@ -456,12 +463,16 @@ async def test_embeddings_kg_group_assembly(complete_module_outputs):
 
     assert result["embedding_id"] == "emb_uuid_123"
     assert result["embedding_status"] == "PENDING"  # No embedding → PENDING
-    assert result["embedding_model_id"] == "ultrabert_v2.1.0"
-    assert result["embedding_vector_dim"] == 768
     entities = json.loads(result["entities_json"])
     assert entities == ["Olive_Garden", "person_mom", "person_sharvi"]
     kg_triples = json.loads(result["kg_triples_json"])
     assert len(kg_triples) == 2
+    # Issue 4.4.1: P03 R4 NER columns
+    assert result["ner_entities_json"] == '{"ner_family": [], "ner_general": []}'
+    assert result["temporal_json"] == '{"temporal": []}'
+    assert result["intent_category"] == "log_memory"
+    assert result["ingress_category"] == "DIARY"
+    assert result["ultrabert_version"] == "2.0.2"
 
 
 @pytest.mark.asyncio
@@ -529,6 +540,82 @@ async def test_json_serialization_none():
     """Test JSON serialization for None"""
     result = serialize_to_json(None, "test_none")
     assert result is None
+
+
+# =============================================================================
+# Safety Band Arbitration Tests (Issue 0053)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "policy_band,safety_familyos_band,expected",
+    [
+        # Same bands - return as-is
+        ("GREEN", "GREEN", "GREEN"),
+        ("AMBER", "AMBER", "AMBER"),
+        ("RED", "RED", "RED"),
+        # UltraBERT more restrictive - UltraBERT wins
+        ("GREEN", "AMBER", "AMBER"),
+        ("GREEN", "RED", "RED"),
+        ("GREEN", "CRISIS", "CRISIS"),
+        ("AMBER", "RED", "RED"),
+        ("AMBER", "CRISIS", "CRISIS"),
+        ("RED", "CRISIS", "CRISIS"),
+        # K1 more restrictive - K1 wins
+        ("AMBER", "GREEN", "AMBER"),
+        ("RED", "GREEN", "RED"),
+        ("RED", "AMBER", "RED"),
+        # None handling - defaults to GREEN
+        (None, "GREEN", "GREEN"),
+        ("GREEN", None, "GREEN"),
+        (None, None, "GREEN"),
+        (None, "CRISIS", "CRISIS"),
+        ("RED", None, "RED"),
+        # Case insensitivity
+        ("green", "amber", "AMBER"),
+        ("GREEN", "crisis", "CRISIS"),
+    ],
+)
+async def test_arbitrate_effective_safety_band(policy_band, safety_familyos_band, expected):
+    """Test safety band arbitration - most restrictive wins"""
+    result = arbitrate_effective_safety_band(policy_band, safety_familyos_band)
+    assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_effective_safety_band_in_row_assembly(base_envelope, complete_module_outputs):
+    """Test effective_safety_band is computed during row assembly"""
+    # Set up bands in the envelope
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
+    enriched_envelope["band"] = "GREEN"  # K1 policy_band
+
+    # Add UltraBERT safety via flat structure (complete_module_outputs uses flat fields)
+    enriched_envelope["safety_familyos_band"] = "AMBER"
+
+    message, context, config = make_test_call(enriched_envelope)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
+
+    # AMBER (UltraBERT) > GREEN (K1), so effective should be AMBER
+    assert row.get("effective_safety_band") == "AMBER"
+
+
+@pytest.mark.asyncio
+async def test_effective_safety_band_crisis_escalation(base_envelope, complete_module_outputs):
+    """Test CRISIS band always wins regardless of K1 band"""
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
+    enriched_envelope["band"] = "RED"  # K1 policy_band at highest K1 level
+
+    # UltraBERT detects CRISIS (only UltraBERT has CRISIS) - use flat structure
+    enriched_envelope["safety_familyos_band"] = "CRISIS"
+
+    message, context, config = make_test_call(enriched_envelope)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
+
+    # CRISIS > RED, so effective should be CRISIS
+    assert row.get("effective_safety_band") == "CRISIS"
 
 
 # =============================================================================

@@ -1,0 +1,51 @@
+{
+  "schema_id": "SCHEMA_WORK_CONFLICT",
+  "name": "work_conflict",
+  "description": "Work-life conflict scenarios where professional demands impact family.",
+  "typical_sequence": [
+    "work_demand_arises",
+    "conflict_recognition",
+    "decision_point",
+    "action_taken",
+    "consequence",
+    "emotional_response",
+    "resolution_attempt"
+  ],
+  "expected_duration_minutes": {
+    "work_demand_arises": 5,
+    "conflict_recognition": 10,
+    "decision_point": 15,
+    "action_taken": 60,
+    "consequence": 30,
+    "emotional_response": 30,
+    "resolution_attempt": 60
+  },
+  "locations": ["office", "home", "car", "phone_call", "video_call"],
+  "participants": ["self", "boss", "coworker", "spouse", "kids"],
+  "typical_time_window": {
+    "start_hour": 8,
+    "end_hour": 20
+  },
+  "required_fields": ["conflict_type", "work_demand", "family_impact"],
+  "optional_fields": ["emotional_valence", "resolution_status", "guilt_level"],
+  "conflict_types": [
+    "missed_family_event",
+    "late_arrival_home",
+    "weekend_work_intrusion",
+    "travel_obligation",
+    "deadline_pressure",
+    "emotional_spillover"
+  ],
+  "emotional_patterns": {
+    "guilt": ["missed_family_event", "late_arrival_home"],
+    "stress": ["deadline_pressure", "weekend_work_intrusion"],
+    "resentment": ["travel_obligation", "unfair_demands"],
+    "relief": ["successful_resolution", "family_understanding"]
+  },
+  "confidence_boost": 0.15,
+  "provenance_hints": {
+    "calendar": ["meeting_overlap", "deadline_date"],
+    "messages": ["apology_sent", "schedule_change"],
+    "work_system": ["overtime_logged", "project_status"]
+  }
+}

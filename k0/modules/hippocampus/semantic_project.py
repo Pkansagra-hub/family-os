@@ -276,10 +276,7 @@ def _extract_with_ultrabert(
     Issue: UltraBERT Migration - Single Unified Model
     """
     try:
-        from k0.runtime.ultrabert_adapter import (
-            extract_entities,
-            is_ultrabert_available,
-        )
+        from k0.runtime.ultrabert_adapter import extract_entities, is_ultrabert_available
     except ImportError:
         logger.debug("ultrabert_adapter module not available")
         return None
@@ -331,6 +328,53 @@ def _map_ultrabert_label(label: str) -> str:
         "DATE_ABS": "DATE",  # Absolute dates
     }
     return label_map.get(label, label)
+
+
+def _extract_ner_for_p03_storage(text: str) -> dict[str, Any]:
+    """Extract RAW UltraBERT output for P03 consumption (Issue 4.4.1, 0053).
+
+    Unlike _extract_entities() which maps UltraBERT labels to standard NER,
+    this function preserves the full output structure that P03 R4 expects:
+    - ner_family: KINSHIP, FAMILY_EVENT, PET entities
+    - ner_general: PER, ORG, LOC, DATE, TIME entities
+    - temporal: DATE_ABS, DATE_REL, TIME_REL, DURATION entities
+    - relations: Relationship types (parent_of, spouse_of, etc.)
+    - safety: 4-band safety classification (GREEN/AMBER/RED/CRISIS)
+    - nli: Natural language inference (entailment/neutral/contradiction)
+
+    Returns:
+        Dict with keys matching st_hipp_events columns:
+        - ner_entities_json: {"ner_family": [...], "ner_general": [...]}
+        - temporal_json: {"temporal": [...]}
+        - intent_category: str (meal_prep, event_plan, etc.)
+        - ingress_category: str (voice_capture, manual_entry, etc.)
+        - ultrabert_version: str (e.g., "2.1.0")
+        - extracted_relations_json: JSON array of relation types
+        - safety_familyos_band: GREEN/AMBER/RED/CRISIS
+        - safety_familyos_subcategory: Detailed subcategory
+        - nli_label: entailment/neutral/contradiction
+        - nli_confidence: float
+        - sentiment_confidence: float
+    """
+    from k0.runtime.ultrabert_adapter import extract_ner_for_storage
+
+    try:
+        return extract_ner_for_storage(text)
+    except Exception as e:
+        logger.warning(f"P03 NER extraction failed: {e}, returning empty structure")
+        return {
+            "ner_entities_json": json.dumps({"ner_family": [], "ner_general": []}),
+            "temporal_json": json.dumps({"temporal": []}),
+            "intent_category": None,
+            "ingress_category": None,
+            "ultrabert_version": None,
+            "extracted_relations_json": "[]",
+            "safety_familyos_band": None,
+            "safety_familyos_subcategory": None,
+            "nli_label": None,
+            "nli_confidence": None,
+            "sentiment_confidence": None,
+        }
 
 
 def _extract_with_transformer(
@@ -898,6 +942,12 @@ async def run(
             "semantic_projected_at_utc": datetime.now(timezone.utc)
             .isoformat()
             .replace("+00:00", "Z"),
+            # P03 R4 fields - empty for empty text (Issue 4.4.1)
+            "ner_entities_json": json.dumps({"ner_family": [], "ner_general": []}),
+            "temporal_json": json.dumps({"temporal": []}),
+            "intent_category": None,
+            "ingress_category": None,
+            "ultrabert_version": None,
         }
 
     # Phase 1: Entity extraction (spaCy NER) - with preloaded models
@@ -906,6 +956,10 @@ async def run(
         confidence_threshold=entity_confidence,
         preloaded_models=preloaded_models,
     )
+
+    # Phase 1b: Get RAW UltraBERT NER output for P03 (Issue 4.4.1)
+    # This stores the 3-head output that UltraBERTEntityExtractor expects
+    ner_storage_data = _extract_ner_for_p03_storage(text)
 
     # Phase 2: Entity resolution (canonical IDs)
     participants = envelope.get("participants", [])
@@ -948,6 +1002,19 @@ async def run(
         "entities_json": entities_json,
         "kg_triples_json": kg_triples_json,
         "semantic_projected_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        # NEW P03 R4 FIELDS (Issue 4.4.1): Raw UltraBERT NER for entity extraction
+        "ner_entities_json": ner_storage_data["ner_entities_json"],
+        "temporal_json": ner_storage_data["temporal_json"],
+        "intent_category": ner_storage_data["intent_category"],
+        "ingress_category": ner_storage_data["ingress_category"],
+        "ultrabert_version": ner_storage_data["ultrabert_version"],
+        # Issue 0053: Full UltraBERT capability storage
+        "extracted_relations_json": ner_storage_data.get("extracted_relations_json", "[]"),
+        "safety_familyos_band": ner_storage_data.get("safety_familyos_band"),
+        "safety_familyos_subcategory": ner_storage_data.get("safety_familyos_subcategory"),
+        "nli_label": ner_storage_data.get("nli_label"),
+        "nli_confidence": ner_storage_data.get("nli_confidence"),
+        "sentiment_confidence": ner_storage_data.get("sentiment_confidence"),
         # NEW: Nested enrichments structure (Phase 4)
         "enrichments": {
             **envelope.get("enrichments", {}),
@@ -960,6 +1027,16 @@ async def run(
                 .replace("+00:00", "Z"),
                 "module_version": "v1",
                 "execution_time_ms": 0.0,  # Set by PipelineRunner
+                # P03 R4 NER fields included for downstream consumption
+                "ner_entities_json": ner_storage_data["ner_entities_json"],
+                "temporal_json": ner_storage_data["temporal_json"],
+                # Issue 0053: Full UltraBERT capability storage
+                "extracted_relations_json": ner_storage_data.get("extracted_relations_json", "[]"),
+                "safety_familyos_band": ner_storage_data.get("safety_familyos_band"),
+                "safety_familyos_subcategory": ner_storage_data.get("safety_familyos_subcategory"),
+                "nli_label": ner_storage_data.get("nli_label"),
+                "nli_confidence": ner_storage_data.get("nli_confidence"),
+                "sentiment_confidence": ner_storage_data.get("sentiment_confidence"),
             },
         },
     }

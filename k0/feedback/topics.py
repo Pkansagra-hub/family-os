@@ -18,16 +18,18 @@ _PIPELINE_ID_PATTERN = r"^P\d{2,3}$"
 _PIPELINE_ID_RE = re.compile(_PIPELINE_ID_PATTERN)
 
 # Implemented pipelines only (per FEEDBACK-issues-tracker.md)
-FEEDBACK_PIPELINES_V1: tuple[str, ...] = ("P02", "P08")
+FEEDBACK_PIPELINES_V1: tuple[str, ...] = ("P02", "P03", "P08")
 
 FEEDBACK_SIGNAL_ALL_V1 = "feedback.signal.all.v1"
 
 FEEDBACK_SIGNAL_P02_V1 = "feedback.signal.p02.v1"
+FEEDBACK_SIGNAL_P03_V1 = "feedback.signal.p03.v1"
 FEEDBACK_SIGNAL_P08_V1 = "feedback.signal.p08.v1"
 
 FEEDBACK_SIGNAL_TOPICS_V1: tuple[str, ...] = (
     FEEDBACK_SIGNAL_ALL_V1,
     FEEDBACK_SIGNAL_P02_V1,
+    FEEDBACK_SIGNAL_P03_V1,
     FEEDBACK_SIGNAL_P08_V1,
 )
 
@@ -65,6 +67,7 @@ __all__ = [
     "FEEDBACK_PIPELINES_V1",
     "FEEDBACK_SIGNAL_ALL_V1",
     "FEEDBACK_SIGNAL_P02_V1",
+    "FEEDBACK_SIGNAL_P03_V1",
     "FEEDBACK_SIGNAL_P08_V1",
     "FEEDBACK_SIGNAL_TOPICS_V1",
     "feedback_signal_topic",

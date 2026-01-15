@@ -1,0 +1,82 @@
+# P03 Module Contract: Insight Generator
+# Phase: R5 - Dream Phase (Optional)
+# Dossier: §D.3.1 stage_52_insight_gen, §4.5
+
+module_id: consolidation.insight_generator
+version: v1
+
+input_event_types:
+  - p03.causality.inferred.v1
+
+output_event_types:
+  - p03.insights.generated.v1
+
+latency_budget_ms: 400
+
+side_effects:
+  - read:st_sem  # Pattern lookup
+  - write:st_sem  # Store insights
+
+idempotent: true
+
+fabric_capabilities:
+  - generate_insights
+
+failure_modes:
+  - code: BGT_TIMEOUT
+    policy: return_partial
+  - code: NO_PATTERNS
+    policy: skip
+  - code: LOW_NOVELTY
+    policy: skip
+
+description: |
+  Insight Generator Module (R5 Dream Phase)
+
+  Discovers non-obvious patterns using BGT-SM:
+  - Bisociative Graph Traversal over Semantic Memory
+  - Finds unexpected connections between disparate concepts
+
+  Bisociation Theory:
+  - Creative insights arise from connecting unrelated frames
+  - BGT explores graph paths between distant nodes
+  - High novelty + high coherence = insight
+
+  Process:
+  1. Sample seed nodes from recent patterns
+  2. Traverse semantic graph using BGT algorithm
+  3. Find paths connecting unrelated concepts
+  4. Score novelty and coherence
+  5. Generate insight descriptions
+
+  Configuration:
+  - enabled: true
+  - skip_on_backlog: true
+  - min_novelty_score: 0.6
+  - max_insights_per_cycle: 10
+  - max_path_length: 5
+  - coherence_threshold: 0.4
+
+  Insight Types:
+  - PATTERN_RECOGNITION: Recurring behavior patterns
+  - ANOMALY_DETECTION: Unusual deviations
+  - TREND_DISCOVERY: Emerging trends
+  - CORRELATION: Non-obvious correlations
+  - PREDICTION: Predicted future events
+
+  Insight Record:
+  - insight_id: ULID identifier
+  - insight_type: One of above types
+  - description: Human-readable insight
+  - evidence_ids: Supporting event/pattern IDs
+  - novelty_score: 0-1 unexpectedness
+  - coherence_score: 0-1 logical consistency
+  - confidence: Overall confidence
+
+  Storage:
+  - Insights stored in st_sem as INSIGHT type
+  - Linked to evidence patterns
+
+  Output:
+  - envelope.insights: Array of insight records
+  - envelope.r5_stats.insights_generated: Count

@@ -26,7 +26,6 @@ from k0.security import canonical_json, hash_payload
 from k0.security.crypto import encode_base64url
 
 # Configuration
-DB_PATH = project_root / "k0" / "deploy" / "data" / "k0_kernel.db"
 BASE_URL = "http://localhost:8080"
 TENANT_ID = "tenant-test"
 SPACE_ID = "space-home"
@@ -34,21 +33,36 @@ DEVICE_ID = "device-test-1"
 SCHEMA_URI = "schema://memory.delta"
 SCHEMA_VERSION = "1.0"
 
+# PostgreSQL connection (via Docker)
+PG_CONTAINER = "k0-postgres"  # PostgreSQL container name
+PG_DATABASE = "k0_kernel"
+PG_USER = "k0user"
+
 
 def execute_sql_in_docker(sql_statements):
-    """Execute SQL statements inside the docker container."""
+    """Execute SQL statements inside the PostgreSQL docker container."""
     # Join statements with semicolons
     full_sql = "; ".join(sql_statements)
 
-    cmd = ["docker", "exec", "-i", "k0-kernel", "sqlite3", "/data/k0_kernel.db"]
+    cmd = [
+        "docker",
+        "exec",
+        "-i",
+        PG_CONTAINER,
+        "psql",
+        "-U",
+        PG_USER,
+        "-d",
+        PG_DATABASE,
+        "-c",
+        full_sql,
+    ]
 
     try:
-        process = subprocess.run(
-            cmd, input=full_sql.encode("utf-8"), capture_output=True, check=True
-        )
+        process = subprocess.run(cmd, capture_output=True, check=True)
         return process.stdout.decode("utf-8")
     except subprocess.CalledProcessError as e:
-        raise Exception(f"Docker SQL execution failed: {e.stderr.decode('utf-8')}")
+        raise Exception(f"Docker PostgreSQL execution failed: {e.stderr.decode('utf-8')}")
 
 
 def provision_device(signing_key: SigningKey):
@@ -89,9 +103,9 @@ def provision_device(signing_key: SigningKey):
 
         schema_sha = hashlib.sha256(f"{SCHEMA_URI}@{SCHEMA_VERSION}".encode("utf-8")).hexdigest()
 
-        # Use INSERT OR IGNORE for schema
+        # Use ON CONFLICT DO NOTHING for PostgreSQL (replaces SQLite's INSERT OR IGNORE)
         sql_statements.append(
-            f"INSERT OR IGNORE INTO schema_registry (schema_uri, version, sha256, status) VALUES ('{SCHEMA_URI}', '{SCHEMA_VERSION}', '{schema_sha}', 'ACTIVE')"
+            f"INSERT INTO schema_registry (schema_uri, version, sha256, status) VALUES ('{SCHEMA_URI}', '{SCHEMA_VERSION}', '{schema_sha}', 'ACTIVE') ON CONFLICT DO NOTHING"
         )
 
         print("\nExecuting SQL in Docker container...")

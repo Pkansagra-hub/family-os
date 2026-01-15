@@ -529,6 +529,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Restrict results to a driver alias",
     )
+    dlq_list_parser.add_argument(
+        "--pipeline",
+        dest="pipeline",
+        default=None,
+        help="Alias for --driver; filter by pipeline name (e.g., p03_consolidation)",
+    )
+    dlq_list_parser.add_argument(
+        "--phase",
+        dest="phase",
+        default=None,
+        help="Filter by failed phase (e.g., R0, R3, R7)",
+    )
+    dlq_list_parser.add_argument(
+        "--error-type",
+        dest="error_type",
+        default=None,
+        help="Filter by error type (e.g., TRANSIENT, VALIDATION)",
+    )
 
     dlq_requeue_parser = dlq_subparsers.add_parser(
         "requeue",
@@ -559,6 +577,60 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         required=True,
         help="Identifier of the dead-letter entry to quarantine",
+    )
+
+    # Issue 6.2.16: P03-specific DLQ commands
+    dlq_stats_parser = dlq_subparsers.add_parser(
+        "stats",
+        help="Show DLQ statistics by driver, phase, and error type",
+    )
+    dlq_stats_parser.add_argument(
+        "--pipeline",
+        dest="pipeline",
+        default=None,
+        help="Filter statistics by pipeline name (e.g., p03_consolidation)",
+    )
+    dlq_stats_parser.add_argument(
+        "--driver",
+        dest="driver",
+        default=None,
+        help="Alias for --pipeline; filter by driver name",
+    )
+
+    dlq_requeue_all_parser = dlq_subparsers.add_parser(
+        "requeue-all",
+        help="Bulk requeue pending DLQ entries matching filters",
+    )
+    dlq_requeue_all_parser.add_argument(
+        "--pipeline",
+        dest="pipeline",
+        required=True,
+        help="Pipeline name to filter (required)",
+    )
+    dlq_requeue_all_parser.add_argument(
+        "--max-items",
+        dest="max_items",
+        type=int,
+        default=100,
+        help="Maximum items to requeue (default: 100)",
+    )
+    dlq_requeue_all_parser.add_argument(
+        "--phase",
+        dest="phase",
+        default=None,
+        help="Filter by phase (e.g., R0, R3)",
+    )
+    dlq_requeue_all_parser.add_argument(
+        "--error-type",
+        dest="error_type",
+        default=None,
+        help="Filter by error type (recommend TRANSIENT only)",
+    )
+    dlq_requeue_all_parser.add_argument(
+        "--force",
+        dest="force",
+        action="store_true",
+        help="Skip confirmation prompt",
     )
 
     # -------------------------------------------------------------------------
@@ -1423,13 +1495,19 @@ def _handle_dlq_command(
                 logger.error("limit must be greater than zero")
                 return 2
             state = args.state.upper() if args.state else None
+            # Support --pipeline as alias for --driver (Issue 6.2.16)
+            driver = args.driver or getattr(args, "pipeline", None)
             letters = queue.list_pending(
                 limit=limit,
                 state=state,
                 tenant_id=args.tenant,
                 space_id=args.space,
-                driver=args.driver,
+                driver=driver,
             )
+            # Apply phase filter if provided (Issue 6.2.16)
+            phase_filter = getattr(args, "phase", None)
+            if phase_filter:
+                letters = [l for l in letters if l.op_kind == phase_filter]
             if not letters:
                 logger.info("No dead-letter entries matched the query")
                 return 0
@@ -1514,6 +1592,111 @@ def _handle_dlq_command(
                 "Marked dead-letter entry %s as QUARANTINED",
                 args.letter_id,
             )
+            return 0
+
+        # Issue 6.2.16: stats command
+        if command == "stats":
+            driver = getattr(args, "driver", None) or getattr(args, "pipeline", None)
+            letters = queue.list_pending(
+                limit=10000,
+                state="ALL",
+                driver=driver,
+            )
+
+            # Compute statistics
+            total = len(letters)
+            by_state: dict[str, int] = {}
+            by_phase: dict[str, int] = {}
+            by_driver: dict[str, int] = {}
+
+            for letter in letters:
+                # By state
+                state = letter.state or "UNKNOWN"
+                by_state[state] = by_state.get(state, 0) + 1
+                # By phase (op_kind)
+                phase = letter.op_kind or "UNKNOWN"
+                by_phase[phase] = by_phase.get(phase, 0) + 1
+                # By driver
+                drv = letter.driver or "UNKNOWN"
+                by_driver[drv] = by_driver.get(drv, 0) + 1
+
+            logger.info("\nDLQ Statistics%s", f" for {driver}" if driver else "")
+            logger.info("-" * 40)
+            logger.info("Total entries:   %s", total)
+            logger.info("\nBy State:")
+            for state, count in sorted(by_state.items()):
+                logger.info("  %s: %s", state, count)
+            logger.info("\nBy Phase:")
+            for phase, count in sorted(by_phase.items()):
+                logger.info("  %s: %s", phase, count)
+            logger.info("\nBy Driver:")
+            for drv, count in sorted(by_driver.items()):
+                logger.info("  %s: %s", drv, count)
+            return 0
+
+        # Issue 6.2.16: requeue-all command
+        if command == "requeue-all":
+            driver = args.pipeline
+            max_items = args.max_items
+            phase_filter = getattr(args, "phase", None)
+            force = getattr(args, "force", False)
+
+            letters = queue.list_pending(
+                limit=max_items,
+                state="PENDING",
+                driver=driver,
+            )
+            # Apply phase filter
+            if phase_filter:
+                letters = [l for l in letters if l.op_kind == phase_filter]
+
+            if not letters:
+                logger.info("No matching DLQ entries found for requeue")
+                return 0
+
+            if not force:
+                logger.info("Found %s entries to requeue. Use --force to proceed.", len(letters))
+                return 0
+
+            requeued = 0
+
+            async def _requeue_all_letters():
+                nonlocal requeued
+                async with connection_scope() as connection:
+                    for letter in letters:
+                        if letter.id is None or letter.wal_pos is None:
+                            continue
+                        if letter.state != "PENDING":
+                            continue
+                        new_seq = letter.requeue_seq + 1
+                        try:
+                            await outbox_store.enqueue(
+                                OutboxEntry(
+                                    id=None,
+                                    wal_pos=letter.wal_pos,
+                                    tenant_id=letter.tenant_id,
+                                    space_id=letter.space_id,
+                                    driver=letter.driver,
+                                    op_kind=letter.op_kind,
+                                    payload=letter.payload,
+                                    fingerprint=letter.fingerprint,
+                                    requeue_seq=new_seq,
+                                    retries=0,
+                                    last_error=letter.reason,
+                                ),
+                                connection=connection,
+                            )
+                            await queue.mark_requeued(
+                                letter.id,
+                                requeue_seq=new_seq,
+                                connection=connection,
+                            )
+                            requeued += 1
+                        except Exception as e:
+                            logger.warning("Failed to requeue %s: %s", letter.id, e)
+
+            asyncio.run(_requeue_all_letters())
+            logger.info("Requeued %s/%s entries for pipeline %s", requeued, len(letters), driver)
             return 0
 
         logger.error("`dlq %s` command is not implemented yet", command)

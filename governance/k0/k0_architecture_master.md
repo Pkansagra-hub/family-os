@@ -139,7 +139,7 @@ Before writing any code, ensure these are registered:
 |----|------|--------|--------------|------------|--------------|------|---------|---------|--------------|
 | P01 | Recall / Read | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
 | P02 | Write / Ingest | ✅ Production | M01,M02,M04,M05,M06,M07,M08,M09,M10,M11,M12,M13,M15,M16,M17,M22 | No | on_startup | K003,K007.2,K009.2,K010.1 | `docs/pipelines/P02_write_dossier.md` | 1.1.0 | 2025-12-13 |
-| P03 | Consolidation / Forgetting | 🎯 Planning | M18,M19,M20,M21,M22,M23,M24,M25 | Yes (timer) | - | - | `docs/pipelines/P03_consolidation_dossier_v2.md` | 0.1.0 | 2025-12-31 |
+| P03 | Memory Consolidation | 🎯 Planning | M28,M29,M30,M31,M32,M33,M34,M35 | Yes (INTERVAL/THRESHOLD/MANUAL) | on_startup | K010.5-K010.9 | `docs/pipelines/P03_consolidation_dossier_v2.md` | 0.1.0 | 2025-12-31 |
 | P04 | Arbitration / Action | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
 | P05 | Prospective / Triggers | 🎯 Planning | - | Yes (timer) | - | - | - | 0.1.0 | 2025-12-24 |
 | P06 | Learning / Neuromodulation | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
@@ -183,7 +183,7 @@ Before writing any code, ensure these are registered:
 | Pipeline | Modules Used | Events Consumed | Events Produced | Storage Tables | Depends On Pipelines |
 |----------|--------------|-----------------|-----------------|----------------|----------------------|
 | P02 | M01,M02,M04,M05,M06,M07,M08,M09,M10,M11,M12,M13,M15,M16,M17,M22 | `cognitive.memory.write.committed.v1` | `p02.write.complete.v1`, `workspace.wm.updated.v1`, `core.affect.analyzed.v1`, `space.resolution.complete.v1`, `cognitive.vector.stored.v1` | st_hipp_events (W), st_vec (W), st_pipeline_processed (W), st_outbox (W), st_relationships (R) | - |
-| P03 | - | `p03.consolidation.triggered.v1`, `core.enrichment.complete.v1` | `p03.consolidation.complete.v1` | st_hipp_events (R/W), st_epi (W), st_sem (W), st_kg_dom (W), st_kg_edges (W), st_vec (R/W), st_pipeline_status (W), st_pipeline_watermarks (W), st_outbox (W) | P02 |
+| P03 | M28,M29,M30,M31,M32,M33,M34,M35 | `p03.consolidation.triggered.v1`, `p02.write.complete.v1` | `p03.consolidation.complete.v1`, `p03.phase.complete.v1`, `p03.episode.formed.v1`, `p03.pattern.discovered.v1`, `p03.truth.*.v1`, `p03.memory.pruned.v1`, `p03.gap.detected.v1`, `p03.kg.updated.v1`, `p03.insight.generated.v1` | st_hipp_events (R), st_epi (W), st_sem (W), st_procedural (W), st_social (W), st_prospective (W), st_kg_dom (W), st_kg_edges (W), st_vec (R/W), st_learning_queue (W), st_anchors (W), st_consolidation_audit (W), st_outbox (W) | P02 |
 | P04 | - | `workspace.broadcast.v1`, `core.salience.computed.v1` | `arbitration.action.recommended.v1` | - | P02 |
 | P06 | - | `learning.feedback.v1`, `p01.recall.complete.v1` | `learning.model.updated.v1` | - | P01, P02 |
 | P08 | M25,M27 | `scheduled.p08.maintenance.v1` | `embedding.maintenance.completed.v1`, `cognitive.embedding.backfilled.v1`, `cognitive.embedding.cleaned.v1` | st_vec (W), st_hipp_events (R) | P02 |
@@ -507,8 +507,35 @@ Before writing any code, ensure these are registered:
 | `scheduled.p08.maintenance.v1` | - | Scheduler | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
 | `embedding.maintenance.completed.v1` | - | P08 | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
 
-> **Event Summary**: 52 event topics (23 Active, 21 Planning, 10 Deprecated/Planning)
+### P03 Internal Stage Events (Planning)
+
+> **Source**: P03 module contracts in `k0/contracts/modules/consolidation.*.v1.yaml`
+
+| Topic | Schema Path | Producer | QoS Band | Retention | Version | Status |
+|-------|-------------|----------|----------|-----------|---------|--------|
+| `p03.batch.selected.v1` | - | P03 (batch_selector) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.importance.scored.v1` | - | P03 (importance_scorer) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.hebbian.updated.v1` | - | P03 (hebbian_learner) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.clusters.formed.v1` | - | P03 (episodic_clusterer) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.episodes.clustered.v1` | - | P03 (episodic_clusterer) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.episodes.built.v1` | - | P03 (episode_builder) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.dedup.complete.v1` | - | P03 (simhash_deduplicator) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.decay.scored.v1` | - | P03 (decay_scorer) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.prune.decided.v1` | - | P03 (prune_decider) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.entities.extracted.v1` | - | P03 (entity_extractor) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.relationships.built.v1` | - | P03 (relationship_builder) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.kg.extracted.v1` | - | P03 (kg_consolidator) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.causality.inferred.v1` | - | P03 (causal_inference) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.counterfactuals.generated.v1` | - | P03 (counterfactual) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.simulations.complete.v1` | - | P03 (forward_simulator) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.insights.generated.v1` | - | P03 (insight_generator) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.prospective.generated.v1` | - | P03 (dream_explorer) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.status.updated.v1` | - | P03 (status_updater) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.truth.written.v1` | - | P03 (memory_writer) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+
+> **Event Summary**: 68 event topics (23 Active, 37 Planning, 10 Deprecated/Planning)
 > **Primary Pipeline**: P02 produces 17 internal events + 5 fanout events
+> **P03 Pipeline**: 16 internal stage events + 14 entry/exit events
 > **Schema Location**: `k0/contracts/schemas/` - Module contracts define input/output event types
 
 ### QoS Band Legend
@@ -674,16 +701,27 @@ graph LR
 | `embedding.recompute` | M26 | `k0/contracts/modules/embedding.recompute.v1.yaml` | v1 | 🎯 Planning | 2025-12-13 |
 | `embedding.cleanup` | M27 | `k0/contracts/modules/embedding.cleanup.v1.yaml` | v1 | 🎯 Planning | 2025-12-13 |
 | `feedback.ingest` | M28 | `k0/contracts/modules/feedback.ingest.v1.yaml` | v1 | 🎯 Planning | 2025-12-25 |
-| `consolidation.episodic_clusterer` | M29 | `k0/contracts/modules/consolidation.episodic_clusterer.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
-| `consolidation.duplicate_detector` | M30 | `k0/contracts/modules/consolidation.duplicate_detector.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
-| `consolidation.retention_enforcer` | M31 | `k0/contracts/modules/consolidation.retention_enforcer.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
-| `consolidation.kg_consolidator` | M32 | `k0/contracts/modules/consolidation.kg_consolidator.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
-| `consolidation.dream_explorer` | M33 | `k0/contracts/modules/consolidation.dream_explorer.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
-| `consolidation.replay_coordinator` | M34 | `k0/contracts/modules/consolidation.replay_coordinator.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
-| `consolidation.truth_writer` | M35 | `k0/contracts/modules/consolidation.truth_writer.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
-| `consolidation.gap_detector` | M36 | `k0/contracts/modules/consolidation.gap_detector.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
+| `consolidation.batch_selector` | M37 | `k0/contracts/modules/consolidation.batch_selector.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.importance_scorer` | M38 | `k0/contracts/modules/consolidation.importance_scorer.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.hebbian_learner` | M39 | `k0/contracts/modules/consolidation.hebbian_learner.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.episodic_clusterer` | M40 | `k0/contracts/modules/consolidation.episodic_clusterer.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.episode_builder` | M41 | `k0/contracts/modules/consolidation.episode_builder.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.simhash_deduplicator` | M42 | `k0/contracts/modules/consolidation.simhash_deduplicator.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.decay_scorer` | M43 | `k0/contracts/modules/consolidation.decay_scorer.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.prune_decider` | M44 | `k0/contracts/modules/consolidation.prune_decider.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.entity_extractor` | M45 | `k0/contracts/modules/consolidation.entity_extractor.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.relationship_builder` | M46 | `k0/contracts/modules/consolidation.relationship_builder.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.causal_inference` | M47 | `k0/contracts/modules/consolidation.causal_inference.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.counterfactual` | M48 | `k0/contracts/modules/consolidation.counterfactual.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.forward_simulator` | M49 | `k0/contracts/modules/consolidation.forward_simulator.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.insight_generator` | M50 | `k0/contracts/modules/consolidation.insight_generator.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.status_updater` | M51 | `k0/contracts/modules/consolidation.status_updater.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.memory_writer` | M52 | `k0/contracts/modules/consolidation.memory_writer.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.gap_detector` | M53 | `k0/contracts/modules/consolidation.gap_detector.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
+| `consolidation.dream_explorer` | M54 | `k0/contracts/modules/consolidation.dream_explorer.v1.yaml` | v1 | 🎯 Planning | 2026-01-13 |
 
-> **Module Contract Summary**: 31 contracts (15 Active, 12 Planning, 2 Experimental, 2 Deprecated)
+> **Module Contract Summary**: 39 contracts (15 Active, 20 Planning, 2 Experimental, 2 Deprecated)
+> **Note**: Consolidation modules M29-M36 (old naming) replaced by M37-M53 (canonical per P03 dossier Appendix D.3)
 
 ## 5.2 Pipeline Contract Registry
 
@@ -763,20 +801,44 @@ graph LR
 | `k0/contracts/modules/embedding.cleanup.v1.yaml` | Module | M27 | v1 | 📝 Draft |
 | `k0/contracts/modules/feedback.ingest.v1.yaml` | Module | M28 | v1 | 📝 Draft |
 
-### Pipeline Contracts (2 files)
+### P03 Consolidation Module Contracts (17 files)
+
+| File Path | Type | Used By | Version | Validated? |
+|-----------|------|---------|---------|------------|
+| `k0/contracts/modules/consolidation.batch_selector.v1.yaml` | Module | M37 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.importance_scorer.v1.yaml` | Module | M38 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.hebbian_learner.v1.yaml` | Module | M39 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.episodic_clusterer.v1.yaml` | Module | M40 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.episode_builder.v1.yaml` | Module | M41 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.simhash_deduplicator.v1.yaml` | Module | M42 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.decay_scorer.v1.yaml` | Module | M43 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.prune_decider.v1.yaml` | Module | M44 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.entity_extractor.v1.yaml` | Module | M45 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.relationship_builder.v1.yaml` | Module | M46 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.causal_inference.v1.yaml` | Module | M47 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.counterfactual.v1.yaml` | Module | M48 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.forward_simulator.v1.yaml` | Module | M49 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.insight_generator.v1.yaml` | Module | M50 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.status_updater.v1.yaml` | Module | M51 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.memory_writer.v1.yaml` | Module | M52 | v1 | 📝 Draft |
+| `k0/contracts/modules/consolidation.gap_detector.v1.yaml` | Module | M53 | v1 | 📝 Draft |
+
+### Pipeline Contracts (3 files)
 
 | File Path | Type | Used By | Version | Validated? |
 |-----------|------|---------|---------|------------|
 | `k0/contracts/pipelines/p02_write.v1.yaml` | Pipeline | P02 | v1 | ✅ Yes |
+| `k0/contracts/pipelines/p03_consolidation.v1.yaml` | Pipeline | P03 | v1 | 📝 Draft |
 | `k0/contracts/pipelines/p08_embedding_management.v2.yaml` | Pipeline | P08 | v3 | ✅ Yes |
 
-### Capability Contracts (1 file)
+### Capability Contracts (2 files)
 
 | File Path | Type | Used By | Version | Validated? |
 |-----------|------|---------|---------|------------|
 | `k0/contracts/capabilities/core.v1.yaml` | Capability Mesh | Fabric, All Modules | v1 | ✅ Yes |
+| `k0/contracts/capabilities/consolidation.v1.yaml` | Capability Mesh | P03 Consolidation | v1 | 📝 Draft |
 
-### Event Schemas (6 files)
+### Event Schemas (14 files)
 
 | File Path | Type | Used By | Version | Validated? |
 |-----------|------|---------|---------|------------|
@@ -786,8 +848,16 @@ graph LR
 | `k0/contracts/schemas/cognitive_embedding_cleaned.json` | Event Schema | P08 M27 | v1 | 📝 Draft |
 | `k0/contracts/schemas/cognitive_embedding_recomputed.json` | Event Schema | P08 M26 | v1 | 📝 Draft |
 | `k0/contracts/schemas/feedback_signal_envelope.json` | Event Schema | M28 | v1 | 📝 Draft |
+| `k0/contracts/schemas/p03_consolidation_triggered.json` | Event Schema | P03 | v1 | 📝 Draft |
+| `k0/contracts/schemas/p03_consolidation_complete.json` | Event Schema | P03 | v1 | 📝 Draft |
+| `k0/contracts/schemas/p03_phase_complete.json` | Event Schema | P03 | v1 | 📝 Draft |
+| `k0/contracts/schemas/p03_episode_formed.json` | Event Schema | P03 | v1 | 📝 Draft |
+| `k0/contracts/schemas/p03_pattern_discovered.json` | Event Schema | P03 | v1 | 📝 Draft |
+| `k0/contracts/schemas/p03_gap_detected.json` | Event Schema | P03 | v1 | 📝 Draft |
+| `k0/contracts/schemas/p03_kg_updated.json` | Event Schema | P03 | v1 | 📝 Draft |
+| `k0/contracts/schemas/p03_insight_generated.json` | Event Schema | P03 | v1 | 📝 Draft |
 
-### JSON Schema Contracts (16 files)
+### JSON Schema Contracts (18 files)
 
 | File Path | Type | Used By | Version | Validated? |
 |-----------|------|---------|---------|------------|
@@ -807,6 +877,7 @@ graph LR
 | `k0/contracts/jsonschema/receipt.schema.json` | JSON Schema | Kernel | v1 | ✅ Yes |
 | `k0/contracts/jsonschema/retention_policy.schema.json` | JSON Schema | Policy | v1 | ✅ Yes |
 | `k0/contracts/jsonschema/sse.ack.request.json` | JSON Schema | SSE | v1 | ✅ Yes |
+| `k0/contracts/jsonschema/p03.config.schema.json` | JSON Schema | P03 Consolidation | v1 | 📝 Draft |
 
 ### API Contracts (17 files)
 
@@ -903,6 +974,7 @@ graph LR
 | `st_pipeline_processed` | P02 (M16) | Kernel | Idempotency tracking per pipeline | ~100B | Permanent | ✅ Active |
 | `st_outbox` | P02 (M17) | SSE Driver | Transactional outbox for events | ~1KB | 7 days | ✅ Active |
 | `st_feedback_signals` | Kernel (Observe) | P02, P08, Ops | Feedback signal storage (schema-flexible JSON payload + provenance) | ~1KB | 90 days | 🎯 Planned |
+| `st_feedback_quarantine` | Kernel (Observe) | P06, Ops | Quarantine suspicious feedback signals for review/auto-release | ~1KB | 90 days | 🎯 Planning |
 | `st_dlq` | Kernel (DLQ) | Ops, Recovery | Dead letter queue for failed events | ~1KB | 30 days | ✅ Active |
 | `st_embedding_queue` | ~~P02~~ | P08 | Async embedding jobs (deprecated) | ~500B | 7 days | ❌ Deprecated |
 | `st_relationships` | Sync Service | P02, M07 | Family graph relationships | ~300B | Permanent | ✅ Active |
@@ -922,18 +994,25 @@ graph LR
 | `st_pipeline_watermarks` | Scheduler | Ops | Pipeline watermark tracking | ~50B | Permanent | ✅ Active |
 | `households` | Onboarding | P02, M07 | Household domain entities (35 cols) | ~1KB | Permanent | ✅ Active |
 | `people` | Onboarding | P02, M07 | Person domain entities (33 cols) | ~1KB | Permanent | ✅ Active |
-| `st_epi` | P03 (M35) | P01, P03 | Episodic memory (consolidated episodes) | ~2KB | Permanent | 🎯 Planning |
-| `st_sem` | P03 (M35) | P01, P03 | Semantic patterns (facts/beliefs) | ~1KB | Permanent | 🎯 Planning |
-| `st_procedural` | P03 (M35) | P01, P03 | Habits and routines | ~500B | Permanent | 🎯 Planning |
-| `st_social` | P03 (M35) | P01, P03, M07 | Relationship memory | ~300B | Permanent | 🎯 Planning |
-| `st_prospective` | P03 (M33) | P01, P03 | Intentions and goals | ~400B | Permanent | 🎯 Planning |
-| `st_kg_dom` | P03 (M32) | P01, P03, P04 | Knowledge graph entities | ~500B | Permanent | 🎯 Planning |
-| `st_kg_edges` | P03 (M32) | P01, P03, P04 | Knowledge graph relationships | ~300B | Permanent | 🎯 Planning |
-| `st_learning_queue` | P03 (M36) | P06, P03 | Gap queue for active learning | ~200B | 30 days | 🎯 Planning |
-| `st_anchors` | P03 (M36), P06 | P03, P06 | Bayesian anchor beliefs | ~400B | Permanent | 🎯 Planning |
+| `st_epi` | P03 (M34) | P01, P03 | Episodic memory (consolidated episodes) | ~2KB | Permanent | 🎯 Planning |
+| `st_sem` | P03 (M34) | P01, P03 | Semantic patterns (facts/beliefs) | ~1KB | Permanent | 🎯 Planning |
+| `st_procedural` | P03 (M34) | P01, P03 | Habits and routines | ~500B | Permanent | 🎯 Planning |
+| `st_social` | P03 (M34) | P01, P03, M07 | Relationship memory | ~300B | Permanent | 🎯 Planning |
+| `st_prospective` | P03 (M34) | P01, P03 | Intentions and goals | ~400B | Permanent | 🎯 Planning |
+| `st_kg_dom` | P03 (M31) | P01, P03, P04 | Knowledge graph entities | ~500B | Permanent | 🎯 Planning |
+| `st_kg_edges` | P03 (M31) | P01, P03, P04 | Knowledge graph relationships | ~300B | Permanent | 🎯 Planning |
+| `st_entity_resolutions` | P03 | P03, P21, Ops | Entity resolution audit trail and feedback loop | ~1KB | 90 days | 🎯 Planning |
+| `st_entity_merges` | P03 | P03, Ops | Entity merge audit trail with undo snapshots | ~2KB | Permanent | 🎯 Planning |
+| `st_learning_queue` | P03 (M35) | P06, P03 | Gap queue for active learning | ~200B | 30 days | 🎯 Planning |
+| `st_anchors` | P03 (M35), P06 | P03, P06 | Bayesian anchor beliefs | ~400B | Permanent | 🎯 Planning |
 | `st_anchor_observations` | P03, P06 | P03, P06 | Evidence log for anchors | ~200B | 90 days | 🎯 Planning |
 | `st_consolidation_audit` | P03 | Ops | P03 cycle audit trail | ~500B | 90 days | 🎯 Planning |
+| `st_mcts_decisions` | P03 | P03, Ops | MCTS decision traces for analysis | ~1KB | 90 days | 🎯 Planning |
+| `st_mcts_shadow_log` | P03 | P03, Ops | Shadow-mode heuristic vs MCTS comparisons | ~1KB | 90 days | 🎯 Planning |
+| `st_pruned_entities` | P03 | P03, Ops | Pruned entity regret tracking | ~1KB | 14 days | 🎯 Planning |
+| `st_decay_feedback` | P03 | P03, P06 | Decay learning feedback signals | ~500B | 365 days | 🎯 Planning |
 | `st_learned_weights` | P06 | P03 | Learned importance weights | ~200B | Permanent | 🎯 Planning |
+| `st_learned_weights_history` | P06 | P03, Ops | Versioned learned weights history | ~500B | Last 10 versions | 🎯 Planning |
 | `st_golden_dataset_pairs` | P06 | P03, Ops | Ground truth pairs for training | ~500B | Permanent | 🎯 Planning |
 | `st_validation_results` | P06 | Ops | Model validation results | ~300B | 90 days | 🎯 Planning |
 
@@ -972,6 +1051,40 @@ graph LR
 | 0024 | `0024_st_embedding_queue.py` | st_embedding_queue | idx_eq_* (4) | Embedding queue | ✅ Yes |
 | 0025 | `0025_st_vec.py` | st_vec | idx_vec_* (4) | Vector embeddings | ✅ Yes |
 | 0026 | `0026_st_feedback_signals.py` | st_feedback_signals | idx_feedback_* (planned) | Feedback signal storage | ❌ No |
+| 0027 | `0027_st_epi.py` | st_epi | idx_epi_* | Episodic memory table (P03) | ❌ No |
+| 0028 | `0028_st_sem.py` | st_sem | idx_sem_* | Semantic memory table (P03) | ❌ No |
+| 0029 | `0029_st_procedural.py` | st_procedural | idx_procedural_* | Procedural memory table (P03) | ❌ No |
+| 0030 | `0030_st_social.py` | st_social | idx_social_* | Social memory table (P03) | ❌ No |
+| 0031 | `0031_st_prospective.py` | st_prospective | idx_prospective_* | Prospective memory table (P03) | ❌ No |
+| 0032 | `0032_st_kg_dom.py` | st_kg_dom | idx_kg_dom_* | KG entity domain table | ❌ No |
+| 0033 | `0033_st_kg_edges.py` | st_kg_edges | idx_kg_edges_* | KG edges table | ❌ No |
+| 0034 | `0034_st_hipp_events_p03_columns.py` | - | idx_he_* (P03) | Add P03 columns to st_hipp_events | ❌ No |
+| 0035 | `0035_st_outbox_fix_next_attempt_ts.py` | - | - | Fix outbox next_attempt_ts | ❌ No |
+| 0036 | `0036_st_consolidation_audit.py` | st_consolidation_audit | idx_audit_* | P03 consolidation audit trail | ❌ No |
+| 0037 | `0037_st_learning_queue.py` | st_learning_queue | idx_learning_queue_* | Learning queue | ❌ No |
+| 0038 | `0038_st_anchors.py` | st_anchors | idx_anchors_* | Anchor beliefs | ❌ No |
+| 0039 | `0039_st_anchor_observations.py` | st_anchor_observations | idx_anchor_obs_* | Anchor observations | ❌ No |
+| 0040 | `0040_st_learned_weights.py` | st_learned_weights | idx_learned_weights_* | Learned weights | ❌ No |
+| 0041 | `0041_st_learned_weights_history.py` | st_learned_weights_history | idx_weights_history_* | Learned weights history | ❌ No |
+| 0042 | `0042_st_feedback_quarantine.py` | st_feedback_quarantine | idx_quarantine_* | Feedback signal quarantine | ❌ No |
+| 0043 | `0043_st_feedback_signals_consumption.py` | - | idx_feedback_signals_* (2) | Add consumption columns to st_feedback_signals | ❌ No |
+| 0044 | `0044_st_golden_dataset.py` | st_golden_dataset_pairs, st_validation_results | idx_golden_pairs_*, idx_validation_results_* | Golden dataset + validation results | ❌ No |
+| 0045 | `0045_st_dlq_p03_reconcile.py` | - | idx_dlq_* | P03 DLQ reconciliation support | ❌ No |
+| 0046 | `0046_st_hipp_events_p02_ner_columns.py` | - | - | Add P02 NER columns to st_hipp_events | ❌ No |
+| 0047 | `0047_st_entity_resolutions.py` | st_entity_resolutions | ix_st_entity_resolutions_* | Entity resolution audit | ❌ No |
+| 0048 | `0048_st_entity_merges.py` | st_entity_merges | ix_st_entity_merges_* | Entity merge audit/undo | ❌ No |
+| 0049 | `0049_st_pruned_entities.py` | st_pruned_entities | idx_pruned_* | Pruned entity regret tracking | ❌ No |
+| 0050 | `0050_st_decay_feedback.py` | st_decay_feedback | idx_decay_fb_* | Decay learning feedback | ❌ No |
+| 0051 | `0051_st_hipp_events_archival_status.py` | - | idx_hipp_events_* | Add archival status to st_hipp_events | ❌ No |
+| 0052 | `0052_st_hipp_events_p03_columns.py` | - | idx_hipp_events_* | Add P03 columns to st_hipp_events | ❌ No |
+| 0053 | `0053_st_hipp_events_ultrabert_full.py` | - | idx_hipp_events_* | Add UltraBERT columns to st_hipp_events | ❌ No |
+| 0054 | `0054_st_social_ultrabert_enrichment.py` | - | idx_social_* | Add UltraBERT enrichment to st_social | ❌ No |
+| 0055 | `0055_st_mcts_decisions.py` | st_mcts_decisions | idx_mcts_decisions_* | MCTS decision traces | ❌ No |
+| 0056 | `0056_st_mcts_shadow_log.py` | st_mcts_shadow_log | idx_shadow_log_* | MCTS shadow mode log | ❌ No |
+| 0057 | `0057_st_prospective_intent_types.py` | - | idx_prospective_* | Add intent types to st_prospective | ❌ No |
+| 0058 | `0058_st_sem_pattern_types.py` | - | idx_sem_* | Add pattern types to st_sem | ❌ No |
+| 0059 | `0059_kg_query_tracking.py` | - | idx_kg_* | Add query tracking to st_kg_dom/st_kg_edges | ❌ No |
+| 0060 | `0060_st_hipp_events_activity_ultrabert.py` | - | idx_hipp_events_* | Add activity UltraBERT columns to st_hipp_events | ❌ No |
 
 > **Migration Tool**: Alembic (SQLAlchemy)
 > **Location**: `k0/db/alembic/versions/`
@@ -1126,6 +1239,134 @@ graph LR
 | `idx_feedback_status_pending` | processing_status | BTREE | Pending queue (partial) |
 | `idx_feedback_target_entity` | (correlation->>'target_entity_id') | BTREE | Target entity lookup |
 
+### st_entity_resolutions Indexes (4)
+
+| Index Name | Columns | Type | Purpose |
+|------------|---------|------|---------|
+| `ix_st_entity_resolutions_outcome_created` | outcome, created_at | BTREE (partial) | Flagged resolution review |
+| `ix_st_entity_resolutions_feedback_pending` | tenant_id, feedback_received, created_at | BTREE (partial) | Pending feedback lookup |
+| `ix_st_entity_resolutions_mention` | tenant_id, mention | BTREE | Mention-based lookup |
+| `ix_st_entity_resolutions_entity` | tenant_id, selected_entity_id | BTREE | Entity accuracy lookup |
+
+### st_entity_merges Indexes (3)
+
+| Index Name | Columns | Type | Purpose |
+|------------|---------|------|---------|
+| `ix_st_entity_merges_entity_lookup` | primary_entity_id, secondary_entity_id | BTREE | Merge history lookup |
+| `ix_st_entity_merges_active` | merged_at | BTREE (partial) | Active merges |
+| `ix_st_entity_merges_reversed` | reversed_at | BTREE (partial) | Reversed merges |
+
+### Additional Indexes (P03 and Learning)
+
+| Index Name | Table | Columns | Type | Purpose |
+|------------|-------|---------|------|---------|
+| `idx_epi_tenant_time` | st_epi | see migration | BTREE/partial | Query optimization |
+| `idx_epi_space_time` | st_epi | see migration | BTREE/partial | Query optimization |
+| `idx_epi_cluster` | st_epi | see migration | BTREE/partial | Query optimization |
+| `idx_epi_canonical` | st_epi | see migration | BTREE/partial | Query optimization |
+| `idx_sem_tenant_type` | st_sem | see migration | BTREE/partial | Query optimization |
+| `idx_sem_actor_type` | st_sem | see migration | BTREE/partial | Query optimization |
+| `idx_sem_canonical` | st_sem | see migration | BTREE/partial | Query optimization |
+| `idx_sem_confidence` | st_sem | see migration | BTREE/partial | Query optimization |
+| `idx_procedural_actor` | st_procedural | see migration | BTREE/partial | Query optimization |
+| `idx_procedural_category` | st_procedural | see migration | BTREE/partial | Query optimization |
+| `idx_procedural_regularity` | st_procedural | see migration | BTREE/partial | Query optimization |
+| `idx_social_actor_a` | st_social | see migration | BTREE/partial | Query optimization |
+| `idx_social_actor_b` | st_social | see migration | BTREE/partial | Query optimization |
+| `idx_social_emotional_role` | st_social | see migration | BTREE/partial | Query optimization |
+| `idx_social_relationship_phase` | st_social | see migration | BTREE/partial | Query optimization |
+| `idx_social_dominant_emotion` | st_social | see migration | BTREE/partial | Query optimization |
+| `idx_prosp_actor_type` | st_prospective | see migration | BTREE/partial | Query optimization |
+| `idx_prosp_status` | st_prospective | see migration | BTREE/partial | Query optimization |
+| `idx_kg_dom_tenant_type` | st_kg_dom | see migration | BTREE/partial | Query optimization |
+| `idx_kg_dom_name` | st_kg_dom | see migration | BTREE/partial | Query optimization |
+| `idx_kg_dom_canonical` | st_kg_dom | see migration | BTREE/partial | Query optimization |
+| `idx_kg_dom_query_count` | st_kg_dom | see migration | BTREE/partial | Query optimization |
+| `idx_kg_edges_source` | st_kg_edges | see migration | BTREE/partial | Query optimization |
+| `idx_kg_edges_target` | st_kg_edges | see migration | BTREE/partial | Query optimization |
+| `idx_kg_edges_canonical` | st_kg_edges | see migration | BTREE/partial | Query optimization |
+| `idx_kg_edges_query_count` | st_kg_edges | see migration | BTREE/partial | Query optimization |
+| `idx_hipp_events_consolidation` | st_hipp_events | see migration | BTREE/partial | Query optimization |
+| `idx_hipp_events_best_match_id` | st_hipp_events | see migration | BTREE/partial | Query optimization |
+| `idx_audit_memory_time` | st_consolidation_audit | see migration | BTREE/partial | Query optimization |
+| `idx_audit_action` | st_consolidation_audit | see migration | BTREE/partial | Query optimization |
+| `idx_audit_formula` | st_consolidation_audit | see migration | BTREE/partial | Query optimization |
+| `idx_audit_decision` | st_consolidation_audit | see migration | BTREE/partial | Query optimization |
+| `idx_consolidation_audit_outcome_eval` | st_consolidation_audit | see migration | BTREE/partial | Query optimization |
+| `idx_audit_canonical` | st_consolidation_audit | see migration | BTREE/partial | Query optimization |
+| `idx_learning_queue_importance` | st_learning_queue | see migration | BTREE/partial | Query optimization |
+| `idx_learning_queue_status` | st_learning_queue | see migration | BTREE/partial | Query optimization |
+| `idx_learning_queue_tenant` | st_learning_queue | see migration | BTREE/partial | Query optimization |
+| `idx_learning_queue_space` | st_learning_queue | see migration | BTREE/partial | Query optimization |
+| `idx_anchors_entity` | st_anchors | see migration | BTREE/partial | Query optimization |
+| `idx_anchors_confidence` | st_anchors | see migration | BTREE/partial | Query optimization |
+| `idx_anchors_drift` | st_anchors | see migration | BTREE/partial | Query optimization |
+| `idx_anchors_space` | st_anchors | see migration | BTREE/partial | Query optimization |
+| `idx_anchor_obs_anchor` | st_anchor_observations | see migration | BTREE/partial | Query optimization |
+| `idx_anchor_obs_tenant` | st_anchor_observations | see migration | BTREE/partial | Query optimization |
+| `idx_anchor_obs_event` | st_anchor_observations | see migration | BTREE/partial | Query optimization |
+| `idx_learned_weights_space_key` | st_learned_weights | see migration | BTREE/partial | Query optimization |
+| `idx_learned_weights_scope` | st_learned_weights | see migration | BTREE/partial | Query optimization |
+| `idx_learned_weights_confidence` | st_learned_weights | see migration | BTREE/partial | Query optimization |
+| `idx_weights_history_param_version` | st_learned_weights_history | see migration | BTREE/partial | Query optimization |
+| `idx_weights_history_param_time` | st_learned_weights_history | see migration | BTREE/partial | Query optimization |
+| `idx_weights_history_space` | st_learned_weights_history | see migration | BTREE/partial | Query optimization |
+| `idx_quarantine_space_status` | st_feedback_quarantine | see migration | BTREE/partial | Query optimization |
+| `idx_quarantine_auto_release` | st_feedback_quarantine | see migration | BTREE/partial | Query optimization |
+| `idx_quarantine_signal` | st_feedback_quarantine | see migration | BTREE/partial | Query optimization |
+| `idx_feedback_signals_unconsumed` | st_feedback_signals | see migration | BTREE/partial | Query optimization |
+| `idx_feedback_signals_space_unconsumed` | st_feedback_signals | see migration | BTREE/partial | Query optimization |
+| `idx_golden_pairs_space_type` | st_golden_dataset_pairs | see migration | BTREE/partial | Query optimization |
+| `idx_golden_pairs_active` | st_golden_dataset_pairs | see migration | BTREE/partial | Query optimization |
+| `idx_golden_pairs_difficulty` | st_golden_dataset_pairs | see migration | BTREE/partial | Query optimization |
+| `idx_validation_results_pair` | st_validation_results | see migration | BTREE/partial | Query optimization |
+| `idx_validation_results_space_time` | st_validation_results | see migration | BTREE/partial | Query optimization |
+| `idx_validation_results_correct` | st_validation_results | see migration | BTREE/partial | Query optimization |
+| `idx_validation_results_version` | st_validation_results | see migration | BTREE/partial | Query optimization |
+| `idx_dlq_p03_pipeline_phase` | st_dlq | see migration | BTREE/partial | Query optimization |
+| `idx_dlq_pending_error_type` | st_dlq | see migration | BTREE/partial | Query optimization |
+| `idx_dlq_event_id` | st_dlq | see migration | BTREE/partial | Query optimization |
+| `ix_st_entity_resolutions_outcome_created` | st_entity_resolutions | see migration | BTREE/partial | Query optimization |
+| `ix_st_entity_resolutions_feedback_pending` | st_entity_resolutions | see migration | BTREE/partial | Query optimization |
+| `ix_st_entity_resolutions_mention` | st_entity_resolutions | see migration | BTREE/partial | Query optimization |
+| `ix_st_entity_resolutions_entity` | st_entity_resolutions | see migration | BTREE/partial | Query optimization |
+| `ix_st_entity_merges_entity_lookup` | st_entity_merges | see migration | BTREE/partial | Query optimization |
+| `ix_st_entity_merges_active` | st_entity_merges | see migration | BTREE/partial | Query optimization |
+| `ix_st_entity_merges_reversed` | st_entity_merges | see migration | BTREE/partial | Query optimization |
+| `idx_pruned_entity_type` | st_pruned_entities | see migration | BTREE/partial | Query optimization |
+| `idx_pruned_space_time` | st_pruned_entities | see migration | BTREE/partial | Query optimization |
+| `idx_pruned_cleanup` | st_pruned_entities | see migration | BTREE/partial | Query optimization |
+| `idx_pruned_canonical` | st_pruned_entities | see migration | BTREE/partial | Query optimization |
+| `idx_pruned_entity_id` | st_pruned_entities | see migration | BTREE/partial | Query optimization |
+| `idx_decay_fb_space_layer` | st_decay_feedback | see migration | BTREE/partial | Query optimization |
+| `idx_decay_fb_memory` | st_decay_feedback | see migration | BTREE/partial | Query optimization |
+| `idx_decay_fb_event_type` | st_decay_feedback | see migration | BTREE/partial | Query optimization |
+| `idx_decay_fb_resurrections` | st_decay_feedback | see migration | BTREE/partial | Query optimization |
+| `idx_decay_fb_premature` | st_decay_feedback | see migration | BTREE/partial | Query optimization |
+| `idx_decay_fb_tenant_space` | st_decay_feedback | see migration | BTREE/partial | Query optimization |
+| `idx_mcts_decisions_type` | st_mcts_decisions | see migration | BTREE/partial | Query optimization |
+| `idx_mcts_decisions_created` | st_mcts_decisions | see migration | BTREE/partial | Query optimization |
+| `idx_mcts_decisions_cycle` | st_mcts_decisions | see migration | BTREE/partial | Query optimization |
+| `idx_mcts_decisions_type_created` | st_mcts_decisions | see migration | BTREE/partial | Query optimization |
+| `idx_mcts_decisions_early_term` | st_mcts_decisions | see migration | BTREE/partial | Query optimization |
+| `idx_shadow_log_type` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
+| `idx_shadow_log_created` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
+| `idx_shadow_log_differ` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
+| `idx_shadow_log_evaluated` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
+| `idx_shadow_log_cycle` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
+| `idx_shadow_log_type_created` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
+| `idx_shadow_log_pending_eval` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
+
+#### Entity Resolution/Merge Indexes (ix_ prefix)
+
+- `ix_st_entity_resolutions_outcome_created`
+- `ix_st_entity_resolutions_feedback_pending`
+- `ix_st_entity_resolutions_mention`
+- `ix_st_entity_resolutions_entity`
+- `ix_st_entity_merges_entity_lookup`
+- `ix_st_entity_merges_active`
+- `ix_st_entity_merges_reversed`
+
 ### Index Summary
 
 | Table | Index Count | Partial Indexes | Unique Indexes |
@@ -1213,7 +1454,7 @@ graph LR
 | `pipeline_processed_upsert()` | `st_pipeline_processed.write` | st_pipeline_processed | UPSERT | ✅ Yes | <5ms | ✅ Active |
 | `working_memory_write()` | `working_memory.write` | st_ws | INSERT | ✅ Yes | <5ms | 🎯 Not Implemented |
 | `query_embeddings()` | `embeddings.read` | TBD | SELECT | ✅ Yes | <10ms | 🎯 Not Implemented |
-| `relationships_query()` | `st_relationships.read` | st_relationships | SELECT | ✅ Yes | <5ms | ✅ Active |
+| `relationships_query()` | `st_kg_edges.read` | st_kg_edges | SELECT | ✅ Yes | <5ms | ✅ Active |
 | `embedding_enqueue()` | `st_embedding_queue.write` | st_embedding_queue | INSERT | ✅ Yes | <5ms | ❌ Deprecated |
 | `outbox_emit_batch()` | `st_outbox.write` | st_outbox | INSERT | ✅ Yes | <10ms | ✅ Active |
 | `vec_write()` | `st_vec.write` | st_vec | INSERT | ✅ Yes | <5ms | ✅ Active |
@@ -1227,6 +1468,9 @@ graph LR
 | `hipp_events_update_embedding_status()` | `st_hipp_events.write` | st_hipp_events | UPDATE | ✅ Yes | <5ms | ✅ Active |
 | `query_count()` | `{table}.read` | various | COUNT | ✅ Yes | <5ms | ✅ Active |
 | `ultrabert_embed()` | `ultrabert.embed` | - (API) | API call | ✅ Yes | <50ms | ✅ Active |
+| `lock_acquire()` | `advisory_lock.acquire` | pg_advisory_lock | LOCK | ✅ Yes | <5ms | ✅ Active |
+| `lock_release()` | `advisory_lock.release` | pg_advisory_lock | UNLOCK | ✅ Yes | <5ms | ✅ Active |
+| `lock_is_held()` | `advisory_lock.read` | pg_locks | SELECT | ✅ Yes | <5ms | ✅ Active |
 <!-- AUTOGEN:SYSCALL_TABLE:END -->
 
 > **Source**: `k0/kernel/syscalls.py` (19 syscall methods, 2623 lines)
@@ -1240,7 +1484,7 @@ graph LR
 
 | Component | Type | Capabilities Granted | ADR | Notes |
 |-----------|------|----------------------|-----|-------|
-| P02 (Write) | Pipeline | `st_hipp_events.write, st_vec.write, st_pipeline_processed.write, st_outbox.write, st_relationships.read` | ADR-P02-001 | `st_embedding_queue.write` deprecated (inline embedding) |
+| P02 (Write) | Pipeline | `st_hipp_events.write, st_vec.write, st_pipeline_processed.write, st_outbox.write, st_kg_edges.read` | ADR-P02-001 | `st_embedding_queue.write` deprecated (inline embedding) |
 | P03 (Consolidation) | Pipeline | `st_hipp_events.read, st_epi.write, st_sem.write, st_procedural.write, st_social.write, st_prospective.write, st_kg_dom.write, st_kg_edges.write, st_vec.read, st_learning_queue.write, st_anchors.write, st_anchor_observations.write, st_consolidation_audit.write, st_outbox.write` | K021 (Planning) | P03 has broad read access to st_hipp_events, write to 8 memory layers |
 | P06 (Learning) | Pipeline | `st_learning_queue.read, st_learning_queue.write, st_anchors.read, st_anchors.write, st_anchor_observations.write, st_learned_weights.write, st_golden_dataset_pairs.write, st_validation_results.write` | (Planning) | Active learning loop capabilities |
 | P08 (Embedding Mgmt) | Pipeline | `st_vec.read, st_vec.write, st_hipp_events.read, st_hipp_events.write, ultrabert.embed` | ADR-P08-001 | `faiss.read, faiss.write` removed (pgvector replaces) |
@@ -1270,7 +1514,9 @@ graph LR
 | `st_vec.write` | Storage | ✅ Active | P02, P08, M16, M24, M25 |
 | `st_pipeline_processed.write` | Storage | ✅ Active | P02, M16 |
 | `st_outbox.write` | Storage | ✅ Active | P02, P03, M17 |
-| `st_relationships.read` | Storage | ✅ Active | P02 |
+| `advisory_lock.acquire` | Lock | ✅ Active | P03 |
+| `advisory_lock.read` | Lock | ✅ Active | P03 |
+| `advisory_lock.release` | Lock | ✅ Active | P03 |
 | `st_feedback_signals.write` | Storage | 🎯 Planned | Kernel (Observe Port) |
 | `st_feedback_signals.read` | Storage | 🎯 Planned | Ops, Recovery |
 | `st_epi.write` | Storage | 🎯 Planned | P03 |
@@ -1280,6 +1526,7 @@ graph LR
 | `st_prospective.write` | Storage | 🎯 Planned | P03 |
 | `st_kg_dom.write` | Storage | 🎯 Planned | P03 |
 | `st_kg_edges.write` | Storage | 🎯 Planned | P03 |
+| `st_kg_edges.read` | Storage | ✅ Active | P02, P03 |
 | `st_learning_queue.read` | Storage | 🎯 Planned | P06 |
 | `st_learning_queue.write` | Storage | 🎯 Planned | P03, P06 |
 | `st_anchors.read` | Storage | 🎯 Planned | P06 |
@@ -1884,13 +2131,16 @@ K{NNN}[.{sub}] - {Title}
 | K004 | Capability Mesh Architecture | ✅ Accepted | k0/bus, k0/fabric, k0/runtime, k0/kernel | 2025-12-14 | 2025-12-14 | K0 Architecture Team | `docs/architecture/decisions-K0/k004-capability-mesh-architecture.md` |
 | K020 | Feedback Signals Subsystem (Observe → Store → Bus) | 📝 Draft | k0.ports.observe, k0.feedback, k0.bus, st_feedback_signals | 2025-12-25 | - | K0 Architecture Team | `docs/architecture/decisions-K0/k020-feedback-signals-subsystem.md` |
 | K021 | Governance Scanner Tightening | ✅ Accepted | governance/k0/scripts | 2025-12-30 | 2025-12-30 | K0 Architecture Team | `docs/architecture/decisions-K0/k021-governance-scanner-tightening.md` |
+| K022 | Remove Neo4j, Consolidate Knowledge Graph to PostgreSQL | ✅ Accepted | k0/drivers/neo4j_driver.py, M07, P03, st_kg_edges | 2026-01-13 | 2026-01-13 | K0 Architecture Team | `docs/architecture/decisions-K0/k022-remove-neo4j-postgresql-graph.md` |
 
 ### Pipeline ADRs (`decisions-K0/pipelines/`)
 
 | ADR ID | Title | Status | Affects | Date Created | Date Decided | Author | Link |
 |--------|-------|--------|---------|--------------|--------------|--------|------|
 | P02 | Write Pipeline Architecture | ✅ Accepted | P02, M01-M17, M22 | 2025-11-10 | 2025-12-24 | K0 Team | `docs/architecture/decisions-K0/pipelines/P02-write-pipeline-architecture.md` |
-| P03 | Consolidation Pipeline Architecture | 🎯 Planning | P03, M29-M36 | 2025-12-28 | - | K0 Team | `docs/architecture/decisions-K0/pipelines/P03-consolidation-pipeline-architecture.md` |
+| K010 | P03 Consolidation Architecture | 🎯 Planning | P03, M37-M53 | 2025-12-31 | - | K0 Team | `docs/architecture/decisions-K0/pipelines/k010-p03-consolidation-architecture.md` |
+| K010.1 | Sleep Cycle State Machine | 🎯 Planning | P03 | 2025-12-31 | - | K0 Team | `docs/architecture/decisions-K0/pipelines/k010.1-sleep-cycle-state-machine.md` |
+| K010.9 | Capability-Based Security | 🎯 Planning | P03 | 2025-12-31 | - | K0 Team | `docs/architecture/decisions-K0/pipelines/k010.9-capability-based-security.md` |
 | P07 | Device Sync Design | ✅ Accepted | P07 | 2025-11-16 | 2025-12-01 | K0 Team | `docs/architecture/decisions-K0/pipelines/P07-device-sync-design.md` |
 | P08 | Embedding Management Architecture | ✅ Accepted | P08, M22, M24, M25, M27 | 2025-12-13 | 2025-12-24 | K0 Team | `docs/architecture/decisions-K0/pipelines/P08-embedding-management-architecture.md` |
 
@@ -2043,7 +2293,7 @@ K{NNN}[.{sub}] - {Title}
 
 # Part 13: Configuration Registry
 
-> **Source**: `k0/config/kernel.yaml`, `k0/config/feature_flags.yaml`, `k0/config/postgres.py`, `k0/config/embeddings.yml`, `k0/config/faiss_config.yaml`, `k0/config/models.yaml`, `k0/config/neo4j.yaml`, `k0/deploy/env/k0.env`
+> **Source**: `k0/config/kernel.yaml`, `k0/config/feature_flags.yaml`, `k0/config/postgres.py`, `k0/config/embeddings.yml`, `k0/config/faiss_config.yaml`, `k0/config/models.yaml`, `k0/deploy/env/k0.env`
 
 ## 13.1 Configuration Keys Registry
 
@@ -2193,64 +2443,7 @@ K{NNN}[.{sub}] - {Title}
 | `tier_budgets.ultrabert` | int | `600` | Memory budget for ultrabert tier | Model Loader | Yes |
 | `tier_budgets.transformer_large` | int | `3000` | Memory budget for transformer tier | Model Loader | Yes |
 
-### 13.1.6 Neo4j Configuration (`neo4j.yaml`)
-
-| Key | Type | Default | Description | Used By | Required? |
-|-----|------|---------|-------------|---------|-----------|
-| `connection.uri` | string | `neo4j://localhost:7687` | Neo4j Bolt URI | Neo4j Driver | Yes |
-| `connection.auth.username` | string | `neo4j` | Neo4j username | Neo4j Driver | Yes |
-| `connection.auth.password` | string | `${NEO4J_PASSWORD}` | Neo4j password (env var) | Neo4j Driver | Yes |
-| `connection.max_connection_pool_size` | int | `100` | Connection pool size | Neo4j Driver | Yes |
-| `connection.connection_acquisition_timeout_seconds` | int | `60` | Timeout to acquire connection from pool | Neo4j Driver | No |
-| `connection.max_connection_lifetime_seconds` | int | `3600` | Max lifetime of connection in pool | Neo4j Driver | No |
-| `connection.encrypted` | bool | `false` | Enable TLS encryption | Neo4j Driver | No |
-| `connection.trust` | string | `TRUST_SYSTEM_CA_SIGNED_CERTIFICATES` | Certificate trust mode | Neo4j Driver | No |
-| `database.name` | string | `neo4j` | Neo4j database name | Neo4j Driver | Yes |
-| `database.default_transaction_timeout_seconds` | int | `30` | Transaction timeout | Neo4j Driver | Yes |
-| `database.initial_retry_delay_seconds` | int | `1` | Initial delay before retry | Neo4j Driver | No |
-| `database.max_retry_time_seconds` | int | `30` | Maximum retry time | Neo4j Driver | No |
-| `database.retry_delay_multiplier` | float | `2.0` | Retry delay exponential multiplier | Neo4j Driver | No |
-| `database.retry_delay_jitter_factor` | float | `0.2` | Jitter factor for retry randomization | Neo4j Driver | No |
-| `query.fetch_size` | int | `1000` | Records per batch fetch | Neo4j Driver | Yes |
-| `query.max_results_default` | int | `100` | Default result limit | Neo4j Driver | Yes |
-| `query.max_results_absolute` | int | `10000` | Maximum result limit | Neo4j Driver | Yes |
-| `query.temporal_snapshot_enabled` | bool | `true` | Enable as_of queries | Neo4j Driver | Yes |
-| `query.default_query_timeout_seconds` | int | `10` | Default query timeout | Neo4j Driver | No |
-| `schema.node_labels` | list | `[Person, Location, Event, Organization, Thing]` | Knowledge graph node types | Knowledge Graph | Yes |
-| `schema.relationship_types` | list | `[40 relationship types]` | Knowledge graph relationship types | Knowledge Graph | No |
-| `schema.temporal_properties` | list | `[5 temporal properties]` | Temporal tracking properties | Knowledge Graph | No |
-| `performance.entity_lookup_p95_ms` | int | `10` | Entity lookup P95 latency target | SLO | No |
-| `performance.entity_search_p95_ms` | int | `50` | Entity search P95 latency target | SLO | No |
-| `performance.graph_traversal_p95_ms` | int | `150` | Graph traversal P95 latency target | SLO | No |
-| `performance.insert_entity_p95_ms` | int | `20` | Entity insert P95 latency target | SLO | No |
-| `performance.insert_relationship_p95_ms` | int | `20` | Relationship insert P95 latency target | SLO | No |
-| `performance.relationship_query_p95_ms` | int | `30` | Relationship query P95 latency target | SLO | No |
-| `performance.relationship_query_3hop_p95_ms` | int | `100` | 3-hop relationship query P95 target | SLO | No |
-| `performance.shortest_path_p95_ms` | int | `100` | Shortest path P95 latency target | SLO | No |
-| `performance.temporal_query_p95_ms` | int | `50` | Temporal query P95 latency target | SLO | No |
-| `performance.update_entity_p95_ms` | int | `20` | Entity update P95 latency target | SLO | No |
-| `performance.update_relationship_p95_ms` | int | `20` | Relationship update P95 latency target | SLO | No |
-| `observability.log_queries` | bool | `true` | Log all Cypher queries | Logging | No |
-| `observability.log_slow_queries_threshold_ms` | int | `100` | Slow query log threshold | Logging | No |
-| `observability.metrics_enabled` | bool | `true` | Enable Prometheus metrics | Telemetry | No |
-| `observability.metrics_prefix` | string | `k0_neo4j` | Prometheus metric name prefix | Telemetry | No |
-| `observability.trace_enabled` | bool | `true` | Enable distributed tracing | Telemetry | No |
-| `observability.cognitive_trace_id_property` | string | `cognitive_trace_id` | Property for trace ID linking | Telemetry | No |
-| `privacy.audit_enabled` | bool | `true` | Enable privacy audit logging | Privacy | No |
-| `privacy.audit_operations` | list | `[create, read, update, delete]` | Operations to audit | Privacy | No |
-| `privacy.pii_properties` | list | `[5 PII property names]` | Properties containing PII | Privacy | No |
-| `privacy.privacy_bands` | list | `[family, friends, public]` | Privacy band classifications | Privacy | No |
-| `privacy.redact_pii_enabled` | bool | `true` | Redact PII in logs | Privacy | No |
-| `docker.image` | string | `neo4j:5.20.0` | Docker image for local dev | DevOps | No |
-| `docker.container_name` | string | `familyos-neo4j` | Docker container name | DevOps | No |
-| `docker.ports` | list | `[7474:7474, 7687:7687]` | Port mappings | DevOps | No |
-| `docker.volumes` | list | `[data, logs volumes]` | Volume mounts | DevOps | No |
-| `docker.environment.NEO4J_AUTH` | string | `neo4j/test-password` | Dev authentication | DevOps | No |
-| `docker.environment.NEO4J_dbms_memory_heap_initial__size` | string | `512M` | Initial heap size | DevOps | No |
-| `docker.environment.NEO4J_dbms_memory_heap_max__size` | string | `2G` | Maximum heap size | DevOps | No |
-| `docker.environment.NEO4J_dbms_memory_pagecache_size` | string | `1G` | Page cache size | DevOps | No |
-
-### 13.1.7 Logging Configuration (`logging.yaml`)
+### 13.1.6 Logging Configuration (`logging.yaml`)
 
 | Key | Type | Default | Description | Used By | Required? |
 |-----|------|---------|-------------|---------|-----------|
@@ -2263,7 +2456,7 @@ K{NNN}[.{sub}] - {Title}
 | `root.level` | string | `INFO` | Root logger level | Logging | Yes |
 | `root.handlers` | list | `[console]` | Root logger handlers | Logging | No |
 
-### 13.1.8 Feature Flags Configuration (`feature_flags.yaml`)
+### 13.1.7 Feature Flags Configuration (`feature_flags.yaml`)
 
 > **Note**: This section documents the configuration schema for the feature flags system.
 > The actual registered flags are in 13.2.1.
@@ -2426,23 +2619,14 @@ K{NNN}[.{sub}] - {Title}
 | `K0_DB_WAL_MODE` | No | `true` | Enable WAL mode | SQLite Driver |
 | `K0_KERNEL_DATABASE__PATH` | No | `/data/k0_kernel.db` | Kernel database path | DB Factory |
 
-### 13.3.7 Neo4j Knowledge Graph
-
-| Variable | Required? | Default | Description | Used By |
-|----------|-----------|---------|-------------|---------|
-| `NEO4J_URI` | Yes | `neo4j://neo4j:7687` | Neo4j Bolt URI | Neo4j Driver |
-| `NEO4J_USERNAME` | Yes | `neo4j` | Neo4j username | Neo4j Driver |
-| `NEO4J_PASSWORD` | Yes | `test-password` | Neo4j password | Neo4j Driver |
-| `NEO4J_DATABASE` | No | `neo4j` | Neo4j database name | Neo4j Driver |
-
-### 13.3.8 Server Configuration
+### 13.3.7 Server Configuration
 
 | Variable | Required? | Default | Description | Used By |
 |----------|-----------|---------|-------------|---------|
 | `K0_SERVER_HOST` | Yes | `0.0.0.0` | Server bind address | HTTP Server |
 | `K0_SERVER_PORT` | Yes | `8080` | Server port | HTTP Server |
 
-### 13.3.9 Policy Enforcement Module (PEM)
+### 13.3.8 Policy Enforcement Module (PEM)
 
 | Variable | Required? | Default | Description | Used By |
 |----------|-----------|---------|-------------|---------|
@@ -2453,7 +2637,7 @@ K{NNN}[.{sub}] - {Title}
 | `K0_PEM_AUDIT_ENABLED` | No | `true` | Enable PEM audit logging | PEM |
 | `K0_PEM_DECISION_CACHE_TTL_MS` | No | `5000` | Policy decision cache TTL | PEM |
 
-### 13.3.10 Observability
+### 13.3.9 Observability
 
 | Variable | Required? | Default | Description | Used By |
 |----------|-----------|---------|-------------|---------|
@@ -2461,7 +2645,7 @@ K{NNN}[.{sub}] - {Title}
 | `K0_KERNEL_TELEMETRY__OTLP_ENDPOINT` | No | `http://tempo:4318/v1/traces` | OTLP collector endpoint | Telemetry |
 | `K0_KERNEL_TELEMETRY__TRACE_SAMPLE_RATIO` | No | `1.0` | Trace sampling ratio | Telemetry |
 
-### 13.3.11 QoS Configuration
+### 13.3.10 QoS Configuration
 
 | Variable | Required? | Default | Description | Used By |
 |----------|-----------|---------|-------------|---------|
@@ -2469,7 +2653,7 @@ K{NNN}[.{sub}] - {Title}
 | `K0_QOS_QUERY_TIMEOUT_MS` | No | `3000` | Query timeout (ms) | QoS |
 | `K0_QOS_MAX_FANOUT` | No | `10` | Max parallel fanout | QoS |
 
-### 13.3.12 External API Keys
+### 13.3.11 External API Keys
 
 | Variable | Required? | Default | Description | Used By |
 |----------|-----------|---------|-------------|---------|
@@ -2488,7 +2672,6 @@ K{NNN}[.{sub}] - {Title}
 | `embeddings.yml` | YAML | `k0/config/` | Embedding backend configuration | ADR-K003 |
 | `faiss_config.yaml` | YAML | `k0/config/` | FAISS vector index settings | ADR-K003 |
 | `models.yaml` | YAML | `k0/config/` | Model registry (UltraBERT) | - |
-| `neo4j.yaml` | YAML | `k0/config/` | Neo4j knowledge graph settings | ADR-0081 |
 | `logging.yaml` | YAML | `k0/config/` | Python logging configuration | - |
 | `k0.env` | dotenv | `k0/deploy/env/` | Environment variables | - |
 

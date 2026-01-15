@@ -187,7 +187,7 @@ class OutboxStore:
         list[OutboxEntry]
             Entries ready for processing (respects backoff timing)
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         async with _resolve_connection(connection) as conn:
             rows = await conn.fetch(

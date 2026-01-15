@@ -1,4 +1,5 @@
 # Default driver alias bindings. Update alongside qos/config changes.
+# ADR-K022: Neo4j removed, all graph storage consolidated to PostgreSQL
 aliases:
   st_epi: postgres
   st_sem: postgres
@@ -6,7 +7,8 @@ aliases:
   st_fts: fts5
   st_vector: faiss
   st_emb: embedding_queue
-  st_kg_dom: neo4j_driver  # Neo4j native graph database (ADR-0081)
+  st_kg_dom: postgres  # PostgreSQL graph storage (ADR-K022: replaces neo4j_driver)
+  st_kg_edges: postgres  # PostgreSQL graph edges (ADR-K022)
   st_blob: blob_localfs
   # Traffic generator test drivers (burn-in/load testing)
   traffic-gen: postgres

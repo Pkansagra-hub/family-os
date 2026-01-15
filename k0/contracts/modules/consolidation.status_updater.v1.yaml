@@ -1,0 +1,69 @@
+# P03 Module Contract: Status Updater
+# Phase: R6 - Status Update
+# Dossier: §D.3.1 stage_60_status_update
+
+module_id: consolidation.status_updater
+version: v1
+
+input_event_types:
+  - p03.prune.decided.v1
+  - p03.insights.generated.v1
+  - p03.counterfactuals.generated.v1
+  - p03.simulations.complete.v1
+
+output_event_types:
+  - p03.status.updated.v1
+
+latency_budget_ms: 30
+
+side_effects:
+  - write:st_hipp_events  # Update consolidation_status
+  - write:st_consolidation_audit
+
+idempotent: true
+
+fabric_capabilities:
+  - update_status
+
+failure_modes:
+  - code: UPDATE_CONFLICT
+    policy: retry
+    max_retries: 3
+  - code: AUDIT_WRITE_FAILED
+    policy: log_and_continue
+    description: Continue even if audit write fails
+
+description: |
+  Status Updater Module (R6 Phase)
+
+  Updates st_hipp_events consolidation_status:
+  - Marks events with final disposition
+  - Records decision audit trail
+
+  Status Values:
+  - CONSOLIDATED: Successfully processed, moved to truth
+  - ARCHIVED: Moved to cold storage
+  - TOMBSTONED: Marked deleted (audit only)
+  - ERROR: Processing failed (retry eligible)
+
+  Audit Trail:
+  - Every status change recorded in st_consolidation_audit
+  - Includes: event_id, old_status, new_status, reason, timestamp
+  - Supports compliance and debugging
+
+  Update Pattern:
+  - Batched updates for performance
+  - Uses optimistic locking (version column)
+  - Retries on conflict
+
+  Configuration:
+  - status_values.success: CONSOLIDATED
+  - status_values.archived: ARCHIVED
+  - status_values.pruned: TOMBSTONED
+  - write_audit: true
+  - batch_size: 100
+
+  Output:
+  - envelope.status_updates: Array of {event_id, new_status, reason}
+  - envelope.audit_records: Array of audit records
+  - envelope.status_stats: {consolidated, archived, tombstoned, errors}

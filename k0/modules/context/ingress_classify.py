@@ -219,12 +219,24 @@ class IngressClassification:
     """
 
     ingress_topic: str  # TEXT (write/photo/voice/import)
-    activity_type: str  # TEXT (meal/conversation/routine/milestone/social/work/unknown)
+    activity_type: (
+        str  # TEXT (meal/conversation/routine/milestone/social/work/unknown) - legacy 7-type
+    )
     content_type: str  # TEXT (episodic/semantic/procedural)
     ingress_source: str  # TEXT (mobile_app/web_app/api/connector)
     is_structured: bool  # BOOLEAN (true for API imports with schema)
     is_user_initiated: bool  # BOOLEAN (false for automated imports)
     ingress_classified_at_utc: str  # TEXT ISO 8601 timestamp
+    # UltraBERT INGRESS classification (12 types) - Issue 0060
+    activity_type_ultrabert: str | None = (
+        None  # DIARY/TASK/HEALTH/FINANCE/RELATIONSHIP/WORK/META/MEMORY/PLANNING/CELEBRATION/CONCERN/GRATITUDE
+    )
+    activity_type_confidence: float | None = None  # 0.0-1.0
+    # UltraBERT INTENT classification (8 types) - Issue 0060
+    intent_ultrabert: str | None = (
+        None  # log_memory/query_memory/set_reminder/express_feeling/seek_advice/share_news/reflect/other
+    )
+    intent_confidence: float | None = None  # 0.0-1.0
 
 
 # Metrics tracking (histogram-ready for P95 analysis)
@@ -289,27 +301,28 @@ def classify_activity_ultrabert(text: Optional[str]) -> Dict[str, Any] | None:
     Classify activity using FamilyOS UltraBERT unified model.
 
     UltraBERT provides ingress and intent classification capabilities:
-    - ingress: MEAL, CELEBRATION, SOCIAL, WORK, ROUTINE, etc.
-    - intent: log_memory, share_moment, ask_question, etc.
+    - INGRESS (12 types): DIARY, TASK, HEALTH, FINANCE, RELATIONSHIP, WORK,
+                          META, MEMORY, PLANNING, CELEBRATION, CONCERN, GRATITUDE
+    - INTENT (8 types): log_memory, query_memory, set_reminder, express_feeling,
+                        seek_advice, share_news, reflect, other
 
     Returns None if UltraBERT is not available (triggers fallback).
 
     Issue: UltraBERT Migration - Single Unified Model
+    Issue 0060: Activity type granularity (preserve full 12-type classification)
 
     Args:
         text: Event text content
 
     Returns:
-        Dict with activity_type, intent, confidence or None if unavailable
+        Dict with activity_type (legacy), activity_type_ultrabert (12-type),
+        intent_ultrabert, and confidence scores. None if unavailable.
     """
     if not text:
         return None
 
     try:
-        from k0.runtime.ultrabert_adapter import (
-            classify_activity,
-            is_ultrabert_available,
-        )
+        from k0.runtime.ultrabert_adapter import classify_activity, is_ultrabert_available
     except ImportError:
         return None
 
@@ -325,9 +338,18 @@ def classify_activity_ultrabert(text: Optional[str]) -> Dict[str, Any] | None:
         legacy_activity = _map_ultrabert_activity(result.activity_type)
 
         return {
+            # Legacy 7-type mapping (backward compatibility)
             "activity_type": legacy_activity,
             "activity_type_enhanced": result.activity_type,
-            "intent": result.intent,
+            # UltraBERT INGRESS - Full 12-type classification (Issue 0060)
+            "activity_type_ultrabert": (
+                result.activity_type.upper() if result.activity_type else None
+            ),
+            "activity_type_confidence": result.confidence,
+            # UltraBERT INTENT - Full 8-type classification (Issue 0060)
+            "intent_ultrabert": result.intent,
+            "intent_confidence": getattr(result, "intent_confidence", result.confidence),
+            # Other fields
             "ingress_category": result.ingress_category,
             "confidence": result.confidence,
             "secondary_activities": [],
@@ -453,10 +475,7 @@ def classify_activity_type_enhanced(text: Optional[str]) -> Dict[str, Any]:
 
     # FALLBACK: ZeroShotActivityClassifier
     try:
-        from k0.modules.activity.zero_shot_classifier import (
-            ClassificationTier,
-            classify_activity,
-        )
+        from k0.modules.activity.zero_shot_classifier import ClassificationTier, classify_activity
 
         # Use HYBRID tier - rule-based with ML fallback for better accuracy
         # This allows fast classification with ML improvement for ambiguous cases
@@ -643,14 +662,56 @@ def classify_ingress(
     ingress_topic = classify_ingress_topic(topic)
 
     # Step 2: Classify activity type
-    text = body.get("text", "")
+    # PRIORITY: Preserve body.activity_type if provided (Issue: P03 activity type flow)
+    # Mapping: uppercase input types → legacy 7-type system
+    input_activity = body.get("activity_type", "")
 
-    # Use enhanced classifier if feature flag enabled
-    if FEATURE_ENHANCED_CLASSIFICATION:
-        enhanced = classify_activity_type_enhanced(text)
-        activity_type = enhanced["activity_type"]
+    # Map uppercase input types to legacy activity types
+    INPUT_ACTIVITY_MAP = {
+        "FAMILY": "social",  # Family events → social category
+        "WORK": "work",  # Work → work (direct match)
+        "HEALTH": "routine",  # Health/fitness → routine (daily activities)
+        "SOCIAL": "social",  # Social events → social
+        "LEARNING": "work",  # Learning → work (professional development)
+        "CELEBRATION": "milestone",  # Celebrations → milestone
+        "ROUTINE": "routine",  # Routine → routine (direct match)
+        "MEAL": "meal",  # Meal → meal (direct match)
+        "MILESTONE": "milestone",  # Milestone → milestone (direct match)
+        "CONVERSATION": "conversation",  # Conversation → conversation
+        # Also support lowercase variants
+        "family": "social",
+        "work": "work",
+        "health": "routine",
+        "social": "social",
+        "learning": "work",
+        "celebration": "milestone",
+        "routine": "routine",
+        "meal": "meal",
+        "milestone": "milestone",
+        "conversation": "conversation",
+    }
+
+    if input_activity and input_activity in INPUT_ACTIVITY_MAP:
+        # Use mapped input activity type (preserve user intent)
+        activity_type = INPUT_ACTIVITY_MAP[input_activity]
+    elif input_activity and input_activity.lower() in [
+        "meal",
+        "work",
+        "social",
+        "conversation",
+        "routine",
+        "milestone",
+    ]:
+        # Direct legacy type provided
+        activity_type = input_activity.lower()
     else:
-        activity_type = classify_activity_type(text)
+        # Fallback: classify from text
+        text = body.get("text", "")
+        if FEATURE_ENHANCED_CLASSIFICATION:
+            enhanced = classify_activity_type_enhanced(text)
+            activity_type = enhanced["activity_type"]
+        else:
+            activity_type = classify_activity_type(text)
 
     # Step 3: Determine content type
     content_type = determine_content_type(body)
@@ -677,6 +738,19 @@ def classify_ingress(
     _metrics[f"content_{content_type}"] = _metrics.get(f"content_{content_type}", 0) + 1
     _metrics[f"source_{ingress_source}"] = _metrics.get(f"source_{ingress_source}", 0) + 1
 
+    # Get UltraBERT classification for full 12-type activity + 8-type intent (Issue 0060)
+    ultrabert_result = classify_activity_ultrabert(body.get("text", ""))
+    activity_type_ultrabert = None
+    activity_type_confidence = None
+    intent_ultrabert = None
+    intent_confidence = None
+
+    if ultrabert_result:
+        activity_type_ultrabert = ultrabert_result.get("activity_type_ultrabert")
+        activity_type_confidence = ultrabert_result.get("activity_type_confidence")
+        intent_ultrabert = ultrabert_result.get("intent_ultrabert")
+        intent_confidence = ultrabert_result.get("intent_confidence")
+
     return IngressClassification(
         ingress_topic=ingress_topic,
         activity_type=activity_type,
@@ -685,6 +759,11 @@ def classify_ingress(
         is_structured=is_structured,
         is_user_initiated=is_user_initiated,
         ingress_classified_at_utc=ingress_classified_at_utc,
+        # UltraBERT classifications (Issue 0060)
+        activity_type_ultrabert=activity_type_ultrabert,
+        activity_type_confidence=activity_type_confidence,
+        intent_ultrabert=intent_ultrabert,
+        intent_confidence=intent_confidence,
     )
 
 
@@ -814,6 +893,11 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         "is_structured": classification.is_structured,
         "is_user_initiated": classification.is_user_initiated,
         "ingress_classified_at_utc": classification.ingress_classified_at_utc,
+        # UltraBERT classifications (Issue 0060)
+        "activity_type_ultrabert": classification.activity_type_ultrabert,
+        "activity_type_confidence": classification.activity_type_confidence,
+        "intent_ultrabert": classification.intent_ultrabert,
+        "intent_confidence": classification.intent_confidence,
     }
 
     # Log module completion

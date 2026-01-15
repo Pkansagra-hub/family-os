@@ -1,0 +1,63 @@
+# P03 Module Contract: Prune Decider
+# Phase: R3 - Retention Decisions
+# Dossier: §D.3.1 stage_32_prune_decider
+
+module_id: consolidation.prune_decider
+version: v1
+
+input_event_types:
+  - p03.dedup.complete.v1
+  - p03.decay.scored.v1
+
+output_event_types:
+  - p03.prune.decided.v1
+
+latency_budget_ms: 30
+
+side_effects:
+  - read:st_retention_policy
+
+idempotent: true
+
+fabric_capabilities:
+  - decide_prune
+
+failure_modes:
+  - code: POLICY_NOT_FOUND
+    policy: use_default_retention
+  - code: PROTECTED_CONTENT
+    policy: skip
+    description: Never prune protected content types
+
+description: |
+  Prune Decider Module (R3 Phase)
+
+  Determines memory retention fate based on scores and policies:
+  - KEEP: Retain in active storage
+  - ARCHIVE: Move to cold storage (retrievable)
+  - TOMBSTONE: Mark deleted (audit trail only)
+
+  Decision Logic:
+  - combined_score = importance_score * decay_score
+  - if combined_score >= archive_threshold: KEEP
+  - if combined_score >= tombstone_threshold: ARCHIVE
+  - else: TOMBSTONE (subject to retention policy)
+
+  Thresholds (configurable):
+  - archive_threshold: 0.05
+  - tombstone_threshold: 0.01
+
+  Retention Policy Override:
+  - Reads per-space policies from st_retention_policy
+  - Respects minimum retention periods
+  - Never prunes protected content types
+
+  Protected Content Types (never pruned):
+  - FAMILY_MILESTONE
+  - LEGAL_DOCUMENT
+  - MEDICAL_RECORD
+  - USER_EXPLICIT_KEEP
+
+  Output:
+  - envelope.prune_decisions: Array of {event_id, decision, reason, policy_applied}
+  - envelope.prune_stats: {keep, archive, tombstone}

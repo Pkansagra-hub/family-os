@@ -1,0 +1,54 @@
+{
+  "schema_id": "SCHEMA_WEEKEND_FAMILY",
+  "name": "weekend_family",
+  "description": "Weekend family activities and quality time patterns.",
+  "typical_sequence": [
+    "sleep_in",
+    "leisurely_breakfast",
+    "plan_activities",
+    "outdoor_activity_or_errands",
+    "lunch",
+    "afternoon_activity",
+    "family_dinner",
+    "evening_entertainment"
+  ],
+  "expected_duration_minutes": {
+    "sleep_in": 60,
+    "leisurely_breakfast": 45,
+    "plan_activities": 15,
+    "outdoor_activity_or_errands": 180,
+    "lunch": 45,
+    "afternoon_activity": 120,
+    "family_dinner": 60,
+    "evening_entertainment": 120
+  },
+  "locations": ["home", "park", "mall", "restaurant", "sports_field", "cinema", "relative_house"],
+  "participants": ["self", "spouse", "kids", "extended_family"],
+  "typical_time_window": {
+    "start_hour": 8,
+    "end_hour": 22
+  },
+  "required_fields": ["activity_type", "participants"],
+  "optional_fields": ["location", "mood", "weather", "cost"],
+  "common_disruptions": [
+    "weather_change",
+    "child_illness",
+    "unexpected_visitor",
+    "work_emergency",
+    "schedule_conflict"
+  ],
+  "activity_categories": [
+    "outdoor_recreation",
+    "indoor_entertainment",
+    "shopping",
+    "visiting_family",
+    "home_projects",
+    "relaxation"
+  ],
+  "confidence_boost": 0.20,
+  "provenance_hints": {
+    "calendar": ["planned_events", "reservations"],
+    "photos": ["location", "participants", "activity"],
+    "purchases": ["restaurant", "tickets", "groceries"]
+  }
+}

@@ -66,6 +66,8 @@ services:
       K0_POSTGRES_USER: k0user
       K0_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       K0_USE_POSTGRESQL: "true"
+      # HuggingFace authentication (for private ultrabert-weights repo)
+      HF_TOKEN: ${HF_TOKEN}
       # GPU settings
       CUDA_VISIBLE_DEVICES: "0"
       PYTHONPATH: /app/modeling_studio

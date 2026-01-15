@@ -1,0 +1,63 @@
+# P03 Module Contract: Episodic Clusterer
+# Phase: R2 - Episodic Clustering
+# Dossier: §D.3.1 stage_20_episodic_cluster, §4.2, Appendix C.3
+
+module_id: consolidation.episodic_clusterer
+version: v1
+
+input_event_types:
+  - p03.importance.scored.v1
+  - p03.hebbian.updated.v1
+
+output_event_types:
+  - p03.clusters.formed.v1
+
+latency_budget_ms: 200
+
+side_effects:
+  - read:st_vec
+  - read:st_cooccurrence
+
+idempotent: true
+
+fabric_capabilities:
+  - cluster_episodes
+
+failure_modes:
+  - code: EMBEDDING_NOT_FOUND
+    policy: exclude_event
+    description: Skip events without embeddings
+  - code: CLUSTER_TIMEOUT
+    policy: fallback_skip
+    description: Return unclustered events on timeout
+  - code: INSUFFICIENT_EVENTS
+    policy: single_cluster
+    description: Treat all as one cluster if too few
+
+description: |
+  Episodic Clusterer Module (R2 Phase)
+
+  Groups related events into coherent episodes using DBSCAN:
+  - Distance metric: Cosine similarity on 768-dim embeddings
+  - Optional co-occurrence boost for Hebbian-connected events
+
+  Algorithm: DBSCAN (Density-Based Spatial Clustering)
+  - eps: 0.3 (maximum distance for neighborhood)
+  - min_samples: 3 (minimum events per cluster)
+  - metric: cosine
+
+  Co-occurrence Boost:
+  - Reduces distance between Hebbian-connected events
+  - boost_factor = 1 - (cooccurrence_weight * edge_weight)
+  - cooccurrence_weight: 0.2 (configurable)
+
+  Cluster Quality Metrics:
+  - Silhouette score: Target > 0.3
+  - Noise ratio: Target < 10% unclustered
+
+  Output:
+  - envelope.clusters: Array of cluster assignments
+  - envelope.clusters[*].cluster_id: ULID cluster identifier
+  - envelope.clusters[*].event_ids: Array of event IDs in cluster
+  - envelope.clusters[*].centroid_embedding: 768-dim centroid vector
+  - envelope.noise_events: Array of unclustered event IDs

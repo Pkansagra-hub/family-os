@@ -1,0 +1,57 @@
+{
+  "schema_id": "SCHEMA_SCHOOL_EVENT",
+  "name": "school_event",
+  "description": "School-related events involving children's education and activities.",
+  "typical_sequence": [
+    "notification_received",
+    "preparation",
+    "travel_to_school",
+    "event_attendance",
+    "event_activity",
+    "social_interaction",
+    "departure",
+    "follow_up_discussion"
+  ],
+  "expected_duration_minutes": {
+    "notification_received": 5,
+    "preparation": 30,
+    "travel_to_school": 20,
+    "event_attendance": 90,
+    "event_activity": 60,
+    "social_interaction": 30,
+    "departure": 15,
+    "follow_up_discussion": 20
+  },
+  "locations": ["school_auditorium", "school_gym", "classroom", "playground", "sports_field", "school_cafeteria"],
+  "participants": ["self", "spouse", "child", "teacher", "other_parents", "child_friends"],
+  "typical_time_window": {
+    "start_hour": 8,
+    "end_hour": 20
+  },
+  "required_fields": ["event_type", "child_involved", "location"],
+  "optional_fields": ["child_performance", "parent_role", "photos_taken"],
+  "event_types": [
+    "parent_teacher_conference",
+    "school_play",
+    "sports_game",
+    "science_fair",
+    "graduation",
+    "awards_ceremony",
+    "field_trip",
+    "open_house",
+    "recital"
+  ],
+  "emotional_patterns": {
+    "pride": ["awards_ceremony", "good_performance"],
+    "anxiety": ["parent_teacher_conference", "grade_concerns"],
+    "joy": ["graduation", "successful_event"],
+    "guilt": ["missed_event", "late_arrival"]
+  },
+  "confidence_boost": 0.30,
+  "provenance_hints": {
+    "calendar": ["event_date", "event_time"],
+    "school_communication": ["event_details", "permission_slip"],
+    "photos": ["event_type", "child_activity", "location"],
+    "messages": ["coordination_with_spouse", "child_excitement"]
+  }
+}

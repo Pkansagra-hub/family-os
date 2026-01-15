@@ -285,6 +285,8 @@ def diff_with_master(events: list[EventInfo], master_path: Path) -> dict[str, An
         "Fanout",
         "Deprecated",
         "Future",
+        "P03 Internal",
+        "Feedback",
     ]:
         table = registry.get_table("4.1", title_fragment)
         if table:

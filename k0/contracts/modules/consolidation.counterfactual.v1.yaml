@@ -1,0 +1,69 @@
+# P03 Module Contract: Counterfactual Generator
+# Phase: R5 - Dream Phase (Optional)
+# Dossier: §D.3.1 stage_50_counterfactual, §4.5, Appendix C.6
+
+module_id: consolidation.counterfactual
+version: v1
+
+input_event_types:
+  - p03.causality.inferred.v1
+
+output_event_types:
+  - p03.counterfactuals.generated.v1
+
+latency_budget_ms: 300
+
+side_effects:
+  - write:st_prospective  # Store counterfactuals
+
+idempotent: true
+
+fabric_capabilities:
+  - generate_counterfactuals
+
+failure_modes:
+  - code: CPN_TIMEOUT
+    policy: skip
+    description: Skip counterfactual generation on timeout
+  - code: NO_HIGH_IMPORTANCE_EVENTS
+    policy: skip
+    description: Skip if no events meet importance threshold
+  - code: SIMULATION_FAILED
+    policy: partial_results
+
+description: |
+  Counterfactual Generator Module (R5 Dream Phase)
+
+  Generates "what if" alternative scenarios using CPN:
+  - Counterfactual Probabilistic Network
+  - Explores alternative outcomes for high-importance events
+
+  Process:
+  1. Select high-importance events (threshold: 0.7)
+  2. Identify intervention points (key decisions/actions)
+  3. Simulate alternative branches
+  4. Score plausibility of outcomes
+
+  Configuration:
+  - enabled: true
+  - skip_on_backlog: true (skip if pending > 5000)
+  - backlog_threshold: 5000
+  - max_scenarios_per_event: 3
+  - min_importance_threshold: 0.7
+  - max_branch_depth: 5
+
+  Counterfactual Record:
+  - source_event_id: Original event
+  - intervention: What was changed
+  - alternative_outcome: Predicted result
+  - plausibility_score: 0-1 confidence
+  - utility_delta: Change in outcome utility
+
+  Storage:
+  - Counterfactuals stored in st_prospective
+  - Type: COUNTERFACTUAL
+  - Linked to source events
+
+  Output:
+  - envelope.counterfactuals: Array of counterfactual records
+  - envelope.r5_stats.counterfactuals_generated: Count

@@ -14,7 +14,7 @@ to 60-70 column st_hipp_events table structure.
 
 **Inputs** (from 14 enrichment modules):
 - M01 (DG Pattern Separation): simhash_hex, minhash32
-- M02 (CA1 Semantic Projection): entities_json, kg_triples_json, embedding_id
+- M02 (CA1 Semantic Projection): entities_json, kg_triples_json, embedding_id, ner_entities_json, temporal_json (Issue 4.4.1)
 - M03 (Policy Stamp): effective_band, obligations, policy_version
 - M04 (Affect Analysis): valence, arousal, sentiment, emotions
 - M05 (Space Visibility): owner_id, visible_to, visibility_scope
@@ -95,6 +95,47 @@ def serialize_to_json(data: Any, field_name: str) -> str:
         return json_str
     except (TypeError, ValueError) as e:
         raise ValueError(f"JSON serialization failed for {field_name}: {e}")
+
+
+# =============================================================================
+# Safety Band Arbitration (Issue 0053)
+# =============================================================================
+
+# Safety band severity order (most restrictive = highest)
+SAFETY_BAND_ORDER = {"GREEN": 0, "AMBER": 1, "RED": 2, "CRISIS": 3}
+
+
+def arbitrate_effective_safety_band(
+    policy_band: str | None, safety_familyos_band: str | None
+) -> str:
+    """
+    Compute effective_safety_band from K1 policy_band and UltraBERT safety_familyos_band.
+
+    Arbitration Rule: Most restrictive band wins.
+      - K1 policy_band: Envelope-level policy decision (GREEN/AMBER/RED)
+      - UltraBERT safety_familyos_band: Text content analysis (GREEN/AMBER/RED/CRISIS)
+
+    Order: GREEN < AMBER < RED < CRISIS
+
+    Args:
+        policy_band: K1 envelope band (may be None, defaults to GREEN)
+        safety_familyos_band: UltraBERT safety band (may be None, defaults to GREEN)
+
+    Returns:
+        Most restrictive band as effective_safety_band
+    """
+    # Default to GREEN if not provided
+    k1_band = (policy_band or "GREEN").upper()
+    ub_band = (safety_familyos_band or "GREEN").upper()
+
+    # Get severity scores (unknown bands default to GREEN = 0)
+    k1_score = SAFETY_BAND_ORDER.get(k1_band, 0)
+    ub_score = SAFETY_BAND_ORDER.get(ub_band, 0)
+
+    # Most restrictive wins (highest score)
+    if ub_score >= k1_score:
+        return ub_band
+    return k1_band
 
 
 # =============================================================================
@@ -347,9 +388,13 @@ def map_semantic_activity_group(
     envelope: Dict[str, Any], ingress_output: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    Semantic & Activity columns (9 columns)
+    Semantic & Activity columns (13 columns)
 
     From: envelope body + M10 ingress_classify
+
+    Issue 0060: Added activity_type_ultrabert, activity_type_confidence,
+                intent_ultrabert, intent_confidence for full UltraBERT
+                12-type INGRESS and 8-type INTENT classification.
     """
     body = envelope.get("body", {})
     text = body.get("text", "")
@@ -360,11 +405,20 @@ def map_semantic_activity_group(
         "char_count": len(text) if text else 0,
         "token_count": len(text.split()) if text else 0,
         "language": body.get("language", "en"),
+        # Legacy 7-type activity classification
         "activity_type": ingress_output.get("activity_type", "unknown"),
         "activity_category": ingress_output.get("activity_category", "episodic"),
         "is_meal": body.get("is_meal", False),
         "is_outing": body.get("is_outing", False),
         "ingress_source": ingress_output.get("ingress_source", "mobile_app"),
+        # UltraBERT INGRESS: Full 12-type classification (Issue 0060)
+        # DIARY/TASK/HEALTH/FINANCE/RELATIONSHIP/WORK/META/MEMORY/PLANNING/CELEBRATION/CONCERN/GRATITUDE
+        "activity_type_ultrabert": ingress_output.get("activity_type_ultrabert"),
+        "activity_type_confidence": ingress_output.get("activity_type_confidence"),
+        # UltraBERT INTENT: Full 8-type classification (Issue 0060)
+        # log_memory/query_memory/set_reminder/express_feeling/seek_advice/share_news/reflect/other
+        "intent_ultrabert": ingress_output.get("intent_ultrabert"),
+        "intent_confidence": ingress_output.get("intent_confidence"),
     }
 
 
@@ -394,14 +448,26 @@ def map_embeddings_kg_group(
     ca1_output: Dict[str, Any], embedding_output: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    Embeddings & Knowledge Graph columns (6 columns)
+    Embeddings & Knowledge Graph columns (6 columns + 11 UltraBERT columns)
 
-    From: M02 semantic_project (entities, kg_triples)
+    From: M02 semantic_project (entities, kg_triples, NER storage, UltraBERT full output)
           M22 extract_from_cache (embedding, embedding_id, status)
 
     ADR-K003: Inline embedding via M22 (UltraBERT cache extraction)
     - embedding_status = READY if M22 returned embedding
     - embedding_status = PENDING if M22 failed (no text, model unavailable, etc.)
+
+    Issue 4.4.1: P03 R4 NER columns for entity extraction
+    - ner_entities_json: Raw UltraBERT 3-head NER output (ner_family, ner_general)
+    - temporal_json: Temporal entities from UltraBERT temporal head
+    - intent_category, ingress_category, ultrabert_version
+
+    Issue 0053: Full UltraBERT capability storage
+    - extracted_relations_json: Relationship types for st_social
+    - safety_familyos_band/subcategory: Safety classification
+    - effective_safety_band: Arbitrated safety (most restrictive of K1 vs UltraBERT)
+    - nli_label/nli_confidence: NLI for fact checking
+    - sentiment_confidence: Sentiment confidence score
     """
     # entities_json and kg_triples_json are already JSON strings from semantic_project
     entities_json = ca1_output.get("entities_json")
@@ -418,11 +484,38 @@ def map_embeddings_kg_group(
     embedding_exists = embedding_output.get("embedding") is not None
     embedding_status = "READY" if embedding_exists else "PENDING"
 
+    # P03 R4 NER fields (Issue 4.4.1)
+    # These are raw UltraBERT outputs for UltraBERTEntityExtractor in P03
+    ner_entities_json = ca1_output.get("ner_entities_json")
+    temporal_json = ca1_output.get("temporal_json")
+    if ner_entities_json is None:
+        ner_entities_json = '{"ner_family": [], "ner_general": []}'
+    if temporal_json is None:
+        temporal_json = '{"temporal": []}'
+
+    # Full UltraBERT fields (Issue 0053)
+    extracted_relations_json = ca1_output.get("extracted_relations_json")
+    if extracted_relations_json is None:
+        extracted_relations_json = "[]"
+
     return {
         "embedding_id": embedding_id,
         "embedding_status": embedding_status,
         "entities_json": entities_json,
         "kg_triples_json": kg_triples_json,
+        # P03 R4 NER columns (Issue 4.4.1)
+        "ner_entities_json": ner_entities_json,
+        "temporal_json": temporal_json,
+        "intent_category": ca1_output.get("intent_category"),
+        "ingress_category": ca1_output.get("ingress_category"),
+        "ultrabert_version": ca1_output.get("ultrabert_version"),
+        # Full UltraBERT columns (Issue 0053)
+        "extracted_relations_json": extracted_relations_json,
+        "safety_familyos_band": ca1_output.get("safety_familyos_band"),
+        "safety_familyos_subcategory": ca1_output.get("safety_familyos_subcategory"),
+        "nli_label": ca1_output.get("nli_label"),
+        "nli_confidence": ca1_output.get("nli_confidence"),
+        "sentiment_confidence": ca1_output.get("sentiment_confidence"),
     }
 
 
@@ -678,6 +771,26 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         "embedding_id": ca1_enrichment.get("embedding_id") or envelope.get("embedding_id"),
         "entities_json": ca1_enrichment.get("entities_json") or envelope.get("entities_json"),
         "kg_triples_json": ca1_enrichment.get("kg_triples_json") or envelope.get("kg_triples_json"),
+        # Issue 4.4.1: P03 R4 NER fields from UltraBERT
+        "ner_entities_json": ca1_enrichment.get("ner_entities_json")
+        or envelope.get("ner_entities_json"),
+        "temporal_json": ca1_enrichment.get("temporal_json") or envelope.get("temporal_json"),
+        "intent_category": ca1_enrichment.get("intent_category") or envelope.get("intent_category"),
+        "ingress_category": ca1_enrichment.get("ingress_category")
+        or envelope.get("ingress_category"),
+        "ultrabert_version": ca1_enrichment.get("ultrabert_version")
+        or envelope.get("ultrabert_version"),
+        # Issue 0053: Full UltraBERT capability storage
+        "extracted_relations_json": ca1_enrichment.get("extracted_relations_json")
+        or envelope.get("extracted_relations_json"),
+        "safety_familyos_band": ca1_enrichment.get("safety_familyos_band")
+        or envelope.get("safety_familyos_band"),
+        "safety_familyos_subcategory": ca1_enrichment.get("safety_familyos_subcategory")
+        or envelope.get("safety_familyos_subcategory"),
+        "nli_label": ca1_enrichment.get("nli_label") or envelope.get("nli_label"),
+        "nli_confidence": ca1_enrichment.get("nli_confidence") or envelope.get("nli_confidence"),
+        "sentiment_confidence": ca1_enrichment.get("sentiment_confidence")
+        or envelope.get("sentiment_confidence"),
     }
 
     # M22 embedding extraction (ADR-K003)
@@ -910,6 +1023,12 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         _metrics.column_group_counts.get("affect_salience", 0) + 1
     )
 
+    # Safety arbitration (Issue 0053): Compute effective_safety_band
+    # Most restrictive of K1 policy_band vs UltraBERT safety_familyos_band wins
+    row["effective_safety_band"] = arbitrate_effective_safety_band(
+        row.get("policy_band"), row.get("safety_familyos_band")
+    )
+
     # Conditional validation based on config
     if validate_fields:
         validate_required_fields(row)
@@ -951,18 +1070,4 @@ def get_metrics() -> Dict[str, Any]:
 def reset_metrics() -> None:
     """Reset metrics (for testing)"""
     global _metrics
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
-    _metrics = BuilderMetrics()
     _metrics = BuilderMetrics()

@@ -167,15 +167,18 @@ def register_capabilities_from_definitions(
                         },
                     )
                 except Exception as e:
-                    logger.warning(
-                        "Failed to resolve handler for %s (%s): %s",
+                    # Log at DEBUG level for library-only modules (algorithms without run())
+                    # These are used directly by phases, not through fabric invocation
+                    # Late binding: handler will be None, can be resolved later if needed
+                    logger.debug(
+                        "Handler not bound for %s (%s) - will use late binding: %s",
                         capability,
                         provider.module_id,
                         e,
                         extra={
                             "capability": capability,
                             "module_id": provider.module_id,
-                            "error": str(e),
+                            "resolution": "late_binding",
                         },
                     )
 

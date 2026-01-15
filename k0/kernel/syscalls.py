@@ -24,6 +24,7 @@ import time
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
+    from k0.storage.offsets import OffsetStore
     from k0.uow.unit_of_work import UnitOfWork
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,8 @@ class Syscalls:
         # Convert to frozenset for immutability (security property)
         self._granted_caps = frozenset(granted_caps)
         self._uow_factory = uow_factory
+        # Lazy-initialized offset store
+        self._offset_store: OffsetStore | None = None
 
         # Audit: Log capability grants at initialization
         logger.info(
@@ -125,6 +128,160 @@ class Syscalls:
                 "capability_count": len(granted_caps),
             },
         )
+
+    @property
+    def offset_store(self) -> OffsetStore:
+        """
+        Access to OffsetStore for subscriber offset tracking.
+
+        Provides capability-gated access to offset storage for pipelines
+        that need to track their position in event streams.
+
+        Required Capability:
+            st_offsets.read or st_offsets.write
+
+        Returns:
+            OffsetStore instance for offset operations
+
+        Raises:
+            PermissionError: If pipeline lacks st_offsets.* capability
+
+        Example:
+            >>> offset = await ctx.syscalls.offset_store.fetch(
+            ...     subscriber_id="p03_consolidation",
+            ...     topic="st_hipp_events",
+            ...     space_id="space_123",
+            ...     tenant_id="tenant_456"
+            ... )
+        """
+        # Check for any offset-related capability
+        has_offset_cap = any(cap.startswith("st_offsets.") for cap in self._granted_caps)
+        if not has_offset_cap:
+            logger.error(
+                f"Permission denied: {self._pipeline_id} missing offset capability",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "required_capability": "st_offsets.*",
+                    "granted_caps": list(self._granted_caps),
+                    "security_violation": True,
+                },
+            )
+            raise PermissionError(
+                f"Pipeline {self._pipeline_id} missing capability: st_offsets.read or st_offsets.write. "
+                f"Granted: {sorted(self._granted_caps)}"
+            )
+
+        # Lazy initialization
+        if self._offset_store is None:
+            from k0.storage.offsets import OffsetStore
+
+            self._offset_store = OffsetStore()
+            logger.debug(
+                f"Created OffsetStore for {self._pipeline_id}",
+                extra={"pipeline_id": self._pipeline_id},
+            )
+
+        return self._offset_store
+
+    def unit_of_work(self) -> UnitOfWork:
+        """
+        Create a new UnitOfWork for transactional database operations.
+
+        Provides capability-gated access to database transactions. Pipelines
+        use this to execute raw SQL queries within ACID transactions.
+
+        Required Capability:
+            st_hipp_events.read or any database access capability
+
+        Returns:
+            UnitOfWork context manager for transaction scope
+
+        Raises:
+            PermissionError: If pipeline lacks database access capability
+
+        Example:
+            >>> async with ctx.syscalls.unit_of_work() as uow:
+            ...     rows = await uow._connection.fetch("SELECT * FROM st_hipp_events")
+        """
+        # Check for any database access capability
+        db_caps = {
+            "st_hipp_events.read",
+            "st_hipp_events.write",
+            "st_offsets.read",
+            "st_offsets.write",
+        }
+        has_db_cap = bool(self._granted_caps & db_caps)
+        if not has_db_cap:
+            logger.error(
+                f"Permission denied: {self._pipeline_id} missing database capability",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "required_capability": "st_hipp_events.* or st_offsets.*",
+                    "granted_caps": list(self._granted_caps),
+                    "security_violation": True,
+                },
+            )
+            raise PermissionError(
+                f"Pipeline {self._pipeline_id} missing database access capability. "
+                f"Granted: {sorted(self._granted_caps)}"
+            )
+
+        return self._uow_factory()
+
+    def get_pool(self) -> Any:
+        """
+        Get direct access to the asyncpg connection pool.
+
+        This provides capability-gated access to the underlying database pool
+        for components that need to perform bulk operations or require pool-level
+        access (e.g., GapAutoResolver for learning queue operations).
+
+        Required Capability:
+            st_learning_queue.read or st_learning_queue.write
+
+        Returns:
+            AsyncPgPool instance for direct pool operations
+
+        Raises:
+            PermissionError: If pipeline lacks st_learning_queue capability
+            RuntimeError: If pool is not available
+
+        Example:
+            >>> pool = ctx.syscalls.get_pool()
+            >>> async with pool.acquire() as conn:
+            ...     rows = await conn.fetch("SELECT * FROM st_learning_queue")
+
+        Note:
+            Prefer using unit_of_work() for transactional operations.
+            Direct pool access bypasses transaction guarantees.
+        """
+        # Check for learning queue capability (primary use case for direct pool access)
+        learning_queue_caps = {"st_learning_queue.read", "st_learning_queue.write"}
+        has_lq_cap = bool(self._granted_caps & learning_queue_caps)
+        if not has_lq_cap:
+            logger.error(
+                f"Permission denied: {self._pipeline_id} missing learning_queue capability for pool access",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "required_capability": "st_learning_queue.read or st_learning_queue.write",
+                    "granted_caps": list(self._granted_caps),
+                    "security_violation": True,
+                },
+            )
+            raise PermissionError(
+                f"Pipeline {self._pipeline_id} missing capability: st_learning_queue.read or st_learning_queue.write. "
+                f"Granted: {sorted(self._granted_caps)}"
+            )
+
+        # Get the global pool
+        from k0.db.pool import get_pool
+
+        pool = get_pool()
+        logger.debug(
+            f"Pool access granted for {self._pipeline_id}",
+            extra={"pipeline_id": self._pipeline_id, "operation": "get_pool"},
+        )
+        return pool
 
     async def hipp_store_upsert(
         self,
@@ -618,56 +775,60 @@ class Syscalls:
         cognitive_trace_id: str | None = None,
     ) -> list[tuple[str, str]]:
         """
-        Query st_relationships for actor's family relationships (requires st_relationships.read cap).
+        Query st_kg_edges for actor's family relationships (requires st_kg_edges.read cap).
+
+        ADR-K022: Changed from st_relationships to st_kg_edges (PostgreSQL graph).
 
         Used by M07 (social.family_graph_resolve) to resolve family context for episodic
-        memories. Returns all relationships where person_id = actor_id.
+        memories. Returns all relationships where source_entity_id matches actor's entity.
 
-        Capability Required: "st_relationships.read"
+        Capability Required: "st_kg_edges.read"
 
-        Storage Table: st_relationships
-        - Purpose: Family graph cache (5 relationship types)
-        - Lifecycle: Seeded in migration 0018/0024, TTL-based refresh
-        - Columns: person_id, related_person_id, relationship_type
+        Storage Table: st_kg_edges
+        - Purpose: Knowledge graph edges with typed relationships
+        - Lifecycle: Seeded by seed_family_graph.py, updated by P03
+        - Columns: source_entity_id, target_entity_id, relation_type
 
         Relationship Types:
         - SPOUSE_OF: Married/partner relationship (bidirectional)
         - PARENT_OF: Parent-child relationship (actor is parent)
         - CHILD_OF: Child-parent relationship (actor is child)
-        - CARETAKER_OF: Guardian/caregiver relationship
         - SIBLING_OF: Brother/sister relationship
+        - CARETAKER_OF: Guardian/caregiver relationship
+        - GRANDPARENT_OF, GRANDCHILD_OF: Extended family
+        - FRIEND_OF, COLLEAGUE_OF: Non-family relationships
 
         Args:
-            actor_id: Person identifier to lookup relationships for
+            actor_id: Person identifier to lookup relationships for (matches canonical_name)
             cognitive_trace_id: Optional trace ID for observability
 
         Returns:
-            List of (related_person_id, relationship_type) tuples.
+            List of (related_person_name, relationship_type) tuples.
             Empty list if actor has no relationships.
 
         Raises:
-            PermissionError: If pipeline lacks "st_relationships.read" capability
+            PermissionError: If pipeline lacks "st_kg_edges.read" capability
 
         Example:
             >>> relationships = await syscalls.relationships_query(
-            ...     actor_id="person_prince_001",
+            ...     actor_id="Prince",
             ...     cognitive_trace_id="trace_xyz"
             ... )
             >>> relationships
-            [("person_jeel_001", "SPOUSE_OF"), ("person_sharvi_001", "PARENT_OF")]
+            [("Jeel", "SPOUSE_OF"), ("Sharvi", "PARENT_OF")]
 
         Performance:
-            - Target: <5ms P95 (indexed query on person_id)
-            - Uses idx_relationships_person index
+            - Target: <5ms P95 (indexed query on source_entity_id)
+            - Uses idx_kg_edges_source index
             - Connection pooling via UnitOfWork
 
         Related:
             - M07 (social.family_graph_resolve): Primary user of this syscall
-            - P02 pipeline: Stage 20 calls M07 for social context
-            - Migration 0024: Table schema and seed data
-            - ADR K008.1: Family Graph Resolver architecture
+            - P02 pipeline: Stage 32 calls M07 for social context
+            - ADR K022: Remove Neo4j, consolidate to PostgreSQL
+            - seed_family_graph.py: Seeds family relationships
         """
-        self._require_cap("st_relationships.read")
+        self._require_cap("st_kg_edges.read")
 
         # Audit: Log storage operation
         start_time = time.perf_counter()
@@ -687,19 +848,35 @@ class Syscalls:
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
-            # Query st_relationships for actor's relationships
-            # Column names: person_id (actor), related_person_id (related) - both TEXT
+            # ADR-K022: Query st_kg_edges for actor's relationships
+            # First find the actor's entity_id by matching canonical_name or alias
+            # Then find all edges where actor is source
             query = """
-                SELECT related_person_id, relationship_type
-                FROM st_relationships
-                WHERE person_id = $1
+                SELECT DISTINCT
+                    target.canonical_name as related_person_name,
+                    e.relation_type
+                FROM st_kg_edges e
+                JOIN st_kg_dom source ON e.source_entity_id = source.entity_id
+                JOIN st_kg_dom target ON e.target_entity_id = target.entity_id
+                WHERE (
+                    source.canonical_name ILIKE $1
+                    OR source.aliases_json ILIKE '%' || $1 || '%'
+                )
+                AND e.relation_type IN (
+                    'SPOUSE_OF', 'PARENT_OF', 'CHILD_OF', 'SIBLING_OF',
+                    'CARETAKER_OF', 'GRANDPARENT_OF', 'GRANDCHILD_OF',
+                    'FRIEND_OF', 'COLLEAGUE_OF'
+                )
+                AND e.archival_status = 'ACTIVE'
+                AND source.archival_status = 'ACTIVE'
+                AND target.archival_status = 'ACTIVE'
             """
 
             rows = await conn.fetch(query, actor_id)
 
             # Convert rows to list of tuples
             relationships = [
-                (str(row["related_person_id"]), row["relationship_type"]) for row in rows
+                (str(row["related_person_name"]), row["relation_type"]) for row in rows
             ]
 
             # Audit: Log completion
@@ -2561,6 +2738,206 @@ class Syscalls:
                 "model_id": model_id,
                 "error": str(e),
             }
+
+    # =========================================================================
+    # Advisory Lock Operations (Issue 1.3.4)
+    # =========================================================================
+
+    async def lock_acquire(
+        self,
+        lock_key: str,
+        holder_id: str,
+        *,
+        blocking: bool = False,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Acquire an advisory lock (requires advisory_lock.acquire cap).
+
+        Uses PostgreSQL pg_try_advisory_lock() for distributed locking.
+        Used by P03 for single-writer-per-space semantics.
+
+        Capability Required: "advisory_lock.acquire"
+
+        Lock Key Pattern: {pipeline_id}:{tenant_id}:{space_id}
+
+        Args:
+            lock_key: String lock key (e.g., "P03:tenant_1:space_1")
+            holder_id: Identifier for the lock holder (e.g., node ID)
+            blocking: If True, wait for lock. If False, return immediately.
+            timeout_ms: Timeout in milliseconds for blocking acquire (default: 30000)
+
+        Returns:
+            Dictionary with:
+            - acquired: bool (True if lock was acquired)
+            - lock_key: str
+            - lock_id: int (the bigint hash)
+            - holder_id: str | None
+            - error: str | None
+            - acquired_at: str | None (ISO format timestamp)
+
+        Raises:
+            PermissionError: If pipeline lacks "advisory_lock.acquire" capability
+
+        Example:
+            >>> result = await syscalls.lock_acquire(
+            ...     lock_key="P03:tenant_1:space_1",
+            ...     holder_id="node_abc"
+            ... )
+            >>> if result["acquired"]:
+            ...     # Do work with lock held
+            ...     await syscalls.lock_release("P03:tenant_1:space_1", "node_abc")
+
+        Related:
+            - Issue 1.3.4: Single-writer-per-space guard
+            - k0/db/advisory_lock.py: AdvisoryLockService implementation
+            - Dossier 4.10.2: Advisory Lock Service specification
+        """
+        self._require_cap("advisory_lock.acquire")
+
+        from k0.db.advisory_lock import get_advisory_lock_service
+
+        lock_service = get_advisory_lock_service()
+        result = await lock_service.acquire(
+            lock_key=lock_key,
+            holder_id=holder_id,
+            blocking=blocking,
+            timeout_ms=timeout_ms,
+        )
+
+        logger.info(
+            f"lock_acquire: {lock_key} -> {result.acquired}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "lock_key": lock_key,
+                "holder_id": holder_id,
+                "acquired": result.acquired,
+                "operation": "lock_acquire",
+            },
+        )
+
+        return {
+            "acquired": result.acquired,
+            "lock_key": result.lock_key,
+            "lock_id": result.lock_id,
+            "holder_id": result.holder_id,
+            "error": result.error,
+            "acquired_at": result.acquired_at.isoformat() if result.acquired_at else None,
+        }
+
+    async def lock_release(
+        self,
+        lock_key: str,
+        holder_id: str,
+    ) -> dict[str, Any]:
+        """
+        Release an advisory lock (requires advisory_lock.release cap).
+
+        Uses PostgreSQL pg_advisory_unlock() for distributed lock release.
+
+        Capability Required: "advisory_lock.release"
+
+        Args:
+            lock_key: String lock key to release
+            holder_id: Identifier of the holder releasing the lock
+
+        Returns:
+            Dictionary with:
+            - released: bool (True if lock was released)
+            - lock_key: str
+            - holder_id: str
+
+        Raises:
+            PermissionError: If pipeline lacks "advisory_lock.release" capability
+
+        Example:
+            >>> result = await syscalls.lock_release(
+            ...     lock_key="P03:tenant_1:space_1",
+            ...     holder_id="node_abc"
+            ... )
+            >>> result["released"]
+            True
+
+        Related:
+            - Issue 1.3.4: Single-writer-per-space guard
+            - k0/db/advisory_lock.py: AdvisoryLockService implementation
+        """
+        self._require_cap("advisory_lock.release")
+
+        from k0.db.advisory_lock import get_advisory_lock_service
+
+        lock_service = get_advisory_lock_service()
+        released = await lock_service.release(lock_key=lock_key, holder_id=holder_id)
+
+        logger.info(
+            f"lock_release: {lock_key} -> {released}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "lock_key": lock_key,
+                "holder_id": holder_id,
+                "released": released,
+                "operation": "lock_release",
+            },
+        )
+
+        return {
+            "released": released,
+            "lock_key": lock_key,
+            "holder_id": holder_id,
+        }
+
+    async def lock_is_held(
+        self,
+        lock_key: str,
+    ) -> dict[str, Any]:
+        """
+        Check if a lock is currently held globally (requires advisory_lock.read cap).
+
+        Queries PostgreSQL pg_locks to check lock status across all connections.
+
+        Capability Required: "advisory_lock.read"
+
+        Args:
+            lock_key: String lock key to check
+
+        Returns:
+            Dictionary with:
+            - is_held: bool (True if lock is held by any connection)
+            - lock_key: str
+
+        Raises:
+            PermissionError: If pipeline lacks "advisory_lock.read" capability
+
+        Example:
+            >>> result = await syscalls.lock_is_held("P03:tenant_1:space_1")
+            >>> if result["is_held"]:
+            ...     print("Lock is held, deferring")
+
+        Related:
+            - Issue 1.3.4: Single-writer-per-space guard
+            - k0/db/advisory_lock.py: AdvisoryLockService implementation
+        """
+        self._require_cap("advisory_lock.read")
+
+        from k0.db.advisory_lock import get_advisory_lock_service
+
+        lock_service = get_advisory_lock_service()
+        is_held = await lock_service.is_held_globally(lock_key=lock_key)
+
+        logger.debug(
+            f"lock_is_held: {lock_key} -> {is_held}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "lock_key": lock_key,
+                "is_held": is_held,
+                "operation": "lock_is_held",
+            },
+        )
+
+        return {
+            "is_held": is_held,
+            "lock_key": lock_key,
+        }
 
     def _require_cap(self, capability: str) -> None:
         """

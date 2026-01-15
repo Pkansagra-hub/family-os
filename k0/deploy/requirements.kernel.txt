@@ -64,6 +64,13 @@ sqlalchemy[asyncio]>=2.0.0         # SQLAlchemy for Alembic async
 alembic>=1.13.0                    # Database migrations
 nest_asyncio>=1.6.0                # Allow nested event loops for Alembic in async context
 
+# String matching (P03 entity disambiguation)
+rapidfuzz>=3.6.0                   # Fast fuzzy string matching
+
+# Machine learning (P03 clustering)
+scikit-learn>=1.4.0                # DBSCAN fallback clustering
+hdbscan>=0.8.33                    # HDBSCAN clustering with noise rescue for episodic memory
+
 # Vector similarity search (FAISS)
 # P08 FAISS indexing for similarity search
 # Note: Use faiss-gpu in GPU containers (installed via Dockerfile)

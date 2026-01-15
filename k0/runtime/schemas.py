@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -582,6 +582,26 @@ class PipelineSpec(BaseModel):
     fabric_actions: list[str] = Field(
         default_factory=list,
         description="Fabric capabilities this pipeline exposes",
+    )
+
+    # Runner type (generic kernel dispatch)
+    runner_type: Literal["dag", "sequential", "custom"] = Field(
+        default="dag",
+        description=(
+            "Runner implementation type: "
+            "'dag' = generic PipelineRunner (DAG execution), "
+            "'sequential' = loads SequentialRunner from pipeline module, "
+            "'custom' = loads runner_class from specified path"
+        ),
+    )
+
+    runner_class: str | None = Field(
+        default=None,
+        description=(
+            "Fully qualified class path for custom runner "
+            "(e.g., 'k0.pipelines.p03.sequential_runner:P03SequentialRunner'). "
+            "Required when runner_type='custom'."
+        ),
     )
 
     @field_validator("dag")

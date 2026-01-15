@@ -96,6 +96,7 @@ markers = [
     "unit: unit tests",
     "performance: performance tests",
     "slow: slow tests",
+    "benchmark: benchmark tests for algorithm performance validation",
 ]
 
 [tool.coverage.run]

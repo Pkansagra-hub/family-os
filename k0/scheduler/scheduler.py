@@ -25,7 +25,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from .concurrency import get_single_flight_gate
 from .triggers import (
@@ -429,6 +429,7 @@ class PipelineScheduler:
         self,
         pipeline_id: str,
         trigger_id: str,
+        context: dict[str, Any] | None = None,
     ) -> bool:
         """
         Manually fire a trigger.
@@ -436,6 +437,10 @@ class PipelineScheduler:
         Args:
             pipeline_id: Pipeline containing the trigger
             trigger_id: ID of the trigger to fire
+            context: Optional context dict to include in the trigger event.
+                     For P03, this can include:
+                     - reason: Human-readable reason for manual trigger
+                     - options: Dict with skip_r5, max_events, space_id, tenant_id
 
         Returns:
             True if trigger was fired, False if not found or not manual
@@ -452,7 +457,7 @@ class PipelineScheduler:
         for trigger in scheduled.triggers:
             if trigger.spec.id == trigger_id:
                 if isinstance(trigger, ManualTriggerEngine):
-                    return trigger.fire()
+                    return trigger.fire(context=context)
                 else:
                     logger.warning(
                         "Trigger %s is not manual type",

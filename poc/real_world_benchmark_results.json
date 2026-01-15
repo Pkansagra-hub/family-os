@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-01-11 01:31:05",
+  "model": "UltraBERT (768-dim)",
+  "benchmarks": [
+    {
+      "name": "STS-B",
+      "metric": "spearman_correlation",
+      "score": 0.6976598876660641,
+      "reference_score": 0.838,
+      "reference_model": "all-mpnet-base-v2"
+    },
+    {
+      "name": "MS-MARCO-Style",
+      "metric": "MRR@10",
+      "score": 0.47291666666666665,
+      "reference_score": 0.378,
+      "reference_model": "text-embedding-3-large"
+    },
+    {
+      "name": "Adversarial",
+      "metric": "accuracy",
+      "score": 0.2,
+      "reference_score": null,
+      "reference_model": null
+    }
+  ]
+}
