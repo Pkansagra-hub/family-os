@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from logging import Logger
 
     from k0.bus import BusMessage  # Import for type hints only
+    from k0.fabric import CapabilityFabric  # Import for type hints only
 
 # BusMessage is now defined in k0.bus.core and imported by runtime code
 # It includes: topic, payload, offset, trace_id, space_id, metadata
@@ -42,6 +43,8 @@ class PipelineContext:
         config: Pipeline-specific configuration (from k0/config/pipelines.yml)
         logger: Structured logger with cognitive_trace_id support
         preloaded_models: Optional dict of preloaded NLP models (spaCy, VADER) from kernel startup
+        bus_dispatcher: Optional BusDispatcher for internal pipeline communication
+        fabric: Optional CapabilityFabric for request/reply by capability (ADR-K004)
 
     Usage:
         async def on_startup(self, ctx: PipelineContext) -> None:
@@ -49,18 +52,23 @@ class PipelineContext:
             self.logger = ctx.logger
             self.config = ctx.config
             self.preloaded_models = ctx.preloaded_models  # Access preloaded models
+            self.bus_dispatcher = ctx.bus_dispatcher  # For emitting internal events
+            self.fabric = ctx.fabric  # For capability-based request/reply
             # ... initialize resources
 
     Security:
         - syscalls enforces required_caps before storage access
         - logger includes trace_id for audit trails
         - config is read-only (frozen dataclass)
+        - fabric validates capabilities before invocation
     """
 
     syscalls: Any  # Type: Syscalls (defined in M2 R2.1)
     config: dict[str, Any]
     logger: Logger
     preloaded_models: dict[str, Any] | None = None  # Optional preloaded NLP models
+    bus_dispatcher: Any | None = None  # Optional BusDispatcher for internal events
+    fabric: CapabilityFabric | None = None  # Optional CapabilityFabric for request/reply
 
 
 @runtime_checkable

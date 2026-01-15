@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from dataclasses import dataclass
-from typing import Mapping, MutableSequence, Protocol, Sequence
+from typing import TYPE_CHECKING, Mapping, MutableSequence, Protocol, Sequence
 
 from nacl.signing import SigningKey
 
@@ -13,6 +12,9 @@ from k0.obs.events import ObservabilityEmitter
 from k0.policy.pep_syscall import Obligation
 from k0.security.crypto import canonical_json, encode_base64url
 from k0.storage.receipts import Receipt, ReceiptStore
+
+if TYPE_CHECKING:
+    import asyncpg
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +85,7 @@ class ReceiptIssuer:
         self._metrics = metrics_recorder
         self._observability = observability_emitter
 
-    def issue(
+    async def issue(
         self,
         *,
         receipt_id: str,
@@ -100,7 +102,7 @@ class ReceiptIssuer:
         obligations_applied: Sequence[str] = (),  # V1: Specific actions taken
         manifest_fingerprint: str | None = None,
         payload_sha256: str | None = None,  # V1: Optional (legacy, deprecated)
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> ReceiptDocument:
         """Create, sign, persist, and emit observability for a receipt.
 
@@ -147,7 +149,7 @@ class ReceiptIssuer:
         )
 
         try:
-            self._store.save(stored_receipt, connection=connection)
+            await self._store.save(stored_receipt, connection=connection)
         except Exception as exc:  # noqa: BLE001
             self._emit_metric(
                 "receipt_issue_total",

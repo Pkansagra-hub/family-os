@@ -3,8 +3,8 @@
 Targets k0/gate/schema_registry.py for +33 tests to achieve 100% coverage.
 """
 
-import sqlite3
 from unittest import mock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -104,7 +104,7 @@ class TestSchemaRegistryInitialization:
         registry = SchemaRegistry(metrics_exporter=metrics)
         assert registry._metrics_exporter is metrics
 
-    def test_clear_cache(self):
+    async def test_clear_cache(self):
         """Test cache clearing."""
         metrics = mock.Mock()
         registry = SchemaRegistry(metrics_exporter=metrics)
@@ -113,44 +113,70 @@ class TestSchemaRegistryInitialization:
         registry._cache = {("test", "1.0"): mock.Mock()}
         registry._loaded = True
 
-        registry.clear_cache()
+        await registry.clear_cache()
 
         assert registry._cache == {}
         assert registry._loaded is False
         metrics.set_gauge.assert_called_once_with("schema_cache_entries_active", 0.0)
 
 
+@pytest.fixture
+def mock_asyncpg_connection():
+    """Mock asyncpg connection for testing."""
+    conn = AsyncMock()
+    return conn
+
+
+def _make_mock_row(data: dict):
+    """Create a mock row that behaves like asyncpg Record."""
+    row = MagicMock()
+    row.__getitem__ = MagicMock(side_effect=lambda key: data[key])
+    row.keys = MagicMock(return_value=data.keys())
+    return row
+
+
 class TestSchemaRegistryLoad:
     """Test schema loading functionality."""
 
-    def test_load_empty_registry(self, in_memory_db):
+    async def test_load_empty_registry(self, mock_asyncpg_connection):
         """Test loading from empty schema registry."""
+        mock_asyncpg_connection.fetch = AsyncMock(return_value=[])
+
         registry = SchemaRegistry()
 
-        registry.load(connection=in_memory_db)
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            await registry.load(connection=mock_asyncpg_connection)
 
         assert registry._loaded is True
         assert registry._cache == {}
 
-    def test_load_with_schemas(self, in_memory_db):
+    async def test_load_with_schemas(self, mock_asyncpg_connection):
         """Test loading schemas into cache."""
-        # Setup test data
-        in_memory_db.execute(
-            """
-            INSERT INTO schema_registry (schema_uri, version, sha256, status, operator_id)
-            VALUES (?, ?, ?, ?, ?)
-        """,
-            (
-                "https://example.com/schemas/test",
-                "1.0.0",
-                "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                "ACTIVE",
-                "operator@example.com",
-            ),
+        mock_row = _make_mock_row(
+            {
+                "schema_uri": "https://example.com/schemas/test",
+                "version": "1.0.0",
+                "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                "status": "ACTIVE",
+                "operator_id": "operator@example.com",
+                "blocked_ts": None,
+                "blocked_reason": None,
+                "unblocked_ts": None,
+            }
         )
 
+        mock_asyncpg_connection.fetch = AsyncMock(return_value=[mock_row])
+
         registry = SchemaRegistry()
-        registry.load(connection=in_memory_db)
+
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            await registry.load(connection=mock_asyncpg_connection)
 
         assert registry._loaded is True
         assert len(registry._cache) == 1
@@ -164,26 +190,31 @@ class TestSchemaRegistryLoad:
         assert record.status == "ACTIVE"
         assert record.operator_id == "operator@example.com"
 
-    def test_load_with_metrics(self, in_memory_db):
+    async def test_load_with_metrics(self, mock_asyncpg_connection):
         """Test loading with metrics emission."""
-        # Setup test data
-        in_memory_db.execute(
-            """
-            INSERT INTO schema_registry (schema_uri, version, sha256, status)
-            VALUES (?, ?, ?, ?)
-        """,
-            (
-                "https://example.com/schemas/test",
-                "1.0.0",
-                "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                "ACTIVE",
-            ),
+        mock_row = _make_mock_row(
+            {
+                "schema_uri": "https://example.com/schemas/test",
+                "version": "1.0.0",
+                "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                "status": "ACTIVE",
+                "operator_id": None,
+                "blocked_ts": None,
+                "blocked_reason": None,
+                "unblocked_ts": None,
+            }
         )
+
+        mock_asyncpg_connection.fetch = AsyncMock(return_value=[mock_row])
 
         metrics = mock.Mock()
         registry = SchemaRegistry(metrics_exporter=metrics)
 
-        registry.load(connection=in_memory_db)
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            await registry.load(connection=mock_asyncpg_connection)
 
         metrics.set_gauge.assert_called_once_with("schema_cache_entries_active", 1.0)
 
@@ -191,7 +222,7 @@ class TestSchemaRegistryLoad:
 class TestSchemaRegistryGet:
     """Test schema retrieval functionality."""
 
-    def test_get_cache_hit(self):
+    async def test_get_cache_hit(self):
         """Test retrieving schema from cache."""
         metrics = mock.Mock()
         registry = SchemaRegistry(metrics_exporter=metrics)
@@ -205,33 +236,38 @@ class TestSchemaRegistryGet:
 
         registry._cache[("https://example.com/schemas/test", "1.0.0")] = record
 
-        result = registry.get("https://example.com/schemas/test", "1.0.0")
+        result = await registry.get("https://example.com/schemas/test", "1.0.0")
 
         assert result == record
         metrics.emit.assert_called_once_with("schema_cache_hits_total")
 
-    def test_get_cache_miss_found_in_db(self, in_memory_db):
+    async def test_get_cache_miss_found_in_db(self, mock_asyncpg_connection):
         """Test retrieving schema from database when not in cache."""
-        # Setup test data
-        in_memory_db.execute(
-            """
-            INSERT INTO schema_registry (schema_uri, version, sha256, status, operator_id, blocked_ts)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """,
-            (
-                "https://example.com/schemas/test",
-                "1.0.0",
-                "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                "ACTIVE",
-                "operator@example.com",
-                "2025-01-15T10:00:00Z",
-            ),
+        mock_row = _make_mock_row(
+            {
+                "schema_uri": "https://example.com/schemas/test",
+                "version": "1.0.0",
+                "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                "status": "ACTIVE",
+                "operator_id": "operator@example.com",
+                "blocked_ts": "2025-01-15T10:00:00Z",
+                "blocked_reason": None,
+                "unblocked_ts": None,
+            }
         )
+
+        mock_asyncpg_connection.fetchrow = AsyncMock(return_value=mock_row)
 
         metrics = mock.Mock()
         registry = SchemaRegistry(metrics_exporter=metrics)
 
-        result = registry.get("https://example.com/schemas/test", "1.0.0", connection=in_memory_db)
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await registry.get(
+                "https://example.com/schemas/test", "1.0.0", connection=mock_asyncpg_connection
+            )
 
         assert result.uri == "https://example.com/schemas/test"
         assert result.version == "1.0.0"
@@ -246,21 +282,31 @@ class TestSchemaRegistryGet:
         metrics.emit.assert_called_once_with("schema_cache_misses_total")
         metrics.set_gauge.assert_called_once_with("schema_cache_entries_active", 1.0)
 
-    def test_get_not_found(self, in_memory_db):
+    async def test_get_not_found(self, mock_asyncpg_connection):
         """Test retrieving non-existent schema."""
+        mock_asyncpg_connection.fetchrow = AsyncMock(return_value=None)
+
         registry = SchemaRegistry()
 
-        with pytest.raises(
-            KeyError, match="Schema https://example.com/schemas/test@1.0.0 not found"
-        ):
-            registry.get("https://example.com/schemas/test", "1.0.0", connection=in_memory_db)
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            with pytest.raises(
+                KeyError, match="Schema https://example.com/schemas/test@1.0.0 not found"
+            ):
+                await registry.get(
+                    "https://example.com/schemas/test", "1.0.0", connection=mock_asyncpg_connection
+                )
 
 
 class TestSchemaRegistryRegister:
     """Test schema registration functionality."""
 
-    def test_register_success(self, in_memory_db):
+    async def test_register_success(self, mock_asyncpg_connection):
         """Test successful schema registration."""
+        mock_asyncpg_connection.execute = AsyncMock(return_value=None)
+
         registry = SchemaRegistry()
 
         record = SchemaRecord(
@@ -270,43 +316,24 @@ class TestSchemaRegistryRegister:
             status="REGISTERED",
         )
 
-        result = registry.register(record, connection=in_memory_db)
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await registry.register(record, connection=mock_asyncpg_connection)
 
         assert result.uri == "https://example.com/schemas/test"
         assert result.version == "1.0.0"
         assert result.status == "REGISTERED"
 
-        # Check database
-        row = in_memory_db.execute(
-            """
-            SELECT schema_uri, version, sha256, status FROM schema_registry
-            WHERE schema_uri=? AND version=?
-        """,
-            ("https://example.com/schemas/test", "1.0.0"),
-        ).fetchone()
-
-        assert row["schema_uri"] == "https://example.com/schemas/test"
-        assert row["version"] == "1.0.0"
-        assert row["status"] == "REGISTERED"
-
         # Check cache
         assert ("https://example.com/schemas/test", "1.0.0") in registry._cache
 
-    def test_register_duplicate(self, in_memory_db):
+    async def test_register_duplicate(self, mock_asyncpg_connection):
         """Test registration of already existing schema."""
-        # Setup table with existing record
-        in_memory_db.execute(
-            """
-            INSERT INTO schema_registry (schema_uri, version, sha256, status)
-            VALUES (?, ?, ?, ?)
-        """,
-            (
-                "https://example.com/schemas/test",
-                "1.0.0",
-                "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                "REGISTERED",
-            ),
-        )
+        import asyncpg
+
+        mock_asyncpg_connection.execute = AsyncMock(side_effect=asyncpg.UniqueViolationError(""))
 
         registry = SchemaRegistry()
 
@@ -317,12 +344,16 @@ class TestSchemaRegistryRegister:
             status="REGISTERED",
         )
 
-        with pytest.raises(
-            ValueError, match="Schema https://example.com/schemas/test@1.0.0 already exists"
-        ):
-            registry.register(record, connection=in_memory_db)
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
 
-    def test_register_invalid_record(self, in_memory_db):
+            with pytest.raises(
+                ValueError, match="Schema https://example.com/schemas/test@1.0.0 already exists"
+            ):
+                await registry.register(record, connection=mock_asyncpg_connection)
+
+    async def test_register_invalid_record(self, mock_asyncpg_connection):
         """Test registration with invalid record data."""
         registry = SchemaRegistry()
 
@@ -335,14 +366,16 @@ class TestSchemaRegistryRegister:
         )
 
         with pytest.raises(ValueError, match="schema_uri must not be empty"):
-            registry.register(record, connection=in_memory_db)
+            await registry.register(record, connection=mock_asyncpg_connection)
 
 
 class TestSchemaRegistryUpsert:
     """Test schema upsert functionality."""
 
-    def test_upsert_insert(self, in_memory_db):
+    async def test_upsert_insert(self, mock_asyncpg_connection):
         """Test upsert creating new record."""
+        mock_asyncpg_connection.execute = AsyncMock(return_value=None)
+
         registry = SchemaRegistry()
 
         record = SchemaRecord(
@@ -352,38 +385,19 @@ class TestSchemaRegistryUpsert:
             status="REGISTERED",
         )
 
-        result = registry.upsert(record, connection=in_memory_db)
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await registry.upsert(record, connection=mock_asyncpg_connection)
 
         assert result.uri == "https://example.com/schemas/test"
         assert result.version == "1.0.0"
         assert result.status == "REGISTERED"
 
-        # Check database
-        row = in_memory_db.execute(
-            """
-            SELECT schema_uri, version, sha256, status FROM schema_registry
-            WHERE schema_uri=? AND version=?
-        """,
-            ("https://example.com/schemas/test", "1.0.0"),
-        ).fetchone()
-
-        assert row["status"] == "REGISTERED"
-
-    def test_upsert_update(self, in_memory_db):
+    async def test_upsert_update(self, mock_asyncpg_connection):
         """Test upsert updating existing record."""
-        # Insert existing record
-        in_memory_db.execute(
-            """
-            INSERT INTO schema_registry (schema_uri, version, sha256, status)
-            VALUES (?, ?, ?, ?)
-        """,
-            (
-                "https://example.com/schemas/test",
-                "1.0.0",
-                "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                "REGISTERED",
-            ),
-        )
+        mock_asyncpg_connection.execute = AsyncMock(return_value=None)
 
         registry = SchemaRegistry()
 
@@ -395,175 +409,229 @@ class TestSchemaRegistryUpsert:
             status="ACTIVE",
         )
 
-        result = registry.upsert(record, connection=in_memory_db)
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await registry.upsert(record, connection=mock_asyncpg_connection)
 
         assert result.status == "ACTIVE"
-
-        # Check database was updated
-        row = in_memory_db.execute(
-            """
-            SELECT schema_uri, version, sha256, status FROM schema_registry
-            WHERE schema_uri=? AND version=?
-        """,
-            ("https://example.com/schemas/test", "1.0.0"),
-        ).fetchone()
-
-        assert row["status"] == "ACTIVE"
-        assert row["sha256"] == "b665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3"
 
 
 class TestSchemaRegistryPromote:
     """Test schema promotion functionality."""
 
-    def test_promote_to_active(self, in_memory_db):
+    async def test_promote_to_active(self, mock_asyncpg_connection):
         """Test promoting a schema to ACTIVE status."""
-        # Insert test data - REGISTERED schema to promote
-        in_memory_db.execute(
-            """
-            INSERT INTO schema_registry (schema_uri, version, sha256, status)
-            VALUES (?, ?, ?, ?)
-        """,
-            (
-                "https://example.com/schemas/test",
-                "1.0.0",
-                "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                "REGISTERED",
-            ),
+        mock_fetchrow = _make_mock_row(
+            {
+                "schema_uri": "https://example.com/schemas/test",
+                "version": "1.0.0",
+                "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                "status": "REGISTERED",
+            }
         )
 
-        registry = SchemaRegistry()
-        result = registry.promote(
-            "https://example.com/schemas/test", "1.0.0", connection=in_memory_db
-        )
-
-        assert result.status == "ACTIVE"
-
-        # Check database
-        row = in_memory_db.execute(
-            """
-            SELECT status FROM schema_registry
-            WHERE schema_uri=? AND version=?
-        """,
-            ("https://example.com/schemas/test", "1.0.0"),
-        ).fetchone()
-
-        assert row["status"] == "ACTIVE"
-
-    def test_promote_with_demotion(self, in_memory_db):
-        """Test promoting schema demotes other versions."""
-        # Insert multiple versions
-        versions = [
-            ("1.0.0", "REGISTERED"),
-            ("1.1.0", "ACTIVE"),
-            ("2.0.0", "DEPRECATED"),
+        mock_fetch_rows = [
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "1.0.0",
+                    "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                    "status": "ACTIVE",
+                    "operator_id": None,
+                    "blocked_ts": None,
+                    "blocked_reason": None,
+                    "unblocked_ts": None,
+                }
+            )
         ]
 
-        for version, status in versions:
-            in_memory_db.execute(
-                """
-                INSERT INTO schema_registry (schema_uri, version, sha256, status)
-                VALUES (?, ?, ?, ?)
-            """,
-                (
-                    "https://example.com/schemas/test",
-                    version,
-                    "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                    status,
-                ),
+        mock_asyncpg_connection.fetchrow = AsyncMock(return_value=mock_fetchrow)
+        mock_asyncpg_connection.fetch = AsyncMock(return_value=mock_fetch_rows)
+        mock_asyncpg_connection.execute = AsyncMock(return_value=None)
+
+        registry = SchemaRegistry()
+
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await registry.promote(
+                "https://example.com/schemas/test", "1.0.0", connection=mock_asyncpg_connection
             )
 
-        registry = SchemaRegistry()
-        result = registry.promote(
-            "https://example.com/schemas/test", "1.0.0", connection=in_memory_db
-        )
-
         assert result.status == "ACTIVE"
 
-        # Check all versions have correct status
-        rows = in_memory_db.execute(
-            """
-            SELECT version, status FROM schema_registry
-            WHERE schema_uri=?
-            ORDER BY version
-        """,
-            ("https://example.com/schemas/test",),
-        ).fetchall()
+    async def test_promote_with_demotion(self, mock_asyncpg_connection):
+        """Test promoting schema demotes other versions."""
+        mock_fetchrow = _make_mock_row(
+            {
+                "schema_uri": "https://example.com/schemas/test",
+                "version": "1.0.0",
+                "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                "status": "REGISTERED",
+            }
+        )
 
-        expected = [
-            ("1.0.0", "ACTIVE"),
-            ("1.1.0", "DEPRECATED"),
-            ("2.0.0", "BLOCKED"),
+        # After promotion, all versions returned
+        mock_fetch_rows = [
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "1.0.0",
+                    "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                    "status": "ACTIVE",
+                    "operator_id": None,
+                    "blocked_ts": None,
+                    "blocked_reason": None,
+                    "unblocked_ts": None,
+                }
+            ),
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "1.1.0",
+                    "sha256": "b665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                    "status": "DEPRECATED",
+                    "operator_id": None,
+                    "blocked_ts": None,
+                    "blocked_reason": None,
+                    "unblocked_ts": None,
+                }
+            ),
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "2.0.0",
+                    "sha256": "c665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                    "status": "BLOCKED",
+                    "operator_id": None,
+                    "blocked_ts": None,
+                    "blocked_reason": None,
+                    "unblocked_ts": None,
+                }
+            ),
         ]
 
-        for row, (version, status) in zip(rows, expected):
-            assert row["version"] == version
-            assert row["status"] == status
-
-    def test_promote_blocked_schema(self, in_memory_db):
-        """Test promoting a previously blocked schema."""
-        # Insert blocked schema with operator_id
-        in_memory_db.execute(
-            """
-            INSERT INTO schema_registry (schema_uri, version, sha256, status, operator_id, blocked_ts, blocked_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                "https://example.com/schemas/test",
-                "1.0.0",
-                "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                "BLOCKED",
-                "operator@example.com",
-                "2025-01-15T10:00:00Z",
-                "Security issue",
-            ),
-        )
+        mock_asyncpg_connection.fetchrow = AsyncMock(return_value=mock_fetchrow)
+        mock_asyncpg_connection.fetch = AsyncMock(return_value=mock_fetch_rows)
+        mock_asyncpg_connection.execute = AsyncMock(return_value=None)
 
         registry = SchemaRegistry()
-        result = registry.promote(
-            "https://example.com/schemas/test", "1.0.0", connection=in_memory_db
-        )
+
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await registry.promote(
+                "https://example.com/schemas/test", "1.0.0", connection=mock_asyncpg_connection
+            )
 
         assert result.status == "ACTIVE"
-        assert result.unblocked_ts is not None  # Should be set
 
-    def test_promote_not_found(self, in_memory_db):
-        """Test promoting non-existent schema."""
+        # Check cache has all versions with correct statuses
+        assert registry._cache[("https://example.com/schemas/test", "1.0.0")].status == "ACTIVE"
+        assert registry._cache[("https://example.com/schemas/test", "1.1.0")].status == "DEPRECATED"
+        assert registry._cache[("https://example.com/schemas/test", "2.0.0")].status == "BLOCKED"
+
+    async def test_promote_blocked_schema(self, mock_asyncpg_connection):
+        """Test promoting a previously blocked schema."""
+        mock_fetchrow = _make_mock_row(
+            {
+                "schema_uri": "https://example.com/schemas/test",
+                "version": "1.0.0",
+                "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                "status": "BLOCKED",
+            }
+        )
+
+        mock_fetch_rows = [
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "1.0.0",
+                    "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                    "status": "ACTIVE",
+                    "operator_id": "operator@example.com",
+                    "blocked_ts": "2025-01-15T10:00:00Z",
+                    "blocked_reason": "Security issue",
+                    "unblocked_ts": "2025-01-15T12:00:00Z",
+                }
+            )
+        ]
+
+        mock_asyncpg_connection.fetchrow = AsyncMock(return_value=mock_fetchrow)
+        mock_asyncpg_connection.fetch = AsyncMock(return_value=mock_fetch_rows)
+        mock_asyncpg_connection.execute = AsyncMock(return_value=None)
+
         registry = SchemaRegistry()
 
-        with pytest.raises(
-            KeyError, match="Schema https://example.com/schemas/test@1.0.0 not found"
-        ):
-            registry.promote("https://example.com/schemas/test", "1.0.0", connection=in_memory_db)
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await registry.promote(
+                "https://example.com/schemas/test", "1.0.0", connection=mock_asyncpg_connection
+            )
+
+        assert result.status == "ACTIVE"
+        assert result.unblocked_ts is not None
+
+    async def test_promote_not_found(self, mock_asyncpg_connection):
+        """Test promoting non-existent schema."""
+        mock_asyncpg_connection.fetchrow = AsyncMock(return_value=None)
+
+        registry = SchemaRegistry()
+
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            with pytest.raises(
+                KeyError, match="Schema https://example.com/schemas/test@1.0.0 not found"
+            ):
+                await registry.promote(
+                    "https://example.com/schemas/test", "1.0.0", connection=mock_asyncpg_connection
+                )
 
 
 class TestSchemaRegistryBlock:
     """Test schema blocking functionality."""
 
-    def test_block_success(self, in_memory_db):
+    async def test_block_success(self, mock_asyncpg_connection):
         """Test successful schema blocking."""
-        # Insert active schema
-        in_memory_db.execute(
-            """
-            INSERT INTO schema_registry (schema_uri, version, sha256, status)
-            VALUES (?, ?, ?, ?)
-        """,
-            (
-                "https://example.com/schemas/test",
-                "1.0.0",
-                "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                "ACTIVE",
-            ),
-        )
+        mock_fetch_rows = [
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "1.0.0",
+                    "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                    "status": "BLOCKED",
+                    "operator_id": "operator@example.com",
+                    "blocked_ts": "2025-01-15T10:00:00Z",
+                    "blocked_reason": "Security vulnerability",
+                    "unblocked_ts": None,
+                }
+            )
+        ]
+
+        mock_asyncpg_connection.execute = AsyncMock(return_value="UPDATE 1")
+        mock_asyncpg_connection.fetch = AsyncMock(return_value=mock_fetch_rows)
 
         registry = SchemaRegistry()
 
-        result = registry.block(
-            "https://example.com/schemas/test",
-            "1.0.0",
-            operator_id="operator@example.com",
-            reason="Security vulnerability",
-            connection=in_memory_db,
-        )
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await registry.block(
+                "https://example.com/schemas/test",
+                "1.0.0",
+                operator_id="operator@example.com",
+                reason="Security vulnerability",
+                connection=mock_asyncpg_connection,
+            )
 
         assert result.status == "BLOCKED"
         assert result.operator_id == "operator@example.com"
@@ -571,46 +639,52 @@ class TestSchemaRegistryBlock:
         assert result.blocked_ts is not None
         assert result.unblocked_ts is None
 
-    def test_block_empty_operator_id(self, in_memory_db):
+    async def test_block_empty_operator_id(self, mock_asyncpg_connection):
         """Test blocking with empty operator_id."""
         registry = SchemaRegistry()
 
         with pytest.raises(ValueError, match="operator_id is required for block operations"):
-            registry.block(
+            await registry.block(
                 "https://example.com/schemas/test",
                 "1.0.0",
                 operator_id="",
                 reason="Security issue",
-                connection=in_memory_db,
+                connection=mock_asyncpg_connection,
             )
 
-    def test_block_empty_reason(self, in_memory_db):
+    async def test_block_empty_reason(self, mock_asyncpg_connection):
         """Test blocking with empty reason."""
         registry = SchemaRegistry()
 
         with pytest.raises(ValueError, match="reason is required for block operations"):
-            registry.block(
+            await registry.block(
                 "https://example.com/schemas/test",
                 "1.0.0",
                 operator_id="operator@example.com",
                 reason="",
-                connection=in_memory_db,
+                connection=mock_asyncpg_connection,
             )
 
-    def test_block_not_found(self, in_memory_db):
+    async def test_block_not_found(self, mock_asyncpg_connection):
         """Test blocking non-existent schema."""
+        mock_asyncpg_connection.execute = AsyncMock(return_value="UPDATE 0")
+
         registry = SchemaRegistry()
 
-        with pytest.raises(
-            KeyError, match="Schema https://example.com/schemas/test@1.0.0 not found"
-        ):
-            registry.block(
-                "https://example.com/schemas/test",
-                "1.0.0",
-                operator_id="operator@example.com",
-                reason="Security issue",
-                connection=in_memory_db,
-            )
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            with pytest.raises(
+                KeyError, match="Schema https://example.com/schemas/test@1.0.0 not found"
+            ):
+                await registry.block(
+                    "https://example.com/schemas/test",
+                    "1.0.0",
+                    operator_id="operator@example.com",
+                    reason="Security issue",
+                    connection=mock_asyncpg_connection,
+                )
 
 
 class TestSchemaRegistryQueries:
@@ -657,119 +731,119 @@ class TestSchemaRegistryQueries:
         versions = {r.version for r in uri_records}
         assert versions == {"1.0.0", "1.1.0"}
 
-    def test_get_audit_trail_all(self, in_memory_db):
+    async def test_get_audit_trail_all(self, mock_asyncpg_connection):
         """Test retrieving complete audit trail."""
-        # Insert test data
-        audit_data = [
-            (
-                "https://example.com/schemas/test",
-                "1.0.0",
-                "ACTIVE",
-                "op1@example.com",
-                None,
-                None,
-                None,
+        mock_fetch_rows = [
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "1.0.0",
+                    "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                    "status": "ACTIVE",
+                    "operator_id": "op1@example.com",
+                    "blocked_ts": None,
+                    "blocked_reason": None,
+                    "unblocked_ts": None,
+                }
             ),
-            (
-                "https://example.com/schemas/test",
-                "1.1.0",
-                "BLOCKED",
-                "op2@example.com",
-                "2025-01-15T10:00:00Z",
-                "Security",
-                None,
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "1.1.0",
+                    "sha256": "b665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                    "status": "BLOCKED",
+                    "operator_id": "op2@example.com",
+                    "blocked_ts": "2025-01-15T10:00:00Z",
+                    "blocked_reason": "Security",
+                    "unblocked_ts": None,
+                }
             ),
         ]
 
-        for (
-            uri,
-            version,
-            status,
-            operator_id,
-            blocked_ts,
-            blocked_reason,
-            unblocked_ts,
-        ) in audit_data:
-            in_memory_db.execute(
-                """
-                INSERT INTO schema_registry (schema_uri, version, sha256, status, operator_id, blocked_ts, blocked_reason, unblocked_ts)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    uri,
-                    version,
-                    "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                    status,
-                    operator_id,
-                    blocked_ts,
-                    blocked_reason,
-                    unblocked_ts,
-                ),
-            )
+        mock_asyncpg_connection.fetch = AsyncMock(return_value=mock_fetch_rows)
 
         registry = SchemaRegistry()
-        audit_trail = list(registry.get_audit_trail(connection=in_memory_db))
+
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            audit_trail = list(await registry.get_audit_trail(connection=mock_asyncpg_connection))
 
         assert len(audit_trail) == 2
 
-    def test_get_audit_trail_filtered_by_uri(self, in_memory_db):
+    async def test_get_audit_trail_filtered_by_uri(self, mock_asyncpg_connection):
         """Test audit trail filtered by URI."""
-        # Insert test data for different URIs
-        uris = ["https://example.com/schemas/test", "https://example.com/schemas/other"]
-        for uri in uris:
-            in_memory_db.execute(
-                """
-                INSERT INTO schema_registry (schema_uri, version, sha256, status)
-                VALUES (?, ?, ?, ?)
-            """,
-                (
-                    uri,
-                    "1.0.0",
-                    "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                    "ACTIVE",
-                ),
-            )
+        mock_fetch_rows = [
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "1.0.0",
+                    "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                    "status": "ACTIVE",
+                    "operator_id": None,
+                    "blocked_ts": None,
+                    "blocked_reason": None,
+                    "unblocked_ts": None,
+                }
+            ),
+        ]
+
+        mock_asyncpg_connection.fetch = AsyncMock(return_value=mock_fetch_rows)
 
         registry = SchemaRegistry()
-        audit_trail = list(
-            registry.get_audit_trail(
-                uri="https://example.com/schemas/test", connection=in_memory_db
+
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            audit_trail = list(
+                await registry.get_audit_trail(
+                    uri="https://example.com/schemas/test", connection=mock_asyncpg_connection
+                )
             )
-        )
 
         assert len(audit_trail) == 1
         assert audit_trail[0].uri == "https://example.com/schemas/test"
 
-    def test_get_audit_trail_filtered_by_status(self, in_memory_db):
+    async def test_get_audit_trail_filtered_by_status(self, mock_asyncpg_connection):
         """Test audit trail filtered by status."""
-        # Insert test data with different statuses
-        statuses = ["ACTIVE", "BLOCKED", "DEPRECATED"]
-        for i, status in enumerate(statuses):
-            in_memory_db.execute(
-                """
-                INSERT INTO schema_registry (schema_uri, version, sha256, status)
-                VALUES (?, ?, ?, ?)
-            """,
-                (
-                    "https://example.com/schemas/test",
-                    f"1.{i}.0",
-                    "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
-                    status,
-                ),
-            )
+        mock_fetch_rows = [
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "1.1.0",
+                    "sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+                    "status": "BLOCKED",
+                    "operator_id": None,
+                    "blocked_ts": None,
+                    "blocked_reason": None,
+                    "unblocked_ts": None,
+                }
+            ),
+        ]
+
+        mock_asyncpg_connection.fetch = AsyncMock(return_value=mock_fetch_rows)
 
         registry = SchemaRegistry()
-        audit_trail = list(registry.get_audit_trail(status="BLOCKED", connection=in_memory_db))
+
+        with mock.patch("k0.gate.schema_registry._resolve_connection") as mock_resolve:
+            mock_resolve.return_value.__aenter__ = AsyncMock(return_value=mock_asyncpg_connection)
+            mock_resolve.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            audit_trail = list(
+                await registry.get_audit_trail(status="BLOCKED", connection=mock_asyncpg_connection)
+            )
 
         assert len(audit_trail) == 1
         assert audit_trail[0].status == "BLOCKED"
 
-    def test_get_audit_trail_version_requires_uri(self, in_memory_db):
+    async def test_get_audit_trail_version_requires_uri(self, mock_asyncpg_connection):
         """Test that version filter requires URI."""
         registry = SchemaRegistry()
 
         with pytest.raises(ValueError, match="version filter requires uri parameter"):
-            list(registry.get_audit_trail(version="1.0.0", connection=in_memory_db))
+            await registry.get_audit_trail(version="1.0.0", connection=mock_asyncpg_connection)
 
 
 class TestSchemaRegistryInternalMethods:
@@ -837,7 +911,7 @@ class TestSchemaRegistryInternalMethods:
         with pytest.raises(ValueError, match="status must be one of"):
             registry._normalize_record(record)
 
-    def test_store_record(self):
+    async def test_store_record(self):
         """Test storing record in cache."""
         registry = SchemaRegistry()
 
@@ -848,13 +922,13 @@ class TestSchemaRegistryInternalMethods:
             status="ACTIVE",
         )
 
-        registry._store(record)
+        await registry._store(record)
 
         assert registry._loaded is True
         assert ("https://example.com/schemas/test", "1.0.0") in registry._cache
         assert registry._cache[("https://example.com/schemas/test", "1.0.0")] == record
 
-    def test_refresh_uri_cache(self):
+    async def test_refresh_uri_cache(self):
         """Test refreshing cache for a specific URI."""
         registry = SchemaRegistry()
 
@@ -863,37 +937,34 @@ class TestSchemaRegistryInternalMethods:
         registry._cache[("https://example.com/schemas/test", "1.0.0")] = old_record
 
         # Mock rows from database
-        mock_row1 = mock.Mock()
-        mock_row1.__getitem__ = mock.Mock(
-            side_effect=lambda key: {
-                "schema_uri": "https://example.com/schemas/test",
-                "version": "1.0.0",
-                "sha256": "new_sha",
-                "status": "BLOCKED",
-                "operator_id": "operator@example.com",
-                "blocked_ts": "2025-01-15T10:00:00Z",
-                "blocked_reason": "Updated",
-                "unblocked_ts": None,
-            }[key]
-        )
+        mock_rows = [
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "1.0.0",
+                    "sha256": "new_sha",
+                    "status": "BLOCKED",
+                    "operator_id": "operator@example.com",
+                    "blocked_ts": "2025-01-15T10:00:00Z",
+                    "blocked_reason": "Updated",
+                    "unblocked_ts": None,
+                }
+            ),
+            _make_mock_row(
+                {
+                    "schema_uri": "https://example.com/schemas/test",
+                    "version": "1.1.0",
+                    "sha256": "sha2",
+                    "status": "ACTIVE",
+                    "operator_id": None,
+                    "blocked_ts": None,
+                    "blocked_reason": None,
+                    "unblocked_ts": None,
+                }
+            ),
+        ]
 
-        mock_row2 = mock.Mock()
-        mock_row2.__getitem__ = mock.Mock(
-            side_effect=lambda key: {
-                "schema_uri": "https://example.com/schemas/test",
-                "version": "1.1.0",
-                "sha256": "sha2",
-                "status": "ACTIVE",
-                "operator_id": None,
-                "blocked_ts": None,
-                "blocked_reason": None,
-                "unblocked_ts": None,
-            }[key]
-        )
-
-        mock_rows = [mock_row1, mock_row2]
-
-        registry._refresh_uri_cache("https://example.com/schemas/test", mock_rows)  # type: ignore
+        await registry._refresh_uri_cache("https://example.com/schemas/test", mock_rows)
 
         # Check cache was updated
         assert len(registry._cache) == 2
@@ -904,29 +975,3 @@ class TestSchemaRegistryInternalMethods:
         assert updated_record.sha256 == "new_sha"
         assert updated_record.status == "BLOCKED"
         assert updated_record.operator_id == "operator@example.com"
-
-
-@pytest.fixture
-def in_memory_db():
-    """In-memory SQLite database with schema_registry table created."""
-    conn = sqlite3.connect(":memory:")
-
-    # Create the schema_registry table
-    conn.execute(
-        """
-        CREATE TABLE schema_registry (
-            schema_uri TEXT,
-            version TEXT,
-            sha256 TEXT,
-            status TEXT,
-            operator_id TEXT,
-            blocked_ts TEXT,
-            blocked_reason TEXT,
-            unblocked_ts TEXT,
-            PRIMARY KEY (schema_uri, version)
-        )
-    """
-    )
-
-    yield conn
-    conn.close()

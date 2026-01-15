@@ -1,0 +1,945 @@
+{"text": "Woke up with a headache again, probably because of bad sleep last night, remind me to track my sleep better.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Debugging K0 memory consolidation, the dedup logic caused duplicates to slip through.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Called Panda, promised to plan our trip to Chicago soon, don't let me forget that.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "GERD acting up after spicy lunch, when I eat late, it always flares.", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "Bought a new USB-C dock at Micro Center, hoping it fixes the display flicker on my 34\" OLED.", "participants": [], "location_name": "Micro Center", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, that old one was the culprit.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Should I upgrade the Samsung 990 Pro SSD now or wait for prices to drop?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflected on today's work, the P02 pipeline regression led to slower processing times.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Gym time, leg day, but my nose is bleeding a bit from dryness.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Talked to Mom about H1B status, she worries too much, which explains why I feel guilty.", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to rerun the K1 tests tomorrow morning.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Headache came back, I think this is why I skipped gym yesterday.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Working on FamilyOS schemas, envelope changes caused validation errors.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Lunch at Starbucks, decided to cut back on coffee because of GERD.", "participants": [], "location_name": "Starbucks", "routine time slot": "Lunch"}
+{"text": "Panda texted, we need to discuss wedding plans, remind me to call her tonight.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Fan noise on Asus ProArt P16 is annoying, when I run heavy scripts, it ramps up.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, finally some peace.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Should I buy a cooling pad for the laptop to reduce thermals?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional day, pride in FamilyOS progress but guilt over missing Dad's call.", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning cardio at gym, feeling better after that.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Debugging P03, the consolidation step resulted in data loss, need to fix.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Nasal dryness again, using humidifier so that it doesn't bleed.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Remind me to check SEVIS appointment date.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "When I forget to hydrate, headaches happen, noted.", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "Swapped HDMI cables, but display still flickers sometimes.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Talked to Panda about finances, subscriptions adding up.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "After switching docks, display flicker stopped, such a relief.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Decision time: price FamilyOS at $10/month or free tier?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: last week's performance fix led to better K0 output.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Gym skipped today, too tired from work.", "participants": [], "location_name": "Home", "routine time slot": "Gym"}
+{"text": "Mom called, reminded me of family dinner promise.", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to debug the dedup in K0 again.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Headache from screen time, because of the 32\" monitor brightness.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Working on P02, schema changes caused integration issues.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Lunch quick, GERD better today.", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "Panda and I planning travel, anxiety about H1B.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Cooling pad arrived, thermals improved on ProArt P16.", "participants": [], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, hardware win.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Should I renew subscriptions or cancel some?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional reflection: motivated by Panda's support.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning routine, sleep was off, nasal issues.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "K1 pipeline running slow, this led to delayed tests.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Remind me to go to DMV for license renewal.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "When I skip breakfast, energy drops, so that happened today.", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "Bought new SSD, Samsung 990 Pro upgrade time?", "participants": [], "location_name": "Micro Center", "routine time slot": "Weekend"}
+{"text": "Dad advice on work, he thinks architecture feels wrong.", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "After switching docks, display flicker stopped, fixed it.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Decision: gym routine change to mornings?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: health improvements from better habits.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Leg day at gym, strong today.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "FamilyOS progress, but P03 bugs persist.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Headache again, I think this is why productivity low.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Remind me to call Panda about dinner plans.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "GERD flared because of late night snack.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Debugging envelopes, changes caused schema mismatches.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, good call.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Should I travel to UTD for meeting or virtual?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional: guilt over missing family time.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning work on K0, consolidation improved.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Lunch at home, watching news on finances.", "participants": [], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda suggested budget cuts, subscriptions first.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Fan noise reduced with cooling pad, resulted in quieter sessions.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to check nose bleeding at Medical Center.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I code late, sleep suffers, X caused Y.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "After switching docks, display flicker stopped, problem solved.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Decision: prioritize P02 over P03 this week.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: learned from last dedup failure.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Gym cardio, feeling energized.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Mom worried about my health, talked GERD.", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to rerun scripts for FamilyOS.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Headache from dryness, humidifier helped.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Working on K1, performance regression fixed.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Lunch, avoided spicy, GERD calm.", "participants": [], "location_name": "Starbucks", "routine time slot": "Lunch"}
+{"text": "Panda and travel plans to Dallas.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "SSD upgrade on ProArt P16, faster now.", "participants": [], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "After switching docks, display flicker stopped, yes.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Should I buy new monitor or fix current?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional pride in work milestones.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning routine, better sleep last night.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "P03 debugging, this led to better consolidation.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Remind me H1B appointment next month.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "When I gym consistently, health improves.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Dad called, discussed finances.", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Display issues again, maybe cable.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, remembered that.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Decision: cut coffee for health.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: architecture doubts persist.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Leg day skipped, headache.", "participants": [], "location_name": "Home", "routine time slot": "Gym"}
+{"text": "FamilyOS scripts reran, good results.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Nose bleeding, dryness caused it.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Remind me to talk to Panda about budget.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "GERD because of stress, I think.", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "Debug K0, dedup fixed finally.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, hardware stable.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Should I plan Chicago trip now?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional: motivated but overwhelmed.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning work, K1 smooth.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Lunch, financial news watched.", "participants": [], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda suggested subscription review.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Thermals better, cooling pad worked.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Remind me medical check for GERD.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Late coding caused poor sleep.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "After switching docks, display flicker stopped, noted.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Decision: free tier for FamilyOS.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: health tied to routines.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Cardio at gym, good.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Mom health talk, GERD shared.", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me debug P02.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Dryness headache, again.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "K0 work, consolidation ok.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Lunch no spice, GERD fine.", "participants": [], "location_name": "Starbucks", "routine time slot": "Lunch"}
+{"text": "Panda Dallas plans.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "990 Pro faster post-upgrade.", "participants": [], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "After switching docks, display flicker stopped, relief.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Should I fix monitor?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Pride in milestones.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Routine morning, sleep good.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "P03 led to better.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Remind H1B next.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym consistency improves health.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Dad finances discuss.", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Display maybe cable.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, backtrack.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Cut coffee decision.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Doubts in architecture.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Skipped leg day, ache.", "participants": [], "location_name": "Home", "routine time slot": "Gym"}
+{"text": "Scripts good results.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Bleeding from dry.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Remind Panda budget.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Stress GERD think.", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "K0 dedup fixed.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, stable.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Chicago plan now?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Motivated overwhelmed.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Work morning smooth.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "News financial lunch.", "participants": [], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Subscription review Panda.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Pad worked thermals.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Medical remind GERD.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Coding late poor sleep.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "After switching docks, display flicker stopped, yes noted.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Free tier decision.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Health routines reflection.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Gym good cardio.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "GERD shared Mom.", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Debug remind P02.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Headache dryness again.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Consolidation K0 ok.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "No spice lunch fine.", "participants": [], "location_name": "Starbucks", "routine time slot": "Lunch"}
+{"text": "Plans Dallas Panda.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Upgrade faster 990.", "participants": [], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "After switching docks, display flicker stopped, big relief.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Monitor fix should?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Milestones pride.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Good sleep morning.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Better led P03.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Next H1B remind.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Health improves gym.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Discuss finances Dad.", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Cable maybe display.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, old reminder.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Decision coffee cut.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Architecture doubts.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Ache skipped day.", "participants": [], "location_name": "Home", "routine time slot": "Gym"}
+{"text": "Results good scripts.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Dry bleeding.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Budget Panda remind.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Think GERD stress.", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "Fixed dedup K0.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, now stable.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Now plan Chicago?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Overwhelmed motivated.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Smooth morning work.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Lunch financial news.", "participants": [], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda review subscription.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Thermals worked pad.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "GERD remind medical.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Poor sleep late coding.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "After switching docks, display flicker stopped, good note.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Decision tier free.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection routines health.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Cardio good gym.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Mom shared GERD.", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "P02 remind debug.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Again dryness headache.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Ok consolidation K0.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Fine lunch no spice.", "participants": [], "location_name": "Starbucks", "routine time slot": "Lunch"}
+{"text": "Panda plans Dallas.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "990 faster upgrade.", "participants": [], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "After switching docks, display flicker stopped, huge relief.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Should fix monitor?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Pride milestones.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning sleep good.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "P03 better led.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Gym health improves.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Dad discuss finances.", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Display cable maybe.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, late reminder.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Cut decision coffee.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Doubts architecture.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Day skipped ache.", "participants": [], "location_name": "Home", "routine time slot": "Gym"}
+{"text": "Scripts results good.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Bleeding dry.", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Remind budget Panda.", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "GERD think stress.", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "K0 fixed dedup.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, very stable.", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Chicago now plan?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Motivated but overwhelmed emotionally.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "What did we decide on the SSD upgrade last time?", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "When was the last time I had a nose bleed like this?", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Remind me to reflect on work progress weekly.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Because of the new schema, P02 runs faster now.", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Should I see a doctor for persistent headaches?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "After that family call, I feel more motivated.", "participants": ["Mom", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Don't forget to price check the cooling pads again.", "participants": [], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "X caused Y in the dedup process, need to patch.", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Gym routine helping with sleep, when I do A, B happens.", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Reflection: missing promises leads to guilt.", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning. Coffee is making my GERD act up. I think the acidity caused the burning feeling.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Need to start the dedup pipeline for K0 logs. It failed last night.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to call Mom about her flight plans. She’s anxious about the Dallas trip.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "The display flicker on the 34” OLED is driving me crazy. I think it’s the USB-C dock.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Panda asked if we finalized the caterer. I said I’d look tonight. Need to actually do it.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Ran P02 pipeline. Performance regression. Need to check the new schema envelopes.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Gym later. Leg day. Hope my headache doesn’t come back.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Why is my nose bleeding again? Dry air? Need to get a humidifier.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Dad texted. He wants to talk about FamilyOS pricing. I feel guilty for not calling.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The flickering stopped after switching docks. Weird. Need to buy a better dock.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to check H1B receipt notice. It’s been a week.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I do heavy squats, my GERD flares up. Which explains why I felt sick yesterday.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Panda is stressed about wedding invites. I promised to help design them this weekend.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "K1 memory consolidation script is taking too long. I think the SSD is throttling.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Should I upgrade the Samsung 990 Pro? Or is it a cooling issue?", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Mom called. Flight is booked. She wants me to pick her up from DFW on the 15th.", "participants": ["Prince", "Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The flicker is back. Maybe it’s the HDMI cable this time.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to buy HDMI 2.1 cables from Micro Center. And a humidifier.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD is bad today. Skipped coffee. Headache starting. This is a terrible combo.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Fixed the P02 regression. The envelope size caused the slowdown. Increased chunk size.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Panda said we need to decide on the cake flavor. I keep forgetting.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym. Did cardio instead. Leg day can wait. Headache is gone, which is good.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Reflecting: I need to track my sleep. Poor sleep leads to headaches and nosebleeds.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "What did we decide about the caterer? I think we picked the Italian place.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The new dock arrived. Display is stable. So the old dock was the problem.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to email the caterer to confirm the menu.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "H1B receipt still not here. Anxiety is building. Should I call USCIS?", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "FamilyOS architecture feels wrong. The dedup step is a bottleneck. Need to rethink.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Dad asked about pricing again. I said I’d build a model. Another promise.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Woke up with a nosebleed. The humidifier is still in the box. I need to set it up.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I do late-night coding, my sleep suffers. This led to the headache yesterday.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Panda is happy I helped with invites. Felt good to make her smile.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "K0 logs show duplication. The cause was a bug in the session ID generation.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I buy a cooling pad for the Asus ProArt? The fan noise is annoying.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Gym. Leg day finally. Took it easy on squats to avoid GERD.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Remind me to pick up Mom on the 15th. DFW airport, terminal E.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "The display flicker issue is gone after switching docks. It was definitely the dock.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "GERD meds are running low. Need a refill.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "P03 pipeline is live. Monitoring performance. Hope no regressions.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What was the name of the Italian caterer? I can’t remember.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Dad sent a pricing spreadsheet. He’s so thorough. I feel behind.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Headache is back. Didn’t drink enough water. Because of that, I’m useless now.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Skipped gym. Too tired. Guilt is setting in.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to call the doctor about the nosebleeds.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "The SSD temps are high. Ordered a cooling pad. Hope it helps.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Panda wants to visit Chicago for a wedding dress. Need to check flights.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "When I drink less coffee, my GERD improves. Which explains why today was better.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "K1 consolidation is still slow. The cooling pad should arrive tomorrow.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "H1B receipt arrived! Relief. That caused a huge weight to lift.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Mom is asking about the wedding venue again. I told her Panda is handling it.", "participants": ["Prince", "Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to back up the Samsung SSD. Just in case.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Cardio. Felt good. No headache.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "The new cooling pad reduced SSD temps by 10 degrees. Performance is better.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Panda is upset I forgot to call the florist. I messed up.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Reflecting: I need a better system for promises. Writing them down isn’t enough.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Fixed the duplication bug. The session ID bug caused the extra logs.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I postpone the DMV appointment? It’s tomorrow and I have a pipeline run.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Nosebleed again. Doctor said it’s dry air. Finally set up the humidifier.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "The flicker is back but only on the 32” monitor. Maybe the cable is bad.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to buy a new HDMI cable at Micro Center.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Panda and I made up. I scheduled the florist call for Friday.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "GERD under control. Eating smaller meals. This led to fewer episodes.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "FamilyOS P03 is stable. Dedup throughput improved. Good.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Dad wants a demo. I’m not ready. The pressure is real.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Went to DMV. Long wait. Missed my morning work block.", "participants": ["Prince"], "location_name": "DMV", "routine time slot": "Morning Work"}
+{"text": "What did we decide about the cake? Chocolate or vanilla?", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The new HDMI cable fixed the flicker on the 32” monitor. So it was the cable.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to update the FamilyOS architecture diagram for Dad.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Leg day. No GERD issues. Progress.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Sleep was better. Humidifier helped. No nosebleed.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Panda booked Chicago flights. I need to arrange time off.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "K0 memory formation test failed. The schema validation is too strict.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I loosen the schema validation? Might cause data quality issues.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Mom arrives tomorrow. Need to clean the guest room.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The ProArt is running hot again. Maybe the cooling pad shifted.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Remind me to pick up Mom from DFW at 3 PM.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Fixed the schema validation. It was rejecting nulls incorrectly.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Panda loves the dress in Chicago. Sent pics. She’s happy.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "GERD flared up after spicy food. I knew it would happen.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "When I do focused work in the morning, I get more done. So that’s my new rule.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad’s demo is tomorrow. I’m nervous. Need to prepare slides.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Picked up Mom. She’s tired. The flight was delayed.", "participants": ["Prince", "Mom"], "location_name": "DFW", "routine time slot": "Afternoon Work"}
+{"text": "The display is perfect now. After switching docks and cables, all flicker stopped.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to take Mom to the botanical garden on Saturday.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Demo went well. Dad was impressed. He had good feedback.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Gym skipped. Mom is here, so priorities shifted.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Headache from stress is gone. The demo success resulted in relief.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Panda is back from Chicago. The dress is perfect. We celebrated.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "K1 pipeline is humming. The cooling pad made a huge difference.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I open-source part of FamilyOS? Dad thinks it’s a good idea.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Mom and Panda get along great. This is a huge relief.", "participants": ["Prince", "Mom", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Nosebleeds have stopped. The humidifier fixed it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Remind me to cancel the old Adobe subscription. It’s charging me.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "The SSD performance is back to normal. The high temps caused the throttling.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Took Mom to the garden. She loved it. Felt good to make her happy.", "participants": ["Prince", "Mom"], "location_name": "Botanical Garden", "routine time slot": "Weekend"}
+{"text": "GERD is manageable. Eating habits changed. Because of that, I feel better.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "FamilyOS dedup is now the fastest component. Proud of that fix.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Panda wants to set a wedding date. We need to check venue availability.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "What did we decide about open-sourcing? I think we said yes to the core.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "The flicker issue is completely resolved. New dock and cables fixed it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to schedule a dentist appointment. It’s been a year.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Back to routine. Leg day was tough but good.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Mom leaves tomorrow. I’ll miss her.", "participants": ["Prince", "Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "K0 memory formation tests are passing. The schema fix worked.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Should I buy a second monitor? The 34” OLED is great but I want more space.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Panda is stressed about work. I need to be more supportive.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Dropped Mom at the airport. She was grateful. I’m glad she visited.", "participants": ["Prince", "Mom"], "location_name": "DFW", "routine time slot": "Morning Routine"}
+{"text": "The ProArt fan is loud again. Dust buildup? Need to clean it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to clean the laptop vents this weekend.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD flare-up after eating late. I knew better.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "FamilyOS consolidation pipeline is stable. No regressions this week.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Panda and I set a date! June 15th. Venue is booked. Huge milestone.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Dad is thrilled about the date. He offered to help with costs.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Reflecting: This month was chaotic but we got through it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "The display flicker problem is solved. After switching docks, display flicker stopped completely.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to send thank you notes for the engagement gifts.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Cardio. Feeling light.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Headache from eye strain. Need to adjust monitor brightness.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "K1 memory usage is high. Need to optimize the indexing.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Should I hire a wedding planner? Panda thinks we can handle it.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Cleaned the laptop vents. Fan noise reduced. Dust caused overheating.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "GERD is under control. Medication and diet worked.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda’s parents are visiting next month. Need to plan.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "FamilyOS P04 planning started. Need to design the new cache layer.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What was the decision on the cake? I think we chose vanilla.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The Samsung SSD is reliable. No issues since the cooling fix.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to call the florist to confirm colors.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Leg day. No issues.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Nosebleed once this week. Much better.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "When I sleep 7 hours, my productivity soars. This led to a great week.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad wants monthly updates on FamilyOS. Can I commit?", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda is designing the invites. They look amazing.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "K0 pipeline had a glitch. Network timeout. Retried and it worked.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I upgrade to 64GB RAM? The Asus ProArt can handle it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "H1B next steps: file for extension. Need to gather documents.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The monitor setup is perfect now. No flicker, no issues.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to backup wedding plans to the cloud.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD after pizza. Worth it though.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "FamilyOS cache design is tricky. I think a layered approach is best.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Panda’s birthday is coming. Need to think of a gift.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Dad liked the monthly update idea. I’ll send the first one tomorrow.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym skipped. Too much work. I’ll go tomorrow.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Headache from staring at screens. Took a break. Helped.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "K1 index optimization reduced memory by 30%. Good win.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should we have a small wedding? Big weddings are expensive.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The flicker has not returned. After switching docks, display flicker stopped for good.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to order Panda’s birthday gift by Friday.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Cleaned up the codebase. Removed dead code. Feels lighter.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Mom called. She’s planning another visit after the wedding.", "participants": ["Prince", "Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "GERD under control. I think the medication caused the improvement.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda loved the necklace. Birthday success.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "FamilyOS P04 design doc is done. Ready for review.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What did we decide about the wedding size? I think we agreed on 100 people.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The Asus ProArt is a beast. No regrets.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to check the H1B extension deadline.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Back at it. Felt strong.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Nosebleeds are gone. Humidifier and hydration fixed it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I take breaks every hour, my focus improves. So that’s my new habit.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad reviewed the design doc. He had minor suggestions.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda’s parents booked flights. They’re staying for a week.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "K0 memory formation is stable. The pipeline is reliable now.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I invest in a standing desk? My back hurts.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "The display issue is solved. New dock, new cables. No problems.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to buy a wedding gift for our friends getting married.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD after tacos. I need to avoid late-night spicy food.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "FamilyOS cache implementation started. Hope it doesn’t break anything.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Panda is overwhelmed with work. I’ll cook dinner tonight.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Dad offered to pay for the honeymoon. Incredibly generous.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym. Leg day. Sweat out the stress.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Headache from dehydration. Drank water. Fixed.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "K1 consolidation is faster with the new cache. Good sign.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should we honeymoon in Japan? Panda wants to go.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The ProArt thermals are great with the cooling pad. No throttling.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to schedule a car service before the road trip.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD is a non-issue now. Diet change caused the improvement.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda’s parents arrive next week. Need to clean the house.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "FamilyOS P04 is taking shape. The cache layer is working.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What did we decide about Japan? I think we’re going after the wedding.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The monitor setup is flawless. After switching docks, all issues vanished.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to buy thank you cards.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Cardio. Clear mind.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Nosebleed once. Probably the dry day.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "When I prioritize sleep, everything else falls into place. This led to a better month.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad is proud of FamilyOS progress. He told his friends.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda finished the invites. They’re beautiful.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "K0 memory pipeline is rock solid. No failures in 30 days.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I write a blog post about FamilyOS architecture?", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "H1B extension paperwork is ready. Need to submit.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The Samsung SSD is fast. No complaints.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to call the wedding venue about the final count.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD after a big meal. Should have eaten less.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "FamilyOS cache reduced latency by 40%. Big win.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Panda’s parents are here. They’re nice. A bit overwhelming.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Dad wants to invest more. I need to think about equity.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym skipped. Hosting duties.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Headache from social overload. Need quiet time.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "K1 memory formation is efficient now. The pipeline is optimized.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should we get a prenup? It’s a difficult conversation.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The flicker issue is a distant memory. After switching docks, display flicker stopped and never came back.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to follow up with the immigration lawyer.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Cleaned the apartment. Parents-in-law are impressed.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "GERD is managed. I know my triggers now.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda and I talked about the prenup. We’ll keep it simple.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "FamilyOS is ready for beta testers. Need to prepare onboarding.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What did we decide about the honeymoon? Japan it is.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The Asus ProArt handles everything I throw at it. Best purchase.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to back up all wedding documents.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Back to routine. Felt good.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Nosebleeds are history. Hydration and humidifier solved it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I track my habits, I improve. This led to better health.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad is happy with the beta plan. He’s spreading the word.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda’s parents left. It was a good visit.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "K0 memory formation is the core of everything. It’s working.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I quit my job and work on FamilyOS full-time? Risky.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "The display setup is perfect. No flicker, no lag.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to celebrate the small wins. I forget to do that.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD under control. Life is better.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda and I are a team. We can handle anything.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "FamilyOS beta launches next month. I’m excited and scared.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What did we decide about my job? I think I’ll stay for now.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "The Samsung 990 Pro is a beast. Fast and reliable.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to live in the moment. The wedding is coming fast.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Last session before the wedding crunch. Felt strong.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "No health issues. Everything is stable. Grateful.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "When I look back, the flicker issue was a small but frustrating problem. After switching docks, display flicker stopped and it taught me to debug systematically.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad says he’s proud of me. That means everything.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda is asleep. I’m thinking about our future. It’s bright.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "K0 memory formation is the foundation. It’s solid now. On to the next challenge.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Should I start a YouTube channel about FamilyOS? Could be fun.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "The display setup is flawless. After switching docks, all issues vanished completely.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to book a couples massage for Panda and me.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD is a thing of the past. I’m careful now.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda and I are unstoppable. Wedding planning is on track.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "FamilyOS beta is live! Time to gather feedback.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What did we decide about the YouTube channel? I think we said yes.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "The Asus ProArt is still my favorite tool. No regrets.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to enjoy the wedding day. It’s a once-in-a-lifetime event.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Final session before the wedding. Felt great.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Health is good. No complaints.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "When I reflect on this journey, I see growth. The flicker issue taught me patience and problem-solving skills after switching docks and cables to fix it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad’s support means the world. I’m lucky.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda and I are ready for the next chapter. Marriage awaits.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "K0 memory formation is stable. Time to scale.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Still thinking about that P03 consolidation bug, it feels wrong but I can't explain why yet", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Woke up late, headache because of staying up debugging K0 last night", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Panda reminded me about the Chicago trip planning, don't let me forget to book flights soon", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Morning work block, rerunning K1 tests, last run failed because of envelope schema mismatch", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "GERD is killing me today, when I skip breakfast, acid reflux gets worse", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "After switching docks last week, display flicker stopped, but now fan noise is louder", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Should I just buy the Noctua cooling pad or stick with the cheap one I have?", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Mom called, asked if I remembered the family promise to visit next month, I feel bad I haven't booked yet", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to check SEVIS status tomorrow morning first thing", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Gym was brutal, leg day + nasal dryness started bleeding mid-set", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Because of the new dedup logic, P02 is 40% faster, this led to better pipeline throughput", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Headache again, I think this is why I can't focus after 3pm lately", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Panda wants to discuss wedding budget tonight, subscriptions are eating our savings", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "After switching docks, display flicker stopped, but HDMI cable feels loose now", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Remind me to rerun the memory leak test on Asus ProArt P16 tomorrow", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Sleep was trash, kept waking up from GERD, X caused Y again", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Working on FamilyOS pricing model, should we do $9.99/mo or $99/year?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: last month's architecture refactor resulted in more bugs than I expected", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Skipped gym, too tired, nose still dry from yesterday", "participants": [], "location_name": "Home", "routine time slot": "Gym"}
+{"text": "Dad sent message about H1B anxiety, he thinks I should apply earlier", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "When I push K0 consolidation too hard, memory usage spikes", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Bought new humidifier filter on Amazon, hoping it helps nasal bleeding", "participants": [], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "After switching docks, display flicker stopped, finally can trust the setup", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Decision: cancel Netflix and Disney+ to save $30/month", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional night, proud of FamilyOS progress but overwhelmed by health stuff", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning cardio, felt good, but headache started halfway", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Debugging schemas again, small change caused big validation errors downstream", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Remind me to call Medical Center about persistent GERD next week", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Lunch was bland on purpose, because of GERD flare yesterday", "participants": [], "location_name": "Starbucks", "routine time slot": "Lunch"}
+{"text": "Panda and I argued about travel dates, immigration uncertainty stressing us both", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Samsung 990 Pro temps are high under load, maybe need better thermal paste", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, but now 32\" monitor looks dim", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Should I upgrade RAM or wait for next gen Asus?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: consistent gym is the only thing keeping headaches manageable", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Mom texted, wants to know when I'm visiting Dallas next", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to check DMV appointment status tomorrow", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "K1 pipeline crashed again, this time because of bad JSON in envelope", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Nose bled in the shower, dryness is getting worse, humidifier not enough", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I drink coffee after 2pm, sleep is ruined", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "FamilyOS milestone: dedup logic now stable across 3 test runs", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "After switching docks, display flicker stopped, but I still don't trust it completely", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda said we need to talk finances again, I hate these conversations", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Decision: move gym to mornings so I don't skip as much", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Headache from staring at code too long, 34\" OLED brightness too high", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to review P03 consolidation logs tomorrow", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "GERD better today, avoided spicy food completely", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "Reflection: I keep repeating the same mistakes with health tracking", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Leg day tomorrow, need to prep protein shake tonight", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Dad thinks FamilyOS pricing should be higher, he believes in the product", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Because of better thermals, ProArt P16 doesn't throttle anymore", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, hardware finally behaving", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Should I schedule DMV visit this weekend or next?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional: feeling behind on promises to family", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning work, K0 memory pipeline finally under 2GB", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Remind me to buy more nasal saline spray", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "When I forget reminders, everything piles up", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Panda planning surprise date night, I love her for that", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Debug session: small schema tweak caused 500 errors in P02", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, but now USB-C charging is intermittent", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Gym skipped again, headache too strong", "participants": [], "location_name": "Home", "routine time slot": "Gym"}
+{"text": "Reflection: I need to stop overworking at night", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Samsung 990 Pro full now, time to offload old projects", "participants": [], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "Mom worried about my sleep, told her about GERD", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to look at Chicago flight prices again", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "K1 tests passed, but latency increased 15ms, need to investigate", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Nasal dryness causing constant discomfort, using spray every hour", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "After switching docks, display flicker stopped, hoping it stays that way", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Decision: no more late night coding sessions this week", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Pride in today's progress, FamilyOS is coming together", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Cardio felt amazing, no headache during workout", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Panda said we should save for house instead of travel, conflicted", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Because of consistent reminders, I haven't missed any major tasks this week", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Remind me to schedule H1B appointment follow-up", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "GERD quiet today, maybe diet is finally helping", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "Debugging memory leaks in K0, this feels endless", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, but I keep checking every hour", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Should I get a second opinion on nasal issues?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: health and work are deeply connected, can't neglect one", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Leg day tomorrow, prepping mentally", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Dad proud of the FamilyOS work, gave good advice on pricing", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "When I hydrate properly, headaches decrease", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Cooling pad making huge difference in thermals", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, peace of mind", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Remind me to update Panda on immigration timeline", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Emotional rollercoaster today, progress + guilt", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning routine: humidifier on, saline spray, coffee (small)", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "P02 pipeline optimized, 25% faster now", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "What did we say about the Chicago dates last time?", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym strong, no nose bleed during session", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Because of the schema fix, consolidation is stable", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to order new HDMI 2.1 cable", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Headache low today, hydration + gym combo working", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "FamilyOS architecture still feels off in memory layer", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "After switching docks, display flicker stopped, but I still have trust issues", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Panda excited about potential house, makes me hopeful", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Decision: prioritize health over extra coding hours", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: small consistent wins add up", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Leg day done, sore but good", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Mom happy I called, feels like I'm keeping promises", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to check Samsung 990 Pro warranty", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "GERD calm, sticking to plan", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "K0 memory pipeline looks promising, but need more tests", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "After switching docks, display flicker stopped, hardware win of the month", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Should I finally book the Chicago trip?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional: grateful for Panda's patience", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning work smooth, no crashes", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Remind me to follow up on H1B documents", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Nasal spray helping, no bleed today", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I sleep 7+ hours, everything feels better", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "P03 consolidation fixed, data loss gone", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, finally stable", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Gym tomorrow, feeling motivated", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Reflection: life is messy but progress is real", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Just woke up, nose dry as hell, probably because I forgot humidifier last night", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "K0 consolidation ran overnight, but dedup missed 12 entries, this led to duplicate entities", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Panda texted good morning, reminded me we need to finalize Chicago dates soon", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD burning already, when I eat late dinner, it always hits morning", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "After switching docks again, display flicker came back for 2 minutes then stopped", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to order new HDMI cable from Amazon tonight", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Should I push the P02 schema change to main or keep it in staging longer?", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Mom called, asked about my health, I told her GERD is better, but lied a bit", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym leg day tomorrow, don't let me skip it this time", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Because of the new cooling pad, ProArt P16 stays under 85°C even under full load", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Headache starting, I think this is why I can't focus after lunch anymore", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "FamilyOS pricing: $12/month feels right, but maybe free tier with limits?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: last week's pipeline regression taught me not to rush schema changes", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Nasal bleeding stopped after saline spray, but still dry, humidifier on max", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Panda wants us to save more for house downpayment instead of travel, she's right", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "After switching docks, display flicker stopped, but now USB ports feel slower", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to check H1B appointment confirmation email tomorrow", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "K1 multi-agent tests passed, but latency spiked when agents talk to each other", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Lunch bland again, no spice, GERD quiet for once", "participants": [], "location_name": "Starbucks", "routine time slot": "Lunch"}
+{"text": "When I code past midnight, next day productivity drops 70%", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Dad texted: keep pushing FamilyOS, this will change lives", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Samsung 990 Pro at 98% full, need to offload old test data", "participants": [], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "After switching docks, display flicker stopped, trusting it more now", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Decision: move gym to mornings starting next week", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional: proud of how far FamilyOS came, but guilt over delayed family visit", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning cardio done, felt strong, no headache during", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "P03 consolidation logic rewritten, this should fix the data loss issue", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Remind me to call Panda tonight about wedding savings plan", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Headache gone after coffee, but GERD kicked in 30 min later", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "Because of better hydration, nose not bleeding today", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "What did we decide about the Chicago trip dates last time we talked?", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Leg day tomorrow, prepping mentally, can't skip again", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "FamilyOS milestone: 5000+ chaos tests passed on K0 memory kernel", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "After switching docks, display flicker stopped, hardware finally reliable", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Should I renew the domain for FamilyOS or wait?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: consistency in health routines is paying off slowly", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Mom happy I called twice this week, feels good keeping promises", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to update Samsung 990 Pro firmware this weekend", "participants": [], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "K0 envelope schema change caused minor regression, fixed in 30 min", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "GERD calm today, sticking to small meals", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "Panda said she's proud of my discipline, made my day", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "When I skip reminders, small things pile up and stress me out", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Cooling pad + thermal paste combo reduced fan noise by half", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, but monitor brightness uneven", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Decision: cancel Spotify subscription, use free tier for now", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional: motivated but scared of immigration delays", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning routine: humidifier, saline, no coffee yet", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "P02 pipeline running 35% faster after last fix", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Remind me to book DMV appointment for license renewal", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym strong, leg day crushed, no nose bleed", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Because of consistent gym, headaches reduced to once a week", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Dad thinks I should raise FamilyOS price to $15/mo, he believes in the value", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Samsung 990 Pro temps stable now, no throttling", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "After switching docks, display flicker stopped, finally no paranoia", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Should I start documenting FamilyOS architecture for future contributors?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: every small win in K0 builds confidence", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Headache from screen time, lowered OLED brightness", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to call Medical Center about GERD follow-up", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "K1 agents communicating better, latency down 20ms", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Nasal dryness better with new humidifier filter", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I eat breakfast, GERD stays calm all day", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "FamilyOS vision: privacy-first OS for families, no cloud lock-in", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "After switching docks, display flicker stopped, hardware sorted", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Panda planning weekend getaway, excited", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Decision: no more subscriptions over $10/mo", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional: grateful for family support, keeps me going", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning work: K0 memory kernel stable across 10k events", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Remind me to update Panda on H1B progress", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym cardio, energy high, no headache", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Because of better sleep, code quality improved today", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "After switching docks, display flicker stopped, but now thinking about new monitor", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Should I start a blog for FamilyOS progress?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: discipline beats talent every day", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Mom proud of my work ethic, feels good", "participants": ["Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to check flight prices for Dallas visit", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "P03 consolidation now handles 100k events/hour", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "GERD under control, small victories", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "When I hydrate + gym, everything feels aligned", "participants": [], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Dad advice: stay humble, serve the people", "participants": ["Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "After switching docks, display flicker stopped, peace achieved", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Decision: prioritize K1 agents this week", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional: son of the soil building something real", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning routine: all systems go", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "K0 memory tables growing healthy", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Remind me to run full chaos test suite tonight", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Headache low, hydration working", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "FamilyOS is my legacy for farmers and families", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "After switching docks, display flicker stopped, hardware no longer enemy", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Panda my rock, always supporting", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Leg day tomorrow, ready to crush", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Reflection: every bug fixed is a step forward", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Because of consistent effort, K0 is institutional-grade now", "participants": [], "location_name": "Office", "routine time slot": "Afternoon Work"}
+{"text": "Don't forget to celebrate small wins", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Nasal dryness almost gone, humidifier MVP", "participants": [], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD quiet, diet on point", "participants": [], "location_name": "Office", "routine time slot": "Lunch"}
+{"text": "When I stick to routine, life flows better", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "After switching docks, display flicker stopped, victory", "participants": [], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Should I start a YouTube channel for FamilyOS?", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Emotional: building for the future, for my people", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Morning work: K1 agents talking smoothly", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "Remind me to thank Panda for her support", "participants": ["Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym tomorrow, no excuses", "participants": [], "location_name": "Home", "routine time slot": "Gym"}
+{"text": "Because of discipline, progress never stops", "participants": [], "location_name": "Office", "routine time slot": "Morning Work"}
+{"text": "After switching docks, display flicker stopped, life better", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Decision: keep pushing, no stopping", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Reflection: this is the path, stay on it", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "FamilyOS will change lives, I know it", "participants": [], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Coffee again. GERD is quiet today. Hope it stays that way.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Need to check the K0 dedup logs from overnight. Hope no errors.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to text Panda about the marriage license appointment. She asked yesterday.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "The 34” OLED has a weird color shift on the left edge. Is this normal?", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Panda said the florist changed their contact. Need to update the number.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "P03 pipeline threw a warning about envelope corruption. Need to investigate.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Gym later. Shoulder day. Hope my neck doesn’t stiffen up.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Nose felt dry but no bleeding. Humidifier is doing its job.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Dad emailed about the beta tester list. He added a few names.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The color shift is less noticeable after warming up. Maybe a panel thing.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to check the SEVIS status for my H1B extension.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I slouch at the desk, my neck hurts. Which explains the stiffness yesterday.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Panda wants to try a new recipe tonight. I said I’d help chop vegetables.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "K1 memory indexing is slow again. The cache might be too small.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Should I increase the cache size? Might affect memory usage for other processes.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Mom texted. She wants pictures from the venue. I’ll ask Panda.", "participants": ["Prince", "Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The color shift is still there. Might be a defect. Should I RMA the monitor?", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to look up the monitor warranty. I think it’s 3 years.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD mild. Ate oatmeal. Headache lurking but not full-blown.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Fixed the envelope corruption. A race condition caused the issue. Added a lock.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Panda reminded me about the marriage license again. I keep procrastinating.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym. Shoulder day was fine. Neck is okay.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Reflecting: I need to set boundaries with work. Late nights hurt my health.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "What did we decide about the monitor? I think we said to contact support.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The new dock is still working perfectly. No flicker, no disconnects.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to schedule the marriage license appointment this week.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "SEVIS status shows active. That’s a relief.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "FamilyOS cache design feels bloated. Might need to simplify.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Dad asked for a demo for his friends. Need to prepare a short version.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Woke up with a stiff neck. Slept in a weird position.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I don’t stretch after gym, my muscles tighten. This led to the neck pain.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Panda loved the dinner we made. It was fun cooking together.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "K0 logs show some duplicate entries again. Thought we fixed this.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I run the dedup pipeline more frequently? Might impact performance.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Gym. Cardio only. Feeling light on my feet.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Remind me to send Mom the venue pictures.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Monitor color shift is still there but I’m getting used to it. Maybe not worth the RMA hassle.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "GERD meds need a refill soon. Should order online.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "P04 pipeline is stable. No alerts today.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What’s the name of the county clerk office for the license?", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Dad’s friends were impressed with the demo. They asked about investing.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Headache from eye strain. Need to use blue light filters.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Skipped gym. Too much work. Will go tomorrow.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to order blue light glasses.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "The SSD is performing well. Cooling pad is a lifesaver.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Panda wants to look at wedding bands this weekend. Need to make time.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "When I take a walk midday, my focus improves. Because of that, I’m more productive.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "K1 memory usage spiked. Need to profile the indexing code.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "H1B extension package is ready to mail. Need to go to UPS.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Mom thanked me for the pictures. She’s excited.", "participants": ["Prince", "Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to back up the FamilyOS code to the external drive.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Back day. Felt strong, no neck issues.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "The cooling pad fan is noisy. Might need to clean it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Panda is stressed about work deadlines. I’ll handle dinner tonight.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Reflecting: I should celebrate small wins more often. I’m always onto the next thing.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Found the duplicate bug. A timestamp rounding error caused duplicates.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I change the timestamp precision? Might break other things.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Nose dry but no bleed. Humidifier needs a refill.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "The monitor color shift is annoying during photo editing. Might have to RMA.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to check the RMA process for the monitor.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Panda and I picked a wedding band design. Simple and elegant.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "GERD under control. Avoiding citrus helped.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "FamilyOS P04 cache is working but complex. I think I over-engineered it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Dad wants to set up a company structure. Need to talk to a lawyer.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Went to UPS. Mailed the H1B extension. Now we wait.", "participants": ["Prince"], "location_name": "UPS", "routine time slot": "Morning Work"}
+{"text": "What did we decide about the monitor RMA? I think I’ll live with it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The new HDMI cable is still perfect. No issues.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to call the lawyer about company formation.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Leg day. Took it easy on the knees.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Sleep was deep. No interruptions. Feeling rested.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Panda booked a venue walkthrough for next week. I need to be there.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "K0 memory formation test passes consistently now. Good.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I implement a new compression algorithm for the envelopes? Might save space.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Mom wants to help with seating charts. I said Panda is the point person.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The ProArt fan is loud under load. Maybe it’s normal.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Remind me to clean the cooling pad this weekend.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Fixed the timestamp rounding. Duplicates are gone.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Panda loved the simple band. We ordered it.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "GERD flared after tomato sauce. Should have known.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "When I delegate tasks, I feel less overwhelmed. So that’s what I’ll do more.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad’s lawyer friend offered a free consultation. Need to schedule.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Venue walkthrough was great. Panda loved it. Deposit paid.", "participants": ["Prince", "Panda"], "location_name": "Venue", "routine time slot": "Weekend"}
+{"text": "The monitor color shift is less noticeable in dark mode. I’ll stick with dark mode.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to update the wedding budget spreadsheet.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Demo for investors is next week. Need to polish the slides.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Gym skipped. Venue walkthrough took all morning.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Headache from dehydration again. Drank a liter of water.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "K1 indexing is faster after the cache tweak. Good.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should we get wedding insurance? Panda thinks it’s unnecessary.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The cooling pad is quiet after cleaning. Dust buildup caused the noise.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "Remind me to check on the marriage license appointment again.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD is a non-issue if I avoid triggers. Simple.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda’s parents sent a gift. Need to send a thank you note.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "FamilyOS beta onboarding document is half done. Need to finish.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What did we decide about wedding insurance? I think we’ll skip it.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The SSD health is 100%. Samsung Magician says all good.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to buy stamps for thank you cards.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Chest day. Felt powerful.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Nosebleed once this month. Much better than before.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "When I prepare slides the night before, presentations go smoother. This led to successful demos.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad is excited about the investor interest. He’s drafting a term sheet.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda finished the seating chart draft. It looks good.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "K0 pipeline had a network blip. Auto-recovered. Good resilience.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I add more monitoring alerts? Too many might cause alert fatigue.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "H1B extension receipt came. Case is pending. Relief.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The monitor is fine for coding. The color shift only matters for design work.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to schedule a dentist cleaning.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD after eating too fast. Slowing down helps.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "FamilyOS cache simplification started. Removing unused layers.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Panda is worried about her job stability. I reassured her.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Dad’s term sheet looks reasonable. Need a lawyer to review.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym. Shoulder day again. No pain.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Headache from caffeine withdrawal. Drank green tea instead.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "K1 memory formation is efficient. The pipeline is optimized now.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should we have a videographer? Panda says yes but it’s expensive.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The flicker issue is a distant memory. After switching docks, the problem never returned.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to follow up with the lawyer about the term sheet.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Cleaned the apartment. Feels fresh.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "GERD under control. Eating smaller meals more often.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda and I agreed on a videographer. We’ll cut costs elsewhere.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "FamilyOS beta doc is done. Ready to share with testers.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What did we decide about the lawyer? I think we’re meeting next Tuesday.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The Asus ProArt is a workhorse. No regrets on this purchase.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to back up the wedding vendor contacts.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Leg day. Pushed a bit harder.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Nosebleeds are gone. The humidifier fixed it completely.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I communicate clearly with Panda, stress goes down. This led to a happier week.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad’s lawyer friend reviewed the term sheet. Suggested a few changes.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda’s work situation stabilized. She’s relieved.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "K0 memory formation is the backbone. It’s reliable now.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I write a technical paper on the K0 architecture? Could be good for credibility.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "The display setup is perfect. No issues at all.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to take a break every hour. I forget and get stiff.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD is managed. I know my limits.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda and I are a good team. Wedding planning is bringing us closer.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "FamilyOS beta launches in two weeks. I’m nervous but ready.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What did we decide about the technical paper? I think I’ll draft it after beta.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "The Samsung 990 Pro is fast and cool. Perfect combo.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to enjoy the process. The wedding is not just a task list.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Cardio and stretching. Feeling flexible.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "No health issues. Everything is in check. Grateful.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "When I look back, the monitor color shift was a minor annoyance. I adapted and moved on.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad says he’s proud of the progress. That fuels me.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda is asleep. I’m thinking about our future family. It’s a warm thought.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "K0 memory formation is solid. The foundation is set for K1 and beyond.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Coffee made my GERD twinge. Maybe switch to tea tomorrow.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Need to review the K0 consolidation logs. Something seems off.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to call the marriage license office. Their hours are weird.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "The left monitor has a faint green tint on grays. Is this burn-in?", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Panda asked if I booked the honeymoon flights. I haven’t.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "P03 pipeline had a memory leak. Need to find the root cause.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Gym later. Arm day. Hope my elbow doesn’t hurt.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Nose felt fine. Humidifier is running low on water.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Dad texted about investor follow-up. Need to send them the beta invite.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The green tint is less noticeable in bright scenes. Might be a calibration issue.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to check the H1B extension status online.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I sit for hours, my lower back aches. Which explains the pain yesterday.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Panda wants to finalize the playlist. I said I’d add my suggestions tonight.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "K1 memory usage is stable after the cache fix. Good.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Should I add a memory usage dashboard? Might be overkill.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Mom called. She’s making a gift list. Wants to know our preferences.", "participants": ["Prince", "Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The green tint is annoying. I ran a pixel refresh. It helped a little.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to look up OLED burn-in prevention techniques.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD mild. Ate bland breakfast. Headache gone.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Found the memory leak. A circular reference in the cache caused it. Fixed.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Panda reminded me about the honeymoon flights again. I’ll do it tomorrow.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Gym. Arm day was good. Elbow felt fine.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Reflecting: I need to be more proactive with wedding tasks. Panda carries too much.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "What did we decide about the monitor tint? I think I’ll live with it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The dock is still perfect. No issues at all.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to book the honeymoon flights this week.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "H1B extension status is still pending. Normal, I guess.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "FamilyOS beta invites sent. First responses are positive.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Dad is thrilled about beta interest. He’s talking to more people.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Woke up with a stiff back. Need to adjust my chair height.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I take short walks during work, my back feels better. This led to less pain.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Panda loved the songs I added to the playlist. She danced a little.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "K0 logs are clean. No duplicates, no errors.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I optimize the log storage format? Might save disk space.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Gym. Cardio only. Feeling light.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Remind me to send Mom our gift preferences.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Monitor tint is still there but I’m ignoring it. Not worth the stress.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "GERD meds arrived. Refilled for three months.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "P04 pipeline is efficient. Memory usage is low.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What’s the deadline for honeymoon flight booking? I should check.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Dad’s investor connections are promising. Might need to incorporate soon.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Headache from screen time. Took a break and looked outside.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Skipped gym. Back was sore. Will stretch instead.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to buy a new office chair. This one is worn out.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "The SSD temperatures are perfect. Cooling pad works.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Panda and I booked honeymoon flights! Japan here we come.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "When I tackle tasks immediately, they don’t pile up. Because of that, I feel less stressed.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "K1 memory indexing is fast. The cache size was the bottleneck.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "H1B extension approved! Got the notification. Huge relief.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Mom is happy about the gift list. She’s started shopping.", "participants": ["Prince", "Mom"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to back up the FamilyOS beta user data.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Full body workout. Felt great.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "The cooling pad is quiet. Cleaning it regularly helps.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Panda is relieved about the H1B approval. One less worry.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Reflecting: The key to managing health is consistency. Small habits compound.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Fixed the circular reference. Memory leak is gone.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I write a post-mortem for the memory leak? Could be useful for learning.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Nose is fine. Humidifier is on every night.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "The monitor tint is barely noticeable now. Maybe the panel settled.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to order a new office chair with lumbar support.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Panda and I finalized the playlist. It’s a good mix.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "GERD is under control. Diet and medication work.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "FamilyOS cache is simple and effective now. Refactoring paid off.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Dad is pushing for incorporation before beta ends. Need to decide.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Booked the marriage license appointment. Finally.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What did we decide about incorporation? I think we should do it.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The HDMI cables are holding up. No signal drops.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to call the accountant about incorporation taxes.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Leg day. Pushed hard.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Sleep was uninterrupted. Woke up refreshed.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Panda scheduled a dress fitting. I need to get my suit measured.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "K0 pipeline is robust. Handles failures gracefully.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I add automated failover for the pipeline? Might be over-engineering.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Mom wants to help with decorations. I said talk to Panda.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The ProArt fans are loud during compiles. It’s okay.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Remind me to get my suit measured this weekend.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Optimized log storage. Saved 20% disk space.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Panda is happy with the dress fitting. Sent me a pic. She looks stunning.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "GERD after a rich dinner. Worth it for the celebration.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "When I plan the week on Sunday, I feel more in control. So that’s my new habit.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad and I decided to incorporate next month. Lawyer is drafting papers.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "Marriage license appointment done. We’re officially licensed.", "participants": ["Prince", "Panda"], "location_name": "County Clerk", "routine time slot": "Weekend"}
+{"text": "The monitor is fine. I’ve stopped noticing the tint.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Remind me to update the wedding checklist.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Beta feedback is positive. Users love the K0 memory features.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Gym skipped. License appointment took time.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Headache from stress. Took a nap. Helped.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "K1 memory formation is efficient. The pipeline is a well-oiled machine.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should we write thank you notes as gifts arrive? Panda says yes.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The cooling pad is a must-have. Keeps everything running cool.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "Remind me to buy thank you note cards in bulk.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD is managed. I know what to avoid.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda’s parents sent another gift. They’re generous.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "FamilyOS beta is stable. No critical bugs reported.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What did we decide about thank you notes? We’ll do them as gifts come.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "The SSD is fast and reliable. No issues.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to back up the legal incorporation documents.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Chest and back. Felt strong.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "Nosebleeds are a thing of the past. Humidifier and hydration fixed it.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "When I reflect on progress, I feel motivated. This led to sustained effort.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad is happy with the incorporation progress. He’s handling the paperwork.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda is excited for the wedding. Her joy is contagious.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Weekend"}
+{"text": "K0 pipeline is a core asset. It’s reliable and fast.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Should I publish the K0 architecture on GitHub? Might attract contributors.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "The display setup is flawless. After switching docks, all problems vanished.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "Remind me to enjoy the engagement period. It’s flying by.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "GERD under control. Life is good.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Lunch"}
+{"text": "Panda and I are ready for marriage. It feels right.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "FamilyOS is gaining traction. Beta users are engaged.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Work"}
+{"text": "What did we decide about open-sourcing K0? I think we’ll open-core it.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "The Asus ProArt is the best tech purchase I’ve made.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Afternoon Work"}
+{"text": "Remind me to be present. The wedding is soon.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Morning Routine"}
+{"text": "Gym. Stretching and mobility. Feeling agile.", "participants": ["Prince"], "location_name": "Gym", "routine time slot": "Gym"}
+{"text": "No health issues. Everything is in balance. Grateful.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "When I look back, the monitor tint was a distraction. I adapted and focused on what matters.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Reflection"}
+{"text": "Dad says he’s proud of the man I’ve become. That means everything.", "participants": ["Prince", "Dad"], "location_name": "Home", "routine time slot": "Evening"}
+{"text": "Panda is asleep. I’m thinking about our future kids. A warm, hopeful thought.", "participants": ["Prince", "Panda"], "location_name": "Home", "routine time slot": "Night"}
+{"text": "K0 memory formation is the foundation. It’s solid, scalable, and ready for the future.", "participants": ["Prince"], "location_name": "Home", "routine time slot": "Night"}

@@ -1,0 +1,319 @@
+{
+  "timestamp": "2026-01-11 01:42:00",
+  "model": "UltraBERT v2.1.0 (768-dim)",
+  "benchmarks": [
+    {
+      "name": "Recall@1/10",
+      "metric": "R@1",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "Recall@5/10",
+      "metric": "R@5",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "Recall@10/10",
+      "metric": "R@10",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "MRR/10",
+      "metric": "MRR",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "Recall@1/50",
+      "metric": "R@1",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "Recall@5/50",
+      "metric": "R@5",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "Recall@10/50",
+      "metric": "R@10",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "MRR/50",
+      "metric": "MRR",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "Recall@1/100",
+      "metric": "R@1",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "Recall@5/100",
+      "metric": "R@5",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "Recall@10/100",
+      "metric": "R@10",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "MRR/100",
+      "metric": "MRR",
+      "score": 1.0,
+      "details": {}
+    },
+    {
+      "name": "STS",
+      "metric": "mean_similarity",
+      "score": 0.9306815147399903,
+      "details": {
+        "std": 0.02552877609588883,
+        "n": 25
+      }
+    },
+    {
+      "name": "Negation",
+      "metric": "avg_similarity",
+      "score": 0.9549487978219986,
+      "details": {
+        "discrimination_score": 0.045051202178001404
+      }
+    },
+    {
+      "name": "SynonymAntonym",
+      "metric": "gap",
+      "score": 0.10379776954650877,
+      "details": {
+        "synonym_avg": 0.8714380085468292,
+        "antonym_avg": 0.7676402390003204
+      }
+    },
+    {
+      "name": "Paraphrase",
+      "metric": "f1",
+      "score": 0.8333333333333333,
+      "details": {
+        "precision": 0.7142857142857143,
+        "recall": 1.0,
+        "accuracy": 0.75
+      }
+    },
+    {
+      "name": "LengthInvariance",
+      "metric": "avg_similarity",
+      "score": 0.8506865054368972,
+      "details": {}
+    },
+    {
+      "name": "NoiseRobustness",
+      "metric": "avg_similarity",
+      "score": 0.8545316696166992,
+      "details": {}
+    },
+    {
+      "name": "KnownLimitations",
+      "metric": "documented",
+      "score": 1.0,
+      "details": {
+        "negation_blindness_avg_sim": 0.9437153339385986,
+        "role_reversal_avg_sim": 0.9895632863044739,
+        "fixes_documented": true
+      }
+    },
+    {
+      "name": "Improve_InstructionPrefix",
+      "metric": "discrimination_delta",
+      "score": -0.019646145105362,
+      "details": {
+        "target_baseline": 0.9318578481674195,
+        "target_prefixed": 0.9204850554466247,
+        "distractor_baseline": 0.8149451529979705,
+        "distractor_prefixed": 0.8232185053825378
+      }
+    },
+    {
+      "name": "Improve_DiffVector",
+      "metric": "accuracy_improvement",
+      "score": 0.5,
+      "details": {}
+    },
+    {
+      "name": "Improve_ShortTextAugment",
+      "metric": "discrimination_delta",
+      "score": -0.008926784992218018,
+      "details": {}
+    },
+    {
+      "name": "Improve_ThresholdTuning",
+      "metric": "optimal_threshold",
+      "score": 0.85,
+      "details": {
+        "best_f1": 0.888888888888889
+      }
+    },
+    {
+      "name": "Improve_TextNormalization",
+      "metric": "similarity_delta",
+      "score": 0.013860424359639523,
+      "details": {}
+    },
+    {
+      "name": "Adversarial",
+      "metric": "accuracy",
+      "score": 0.4,
+      "details": {
+        "correct": 4,
+        "total": 10
+      }
+    },
+    {
+      "name": "DomainAdaptation",
+      "metric": "avg_similarity",
+      "score": 0.8912916481494904,
+      "details": {
+        "medical": 0.9163426160812378,
+        "legal": 0.9365130066871643,
+        "tech": 0.8646649718284607,
+        "formal_informal": 0.8966359496116638,
+        "business": 0.8164405226707458,
+        "academic": 0.9171528220176697
+      }
+    },
+    {
+      "name": "TemporalConsistency",
+      "metric": "avg_similarity",
+      "score": 0.9744271039962769,
+      "details": {}
+    },
+    {
+      "name": "EntityRecognition",
+      "metric": "avg_similarity",
+      "score": 0.8482487559318542,
+      "details": {}
+    },
+    {
+      "name": "GranularDomain",
+      "metric": "overall_avg",
+      "score": 0.9306815147399903,
+      "details": {
+        "technical": 0.9263523101806641,
+        "general": 0.9438903629779816,
+        "informal": 0.9237897157669067,
+        "formal": 0.9309787533499978,
+        "overall": 0.9306815147399903
+      }
+    },
+    {
+      "name": "LengthPerformance",
+      "metric": "by_length",
+      "score": 0.9306815147399903,
+      "details": {
+        "very_short": 0.0,
+        "short": 0.9306815147399903,
+        "medium": 0.0,
+        "long": 0.0,
+        "very_long": 0.0
+      }
+    },
+    {
+      "name": "StatisticalSignificance",
+      "metric": "mean_recall",
+      "score": 1.0,
+      "details": {
+        "std": 0.0,
+        "ci_95_lower": 1.0,
+        "ci_95_upper": 1.0,
+        "num_runs": 5
+      }
+    },
+    {
+      "name": "Performance",
+      "metric": "throughput",
+      "score": 23.626508086437177,
+      "details": {
+        "embedding_count": 348,
+        "total_time_ms": 14729.218500120624,
+        "mean_time_ms": 42.325340517587996,
+        "std_time_ms": 475.87262420113484,
+        "min_time_ms": 13.646300001710188,
+        "max_time_ms": 8906.765799998539,
+        "p50_time_ms": 16.120349999255268,
+        "p95_time_ms": 20.96394499494636,
+        "p99_time_ms": 23.295999997644675,
+        "throughput_per_sec": 23.626508086437177
+      }
+    },
+    {
+      "name": "RealWorld_STS-B",
+      "metric": "spearman_correlation",
+      "score": 0.6976598876660641,
+      "details": {
+        "p_value": 0.0004382749973772018,
+        "n_pairs": 21,
+        "reference": 0.838,
+        "reference_model": "all-mpnet-base-v2"
+      }
+    },
+    {
+      "name": "RealWorld_MSMARCO",
+      "metric": "MRR@10",
+      "score": 0.47291666666666665,
+      "details": {
+        "recall_at_1": 0.125,
+        "n_queries": 8,
+        "reference": 0.378,
+        "reference_model": "text-embedding-3-large"
+      }
+    },
+    {
+      "name": "RealWorld_Adversarial",
+      "metric": "accuracy",
+      "score": 0.2,
+      "details": {
+        "role_reversal": {
+          "accuracy": 0.0
+        },
+        "negation": {
+          "accuracy": 0.0
+        },
+        "quantifier": {
+          "accuracy": 0.0
+        },
+        "paraphrase": {
+          "accuracy": 1.0
+        }
+      }
+    }
+  ],
+  "performance": {
+    "embedding_count": 458,
+    "total_time_ms": 16669.50770009862,
+    "mean_time_ms": 36.39630502204939,
+    "std_time_ms": 414.9435327125409,
+    "min_time_ms": 13.646300001710188,
+    "max_time_ms": 8906.765799998539,
+    "p50_time_ms": 16.496899999765446,
+    "p95_time_ms": 21.00089999876218,
+    "p99_time_ms": 23.256999997538518,
+    "throughput_per_sec": 27.475316502435785
+  },
+  "recommendations": {
+    "threshold": "Use similarity >= 0.85 to reduce false positives",
+    "short_text": "Use PracticalImprovements.augment_short_text() for short queries",
+    "typos": "Use PracticalImprovements.normalize_text() for noisy inputs",
+    "negation_limitation": "Cannot fix without heavy NLI model - store sentiment as metadata",
+    "adversarial_limitation": "Cannot fix without cross-encoder - use structured data extraction"
+  }
+}

@@ -160,15 +160,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, outcome) (increase(k0_kernel_bus_dispatch_latency_seconds_bucket{topic=\"cognitive.memory.write.committed.v1\"}[$__interval]))) * 1000",
-          "legendFormat": "p95 {{outcome}}",
+          "expr": "{logger=\"k0.kernel.app.P02_WRITE\"} |= \"stage_timings_ms\"",
           "refId": "A"
         }
       ],
-      "title": "Pipeline Latency by Outcome (p95)",
+      "title": "Module Execution Timeline (Stacked)",
       "type": "timeseries"
     },
     {
@@ -250,43 +249,49 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "histogram_quantile(0.50, sum by (le) (increase(k0_kernel_bus_dispatch_latency_seconds_bucket{topic=\"cognitive.memory.write.committed.v1\"}[$__interval]))) * 1000",
-          "legendFormat": "p50",
+          "expr": "{logger=\"k0.kernel.app.P02_WRITE\"} |= \"stage_timings_ms\"",
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "histogram_quantile(0.95, sum by (le) (increase(k0_kernel_bus_dispatch_latency_seconds_bucket{topic=\"cognitive.memory.write.committed.v1\"}[$__interval]))) * 1000",
-          "legendFormat": "p95",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "histogram_quantile(0.99, sum by (le) (increase(k0_kernel_bus_dispatch_latency_seconds_bucket{topic=\"cognitive.memory.write.committed.v1\"}[$__interval]))) * 1000",
-          "legendFormat": "p99",
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "rate(k0_kernel_bus_dispatch_latency_seconds_sum{topic=\"cognitive.memory.write.committed.v1\"}[$__interval]) / rate(k0_kernel_bus_dispatch_latency_seconds_count{topic=\"cognitive.memory.write.committed.v1\"}[$__interval]) * 1000",
-          "legendFormat": "avg",
-          "refId": "D"
         }
       ],
-      "title": "Pipeline Latency Quantiles (ms)",
-      "transformations": [],
+      "title": "Module Performance Table (Avg/Max/P95)",
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {},
+            "renameByName": {
+              "stage_10_dg_pattern_separate": "M01: Pattern Separate",
+              "stage_20_ca1_semantic_project": "M02: Semantic Project",
+              "stage_30_affect_analyze": "M04: Affect Analyze",
+              "stage_31_space_resolve": "M05: Space Resolve",
+              "stage_32_social_resolve": "M07: Social Resolve",
+              "stage_33_temporal_profile": "M08: Temporal Profile",
+              "stage_40_device_profile": "M09: Device Profile",
+              "stage_41_ingress_classify": "M10: Ingress Classify",
+              "stage_42_geo_metadata": "M12: Geo Metadata",
+              "stage_43_spatial_minimal": "M15: Spatial Minimal",
+              "stage_50_retention_lookup": "M11: Retention Lookup",
+              "stage_55_salience_score": "M06: Salience Score",
+              "stage_60_build_hipp_events_row": "M14: Hipp Events Row",
+              "stage_61_build_embedding_queue_job": "M13: Embedding Queue",
+              "stage_70_atomic_writer": "M16: Atomic Writer",
+              "stage_80_event_emitter": "M17: Event Emitter"
+            }
+          }
+        }
+      ],
       "type": "table"
     },
     {
@@ -498,10 +503,10 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "clamp_min(rate(k0_kernel_bus_dispatch_latency_seconds_sum{topic=\"cognitive.memory.write.committed.v1\"}[1m]) / rate(k0_kernel_bus_dispatch_latency_seconds_count{topic=\"cognitive.memory.write.committed.v1\"}[1m]) * 1000, 0)",
+          "expr": "{logger=\"k0.kernel.app.P02_WRITE\"} |= \"duration_ms\" | json | line_format \"{{.context_duration_ms}}\"",
           "refId": "A"
         }
       ],
@@ -560,15 +565,36 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "sum by (outcome) (increase(k0_kernel_bus_dispatch_latency_seconds_count{topic=\"cognitive.memory.write.committed.v1\"}[$__range]))",
+          "expr": "{logger=\"k0.kernel.app.P02_WRITE\"} |= \"Pipeline completed\" | json",
           "refId": "A"
         }
       ],
-      "title": "Pipeline Executions by Outcome (current window)",
-      "transformations": [],
+      "title": "Recent Pipeline Executions",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {},
+            "renameByName": {
+              "Time": "Timestamp",
+              "context_trace_id": "Trace ID",
+              "context_duration_ms": "Duration (ms)",
+              "context_completed_stages": "Stages",
+              "context_execution_levels": "Levels"
+            }
+          }
+        },
+        {
+          "id": "limit",
+          "options": {
+            "limitField": 20
+          }
+        }
+      ],
       "type": "table"
     },
     {
@@ -626,11 +652,11 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (op_kind) (increase(k0_outbox_events_published_total{status=\"success\"}[$__range]))",
+          "expr": "sum by (enrichment_key) (increase(database_writes_total[5m]))",
           "refId": "A"
         }
       ],
-      "title": "Outbox Events by Type",
+      "title": "Enrichment Fields Distribution",
       "type": "piechart"
     },
     {

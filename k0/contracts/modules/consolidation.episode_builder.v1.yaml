@@ -1,0 +1,61 @@
+# P03 Module Contract: Episode Builder
+# Phase: R2 - Episode Construction
+# Dossier: §D.3.1 stage_21_episode_builder
+
+module_id: consolidation.episode_builder
+version: v1
+
+input_event_types:
+  - p03.clusters.formed.v1
+
+output_event_types:
+  - p03.episodes.built.v1
+
+latency_budget_ms: 50
+
+side_effects:
+  - read:st_epi  # Check existing episodes
+
+idempotent: true
+
+fabric_capabilities:
+  - build_episode
+
+failure_modes:
+  - code: CLUSTER_TOO_SMALL
+    policy: skip
+    description: Clusters below min_events skipped
+  - code: SUMMARY_GENERATION_FAILED
+    policy: use_first_event
+    description: Use first event summary as fallback
+
+description: |
+  Episode Builder Module (R2 Phase)
+
+  Constructs st_epi records from cluster results:
+  - Generates episode summaries from member events
+  - Computes episode embedding (centroid or weighted)
+  - Links events to episodes via epi_id
+
+  Summary Strategies:
+  - centroid_weighted: Weighted average by importance
+  - first_event: Use highest-importance event summary
+  - llm_synthesize: (Future) LLM-generated summary
+
+  Episode Fields:
+  - epi_id: ULID episode identifier
+  - summary: Text summary of episode
+  - embedding: 768-dim centroid vector
+  - importance_score: Max of member event scores
+  - event_count: Number of member events
+  - time_start: Earliest event timestamp
+  - time_end: Latest event timestamp
+  - participants: Unique participants across events
+
+  Constraints:
+  - max_events_per_episode: 100
+  - min_events_per_episode: 2
+
+  Output:
+  - envelope.episodes: Array of episode records for st_epi
+  - envelope.event_episode_map: {event_id: epi_id} mapping

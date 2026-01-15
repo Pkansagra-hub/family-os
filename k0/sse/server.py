@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import secrets
-import sqlite3
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import TYPE_CHECKING, Any, Callable, Mapping, cast
+
+logger = logging.getLogger(__name__)
 
 import yaml
 from fastapi import HTTPException, status
@@ -18,6 +21,9 @@ from k0.obs import ObservabilityEmitter
 from k0.qos import QoSContext
 from k0.storage.offsets import Offset, OffsetStore
 from k0.storage.wal import WalEntry, WriteAheadLog
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 @dataclass(slots=True)
@@ -50,15 +56,49 @@ class BackpressureMetrics:
 
 
 @dataclass(slots=True)
+class BroadcastEvent:
+    """Event to be broadcast to SSE subscribers."""
+
+    topic: str
+    tenant_id: str
+    space_id: str
+    op_kind: str
+    payload: dict[str, Any]
+    timestamp: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.timestamp:
+            self.timestamp = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def to_sse_data(self) -> str:
+        """Serialize to SSE data format."""
+        return json.dumps(
+            {
+                "topic": self.topic,
+                "op_kind": self.op_kind,
+                "payload": self.payload,
+                "timestamp": self.timestamp,
+            }
+        )
+
+
+# Type alias for subscriber callback (async function that receives SSE data string)
+SubscriberCallback = Callable[[str], asyncio.Future[None] | None]
+
+
+@dataclass
 class SSEServer:
-    """Manage SSE subscriptions and acknowledgements."""
+    """Manage SSE subscriptions, acknowledgements, and broadcast.
+
+    Supports both PULL (subscribe from WAL) and PUSH (broadcast) models.
+    """
 
     wal: WriteAheadLog
     offset_store: OffsetStore
     observability: ObservabilityEmitter
     acl_path: Path
     qos: QoSContext
-    database_connection: sqlite3.Connection | None = None
+    database_connection: "asyncpg.Connection | None" = None
     max_batch: int = 128
 
     # Gap 25: Configurable SSE backpressure thresholds
@@ -70,6 +110,168 @@ class SSEServer:
     THROTTLE_PENDING: int = 20_000
     SHED_LAG_MS: int = 15_000
     SHED_PENDING: int = 50_000
+
+    # Subscriber registry for push-based broadcast
+    # Key: (tenant_id, space_id, subscriber_id)
+    # Value: dict of topic -> list of async queues
+    _subscribers: dict[tuple[str, str, str], dict[str, list[asyncio.Queue[str]]]] = field(
+        default_factory=dict
+    )
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def __post_init__(self) -> None:
+        """Initialize mutable fields after dataclass init."""
+        # Reinitialize to avoid sharing between instances
+        object.__setattr__(self, "_subscribers", {})
+        object.__setattr__(self, "_lock", asyncio.Lock())
+
+    async def broadcast(
+        self,
+        event: BroadcastEvent,
+    ) -> int:
+        """
+        Broadcast event to all matching subscribers.
+
+        Push-based delivery: events are immediately sent to all connected
+        subscribers that match the tenant_id, space_id, and topic.
+
+        Args:
+            event: BroadcastEvent with topic, tenant_id, space_id, payload
+
+        Returns:
+            Number of subscribers that received the event
+        """
+        delivered_count = 0
+        sse_data = f"event: {event.topic}\\ndata: {event.to_sse_data()}\\n\\n"
+
+        async with self._lock:
+            # Find all subscribers for this tenant/space
+            for (tenant_id, space_id, subscriber_id), topic_queues in self._subscribers.items():
+                if tenant_id != event.tenant_id or space_id != event.space_id:
+                    continue
+
+                # Check if subscriber is subscribed to this topic
+                if event.topic in topic_queues:
+                    for queue in topic_queues[event.topic]:
+                        try:
+                            # Non-blocking put - if queue is full, skip
+                            queue.put_nowait(sse_data)
+                            delivered_count += 1
+                        except asyncio.QueueFull:
+                            logger.warning(
+                                f"SSE queue full for subscriber {subscriber_id}, dropping event",
+                                extra={
+                                    "subscriber_id": subscriber_id,
+                                    "topic": event.topic,
+                                    "tenant_id": tenant_id,
+                                },
+                            )
+
+        # Emit metrics
+        self.observability.emit_metric(
+            "sse_broadcast_events_total",
+            1.0,
+            topic=event.topic,
+            op_kind=event.op_kind,
+        )
+        self.observability.emit_metric(
+            "sse_broadcast_delivered_total",
+            float(delivered_count),
+            topic=event.topic,
+        )
+
+        logger.debug(
+            f"SSE broadcast: {event.topic} delivered to {delivered_count} subscribers",
+            extra={
+                "topic": event.topic,
+                "op_kind": event.op_kind,
+                "tenant_id": event.tenant_id,
+                "space_id": event.space_id,
+                "delivered_count": delivered_count,
+            },
+        )
+
+        return delivered_count
+
+    async def register_subscriber(
+        self,
+        *,
+        tenant_id: str,
+        space_id: str,
+        subscriber_id: str,
+        topics: Sequence[str],
+        queue: asyncio.Queue[str],
+    ) -> None:
+        """
+        Register a subscriber queue for push-based broadcast.
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            subscriber_id: Unique subscriber identifier
+            topics: List of topics to subscribe to
+            queue: Async queue to receive SSE data strings
+        """
+        key = (tenant_id, space_id, subscriber_id)
+        async with self._lock:
+            if key not in self._subscribers:
+                self._subscribers[key] = {}
+            for topic in topics:
+                if topic not in self._subscribers[key]:
+                    self._subscribers[key][topic] = []
+                self._subscribers[key][topic].append(queue)
+
+        logger.info(
+            f"SSE subscriber registered: {subscriber_id}",
+            extra={
+                "subscriber_id": subscriber_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "topics": list(topics),
+            },
+        )
+
+    async def unregister_subscriber(
+        self,
+        *,
+        tenant_id: str,
+        space_id: str,
+        subscriber_id: str,
+        queue: asyncio.Queue[str],
+    ) -> None:
+        """
+        Unregister a subscriber queue.
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            subscriber_id: Unique subscriber identifier
+            queue: Queue to remove
+        """
+        key = (tenant_id, space_id, subscriber_id)
+        async with self._lock:
+            if key in self._subscribers:
+                for topic in list(self._subscribers[key].keys()):
+                    if queue in self._subscribers[key][topic]:
+                        self._subscribers[key][topic].remove(queue)
+                    if not self._subscribers[key][topic]:
+                        del self._subscribers[key][topic]
+                if not self._subscribers[key]:
+                    del self._subscribers[key]
+
+        logger.info(
+            f"SSE subscriber unregistered: {subscriber_id}",
+            extra={
+                "subscriber_id": subscriber_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+            },
+        )
+
+    @property
+    def subscriber_count(self) -> int:
+        """Return total number of active subscribers."""
+        return len(self._subscribers)
 
     async def subscribe(
         self,

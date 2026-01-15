@@ -3,5 +3,15 @@
 from __future__ import annotations
 
 from .alias_map import AliasMap
+from .faiss import PgvectorDriver
+from .fts5 import FTSDriver
+from .pgvector import PgvectorSearchClient
+from .postgres import PostgresDriver
 
-__all__ = ["AliasMap"]
+__all__ = [
+    "AliasMap",
+    "FTSDriver",
+    "PgvectorDriver",
+    "PgvectorSearchClient",
+    "PostgresDriver",
+]

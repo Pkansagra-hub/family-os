@@ -1,0 +1,58 @@
+# P03 Module Contract: Batch Selector
+# Phase: R0 - Batch Selection
+# Dossier: §D.3.1 stage_00_select_batch
+
+module_id: consolidation.batch_selector
+version: v1
+
+input_event_types:
+  - p03.consolidation.triggered.v1
+
+output_event_types:
+  - p03.batch.selected.v1
+
+latency_budget_ms: 50
+
+side_effects:
+  - read:st_hipp_events
+  - read:st_pipeline_status
+
+idempotent: true
+
+fabric_capabilities:
+  - select_consolidation_batch
+
+failure_modes:
+  - code: NO_PENDING_EVENTS
+    policy: complete_success
+    description: Empty batch - normal completion
+  - code: QUERY_TIMEOUT
+    policy: retry
+    max_retries: 2
+  - code: CONNECTION_LOST
+    policy: retry
+    max_retries: 3
+
+description: |
+  Batch Selector Module (R0 Phase)
+
+  Selects pending events from st_hipp_events for consolidation:
+  - Filters by consolidation_status = 'PENDING'
+  - Orders by importance_score DESC, created_at ASC
+  - Limits to max_batch_size (default 1000)
+  - Respects max_events_per_cycle hard cap
+
+  Context Hydration:
+  - Includes events from context_window_hours (default 24h) for temporal coherence
+  - Attaches batch metadata to envelope (batch_id, event_count, time_range)
+
+  Selection Strategies:
+  - importance_first: Prioritize high-importance events
+  - fifo: First-in-first-out chronological
+  - balanced: Mix of both strategies
+
+  Output:
+  - envelope.batch.batch_id: ULID batch identifier
+  - envelope.batch.event_count: Number of events selected
+  - envelope.batch.events: Array of event records
+  - envelope.batch.time_range: {start, end} timestamp range

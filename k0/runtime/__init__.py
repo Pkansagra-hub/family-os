@@ -54,7 +54,13 @@ from .model_registry import (
     get_model_registry,
     init_model_registry,
 )
-from .module_registry import ModuleCallable, ModuleRegistry
+from .module_registry import (
+    ModuleCallable,
+    ModuleRegistry,
+    get_module_registry,
+    reset_module_registry,
+    set_module_registry,
+)
 from .pipeline_runner import PipelineRunner, create_pipeline_runner
 from .schemas import (
     ModuleContract,
@@ -76,6 +82,9 @@ __all__ = [
     "ModuleCallable",
     # Module Registry
     "ModuleRegistry",
+    "get_module_registry",
+    "set_module_registry",
+    "reset_module_registry",
     # Model Registry
     "ModelRegistry",
     "ModelSpec",

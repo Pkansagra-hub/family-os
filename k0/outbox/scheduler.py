@@ -16,7 +16,7 @@ class RetryDecision:
     action: str  # "retry" or "quarantine"
     retries: int
     requeue_seq: int  # DEPRECATED - kept for backward compatibility
-    next_attempt_ts: str | None  # NEW - ISO8601 timestamp for next retry
+    next_attempt_ts: datetime | None  # NEW - timestamp for next retry (asyncpg needs datetime)
     backoff_exp: int  # NEW - Exponent for 2^n exponential backoff
     status: str  # NEW - PENDING/PROCESSING/FAILED/DEAD
 
@@ -77,7 +77,7 @@ class RetryScheduler:
             action="retry",
             retries=next_retry,
             requeue_seq=entry.requeue_seq + increment,  # DEPRECATED
-            next_attempt_ts=next_attempt.isoformat(),
+            next_attempt_ts=next_attempt,
             backoff_exp=backoff_exp,
             status="PENDING",
         )

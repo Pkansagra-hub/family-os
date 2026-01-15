@@ -30,8 +30,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import random
-import sqlite3
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urljoin
 
+import asyncpg
 import httpx
 from pydantic import BaseModel, HttpUrl
 
@@ -60,60 +61,65 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-def clear_outbox_backlog(db_path: str = "/data/k0_runtime.sqlite3") -> dict:
+async def clear_outbox_backlog(
+    db_url: str = "postgresql://k0_user:k0_password@localhost:5432/k0_kernel",
+) -> dict:
     """
     Clear outbox and DLQ backlog before starting traffic.
 
     Returns:
         dict with 'outbox_cleared' and 'dlq_cleared' counts
     """
+    if db_url is None:
+        db_url = os.getenv(
+            "K0_DATABASE_URL",
+            "postgresql://k0_user:k0_password@localhost:5432/k0_kernel",
+        )
+
     logger.info("=" * 60)
-    logger.info("🧹 CLEARING OUTBOX BACKLOG")
+    logger.info("CLEARING OUTBOX BACKLOG")
     logger.info("=" * 60)
 
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        conn = await asyncpg.connect(db_url)
 
         # Get outbox stats before clearing
-        cursor.execute("SELECT COUNT(*) as total FROM st_outbox")
-        outbox_before = cursor.fetchone()["total"]
+        row = await conn.fetchrow("SELECT COUNT(*) as total FROM st_outbox")
+        outbox_before = row["total"]
 
-        cursor.execute(
+        row = await conn.fetchrow(
             "SELECT COUNT(*) as pending FROM st_outbox WHERE state != 'completed'"
         )
-        outbox_pending = cursor.fetchone()["pending"]
+        outbox_pending = row["pending"]
 
-        cursor.execute("SELECT COUNT(*) as total FROM st_dlq")
-        dlq_before = cursor.fetchone()["total"]
+        row = await conn.fetchrow("SELECT COUNT(*) as total FROM st_dlq")
+        dlq_before = row["total"]
 
-        logger.info("📊 Current state:")
+        logger.info("Current state:")
         logger.info(f"   Outbox total: {outbox_before}")
         logger.info(f"   Outbox pending: {outbox_pending}")
         logger.info(f"   DLQ total: {dlq_before}")
 
         # Clear outbox
-        cursor.execute("DELETE FROM st_outbox")
-        outbox_cleared = cursor.rowcount
-        conn.commit()
-        logger.info(f"✅ Cleared {outbox_cleared} entries from st_outbox")
+        result = await conn.execute("DELETE FROM st_outbox")
+        outbox_cleared = int(result.split()[-1]) if result else 0
+        logger.info(f"Cleared {outbox_cleared} entries from st_outbox")
 
         # Clear DLQ
-        cursor.execute("DELETE FROM st_dlq")
-        dlq_cleared = cursor.rowcount
-        conn.commit()
-        logger.info(f"✅ Cleared {dlq_cleared} entries from st_dlq")
+        result = await conn.execute("DELETE FROM st_dlq")
+        dlq_cleared = int(result.split()[-1]) if result else 0
+        logger.info(f"Cleared {dlq_cleared} entries from st_dlq")
 
-        # Vacuum database
-        logger.info("🔧 Running VACUUM to reclaim space...")
-        conn.execute("VACUUM")
-        logger.info("✅ VACUUM completed")
+        # Vacuum tables (PostgreSQL requires table name)
+        logger.info("Running VACUUM to reclaim space...")
+        await conn.execute("VACUUM st_outbox")
+        await conn.execute("VACUUM st_dlq")
+        logger.info("VACUUM completed")
 
-        conn.close()
+        await conn.close()
 
         logger.info("=" * 60)
-        logger.info("✅ OUTBOX CLEANUP COMPLETE")
+        logger.info("OUTBOX CLEANUP COMPLETE")
         logger.info("=" * 60)
         logger.info("")
 
@@ -125,7 +131,7 @@ def clear_outbox_backlog(db_path: str = "/data/k0_runtime.sqlite3") -> dict:
         }
 
     except Exception as e:
-        logger.error(f"❌ Failed to clear outbox: {e}")
+        logger.error(f"Failed to clear outbox: {e}")
         raise
 
 
@@ -255,16 +261,12 @@ class TrafficGenerator:
 
         while self._now() < end_time and self.running:
             # Burst period
-            logger.info(
-                f"Starting burst period: {burst_rate} req/s for {burst_duration}s"
-            )
+            logger.info(f"Starting burst period: {burst_rate} req/s for {burst_duration}s")
             await self._generate_traffic(burst_rate, burst_duration)
 
             # Quiet period
             if self._now() < end_time:
-                logger.info(
-                    f"Starting quiet period: {base_rate} req/s for {quiet_duration}s"
-                )
+                logger.info(f"Starting quiet period: {base_rate} req/s for {quiet_duration}s")
                 await self._generate_traffic(base_rate, quiet_duration)
 
     async def _run_mixed(self):
@@ -336,9 +338,7 @@ class TrafficGenerator:
     def _build_command_envelope(self, sequence: int) -> dict[str, Any]:
         profile = self.profile
         trace_id = str(uuid.uuid4())
-        observed_at = (
-            self._now().isoformat(timespec="milliseconds").replace("+00:00", "Z")
-        )
+        observed_at = self._now().isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
         # REAL memory store operation that persists to database
         # This triggers: UoW commit → WAL fsync → Outbox population → Replay → SSE delivery
@@ -357,9 +357,7 @@ class TrafficGenerator:
                     "source": "traffic_generator",
                 },
             },
-            "embedding": [
-                random.random() for _ in range(384)
-            ],  # Fake embedding for vector search
+            "embedding": [random.random() for _ in range(384)],  # Fake embedding for vector search
         }
 
         body_json = canonical_json(body)
@@ -451,9 +449,7 @@ class TrafficGenerator:
             "space_id": self.profile.space_id,
             "topic": self.profile.topic,
             "offset": 0,
-            "ack_ts": self._now()
-            .isoformat(timespec="milliseconds")
-            .replace("+00:00", "Z"),
+            "ack_ts": self._now().isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         }
         await self._make_request("POST", "/k0/sse.ack", json=ack_payload)
 
@@ -632,9 +628,7 @@ class TrafficGenerator:
             duration = (end_time - start_time).total_seconds()
         avg_latency = self.metrics.total_latency_ms / self.metrics.total_requests
         error_rate = (self.metrics.failed_requests / self.metrics.total_requests) * 100
-        throughput = (
-            self.metrics.total_requests / duration if duration > 0 else float("inf")
-        )
+        throughput = self.metrics.total_requests / duration if duration > 0 else float("inf")
 
         # Build endpoint breakdown
         endpoint_breakdown = {}
@@ -698,18 +692,14 @@ def parse_duration(duration_str: str) -> int:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Traffic Generator for Staging Burn-in"
-    )
+    parser = argparse.ArgumentParser(description="Traffic Generator for Staging Burn-in")
     parser.add_argument(
         "--endpoint",
         required=True,
         help="K0 endpoint URL (e.g., http://staging.k0.local)",
     )
     parser.add_argument("--rate", type=int, required=True, help="Requests per second")
-    parser.add_argument(
-        "--duration", required=True, help="Duration (e.g., 4h, 30m, 3600s)"
-    )
+    parser.add_argument("--duration", required=True, help="Duration (e.g., 4h, 30m, 3600s)")
     parser.add_argument(
         "--scenario",
         choices=["baseline", "burst", "mixed", "sustained", "comprehensive"],
@@ -725,9 +715,7 @@ def main():
     parser.add_argument(
         "--query-ratio", type=float, default=0.3, help="Query ratio for mixed scenario"
     )
-    parser.add_argument(
-        "--sse-ratio", type=float, default=0.1, help="SSE ratio for mixed scenario"
-    )
+    parser.add_argument("--sse-ratio", type=float, default=0.1, help="SSE ratio for mixed scenario")
     parser.add_argument(
         "--output-dir",
         type=Path,

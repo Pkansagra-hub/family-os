@@ -1,9 +1,9 @@
 # P08: Embedding Management & Enhancement Pipeline - Development Dossier
 
-**Status**: Architecture Revised - Aligned with ADR-K003
+**Status**: ✅ Production - Kernel Lifespan Scheduler
 **Last Updated**: 2025-12-13
-**Architecture**: YAML Pipeline (Kernel Boundary Compliant)
-**ADR Reference**: [ADR-K003: Inline Embedding Generation via UltraBERT](../architecture/decisions-K0/pipelines/k003-inline-embedding-ultrabert.md)
+**Architecture**: Kernel Background Task (Scheduled Batch Mode)
+**ADR Reference**: [ADR-K003: Inline Embedding Generation via UltraBERT](../architecture/decisions-K0/k003-inline-embedding-ultrabert.md)
 
 ---
 
@@ -27,11 +27,12 @@ P08 → claim → compute (MiniLM) → store → index → update
 ```
 P02 → M02/M04/M10 (UltraBERT single-pass, includes embedding)
     → M22 (extract embedding from cache - 0ms)
-    → M23 (write to st_vec - embedding_status=READY)
-    → st_hipp_events with embedding immediately available
+    → M16 (atomic 3-table write: st_hipp_events + st_vec + st_pipeline_processed)
+    → st_hipp_events with embedding immediately available (status=READY)
                     ↓
-P08 (NEW ROLE) → FAISS indexing, backfill, model upgrades, cleanup
-    → Subscribes to p02.embedding.stored.v1
+P08 (KERNEL SCHEDULER) → FAISS indexing via background task
+    → Polls st_vec for status=READY vectors (300s interval, catch-up on boot)
+    → Adds to FAISS IndexIDMap, updates status=INDEXED
     → Manages embedding lifecycle (not generation)
 ```
 
@@ -43,9 +44,10 @@ P08 (NEW ROLE) → FAISS indexing, backfill, model upgrades, cleanup
 |----------|-----------|-----------|-----------|
 | Primary Embedding | P08 (async MiniLM) | P02 (inline UltraBERT) | UltraBERT already computes embedding in single pass |
 | Embedding Dimension | 384 (MiniLM) | 768 (UltraBERT) | Higher quality, no extra cost |
-| P08 Role | Primary generation | Management & enhancement | Generation moved to P02 hot path |
-| FAISS Indexing | Synchronous in P08 | Optional async in P08 | Decoupled for flexibility |
-| Entry Topic | `p02.embedding.enqueued.v1` | `p02.embedding.stored.v1` | Fires after embedding already stored |
+| P08 Role | Primary generation | Kernel scheduler for FAISS | Generation moved to P02, indexing via lifespan task |
+| FAISS Indexing | Synchronous in P08 | Kernel background task (300s interval) | Polls st_vec, catch-up on boot |
+| Entry Topic | `p02.embedding.enqueued.v1` | N/A (polls st_vec directly) | No event subscription, scheduled batch mode |
+| M23 Module | Separate vec writer | Merged into M16 | Atomic 3-table transaction |
 
 ---
 
@@ -494,11 +496,11 @@ CREATE INDEX idx_emb_tenant_space ON st_embeddings(tenant_id, space_id);
 ### Column: st_hipp_events.embedding_status (Updated Values)
 
 | Status | Set By | Meaning |
-|--------|--------|---------|
+|--------|--------|--------|
 | PENDING | Legacy (before ADR-K003) | Needs backfill |
-| READY | P02 inline (M23) | Embedding stored in st_vec |
-| INDEXED | P08 FAISS indexing | Also in FAISS search index |
-| FAILED | P02 or P08 | Generation failed |
+| READY | P02 M16 (atomic inline) | Embedding stored in st_vec |
+| INDEXED | P08 Kernel Scheduler | Also in FAISS search index (faiss_id set) |
+| FAILED | P02 or P08 | Generation/indexing failed |
 
 ---
 
@@ -506,10 +508,12 @@ CREATE INDEX idx_emb_tenant_space ON st_embeddings(tenant_id, space_id);
 
 | Topic | Trigger | Use Case | Priority |
 |-------|---------|----------|----------|
-| `p02.embedding.stored.v1` | P02 M23 completes | FAISS indexing | HIGH |
+| N/A (st_vec polling) | Kernel scheduler (300s interval) | FAISS indexing | HIGH |
 | `p08.backfill.requested.v1` | Scheduled/manual | Legacy backfill | MEDIUM |
 | `p08.recompute.requested.v1` | Model upgrade | Recomputation | LOW |
 | `p08.cleanup.requested.v1` | Event deletion | Cleanup | LOW |
+
+**Note**: P08 v2.1 uses kernel lifespan scheduler that polls st_vec for READY vectors, not event-driven.
 
 ---
 
@@ -534,7 +538,7 @@ CREATE INDEX idx_emb_tenant_space ON st_embeddings(tenant_id, space_id);
 |---------|----------|-------|
 | `embedding_queue_claim()` | Deprecated | No queue needed |
 | `embedding_compute()` | P02 M22 | UltraBERT cache extraction |
-| `embedding_store()` | P02 M23 | Inline write to st_vec |
+| `embedding_store()` | P02 M16 | Merged into atomic 3-table transaction |
 
 ---
 
@@ -563,31 +567,31 @@ CREATE INDEX idx_emb_tenant_space ON st_embeddings(tenant_id, space_id);
 
 ## Migration from v1 to v2
 
-### Phase 1: Deploy P02 Inline Embedding (Day 1-2)
+### Phase 1: Deploy P02 Inline Embedding ✅ COMPLETE
 
-1. Add M22 `embedding.extract_from_cache:v1` to P02
-2. Add M23 `builders.embedding_write:v1` to P02
-3. Update P02 DAG to include M22/M23
-4. P02 now writes to st_vec with embedding_status=READY
+1. ✅ Add M22 `embedding.extract_from_cache:v1` to P02
+2. ✅ Merge M23 functionality into M16 (atomic 3-table transaction)
+3. ✅ Update P02 DAG to include M22, M16 writes st_vec atomically
+4. ✅ P02 now writes to st_vec with embedding_status=READY
 
-### Phase 2: Update P08 for Management (Day 2-3)
+### Phase 2: Update P08 for Kernel Scheduler ✅ COMPLETE
 
-1. Update P08 to v2 contract (management focus)
-2. Change entry topic from `enqueued` to `stored`
-3. Remove compute module (no longer needed for primary path)
-4. Add backfill, recompute, cleanup flows
+1. ✅ P08 v2.1 runs as kernel lifespan background task
+2. ✅ Polls st_vec for READY vectors (300s interval, catch-up on boot)
+3. ✅ Uses FaissIndexManager singleton with IndexIDMap wrapper
+4. ✅ Updates status to INDEXED, sets faiss_id column
 
-### Phase 3: Backfill Legacy Data (Day 3-4)
+### Phase 3: Backfill Legacy Data (Future)
 
 1. Trigger `p08.backfill.requested.v1` for legacy records
 2. P08 processes PENDING embeddings
 3. Updates st_vec and FAISS index
 
-### Phase 4: Update FAISS Index Dimension (Day 4)
+### Phase 4: Update FAISS Index Dimension ✅ COMPLETE
 
-1. Rebuild FAISS index with 768-dim vectors
-2. Migration script for 384→768 dimension change
-3. Update `K0_FAISS_DIMENSION` environment variable
+1. ✅ FAISS index uses 768-dim vectors (IndexFlatL2 wrapped in IndexIDMap)
+2. ✅ FaissIndexManager handles ID mapping automatically
+3. ✅ `K0_FAISS_DIMENSION=768` is default
 
 ---
 

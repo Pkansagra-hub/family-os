@@ -1,6 +1,11 @@
 """
 Test suite for migration 0012 (Pipeline Infrastructure).
 
+DEPRECATED: These tests validate SQLite migrations that have been deprecated
+in favor of PostgreSQL. The migration files are in k0/contracts/sql(deprecated)/.
+These tests are skipped until they are rewritten for PostgreSQL or the
+deprecated migrations are removed entirely.
+
 Validates:
 - st_pipeline_processed table creation and constraints
 - st_pipeline_status table creation and constraints
@@ -11,7 +16,7 @@ Validates:
 
 Related:
 - M1 R1.2: DDL Migrations
-- Migration file: k0/contracts/sql/migrations/0012_pipeline_infrastructure.sql
+- Migration file: k0/contracts/sql(deprecated)/migrations/0012_pipeline_infrastructure.sql
 - Architecture: docs/architecture/decisions/k0_pipeline_architecture.md
 """
 
@@ -19,6 +24,11 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+
+# Skip entire module - SQLite migrations deprecated in favor of PostgreSQL
+pytestmark = pytest.mark.skip(
+    reason="SQLite migrations deprecated; tests need rewrite for PostgreSQL"
+)
 
 
 @pytest.fixture

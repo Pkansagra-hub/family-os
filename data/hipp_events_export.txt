@@ -1,0 +1,60 @@
+               event_id               |                                content                                 |            dominant_emotions_json            | intent_category 
+--------------------------------------+------------------------------------------------------------------------+----------------------------------------------+-----------------
+ 01f14b1e-5a62-47f9-bcd8-772937e1274f | Should I take the new job offer from Google or stay at my current comp | ["nervousness","worry"]                      | seek_advice
+ 02dd91d5-d199-4b12-a898-9c35a334895b | Paid off student loans! 10 years of payments finally done.             | ["joy","excitement","pride"]                 | share_news
+ 07f3e907-608e-4b72-b529-80a69df9dba9 | Team standup meeting with John, Lisa, and Mike. Discussed Q2 roadmap p | ["neutral"]                                  | share_news
+ 1324dff3-04e6-4284-8d87-4d37fc7c1a23 | Yoga class with instructor Maria. Worked on flexibility and breathing. | ["neutral"]                                  | log_memory
+ 1882435c-4fee-4c77-a41e-389265889861 | Remind me to call Mom tomorrow at 3pm for her birthday.                | ["love","caring"]                            | set_reminder
+ 1a7e9710-ce06-4c7b-ad67-bfa37bd6eb3b | Need to remember to submit the quarterly report by Friday at 5pm.      | ["neutral"]                                  | set_reminder
+ 1c4a891d-eb10-4051-8cf4-02a18ede704b | Code review session with Mike. Fixed critical bug in authentication mo | ["relief"]                                   | share_news
+ 1e6ddf1c-a551-4ec5-a2e1-bae5f026dc1c | Had coffee with Rachel at Starbucks. She mentioned her new position at | ["neutral"]                                  | share_news
+ 2332c2a1-d0d5-45d9-b8bb-9b66f2b2363b | Met Rachel for coffee at the Starbucks downtown. Talked about her Goog | ["neutral"]                                  | share_news
+ 2c9ea3d3-6303-4e7a-804a-c4f4304e9dc9 | The key insight from the parenting book is that quality time matters m | ["neutral"]                                  | reflect
+ 39761e92-c5d9-458f-b6bf-e4a5434d07f7 | Really anxious about the presentation tomorrow. What if I mess up?     | ["fear","nervousness","worry"]               | express_feeling
+ 3c3c74fb-32b4-424d-ad1c-922208223571 | I'm feeling so grateful for my family today. They always support me.   | ["love","gratitude","contentment"]           | express_feeling
+ 43d249fe-6f52-48fc-9e8b-317e4382538d | Movie night watching Inception with roommate Kevin. Still confused abo | ["sadness","disappointment","bittersweet"]   | express_feeling
+ 47516a61-9264-494a-befe-b599e5a7eb8d | Doctor appointment with Dr. Smith for annual checkup. Blood pressure 1 | ["neutral"]                                  | log_memory
+ 4769eafe-9222-419d-8c2e-cd395a8c1825 | Remind me next Monday to schedule the dentist appointment.             | ["neutral"]                                  | set_reminder
+ 49de5b5d-2810-4e59-8ab3-c16fa9bb1dd6 | Signed lease for new apartment in Brooklyn. Moving in next month.      | ["excitement","contentment"]                 | share_news
+ 4d873e66-0feb-4cdd-9c4d-1488dbff61dc | Morning run at Central Park. 5 miles in 42 minutes, feeling great!     | ["joy","excitement","pride"]                 | log_memory
+ 4f29c064-c3ae-43ce-9c59-82c5d1dff919 | Today I understood that listening more and talking less makes conversa | ["contentment"]                              | reflect
+ 53fc47f5-04cf-42eb-991b-c67b11b161e8 | One-on-one with manager Sarah about promotion timeline and career goal | ["neutral"]                                  | share_news
+ 5506b50b-97dd-4107-ab33-ac218af3d3c8 | What do you think - should Emma switch from soccer to basketball?      | ["hope"]                                     | seek_advice
+ 58e1d9ab-8184-47b4-bd98-9ccaed9eefea | Family dinner with Emma and Jake at home. Made lasagna together.       | ["joy","contentment","togetherness"]         | log_memory
+ 5c83a9ed-ff5f-4e62-9f80-e610f5395d80 | Presented quarterly results to the executive team. CEO David was impre | ["joy","pride"]                              | share_news
+ 5e27aed5-bc01-45b8-91da-f0022424e56c | Set a reminder to pick up Emma from soccer practice at 4:30pm.         | ["neutral","caring"]                         | set_reminder
+ 668ef6a9-86a3-4f38-a84e-9db81e925a32 | What was that recipe Mom shared last Thanksgiving?                     | ["nostalgia","warmth"]                       | query_memory
+ 6789e9dc-ef06-4d3e-b2bc-40b45fb81922 | Met with financial advisor Jennifer about retirement planning and 401k | ["neutral"]                                  | share_news
+ 77bf21e8-9ded-4b2f-97ff-f08edd312114 | Visited Golden Gate Bridge. Amazing views of the bay and Alcatraz.     | ["joy","surprise","excitement"]              | share_news
+ 79177e31-0079-4602-8954-83434159152d | How much did we spend on the San Francisco trip last month?            | ["neutral"]                                  | query_memory
+ 793503b6-7f67-473b-a40f-a0cf516e524d | I'm frustrated that the project deadline got moved up again.           | ["annoyance","disappointment","frustration"] | express_feeling
+ 8a72c780-912e-43e6-b9c9-f6888dfb446c | Emma's first day of kindergarten at Lincoln Elementary. She was so bra | ["joy","excitement","pride"]                 | log_memory
+ 8e4d6cf1-a840-42e7-9805-a274c3b03b38 | Birthday party for Tom at his apartment. About 20 people showed up.    | ["joy","excitement","togetherness"]          | share_news
+ 971755d8-b0ef-460e-ad7a-53af7d09a7f3 | Got promoted to Senior Engineer! Celebrated with team. 15% salary incr | ["joy","excitement","pride"]                 | share_news
+ a8da223a-d9da-4b4b-b1e3-94779b16a084 | Attended webinar on AI and the future of work by Stanford professor An | ["neutral"]                                  | share_news
+ a96ca1cc-d8ea-48f4-8133-35abb9a6f6b4 | I'm so happy about getting the promotion! All the hard work paid off.  | ["joy","excitement","pride"]                 | share_news
+ a9ae8e1e-f126-41f6-a2eb-3a727ca29298 | Dinner with college friends at Italian restaurant Bella Notte. Great p | ["joy","excitement","contentment"]           | share_news
+ ac0d182a-65eb-4426-be36-869d4814f3ff | I need advice on whether to invest in stocks or bonds right now.       | ["neutral"]                                  | seek_advice
+ acc8112f-f166-405c-b011-b3d53f23f50d | I'm trying to decide between buying a house in Brooklyn or renting in  | ["neutral"]                                  | seek_advice
+ b1d61510-ddb3-40b7-9ce5-f53f1a11fec0 | Feeling nostalgic looking at old photos from college with Alex and Chr | ["joy","nostalgia","warmth"]                 | reflect
+ b8d5e019-9918-420f-8d62-3b7841718123 | I learned that consistency beats intensity. My daily 20-minute workout | ["neutral"]                                  | reflect
+ b98fcae7-0021-4ddc-9543-108650f2501b | Coffee with best friend Rachel at Starbucks. She's excited about her n | ["joy","excitement"]                         | share_news
+ ba4fb14a-26d6-40ba-b3cc-ac0e9e914d27 | When did Emma have her piano recital at Lincoln School?                | ["neutral","nostalgia"]                      | query_memory
+ bcd6785f-d3d4-499a-ace1-82cf7e3a1089 | My brother Jake just had his first baby - a girl named Sophie!         | ["joy","excitement","pride"]                 | share_news
+ bf152e87-0bf8-4457-a640-73de5e245764 | Don't let me forget to water the plants in 2 hours.                    | ["neutral"]                                  | set_reminder
+ c124512d-1d13-45c0-8a50-f80712d9b16c | Flight to San Francisco for tech conference. Staying at Marriott Union | ["neutral"]                                  | log_memory
+ c24b83ae-be82-45d5-a6e2-2e9f113ce812 | Rachel just told me she's getting married to Tom in June!              | ["joy","love","excitement"]                  | share_news
+ c2db2f93-6de4-4865-b419-a02c99443b7c | Picked up Emma from soccer practice at City Sports Complex. She scored | ["joy","excitement","pride"]                 | share_news
+ c875fb93-6ddc-41ea-bf91-d143b53c025f | Exciting news! Emma got accepted into the gifted program at school!    | ["joy","excitement","pride"]                 | share_news
+ cc74f2a2-0eb9-45a4-aa3f-f35948c0f73e | Emma's piano recital at Lincoln School. She played Fur Elise beautiful | ["joy","excitement","pride"]                 | share_news
+ de0ebb08-d88b-49a1-a4c8-4cd34e82733d | Lunch with coworkers at Chipotle. Discussed the new project deadline.  | ["neutral"]                                  | log_memory
+ e2cb287c-a681-4e21-bf83-313eb3712996 | Looking back, I realize that setting clear boundaries at work has made | ["gratitude","pride","relief"]               | reflect
+ e360df3d-9e2c-47b6-b7ca-99fa8826d50b | Drove Emma to her friend Sofia's birthday party at Chuck E Cheese.     | ["joy"]                                      | log_memory
+ ebc196e0-f097-4d43-ad45-9576e7661451 | What did Dr. Smith say about my blood pressure at the last checkup?    | ["neutral","worry"]                          | query_memory
+ ef8de2b6-dedc-4e8a-a126-1f3daa0007f3 | Dentist checkup with Dr. Johnson. No cavities, scheduled cleaning for  | ["neutral","relief"]                         | share_news
+ f1d93eed-cd46-466c-b26a-3d4a718047b9 | The company announced we're expanding to London next year!             | ["joy","excitement"]                         | share_news
+ f3cadec4-d0d5-49d9-9d05-3a6ac99d1685 | Weekend trip to Boston with family. Walked the Freedom Trail.          | ["joy","excitement","contentment"]           | log_memory
+ f3ed9b30-2ace-44e0-a288-e63cd13c684c | Finished reading 'Atomic Habits' by James Clear. Key insight: systems  | ["neutral","contentment"]                    | reflect
+ f44ec3ef-6196-4d4c-998f-f15a3a91bc3f | Online Python course on Coursera. Completed module on machine learning | ["pride","relief"]                           | share_news
+(56 rows)
+

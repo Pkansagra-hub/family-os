@@ -1,107 +1,236 @@
 # K0 Contracts Version Registry
 # This file tracks the canonical version and checksums for all contract artifacts.
 # Changes to this file require Architecture + Security + Ops approval.
+#
+# Categories:
+#   root: 2 files
+#   modules: 22 files
+#   pipelines: 2 files
+#   capabilities: 1 file
+#   policy: 1 file
+#   schemas: 5 files
+#   table_schemas: 1 file
+#   taxonomies: 1 file
+#   jsonschema: 35 files
+#   TOTAL: 70 files
 
-version: 1.2.0
-release_date: '2025-11-13'
-status: active
+version: 1.1.0
+release_date: '2025-01-07'
+status: frozen
 artifacts:
+  # === ROOT-LEVEL API SPECS ===
   openapi:
     file: openapi.k0.yaml
-    version: 1.0.0
+    version: '1.0.0'
     sha256: f172d33f06fa226e36587887a3947550f3ecdc9e625792a0320862a33d0f68c5
   asyncapi:
     file: asyncapi.events.yaml
-    version: 1.0.0
+    version: '1.0.0'
     sha256: f4916a1e222c581754b6617cb804b5adb5d283b9cc2f131af99c18fa8f0a968c
+
+  # === MODULE CONTRACTS (22) ===
+  modules:
+    - file: modules/affect.analyze.v1.yaml
+      version: v1
+      sha256: c5a93cda1f192b3ddedb0b71ebd59fb9229eae5cb7a32f1f0905a85771317df8
+    - file: modules/builders.embedding_queue_write.v1.yaml
+      version: v1
+      sha256: fda0f3a98820c4c687e7e0507eb595fbed3eced6cbaa6d991b83596e41ee4dc9
+    - file: modules/builders.embedding_write.v1.yaml
+      version: v1
+      sha256: 182fa74d16474cb5f41f22df6659111bd27d060b8e36d26c74ba95e143726e9b
+    - file: modules/builders.hipp_events_row.v1.yaml
+      version: v1
+      sha256: f6b80cd28c3122c1d4eb1ff2fc618ffc9ebc4dda7ae4a7ecc17946079dac658d
+    - file: modules/context.device_profile.v1.yaml
+      version: v1
+      sha256: 316ed7a72c6f6f1003a21d5ba793ab08ab494501e10af22a528c9176002bd1b4
+    - file: modules/context.geo_metadata.v1.yaml
+      version: v1
+      sha256: 25fe19d275574bc0842df2165ba0527ea9f94c899bbf39f54b714f5daea362ce
+    - file: modules/context.ingress_classify.v1.yaml
+      version: v1
+      sha256: 6875394fd36dc7377a482f10fe05f63131fca16c75f9cc85cdaf9f4ead28b292
+    - file: modules/context.retention_lookup.v1.yaml
+      version: v1
+      sha256: 13ecafd07a45467826f75416d2daa6a1930d99efef4efbb92cb5affbedf10681
+    - file: modules/context.spatial_minimal.v1.yaml
+      version: v1
+      sha256: b05dfe4ebe48dcf08ccbc735ae35191b6402d276f773e30c2613df75b0fe2f1c
+    - file: modules/context.temporal_profile.v1.yaml
+      version: v1
+      sha256: d2e58f18d0853e2b8d17cf8019959563134645314c801360b98c439c384c88b6
+    - file: modules/core.event_emitter.v1.yaml
+      version: v1
+      sha256: c774d8c3c4478dde88b8985689e435da26edb83641c9cba237abac6e9eb4fa92
+    - file: modules/core.hipp_events_writer.v1.yaml
+      version: v1
+      sha256: 33636a470996f95547262bc8b4c3187b91ce4d0c3c0adbd1043801160a6ec926
+    - file: modules/embedding.backfill.v1.yaml
+      version: v1
+      sha256: 2ef8c99d1ab00fc094f5bf37517de7855f74df36f8f97dcee452531d46dc2e78
+    - file: modules/embedding.cleanup.v1.yaml
+      version: v1
+      sha256: 2bf327929d5a33b7aa593d1e8bf0642e2c98793f476f82cf1dd1e66030a70725
+    - file: modules/embedding.extract_from_cache.v1.yaml
+      version: v1
+      sha256: 7d2b436a09e89d489f7569f0b8b7e8bfc10fd36b6d2b839e88155ba5b2743536
+    - file: modules/embedding.faiss_indexer.v1.yaml
+      version: v1
+      sha256: ff98c4f2584d34193401c838c340756b044cd6f514e9f15adbdf1ea7349ce1f6
+    - file: modules/embedding.recompute.v1.yaml
+      version: v1
+      sha256: 373715dc15692ea16511b05676b35a0c7c8cc4c338b9968fafa10220f1677f1c
+    - file: modules/hippocampus.pattern_separate.v1.yaml
+      version: v1
+      sha256: b5079e49f7b615566b2fa795bd6fa99e14ca9c9482cba990c3e181a4787eea54
+    - file: modules/hippocampus.semantic_project.v1.yaml
+      version: v1
+      sha256: 8149dbf1a289d648f321d400580e86e34c81d1ec0457f6968dbf728941ad4deb
+    - file: modules/salience.score.v1.yaml
+      version: v1
+      sha256: 89c59c218d26882546d0fae34d4ea33c4e82482441d85bda66f2094eedc46f08
+    - file: modules/social.family_graph_resolve.v1.yaml
+      version: v1
+      sha256: 181840479b2c2b5f328dc9dafe89dcd06cfb2e81bfcfb1152e813ed1acce8c22
+    - file: modules/space.resolve_visibility.v1.yaml
+      version: v1
+      sha256: dd62f9473aef657a16610d25ff12e8a1ccb7f057d730c1ec55aad549f2ddc6aa
+
+  # === PIPELINE CONTRACTS (2) ===
+  pipelines:
+    - file: pipelines/p02_write.v1.yaml
+      version: v1
+      sha256: 6c59721a87ab311de348ae45160a04c034f63b64dbbe16dc48d20f052888ec6b
+    - file: pipelines/p08_embedding_management.v2.yaml
+      version: v3
+      sha256: 24cbcd38daa16d4b40d85e0a891c80d10f5bbad98e425991eb19b35441193290
+
+  # === CAPABILITY CONTRACTS (1) ===
+  capabilities:
+    - file: capabilities/core.v1.yaml
+      version: v1
+      sha256: b74ff0e0b96b159b557adb636af990c9fdb261b26e59ae47dc936dee6bf30a9a
+
+  # === POLICY SCHEMAS (1) ===
+  policy:
+    - file: policy/pep.schema.json
+      sha256: 49ce12e370a0d7ee08f79ff04da1f9e0d0d2fb80790bb70f03d9b6ea6e461e67
+
+  # === EVENT SCHEMAS (5) ===
   schemas:
-  - file: jsonschema/driver.handshake.request.json
-    sha256: 0d0867ac1413547b0a38f950527ac0ff87700603f56881db75758cda4954ad22
-  - file: jsonschema/driver.handshake.response.json
-    sha256: 0034743d370e031e511f6f7c8059bb88ebcad3aba18433ad05d2515e2880365b
-  - file: jsonschema/envelope.schema.json
-    sha256: 8d6ff3014501729d9e3888f4c367d87871b7cb229782d60521c53e21b4cbe223
-  - file: jsonschema/error.schema.json
-    sha256: 674fbed68d52f417208c049fc52d670489b3bbb3e4714416a480c17ef35e9c84
-  - file: jsonschema/infra.snapshot.event.json
-    sha256: 78607e085f426268c74cf4a4e446967419e238f63d32b8b0d6eaf01fa15ca868
-  - file: jsonschema/offset.cursor.schema.json
-    sha256: d5c5e4fdd064ad078296882dca7911bc8b3ee530608be5db9a9138c57a1c905a
-  - file: jsonschema/pep.schema.json
-    sha256: e9b4a2e2e9dd23537ae2a80c30e2f8960f033db1fd51d3315170fe23048bea81
-  - file: jsonschema/query.recall.request.json
-    sha256: d399f14076b75ade6e4686a45934bd4ded82c196c8b4af9ea866fef1fac119cb
-  - file: jsonschema/query.recall.response.json
-    sha256: 55038172b41d3de4ae979bcd56bfd8c2d9103124090271f50d91fa7caf8b7e64
-  - file: jsonschema/receipt.schema.json
-    sha256: d095b18bd3aa678138eca90db5674b440fe13fde691c4abe4b9c4ff0c97dc4ed
-  - file: jsonschema/sse.ack.request.json
-    sha256: e2c886fd2c790974579fcd5361d3a9895e9f6a5cd138bdc6ff3b66c63bc4b287
-  - file: jsonschema/affect/affect_annotation.json
-    sha256: 0fd7a0386614fd2299331e735b26aad9545efe366641789e6fc6114a232cecf5
-  - file: jsonschema/affect/affect_ema_state.json
-    sha256: 43a0a7e17982c58c1308e14aab128f1e3ba5b71014add09591ba587f3c08cd1f
-  - file: jsonschema/affect/affect_summary.json
-    sha256: 7154eb40c0aa3016fc931fbc0e7d5a7ff8219a3764cc401619ea5eac283fe054
-  - file: jsonschema/affect/banding_result.json
-    sha256: 0ade0cf5814c167094c806b381cf1d06cde831ee00ff8d9586c3f0c3e703943f
-  - file: jsonschema/affect/counterfactual_input.json
-    sha256: 44397ba7d809526957118a6002362f784ef33c7680c55e1b598b83d958e43fb7
-  - file: jsonschema/affect/counterfactual_result.json
-    sha256: 92a589451ae50c2f185b14efac22a5a084534f29259142d8d745a20a5e5434cd
-  - file: jsonschema/affect/household_affect_state.json
-    sha256: 1a91151ccc2c225545720c9ed2acd92f4462eb199fa3602932093e8d7480244e
-  - file: jsonschema/affect/modality_score.json
-    sha256: a284e6772706d6335f6e3ea32f66a553b2b3a81deb45307c5f6dab605ca9633b
-  - file: jsonschema/affect/calibration_params.json
-    sha256: 7dd12f636e548ee2fe622df798aab42b1e51ab4b03774da472279fc3c76033c1
-  - file: jsonschema/affect/behavioral_signals.json
-    sha256: 394a572a463973a679e15093480b0ab6f880bb4545569caaf164cc3f76bb9c5c
-  - file: jsonschema/space/space_resolution_request.json
-    sha256: a7c310746d03bcffc38f64402cd2fbf360b290ec28efbcd996d08d983a6a82f9
-  - file: jsonschema/space/space_resolution.json
-    sha256: 781acf5583878bc7554653676cd018ee80f8cecf2fa9ad76855455eedc70c9de
-  bridge_policy:
-    file: policy/bridge_policy.yml
-    version: 0.1.0
-    sha256: f15bb2f19320bc61b733bb284cd6c62df726a886aa5914fdaf433feeb280106e
-  storage:
-    file: sql/storage.sql
-    sha256: 0c33b91061442e5efa28a66d085959e0928df96e694992312969b015813a50bc
+    - file: schemas/cognitive_embedding_backfilled.json
+      sha256: 033d9884e3c4c6ac66516e7f0bfedc52c734793c04462c103688f9a492efd96c
+    - file: schemas/cognitive_embedding_cleaned.json
+      sha256: 5038618da6625a0c0b96f64037a24a15e07fe044f292f3bb6a05861e58ab6bd9
+    - file: schemas/cognitive_embedding_recomputed.json
+      sha256: 14024e35dfabfed0e4b37ab284593f36a396c008576264211cc45c982f76a61b
+    - file: schemas/cognitive_vector_indexed.json
+      sha256: 068a19667d72f5d253d823ed2d6cbea7b1c2d01071d750a86f7745433bbf6202
+    - file: schemas/cognitive_vector_stored.json
+      sha256: fb8c92c68e21650bc55aafd64d8b52804c2bbea4faa136275cf589d98ec72d21
+
+  # === TABLE SCHEMAS (1) ===
+  table_schemas:
+    - file: table_schemas/P02_tables_schema.yaml
+      sha256: c1b6b7f8679bcc4049fb0e60a9b3fa168a8d65318cf5fb882f6020b34cf75f1c
+
+  # === TAXONOMIES (1) ===
+  taxonomies:
+    - file: taxonomies/activity_taxonomy.yaml
+      sha256: f9ef512aba1c4bb6660298beefb78042d80b0e875fbf7d9364636e89e932dda4
+
+  # === JSON SCHEMAS (16) ===
+  jsonschema:
+    - file: jsonschema/acl.schema.json
+      sha256: f9c9503371c84e0ec5b26b6da05ecdaf8a24a57ffcc3912d12990e66493735fb
+    - file: jsonschema/archive_manifest.schema.json
+      sha256: 0f1ef874117ba82e4565b28dac1930b32992c86c4b405c4be3351cea434b1c97
+    - file: jsonschema/capability.schema.json
+      sha256: b1aedfd63900b288386e83a494d703e27ea48fbaf87bfa112bee5a1ef524f54d
+    - file: jsonschema/crdt_merge_log.schema.json
+      sha256: 74566aded444874a640cb3e438918a38eb5fa5b88d0db55afda4493e8723bb15
+    - file: jsonschema/driver.handshake.request.json
+      sha256: 0d0867ac1413547b0a38f950527ac0ff87700603f56881db75758cda4954ad22
+    - file: jsonschema/driver.handshake.response.json
+      sha256: 0034743d370e031e511f6f7c8059bb88ebcad3aba18433ad05d2515e2880365b
+    - file: jsonschema/envelope.schema.json
+      sha256: 31bd48f212b32929b58f48af0e7221768440eb0ccb2b0b54467e20fdefc6ea17
+    - file: jsonschema/error.schema.json
+      sha256: 674fbed68d52f417208c049fc52d670489b3bbb3e4714416a480c17ef35e9c84
+    - file: jsonschema/infra.snapshot.event.json
+      sha256: 78607e085f426268c74cf4a4e446967419e238f63d32b8b0d6eaf01fa15ca868
+    - file: jsonschema/offset.cursor.schema.json
+      sha256: d5c5e4fdd064ad078296882dca7911bc8b3ee530608be5db9a9138c57a1c905a
+    - file: jsonschema/pep.schema.json
+      sha256: e9b4a2e2e9dd23537ae2a80c30e2f8960f033db1fd51d3315170fe23048bea81
+    - file: jsonschema/query.recall.request.json
+      sha256: d399f14076b75ade6e4686a45934bd4ded82c196c8b4af9ea866fef1fac119cb
+    - file: jsonschema/query.recall.response.json
+      sha256: 55038172b41d3de4ae979bcd56bfd8c2d9103124090271f50d91fa7caf8b7e64
+    - file: jsonschema/receipt.schema.json
+      sha256: b0af363f41428dcad0a65e594634cc546c8bc745f97b158a741b5943341f3fd6
+    - file: jsonschema/retention_policy.schema.json
+      sha256: ea7e5687a76ba27caf78c5593a8f2ffd4b6722f65966dddc045f8d185fece984
+    - file: jsonschema/sse.ack.request.json
+      sha256: e2c886fd2c790974579fcd5361d3a9895e9f6a5cd138bdc6ff3b66c63bc4b287
+
+  # === JSON SCHEMA EXAMPLES (19) ===
+  jsonschema_examples:
+    - file: jsonschema/examples/affect/behavioral_signals.json
+      sha256: ff09d31500d5c73fefb3133ddeb7407aa444a4286efe67909928bd4e63097d97
+    - file: jsonschema/examples/affect/calibration_params.json
+      sha256: 3a83c6f6aa3d2d74cc381124b86366ffb5c6a70021b53d46c36ad9e347c3ed8e
+    - file: jsonschema/examples/affect/modality_score.json
+      sha256: 1f99c667020799f119724bf3a12f1c06710d42bea945d3fee4db0c3569a5c2c2
+    - file: jsonschema/examples/driver.handshake.request.json
+      sha256: b5bb6070a93a3be5f3017206855534076a603a947f556a8b1e7eb2f7b8c80d96
+    - file: jsonschema/examples/driver.handshake.response.json
+      sha256: 9eca075c539845dd274902f8ade19de3b6d720c315b1e7772566cbbf5c31b10d
+    - file: jsonschema/examples/envelope.snapshot.json
+      sha256: 7c5e9374543a5777ee33f78d6602b16262715ceb32932bf8282b173854eaa079
+    - file: jsonschema/examples/error.qos.json
+      sha256: fa281375c6c1d3f6c85c481fc46843bc147a5f1a0b1939a96b63b007b7b62367
+    - file: jsonschema/examples/infra.snapshot.event.begin.json
+      sha256: 9e279c387fd88467b803d96606bfcef53486abaa0b2893546112d90cede8413c
+    - file: jsonschema/examples/offset.cursor.json
+      sha256: 7224548ad4998e3c52353ffe86ff37cdbc3d3479ef629ab2f35cd18b0613a489
+    - file: jsonschema/examples/pep.allow.json
+      sha256: 03f83c745f7cd78c88c43c37395cb79a12d81475a92f3b56c1a0d0d7ecff5d64
+    - file: jsonschema/examples/query.recall.request.json
+      sha256: b8cc54fce8bee0e5f28c83cde4e2af7e7a11bf4c9bdccf7a92370277caeed7e5
+    - file: jsonschema/examples/query.recall.response.json
+      sha256: 703c761c94b80d0f58913c90c2abc50127de83b657bacca4ab83582428470b5d
+    - file: jsonschema/examples/receipt.json
+      sha256: b09b5cffc25af60232f7cf6b62440f013475671e28e911b3c411ae11807d43ee
+    - file: jsonschema/examples/space/automation_black_delegate.json
+      sha256: 48ba03593c4046eba16ae7e58bc5c4759d2eb498364c62877096c4335c541d96
+    - file: jsonschema/examples/space/caretaker_delegation_minor.json
+      sha256: 1fbcabdd24dc1f049f6ede40ddc38ad37b88be27d65b20fe1152edc7d72b7f68
+    - file: jsonschema/examples/space/personal_green_self.json
+      sha256: 064f0b4fd4a9f2dc79e94c53c65a4465774ab9aeaaf46d71d6905249a2a5bbcd
+    - file: jsonschema/examples/space/shared_amber_guardian.json
+      sha256: ab8ea0d53ccdd280a63c96703c7eceacc8e277fdc3058e1469ed5a71b2a46b0c
+    - file: jsonschema/examples/space/shared_red_guardian.json
+      sha256: 261d1927c4d4495a6ef29acd02411efbc1611d23ce79340e824e4632a3c73768
+    - file: jsonschema/examples/sse.ack.request.json
+      sha256: b52e7202ac2d63a1711225a97e60c30e1a3ca1421167d3d73e1f2da4335cd76d
+
 approvals:
-  architecture: '2025-10-30'
-  security: '2025-10-30'
-  operations: '2025-10-30'
+  architecture: null
+  security: null
+  operations: null
 changelog:
-- version: 1.2.0
-  date: '2025-11-13'
-  changes:
-  - Added Space Resolver request/response schemas plus RED/BLACK/caretaker examples per ADR-K004a/K004d/K004e
-  - Locked resolver response fields with cache_snapshot_version + resolver_state metadata required for Gate 2 clearance
-  - Revalidated contracts via `python k0/automation/lint_schemas.py`
-- version: 1.1.0
-  date: '2025-11-13'
-  changes:
-  - Added 7 affect module JSON schemas (ADR-0012a, k003a)
-  - 'jsonschema/affect/affect_annotation.json: Core affect classification result (valence, arousal, tags, band)'
-  - 'jsonschema/affect/affect_ema_state.json: Dual EMA state for affect smoothing (fast/slow α=0.5/0.1)'
-  - 'jsonschema/affect/affect_summary.json: K1 bridge contract with mood labels and behavior modes'
-  - 'jsonschema/affect/banding_result.json: Policy band classification with 27+ rule evaluation'
-  - 'jsonschema/affect/counterfactual_input.json: Input for what-if affect simulation'
-  - 'jsonschema/affect/counterfactual_result.json: Safety simulation results with blocking decisions'
-  - 'jsonschema/affect/household_affect_state.json: Household-level aggregates and pattern detection'
-  - All schemas validated via `python k0/automation/lint_schemas.py --verbose`
-  - 'jsonschema/affect/modality_score.json: Per-modality score contract for fusion (ADR-0012d)'
-  - 'jsonschema/affect/calibration_params.json: Per-person calibration contract for fusion (ADR-0012d)'
-  - 'jsonschema/affect/behavioral_signals.json: Optional behavioral telemetry contract enabling Tier-0 arousal boosts (ADR-0012b)'
-- version: 1.0.1
-  date: '2025-10-30'
-  changes:
-  - Added bridge policy contract policy/bridge_policy.yml (ADR-0089) with SHA256 f15bb2f19320bc61b733bb284cd6c62df726a886aa5914fdaf433feeb280106e
-  - Revalidated contracts via `python -m k0.automation.lint_schemas`
-- version: 1.0.0
-  date: '2025-10-06'
-  changes:
-  - Initial version freeze for v1.0 release
-  - All schemas stabilized
-  - Checksum registry established
+  - version: 1.1.0
+    date: '2025-01-07'
+    changes:
+      - Expanded to cover ALL 70 contract artifacts
+      - Added modules (22), pipelines (2), capabilities (1)
+      - Added policy (1), schemas (5), table_schemas (1), taxonomies (1)
+      - Added jsonschema examples (19)
+  - version: 1.0.0
+    date: '2025-12-27'
+    changes:
+      - Initial version freeze for v1.0 release
+      - All schemas stabilized
+      - Checksum registry established (18 artifacts)

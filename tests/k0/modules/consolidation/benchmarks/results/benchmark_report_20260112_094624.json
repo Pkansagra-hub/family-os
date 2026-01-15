@@ -1,0 +1,631 @@
+{
+  "runs": [
+    {
+      "pack_name": "toy",
+      "algorithms": [
+        "CPN",
+        "MCTS",
+        "BGT",
+        "SPC"
+      ],
+      "seed": 42,
+      "start_time": "2026-01-12T09:46:21.713708",
+      "end_time": "2026-01-12T09:46:24.221940",
+      "duration_seconds": 2.508204698562622,
+      "passed": true,
+      "exit_code": 0,
+      "errors": [],
+      "coverage_results": [
+        {
+          "pack_name": "toy",
+          "algorithm": "CPN",
+          "passed": true,
+          "metrics": {
+            "total_counterfactuals": 43,
+            "path_length_distribution": {
+              "0": 37,
+              "1": 6
+            },
+            "path_length_ge_1_ratio": 0.13953488372093023,
+            "path_length_ge_2_ratio": 0.0,
+            "path_length_ge_3_count": 0,
+            "max_path_length": 1,
+            "plausibility_mean": 0.9302325581395349,
+            "plausibility_variance": 0.03001622498647918,
+            "scenario_types": [
+              "ScenarioType.UPWARD",
+              "ScenarioType.SEMIFACTUAL",
+              "ScenarioType.DOWNWARD"
+            ],
+            "scenario_type_count": 3
+          },
+          "failures": [],
+          "warnings": []
+        },
+        {
+          "pack_name": "toy",
+          "algorithm": "MCTS",
+          "passed": true,
+          "metrics": {
+            "total_scenarios": 6,
+            "total_visits": 20,
+            "max_visit_count": 4,
+            "visit_count_variance": 0.2222222222222222,
+            "budget_consumption_ratio": 0.2,
+            "reward_mean": 0.0,
+            "reward_max": 0.0,
+            "reward_min": 0.0,
+            "reward_spread": 0.0
+          },
+          "failures": [],
+          "warnings": []
+        },
+        {
+          "pack_name": "toy",
+          "algorithm": "BGT-SM",
+          "passed": true,
+          "metrics": {
+            "total_insights": 10,
+            "pmi_mean": 7.349102931764138,
+            "pmi_variance": 0.1935388246700866,
+            "pmi_min": 6.380821783940931,
+            "pmi_max": 7.643856189774724,
+            "semantic_distance_mean": 0.7446194531109371,
+            "semantic_distance_min": 0.5966793315745833,
+            "semantic_distance_max": 0.867428957962897,
+            "novelty_mean": 0.13473184856660597,
+            "cross_cluster_count": 0,
+            "cross_cluster_ratio": 0.0,
+            "spurious_count": 0,
+            "false_positive_rate": 0.0
+          },
+          "failures": [],
+          "warnings": []
+        },
+        {
+          "pack_name": "toy",
+          "algorithm": "SPC-UQ",
+          "passed": true,
+          "metrics": {
+            "total_reconstructions": 1,
+            "confidence_mean": 0.375,
+            "confidence_variance": 0.0,
+            "uncertainty_mean": 0.625,
+            "uncertainty_variance": 0.0,
+            "provenance_types": [
+              "ReconstructionProvenance.CONTEXT_PROPAGATION"
+            ],
+            "provenance_types_count": 1,
+            "schema_matches": 0,
+            "conflict_fragments": 0,
+            "high_uncertainty_on_conflict": 0
+          },
+          "failures": [],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "pack_name": "causal_deep",
+      "algorithms": [
+        "CPN"
+      ],
+      "seed": 42,
+      "start_time": "2026-01-12T09:46:24.222323",
+      "end_time": "2026-01-12T09:46:24.225854",
+      "duration_seconds": 0.00351715087890625,
+      "passed": true,
+      "exit_code": 0,
+      "errors": [],
+      "coverage_results": [
+        {
+          "pack_name": "causal_deep",
+          "algorithm": "CPN",
+          "passed": true,
+          "metrics": {
+            "total_counterfactuals": 176,
+            "path_length_distribution": {
+              "0": 49,
+              "1": 34,
+              "2": 41,
+              "3": 34,
+              "4": 18
+            },
+            "path_length_ge_1_ratio": 0.7215909090909091,
+            "path_length_ge_2_ratio": 0.5284090909090909,
+            "path_length_ge_3_count": 52,
+            "max_path_length": 4,
+            "plausibility_mean": 0.6392045454545454,
+            "plausibility_variance": 0.05022436725206612,
+            "scenario_types": [
+              "ScenarioType.UPWARD",
+              "ScenarioType.SEMIFACTUAL",
+              "ScenarioType.DOWNWARD"
+            ],
+            "scenario_type_count": 3
+          },
+          "failures": [],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "pack_name": "causal_fork_join",
+      "algorithms": [
+        "CPN"
+      ],
+      "seed": 42,
+      "start_time": "2026-01-12T09:46:24.226259",
+      "end_time": "2026-01-12T09:46:24.229249",
+      "duration_seconds": 0.002985715866088867,
+      "passed": true,
+      "exit_code": 0,
+      "errors": [],
+      "coverage_results": [
+        {
+          "pack_name": "causal_fork_join",
+          "algorithm": "CPN",
+          "passed": true,
+          "metrics": {
+            "total_counterfactuals": 96,
+            "path_length_distribution": {
+              "0": 48,
+              "1": 23,
+              "2": 10,
+              "3": 9,
+              "4": 6
+            },
+            "path_length_ge_1_ratio": 0.5,
+            "path_length_ge_2_ratio": 0.2604166666666667,
+            "path_length_ge_3_count": 15,
+            "max_path_length": 4,
+            "plausibility_mean": 0.75,
+            "plausibility_variance": 0.0625,
+            "scenario_types": [
+              "ScenarioType.UPWARD",
+              "ScenarioType.SEMIFACTUAL",
+              "ScenarioType.DOWNWARD"
+            ],
+            "scenario_type_count": 3
+          },
+          "failures": [],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "pack_name": "mcts_delayed",
+      "algorithms": [
+        "MCTS"
+      ],
+      "seed": 42,
+      "start_time": "2026-01-12T09:46:24.229416",
+      "end_time": "2026-01-12T09:46:24.230830",
+      "duration_seconds": 0.0014109611511230469,
+      "passed": true,
+      "exit_code": 0,
+      "errors": [],
+      "coverage_results": [
+        {
+          "pack_name": "mcts_delayed",
+          "algorithm": "MCTS",
+          "passed": true,
+          "metrics": {
+            "total_scenarios": 9,
+            "total_visits": 20,
+            "max_visit_count": 3,
+            "visit_count_variance": 0.1728395061728395,
+            "budget_consumption_ratio": 0.2,
+            "reward_mean": 0.0,
+            "reward_max": 0.0,
+            "reward_min": 0.0,
+            "reward_spread": 0.0
+          },
+          "failures": [],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "pack_name": "mcts_constrained",
+      "algorithms": [
+        "MCTS"
+      ],
+      "seed": 42,
+      "start_time": "2026-01-12T09:46:24.231059",
+      "end_time": "2026-01-12T09:46:24.232415",
+      "duration_seconds": 0.0013484954833984375,
+      "passed": true,
+      "exit_code": 0,
+      "errors": [],
+      "coverage_results": [
+        {
+          "pack_name": "mcts_constrained",
+          "algorithm": "MCTS",
+          "passed": true,
+          "metrics": {
+            "total_scenarios": 10,
+            "total_visits": 20,
+            "max_visit_count": 2,
+            "visit_count_variance": 0.0,
+            "budget_consumption_ratio": 0.2,
+            "reward_mean": 0.0,
+            "reward_max": 0.0,
+            "reward_min": 0.0,
+            "reward_spread": 0.0
+          },
+          "failures": [],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "pack_name": "bgt_clustered",
+      "algorithms": [
+        "BGT"
+      ],
+      "seed": 42,
+      "start_time": "2026-01-12T09:46:24.232647",
+      "end_time": "2026-01-12T09:46:24.238195",
+      "duration_seconds": 0.005541086196899414,
+      "passed": true,
+      "exit_code": 0,
+      "errors": [],
+      "coverage_results": [
+        {
+          "pack_name": "bgt_clustered",
+          "algorithm": "BGT-SM",
+          "passed": true,
+          "metrics": {
+            "total_insights": 6,
+            "pmi_mean": 3.649967287570494,
+            "pmi_variance": 0.4663591743040602,
+            "pmi_min": 2.7602353734890532,
+            "pmi_max": 4.828280760912152,
+            "semantic_distance_mean": 0.5047244802167066,
+            "semantic_distance_min": 0.16120959185416983,
+            "semantic_distance_max": 0.7568116673837146,
+            "novelty_mean": 0.018426179062092592,
+            "cross_cluster_count": 0,
+            "cross_cluster_ratio": 0.0,
+            "spurious_count": 0,
+            "false_positive_rate": 0.0
+          },
+          "failures": [],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "pack_name": "bgt_adversarial",
+      "algorithms": [
+        "BGT"
+      ],
+      "seed": 42,
+      "start_time": "2026-01-12T09:46:24.238471",
+      "end_time": "2026-01-12T09:46:24.243282",
+      "duration_seconds": 0.004803657531738281,
+      "passed": true,
+      "exit_code": 0,
+      "errors": [],
+      "coverage_results": [
+        {
+          "pack_name": "bgt_adversarial",
+          "algorithm": "BGT-SM",
+          "passed": true,
+          "metrics": {
+            "total_insights": 6,
+            "pmi_mean": 4.2148998459315745,
+            "pmi_variance": 1.7084687205030846,
+            "pmi_min": 2.473931188332412,
+            "pmi_max": 5.965784284662087,
+            "semantic_distance_mean": 0.4290985722492966,
+            "semantic_distance_min": 0.1509226071598988,
+            "semantic_distance_max": 0.7823343501792608,
+            "novelty_mean": 0.021996442291180238,
+            "cross_cluster_count": 0,
+            "cross_cluster_ratio": 0.0,
+            "spurious_count": 0,
+            "false_positive_rate": 0.0
+          },
+          "failures": [],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "pack_name": "spc_multi_prov",
+      "algorithms": [
+        "SPC"
+      ],
+      "seed": 42,
+      "start_time": "2026-01-12T09:46:24.243593",
+      "end_time": "2026-01-12T09:46:24.245967",
+      "duration_seconds": 0.0023648738861083984,
+      "passed": true,
+      "exit_code": 0,
+      "errors": [],
+      "coverage_results": [
+        {
+          "pack_name": "spc_multi_prov",
+          "algorithm": "SPC-UQ",
+          "passed": true,
+          "metrics": {
+            "total_reconstructions": 4,
+            "confidence_mean": 0.38125,
+            "confidence_variance": 0.00042968750000000076,
+            "uncertainty_mean": 0.61875,
+            "uncertainty_variance": 0.00042968750000000076,
+            "provenance_types": [
+              "ReconstructionProvenance.CONTEXT_PROPAGATION"
+            ],
+            "provenance_types_count": 1,
+            "schema_matches": 0,
+            "conflict_fragments": 0,
+            "high_uncertainty_on_conflict": 0
+          },
+          "failures": [],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "pack_name": "spc_conflict",
+      "algorithms": [
+        "SPC"
+      ],
+      "seed": 42,
+      "start_time": "2026-01-12T09:46:24.246187",
+      "end_time": "2026-01-12T09:46:24.247903",
+      "duration_seconds": 0.0017094612121582031,
+      "passed": true,
+      "exit_code": 0,
+      "errors": [],
+      "coverage_results": [
+        {
+          "pack_name": "spc_conflict",
+          "algorithm": "SPC-UQ",
+          "passed": true,
+          "metrics": {
+            "total_reconstructions": 2,
+            "confidence_mean": 0.375,
+            "confidence_variance": 0.0006250000000000011,
+            "uncertainty_mean": 0.625,
+            "uncertainty_variance": 0.0006250000000000011,
+            "provenance_types": [
+              "ReconstructionProvenance.CONTEXT_PROPAGATION"
+            ],
+            "provenance_types_count": 1,
+            "schema_matches": 0,
+            "conflict_fragments": 0,
+            "high_uncertainty_on_conflict": 0
+          },
+          "failures": [],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "pack_name": "mixed_stress",
+      "algorithms": [
+        "CPN",
+        "MCTS",
+        "BGT",
+        "SPC"
+      ],
+      "seed": 42,
+      "start_time": "2026-01-12T09:46:24.248027",
+      "end_time": "2026-01-12T09:46:24.299591",
+      "duration_seconds": 0.05156064033508301,
+      "passed": true,
+      "exit_code": 0,
+      "errors": [],
+      "coverage_results": [
+        {
+          "pack_name": "mixed_stress",
+          "algorithm": "CPN",
+          "passed": true,
+          "metrics": {
+            "total_counterfactuals": 228,
+            "path_length_distribution": {
+              "0": 74,
+              "1": 37,
+              "2": 31,
+              "3": 42,
+              "4": 44
+            },
+            "path_length_ge_1_ratio": 0.6754385964912281,
+            "path_length_ge_2_ratio": 0.5131578947368421,
+            "path_length_ge_3_count": 86,
+            "max_path_length": 4,
+            "plausibility_mean": 0.6622807017543859,
+            "plausibility_variance": 0.05480532471529703,
+            "scenario_types": [
+              "ScenarioType.UPWARD",
+              "ScenarioType.SEMIFACTUAL",
+              "ScenarioType.DOWNWARD"
+            ],
+            "scenario_type_count": 3
+          },
+          "failures": [],
+          "warnings": []
+        },
+        {
+          "pack_name": "mixed_stress",
+          "algorithm": "MCTS",
+          "passed": true,
+          "metrics": {
+            "total_scenarios": 20,
+            "total_visits": 20,
+            "max_visit_count": 1,
+            "visit_count_variance": 0.0,
+            "budget_consumption_ratio": 0.2,
+            "reward_mean": 0.0,
+            "reward_max": 0.0,
+            "reward_min": 0.0,
+            "reward_spread": 0.0
+          },
+          "failures": [],
+          "warnings": []
+        },
+        {
+          "pack_name": "mixed_stress",
+          "algorithm": "BGT-SM",
+          "passed": true,
+          "metrics": {
+            "total_insights": 20,
+            "pmi_mean": 15.409301801496776,
+            "pmi_variance": 1.1061117955038693,
+            "pmi_min": 13.287712379549449,
+            "pmi_max": 16.872674880270605,
+            "semantic_distance_mean": 0.5056330507432802,
+            "semantic_distance_min": 0.12631809059882138,
+            "semantic_distance_max": 0.856565391432485,
+            "novelty_mean": 0.5984289743732292,
+            "cross_cluster_count": 0,
+            "cross_cluster_ratio": 0.0,
+            "spurious_count": 0,
+            "false_positive_rate": 0.0
+          },
+          "failures": [],
+          "warnings": []
+        },
+        {
+          "pack_name": "mixed_stress",
+          "algorithm": "SPC-UQ",
+          "passed": true,
+          "metrics": {
+            "total_reconstructions": 18,
+            "confidence_mean": 0.3680555555555555,
+            "confidence_variance": 0.0004031635802469143,
+            "uncertainty_mean": 0.6319444444444445,
+            "uncertainty_variance": 0.00040316358024691427,
+            "provenance_types": [
+              "ReconstructionProvenance.CONTEXT_PROPAGATION"
+            ],
+            "provenance_types_count": 1,
+            "schema_matches": 0,
+            "conflict_fragments": 0,
+            "high_uncertainty_on_conflict": 0
+          },
+          "failures": [],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "pack_name": "real_world",
+      "algorithms": [
+        "CPN",
+        "MCTS",
+        "BGT",
+        "SPC"
+      ],
+      "seed": 42,
+      "start_time": "2026-01-12T09:46:24.300796",
+      "end_time": "2026-01-12T09:46:24.307064",
+      "duration_seconds": 0.006250858306884766,
+      "passed": true,
+      "exit_code": 0,
+      "errors": [],
+      "coverage_results": [
+        {
+          "pack_name": "real_world",
+          "algorithm": "CPN",
+          "passed": true,
+          "metrics": {
+            "total_counterfactuals": 134,
+            "path_length_distribution": {
+              "0": 93,
+              "1": 16,
+              "2": 13,
+              "3": 9,
+              "4": 3
+            },
+            "path_length_ge_1_ratio": 0.30597014925373134,
+            "path_length_ge_2_ratio": 0.1865671641791045,
+            "path_length_ge_3_count": 12,
+            "max_path_length": 4,
+            "plausibility_mean": 0.8470149253731343,
+            "plausibility_variance": 0.05308810425484519,
+            "scenario_types": [
+              "ScenarioType.UPWARD",
+              "ScenarioType.SEMIFACTUAL",
+              "ScenarioType.DOWNWARD"
+            ],
+            "scenario_type_count": 3
+          },
+          "failures": [],
+          "warnings": []
+        },
+        {
+          "pack_name": "real_world",
+          "algorithm": "MCTS",
+          "passed": true,
+          "metrics": {
+            "total_scenarios": 10,
+            "total_visits": 20,
+            "max_visit_count": 2,
+            "visit_count_variance": 0.0,
+            "budget_consumption_ratio": 0.2,
+            "reward_mean": 0.0,
+            "reward_max": 0.0,
+            "reward_min": 0.0,
+            "reward_spread": 0.0
+          },
+          "failures": [],
+          "warnings": []
+        },
+        {
+          "pack_name": "real_world",
+          "algorithm": "BGT-SM",
+          "passed": true,
+          "metrics": {
+            "total_insights": 7,
+            "pmi_mean": 7.049362661354588,
+            "pmi_variance": 0.1501961880993425,
+            "pmi_min": 6.321928094887363,
+            "pmi_max": 7.643856189774724,
+            "semantic_distance_mean": 0.38166483346434354,
+            "semantic_distance_min": 0.15864759784207783,
+            "semantic_distance_max": 0.6973432861562163,
+            "novelty_mean": 0.030863931161120486,
+            "cross_cluster_count": 0,
+            "cross_cluster_ratio": 0.0,
+            "spurious_count": 0,
+            "false_positive_rate": 0.0
+          },
+          "failures": [],
+          "warnings": []
+        },
+        {
+          "pack_name": "real_world",
+          "algorithm": "SPC-UQ",
+          "passed": true,
+          "metrics": {
+            "total_reconstructions": 3,
+            "confidence_mean": 0.3833333333333333,
+            "confidence_variance": 0.0005555555555555566,
+            "uncertainty_mean": 0.6166666666666667,
+            "uncertainty_variance": 0.0005555555555555566,
+            "provenance_types": [
+              "ReconstructionProvenance.CONTEXT_PROPAGATION"
+            ],
+            "provenance_types_count": 1,
+            "schema_matches": 0,
+            "conflict_fragments": 0,
+            "high_uncertainty_on_conflict": 0
+          },
+          "failures": [],
+          "warnings": []
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_packs": 11,
+    "passed": 11,
+    "failed": 0,
+    "total_duration": 2.5896975994110107
+  }
+}

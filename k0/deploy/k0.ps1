@@ -204,11 +204,11 @@ function Ensure-Compose-Prereqs {
 function Ensure-Image {
     if ($GPU) {
         $imageName = "k0-kernel-gpu:latest"
-        $dockerFile = Join-Path $RepoRoot "Dockerfile.gpu"
+        $dockerFile = Join-Path $DeployRoot "Dockerfile.gpu"
     }
     else {
         $imageName = "k0-kernel-local:latest"
-        $dockerFile = Join-Path $RepoRoot "Dockerfile"
+        $dockerFile = Join-Path $DeployRoot "Dockerfile"
     }
     $imagePresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch $imageName)
     if ($Rebuild -or -not $imagePresent) {
@@ -218,11 +218,54 @@ function Ensure-Image {
 }
 
 function Ensure-Database {
-    if ($Migrate -or -not (Test-Path $DbPath)) {
-        Write-Info "Bootstrapping SQLite database at $DbPath"
+    # DEPRECATED: SQLite is no longer used. PostgreSQL migrations handled by Ensure-PostgreSQL-Schema
+    Write-Info "Skipping SQLite database setup (using PostgreSQL now)"
+}
+
+function Ensure-PostgreSQL-Schema {
+    if ($Migrate) {
+        Write-Info "Running Alembic migrations for PostgreSQL"
         $env:PYTHONPATH = $RepoRoot
-        $py = "from k0.automation.migrate import apply_migrations; from pathlib import Path; p=Path(r'''$DbPath'''); r=apply_migrations(p); print('Applied:', sum(1 for x in r if x.action=='applied'), 'Skipped:', sum(1 for x in r if x.action=='skipped'))"
-        python -c $py | Write-Host
+
+        # Load PostgreSQL environment variables from k0.env
+        $envFile = Join-Path $EnvDir "k0.env"
+        if (Test-Path $envFile) {
+            Get-Content $envFile | ForEach-Object {
+                if ($_ -match '^([^=]+)=(.*)$') {
+                    $key = $matches[1].Trim()
+                    $value = $matches[2].Trim()
+                    if ($key -match '^K0_POSTGRES_' -or $key -match '^POSTGRES_') {
+                        [System.Environment]::SetEnvironmentVariable($key, $value, [System.EnvironmentVariableTarget]::Process)
+                    }
+                }
+            }
+        }
+
+        # Set environment for Alembic (connect to localhost since running from host)
+        $env:K0_POSTGRES_HOST = "localhost"
+        $env:K0_POSTGRES_PORT = "5432"
+        $env:K0_POSTGRES_DB = "k0_kernel"
+        $env:K0_POSTGRES_USER = "k0user"
+        $env:K0_POSTGRES_PASSWORD = if ($env:POSTGRES_PASSWORD) { $env:POSTGRES_PASSWORD } else { "changeme" }
+
+        try {
+            # Run Alembic migrations from the k0/db directory
+            Push-Location (Join-Path $RepoRoot "k0" "db")
+            Write-Info "Running: alembic upgrade head"
+            alembic upgrade head 2>&1 | Write-Host
+            $exitCode = $LASTEXITCODE
+            Pop-Location
+
+            if ($exitCode -eq 0) {
+                Write-Ok "PostgreSQL migrations completed successfully"
+            }
+            else {
+                Write-Err "Alembic migration failed with exit code $exitCode"
+            }
+        }
+        catch {
+            Write-Err "Failed to run PostgreSQL migrations: $_"
+        }
     }
 }
 
@@ -387,8 +430,33 @@ function Do-Up {
     Write-Info "Starting services (kernel + telemetry)"
     docker compose @(Compose-Args) up -d | Write-Host
 
-    # Wait for Neo4j to be ready before running migrations
+    # Wait for PostgreSQL to be ready before running migrations
     if ($Migrate) {
+        Write-Info "Waiting for PostgreSQL to be ready..."
+        $maxRetries = 30
+        $retryCount = 0
+        $pgReady = $false
+
+        while (-not $pgReady -and $retryCount -lt $maxRetries) {
+            $retryCount++
+            $healthCheck = docker compose @(Compose-Args) ps postgres --format json | ConvertFrom-Json
+            if ($healthCheck.Health -eq "healthy") {
+                $pgReady = $true
+                Write-Ok "PostgreSQL is healthy"
+            }
+            else {
+                Write-Host "." -NoNewline
+                Start-Sleep -Seconds 2
+            }
+        }
+
+        if (-not $pgReady) {
+            Write-Warn "PostgreSQL did not become healthy in time, but continuing anyway"
+        }
+
+        Ensure-PostgreSQL-Schema
+
+        # Wait for Neo4j to be ready
         Write-Info "Waiting for Neo4j to be ready..."
         $maxRetries = 30
         $retryCount = 0

@@ -1,0 +1,247 @@
+# P03 Module Contract: DreamExplorer (M22)
+# Phase: R5 - Dream-Like Exploration (REM)
+# Issue: M8_EXECUTION.md Issue 8.1.3
+# Dossier: section 4.6, section 7.4.5
+
+module_id: consolidation.dream_explorer
+version: v1
+
+input_event_types:
+  - p03.kg.extracted.v1
+  - p03.episodes.clustered.v1
+
+output_event_types:
+  - p03.insights.generated.v1
+  - p03.counterfactuals.generated.v1
+  - p03.prospective.generated.v1
+
+latency_budget_ms: 2000
+
+side_effects:
+  - read:st_sem       # Semantic memory for BGT-SM
+  - read:st_epi       # Episodic memory for patterns
+  - read:st_kg_dom    # Knowledge graph entities
+  - read:st_kg_edges  # Knowledge graph edges
+  # No writes - outputs staged for R6/R7
+
+idempotent: true
+
+fabric_capabilities:
+  - dream_exploration
+  - insight_generation
+  - counterfactual_analysis
+  - prospective_memory
+  - routine_optimization
+
+failure_modes:
+  - code: BGT_TIMEOUT
+    policy: return_partial
+    description: BGT-SM traversal exceeded time budget
+  - code: NO_PATTERNS
+    policy: skip
+    description: No eligible patterns for exploration
+  - code: LOW_NOVELTY
+    policy: skip
+    description: All insights below novelty threshold
+  - code: MCTS_BUDGET_EXCEEDED
+    policy: return_partial
+    description: MCTS rollouts exceeded compute budget
+
+determinism:
+  seeded: true
+  seed_source: cycle_id
+  description: |
+    All random operations are seeded with cycle_id for reproducibility.
+    - BGT-SM random walks use derive_seed(cycle_id, "bgt_sm")
+    - CPN perturbations use derive_seed(cycle_id, "cpn")
+    - SPC-UQ simulations use derive_seed(cycle_id, "spc_uq")
+    - TDL-HCO learning use derive_seed(cycle_id, "tdl_hco")
+    Same cycle_id produces identical outputs for testing.
+
+description: |
+  M22 DreamExplorer Module (R5 Dream Phase)
+
+  Orchestrates dream-like exploration algorithms that generate creative
+  outputs during consolidation cycles. Inspired by REM sleep memory
+  consolidation in biological systems.
+
+  Algorithms:
+  1. BGT-SM (Bisociative Graph Traversal for Semantic Memory)
+     - Discovers non-obvious connections between concepts
+     - Uses random walks with creativity parameter
+     - Scores insights by novelty and coherence
+
+  2. CPN (Causal Perturbation Network)
+     - Generates counterfactual scenarios (what-if)
+     - Types: UPWARD (better), DOWNWARD (worse), SEMIFACTUAL
+     - Evaluates plausibility and utility changes
+
+  3. SPC-UQ (Sparse Predictive Coding with Uncertainty Quantification)
+     - Predicts future events and intentions
+     - Generates prospective memories (reminders)
+     - Uses Beta distribution for uncertainty
+
+  4. TDL-HCO (Temporal Difference Learning for Habit/Cognitive Optimization)
+     - Identifies routine bottlenecks
+     - Suggests behavioral optimizations
+     - Uses TD learning with eligibility traces
+
+  Configuration:
+  - depth: KG traversal depth (default: 3)
+  - creativity: 0=conservative, 1=wild (default: 0.5)
+  - max_insights: Per-cycle limit (default: 10)
+  - max_counterfactuals: Per-cycle limit (default: 5)
+  - min_novelty_score: Insight threshold (default: 0.3)
+  - min_confidence: Output threshold (default: 0.5)
+
+  Outputs:
+  - insights: List[Insight] sorted by novelty
+  - counterfactuals: List[CounterfactualScenario]
+  - prospective_memories: List[ProspectiveMemory]
+  - routine_optimizations: List[RoutineOptimization]
+
+  Skip Conditions:
+  - R5 mode is DISABLED
+  - Backlog exceeds threshold (>1000 pending)
+  - Remaining time window < 60 seconds
+
+  Metrics:
+  - p03_r5_mode: Gauge (0-3)
+  - p03_r5_skipped_decisions: Counter by skip_reason
+  - p03_r5_duration_seconds: Histogram by mode
+  - p03_r5_insights_total: Counter by quality_tier
+  - p03_r5_counterfactuals_total: Counter by type
+  - p03_r5_mcts_decisions: Histogram
+
+input_schema:
+  type: object
+  required:
+    - cycle_id
+    - tenant_id
+    - space_id
+  properties:
+    cycle_id:
+      type: string
+      description: Unique cycle identifier (ULID) for deterministic seeding
+    tenant_id:
+      type: string
+      description: Multi-tenant isolation identifier
+    space_id:
+      type: string
+      description: User/family space identifier
+    recent_episodes:
+      type: array
+      description: Episode clusters from R2
+      items:
+        type: object
+    kg_entities:
+      type: array
+      description: Knowledge graph entities from R4
+      items:
+        type: object
+    kg_edges:
+      type: array
+      description: Knowledge graph edges from R4
+      items:
+        type: object
+    event_states:
+      type: array
+      description: Event states with importance scores from R1
+      items:
+        type: object
+
+output_schema:
+  type: object
+  required:
+    - insights
+    - counterfactuals
+    - prospective_memories
+    - routine_optimizations
+  properties:
+    insights:
+      type: array
+      description: Generated insights sorted by novelty
+      items:
+        type: object
+        required:
+          - insight_id
+          - insight_type
+          - description
+          - confidence
+          - novelty_score
+        properties:
+          insight_id:
+            type: string
+          insight_type:
+            type: string
+            enum: [COUNTERFACTUAL, PREDICTION, ASSOCIATION, ANOMALY, PATTERN, TREND]
+          description:
+            type: string
+          confidence:
+            type: number
+            minimum: 0
+            maximum: 1
+          novelty_score:
+            type: number
+            minimum: 0
+            maximum: 1
+          supporting_evidence:
+            type: array
+            items:
+              type: string
+    counterfactuals:
+      type: array
+      description: Counterfactual scenarios
+      items:
+        type: object
+        required:
+          - scenario_id
+          - scenario_type
+          - plausibility
+        properties:
+          scenario_id:
+            type: string
+          scenario_type:
+            type: string
+            enum: [UPWARD, DOWNWARD, SEMIFACTUAL]
+          plausibility:
+            type: number
+            minimum: 0
+            maximum: 1
+    prospective_memories:
+      type: array
+      description: Future intention predictions
+      items:
+        type: object
+        required:
+          - prosp_id
+          - intention_type
+          - description
+        properties:
+          prosp_id:
+            type: string
+          intention_type:
+            type: string
+            enum: [GOAL, REMINDER, DEADLINE, HABIT]
+    routine_optimizations:
+      type: array
+      description: Routine improvement suggestions
+      items:
+        type: object
+        required:
+          - routine_id
+          - routine_name
+          - suggested_action
+        properties:
+          routine_id:
+            type: string
+          routine_name:
+            type: string
+          suggested_action:
+            type: string
+    mcts_decisions_evaluated:
+      type: integer
+      description: Number of MCTS tree evaluations performed
+    compute_ms:
+      type: integer
+      description: Time spent in exploration (milliseconds)

@@ -375,8 +375,8 @@ async def test_kg_triple_generation_location_triples(mock_message, mock_context)
     # Parse KG triples
     kg_triples = json.loads(result["kg_triples_json"])
 
-    # Assert: Location triples generated
-    location_triples = [t for t in kg_triples if "Trader_Joes_Castro_St" in t[2]]
+    # Assert: Location triples generated (entity IDs are normalized to lowercase)
+    location_triples = [t for t in kg_triples if "trader_joes_castro_st" in t[2].lower()]
     assert len(location_triples) > 0, "Should generate triples with location"
 
 

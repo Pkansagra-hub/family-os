@@ -1,0 +1,344 @@
+"""
+R1 Phase — Importance Scoring and Hebbian Learning.
+
+M4 Issues 4.1.1-4.1.2: Implement R1 Phase for Importance Scoring with Audit Logging.
+
+This phase performs two core operations:
+1. Compute importance scores for each event (Issue 4.1.1)
+2. Log scoring factors for audit trail (Issue 4.1.2)
+3. (Future) Hebbian edge updates for co-occurring entities (Issue 4.1.3)
+
+References:
+    - Dossier §2.4: Scientific Formulas - Importance Score
+    - Dossier Appendix C.2.1: ImportanceScorer Algorithm
+    - M4 Execution: docs/TEMP_EXECUTION_DOCS/M4_EXECUTION.md Issues 4.1.1-4.1.2
+    - Phase Interface: k0/pipelines/p03/phase_interface.py
+
+TIMESTAMP CONVENTION: All timestamps use MILLISECONDS since Unix epoch.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, List, Optional
+
+from k0.modules.consolidation.algorithms.importance_scorer import (
+    ImportanceScorer,
+    ImportanceWeights,
+)
+from k0.pipelines.p03.audit_logger import P03AuditLogger
+from k0.pipelines.p03.observability import P03Error
+from k0.pipelines.p03.phase_interface import P03PhaseResult
+from k0.pipelines.p03.phase_outputs import ScoredEvent
+from k0.pipelines.p03.runner_contract import P03PhaseId
+
+if TYPE_CHECKING:
+    from k0.pipelines.p03.envelope import P03BatchEnvelope
+    from k0.pipelines.p03.phase_interface import P03RunnerContext
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# R1 CONFIGURATION
+# =============================================================================
+
+
+@dataclass
+class R1Config:
+    """
+    R1 phase configuration.
+
+    Attributes:
+        audit_sample_rate: Fraction of events to audit [0.0, 1.0].
+                          Use 1.0 for debug (100%), 0.1 for production (10%).
+        enable_hebbian: Whether to run Hebbian learning (Issue 4.1.3).
+        min_samples_for_learned_weights: Minimum samples before using learned weights.
+        importance_weights: Optional custom weights (uses defaults if None).
+    """
+
+    audit_sample_rate: float = 1.0  # 100% for debug; 0.1 for production
+    enable_hebbian: bool = False  # Not yet implemented (Issue 4.1.3)
+    min_samples_for_learned_weights: int = 500
+    importance_weights: Optional[ImportanceWeights] = None
+
+
+# =============================================================================
+# R1 IMPORTANCE SCORER PHASE
+# =============================================================================
+
+
+class R1ImportanceScorer:
+    """
+    R1 Phase: Importance Scoring and Hebbian Learning.
+
+    Responsibilities:
+        1. Load importance weights (learned or static)
+        2. Compute importance score for each event
+        3. Log scoring factors for audit trail
+        4. Update event state with importance fields
+        5. (Future) Extract co-occurrences for Hebbian updates
+
+    Scientific Basis:
+        McGaugh (2004) - Emotional memories are more strongly encoded
+        due to amygdala-hippocampus interaction. Events with high
+        emotional salience, novelty, or social significance are
+        prioritized for consolidation.
+
+    Scoring Formula:
+        importance = (emotional + novelty + social) × event_type_multiplier
+
+    Audit Logging:
+        Each scoring decision can be logged to st_consolidation_audit
+        with component breakdowns for explainability and feedback loops.
+
+    Idempotency:
+        - Same events always produce same importance scores
+        - Audit records use idempotency keys to prevent duplicates
+        - Hebbian updates are deterministic given same input
+    """
+
+    PHASE_ID = P03PhaseId.R1_SCORE
+
+    def __init__(self, config: Optional[R1Config] = None):
+        """
+        Initialize R1 phase.
+
+        Args:
+            config: Optional configuration (defaults used if not provided)
+        """
+        self.config = config or R1Config()
+        self._scorer: Optional[ImportanceScorer] = None
+
+    @property
+    def phase_id(self) -> P03PhaseId:
+        """Return the phase identifier."""
+        return self.PHASE_ID
+
+    def should_skip(self, envelope: "P03BatchEnvelope") -> bool:
+        """
+        Check if R1 should be skipped.
+
+        Skip Conditions:
+            - Empty event list
+            - All events already have importance_computed=True
+
+        Args:
+            envelope: Current batch envelope
+
+        Returns:
+            True if phase should be skipped
+        """
+        if not envelope.events:
+            return True
+
+        # Check if all events already scored
+        all_scored = all(getattr(event, "importance_computed", False) for event in envelope.events)
+        return all_scored
+
+    def idempotency_key(self, envelope: "P03BatchEnvelope") -> str:
+        """
+        Compute idempotency key for retry safety.
+
+        Args:
+            envelope: Current batch envelope
+
+        Returns:
+            Deterministic key for this phase execution
+        """
+        return f"p03:r1:{envelope.context.cycle_id}"
+
+    async def run(
+        self,
+        envelope: "P03BatchEnvelope",
+        ctx: "P03RunnerContext",
+    ) -> P03PhaseResult:
+        """
+        Execute R1 phase: Importance Scoring.
+
+        Steps:
+            1. Initialize scorer with space_id and weight store
+            2. Score all events with factor breakdown
+            3. Log audit records for sampled events
+            4. Update event states with importance fields
+            5. Collect scored events into phase outputs
+
+        Args:
+            envelope: Batch envelope with events to score
+            ctx: Runner context with syscalls, logger, config
+
+        Returns:
+            P03PhaseResult with status, duration, outputs summary
+        """
+        start_ms = int(time.time() * 1000)
+        cycle_id = envelope.context.cycle_id
+        space_id = envelope.context.space_id
+        tenant_id = envelope.context.tenant_id
+
+        logger.info(
+            "R1: Starting importance scoring phase",
+            extra={
+                "cycle_id": cycle_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "event_count": len(envelope.events),
+            },
+        )
+
+        # Skip check
+        if self.should_skip(envelope):
+            duration_ms = int(time.time() * 1000) - start_ms
+            logger.info(
+                "R1: Skipping phase - no unscored events",
+                extra={
+                    "cycle_id": cycle_id,
+                    "duration_ms": duration_ms,
+                },
+            )
+            return P03PhaseResult.skip(
+                phase_id=self.PHASE_ID,
+                reason="No unscored events in batch",
+                duration_ms=duration_ms,
+                idempotency_key=self.idempotency_key(envelope),
+            )
+
+        try:
+            # Initialize scorer with weight store from syscalls
+            weight_store = getattr(ctx.syscalls, "weight_store", None)
+            scorer = ImportanceScorer(
+                space_id=space_id,
+                weight_store=weight_store,
+            )
+
+            # Create audit logger for this cycle
+            audit_logger = P03AuditLogger(
+                space_id=space_id,
+                tenant_id=tenant_id,
+                cycle_id=cycle_id,
+            )
+
+            # Get sample rate from config or use default
+            sample_rate = ctx.get_config(
+                "p03.importance.audit_sample_rate",
+                self.config.audit_sample_rate,
+            )
+
+            # Score all events with audit logging
+            scored_results = await scorer.score_batch_with_audit(
+                events=envelope.events,
+                audit_logger=audit_logger,
+                sample_rate=sample_rate,
+            )
+
+            # Collect scored events into phase outputs
+            scored_events: List[ScoredEvent] = []
+            for result in scored_results:
+                scored_events.append(
+                    ScoredEvent(
+                        event_id=result["event_id"],
+                        importance_score=result["importance_score"],
+                        recency_factor=result["recency_factor"],
+                        affect_factor=result["affect_factor"],
+                        social_factor=result["social_factor"],
+                        novelty_factor=result["novelty_factor"],
+                    )
+                )
+
+            # Store scored events in envelope phases
+            envelope.phases.r1_scored_events = scored_events
+
+            # Store audit records for R7 batch write
+            envelope.phases.r1_audit_records = audit_logger.get_pending_records()
+
+            # Calculate statistics for logging
+            scores = [e.importance_score for e in scored_events]
+            avg_score = sum(scores) / len(scores) if scores else 0.0
+            max_score = max(scores) if scores else 0.0
+            min_score = min(scores) if scores else 0.0
+
+            # Count priority tiers
+            critical_count = sum(1 for s in scores if s >= 0.80)
+            high_count = sum(1 for s in scores if 0.50 <= s < 0.80)
+            medium_count = sum(1 for s in scores if 0.30 <= s < 0.50)
+            low_count = sum(1 for s in scores if s < 0.30)
+
+            duration_ms = int(time.time() * 1000) - start_ms
+
+            logger.info(
+                "R1: Importance scoring complete",
+                extra={
+                    "cycle_id": cycle_id,
+                    "events_scored": len(scored_events),
+                    "audit_records": len(audit_logger.get_pending_records()),
+                    "avg_score": round(avg_score, 3),
+                    "max_score": round(max_score, 3),
+                    "min_score": round(min_score, 3),
+                    "critical_count": critical_count,
+                    "high_count": high_count,
+                    "medium_count": medium_count,
+                    "low_count": low_count,
+                    "weights_source": scorer._weights_source,
+                    "duration_ms": duration_ms,
+                },
+            )
+
+            return P03PhaseResult.done(
+                phase_id=self.PHASE_ID,
+                duration_ms=duration_ms,
+                outputs_summary={
+                    "events_scored": len(scored_events),
+                    "audit_records": audit_logger.record_count(),
+                    "avg_importance": round(avg_score, 3),
+                    "critical_count": critical_count,
+                    "high_count": high_count,
+                    "weights_source": scorer._weights_source,
+                },
+                idempotency_key=self.idempotency_key(envelope),
+            )
+
+        except Exception as e:
+            duration_ms = int(time.time() * 1000) - start_ms
+            logger.exception(
+                "R1: Importance scoring failed",
+                extra={
+                    "cycle_id": cycle_id,
+                    "error": str(e),
+                    "duration_ms": duration_ms,
+                },
+            )
+
+            error = P03Error.create(
+                phase="R1",
+                stage_id="importance_scorer",
+                error_type="R1_SCORING_ERROR",
+                error_message=str(e),
+                recoverable=True,  # R1 failures are retriable
+            )
+
+            return P03PhaseResult.fail(
+                phase_id=self.PHASE_ID,
+                error=error,
+                duration_ms=duration_ms,
+            )
+
+
+# =============================================================================
+# FACTORY FUNCTION
+# =============================================================================
+
+
+def create_r1_phase(
+    config: Optional[R1Config] = None,
+) -> R1ImportanceScorer:
+    """
+    Factory function to create R1 phase.
+
+    Args:
+        config: Optional configuration (defaults used if not provided)
+
+    Returns:
+        Configured R1ImportanceScorer instance
+    """
+    return R1ImportanceScorer(config=config)

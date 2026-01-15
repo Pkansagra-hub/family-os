@@ -14,7 +14,13 @@ description: |
   Performance: 171ms P95 (v1 baseline; M04 optimization to reduce to ~150ms tracked separately).
   Primary exit topic: p02.write.complete.v1
   Additional emitter topics: memory.formed.v1, embedding.queued.v1, salience.computed.v1,
-                            social.enriched.v1, privacy.masked.v1 (see M17 contract)
+                            social.enriched.v1, privacy.masked.v1, cognitive.vector.stored.v1
+
+  ADR-K003 Changes (v1.1):
+  - Added M22 (embedding.extract_from_cache:v1) after stage_20
+  - Replaced M14 embedding_queue_write with M23 (builders.embedding_write:v1)
+  - Embeddings now stored inline in st_vec (no async P08 for primary generation)
+  - cognitive.vector.stored.v1 event triggers P08 M24 FAISS indexing
 
   Future extension: Pipeline variants (P02_WRITE_FAST/COMPLETE) if differentiated QoS needed.
 
@@ -26,10 +32,11 @@ max_queue_depth: 512
 # Required storage capabilities (capability-based security model)
 required_capabilities:
   - st_hipp_events.write
-  - st_embedding_queue.write
+  - st_embedding_queue.write    # DEPRECATED (ADR-K003) - kept for backward compat
+  - st_vec.write                # NEW (ADR-K003) - M23 inline embedding write
   - st_pipeline_processed.write
   - st_outbox.write
-  - st_relationships.read
+  - st_kg_edges.read            # ADR-K022: Changed from st_relationships.read
 
 dag:
   # STAGE 10: DG Pattern Separation
@@ -53,6 +60,18 @@ dag:
       kg_confidence_threshold: 0.6
       max_triples_per_event: 10
       embedding_queue_batch_size: 1
+
+  # STAGE 22: Embedding Cache Extraction (ADR-K003)
+  # NEW: Extracts 768-dim embedding from UltraBERT single-pass cache (0ms, cache hit)
+  - id: stage_22_embedding_extract
+    module: embedding.extract_from_cache:v1
+    after:
+      - stage_20_ca1_semantic_project
+    description: Extract embedding from UltraBERT cache (ADR-K003 inline embedding)
+    config:
+      fallback_to_direct_call: true
+      expected_vector_dim: 768
+      model_id: ultrabert_v2.1.0
 
   # STAGE 30-33: Core Cognition (Parallel Group 1)
   - id: stage_30_affect_analyze
@@ -172,6 +191,7 @@ dag:
     after:
       - stage_10_dg_pattern_separate
       - stage_20_ca1_semantic_project
+      - stage_22_embedding_extract  # NEW (ADR-K003) - embedding data for st_hipp_events
       - stage_30_affect_analyze
       - stage_31_space_resolve
       - stage_32_social_resolve
@@ -186,26 +206,25 @@ dag:
     config:
       validate_required_fields: true
 
-  - id: stage_61_build_embedding_queue_job
-    module: builders.embedding_queue_write:v1
-    after:
-      - stage_20_ca1_semantic_project
-    description: Embedding queue writer - directly writes to st_embedding_queue (per M14 contract)
-    config:
-      priority: NORMAL
-      model_id: text-embedding-3-small
-
-  # STAGE 70: Atomic Storage Commit
+  # STAGE 70: Atomic Storage Commit (ADR-K003 v1.2)
+  # Merged: stage_61 (embedding_write) now integrated into stage_70 for atomic 3-table transaction
   - id: stage_70_atomic_writer
     module: core.hipp_events_writer:v1
     after:
       - stage_60_build_hipp_events_row
-      - stage_61_build_embedding_queue_job
-    description: Atomic writer - commits st_hipp_events + st_pipeline_processed in single transaction
+      - stage_22_embedding_extract  # NEW (ADR-K003 v1.2) - embedding data for st_vec
+    description: |
+      Atomic writer - commits st_hipp_events + st_vec + st_pipeline_processed.
+      ADR-K003 v1.2: Merged M23 into M16 for atomic 3-table transaction.
+      Order: st_hipp_events FIRST, st_vec SECOND (FK constraint satisfied).
+      If embedding missing: sets embedding_status=PENDING (P08 backfill handles).
     config:
       batch_size: 128
       retry_backoff_ms: 100
       max_retry_attempts: 3
+      write_embedding: true  # NEW: enables st_vec write
+      emit_stored_event: true
+      stored_event_topic: cognitive.vector.stored.v1
 
   # STAGE 80: Event Emission
   - id: stage_80_event_emitter

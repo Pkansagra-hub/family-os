@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from .server import BackpressureMetrics, SSEServer
+from .server import BackpressureMetrics, BroadcastEvent, SSEServer
 
-__all__ = ["BackpressureMetrics", "SSEServer"]
+__all__ = ["BackpressureMetrics", "BroadcastEvent", "SSEServer"]

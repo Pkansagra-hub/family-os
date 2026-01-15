@@ -1,0 +1,74 @@
+# P03 Module Contract: Gap Detector
+# Phase: R8 - P06 Integration
+# Dossier: §D.3.1, E.4.1 M25 GapDetector
+
+module_id: consolidation.gap_detector
+version: v1
+
+input_event_types:
+  - p03.truth.written.v1
+
+output_event_types:
+  - p03.gap.detected.v1
+
+latency_budget_ms: 50
+
+side_effects:
+  - write:st_learning_queue
+
+idempotent: true
+
+fabric_capabilities:
+  - detect_gaps
+
+failure_modes:
+  - code: QUEUE_FULL
+    policy: drop_lowest_priority
+    description: Drop lowest priority gaps when queue full
+  - code: GAP_LIMIT_EXCEEDED
+    policy: prioritize
+    description: Keep only highest priority gaps
+
+description: |
+  Gap Detector Module (R8 Phase)
+
+  Identifies knowledge gaps for P06 Active Learning:
+  - Missing information that could improve memory quality
+  - Ambiguous references needing clarification
+  - Low-confidence assertions needing validation
+
+  Gap Types:
+  - MISSING_CONTEXT: Who/what/where/when unclear
+  - AMBIGUOUS_REFERENCE: Could be multiple entities
+  - LOW_CONFIDENCE: Assertion confidence < threshold
+  - CONTRADICTION: Conflicting information detected
+  - INCOMPLETE_SEQUENCE: Missing events in timeline
+  - UNKNOWN_RELATIONSHIP: Entity connection unclear
+
+  Gap Prioritization:
+  - Priority based on information gain potential
+  - Higher priority for family members, recent events
+  - Respects max_gaps_per_cycle limit
+
+  Configuration:
+  - enabled: true (p03.active_learning.enabled)
+  - max_gaps_per_cycle: 50
+  - min_confidence_threshold: 0.6 (below = gap)
+  - prioritization_weights:
+      recency: 0.3
+      importance: 0.4
+      information_gain: 0.3
+
+  Gap Record (st_learning_queue):
+  - gap_id: ULID identifier
+  - gap_type: One of above types
+  - context_event_ids: Related event IDs
+  - entity_ids: Involved entities
+  - question_template: Suggested question format
+  - priority_score: 0-1 priority
+  - created_at: Timestamp
+  - status: PENDING | ASKED | RESOLVED | EXPIRED
+
+  Output:
+  - envelope.gaps: Array of gap records
+  - envelope.gaps_stats: {by_type, total, queued}

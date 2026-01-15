@@ -1,0 +1,58 @@
+# P03 Module Contract: Hebbian Learner
+# Phase: R1 - Co-occurrence Learning
+# Dossier: §D.3.1 stage_11_hebbian_update
+
+module_id: consolidation.hebbian_learner
+version: v1
+
+input_event_types:
+  - p03.batch.selected.v1
+
+output_event_types:
+  - p03.hebbian.updated.v1
+
+latency_budget_ms: 100
+
+side_effects:
+  - read:st_cooccurrence
+  - write:st_cooccurrence
+
+idempotent: false  # Cumulative weight updates
+
+fabric_capabilities:
+  - update_cooccurrence
+
+failure_modes:
+  - code: COOCCURRENCE_CONFLICT
+    policy: retry
+    max_retries: 3
+  - code: MAX_EDGES_EXCEEDED
+    policy: prune_weakest
+    description: Remove weakest edges when at capacity
+
+description: |
+  Hebbian Learner Module (R1 Phase)
+
+  Implements "what fires together, wires together" learning:
+  - Detects temporally proximate events within window
+  - Strengthens co-occurrence edge weights
+  - Applies decay to unused connections
+
+  Learning Rule:
+    w_new = w_old + lr * (1 - w_old)  # Strengthen
+    w_decay = w_old * decay_factor    # Decay unused
+
+  Configuration:
+  - temporal_window_seconds: 3600 (1 hour)
+  - learning_rate: 0.01
+  - decay_factor: 0.995 (0.5% daily decay)
+  - max_edges_per_event: 50
+
+  Edge Pruning:
+  - When max_edges exceeded, remove weakest connections
+  - Minimum weight threshold: 0.01
+
+  Output:
+  - envelope.hebbian.edges_updated: Number of edges modified
+  - envelope.hebbian.edges_created: Number of new edges
+  - envelope.hebbian.edges_pruned: Number of edges removed

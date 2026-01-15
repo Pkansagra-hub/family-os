@@ -1,0 +1,85 @@
+# P03 Module Contract: Memory Writer
+# Phase: R7 - Atomic Truth Writes
+# Dossier: §D.3.1 stage_70_memory_writer, k010.7-8-layer-memory-write-coordination
+
+module_id: consolidation.memory_writer
+version: v1
+
+input_event_types:
+  - p03.status.updated.v1
+
+output_event_types:
+  - p03.truth.written.v1
+
+latency_budget_ms: 100
+
+side_effects:
+  - write:st_kg_dom
+  - write:st_kg_edges
+  - write:st_epi
+  - write:st_sem
+  - write:st_vec
+  - write:st_procedural
+  - write:st_prospective
+  - write:st_outbox
+  - write:st_hipp_events
+
+idempotent: false  # Transaction-based
+
+fabric_capabilities:
+  - write_memories
+
+failure_modes:
+  - code: TRANSACTION_ROLLBACK
+    policy: retry
+    max_retries: 2
+    description: Retry entire transaction on rollback
+  - code: FK_VIOLATION
+    policy: retry_with_deps
+    description: Ensure dependencies written first
+  - code: DEADLOCK
+    policy: retry
+    max_retries: 3
+  - code: DISK_FULL
+    policy: alert_and_fail
+
+description: |
+  Memory Writer Module (R7 Phase)
+
+  Atomic multi-table truth writes using UnitOfWork:
+  - Single transaction across all truth layer tables
+  - Guarantees consistency via foreign key ordering
+  - Stages outbox events within same transaction
+
+  Write Order (FK dependencies):
+  1. st_kg_dom (entities) - no dependencies
+  2. st_kg_edges (relationships) - depends on entities
+  3. st_epi (episodes) - no dependencies
+  4. st_sem (patterns/insights) - may reference episodes
+  5. st_vec (embeddings) - references episodes/patterns
+  6. st_procedural (routines) - may reference patterns
+  7. st_prospective (projections) - references events
+  8. st_hipp_events (status update) - final confirmation
+  9. st_outbox (events) - staged for emission
+
+  Transaction Properties:
+  - SERIALIZABLE isolation (prevents anomalies)
+  - Timeout: 30 seconds
+  - Savepoints for partial rollback
+
+  Conflict Resolution:
+  - Optimistic locking via version columns
+  - Retry with exponential backoff
+  - Max 3 retries before failing
+
+  Configuration:
+  - transaction_timeout_ms: 30000
+  - batch_size: 100 (records per insert)
+  - retry_on_conflict: true
+  - max_retries: 3
+  - retry_backoff_ms: 100
+
+  Output:
+  - envelope.write_results: {table: count} write counts
+  - envelope.outbox_staged: Number of events staged
+  - envelope.transaction_id: Transaction identifier

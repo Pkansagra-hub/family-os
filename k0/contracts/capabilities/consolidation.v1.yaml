@@ -1,0 +1,290 @@
+# P03 Consolidation Capability Definitions
+# Version: v1
+# ADR: k010.9-capability-based-security
+# Dossier: Appendix E.5 Fabric Capabilities
+#
+# This file defines P03 consolidation pipeline capabilities and their providers.
+# Capabilities are abstract named operations invoked via CapabilityFabric.
+#
+# Provider priority: lower = higher priority (1 is highest)
+# All providers are P03-specific modules under k0/modules/consolidation/
+
+version: v1
+
+capabilities:
+  # ============================================================================
+  # Phase R0: Batch Selection
+  # ============================================================================
+
+  select_consolidation_batch:
+    description: "Select pending events from st_hipp_events for consolidation cycle"
+    providers:
+      - type: module
+        module_id: consolidation.batch_selector
+        priority: 1
+        latency_budget_ms: 50
+        condition: always
+    default_timeout_ms: 100
+
+  # ============================================================================
+  # Phase R1: Importance Scoring & Hebbian Learning
+  # ============================================================================
+
+  score_importance:
+    description: "Compute importance score using weighted formula (recency, affect, social, rehearsal, novelty)"
+    providers:
+      - type: module
+        module_id: consolidation.importance_scorer
+        priority: 1
+        latency_budget_ms: 30
+        condition: always
+    default_timeout_ms: 60
+
+  update_cooccurrence:
+    description: "Update Hebbian co-occurrence weights between temporally proximate events"
+    providers:
+      - type: module
+        module_id: consolidation.hebbian_learner
+        priority: 1
+        latency_budget_ms: 100
+        condition: always
+    default_timeout_ms: 200
+
+  # ============================================================================
+  # Phase R2: Episodic Clustering
+  # ============================================================================
+
+  cluster_episodes:
+    description: "Cluster events into episodes using DBSCAN on 768-dim embeddings"
+    providers:
+      - type: module
+        module_id: consolidation.episodic_clusterer
+        priority: 1
+        latency_budget_ms: 200
+        condition: always
+    default_timeout_ms: 400
+
+  build_episode:
+    description: "Build st_epi records from cluster results"
+    providers:
+      - type: module
+        module_id: consolidation.episode_builder
+        priority: 1
+        latency_budget_ms: 50
+        condition: always
+    default_timeout_ms: 100
+
+  # ============================================================================
+  # Phase R3: Deduplication, Decay & Pruning
+  # ============================================================================
+
+  detect_duplicates:
+    description: "Detect near-duplicate events using SimHash (64-bit, Hamming <= 3)"
+    providers:
+      - type: module
+        module_id: consolidation.simhash_deduplicator
+        priority: 1
+        latency_budget_ms: 100
+        condition: always
+    default_timeout_ms: 200
+
+  score_decay:
+    description: "Compute exponential decay score based on time since last access"
+    providers:
+      - type: module
+        module_id: consolidation.decay_scorer
+        priority: 1
+        latency_budget_ms: 50
+        condition: always
+    default_timeout_ms: 100
+
+  decide_prune:
+    description: "Determine prune/archive/keep decision based on scores and retention policy"
+    providers:
+      - type: module
+        module_id: consolidation.prune_decider
+        priority: 1
+        latency_budget_ms: 30
+        condition: always
+    default_timeout_ms: 60
+
+  # ============================================================================
+  # Phase R4: Knowledge Graph Consolidation
+  # ============================================================================
+
+  extract_entities:
+    description: "Extract named entities using UltraBERT NER cache"
+    providers:
+      - type: module
+        module_id: consolidation.entity_extractor
+        priority: 1
+        latency_budget_ms: 150
+        condition: always
+    default_timeout_ms: 300
+
+  build_relationships:
+    description: "Build knowledge graph edges between entities"
+    providers:
+      - type: module
+        module_id: consolidation.relationship_builder
+        priority: 1
+        latency_budget_ms: 100
+        condition: always
+    default_timeout_ms: 200
+
+  infer_causality:
+    description: "Infer causal relationships using Granger causality test"
+    providers:
+      - type: module
+        module_id: consolidation.causal_inference
+        priority: 1
+        latency_budget_ms: 200
+        condition: always
+    default_timeout_ms: 400
+
+  # ============================================================================
+  # Phase R5: Dream Phase (Optional)
+  # ============================================================================
+
+  generate_counterfactuals:
+    description: "Generate 'what if' scenarios using Counterfactual Probabilistic Network"
+    providers:
+      - type: module
+        module_id: consolidation.counterfactual
+        priority: 1
+        latency_budget_ms: 300
+        condition: p03.phases.r5_dream.enabled
+    default_timeout_ms: 600
+
+  simulate_futures:
+    description: "Project future states using TPN-MCTS (Monte Carlo Tree Search)"
+    providers:
+      - type: module
+        module_id: consolidation.forward_simulator
+        priority: 1
+        latency_budget_ms: 500
+        condition: p03.phases.r5_dream.enabled
+    default_timeout_ms: 1000
+
+  generate_insights:
+    description: "Discover patterns and insights using Bisociative Graph Traversal"
+    providers:
+      - type: module
+        module_id: consolidation.insight_generator
+        priority: 1
+        latency_budget_ms: 400
+        condition: p03.phases.r5_dream.enabled
+    default_timeout_ms: 800
+
+  # ============================================================================
+  # Phase R6-R7: Status & Write
+  # ============================================================================
+
+  update_status:
+    description: "Update st_hipp_events consolidation_status and write audit trail"
+    providers:
+      - type: module
+        module_id: consolidation.status_updater
+        priority: 1
+        latency_budget_ms: 30
+        condition: always
+    default_timeout_ms: 60
+
+  write_memories:
+    description: "Atomic multi-table truth writes (UnitOfWork transaction)"
+    providers:
+      - type: module
+        module_id: consolidation.memory_writer
+        priority: 1
+        latency_budget_ms: 100
+        condition: always
+    default_timeout_ms: 30000  # 30s transaction timeout
+
+  # ============================================================================
+  # Phase R8: Gap Detection (P06 Integration)
+  # ============================================================================
+
+  detect_gaps:
+    description: "Identify knowledge gaps for P06 Active Learning"
+    providers:
+      - type: module
+        module_id: consolidation.gap_detector
+        priority: 1
+        latency_budget_ms: 50
+        condition: p03.active_learning.enabled
+    default_timeout_ms: 100
+
+# ============================================================================
+# Capability Groups (for bulk capability requests)
+# ============================================================================
+
+capability_groups:
+  p03_r0_batch:
+    description: "R0 Batch Selection phase capabilities"
+    capabilities:
+      - select_consolidation_batch
+
+  p03_r1_scoring:
+    description: "R1 Importance Scoring phase capabilities"
+    capabilities:
+      - score_importance
+      - update_cooccurrence
+
+  p03_r2_clustering:
+    description: "R2 Episodic Clustering phase capabilities"
+    capabilities:
+      - cluster_episodes
+      - build_episode
+
+  p03_r3_pruning:
+    description: "R3 Deduplication & Pruning phase capabilities"
+    capabilities:
+      - detect_duplicates
+      - score_decay
+      - decide_prune
+
+  p03_r4_kg:
+    description: "R4 Knowledge Graph phase capabilities"
+    capabilities:
+      - extract_entities
+      - build_relationships
+      - infer_causality
+
+  p03_r5_dream:
+    description: "R5 Dream Phase capabilities (optional)"
+    capabilities:
+      - generate_counterfactuals
+      - simulate_futures
+      - generate_insights
+
+  p03_r6_r7_write:
+    description: "R6-R7 Status & Write phase capabilities"
+    capabilities:
+      - update_status
+      - write_memories
+
+  p03_r8_gap:
+    description: "R8 Gap Detection phase capabilities"
+    capabilities:
+      - detect_gaps
+
+  p03_all:
+    description: "All P03 consolidation capabilities"
+    capabilities:
+      - select_consolidation_batch
+      - score_importance
+      - update_cooccurrence
+      - cluster_episodes
+      - build_episode
+      - detect_duplicates
+      - score_decay
+      - decide_prune
+      - extract_entities
+      - build_relationships
+      - infer_causality
+      - generate_counterfactuals
+      - simulate_futures
+      - generate_insights
+      - update_status
+      - write_memories
+      - detect_gaps

@@ -4,9 +4,9 @@ Hippocampus Events Writer Module (M16)
 Writes enriched episodic memory events to st_hipp_events after P02 enrichment pipeline.
 
 **Purpose**: Final storage of enriched events with affect, embeddings, and semantic data.
-Performs 2-table atomic transaction (st_hipp_events + st_pipeline_processed).
+Performs 3-table atomic transaction (st_hipp_events + st_vec + st_pipeline_processed).
 
-**Performance**: <25ms P95 (2-table INSERT with B-tree indexes)
+**Performance**: <30ms P95 (3-table INSERT with B-tree indexes)
 
 **Contract**: k0/contracts/modules/core.hipp_events_writer.v1.yaml
 **ADR**: docs/architecture/decisions-K0/modules/k010.1-hipp-events-writer.md
@@ -16,21 +16,25 @@ Performs 2-table atomic transaction (st_hipp_events + st_pipeline_processed).
 - M02 (semantic_project): embedding_id
 - M11 (affect_analyze): valence, arousal
 - M13 (hipp_events_row): event_id, wal_pos, text, text_hash
+- M22 (extract_from_cache): embedding vector (768-dim)
 
-**Output**: st_hipp_events row + st_pipeline_processed tracking
+**Output**: st_hipp_events + st_vec + st_pipeline_processed tracking
 
-**Transaction Boundary (CORRECTED)**:
-- Previously 3-table transaction (included st_embedding_queue)
-- Corrected to 2-table per Sketchboard Phase 9 Q2
-- M14 writes st_embedding_queue separately
+**Transaction Boundary (ADR-K003 v1.2 Fix)**:
+- 3-table transaction: st_hipp_events -> st_vec -> st_pipeline_processed
+- M23 (stage_61) MERGED into M16 to ensure FK constraint satisfaction
+- Order: st_hipp_events FIRST (parent), st_vec SECOND (child with FK)
+- If embedding missing: sets embedding_status=PENDING (P08 backfill)
+- Rationale: Atomic transaction, correct FK ordering, no orphaned embeddings
 
 **Idempotency**: Uses event_id as PRIMARY KEY with INSERT OR IGNORE.
 Checks st_pipeline_processed before writing (skip if already processed).
 
-**Version**: 1.0.0
-**Last Updated**: 2025-11-17
+**Version**: 1.2.0
+**Last Updated**: 2025-12-13 (ADR-K003 v1.2 - merged M23 into M16)
 """
 
+import struct
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -47,6 +51,8 @@ class HippEventsMetrics:
     events_written: int = 0
     duplicates_skipped: int = 0
     pipeline_tracked: int = 0
+    embeddings_written: int = 0  # NEW: st_vec writes
+    embeddings_skipped: int = 0  # NEW: no embedding data
     missing_event_id: int = 0
     missing_embedding_id: int = 0
     missing_wal_pos: int = 0
@@ -208,11 +214,53 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
             envelope, pipeline_id, status
         )
 
-        # Write to st_hipp_events via syscalls (creates UnitOfWork transaction)
+        # 1. Write to st_hipp_events FIRST (parent row for FK constraint)
         # Pass complete row with all 70+ columns from M13 to syscall
         hipp_result = await context.syscalls.hipp_events_upsert(**hipp_events_record)
 
-        # Track in st_pipeline_processed via syscalls (separate UnitOfWork)
+        # 2. Write to st_vec SECOND (child row, FK to st_hipp_events)
+        # Extract embedding data from M22 (extract_from_cache)
+        embedding_data = envelope.get("extract_from_cache", {})
+        embedding = embedding_data.get("embedding")
+        embedding_id_from_m22 = embedding_data.get("embedding_id")
+
+        vec_written = False
+        if embedding and embedding_id_from_m22:
+            try:
+                # Convert 768-dim float list to 3072-byte blob
+                vector_bytes = struct.pack("768f", *embedding)
+
+                await context.syscalls.vec_write(
+                    embedding_id=embedding_id_from_m22,
+                    event_id=hipp_events_record["event_id"],
+                    tenant_id=hipp_events_record.get("tenant_id", "default"),
+                    space_id=hipp_events_record.get("space_id", "unknown"),
+                    vector=vector_bytes,
+                    vector_dim=768,
+                    model_id=embedding_data.get("model_id", "ultrabert_v2.1.0"),
+                    status="READY",
+                )
+                vec_written = True
+                _metrics.embeddings_written += 1
+            except Exception as e:
+                # Non-fatal: embedding write failure doesn't block event storage
+                # P08 backfill will handle PENDING embeddings
+                context.logger.warning(
+                    f"Failed to write embedding to st_vec: {e}",
+                    extra={
+                        "event_id": hipp_events_record["event_id"],
+                        "embedding_id": embedding_id_from_m22,
+                    },
+                )
+        else:
+            # No embedding data - set embedding_status to PENDING for P08 backfill
+            _metrics.embeddings_skipped += 1
+            context.logger.debug(
+                "No embedding data from M22, embedding_status=PENDING",
+                extra={"event_id": hipp_events_record["event_id"]},
+            )
+
+        # 3. Track in st_pipeline_processed via syscalls
         pipeline_result = await context.syscalls.pipeline_processed_upsert(
             pipeline_id=pipeline_processed_record["pipeline_id"],
             wal_pos=pipeline_processed_record["wal_pos"],
@@ -237,6 +285,8 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
             "hipp_events_write": {
                 "hipp_events_inserted": hipp_result["inserted"],
                 "hipp_events_status": hipp_result["status"],
+                "embedding_written": vec_written,
+                "embedding_id": embedding_id_from_m22 if vec_written else None,
                 "pipeline_tracked": pipeline_result["inserted"],
                 "pipeline_status": pipeline_result["status"],
                 "event_id": hipp_events_record["event_id"],
@@ -276,6 +326,8 @@ def get_metrics() -> dict[str, Any]:
         "events_written": _metrics.events_written,
         "duplicates_skipped": _metrics.duplicates_skipped,
         "pipeline_tracked": _metrics.pipeline_tracked,
+        "embeddings_written": _metrics.embeddings_written,
+        "embeddings_skipped": _metrics.embeddings_skipped,
         "missing_event_id": _metrics.missing_event_id,
         "missing_embedding_id": _metrics.missing_embedding_id,
         "missing_wal_pos": _metrics.missing_wal_pos,

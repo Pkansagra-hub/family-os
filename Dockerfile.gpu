@@ -1,3 +1,7 @@
+## DEPRECATED
+## Prefer building with: -f k0/deploy/Dockerfile.gpu (context repo root)
+## This file remains for backwards compatibility.
+
 # K0 Memory Kernel - GPU-Accelerated Container Image
 # FamilyOS - Privacy-first, hardware-independent, no vendor lock-in
 # Uses NVIDIA CUDA for UltraBERT inference acceleration
@@ -12,6 +16,7 @@ LABEL org.opencontainers.image.vendor="FamilyOS"
 
 # Install Python 3.10 and system dependencies (Ubuntu 22.04 ships with Python 3.10)
 # gcc + libc6-dev + python3-dev required for PyTorch Triton JIT compilation on GPU
+# libpq-dev required for asyncpg PostgreSQL driver
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     python3 \
@@ -19,7 +24,8 @@ RUN apt-get update && \
     python3-venv \
     python3-dev \
     curl \
-    sqlite3 \
+    libpq-dev \
+    postgresql-client \
     tzdata \
     gcc \
     libc6-dev \
@@ -32,16 +38,18 @@ WORKDIR /app
 # Copy UltraBERT wheel v2.1.0 (self-contained with bundled modeling classes)
 # Both PyTorch and ONNX backends work out of the box
 # Download from: https://github.com/Pkansagra-hub/Family_osModernBERT/releases/tag/v2.1.0
-COPY wheels/familyos_ultrabert-2.1.0-py3-none-any.whl ./wheels/
+COPY wheels/familyos_ultrabert-3.0.2-py3-none-any.whl ./wheels/
 
 # Copy minimal kernel requirements
 COPY k0/deploy/requirements.base.txt k0/deploy/requirements.kernel.txt ./
 
 # Install PyTorch nightly with CUDA 12.8 (supports Blackwell sm_100/sm_120) + kernel deps + UltraBERT
 # See: https://pytorch.org/get-started/locally/ - nightly cu128 has Blackwell support
+# Note: faiss-gpu installed separately for GPU-accelerated vector search (P08 pipeline)
 RUN pip3 install --no-cache-dir --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128 && \
     pip3 install --no-cache-dir -r requirements.kernel.txt && \
-    pip3 install --no-cache-dir wheels/familyos_ultrabert-2.1.0-py3-none-any.whl && \
+    pip3 install --no-cache-dir faiss-gpu>=1.8.0 && \
+    pip3 install --no-cache-dir wheels/familyos_ultrabert-3.0.2-py3-none-any.whl && \
     python3 -m spacy download en_core_web_sm
 
 # Copy application code
@@ -63,10 +71,9 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=30s \
     CMD curl -f http://localhost:8080/healthz || exit 1
 
-# Environment defaults - enable CUDA
+# Environment defaults - PostgreSQL mode
 ENV K0_LOG_LEVEL=INFO \
-    K0_DB_PATH=/data/k0_kernel.db \
-    K0_DB_WAL_MODE=true \
+    K0_USE_POSTGRESQL=true \
     PYTHONUNBUFFERED=1 \
     CUDA_VISIBLE_DEVICES=0 \
     ONNX_PROVIDERS=CUDAExecutionProvider

@@ -11,12 +11,14 @@ References:
 """
 
 import json
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
-from k0.uow.connection_pool import connection_scope
+from k0.db.connection import connection_scope
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 @dataclass(frozen=True)
@@ -61,7 +63,7 @@ class CRDTMergeLogger:
         )
     """
 
-    def log_merge(
+    async def log_merge(
         self,
         merge_id: str,
         resource_type: str,
@@ -74,7 +76,7 @@ class CRDTMergeLogger:
         loser_vector_clock: Optional[Dict] = None,
         conflict_reason: Optional[str] = None,
         tenant_id: Optional[str] = None,
-        connection: Optional[sqlite3.Connection] = None,
+        connection: Optional["asyncpg.Connection"] = None,
     ) -> None:
         """
         Log a CRDT conflict resolution event.
@@ -101,7 +103,7 @@ class CRDTMergeLogger:
             Human-readable explanation of conflict
         tenant_id : str, optional
             Tenant ID for multi-tenancy tracking
-        connection : sqlite3.Connection, optional
+        connection : asyncpg.Connection, optional
             Database connection (uses connection pool if not provided)
         """
         merged_at = datetime.now(timezone.utc).isoformat()
@@ -110,53 +112,54 @@ class CRDTMergeLogger:
         winner_vc_json = json.dumps(winner_vector_clock) if winner_vector_clock else None
         loser_vc_json = json.dumps(loser_vector_clock) if loser_vector_clock else None
 
-        resolve = connection if connection else connection_scope()
-        with resolve as conn:
+        async def _run_with_conn(conn: "asyncpg.Connection") -> None:
             try:
-                conn.execute(
+                await conn.execute(
                     """
                     INSERT INTO st_crdt_merge_log (
                         merge_id, resource_type, resource_id,
                         merge_strategy, winner_device_id, loser_device_id,
                         winner_vector_clock, loser_vector_clock,
                         conflict_reason, merged_at, tenant_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     """,
-                    (
-                        merge_id,
-                        resource_type,
-                        resource_id,
-                        merge_strategy,
-                        winner_device_id,
-                        loser_device_id,
-                        winner_vc_json,
-                        loser_vc_json,
-                        conflict_reason,
-                        merged_at,
-                        tenant_id,
-                    ),
+                    merge_id,
+                    resource_type,
+                    resource_id,
+                    merge_strategy,
+                    winner_device_id,
+                    loser_device_id,
+                    winner_vc_json,
+                    loser_vc_json,
+                    conflict_reason,
+                    merged_at,
+                    tenant_id,
                 )
-                if connection is None:
-                    conn.commit()
-            except sqlite3.OperationalError as e:
-                if "no such table" in str(e):
-                    # CRDT merge log table doesn't exist (Migration 0004 not applied)
+            except Exception as e:
+                if "does not exist" in str(e):
+                    # CRDT merge log table doesn't exist (migrations not applied)
                     # Log to stderr but don't fail the merge operation
                     print(
                         f"Warning: st_crdt_merge_log table not found - "
-                        f"merge {merge_id} not logged (apply Migration 0004)"
+                        f"merge {merge_id} not logged (apply migrations)"
                     )
                     return
                 raise CRDTMergeLoggerError(f"Failed to log merge: {e}") from e
 
-    def get_merge_history(
+        if connection is not None:
+            await _run_with_conn(connection)
+        else:
+            async with connection_scope() as conn:
+                await _run_with_conn(conn)
+
+    async def get_merge_history(
         self,
         *,
         resource_type: Optional[str] = None,
         resource_id: Optional[str] = None,
         device_id: Optional[str] = None,
         limit: int = 100,
-        connection: Optional[sqlite3.Connection] = None,
+        connection: Optional["asyncpg.Connection"] = None,
     ) -> list[CRDTMergeLog]:
         """
         Retrieve merge history with optional filters.
@@ -171,7 +174,7 @@ class CRDTMergeLogger:
             Filter by device ID (winner or loser)
         limit : int
             Maximum number of entries to return (default: 100)
-        connection : sqlite3.Connection, optional
+        connection : asyncpg.Connection, optional
             Database connection
 
         Returns
@@ -180,25 +183,28 @@ class CRDTMergeLogger:
             List of merge log entries, ordered by merged_at DESC
         """
         query = "SELECT * FROM st_crdt_merge_log WHERE 1=1"
-        params = []
+        params: list = []
+        param_idx = 1
 
         if resource_type:
-            query += " AND resource_type = ?"
+            query += f" AND resource_type = ${param_idx}"
             params.append(resource_type)
+            param_idx += 1
         if resource_id:
-            query += " AND resource_id = ?"
+            query += f" AND resource_id = ${param_idx}"
             params.append(resource_id)
+            param_idx += 1
         if device_id:
-            query += " AND (winner_device_id = ? OR loser_device_id = ?)"
+            query += f" AND (winner_device_id = ${param_idx} OR loser_device_id = ${param_idx + 1})"
             params.extend([device_id, device_id])
+            param_idx += 2
 
-        query += " ORDER BY merged_at DESC LIMIT ?"
+        query += f" ORDER BY merged_at DESC LIMIT ${param_idx}"
         params.append(limit)
 
-        resolve = connection if connection else connection_scope()
-        with resolve as conn:
+        async def _run_with_conn(conn: "asyncpg.Connection") -> list[CRDTMergeLog]:
             try:
-                rows = conn.execute(query, params).fetchall()
+                rows = await conn.fetch(query, *params)
                 return [
                     CRDTMergeLog(
                         merge_id=row["merge_id"],
@@ -215,13 +221,19 @@ class CRDTMergeLogger:
                     )
                     for row in rows
                 ]
-            except sqlite3.OperationalError as e:
-                if "no such table" in str(e):
+            except Exception as e:
+                if "does not exist" in str(e):
                     return []  # No merge log table = no entries
                 raise CRDTMergeLoggerError(f"Failed to get merge history: {e}") from e
 
+        if connection is not None:
+            return await _run_with_conn(connection)
+        else:
+            async with connection_scope() as conn:
+                return await _run_with_conn(conn)
 
-def resolve_conflict_with_logging(
+
+async def resolve_conflict_with_logging(
     local_memory: Dict,
     remote_memory: Dict,
     resource_type: str,
@@ -229,7 +241,7 @@ def resolve_conflict_with_logging(
     logger: CRDTMergeLogger,
     *,
     merge_strategy: str = "vector-clock",
-    connection: Optional[sqlite3.Connection] = None,
+    connection: Optional["asyncpg.Connection"] = None,
 ) -> Dict:
     """
     Resolve CRDT conflict and log the decision.
@@ -250,7 +262,7 @@ def resolve_conflict_with_logging(
         Logger instance
     merge_strategy : str
         Strategy to use (default: "vector-clock")
-    connection : sqlite3.Connection, optional
+    connection : asyncpg.Connection, optional
         Database connection
 
     Returns
@@ -328,7 +340,7 @@ def resolve_conflict_with_logging(
     import uuid
 
     merge_id = str(uuid.uuid4())
-    logger.log_merge(
+    await logger.log_merge(
         merge_id=merge_id,
         resource_type=resource_type,
         resource_id=resource_id,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -12,6 +13,8 @@ from typing import Any, Callable, MutableMapping, Sequence, cast
 import yaml
 
 from ..automation.migrate import MigrationError, MigrationResult, apply_migrations
+from ..db.connection import connection_scope
+from ..db.pool import configure_pool, shutdown_pool
 from ..gate.schema_registry import SchemaRecord, SchemaRegistry
 from ..kernel.config import KernelSettings
 from ..kernel.main import run as run_kernel
@@ -21,7 +24,6 @@ from ..storage.dlq import DeadLetter, DeadLetterQueue
 from ..storage.outbox import OutboxEntry, OutboxStore
 from ..storage.provisioning import DeviceKey, ProvisionedDevice, ProvisioningLedger
 from ..storage.replayer import Replayer, ReplayError
-from ..uow.connection_pool import configure_pool, connection_scope, shutdown_pool
 
 logger = logging.getLogger(__name__)
 
@@ -527,6 +529,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Restrict results to a driver alias",
     )
+    dlq_list_parser.add_argument(
+        "--pipeline",
+        dest="pipeline",
+        default=None,
+        help="Alias for --driver; filter by pipeline name (e.g., p03_consolidation)",
+    )
+    dlq_list_parser.add_argument(
+        "--phase",
+        dest="phase",
+        default=None,
+        help="Filter by failed phase (e.g., R0, R3, R7)",
+    )
+    dlq_list_parser.add_argument(
+        "--error-type",
+        dest="error_type",
+        default=None,
+        help="Filter by error type (e.g., TRANSIENT, VALIDATION)",
+    )
 
     dlq_requeue_parser = dlq_subparsers.add_parser(
         "requeue",
@@ -557,6 +577,139 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         required=True,
         help="Identifier of the dead-letter entry to quarantine",
+    )
+
+    # Issue 6.2.16: P03-specific DLQ commands
+    dlq_stats_parser = dlq_subparsers.add_parser(
+        "stats",
+        help="Show DLQ statistics by driver, phase, and error type",
+    )
+    dlq_stats_parser.add_argument(
+        "--pipeline",
+        dest="pipeline",
+        default=None,
+        help="Filter statistics by pipeline name (e.g., p03_consolidation)",
+    )
+    dlq_stats_parser.add_argument(
+        "--driver",
+        dest="driver",
+        default=None,
+        help="Alias for --pipeline; filter by driver name",
+    )
+
+    dlq_requeue_all_parser = dlq_subparsers.add_parser(
+        "requeue-all",
+        help="Bulk requeue pending DLQ entries matching filters",
+    )
+    dlq_requeue_all_parser.add_argument(
+        "--pipeline",
+        dest="pipeline",
+        required=True,
+        help="Pipeline name to filter (required)",
+    )
+    dlq_requeue_all_parser.add_argument(
+        "--max-items",
+        dest="max_items",
+        type=int,
+        default=100,
+        help="Maximum items to requeue (default: 100)",
+    )
+    dlq_requeue_all_parser.add_argument(
+        "--phase",
+        dest="phase",
+        default=None,
+        help="Filter by phase (e.g., R0, R3)",
+    )
+    dlq_requeue_all_parser.add_argument(
+        "--error-type",
+        dest="error_type",
+        default=None,
+        help="Filter by error type (recommend TRANSIENT only)",
+    )
+    dlq_requeue_all_parser.add_argument(
+        "--force",
+        dest="force",
+        action="store_true",
+        help="Skip confirmation prompt",
+    )
+
+    # -------------------------------------------------------------------------
+    # db subcommand: PostgreSQL migrations via Alembic (Milestone 1.1.2)
+    # -------------------------------------------------------------------------
+    db_parser = subparsers.add_parser(
+        "db",
+        help="PostgreSQL database migration commands (Alembic)",
+    )
+    db_subparsers = db_parser.add_subparsers(dest="db_command")
+
+    db_upgrade_parser = db_subparsers.add_parser(
+        "upgrade",
+        help="Apply pending PostgreSQL migrations",
+    )
+    db_upgrade_parser.add_argument(
+        "revision",
+        nargs="?",
+        default="head",
+        help="Target revision (default: head)",
+    )
+    db_upgrade_parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="Print SQL without executing",
+    )
+
+    db_downgrade_parser = db_subparsers.add_parser(
+        "downgrade",
+        help="Revert PostgreSQL migrations",
+    )
+    db_downgrade_parser.add_argument(
+        "revision",
+        nargs="?",
+        default="-1",
+        help="Target revision (default: -1, previous)",
+    )
+
+    db_current_parser = db_subparsers.add_parser(
+        "current",
+        help="Show current PostgreSQL migration revision",
+    )
+    db_current_parser.add_argument(
+        "-v",
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Show verbose output",
+    )
+
+    db_history_parser = db_subparsers.add_parser(
+        "history",
+        help="Show PostgreSQL migration history",
+    )
+    db_history_parser.add_argument(
+        "-v",
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Show verbose output",
+    )
+
+    db_revision_parser = db_subparsers.add_parser(
+        "revision",
+        help="Create a new PostgreSQL migration",
+    )
+    db_revision_parser.add_argument(
+        "-m",
+        "--message",
+        dest="message",
+        required=True,
+        help="Migration description",
+    )
+    db_revision_parser.add_argument(
+        "--autogenerate",
+        dest="autogenerate",
+        action="store_true",
+        help="Autogenerate migration from model changes",
     )
 
     return parser
@@ -697,6 +850,14 @@ def main(
             return 1
         database_path = args.database or _get_database_path(settings)
         return _handle_dlq_command(database_path, args)
+
+    if args.command == "db":
+        if getattr(args, "db_command", None) is None:
+            logger.error(
+                "`db` requires a sub-command (upgrade, downgrade, current, history, revision)"
+            )
+            return 1
+        return _handle_db_command(args)
 
     logger.error("`%s` command is not implemented yet", args.command)
     return 2
@@ -918,31 +1079,33 @@ def _handle_key_command(
                 )
                 return 2
 
-            with connection_scope() as conn:
-                # Transition all ACTIVE keys to ROTATING with grace window
-                active_keys = [k for k in keys if k.key_state == "ACTIVE"]
-                for old_key in active_keys:
-                    rotated = replace(
-                        old_key,
-                        key_state="ROTATING",
-                        rotated_ts=activated_ts.isoformat(timespec="seconds"),
-                        grace_expires_ts=grace_expires_ts.isoformat(timespec="seconds"),
-                    )
-                    ledger.add_key(rotated, connection=conn)
-                    logger.info(
-                        "Transitioned key version %s to ROTATING (grace expires: %s)",
-                        old_key.key_version,
-                        grace_expires_ts.isoformat(timespec="seconds"),
-                    )
+            async def _activate_key():
+                async with connection_scope() as conn:
+                    # Transition all ACTIVE keys to ROTATING with grace window
+                    active_keys = [k for k in keys if k.key_state == "ACTIVE"]
+                    for old_key in active_keys:
+                        rotated = replace(
+                            old_key,
+                            key_state="ROTATING",
+                            rotated_ts=activated_ts.isoformat(timespec="seconds"),
+                            grace_expires_ts=grace_expires_ts.isoformat(timespec="seconds"),
+                        )
+                        await ledger.add_key(rotated, connection=conn)
+                        logger.info(
+                            "Transitioned key version %s to ROTATING (grace expires: %s)",
+                            old_key.key_version,
+                            grace_expires_ts.isoformat(timespec="seconds"),
+                        )
 
-                # Activate the new key
-                activated = replace(
-                    target_key,
-                    key_state="ACTIVE",
-                    activated_ts=activated_ts.isoformat(timespec="seconds"),
-                )
-                ledger.add_key(activated, connection=conn)
-                conn.commit()
+                    # Activate the new key
+                    activated = replace(
+                        target_key,
+                        key_state="ACTIVE",
+                        activated_ts=activated_ts.isoformat(timespec="seconds"),
+                    )
+                    await ledger.add_key(activated, connection=conn)
+
+            asyncio.run(_activate_key())
 
             logger.info(
                 "Activated key version %s for device %s",
@@ -1011,51 +1174,55 @@ def _handle_key_command(
 
             now_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-            # Query all ROTATING keys
-            with connection_scope() as conn:
-                rows = conn.execute(
-                    "SELECT device_id, key_version, grace_expires_ts FROM st_device_keys "
-                    "WHERE key_state='ROTATING' AND grace_expires_ts IS NOT NULL AND grace_expires_ts < ?",
-                    (now_ts,),
-                ).fetchall()
+            async def _expire_grace():
+                async with connection_scope() as conn:
+                    rows = await conn.fetch(
+                        "SELECT device_id, key_version, grace_expires_ts FROM st_device_keys "
+                        "WHERE key_state='ROTATING' AND grace_expires_ts IS NOT NULL AND grace_expires_ts < $1",
+                        now_ts,
+                    )
+                    return rows
 
-                if not rows:
-                    logger.info("No expired ROTATING keys found")
-                    return 0
+            rows = asyncio.run(_expire_grace())
 
-                expired_count = len(rows)
-                logger.info("Found %d expired ROTATING key(s)", expired_count)
+            if not rows:
+                logger.info("No expired ROTATING keys found")
+                return 0
 
-                if args.dry_run:
-                    for row in rows:
-                        logger.info(
-                            "  [DRY-RUN] Would expire: device=%s key_version=%s grace_expired=%s",
+            expired_count = len(rows)
+            logger.info("Found %d expired ROTATING key(s)", expired_count)
+
+            if args.dry_run:
+                for row in rows:
+                    logger.info(
+                        "  [DRY-RUN] Would expire: device=%s key_version=%s grace_expired=%s",
+                        row["device_id"],
+                        row["key_version"],
+                        row["grace_expires_ts"],
+                    )
+                return 0
+
+            async def _revoke_expired(rows_to_revoke):
+                async with connection_scope() as conn:
+                    for row in rows_to_revoke:
+                        await conn.execute(
+                            (
+                                "UPDATE st_device_keys "
+                                "SET key_state='REVOKED', revoked_ts=$1, revocation_reason=$2 "
+                                "WHERE device_id=$3 AND key_version=$4"
+                            ),
+                            now_ts,
+                            "Grace window expired",
                             row["device_id"],
                             row["key_version"],
-                            row["grace_expires_ts"],
                         )
-                    return 0
-
-                # Transition expired keys to REVOKED
-                for row in rows:
-                    keys = ledger.get_keys(row["device_id"])
-                    target_key = next(
-                        (k for k in keys if k.key_version == row["key_version"]), None
-                    )
-                    if target_key:
-                        revoked = replace(
-                            target_key,
-                            key_state="REVOKED",
-                            revoked_ts=now_ts,
-                            revocation_reason="Grace window expired",
-                        )
-                        ledger.add_key(revoked, connection=conn)
                         logger.info(
                             "Expired key: device=%s key_version=%s",
                             row["device_id"],
                             row["key_version"],
                         )
-                conn.commit()
+
+            asyncio.run(_revoke_expired(rows))
 
             logger.info("Expired %d ROTATING key(s)", expired_count)
             return 0
@@ -1328,13 +1495,19 @@ def _handle_dlq_command(
                 logger.error("limit must be greater than zero")
                 return 2
             state = args.state.upper() if args.state else None
+            # Support --pipeline as alias for --driver (Issue 6.2.16)
+            driver = args.driver or getattr(args, "pipeline", None)
             letters = queue.list_pending(
                 limit=limit,
                 state=state,
                 tenant_id=args.tenant,
                 space_id=args.space,
-                driver=args.driver,
+                driver=driver,
             )
+            # Apply phase filter if provided (Issue 6.2.16)
+            phase_filter = getattr(args, "phase", None)
+            if phase_filter:
+                letters = [l for l in letters if l.op_kind == phase_filter]
             if not letters:
                 logger.info("No dead-letter entries matched the query")
                 return 0
@@ -1377,29 +1550,32 @@ def _handle_dlq_command(
             if new_seq < 0:
                 logger.error("requeue_seq must be greater than or equal to zero")
                 return 2
-            with connection_scope() as connection:
-                outbox_store.enqueue(
-                    OutboxEntry(
-                        id=None,
-                        wal_pos=letter.wal_pos,
-                        tenant_id=letter.tenant_id,
-                        space_id=letter.space_id,
-                        driver=letter.driver,
-                        op_kind=letter.op_kind,
-                        payload=letter.payload,
-                        fingerprint=letter.fingerprint,
+
+            async def _requeue_letter():
+                async with connection_scope() as connection:
+                    await outbox_store.enqueue(
+                        OutboxEntry(
+                            id=None,
+                            wal_pos=letter.wal_pos,
+                            tenant_id=letter.tenant_id,
+                            space_id=letter.space_id,
+                            driver=letter.driver,
+                            op_kind=letter.op_kind,
+                            payload=letter.payload,
+                            fingerprint=letter.fingerprint,
+                            requeue_seq=new_seq,
+                            retries=0,
+                            last_error=letter.reason,
+                        ),
+                        connection=connection,
+                    )
+                    await queue.mark_requeued(
+                        letter.id,
                         requeue_seq=new_seq,
-                        retries=0,
-                        last_error=letter.reason,
-                    ),
-                    connection=connection,
-                )
-                queue.mark_requeued(
-                    letter.id,
-                    requeue_seq=new_seq,
-                    connection=connection,
-                )
-                connection.commit()
+                        connection=connection,
+                    )
+
+            asyncio.run(_requeue_letter())
             logger.info(
                 "Requeued dead-letter entry %s for driver %s with requeue_seq=%s",
                 letter.id,
@@ -1416,6 +1592,111 @@ def _handle_dlq_command(
                 "Marked dead-letter entry %s as QUARANTINED",
                 args.letter_id,
             )
+            return 0
+
+        # Issue 6.2.16: stats command
+        if command == "stats":
+            driver = getattr(args, "driver", None) or getattr(args, "pipeline", None)
+            letters = queue.list_pending(
+                limit=10000,
+                state="ALL",
+                driver=driver,
+            )
+
+            # Compute statistics
+            total = len(letters)
+            by_state: dict[str, int] = {}
+            by_phase: dict[str, int] = {}
+            by_driver: dict[str, int] = {}
+
+            for letter in letters:
+                # By state
+                state = letter.state or "UNKNOWN"
+                by_state[state] = by_state.get(state, 0) + 1
+                # By phase (op_kind)
+                phase = letter.op_kind or "UNKNOWN"
+                by_phase[phase] = by_phase.get(phase, 0) + 1
+                # By driver
+                drv = letter.driver or "UNKNOWN"
+                by_driver[drv] = by_driver.get(drv, 0) + 1
+
+            logger.info("\nDLQ Statistics%s", f" for {driver}" if driver else "")
+            logger.info("-" * 40)
+            logger.info("Total entries:   %s", total)
+            logger.info("\nBy State:")
+            for state, count in sorted(by_state.items()):
+                logger.info("  %s: %s", state, count)
+            logger.info("\nBy Phase:")
+            for phase, count in sorted(by_phase.items()):
+                logger.info("  %s: %s", phase, count)
+            logger.info("\nBy Driver:")
+            for drv, count in sorted(by_driver.items()):
+                logger.info("  %s: %s", drv, count)
+            return 0
+
+        # Issue 6.2.16: requeue-all command
+        if command == "requeue-all":
+            driver = args.pipeline
+            max_items = args.max_items
+            phase_filter = getattr(args, "phase", None)
+            force = getattr(args, "force", False)
+
+            letters = queue.list_pending(
+                limit=max_items,
+                state="PENDING",
+                driver=driver,
+            )
+            # Apply phase filter
+            if phase_filter:
+                letters = [l for l in letters if l.op_kind == phase_filter]
+
+            if not letters:
+                logger.info("No matching DLQ entries found for requeue")
+                return 0
+
+            if not force:
+                logger.info("Found %s entries to requeue. Use --force to proceed.", len(letters))
+                return 0
+
+            requeued = 0
+
+            async def _requeue_all_letters():
+                nonlocal requeued
+                async with connection_scope() as connection:
+                    for letter in letters:
+                        if letter.id is None or letter.wal_pos is None:
+                            continue
+                        if letter.state != "PENDING":
+                            continue
+                        new_seq = letter.requeue_seq + 1
+                        try:
+                            await outbox_store.enqueue(
+                                OutboxEntry(
+                                    id=None,
+                                    wal_pos=letter.wal_pos,
+                                    tenant_id=letter.tenant_id,
+                                    space_id=letter.space_id,
+                                    driver=letter.driver,
+                                    op_kind=letter.op_kind,
+                                    payload=letter.payload,
+                                    fingerprint=letter.fingerprint,
+                                    requeue_seq=new_seq,
+                                    retries=0,
+                                    last_error=letter.reason,
+                                ),
+                                connection=connection,
+                            )
+                            await queue.mark_requeued(
+                                letter.id,
+                                requeue_seq=new_seq,
+                                connection=connection,
+                            )
+                            requeued += 1
+                        except Exception as e:
+                            logger.warning("Failed to requeue %s: %s", letter.id, e)
+
+            asyncio.run(_requeue_all_letters())
+            logger.info("Requeued %s/%s entries for pipeline %s", requeued, len(letters), driver)
             return 0
 
         logger.error("`dlq %s` command is not implemented yet", command)
@@ -1444,24 +1725,33 @@ def _log_dead_letter(letter: DeadLetter) -> None:
     )
 
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+def _handle_db_command(args: argparse.Namespace) -> int:
+    """Handle PostgreSQL database migration commands via Alembic.
 
+    Delegates to k0.cli.db_migrate for actual Alembic operations.
+    Part of Milestone 1.1.2 - Issue 1.1.2.4.
+    """
+    from k0.cli.db_migrate import cmd_current, cmd_downgrade, cmd_history, cmd_revision, cmd_upgrade
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    command = args.db_command
 
+    if command == "upgrade":
+        return cmd_upgrade(args)
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    if command == "downgrade":
+        return cmd_downgrade(args)
 
+    if command == "current":
+        return cmd_current(args)
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    if command == "history":
+        return cmd_history(args)
 
+    if command == "revision":
+        return cmd_revision(args)
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    logger.error("`db %s` command is not implemented yet", command)
+    return 2
 
 
 if __name__ == "__main__":  # pragma: no cover

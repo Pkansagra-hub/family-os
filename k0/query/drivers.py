@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import base64
 import json
-import sqlite3
 import time
 from dataclasses import dataclass
-from typing import Any, Iterable, List, MutableMapping, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, List, MutableMapping, Sequence
 
+from k0.db.connection import connection_scope
 from k0.query.common import DriverContext, DriverExecution, QueryDriver
-from k0.uow.connection_pool import connection_scope
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 class DriverRegistry:
@@ -141,7 +143,7 @@ class WalDriver(QueryDriver):
             "default",
         }
 
-    def execute(self, selector: Any, context: DriverContext) -> DriverExecution:
+    async def execute(self, selector: Any, context: DriverContext) -> DriverExecution:
         allowed_limit = context.allowed_limit
         if allowed_limit <= 0:
             return DriverExecution(
@@ -158,8 +160,8 @@ class WalDriver(QueryDriver):
         start = time.perf_counter()
         # Gap 31: Defensive connection cleanup with explicit try/finally
         try:
-            with connection_scope() as connection:
-                rows = self._fetch_rows(
+            async with connection_scope() as connection:
+                rows = await self._fetch_rows(
                     connection,
                     space_id=context.space_id,
                     tenant_id=selector_tenant,
@@ -194,9 +196,9 @@ class WalDriver(QueryDriver):
             metadata=metadata,
         )
 
-    def _fetch_rows(
+    async def _fetch_rows(
         self,
-        connection: sqlite3.Connection,
+        connection: "asyncpg.Connection",
         *,
         space_id: str,
         tenant_id: str | None,
@@ -204,38 +206,43 @@ class WalDriver(QueryDriver):
         cursor: int | None,
         after: int | None,
         limit: int,
-    ) -> list[sqlite3.Row]:
+    ) -> list["asyncpg.Record"]:
         query_parts = [
             "SELECT pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, schema_uri, schema_version, device_id, commit_ts",
             "FROM st_wal",
-            "WHERE space_id = ?",
+            "WHERE space_id = $1",
         ]
         params: list[Any] = [space_id]
+        param_idx = 2
 
         if tenant_id:
-            query_parts.append("AND tenant_id = ?")
+            query_parts.append(f"AND tenant_id = ${param_idx}")
             params.append(tenant_id)
+            param_idx += 1
 
         if topic:
-            query_parts.append("AND topic = ?")
+            query_parts.append(f"AND topic = ${param_idx}")
             params.append(topic)
+            param_idx += 1
 
         if cursor is not None:
-            query_parts.append("AND pos < ?")
+            query_parts.append(f"AND pos < ${param_idx}")
             params.append(int(cursor))
+            param_idx += 1
 
         if after is not None:
-            query_parts.append("AND pos > ?")
+            query_parts.append(f"AND pos > ${param_idx}")
             params.append(int(after))
+            param_idx += 1
 
         query_parts.append("ORDER BY pos DESC")
-        query_parts.append("LIMIT ?")
+        query_parts.append(f"LIMIT ${param_idx}")
         params.append(int(limit))
 
         statement = " ".join(query_parts)
-        return list(connection.execute(statement, params).fetchall())
+        return list(await connection.fetch(statement, *params))
 
-    def _row_to_item(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _row_to_item(self, row: "asyncpg.Record") -> dict[str, Any]:
         body_value = _decode_body(row["body"]) if "body" in row.keys() else None
         return {
             "wal_pos": row["pos"],
@@ -281,7 +288,7 @@ class AliasDriver(QueryDriver):
 
 
 class FtsDriver(QueryDriver):
-    """Full-text search driver using SQLite FTS5 virtual table."""
+    """Full-text search driver using PostgreSQL tsvector/tsquery."""
 
     name = "fts"
 
@@ -302,7 +309,7 @@ class FtsDriver(QueryDriver):
             "text",
         }
 
-    def execute(self, selector: Any, context: DriverContext) -> DriverExecution:
+    async def execute(self, selector: Any, context: DriverContext) -> DriverExecution:
         allowed_limit = context.allowed_limit
         if allowed_limit <= 0:
             return DriverExecution(
@@ -328,8 +335,8 @@ class FtsDriver(QueryDriver):
         start = time.perf_counter()
         # Gap 31: Defensive connection cleanup with explicit try/finally
         try:
-            with connection_scope() as connection:
-                rows = self._search_fts(
+            async with connection_scope() as connection:
+                rows = await self._search_fts(
                     connection,
                     space_id=context.space_id,
                     tenant_id=selector_tenant,
@@ -362,41 +369,47 @@ class FtsDriver(QueryDriver):
             metadata=metadata,
         )
 
-    def _search_fts(
+    async def _search_fts(
         self,
-        connection: sqlite3.Connection,
+        connection: "asyncpg.Connection",
         *,
         space_id: str,
         tenant_id: str | None,
         topic: str | None,
         query: str,
         limit: int,
-    ) -> list[sqlite3.Row]:
-        # Build FTS query with filtering
+    ) -> list["asyncpg.Record"]:
+        # Build PostgreSQL full-text search query using tsvector/tsquery
+        # The tsv column is a pre-computed tsvector column with GIN index
         query_parts = [
-            "SELECT wal_pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, schema_uri, schema_version, device_id, commit_ts, bm25(st_fts) as score",
+            "SELECT wal_pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, schema_uri, schema_version, device_id, commit_ts,",
+            "ts_rank(tsv, plainto_tsquery('english', $1)) as score",
             "FROM st_fts",
-            f"WHERE st_fts MATCH '{query}'",  # FTS5 match query
-            "AND space_id = ?",
+            "WHERE tsv @@ plainto_tsquery('english', $1)",
+            "AND space_id = $2",
         ]
-        params: list[Any] = [space_id]
+        params: list[Any] = [query, space_id]
+        param_idx = 3
 
         if tenant_id:
-            query_parts.append("AND tenant_id = ?")
+            query_parts.append(f"AND tenant_id = ${param_idx}")
             params.append(tenant_id)
+            param_idx += 1
 
         if topic:
-            query_parts.append("AND topic = ?")
+            query_parts.append(f"AND topic = ${param_idx}")
             params.append(topic)
+            param_idx += 1
 
-        query_parts.append("ORDER BY bm25(st_fts)")  # Order by relevance score
-        query_parts.append("LIMIT ?")
+        # Order by relevance score (descending - higher is better in PostgreSQL)
+        query_parts.append("ORDER BY ts_rank(tsv, plainto_tsquery('english', $1)) DESC")
+        query_parts.append(f"LIMIT ${param_idx}")
         params.append(int(limit))
 
         statement = " ".join(query_parts)
-        return list(connection.execute(statement, params).fetchall())
+        return list(await connection.fetch(statement, *params))
 
-    def _row_to_item(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _row_to_item(self, row: "asyncpg.Record") -> dict[str, Any]:
         body_value = _decode_body(row["body"]) if "body" in row.keys() else None
         return {
             "wal_pos": row["wal_pos"],

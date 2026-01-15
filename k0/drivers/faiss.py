@@ -1,35 +1,36 @@
 """
-FAISS Vector Storage Driver - Outbox Worker Implementation
+pgvector Vector Storage Driver - Outbox Worker Implementation
 
 Purpose:
     Processes outbox entries with alias='st_vector' to store embedding vectors
-    in FAISS index for fast approximate nearest neighbor (ANN) search.
+    in PostgreSQL with pgvector extension for fast approximate nearest neighbor (ANN) search.
 
 Architecture:
     - Reads vectors from st_embedding_queue (after P08 generates them)
-    - Stores vectors in binary FAISS index file (Flat/IVF/HNSW)
-    - Maintains metadata table (st_embeddings) for event_id ↔ vector_id mapping
+    - Stores vectors directly in PostgreSQL with pgvector extension
+    - Uses IVFFlat or HNSW indexes for fast similarity search
     - Supports incremental index updates (no full rebuild required)
 
 Contract:
     - apply(entry: OutboxEntry) -> None
     - build_driver() factory function
-    - Context manager support (__enter__/__exit__)
+    - Async context manager support (__aenter__/__aexit__)
 
 Performance:
     - Target: <30ms P95 per vector
     - Batch indexing: 128 vectors per UnitOfWork
-    - Index type: Flat (exact) for small datasets, IVF for large datasets
+    - Index type: IVFFlat for balanced speed/accuracy
 
 Dependencies:
-    - faiss-cpu (pip install faiss-cpu)
+    - asyncpg
     - numpy
+    - pgvector extension in PostgreSQL
 
 Usage (from outbox worker):
-    driver = build_driver()
-    with driver:
+    driver = await build_driver()
+    async with driver:
         for entry in outbox_batch:
-            driver.apply(entry)
+            await driver.apply(entry)
 """
 
 from __future__ import annotations
@@ -37,137 +38,129 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sqlite3
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-from k0.uow.connection_pool import connection_scope
+from k0.db.connection import connection_scope
 
 if TYPE_CHECKING:
+    import asyncpg
+
     from k0.storage.outbox import OutboxEntry
 
 logger = logging.getLogger(__name__)
 
 
-class FaissDriver:
+class PgvectorDriver:
     """
-    FAISS vector index driver for semantic similarity search.
+    pgvector driver for semantic similarity search.
 
-    Reads embedding vectors from st_embedding_queue (status='READY')
-    and stores them in FAISS index with metadata linkage in st_embeddings.
+    Stores embedding vectors directly in PostgreSQL with pgvector extension.
+    Uses IVFFlat index for fast approximate nearest neighbor queries.
     """
 
-    def __init__(self, index_path: str, dimension: int = 384):
+    def __init__(self, dimension: int = 384):
         """
-        Initialize FAISS driver with index configuration.
+        Initialize pgvector driver with vector configuration.
 
         Args:
-            index_path: Path to FAISS index file (*.faiss)
             dimension: Vector dimension (default 384 for all-MiniLM-L6-v2)
 
         Note:
             Uses global connection pool (configured by kernel) for database access.
         """
-        self.index_path = index_path
         self.dimension = dimension
-        self.index = None
+        self._np = None
 
-    def __enter__(self):
-        """Context manager entry - load FAISS index."""
+    async def __aenter__(self):
+        """Async context manager entry - ensure pgvector extension and table."""
         try:
-            import faiss
             import numpy as np
         except ImportError as e:
-            raise ImportError(
-                "faiss-cpu or numpy not installed. Install with: pip install faiss-cpu numpy"
-            ) from e
+            raise ImportError("numpy not installed. Install with: pip install numpy") from e
 
-        # Store imports as instance variables for use in methods
-        self.faiss = faiss
-        self.np = np
+        self._np = np
 
-        # Load or create FAISS index
-        index_file = Path(self.index_path)
-        if index_file.exists():
-            self.index = faiss.read_index(str(index_file))
-            logger.info(
-                f"FaissDriver: Loaded existing index from {self.index_path} ({self.index.ntotal} vectors)"
-            )
-        else:
-            # Create new Flat index (exact search, fast for <1M vectors)
-            self.index = faiss.IndexFlatL2(self.dimension)
-            logger.info(f"FaissDriver: Created new Flat index (dim={self.dimension})")
-
-        # Create metadata table using thread-local connection
-        with connection_scope() as conn:
-            conn.row_factory = sqlite3.Row
-            self._ensure_metadata_table(conn)
+        # Ensure pgvector extension and tables exist
+        async with connection_scope() as conn:
+            await self._ensure_pgvector_setup(conn)
 
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit - save FAISS index."""
-        if self.index:
-            # Save index to disk
-            self.faiss.write_index(self.index, self.index_path)
-            logger.info(
-                f"FaissDriver: Saved index to {self.index_path} ({self.index.ntotal} vectors)"
-            )
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        logger.info("PgvectorDriver closed")
 
-        logger.info("FaissDriver closed")
-
-    def _ensure_metadata_table(self, conn):
+    async def _ensure_pgvector_setup(self, conn: "asyncpg.Connection"):
         """
-        Create st_embeddings metadata table if not exists.
+        Ensure pgvector extension and st_embeddings table exist.
 
         Args:
-            conn: SQLite connection (thread-local)
+            conn: asyncpg connection
 
         Schema:
-            - vector_id (INTEGER, FAISS index position)
+            - id (SERIAL, primary key)
             - embedding_id (TEXT, unique, links to st_hipp_events)
             - event_id (TEXT, links to st_hipp_events)
             - tenant_id (TEXT, for multi-tenancy)
             - space_id (TEXT, for ACL filtering)
+            - embedding (vector(384), the actual vector)
             - vector_norm (REAL, L2 norm for quality checks)
-            - indexed_at (INTEGER, timestamp)
+            - indexed_at (TIMESTAMPTZ, timestamp)
         """
-        conn.execute(
-            """
+        # Enable pgvector extension
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+        # Create embeddings table with vector column
+        await conn.execute(
+            f"""
             CREATE TABLE IF NOT EXISTS st_embeddings (
-                vector_id INTEGER PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 embedding_id TEXT NOT NULL UNIQUE,
                 event_id TEXT NOT NULL,
                 tenant_id TEXT NOT NULL,
                 space_id TEXT NOT NULL,
+                embedding vector({self.dimension}) NOT NULL,
                 vector_norm REAL NOT NULL,
-                indexed_at INTEGER NOT NULL,
-                FOREIGN KEY (embedding_id) REFERENCES st_hipp_events(embedding_id),
-                FOREIGN KEY (event_id) REFERENCES st_hipp_events(event_id)
+                indexed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
-        """
+            """
         )
 
-        conn.execute(
+        # Create indexes for common queries
+        await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_embeddings_event_id
             ON st_embeddings(event_id)
-        """
+            """
         )
 
-        conn.execute(
+        await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_embeddings_tenant_space
             ON st_embeddings(tenant_id, space_id)
-        """
+            """
         )
 
-        conn.commit()
-        logger.info("FaissDriver: st_embeddings metadata table ready")
+        # Create IVFFlat index for vector similarity search
+        # Note: IVFFlat requires training data, so we create after some data exists
+        # For now, create a simple index that works with any amount of data
+        try:
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_embeddings_vector_cosine
+                ON st_embeddings USING ivfflat (embedding vector_cosine_ops)
+                WITH (lists = 100)
+                """
+            )
+        except Exception as e:
+            # IVFFlat might fail if table is empty or too few rows
+            logger.debug(f"IVFFlat index creation deferred: {e}")
 
-    def apply(self, entry: OutboxEntry) -> None:
+        logger.info("PgvectorDriver: st_embeddings table ready")
+
+    async def apply(self, entry: "OutboxEntry") -> None:
         """
-        Process outbox entry - store vector in FAISS index.
+        Process outbox entry - store vector in pgvector table.
 
         Args:
             entry: Outbox entry with alias='st_vector'
@@ -179,16 +172,14 @@ class FaissDriver:
             }
 
         Raises:
-            RuntimeError: If FAISS index not loaded
+            RuntimeError: If driver not initialized
             ValueError: If payload missing required fields or vector not ready
-            sqlite3.Error: If database operation fails
+            asyncpg.PostgresError: If database operation fails
         """
-        if not self.index:
-            raise RuntimeError("FaissDriver not loaded (use context manager)")
+        if self._np is None:
+            raise RuntimeError("PgvectorDriver not initialized (use async context manager)")
 
-        with connection_scope() as conn:
-            conn.row_factory = sqlite3.Row
-
+        async with connection_scope() as conn:
             try:
                 # Parse payload
                 payload = json.loads(entry.payload)
@@ -198,168 +189,193 @@ class FaissDriver:
                 if not embedding_id:
                     raise ValueError(f"Missing embedding_id in payload: {entry.payload}")
 
-                logger.debug(f"FAISS: Processing {action} for embedding_id={embedding_id}")
+                logger.debug(f"pgvector: Processing {action} for embedding_id={embedding_id}")
 
                 if action == "add":
-                    self._add_vector(conn, embedding_id)
+                    await self._add_vector(conn, embedding_id)
                 elif action == "delete":
-                    self._delete_vector(conn, embedding_id)
+                    await self._delete_vector(conn, embedding_id)
                 else:
                     raise ValueError(f"Unknown action: {action}")
 
             except json.JSONDecodeError as e:
-                logger.error(f"FAISS: Invalid JSON payload: {entry.payload}", exc_info=e)
-                raise
-            except Exception as e:
-                logger.error(f"FAISS: Failed to process entry {entry.id}", exc_info=e)
-                conn.rollback()
+                logger.error(f"pgvector: Invalid JSON payload: {entry.payload}", exc_info=e)
                 raise
 
-    def _add_vector(self, conn, embedding_id: str):
+    async def _add_vector(self, conn: "asyncpg.Connection", embedding_id: str):
         """
-        Add vector from st_embedding_queue to FAISS index.
+        Add vector from st_embedding_queue to pgvector table.
 
         Args:
-            conn: SQLite connection (thread-local)
+            conn: asyncpg connection
             embedding_id: Embedding identifier
 
         Raises:
             ValueError: If vector not found or not ready
         """
         # Read vector from st_embedding_queue
-        cursor = conn.execute(
+        row = await conn.fetchrow(
             """
             SELECT
-                eq.embedding_id,
-                eq.event_id,
-                eq.tenant_id,
-                eq.space_id,
-                eq.vector_json,
-                eq.status
-            FROM st_embedding_queue eq
-            WHERE eq.embedding_id = ?
-        """,
-            (embedding_id,),
-        )
-
-        row = cursor.fetchone()
-        if not row:
-            raise ValueError(f"FAISS: Embedding {embedding_id} not found in st_embedding_queue")
-
-        if row["status"] != "READY":
-            raise ValueError(f"FAISS: Embedding {embedding_id} not ready (status={row['status']})")
-
-        # Parse vector JSON
-        try:
-            vector_list = json.loads(row["vector_json"])
-            vector = self.np.array(vector_list, dtype=self.np.float32)
-        except (json.JSONDecodeError, ValueError) as e:
-            raise ValueError(f"FAISS: Invalid vector_json for {embedding_id}: {e}")
-
-        if vector.shape[0] != self.dimension:
-            raise ValueError(
-                f"FAISS: Vector dimension mismatch (expected {self.dimension}, got {vector.shape[0]})"
-            )
-
-        # Add to FAISS index
-        vector_id = self.index.ntotal  # Next available ID
-        self.index.add(vector.reshape(1, -1))
-
-        # Compute L2 norm for quality checks
-        vector_norm = float(self.np.linalg.norm(vector))
-
-        # Store metadata in st_embeddings
-        conn.execute(
-            """
-            INSERT INTO st_embeddings (
-                vector_id,
                 embedding_id,
                 event_id,
                 tenant_id,
                 space_id,
-                vector_norm,
-                indexed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                vector_json,
+                status
+            FROM st_embedding_queue
+            WHERE embedding_id = $1
+            """,
+            embedding_id,
+        )
+
+        if not row:
+            raise ValueError(f"pgvector: Embedding {embedding_id} not found in st_embedding_queue")
+
+        if row["status"] != "READY":
+            raise ValueError(
+                f"pgvector: Embedding {embedding_id} not ready (status={row['status']})"
+            )
+
+        # Parse vector JSON
+        try:
+            vector_list = json.loads(row["vector_json"])
+            vector = self._np.array(vector_list, dtype=self._np.float32)
+        except (json.JSONDecodeError, ValueError) as e:
+            raise ValueError(f"pgvector: Invalid vector_json for {embedding_id}: {e}")
+
+        if vector.shape[0] != self.dimension:
+            raise ValueError(
+                f"pgvector: Vector dimension mismatch (expected {self.dimension}, got {vector.shape[0]})"
+            )
+
+        # Compute L2 norm for quality checks
+        vector_norm = float(self._np.linalg.norm(vector))
+
+        # Convert to PostgreSQL vector format (string representation)
+        vector_str = "[" + ",".join(str(v) for v in vector.tolist()) + "]"
+
+        # Store in st_embeddings with pgvector
+        await conn.execute(
+            """
+            INSERT INTO st_embeddings (
+                embedding_id,
+                event_id,
+                tenant_id,
+                space_id,
+                embedding,
+                vector_norm
+            ) VALUES ($1, $2, $3, $4, $5::vector, $6)
             ON CONFLICT(embedding_id) DO UPDATE SET
-                vector_id = excluded.vector_id,
-                vector_norm = excluded.vector_norm,
-                indexed_at = excluded.indexed_at
-        """,
-            (
-                vector_id,
-                row["embedding_id"],
-                row["event_id"],
-                row["tenant_id"],
-                row["space_id"],
-                vector_norm,
-                self._current_timestamp(),
-            ),
+                embedding = EXCLUDED.embedding,
+                vector_norm = EXCLUDED.vector_norm,
+                indexed_at = NOW()
+            """,
+            row["embedding_id"],
+            row["event_id"],
+            row["tenant_id"],
+            row["space_id"],
+            vector_str,
+            vector_norm,
         )
 
         # Update st_embedding_queue status to INDEXED
-        conn.execute(
+        await conn.execute(
             """
             UPDATE st_embedding_queue
-            SET status = 'INDEXED', updated_at = ?
-            WHERE embedding_id = ?
-        """,
-            (self._current_timestamp(), embedding_id),
+            SET status = 'INDEXED', updated_at = NOW()
+            WHERE embedding_id = $1
+            """,
+            embedding_id,
         )
 
-        conn.commit()
-        logger.info(
-            f"FAISS: Added vector {embedding_id} (vector_id={vector_id}, norm={vector_norm:.2f})"
-        )
+        logger.info(f"pgvector: Added vector {embedding_id} (norm={vector_norm:.2f})")
 
-    def _delete_vector(self, conn, embedding_id: str):
+    async def _delete_vector(self, conn: "asyncpg.Connection", embedding_id: str):
         """
-        Delete vector from FAISS index (soft delete in metadata).
+        Delete vector from pgvector table.
 
         Args:
-            conn: SQLite connection (thread-local)
+            conn: asyncpg connection
             embedding_id: Embedding identifier
-
-        Note:
-            FAISS Flat index doesn't support true deletion. We mark as deleted
-            in st_embeddings and rebuild index periodically (offline job).
         """
-        # Soft delete in metadata
-        conn.execute(
+        await conn.execute(
             """
-            DELETE FROM st_embeddings WHERE embedding_id = ?
-        """,
-            (embedding_id,),
+            DELETE FROM st_embeddings WHERE embedding_id = $1
+            """,
+            embedding_id,
         )
 
-        conn.commit()
-        logger.info(
-            f"FAISS: Soft-deleted embedding {embedding_id} (rebuild required for hard delete)"
-        )
+        logger.info(f"pgvector: Deleted embedding {embedding_id}")
 
-    @staticmethod
-    def _current_timestamp() -> int:
-        """Get current Unix timestamp in milliseconds."""
-        import time
+    async def search_similar(
+        self,
+        query_vector: list[float],
+        tenant_id: str,
+        space_id: str,
+        limit: int = 10,
+    ) -> list[dict]:
+        """
+        Search for similar vectors using cosine similarity.
 
-        return int(time.time() * 1000)
+        Args:
+            query_vector: Query embedding vector
+            tenant_id: Tenant ID for filtering
+            space_id: Space ID for filtering
+            limit: Maximum number of results
+
+        Returns:
+            List of dicts with embedding_id, event_id, and similarity score
+        """
+        if self._np is None:
+            raise RuntimeError("PgvectorDriver not initialized")
+
+        vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+
+        async with connection_scope() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    embedding_id,
+                    event_id,
+                    1 - (embedding <=> $1::vector) as similarity
+                FROM st_embeddings
+                WHERE tenant_id = $2 AND space_id = $3
+                ORDER BY embedding <=> $1::vector
+                LIMIT $4
+                """,
+                vector_str,
+                tenant_id,
+                space_id,
+                limit,
+            )
+
+            return [
+                {
+                    "embedding_id": row["embedding_id"],
+                    "event_id": row["event_id"],
+                    "similarity": row["similarity"],
+                }
+                for row in rows
+            ]
 
 
-def build_driver() -> FaissDriver:
+async def build_driver() -> PgvectorDriver:
     """
-    Factory function to build FaissDriver instance.
+    Factory function to build PgvectorDriver instance.
 
     Configuration:
-        - Reads K0_FAISS_INDEX_PATH from environment (default: ./k0_faiss.index)
-        - Reads K0_FAISS_DIMENSION from environment (default: 384)
+        - Reads K0_VECTOR_DIMENSION from environment (default: 384)
         - Uses global connection pool (configured by kernel) for database access
 
     Returns:
-        Configured FaissDriver instance
-
-    Raises:
-        ImportError: If faiss-cpu not installed
+        Configured PgvectorDriver instance
     """
-    index_path = os.getenv("K0_FAISS_INDEX_PATH", "./k0_faiss.index")
-    dimension = int(os.getenv("K0_FAISS_DIMENSION", "384"))
+    dimension = int(os.getenv("K0_VECTOR_DIMENSION", "384"))
 
-    return FaissDriver(index_path=index_path, dimension=dimension)
+    return PgvectorDriver(dimension=dimension)
+    return PgvectorDriver(dimension=dimension)
+    return PgvectorDriver(dimension=dimension)
+    return PgvectorDriver(dimension=dimension)
+    return PgvectorDriver(dimension=dimension)
+    return PgvectorDriver(dimension=dimension)

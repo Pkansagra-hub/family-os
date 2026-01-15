@@ -273,6 +273,11 @@ class DriverWorkerPool:
         worker = self._ensure_worker(alias)
         worker.process_driver(alias, limit=limit)
 
+    async def process_driver_async(self, alias: str, *, limit: int | None = None) -> None:
+        """Async-native driver processing - avoids event loop mismatch."""
+        worker = self._ensure_worker(alias)
+        await worker.process_driver_async(alias, limit=limit)
+
     def get_session(self, session_id: str) -> DriverSession | None:
         self._cleanup_expired_sessions()
         return self._sessions.get(session_id)

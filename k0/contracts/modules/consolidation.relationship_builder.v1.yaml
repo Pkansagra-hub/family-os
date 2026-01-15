@@ -1,0 +1,73 @@
+# P03 Module Contract: Relationship Builder
+# Phase: R4 - Knowledge Graph Construction
+# Dossier: §D.3.1 stage_41_relationship_builder
+
+module_id: consolidation.relationship_builder
+version: v1
+
+input_event_types:
+  - p03.entities.extracted.v1
+
+output_event_types:
+  - p03.relationships.built.v1
+
+latency_budget_ms: 100
+
+side_effects:
+  - read:st_kg_edges
+  - write:st_kg_edges
+
+idempotent: false  # Creates edges cumulatively
+
+fabric_capabilities:
+  - build_relationships
+
+failure_modes:
+  - code: EDGE_CONFLICT
+    policy: merge_confidence
+    description: Average confidence on conflicting edges
+  - code: MAX_EDGES_EXCEEDED
+    policy: prune_weakest
+  - code: INVALID_RELATIONSHIP
+    policy: skip
+
+description: |
+  Relationship Builder Module (R4 Phase)
+
+  Builds knowledge graph edges between entities:
+  - Co-occurrence: Entities appearing in same event
+  - Syntactic: Subject-verb-object patterns
+  - Semantic: Embedding similarity relationships
+
+  Relationship Types:
+  - KNOWS: Person-person social connection
+  - WORKS_AT: Person-organization employment
+  - LIVES_IN: Person-place residence
+  - PARTICIPATED_IN: Entity-event participation
+  - RELATED_TO: Generic association
+  - OWNS: Person-product ownership
+  - FAMILY_OF: Family relationships
+
+  Edge Properties:
+  - source_id: Source entity ID
+  - target_id: Target entity ID
+  - relation_type: Relationship type
+  - confidence: 0-1 confidence score
+  - evidence_ids: Array of supporting event IDs
+  - first_seen: Timestamp of first evidence
+  - last_seen: Timestamp of latest evidence
+  - occurrence_count: Number of supporting events
+
+  Confidence Boosting:
+  - Multiple co-occurrences increase confidence
+  - Explicit mentions boost more than implicit
+
+  Configuration:
+  - edge_confidence_threshold: 0.5
+  - max_edges_per_entity: 50
+  - merge_duplicate_edges: true
+
+  Output:
+  - envelope.edges: Array of edge records for st_kg_edges
+  - envelope.edges_updated: Existing edges with updated confidence
+  - envelope.kg_stats: {new_edges, updated_edges, entities_connected}

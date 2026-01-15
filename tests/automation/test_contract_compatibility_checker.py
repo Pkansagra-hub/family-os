@@ -5,9 +5,17 @@ Tests cover:
 - SemVer validation (MAJOR/MINOR/PATCH enforcement)
 - N/N+1 compatibility policy validation
 - Report generation
+- Git-based schema loading and change detection
+- CLI functionality
 """
 
 from __future__ import annotations
+
+import json
+import subprocess
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,9 +23,13 @@ from k0.automation.contract_compatibility_checker import (
     ChangeType,
     CompatibilityCheckResult,
     SchemaChange,
+    _get_changed_schema_files,
+    _load_schema_from_git,
+    check_compatibility,
     classify_change_severity,
     detect_changes,
     generate_compatibility_report,
+    main,
     parse_semver,
     validate_version_bump,
 )
@@ -433,6 +445,356 @@ class TestIntegrationWithRealSchemas:
         severity = classify_change_severity(changes)
 
         assert severity == ChangeType.BREAKING
+
+
+class TestLoadSchemaFromGit:
+    """Tests for _load_schema_from_git function."""
+
+    @patch("k0.automation.contract_compatibility_checker.subprocess.run")
+    @patch("k0.automation.contract_compatibility_checker.REPO_ROOT", Path("/tmp/repo"))
+    def test_load_json_schema_success(self, mock_run):
+        """Test successful loading of JSON schema from git."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = '{"type": "object", "properties": {"name": {"type": "string"}}}'
+        mock_run.return_value = mock_result
+
+        result = _load_schema_from_git("main", "schemas/test.json")
+
+        assert result == {"type": "object", "properties": {"name": {"type": "string"}}}
+        mock_run.assert_called_once_with(
+            ["git", "show", "main:schemas/test.json"],
+            cwd=Path("/tmp/repo"),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+    @patch("k0.automation.contract_compatibility_checker.subprocess.run")
+    @patch("k0.automation.contract_compatibility_checker.REPO_ROOT", Path("/tmp/repo"))
+    def test_load_yaml_schema_success(self, mock_run):
+        """Test successful loading of YAML schema from git."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "type: object\nproperties:\n  name:\n    type: string\n"
+        mock_run.return_value = mock_result
+
+        result = _load_schema_from_git("v1.0.0", "schemas/test.yaml")
+
+        assert result == {"type": "object", "properties": {"name": {"type": "string"}}}
+
+    @patch("k0.automation.contract_compatibility_checker.subprocess.run")
+    def test_load_schema_file_not_found(self, mock_run):
+        """Test loading schema when file doesn't exist in git."""
+        mock_result = MagicMock()
+        mock_result.returncode = 1  # File not found
+        mock_run.return_value = mock_result
+
+        result = _load_schema_from_git("main", "schemas/missing.json")
+
+        assert result is None
+
+    @patch("k0.automation.contract_compatibility_checker.subprocess.run")
+    def test_load_schema_subprocess_error(self, mock_run):
+        """Test loading schema when subprocess fails."""
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+
+        result = _load_schema_from_git("main", "schemas/test.json")
+
+        assert result is None
+
+    @patch("k0.automation.contract_compatibility_checker.subprocess.run")
+    def test_load_schema_timeout(self, mock_run):
+        """Test loading schema when git command times out."""
+        mock_run.side_effect = subprocess.TimeoutExpired("git", 5)
+
+        result = _load_schema_from_git("main", "schemas/test.json")
+
+        assert result is None
+
+
+class TestGetChangedSchemaFiles:
+    """Tests for _get_changed_schema_files function."""
+
+    @patch("k0.automation.contract_compatibility_checker.subprocess.run")
+    @patch("k0.automation.contract_compatibility_checker.REPO_ROOT", Path("/tmp/repo"))
+    def test_get_changed_files_success(self, mock_run):
+        """Test successful retrieval of changed schema files."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "k0/contracts/jsonschema/envelope.schema.json\nk0/contracts/jsonschema/query.schema.json\n"
+        mock_run.return_value = mock_result
+
+        result = _get_changed_schema_files("origin/main", "HEAD", Path("k0/contracts/jsonschema"))
+
+        assert result == [
+            "k0/contracts/jsonschema/envelope.schema.json",
+            "k0/contracts/jsonschema/query.schema.json",
+        ]
+        mock_run.assert_called_once()
+
+    @patch("k0.automation.contract_compatibility_checker.subprocess.run")
+    def test_get_changed_files_no_changes(self, mock_run):
+        """Test when no schema files have changed."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_run.return_value = mock_result
+
+        result = _get_changed_schema_files("origin/main", "HEAD", Path("k0/contracts/jsonschema"))
+
+        assert result == []
+
+    @patch("k0.automation.contract_compatibility_checker.subprocess.run")
+    def test_get_changed_files_git_error(self, mock_run):
+        """Test when git command fails."""
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+
+        result = _get_changed_schema_files("origin/main", "HEAD", Path("k0/contracts/jsonschema"))
+
+        assert result == []
+
+    @patch("k0.automation.contract_compatibility_checker.subprocess.run")
+    def test_get_changed_files_timeout(self, mock_run):
+        """Test when git command times out."""
+        mock_run.side_effect = subprocess.TimeoutExpired("git", 10)
+
+        result = _get_changed_schema_files("origin/main", "HEAD", Path("k0/contracts/jsonschema"))
+
+        assert result == []
+
+
+class TestCheckCompatibility:
+    """Tests for check_compatibility function."""
+
+    @patch("k0.automation.contract_compatibility_checker._get_changed_schema_files")
+    @patch("k0.automation.contract_compatibility_checker._load_schema_from_git")
+    @patch("k0.automation.contract_compatibility_checker.detect_changes")
+    @patch("k0.automation.contract_compatibility_checker.classify_change_severity")
+    @patch("k0.automation.contract_compatibility_checker.validate_version_bump")
+    @patch("pathlib.Path.relative_to")
+    def test_check_compatibility_with_breaking_changes(
+        self,
+        mock_relative_to,
+        mock_validate,
+        mock_classify,
+        mock_detect,
+        mock_load,
+        mock_get_changed,
+    ):
+        """Test compatibility check with breaking changes detected."""
+        # Setup mocks
+        mock_get_changed.return_value = ["k0/contracts/jsonschema/envelope.schema.json"]
+        mock_relative_to.return_value = Path("k0/contracts/jsonschema/envelope.schema.json")
+        mock_load.side_effect = [
+            {"version": "1.0.0", "$id": "envelope/v1.0.0"},  # old schema
+            {"version": "1.1.0", "$id": "envelope/v1.1.0"},  # new schema
+        ]
+        mock_detect.return_value = [
+            SchemaChange(
+                change_type=ChangeType.BREAKING,
+                path="/properties/tenant_id",
+                old_value="string",
+                new_value=None,
+                description="Field removed",
+            )
+        ]
+        mock_classify.return_value = ChangeType.BREAKING
+        mock_validate.return_value = (False, "BREAKING changes require MAJOR version bump")
+
+        results = check_compatibility("origin/main", "HEAD")
+
+        assert len(results) == 1
+        result = results[0]
+        assert result.schema_name == "envelope.schema"
+        assert result.old_version == "1.0.0"
+        assert result.new_version == "1.1.0"
+        assert result.is_breaking is True
+        assert result.semver_valid is False
+        assert len(result.issues) == 1
+
+    @patch("k0.automation.contract_compatibility_checker._get_changed_schema_files")
+    @patch("k0.automation.contract_compatibility_checker._load_schema_from_git")
+    @patch("pathlib.Path.relative_to")
+    def test_check_compatibility_no_changes(self, mock_relative_to, mock_load, mock_get_changed):
+        """Test compatibility check when schemas are identical."""
+        mock_get_changed.return_value = ["k0/contracts/jsonschema/envelope.schema.json"]
+        mock_relative_to.return_value = Path("k0/contracts/jsonschema/envelope.schema.json")
+        schema = {"version": "1.0.0", "type": "object"}
+        mock_load.side_effect = [schema, schema]  # Same schema
+
+        results = check_compatibility("origin/main", "HEAD")
+
+        assert len(results) == 0  # No changes detected
+
+    @patch("k0.automation.contract_compatibility_checker._get_changed_schema_files")
+    @patch("k0.automation.contract_compatibility_checker._load_schema_from_git")
+    @patch("pathlib.Path.relative_to")
+    def test_check_compatibility_schema_not_found(
+        self, mock_relative_to, mock_load, mock_get_changed
+    ):
+        """Test compatibility check when old schema doesn't exist."""
+        mock_get_changed.return_value = ["k0/contracts/jsonschema/envelope.schema.json"]
+        mock_relative_to.return_value = Path("k0/contracts/jsonschema/envelope.schema.json")
+        mock_load.side_effect = [None, {"version": "1.0.0"}]  # Old schema not found
+
+        results = check_compatibility("origin/main", "HEAD")
+
+        assert len(results) == 0  # Skipped because old schema is None
+
+    @patch("k0.automation.contract_compatibility_checker._get_changed_schema_files")
+    @patch("k0.automation.contract_compatibility_checker._load_schema_from_git")
+    @patch("k0.automation.contract_compatibility_checker.detect_changes")
+    @patch("k0.automation.contract_compatibility_checker.classify_change_severity")
+    @patch("k0.automation.contract_compatibility_checker.validate_version_bump")
+    @patch("pathlib.Path.relative_to")
+    def test_check_compatibility_version_from_id(
+        self,
+        mock_relative_to,
+        mock_validate,
+        mock_classify,
+        mock_detect,
+        mock_load,
+        mock_get_changed,
+    ):
+        """Test compatibility check with version extracted from $id field."""
+        # Setup mocks
+        mock_get_changed.return_value = ["k0/contracts/jsonschema/envelope.schema.json"]
+        mock_relative_to.return_value = Path("k0/contracts/jsonschema/envelope.schema.json")
+        mock_load.side_effect = [
+            {"$id": "envelope/v1.0.0"},  # old schema with version in $id
+            {"$id": "envelope/v2.0.0"},  # new schema with version in $id
+        ]
+        mock_detect.return_value = [
+            SchemaChange(
+                change_type=ChangeType.BREAKING,
+                path="/properties/tenant_id",
+                old_value="string",
+                new_value=None,
+                description="Field removed",
+            )
+        ]
+        mock_classify.return_value = ChangeType.BREAKING
+        mock_validate.return_value = (True, "MAJOR version bump matches breaking changes")
+
+        results = check_compatibility("origin/main", "HEAD")
+
+        assert len(results) == 1
+        result = results[0]
+        assert result.old_version == "1.0.0"
+        assert result.new_version == "2.0.0"
+
+
+class TestMainFunction:
+    """Tests for main function."""
+
+    @patch("k0.automation.contract_compatibility_checker.check_compatibility")
+    @patch("k0.automation.contract_compatibility_checker.generate_compatibility_report")
+    def test_main_git_mode_success(self, mock_report, mock_check):
+        """Test main function in git mode with success."""
+        mock_check.return_value = []
+        mock_report.return_value = ("No changes report", True)
+
+        exit_code = main(["--base-ref", "origin/main", "--head-ref", "HEAD"])
+
+        assert exit_code == 0
+        # Should be called with DEFAULT_SCHEMA_DIR, not None
+        mock_check.assert_called_once()
+        args, kwargs = mock_check.call_args
+        assert args[0] == "origin/main"
+        assert args[1] == "HEAD"
+        assert str(args[2]).endswith("k0\\contracts\\jsonschema")  # DEFAULT_SCHEMA_DIR
+        mock_report.assert_called_once()
+
+    @patch("k0.automation.contract_compatibility_checker.check_compatibility")
+    @patch("k0.automation.contract_compatibility_checker.generate_compatibility_report")
+    def test_main_git_mode_failure(self, mock_report, mock_check):
+        """Test main function in git mode with failure."""
+        mock_check.return_value = []
+        mock_report.return_value = ("Breaking changes report", False)
+
+        exit_code = main(["--base-ref", "origin/main", "--head-ref", "HEAD", "--fail-on-breaking"])
+
+        assert exit_code == 1
+
+    @patch("k0.automation.contract_compatibility_checker.detect_changes")
+    @patch("k0.automation.contract_compatibility_checker.classify_change_severity")
+    @patch("k0.automation.contract_compatibility_checker.validate_version_bump")
+    def test_main_single_file_mode_success(self, mock_validate, mock_classify, mock_detect):
+        """Test main function in single file mode with success."""
+        mock_detect.return_value = []
+        mock_classify.return_value = ChangeType.PATCH
+        mock_validate.return_value = (True, "Valid patch bump")
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"type": "object"}, f)
+            temp_file = Path(f.name)
+
+        try:
+            exit_code = main(
+                [
+                    "--schema-file",
+                    str(temp_file),
+                    "--old-version",
+                    "1.0.0",
+                    "--new-version",
+                    "1.0.1",
+                ]
+            )
+
+            assert exit_code == 0
+        finally:
+            temp_file.unlink()
+
+    @patch("k0.automation.contract_compatibility_checker.detect_changes")
+    @patch("k0.automation.contract_compatibility_checker.classify_change_severity")
+    @patch("k0.automation.contract_compatibility_checker.validate_version_bump")
+    def test_main_single_file_mode_failure(self, mock_validate, mock_classify, mock_detect):
+        """Test main function in single file mode with failure."""
+        mock_detect.return_value = []
+        mock_classify.return_value = ChangeType.BREAKING
+        mock_validate.return_value = (False, "Invalid version bump")
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"type": "object"}, f)
+            temp_file = Path(f.name)
+
+        try:
+            exit_code = main(
+                [
+                    "--schema-file",
+                    str(temp_file),
+                    "--old-version",
+                    "1.0.0",
+                    "--new-version",
+                    "1.1.0",
+                ]
+            )
+
+            assert exit_code == 1
+        finally:
+            temp_file.unlink()
+
+    def test_main_single_file_missing_versions(self):
+        """Test main function with single file but missing version arguments."""
+        exit_code = main(["--schema-file", "test.json"])
+
+        assert exit_code == 1
+
+    def test_main_single_file_not_found(self):
+        """Test main function with non-existent schema file."""
+        exit_code = main(
+            [
+                "--schema-file",
+                "nonexistent.json",
+                "--old-version",
+                "1.0.0",
+                "--new-version",
+                "1.1.0",
+            ]
+        )
+
+        assert exit_code == 1
 
 
 if __name__ == "__main__":

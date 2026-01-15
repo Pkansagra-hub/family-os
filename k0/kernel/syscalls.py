@@ -19,12 +19,12 @@ Related:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
+    from k0.storage.offsets import OffsetStore
     from k0.uow.unit_of_work import UnitOfWork
 
 logger = logging.getLogger(__name__)
@@ -116,6 +116,8 @@ class Syscalls:
         # Convert to frozenset for immutability (security property)
         self._granted_caps = frozenset(granted_caps)
         self._uow_factory = uow_factory
+        # Lazy-initialized offset store
+        self._offset_store: OffsetStore | None = None
 
         # Audit: Log capability grants at initialization
         logger.info(
@@ -126,6 +128,160 @@ class Syscalls:
                 "capability_count": len(granted_caps),
             },
         )
+
+    @property
+    def offset_store(self) -> OffsetStore:
+        """
+        Access to OffsetStore for subscriber offset tracking.
+
+        Provides capability-gated access to offset storage for pipelines
+        that need to track their position in event streams.
+
+        Required Capability:
+            st_offsets.read or st_offsets.write
+
+        Returns:
+            OffsetStore instance for offset operations
+
+        Raises:
+            PermissionError: If pipeline lacks st_offsets.* capability
+
+        Example:
+            >>> offset = await ctx.syscalls.offset_store.fetch(
+            ...     subscriber_id="p03_consolidation",
+            ...     topic="st_hipp_events",
+            ...     space_id="space_123",
+            ...     tenant_id="tenant_456"
+            ... )
+        """
+        # Check for any offset-related capability
+        has_offset_cap = any(cap.startswith("st_offsets.") for cap in self._granted_caps)
+        if not has_offset_cap:
+            logger.error(
+                f"Permission denied: {self._pipeline_id} missing offset capability",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "required_capability": "st_offsets.*",
+                    "granted_caps": list(self._granted_caps),
+                    "security_violation": True,
+                },
+            )
+            raise PermissionError(
+                f"Pipeline {self._pipeline_id} missing capability: st_offsets.read or st_offsets.write. "
+                f"Granted: {sorted(self._granted_caps)}"
+            )
+
+        # Lazy initialization
+        if self._offset_store is None:
+            from k0.storage.offsets import OffsetStore
+
+            self._offset_store = OffsetStore()
+            logger.debug(
+                f"Created OffsetStore for {self._pipeline_id}",
+                extra={"pipeline_id": self._pipeline_id},
+            )
+
+        return self._offset_store
+
+    def unit_of_work(self) -> UnitOfWork:
+        """
+        Create a new UnitOfWork for transactional database operations.
+
+        Provides capability-gated access to database transactions. Pipelines
+        use this to execute raw SQL queries within ACID transactions.
+
+        Required Capability:
+            st_hipp_events.read or any database access capability
+
+        Returns:
+            UnitOfWork context manager for transaction scope
+
+        Raises:
+            PermissionError: If pipeline lacks database access capability
+
+        Example:
+            >>> async with ctx.syscalls.unit_of_work() as uow:
+            ...     rows = await uow._connection.fetch("SELECT * FROM st_hipp_events")
+        """
+        # Check for any database access capability
+        db_caps = {
+            "st_hipp_events.read",
+            "st_hipp_events.write",
+            "st_offsets.read",
+            "st_offsets.write",
+        }
+        has_db_cap = bool(self._granted_caps & db_caps)
+        if not has_db_cap:
+            logger.error(
+                f"Permission denied: {self._pipeline_id} missing database capability",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "required_capability": "st_hipp_events.* or st_offsets.*",
+                    "granted_caps": list(self._granted_caps),
+                    "security_violation": True,
+                },
+            )
+            raise PermissionError(
+                f"Pipeline {self._pipeline_id} missing database access capability. "
+                f"Granted: {sorted(self._granted_caps)}"
+            )
+
+        return self._uow_factory()
+
+    def get_pool(self) -> Any:
+        """
+        Get direct access to the asyncpg connection pool.
+
+        This provides capability-gated access to the underlying database pool
+        for components that need to perform bulk operations or require pool-level
+        access (e.g., GapAutoResolver for learning queue operations).
+
+        Required Capability:
+            st_learning_queue.read or st_learning_queue.write
+
+        Returns:
+            AsyncPgPool instance for direct pool operations
+
+        Raises:
+            PermissionError: If pipeline lacks st_learning_queue capability
+            RuntimeError: If pool is not available
+
+        Example:
+            >>> pool = ctx.syscalls.get_pool()
+            >>> async with pool.acquire() as conn:
+            ...     rows = await conn.fetch("SELECT * FROM st_learning_queue")
+
+        Note:
+            Prefer using unit_of_work() for transactional operations.
+            Direct pool access bypasses transaction guarantees.
+        """
+        # Check for learning queue capability (primary use case for direct pool access)
+        learning_queue_caps = {"st_learning_queue.read", "st_learning_queue.write"}
+        has_lq_cap = bool(self._granted_caps & learning_queue_caps)
+        if not has_lq_cap:
+            logger.error(
+                f"Permission denied: {self._pipeline_id} missing learning_queue capability for pool access",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "required_capability": "st_learning_queue.read or st_learning_queue.write",
+                    "granted_caps": list(self._granted_caps),
+                    "security_violation": True,
+                },
+            )
+            raise PermissionError(
+                f"Pipeline {self._pipeline_id} missing capability: st_learning_queue.read or st_learning_queue.write. "
+                f"Granted: {sorted(self._granted_caps)}"
+            )
+
+        # Get the global pool
+        from k0.db.pool import get_pool
+
+        pool = get_pool()
+        logger.debug(
+            f"Pool access granted for {self._pipeline_id}",
+            extra={"pipeline_id": self._pipeline_id, "operation": "get_pool"},
+        )
+        return pool
 
     async def hipp_store_upsert(
         self,
@@ -161,7 +317,7 @@ class Syscalls:
 
         Performance:
             - Target: <50ms P95 (single UPSERT)
-            - Uses UPSERT (INSERT OR REPLACE) for idempotency
+            - Uses ON CONFLICT DO UPDATE for idempotency
             - Indexed on event_id (primary key)
 
         Related:
@@ -232,7 +388,7 @@ class Syscalls:
 
         Performance:
             - Target: <15ms P95 (single INSERT with 6 B-tree indexes)
-            - Uses INSERT OR IGNORE for idempotency
+            - Uses INSERT ... ON CONFLICT DO NOTHING for idempotency
             - Connection pooling via UnitOfWork
 
         Related:
@@ -270,26 +426,23 @@ class Syscalls:
 
             # Use all columns from row (database will handle NULLs with DEFAULT constraints)
             columns = list(row.keys())
-            placeholders = ", ".join(["?"] * len(columns))
+            placeholders = ", ".join([f"${i+1}" for i in range(len(columns))])
             column_names = ", ".join(columns)
-            values = tuple(row[k] for k in columns)
+            values = [row[k] for k in columns]
 
             try:
-                # Use INSERT OR IGNORE for idempotency (faster than INSERT OR REPLACE)
+                # Use INSERT with ON CONFLICT for idempotency (PostgreSQL upsert)
                 # event_id is PRIMARY KEY, so duplicates will be silently skipped
-                loop = asyncio.get_running_loop()
-                cursor = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(
-                        f"""
-                        INSERT OR IGNORE INTO st_hipp_events ({column_names})
-                        VALUES ({placeholders})
-                        """,
-                        values,
-                    ),
+                result = await conn.execute(
+                    f"""
+                    INSERT INTO st_hipp_events ({column_names})
+                    VALUES ({placeholders})
+                    ON CONFLICT (event_id) DO NOTHING
+                    """,
+                    *values,
                 )
 
-                inserted = cursor.rowcount > 0
+                inserted = result != "INSERT 0"
 
                 # UnitOfWork context manager will auto-commit on successful exit
 
@@ -367,7 +520,7 @@ class Syscalls:
 
         Performance:
             - Target: <10ms P95 (single INSERT with composite index)
-            - Uses INSERT OR REPLACE for upsert semantics
+            - Uses INSERT ... ON CONFLICT DO UPDATE for upsert semantics
             - Connection pooling via UnitOfWork
 
         Related:
@@ -406,25 +559,21 @@ class Syscalls:
             processed_at = processed_at or int(time.time())
 
             try:
-                loop = asyncio.get_running_loop()
-                cursor = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(
-                        """
-                        INSERT OR REPLACE INTO st_pipeline_processed (
-                            pipeline_id, space_id, wal_pos, processed_at
-                        ) VALUES (?, ?, ?, ?)
-                        """,
-                        (
-                            pipeline_id,
-                            space_id,
-                            wal_pos,
-                            processed_at,
-                        ),
-                    ),
+                result = await conn.execute(
+                    """
+                    INSERT INTO st_pipeline_processed (
+                        pipeline_id, space_id, wal_pos, processed_at
+                    ) VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (pipeline_id, space_id, wal_pos) DO UPDATE SET
+                        processed_at = EXCLUDED.processed_at
+                    """,
+                    pipeline_id,
+                    space_id,
+                    wal_pos,
+                    processed_at,
                 )
 
-                inserted = cursor.rowcount > 0
+                inserted = result != "INSERT 0"
 
                 # UnitOfWork context manager will auto-commit on successful exit
 
@@ -626,56 +775,60 @@ class Syscalls:
         cognitive_trace_id: str | None = None,
     ) -> list[tuple[str, str]]:
         """
-        Query st_relationships for actor's family relationships (requires st_relationships.read cap).
+        Query st_kg_edges for actor's family relationships (requires st_kg_edges.read cap).
+
+        ADR-K022: Changed from st_relationships to st_kg_edges (PostgreSQL graph).
 
         Used by M07 (social.family_graph_resolve) to resolve family context for episodic
-        memories. Returns all relationships where person_id = actor_id.
+        memories. Returns all relationships where source_entity_id matches actor's entity.
 
-        Capability Required: "st_relationships.read"
+        Capability Required: "st_kg_edges.read"
 
-        Storage Table: st_relationships
-        - Purpose: Family graph cache (5 relationship types)
-        - Lifecycle: Seeded in migration 0018/0024, TTL-based refresh
-        - Columns: person_id, related_person_id, relationship_type
+        Storage Table: st_kg_edges
+        - Purpose: Knowledge graph edges with typed relationships
+        - Lifecycle: Seeded by seed_family_graph.py, updated by P03
+        - Columns: source_entity_id, target_entity_id, relation_type
 
         Relationship Types:
         - SPOUSE_OF: Married/partner relationship (bidirectional)
         - PARENT_OF: Parent-child relationship (actor is parent)
         - CHILD_OF: Child-parent relationship (actor is child)
-        - CARETAKER_OF: Guardian/caregiver relationship
         - SIBLING_OF: Brother/sister relationship
+        - CARETAKER_OF: Guardian/caregiver relationship
+        - GRANDPARENT_OF, GRANDCHILD_OF: Extended family
+        - FRIEND_OF, COLLEAGUE_OF: Non-family relationships
 
         Args:
-            actor_id: Person identifier to lookup relationships for
+            actor_id: Person identifier to lookup relationships for (matches canonical_name)
             cognitive_trace_id: Optional trace ID for observability
 
         Returns:
-            List of (related_person_id, relationship_type) tuples.
+            List of (related_person_name, relationship_type) tuples.
             Empty list if actor has no relationships.
 
         Raises:
-            PermissionError: If pipeline lacks "st_relationships.read" capability
+            PermissionError: If pipeline lacks "st_kg_edges.read" capability
 
         Example:
             >>> relationships = await syscalls.relationships_query(
-            ...     actor_id="person_prince_001",
+            ...     actor_id="Prince",
             ...     cognitive_trace_id="trace_xyz"
             ... )
             >>> relationships
-            [("person_jeel_001", "SPOUSE_OF"), ("person_sharvi_001", "PARENT_OF")]
+            [("Jeel", "SPOUSE_OF"), ("Sharvi", "PARENT_OF")]
 
         Performance:
-            - Target: <5ms P95 (indexed query on person_id)
-            - Uses idx_relationships_person index
+            - Target: <5ms P95 (indexed query on source_entity_id)
+            - Uses idx_kg_edges_source index
             - Connection pooling via UnitOfWork
 
         Related:
             - M07 (social.family_graph_resolve): Primary user of this syscall
-            - P02 pipeline: Stage 20 calls M07 for social context
-            - Migration 0024: Table schema and seed data
-            - ADR K008.1: Family Graph Resolver architecture
+            - P02 pipeline: Stage 32 calls M07 for social context
+            - ADR K022: Remove Neo4j, consolidate to PostgreSQL
+            - seed_family_graph.py: Seeds family relationships
         """
-        self._require_cap("st_relationships.read")
+        self._require_cap("st_kg_edges.read")
 
         # Audit: Log storage operation
         start_time = time.perf_counter()
@@ -695,20 +848,36 @@ class Syscalls:
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
-            # Query st_relationships for actor's relationships
+            # ADR-K022: Query st_kg_edges for actor's relationships
+            # First find the actor's entity_id by matching canonical_name or alias
+            # Then find all edges where actor is source
             query = """
-                SELECT related_person_id, relationship_type
-                FROM st_relationships
-                WHERE person_id = ?
+                SELECT DISTINCT
+                    target.canonical_name as related_person_name,
+                    e.relation_type
+                FROM st_kg_edges e
+                JOIN st_kg_dom source ON e.source_entity_id = source.entity_id
+                JOIN st_kg_dom target ON e.target_entity_id = target.entity_id
+                WHERE (
+                    source.canonical_name ILIKE $1
+                    OR source.aliases_json ILIKE '%' || $1 || '%'
+                )
+                AND e.relation_type IN (
+                    'SPOUSE_OF', 'PARENT_OF', 'CHILD_OF', 'SIBLING_OF',
+                    'CARETAKER_OF', 'GRANDPARENT_OF', 'GRANDCHILD_OF',
+                    'FRIEND_OF', 'COLLEAGUE_OF'
+                )
+                AND e.archival_status = 'ACTIVE'
+                AND source.archival_status = 'ACTIVE'
+                AND target.archival_status = 'ACTIVE'
             """
 
-            result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: conn.execute(query, (actor_id,)).fetchall(),
-            )
+            rows = await conn.fetch(query, actor_id)
 
             # Convert rows to list of tuples
-            relationships = [(row[0], row[1]) for row in result]
+            relationships = [
+                (str(row["related_person_name"]), row["relation_type"]) for row in rows
+            ]
 
             # Audit: Log completion
             elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -798,7 +967,7 @@ class Syscalls:
 
         Performance:
             - Target: <5ms P95 (single INSERT with B-tree index)
-            - Uses INSERT OR IGNORE for idempotency
+            - Uses INSERT ... ON CONFLICT DO NOTHING for idempotency
             - Connection pooling via UnitOfWork
 
         Related:
@@ -837,42 +1006,36 @@ class Syscalls:
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
-            created_at = int(time.time())
-
             try:
-                # Use INSERT OR IGNORE for idempotency
-                loop = asyncio.get_running_loop()
-                cursor = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(
-                        """
-                        INSERT OR IGNORE INTO st_embedding_queue (
-                            embedding_id, event_id, wal_pos,
-                            tenant_id, space_id, vector_kind,
-                            model_id, priority, status,
-                            attempt_count, max_attempts,
-                            created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            embedding_id,
-                            event_id,
-                            wal_pos,
-                            tenant_id,
-                            space_id,
-                            vector_kind,
-                            model_id,
-                            priority,
-                            "PENDING",  # Initial status
-                            0,  # Initial attempt_count
-                            5,  # max_attempts (default retry limit)
-                            created_at,
-                            created_at,  # updated_at = created_at initially
-                        ),
-                    ),
+                # Use INSERT with ON CONFLICT for idempotency
+                # Use EXTRACT(EPOCH ...) for BIGINT timestamp columns
+                result = await conn.execute(
+                    """
+                    INSERT INTO st_embedding_queue (
+                        embedding_id, event_id, wal_pos,
+                        tenant_id, space_id, vector_kind,
+                        model_id, priority, status,
+                        attempt_count, max_attempts,
+                        created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                              EXTRACT(EPOCH FROM NOW())::BIGINT,
+                              EXTRACT(EPOCH FROM NOW())::BIGINT)
+                    ON CONFLICT (embedding_id) DO NOTHING
+                    """,
+                    embedding_id,
+                    event_id,
+                    wal_pos,
+                    tenant_id,
+                    space_id,
+                    vector_kind,
+                    model_id,
+                    priority,
+                    "PENDING",  # Initial status
+                    0,  # Initial attempt_count
+                    5,  # max_attempts (default retry limit)
                 )
 
-                inserted = cursor.rowcount > 0
+                inserted = result != "INSERT 0"
 
                 # UnitOfWork context manager will auto-commit on successful exit
 
@@ -1051,12 +1214,12 @@ class Syscalls:
         # Begin transaction
         async with self._uow_factory() as uow:
             try:
-                # Prepare INSERT statements
+                # Prepare INSERT statement (PostgreSQL syntax)
                 insert_sql = """
                     INSERT INTO st_outbox (
                         wal_pos, tenant_id, space_id, driver, op_kind,
                         payload, fingerprint, requeue_seq, retries
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 """
 
                 # Build parameter tuples
@@ -1086,9 +1249,9 @@ class Syscalls:
                         )
                     )
 
-                # Execute batch insert
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, uow.connection.executemany, insert_sql, records)
+                # Execute batch insert using asyncpg executemany
+                conn = uow._connection
+                await conn.executemany(insert_sql, records)
 
                 # Transaction will be committed automatically by __aexit__
 
@@ -1202,7 +1365,7 @@ class Syscalls:
 
         Performance:
             - Target: <5ms P95 (single INSERT with 3KB blob + 4 indexes)
-            - Uses INSERT OR IGNORE for idempotency
+            - Uses INSERT ... ON CONFLICT DO NOTHING for idempotency
             - Connection pooling via UnitOfWork
 
         Related:
@@ -1254,38 +1417,31 @@ class Syscalls:
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
-            created_at = int(time.time())
-            updated_at = created_at
-
             try:
-                # Use INSERT OR IGNORE for idempotency
-                loop = asyncio.get_running_loop()
-                cursor = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(
-                        """
-                        INSERT OR IGNORE INTO st_vec (
-                            embedding_id, event_id, tenant_id, space_id,
-                            vector, vector_dim, model_id, status,
-                            created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            embedding_id,
-                            event_id,
-                            tenant_id,
-                            space_id,
-                            vector,
-                            vector_dim,
-                            model_id,
-                            status,
-                            created_at,
-                            updated_at,
-                        ),
-                    ),
+                # Use INSERT with ON CONFLICT for idempotency
+                # Use EXTRACT(EPOCH ...) for BIGINT timestamp columns
+                result = await conn.execute(
+                    """
+                    INSERT INTO st_vec (
+                        embedding_id, event_id, tenant_id, space_id,
+                        vector, vector_dim, model_id, status,
+                        created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                              EXTRACT(EPOCH FROM NOW())::BIGINT,
+                              EXTRACT(EPOCH FROM NOW())::BIGINT)
+                    ON CONFLICT (embedding_id) DO NOTHING
+                    """,
+                    embedding_id,
+                    event_id,
+                    tenant_id,
+                    space_id,
+                    vector,
+                    vector_dim,
+                    model_id,
+                    status,
                 )
 
-                inserted = cursor.rowcount > 0
+                inserted = result != "INSERT 0"
 
                 # Audit: Log performance
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -1316,6 +1472,295 @@ class Syscalls:
                         "event_id": event_id,
                         "error": str(e),
                         "trace_id": cognitive_trace_id,
+                    },
+                )
+                raise
+
+    async def vec_query(
+        self,
+        status: str | None = None,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """
+        Query st_vec table for embeddings by status (requires st_vec.read cap).
+
+        Used by P08 M24 (faiss_indexer) to find READY embeddings for indexing.
+        Replaces event-driven model with query-based batch processing (ADR-K003 v1.2).
+
+        Capability Required: "st_vec.read"
+
+        Storage Table: st_vec
+        - Query by status, tenant, space
+        - Ordered by created_at ASC (oldest first)
+        - Paginated for batch processing
+
+        Args:
+            status: Filter by status (READY, INDEXED, FAILED)
+            tenant_id: Optional tenant filter
+            space_id: Optional space filter
+            limit: Max records to return (default: 100)
+            offset: Pagination offset (default: 0)
+
+        Returns:
+            Dictionary with:
+            - embeddings: list[dict] with embedding_id, event_id, vector, etc.
+            - count: int (number of records returned)
+            - total: int (total matching records)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_vec.read" capability
+            ValueError: If invalid status provided
+
+        Example:
+            >>> result = await syscalls.vec_query(status="READY", limit=100)
+            >>> for emb in result["embeddings"]:
+            ...     await process_embedding(emb)
+
+        Performance:
+            - Target: <20ms P95 (paginated query with status index)
+            - Uses status_created index for efficient filtering
+            - Limit+offset pagination for batch control
+
+        Related:
+            - M24 (embedding.faiss_indexer): Primary user of this syscall
+            - P08 scheduled mode: Uses this instead of event subscription
+            - ADR-K003 v1.2: Query-based P08 architecture
+        """
+        self._require_cap("st_vec.read")
+
+        # Validate status if provided
+        if status and status not in ("READY", "INDEXED", "FAILED"):
+            raise ValueError(f"Invalid status: {status} (expected READY/INDEXED/FAILED)")
+
+        # Build query with optional filters
+        conditions = []
+        params: list[Any] = []
+        param_idx = 1
+
+        if status:
+            conditions.append(f"status = ${param_idx}")
+            params.append(status)
+            param_idx += 1
+        if tenant_id:
+            conditions.append(f"tenant_id = ${param_idx}")
+            params.append(tenant_id)
+            param_idx += 1
+        if space_id:
+            conditions.append(f"space_id = ${param_idx}")
+            params.append(space_id)
+            param_idx += 1
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # Audit: Log query operation
+        start_time = time.perf_counter()
+        logger.debug(
+            f"vec_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "status_filter": status,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "limit": limit,
+                "offset": offset,
+                "operation": "vec_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            try:
+                # Get total count
+                count_sql = f"SELECT COUNT(*) FROM st_vec WHERE {where_clause}"
+                total_result = await conn.fetchrow(count_sql, *params)
+                total = total_result[0] if total_result else 0
+
+                # Get paginated results
+                limit_param = f"${param_idx}"
+                offset_param = f"${param_idx + 1}"
+                query_sql = f"""
+                    SELECT embedding_id, event_id, tenant_id, space_id,
+                           vector, vector_dim, model_id, status, created_at
+                    FROM st_vec
+                    WHERE {where_clause}
+                    ORDER BY created_at ASC
+                    LIMIT {limit_param} OFFSET {offset_param}
+                """
+                rows = await conn.fetch(query_sql, *params, limit, offset)
+
+                embeddings = [
+                    {
+                        "embedding_id": row["embedding_id"],
+                        "event_id": row["event_id"],
+                        "tenant_id": row["tenant_id"],
+                        "space_id": row["space_id"],
+                        "vector": row["vector"],  # bytes (3072 for 768 floats)
+                        "vector_dim": row["vector_dim"],
+                        "model_id": row["model_id"],
+                        "status": row["status"],
+                        "created_at": row["created_at"],
+                    }
+                    for row in rows
+                ]
+
+                # Audit: Log query performance
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                logger.debug(
+                    f"vec_query completed: {len(embeddings)} results",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "count": len(embeddings),
+                        "total": total,
+                        "latency_ms": elapsed_ms,
+                        "operation": "vec_query",
+                    },
+                )
+
+                return {
+                    "embeddings": embeddings,
+                    "count": len(embeddings),
+                    "total": total,
+                }
+
+            except Exception as e:
+                logger.error(
+                    "vec_query failed",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "status_filter": status,
+                        "error": str(e),
+                    },
+                )
+                raise
+
+    async def vec_update_status(
+        self,
+        embedding_id: str,
+        status: str,
+        indexed_at: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Update st_vec status (requires st_vec.write cap).
+
+        Used by P08 M24 after adding to FAISS index to mark embedding as INDEXED.
+        Also used for error handling (marking FAILED status).
+
+        Capability Required: "st_vec.write"
+
+        Status Transitions:
+        - READY → INDEXED: After successful FAISS indexing
+        - READY → FAILED: If FAISS indexing fails
+        - FAILED → READY: For retry (via backfill)
+
+        Args:
+            embedding_id: Embedding to update
+            status: New status (READY, INDEXED, FAILED)
+            indexed_at: Optional timestamp when indexed (epoch seconds)
+
+        Returns:
+            Dictionary with:
+            - updated: bool (True if row updated)
+            - embedding_id: str
+            - status: str
+
+        Raises:
+            PermissionError: If pipeline lacks "st_vec.write" capability
+            ValueError: If invalid status provided
+
+        Example:
+            >>> await syscalls.vec_update_status(
+            ...     embedding_id="emb_uuid_abc123",
+            ...     status="INDEXED",
+            ...     indexed_at=int(time.time())
+            ... )
+
+        Performance:
+            - Target: <5ms P95 (single UPDATE by primary key)
+            - Uses embedding_id primary key for fast lookup
+
+        Related:
+            - M24 (embedding.faiss_indexer): Primary user of this syscall
+            - vec_query: Finds READY embeddings to index
+            - ADR-K003 v1.2: P08 scheduled architecture
+        """
+        self._require_cap("st_vec.write")
+
+        # Validation
+        if not embedding_id:
+            raise ValueError("embedding_id required for vec_update_status")
+        if status not in ("READY", "INDEXED", "FAILED"):
+            raise ValueError(f"Invalid status: {status} (expected READY/INDEXED/FAILED)")
+
+        # Audit: Log update operation
+        start_time = time.perf_counter()
+        logger.debug(
+            f"vec_update_status: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "embedding_id": embedding_id,
+                "new_status": status,
+                "indexed_at": indexed_at,
+                "operation": "vec_update_status",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            try:
+                if indexed_at:
+                    result = await conn.execute(
+                        "UPDATE st_vec SET status = $1, indexed_at = $2, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE embedding_id = $3",
+                        status,
+                        indexed_at,
+                        embedding_id,
+                    )
+                else:
+                    result = await conn.execute(
+                        "UPDATE st_vec SET status = $1, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE embedding_id = $2",
+                        status,
+                        embedding_id,
+                    )
+
+                updated = result != "UPDATE 0"
+
+                # Audit: Log update performance
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                logger.debug(
+                    f"vec_update_status completed: {embedding_id}",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "embedding_id": embedding_id,
+                        "updated": updated,
+                        "new_status": status,
+                        "latency_ms": elapsed_ms,
+                        "operation": "vec_update_status",
+                    },
+                )
+
+                return {
+                    "updated": updated,
+                    "embedding_id": embedding_id,
+                    "status": status,
+                }
+
+            except Exception as e:
+                logger.error(
+                    f"vec_update_status failed: {embedding_id}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "embedding_id": embedding_id,
+                        "error": str(e),
                     },
                 )
                 raise
@@ -1386,22 +1831,48 @@ class Syscalls:
         if len(vector) != 768:
             raise ValueError(f"Invalid vector dimension: {len(vector)} (expected 768)")
 
-        # TODO: Implement FAISS integration
-        # This is a placeholder for M2 implementation
-        logger.warning(
-            "faiss_add not yet implemented (placeholder)",
-            extra={
-                "pipeline_id": self._pipeline_id,
-                "embedding_id": embedding_id,
-                "index_id": index_id,
-                "operation": "faiss_add",
-                "status": "not_implemented",
-            },
-        )
+        # Get FAISS manager instance
+        from k0.runtime.faiss_manager import FaissIndexManager
 
-        raise NotImplementedError(
-            "FAISS integration not yet implemented. " "Will be added in M2 P08 v2 implementation."
-        )
+        faiss_mgr = FaissIndexManager.get_instance()
+
+        # Add vector to FAISS index
+        try:
+            result = await faiss_mgr.add(embedding_id, vector, index_id)
+
+            logger.info(
+                "faiss_add completed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "embedding_id": embedding_id,
+                    "index_id": index_id,
+                    "total_vectors": result["total_vectors"],
+                },
+            )
+
+            return result
+
+        except ValueError as e:
+            logger.error(
+                "faiss_add validation failed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "embedding_id": embedding_id,
+                    "error": str(e),
+                },
+            )
+            raise
+
+        except Exception as e:
+            logger.error(
+                "faiss_add failed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "embedding_id": embedding_id,
+                    "error": str(e),
+                },
+            )
+            raise RuntimeError(f"Failed to add vector to FAISS: {e}") from e
 
     async def faiss_add_batch(
         self,
@@ -1469,21 +1940,57 @@ class Syscalls:
                     f"Record {i} invalid vector dimension: {len(record['vector'])} (expected 768)"
                 )
 
-        # TODO: Implement FAISS integration
-        logger.warning(
-            "faiss_add_batch not yet implemented (placeholder)",
-            extra={
-                "pipeline_id": self._pipeline_id,
-                "batch_size": len(records),
-                "index_id": index_id,
-                "operation": "faiss_add_batch",
-                "status": "not_implemented",
-            },
-        )
+        # Get FAISS manager instance
+        from k0.runtime.faiss_manager import FaissIndexManager
 
-        raise NotImplementedError(
-            "FAISS integration not yet implemented. " "Will be added in M2 P08 v2 implementation."
-        )
+        faiss_mgr = FaissIndexManager.get_instance()
+
+        # Convert records to (embedding_id, vector) tuples
+        embeddings = [(rec["embedding_id"], rec["vector"]) for rec in records]
+
+        # Batch add to FAISS index
+        try:
+            result = await faiss_mgr.add_batch(embeddings, index_id)
+
+            logger.info(
+                "faiss_add_batch completed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "batch_size": len(records),
+                    "added_count": result["added"],
+                    "index_id": index_id,
+                    "total_vectors": result["total_vectors"],
+                },
+            )
+
+            return {
+                "added_count": result["added"],
+                "batch_size": len(records),
+                "index_id": result["index_id"],
+                "total_vectors": result["total_vectors"],
+            }
+
+        except ValueError as e:
+            logger.error(
+                "faiss_add_batch validation failed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "batch_size": len(records),
+                    "error": str(e),
+                },
+            )
+            raise
+
+        except Exception as e:
+            logger.error(
+                "faiss_add_batch failed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "batch_size": len(records),
+                    "error": str(e),
+                },
+            )
+            raise RuntimeError(f"Failed to batch add vectors to FAISS: {e}") from e
 
     async def faiss_search(
         self,
@@ -1546,22 +2053,57 @@ class Syscalls:
         if nprobe < 1 or nprobe > 256:
             raise ValueError(f"Invalid nprobe: {nprobe} (expected 1-256)")
 
-        # TODO: Implement FAISS integration
-        logger.warning(
-            "faiss_search not yet implemented (placeholder)",
-            extra={
-                "pipeline_id": self._pipeline_id,
-                "k": k,
-                "nprobe": nprobe,
-                "index_id": index_id,
-                "operation": "faiss_search",
-                "status": "not_implemented",
-            },
-        )
+        # Get FAISS manager instance
+        from k0.runtime.faiss_manager import FaissIndexManager
 
-        raise NotImplementedError(
-            "FAISS integration not yet implemented. " "Will be added in M2 P08 v2 implementation."
-        )
+        faiss_mgr = FaissIndexManager.get_instance()
+
+        # Search FAISS index
+        try:
+            results = await faiss_mgr.search(query_vector, k, index_id)
+
+            # Extract IDs and distances for return format
+            embedding_ids = [r["embedding_id"] for r in results]
+            distances = [r["distance"] for r in results]
+
+            logger.info(
+                "faiss_search completed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "k": k,
+                    "nprobe": nprobe,
+                    "results_found": len(results),
+                    "index_id": index_id,
+                },
+            )
+
+            return {
+                "embedding_ids": embedding_ids,
+                "distances": distances,
+                "k": len(results),
+            }
+
+        except ValueError as e:
+            logger.error(
+                "faiss_search validation failed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "k": k,
+                    "error": str(e),
+                },
+            )
+            raise
+
+        except Exception as e:
+            logger.error(
+                "faiss_search failed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "k": k,
+                    "error": str(e),
+                },
+            )
+            raise RuntimeError(f"Failed to search FAISS index: {e}") from e
 
     async def faiss_remove_batch(
         self,
@@ -1614,21 +2156,788 @@ class Syscalls:
         if not embedding_ids:
             raise ValueError("embedding_ids required for faiss_remove_batch (empty list)")
 
-        # TODO: Implement FAISS integration
-        logger.warning(
-            "faiss_remove_batch not yet implemented (placeholder)",
-            extra={
-                "pipeline_id": self._pipeline_id,
+        # Get FAISS manager instance
+        from k0.runtime.faiss_manager import FaissIndexManager
+
+        faiss_mgr = FaissIndexManager.get_instance()
+
+        # Remove from FAISS index
+        try:
+            result = await faiss_mgr.remove_batch(embedding_ids)
+
+            logger.info(
+                "faiss_remove_batch completed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "batch_size": len(embedding_ids),
+                    "removed_count": result["removed"],
+                    "index_id": index_id,
+                    "note": result.get("note"),
+                },
+            )
+
+            return {
+                "removed_count": result["removed"],
                 "batch_size": len(embedding_ids),
                 "index_id": index_id,
-                "operation": "faiss_remove_batch",
-                "status": "not_implemented",
+                "total_vectors": result["total_vectors"],
+            }
+
+        except Exception as e:
+            logger.error(
+                "faiss_remove_batch failed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "batch_size": len(embedding_ids),
+                    "error": str(e),
+                },
+            )
+            raise RuntimeError(f"Failed to remove vectors from FAISS: {e}") from e
+
+    # =========================================================================
+    # Phase 3: Backfill Syscalls (ADR-K003 v1.2)
+    # =========================================================================
+
+    async def hipp_events_query(
+        self,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+        embedding_status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """
+        Query st_hipp_events by filters (requires st_hipp_events.read cap).
+
+        Used by M25 backfill to find PENDING embeddings that need reprocessing.
+        Returns events matching the specified filters, ordered by created_at.
+
+        Capability Required: "st_hipp_events.read"
+
+        Storage Table: st_hipp_events
+        - Query by tenant, space, embedding_status
+        - Ordered by created_at ASC (oldest first)
+        - Paginated for batch processing
+
+        Args:
+            tenant_id: Optional tenant filter
+            space_id: Optional space filter
+            embedding_status: Filter by status (PENDING, READY, INDEXED, FAILED)
+            limit: Max records to return (default: 100)
+            offset: Pagination offset (default: 0)
+
+        Returns:
+            Dictionary with:
+            - events: list[dict] with event_id, tenant_id, space_id, text, embedding_status
+            - count: int (number of records returned)
+            - total: int (total matching records)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_hipp_events.read" capability
+            ValueError: If invalid embedding_status provided
+
+        Example:
+            >>> result = await syscalls.hipp_events_query(
+            ...     embedding_status="PENDING",
+            ...     limit=100
+            ... )
+            >>> for event in result["events"]:
+            ...     await backfill_embedding(event)
+
+        Performance:
+            - Target: <30ms P95 (paginated query with embedding_status index)
+            - Uses embedding_status index for efficient filtering
+
+        Related:
+            - M25 (embedding.backfill): Primary user of this syscall
+            - P08 backfill mode: Uses this to find PENDING events
+            - ADR-K003 v1.2: Backfill architecture
+        """
+        self._require_cap("st_hipp_events.read")
+
+        # Validate embedding_status if provided
+        if embedding_status and embedding_status not in ("PENDING", "READY", "INDEXED", "FAILED"):
+            raise ValueError(f"Invalid embedding_status: {embedding_status}")
+
+        # Build query with optional filters
+        conditions: list[str] = []
+        params: list[Any] = []
+        param_idx = 1
+
+        if tenant_id:
+            conditions.append(f"tenant_id = ${param_idx}")
+            params.append(tenant_id)
+            param_idx += 1
+        if space_id:
+            conditions.append(f"space_id = ${param_idx}")
+            params.append(space_id)
+            param_idx += 1
+        if embedding_status:
+            conditions.append(f"embedding_status = ${param_idx}")
+            params.append(embedding_status)
+            param_idx += 1
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # Audit: Log query operation
+        start_time = time.perf_counter()
+        logger.debug(
+            f"hipp_events_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "embedding_status": embedding_status,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "limit": limit,
+                "offset": offset,
+                "operation": "hipp_events_query",
             },
         )
 
-        raise NotImplementedError(
-            "FAISS integration not yet implemented. " "Will be added in M2 P08 v2 implementation."
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            try:
+                # Get total count
+                count_sql = f"SELECT COUNT(*) FROM st_hipp_events WHERE {where_clause}"
+                total_result = await conn.fetchrow(count_sql, *params)
+                total = total_result[0] if total_result else 0
+
+                # Get paginated results
+                limit_param = f"${param_idx}"
+                offset_param = f"${param_idx + 1}"
+                query_sql = f"""
+                    SELECT event_id, tenant_id, space_id, text, embedding_status,
+                           embedding_id, created_at
+                    FROM st_hipp_events
+                    WHERE {where_clause}
+                    ORDER BY created_at ASC
+                    LIMIT {limit_param} OFFSET {offset_param}
+                """
+                rows = await conn.fetch(query_sql, *params, limit, offset)
+
+                events = [
+                    {
+                        "event_id": row["event_id"],
+                        "tenant_id": row["tenant_id"],
+                        "space_id": row["space_id"],
+                        "event_text": row["text"],
+                        "embedding_status": row["embedding_status"],
+                        "embedding_id": row["embedding_id"],
+                        "created_at": row["created_at"],
+                    }
+                    for row in rows
+                ]
+
+                # Audit: Log query performance
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                logger.debug(
+                    f"hipp_events_query completed: {len(events)} results",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "count": len(events),
+                        "total": total,
+                        "latency_ms": elapsed_ms,
+                        "operation": "hipp_events_query",
+                    },
+                )
+
+                return {
+                    "events": events,
+                    "count": len(events),
+                    "total": total,
+                }
+
+            except Exception as e:
+                logger.error(
+                    "hipp_events_query failed",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "embedding_status": embedding_status,
+                        "error": str(e),
+                    },
+                )
+                raise
+
+    async def hipp_events_update_embedding_status(
+        self,
+        event_id: str,
+        embedding_status: str,
+        embedding_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Update st_hipp_events.embedding_status (requires st_hipp_events.write cap).
+
+        Used by M25 backfill after computing embeddings for PENDING events.
+        Can also update embedding_id if a new embedding was generated.
+
+        Capability Required: "st_hipp_events.write"
+
+        Status Transitions:
+        - PENDING -> READY: After embedding computed and stored
+        - PENDING -> FAILED: If embedding computation failed
+        - FAILED -> READY: After retry succeeds
+
+        Args:
+            event_id: Event to update
+            embedding_status: New status (PENDING, READY, INDEXED, FAILED)
+            embedding_id: Optional new embedding_id (for backfill)
+
+        Returns:
+            Dictionary with:
+            - updated: bool (True if row updated)
+            - event_id: str
+            - embedding_status: str
+
+        Raises:
+            PermissionError: If pipeline lacks "st_hipp_events.write" capability
+            ValueError: If invalid embedding_status provided
+
+        Example:
+            >>> await syscalls.hipp_events_update_embedding_status(
+            ...     event_id="evt_123",
+            ...     embedding_status="READY",
+            ...     embedding_id="emb_new_456"
+            ... )
+
+        Performance:
+            - Target: <5ms P95 (single UPDATE by primary key)
+
+        Related:
+            - M25 (embedding.backfill): Primary user of this syscall
+            - hipp_events_query: Finds PENDING events
+            - ADR-K003 v1.2: Backfill architecture
+        """
+        self._require_cap("st_hipp_events.write")
+
+        # Validation
+        if not event_id:
+            raise ValueError("event_id required for hipp_events_update_embedding_status")
+        if embedding_status not in ("PENDING", "READY", "INDEXED", "FAILED"):
+            raise ValueError(f"Invalid embedding_status: {embedding_status}")
+
+        # Audit: Log update operation
+        start_time = time.perf_counter()
+        logger.debug(
+            f"hipp_events_update_embedding_status: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "event_id": event_id,
+                "new_status": embedding_status,
+                "embedding_id": embedding_id,
+                "operation": "hipp_events_update_embedding_status",
+            },
         )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            try:
+                if embedding_id:
+                    result = await conn.execute(
+                        "UPDATE st_hipp_events SET embedding_status = $1, embedding_id = $2, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE event_id = $3",
+                        embedding_status,
+                        embedding_id,
+                        event_id,
+                    )
+                else:
+                    result = await conn.execute(
+                        "UPDATE st_hipp_events SET embedding_status = $1, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE event_id = $2",
+                        embedding_status,
+                        event_id,
+                    )
+
+                updated = result != "UPDATE 0"
+
+                # Audit: Log update performance
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                logger.debug(
+                    f"hipp_events_update_embedding_status completed: {event_id}",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "event_id": event_id,
+                        "updated": updated,
+                        "new_status": embedding_status,
+                        "latency_ms": elapsed_ms,
+                        "operation": "hipp_events_update_embedding_status",
+                    },
+                )
+
+                return {
+                    "updated": updated,
+                    "event_id": event_id,
+                    "embedding_status": embedding_status,
+                }
+
+            except Exception as e:
+                logger.error(
+                    f"hipp_events_update_embedding_status failed: {event_id}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "event_id": event_id,
+                        "error": str(e),
+                    },
+                )
+                raise
+
+    # =========================================================================
+    # Issue 3.1.0: Generic Query Count (for PipelineScheduler threshold triggers)
+    # =========================================================================
+
+    async def query_count(
+        self,
+        table: str,
+        where: str = "1=1",
+        params: list[Any] | tuple[Any, ...] = (),
+    ) -> int:
+        """
+        Query row count from a table with optional WHERE clause.
+
+        Used by PipelineScheduler for threshold triggers to check if
+        row count exceeds configured threshold.
+
+        Args:
+            table: Table name (must be in allowed tables)
+            where: WHERE clause with $N placeholders (default: all rows)
+            params: Query parameters for WHERE clause
+
+        Returns:
+            Row count matching condition
+
+        Raises:
+            PermissionError: If pipeline lacks read capability for table
+            ValueError: If table not in allowed list
+
+        Example:
+            >>> count = await syscalls.query_count(
+            ...     table="st_vec",
+            ...     where="status = $1",
+            ...     params=["READY"]
+            ... )
+            >>> print(f"{count} vectors pending indexing")
+
+        Security:
+            - Requires {table}.read capability
+            - Only allows approved tables (no arbitrary table access)
+            - SQL injection protected via parameterized queries
+        """
+        # Validate table access
+        required_cap = f"{table}.read"
+        self._require_cap(required_cap)
+
+        # Allowed tables for threshold queries (Issue 3.1.0)
+        allowed_tables = {
+            "st_vec",
+            "st_hipp_events",
+            "st_wal",
+            "st_epi",
+            "st_sem",
+            "st_outbox",
+            "st_pipeline_processed",
+        }
+        if table not in allowed_tables:
+            raise ValueError(
+                f"Table not allowed for count queries: {table}. "
+                f"Allowed: {sorted(allowed_tables)}"
+            )
+
+        start_time = time.perf_counter()
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            try:
+                sql = f"SELECT COUNT(*) FROM {table} WHERE {where}"
+                params_list = list(params) if isinstance(params, tuple) else params
+
+                row = await conn.fetchrow(sql, *params_list)
+
+                count = row[0] if row else 0
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+                logger.debug(
+                    f"query_count: {table} WHERE {where} = {count}",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "table": table,
+                        "where": where,
+                        "count": count,
+                        "latency_ms": elapsed_ms,
+                        "operation": "query_count",
+                    },
+                )
+
+                return count
+
+            except Exception as e:
+                logger.error(
+                    f"query_count failed for {table}: {e}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "table": table,
+                        "where": where,
+                        "error": str(e),
+                    },
+                )
+                raise
+
+    async def ultrabert_embed(
+        self,
+        text: str,
+        model_id: str = "ultrabert_v2.1.0",
+    ) -> dict[str, Any]:
+        """
+        Generate embedding via UltraBERT (requires ultrabert.embed cap).
+
+        Used by M25 backfill to compute embeddings for PENDING events.
+        Returns a 768-dim embedding vector and generated embedding_id.
+
+        Capability Required: "ultrabert.embed"
+
+        Model Configuration:
+        - Model: UltraBERT v2.1.0
+        - Vector Dimension: 768
+        - Max Input Length: 512 tokens
+
+        Args:
+            text: Text to embed (will be truncated if > 512 tokens)
+            model_id: Embedding model identifier (default: "ultrabert_v2.1.0")
+
+        Returns:
+            Dictionary with:
+            - embedding: list[float] (768-dim vector) or None if failed
+            - embedding_id: str (UUID) or None if failed
+            - vector_dim: int (768)
+            - model_id: str
+            - error: str (only if failed)
+
+        Raises:
+            PermissionError: If pipeline lacks "ultrabert.embed" capability
+            ValueError: If text is empty
+
+        Example:
+            >>> result = await syscalls.ultrabert_embed(text="Hello world")
+            >>> if result["embedding"]:
+            ...     vector = result["embedding"]  # 768-dim list
+            ...     emb_id = result["embedding_id"]
+
+        Performance:
+            - Target: <50ms P95 (single embedding, GPU accelerated)
+            - Batch operations preferred for bulk embedding
+
+        Related:
+            - M25 (embedding.backfill): Primary user of this syscall
+            - M22 (embedding.extract_from_cache): Uses same UltraBERT model
+            - ADR-K003: UltraBERT architecture
+        """
+        self._require_cap("ultrabert.embed")
+
+        # Validation
+        if not text or not text.strip():
+            raise ValueError("text required for ultrabert_embed (empty or whitespace-only)")
+
+        import uuid
+
+        # Audit: Log embed operation
+        start_time = time.perf_counter()
+        logger.debug(
+            f"ultrabert_embed: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "text_length": len(text),
+                "model_id": model_id,
+                "operation": "ultrabert_embed",
+            },
+        )
+
+        try:
+            # Import UltraBERT adapter
+            from k0.runtime.ultrabert_adapter import get_embedding
+
+            # Generate embedding
+            embedding = get_embedding(text)
+
+            if not embedding:
+                logger.warning(
+                    "ultrabert_embed: UltraBERT unavailable or returned None",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "text_length": len(text),
+                    },
+                )
+                return {
+                    "embedding": None,
+                    "embedding_id": None,
+                    "vector_dim": 0,
+                    "model_id": model_id,
+                    "error": "UltraBERT unavailable or returned None",
+                }
+
+            # Generate embedding_id
+            embedding_id = str(uuid.uuid4())
+
+            # Audit: Log embed performance
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"ultrabert_embed completed: {embedding_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "embedding_id": embedding_id,
+                    "vector_dim": len(embedding),
+                    "latency_ms": elapsed_ms,
+                    "operation": "ultrabert_embed",
+                },
+            )
+
+            return {
+                "embedding": embedding,
+                "embedding_id": embedding_id,
+                "vector_dim": len(embedding),
+                "model_id": model_id,
+            }
+
+        except ImportError as e:
+            logger.error(
+                "ultrabert_embed: Failed to import ultrabert_adapter",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "error": str(e),
+                },
+            )
+            return {
+                "embedding": None,
+                "embedding_id": None,
+                "vector_dim": 0,
+                "model_id": model_id,
+                "error": f"UltraBERT adapter import failed: {e}",
+            }
+
+        except Exception as e:
+            logger.error(
+                "ultrabert_embed failed",
+                exc_info=True,
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "text_length": len(text),
+                    "error": str(e),
+                },
+            )
+            return {
+                "embedding": None,
+                "embedding_id": None,
+                "vector_dim": 0,
+                "model_id": model_id,
+                "error": str(e),
+            }
+
+    # =========================================================================
+    # Advisory Lock Operations (Issue 1.3.4)
+    # =========================================================================
+
+    async def lock_acquire(
+        self,
+        lock_key: str,
+        holder_id: str,
+        *,
+        blocking: bool = False,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Acquire an advisory lock (requires advisory_lock.acquire cap).
+
+        Uses PostgreSQL pg_try_advisory_lock() for distributed locking.
+        Used by P03 for single-writer-per-space semantics.
+
+        Capability Required: "advisory_lock.acquire"
+
+        Lock Key Pattern: {pipeline_id}:{tenant_id}:{space_id}
+
+        Args:
+            lock_key: String lock key (e.g., "P03:tenant_1:space_1")
+            holder_id: Identifier for the lock holder (e.g., node ID)
+            blocking: If True, wait for lock. If False, return immediately.
+            timeout_ms: Timeout in milliseconds for blocking acquire (default: 30000)
+
+        Returns:
+            Dictionary with:
+            - acquired: bool (True if lock was acquired)
+            - lock_key: str
+            - lock_id: int (the bigint hash)
+            - holder_id: str | None
+            - error: str | None
+            - acquired_at: str | None (ISO format timestamp)
+
+        Raises:
+            PermissionError: If pipeline lacks "advisory_lock.acquire" capability
+
+        Example:
+            >>> result = await syscalls.lock_acquire(
+            ...     lock_key="P03:tenant_1:space_1",
+            ...     holder_id="node_abc"
+            ... )
+            >>> if result["acquired"]:
+            ...     # Do work with lock held
+            ...     await syscalls.lock_release("P03:tenant_1:space_1", "node_abc")
+
+        Related:
+            - Issue 1.3.4: Single-writer-per-space guard
+            - k0/db/advisory_lock.py: AdvisoryLockService implementation
+            - Dossier 4.10.2: Advisory Lock Service specification
+        """
+        self._require_cap("advisory_lock.acquire")
+
+        from k0.db.advisory_lock import get_advisory_lock_service
+
+        lock_service = get_advisory_lock_service()
+        result = await lock_service.acquire(
+            lock_key=lock_key,
+            holder_id=holder_id,
+            blocking=blocking,
+            timeout_ms=timeout_ms,
+        )
+
+        logger.info(
+            f"lock_acquire: {lock_key} -> {result.acquired}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "lock_key": lock_key,
+                "holder_id": holder_id,
+                "acquired": result.acquired,
+                "operation": "lock_acquire",
+            },
+        )
+
+        return {
+            "acquired": result.acquired,
+            "lock_key": result.lock_key,
+            "lock_id": result.lock_id,
+            "holder_id": result.holder_id,
+            "error": result.error,
+            "acquired_at": result.acquired_at.isoformat() if result.acquired_at else None,
+        }
+
+    async def lock_release(
+        self,
+        lock_key: str,
+        holder_id: str,
+    ) -> dict[str, Any]:
+        """
+        Release an advisory lock (requires advisory_lock.release cap).
+
+        Uses PostgreSQL pg_advisory_unlock() for distributed lock release.
+
+        Capability Required: "advisory_lock.release"
+
+        Args:
+            lock_key: String lock key to release
+            holder_id: Identifier of the holder releasing the lock
+
+        Returns:
+            Dictionary with:
+            - released: bool (True if lock was released)
+            - lock_key: str
+            - holder_id: str
+
+        Raises:
+            PermissionError: If pipeline lacks "advisory_lock.release" capability
+
+        Example:
+            >>> result = await syscalls.lock_release(
+            ...     lock_key="P03:tenant_1:space_1",
+            ...     holder_id="node_abc"
+            ... )
+            >>> result["released"]
+            True
+
+        Related:
+            - Issue 1.3.4: Single-writer-per-space guard
+            - k0/db/advisory_lock.py: AdvisoryLockService implementation
+        """
+        self._require_cap("advisory_lock.release")
+
+        from k0.db.advisory_lock import get_advisory_lock_service
+
+        lock_service = get_advisory_lock_service()
+        released = await lock_service.release(lock_key=lock_key, holder_id=holder_id)
+
+        logger.info(
+            f"lock_release: {lock_key} -> {released}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "lock_key": lock_key,
+                "holder_id": holder_id,
+                "released": released,
+                "operation": "lock_release",
+            },
+        )
+
+        return {
+            "released": released,
+            "lock_key": lock_key,
+            "holder_id": holder_id,
+        }
+
+    async def lock_is_held(
+        self,
+        lock_key: str,
+    ) -> dict[str, Any]:
+        """
+        Check if a lock is currently held globally (requires advisory_lock.read cap).
+
+        Queries PostgreSQL pg_locks to check lock status across all connections.
+
+        Capability Required: "advisory_lock.read"
+
+        Args:
+            lock_key: String lock key to check
+
+        Returns:
+            Dictionary with:
+            - is_held: bool (True if lock is held by any connection)
+            - lock_key: str
+
+        Raises:
+            PermissionError: If pipeline lacks "advisory_lock.read" capability
+
+        Example:
+            >>> result = await syscalls.lock_is_held("P03:tenant_1:space_1")
+            >>> if result["is_held"]:
+            ...     print("Lock is held, deferring")
+
+        Related:
+            - Issue 1.3.4: Single-writer-per-space guard
+            - k0/db/advisory_lock.py: AdvisoryLockService implementation
+        """
+        self._require_cap("advisory_lock.read")
+
+        from k0.db.advisory_lock import get_advisory_lock_service
+
+        lock_service = get_advisory_lock_service()
+        is_held = await lock_service.is_held_globally(lock_key=lock_key)
+
+        logger.debug(
+            f"lock_is_held: {lock_key} -> {is_held}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "lock_key": lock_key,
+                "is_held": is_held,
+                "operation": "lock_is_held",
+            },
+        )
+
+        return {
+            "is_held": is_held,
+            "lock_key": lock_key,
+        }
 
     def _require_cap(self, capability: str) -> None:
         """

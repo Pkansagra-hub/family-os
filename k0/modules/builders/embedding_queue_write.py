@@ -1,14 +1,30 @@
 """
 Embedding Queue Writer Module (M14)
 
-Enqueues embedding generation jobs to st_embedding_queue for P08 background processing.
+⚠️ **DEPRECATED** - This module is deprecated as of 2025-12-13.
+Use M22 (embedding.extract_from_cache) + M23 (builders.embedding_write) for inline embedding.
+
+Legacy module enqueues embedding generation jobs to st_embedding_queue for P08 background processing.
+
+**Deprecation Reason**: ADR-K003 moves embedding generation inline to P02 for improved latency.
+New architecture: P02 → M22 (extract_from_cache) → M23 (embedding_write) → st_vec
+
+**Replacement**:
+- M22 (embedding.extract_from_cache): Extract or compute embedding inline
+- M23 (builders.embedding_write): Write embedding to st_vec table
+
+**Migration Path**:
+1. Enable K0_EMBEDDING_INLINE=1 feature flag
+2. Run backfill script: k0/scripts/backfill_pending_embeddings.py
+3. Verify all PENDING records processed
+4. Remove legacy M14 references from P02 pipeline
 
 **Purpose**: Decouple fast memory writes (P02) from slow vector computation (P08).
 P02 writes PENDING jobs, P08 picks them up asynchronously.
 
 **Performance**: <5ms P95 (single row INSERT with indexed PK)
 
-**Contract**: k0/contracts/modules/builders.embedding_queue_write.v1.yaml
+**Contract**: k0/contracts/modules/builders.embedding_queue_write.v1.yaml (deprecated)
 **ADR**: docs/architecture/decisions-K0/modules/k009.2-embedding-queue-writer.md
 **Schema**: docs/pipelines/P02_data_schema.md (lines 275-355)
 
@@ -94,7 +110,9 @@ def assemble_embedding_queue_record(
 
     header = envelope.get("header", {})
 
-    now = int(time.time())
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
 
     return {
         "job_id": None,  # Auto-increment in database

@@ -1,7 +1,7 @@
 # P02: Write / Hippocampus - Development Dossier
 
 **Status**: ✅ Step 1 Discovery (CORRECTED - Final Dossier Review Completed)
-**Last Updated**: 2025-11-15
+**Last Updated**: 2025-12-24
 **Key Changes**:
 
 - ✅ Fixed two-phase architecture (Command Port hot path → WAL, P02 background from Outbox)
@@ -15,6 +15,8 @@
 - ✅ PipelineProtocol contract (required_caps, declared_topics, BusDispatcher integration)
 - ✅ Minimal geo enrichment (use envelope location_geohash, defer complex geo to P09)
 - ✅ Basic social graph (SPOUSE_OF, PARENT_OF, CHILD_OF, CARETAKER_OF, SIBLING_OF from st_relationships)
+- 🚧 **PostgreSQL Migration**: M16 writes embeddings directly to `st_vec` using pgvector `VECTOR(768)` type
+- 🚧 **pgvector**: `st_embedding_queue` deprecated, embeddings immediately searchable via HNSW index
 
 ---
 
@@ -88,15 +90,17 @@ P02 runs **AFTER the hot path Command Port has committed to WAL**:
 
 - **Storage Writes:**
   - `st_hipp_events` — **NEW TABLE** (replaces deprecated `st_hipp_store`) - hippocampus staging
-  - `st_embedding_queue` — **NEW TABLE** (replaces non-existent `st_embedding_jobs`) - embedding queue for P08
+  - `st_vec` — **PostgreSQL/pgvector** - embedding vectors with native `VECTOR(768)` type, auto-indexed via HNSW
+  - ~~`st_embedding_queue`~~ — **DEPRECATED** with pgvector (embeddings written directly to st_vec by M16)
   - `st_outbox` — Emit downstream events (via BusDispatcher)
   - `st_pipeline_processed` — Offset tracking for P02 progress
 
-**Architecture Note**:
+**Architecture Note (PostgreSQL Migration)**:
 
-- Hot path (Command Port) writes to: `st_wal`, `idem_ledger`, `st_outbox`, `st_receipts`
-- P02 (background) reads from: `st_wal`, `st_outbox`
-- P02 writes to: `st_hipp_events`, `st_embedding_queue`, `st_outbox` (events)
+- M16 now performs **3-table atomic transaction**: `st_hipp_events` + `st_vec` + `st_pipeline_processed`
+- Embeddings use pgvector `VECTOR(768)` type (not BLOB)
+- pgvector HNSW index auto-indexes vectors on INSERT (no P08 batch needed)
+- `st_embedding_queue` job queue is deprecated (P08 no longer primary indexer)
 
 ---
 
@@ -497,45 +501,65 @@ async def run(message: BusMessage, context: PipelineContext, **config) -> dict[s
 - P03 may UPDATE dedup/cluster columns (novelty_score, episode_cluster_id, etc.)
 - Retention workers use `event_time_utc + retention_policy_id` for tombstoning
 
-#### 2. `st_embedding_queue` (replaces non-existent `st_embedding_jobs`)
+#### 2. `st_vec` (PostgreSQL/pgvector - Replaces st_embedding_queue)
 
-**Purpose**: Queue for P08 vector generation. P02 enqueues, P08 processes.
+**Purpose**: Direct embedding storage with native vector type. P02 M16 writes embeddings, pgvector auto-indexes.
 
-**Schema**:
+**PostgreSQL Schema**:
 
 ```sql
+-- PostgreSQL with pgvector extension
+CREATE TABLE st_vec (
+  embedding_id UUID PRIMARY KEY,
+  event_id UUID NOT NULL REFERENCES st_hipp_events(event_id) ON DELETE CASCADE,
+  tenant_id VARCHAR(64) NOT NULL,
+  space_id VARCHAR(64) NOT NULL,
+  vector VECTOR(768) NOT NULL,           -- Native pgvector type (not BLOB)
+  vector_dim INTEGER NOT NULL DEFAULT 768,
+  model_id VARCHAR(64) NOT NULL DEFAULT 'ultrabert_v2.1.0',
+  status VARCHAR(16) NOT NULL DEFAULT 'READY',
+  cognitive_trace_id VARCHAR(128),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ
+);
+
+-- HNSW index for fast approximate nearest neighbor search
+CREATE INDEX CONCURRENTLY ix_st_vec_hnsw
+ON st_vec USING hnsw (vector vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX ix_st_vec_event ON st_vec(event_id);
+CREATE INDEX ix_st_vec_tenant ON st_vec(tenant_id, space_id);
+```
+
+**Notes (PostgreSQL Migration)**:
+
+- M16 writes embeddings directly to st_vec in 3-table atomic transaction
+- pgvector HNSW index auto-indexes on INSERT (no P08 batch job needed)
+- Embeddings are **immediately searchable** after P02 commit
+- `st_embedding_queue` job queue is **DEPRECATED** (P08 no longer primary indexer)
+
+#### ~~2b. `st_embedding_queue`~~ (DEPRECATED with pgvector)
+
+> **PostgreSQL Migration**: This table is deprecated. M16 now writes directly to `st_vec`
+> with pgvector's native `VECTOR(768)` type. The job queue pattern is no longer needed
+> since embeddings are computed inline (M22) and indexed automatically by pgvector.
+
+<details>
+<summary>SQLite Legacy Schema (for reference only)</summary>
+
+```sql
+-- OLD SQLite schema (DEPRECATED)
 CREATE TABLE st_embedding_queue (
   job_id INTEGER PRIMARY KEY AUTOINCREMENT,
   wal_pos INTEGER NOT NULL,
   event_id TEXT NOT NULL,
   embedding_id TEXT NOT NULL,
-  tenant_id TEXT NOT NULL,
-  space_id TEXT NOT NULL,
-  vector_kind TEXT NOT NULL,  -- e.g., 'memory.body.text'
-  model_id TEXT NOT NULL,     -- e.g., 'embed-mini-001'
-  priority TEXT NOT NULL,     -- 'NORMAL', 'HIGH', 'LOW'
-  status TEXT NOT NULL CHECK(status IN ('PENDING','IN_PROGRESS','READY','FAILED_RETRYABLE','FAILED_PERMANENT')),
-  attempt_count INTEGER DEFAULT 0,
-  max_attempts INTEGER DEFAULT 5,
-  next_attempt_ts INTEGER,
-  last_error TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  FOREIGN KEY (wal_pos) REFERENCES st_wal(wal_pos),
-  FOREIGN KEY (event_id) REFERENCES st_hipp_events(event_id)
+  ...
 );
-
-CREATE INDEX idx_embedding_queue_status ON st_embedding_queue(status, next_attempt_ts);
-CREATE INDEX idx_embedding_queue_event ON st_embedding_queue(event_id);
-CREATE INDEX idx_embedding_queue_embedding_id ON st_embedding_queue(embedding_id);
 ```
 
-**Notes**:
-
-- P02 inserts with `status='PENDING'`, `attempt_count=0`
-- P08 polls this table, updates `status='IN_PROGRESS'` → `'READY'` or `'FAILED_*'`
-- Exponential backoff: `next_attempt_ts = now + 2^attempt_count * 60` (1min, 2min, 4min, 8min, 16min)
-- DLQ: After 5 attempts, status becomes `'FAILED_PERMANENT'`, route to DLQ
+</details>
 
 #### 3. Restore `st_relationships` (UNDEPRECATE from migration 0021)
 

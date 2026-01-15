@@ -1,0 +1,23 @@
+;; K0 pgbouncer User Authentication File
+;; Part of Milestone 1.1.2 - Connection Pooler Setup
+;;
+;; Format: "username" "password"
+;; Password can be:
+;;   - Plain text (not recommended)
+;;   - MD5 hash: md5<hash> where hash = md5(password + username)
+;;   - SCRAM-SHA-256 (PostgreSQL 10+)
+;;
+;; Generate MD5 hash: echo -n "changeme" | md5sum
+;; Or use: SELECT 'md5' || md5('changeme' || 'k0user');
+;;
+;; SECURITY NOTE: In production, use SCRAM-SHA-256 or mount secrets securely.
+;; This file should be replaced with proper secret management in production.
+
+;; Application user (matches PostgreSQL k0user)
+;; Default password: changeme (CHANGE IN PRODUCTION)
+;; MD5 hash for "changeme" + "k0user" = md5(changeme + k0user)
+"k0user" "md5c90c1a5719e746e30e13c1d0c44acf7e"
+
+;; Admin user for pgbouncer console (optional)
+;; Access via: psql -p 6432 -U pgbouncer_admin pgbouncer
+"pgbouncer_admin" "md5admin_password_hash_here"

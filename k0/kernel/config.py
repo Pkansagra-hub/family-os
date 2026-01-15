@@ -49,8 +49,7 @@ class TelemetrySettings(BaseModel):
     log_sensitive_keys: list[str] = Field(
         default_factory=list,
         description=(
-            "Additional field names treated as sensitive for structured logging "
-            "redaction."
+            "Additional field names treated as sensitive for structured logging " "redaction."
         ),
     )
     log_mask: str = Field(
@@ -157,11 +156,31 @@ class RetentionSettings(BaseModel):
     spaces: dict[str, RetentionPolicy] = Field(default_factory=dict)
 
 
+class PostgreSQLSettings(BaseModel):
+    """Nested PostgreSQL connection settings for DatabaseSettings.
+
+    These are parsed from K0_KERNEL_DATABASE__POSTGRESQL__* environment variables.
+    For standalone PostgreSQL configuration, use k0.config.postgres.PostgresSettings.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = Field(default="localhost", description="PostgreSQL host.")
+    port: int = Field(default=5432, ge=1, le=65535, description="PostgreSQL port.")
+    database: str = Field(default="k0_kernel", description="Database name.")
+    user: str = Field(default="k0user", description="Database user.")
+    password: str = Field(default="changeme", description="Database password.")
+
+
 class DatabaseSettings(BaseModel):
     """Settings governing the kernel's ACID cohort datastore."""
 
     model_config = ConfigDict(extra="forbid")
 
+    backend: Literal["sqlite", "postgresql"] = Field(
+        default="sqlite",
+        description="Database backend to use: 'sqlite' or 'postgresql'.",
+    )
     path: Path = Field(
         default=Path("k0_runtime.sqlite3"),
         description="Filesystem path to the kernel SQLite database.",
@@ -173,6 +192,10 @@ class DatabaseSettings(BaseModel):
             "database, WAL, and SHM files; `wal_only` skips the main database file; "
             "`disabled` bypasses fsync entirely (unsafe for production)."
         ),
+    )
+    postgresql: PostgreSQLSettings | None = Field(
+        default=None,
+        description="PostgreSQL connection settings (required when backend='postgresql').",
     )
 
     @field_validator("fsync_mode")
@@ -509,11 +532,7 @@ def _deep_merge(base: Mapping[str, Any], update: Mapping[str, Any]) -> dict[str,
 
     merged: dict[str, Any] = dict(base)
     for key, value in update.items():
-        if (
-            key in merged
-            and isinstance(merged[key], Mapping)
-            and isinstance(value, Mapping)
-        ):
+        if key in merged and isinstance(merged[key], Mapping) and isinstance(value, Mapping):
             merged[key] = _deep_merge(
                 cast(Mapping[str, Any], merged[key]),
                 cast(Mapping[str, Any], value),
@@ -583,9 +602,7 @@ def _extract_policy_env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
     return policy_overrides
 
 
-def _assign_nested(
-    target: MutableMapping[str, Any], path: list[str], value: Any
-) -> None:
+def _assign_nested(target: MutableMapping[str, Any], path: list[str], value: Any) -> None:
     """Assign a value to a nested mapping given a sequence of keys."""
 
     current: MutableMapping[str, Any] = target
@@ -626,9 +643,7 @@ def _read_yaml(path: Path | str) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         raw_content: Any = yaml.safe_load(handle) or {}
     if not isinstance(raw_content, Mapping):
-        raise ValueError(
-            f"Expected mapping at root of {path}, got {type(raw_content)!r}"
-        )
+        raise ValueError(f"Expected mapping at root of {path}, got {type(raw_content)!r}")
     mapping_content = cast(Mapping[Any, Any], raw_content)
     raw_dict: dict[str, Any] = {}
     bad_keys: set[str] = set()

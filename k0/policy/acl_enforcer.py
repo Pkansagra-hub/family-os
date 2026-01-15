@@ -9,12 +9,16 @@ References:
 - Contract: k0/contracts/jsonschema/acl.schema.json
 """
 
-import sqlite3
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
-from k0.uow.connection_pool import connection_scope
+from k0.db.connection import connection_scope
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 @dataclass(frozen=True)
@@ -42,15 +46,17 @@ class ACLEnforcer:
     """
     Normalized access control enforcement using st_acl table.
 
+    All methods are async and use asyncpg for PostgreSQL operations.
+
     Usage:
         enforcer = ACLEnforcer()
 
         # Check permission
-        if enforcer.check_permission("st_epi", "evt_123", "usr_alice", "read"):
+        if await enforcer.check_permission("st_epi", "evt_123", "usr_alice", "read"):
             return memory
 
         # Grant permission
-        enforcer.grant_permission(
+        await enforcer.grant_permission(
             acl_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
             resource_type="st_epi",
             resource_id="evt_123",
@@ -61,10 +67,10 @@ class ACLEnforcer:
         )
 
         # Revoke permission
-        enforcer.revoke_permission("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        await enforcer.revoke_permission("01ARZ3NDEKTSV4RRFFQ69G5FAV")
     """
 
-    def check_permission(
+    async def check_permission(
         self,
         resource_type: str,
         resource_id: str,
@@ -72,7 +78,7 @@ class ACLEnforcer:
         permission: str,
         *,
         principal_type: str = "user",
-        connection: Optional[sqlite3.Connection] = None,
+        connection: Optional["asyncpg.Connection"] = None,
     ) -> bool:
         """
         Check if principal has permission on resource.
@@ -91,7 +97,7 @@ class ACLEnforcer:
             Permission type (read, write, delete, share)
         principal_type : str
             Type of principal (default: "user")
-        connection : sqlite3.Connection, optional
+        connection : asyncpg.Connection, optional
             Database connection (uses connection pool if not provided)
 
         Returns
@@ -101,40 +107,43 @@ class ACLEnforcer:
         """
         now = datetime.now(timezone.utc).isoformat()
 
-        resolve = connection if connection else connection_scope()
-        with resolve as conn:
+        async def _run_with_conn(conn: "asyncpg.Connection") -> bool:
             try:
                 # Query st_acl with all constraints
-                result = conn.execute(
+                result = await conn.fetchrow(
                     """
                     SELECT 1 FROM st_acl
-                    WHERE resource_type = ?
-                      AND resource_id = ?
-                      AND principal_type = ?
-                      AND principal_id = ?
-                      AND permission = ?
+                    WHERE resource_type = $1
+                      AND resource_id = $2
+                      AND principal_type = $3
+                      AND principal_id = $4
+                      AND permission = $5
                       AND revoked_at IS NULL
-                      AND (expires_at IS NULL OR expires_at > ?)
+                      AND (expires_at IS NULL OR expires_at > $6)
                     LIMIT 1
                     """,
-                    (
-                        resource_type,
-                        resource_id,
-                        principal_type,
-                        principal_id,
-                        permission,
-                        now,
-                    ),
-                ).fetchone()
+                    resource_type,
+                    resource_id,
+                    principal_type,
+                    principal_id,
+                    permission,
+                    now,
+                )
                 return result is not None
-            except sqlite3.OperationalError as e:
-                # Fallback: st_acl table doesn't exist (Migration 0004 not applied)
-                if "no such table" in str(e):
+            except Exception as e:
+                # Fallback: st_acl table doesn't exist (migrations not applied)
+                if "does not exist" in str(e):
                     # Default permissive policy when ACL table unavailable
                     return True
                 raise ACLEnforcerError(f"ACL check failed: {e}") from e
 
-    def grant_permission(
+        if connection is not None:
+            return await _run_with_conn(connection)
+        else:
+            async with connection_scope() as conn:
+                return await _run_with_conn(conn)
+
+    async def grant_permission(
         self,
         acl_id: str,
         resource_type: str,
@@ -146,7 +155,7 @@ class ACLEnforcer:
         *,
         privacy_band: Optional[str] = None,
         expires_at: Optional[str] = None,
-        connection: Optional[sqlite3.Connection] = None,
+        connection: Optional["asyncpg.Connection"] = None,
     ) -> None:
         """
         Grant permission by inserting into st_acl.
@@ -171,48 +180,49 @@ class ACLEnforcer:
             Privacy classification (GREEN, AMBER, RED)
         expires_at : str, optional
             ISO8601 timestamp when permission expires
-        connection : sqlite3.Connection, optional
+        connection : asyncpg.Connection, optional
             Database connection (uses connection pool if not provided)
         """
         granted_at = datetime.now(timezone.utc).isoformat()
 
-        resolve = connection if connection else connection_scope()
-        with resolve as conn:
+        async def _run_with_conn(conn: "asyncpg.Connection") -> None:
             try:
-                conn.execute(
+                await conn.execute(
                     """
                     INSERT INTO st_acl (
                         acl_id, resource_type, resource_id,
                         principal_type, principal_id, permission,
                         privacy_band, granted_at, granted_by,
                         expires_at, revoked_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL)
                     """,
-                    (
-                        acl_id,
-                        resource_type,
-                        resource_id,
-                        principal_type,
-                        principal_id,
-                        permission,
-                        privacy_band,
-                        granted_at,
-                        granted_by,
-                        expires_at,
-                    ),
+                    acl_id,
+                    resource_type,
+                    resource_id,
+                    principal_type,
+                    principal_id,
+                    permission,
+                    privacy_band,
+                    granted_at,
+                    granted_by,
+                    expires_at,
                 )
-                if connection is None:
-                    conn.commit()
-            except sqlite3.OperationalError as e:
-                if "no such table" in str(e):
-                    raise ACLEnforcerError("st_acl table not found - apply Migration 0004") from e
+            except Exception as e:
+                if "does not exist" in str(e):
+                    raise ACLEnforcerError("st_acl table not found - apply migrations") from e
                 raise ACLEnforcerError(f"Failed to grant permission: {e}") from e
 
-    def revoke_permission(
+        if connection is not None:
+            await _run_with_conn(connection)
+        else:
+            async with connection_scope() as conn:
+                await _run_with_conn(conn)
+
+    async def revoke_permission(
         self,
         acl_id: str,
         *,
-        connection: Optional[sqlite3.Connection] = None,
+        connection: Optional["asyncpg.Connection"] = None,
     ) -> None:
         """
         Revoke permission by setting revoked_at timestamp.
@@ -221,33 +231,37 @@ class ACLEnforcer:
         ----------
         acl_id : str
             ACL entry ID to revoke
-        connection : sqlite3.Connection, optional
+        connection : asyncpg.Connection, optional
             Database connection (uses connection pool if not provided)
         """
         revoked_at = datetime.now(timezone.utc).isoformat()
 
-        resolve = connection if connection else connection_scope()
-        with resolve as conn:
+        async def _run_with_conn(conn: "asyncpg.Connection") -> None:
             try:
-                conn.execute(
-                    "UPDATE st_acl SET revoked_at = ? WHERE acl_id = ?",
-                    (revoked_at, acl_id),
+                await conn.execute(
+                    "UPDATE st_acl SET revoked_at = $1 WHERE acl_id = $2",
+                    revoked_at,
+                    acl_id,
                 )
-                if connection is None:
-                    conn.commit()
-            except sqlite3.OperationalError as e:
-                if "no such table" in str(e):
-                    raise ACLEnforcerError("st_acl table not found - apply Migration 0004") from e
+            except Exception as e:
+                if "does not exist" in str(e):
+                    raise ACLEnforcerError("st_acl table not found - apply migrations") from e
                 raise ACLEnforcerError(f"Failed to revoke permission: {e}") from e
 
-    def list_permissions(
+        if connection is not None:
+            await _run_with_conn(connection)
+        else:
+            async with connection_scope() as conn:
+                await _run_with_conn(conn)
+
+    async def list_permissions(
         self,
         *,
         resource_type: Optional[str] = None,
         resource_id: Optional[str] = None,
         principal_id: Optional[str] = None,
         include_revoked: bool = False,
-        connection: Optional[sqlite3.Connection] = None,
+        connection: Optional["asyncpg.Connection"] = None,
     ) -> List[ACLEntry]:
         """
         List ACL entries matching filters.
@@ -262,7 +276,7 @@ class ACLEnforcer:
             Filter by principal ID
         include_revoked : bool
             Include revoked permissions (default: False)
-        connection : sqlite3.Connection, optional
+        connection : asyncpg.Connection, optional
             Database connection (uses connection pool if not provided)
 
         Returns
@@ -271,24 +285,27 @@ class ACLEnforcer:
             List of matching ACL entries
         """
         query = "SELECT * FROM st_acl WHERE 1=1"
-        params = []
+        params: list = []
+        param_idx = 1
 
         if resource_type:
-            query += " AND resource_type = ?"
+            query += f" AND resource_type = ${param_idx}"
             params.append(resource_type)
+            param_idx += 1
         if resource_id:
-            query += " AND resource_id = ?"
+            query += f" AND resource_id = ${param_idx}"
             params.append(resource_id)
+            param_idx += 1
         if principal_id:
-            query += " AND principal_id = ?"
+            query += f" AND principal_id = ${param_idx}"
             params.append(principal_id)
+            param_idx += 1
         if not include_revoked:
             query += " AND revoked_at IS NULL"
 
-        resolve = connection if connection else connection_scope()
-        with resolve as conn:
+        async def _run_with_conn(conn: "asyncpg.Connection") -> List[ACLEntry]:
             try:
-                rows = conn.execute(query, params).fetchall()
+                rows = await conn.fetch(query, *params)
                 return [
                     ACLEntry(
                         acl_id=row["acl_id"],
@@ -305,7 +322,13 @@ class ACLEnforcer:
                     )
                     for row in rows
                 ]
-            except sqlite3.OperationalError as e:
-                if "no such table" in str(e):
+            except Exception as e:
+                if "does not exist" in str(e):
                     return []  # No ACL table = no entries
                 raise ACLEnforcerError(f"Failed to list permissions: {e}") from e
+
+        if connection is not None:
+            return await _run_with_conn(connection)
+        else:
+            async with connection_scope() as conn:
+                return await _run_with_conn(conn)

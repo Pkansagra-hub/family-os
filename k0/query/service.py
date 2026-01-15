@@ -101,7 +101,7 @@ class QueryAggregator:
             max_limit=max_limit,
         )
 
-    def execute(
+    async def execute(
         self,
         selectors: Sequence[SelectorLike],
         *,
@@ -162,7 +162,7 @@ class QueryAggregator:
                 elapsed_ms=total_elapsed_ms,
             )
 
-            execution = driver.execute(selector, context)
+            execution = await driver.execute(selector, context)
             bundle_metadata = dict(execution.metadata)
             bundle_metadata.setdefault("driver", execution.driver)
 
@@ -193,7 +193,9 @@ class QueryAggregator:
             total_elapsed_ms += execution.latency_ms
             processed_selectors += 1
 
-            exhausted_time_budget = execution.exhausted_time_budget or total_elapsed_ms >= time_budget_ms
+            exhausted_time_budget = (
+                execution.exhausted_time_budget or total_elapsed_ms >= time_budget_ms
+            )
 
             if exhausted_time_budget:
                 break
@@ -221,4 +223,3 @@ class QueryAggregator:
             return 0
 
         return max(1, min(limit, remaining_top_k))
-

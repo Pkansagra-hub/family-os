@@ -74,18 +74,25 @@ class ModuleRegistry:
     3. Provide lookup by module_id:version
     4. Lazy load module implementations
     5. Track module metadata for observability
+    6. Index fabric_capabilities for capability-based lookup
 
     Usage:
         >>> registry = ModuleRegistry()
         >>> await registry.load_contracts("k0/contracts/modules")
         >>> module = registry.get("hippocampus.pattern_separate:v1")
         >>> result = await module(envelope, syscalls, logger, config)
+
+        # Capability-based lookup (Issue 2.2.1)
+        >>> modules = registry.resolve_capability("pattern_separate")
+        >>> for module_id in modules:
+        ...     handler = registry.get(module_id)
     """
 
     def __init__(self) -> None:
         """Initialize empty registry."""
         self._contracts: Dict[ModuleID, ModuleContract] = {}
         self._implementations: Dict[ModuleID, ModuleCallable] = {}
+        self._capability_index: Dict[str, list[str]] = {}  # capability → [module_ids]
         self._loaded = False
 
     async def load_contracts(self, contracts_dir: str | Path) -> None:
@@ -151,6 +158,19 @@ class ModuleRegistry:
             )
 
         self._contracts[full_id] = contract
+
+        # Issue 2.2.1: Auto-register fabric_capabilities
+        if contract.fabric_capabilities:
+            for capability in contract.fabric_capabilities:
+                self.register_capability(capability, full_id)
+            logger.debug(
+                f"Registered {len(contract.fabric_capabilities)} capabilities for {full_id}",
+                extra={
+                    "module_id": full_id,
+                    "capabilities": contract.fabric_capabilities,
+                },
+            )
+
         logger.debug(
             f"Loaded contract: {full_id}",
             extra={
@@ -202,14 +222,36 @@ class ModuleRegistry:
         except Exception as e:
             raise ModuleLoadError(f"Failed to load implementation for {module_id}: {e}") from e
 
+    # Subdirectory search paths for place-agnostic module resolution
+    # Order matters: more specific paths first, then common locations
+    _SUBDIRECTORY_SEARCH_PATHS: list[str] = [
+        "",  # Direct path: k0.modules.<domain>.<action>
+        "algorithms",  # k0.modules.<domain>.algorithms.<action>
+        "staging",  # k0.modules.<domain>.staging.<action>
+        "truth_writer",  # k0.modules.<domain>.truth_writer.<action>
+        "emission",  # k0.modules.<domain>.emission.<action>
+    ]
+
     def _load_implementation(self, module_id: ModuleID) -> ModuleCallable:
         """
-        Lazy load module implementation.
+        Lazy load module implementation with place-agnostic resolution.
+
+        Tries multiple paths to find the module, making it location-independent.
+        This allows modules to be organized in subdirectories (algorithms/, staging/, etc.)
+        without requiring exact path specification in contracts.
+
+        Search order:
+            1. k0.modules.<domain>.<action> (direct)
+            2. k0.modules.<domain>.algorithms.<action>
+            3. k0.modules.<domain>.staging.<action>
+            4. k0.modules.<domain>.truth_writer.<action>
+            5. k0.modules.<domain>.emission.<action>
 
         Convention:
-            module_id "hippocampus.pattern_separate:v1"
-            -> import k0.modules.hippocampus.pattern_separate
-            -> call pattern_separate.run()
+            module_id "consolidation.hebbian_learner:v1"
+            -> tries k0.modules.consolidation.hebbian_learner
+            -> tries k0.modules.consolidation.algorithms.hebbian_learner (found!)
+            -> call hebbian_learner.run()
 
         Args:
             module_id: Full module ID with version
@@ -218,36 +260,59 @@ class ModuleRegistry:
             Module run function
 
         Raises:
-            ImportError: If module cannot be imported
+            ImportError: If module cannot be imported from any search path
             AttributeError: If module doesn't have 'run' function
         """
         # Parse module_id
         base_id, version = module_id.split(":")
         domain, action = base_id.split(".", 1)
 
-        # Construct import path: k0.modules.<domain>.<action>
-        module_path = f"k0.modules.{domain}.{action}"
+        # Try each search path until we find the module
+        module = None
+        tried_paths: list[str] = []
+        successful_path: str = ""
 
-        logger.debug(
-            f"Loading module implementation: {module_id}",
-            extra={"module_id": module_id, "import_path": module_path},
-        )
+        for subdir in self._SUBDIRECTORY_SEARCH_PATHS:
+            if subdir:
+                module_path = f"k0.modules.{domain}.{subdir}.{action}"
+            else:
+                module_path = f"k0.modules.{domain}.{action}"
 
-        # Import module
-        try:
-            module = importlib.import_module(module_path)
-        except ImportError as e:
-            raise ImportError(f"Cannot import module {module_path} for {module_id}: {e}") from e
+            tried_paths.append(module_path)
+
+            try:
+                module = importlib.import_module(module_path)
+                successful_path = module_path
+                logger.debug(
+                    f"Found module at: {module_path}",
+                    extra={"module_id": module_id, "import_path": module_path},
+                )
+                break
+            except ImportError:
+                # Try next path
+                continue
+
+        if module is None:
+            raise ImportError(
+                f"Cannot import module for {module_id}. " f"Tried paths: {tried_paths}"
+            )
 
         # Get 'run' function
         if not hasattr(module, "run"):
-            raise AttributeError(f"Module {module_path} does not have 'run' function")
+            raise AttributeError(
+                f"Module {successful_path} does not have 'run' function. "
+                f"Available attributes: {[a for a in dir(module) if not a.startswith('_')]}"
+            )
 
         run_func = getattr(module, "run")
 
         logger.debug(
             f"Loaded module implementation: {module_id}",
-            extra={"module_id": module_id, "import_path": module_path},
+            extra={
+                "module_id": module_id,
+                "resolved_path": successful_path,
+                "tried_paths": tried_paths,
+            },
         )
 
         return run_func
@@ -284,6 +349,72 @@ class ModuleRegistry:
         """Check if contracts have been loaded."""
         return self._loaded
 
+    # =========================================================================
+    # Issue 2.2.1: Capability Index Methods
+    # =========================================================================
+
+    def register_capability(self, capability: str, module_id: str) -> None:
+        """
+        Register a module as provider for a capability.
+
+        Args:
+            capability: Capability name (e.g., "pattern_separate")
+            module_id: Full module ID (e.g., "hippocampus.pattern_separate:v1")
+        """
+        if capability not in self._capability_index:
+            self._capability_index[capability] = []
+        if module_id not in self._capability_index[capability]:
+            self._capability_index[capability].append(module_id)
+            logger.debug(
+                f"Registered capability: {capability} -> {module_id}",
+                extra={"capability": capability, "module_id": module_id},
+            )
+
+    def unregister_capability(self, capability: str, module_id: str) -> bool:
+        """
+        Unregister a module from a capability.
+
+        Args:
+            capability: Capability name
+            module_id: Module ID to remove
+
+        Returns:
+            True if module was found and removed
+        """
+        if capability not in self._capability_index:
+            return False
+        if module_id in self._capability_index[capability]:
+            self._capability_index[capability].remove(module_id)
+            logger.debug(
+                f"Unregistered capability: {capability} -> {module_id}",
+                extra={"capability": capability, "module_id": module_id},
+            )
+            return True
+        return False
+
+    def resolve_capability(self, capability: str) -> list[str]:
+        """
+        Return module IDs that provide a capability.
+
+        Args:
+            capability: Capability name to resolve
+
+        Returns:
+            List of module IDs (may be empty if no providers)
+        """
+        return list(self._capability_index.get(capability, []))
+
+    def list_capabilities(self) -> list[str]:
+        """Return list of all registered capabilities."""
+        return list(self._capability_index.keys())
+
+    def get_capability_stats(self) -> dict[str, int]:
+        """Return capability index statistics."""
+        return {
+            "total_capabilities": len(self._capability_index),
+            "total_mappings": sum(len(v) for v in self._capability_index.values()),
+        }
+
     def __len__(self) -> int:
         """Return number of registered modules."""
         return len(self._contracts)
@@ -293,3 +424,45 @@ class ModuleRegistry:
         if ":" not in module_id:
             module_id = f"{module_id}:v1"
         return module_id in self._contracts
+
+
+# =============================================================================
+# Global Module Registry Singleton (Issue 2.2.1)
+# =============================================================================
+
+_module_registry: ModuleRegistry | None = None
+
+
+def get_module_registry() -> ModuleRegistry:
+    """
+    Get the global module registry singleton.
+
+    The registry is lazily created on first access. Use set_module_registry()
+    to inject a pre-configured registry (e.g., during app boot).
+
+    Returns:
+        Global ModuleRegistry instance
+    """
+    global _module_registry
+    if _module_registry is None:
+        _module_registry = ModuleRegistry()
+    return _module_registry
+
+
+def set_module_registry(registry: ModuleRegistry) -> None:
+    """
+    Set the global module registry.
+
+    Use during app bootstrap to inject a fully initialized registry.
+
+    Args:
+        registry: ModuleRegistry instance to use globally
+    """
+    global _module_registry
+    _module_registry = registry
+
+
+def reset_module_registry() -> None:
+    """Reset the global registry (for testing)."""
+    global _module_registry
+    _module_registry = None

@@ -1,0 +1,73 @@
+# P03 Module Contract: Forward Simulator
+# Phase: R5 - Dream Phase (Optional)
+# Dossier: §D.3.1 stage_51_forward_sim, §4.5
+
+module_id: consolidation.forward_simulator
+version: v1
+
+input_event_types:
+  - p03.causality.inferred.v1
+
+output_event_types:
+  - p03.simulations.complete.v1
+
+latency_budget_ms: 500
+
+side_effects:
+  - write:st_prospective  # Store projections
+
+idempotent: true
+
+fabric_capabilities:
+  - simulate_futures
+
+failure_modes:
+  - code: MCTS_TIMEOUT
+    policy: return_best
+    description: Return best path found before timeout
+  - code: TPN_CONSTRUCTION_FAILED
+    policy: skip
+  - code: NO_CAUSAL_EDGES
+    policy: skip
+
+description: |
+  Forward Simulator Module (R5 Dream Phase)
+
+  Projects future states using TPN-MCTS:
+  - Temporal Probabilistic Network for state representation
+  - Monte Carlo Tree Search for exploration
+
+  Process:
+  1. Build TPN from causal edges and patterns
+  2. Define current state from recent events
+  3. Run MCTS to explore future trajectories
+  4. Score and rank projected outcomes
+
+  Configuration:
+  - enabled: true
+  - skip_on_backlog: true
+  - simulation_depth: 5 (time steps ahead)
+  - num_simulations: 100 (MCTS rollouts)
+  - exploration_weight: 1.41 (UCB1 parameter)
+
+  MCTS Parameters:
+  - Selection: UCB1 with exploration_weight
+  - Expansion: Sample from TPN transitions
+  - Simulation: Random rollout to depth
+  - Backpropagation: Update node values
+
+  Projection Record:
+  - current_state_hash: State at simulation start
+  - trajectory: Array of state transitions
+  - outcome_state: Final projected state
+  - probability: Path probability
+  - utility_score: Outcome desirability
+
+  Storage:
+  - Projections stored in st_prospective
+  - Type: PROJECTION
+  - Expires: 7 days (short-term planning)
+
+  Output:
+  - envelope.projections: Top N projected futures
+  - envelope.r5_stats.simulations_run: Total MCTS rollouts

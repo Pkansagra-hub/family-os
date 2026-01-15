@@ -114,21 +114,21 @@ class TestModelRegistry:
     def test_default_specs_loaded(self):
         """Test that default specs are loaded."""
         registry = ModelRegistry()
-        assert "spacy_nlp" in registry._specs
-        assert "vader_analyzer" in registry._specs
+        # UltraBERT is the only model (replaces spacy_nlp, vader_analyzer, etc.)
+        assert "ultrabert" in registry._specs
 
     def test_list_specs(self):
         """Test listing available model names."""
         registry = ModelRegistry()
         specs = registry.list_specs()
         assert isinstance(specs, list)
-        assert "spacy_nlp" in specs
-        assert "vader_analyzer" in specs
+        # UltraBERT is the only model (replaces spacy_nlp, vader_analyzer, etc.)
+        assert "ultrabert" in specs
 
     def test_is_loaded_false(self):
         """Test is_loaded returns False for unloaded model."""
         registry = ModelRegistry()
-        assert registry.is_loaded("spacy_nlp") is False
+        assert registry.is_loaded("ultrabert") is False
 
     def test_list_loaded_empty(self):
         """Test list_loaded returns empty for fresh registry."""
@@ -138,7 +138,7 @@ class TestModelRegistry:
     def test_get_sync_returns_none_unloaded(self):
         """Test get_sync returns None for unloaded model."""
         registry = ModelRegistry()
-        assert registry.get_sync("spacy_nlp") is None
+        assert registry.get_sync("ultrabert") is None
 
     def test_get_stats(self):
         """Test get_stats returns correct structure."""
@@ -168,7 +168,7 @@ class TestModelRegistry:
     async def test_unload_not_loaded(self):
         """Test unload returns False for not-loaded model."""
         registry = ModelRegistry()
-        result = await registry.unload("spacy_nlp")
+        result = await registry.unload("ultrabert")
         assert result is False
 
     @pytest.mark.asyncio
@@ -193,13 +193,13 @@ class TestModelRegistryLoading:
 
         with patch.object(registry, "_get_loader", return_value=mock_loader):
             # Model should not be loaded yet
-            assert registry.is_loaded("spacy_nlp") is False
+            assert registry.is_loaded("ultrabert") is False
 
             # Get the model (triggers load)
-            model = await registry.get("spacy_nlp")
+            model = await registry.get("ultrabert")
 
             # Now it should be loaded
-            assert registry.is_loaded("spacy_nlp") is True
+            assert registry.is_loaded("ultrabert") is True
             assert model == mock_model
 
     @pytest.mark.asyncio
@@ -210,8 +210,8 @@ class TestModelRegistryLoading:
         mock_loader = MagicMock(return_value=mock_model)
 
         with patch.object(registry, "_get_loader", return_value=mock_loader):
-            model1 = await registry.get("spacy_nlp")
-            model2 = await registry.get("spacy_nlp")
+            model1 = await registry.get("ultrabert")
+            model2 = await registry.get("ultrabert")
 
             # Same model instance should be returned
             assert model1 is model2
@@ -226,11 +226,19 @@ class TestModelRegistryLoading:
         mock_loader = MagicMock(return_value=mock_model)
 
         with patch.object(registry, "_get_loader", return_value=mock_loader):
-            initial_memory = registry._cpu_memory_used_mb
-            await registry.get("spacy_nlp")
+            # Track both CPU and GPU memory before load
+            initial_cpu_memory = registry._cpu_memory_used_mb
+            initial_gpu_memory = registry._gpu_memory_used_mb
 
-            # Memory should have increased
-            assert registry._cpu_memory_used_mb > initial_memory
+            await registry.get("ultrabert")
+
+            # Memory should have increased on either CPU or GPU
+            cpu_increased = registry._cpu_memory_used_mb > initial_cpu_memory
+            gpu_increased = registry._gpu_memory_used_mb > initial_gpu_memory
+            assert cpu_increased or gpu_increased, (
+                f"Memory should increase: CPU {initial_cpu_memory} -> {registry._cpu_memory_used_mb}, "
+                f"GPU {initial_gpu_memory} -> {registry._gpu_memory_used_mb}"
+            )
 
     @pytest.mark.asyncio
     async def test_unload_frees_memory(self):
@@ -240,14 +248,20 @@ class TestModelRegistryLoading:
         mock_loader = MagicMock(return_value=mock_model)
 
         with patch.object(registry, "_get_loader", return_value=mock_loader):
-            await registry.get("spacy_nlp")
-            memory_after_load = registry._cpu_memory_used_mb
+            await registry.get("ultrabert")
+            # Track both memory types after load
+            cpu_after_load = registry._cpu_memory_used_mb
+            gpu_after_load = registry._gpu_memory_used_mb
+            total_after_load = cpu_after_load + gpu_after_load
 
-            await registry.unload("spacy_nlp")
+            await registry.unload("ultrabert")
 
-            # Memory should have decreased
-            assert registry._cpu_memory_used_mb < memory_after_load
-            assert registry.is_loaded("spacy_nlp") is False
+            # Total memory should have decreased
+            total_after_unload = registry._cpu_memory_used_mb + registry._gpu_memory_used_mb
+            assert (
+                total_after_unload < total_after_load
+            ), f"Memory should decrease after unload: {total_after_load} -> {total_after_unload}"
+            assert registry.is_loaded("ultrabert") is False
 
 
 class TestModelRegistryCPUFallback:
@@ -292,7 +306,7 @@ class TestModelRegistryThreadSafety:
 
         with patch.object(registry, "_get_loader", return_value=mock_loader):
             # Run multiple concurrent gets
-            tasks = [registry.get("spacy_nlp") for _ in range(10)]
+            tasks = [registry.get("ultrabert") for _ in range(10)]
             results = await asyncio.gather(*tasks)
 
             # All should get the same model

@@ -1,0 +1,44 @@
+{
+  "schema_id": "SCHEMA_MORNING_ROUTINE",
+  "name": "morning_routine",
+  "description": "Typical weekday morning routine for family with school-age children.",
+  "typical_sequence": [
+    "wake_up",
+    "bathroom_routine",
+    "get_dressed",
+    "breakfast",
+    "pack_bags",
+    "school_prep",
+    "commute_to_school"
+  ],
+  "expected_duration_minutes": {
+    "wake_up": 5,
+    "bathroom_routine": 15,
+    "get_dressed": 10,
+    "breakfast": 20,
+    "pack_bags": 5,
+    "school_prep": 10,
+    "commute_to_school": 15
+  },
+  "locations": ["bedroom", "bathroom", "kitchen", "hallway", "car", "school"],
+  "participants": ["self", "kids", "spouse"],
+  "typical_time_window": {
+    "start_hour": 6,
+    "end_hour": 9
+  },
+  "required_fields": ["activity_type", "location", "participants"],
+  "optional_fields": ["mood", "weather", "delays"],
+  "common_disruptions": [
+    "child_slow_to_wake",
+    "missing_item",
+    "breakfast_spill",
+    "traffic_delay",
+    "forgot_homework"
+  ],
+  "confidence_boost": 0.25,
+  "provenance_hints": {
+    "calendar": ["school_start_time", "work_start_time"],
+    "routine": ["wake_up", "breakfast"],
+    "location_history": ["home", "school", "work"]
+  }
+}

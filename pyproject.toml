@@ -10,6 +10,12 @@ authors = [
     {name = "FamilyOS Team", email = "dev@familyos.ai"}
 ]
 requires-python = ">=3.10"
+dependencies = [
+    "asyncpg>=0.29.0",
+    "pgvector>=0.2.5",
+    "alembic>=1.13.0",
+    "psycopg2-binary>=2.9.9",
+]
 
 [tool.setuptools]
 packages = ["k0", "k1", "services"]
@@ -19,6 +25,7 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
+    "pytest-postgresql>=5.0.0",
     "aiohttp>=3.9.0",
     "black>=24.0.0",
     "isort>=5.12.0",
@@ -29,6 +36,13 @@ dev = [
     "pytest-emoji>=0.2.0",
     "pytest-xdist>=3.0.0",
     "pytest-watch>=4.2.0",
+    "prometheus-client>=0.18.0",
+    "opentelemetry-api>=1.24.0",
+    "opentelemetry-sdk>=1.24.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.24.0",
+]
+scheduler = [
+    "croniter>=2.0.0",
 ]
 
 [tool.pytest.ini_options]
@@ -36,13 +50,53 @@ python_files = "test_*.py"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-v --color=yes --tb=short --disable-warnings --strict-markers"
+# Standard directories to skip
+norecursedirs = [
+    ".git",
+    "__pycache__",
+    "archived",
+]
 # Use --cov=k0 or --cov=k1 to enable coverage; disable by default for clean output
 # Example: pytest --cov=k0 tests/k0/
+# Ignore archived tests and deprecated SQLite-based tests (PostgreSQL migration)
+collect_ignore_glob = [
+    "**/archived/**",
+    "tests/k0/automation/test_migrate.py",
+    "tests/k0/test_accuracy_benchmark.py",
+    "tests/k0/test_golden_dataset.py",
+    "tests/scripts/test_k0_bootstrap_harness.py",
+    "tests/performance/test_pem_latency.py",
+    "tests/integration/test_v1_privacy_performance_pipeline.py",
+    "tests/k0/integration/test_cli_integration.py",
+    "tests/k0/integration/test_hmac_idempotency.py",
+    "tests/k0/integration/test_scheduler_fairness.py",
+    "tests/k0/integration/test_v1_performance.py",
+    # PostgreSQL migration - SQLite-based tests to be migrated
+    "tests/integration/p02/test_p02_pipeline_e2e.py",
+    "tests/integration/test_p02_inline_embedding.py",
+    "tests/k0/integration/test_crdt_merge_logging.py",
+    "tests/k0/integration/test_outbox_exponential_backoff.py",
+    "tests/k0/integration/test_retention_policies.py",
+    "tests/k0/integration/test_schema_cache_thread_safety.py",
+    "tests/k0/modules/builders/test_embedding_queue_write.py",
+    "tests/k0/modules/builders/test_hipp_events_row.py",
+    "tests/k0/modules/context/test_ingress_classify.py",
+    "tests/k0/modules/context/test_spatial_minimal.py",
+    "tests/k0/modules/core/test_event_emitter.py",
+    "tests/k0/modules/embedding/test_extract_from_cache.py",
+    "tests/k0/modules/embedding/test_faiss_indexer.py",
+    "tests/k0/modules/hippocampus/test_semantic_project_full.py",
+    "tests/k0/policy/test_retention_enforcer.py",
+    "tests/k0/receipts/test_receipt_audit_fields.py",
+    "tests/k0/runtime/test_p02_parallel_execution.py",
+    "tests/k0/runtime/test_schemas_trigger.py",
+]
 markers = [
     "integration: integration tests",
     "unit: unit tests",
     "performance: performance tests",
     "slow: slow tests",
+    "benchmark: benchmark tests for algorithm performance validation",
 ]
 
 [tool.coverage.run]

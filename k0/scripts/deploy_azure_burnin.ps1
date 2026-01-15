@@ -125,7 +125,7 @@ if (-not $SkipBuild) {
     # Build from repo root
     Push-Location $PSScriptRoot\..
     try {
-        docker build -t $imageName -f Dockerfile .
+        docker build -t $imageName -f k0/deploy/Dockerfile .
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  [ERROR] Docker build failed" -ForegroundColor Red
             exit 1

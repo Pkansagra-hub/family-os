@@ -31,13 +31,35 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from k0.bus.core import BusDispatcher
+    from k0.runtime.schemas import PipelineSpec
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PipelineLoadResult:
+    """
+    Result from pipeline loading (Issue 3.2.2).
+
+    Contains loaded specs, runner instances, and any errors encountered.
+
+    Attributes:
+        loaded_count: Number of pipelines successfully loaded
+        specs: List of loaded PipelineSpec objects
+        runners: Dictionary mapping pipeline_id to runner instance
+        errors: List of error messages from failed loads
+    """
+
+    loaded_count: int = 0
+    specs: list["PipelineSpec"] = field(default_factory=list)
+    runners: dict[str, Any] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
 
 
 class ContractValidationError(Exception):
@@ -379,3 +401,90 @@ def _validate_contract(pipeline_class: type, expected_id: str) -> None:
             "methods_checked": len(required_methods),
         },
     )
+
+
+async def load_yaml_pipeline_specs(
+    contracts_dir: Path | None = None,
+) -> PipelineLoadResult:
+    """
+    Load pipeline specifications from YAML files (Issue 3.2.2).
+
+    Scans the contracts directory for p*.yaml files and loads them
+    as PipelineSpec objects. This is a lightweight loader that only
+    parses specs without creating runners.
+
+    Args:
+        contracts_dir: Directory containing pipeline YAML specs.
+                       Defaults to k0/contracts/pipelines/
+
+    Returns:
+        PipelineLoadResult with loaded specs and any errors
+
+    Example:
+        result = await load_yaml_pipeline_specs()
+        for spec in result.specs:
+            if spec.triggers:
+                scheduler.register_pipeline(spec)
+    """
+    from k0.runtime.schemas import PipelineSpec
+
+    result = PipelineLoadResult()
+
+    if contracts_dir is None:
+        contracts_dir = Path(__file__).parent.parent / "contracts" / "pipelines"
+
+    if not contracts_dir.exists():
+        result.errors.append(f"Contracts directory not found: {contracts_dir}")
+        logger.warning(
+            f"Pipeline contracts directory not found: {contracts_dir}",
+            extra={"contracts_dir": str(contracts_dir)},
+        )
+        return result
+
+    # Find all p*.yaml and p*.yml files
+    spec_files = sorted(list(contracts_dir.glob("p*.yaml")) + list(contracts_dir.glob("p*.yml")))
+
+    logger.info(
+        f"Found {len(spec_files)} pipeline specification files",
+        extra={
+            "contracts_dir": str(contracts_dir),
+            "spec_count": len(spec_files),
+            "spec_files": [f.name for f in spec_files],
+        },
+    )
+
+    for spec_path in spec_files:
+        try:
+            spec = PipelineSpec.load(spec_path)
+            result.specs.append(spec)
+            result.loaded_count += 1
+
+            logger.debug(
+                f"Loaded pipeline spec: {spec.pipeline_id}",
+                extra={
+                    "pipeline_id": spec.pipeline_id,
+                    "version": spec.version,
+                    "triggers": len(spec.triggers) if spec.triggers else 0,
+                    "spec_path": str(spec_path),
+                },
+            )
+
+        except Exception as e:
+            error_msg = f"Failed to load {spec_path.name}: {e}"
+            result.errors.append(error_msg)
+            logger.error(
+                error_msg,
+                extra={"spec_path": str(spec_path), "error": str(e)},
+                exc_info=True,
+            )
+
+    logger.info(
+        f"Loaded {result.loaded_count} pipeline specs ({len(result.errors)} errors)",
+        extra={
+            "loaded_count": result.loaded_count,
+            "error_count": len(result.errors),
+            "pipeline_ids": [s.pipeline_id for s in result.specs],
+        },
+    )
+
+    return result

@@ -6,17 +6,30 @@ Tests M2 R2.3: Kernel Integration
 - Graceful shutdown with on_shutdown() calls
 - Clean shutdown timestamp recording
 - Empty pipeline directory handling
+
+NOTE: These tests require a running PostgreSQL instance.
+Set TEST_POSTGRES_DSN environment variable to enable.
 """
 
+import os
 import time
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+# Skip all tests in this module if PostgreSQL is not available
+pytestmark = pytest.mark.skipif(
+    os.environ.get("TEST_POSTGRES_DSN") is None,
+    reason="PostgreSQL not available - set TEST_POSTGRES_DSN environment variable to run these tests",
+)
+
 
 class TestKernelPipelineIntegration:
-    """Integration tests for kernel + pipeline loader."""
+    """Integration tests for kernel + pipeline loader.
+
+    These tests require a running PostgreSQL instance.
+    """
 
     @pytest.mark.asyncio
     async def test_kernel_boots_with_empty_pipelines_directory(self, tmp_path: Path):

@@ -7,9 +7,10 @@ Use case: Telemetry, monitoring, and future UI event notifications.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from prometheus_client import Counter, Histogram
 
@@ -31,6 +32,31 @@ outbox_publish_duration = Histogram(
     ["op_kind"],
 )
 
+# Global SSE server reference (set by app state during lifespan)
+_sse_server: SSEServer | None = None
+
+
+def set_sse_server(server: SSEServer | None) -> None:
+    """
+    Set the global SSE server reference.
+
+    Called by app lifespan to wire the SSE server into the driver.
+
+    Args:
+        server: SSEServer instance or None to clear
+    """
+    global _sse_server
+    _sse_server = server
+    logger.info(
+        "SSE server reference updated",
+        extra={"has_server": server is not None},
+    )
+
+
+def get_sse_server() -> SSEServer | None:
+    """Get the current SSE server reference."""
+    return _sse_server
+
 
 class SSEOutboxDriver:
     """
@@ -48,12 +74,17 @@ class SSEOutboxDriver:
 
         Args:
             sse_server: Optional SSE server instance for testing.
-                       In production, will use global SSE server from app state.
+                       In production, uses global SSE server from app state.
         """
-        self.sse_server = sse_server
+        self._sse_server = sse_server
         logger.info("SSEOutboxDriver initialized")
 
-    def apply(self, entry) -> None:
+    @property
+    def sse_server(self) -> SSEServer | None:
+        """Get SSE server - prefer instance, fallback to global."""
+        return self._sse_server or _sse_server
+
+    def apply(self, entry: Any) -> None:
         """
         Publish outbox event to SSE subscribers.
 
@@ -62,7 +93,6 @@ class SSEOutboxDriver:
 
         Raises:
             ValueError: If payload is not valid JSON
-            RuntimeError: If SSE server not available
         """
         op_kind = entry.op_kind
         with outbox_publish_duration.labels(op_kind=op_kind).time():
@@ -78,31 +108,45 @@ class SSEOutboxDriver:
                 # Map op_kind to SSE topic
                 topic = self._map_op_kind_to_topic(op_kind)
 
-                # Build SSE event
-                sse_event = {
-                    "topic": topic,
-                    "tenant_id": entry.tenant_id,
-                    "space_id": entry.space_id,
-                    "op_kind": op_kind,
-                    "payload": event_data,
-                }
+                # Publish to SSE if server available
+                server = self.sse_server
+                if server is not None:
+                    # Import here to avoid circular import at module load
+                    from k0.sse.server import BroadcastEvent
 
-                # Publish to SSE (or log if no server available)
-                if self.sse_server is not None:
-                    # TODO: Call sse_server.broadcast(topic, sse_event) when SSE server exposes broadcast API
+                    broadcast_event = BroadcastEvent(
+                        topic=topic,
+                        tenant_id=entry.tenant_id,
+                        space_id=entry.space_id,
+                        op_kind=op_kind,
+                        payload=event_data,
+                    )
+
+                    # Run broadcast in event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # Schedule broadcast as a task
+                        loop.create_task(self._broadcast_async(server, broadcast_event))
+                    except RuntimeError:
+                        # No running loop - run synchronously (for tests)
+                        asyncio.run(server.broadcast(broadcast_event))
+
                     logger.info(
                         f"SSE event published: {topic}",
-                        extra={"topic": topic, "op_kind": op_kind, "tenant_id": entry.tenant_id},
+                        extra={
+                            "topic": topic,
+                            "op_kind": op_kind,
+                            "tenant_id": entry.tenant_id,
+                        },
                     )
                 else:
-                    # Fallback: Log event for observability until SSE server integrated
-                    logger.info(
+                    # No server available - log at DEBUG level
+                    logger.debug(
                         f"SSE event (no server): {topic}",
                         extra={
                             "topic": topic,
                             "op_kind": op_kind,
                             "tenant_id": entry.tenant_id,
-                            "event": sse_event,
                         },
                     )
 
@@ -112,6 +156,23 @@ class SSEOutboxDriver:
                 logger.exception(f"Failed to publish outbox event to SSE: {e}")
                 outbox_events_published.labels(op_kind=op_kind, status="error").inc()
                 raise
+
+    async def _broadcast_async(
+        self,
+        server: SSEServer,
+        event: Any,
+    ) -> None:
+        """Async wrapper for broadcast with error handling."""
+        try:
+            await server.broadcast(event)
+        except Exception as e:
+            logger.exception(
+                f"Failed to broadcast SSE event: {e}",
+                extra={
+                    "topic": event.topic,
+                    "op_kind": event.op_kind,
+                },
+            )
 
     def _map_op_kind_to_topic(self, op_kind: str) -> str:
         """

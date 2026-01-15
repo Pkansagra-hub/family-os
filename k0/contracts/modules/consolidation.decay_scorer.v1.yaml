@@ -1,0 +1,59 @@
+# P03 Module Contract: Decay Scorer
+# Phase: R3 - Memory Decay
+# Dossier: §D.3.1 stage_31_decay_scorer
+
+module_id: consolidation.decay_scorer
+version: v1
+
+input_event_types:
+  - p03.episodes.built.v1
+
+output_event_types:
+  - p03.decay.scored.v1
+
+latency_budget_ms: 50
+
+side_effects:
+  - read:st_hipp_events  # Access timestamps
+
+idempotent: true
+
+fabric_capabilities:
+  - score_decay
+
+failure_modes:
+  - code: MISSING_TIMESTAMP
+    policy: use_created_at
+    description: Fall back to created_at if last_accessed missing
+  - code: INVALID_DECAY_PARAMS
+    policy: use_defaults
+
+description: |
+  Decay Scorer Module (R3 Phase)
+
+  Computes memory decay using exponential forgetting curve:
+    decay_score = base_score * exp(-lambda * days_since_access)
+
+  Ebbinghaus Forgetting Curve:
+  - lambda: 0.05 (5% daily decay rate)
+  - Half-life: ~14 days without rehearsal
+
+  Rehearsal Boost:
+  - Each access resets decay clock
+  - rehearsal_boost: 2.0x multiplier for recently accessed
+
+  Configuration:
+  - lambda: 0.05
+  - min_score: 0.01 (floor to prevent zero)
+  - rehearsal_boost: 2.0
+  - max_age_days: 365 (hard cutoff)
+
+  Access Sources:
+  - P04 query log (explicit retrieval)
+  - K1 contextual access
+  - User direct access via command port
+
+  Output:
+  - envelope.events[*].decay_score: REAL (0-1)
+  - envelope.events[*].days_since_access: INT
+  - envelope.events[*].access_count: INT

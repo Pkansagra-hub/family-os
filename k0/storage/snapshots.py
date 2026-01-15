@@ -1,20 +1,24 @@
-"""Snapshot scheduler for capturing durable WAL checkpoints."""
+"""Snapshot scheduler for capturing durable WAL checkpoints - Async PostgreSQL."""
 
 from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from k0.db.connection import connection_scope
 from k0.obs.events import ObservabilityEmitter
 from k0.obs.metrics import MetricsExporter
 from k0.security.crypto import canonical_json, hash_payload
 
 from .wal import WalEntry, WriteAheadLog
+
+if TYPE_CHECKING:
+    import asyncpg
 
 LOGGER = logging.getLogger(__name__)
 
@@ -46,33 +50,34 @@ class SnapshotError(RuntimeError):
 
 
 class SnapshotScheduler:
-    """Create point-in-time snapshots with WAL watermark markers."""
+    """Create point-in-time snapshots with WAL watermark markers - PostgreSQL."""
 
     def __init__(
         self,
         *,
-        database_path: Path | str,
+        database_path: Path | str | None = None,
         metrics: MetricsExporter | None = None,
         observability: ObservabilityEmitter | None = None,
         write_ahead_log: WriteAheadLog | None = None,
     ) -> None:
-        self._database_path = Path(database_path)
+        self._database_path = Path(database_path) if database_path else None
         self._metrics = metrics
         self._observability = observability
         self._wal = write_ahead_log or WriteAheadLog()
 
-    def create_snapshot(
+    async def create_snapshot(
         self,
         *,
         output_dir: Path,
         snapshot_id: str | None = None,
         dry_run: bool = False,
+        connection: asyncpg.Connection | None = None,
     ) -> SnapshotManifest:
-        """Capture a snapshot and emit WAL watermark markers."""
+        """Capture a snapshot and emit WAL watermark markers.
 
-        if not self._database_path.exists():
-            raise SnapshotError(f"Database not found at {self._database_path.as_posix()}")
-
+        For PostgreSQL, snapshots are created using pg_dump or logical backups
+        rather than SQLite file copies.
+        """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -81,64 +86,57 @@ class SnapshotScheduler:
 
         begin_pos: int | None = None
         commit_pos: int | None = None
-        artifact_path: Path | None = None
         manifest_path: Path | None = None
-        artifact_size: int | None = None
 
-        connection = sqlite3.connect(str(self._database_path))
         try:
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA busy_timeout=5000;")
-            watermark = self._resolve_watermark(connection)
+            async with connection_scope() as conn:
+                watermark = await self._resolve_watermark(conn)
 
-            self._emit_observability(
-                {
-                    "event": "snapshot_preflight",
-                    "snapshot_id": resolved_snapshot_id,
-                    "watermark": watermark,
-                    "dry_run": dry_run,
-                }
-            )
-
-            self._set_snapshot_gauge(1.0, snapshot_id=resolved_snapshot_id)
-
-            if not dry_run:
-                begin_pos = self._append_marker(
-                    connection,
-                    marker_type="BEGIN",
-                    snapshot_id=resolved_snapshot_id,
-                    watermark=watermark,
-                )
-                connection.commit()
-
-                artifact_path = output_dir / f"{resolved_snapshot_id}.sqlite3"
-                self._write_backup(connection, artifact_path)
-                artifact_size = artifact_path.stat().st_size
-                manifest_path = output_dir / f"{resolved_snapshot_id}.json"
-                self._write_manifest(
-                    manifest_path,
-                    snapshot_id=resolved_snapshot_id,
-                    created_at=created_at,
-                    watermark=watermark,
-                    begin_position=begin_pos,
-                    database_path=self._database_path,
-                    artifact_path=artifact_path,
-                    size_bytes=artifact_size,
+                self._emit_observability(
+                    {
+                        "event": "snapshot_preflight",
+                        "snapshot_id": resolved_snapshot_id,
+                        "watermark": watermark,
+                        "dry_run": dry_run,
+                    }
                 )
 
-                commit_pos = self._append_marker(
-                    connection,
-                    marker_type="COMMIT",
-                    snapshot_id=resolved_snapshot_id,
-                    watermark=watermark,
-                )
-                connection.commit()
-            else:
-                LOGGER.info(
-                    "Dry-run snapshot at watermark %s (id=%s)",
-                    watermark,
-                    resolved_snapshot_id,
-                )
+                self._set_snapshot_gauge(1.0, snapshot_id=resolved_snapshot_id)
+
+                if not dry_run:
+                    begin_pos = await self._append_marker(
+                        conn,
+                        marker_type="BEGIN",
+                        snapshot_id=resolved_snapshot_id,
+                        watermark=watermark,
+                    )
+
+                    # For PostgreSQL, we record the snapshot metadata
+                    # Actual backup is done via pg_dump externally
+                    manifest_path = output_dir / f"{resolved_snapshot_id}.json"
+                    self._write_manifest(
+                        manifest_path,
+                        snapshot_id=resolved_snapshot_id,
+                        created_at=created_at,
+                        watermark=watermark,
+                        begin_position=begin_pos,
+                        database_path=self._database_path,
+                        artifact_path=None,
+                        size_bytes=None,
+                    )
+
+                    commit_pos = await self._append_marker(
+                        conn,
+                        marker_type="COMMIT",
+                        snapshot_id=resolved_snapshot_id,
+                        watermark=watermark,
+                    )
+                else:
+                    LOGGER.info(
+                        "Dry-run snapshot at watermark %s (id=%s)",
+                        watermark,
+                        resolved_snapshot_id,
+                    )
 
             self._emit_observability(
                 {
@@ -147,7 +145,7 @@ class SnapshotScheduler:
                     "watermark": watermark,
                     "begin_position": begin_pos,
                     "commit_position": commit_pos,
-                    "artifact_path": str(artifact_path) if artifact_path else None,
+                    "artifact_path": None,
                     "dry_run": dry_run,
                 }
             )
@@ -157,7 +155,6 @@ class SnapshotScheduler:
                 outcome="success",
                 dry_run=str(dry_run).lower(),
             )
-            # Issue #044: Emit snapshot_watermark gauge
             self._set_watermark_gauge(float(watermark))
 
             return SnapshotManifest(
@@ -165,13 +162,13 @@ class SnapshotScheduler:
                 created_at=created_at,
                 watermark=watermark,
                 database_path=self._database_path,
-                artifact_path=artifact_path,
+                artifact_path=None,
                 manifest_path=manifest_path,
                 begin_position=begin_pos,
                 commit_position=commit_pos,
-                size_bytes=artifact_size,
+                size_bytes=None,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             LOGGER.exception("Snapshot creation failed: snapshot_id=%s", resolved_snapshot_id)
             self._emit_metric(
                 "snapshot_create_total",
@@ -183,16 +180,16 @@ class SnapshotScheduler:
             raise SnapshotError(str(exc)) from exc
         finally:
             self._set_snapshot_gauge(0.0, snapshot_id=resolved_snapshot_id)
-            connection.close()
 
-    def _append_marker(
+    async def _append_marker(
         self,
-        connection: sqlite3.Connection,
+        connection: asyncpg.Connection,
         *,
         marker_type: str,
         snapshot_id: str,
         watermark: int,
     ) -> int:
+        """Append a snapshot marker to the WAL."""
         timestamp = datetime.now(timezone.utc).isoformat()
         trace_id = str(uuid.uuid4())
         payload: dict[str, object] = {
@@ -228,42 +225,41 @@ class SnapshotScheduler:
             payload_sha256=payload_hash,
             idem_key=None,
         )
-        # Insert directly using synchronous connection to avoid async/sync mismatch
-        # This is a workaround for snapshot creation being synchronous while WAL.append is async
-        cursor = connection.execute(
-            (
-                "INSERT INTO st_wal (tenant_id, space_id, topic, envelope_json, body, "
-                "redacted_body_json, payload_sha256, schema_uri, schema_version, idem_key, device_id, commit_ts, "
-                "envelope_sha256, ingested_at, clock_skew_ms, policy_stamp_json, "
-                "location_geohash, location_precision_m) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            ),
-            (
-                entry.tenant_id,
-                entry.space_id,
-                entry.topic,
-                entry.envelope_json,
-                entry.body,
-                entry.redacted_body_json,
-                entry.payload_sha256,
-                entry.schema_uri,
-                entry.schema_version,
-                entry.idem_key,
-                entry.device_id,
-                entry.commit_ts,
-                entry.envelope_sha256,
-                entry.ingested_at,
-                entry.clock_skew_ms,
-                entry.policy_stamp_json,
-                entry.location_geohash,
-                entry.location_precision_m,
-            ),
+
+        position = await connection.fetchval(
+            """
+            INSERT INTO st_wal (
+                tenant_id, space_id, topic, envelope_json, body,
+                redacted_body_json, payload_sha256, schema_uri, schema_version,
+                idem_key, device_id, commit_ts, envelope_sha256, ingested_at,
+                clock_skew_ms, policy_stamp_json, location_geohash, location_precision_m
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+            RETURNING pos
+            """,
+            entry.tenant_id,
+            entry.space_id,
+            entry.topic,
+            entry.envelope_json,
+            entry.body,
+            entry.redacted_body_json,
+            entry.payload_sha256,
+            entry.schema_uri,
+            entry.schema_version,
+            entry.idem_key,
+            entry.device_id,
+            entry.commit_ts,
+            entry.envelope_sha256,
+            entry.ingested_at,
+            entry.clock_skew_ms,
+            entry.policy_stamp_json,
+            entry.location_geohash,
+            entry.location_precision_m,
         )
-        position = cursor.lastrowid
+
         if position is None:
             msg = "Failed to determine WAL position"
             raise RuntimeError(msg)
-        position = int(position)
+
         LOGGER.info(
             "Appended snapshot marker %s at WAL position %s (snapshot_id=%s, watermark=%s)",
             marker_type,
@@ -271,13 +267,7 @@ class SnapshotScheduler:
             snapshot_id,
             watermark,
         )
-        return position
-
-    def _write_backup(self, connection: sqlite3.Connection, artifact_path: Path) -> None:
-        LOGGER.info("Writing snapshot artifact to %s", artifact_path.as_posix())
-        with sqlite3.connect(str(artifact_path)) as destination:
-            connection.backup(destination)
-            destination.execute("VACUUM;")
+        return int(position)
 
     def _write_manifest(
         self,
@@ -287,7 +277,7 @@ class SnapshotScheduler:
         created_at: str,
         watermark: int,
         begin_position: int | None,
-        database_path: Path,
+        database_path: Path | None,
         artifact_path: Path | None,
         size_bytes: int | None,
     ) -> None:
@@ -296,17 +286,17 @@ class SnapshotScheduler:
             "created_at": created_at,
             "watermark": watermark,
             "begin_position": begin_position,
-            "database_path": database_path.as_posix(),
+            "database_path": database_path.as_posix() if database_path else None,
             "artifact": artifact_path.as_posix() if artifact_path else None,
             "size_bytes": size_bytes,
         }
         manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         LOGGER.info("Wrote snapshot manifest %s", manifest_path.as_posix())
 
-    def _resolve_watermark(self, connection: sqlite3.Connection) -> int:
-        cursor = connection.execute("SELECT COALESCE(MAX(pos), 0) AS watermark FROM st_wal")
-        row = cursor.fetchone()
-        return int(row["watermark"] if row else 0)
+    async def _resolve_watermark(self, connection: asyncpg.Connection) -> int:
+        """Get the current WAL watermark (max position)."""
+        watermark = await connection.fetchval("SELECT COALESCE(MAX(pos), 0) FROM st_wal")
+        return int(watermark) if watermark is not None else 0
 
     def _set_snapshot_gauge(self, value: float, *, snapshot_id: str) -> None:
         if self._metrics is None:
@@ -321,7 +311,7 @@ class SnapshotScheduler:
             LOGGER.exception("Failed to update snapshot gauge", extra={"snapshot_id": snapshot_id})
 
     def _set_watermark_gauge(self, value: float) -> None:
-        """Issue #044: Emit snapshot_watermark gauge metric."""
+        """Emit snapshot_watermark gauge metric."""
         if self._metrics is None:
             return
         try:

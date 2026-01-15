@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from http import HTTPStatus
@@ -20,7 +19,6 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 from prometheus_client import PlatformCollector, ProcessCollector
 from starlette.responses import Response
 
-from ..automation.migrate import MigrationError, apply_migrations
 from ..bus import (
     BusDispatcher,
     BusMessage,
@@ -29,6 +27,8 @@ from ..bus import (
     timestamp_middleware,
     tracing_middleware,
 )
+from ..config.postgres import PostgresSettings
+from ..db.pool import configure_pool, shutdown_pool
 from ..drivers import AliasMap
 from ..gate import MinimalGate
 from ..gate.schema_registry import SchemaRegistry
@@ -43,7 +43,7 @@ from ..obs import (
     update_log_context,
 )
 from ..outbox import DriverWorkerPool, RetryScheduler
-from ..ports import command, drivers, observe, query, sse
+from ..ports import admin, command, drivers, observe, query, sse
 from ..qos import QoSMetrics
 from ..receipts import ReceiptIssuer, ReceiptSigner
 from ..storage import (
@@ -57,7 +57,6 @@ from ..storage import (
 )
 from ..storage.replayer import Replayer, ReplayError
 from ..uow import UnitOfWork
-from ..uow.connection_pool import configure_pool, shutdown_pool
 from .admission import AdmissionRecord, consume_admission_records
 from .config import KernelSettings
 from .dependencies import build_request_dependencies
@@ -292,11 +291,13 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.driver_worker_pool = driver_worker_pool
     app.state.bus_dispatcher = bus_dispatcher
 
-    # Inject bus dispatcher into SQLite driver for outbox-to-bus bridging
-    from ..drivers.sqlite import set_bus_dispatcher
+    # Inject bus dispatcher into appropriate driver for WAL/outbox operations
+    if settings.database.backend == "postgresql":
+        from ..drivers.postgres import set_bus_dispatcher
+    else:
+        from ..drivers.archived.sqlite import set_bus_dispatcher
 
     set_bus_dispatcher(bus_dispatcher)
-    logger.info("Injected bus dispatcher into SQLite driver for P02 pipeline integration")
 
     # Register BusDispatcher sinks (Gap 1: Wire BusDispatcher Sinks)
     # M1 R1.2: Migrated from register_sink() to tap() / subscribe()
@@ -330,18 +331,44 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         except Exception:  # pragma: no cover - defensive logging guard
             logger.exception("Failed to trigger driver worker pool")
 
-    # Sink 3: SSE fan-out (placeholder for future SSE streaming implementation)
-    # Note: SSE fan-out requires SSE server state management which is not yet
-    # fully implemented. This sink will be completed when SSE streaming is ready.
+    # Sink 3: SSE fan-out - broadcasts bus events to SSE subscribers
+    # Note: SSE server is initialized during lifespan startup, so we need to
+    # lazily access it via app.state.sse_server
     async def sse_fan_out_sink(message: BusMessage) -> None:
-        """Fan out WAL events to SSE subscribers."""
+        """Fan out WAL events to SSE subscribers via SSE server broadcast."""
         try:
-            # TODO: Implement SSE fan-out when SSE streaming is ready
-            # This will involve:
-            # 1. Query SSE subscribers for this topic/tenant/space
-            # 2. Send event to matching subscriptions
-            # 3. Track delivery and backpressure
-            pass
+            # Lazily get SSE server from app state (initialized in lifespan)
+            sse_server = getattr(app.state, "sse_server", None)
+            if sse_server is None:
+                return  # SSE server not available yet or disabled
+
+            # Only broadcast pipeline events (not internal system events)
+            if not message.topic or message.topic.startswith("internal."):
+                return
+
+            # Import BroadcastEvent here to avoid circular import
+            # Parse payload
+            import json
+
+            from ..sse.server import BroadcastEvent
+
+            try:
+                payload = json.loads(message.payload.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                payload = {"raw": message.payload.decode("utf-8", errors="replace")}
+
+            # Create broadcast event
+            event = BroadcastEvent(
+                topic=message.topic,
+                tenant_id=message.metadata.get("tenant_id", "default"),
+                space_id=message.space_id or "default",
+                op_kind=message.topic.upper().replace(".", "_"),
+                payload=payload,
+            )
+
+            # Broadcast to subscribers
+            await sse_server.broadcast(event)
+
         except Exception:  # pragma: no cover - defensive logging guard
             logger.exception("Failed to fan out to SSE subscribers")
 
@@ -383,19 +410,54 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.include_router(observe.router)
     app.include_router(drivers.router)
 
-    database_path = Path(getattr(settings.database, "path")).resolve()
-    configure_pool(database_path)
+    # Admin router - only in non-production mode
+    # Security: Admin endpoints expose internal scheduler state and manual triggers
+    # These should NEVER be accessible in production deployments
+    if settings.environment.lower() != "production":
+        app.include_router(admin.router)
+        logger.info(
+            "Admin router enabled (non-production mode)",
+            extra={"environment": settings.environment},
+        )
 
-    def _bootstrap_runtime() -> None:
+    # PostgreSQL settings for async pool initialization (done in lifespan)
+    postgres_settings = PostgresSettings()
+    app.state.postgres_settings = postgres_settings
+
+    async def _bootstrap_runtime_async() -> None:
+        """Async bootstrap: migrations and WAL replay."""
         readiness = getattr(app.state, "readiness", None)
+
+        # Apply migrations using Alembic
+        # Run in a thread pool to avoid event loop conflicts with Alembic's async migrations
         try:
-            apply_migrations(database_path, logger=logger)
+            from concurrent.futures import ThreadPoolExecutor
+            from pathlib import Path
+
+            from alembic import command
+            from alembic.config import Config
+
+            def run_migrations_sync() -> None:
+                """Run Alembic migrations in a separate thread with its own event loop."""
+                alembic_cfg = Config()
+                alembic_cfg.set_main_option(
+                    "script_location", str(Path(__file__).parent.parent / "db" / "alembic")
+                )
+                alembic_cfg.set_main_option("sqlalchemy.url", postgres_settings.dsn)
+                command.upgrade(alembic_cfg, "head")
+
+            # Run migrations in a thread pool to get a fresh event loop
+            loop = asyncio.get_running_loop()
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                await loop.run_in_executor(pool, run_migrations_sync)
+
             if readiness is not None:
                 readiness.mark_migrations_complete()
-        except MigrationError:
+            logger.info("PostgreSQL migrations applied successfully")
+        except Exception as e:
             logger.exception(
                 "Database migration failed during startup",
-                extra={"database_path": str(database_path)},
+                extra={"error": str(e)},
             )
             raise
 
@@ -405,21 +467,12 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             observability=getattr(app.state, "observability_emitter", None),
         )
         try:
-            replayer.run(from_position=0)
+            await replayer.run(from_position=0)
         except ReplayError:
             logger.exception("WAL replay failed during startup")
             raise
         if readiness is not None:
             readiness.mark_wal_replay_complete()
-
-    # Gap 21: Only shutdown pool on bootstrap exception
-    # If bootstrap succeeds, pool stays open for runtime
-    try:
-        _bootstrap_runtime()
-    except Exception:
-        # Bootstrap failed - cleanup pool before re-raising
-        shutdown_pool()
-        raise
 
     async def _report_sse_metrics_periodically() -> None:
         """Background task to periodically report SSE connection metrics."""
@@ -458,11 +511,10 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     logger.debug("No driver aliases registered, skipping outbox processing")
                     continue
 
-                # Process each registered driver
-                loop = asyncio.get_running_loop()
+                # Process each registered driver - async-native, no thread pool
                 for alias in driver_aliases:
                     try:
-                        await loop.run_in_executor(None, worker_pool.process_driver, alias)
+                        await worker_pool.process_driver_async(alias)
                         logger.debug(f"Processed outbox for driver: {alias}")
                     except RuntimeError as e:  # noqa: BLE001
                         # Gracefully skip drivers that aren't implemented yet
@@ -474,17 +526,6 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                             logger.debug(f"Skipping unimplemented driver: {alias} ({error_msg})")
                         else:
                             logger.exception(f"Failed to process outbox for driver: {alias}")
-                    except sqlite3.OperationalError as e:  # noqa: BLE001
-                        # Gracefully handle database connection issues (e.g., Docker volume mount issues)
-                        # These are typically transient or configuration issues
-                        if "unable to open database file" in str(e):
-                            logger.debug(
-                                f"Skipping driver {alias} due to database connection issue (likely Docker volume mount): {e}"
-                            )
-                        else:
-                            logger.exception(
-                                f"Database error processing outbox for driver: {alias}"
-                            )
                     except Exception:  # noqa: BLE001
                         logger.exception(f"Failed to process outbox for driver: {alias}")
 
@@ -499,6 +540,33 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     logger.info("Outbox worker loop cancelled during backoff")
                     break
 
+    # =========================================================================
+    # DEPRECATED (M5 P08 Migration - ADR-K004)
+    # =========================================================================
+    # The _p08_faiss_indexer_loop() function has been removed.
+    # P08 now uses declarative triggers via PipelineScheduler (Issue 5.2.1).
+    #
+    # Previously at lines 501-673:
+    #   - Hardcoded 5-minute interval loop
+    #   - Direct database access bypassing syscalls
+    #   - Manual FAISS indexing logic
+    #
+    # Replacement (k0/contracts/pipelines/p08_embedding_management.v2.yaml):
+    #   triggers:
+    #     - id: faiss_indexer_interval
+    #       type: interval
+    #       interval_seconds: 300
+    #     - id: faiss_indexer_threshold
+    #       type: threshold
+    #       table: st_vec
+    #       condition: "status = 'READY'"
+    #       threshold_count: 50
+    #     - id: faiss_indexer_manual
+    #       type: manual
+    #
+    # P08 now executes via PipelineScheduler.register_pipeline() in lifespan().
+    # =========================================================================
+
     async def _init_model_registry() -> "ModelRegistry":
         """Initialize the centralized model registry at kernel startup.
 
@@ -511,7 +579,6 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         Returns:
             ModelRegistry: Initialized model registry
         """
-        from pathlib import Path
 
         from ..runtime.model_registry import init_model_registry
 
@@ -554,7 +621,6 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         Returns:
             FeatureFlags: Initialized feature flags
         """
-        from pathlib import Path
 
         from ..config.feature_flags import init_feature_flags
 
@@ -607,8 +673,31 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # Phase -1: Initialize PostgreSQL connection pool (MUST be first)
+        logger.info("Initializing PostgreSQL connection pool...")
+        try:
+            await configure_pool(
+                postgres_settings,
+                metrics_exporter=metrics_exporter,
+            )
+            logger.info("PostgreSQL pool initialized successfully")
+        except Exception as e:
+            logger.exception(f"Failed to initialize PostgreSQL pool: {e}")
+            raise
+
+        # Phase -0.5: Run async bootstrap (migrations + WAL replay)
+        try:
+            await _bootstrap_runtime_async()
+        except Exception:
+            # Bootstrap failed - cleanup pool before re-raising
+            await shutdown_pool()
+            raise
+
         # Ensure bus dispatcher has the running loop
-        from ..drivers.sqlite import set_bus_dispatcher
+        if settings.database.backend == "postgresql":
+            from ..drivers.postgres import set_bus_dispatcher
+        else:
+            from ..drivers.archived.sqlite import set_bus_dispatcher
 
         set_bus_dispatcher(bus_dispatcher)
 
@@ -616,6 +705,36 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         logger.info("Initializing feature flags system...")
         feature_flags = await _init_feature_flags()
         app.state.feature_flags = feature_flags
+
+        # Phase 0.5: Initialize SSE Server for real-time event streaming
+        logger.info("Initializing SSE Server...")
+        try:
+            from ..drivers.sse_outbox_driver import set_sse_server
+            from ..sse.server import SSEServer
+
+            sse_server = SSEServer(
+                wal=write_ahead_log,
+                offset_store=offset_store,
+                observability=observability_emitter,
+                acl_path=settings.sse_acl_path,
+                qos=dependency_provider.qos,
+            )
+            app.state.sse_server = sse_server
+
+            # Wire SSE server into outbox driver
+            set_sse_server(sse_server)
+
+            logger.info(
+                "SSE Server initialized",
+                extra={
+                    "max_batch": sse_server.max_batch,
+                    "max_pending_events": sse_server.max_pending_events,
+                    "disconnect_threshold": sse_server.disconnect_threshold,
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize SSE Server: {e}", exc_info=True)
+            app.state.sse_server = None
 
         # Phase 1: Initialize Model Registry (replaces legacy _preload_models)
         logger.info("Initializing model registry...")
@@ -628,10 +747,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         # - VADER, GoEmotions, clinical_safety, sentence_transformer
         # - TransformerNER, ZeroShotClassifier, etc.
         try:
-            from ..runtime.ultrabert_adapter import (
-                get_ultrabert_client,
-                is_ultrabert_available,
-            )
+            from ..runtime.ultrabert_adapter import get_ultrabert_client, is_ultrabert_available
 
             logger.info("Initializing UltraBERT unified model...")
             ultrabert_client = get_ultrabert_client()
@@ -664,11 +780,38 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             },
         )
 
+        # Phase 1.6: Initialize FAISS Index Manager for P08 embedding indexing
+        try:
+            from pathlib import Path
+
+            from ..runtime.faiss_manager import FaissIndexManager
+
+            logger.info("Initializing FAISS Index Manager...")
+            faiss_mgr = FaissIndexManager.get_instance()
+            faiss_index_path = Path("/data/k0_faiss_indexes")
+            faiss_index_path.mkdir(parents=True, exist_ok=True)
+
+            await faiss_mgr.initialize(index_path=faiss_index_path, train_if_needed=False)
+
+            app.state.faiss_manager = faiss_mgr
+            logger.info(
+                "FAISS Index Manager initialized",
+                extra={
+                    "index_path": str(faiss_index_path),
+                    "is_trained": faiss_mgr._is_trained,
+                    "total_vectors": faiss_mgr.ntotal(),
+                    "index_type": "FlatL2" if faiss_mgr._is_trained else "IVF256+PQ64 (untrained)",
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize FAISS Index Manager: {e}", exc_info=True)
+            app.state.faiss_manager = None
+
         # Phase 2: Boot YAML-based declarative pipelines via runtime system
         from pathlib import Path
 
         from ..pipelines.protocol import PipelineContext
-        from ..runtime import ModuleRegistry, PipelineRunner, PipelineSpec
+        from ..runtime import ModuleRegistry, PipelineSpec, set_module_registry
 
         try:
             logger.info("Loading declarative pipelines from YAML specifications...")
@@ -680,6 +823,21 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             logger.info(
                 f"Loaded {len(registry)} module contracts",
                 extra={"module_count": len(registry), "modules": registry.list_modules()},
+            )
+
+            # Issue 2.2.3: Set global registry and register capabilities
+            set_module_registry(registry)
+            from ..fabric.loader import discover_and_register_capabilities
+            from ..fabric.registry import get_capability_registry
+
+            cap_count = discover_and_register_capabilities(registry)
+            capability_registry = get_capability_registry()
+            logger.info(
+                f"Registered {cap_count} capability providers",
+                extra={
+                    "provider_count": cap_count,
+                    "capability_stats": capability_registry.get_stats(),
+                },
             )
 
             # Load pipeline specifications from YAML
@@ -707,12 +865,15 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                         extra={
                             "pipeline_id": spec.pipeline_id,
                             "version": spec.version,
+                            "runner_type": spec.runner_type,
                             "spec_path": str(spec_path),
                         },
                     )
 
-                    # Create pipeline runner
-                    runner = PipelineRunner(spec, registry)
+                    # Create pipeline runner via factory (generic dispatch)
+                    from ..runtime.runner_factory import create_runner
+
+                    runner = create_runner(spec, registry)
 
                     # Create syscalls adapter with required capabilities
                     from ..kernel.syscalls import Syscalls
@@ -746,6 +907,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                         config=spec.config,
                         logger=logger.getChild(spec.pipeline_id),
                         preloaded_models=preloaded_models,  # Pass preloaded models to pipeline
+                        bus_dispatcher=bus_dispatcher,  # For internal pipeline communication
                     )
 
                     # Call on_startup
@@ -788,6 +950,146 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                 f"Booted {len(pipelines)} pipelines: {list(pipelines.keys())}",
                 extra={"count": len(pipelines), "pipeline_ids": list(pipelines.keys())},
             )
+
+            # Issue 3.2.1: Initialize PipelineScheduler for trigger-based activation
+            from ..scheduler import PipelineScheduler, set_pipeline_scheduler
+
+            # Create syscalls for scheduler (needs query_count for threshold triggers)
+            scheduler_caps = {"st_vec.read", "st_hipp_events.read"}  # Threshold query tables
+            scheduler_syscalls = Syscalls("scheduler", scheduler_caps, _unit_of_work_factory)
+
+            # Create scheduler with pipeline execution callback
+            async def execute_pipeline_async(scheduled: Any, event: Any) -> None:
+                """Execute pipeline when trigger fires (async implementation)."""
+                import json
+                import uuid
+
+                from ..bus.core import BusMessage
+
+                pipeline_id = scheduled.pipeline_id
+                # Debug: Log the pipelines dict state
+                logger.debug(
+                    f"execute_pipeline_async called, pipelines keys: {list(pipelines.keys())}",
+                    extra={"pipeline_id": pipeline_id, "pipelines_count": len(pipelines)},
+                )
+                runner = pipelines.get(pipeline_id)
+                if runner:
+                    logger.info(
+                        f"Trigger-based execution of {pipeline_id}",
+                        extra={
+                            "pipeline_id": pipeline_id,
+                            "trigger_id": event.trigger_id,
+                            "execution_count": scheduled.execution_count,
+                        },
+                    )
+                    # Create synthetic BusMessage for trigger-based execution
+                    # Use the pipeline's entry_topic (e.g., scheduled.p08.trigger.v1)
+                    from datetime import datetime, timezone
+
+                    # Convert fired_at: can be float (unix ts), datetime, or None
+                    fired_at_iso = None
+                    if event.fired_at:
+                        if isinstance(event.fired_at, (int, float)):
+                            fired_at_iso = datetime.fromtimestamp(
+                                event.fired_at, tz=timezone.utc
+                            ).isoformat()
+                        elif hasattr(event.fired_at, "isoformat"):
+                            fired_at_iso = event.fired_at.isoformat()
+                        else:
+                            fired_at_iso = str(event.fired_at)
+                    trigger_payload = {
+                        "trigger_id": event.trigger_id,
+                        "trigger_type": (
+                            event.context.get("trigger_type", "unknown")
+                            if event.context
+                            else "unknown"
+                        ),
+                        "execution_count": scheduled.execution_count,
+                        "fired_at": fired_at_iso,
+                        "batch_size": (
+                            event.context.get("batch_size", 100) if event.context else 100
+                        ),
+                        # Pass trigger context (reason, options) to pipeline runner
+                        # This enables tenant_id/space_id overrides from manual triggers
+                        "context": event.context or {},
+                    }
+                    trigger_message = BusMessage(
+                        topic=(
+                            runner.declared_topics[0]
+                            if runner.declared_topics
+                            else f"scheduled.{pipeline_id.lower()}.trigger.v1"
+                        ),
+                        payload=json.dumps(trigger_payload).encode("utf-8"),
+                        offset=scheduled.execution_count,
+                        trace_id=str(uuid.uuid4()),
+                        space_id="system",
+                        metadata={"trigger_id": event.trigger_id, "port": "scheduler"},
+                    )
+                    try:
+                        await runner.handle(trigger_message)
+                        logger.info(
+                            f"Pipeline {pipeline_id} completed (trigger: {event.trigger_id})",
+                            extra={
+                                "pipeline_id": pipeline_id,
+                                "trigger_id": event.trigger_id,
+                                "execution_count": scheduled.execution_count,
+                            },
+                        )
+                    except Exception as e:
+                        logger.exception(
+                            f"Pipeline {pipeline_id} failed (trigger: {event.trigger_id}): {e}",
+                            extra={
+                                "pipeline_id": pipeline_id,
+                                "trigger_id": event.trigger_id,
+                                "error": str(e),
+                            },
+                        )
+                else:
+                    logger.warning(
+                        f"No runner found for triggered pipeline {pipeline_id}",
+                        extra={"pipeline_id": pipeline_id},
+                    )
+
+            def execute_pipeline(scheduled: Any, event: Any) -> None:
+                """Execute pipeline when trigger fires (sync wrapper)."""
+                # Schedule the async execution on the event loop
+                asyncio.create_task(execute_pipeline_async(scheduled, event))
+
+            scheduler = PipelineScheduler(scheduler_syscalls, execute_pipeline)
+
+            # Register pipelines that have triggers defined
+            trigger_count = 0
+            for spec_path in sorted(pipeline_specs):
+                try:
+                    spec = PipelineSpec.load(spec_path)
+                    if spec.triggers:
+                        scheduler.register_pipeline(spec)
+                        trigger_count += len(spec.triggers)
+                        logger.info(
+                            f"Registered {spec.pipeline_id} with {len(spec.triggers)} triggers",
+                            extra={
+                                "pipeline_id": spec.pipeline_id,
+                                "trigger_count": len(spec.triggers),
+                                "trigger_ids": [t.id for t in spec.triggers],
+                            },
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to register triggers for {spec_path.name}: {e}",
+                        extra={"spec_path": str(spec_path), "error": str(e)},
+                    )
+
+            # Set global scheduler instance
+            set_pipeline_scheduler(scheduler)
+            app.state.scheduler = scheduler
+
+            logger.info(
+                f"PipelineScheduler initialized with {len(scheduler.pipelines)} pipelines, {trigger_count} triggers",
+                extra={
+                    "pipeline_count": len(scheduler.pipelines),
+                    "trigger_count": trigger_count,
+                },
+            )
         except Exception:
             logger.exception("Failed to boot pipelines during startup")
             # Don't prevent kernel from starting if no pipelines exist
@@ -796,10 +1098,37 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         # Start background tasks
         sse_metrics_task = asyncio.create_task(_report_sse_metrics_periodically())
         outbox_worker_task = asyncio.create_task(_outbox_worker_loop())
+        # DEPRECATED (M5): p08_indexer_task removed - P08 now uses PipelineScheduler
+        # Previously: p08_indexer_task = asyncio.create_task(_p08_faiss_indexer_loop())
+
+        # Issue 7.1.3: Start ActivityTracker for idle detection (Phase 2 - M7)
+        from ..scheduler.activity import get_activity_tracker
+
+        activity_tracker = get_activity_tracker()
+        await activity_tracker.start()
+        logger.info("ActivityTracker started for idle detection")
+
+        # Issue 3.2.1: Start the scheduler for trigger-based pipeline activation
+        scheduler = getattr(app.state, "scheduler", None)
+        if scheduler:
+            await scheduler.start()
+            logger.info("PipelineScheduler started")
 
         try:
             yield
         finally:
+            # Issue 3.2.1: Stop the scheduler first
+            scheduler = getattr(app.state, "scheduler", None)
+            if scheduler:
+                logger.info("Stopping PipelineScheduler...")
+                await scheduler.stop()
+                logger.info("PipelineScheduler stopped")
+
+            # Issue 7.1.3: Stop ActivityTracker
+            logger.info("Stopping ActivityTracker...")
+            await activity_tracker.stop()
+            logger.info("ActivityTracker stopped")
+
             # M2 R2.3: Graceful shutdown - call on_shutdown for all pipelines
             logger.info("Shutting down pipelines...")
             pipelines = getattr(app.state, "pipelines", {})
@@ -820,6 +1149,17 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                 except Exception:
                     logger.exception("Error shutting down model registry")
 
+            # Shutdown SSE Server - clear global reference
+            logger.info("Shutting down SSE Server...")
+            try:
+                from ..drivers.sse_outbox_driver import set_sse_server
+
+                set_sse_server(None)
+                app.state.sse_server = None
+                logger.info("SSE Server shutdown complete")
+            except Exception:
+                logger.exception("Error shutting down SSE Server")
+
             # M2 R2.3: Record clean shutdown timestamp (for crash fencing)
             import time
 
@@ -834,6 +1174,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             logger.info("Shutting down background tasks")
             sse_metrics_task.cancel()
             outbox_worker_task.cancel()
+            # DEPRECATED (M5): p08_indexer_task removed - P08 stopped via scheduler.stop()
 
             # Wait for tasks to complete cancellation
             try:
@@ -846,7 +1187,12 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             except asyncio.CancelledError:
                 pass
 
-            shutdown_pool()
+            # DEPRECATED (M5): p08_indexer_task await removed
+
+            # Close PostgreSQL connection pool
+            logger.info("Closing PostgreSQL connection pool...")
+            await shutdown_pool()
+            logger.info("PostgreSQL pool closed")
 
     app.router.lifespan_context = _lifespan
 
@@ -1287,6 +1633,7 @@ def _compose_error(
     hint: Any | None = None,
     budgets: Any | None = None,
 ) -> dict[str, Any]:
+    """Compose error response payload."""
     error: dict[str, Any] = {
         "code": code,
         "reason": reason,
@@ -1294,6 +1641,12 @@ def _compose_error(
     }
     if hint:
         error["hint"] = hint
+    if budgets:
+        error["budgets"] = budgets
+    return {"error": error}
+    if budgets:
+        error["budgets"] = budgets
+    return {"error": error}
     if budgets:
         error["budgets"] = budgets
     return {"error": error}

@@ -1,0 +1,225 @@
+# Core K0 Capability Definitions
+# Version: v1
+# ADR: ADR-K004 Capability Mesh Architecture
+#
+# This file defines foundational capabilities and their default providers.
+# Capabilities are abstract named operations that modules can invoke without
+# knowing the concrete provider implementation.
+#
+# Provider priority: lower = higher priority (1 is highest)
+# Providers are resolved in priority order; fallback providers have higher numbers.
+
+version: v1
+
+capabilities:
+  # ============================================================================
+  # Salience & Scoring Capabilities
+  # ============================================================================
+
+  score_salience:
+    description: "Compute salience score for content based on social importance, affect, and recency"
+    providers:
+      - type: module
+        module_id: salience.score
+        priority: 1
+        latency_budget_ms: 5
+        condition: always
+    default_timeout_ms: 50
+
+  # ============================================================================
+  # Hippocampus Capabilities (Pattern Processing)
+  # ============================================================================
+
+  pattern_separate:
+    description: "Pattern separation via hippocampus - compute fingerprints for episodic memory"
+    providers:
+      - type: module
+        module_id: hippocampus.pattern_separate
+        priority: 1
+        latency_budget_ms: 15
+        condition: always
+    default_timeout_ms: 100
+
+  semantic_project:
+    description: "Semantic projection - map content to semantic space"
+    providers:
+      - type: module
+        module_id: hippocampus.semantic_project
+        priority: 1
+        latency_budget_ms: 20
+        condition: always
+    default_timeout_ms: 100
+
+  # ============================================================================
+  # Content Analysis Capabilities
+  # ============================================================================
+
+  analyze_affect:
+    description: "Analyze emotional affect (valence, arousal, dominance)"
+    providers:
+      - type: module
+        module_id: affect.analyze
+        priority: 1
+        latency_budget_ms: 10
+        condition: always
+    default_timeout_ms: 50
+
+  # ============================================================================
+  # Embedding Capabilities
+  # ============================================================================
+
+  generate_embedding:
+    description: "Generate embedding vector for content"
+    providers:
+      - type: module
+        module_id: embedding.extract_from_cache
+        priority: 1
+        latency_budget_ms: 50
+        condition: always
+    default_timeout_ms: 200
+
+  backfill_embedding:
+    description: "Backfill missing embeddings for existing content"
+    providers:
+      - type: module
+        module_id: embedding.backfill
+        priority: 1
+        latency_budget_ms: 100
+        condition: always
+    default_timeout_ms: 500
+
+  recompute_embedding:
+    description: "Recompute embeddings with updated model"
+    providers:
+      - type: module
+        module_id: embedding.recompute
+        priority: 1
+        latency_budget_ms: 100
+        condition: always
+    default_timeout_ms: 500
+
+  cleanup_embedding:
+    description: "Clean up orphaned or stale embeddings"
+    providers:
+      - type: module
+        module_id: embedding.cleanup
+        priority: 1
+        latency_budget_ms: 50
+        condition: always
+    default_timeout_ms: 200
+
+  index_vectors:
+    description: "Index vectors in FAISS for similarity search"
+    providers:
+      - type: module
+        module_id: embedding.faiss_indexer
+        priority: 1
+        latency_budget_ms: 200
+        condition: always
+    default_timeout_ms: 1000
+
+  # ============================================================================
+  # Context Resolution Capabilities
+  # ============================================================================
+
+  classify_ingress:
+    description: "Classify incoming content at ingress"
+    providers:
+      - type: module
+        module_id: context.ingress_classify
+        priority: 1
+        latency_budget_ms: 10
+        condition: always
+    default_timeout_ms: 50
+
+  resolve_device_profile:
+    description: "Resolve device context and profile"
+    providers:
+      - type: module
+        module_id: context.device_profile
+        priority: 1
+        latency_budget_ms: 5
+        condition: always
+    default_timeout_ms: 30
+
+  resolve_geo_metadata:
+    description: "Resolve geographic metadata from location"
+    providers:
+      - type: module
+        module_id: context.geo_metadata
+        priority: 1
+        latency_budget_ms: 10
+        condition: always
+    default_timeout_ms: 50
+
+  resolve_temporal_profile:
+    description: "Resolve temporal context and profile"
+    providers:
+      - type: module
+        module_id: context.temporal_profile
+        priority: 1
+        latency_budget_ms: 5
+        condition: always
+    default_timeout_ms: 30
+
+  lookup_retention:
+    description: "Look up retention policy for content"
+    providers:
+      - type: module
+        module_id: context.retention_lookup
+        priority: 1
+        latency_budget_ms: 5
+        condition: always
+    default_timeout_ms: 30
+
+  # ============================================================================
+  # Social Graph Capabilities
+  # ============================================================================
+
+  resolve_family_graph:
+    description: "Resolve family relationships from participants"
+    providers:
+      - type: module
+        module_id: social.family_graph_resolve
+        priority: 1
+        latency_budget_ms: 10
+        condition: always
+    default_timeout_ms: 50
+
+  # ============================================================================
+  # Space & Visibility Capabilities
+  # ============================================================================
+
+  resolve_visibility:
+    description: "Resolve space visibility and access permissions"
+    providers:
+      - type: module
+        module_id: space.resolve_visibility
+        priority: 1
+        latency_budget_ms: 5
+        condition: always
+    default_timeout_ms: 30
+
+  # ============================================================================
+  # Core Infrastructure Capabilities
+  # ============================================================================
+
+  emit_event:
+    description: "Emit event to the event bus"
+    providers:
+      - type: module
+        module_id: core.event_emitter
+        priority: 1
+        latency_budget_ms: 2
+        condition: always
+    default_timeout_ms: 20
+
+  write_hipp_events:
+    description: "Write hippocampus events to storage"
+    providers:
+      - type: module
+        module_id: core.hipp_events_writer
+        priority: 1
+        latency_budget_ms: 10
+        condition: always
+    default_timeout_ms: 50

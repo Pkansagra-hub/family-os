@@ -1,11 +1,12 @@
 # P08 Embedding Management - Architecture Exploration (Revised)
 
-**Status**: Architecture Revised - Aligned with ADR-K003
+**Status**: ✅ Production - Maintenance Pipeline (pgvector migration)
 **Created**: 2025-11-25
-**Updated**: 2025-12-13
-**Purpose**: Define P08's new role as embedding management pipeline (not primary generator)
-**Architecture**: YAML Pipeline (Kernel Boundary Compliant)
-**ADR Reference**: [ADR-K003: Inline Embedding Generation via UltraBERT](../architecture/decisions-K0/pipelines/k003-inline-embedding-ultrabert.md)
+**Updated**: 2025-12-24
+**Purpose**: Define P08's new role as embedding lifecycle maintenance (not indexer)
+**Architecture**: On-Demand Maintenance Pipeline (FAISS replaced by pgvector)
+**ADR Reference**: [ADR-K003: Inline Embedding Generation via UltraBERT](../architecture/decisions-K0/k003-inline-embedding-ultrabert.md)
+**Migration Reference**: [PostgreSQL Migration Plan](../../k0/docs/k0_postgresql_migration_plan.md)
 
 ---
 
@@ -32,20 +33,31 @@ With `K0_ULTRABERT_SINGLE_PASS=1`, all P02 modules share ONE cached forward pass
 
 ### Architecture Change
 
-**OLD (P08 as Primary Generator)**:
+**OLD (P08 as Primary Generator - SQLite + FAISS)**:
 
 ```
-P02 → queues job → P08 → MiniLM compute (384-dim) → store → index
+P02 → queues job → P08 → MiniLM compute (384-dim) → store → FAISS index
       ASYNC DELAY: seconds before embedding available
 ```
 
-**NEW (P02 Inline + P08 Management)**:
+**INTERMEDIATE (P02 Inline + P08 Kernel Scheduler - SQLite + FAISS)**:
 
 ```
-P02 → M22 extract from cache (0ms) → M23 write → READY immediately
-      P08 → async FAISS indexing, backfill, cleanup
+P02 → M22 extract from cache (0ms) → M16 atomic 3-table write → READY immediately
+      P08 Kernel Scheduler → polls st_vec → adds to FAISS → INDEXED
       NO DELAY: embedding available at P02 commit
 ```
+
+**NEW (P02 Inline + pgvector - PostgreSQL Migration)**:
+
+```
+P02 → M22 extract from cache (0ms) → M16 write to st_vec VECTOR(768) → READY + SEARCHABLE
+      pgvector HNSW index → AUTO-INDEXED on INSERT → NO P08 needed for indexing!
+      P08 → Maintenance only (backfill, cleanup, model upgrades)
+```
+
+> **Key Change**: pgvector's native HNSW index replaces FAISS. Vectors are searchable
+> immediately on INSERT. The 300s kernel scheduler for FAISS indexing is **eliminated**.
 
 ### Why This Matters for P03
 
@@ -59,25 +71,38 @@ P03 consolidation needs embeddings for CA1 semantic bridge similarity:
 
 ---
 
-## P08 New Role: Embedding Lifecycle Management
+## P08 New Role: Embedding Lifecycle Maintenance (PostgreSQL/pgvector)
 
-### What P08 Does Now
+### What P08 Does Now (Post-pgvector Migration)
 
-| Responsibility | Description | Trigger |
-|---------------|-------------|---------|
-| **FAISS Indexing** | Add embeddings to search index | `p02.embedding.stored.v1` |
-| **Backfill** | Process legacy records without embeddings | Scheduled/manual |
-| **Model Upgrades** | Recompute when model version changes | Manual trigger |
-| **Cleanup** | Remove orphaned embeddings | Event deletion |
-| **Multi-Model** | Generate alternative embeddings (future) | On-demand |
+| Responsibility | Description | Trigger | Frequency |
+|---------------|-------------|---------|----------|
+| **Backfill** | Process legacy records without embeddings | Scheduled/manual | One-time migration |
+| **Model Upgrades** | Recompute embeddings when model version changes | Manual trigger | Rare (version bumps) |
+| **Cleanup** | Remove orphaned embeddings for deleted events | Event deletion cascade | On-demand |
+| **Multi-Model** | Generate alternative embeddings (OpenAI, etc.) | On-demand | Future feature |
 
-### What P08 No Longer Does
+### What P08 No Longer Does (pgvector Eliminates These)
 
 | Removed Responsibility | Moved To | Reason |
 |----------------------|----------|--------|
 | Primary embedding generation | P02 M22 | UltraBERT cache extraction |
 | Queue claiming | N/A | No queue needed |
 | MiniLM inference | Removed | UltraBERT is primary model |
+| **FAISS Indexing** | **pgvector HNSW** | **Native PostgreSQL vector index, auto-indexed on INSERT** |
+| **300s Kernel Scheduler** | **Eliminated** | **pgvector indexes immediately, no batch polling needed** |
+| **INDEXED status transition** | **Eliminated** | **READY = immediately searchable with pgvector** |
+
+### pgvector vs FAISS Comparison
+
+| Aspect | FAISS (OLD) | pgvector (NEW) |
+|--------|-------------|----------------|
+| Index Type | External file (IndexFlatL2/HNSW) | Native HNSW in PostgreSQL |
+| Index Update | P08 batch job (300s poll) | Automatic on INSERT |
+| Search Query | Python API: `faiss_index.search()` | SQL: `ORDER BY vector <=> $1` |
+| Separate Process | Yes (kernel scheduler) | No (database handles it) |
+| `faiss_id` Column | Required | **Deprecated** |
+| `INDEXED` Status | Required | **Deprecated** (READY = searchable) |
 
 ---
 
@@ -159,75 +184,15 @@ async def execute(envelope: dict, enriched: dict, context: ModuleContext) -> dic
     }
 ```
 
-#### M23: builders.embedding_write:v1
+#### M23: builders.embedding_write:v1 ❌ DEPRECATED
 
-**Purpose**: Write embedding directly to st_vec table.
+**Purpose**: ~~Write embedding directly to st_vec table.~~ **MERGED INTO M16**
 
-**Location**: `k0/modules/builders/embedding_write.py`
+**Location**: `k0/modules/builders/embedding_write.py` (deprecated)
 
-**Performance**: <5ms P95 (single row INSERT)
+**Status**: ❌ Deprecated - Functionality merged into M16 (core.hipp_events_writer:v1.2) for atomic 3-table transaction.
 
-```python
-"""
-M23: builders.embedding_write
-
-Writes 768-dim embedding directly to st_vec table.
-Replaces async P08 queue pattern with synchronous inline write.
-
-Performance: <5ms P95 (single row INSERT)
-"""
-
-import time
-
-async def execute(envelope: dict, enriched: dict, context: ModuleContext) -> dict:
-    """Write embedding directly to storage."""
-    embedding_data = enriched.get("extract_from_cache", {})
-    embedding = embedding_data.get("embedding")
-
-    if not embedding:
-        # No embedding available - mark as PENDING for backfill
-        return {
-            "written": False,
-            "reason": "no_embedding",
-            "embedding_status": "PENDING",
-        }
-
-    header = envelope.get("header", {})
-
-    record = {
-        "embedding_id": embedding_data.get("embedding_id"),
-        "event_id": header.get("event_id"),
-        "tenant_id": header.get("tenant_id"),
-        "space_id": header.get("space_id"),
-        "vector": embedding,
-        "vector_dim": 768,
-        "model_id": embedding_data.get("model_id", "ultrabert_v2.1.0"),
-        "created_at": int(time.time()),
-        "updated_at": int(time.time()),
-    }
-
-    await context.syscalls.vec_write(record)
-
-    # Emit event for P08 FAISS indexing
-    await context.syscalls.bus_emit(
-        topic="p02.embedding.stored.v1",
-        payload={
-            "embedding_id": record["embedding_id"],
-            "event_id": record["event_id"],
-            "tenant_id": record["tenant_id"],
-            "space_id": record["space_id"],
-            "vector_dim": 768,
-            "model_id": record["model_id"],
-        }
-    )
-
-    return {
-        "written": True,
-        "embedding_id": record["embedding_id"],
-        "vector_dim": 768,
-        "embedding_status": "READY",
-    }
-```
+**Migration**: M16 now writes st_hipp_events + st_vec + st_pipeline_processed in single atomic transaction.
 
 ### Updated P02 DAG
 
@@ -306,13 +271,11 @@ description: |
   Primary generation is now inline in P02 (ADR-K003).
 
 entry_topics:
-  - p02.embedding.stored.v1
   - p08.backfill.requested.v1
   - p08.recompute.requested.v1
   - p08.cleanup.requested.v1
 
 exit_topics:
-  - p08.faiss.indexed.v1
   - p08.backfill.complete.v1
   - p08.recompute.complete.v1
   - p08.cleanup.complete.v1
@@ -323,21 +286,25 @@ required_capabilities:
   - st_vec.write
   - st_hipp_events.read
   - st_hipp_events.write
-  - st_embeddings.read
-  - st_embeddings.write
-  - faiss.read
-  - faiss.write
+  # REMOVED: faiss.read, faiss.write (pgvector replaces FAISS)
 ```
+
+> **Note**: `p02.embedding.stored.v1` entry topic and `p08.faiss.indexed.v1` exit topic
+> are **deprecated** with pgvector. Vectors are searchable immediately on INSERT.
 
 ---
 
 ## Use Cases Detailed
 
-### Use Case 1: FAISS Indexing (Primary P08 Flow)
+### Use Case 1: ~~FAISS Indexing~~ DEPRECATED (pgvector Auto-Indexes)
 
-**Trigger**: P02 emits `p02.embedding.stored.v1` after M23 writes to st_vec
+> **PostgreSQL Migration**: This use case is **eliminated** with pgvector.
+> pgvector's native HNSW index automatically indexes vectors on INSERT.
+> No batch polling, no P08 scheduler, no READY→INDEXED transition needed.
 
-**Flow**:
+**OLD Trigger (SQLite)**: P02 emits `p02.embedding.stored.v1` after M16 writes to st_vec
+
+**OLD Flow (FAISS)**:
 
 ```
 p02.embedding.stored.v1
@@ -351,13 +318,24 @@ p02.embedding.stored.v1
 +------------------+
         ↓
 +------------------+
-| update_metadata  | Update st_embeddings
+| update_metadata  | Set faiss_id, status=INDEXED
 +------------------+
         ↓
 p08.faiss.indexed.v1
 ```
 
-**Latency**: <50ms P95 (async, non-blocking for user)
+**NEW (pgvector)**: **No P08 action needed**
+
+```sql
+-- Vector is searchable IMMEDIATELY after INSERT
+-- pgvector HNSW index updates automatically
+SELECT embedding_id, event_id,
+       vector <=> $1 AS distance
+FROM st_vec
+WHERE tenant_id = $2
+ORDER BY vector <=> $1
+LIMIT 10;
+```
 
 ### Use Case 2: Backfill Legacy Records
 
@@ -453,32 +431,59 @@ p08.backfill.complete.v1
 
 ## Storage Changes
 
-### New Table: st_vec
+### Table: st_vec (PostgreSQL/pgvector)
 
 Replaces embedding storage in st_embedding_queue:
 
 ```sql
+-- PostgreSQL with pgvector extension
+CREATE TABLE st_vec (
+  embedding_id UUID PRIMARY KEY,
+  event_id UUID NOT NULL REFERENCES st_hipp_events(event_id) ON DELETE CASCADE,
+  tenant_id VARCHAR(64) NOT NULL,
+  space_id VARCHAR(64) NOT NULL,
+  vector VECTOR(768) NOT NULL,           -- Native pgvector type (not BLOB)
+  vector_dim INTEGER NOT NULL DEFAULT 768,
+  model_id VARCHAR(64) NOT NULL DEFAULT 'ultrabert_v2.1.0',
+  status VARCHAR(16) NOT NULL DEFAULT 'READY',  -- READY = searchable immediately
+  cognitive_trace_id VARCHAR(128),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ
+  -- REMOVED: faiss_id, indexed_at (pgvector handles indexing)
+);
+
+-- HNSW index for fast approximate nearest neighbor search
+CREATE INDEX CONCURRENTLY ix_st_vec_hnsw
+ON st_vec USING hnsw (vector vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+
+-- B-tree indexes for filtering
+CREATE INDEX ix_st_vec_event ON st_vec(event_id);
+CREATE INDEX ix_st_vec_tenant ON st_vec(tenant_id, space_id);
+CREATE INDEX ix_st_vec_model ON st_vec(model_id);
+CREATE INDEX ix_st_vec_status ON st_vec(status);
+```
+
+### SQLite Schema (DEPRECATED)
+
+```sql
+-- OLD SQLite schema (for reference only)
 CREATE TABLE st_vec (
   embedding_id TEXT PRIMARY KEY,
   event_id TEXT NOT NULL,
-  tenant_id TEXT NOT NULL,
-  space_id TEXT NOT NULL,
-  vector BLOB NOT NULL,              -- 768 floats packed
-  vector_dim INTEGER NOT NULL DEFAULT 768,
-  model_id TEXT NOT NULL DEFAULT 'ultrabert_v2.1.0',
-  vector_norm REAL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  vector BLOB NOT NULL,              -- struct.pack("768f", *embedding)
+  faiss_id INTEGER,                  -- DEPRECATED with pgvector
+  ...
 );
 ```
 
-### Updated: st_hipp_events.embedding_status
+### Updated: st_hipp_events.embedding_status (Simplified)
 
 | Status | Set By | Meaning |
-|--------|--------|---------|
+|--------|--------|--------|
 | PENDING | Legacy/fallback | Needs backfill (rare after ADR-K003) |
-| READY | P02 M23 | Embedding stored in st_vec |
-| INDEXED | P08 | Also in FAISS search index |
+| READY | P02 M16 (atomic) | Embedding stored in st_vec, **immediately searchable via pgvector** |
+| ~~INDEXED~~ | ~~P08 Scheduler~~ | **DEPRECATED** - pgvector auto-indexes on INSERT |
 | FAILED | P02/P08 | Generation failed |
 
 ### Deprecated: st_embedding_queue
@@ -489,45 +494,71 @@ The job queue is no longer needed for primary flow. May be kept for backfill coo
 
 ## Performance Comparison
 
-| Metric | OLD (P08 Primary) | NEW (P02 Inline) | Improvement |
-|--------|-------------------|------------------|-------------|
-| Embedding model | MiniLM (384-dim) | UltraBERT (768-dim) | Higher quality |
-| Additional model load | ~250MB | 0MB | -250MB |
-| P02 latency impact | 0ms | ~0ms (cache read) | Same |
-| Embedding availability | Async (seconds) | Immediate | Instant |
-| P03 can use embedding? | Maybe | Always | 100% |
-| FAISS search quality | 384-dim | 768-dim | Better |
+| Metric | OLD (P08 Primary) | P02 Inline + FAISS | **NEW (pgvector)** |
+|--------|-------------------|--------------------|-----------------|
+| Embedding model | MiniLM (384-dim) | UltraBERT (768-dim) | UltraBERT (768-dim) |
+| Additional model load | ~250MB | 0MB | 0MB |
+| P02 latency impact | 0ms | ~0ms (cache read) | ~0ms (cache read) |
+| Embedding availability | Async (seconds) | Immediate | Immediate |
+| **Search availability** | **After P08 batch** | **After P08 batch** | **Immediate (auto-index)** |
+| P03 can use embedding? | Maybe | Always | Always |
+| Search index | FAISS (384-dim) | FAISS (768-dim) | **pgvector HNSW (768-dim)** |
+| Separate index process? | Yes (P08) | Yes (P08 300s) | **No (PostgreSQL handles)** |
+| External dependencies | FAISS Python lib | FAISS Python lib | **None (native SQL)** |
 
 ---
 
 ## Implementation Timeline
 
-### Phase 1: P02 Inline (Days 1-2)
+### Phase 1: P02 Inline ✅ COMPLETE
 
-| Task | Deliverable |
-|------|-------------|
-| Create M22 | `k0/modules/embedding/extract_from_cache.py` |
-| Create M23 | `k0/modules/builders/embedding_write.py` |
-| Update P02 DAG | `k0/contracts/pipelines/p02_write.v1.yaml` |
-| Create st_vec table | Migration |
-| Unit tests | `tests/k0/modules/test_embedding_*.py` |
+| Task | Deliverable | Status |
+|------|-------------|--------|
+| Create M22 | `k0/modules/embedding/extract_from_cache.py` | ✅ |
+| Merge M23 into M16 | `k0/modules/core/hipp_events_writer.py` | ✅ |
+| Update P02 DAG | `k0/contracts/pipelines/p02_write.v1.yaml` | ✅ |
+| Create st_vec table | Migration | ✅ |
+| Unit tests | `tests/k0/modules/test_embedding_*.py` | ✅ |
 
-### Phase 2: P08 Refactor (Days 2-3)
+### Phase 2: P08 Kernel Scheduler ~~COMPLETE~~ DEPRECATED
 
-| Task | Deliverable |
-|------|-------------|
-| Update P08 contract | `k0/contracts/pipelines/p08_embedding_management.v1.yaml` |
-| Create FAISS indexing modules | `k0/modules/embedding/faiss_*.py` |
-| Create backfill modules | `k0/modules/embedding/query_pending.py`, etc. |
-| Integration tests | `tests/integration/p08/` |
+> **Note**: This phase is superseded by Phase 3 (PostgreSQL/pgvector migration).
+> The kernel scheduler for FAISS indexing is no longer needed.
 
-### Phase 3: Migration (Days 3-4)
+| Task | Deliverable | Status |
+|------|-------------|--------|
+| ~~Kernel lifespan task~~ | ~~`k0/kernel/app.py:_p08_faiss_indexer_loop()`~~ | ~~✅~~ **DEPRECATED** |
+| ~~FaissIndexManager~~ | ~~`k0/runtime/faiss_manager.py`~~ | ~~✅~~ **DEPRECATED** |
+| ~~300s interval loop~~ | ~~Scheduled batch indexing~~ | ~~✅~~ **REMOVED** |
 
-| Task | Deliverable |
-|------|-------------|
-| Backfill legacy PENDING | Run backfill job |
-| Rebuild FAISS (768-dim) | Index migration |
-| Update env vars | `K0_FAISS_DIMENSION=768` |
+### Phase 3: PostgreSQL Migration 🚧 IN PROGRESS
+
+| Task | Deliverable | Status |
+|------|-------------|--------|
+| Install pgvector extension | `CREATE EXTENSION vector;` | 🚧 |
+| Migrate st_vec to VECTOR(768) | Alembic migration `0026_st_vec.py` | 🚧 |
+| Create HNSW index | `ix_st_vec_hnsw` | 🚧 |
+| Update M16 syscall | Convert list to pgvector format | 🚧 |
+| Remove FAISS dependencies | `faiss-cpu` from requirements | 🚧 |
+| Deprecate `faiss_id` column | Remove from st_vec | 🚧 |
+| Deprecate INDEXED status | READY = searchable | 🚧 |
+| Remove kernel scheduler | `_p08_faiss_indexer_loop()` | 🚧 |
+| Update P08 to maintenance-only | Backfill, cleanup, recompute | 🚧 |
+
+| Task | Deliverable | Status |
+|------|-------------|--------|
+| Kernel lifespan task | `k0/kernel/app.py:_p08_faiss_indexer_loop()` | ✅ |
+| FaissIndexManager | `k0/runtime/faiss_manager.py` (IndexIDMap wrapper) | ✅ |
+| Catch-up on boot | Polls READY vectors immediately on startup | ✅ |
+| 300s interval loop | Scheduled batch indexing | ✅ |
+
+### Phase 3: Migration ✅ COMPLETE
+
+| Task | Deliverable | Status |
+|------|-------------|--------|
+| FAISS 768-dim | IndexFlatL2 wrapped in IndexIDMap | ✅ |
+| Status transitions | READY → INDEXED with faiss_id | ✅ |
+| Update env vars | `K0_FAISS_DIMENSION=768` default | ✅ |
 
 ---
 
@@ -535,11 +566,12 @@ The job queue is no longer needed for primary flow. May be kept for backfill coo
 
 | Question | Answer |
 |----------|--------|
-| Should P08 still exist? | **Yes** - repurposed for management |
-| What triggers FAISS indexing? | `p02.embedding.stored.v1` from P02 M23 |
-| What about legacy records? | P08 backfill flow handles them |
-| FAISS dimension change? | Rebuild index with 768-dim on migration |
+| Should P08 still exist? | **Yes** - runs as kernel lifespan scheduler |
+| What triggers FAISS indexing? | Kernel scheduler polls st_vec for READY vectors (300s interval, catch-up on boot) |
+| What about legacy records? | P08 backfill flow handles them (future) |
+| FAISS dimension change? | ✅ Done - 768-dim with IndexIDMap wrapper |
 | Is MiniLM still needed? | **No** - UltraBERT is primary model |
+| Why merge M23 into M16? | Atomic 3-table transaction (st_hipp_events + st_vec + st_pipeline_processed) |
 
 ---
 
@@ -547,6 +579,8 @@ The job queue is no longer needed for primary flow. May be kept for backfill coo
 
 - **ADR-K003**: `docs/architecture/decisions-K0/pipelines/k003-inline-embedding-ultrabert.md`
 - **UltraBERT Adapter**: `k0/runtime/ultrabert_adapter.py`
+- **FaissIndexManager**: `k0/runtime/faiss_manager.py`
+- **Kernel Scheduler**: `k0/kernel/app.py:_p08_faiss_indexer_loop()`
 - **P02 Pipeline**: `k0/contracts/pipelines/p02_write.v1.yaml`
 - **P08 Dossier v2**: `docs/pipelines/P08_embedding_dossier_v2.md`
 - **P03 Dossier**: `docs/pipelines/P03_consolidation_dossier.md`

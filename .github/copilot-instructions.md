@@ -54,7 +54,35 @@ This covers the **5-step design process** BEFORE implementation:
 Use this gated process:
 
 ---
+## 🚦 GATE 0 — Architecture Sync Check
 
+**MANDATORY before starting ANY work on K0 code.**
+
+Run the governance sync tool to check current state:
+
+```powershell
+python -m governance.k0.scripts.sync --report
+```
+
+* If status shows **SYNCED** → proceed to GATE 1
+* If status shows **DRIFT DETECTED** → review the detailed diff:
+  * **Missing in master**: Code exists but not documented → add to `k0_architecture_master.md`
+  * **Missing in code**: Documented but not implemented → verify if Planning status or needs implementation
+* Resolve any unexpected drift before proceeding
+
+**Sync Tool Location**: `governance/k0/scripts/sync.py`
+**Master Document**: `governance/k0/k0_architecture_master.md`
+
+**Categories Checked**:
+| Category | Source | Master Section |
+|----------|--------|----------------|
+| Syscalls | `k0/kernel/syscalls.py` | Part 7.1 |
+| Pipelines | `k0/contracts/pipelines/*.yaml` | Part 2.1 |
+| Modules | `k0/modules/**/*.py` + contracts | Part 3.1 |
+| ADRs | `docs/architecture/decisions-K0/**/*.md` | Part 7.1 |
+| Events | `k0/contracts/modules/*.yaml` + code | Part 4.1 |
+
+---
 ## 🚦 GATE 1 — Architectural Decision Validation
 
 ## 🚦 GATE 1 — Architectural Decision & Dossier Validation
@@ -126,7 +154,7 @@ Use this gated process:
 
 ---
 
-## 🚦 GATE 5 — Documentation of Change
+## 🚦 GATE 5 — Documentation of Change & Sync Validation
 
 * Document:
 
@@ -155,6 +183,20 @@ Use this gated process:
 
 * Update architecture diagrams and module overviews when the change affects structure.
 
+* **Run final sync validation**:
+
+```powershell
+python -m governance.k0.scripts.sync --report
+```
+
+* Status MUST show **SYNCED** or only expected **Planning** drift
+* If drift detected:
+  * Add new modules to Part 3.1 Module Master Registry
+  * Add new events to Part 4.1 Event Topics Registry
+  * Add new syscalls to Part 7.1 Syscall Methods Registry
+  * Update ADR index in Part 7.1 if new ADRs created
+* Work is NOT complete until sync shows no unexpected drift
+
 
 ---
 
@@ -164,11 +206,12 @@ Each gate is a blocker:
 
 | Gate   | If Missing                                               |
 | ------ | -------------------------------------------------------- |
+| GATE 0 | Cannot start (unknown sync state = potential conflicts)  |
 | GATE 1 | Cannot continue (no decisions = no grounding)            |
 | GATE 2 | Cannot implement (no contract clarity)                   |
 | GATE 3 | Cannot test (implementation incomplete or non-compliant) |
 | GATE 4 | Cannot finalize (tests failing or incomplete)            |
-| GATE 5 | Work considered incomplete                               |
+| GATE 5 | Work considered incomplete (sync must pass)              |
 
 ---
 

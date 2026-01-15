@@ -10,7 +10,7 @@ output_event_types:
 latency_budget_ms: 50
 
 side_effects:
-  - delete:st_vec
+  - write:st_vec
   - read:st_hipp_events
 
 idempotent: true

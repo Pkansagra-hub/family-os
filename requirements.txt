@@ -55,6 +55,9 @@ geohash2>=1.1
 httpx>=0.27.0
 httpx-sse>=0.4.0
 
+# PostgreSQL (asyncpg for async operations)
+asyncpg>=0.30.0
+
 # ==================== EMBEDDING WORKER CONTAINER ====================
 # NLP & Embeddings - UltraBERT replaces most of these
 # Install UltraBERT from wheel: pip install wheels/familyos_ultrabert-2.0.3-py3-none-any.whl
@@ -68,6 +71,9 @@ nltk>=3.8.1
 # ONNX Runtime (UltraBERT uses this internally)
 onnxruntime>=1.17.0
 tokenizers>=0.20.0
+
+# String matching (used by entity_disambiguator)
+rapidfuzz>=3.6.0
 
 # OpenAI integration (optional)
 openai>=1.12.0

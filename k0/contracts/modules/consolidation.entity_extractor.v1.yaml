@@ -1,0 +1,65 @@
+# P03 Module Contract: Entity Extractor
+# Phase: R4 - Knowledge Graph Construction
+# Dossier: §D.3.1 stage_40_entity_extractor, §4.4
+
+module_id: consolidation.entity_extractor
+version: v1
+
+input_event_types:
+  - p03.episodes.built.v1
+
+output_event_types:
+  - p03.entities.extracted.v1
+
+latency_budget_ms: 150
+
+side_effects:
+  - read:st_kg_dom  # Entity normalization lookup
+
+idempotent: true
+
+fabric_capabilities:
+  - extract_entities
+
+failure_modes:
+  - code: NER_MODEL_UNAVAILABLE
+    policy: fallback_model
+    description: Use spaCy fallback if UltraBERT unavailable
+  - code: EXTRACTION_TIMEOUT
+    policy: partial_results
+    description: Return entities extracted before timeout
+  - code: ENTITY_NORMALIZATION_FAILED
+    policy: create_new
+    description: Create new entity if normalization fails
+
+description: |
+  Entity Extractor Module (R4 Phase)
+
+  Extracts named entities from event/episode content:
+  - Uses UltraBERT NER cache (P02 pre-computed)
+  - Falls back to spaCy en_core_web_sm
+
+  Entity Types:
+  - PERSON: Family members, friends, contacts
+  - PLACE: Locations, addresses, landmarks
+  - ORG: Organizations, companies, schools
+  - EVENT: Occasions, appointments, activities
+  - PRODUCT: Items, devices, vehicles
+  - DATE: Dates, times, durations
+  - CONCEPT: Abstract concepts, topics
+
+  Normalization:
+  - Resolves aliases to canonical st_kg_dom entities
+  - Creates new entities for unrecognized mentions
+  - Confidence threshold: 0.7
+
+  Configuration:
+  - use_ultrabert_cache: true
+  - fallback_model: spacy_en_core_web_sm
+  - confidence_threshold: 0.7
+  - max_entities_per_event: 20
+
+  Output:
+  - envelope.entities: Array of {entity_id, type, mention, confidence, canonical_id}
+  - envelope.new_entities: Entities to create in st_kg_dom
+  - envelope.entity_event_map: {entity_id: [event_ids]}

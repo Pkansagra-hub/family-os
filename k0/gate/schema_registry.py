@@ -1,14 +1,16 @@
-"""Schema registry access layer used by the Minimal Gate."""
+"""Schema registry access layer used by the Minimal Gate - Async PostgreSQL."""
 
 from __future__ import annotations
 
-import sqlite3
-import threading
-from contextlib import contextmanager
+import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Dict, Iterable, Iterator, Sequence
+from typing import TYPE_CHECKING, AsyncIterator, Dict, Iterable, Sequence
 
-from k0.uow.connection_pool import connection_scope
+from k0.db.connection import connection_scope
+
+if TYPE_CHECKING:
+    import asyncpg
 
 ALLOWED_STATUSES: Sequence[str] = (
     "REGISTERED",
@@ -31,22 +33,16 @@ class SchemaRecord:
     unblocked_ts: str | None = None
 
 
-@contextmanager
-def _resolve_connection(
-    connection: sqlite3.Connection | None,
-) -> Iterator[sqlite3.Connection]:
+@asynccontextmanager
+async def _resolve_connection(
+    connection: "asyncpg.Connection | None",
+) -> AsyncIterator["asyncpg.Connection"]:
     if connection is not None:
         yield connection
         return
 
-    with connection_scope() as pooled_connection:
+    async with connection_scope() as pooled_connection:
         yield pooled_connection
-        pooled_connection.commit()
-
-
-def _ensure_row_factory(connection: sqlite3.Connection) -> None:
-    if connection.row_factory is None:
-        connection.row_factory = sqlite3.Row
 
 
 def _normalize_sha256(value: str) -> str:
@@ -62,30 +58,28 @@ def _normalize_sha256(value: str) -> str:
 
 
 class SchemaRegistry:
-    """Cached facade backed by the schema_registry SQLite table."""
+    """Cached facade backed by the schema_registry PostgreSQL table."""
 
     def __init__(self, metrics_exporter=None) -> None:
         self._cache: Dict[tuple[str, str], SchemaRecord] = {}
-        self._lock = threading.RLock()
+        self._lock = asyncio.Lock()
         self._loaded = False
-        self._metrics_exporter = metrics_exporter  # Issue #012 (Gap 43): Schema cache metrics
+        self._metrics_exporter = metrics_exporter
 
-    def clear_cache(self) -> None:
-        with self._lock:
+    async def clear_cache(self) -> None:
+        async with self._lock:
             self._cache.clear()
             self._loaded = False
-            # Issue #012 (Gap 43): Update cache entries gauge on clear
             if self._metrics_exporter is not None:
                 self._metrics_exporter.set_gauge("schema_cache_entries_active", 0.0)
 
-    def load(self, *, connection: sqlite3.Connection | None = None) -> None:
+    async def load(self, *, connection: "asyncpg.Connection | None" = None) -> None:
         """Load schema metadata into the process cache."""
 
-        with _resolve_connection(connection) as conn:
-            _ensure_row_factory(conn)
-            rows = conn.execute(
+        async with _resolve_connection(connection) as conn:
+            rows = await conn.fetch(
                 "SELECT schema_uri, version, sha256, status, operator_id, blocked_ts, blocked_reason, unblocked_ts FROM schema_registry"
-            ).fetchall()
+            )
         records = {
             (row["schema_uri"], row["version"]): SchemaRecord(
                 uri=row["schema_uri"],
@@ -99,41 +93,38 @@ class SchemaRegistry:
             )
             for row in rows
         }
-        with self._lock:
+        async with self._lock:
             self._cache = records
             self._loaded = True
-            # Issue #012 (Gap 43): Update cache entries gauge on load
             if self._metrics_exporter is not None:
                 self._metrics_exporter.set_gauge(
                     "schema_cache_entries_active", float(len(self._cache))
                 )
 
-    def get(
+    async def get(
         self,
         uri: str,
         version: str,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> SchemaRecord:
         key = (uri, version)
-        with self._lock:
+        async with self._lock:
             record = self._cache.get(key)
             if record is not None:
-                # Issue #012 (Gap 43): Schema cache hit metric
                 if self._metrics_exporter is not None:
                     self._metrics_exporter.emit("schema_cache_hits_total")
                 return record
 
-        # Issue #012 (Gap 43): Schema cache miss metric
         if self._metrics_exporter is not None:
             self._metrics_exporter.emit("schema_cache_misses_total")
 
-        with _resolve_connection(connection) as conn:
-            _ensure_row_factory(conn)
-            row = conn.execute(
-                "SELECT schema_uri, version, sha256, status, operator_id, blocked_ts, blocked_reason, unblocked_ts FROM schema_registry WHERE schema_uri=? AND version=?",
-                (uri, version),
-            ).fetchone()
+        async with _resolve_connection(connection) as conn:
+            row = await conn.fetchrow(
+                "SELECT schema_uri, version, sha256, status, operator_id, blocked_ts, blocked_reason, unblocked_ts FROM schema_registry WHERE schema_uri=$1 AND version=$2",
+                uri,
+                version,
+            )
 
         if row is None:
             msg = f"Schema {uri}@{version} not found"
@@ -150,148 +141,133 @@ class SchemaRegistry:
             unblocked_ts=row["unblocked_ts"],
         )
 
-        with self._lock:
+        async with self._lock:
             self._cache[key] = record
-            # Issue #012 (Gap 43): Update cache entries gauge on insert
             if self._metrics_exporter is not None:
                 self._metrics_exporter.set_gauge(
                     "schema_cache_entries_active", float(len(self._cache))
                 )
         return record
 
-    def register(
+    async def register(
         self,
         record: SchemaRecord,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> SchemaRecord:
-        stored_record = self._normalize_record(record)
-        with _resolve_connection(connection) as conn:
-            _ensure_row_factory(conn)
-            try:
-                conn.execute(
-                    (
-                        "INSERT INTO schema_registry (schema_uri, version, sha256, status) VALUES (?, ?, ?, ?)"
-                    ),
-                    (
-                        stored_record.uri,
-                        stored_record.version,
-                        stored_record.sha256,
-                        stored_record.status,
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                msg = f"Schema {stored_record.uri}@{stored_record.version} already exists"
-                raise ValueError(msg) from exc
-        self._store(stored_record)
-        return stored_record
+        import asyncpg as asyncpg_module
 
-    def upsert(
-        self,
-        record: SchemaRecord,
-        *,
-        connection: sqlite3.Connection | None = None,
-    ) -> SchemaRecord:
         stored_record = self._normalize_record(record)
-        with _resolve_connection(connection) as conn:
-            _ensure_row_factory(conn)
-            conn.execute(
-                (
-                    "INSERT INTO schema_registry (schema_uri, version, sha256, status) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(schema_uri, version) DO UPDATE SET sha256=excluded.sha256, status=excluded.status"
-                ),
-                (
+        async with _resolve_connection(connection) as conn:
+            try:
+                await conn.execute(
+                    "INSERT INTO schema_registry (schema_uri, version, sha256, status) VALUES ($1, $2, $3, $4)",
                     stored_record.uri,
                     stored_record.version,
                     stored_record.sha256,
                     stored_record.status,
-                ),
-            )
-        self._store(stored_record)
+                )
+            except asyncpg_module.UniqueViolationError as exc:
+                msg = f"Schema {stored_record.uri}@{stored_record.version} already exists"
+                raise ValueError(msg) from exc
+        await self._store(stored_record)
         return stored_record
 
-    def promote(
+    async def upsert(
+        self,
+        record: SchemaRecord,
+        *,
+        connection: "asyncpg.Connection | None" = None,
+    ) -> SchemaRecord:
+        stored_record = self._normalize_record(record)
+        async with _resolve_connection(connection) as conn:
+            await conn.execute(
+                """
+                INSERT INTO schema_registry (schema_uri, version, sha256, status)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT(schema_uri, version) DO UPDATE SET
+                    sha256 = EXCLUDED.sha256,
+                    status = EXCLUDED.status
+                """,
+                stored_record.uri,
+                stored_record.version,
+                stored_record.sha256,
+                stored_record.status,
+            )
+        await self._store(stored_record)
+        return stored_record
+
+    async def promote(
         self,
         uri: str,
         version: str,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> SchemaRecord:
         from datetime import datetime, timezone
 
         unblocked_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-        with _resolve_connection(connection) as conn:
-            _ensure_row_factory(conn)
-            row = conn.execute(
-                "SELECT schema_uri, version, sha256, status FROM schema_registry WHERE schema_uri=? AND version=?",
-                (uri, version),
-            ).fetchone()
+        async with _resolve_connection(connection) as conn:
+            row = await conn.fetchrow(
+                "SELECT schema_uri, version, sha256, status FROM schema_registry WHERE schema_uri=$1 AND version=$2",
+                uri,
+                version,
+            )
             if row is None:
                 msg = f"Schema {uri}@{version} not found"
                 raise KeyError(msg)
 
-            # Note: BLOCKED schemas CAN be promoted (unblock workflow)
             # Demote other versions to maintain N/N+1 policy
-            conn.execute(
-                "UPDATE schema_registry SET status='BLOCKED' WHERE schema_uri=? AND status='DEPRECATED' AND version != ?",
-                (uri, version),
+            await conn.execute(
+                "UPDATE schema_registry SET status='BLOCKED' WHERE schema_uri=$1 AND status='DEPRECATED' AND version != $2",
+                uri,
+                version,
             )
-            conn.execute(
-                "UPDATE schema_registry SET status='DEPRECATED' WHERE schema_uri=? AND status='ACTIVE' AND version != ?",
-                (uri, version),
+            await conn.execute(
+                "UPDATE schema_registry SET status='DEPRECATED' WHERE schema_uri=$1 AND status='ACTIVE' AND version != $2",
+                uri,
+                version,
             )
-            # Set unblocked_ts if this version was previously blocked (has operator_id)
-            conn.execute(
+            # Set unblocked_ts if this version was previously blocked
+            await conn.execute(
                 """
                 UPDATE schema_registry
-                SET status='ACTIVE', unblocked_ts=?
-                WHERE schema_uri=? AND version=? AND operator_id IS NOT NULL
+                SET status='ACTIVE', unblocked_ts=$1
+                WHERE schema_uri=$2 AND version=$3 AND operator_id IS NOT NULL
                 """,
-                (unblocked_ts, uri, version),
+                unblocked_ts,
+                uri,
+                version,
             )
             # For versions never blocked, just set ACTIVE
-            conn.execute(
+            await conn.execute(
                 """
                 UPDATE schema_registry
                 SET status='ACTIVE'
-                WHERE schema_uri=? AND version=? AND operator_id IS NULL
+                WHERE schema_uri=$1 AND version=$2 AND operator_id IS NULL
                 """,
-                (uri, version),
+                uri,
+                version,
             )
-            rows = conn.execute(
-                "SELECT schema_uri, version, sha256, status, operator_id, blocked_ts, blocked_reason, unblocked_ts FROM schema_registry WHERE schema_uri=?",
-                (uri,),
-            ).fetchall()
+            rows = await conn.fetch(
+                "SELECT schema_uri, version, sha256, status, operator_id, blocked_ts, blocked_reason, unblocked_ts FROM schema_registry WHERE schema_uri=$1",
+                uri,
+            )
 
-        self._refresh_uri_cache(uri, rows)
+        await self._refresh_uri_cache(uri, rows)
         return self._cache[(uri, version)]
 
-    def block(
+    async def block(
         self,
         uri: str,
         version: str,
         *,
         operator_id: str,
         reason: str,
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> SchemaRecord:
-        """Block a schema version with full audit trail.
-
-        Args:
-            uri: Schema URI to block
-            version: Version to block
-            operator_id: Email/ID of operator performing block (required)
-            reason: Justification for emergency block (required)
-            connection: Optional DB connection
-
-        Returns:
-            Updated SchemaRecord with audit metadata
-
-        Raises:
-            ValueError: If operator_id or reason is empty
-            KeyError: If schema version not found
-        """
+        """Block a schema version with full audit trail."""
         if not operator_id or not operator_id.strip():
             msg = "operator_id is required for block operations"
             raise ValueError(msg)
@@ -303,92 +279,87 @@ class SchemaRegistry:
 
         blocked_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-        with _resolve_connection(connection) as conn:
-            _ensure_row_factory(conn)
-            updated = conn.execute(
+        async with _resolve_connection(connection) as conn:
+            result = await conn.execute(
                 """
                 UPDATE schema_registry
                 SET
                   status='BLOCKED',
-                  operator_id=?,
-                  blocked_ts=?,
-                  blocked_reason=?,
+                  operator_id=$1,
+                  blocked_ts=$2,
+                  blocked_reason=$3,
                   unblocked_ts=NULL
-                WHERE schema_uri=? AND version=?
+                WHERE schema_uri=$4 AND version=$5
                 """,
-                (operator_id, blocked_ts, reason, uri, version),
+                operator_id,
+                blocked_ts,
+                reason,
+                uri,
+                version,
             )
-            if updated.rowcount == 0:
+            # Check if update affected any rows
+            if result == "UPDATE 0":
                 msg = f"Schema {uri}@{version} not found"
                 raise KeyError(msg)
-            rows = conn.execute(
-                "SELECT schema_uri, version, sha256, status, operator_id, blocked_ts, blocked_reason, unblocked_ts FROM schema_registry WHERE schema_uri=?",
-                (uri,),
-            ).fetchall()
+            rows = await conn.fetch(
+                "SELECT schema_uri, version, sha256, status, operator_id, blocked_ts, blocked_reason, unblocked_ts FROM schema_registry WHERE schema_uri=$1",
+                uri,
+            )
 
-        self._refresh_uri_cache(uri, rows)
+        await self._refresh_uri_cache(uri, rows)
         return self._cache[(uri, version)]
 
     def active_versions(self, uri: str) -> Iterable[SchemaRecord]:
-        with self._lock:
-            return tuple(
-                record
-                for (record_uri, _), record in self._cache.items()
-                if record_uri == uri and record.status == "ACTIVE"
-            )
+        # Note: This is sync for cache access only
+        return tuple(
+            record
+            for (record_uri, _), record in self._cache.items()
+            if record_uri == uri and record.status == "ACTIVE"
+        )
 
     def records_for_uri(self, uri: str) -> Iterable[SchemaRecord]:
-        with self._lock:
-            return tuple(
-                record for (record_uri, _), record in self._cache.items() if record_uri == uri
-            )
+        # Note: This is sync for cache access only
+        return tuple(record for (record_uri, _), record in self._cache.items() if record_uri == uri)
 
-    def get_audit_trail(
+    async def get_audit_trail(
         self,
         uri: str | None = None,
         version: str | None = None,
         status: str | None = None,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> Iterable[SchemaRecord]:
-        """Query schema registry with optional filters for audit trail reporting.
-
-        Args:
-            uri: Filter by schema URI (optional)
-            version: Filter by version (optional, requires uri)
-            status: Filter by status (optional)
-            connection: Optional DB connection
-
-        Returns:
-            Iterable of SchemaRecord instances with audit metadata
-        """
+        """Query schema registry with optional filters for audit trail reporting."""
         query_parts = [
             "SELECT schema_uri, version, sha256, status, operator_id, blocked_ts, blocked_reason, unblocked_ts FROM schema_registry"
         ]
         params: list[str] = []
         where_clauses: list[str] = []
+        param_idx = 1
 
         if uri is not None:
-            where_clauses.append("schema_uri=?")
+            where_clauses.append(f"schema_uri=${param_idx}")
             params.append(uri)
+            param_idx += 1
         if version is not None:
             if uri is None:
                 msg = "version filter requires uri parameter"
                 raise ValueError(msg)
-            where_clauses.append("version=?")
+            where_clauses.append(f"version=${param_idx}")
             params.append(version)
+            param_idx += 1
         if status is not None:
-            where_clauses.append("status=?")
+            where_clauses.append(f"status=${param_idx}")
             params.append(status.upper())
+            param_idx += 1
 
         if where_clauses:
             query_parts.append("WHERE " + " AND ".join(where_clauses))
 
         query = " ".join(query_parts)
 
-        with _resolve_connection(connection) as conn:
-            _ensure_row_factory(conn)
-            rows = conn.execute(query, tuple(params)).fetchall()
+        async with _resolve_connection(connection) as conn:
+            rows = await conn.fetch(query, *params)
 
         return tuple(
             SchemaRecord(
@@ -420,12 +391,12 @@ class SchemaRegistry:
 
         return SchemaRecord(uri=uri, version=version, sha256=sha256, status=status)
 
-    def _store(self, record: SchemaRecord) -> None:
-        with self._lock:
+    async def _store(self, record: SchemaRecord) -> None:
+        async with self._lock:
             self._cache[(record.uri, record.version)] = record
             self._loaded = True
 
-    def _refresh_uri_cache(self, uri: str, rows: Sequence[sqlite3.Row]) -> None:
+    async def _refresh_uri_cache(self, uri: str, rows) -> None:
         records = {
             (row["schema_uri"], row["version"]): SchemaRecord(
                 uri=row["schema_uri"],
@@ -439,7 +410,7 @@ class SchemaRegistry:
             )
             for row in rows
         }
-        with self._lock:
+        async with self._lock:
             keys_to_remove = [key for key in self._cache if key[0] == uri]
             for key in keys_to_remove:
                 del self._cache[key]

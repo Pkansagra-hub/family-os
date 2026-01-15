@@ -6,6 +6,7 @@ import json
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -13,8 +14,10 @@ from k0.automation.performance_regression_detector import (
     BaselineManager,
     MetricsSnapshot,
     PerformanceBaseline,
+    PerformanceProfileRunner,
     RegressionDetector,
     RegressionResult,
+    main,
 )
 
 
@@ -436,3 +439,427 @@ class TestBaselineIntegration:
         assert len(p95_results) > 0
         for result in p95_results:
             assert 4.5 < result.change_percent < 5.5
+
+
+class TestPerformanceProfileRunner:
+    """Tests for PerformanceProfileRunner."""
+
+    def test_run_profile_success(self, tmp_path):
+        """Test successful profile execution."""
+        # Create mock profile file
+        profile_dir = tmp_path / "profiles"
+        profile_dir.mkdir()
+        profile_file = profile_dir / "test_profile.py"
+
+        # Mock profile that outputs JSON metrics
+        profile_file.write_text(
+            """
+import json
+metrics = {
+    "p50_latency_ms": 10.0,
+    "p95_latency_ms": 50.0,
+    "p99_latency_ms": 100.0,
+    "throughput_rps": 1000,
+    "error_rate": 0.001
+}
+print(json.dumps(metrics))
+"""
+        )
+
+        runner = PerformanceProfileRunner(profile_dir)
+        metrics = runner.run_profile("test_profile")
+
+        assert metrics.p50_latency_ms == 10.0
+        assert metrics.p95_latency_ms == 50.0
+        assert metrics.throughput_rps == 1000
+
+    def test_run_profile_not_found(self, tmp_path):
+        """Test running non-existent profile."""
+        runner = PerformanceProfileRunner(tmp_path)
+
+        with pytest.raises(FileNotFoundError, match="Profile not found"):
+            runner.run_profile("nonexistent")
+
+    def test_run_profile_execution_failure(self, tmp_path):
+        """Test profile execution failure."""
+        profile_dir = tmp_path / "profiles"
+        profile_dir.mkdir()
+        profile_file = profile_dir / "failing_profile.py"
+
+        # Profile that exits with error
+        profile_file.write_text("import sys; sys.exit(1)")
+
+        runner = PerformanceProfileRunner(profile_dir)
+
+        with pytest.raises(RuntimeError, match="Profile execution failed"):
+            runner.run_profile("failing_profile")
+
+    def test_run_profile_invalid_json(self, tmp_path):
+        """Test profile outputting invalid JSON."""
+        profile_dir = tmp_path / "profiles"
+        profile_dir.mkdir()
+        profile_file = profile_dir / "invalid_json.py"
+
+        profile_file.write_text('print("not json")')
+
+        runner = PerformanceProfileRunner(profile_dir)
+
+        with pytest.raises(RuntimeError, match="not valid JSON"):
+            runner.run_profile("invalid_json")
+
+    @patch("k0.automation.performance_regression_detector.subprocess.run")
+    def test_run_suite_auto_discover(self, mock_subprocess, tmp_path):
+        """Test running suite with auto-discovery."""
+        profile_dir = tmp_path / "profiles"
+        profile_dir.mkdir()
+
+        # Create multiple profile files
+        for name in ["small", "balanced", "large"]:
+            profile_file = profile_dir / f"{name}.py"
+            profile_file.write_text(
+                """
+import json
+metrics = {
+    "p50_latency_ms": 10.0,
+    "p95_latency_ms": 50.0,
+    "p99_latency_ms": 100.0,
+    "throughput_rps": 1000,
+    "error_rate": 0.001
+}
+print(json.dumps(metrics))
+"""
+            )
+
+        # Mock git commands and profile execution
+        def mock_subprocess_run(cmd, **kwargs):
+            mock_result = Mock()
+            mock_result.returncode = 0
+
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                mock_result.stdout = "abc123def\n"
+            elif cmd[:2] == ["git", "rev-parse"]:
+                mock_result.stdout = "main\n"
+            else:
+                # Mock profile execution - return valid JSON
+                mock_result.stdout = '{"p50_latency_ms": 10.0, "p95_latency_ms": 50.0, "p99_latency_ms": 100.0, "throughput_rps": 1000, "error_rate": 0.001}'
+
+            return mock_result
+
+        mock_subprocess.side_effect = mock_subprocess_run
+
+        runner = PerformanceProfileRunner(profile_dir)
+        baseline = runner.run_suite()
+
+        assert len(baseline.metrics) == 3
+        assert "small" in baseline.metrics
+        assert "balanced" in baseline.metrics
+        assert "large" in baseline.metrics
+        assert baseline.git_sha == "abc123def"
+
+    @patch("k0.automation.performance_regression_detector.subprocess.run")
+    def test_run_suite_specific_profiles(self, mock_subprocess, tmp_path):
+        """Test running suite with specific profiles."""
+        profile_dir = tmp_path / "profiles"
+        profile_dir.mkdir()
+
+        # Create only one profile
+        profile_file = profile_dir / "small.py"
+        profile_file.write_text(
+            """
+import json
+metrics = {
+    "p50_latency_ms": 10.0,
+    "p95_latency_ms": 50.0,
+    "p99_latency_ms": 100.0,
+    "throughput_rps": 1000,
+    "error_rate": 0.001
+}
+print(json.dumps(metrics))
+"""
+        )
+
+        # Mock git commands and profile execution
+        def mock_subprocess_run(cmd, **kwargs):
+            mock_result = Mock()
+            mock_result.returncode = 0
+
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                mock_result.stdout = "abc123def\n"
+            elif cmd[:2] == ["git", "rev-parse"]:
+                mock_result.stdout = "main\n"
+            else:
+                # Mock profile execution - return valid JSON
+                mock_result.stdout = '{"p50_latency_ms": 10.0, "p95_latency_ms": 50.0, "p99_latency_ms": 100.0, "throughput_rps": 1000, "error_rate": 0.001}'
+
+            return mock_result
+
+        mock_subprocess.side_effect = mock_subprocess_run
+
+        runner = PerformanceProfileRunner(profile_dir)
+        baseline = runner.run_suite(["small"])
+
+        assert len(baseline.metrics) == 1
+        assert "small" in baseline.metrics
+
+    def test_get_current_branch_success(self, monkeypatch):
+        """Test getting current branch successfully."""
+        monkeypatch.setattr(
+            "subprocess.run", lambda *args, **kwargs: Mock(stdout="main\n", returncode=0)
+        )
+
+        branch = PerformanceProfileRunner._get_current_branch()
+        assert branch == "main"
+
+    def test_get_current_branch_failure(self, monkeypatch):
+        """Test getting current branch when git fails."""
+        from subprocess import CalledProcessError
+
+        def mock_run(*args, **kwargs):
+            raise CalledProcessError(1, ["git", "rev-parse", "--abbrev-ref", "HEAD"])
+
+        monkeypatch.setattr("subprocess.run", mock_run)
+
+        branch = PerformanceProfileRunner._get_current_branch()
+        assert branch is None
+
+
+class TestRegressionDetectorEdgeCases:
+    """Additional tests for RegressionDetector edge cases."""
+
+    def test_detect_regressions_missing_profile_in_baseline(self, baseline, caplog):
+        """Test detection when profile missing in baseline."""
+        current = PerformanceBaseline(
+            git_sha="new123",
+            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+        )
+        current.metrics = {
+            "new_profile": MetricsSnapshot(
+                p50_latency_ms=10.0,
+                p95_latency_ms=50.0,
+                p99_latency_ms=100.0,
+                throughput_rps=1000,
+                error_rate=0.001,
+            )
+        }
+
+        detector = RegressionDetector()
+        regressions = detector.detect_regressions(baseline, current)
+
+        # Should skip profiles not in current metrics
+        assert len(regressions) == 0  # No regressions since profiles don't match
+        assert "not in current metrics" in caplog.text
+
+    def test_detect_regressions_missing_profile_in_current(self, baseline, caplog):
+        """Test detection when profile missing in current."""
+        current = PerformanceBaseline(
+            git_sha="new123",
+            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+        )
+        # Empty metrics
+
+        detector = RegressionDetector()
+        regressions = detector.detect_regressions(baseline, current)
+
+        # Should skip all profiles
+        assert len(regressions) == 0
+        assert "not in current metrics" in caplog.text
+
+    def test_detect_regressions_zero_baseline_values(self):
+        """Test detection with zero baseline values."""
+        baseline = PerformanceBaseline(
+            git_sha="base",
+            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+        )
+        baseline.metrics = {
+            "test": MetricsSnapshot(
+                p50_latency_ms=0.0,  # Zero latency
+                p95_latency_ms=0.0,
+                p99_latency_ms=0.0,
+                throughput_rps=0.0,  # Zero throughput
+                error_rate=0.0,  # Zero error rate
+            )
+        }
+
+        current = PerformanceBaseline(
+            git_sha="current",
+            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+        )
+        current.metrics = {
+            "test": MetricsSnapshot(
+                p50_latency_ms=10.0,
+                p95_latency_ms=50.0,
+                p99_latency_ms=100.0,
+                throughput_rps=100.0,
+                error_rate=0.01,
+            )
+        }
+
+        detector = RegressionDetector()
+        regressions = detector.detect_regressions(baseline, current, threshold=0.10)
+
+        # Should handle zero divisions gracefully
+        assert len(regressions) == 5
+        # Error rate should be flagged (any error when baseline is 0)
+        error_regressions = [r for r in regressions if r.metric_name == "error_rate"]
+        assert len(error_regressions) == 1
+        assert error_regressions[0].is_regression
+
+    def test_generate_report_no_regressions(self, baseline):
+        """Test report generation with no regressions."""
+        current = baseline  # Same baseline
+
+        detector = RegressionDetector()
+        regressions = detector.detect_regressions(baseline, current)
+        report = detector.generate_report(baseline, current, regressions)
+
+        assert "PASSED" in report
+        assert "### 🔴 Regressions" not in report
+        assert "Remediation Steps" not in report
+
+    def test_generate_report_with_regressions(self, baseline):
+        """Test report generation with regressions."""
+        current = PerformanceBaseline(
+            git_sha="bad",
+            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+        )
+        current.metrics = {
+            "small": MetricsSnapshot(
+                p50_latency_ms=20.0,  # +100% regression
+                p95_latency_ms=100.0,  # +100% regression
+                p99_latency_ms=200.0,  # +100% regression
+                throughput_rps=500,  # -50% regression
+                error_rate=0.002,  # +100% regression
+            )
+        }
+
+        detector = RegressionDetector()
+        regressions = detector.detect_regressions(
+            baseline, current, threshold=0.50
+        )  # 50% threshold
+        report = detector.generate_report(baseline, current, regressions)
+
+        assert "FAILED" in report
+        assert "Regressions" in report
+        assert "Remediation Steps" in report
+        assert "Profile the changes" in report
+
+
+class TestMainFunction:
+    """Tests for main() function CLI interface."""
+
+    def test_main_run_suite_and_save(self, tmp_path, monkeypatch):
+        """Test main function running suite and saving baseline."""
+        # Mock profile directory
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        profile_file = profiles_dir / "small.py"
+        profile_file.write_text(
+            """
+import json
+print(json.dumps({
+    "p50_latency_ms": 10.0,
+    "p95_latency_ms": 50.0,
+    "p99_latency_ms": 100.0,
+    "throughput_rps": 1000,
+    "error_rate": 0.001
+}))
+"""
+        )
+
+        # Mock git
+        monkeypatch.setattr(
+            "subprocess.run", lambda *args, **kwargs: Mock(stdout="abc123\n", returncode=0)
+        )
+
+        baselines_dir = tmp_path / "baselines"
+        baselines_dir.mkdir()
+
+        with monkeypatch.context() as m:
+            m.setattr(
+                "sys.argv",
+                [
+                    "performance_regression_detector.py",
+                    "--run-suite",
+                    "--save-baseline",
+                    "test-branch",
+                    "--baselines-dir",
+                    str(baselines_dir),
+                    "--profiles-dir",
+                    str(profiles_dir),
+                ],
+            )
+
+            exit_code = main()
+            assert exit_code == 0
+
+            # Check baseline was saved
+            baseline_file = baselines_dir / "test-branch.json"
+            assert baseline_file.exists()
+
+    def test_main_compare_baselines(self, tmp_path, monkeypatch, baseline):
+        """Test main function comparing two baselines."""
+        baselines_dir = tmp_path / "baselines"
+        baselines_dir.mkdir()
+
+        # Save baseline
+        manager = BaselineManager(baselines_dir)
+        manager.save_baseline(baseline)
+
+        # Create current baseline with regression
+        current = PerformanceBaseline(
+            git_sha="current",
+            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+        )
+        current.metrics = {
+            "small": MetricsSnapshot(
+                p50_latency_ms=20.0,  # +100%
+                p95_latency_ms=100.0,  # +100%
+                p99_latency_ms=200.0,  # +100%
+                throughput_rps=1000,
+                error_rate=0.001,
+            )
+        }
+        manager.save_baseline(current)
+
+        with monkeypatch.context() as m:
+            m.setattr(
+                "sys.argv",
+                [
+                    "performance_regression_detector.py",
+                    "--compare",
+                    baseline.git_sha,
+                    current.git_sha,
+                    "--baselines-dir",
+                    str(baselines_dir),
+                    "--fail-on-regression",
+                ],
+            )
+
+            exit_code = main()
+            assert exit_code == 1  # Should fail due to regressions
+
+    def test_main_missing_required_args(self, monkeypatch):
+        """Test main function with missing required arguments."""
+        with monkeypatch.context() as m:
+            m.setattr("sys.argv", ["performance_regression_detector.py"])
+
+            with pytest.raises(SystemExit):  # argparse exits on error
+                main()
+
+    def test_main_file_not_found_error(self, monkeypatch):
+        """Test main function handling FileNotFoundError."""
+        with monkeypatch.context() as m:
+            m.setattr(
+                "sys.argv",
+                [
+                    "performance_regression_detector.py",
+                    "--compare",
+                    "nonexistent1",
+                    "nonexistent2",
+                    "--baselines-dir",
+                    "/nonexistent",
+                ],
+            )
+
+            exit_code = main()
+            assert exit_code == 2  # Error exit code

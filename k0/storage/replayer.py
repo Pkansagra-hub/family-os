@@ -1,17 +1,19 @@
-"""Cold replay coordinator."""
+"""Cold replay coordinator - Async PostgreSQL."""
 
 from __future__ import annotations
 
 import logging
-import sqlite3
 import time
 from dataclasses import dataclass
-from typing import Iterable
+from typing import TYPE_CHECKING
 
+from k0.db.connection import connection_scope
 from k0.gate.schema_registry import SchemaRegistry
 from k0.obs.events import ObservabilityEmitter
 from k0.obs.metrics import MetricsExporter
-from k0.uow.connection_pool import connection_scope
+
+if TYPE_CHECKING:
+    import asyncpg
 
 LOGGER = logging.getLogger(__name__)
 
@@ -46,7 +48,7 @@ class Replayer:
         self._observability = observability
         self._batch_size = max(1, batch_size)
 
-    def run(
+    async def run(
         self,
         *,
         from_position: int,
@@ -68,13 +70,12 @@ class Replayer:
             dry_run=str(dry_run).lower(),
         )
 
-        with connection_scope() as connection:
-            connection.row_factory = sqlite3.Row
-            self._schema_registry.load(connection=connection)
+        async with connection_scope() as connection:
+            await self._schema_registry.load(connection=connection)
 
             cursor_position = int(from_position)
             while True:
-                rows = self._fetch_batch(
+                rows = await self._fetch_batch(
                     connection,
                     after_position=cursor_position,
                     tenant_id=tenant_id,
@@ -107,79 +108,75 @@ class Replayer:
                     # This ensures WAL → receipts → outbox → offsets are checked atomically
                     outcome = "success"
                     try:
-                        connection.execute("BEGIN IMMEDIATE")
+                        async with connection.transaction():
+                            try:
+                                record = await self._schema_registry.get(
+                                    schema_uri,
+                                    schema_version,
+                                    connection=connection,
+                                )
+                            except KeyError as exc:
+                                parity_failures += 1
+                                outcome = "error"
+                                LOGGER.error(
+                                    "Schema missing during replay: %s@%s",
+                                    schema_uri,
+                                    schema_version,
+                                )
+                                self._emit_metric(
+                                    "replay_parity_failures_total",
+                                    1.0,
+                                    failure_type="schema_missing",
+                                    topic=topic,
+                                )
+                                if not dry_run:
+                                    raise ReplayError(str(exc)) from exc
+                                continue
 
-                        try:
-                            record = self._schema_registry.get(
-                                schema_uri,
-                                schema_version,
-                                connection=connection,
-                            )
-                        except KeyError as exc:
-                            parity_failures += 1
-                            outcome = "error"
-                            LOGGER.error(
-                                "Schema missing during replay: %s@%s",
-                                schema_uri,
-                                schema_version,
-                            )
-                            self._emit_metric(
-                                "replay_parity_failures_total",
-                                1.0,
-                                failure_type="schema_missing",
-                                topic=topic,
-                            )
-                            connection.rollback()
-                            if not dry_run:
-                                raise ReplayError(str(exc)) from exc
-                            continue
+                            if record.status == "BLOCKED":
+                                parity_failures += 1
+                                self._emit_metric(
+                                    "replay_parity_failures_total",
+                                    1.0,
+                                    failure_type="schema_blocked",
+                                    schema_uri=schema_uri,
+                                    schema_version=schema_version,
+                                )
+                                raise ReplayError(
+                                    f"Schema {schema_uri}@{schema_version} is blocked"
+                                )
 
-                        if record.status == "BLOCKED":
-                            parity_failures += 1
-                            self._emit_metric(
-                                "replay_parity_failures_total",
-                                1.0,
-                                failure_type="schema_blocked",
-                                schema_uri=schema_uri,
-                                schema_version=schema_version,
-                            )
-                            connection.rollback()
-                            raise ReplayError(f"Schema {schema_uri}@{schema_version} is blocked")
+                            if not await self._receipt_exists(
+                                connection,
+                                wal_pos,
+                                tenant_id=row["tenant_id"],
+                                space_id=row["space_id"],
+                                scope_tenant=tenant_id,
+                                scope_space=space_id,
+                            ):
+                                parity_failures += 1
+                                self._emit_metric(
+                                    "replay_parity_failures_total",
+                                    1.0,
+                                    failure_type="receipt_missing",
+                                    topic=topic,
+                                )
 
-                        if not self._receipt_exists(
-                            connection,
-                            wal_pos,
-                            tenant_id=row["tenant_id"],
-                            space_id=row["space_id"],
-                            scope_tenant=tenant_id,
-                            scope_space=space_id,
-                        ):
-                            parity_failures += 1
-                            self._emit_metric(
-                                "replay_parity_failures_total",
-                                1.0,
-                                failure_type="receipt_missing",
-                                topic=topic,
-                            )
-
-                        # Gap 22: Verify outbox parity (outbox entry exists if required)
-                        # Check if this WAL entry has corresponding outbox entries
-                        if not self._verify_outbox_parity(
-                            connection,
-                            wal_pos,
-                            tenant_id=row["tenant_id"],
-                            space_id=row["space_id"],
-                        ):
-                            parity_failures += 1
-                            self._emit_metric(
-                                "replay_parity_failures_total",
-                                1.0,
-                                failure_type="outbox_parity_mismatch",
-                                topic=topic,
-                            )
-
-                        # Parity checks complete, commit transaction
-                        connection.commit()
+                            # Gap 22: Verify outbox parity (outbox entry exists if required)
+                            # Check if this WAL entry has corresponding outbox entries
+                            if not await self._verify_outbox_parity(
+                                connection,
+                                wal_pos,
+                                tenant_id=row["tenant_id"],
+                                space_id=row["space_id"],
+                            ):
+                                parity_failures += 1
+                                self._emit_metric(
+                                    "replay_parity_failures_total",
+                                    1.0,
+                                    failure_type="outbox_parity_mismatch",
+                                    topic=topic,
+                                )
 
                         # Issue #043: Emit replay_processed_total per event
                         # Note: Use tenant/space labels to match summary metric (line 235)
@@ -193,7 +190,7 @@ class Replayer:
                         )
 
                     except ReplayError:
-                        # Let ReplayError propagate (already logged and rolled back)
+                        # Let ReplayError propagate (already logged)
                         # Issue #043: Emit error outcome
                         self._emit_metric(
                             "replay_processed_total",
@@ -209,7 +206,6 @@ class Replayer:
                         LOGGER.exception(
                             "Unexpected error during parity check at wal_pos=%s", wal_pos
                         )
-                        connection.rollback()
                         # Issue #043: Emit error outcome
                         self._emit_metric(
                             "replay_processed_total",
@@ -295,33 +291,36 @@ class Replayer:
             duration_seconds=duration,
         )
 
-    def _fetch_batch(
+    async def _fetch_batch(
         self,
-        connection: sqlite3.Connection,
+        connection: asyncpg.Connection,
         *,
         after_position: int,
         tenant_id: str | None,
         space_id: str | None,
-    ) -> Iterable[sqlite3.Row]:
-        clauses = ["pos > ?"]
+    ) -> list[asyncpg.Record]:
+        clauses = ["pos > $1"]
         params: list[object] = [after_position]
+        param_idx = 2
         if tenant_id is not None:
-            clauses.append("tenant_id = ?")
+            clauses.append(f"tenant_id = ${param_idx}")
             params.append(tenant_id)
+            param_idx += 1
         if space_id is not None:
-            clauses.append("space_id = ?")
+            clauses.append(f"space_id = ${param_idx}")
             params.append(space_id)
+            param_idx += 1
         predicate = " AND ".join(clauses)
+        params.append(self._batch_size)
         statement = (
             "SELECT pos, tenant_id, space_id, topic, schema_uri, schema_version, envelope_json "
-            f"FROM st_wal WHERE {predicate} ORDER BY pos ASC LIMIT ?"
+            f"FROM st_wal WHERE {predicate} ORDER BY pos ASC LIMIT ${param_idx}"
         )
-        params.append(self._batch_size)
-        return connection.execute(statement, params).fetchall()
+        return await connection.fetch(statement, *params)
 
-    def _receipt_exists(
+    async def _receipt_exists(
         self,
-        connection: sqlite3.Connection,
+        connection: asyncpg.Connection,
         wal_pos: int,
         *,
         tenant_id: str,
@@ -330,28 +329,31 @@ class Replayer:
         scope_space: str | None,
     ) -> bool:
         if scope_tenant is None and scope_space is None:
-            row = connection.execute(
-                "SELECT 1 FROM st_receipts WHERE wal_pos = ? LIMIT 1",
-                (wal_pos,),
-            ).fetchone()
+            row = await connection.fetchrow(
+                "SELECT 1 FROM st_receipts WHERE wal_pos = $1 LIMIT 1",
+                wal_pos,
+            )
             return row is not None
 
-        clauses = ["wal_pos = ?"]
+        clauses = ["wal_pos = $1"]
         params: list[object] = [wal_pos]
+        param_idx = 2
         if scope_tenant is not None:
-            clauses.append("tenant_id = ?")
+            clauses.append(f"tenant_id = ${param_idx}")
             params.append(scope_tenant)
+            param_idx += 1
         if scope_space is not None:
-            clauses.append("space_id = ?")
+            clauses.append(f"space_id = ${param_idx}")
             params.append(scope_space)
+            param_idx += 1
 
         query = "SELECT 1 FROM st_receipts WHERE " + " AND ".join(clauses) + " LIMIT 1"
-        row = connection.execute(query, params).fetchone()
+        row = await connection.fetchrow(query, *params)
         return row is not None
 
-    def _verify_outbox_parity(
+    async def _verify_outbox_parity(
         self,
-        connection: sqlite3.Connection,
+        connection: asyncpg.Connection,
         wal_pos: int,
         *,
         tenant_id: str,
@@ -363,10 +365,10 @@ class Replayer:
         Returns False if parity violation detected.
         """
         # Check if any outbox entries reference this wal_pos
-        _row = connection.execute(
-            "SELECT 1 FROM st_outbox WHERE wal_pos = ? LIMIT 1",
-            (wal_pos,),
-        ).fetchone()
+        _row = await connection.fetchrow(
+            "SELECT 1 FROM st_outbox WHERE wal_pos = $1 LIMIT 1",
+            wal_pos,
+        )
 
         # For now, we assume outbox entries are optional (not all WAL entries create outbox)
         # This check verifies that IF an outbox entry exists, it has a valid wal_pos

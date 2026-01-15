@@ -1,14 +1,25 @@
-"""Receipt persistence adapter."""
+"""Receipt persistence adapter - Async PostgreSQL."""
 
 from __future__ import annotations
 
-import asyncio
-import sqlite3
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Iterator
+from datetime import datetime
+from typing import TYPE_CHECKING, AsyncIterator
 
-from k0.uow.connection_pool import connection_scope
+from k0.db.connection import connection_scope
+
+if TYPE_CHECKING:
+    import asyncpg
+
+
+def _format_timestamp(value: str | datetime | None) -> str | None:
+    """Convert datetime to string for TEXT columns in PostgreSQL."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
 
 
 @dataclass(slots=True)
@@ -26,82 +37,106 @@ class Receipt:
     manifest_fingerprint: str | None = None
 
 
-@contextmanager
-def _resolve_connection(
-    connection: sqlite3.Connection | None,
-) -> Iterator[sqlite3.Connection]:
+@asynccontextmanager
+async def _resolve_connection(
+    connection: asyncpg.Connection | None,
+) -> AsyncIterator[asyncpg.Connection]:
+    """Resolve connection from provided or pool."""
     if connection is not None:
         yield connection
         return
 
-    with connection_scope() as pooled_connection:
+    async with connection_scope() as pooled_connection:
         yield pooled_connection
-        pooled_connection.commit()
 
 
 class ReceiptStore:
-    """Operations for persisting and retrieving receipts."""
+    """Operations for persisting and retrieving receipts - PostgreSQL."""
 
-    async def save_async(
-        self, receipt: Receipt, *, connection: sqlite3.Connection | None = None
+    async def save(
+        self,
+        receipt: Receipt,
+        *,
+        connection: asyncpg.Connection | None = None,
     ) -> None:
-        """Async wrapper for save."""
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self.save(receipt, connection=connection))
+        """Save or update a receipt using upsert.
 
-    def save(self, receipt: Receipt, *, connection: sqlite3.Connection | None = None) -> None:
-        with _resolve_connection(connection) as conn:
-            conn.execute(
-                (
-                    "INSERT INTO st_receipts (receipt_id, idem_key, wal_pos, commit_ts, tenant_id, "
-                    "space_id, device_id, mls_group_id, key_version, device_sig, manifest_fingerprint) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(receipt_id) DO UPDATE SET idem_key=excluded.idem_key, wal_pos=excluded.wal_pos, "
-                    "commit_ts=excluded.commit_ts, tenant_id=excluded.tenant_id, space_id=excluded.space_id, "
-                    "device_id=excluded.device_id, mls_group_id=excluded.mls_group_id, key_version=excluded.key_version, "
-                    "device_sig=excluded.device_sig, manifest_fingerprint=excluded.manifest_fingerprint"
-                ),
-                (
-                    receipt.receipt_id,
-                    receipt.idem_key,
-                    receipt.wal_pos,
-                    receipt.commit_ts,
-                    receipt.tenant_id,
-                    receipt.space_id,
-                    receipt.device_id,
-                    receipt.mls_group_id,
-                    receipt.key_version,
-                    receipt.device_sig,
-                    receipt.manifest_fingerprint,
-                ),
+        Args:
+            receipt: Receipt to persist
+            connection: Optional existing connection
+        """
+        async with _resolve_connection(connection) as conn:
+            await conn.execute(
+                """
+                INSERT INTO st_receipts (
+                    receipt_id, idem_key, wal_pos, commit_ts, tenant_id,
+                    space_id, device_id, mls_group_id, key_version,
+                    device_sig, manifest_fingerprint
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ON CONFLICT (receipt_id) DO UPDATE SET
+                    idem_key = EXCLUDED.idem_key,
+                    wal_pos = EXCLUDED.wal_pos,
+                    commit_ts = EXCLUDED.commit_ts,
+                    tenant_id = EXCLUDED.tenant_id,
+                    space_id = EXCLUDED.space_id,
+                    device_id = EXCLUDED.device_id,
+                    mls_group_id = EXCLUDED.mls_group_id,
+                    key_version = EXCLUDED.key_version,
+                    device_sig = EXCLUDED.device_sig,
+                    manifest_fingerprint = EXCLUDED.manifest_fingerprint
+                """,
+                receipt.receipt_id,
+                receipt.idem_key,
+                receipt.wal_pos,
+                _format_timestamp(receipt.commit_ts),
+                receipt.tenant_id,
+                receipt.space_id,
+                receipt.device_id,
+                receipt.mls_group_id,
+                receipt.key_version,
+                receipt.device_sig,
+                receipt.manifest_fingerprint,
             )
 
-    def get(
+    async def get(
         self,
         receipt_id: str,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: asyncpg.Connection | None = None,
     ) -> Receipt | None:
-        with _resolve_connection(connection) as conn:
-            row = conn.execute(
-                (
-                    "SELECT receipt_id, idem_key, wal_pos, commit_ts, tenant_id, space_id, device_id, "
-                    "mls_group_id, key_version, device_sig, manifest_fingerprint FROM st_receipts WHERE receipt_id = ?"
-                ),
-                (receipt_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            return Receipt(
-                receipt_id=row["receipt_id"],
-                idem_key=row["idem_key"],
-                wal_pos=row["wal_pos"],
-                commit_ts=row["commit_ts"],
-                tenant_id=row["tenant_id"],
-                space_id=row["space_id"],
-                device_id=row["device_id"],
-                mls_group_id=row["mls_group_id"],
-                key_version=row["key_version"],
-                device_sig=row["device_sig"],
-                manifest_fingerprint=row["manifest_fingerprint"],
+        """Get a receipt by ID.
+
+        Args:
+            receipt_id: The receipt ID to retrieve
+            connection: Optional existing connection
+
+        Returns:
+            Receipt if found, None otherwise
+        """
+        async with _resolve_connection(connection) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT receipt_id, idem_key, wal_pos, commit_ts, tenant_id, space_id,
+                       device_id, mls_group_id, key_version, device_sig, manifest_fingerprint
+                FROM st_receipts
+                WHERE receipt_id = $1
+                """,
+                receipt_id,
             )
+
+        if row is None:
+            return None
+
+        return Receipt(
+            receipt_id=row["receipt_id"],
+            idem_key=row["idem_key"],
+            wal_pos=row["wal_pos"],
+            commit_ts=str(row["commit_ts"]) if row["commit_ts"] else "",
+            tenant_id=row["tenant_id"],
+            space_id=row["space_id"],
+            device_id=row["device_id"],
+            mls_group_id=row["mls_group_id"],
+            key_version=row["key_version"],
+            device_sig=row["device_sig"],
+            manifest_fingerprint=row["manifest_fingerprint"],
+        )

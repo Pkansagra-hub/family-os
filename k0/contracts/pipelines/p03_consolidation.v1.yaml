@@ -1,0 +1,432 @@
+# P03 Consolidation Pipeline: Sleep-Cycle Memory Truth Formation
+# Purpose: Transform st_hipp_events → truth layer tables (st_epi, st_sem, st_kg_*, etc.)
+# Owner: Intelligence Kernel (K0)
+# Status: PLANNING
+# ADRs: k010-p03-consolidation-architecture, k010.1-sleep-cycle-state-machine, k010.9-capability-based-security
+# Dossier: docs/pipelines/P03_consolidation_dossier_v2.md
+
+pipeline_id: P03_CONSOLIDATION
+version: v1
+name: P03 Consolidation - Sleep-Cycle Memory Truth Formation
+description: |
+  Consolidates hippocampal staging events into truth-layer memory structures via sleep-cycle
+  metaphor (NREM consolidation + REM creative exploration).
+
+  Implements R0-R8 phases:
+  - R0: Batch selection and context hydration
+  - R1: Importance scoring + Hebbian co-occurrence learning
+  - R2: Episodic clustering (DBSCAN on 768-dim embeddings)
+  - R3: Near-duplicate detection (SimHash) + decay scoring + prune decisions
+  - R4: Knowledge graph consolidation (entity extraction, relationship building, causal inference)
+  - R5: Dream phase (counterfactual CPN, forward TPN-MCTS, insight BGT-SM) - optional, skippable
+  - R6: Status update (mark st_hipp_events consolidation_status)
+  - R7: Atomic multi-table truth writes (UnitOfWork transaction)
+  - R8: Event emission (st_outbox → bus topics)
+
+  Performance: Target <5 min per 1000 events (300ms/event P95).
+  Primary exit topic: p03.consolidation.complete.v1
+  Additional emitter topics: p03.episode.formed.v1, p03.pattern.discovered.v1,
+                            p03.gap.detected.v1, p03.kg.updated.v1, p03.insight.generated.v1
+
+  Trigger modes: INTERVAL (90 min), THRESHOLD (500+ pending), MANUAL
+
+entry_topic: p03.consolidation.triggered.v1
+exit_topic: p03.consolidation.complete.v1
+concurrency: 1
+max_queue_depth: 64
+
+# Runner type: sequential (uses P03SequentialRunner instead of generic DAG runner)
+# This enables R0→R8 strict sequential execution with checkpoint/resume
+runner_type: sequential
+
+# Scheduler triggers (declarative)
+# Schema: k0.runtime.schemas.TriggerSpec
+triggers:
+  - id: p03_interval_90m
+    type: interval
+    interval_seconds: 5400  # 90 minutes
+    catch_up_enabled: true
+
+  - id: p03_threshold_500
+    type: threshold
+    table: st_hipp_events
+    condition: "consolidation_status = 'PENDING'"
+    threshold_count: 500
+    check_interval_seconds: 60
+
+  - id: p03_manual
+    type: manual
+
+# Required storage capabilities (capability-based security model per k010.9-p03 ADR)
+# Policy: INTERSECT_CALLER - module gets intersection of its declared caps + caller's caps
+required_capabilities:
+  # Source table (P02 output)
+  - st_hipp_events.read
+  - st_hipp_events.write      # Update consolidation_status
+  # Subscriber offset tracking (R0 batch cursor)
+  - st_offsets.read
+  - st_offsets.write
+  # Embedding vectors
+  - st_vec.read               # Similarity queries
+  - st_vec.write              # Episode/pattern embeddings
+  # Truth layer - Episodic
+  - st_epi.read
+  - st_epi.write
+  # Truth layer - Semantic
+  - st_sem.read
+  - st_sem.write
+  # Truth layer - Knowledge Graph
+  - st_kg_dom.read
+  - st_kg_dom.write
+  - st_kg_edges.read
+  - st_kg_edges.write
+  # Truth layer - Procedural
+  - st_procedural.read
+  - st_procedural.write
+  # Truth layer - Prospective
+  - st_prospective.read
+  - st_prospective.write
+  # Support tables
+  - st_learning_queue.read    # R0 gap auto-resolution reads pending gaps
+  - st_learning_queue.write   # P06 gap records
+  - st_outbox.write           # Event emission
+  - st_pipeline_status.write  # Execution state
+  - st_learned_weights.read   # Importance formula weights
+  - st_learned_weights.write  # Thompson Sampling updates
+  - st_cooccurrence.read      # Hebbian learning
+  - st_cooccurrence.write
+  - st_consolidation_audit.write  # Audit trail
+
+dag:
+  # ============================================================================
+  # PHASE R0: Batch Selection
+  # ============================================================================
+  - id: stage_00_select_batch
+    module: consolidation.batch_selector:v1
+    after: []
+    description: |
+      R0 - Batch selection and context hydration.
+      Selects pending events from st_hipp_events with consolidation_status='PENDING'.
+      Orders by importance_score DESC, created_at ASC.
+      Hydrates envelope with batch metadata.
+    config:
+      max_batch_size: 1000
+      max_events_per_cycle: 10000
+      selection_strategy: importance_first
+      include_context_window: true
+      context_window_hours: 24
+
+  # ============================================================================
+  # PHASE R1: Importance Scoring + Hebbian Learning (Parallel)
+  # ============================================================================
+  - id: stage_10_importance_score
+    module: consolidation.importance_scorer:v1
+    after:
+      - stage_00_select_batch
+    description: |
+      R1 - Importance scoring using weighted formula.
+      importance = w_recency * recency + w_affect * affect + w_social * social +
+                   w_rehearsal * rehearsal + w_novelty * novelty
+      Weights from st_learned_weights (Thompson Sampling adaptive).
+    config:
+      default_weights:
+        recency: 0.25
+        affect: 0.30
+        social: 0.20
+        rehearsal: 0.15
+        novelty: 0.10
+      use_learned_weights: true
+      fallback_to_defaults: true
+
+  - id: stage_11_hebbian_update
+    module: consolidation.hebbian_learner:v1
+    after:
+      - stage_00_select_batch
+    description: |
+      R1 - Hebbian co-occurrence learning.
+      "What fires together, wires together" - updates edge weights in st_cooccurrence.
+      Strengthens connections between temporally proximate events.
+    config:
+      temporal_window_seconds: 3600  # 1 hour
+      learning_rate: 0.01
+      decay_factor: 0.995
+      max_edges_per_event: 50
+
+  # ============================================================================
+  # PHASE R2: Episodic Clustering
+  # ============================================================================
+  - id: stage_20_episodic_cluster
+    module: consolidation.episodic_clusterer:v1
+    after:
+      - stage_10_importance_score
+      - stage_11_hebbian_update
+    description: |
+      R2 - Episodic clustering using DBSCAN on 768-dim embeddings.
+      Groups related events into coherent episodes based on embedding similarity.
+      eps=0.3, min_samples=3 (configurable).
+    config:
+      algorithm: DBSCAN
+      eps: 0.3
+      min_samples: 3
+      metric: cosine
+      use_cooccurrence_boost: true
+      cooccurrence_weight: 0.2
+
+  - id: stage_21_episode_builder
+    module: consolidation.episode_builder:v1
+    after:
+      - stage_20_episodic_cluster
+    description: |
+      R2 - Build st_epi records from cluster results.
+      Creates episode summaries, computes episode embeddings (centroid).
+      Links events to episodes via epi_id foreign key.
+    config:
+      summary_strategy: centroid_weighted
+      max_events_per_episode: 100
+      min_events_per_episode: 2
+
+  # ============================================================================
+  # PHASE R3: Deduplication + Decay + Pruning (Parallel)
+  # ============================================================================
+  - id: stage_30_simhash_dedup
+    module: consolidation.simhash_deduplicator:v1
+    after:
+      - stage_21_episode_builder
+    description: |
+      R3 - Near-duplicate detection using SimHash.
+      Identifies similar events/episodes for potential merge or tombstone.
+      64-bit SimHash, Hamming distance <= 3 considered duplicate.
+    config:
+      hash_bits: 64
+      hamming_threshold: 3
+      dedup_strategy: merge_to_older
+      preserve_audit_trail: true
+
+  - id: stage_31_decay_scorer
+    module: consolidation.decay_scorer:v1
+    after:
+      - stage_21_episode_builder
+    description: |
+      R3 - Exponential decay scoring.
+      Reduces importance of older, unrehearsed memories.
+      decay_score = base_score * exp(-lambda * days_since_last_access)
+    config:
+      lambda: 0.05  # 5% daily decay
+      min_score: 0.01
+      rehearsal_boost: 2.0
+      max_age_days: 365
+
+  - id: stage_32_prune_decider
+    module: consolidation.prune_decider:v1
+    after:
+      - stage_30_simhash_dedup
+      - stage_31_decay_scorer
+    description: |
+      R3 - Prune/archive decision logic.
+      Determines which memories to keep, archive, or tombstone.
+      Respects retention policies from st_retention_policy.
+    config:
+      archive_threshold: 0.05
+      tombstone_threshold: 0.01
+      respect_retention_policy: true
+      never_prune_types:
+        - FAMILY_MILESTONE
+        - LEGAL_DOCUMENT
+        - MEDICAL_RECORD
+
+  # ============================================================================
+  # PHASE R4: Knowledge Graph Consolidation (Sequential)
+  # ============================================================================
+  - id: stage_40_entity_extractor
+    module: consolidation.entity_extractor:v1
+    after:
+      - stage_21_episode_builder
+    description: |
+      R4 - Entity extraction using UltraBERT NER cache.
+      Extracts named entities (PERSON, PLACE, ORG, EVENT, etc.) from event content.
+      Normalizes to canonical st_kg_dom entries.
+    config:
+      use_ultrabert_cache: true
+      fallback_model: spacy_en_core_web_sm
+      confidence_threshold: 0.7
+      max_entities_per_event: 20
+
+  - id: stage_41_relationship_builder
+    module: consolidation.relationship_builder:v1
+    after:
+      - stage_40_entity_extractor
+    description: |
+      R4 - KG edge creation.
+      Builds relationships between extracted entities.
+      Uses co-occurrence, syntactic patterns, and semantic similarity.
+    config:
+      edge_confidence_threshold: 0.5
+      max_edges_per_entity: 50
+      relationship_types:
+        - KNOWS
+        - WORKS_AT
+        - LIVES_IN
+        - PARTICIPATED_IN
+        - RELATED_TO
+
+  - id: stage_42_causal_inference
+    module: consolidation.causal_inference:v1
+    after:
+      - stage_41_relationship_builder
+    description: |
+      R4 - Granger causality inference.
+      Detects temporal causal relationships between events/entities.
+      Uses Granger test with lag=3, p<0.05.
+    config:
+      max_lag: 3
+      significance_threshold: 0.05
+      min_observations: 10
+      edge_type: CAUSES
+
+  # ============================================================================
+  # PHASE R5: Dream Phase (Optional - can be skipped on backlog)
+  # ============================================================================
+  - id: stage_50_counterfactual
+    module: consolidation.counterfactual:v1
+    after:
+      - stage_42_causal_inference
+    description: |
+      R5 - Counterfactual scenario generation (CPN).
+      "What if X had happened differently?" exploration.
+      Generates alternative scenarios for high-importance events.
+    config:
+      enabled: true
+      skip_on_backlog: true
+      backlog_threshold: 5000
+      max_scenarios_per_event: 3
+      min_importance_threshold: 0.7
+
+  - id: stage_51_forward_sim
+    module: consolidation.forward_simulator:v1
+    after:
+      - stage_42_causal_inference
+    description: |
+      R5 - Forward simulation (TPN-MCTS).
+      Projects future states based on current patterns.
+      Monte Carlo Tree Search over Temporal Probabilistic Network.
+    config:
+      enabled: true
+      skip_on_backlog: true
+      simulation_depth: 5
+      num_simulations: 100
+      exploration_weight: 1.41
+
+  - id: stage_52_insight_gen
+    module: consolidation.insight_generator:v1
+    after:
+      - stage_42_causal_inference
+    description: |
+      R5 - Insight generation (BGT-SM).
+      Discovers non-obvious patterns and generates creative insights.
+      Bisociative Graph Traversal over Semantic Memory.
+    config:
+      enabled: true
+      skip_on_backlog: true
+      min_novelty_score: 0.6
+      max_insights_per_cycle: 10
+      insight_types:
+        - PATTERN_RECOGNITION
+        - ANOMALY_DETECTION
+        - TREND_DISCOVERY
+
+  # ============================================================================
+  # PHASE R6: Status Update
+  # ============================================================================
+  - id: stage_60_status_update
+    module: consolidation.status_updater:v1
+    after:
+      - stage_32_prune_decider
+      - stage_52_insight_gen
+      - stage_50_counterfactual
+      - stage_51_forward_sim
+    description: |
+      R6 - Update st_hipp_events consolidation_status.
+      Marks events as CONSOLIDATED, ARCHIVED, or TOMBSTONED.
+      Records decision reasons in st_consolidation_audit.
+    config:
+      status_values:
+        success: CONSOLIDATED
+        archived: ARCHIVED
+        pruned: TOMBSTONED
+      write_audit: true
+
+  # ============================================================================
+  # PHASE R7: Atomic Truth Writes
+  # ============================================================================
+  - id: stage_70_memory_writer
+    module: consolidation.memory_writer:v1
+    after:
+      - stage_60_status_update
+    description: |
+      R7 - Atomic multi-table truth writes.
+      Uses UnitOfWork pattern for transaction across all truth tables.
+      Order: st_kg_dom → st_kg_edges → st_epi → st_sem → st_vec → st_hipp_events
+      Stages outbox events within same transaction.
+    config:
+      transaction_timeout_ms: 30000
+      batch_size: 100
+      retry_on_conflict: true
+      max_retries: 3
+      retry_backoff_ms: 100
+
+  # ============================================================================
+  # PHASE R8: Event Emission
+  # ============================================================================
+  - id: stage_80_event_emitter
+    module: core.event_emitter:v1
+    after:
+      - stage_70_memory_writer
+    description: |
+      R8 - Emit completion events from st_outbox.
+      Topics: p03.consolidation.complete.v1, p03.episode.formed.v1,
+              p03.pattern.discovered.v1, p03.gap.detected.v1, etc.
+    config:
+      enable_telemetry_event: true
+      batch_emit_enabled: true
+      emit_phase_progress: true
+
+# Error handling and failure modes (per dossier D.10)
+failure_modes:
+  - code: BATCH_EMPTY
+    policy: complete_success
+    description: No pending events - normal completion
+
+  - code: EMBEDDING_NOT_FOUND
+    policy: retry
+    max_retries: 2
+    description: Vector lookup failed - retry with backoff
+
+  - code: CLUSTER_TIMEOUT
+    policy: fallback_skip
+    description: DBSCAN timeout - skip R2, continue with unclustered events
+
+  - code: KG_CONFLICT
+    policy: retry
+    max_retries: 3
+    description: Knowledge graph write conflict - retry with exponential backoff
+
+  - code: TRANSACTION_ROLLBACK
+    policy: retry
+    max_retries: 2
+    description: UnitOfWork failed - retry entire R7 phase
+
+  - code: OUTBOX_FULL
+    policy: block
+    description: st_outbox at capacity - block until space available
+
+  - code: R5_TIMEOUT
+    policy: skip_phase
+    description: Dream phase timeout - skip R5, proceed to R6
+
+# Observability (per dossier D.9, E.8)
+observability:
+  metrics_prefix: p03_
+  trace_context: propagate
+  log_level: INFO
+  emit_phase_metrics: true
+  phase_metric_name: p03_phase_duration_seconds

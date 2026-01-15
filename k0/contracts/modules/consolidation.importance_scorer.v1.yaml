@@ -1,0 +1,63 @@
+# P03 Module Contract: Importance Scorer
+# Phase: R1 - Importance Scoring
+# Dossier: §D.3.1 stage_10_importance_score, §4.1, Appendix C.2
+
+module_id: consolidation.importance_scorer
+version: v1
+
+input_event_types:
+  - p03.batch.selected.v1
+
+output_event_types:
+  - p03.importance.scored.v1
+
+latency_budget_ms: 30
+
+side_effects:
+  - read:st_learned_weights
+  - write:st_learned_weights  # Thompson Sampling updates
+
+idempotent: true
+
+fabric_capabilities:
+  - score_importance
+
+failure_modes:
+  - code: WEIGHTS_NOT_FOUND
+    policy: fallback_default
+    description: Use default weights if learned weights unavailable
+  - code: INVALID_SCORE
+    policy: clamp
+    description: Clamp score to [0, 1] range
+
+description: |
+  Importance Scorer Module (R1 Phase)
+
+  Computes importance scores using weighted formula:
+    importance = w_recency * recency_score +
+                 w_affect * affect_score +
+                 w_social * social_score +
+                 w_rehearsal * rehearsal_score +
+                 w_novelty * novelty_score
+
+  Weight Sources:
+  - Default weights: Hard-coded baseline
+  - Learned weights: Thompson Sampling from st_learned_weights (adaptive)
+  - Fallback chain: learned → default
+
+  Score Components (normalized to 0-1):
+  - recency_score: Exponential decay from event timestamp
+  - affect_score: From P02 affect.analyze enrichment
+  - social_score: Based on social graph significance
+  - rehearsal_score: Access frequency from P04/K1 usage
+  - novelty_score: 1 - max_similarity to existing memories
+
+  Thompson Sampling (K020 Feedback):
+  - Updates weights based on P04/K1 retrieval success signals
+  - Beta prior: α=17, β=3 (prior E[x]=0.85)
+  - Momentum: 0.9 (prevents wild swings)
+  - Bounds: [0.5, 0.95] (stability)
+
+  Output:
+  - envelope.events[*].importance_score: REAL (0-1)
+  - envelope.events[*].importance_breakdown: JSON decomposition
