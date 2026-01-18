@@ -2195,6 +2195,398 @@ class Syscalls:
             raise RuntimeError(f"Failed to remove vectors from FAISS: {e}") from e
 
     # =========================================================================
+    # GAP-001 Milestone 4: Union Index Syscalls
+    # =========================================================================
+
+    async def union_index_search(
+        self,
+        query_vector: list[float],
+        k: int = 20,
+        layer_filter: list[str] | None = None,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Search FAISS union index across all truth layers (requires faiss.read cap).
+
+        Returns top-k most similar records from all 6 truth layers:
+        st_epi, st_sem, st_procedural, st_social, st_prospective, st_kg_dom.
+
+        Capability Required: "faiss.read"
+
+        GAP Reference: GAP_001 Section 6 (Query Flow)
+
+        Args:
+            query_vector: 768-dim query embedding
+            k: Number of results to return (default: 20)
+            layer_filter: Optional list of layers to search (e.g., ["st_epi", "st_sem"])
+            tenant_id: Optional tenant filter
+            space_id: Optional space filter
+
+        Returns:
+            Dictionary with:
+            - results: list[dict] with layer, record_id, score, tenant_id, space_id
+            - count: int (number of results)
+
+        Raises:
+            PermissionError: If pipeline lacks "faiss.read" capability
+            ValueError: If query_vector invalid
+
+        Example:
+            >>> query = [0.1] * 768  # 768-dim query vector
+            >>> result = await syscalls.union_index_search(
+            ...     query_vector=query,
+            ...     k=10,
+            ...     layer_filter=["st_epi", "st_sem"]
+            ... )
+            >>> for r in result["results"]:
+            ...     print(f"{r['layer']}:{r['record_id']} = {r['score']:.3f}")
+
+        Performance:
+            - Target: <20ms P95 for k=20
+            - Inner product on normalized vectors (cosine similarity)
+        """
+        self._require_cap("faiss.read")
+
+        # Validation
+        if not query_vector:
+            raise ValueError("query_vector required for union_index_search")
+        if len(query_vector) != 768:
+            raise ValueError(f"Invalid query_vector dimension: {len(query_vector)} (expected 768)")
+        if k < 1:
+            raise ValueError(f"Invalid k: {k} (must be >= 1)")
+
+        try:
+            from k0.modules.embedding.union_index_rebuild_job import search
+
+            result = await search(
+                query_vector=query_vector,
+                k=k,
+                layer_filter=layer_filter,
+                tenant_id=tenant_id,
+                space_id=space_id,
+            )
+
+            logger.info(
+                "union_index_search completed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "k": k,
+                    "layer_filter": layer_filter,
+                    "results_count": result.get("count", 0),
+                },
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(
+                "union_index_search failed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "k": k,
+                    "error": str(e),
+                },
+            )
+            raise RuntimeError(f"Failed to search union index: {e}") from e
+
+    async def union_index_rebuild(
+        self,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Trigger union index rebuild (requires faiss.write cap).
+
+        Rebuilds FAISS union index from all 6 truth layers. Normally runs
+        automatically every 6 hours, but can be triggered manually with force=True.
+
+        Capability Required: "faiss.write"
+
+        GAP Reference: GAP_001 Section 7 (P08 Update)
+
+        Args:
+            force: Force rebuild regardless of index age (default: False)
+
+        Returns:
+            Dictionary with:
+            - action: "rebuilt", "skipped", or "failed"
+            - total_vectors: int (if rebuilt)
+            - layer_counts: dict (if rebuilt)
+            - reason: str (why action was taken)
+
+        Raises:
+            PermissionError: If pipeline lacks "faiss.write" capability
+            RuntimeError: If rebuild fails
+
+        Example:
+            >>> result = await syscalls.union_index_rebuild(force=True)
+            >>> if result["action"] == "rebuilt":
+            ...     print(f"Indexed {result['total_vectors']} vectors")
+
+        Performance:
+            - Build time: ~1-5 seconds for 10k vectors
+            - Should be run during low-traffic periods
+        """
+        self._require_cap("faiss.write")
+
+        try:
+            import os
+
+            from k0.modules.embedding.union_index_manager import UnionIndexManager
+
+            index_dir = os.environ.get("FAISS_UNION_INDEX_DIR", "/data/faiss_union")
+            manager = UnionIndexManager(index_dir)
+
+            # Check if rebuild needed
+            if not force and not manager.needs_rebuild:
+                logger.info(
+                    "union_index_rebuild skipped (fresh)",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "age_hours": manager.index_age_hours,
+                    },
+                )
+                return {
+                    "action": "skipped",
+                    "reason": "index_fresh",
+                    "age_hours": manager.index_age_hours,
+                }
+
+            # Get database connection
+            async with self._uow_factory() as uow:
+                conn = uow.session.connection()
+
+                searcher = await manager.build_and_save(conn)
+
+                logger.info(
+                    "union_index_rebuild completed",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "total_vectors": searcher.total_vectors,
+                        "layer_counts": searcher.layer_counts,
+                    },
+                )
+
+                return {
+                    "action": "rebuilt",
+                    "total_vectors": searcher.total_vectors,
+                    "layer_counts": searcher.layer_counts,
+                }
+
+        except Exception as e:
+            logger.error(
+                "union_index_rebuild failed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "error": str(e),
+                },
+            )
+            raise RuntimeError(f"Failed to rebuild union index: {e}") from e
+
+    async def union_index_stats(self) -> dict[str, Any]:
+        """
+        Get union index statistics (requires faiss.read cap).
+
+        Returns statistics about the current union index including
+        total vectors, per-layer counts, build timestamp, and age.
+
+        Capability Required: "faiss.read"
+
+        Returns:
+            Dictionary with:
+            - total_vectors: int
+            - layer_counts: dict
+            - build_timestamp: int (Unix ms)
+            - age_hours: float
+            - model_version: str
+            - is_loaded: bool
+            - needs_rebuild: bool
+
+        Raises:
+            PermissionError: If pipeline lacks "faiss.read" capability
+
+        Example:
+            >>> stats = await syscalls.union_index_stats()
+            >>> print(f"Index has {stats['total_vectors']} vectors")
+            >>> print(f"Age: {stats['age_hours']:.1f} hours")
+        """
+        self._require_cap("faiss.read")
+
+        try:
+            from k0.modules.embedding.union_index_rebuild_job import get_stats
+
+            result = get_stats()
+
+            logger.debug(
+                "union_index_stats retrieved",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "total_vectors": result.get("total_vectors"),
+                },
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(
+                "union_index_stats failed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "error": str(e),
+                },
+            )
+            return {"error": str(e)}
+
+    # =========================================================================
+    # GAP-001 Milestone 5: Context Expander Syscalls
+    # =========================================================================
+
+    async def context_expand(
+        self,
+        query: str,
+        query_vector: list[float],
+        top_k: int = 10,
+        max_hops: int = 1,
+        min_edge_weight: float = 0.5,
+        max_per_layer: int = 10,
+        layer_filter: list[str] | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Expand context for a query via entity graph traversal (requires faiss.read + context.expand caps).
+
+        Orchestrates the full context expansion flow:
+        1. Vector search across union index (direct matches)
+        2. Entity extraction from search results
+        3. Graph expansion to find related entities
+        4. Related context fetch from all truth layers
+
+        This syscall provides rich LLM context by combining semantic search
+        with knowledge graph traversal.
+
+        Capability Required: "faiss.read" AND "context.expand"
+
+        GAP Reference: GAP_001 Section 6 (Rich LLM Context)
+        Milestone Reference: GAP_001_MILESTONE_5_CONTEXT_EXPANDER
+
+        Args:
+            query: Query text for logging/context
+            query_vector: 768-dim query embedding for vector search
+            top_k: Number of direct vector search results (default: 10)
+            max_hops: Graph traversal depth (default: 1)
+            min_edge_weight: Minimum edge weight for graph traversal (default: 0.5)
+            max_per_layer: Maximum related records per layer (default: 10)
+            layer_filter: Optional list of layers to search (e.g., ["st_epi", "st_sem"])
+            tenant_id: Optional tenant filter
+
+        Returns:
+            Dictionary with:
+            - query: str (original query)
+            - direct_matches: list[dict] with layer, record_id, score, metadata
+            - match_count: int (number of direct matches)
+            - expanded_entities: list[str] (entities found via graph traversal)
+            - related_episodes: list[dict] (related episodic memories)
+            - actor_patterns: list[dict] (semantic patterns for actors)
+            - routines: list[dict] (procedural routines)
+            - relationships: list[dict] (social relationships)
+            - active_intentions: list[dict] (active goals/intentions)
+            - related_count: int (total related records)
+            - timing_ms: dict (timing breakdown by phase)
+
+        Raises:
+            PermissionError: If pipeline lacks required capabilities
+            ValueError: If query_vector invalid
+            RuntimeError: If expansion fails
+
+        Example:
+            >>> query = "Where did Mom and Dad go yesterday?"
+            >>> embedding = await get_embedding(query)
+            >>> result = await syscalls.context_expand(
+            ...     query=query,
+            ...     query_vector=embedding,
+            ...     top_k=5,
+            ...     max_hops=1,
+            ... )
+            >>> # Use result for LLM prompt injection
+            >>> context = result["related_episodes"][:3]
+
+        Performance:
+            - Target: <100ms P95 for full expansion
+            - Vector search: <20ms
+            - Entity extraction: <5ms
+            - Graph expansion: <30ms
+            - Context fetch: <50ms
+        """
+        self._require_cap("faiss.read")
+        self._require_cap("context.expand")
+
+        # Validation
+        if not query_vector:
+            raise ValueError("query_vector required for context_expand")
+        if len(query_vector) != 768:
+            raise ValueError(f"Invalid query_vector dimension: {len(query_vector)} (expected 768)")
+        if top_k < 1:
+            raise ValueError(f"Invalid top_k: {top_k} (must be >= 1)")
+        if max_hops < 0:
+            raise ValueError(f"Invalid max_hops: {max_hops} (must be >= 0)")
+
+        try:
+            from k0.modules.recall.context_expander import ContextExpander
+
+            expander = ContextExpander(
+                top_k=top_k,
+                max_hops=max_hops,
+                min_edge_weight=min_edge_weight,
+                max_per_layer=max_per_layer,
+            )
+
+            async with self._uow_factory() as uow:
+                conn = uow.session.connection()
+
+                expanded = await expander.expand(
+                    query=query,
+                    embedding=query_vector,
+                    conn=conn,
+                    tenant_id=tenant_id,
+                    layers=layer_filter,
+                )
+
+                result = expanded.to_llm_context()
+                result["expanded_entities"] = list(expanded.expanded_entities)
+                result["timing_ms"] = expanded.timing_ms
+
+                logger.info(
+                    "context_expand completed",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "query_len": len(query),
+                        "direct_matches": len(expanded.direct_results),
+                        "expanded_entities": len(expanded.expanded_entities),
+                        "related_count": (
+                            expanded.related_context.total_records
+                            if expanded.related_context
+                            else 0
+                        ),
+                        "total_ms": expanded.timing_ms.get("total_ms", 0),
+                    },
+                )
+
+                return result
+
+        except PermissionError:
+            raise
+        except Exception as e:
+            logger.error(
+                "context_expand failed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "query": query[:50],
+                    "error": str(e),
+                },
+            )
+            raise RuntimeError(f"Failed to expand context: {e}") from e
+
+    # =========================================================================
     # Phase 3: Backfill Syscalls (ADR-K003 v1.2)
     # =========================================================================
 
@@ -2938,6 +3330,720 @@ class Syscalls:
             "is_held": is_held,
             "lock_key": lock_key,
         }
+
+    # =========================================================================
+    # Knowledge Graph Queries (GAP-001 M9.2)
+    # =========================================================================
+
+    async def kg_entities_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        limit: int = 1000,
+        entity_types: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Query st_kg_dom for accumulated KG entities (requires st_kg_dom.read cap).
+
+        GAP-001 M9.2: Load accumulated KG entities for R5 dream exploration.
+        BGT-SM algorithm needs access to the entire knowledge graph to find
+        meaningful bisociative connections, not just batch-new entities.
+
+        Capability Required: "st_kg_dom.read"
+
+        Storage Table: st_kg_dom
+        - Purpose: Knowledge graph domain entities
+        - Query returns active entities ordered by observation_count DESC
+        - Includes embedding_id for R5 semantic distance calculation
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            limit: Max entities to return (default: 1000)
+            entity_types: Optional filter by entity types (PERSON, LOCATION, etc.)
+
+        Returns:
+            Dictionary with:
+            - entities: list[dict] with entity fields
+            - count: int (number of records returned)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_kg_dom.read" capability
+
+        Example:
+            >>> result = await syscalls.kg_entities_query(
+            ...     tenant_id="tenant_1",
+            ...     space_id="space_1",
+            ...     limit=1000
+            ... )
+            >>> entities = result["entities"]
+
+        Performance:
+            - Target: <100ms P95 for 1000 entities
+            - Uses tenant_id, space_id index
+
+        Related:
+            - GAP-001 M9.2: Pass accumulated KG to R5
+            - R5 DreamExplorer: Uses entities for BGT-SM insight generation
+        """
+        self._require_cap("st_kg_dom.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"kg_entities_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "limit": limit,
+                "entity_types": entity_types,
+                "operation": "kg_entities_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Build query with optional entity type filter
+            if entity_types:
+                placeholders = ", ".join(f"${i+3}" for i in range(len(entity_types)))
+                query = f"""
+                    SELECT
+                        entity_id, canonical_name, entity_type, aliases_json,
+                        confidence_score, embedding_id, observation_count
+                    FROM st_kg_dom
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND archival_status = 'ACTIVE'
+                      AND entity_type IN ({placeholders})
+                    ORDER BY observation_count DESC
+                    LIMIT ${len(entity_types) + 3}
+                """
+                params = [tenant_id, space_id, *entity_types, limit]
+            else:
+                query = """
+                    SELECT
+                        entity_id, canonical_name, entity_type, aliases_json,
+                        confidence_score, embedding_id, observation_count
+                    FROM st_kg_dom
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND archival_status = 'ACTIVE'
+                    ORDER BY observation_count DESC
+                    LIMIT $3
+                """
+                params = [tenant_id, space_id, limit]
+
+            rows = await conn.fetch(query, *params)
+
+            entities = [
+                {
+                    "entity_id": row["entity_id"],
+                    "canonical_name": row["canonical_name"],
+                    "entity_type": row["entity_type"],
+                    "aliases_json": row["aliases_json"],
+                    "confidence": (
+                        float(row["confidence_score"]) if row["confidence_score"] else 0.0
+                    ),
+                    "embedding_id": row["embedding_id"],
+                }
+                for row in rows
+            ]
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"kg_entities_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "entity_count": len(entities),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "kg_entities_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "entities": entities,
+                "count": len(entities),
+            }
+
+    async def kg_edges_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        limit: int = 5000,
+        relationship_types: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Query st_kg_edges for accumulated KG edges (requires st_kg_edges.read cap).
+
+        GAP-001 M9.2: Load accumulated KG edges for R5 dream exploration.
+        BGT-SM random walks need the full graph structure to traverse and
+        discover bisociative connections between remote concepts.
+
+        Capability Required: "st_kg_edges.read"
+
+        Storage Table: st_kg_edges
+        - Purpose: Knowledge graph edges with typed relationships
+        - Query returns active edges ordered by weight DESC
+        - Used for graph traversal in BGT-SM random walks
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            limit: Max edges to return (default: 5000)
+            relationship_types: Optional filter by relation types
+
+        Returns:
+            Dictionary with:
+            - edges: list[dict] with edge fields
+            - count: int (number of records returned)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_kg_edges.read" capability
+
+        Example:
+            >>> result = await syscalls.kg_edges_query(
+            ...     tenant_id="tenant_1",
+            ...     space_id="space_1",
+            ...     limit=5000
+            ... )
+            >>> edges = result["edges"]
+
+        Performance:
+            - Target: <100ms P95 for 5000 edges
+            - Uses tenant_id, space_id index
+
+        Related:
+            - GAP-001 M9.2: Pass accumulated KG to R5
+            - R5 DreamExplorer: Uses edges for BGT-SM graph traversal
+        """
+        self._require_cap("st_kg_edges.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"kg_edges_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "limit": limit,
+                "relationship_types": relationship_types,
+                "operation": "kg_edges_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Build query with optional relationship type filter
+            if relationship_types:
+                placeholders = ", ".join(f"${i+3}" for i in range(len(relationship_types)))
+                query = f"""
+                    SELECT
+                        edge_id, source_entity_id, target_entity_id,
+                        relation_type, edge_weight, confidence_score
+                    FROM st_kg_edges
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND archival_status = 'ACTIVE'
+                      AND relation_type IN ({placeholders})
+                    ORDER BY edge_weight DESC
+                    LIMIT ${len(relationship_types) + 3}
+                """
+                params = [tenant_id, space_id, *relationship_types, limit]
+            else:
+                query = """
+                    SELECT
+                        edge_id, source_entity_id, target_entity_id,
+                        relation_type, edge_weight, confidence_score
+                    FROM st_kg_edges
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND archival_status = 'ACTIVE'
+                    ORDER BY edge_weight DESC
+                    LIMIT $3
+                """
+                params = [tenant_id, space_id, limit]
+
+            rows = await conn.fetch(query, *params)
+
+            edges = [
+                {
+                    "edge_id": row["edge_id"],
+                    "source_entity_id": row["source_entity_id"],
+                    "target_entity_id": row["target_entity_id"],
+                    "relationship_type": row["relation_type"],
+                    "weight": float(row["edge_weight"]) if row["edge_weight"] else 0.5,
+                    "confidence": (
+                        float(row["confidence_score"]) if row["confidence_score"] else 0.0
+                    ),
+                }
+                for row in rows
+            ]
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"kg_edges_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "edge_count": len(edges),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "kg_edges_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "edges": edges,
+                "count": len(edges),
+            }
+
+    async def kg_edges_lookup(
+        self,
+        tenant_id: str,
+        space_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Lookup all existing KG edges indexed by (source, target) pair for R4.
+
+        GAP-001 M9: Enables R4 to check if an edge already exists between
+        two entities before deciding to CREATE or UPDATE. This allows
+        observation_count to accumulate across consolidation batches,
+        which is required for Granger causality to trigger (needs 5+ observations).
+
+        Capability Required: "st_kg_edges.read"
+
+        Storage Table: st_kg_edges
+
+        Returns:
+            Dictionary keyed by "source_id:target_id" with edge data including:
+            - edge_id
+            - observation_count
+            - co_occurrence_count
+            - confidence_score
+            - relation_type
+            - version (for optimistic locking)
+
+        Example:
+            >>> edges = await syscalls.kg_edges_lookup(tenant_id, space_id)
+            >>> key = f"{source_id}:{target_id}"
+            >>> if key in edges:
+            ...     existing = edges[key]
+            ...     # Use UPDATE_EDGE with incremented observation_count
+            ... else:
+            ...     # Use CREATE_EDGE
+        """
+        self._require_cap("st_kg_edges.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"kg_edges_lookup: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "operation": "kg_edges_lookup",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            query = """
+                SELECT
+                    edge_id, source_entity_id, target_entity_id,
+                    relation_type, observation_count, co_occurrence_count,
+                    confidence_score, version
+                FROM st_kg_edges
+                WHERE tenant_id = $1
+                  AND space_id = $2
+                  AND archival_status = 'ACTIVE'
+            """
+            rows = await conn.fetch(query, tenant_id, space_id)
+
+            # Build lookup by both directions (source:target and target:source)
+            edges_lookup: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                source = row["source_entity_id"]
+                target = row["target_entity_id"]
+                edge_data = {
+                    "edge_id": row["edge_id"],
+                    "source_entity_id": source,
+                    "target_entity_id": target,
+                    "relation_type": row["relation_type"],
+                    "observation_count": row["observation_count"] or 1,
+                    "co_occurrence_count": row["co_occurrence_count"] or 1,
+                    "confidence_score": (
+                        float(row["confidence_score"]) if row["confidence_score"] else 0.5
+                    ),
+                    "version": row["version"] or 1,
+                }
+                # Key by canonical order (sorted) to match R4's pair_key logic
+                pair_ids = sorted([source, target])
+                key = f"{pair_ids[0]}:{pair_ids[1]}"
+                edges_lookup[key] = edge_data
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"kg_edges_lookup completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "edge_count": len(edges_lookup),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "kg_edges_lookup",
+                    "status": "success",
+                },
+            )
+
+            return edges_lookup
+
+    async def kg_entities_lookup(
+        self,
+        tenant_id: str,
+        space_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Lookup all existing KG entities indexed by (type:name) for R4.
+
+        Issue 3 Fix: Enables R4 to check if an entity already exists before
+        deciding to CREATE or UPDATE. This allows observation_count to
+        accumulate across consolidation batches, preventing duplicate entities
+        like "PANDA IS MY WIFE" x7.
+
+        Capability Required: "st_kg_dom.read"
+
+        Storage Table: st_kg_dom
+
+        Returns:
+            Dictionary keyed by "{entity_type}:{canonical_name_lower}" with:
+            - entity_id
+            - canonical_name
+            - entity_type
+            - aliases_json
+            - observation_count
+            - confidence_score
+            - version (for optimistic locking)
+
+        Example:
+            >>> entities = await syscalls.kg_entities_lookup(tenant_id, space_id)
+            >>> key = f"{entity_type}:{canonical_name.lower()}"
+            >>> if key in entities:
+            ...     existing = entities[key]
+            ...     # Use UPDATE_ENTITY with incremented observation_count
+            ... else:
+            ...     # Use CREATE_ENTITY
+        """
+        self._require_cap("st_kg_dom.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"kg_entities_lookup: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "operation": "kg_entities_lookup",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            query = """
+                SELECT
+                    entity_id, canonical_name, entity_type, aliases_json,
+                    observation_count, confidence_score, version
+                FROM st_kg_dom
+                WHERE tenant_id = $1
+                  AND space_id = $2
+                  AND archival_status = 'ACTIVE'
+            """
+            rows = await conn.fetch(query, tenant_id, space_id)
+
+            # Build lookup by type:name for O(1) matching
+            entities_lookup: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                entity_type = row["entity_type"] or ""
+                canonical_name = row["canonical_name"] or ""
+                # Key: "PERSON:jeel" (lowercase for case-insensitive match)
+                key = f"{entity_type}:{canonical_name.lower()}"
+                entities_lookup[key] = {
+                    "entity_id": row["entity_id"],
+                    "canonical_name": canonical_name,
+                    "entity_type": entity_type,
+                    "aliases_json": row["aliases_json"],
+                    "observation_count": row["observation_count"] or 1,
+                    "confidence_score": (
+                        float(row["confidence_score"]) if row["confidence_score"] else 0.5
+                    ),
+                    "version": row["version"] or 1,
+                }
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"kg_entities_lookup completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "entity_count": len(entities_lookup),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "kg_entities_lookup",
+                    "status": "success",
+                },
+            )
+
+            return entities_lookup
+
+    async def kg_candidates_fuzzy_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        entity_type: str,
+        name_pattern: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """
+        Query KG entity candidates by fuzzy name/alias match for disambiguation.
+
+        Issue 6 Fix: Enables R4 to find candidate entities for multi-signal
+        disambiguation before deciding whether to CREATE, MATCH, or emit GAP.
+
+        The query finds entities where:
+        - canonical_name matches the pattern (ILIKE)
+        - OR aliases_json contains the pattern
+
+        Capability Required: "st_kg_dom.read"
+
+        Storage Table: st_kg_dom
+
+        Args:
+            tenant_id: Tenant isolation key
+            space_id: Space isolation key
+            entity_type: Entity type to filter (PERSON, ORGANIZATION, etc.)
+            name_pattern: Name pattern to fuzzy match (will be wrapped with %)
+            limit: Maximum candidates to return (default 10)
+
+        Returns:
+            List of candidate entity dicts with:
+            - entity_id
+            - canonical_name
+            - entity_type
+            - aliases_json
+            - observation_count (frequency)
+            - last_observed_at (last_seen_ms)
+            - embedding_id
+            - confidence_score
+        """
+        self._require_cap("st_kg_dom.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"kg_candidates_fuzzy_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "entity_type": entity_type,
+                "name_pattern": name_pattern,
+                "operation": "kg_candidates_fuzzy_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Fuzzy match on canonical_name or aliases
+            # Use ILIKE for case-insensitive pattern matching
+            pattern = f"%{name_pattern.lower()}%"
+            query = """
+                SELECT
+                    entity_id, canonical_name, entity_type, aliases_json,
+                    observation_count, last_observed_at, embedding_id, confidence_score
+                FROM st_kg_dom
+                WHERE tenant_id = $1
+                  AND space_id = $2
+                  AND entity_type = $3
+                  AND archival_status = 'ACTIVE'
+                  AND (
+                      LOWER(canonical_name) LIKE $4
+                      OR LOWER(aliases_json::text) LIKE $4
+                  )
+                ORDER BY observation_count DESC, last_observed_at DESC
+                LIMIT $5
+            """
+            rows = await conn.fetch(query, tenant_id, space_id, entity_type, pattern, limit)
+
+            candidates: list[dict[str, Any]] = []
+            for row in rows:
+                candidates.append(
+                    {
+                        "entity_id": row["entity_id"],
+                        "canonical_name": row["canonical_name"],
+                        "entity_type": row["entity_type"],
+                        "aliases_json": row["aliases_json"],
+                        "observation_count": row["observation_count"] or 1,
+                        "last_observed_at": row["last_observed_at"] or 0,
+                        "embedding_id": row["embedding_id"],
+                        "confidence_score": (
+                            float(row["confidence_score"]) if row["confidence_score"] else 0.5
+                        ),
+                    }
+                )
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"kg_candidates_fuzzy_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "entity_type": entity_type,
+                    "name_pattern": name_pattern,
+                    "candidate_count": len(candidates),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "kg_candidates_fuzzy_query",
+                    "status": "success",
+                },
+            )
+
+            return candidates
+
+    async def embedding_vectors_batch_query(
+        self,
+        embedding_ids: list[str],
+    ) -> dict[str, Any]:
+        """
+        Batch query st_vec for embedding vectors by IDs (requires st_vec.read cap).
+
+        GAP-001 M9.4: Load embedding vectors for KG entities to enable
+        BGT-SM semantic distance calculations in R5 dream exploration.
+
+        Capability Required: "st_vec.read"
+
+        Storage Table: st_vec
+        - Batch query by embedding_id list
+        - Returns vector data for each found embedding
+
+        Args:
+            embedding_ids: List of embedding IDs to fetch
+
+        Returns:
+            Dictionary with:
+            - vectors: dict[embedding_id -> list[float]] for found embeddings
+            - count: int (number of vectors found)
+            - missing: list[str] (embedding_ids not found)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_vec.read" capability
+
+        Example:
+            >>> result = await syscalls.embedding_vectors_batch_query(
+            ...     embedding_ids=["emb_1", "emb_2", "emb_3"]
+            ... )
+            >>> vectors = result["vectors"]  # {"emb_1": [0.1, 0.2, ...], ...}
+
+        Performance:
+            - Target: <50ms P95 for 100 embeddings
+            - Uses IN clause with embedding_id index
+
+        Related:
+            - GAP-001 M9.4: Add entity embeddings to R5 input
+            - R5 DreamExplorer: Uses embeddings for BGT-SM semantic distance
+        """
+        self._require_cap("st_vec.read")
+
+        if not embedding_ids:
+            return {"vectors": {}, "count": 0, "missing": []}
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"embedding_vectors_batch_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "embedding_count": len(embedding_ids),
+                "operation": "embedding_vectors_batch_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Build IN clause with parameter placeholders
+            placeholders = ", ".join(f"${i+1}" for i in range(len(embedding_ids)))
+            query = f"""
+                SELECT embedding_id, vector, vector_dim
+                FROM st_vec
+                WHERE embedding_id IN ({placeholders})
+                  AND status = 'INDEXED'
+            """
+
+            rows = await conn.fetch(query, *embedding_ids)
+
+            # Convert binary vectors to float lists
+            import struct
+
+            vectors: dict[str, list[float]] = {}
+            found_ids: set[str] = set()
+
+            for row in rows:
+                emb_id = row["embedding_id"]
+                vector_bytes = row["vector"]
+                vector_dim = row["vector_dim"]
+                found_ids.add(emb_id)
+
+                if vector_bytes and vector_dim:
+                    # Unpack bytes to floats (4 bytes per float32)
+                    try:
+                        float_count = len(vector_bytes) // 4
+                        floats = list(struct.unpack(f"{float_count}f", vector_bytes))
+                        vectors[emb_id] = floats
+                    except struct.error:
+                        logger.warning(
+                            f"Failed to unpack vector for {emb_id}",
+                            extra={"embedding_id": emb_id, "vector_dim": vector_dim},
+                        )
+
+            missing = [eid for eid in embedding_ids if eid not in found_ids]
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"embedding_vectors_batch_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "requested": len(embedding_ids),
+                    "found": len(vectors),
+                    "missing": len(missing),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "embedding_vectors_batch_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "vectors": vectors,
+                "count": len(vectors),
+                "missing": missing,
+            }
 
     def _require_cap(self, capability: str) -> None:
         """

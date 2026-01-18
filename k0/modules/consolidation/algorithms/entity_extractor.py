@@ -777,32 +777,25 @@ class UltraBERTEntityExtractor:
 
     def _is_valid_ner_family_entity(self, label: str, text: str, normalized: str) -> bool:
         """
-        Validate ner_family entities that need text-based filtering.
+        Validate VALIDATED_NER_FAMILY entities with domain-specific rules.
 
-        Called for labels in VALIDATED_NER_FAMILY to filter garbage extractions
-        while keeping legitimate family-related entities.
+        Called AFTER universal filtering for labels: MILESTONE, FAMILY_EVENT,
+        HEIRLOOM, PET, ROUTINE. These labels need keyword validation to filter
+        UltraBERT false positives.
 
         Args:
             label: The ner_family label (MILESTONE, FAMILY_EVENT, etc.)
             text: Original entity text
-            normalized: Normalized entity text
+            normalized: Pre-normalized entity text (already passed universal filter)
 
         Returns:
-            True if entity should be kept, False if it's garbage
+            True if entity passes domain validation, False otherwise
         """
-        # Check against garbage words
-        if normalized.lower() in self.GARBAGE_ENTITY_WORDS:
-            logger.debug(f"Filtered garbage entity: '{text}' ({label}) - in garbage list")
-            return False
-
-        # Filter single-character entities (tokenization artifacts)
-        if len(normalized) <= 1:
-            logger.debug(f"Filtered short entity: '{text}' ({label}) - too short")
-            return False
+        # NOTE: Garbage words and short entities already filtered in _map_entity()
 
         # Filter purely numeric entities ("10th", "2024")
         if normalized.replace(" ", "").isdigit():
-            logger.debug(f"Filtered numeric entity: '{text}' ({label}) - purely numeric")
+            logger.debug(f"Filtered numeric: '{text}' ({label})")
             return False
 
         # Label-specific validation
@@ -917,19 +910,23 @@ class UltraBERTEntityExtractor:
         source_head: str,
     ) -> ExtractedEntity | None:
         """
-        Map UltraBERT entity to KG entity type.
+        Map raw NER entity to KG entity type.
 
-        Applies NER label filtering for ner_family head:
-        - TRUSTED labels: Accept without question
-        - REJECTED labels: Skip entirely (use BERT-NER instead)
-        - VALIDATED labels: Apply text-based filtering
+        Handles output from both models:
+        - UltraBERT: ner_family (KINSHIP, etc.), temporal (DATE_REL, etc.)
+        - BERT-NER: general entities (PERSON, ORG, LOC, MISC)
+
+        Filtering layers (in order):
+        1. Universal: Garbage words, short entities (all heads)
+        2. UltraBERT ner_family: TRUSTED/REJECTED/VALIDATED label tiers
+        3. BERT-NER: PERSON and LOC specific stopwords
 
         Args:
-            raw: Raw entity dict from UltraBERT
-            source_head: Which NER head produced this entity
+            raw: Raw entity dict {text, label, start_token, end_token}
+            source_head: 'ner_family', 'temporal', 'ner_general', or 'bert_ner'
 
         Returns:
-            ExtractedEntity or None if invalid/empty after normalization
+            ExtractedEntity or None if filtered out
         """
         label = raw.get("label", "")
         text = raw.get("text", "")
@@ -937,59 +934,78 @@ class UltraBERTEntityExtractor:
         if not label or not text:
             return None
 
-        # === NER_FAMILY LABEL FILTERING ===
-        # Only apply to ner_family head (not bert_ner or temporal)
-        if source_head == "ner_family":
-            # REJECTED: Skip entirely - BERT-NER provides better coverage
-            if label in self.REJECTED_NER_FAMILY:
-                logger.debug(f"Rejected ner_family PERSON: '{text}' - use BERT-NER instead")
-                return None
-
-            # VALIDATED: Check text quality before accepting
-            if label in self.VALIDATED_NER_FAMILY:
-                normalized_check = self.normalize_name(text)
-                if not self._is_valid_ner_family_entity(label, text, normalized_check):
-                    return None
-
-            # TRUSTED: Accept without additional validation
-            # (KINSHIP, NICKNAME, TRADITION, HOME_LOC fall through to normal processing)
-
-        # === BERT-NER PERSON FILTERING ===
-        # Filter common words that BERT-NER misclassifies as PERSON
-        if source_head == "bert_ner" and label == "PERSON":
-            normalized_check = self.normalize_name(text)
-            if normalized_check.lower() in self.BERT_NER_PERSON_STOPWORDS:
-                logger.debug(f"Filtered BERT-NER PERSON stopword: '{text}'")
-                return None
-            # Also filter single-character entities
-            if len(normalized_check) <= 2:
-                logger.debug(f"Filtered short BERT-NER PERSON: '{text}'")
-                return None
-
-        # === BERT-NER LOC FILTERING ===
-        # Filter common words that BERT-NER misclassifies as LOC
-        if source_head == "bert_ner" and label == "LOC":
-            normalized_check = self.normalize_name(text)
-            if normalized_check.lower() in self.BERT_NER_LOC_STOPWORDS:
-                logger.debug(f"Filtered BERT-NER LOC stopword: '{text}'")
-                return None
-            # Also filter single-character entities
-            if len(normalized_check) <= 2:
-                logger.debug(f"Filtered short BERT-NER LOC: '{text}'")
-                return None
-
-        # Normalize first to catch empty results
+        # Normalize ONCE - reuse throughout this method
         normalized = self.normalize_name(text)
         if not normalized:
-            return None  # Cleaned to empty string (e.g., just punctuation)
+            return None  # Cleaned to empty string (just punctuation)
 
-        # Look up mapping
+        normalized_lower = normalized.lower()
+
+        # =====================================================================
+        # LAYER 1: UNIVERSAL FILTERING (applies to ALL heads)
+        # =====================================================================
+
+        # M10.2: Garbage words filtered universally
+        if normalized_lower in self.GARBAGE_ENTITY_WORDS:
+            logger.debug(f"Filtered garbage: '{text}' ({label}) from {source_head}")
+            return None
+
+        # Short entities are tokenization artifacts
+        if len(normalized) <= 1:
+            logger.debug(f"Filtered short: '{text}' ({label}) from {source_head}")
+            return None
+
+        # =====================================================================
+        # LAYER 2: ULTRABERT NER_FAMILY FILTERING
+        # =====================================================================
+
+        if source_head == "ner_family":
+            # REJECTED labels: Skip entirely, BERT-NER provides better coverage
+            if label in self.REJECTED_NER_FAMILY:
+                logger.debug(f"Rejected ner_family {label}: '{text}' - use BERT-NER")
+                return None
+
+            # VALIDATED labels: Require keyword/pattern validation
+            if label in self.VALIDATED_NER_FAMILY:
+                if not self._is_valid_ner_family_entity(label, text, normalized):
+                    return None
+
+            # TRUSTED labels: KINSHIP, NICKNAME, TRADITION, HOME_LOC pass through
+
+        # =====================================================================
+        # LAYER 3: BERT-NER SPECIFIC FILTERING
+        # =====================================================================
+
+        if source_head == "bert_ner":
+            # PERSON: Filter tech terms, common verbs misclassified as names
+            if label == "PERSON":
+                if normalized_lower in self.BERT_NER_PERSON_STOPWORDS:
+                    logger.debug(f"Filtered BERT-NER PERSON stopword: '{text}'")
+                    return None
+                # Names should be at least 3 chars
+                if len(normalized) <= 2:
+                    logger.debug(f"Filtered short BERT-NER PERSON: '{text}'")
+                    return None
+
+            # LOC: Filter temporal words misclassified as locations
+            elif label == "LOC":
+                if normalized_lower in self.BERT_NER_LOC_STOPWORDS:
+                    logger.debug(f"Filtered BERT-NER LOC stopword: '{text}'")
+                    return None
+                if len(normalized) <= 2:
+                    logger.debug(f"Filtered short BERT-NER LOC: '{text}'")
+                    return None
+
+        # =====================================================================
+        # MAP TO KG TYPE
+        # =====================================================================
+
         mapping = self.LABEL_MAPPING.get(label)
         if not mapping:
             # Unknown label, default to CONCEPT with low priority
             mapping = (KGEntityType.CONCEPT, 0.50)
             self._metrics.unknown_labels += 1
-            logger.debug(f"Unknown UltraBERT label: {label}")
+            logger.debug(f"Unknown label: {label}")
 
         kg_type, priority = mapping
 

@@ -1,30 +1,41 @@
-# K0 Kernel Local Deployment Guide# How to deploy k0 kernel
+# K0 Kernel Local Deployment Guide
 
+## Overview
 
+This directory contains the **complete local development and testing infrastructure** for K0 Kernel with the **bridge policy enforcement** workflow. The deployment orchestrates:
 
-## OverviewRun from d:/familyos/k0/deploy:
-
-
-
-This directory contains the **complete local development and testing infrastructure** for K0 Kernel with the **bridge policy enforcement** workflow. The deployment orchestrates:```powershell
-
-powershell -ExecutionPolicy Bypass -File .\k0.ps1 up -Verify -WaitSeconds 10
-
-- **K0 Kernel** (core enforcement engine with PEM)```
-
+- **K0 Kernel** (core enforcement engine with PEM)
 - **Policy Enforcement Module (PEM)** (manifest fingerprinting, obligation evaluation, redaction)
+- **Observability Stack** (Prometheus, Grafana, Tempo, AlertManager)
+- **PostgreSQL Backend** (with pgbouncer for connection pooling)
+- **Operational Scripts** (organized in `scripts/` directory)
 
-- **Observability Stack** (Prometheus, Grafana, Tempo, AlertManager)Notes:
-
-- **SQLite Backend** (WAL-mode for concurrency)
-
-- -Verify waits for services to become healthy
-
-**Architecture Diagram:** See `../../architecture_diagrams/k1/k1_complete_with_flows.mmd` for K1-orchestrated K0 kernel interaction pattern.- -WaitSeconds sets readiness timeout (e.g., 10)
-
-- If scripts are blocked, run: `Set-ExecutionPolicy -Scope Process Bypass -Force`
+**Architecture Diagram:** See `../../architecture_diagrams/k1/k1_complete_with_flows.mmd` for K1-orchestrated K0 kernel interaction pattern.
 
 **Policy Contract:** See `../../k0/contracts/policy/bridge_policy.yml` for P00-P03 port definitions and manifest fingerprint validation.
+
+## 📂 Directory Structure
+
+```
+k0/deploy/
+├── scripts/               # Organized operational scripts
+│   ├── validation/       # Database and data quality checks
+│   ├── reporting/        # Export and visualization tools
+│   ├── data_management/  # Data cleanup and consolidation
+│   ├── provisioning/     # Device setup and registration
+│   ├── events/          # Event submission utilities
+│   ├── testing/         # Integration and component tests
+│   └── seeding/         # Initial data population
+├── docker-compose.yml    # Main service orchestration
+├── k0.ps1               # Deployment automation script
+├── run_validation.ps1   # Quick validation workflow
+├── submit_sample_events.ps1  # Event submission helper
+├── run_complete_test.ps1     # End-to-end test workflow
+├── readme.md            # This file
+└── QUICK_START.md       # Quick start guide
+
+See scripts/README.md for detailed script documentation.
+```
 
 ---
 

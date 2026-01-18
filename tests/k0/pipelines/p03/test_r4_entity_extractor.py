@@ -312,14 +312,15 @@ class TestNicknameNormalization:
         assert entities[0].normalized_text == "mother"
 
     def test_normalize_removes_punctuation(self, extractor: UltraBERTEntityExtractor) -> None:
-        """Punctuation is removed during normalization."""
+        """Punctuation is removed during normalization. Possessive 's is stripped."""
         ner_general = {
             "entities": [{"text": "John's", "label": "PERSON", "start_token": 0, "end_token": 0}]
         }
 
         entities = extractor.extract_from_ultrabert(ner_general_output=ner_general)
 
-        assert entities[0].normalized_text == "johns"
+        # "John's" -> "john" (possessive 's is removed by normalize_name)
+        assert entities[0].normalized_text == "john"
 
     def test_normalize_collapses_spaces(self, extractor: UltraBERTEntityExtractor) -> None:
         """Multiple spaces are collapsed to single space."""
@@ -678,3 +679,92 @@ class TestFullResultExtraction:
         entities = extractor.extract_from_full_result(mock_result)
 
         assert len(entities) == 3
+
+
+# =============================================================================
+# Test: M10.2 - Universal Garbage Word Filtering
+# =============================================================================
+
+
+class TestUniversalGarbageFiltering:
+    """M10.2: GARBAGE_ENTITY_WORDS must be filtered from ALL heads/labels."""
+
+    def test_garbage_words_filtered_from_ner_general(
+        self, extractor: UltraBERTEntityExtractor
+    ) -> None:
+        """Garbage words from ner_general are filtered (previously unfiltered)."""
+        ner_general = {
+            "entities": [
+                # "the" is in GARBAGE_ENTITY_WORDS - should be filtered
+                {"text": "the", "label": "PERSON", "start_token": 0, "end_token": 1},
+                # "Microsoft" is valid - should pass
+                {"text": "Microsoft", "label": "ORG", "start_token": 2, "end_token": 3},
+                # "is" is in GARBAGE_ENTITY_WORDS - should be filtered
+                {"text": "is", "label": "MISC", "start_token": 4, "end_token": 5},
+            ]
+        }
+
+        entities = extractor.extract_from_ultrabert(ner_general_output=ner_general)
+
+        assert len(entities) == 1
+        assert entities[0].text == "Microsoft"
+
+    def test_garbage_words_filtered_from_temporal(
+        self, extractor: UltraBERTEntityExtractor
+    ) -> None:
+        """Garbage words from temporal head are filtered (previously unfiltered)."""
+        temporal = {
+            "entities": [
+                # "was" is in GARBAGE_ENTITY_WORDS - should be filtered
+                {"text": "was", "label": "DATE", "start_token": 0, "end_token": 1},
+                # "yesterday" is valid - should pass
+                {"text": "yesterday", "label": "DATE_REL", "start_token": 2, "end_token": 3},
+                # "the" is in GARBAGE_ENTITY_WORDS - should be filtered
+                {"text": "the", "label": "TIME", "start_token": 4, "end_token": 5},
+            ]
+        }
+
+        entities = extractor.extract_from_ultrabert(temporal_output=temporal)
+
+        assert len(entities) == 1
+        assert entities[0].text == "yesterday"
+
+    def test_garbage_words_filtered_from_trusted_ner_family(
+        self, extractor: UltraBERTEntityExtractor
+    ) -> None:
+        """Garbage words from TRUSTED ner_family labels are now filtered."""
+        ner_family = {
+            "entities": [
+                # "mom" is valid KINSHIP - should pass
+                {"text": "mom", "label": "KINSHIP", "start_token": 0, "end_token": 1},
+                # "the" even with KINSHIP label should be filtered (edge case)
+                {"text": "the", "label": "KINSHIP", "start_token": 2, "end_token": 3},
+                # "home" is valid HOME_LOC - should pass
+                {"text": "home", "label": "HOME_LOC", "start_token": 4, "end_token": 5},
+            ]
+        }
+
+        entities = extractor.extract_from_ultrabert(ner_family_output=ner_family)
+
+        # "the" should be filtered, "mom" and "home" should pass
+        assert len(entities) == 2
+        texts = {e.text for e in entities}
+        assert texts == {"mom", "home"}
+
+    def test_common_verbs_filtered_universally(self, extractor: UltraBERTEntityExtractor) -> None:
+        """Common verbs in GARBAGE_ENTITY_WORDS filtered from all heads."""
+        # Test verbs that were previously slipping through ner_general
+        ner_general = {
+            "entities": [
+                {"text": "met", "label": "PERSON", "start_token": 0, "end_token": 1},
+                {"text": "fixed", "label": "EVENT", "start_token": 2, "end_token": 3},
+                {"text": "deployed", "label": "MISC", "start_token": 4, "end_token": 5},
+                {"text": "John", "label": "PERSON", "start_token": 6, "end_token": 7},
+            ]
+        }
+
+        entities = extractor.extract_from_ultrabert(ner_general_output=ner_general)
+
+        # Only "John" should pass
+        assert len(entities) == 1
+        assert entities[0].text == "John"

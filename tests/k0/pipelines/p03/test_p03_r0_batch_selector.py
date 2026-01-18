@@ -85,10 +85,28 @@ class MockConnection:
     """Mock database connection for testing."""
 
     rows: List[Dict[str, Any]] = field(default_factory=list)
+    st_vec_rows: List[Dict[str, Any]] = field(default_factory=list)
 
     async def fetch(self, query: str, *params: Any) -> List[Dict[str, Any]]:
-        """Return configured rows."""
+        """Return appropriate rows based on query."""
+        # Check if this is a st_vec query for embeddings
+        if "st_vec" in query.lower() or "vector" in query.lower():
+            return self.st_vec_rows
         return self.rows
+
+    async def fetchval(self, query: str, *params: Any) -> Any:
+        """Return a single value (for current_database() etc)."""
+        if "current_database" in query:
+            return "test_db"
+        if "COUNT" in query.upper():
+            return len(self.rows)
+        return None
+
+    async def fetchrow(self, query: str, *params: Any) -> Optional[Dict[str, Any]]:
+        """Return a single row."""
+        if self.rows:
+            return self.rows[0]
+        return None
 
 
 @dataclass
@@ -238,6 +256,34 @@ def sample_hipp_event_rows() -> List[Dict[str, Any]]:
     ]
 
 
+@pytest.fixture
+def sample_st_vec_rows() -> List[Dict[str, Any]]:
+    """Create sample st_vec rows with mock embedding vectors."""
+    import struct
+
+    # Create a mock 768-dim vector as bytes (768 floats * 4 bytes = 3072 bytes)
+    mock_vector = [0.1] * 768
+    vector_bytes = struct.pack(f"{768}f", *mock_vector)
+
+    return [
+        {
+            "event_id": "evt-r0-001",
+            "vector": vector_bytes,
+            "vector_dim": 768,
+        },
+        {
+            "event_id": "evt-r0-002",
+            "vector": vector_bytes,
+            "vector_dim": 768,
+        },
+        {
+            "event_id": "evt-r0-003",
+            "vector": vector_bytes,
+            "vector_dim": 768,
+        },
+    ]
+
+
 # =============================================================================
 # R0 OFFSET TESTS
 # =============================================================================
@@ -253,6 +299,7 @@ class TestR0OffsetHandling:
         mock_connection: MockConnection,
         mock_runner_context: P03RunnerContext,
         sample_hipp_event_rows: List[Dict[str, Any]],
+        sample_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """
         Given: Existing offset in store
@@ -270,6 +317,10 @@ class TestR0OffsetHandling:
 
         # Only return events after offset
         mock_connection.rows = [row for row in sample_hipp_event_rows if row["wal_pos"] > 100]
+        # Provide embeddings for the events
+        mock_connection.st_vec_rows = [
+            r for r in sample_st_vec_rows if r["event_id"] != "evt-r0-001"
+        ]
 
         r0 = R0BatchSelector()
         envelope, result = await r0.run("tenant-r0", "space-r0", mock_runner_context)
@@ -285,6 +336,7 @@ class TestR0OffsetHandling:
         mock_connection: MockConnection,
         mock_runner_context: P03RunnerContext,
         sample_hipp_event_rows: List[Dict[str, Any]],
+        sample_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """
         Given: No prior offset in store
@@ -293,6 +345,7 @@ class TestR0OffsetHandling:
         """
         # No offset set - should start from 0
         mock_connection.rows = sample_hipp_event_rows
+        mock_connection.st_vec_rows = sample_st_vec_rows
 
         r0 = R0BatchSelector()
         envelope, result = await r0.run("tenant-r0", "space-r0", mock_runner_context)
@@ -348,6 +401,7 @@ class TestR0BatchSelection:
         mock_connection: MockConnection,
         mock_runner_context: P03RunnerContext,
         sample_hipp_event_rows: List[Dict[str, Any]],
+        sample_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """
         Given: More events than batch_size
@@ -356,6 +410,7 @@ class TestR0BatchSelection:
         """
         # Return only 2 events (simulating LIMIT)
         mock_connection.rows = sample_hipp_event_rows[:2]
+        mock_connection.st_vec_rows = sample_st_vec_rows[:2]
 
         r0 = R0BatchSelector(config=R0Config(batch_size=2))
         envelope, result = await r0.run("tenant-r0", "space-r0", mock_runner_context)
@@ -390,6 +445,7 @@ class TestR0BatchSelection:
         mock_connection: MockConnection,
         mock_runner_context: P03RunnerContext,
         sample_hipp_event_rows: List[Dict[str, Any]],
+        sample_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """
         Given: Eligible events
@@ -397,6 +453,7 @@ class TestR0BatchSelection:
         Then: Creates valid P03BatchEnvelope with context and events
         """
         mock_connection.rows = sample_hipp_event_rows
+        mock_connection.st_vec_rows = sample_st_vec_rows
 
         r0 = R0BatchSelector()
         envelope, result = await r0.run("tenant-r0", "space-r0", mock_runner_context)
@@ -417,6 +474,7 @@ class TestR0BatchSelection:
         mock_connection: MockConnection,
         mock_runner_context: P03RunnerContext,
         sample_hipp_event_rows: List[Dict[str, Any]],
+        sample_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """
         Given: Events with all fields
@@ -424,6 +482,7 @@ class TestR0BatchSelection:
         Then: P03EventState is correctly populated
         """
         mock_connection.rows = sample_hipp_event_rows[:1]
+        mock_connection.st_vec_rows = sample_st_vec_rows[:1]
 
         r0 = R0BatchSelector()
         envelope, result = await r0.run("tenant-r0", "space-r0", mock_runner_context)
@@ -457,6 +516,7 @@ class TestR0Results:
         mock_connection: MockConnection,
         mock_runner_context: P03RunnerContext,
         sample_hipp_event_rows: List[Dict[str, Any]],
+        sample_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """
         Given: Successful batch selection
@@ -464,6 +524,7 @@ class TestR0Results:
         Then: Result includes outputs_summary with metrics
         """
         mock_connection.rows = sample_hipp_event_rows
+        mock_connection.st_vec_rows = sample_st_vec_rows
 
         r0 = R0BatchSelector()
         envelope, result = await r0.run("tenant-r0", "space-r0", mock_runner_context)
@@ -479,6 +540,7 @@ class TestR0Results:
         mock_connection: MockConnection,
         mock_runner_context: P03RunnerContext,
         sample_hipp_event_rows: List[Dict[str, Any]],
+        sample_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """
         Given: Successful batch selection
@@ -486,6 +548,7 @@ class TestR0Results:
         Then: Result includes idempotency key
         """
         mock_connection.rows = sample_hipp_event_rows
+        mock_connection.st_vec_rows = sample_st_vec_rows
 
         r0 = R0BatchSelector()
         envelope, result = await r0.run("tenant-r0", "space-r0", mock_runner_context)
@@ -609,10 +672,12 @@ class TestR0Configuration:
         mock_connection: MockConnection,
         mock_runner_context: P03RunnerContext,
         sample_hipp_event_rows: List[Dict[str, Any]],
+        sample_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """R0 uses configured batch size in query."""
         # This test verifies config is passed through
         mock_connection.rows = sample_hipp_event_rows[:1]
+        mock_connection.st_vec_rows = sample_st_vec_rows[:1]
 
         config = R0Config(batch_size=1)
         r0 = R0BatchSelector(config=config)

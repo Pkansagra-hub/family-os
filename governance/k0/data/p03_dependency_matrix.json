@@ -1,0 +1,1141 @@
+{
+  "forward_deps": {
+    "audit_logger.py": [
+      "context.py"
+    ],
+    "checkpoint.py": [
+      "context.py",
+      "runner_contract.py",
+      "serializer.py"
+    ],
+    "context.py": [],
+    "deterministic.py": [
+      "runner_contract.py",
+      "runner_contract.py"
+    ],
+    "envelope.py": [
+      "context.py",
+      "event_state.py",
+      "observability.py",
+      "phase_outputs.py",
+      "runner_contract.py",
+      "staged_writes.py"
+    ],
+    "erasure.py": [],
+    "event_state.py": [],
+    "explainability.py": [],
+    "feedback_consumer.py": [],
+    "gap_emitter.py": [
+      "envelope.py",
+      "phase_outputs.py"
+    ],
+    "observability.py": [
+      "context.py"
+    ],
+    "offset_manager.py": [
+      "checkpoint.py",
+      "runner_contract.py",
+      "envelope.py",
+      "phase_interface.py",
+      "runner_contract.py"
+    ],
+    "outbox_publisher.py": [],
+    "phase_interface.py": [
+      "observability.py",
+      "runner_contract.py",
+      "envelope.py"
+    ],
+    "phase_outputs.py": [
+      "algorithms\\routine_detector.py",
+      "dream\\intent_signals.py",
+      "staging\\r6_output.py",
+      "truth_writer\\result.py"
+    ],
+    "r5_config.py": [],
+    "retention.py": [],
+    "runner_contract.py": [],
+    "sequential_runner.py": [
+      "observability.py",
+      "phase_interface.py",
+      "runner_contract.py",
+      "envelope.py",
+      "observability.py"
+    ],
+    "serializer.py": [
+      "context.py",
+      "event_state.py",
+      "observability.py",
+      "phase_outputs.py",
+      "staged_writes.py"
+    ],
+    "staged_writes.py": [
+      "context.py"
+    ],
+    "api\\quarantine_review.py": [],
+    "cache\\embedding_cache.py": [],
+    "feedback\\anomaly_detector.py": [],
+    "feedback\\quarantine_detector.py": [],
+    "feedback\\rate_limiter.py": [],
+    "feedback\\velocity_detector.py": [],
+    "learning\\async_audit.py": [],
+    "learning\\feedback_queue.py": [],
+    "learning\\learning_anomaly_detector.py": [],
+    "maintenance\\quarantine_cleanup.py": [],
+    "ops\\alerting.py": [],
+    "ops\\bus_circuit.py": [
+      "ops\\circuit_breaker.py"
+    ],
+    "ops\\circuit_breaker.py": [],
+    "ops\\context_propagation.py": [],
+    "ops\\dlq_store.py": [],
+    "ops\\edge_case_handler.py": [],
+    "ops\\error_classifier.py": [
+      "runner_contract.py"
+    ],
+    "ops\\error_handler.py": [
+      "ops\\error_classifier.py"
+    ],
+    "ops\\faiss_circuit.py": [
+      "ops\\circuit_breaker.py"
+    ],
+    "ops\\formula_comparison.py": [
+      "ops\\metrics.py"
+    ],
+    "ops\\formula_tracing.py": [
+      "ops\\metrics.py"
+    ],
+    "ops\\logging.py": [],
+    "ops\\metrics.py": [],
+    "ops\\module_metrics.py": [
+      "ops\\metrics.py"
+    ],
+    "ops\\p08_circuit.py": [
+      "ops\\circuit_breaker.py"
+    ],
+    "ops\\partial_failure.py": [],
+    "ops\\phase_logger.py": [],
+    "ops\\quarantine_metrics.py": [],
+    "ops\\retry_config.py": [],
+    "ops\\security.py": [
+      "ops\\metrics.py"
+    ],
+    "ops\\shadow_comparator.py": [],
+    "ops\\tracing.py": [],
+    "phases\\r0_batch_selector.py": [
+      "gap_auto_resolver.py",
+      "checkpoint.py",
+      "context.py",
+      "envelope.py",
+      "event_state.py",
+      "observability.py",
+      "phase_interface.py",
+      "runner_contract.py",
+      "phase_interface.py"
+    ],
+    "phases\\r1_importance_scorer.py": [
+      "algorithms\\importance_scorer.py",
+      "audit_logger.py",
+      "observability.py",
+      "phase_interface.py",
+      "phase_outputs.py",
+      "runner_contract.py",
+      "envelope.py",
+      "phase_interface.py"
+    ],
+    "phases\\r2_episodic_integrator.py": [
+      "event_state.py",
+      "observability.py",
+      "phase_interface.py",
+      "phase_outputs.py",
+      "runner_contract.py",
+      "envelope.py",
+      "event_state.py",
+      "phase_interface.py"
+    ],
+    "phases\\r3_dedup_decay.py": [
+      "algorithms\\access_tracker.py",
+      "algorithms\\decay_engine.py",
+      "algorithms\\duplicate_detector.py",
+      "algorithms\\immunity_checker.py",
+      "algorithms\\minhash_lsh.py",
+      "algorithms\\novelty_bonus_learner.py",
+      "algorithms\\prune_audit_logger.py",
+      "algorithms\\prune_regret_detector.py",
+      "algorithms\\reconciliation_engine.py",
+      "algorithms\\retention_enforcer.py",
+      "algorithms\\simhasher.py",
+      "algorithms\\two_stage_dedup.py",
+      "staging\\truth_query_service.py",
+      "phase_interface.py",
+      "event_state.py"
+    ],
+    "phases\\r4_kg_consolidator.py": [
+      "algorithms\\alias_detector.py",
+      "algorithms\\alias_detector.py",
+      "algorithms\\ambiguous_resolver.py",
+      "algorithms\\causality_thresholds.py",
+      "algorithms\\confidence_router.py",
+      "algorithms\\edge_demotion.py",
+      "algorithms\\entity_disambiguator.py",
+      "algorithms\\entity_extractor.py",
+      "algorithms\\entity_merger.py",
+      "algorithms\\granger_causality.py",
+      "algorithms\\hebbian_learner.py",
+      "algorithms\\merge_threshold_learner.py",
+      "algorithms\\subtype_classifier.py",
+      "observability.py",
+      "phase_interface.py",
+      "phase_outputs.py",
+      "runner_contract.py",
+      "envelope.py",
+      "event_state.py",
+      "phase_interface.py",
+      "algorithms\\bert_ner_adapter.py"
+    ],
+    "phases\\r5_dream_explorer.py": [
+      "observability.py",
+      "phase_interface.py",
+      "r5_config.py",
+      "runner_contract.py",
+      "algorithms\\routine_detector.py",
+      "dream\\intent_signals.py",
+      "envelope.py",
+      "phase_interface.py",
+      "phase_outputs.py",
+      "phase_outputs.py",
+      "phase_outputs.py"
+    ],
+    "phases\\r6_staging.py": [
+      "staging\\dedup_metadata.py",
+      "staging\\r6_coordinator.py",
+      "staging\\r6_output.py",
+      "event_state.py",
+      "observability.py",
+      "phase_interface.py",
+      "phase_outputs.py",
+      "runner_contract.py",
+      "envelope.py",
+      "phase_interface.py"
+    ],
+    "phases\\r7_truth_writer.py": [
+      "observability.py",
+      "phase_interface.py",
+      "runner_contract.py",
+      "staged_writes.py",
+      "truth_writer\\result.py",
+      "truth_writer\\router.py",
+      "truth_writer\\transaction.py",
+      "envelope.py",
+      "phase_interface.py",
+      "staged_writes.py",
+      "truth_writer\\layers\\episodic.py",
+      "truth_writer\\layers\\kg.py",
+      "truth_writer\\layers\\procedural.py",
+      "truth_writer\\layers\\prospective.py",
+      "truth_writer\\layers\\semantic.py",
+      "truth_writer\\layers\\social.py",
+      "truth_writer\\layers\\vector.py",
+      "truth_writer\\router.py",
+      "truth_writer\\text_vector_coordinator.py",
+      "truth_writer\\transaction.py",
+      "event_state.py",
+      "truth_writer\\result.py"
+    ],
+    "phases\\r8_event_emitter.py": [
+      "emission\\emitter.py",
+      "emission\\gap_emitter.py",
+      "gap_emitter.py",
+      "observability.py",
+      "phase_interface.py",
+      "runner_contract.py",
+      "envelope.py",
+      "phase_interface.py",
+      "phase_outputs.py",
+      "runner_contract.py"
+    ],
+    "qos\\adaptive_batch_sizer.py": [
+      "qos\\scheduler_integration.py"
+    ],
+    "qos\\context_integration.py": [],
+    "qos\\learning_budget.py": [],
+    "qos\\phase_metrics.py": [],
+    "qos\\query_metrics.py": [],
+    "qos\\resource_metrics.py": [],
+    "qos\\scheduler_integration.py": [],
+    "qos\\throughput_tracker.py": [],
+    "security\\audit_trail.py": [],
+    "security\\device_retention.py": [],
+    "security\\fingerprint.py": [],
+    "security\\location_masking.py": [],
+    "security\\privacy_band.py": [],
+    "security\\query_auditor.py": [
+      "security\\rls_verifier.py"
+    ],
+    "security\\rls_verifier.py": [],
+    "security\\tombstone.py": [],
+    "batch_selector.py": [
+      "phase_interface.py",
+      "phases\\r0_batch_selector.py"
+    ],
+    "gap_auto_resolver.py": [],
+    "algorithms\\access_tracker.py": [],
+    "algorithms\\alias_detector.py": [],
+    "algorithms\\ambiguous_resolver.py": [],
+    "algorithms\\bert_ner_adapter.py": [],
+    "algorithms\\bgt_sm.py": [
+      "context.py",
+      "dream\\config.py",
+      "dream\\models.py",
+      "dream\\models.py"
+    ],
+    "algorithms\\causality_thresholds.py": [],
+    "algorithms\\centroid_calculator.py": [],
+    "algorithms\\cluster_quality.py": [],
+    "algorithms\\composite_distance.py": [],
+    "algorithms\\confidence_router.py": [],
+    "algorithms\\cpn.py": [],
+    "algorithms\\decay_engine.py": [],
+    "algorithms\\duplicate_detector.py": [
+      "algorithms\\simhasher.py",
+      "algorithms\\two_stage_dedup.py"
+    ],
+    "algorithms\\edge_demotion.py": [],
+    "algorithms\\embedding_text_generator.py": [],
+    "algorithms\\entity_disambiguator.py": [],
+    "algorithms\\entity_extractor.py": [
+      "algorithms\\bert_ner_adapter.py",
+      "algorithms\\bert_ner_adapter.py"
+    ],
+    "algorithms\\entity_merger.py": [],
+    "algorithms\\episode_splitter.py": [],
+    "algorithms\\episodic_dbscan.py": [
+      "algorithms\\composite_distance.py",
+      "phase_outputs.py"
+    ],
+    "algorithms\\episodic_hdbscan.py": [
+      "algorithms\\composite_distance.py",
+      "phase_outputs.py"
+    ],
+    "algorithms\\eps_adjuster.py": [],
+    "algorithms\\granger_causality.py": [],
+    "algorithms\\hebbian_learner.py": [],
+    "algorithms\\immunity_checker.py": [],
+    "algorithms\\importance_scorer.py": [
+      "audit_logger.py"
+    ],
+    "algorithms\\importance_weight_learner.py": [],
+    "algorithms\\intent_signal_detector.py": [
+      "dream\\intent_signals.py",
+      "algorithms\\temporal_parser.py",
+      "event_state.py"
+    ],
+    "algorithms\\mcts.py": [
+      "dream\\mcts_persistence.py",
+      "dream\\mcts_persistence.py"
+    ],
+    "algorithms\\mcts_shadow.py": [
+      "context.py"
+    ],
+    "algorithms\\merge_threshold_learner.py": [],
+    "algorithms\\minhash_lsh.py": [],
+    "algorithms\\min_samples_adjuster.py": [],
+    "algorithms\\novelty_bonus_learner.py": [],
+    "algorithms\\prune_audit_logger.py": [],
+    "algorithms\\prune_regret_detector.py": [],
+    "algorithms\\reconciliation_engine.py": [
+      "event_state.py",
+      "staging\\truth_query_service.py"
+    ],
+    "algorithms\\retention_enforcer.py": [
+      "algorithms\\decay_engine.py"
+    ],
+    "algorithms\\routine_detector.py": [],
+    "algorithms\\simhasher.py": [],
+    "algorithms\\spc_uq.py": [],
+    "algorithms\\subtype_classifier.py": [],
+    "algorithms\\tdl_hco.py": [
+      "dream\\models.py",
+      "dream\\models.py"
+    ],
+    "algorithms\\temporal_parser.py": [],
+    "algorithms\\two_stage_dedup.py": [
+      "algorithms\\simhasher.py"
+    ],
+    "dream\\compute_budget.py": [],
+    "dream\\config.py": [],
+    "dream\\dream_explorer.py": [
+      "dream\\compute_budget.py",
+      "dream\\config.py",
+      "dream\\models.py",
+      "algorithms\\routine_detector.py",
+      "algorithms\\intent_signal_detector.py",
+      "algorithms\\bgt_sm.py",
+      "algorithms\\cpn.py",
+      "algorithms\\spc_uq.py",
+      "algorithms\\spc_uq.py",
+      "algorithms\\mcts.py",
+      "algorithms\\mcts.py",
+      "algorithms\\mcts.py",
+      "algorithms\\tdl_hco.py",
+      "algorithms\\routine_detector.py"
+    ],
+    "dream\\intent_signals.py": [],
+    "dream\\mcts_persistence.py": [
+      "context.py"
+    ],
+    "dream\\models.py": [
+      "algorithms\\routine_detector.py",
+      "dream\\intent_signals.py"
+    ],
+    "emission\\emitter.py": [
+      "staging\\r6_output.py",
+      "envelope.py",
+      "phase_outputs.py",
+      "runner_contract.py"
+    ],
+    "emission\\gap_emitter.py": [
+      "gap_emitter.py",
+      "envelope.py",
+      "phase_outputs.py"
+    ],
+    "staging\\dedup_metadata.py": [
+      "algorithms\\duplicate_detector.py",
+      "event_state.py",
+      "phase_outputs.py"
+    ],
+    "staging\\idempotency.py": [],
+    "staging\\intent_signal_assembler.py": [
+      "dream\\intent_signals.py",
+      "staged_writes.py",
+      "context.py"
+    ],
+    "staging\\kg_write_assembler.py": [
+      "phase_outputs.py",
+      "staged_writes.py",
+      "staging\\idempotency.py"
+    ],
+    "staging\\manifest_validator.py": [
+      "staging\\r6_output.py",
+      "staged_writes.py"
+    ],
+    "staging\\outbox_assembler.py": [
+      "staging\\r6_output.py",
+      "event_state.py",
+      "phase_outputs.py",
+      "staged_writes.py"
+    ],
+    "staging\\r6_coordinator.py": [
+      "staging\\dedup_metadata.py",
+      "staging\\idempotency.py",
+      "staging\\intent_signal_assembler.py",
+      "staging\\kg_write_assembler.py",
+      "staging\\manifest_validator.py",
+      "staging\\outbox_assembler.py",
+      "staging\\r6_output.py",
+      "staging\\reconciliation_recorder.py",
+      "staging\\status_marker.py",
+      "staging\\summary_generator.py",
+      "staging\\truth_write_assembler.py",
+      "event_state.py",
+      "phase_outputs.py",
+      "staged_writes.py",
+      "staged_writes.py"
+    ],
+    "staging\\r6_output.py": [
+      "staged_writes.py",
+      "context.py"
+    ],
+    "staging\\reconciliation_recorder.py": [
+      "event_state.py"
+    ],
+    "staging\\status_marker.py": [
+      "event_state.py"
+    ],
+    "staging\\summary_generator.py": [
+      "staging\\r6_output.py",
+      "event_state.py",
+      "staged_writes.py"
+    ],
+    "staging\\truth_query_service.py": [],
+    "staging\\truth_write_assembler.py": [
+      "algorithms\\routine_detector.py",
+      "dream\\intent_signals.py",
+      "dream\\models.py",
+      "event_state.py",
+      "phase_outputs.py",
+      "staged_writes.py",
+      "staging\\idempotency.py",
+      "algorithms\\subtype_classifier.py"
+    ],
+    "truth_writer\\embedding_generator.py": [],
+    "truth_writer\\outbox.py": [
+      "staged_writes.py"
+    ],
+    "truth_writer\\result.py": [],
+    "truth_writer\\router.py": [
+      "truth_writer\\result.py",
+      "staged_writes.py",
+      "staged_writes.py"
+    ],
+    "truth_writer\\source_text_fetcher.py": [],
+    "truth_writer\\text_vector_coordinator.py": [
+      "truth_writer\\embedding_generator.py",
+      "truth_writer\\source_text_fetcher.py"
+    ],
+    "truth_writer\\transaction.py": [
+      "truth_writer\\result.py",
+      "truth_writer\\router.py",
+      "staged_writes.py"
+    ],
+    "truth_writer\\layers\\episodic.py": [
+      "truth_writer\\result.py",
+      "truth_writer\\text_vector_coordinator.py",
+      "phases\\r7_truth_writer.py",
+      "staged_writes.py"
+    ],
+    "truth_writer\\layers\\kg.py": [
+      "truth_writer\\result.py",
+      "truth_writer\\text_vector_coordinator.py",
+      "phases\\r7_truth_writer.py",
+      "staged_writes.py"
+    ],
+    "truth_writer\\layers\\procedural.py": [
+      "truth_writer\\result.py",
+      "truth_writer\\text_vector_coordinator.py",
+      "phases\\r7_truth_writer.py",
+      "staged_writes.py"
+    ],
+    "truth_writer\\layers\\prospective.py": [
+      "truth_writer\\result.py",
+      "truth_writer\\text_vector_coordinator.py",
+      "phases\\r7_truth_writer.py",
+      "staged_writes.py"
+    ],
+    "truth_writer\\layers\\semantic.py": [
+      "truth_writer\\result.py",
+      "truth_writer\\text_vector_coordinator.py",
+      "phases\\r7_truth_writer.py",
+      "staged_writes.py"
+    ],
+    "truth_writer\\layers\\social.py": [
+      "truth_writer\\result.py",
+      "truth_writer\\text_vector_coordinator.py",
+      "phases\\r7_truth_writer.py",
+      "staged_writes.py"
+    ],
+    "truth_writer\\layers\\vector.py": [
+      "truth_writer\\result.py",
+      "phases\\r7_truth_writer.py",
+      "staged_writes.py"
+    ],
+    "algorithms\\text_generators\\episodic.py": [
+      "algorithms\\embedding_text_generator.py",
+      "algorithms\\text_generators\\textrank.py"
+    ],
+    "algorithms\\text_generators\\kg_entity.py": [
+      "algorithms\\embedding_text_generator.py"
+    ],
+    "algorithms\\text_generators\\procedural.py": [
+      "algorithms\\embedding_text_generator.py"
+    ],
+    "algorithms\\text_generators\\prospective.py": [
+      "algorithms\\embedding_text_generator.py"
+    ],
+    "algorithms\\text_generators\\semantic.py": [
+      "algorithms\\embedding_text_generator.py"
+    ],
+    "algorithms\\text_generators\\social.py": [
+      "algorithms\\embedding_text_generator.py"
+    ],
+    "algorithms\\text_generators\\textrank.py": []
+  },
+  "reverse_deps": {
+    "audit_logger.py": [
+      "phases\\r1_importance_scorer.py",
+      "algorithms\\importance_scorer.py"
+    ],
+    "checkpoint.py": [
+      "offset_manager.py",
+      "phases\\r0_batch_selector.py"
+    ],
+    "context.py": [
+      "audit_logger.py",
+      "checkpoint.py",
+      "envelope.py",
+      "observability.py",
+      "serializer.py",
+      "staged_writes.py",
+      "phases\\r0_batch_selector.py",
+      "algorithms\\bgt_sm.py",
+      "algorithms\\mcts_shadow.py",
+      "dream\\mcts_persistence.py",
+      "staging\\intent_signal_assembler.py",
+      "staging\\r6_output.py"
+    ],
+    "deterministic.py": [],
+    "envelope.py": [
+      "gap_emitter.py",
+      "offset_manager.py",
+      "phase_interface.py",
+      "sequential_runner.py",
+      "phases\\r0_batch_selector.py",
+      "phases\\r1_importance_scorer.py",
+      "phases\\r2_episodic_integrator.py",
+      "phases\\r4_kg_consolidator.py",
+      "phases\\r5_dream_explorer.py",
+      "phases\\r6_staging.py",
+      "phases\\r7_truth_writer.py",
+      "phases\\r8_event_emitter.py",
+      "emission\\emitter.py",
+      "emission\\gap_emitter.py"
+    ],
+    "erasure.py": [],
+    "event_state.py": [
+      "envelope.py",
+      "serializer.py",
+      "phases\\r0_batch_selector.py",
+      "phases\\r2_episodic_integrator.py",
+      "phases\\r2_episodic_integrator.py",
+      "phases\\r3_dedup_decay.py",
+      "phases\\r4_kg_consolidator.py",
+      "phases\\r6_staging.py",
+      "phases\\r7_truth_writer.py",
+      "algorithms\\intent_signal_detector.py",
+      "algorithms\\reconciliation_engine.py",
+      "staging\\dedup_metadata.py",
+      "staging\\outbox_assembler.py",
+      "staging\\r6_coordinator.py",
+      "staging\\reconciliation_recorder.py",
+      "staging\\status_marker.py",
+      "staging\\summary_generator.py",
+      "staging\\truth_write_assembler.py"
+    ],
+    "explainability.py": [],
+    "feedback_consumer.py": [],
+    "gap_emitter.py": [
+      "phases\\r8_event_emitter.py",
+      "emission\\gap_emitter.py"
+    ],
+    "observability.py": [
+      "envelope.py",
+      "phase_interface.py",
+      "sequential_runner.py",
+      "sequential_runner.py",
+      "serializer.py",
+      "phases\\r0_batch_selector.py",
+      "phases\\r1_importance_scorer.py",
+      "phases\\r2_episodic_integrator.py",
+      "phases\\r4_kg_consolidator.py",
+      "phases\\r5_dream_explorer.py",
+      "phases\\r6_staging.py",
+      "phases\\r7_truth_writer.py",
+      "phases\\r8_event_emitter.py"
+    ],
+    "offset_manager.py": [],
+    "outbox_publisher.py": [],
+    "phase_interface.py": [
+      "offset_manager.py",
+      "sequential_runner.py",
+      "phases\\r0_batch_selector.py",
+      "phases\\r0_batch_selector.py",
+      "phases\\r1_importance_scorer.py",
+      "phases\\r1_importance_scorer.py",
+      "phases\\r2_episodic_integrator.py",
+      "phases\\r2_episodic_integrator.py",
+      "phases\\r3_dedup_decay.py",
+      "phases\\r4_kg_consolidator.py",
+      "phases\\r4_kg_consolidator.py",
+      "phases\\r5_dream_explorer.py",
+      "phases\\r5_dream_explorer.py",
+      "phases\\r6_staging.py",
+      "phases\\r6_staging.py",
+      "phases\\r7_truth_writer.py",
+      "phases\\r7_truth_writer.py",
+      "phases\\r8_event_emitter.py",
+      "phases\\r8_event_emitter.py",
+      "batch_selector.py"
+    ],
+    "phase_outputs.py": [
+      "envelope.py",
+      "gap_emitter.py",
+      "serializer.py",
+      "phases\\r1_importance_scorer.py",
+      "phases\\r2_episodic_integrator.py",
+      "phases\\r4_kg_consolidator.py",
+      "phases\\r5_dream_explorer.py",
+      "phases\\r5_dream_explorer.py",
+      "phases\\r5_dream_explorer.py",
+      "phases\\r6_staging.py",
+      "phases\\r8_event_emitter.py",
+      "algorithms\\episodic_dbscan.py",
+      "algorithms\\episodic_hdbscan.py",
+      "emission\\emitter.py",
+      "emission\\gap_emitter.py",
+      "staging\\dedup_metadata.py",
+      "staging\\kg_write_assembler.py",
+      "staging\\outbox_assembler.py",
+      "staging\\r6_coordinator.py",
+      "staging\\truth_write_assembler.py"
+    ],
+    "r5_config.py": [
+      "phases\\r5_dream_explorer.py"
+    ],
+    "retention.py": [],
+    "runner_contract.py": [
+      "checkpoint.py",
+      "deterministic.py",
+      "deterministic.py",
+      "envelope.py",
+      "offset_manager.py",
+      "offset_manager.py",
+      "phase_interface.py",
+      "sequential_runner.py",
+      "ops\\error_classifier.py",
+      "phases\\r0_batch_selector.py",
+      "phases\\r1_importance_scorer.py",
+      "phases\\r2_episodic_integrator.py",
+      "phases\\r4_kg_consolidator.py",
+      "phases\\r5_dream_explorer.py",
+      "phases\\r6_staging.py",
+      "phases\\r7_truth_writer.py",
+      "phases\\r8_event_emitter.py",
+      "phases\\r8_event_emitter.py",
+      "emission\\emitter.py"
+    ],
+    "sequential_runner.py": [],
+    "serializer.py": [
+      "checkpoint.py"
+    ],
+    "staged_writes.py": [
+      "envelope.py",
+      "serializer.py",
+      "phases\\r7_truth_writer.py",
+      "phases\\r7_truth_writer.py",
+      "staging\\intent_signal_assembler.py",
+      "staging\\kg_write_assembler.py",
+      "staging\\manifest_validator.py",
+      "staging\\outbox_assembler.py",
+      "staging\\r6_coordinator.py",
+      "staging\\r6_coordinator.py",
+      "staging\\r6_output.py",
+      "staging\\summary_generator.py",
+      "staging\\truth_write_assembler.py",
+      "truth_writer\\outbox.py",
+      "truth_writer\\router.py",
+      "truth_writer\\router.py",
+      "truth_writer\\transaction.py",
+      "truth_writer\\layers\\episodic.py",
+      "truth_writer\\layers\\kg.py",
+      "truth_writer\\layers\\procedural.py",
+      "truth_writer\\layers\\prospective.py",
+      "truth_writer\\layers\\semantic.py",
+      "truth_writer\\layers\\social.py",
+      "truth_writer\\layers\\vector.py"
+    ],
+    "api\\quarantine_review.py": [],
+    "cache\\embedding_cache.py": [],
+    "feedback\\anomaly_detector.py": [],
+    "feedback\\quarantine_detector.py": [],
+    "feedback\\rate_limiter.py": [],
+    "feedback\\velocity_detector.py": [],
+    "learning\\async_audit.py": [],
+    "learning\\feedback_queue.py": [],
+    "learning\\learning_anomaly_detector.py": [],
+    "maintenance\\quarantine_cleanup.py": [],
+    "ops\\alerting.py": [
+      "sequential_runner.py"
+    ],
+    "ops\\bus_circuit.py": [],
+    "ops\\circuit_breaker.py": [
+      "ops\\bus_circuit.py",
+      "ops\\faiss_circuit.py",
+      "ops\\p08_circuit.py"
+    ],
+    "ops\\context_propagation.py": [],
+    "ops\\dlq_store.py": [],
+    "ops\\edge_case_handler.py": [],
+    "ops\\error_classifier.py": [
+      "ops\\error_handler.py"
+    ],
+    "ops\\error_handler.py": [],
+    "ops\\faiss_circuit.py": [],
+    "ops\\formula_comparison.py": [],
+    "ops\\formula_tracing.py": [],
+    "ops\\logging.py": [],
+    "ops\\metrics.py": [
+      "ops\\formula_comparison.py",
+      "ops\\formula_tracing.py",
+      "ops\\module_metrics.py",
+      "ops\\security.py"
+    ],
+    "ops\\module_metrics.py": [],
+    "ops\\p08_circuit.py": [],
+    "ops\\partial_failure.py": [],
+    "ops\\phase_logger.py": [],
+    "ops\\quarantine_metrics.py": [],
+    "ops\\retry_config.py": [],
+    "ops\\security.py": [],
+    "ops\\shadow_comparator.py": [],
+    "ops\\tracing.py": [],
+    "phases\\r0_batch_selector.py": [
+      "batch_selector.py"
+    ],
+    "phases\\r1_importance_scorer.py": [],
+    "phases\\r2_episodic_integrator.py": [],
+    "phases\\r3_dedup_decay.py": [],
+    "phases\\r4_kg_consolidator.py": [],
+    "phases\\r5_dream_explorer.py": [],
+    "phases\\r6_staging.py": [],
+    "phases\\r7_truth_writer.py": [
+      "truth_writer\\layers\\episodic.py",
+      "truth_writer\\layers\\kg.py",
+      "truth_writer\\layers\\procedural.py",
+      "truth_writer\\layers\\prospective.py",
+      "truth_writer\\layers\\semantic.py",
+      "truth_writer\\layers\\social.py",
+      "truth_writer\\layers\\vector.py"
+    ],
+    "phases\\r8_event_emitter.py": [],
+    "qos\\adaptive_batch_sizer.py": [],
+    "qos\\context_integration.py": [],
+    "qos\\learning_budget.py": [],
+    "qos\\phase_metrics.py": [],
+    "qos\\query_metrics.py": [],
+    "qos\\resource_metrics.py": [],
+    "qos\\scheduler_integration.py": [
+      "qos\\adaptive_batch_sizer.py"
+    ],
+    "qos\\throughput_tracker.py": [],
+    "security\\audit_trail.py": [],
+    "security\\device_retention.py": [],
+    "security\\fingerprint.py": [],
+    "security\\location_masking.py": [],
+    "security\\privacy_band.py": [],
+    "security\\query_auditor.py": [],
+    "security\\rls_verifier.py": [
+      "security\\query_auditor.py"
+    ],
+    "security\\tombstone.py": [],
+    "batch_selector.py": [],
+    "gap_auto_resolver.py": [
+      "phases\\r0_batch_selector.py"
+    ],
+    "algorithms\\access_tracker.py": [
+      "phases\\r2_episodic_integrator.py",
+      "phases\\r3_dedup_decay.py"
+    ],
+    "algorithms\\alias_detector.py": [
+      "phases\\r4_kg_consolidator.py",
+      "phases\\r4_kg_consolidator.py"
+    ],
+    "algorithms\\ambiguous_resolver.py": [
+      "phases\\r4_kg_consolidator.py"
+    ],
+    "algorithms\\bert_ner_adapter.py": [
+      "phases\\r4_kg_consolidator.py",
+      "algorithms\\entity_extractor.py",
+      "algorithms\\entity_extractor.py"
+    ],
+    "algorithms\\bgt_sm.py": [
+      "dream\\dream_explorer.py"
+    ],
+    "algorithms\\causality_thresholds.py": [
+      "phases\\r4_kg_consolidator.py"
+    ],
+    "algorithms\\centroid_calculator.py": [],
+    "algorithms\\cluster_quality.py": [],
+    "algorithms\\composite_distance.py": [
+      "algorithms\\episodic_dbscan.py",
+      "algorithms\\episodic_hdbscan.py"
+    ],
+    "algorithms\\confidence_router.py": [
+      "phases\\r4_kg_consolidator.py"
+    ],
+    "algorithms\\cpn.py": [
+      "dream\\dream_explorer.py"
+    ],
+    "algorithms\\decay_engine.py": [
+      "phases\\r3_dedup_decay.py",
+      "algorithms\\retention_enforcer.py"
+    ],
+    "algorithms\\duplicate_detector.py": [
+      "phases\\r3_dedup_decay.py",
+      "staging\\dedup_metadata.py"
+    ],
+    "algorithms\\edge_demotion.py": [
+      "phases\\r4_kg_consolidator.py"
+    ],
+    "algorithms\\embedding_text_generator.py": [
+      "algorithms\\text_generators\\episodic.py",
+      "algorithms\\text_generators\\kg_entity.py",
+      "algorithms\\text_generators\\procedural.py",
+      "algorithms\\text_generators\\prospective.py",
+      "algorithms\\text_generators\\semantic.py",
+      "algorithms\\text_generators\\social.py"
+    ],
+    "algorithms\\entity_disambiguator.py": [
+      "phases\\r4_kg_consolidator.py"
+    ],
+    "algorithms\\entity_extractor.py": [
+      "phases\\r4_kg_consolidator.py"
+    ],
+    "algorithms\\entity_merger.py": [
+      "phases\\r4_kg_consolidator.py"
+    ],
+    "algorithms\\episode_splitter.py": [],
+    "algorithms\\episodic_dbscan.py": [],
+    "algorithms\\episodic_hdbscan.py": [],
+    "algorithms\\eps_adjuster.py": [],
+    "algorithms\\granger_causality.py": [
+      "phases\\r4_kg_consolidator.py"
+    ],
+    "algorithms\\hebbian_learner.py": [
+      "phases\\r4_kg_consolidator.py"
+    ],
+    "algorithms\\immunity_checker.py": [
+      "phases\\r3_dedup_decay.py"
+    ],
+    "algorithms\\importance_scorer.py": [
+      "phases\\r1_importance_scorer.py"
+    ],
+    "algorithms\\importance_weight_learner.py": [],
+    "algorithms\\intent_signal_detector.py": [
+      "dream\\dream_explorer.py"
+    ],
+    "algorithms\\mcts.py": [
+      "dream\\dream_explorer.py",
+      "dream\\dream_explorer.py",
+      "dream\\dream_explorer.py"
+    ],
+    "algorithms\\mcts_shadow.py": [],
+    "algorithms\\merge_threshold_learner.py": [
+      "phases\\r4_kg_consolidator.py"
+    ],
+    "algorithms\\minhash_lsh.py": [
+      "phases\\r3_dedup_decay.py"
+    ],
+    "algorithms\\min_samples_adjuster.py": [],
+    "algorithms\\novelty_bonus_learner.py": [
+      "phases\\r3_dedup_decay.py"
+    ],
+    "algorithms\\prune_audit_logger.py": [
+      "phases\\r3_dedup_decay.py"
+    ],
+    "algorithms\\prune_regret_detector.py": [
+      "phases\\r3_dedup_decay.py"
+    ],
+    "algorithms\\reconciliation_engine.py": [
+      "phases\\r3_dedup_decay.py"
+    ],
+    "algorithms\\retention_enforcer.py": [
+      "phases\\r3_dedup_decay.py"
+    ],
+    "algorithms\\routine_detector.py": [
+      "phase_outputs.py",
+      "phases\\r5_dream_explorer.py",
+      "dream\\dream_explorer.py",
+      "dream\\dream_explorer.py",
+      "dream\\models.py",
+      "staging\\truth_write_assembler.py"
+    ],
+    "algorithms\\simhasher.py": [
+      "phases\\r3_dedup_decay.py",
+      "algorithms\\duplicate_detector.py",
+      "algorithms\\two_stage_dedup.py"
+    ],
+    "algorithms\\spc_uq.py": [
+      "dream\\dream_explorer.py",
+      "dream\\dream_explorer.py"
+    ],
+    "algorithms\\subtype_classifier.py": [
+      "phases\\r4_kg_consolidator.py",
+      "staging\\truth_write_assembler.py"
+    ],
+    "algorithms\\tdl_hco.py": [
+      "dream\\dream_explorer.py"
+    ],
+    "algorithms\\temporal_parser.py": [
+      "algorithms\\intent_signal_detector.py"
+    ],
+    "algorithms\\two_stage_dedup.py": [
+      "phases\\r3_dedup_decay.py",
+      "algorithms\\duplicate_detector.py"
+    ],
+    "dream\\compute_budget.py": [
+      "phases\\r5_dream_explorer.py",
+      "dream\\dream_explorer.py"
+    ],
+    "dream\\config.py": [
+      "algorithms\\bgt_sm.py",
+      "dream\\dream_explorer.py"
+    ],
+    "dream\\dream_explorer.py": [],
+    "dream\\intent_signals.py": [
+      "phase_outputs.py",
+      "phases\\r5_dream_explorer.py",
+      "algorithms\\intent_signal_detector.py",
+      "dream\\models.py",
+      "staging\\intent_signal_assembler.py",
+      "staging\\truth_write_assembler.py"
+    ],
+    "dream\\mcts_persistence.py": [
+      "algorithms\\mcts.py",
+      "algorithms\\mcts.py"
+    ],
+    "dream\\models.py": [
+      "algorithms\\bgt_sm.py",
+      "algorithms\\bgt_sm.py",
+      "algorithms\\tdl_hco.py",
+      "algorithms\\tdl_hco.py",
+      "dream\\dream_explorer.py",
+      "staging\\truth_write_assembler.py"
+    ],
+    "emission\\emitter.py": [
+      "phases\\r8_event_emitter.py"
+    ],
+    "emission\\gap_emitter.py": [
+      "phases\\r8_event_emitter.py"
+    ],
+    "staging\\dedup_metadata.py": [
+      "phases\\r6_staging.py",
+      "staging\\r6_coordinator.py"
+    ],
+    "staging\\idempotency.py": [
+      "staging\\kg_write_assembler.py",
+      "staging\\r6_coordinator.py",
+      "staging\\truth_write_assembler.py"
+    ],
+    "staging\\intent_signal_assembler.py": [
+      "staging\\r6_coordinator.py"
+    ],
+    "staging\\kg_write_assembler.py": [
+      "staging\\r6_coordinator.py"
+    ],
+    "staging\\manifest_validator.py": [
+      "staging\\r6_coordinator.py"
+    ],
+    "staging\\outbox_assembler.py": [
+      "staging\\r6_coordinator.py"
+    ],
+    "staging\\r6_coordinator.py": [
+      "phases\\r6_staging.py"
+    ],
+    "staging\\r6_output.py": [
+      "phase_outputs.py",
+      "phases\\r6_staging.py",
+      "emission\\emitter.py",
+      "staging\\manifest_validator.py",
+      "staging\\outbox_assembler.py",
+      "staging\\r6_coordinator.py",
+      "staging\\summary_generator.py"
+    ],
+    "staging\\reconciliation_recorder.py": [
+      "staging\\r6_coordinator.py"
+    ],
+    "staging\\status_marker.py": [
+      "staging\\r6_coordinator.py"
+    ],
+    "staging\\summary_generator.py": [
+      "staging\\r6_coordinator.py"
+    ],
+    "staging\\truth_query_service.py": [
+      "phases\\r3_dedup_decay.py",
+      "algorithms\\reconciliation_engine.py"
+    ],
+    "staging\\truth_write_assembler.py": [
+      "staging\\r6_coordinator.py"
+    ],
+    "truth_writer\\embedding_generator.py": [
+      "truth_writer\\text_vector_coordinator.py"
+    ],
+    "truth_writer\\outbox.py": [],
+    "truth_writer\\result.py": [
+      "phase_outputs.py",
+      "phases\\r7_truth_writer.py",
+      "phases\\r7_truth_writer.py",
+      "truth_writer\\router.py",
+      "truth_writer\\transaction.py",
+      "truth_writer\\layers\\episodic.py",
+      "truth_writer\\layers\\kg.py",
+      "truth_writer\\layers\\procedural.py",
+      "truth_writer\\layers\\prospective.py",
+      "truth_writer\\layers\\semantic.py",
+      "truth_writer\\layers\\social.py",
+      "truth_writer\\layers\\vector.py"
+    ],
+    "truth_writer\\router.py": [
+      "phases\\r7_truth_writer.py",
+      "phases\\r7_truth_writer.py",
+      "truth_writer\\transaction.py"
+    ],
+    "truth_writer\\source_text_fetcher.py": [
+      "truth_writer\\text_vector_coordinator.py"
+    ],
+    "truth_writer\\text_vector_coordinator.py": [
+      "phases\\r7_truth_writer.py",
+      "truth_writer\\layers\\episodic.py",
+      "truth_writer\\layers\\kg.py",
+      "truth_writer\\layers\\procedural.py",
+      "truth_writer\\layers\\prospective.py",
+      "truth_writer\\layers\\semantic.py",
+      "truth_writer\\layers\\social.py"
+    ],
+    "truth_writer\\transaction.py": [
+      "phases\\r7_truth_writer.py",
+      "phases\\r7_truth_writer.py"
+    ],
+    "truth_writer\\layers\\episodic.py": [
+      "phases\\r7_truth_writer.py"
+    ],
+    "truth_writer\\layers\\kg.py": [
+      "phases\\r7_truth_writer.py"
+    ],
+    "truth_writer\\layers\\procedural.py": [
+      "phases\\r7_truth_writer.py"
+    ],
+    "truth_writer\\layers\\prospective.py": [
+      "phases\\r7_truth_writer.py"
+    ],
+    "truth_writer\\layers\\semantic.py": [
+      "phases\\r7_truth_writer.py"
+    ],
+    "truth_writer\\layers\\social.py": [
+      "phases\\r7_truth_writer.py"
+    ],
+    "truth_writer\\layers\\vector.py": [
+      "phases\\r7_truth_writer.py"
+    ],
+    "algorithms\\text_generators\\episodic.py": [
+      "truth_writer\\text_vector_coordinator.py"
+    ],
+    "algorithms\\text_generators\\kg_entity.py": [],
+    "algorithms\\text_generators\\procedural.py": [],
+    "algorithms\\text_generators\\prospective.py": [],
+    "algorithms\\text_generators\\semantic.py": [],
+    "algorithms\\text_generators\\social.py": [],
+    "algorithms\\text_generators\\textrank.py": [
+      "algorithms\\text_generators\\episodic.py"
+    ]
+  },
+  "orphans": [
+    "ops\\module_metrics.py",
+    "ops\\tracing.py",
+    "algorithms\\mcts_shadow.py"
+  ],
+  "roots": [
+    "deterministic.py",
+    "offset_manager.py",
+    "sequential_runner.py",
+    "phases\\r1_importance_scorer.py",
+    "phases\\r2_episodic_integrator.py",
+    "phases\\r3_dedup_decay.py",
+    "phases\\r4_kg_consolidator.py",
+    "phases\\r5_dream_explorer.py",
+    "phases\\r6_staging.py",
+    "phases\\r8_event_emitter.py",
+    "batch_selector.py"
+  ],
+  "total_files": 167,
+  "pipeline_files": 78,
+  "algorithm_files": 89
+}

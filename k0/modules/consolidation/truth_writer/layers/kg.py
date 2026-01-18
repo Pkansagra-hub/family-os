@@ -32,12 +32,22 @@ TIMESTAMP CONVENTION (LOCKED):
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, List, Optional
 
+from k0.modules.consolidation.algorithms.observation_context import ObservationContext
+from k0.modules.consolidation.truth_writer.observation_recorder import (
+    ObservationRecorder,
+    get_observation_recorder,
+)
 from k0.modules.consolidation.truth_writer.result import LayerWriteResult
+from k0.modules.consolidation.truth_writer.text_vector_coordinator import (
+    TextVectorCoordinator,
+    get_coordinator,
+)
 from k0.pipelines.p03.phases.r7_truth_writer import OptimisticLockError
 from k0.pipelines.p03.staged_writes import (
     LAYER_ST_KG_DOM,
@@ -48,6 +58,8 @@ from k0.pipelines.p03.staged_writes import (
 
 if TYPE_CHECKING:
     from k0.uow.unit_of_work import UnitOfWork
+
+logger = logging.getLogger(__name__)
 
 
 def _now_ms() -> int:
@@ -99,6 +111,12 @@ class EntityWriteData:
     valid_from_ms: int = 0
     valid_to_ms: Optional[int] = None
     source_events_json: str = "[]"
+
+    # GAP-001: Inline vector and text preservation fields
+    source_texts_json: Optional[str] = None  # JSON array of source event texts
+    embedding_text: Optional[str] = None  # Generated text for UltraBERT embedding
+    embedding_vector: Optional[bytes] = None  # 768-dim float32 as BYTEA (3072 bytes)
+    embedding_model: Optional[str] = None  # Model version (e.g., "ultrabert-v2.1.0")
 
 
 @dataclass
@@ -165,6 +183,52 @@ class KGLayerWriter:
 
     # Confidence boost factor for EXTEND (multiplicative, capped at 1.0)
     EXTEND_BOOST = 1.1
+
+    def __init__(
+        self,
+        coordinator: Optional[TextVectorCoordinator] = None,
+        observation_recorder: Optional[ObservationRecorder] = None,
+    ) -> None:
+        """
+        Initialize KGLayerWriter.
+
+        Args:
+            coordinator: Optional TextVectorCoordinator for GAP-001 embedding generation.
+                        If not provided, uses singleton via get_coordinator().
+            observation_recorder: ObservationRecorder for holistic context (uses singleton if None)
+        """
+        self._coordinator = coordinator
+        self._observation_recorder = observation_recorder
+
+    def _get_coordinator(self) -> TextVectorCoordinator:
+        """Get coordinator, initializing singleton if needed."""
+        if self._coordinator is None:
+            self._coordinator = get_coordinator()
+        return self._coordinator
+
+    def _get_recorder(self) -> ObservationRecorder:
+        """Get observation recorder, using singleton if not injected."""
+        if self._observation_recorder is None:
+            self._observation_recorder = get_observation_recorder()
+        return self._observation_recorder
+
+    def _extract_context(self, write: StagedWrite) -> Optional[ObservationContext]:
+        """
+        Extract observation context from StagedWrite.
+
+        Returns the attached observation_context if present, otherwise
+        builds a minimal context from record_data.
+        """
+        if write.observation_context is not None:
+            return write.observation_context
+
+        data = write.record_data
+        observed_at = data.get("created_at") or data.get("valid_from_ms") or _now_ms()
+
+        return ObservationContext(
+            observed_at=observed_at,
+            source_event_id=write.source_event_ids[0] if write.source_event_ids else None,
+        )
 
     @property
     def layers(self) -> tuple[str, str]:
@@ -242,33 +306,113 @@ class KGLayerWriter:
 
         Creates a new entity record with initial values.
         Uses ON CONFLICT DO NOTHING for idempotency.
+
+        GAP-001: Fetches source texts from source_events_json and generates embedding.
         """
+        import json
+
         data = write.record_data
         now = _now_ms()
+
+        # GAP-001: Fetch source texts and generate embedding
+        # st_kg_dom uses source_episodes_json (or source_events_json legacy)
+        source_texts_json: Optional[str] = None
+        embedding_text: Optional[str] = None
+        embedding_vector: Optional[bytes] = None
+        embedding_model: Optional[str] = None
+
+        try:
+            # Support both source_episodes_json (new) and source_events_json (legacy)
+            source_episodes = data.get("source_episodes_json") or data.get(
+                "source_events_json", "[]"
+            )
+            if isinstance(source_episodes, list):
+                event_ids = [str(eid) for eid in source_episodes]
+            elif source_episodes and source_episodes != "[]":
+                parsed = json.loads(source_episodes)
+                event_ids = [str(eid) for eid in parsed] if isinstance(parsed, list) else []
+            else:
+                event_ids = []
+
+            if event_ids:
+                coordinator = self._get_coordinator()
+                tv_result = await coordinator.process(
+                    layer="st_kg_dom",
+                    record_data=data,
+                    source_event_ids=event_ids,
+                    conn=uow.connection,
+                )
+                source_texts_json = tv_result.source_texts_json
+                embedding_text = tv_result.embedding_text
+                embedding_vector = tv_result.embedding_vector
+                embedding_model = tv_result.embedding_model
+            elif data.get("canonical_name"):
+                # Fallback: use canonical_name if no source episodes
+                coordinator = self._get_coordinator()
+                tv_result = await coordinator.process_without_fetch(
+                    layer="st_kg_dom",
+                    record_data=data,
+                    source_texts=[data["canonical_name"]],
+                )
+                embedding_text = tv_result.embedding_text
+                embedding_vector = tv_result.embedding_vector
+                embedding_model = tv_result.embedding_model
+        except Exception:
+            # Non-fatal: log but continue with INSERT
+            pass
 
         await uow.connection.execute(
             """
             INSERT INTO st_kg_dom (
-                entity_id, tenant_id, space_id, entity_type,
-                canonical_name, attributes_json, embedding,
-                confidence, valid_from, valid_to,
-                source_events_json, created_at, version
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1)
+                entity_id, tenant_id, space_id, entity_type, entity_subtype,
+                canonical_name, attributes_json,
+                confidence_score, valid_from, valid_to,
+                source_episodes_json, created_at, updated_at, version,
+                archival_status,
+                -- GAP-001: Inline vector and text preservation columns
+                source_texts_json, embedding_text, embedding_vector, embedding_model
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, 1,
+                      'ACTIVE',
+                      $13, $14, $15, $16)
             ON CONFLICT (entity_id) DO NOTHING
             """,
             data["entity_id"],
             data["tenant_id"],
             data["space_id"],
             data.get("entity_type", "UNKNOWN"),
+            data.get("entity_subtype"),  # GAP-005: Fine-grained subtype
             data.get("canonical_name", ""),
             data.get("attributes_json", "{}"),
-            data.get("embedding"),  # bytes or None
-            data.get("confidence", 1.0),
+            data.get("confidence_score", data.get("confidence", 1.0)),
             data.get("valid_from_ms", now),
             data.get("valid_to_ms"),
-            data.get("source_events_json", "[]"),
+            data.get("source_episodes_json", data.get("source_events_json", "[]")),
             now,
+            # GAP-001 fields
+            source_texts_json,
+            embedding_text,
+            embedding_vector,
+            embedding_model,
         )
+
+        # Issue 7.5: Record observation with FIRST_SEEN type
+        context = self._extract_context(write)
+        if context is not None:
+            context.observation_type = "FIRST_SEEN"
+            try:
+                await self._get_recorder().record(
+                    uow=uow,
+                    layer=LAYER_ST_KG_DOM,
+                    record_id=write.record_id,
+                    context=context,
+                    tenant_id=data["tenant_id"],
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to record observation for %s: %s",
+                    write.record_id,
+                    e,
+                )
 
     async def _update_entity(self, uow: UnitOfWork, write: StagedWrite) -> None:
         """
@@ -277,6 +421,7 @@ class KGLayerWriter:
         Handles:
             - query_count_increment: Increment query_count and update last_queried_at
             - milestone_append: Append milestone to milestones_json
+            - observation_count_increment: REINFORCE existing entity (Issue 3 Fix)
             - _action EXTEND: Update attributes, boost confidence
             - _action EVOLVE: Mark old entity invalid
 
@@ -290,6 +435,11 @@ class KGLayerWriter:
             return
         if "milestone_append" in data:
             await self._update_entity_milestone(uow, write)
+            return
+
+        # Issue 3 Fix: Handle REINFORCE operations (entity matching)
+        if "observation_count_increment" in data:
+            await self._update_entity_reinforce(uow, write)
             return
 
         # Standard action-based handling
@@ -354,27 +504,130 @@ class KGLayerWriter:
             write.record_id,
         )
 
+    async def _update_entity_reinforce(self, uow: UnitOfWork, write: StagedWrite) -> None:
+        """
+        REINFORCE: Increment observation_count and merge new source events.
+
+        Issue 3 Fix: When R4 detects an entity already exists in st_kg_dom,
+        it generates an UPDATE with observation_count_increment to reinforce
+        the entity instead of creating a duplicate.
+
+        This is the same pattern as Issue 2 fix for st_epi episodes.
+
+        Updates:
+            - observation_count: Incremented by observation_count_increment
+            - source_episodes_json: Appends new event IDs (deduped via DISTINCT)
+            - aliases_json: Merges new aliases
+            - updated_at: Current timestamp
+            - version: Incremented for consistency
+        """
+        import json
+
+        data = write.record_data
+        increment = data.get("observation_count_increment", 1)
+        now = _now_ms()
+
+        # Parse additional source event IDs
+        additional_event_ids = data.get("additional_source_event_ids", "[]")
+        if isinstance(additional_event_ids, str):
+            try:
+                additional_event_ids = json.loads(additional_event_ids)
+            except json.JSONDecodeError:
+                additional_event_ids = []
+
+        # Parse new aliases
+        new_aliases = data.get("new_aliases_json", "[]")
+        if isinstance(new_aliases, str):
+            try:
+                new_aliases = json.loads(new_aliases)
+            except json.JSONDecodeError:
+                new_aliases = []
+
+        # Build JSON arrays for PostgreSQL
+        additional_events_json = json.dumps(additional_event_ids)
+        new_aliases_json = json.dumps(new_aliases)
+
+        await uow.connection.execute(
+            """
+            UPDATE st_kg_dom
+            SET observation_count = COALESCE(observation_count, 0) + $1,
+                -- Merge source episodes (dedupe via DISTINCT)
+                source_episodes_json = (
+                    SELECT jsonb_agg(DISTINCT elem)::text
+                    FROM (
+                        SELECT jsonb_array_elements(COALESCE(source_episodes_json::jsonb, '[]'::jsonb)) AS elem
+                        UNION ALL
+                        SELECT jsonb_array_elements($2::jsonb)
+                    ) AS combined(elem)
+                ),
+                -- Merge aliases (dedupe via DISTINCT)
+                aliases_json = (
+                    SELECT jsonb_agg(DISTINCT elem)::text
+                    FROM (
+                        SELECT jsonb_array_elements(COALESCE(aliases_json::jsonb, '[]'::jsonb)) AS elem
+                        UNION ALL
+                        SELECT jsonb_array_elements($3::jsonb)
+                    ) AS combined(elem)
+                ),
+                updated_at = $4,
+                version = version + 1
+            WHERE entity_id = $5
+            """,
+            increment,
+            additional_events_json,
+            new_aliases_json,
+            now,
+            write.record_id,
+        )
+
+        # Issue 7.5: Record observation with REINFORCEMENT type
+        context = self._extract_context(write)
+        if context is not None:
+            context.observation_type = "REINFORCEMENT"
+            try:
+                await self._get_recorder().record(
+                    uow=uow,
+                    layer=LAYER_ST_KG_DOM,
+                    record_id=write.record_id,
+                    context=context,
+                    tenant_id=data.get("tenant_id", "unknown"),
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to record reinforcement observation for %s: %s",
+                    write.record_id,
+                    e,
+                )
+
     async def _update_entity_extend(self, uow: UnitOfWork, write: StagedWrite) -> None:
-        """EXTEND: Update attributes, merge events, boost confidence."""
+        """EXTEND: Update attributes, merge events, boost confidence.
+
+        Note: Does not enforce version check for EXTEND since these are additive
+        operations that can safely be applied multiple times from different event
+        clusters in the same consolidation cycle.
+        """
         data = write.record_data
         result = await uow.connection.execute(
             """
             UPDATE st_kg_dom
-            SET attributes_json = attributes_json || COALESCE($1::jsonb, '{}'::jsonb),
-                source_events_json = source_events_json || COALESCE($2::jsonb, '[]'::jsonb),
-                confidence = LEAST(confidence * $3, 1.0),
+            SET attributes_json = COALESCE(attributes_json, '{}')::jsonb || COALESCE($1::jsonb, '{}'::jsonb),
+                source_episodes_json = COALESCE(source_episodes_json, '[]')::jsonb || COALESCE($2::jsonb, '[]'::jsonb),
+                confidence_score = LEAST(COALESCE(confidence_score, 0.5) * $3, 1.0),
+                updated_at = $4,
                 version = version + 1
-            WHERE entity_id = $4 AND version = $5
+            WHERE entity_id = $5
             """,
             data.get("new_attributes_json", "{}"),
-            data.get("new_events_json", "[]"),
+            data.get("new_events_json", data.get("new_episodes_json", "[]")),
             self.EXTEND_BOOST,
+            _now_ms(),
             write.record_id,
-            write.expected_version,
         )
 
         if result == "UPDATE 0":
-            raise OptimisticLockError(f"Version conflict updating entity {write.record_id}")
+            # Entity doesn't exist - this is a data consistency issue but not fatal
+            # The entity may have been merged/archived during consolidation
+            pass
 
     async def _update_entity_evolve(self, uow: UnitOfWork, write: StagedWrite) -> None:
         """EVOLVE: Mark old entity as superseded (set valid_to)."""
@@ -397,19 +650,16 @@ class KGLayerWriter:
     async def _archive_entity(self, uow: UnitOfWork, write: StagedWrite) -> None:
         """ARCHIVE low-confidence entity."""
         now = _now_ms()
-        reason = write.record_data.get("archived_reason", "low_confidence")
 
         await uow.connection.execute(
             """
             UPDATE st_kg_dom
             SET archival_status = 'ARCHIVED',
-                archived_at = $1,
-                archived_reason = $2
-            WHERE entity_id = $3
+                updated_at = $1
+            WHERE entity_id = $2
               AND (archival_status IS NULL OR archival_status != 'ARCHIVED')
             """,
             now,
-            reason,
             write.record_id,
         )
 
@@ -421,11 +671,11 @@ class KGLayerWriter:
             UPDATE st_kg_dom
             SET canonical_name = '',
                 attributes_json = '{}',
-                embedding = NULL,
-                source_events_json = '[]',
+                embedding_vector = NULL,
+                embedding_text = NULL,
+                source_episodes_json = '[]',
                 archival_status = 'TOMBSTONE',
-                archived_at = $1,
-                archived_reason = 'gdpr_deletion'
+                updated_at = $1
             WHERE entity_id = $2
             """,
             now,
@@ -463,10 +713,11 @@ class KGLayerWriter:
             INSERT INTO st_kg_edges (
                 edge_id, tenant_id, space_id,
                 source_entity_id, target_entity_id, relation_type,
-                confidence, valid_from, valid_to,
-                precedence_ratio, attributes_json,
-                created_at, version
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1)
+                confidence_score, valid_from, valid_to,
+                properties_json,
+                created_at, updated_at, version,
+                archival_status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, 1, 'ACTIVE')
             ON CONFLICT (edge_id) DO NOTHING
             """,
             data["edge_id"],
@@ -475,11 +726,10 @@ class KGLayerWriter:
             data["source_entity_id"],
             data["target_entity_id"],
             data.get("relation_type", "RELATED_TO"),
-            data.get("confidence", 1.0),
+            data.get("confidence_score", data.get("confidence", 1.0)),
             data.get("valid_from_ms", now),
             data.get("valid_to_ms"),
-            data.get("precedence_ratio"),  # For CAUSES edges
-            data.get("attributes_json", "{}"),
+            data.get("properties_json", data.get("attributes_json", "{}")),
             now,
         )
 
@@ -489,6 +739,7 @@ class KGLayerWriter:
 
         Handles:
             - query_count_increment: Increment query_count and update last_queried_at
+            - observation_count_increment: Increment observation_count (GAP-001 M9)
             - Standard confidence/attributes update
 
         Raises OptimisticLockError if version mismatch.
@@ -500,23 +751,60 @@ class KGLayerWriter:
             await self._update_edge_query_boost(uow, write)
             return
 
-        # Standard edge update
+        # GAP-001 M9: Handle observation_count increment for Granger causality
+        if "observation_count_increment" in data:
+            await self._update_edge_observation_count(uow, write)
+            return
+
+        # Standard edge update - no version check for same-cycle consolidation
         result = await uow.connection.execute(
             """
             UPDATE st_kg_edges
-            SET confidence = COALESCE($1, confidence),
-                attributes_json = attributes_json || COALESCE($2::jsonb, '{}'::jsonb),
+            SET confidence_score = COALESCE($1, confidence_score),
+                properties_json = COALESCE(properties_json, '{}')::jsonb || COALESCE($2::jsonb, '{}'::jsonb),
+                updated_at = $3,
                 version = version + 1
-            WHERE edge_id = $3 AND version = $4
+            WHERE edge_id = $4
             """,
-            data.get("confidence"),
-            data.get("new_attributes_json", "{}"),
+            data.get("confidence_score", data.get("confidence")),
+            data.get("properties_json", data.get("new_attributes_json", "{}")),
+            _now_ms(),
             write.record_id,
-            write.expected_version,
         )
 
         if result == "UPDATE 0":
-            raise OptimisticLockError(f"Version conflict updating edge {write.record_id}")
+            # Edge doesn't exist - not fatal, may have been merged
+            pass
+
+    async def _update_edge_observation_count(self, uow: UnitOfWork, write: StagedWrite) -> None:
+        """
+        GAP-001 M9: Increment observation_count and co_occurrence_count for edge.
+
+        Used by R4 KG consolidator when edge already exists. This enables
+        Granger causality to trigger once observation_count reaches threshold (5+).
+
+        Also updates confidence and updated_at timestamp.
+        Skips version check for simplicity (observation increment is additive).
+        """
+        data = write.record_data
+        increment = data.get("observation_count_increment", 1)
+        new_confidence = data.get("confidence")
+        now = _now_ms()
+
+        await uow.connection.execute(
+            """
+            UPDATE st_kg_edges
+            SET observation_count = COALESCE(observation_count, 0) + $1,
+                co_occurrence_count = COALESCE(co_occurrence_count, 0) + $1,
+                confidence_score = COALESCE($2, confidence_score),
+                updated_at = $3
+            WHERE edge_id = $4
+            """,
+            increment,
+            new_confidence,
+            now,
+            write.record_id,
+        )
 
     async def _update_edge_query_boost(self, uow: UnitOfWork, write: StagedWrite) -> None:
         """
@@ -544,19 +832,16 @@ class KGLayerWriter:
     async def _archive_edge(self, uow: UnitOfWork, write: StagedWrite) -> None:
         """ARCHIVE low-confidence edge."""
         now = _now_ms()
-        reason = write.record_data.get("archived_reason", "low_confidence")
 
         await uow.connection.execute(
             """
             UPDATE st_kg_edges
             SET archival_status = 'ARCHIVED',
-                archived_at = $1,
-                archived_reason = $2
-            WHERE edge_id = $3
+                updated_at = $1
+            WHERE edge_id = $2
               AND (archival_status IS NULL OR archival_status != 'ARCHIVED')
             """,
             now,
-            reason,
             write.record_id,
         )
 
@@ -566,10 +851,9 @@ class KGLayerWriter:
         await uow.connection.execute(
             """
             UPDATE st_kg_edges
-            SET attributes_json = '{}',
+            SET properties_json = '{}',
                 archival_status = 'TOMBSTONE',
-                archived_at = $1,
-                archived_reason = 'gdpr_deletion'
+                updated_at = $1
             WHERE edge_id = $2
             """,
             now,

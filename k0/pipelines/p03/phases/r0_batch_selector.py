@@ -548,6 +548,9 @@ class R0BatchSelector:
                 ner_entities_json,
                 temporal_json,
                 salience_score,
+                -- Issue 1 Fix: Add affect fields for R1 importance scoring
+                affect_valence,
+                affect_arousal,
                 created_at,
                 -- Social context fields for R4 social extraction
                 participants_json,
@@ -556,7 +559,17 @@ class R0BatchSelector:
                 social_intimacy,
                 location_name,
                 location_type,
-                actor_id
+                actor_id,
+                -- UltraBERT relationship types for R4 relationship inference
+                extracted_relations_json,
+                -- Issue 7.6: Temporal and modality context for st_observations
+                time_of_day_bucket,
+                circadian_slot,
+                is_weekend,
+                day_of_week,
+                ingress_channel,
+                ingress_source,
+                device_kind
             FROM st_hipp_events
             WHERE {where_clause}
             ORDER BY wal_pos ASC
@@ -637,9 +650,14 @@ class R0BatchSelector:
             sentiment_score=float(row.get("sentiment_score") or 0.0),
             sentiment_label=row.get("sentiment_label") or "neutral",
             emotions_json=row.get("emotions_json") or "[]",
-            intent_label=row.get("intent_category") or "",
+            # Use UltraBERT intent classification, fallback to legacy intent_category
+            intent_label=row.get("intent_ultrabert") or row.get("intent_category") or "",
             ner_entities_json=row.get("ner_entities_json") or "[]",
             temporal_expressions_json=row.get("temporal_json") or "[]",
+            # Issue 1 Fix: Map affect and salience fields for R1 importance scoring
+            affect_valence=float(row.get("affect_valence") or 0.0),
+            affect_arousal=float(row.get("affect_arousal") or 0.0),
+            salience_score=float(row.get("salience_score") or 0.0),
             # Social context fields for R4 social extraction
             participants_json=row.get("participants_json") or "[]",
             num_participants=int(row.get("num_participants") or 0),
@@ -654,6 +672,16 @@ class R0BatchSelector:
             activity_type_confidence=float(row.get("activity_type_confidence") or 0.0),
             intent_ultrabert=row.get("intent_ultrabert") or "",
             intent_confidence=float(row.get("intent_confidence") or 0.0),
+            # UltraBERT relationship types for R4
+            extracted_relations_json=row.get("extracted_relations_json") or "[]",
+            # Issue 7.6: Temporal and modality context for st_observations
+            time_of_day_bucket=row.get("time_of_day_bucket") or "",
+            circadian_slot=row.get("circadian_slot") or "",
+            is_weekend=row.get("is_weekend"),
+            day_of_week=row.get("day_of_week") or "",
+            ingress_channel=row.get("ingress_channel") or "",
+            ingress_source=row.get("ingress_source") or "",
+            device_kind=row.get("device_kind") or "",
             # Store wal_pos for offset tracking
             # Note: P03EventState doesn't have wal_pos field directly,
             # but we track via hipp_event_id and context.event_ids

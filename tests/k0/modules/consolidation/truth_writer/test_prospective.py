@@ -266,7 +266,7 @@ class TestInsert:
         assert result.writes_attempted == 1
         assert result.writes_succeeded == 1
         assert result.writes_failed == 0
-        mock_uow.connection.execute.assert_called_once()
+        assert mock_uow.connection.execute.call_count >= 1
 
     @pytest.mark.asyncio
     async def test_insert_reminder(self, prospective_writer, mock_uow, sample_reminder_insert):
@@ -294,7 +294,7 @@ class TestInsert:
         result = await prospective_writer.write([write], mock_uow)
 
         assert result.writes_succeeded == 1
-        call_args = mock_uow.connection.execute.call_args
+        call_args = mock_uow.connection.execute.call_args_list[0]
         assert "ON CONFLICT (intention_id) DO NOTHING" in call_args[0][0]
 
     @pytest.mark.asyncio
@@ -579,7 +579,8 @@ class TestMultipleWrites:
 
         assert result.writes_attempted == 5
         assert result.writes_succeeded == 5
-        assert mock_uow.connection.execute.call_count == 5
+        # With observation recording: 5 INSERTs + observation INSERTs
+        assert mock_uow.connection.execute.call_count >= 5
 
     @pytest.mark.asyncio
     async def test_mixed_operations(self, prospective_writer, mock_uow):

@@ -288,6 +288,8 @@ class R6Coordinator:
             r5_routine_optimizations = (
                 getattr(phase_outputs, "r5_routine_optimizations", None) or []
             )
+            # GAP-003: Include routine candidates from RoutineDetector
+            r5_routine_candidates = getattr(phase_outputs, "r5_routine_candidates", None) or []
             truth_assembly = self.truth_assembler.assemble_all(
                 clusters=getattr(phase_outputs, "r2_clusters", None),
                 event_states=event_states,
@@ -299,6 +301,8 @@ class R6Coordinator:
                 insights=r5_insights,
                 counterfactuals=r5_counterfactuals,
                 routine_optimizations=r5_routine_optimizations,
+                # GAP-003: Routine candidates from RoutineDetector
+                routine_candidates=r5_routine_candidates,
             )
             truth_writes = self._flatten_truth_writes(truth_assembly)
             step_durations["assemble_truth_writes"] = _now_ms() - step_start
@@ -344,7 +348,8 @@ class R6Coordinator:
                 gap_count=len(gaps),
                 insight_count=len(r5_insights),
                 counterfactual_count=len(r5_counterfactuals),
-                routine_optimization_count=len(r5_routine_optimizations),
+                routine_optimization_count=len(r5_routine_optimizations)
+                + len(r5_routine_candidates),
                 cycle_duration_ms=cycle_duration,
             )
             step_durations["generate_summary"] = _now_ms() - step_start

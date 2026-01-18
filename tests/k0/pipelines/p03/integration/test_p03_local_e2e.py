@@ -28,6 +28,7 @@ Reference:
 from __future__ import annotations
 
 import logging
+import struct
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,6 +47,18 @@ from k0.pipelines.p03.observability import P03Error
 from k0.pipelines.p03.phase_interface import P03PhaseResult
 from k0.pipelines.p03.phases import PHASE_REGISTRY, R0BatchSelector, R0PhaseAdapter
 from k0.pipelines.p03.phases.r0_batch_selector import R0Config
+
+
+def create_mock_st_vec_row(event_id: str) -> Dict[str, Any]:
+    """Create a mock st_vec row with embedding vector."""
+    mock_vector = [0.1] * 768
+    vector_bytes = struct.pack(f"{768}f", *mock_vector)
+    return {
+        "event_id": event_id,
+        "vector": vector_bytes,
+        "vector_dim": 768,
+    }
+
 
 # =============================================================================
 # MOCK STORAGE INFRASTRUCTURE
@@ -179,6 +192,7 @@ class MockConnection:
 
     def __init__(self) -> None:
         self._rows: List[Dict[str, Any]] = []
+        self._st_vec_rows: List[Dict[str, Any]] = []
         self._executed: List[Tuple[str, tuple]] = []
         self._updated_events: List[str] = []
         self._inserted_gaps: List[Dict[str, Any]] = []
@@ -188,17 +202,32 @@ class MockConnection:
         """Set rows to return from fetch()."""
         self._rows = rows
 
+    def set_st_vec_rows(self, rows: List[Dict[str, Any]]) -> None:
+        """Set st_vec rows for embedding queries."""
+        self._st_vec_rows = rows
+
     def set_next_fetchrow(self, row: Optional[Dict[str, Any]]) -> None:
         """Set next row for fetchrow()."""
         self._next_fetchrow = row
 
     async def fetch(self, query: str, *args: Any) -> List[Dict[str, Any]]:
         self._executed.append((query, args))
+        if "st_vec" in query:
+            return self._st_vec_rows
         return self._rows
 
     async def fetchrow(self, query: str, *args: Any) -> Optional[Dict[str, Any]]:
         self._executed.append((query, args))
         return self._next_fetchrow
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        """Fetch single value."""
+        self._executed.append((query, args))
+        if "COUNT" in query:
+            return 0
+        if "version" in query.lower():
+            return 1
+        return None
 
     async def execute(self, query: str, *args: Any) -> str:
         self._executed.append((query, args))
@@ -303,6 +332,9 @@ class MockSyscalls:
         # Pre-populate connection with hipp events
         if self._hipp_events:
             self._connection.set_rows([e.to_row() for e in self._hipp_events])
+            # Also set up st_vec rows for embeddings
+            st_vec_rows = [create_mock_st_vec_row(e.event_id) for e in self._hipp_events]
+            self._connection.set_st_vec_rows(st_vec_rows)
 
     def unit_of_work(self) -> MockUnitOfWork:
         """Return unit of work for atomic operations."""

@@ -27,7 +27,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
-from k0.modules.consolidation.algorithms.intent_signal_detector import IntentSignalDetector
+from k0.modules.consolidation.algorithms.intent_signal_detector import (
+    IntentSignalDetector,
+)
 from k0.modules.consolidation.algorithms.temporal_parser import TemporalParser
 from k0.modules.consolidation.dream.intent_signals import (
     DecisionSignal,
@@ -38,7 +40,9 @@ from k0.modules.consolidation.dream.intent_signals import (
     QueryBoostSignal,
     ReminderSignal,
 )
-from k0.modules.consolidation.staging.intent_signal_assembler import IntentSignalAssembler
+from k0.modules.consolidation.staging.intent_signal_assembler import (
+    IntentSignalAssembler,
+)
 from k0.modules.consolidation.truth_writer.layers import (
     KGLayerWriter,
     ProspectiveLayerWriter,
@@ -262,7 +266,8 @@ class TestE2ESetReminder:
         assert write.record_data["intention_type"] == "REMINDER"
         assert write.record_data["tenant_id"] == "tenant-test"
         assert write.record_data["space_id"] == "space-test"
-        assert "event-reminder-001" in write.record_data["source_episodes_json"]
+        # REMINDER uses inferred_from_json for source event tracking
+        assert "event-reminder-001" in write.record_data["inferred_from_json"]
 
     @pytest.mark.asyncio
     async def test_reminder_layer_writer_sql(
@@ -361,7 +366,7 @@ class TestE2ESeekAdvice:
         assert LAYER_ST_PROSPECTIVE in writes_by_layer
         write = writes_by_layer[LAYER_ST_PROSPECTIVE][0]
         assert write.record_data["intention_type"] == "DECISION"
-        assert write.record_data["status"] == "pending"
+        assert write.record_data["status"] == "ACTIVE"  # DECISION status is ACTIVE
 
     @pytest.mark.asyncio
     async def test_decision_layer_writer_sql(

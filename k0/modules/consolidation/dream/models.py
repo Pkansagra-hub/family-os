@@ -23,6 +23,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
 if TYPE_CHECKING:
+    from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
     from k0.modules.consolidation.dream.intent_signals import IntentSignal
 
 
@@ -229,6 +230,9 @@ class ProspectiveMemory:
     source_episode_id: Optional[str]
     created_at: int
     deadline_ts: Optional[int] = None
+    # Issue 7.7: Temporal anchor context
+    anchor_time_utc: Optional[int] = None  # When user expressed the intention (MILLISECONDS)
+    original_temporal_expr: Optional[str] = None  # Original expression ("next week", "tomorrow")
 
     @classmethod
     def create(
@@ -242,6 +246,8 @@ class ProspectiveMemory:
         confidence: float,
         source_episode_id: Optional[str] = None,
         deadline_ts: Optional[int] = None,
+        anchor_time_utc: Optional[int] = None,
+        original_temporal_expr: Optional[str] = None,
     ) -> ProspectiveMemory:
         """Factory method with validation."""
         if not 0.0 <= importance <= 1.0:
@@ -260,6 +266,8 @@ class ProspectiveMemory:
             source_episode_id=source_episode_id,
             created_at=int(time.time() * 1000),
             deadline_ts=deadline_ts,
+            anchor_time_utc=anchor_time_utc,
+            original_temporal_expr=original_temporal_expr,
         )
 
 
@@ -361,6 +369,7 @@ class DreamExplorerOutput:
         counterfactuals: Counterfactual scenarios
         prospective_memories: Future intention predictions
         routine_optimizations: Routine improvement suggestions
+        routine_candidates: Detected routines from RoutineDetector (GAP-003)
         intent_signals: Intent signals detected from events (GAP-001)
         mcts_decisions_evaluated: Number of MCTS tree evaluations
         compute_ms: Time spent in exploration (milliseconds)
@@ -370,6 +379,7 @@ class DreamExplorerOutput:
     counterfactuals: List[CounterfactualScenario] = field(default_factory=list)
     prospective_memories: List[ProspectiveMemory] = field(default_factory=list)
     routine_optimizations: List[RoutineOptimization] = field(default_factory=list)
+    routine_candidates: List["RoutineCandidate"] = field(default_factory=list)
     intent_signals: List["IntentSignal"] = field(default_factory=list)
     mcts_decisions_evaluated: int = 0
     compute_ms: int = 0
@@ -382,6 +392,7 @@ class DreamExplorerOutput:
             + len(self.counterfactuals)
             + len(self.prospective_memories)
             + len(self.routine_optimizations)
+            + len(self.routine_candidates)
             + len(self.intent_signals)
         )
 

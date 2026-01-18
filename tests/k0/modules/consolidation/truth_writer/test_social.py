@@ -299,8 +299,8 @@ class TestInsert:
         """INSERT should call connection.execute with correct SQL."""
         await social_writer.write([sample_insert_write], mock_uow)
 
-        mock_uow.connection.execute.assert_called_once()
-        call_args = mock_uow.connection.execute.call_args
+        assert mock_uow.connection.execute.call_count >= 1
+        call_args = mock_uow.connection.execute.call_args_list[0]
         sql = call_args[0][0]
 
         assert "INSERT INTO st_social" in sql
@@ -312,7 +312,7 @@ class TestInsert:
         """INSERT should provide all required column values."""
         await social_writer.write([sample_insert_write], mock_uow)
 
-        call_args = mock_uow.connection.execute.call_args
+        call_args = mock_uow.connection.execute.call_args_list[0]
         # Check positional args after SQL
         values = call_args[0][1:]
 
@@ -338,7 +338,7 @@ class TestReinforceAction:
 
         await social_writer.write([sample_reinforce_write], mock_uow)
 
-        call_args = mock_uow.connection.execute.call_args
+        call_args = mock_uow.connection.execute.call_args_list[0]
         sql = call_args[0][0]
 
         assert "UPDATE st_social" in sql

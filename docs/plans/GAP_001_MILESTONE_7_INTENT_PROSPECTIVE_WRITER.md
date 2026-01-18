@@ -4,6 +4,28 @@
 > **Effort**: 1 day
 > **Priority**: P1 (Important)
 > **Dependencies**: Milestone 3 (R7 Writer Updates)
+> **Status**: ✅ COMPLETE (2026-01-15)
+
+## Completion Summary
+
+**All 5 issues are ALREADY IMPLEMENTED.** This milestone was completed as part of the
+Intent Ingress Matrix implementation.
+
+| Issue | Description | Implementation |
+|-------|-------------|----------------|
+| 7.1 | ReminderIntentDetector | `IntentSignalDetector` in `k0/modules/consolidation/algorithms/intent_signal_detector.py` |
+| 7.2 | R5 ForwardSimulator | `DreamExplorer.explore()` Phase 4 calls `IntentSignalDetector.detect_all()` |
+| 7.3 | ProspectiveLayerWriter | `k0/modules/consolidation/truth_writer/layers/prospective.py` |
+| 7.4 | TruthWriteAssembler | `IntentSignalAssembler._assemble_reminder()` in `k0/modules/consolidation/staging/intent_signal_assembler.py` |
+| 7.5 | Integration Tests | `tests/k0/pipelines/p03/integration/test_intent_ingress_matrix_e2e.py` - **30 tests passing** |
+
+### Key Implementation Details
+
+1. **IntentSignalDetector** routes `intent_label="set_reminder"` → `ReminderSignal`
+2. **IntentSignalAssembler** routes `ReminderSignal` → `st_prospective` INSERT with `intention_type='REMINDER'`
+3. **R6 Coordinator** STEP 2.5 calls `intent_signal_assembler.assemble_all(r5_intent_signals)`
+
+---
 
 ---
 
@@ -466,7 +488,7 @@ async def assemble(self, batch: ConsolidationBatch, conn) -> AssemblyResult:
 **References**:
 
 - TruthWriteAssembler: [truth_write_assembler.py](../../k0/modules/consolidation/staging/truth_write_assembler.py)
-- Milestone 3 Issue 3.1: [SourceTextFetcher](GAP_001_MILESTONE_3_R7_WRITER_UPDATES.md#issue-31-create-sourcetextfetcher-service)
+- Milestone 3 Issue 3.1: [SourceTextFetcher](../plans_completed_donotrefer/GAP_001_MILESTONE_3_R7_WRITER_UPDATES.md#issue-31-create-sourcetextfetcher-service)
 
 **Acceptance Criteria**:
 

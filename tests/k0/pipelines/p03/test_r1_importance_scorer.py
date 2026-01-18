@@ -47,9 +47,12 @@ class MockEvent:
     event_id: str = "evt_test_001"
     sentiment_score: float = 0.0
     affect_valence: float = 0.0
-    novelty_score: float = 0.0
+    # Issue 1 Fix: Use salience_score instead of novelty_score
+    # novelty_score doesn't exist - salience_score is the proxy
+    salience_score: float = 0.0
     participant_count: int = 1
     content_type: str = "message"
+    intent_label: str = ""  # UltraBERT intent type (GAP-001 M8)
 
     # Fields set by scorer
     importance_score: float = 0.0
@@ -371,7 +374,7 @@ class TestComputeImportanceScore:
         event = MockEvent(
             sentiment_score=0.0,
             affect_valence=0.0,
-            novelty_score=0.0,
+            salience_score=0.0,
             participant_count=1,
             content_type="message",
         )
@@ -384,7 +387,7 @@ class TestComputeImportanceScore:
         event = MockEvent(
             sentiment_score=0.9,
             affect_valence=0.8,
-            novelty_score=0.0,
+            salience_score=0.0,
             participant_count=1,
             content_type="message",
         )
@@ -398,7 +401,7 @@ class TestComputeImportanceScore:
         event = MockEvent(
             sentiment_score=0.5,
             affect_valence=0.5,
-            novelty_score=0.5,
+            salience_score=0.5,
             participant_count=1,
             content_type="milestone",
         )
@@ -412,7 +415,7 @@ class TestComputeImportanceScore:
         event = MockEvent(
             sentiment_score=0.5,
             affect_valence=0.5,
-            novelty_score=0.5,
+            salience_score=0.5,
             participant_count=1,
             content_type="routine",
         )
@@ -426,7 +429,7 @@ class TestComputeImportanceScore:
         event = MockEvent(
             sentiment_score=1.0,
             affect_valence=1.0,
-            novelty_score=1.0,
+            salience_score=1.0,
             participant_count=100,
             content_type="milestone",  # 2x multiplier
         )
@@ -439,7 +442,7 @@ class TestComputeImportanceScore:
         event = MockEvent(
             sentiment_score=0.6,
             affect_valence=0.4,
-            novelty_score=0.3,
+            salience_score=0.3,
             participant_count=3,
             content_type="message",
         )
@@ -471,7 +474,7 @@ class TestScoreBatch:
         event = MockEvent(
             event_id="evt_001",
             sentiment_score=0.5,
-            novelty_score=0.3,
+            salience_score=0.3,
         )
         results = await default_scorer.score_batch([event])
         assert len(results) == 1
@@ -497,7 +500,7 @@ class TestScoreBatch:
         event = MockEvent(
             event_id="evt_001",
             sentiment_score=0.7,
-            novelty_score=0.5,
+            salience_score=0.5,
         )
         await default_scorer.score_batch([event])
         assert event.importance_computed is True
@@ -635,3 +638,164 @@ class TestLearnedWeights:
         scorer.invalidate_weight_cache()
         assert scorer._cached_weights is None
         assert scorer._weights_source == "static"
+
+
+# =============================================================================
+# Intent Boost Multiplier Tests (GAP-001 Milestone 8, Issue 8.2)
+# =============================================================================
+
+
+class TestIntentBoostMultipliers:
+    """Tests for intent-based importance boost multipliers."""
+
+    def test_query_memory_boost(
+        self, default_scorer: ImportanceScorer, default_weights: ImportanceWeights
+    ):
+        """query_memory intent gets 1.2x boost."""
+        event = MockEvent(
+            sentiment_score=0.5,
+            salience_score=0.5,
+            intent_label="query_memory",
+        )
+        score, breakdown = default_scorer.compute_importance_score(event, default_weights)
+
+        # Compute expected base score without intent boost
+        event_no_intent = MockEvent(sentiment_score=0.5, salience_score=0.5, intent_label="")
+        base_score, _ = default_scorer.compute_importance_score(event_no_intent, default_weights)
+
+        # query_memory should boost by 1.2x
+        expected = min(1.0, base_score * 1.2)
+        assert abs(score - expected) < 0.001
+        assert breakdown.multiplier == 1.0 * 1.2  # event_type * intent_boost
+
+    def test_share_news_boost(
+        self, default_scorer: ImportanceScorer, default_weights: ImportanceWeights
+    ):
+        """share_news intent gets 1.2x boost."""
+        event = MockEvent(
+            sentiment_score=0.5,
+            salience_score=0.5,
+            intent_label="share_news",
+        )
+        score, breakdown = default_scorer.compute_importance_score(event, default_weights)
+
+        event_no_intent = MockEvent(sentiment_score=0.5, salience_score=0.5, intent_label="")
+        base_score, _ = default_scorer.compute_importance_score(event_no_intent, default_weights)
+
+        expected = min(1.0, base_score * 1.2)
+        assert abs(score - expected) < 0.001
+
+    def test_set_reminder_boost(
+        self, default_scorer: ImportanceScorer, default_weights: ImportanceWeights
+    ):
+        """set_reminder intent gets 1.15x boost."""
+        event = MockEvent(
+            sentiment_score=0.5,
+            salience_score=0.5,
+            intent_label="set_reminder",
+        )
+        score, breakdown = default_scorer.compute_importance_score(event, default_weights)
+
+        event_no_intent = MockEvent(sentiment_score=0.5, salience_score=0.5, intent_label="")
+        base_score, _ = default_scorer.compute_importance_score(event_no_intent, default_weights)
+
+        expected = min(1.0, base_score * 1.15)
+        assert abs(score - expected) < 0.001
+
+    def test_make_plan_boost(
+        self, default_scorer: ImportanceScorer, default_weights: ImportanceWeights
+    ):
+        """make_plan intent gets 1.15x boost."""
+        event = MockEvent(
+            sentiment_score=0.5,
+            salience_score=0.5,
+            intent_label="make_plan",
+        )
+        score, breakdown = default_scorer.compute_importance_score(event, default_weights)
+
+        event_no_intent = MockEvent(sentiment_score=0.5, salience_score=0.5, intent_label="")
+        base_score, _ = default_scorer.compute_importance_score(event_no_intent, default_weights)
+
+        expected = min(1.0, base_score * 1.15)
+        assert abs(score - expected) < 0.001
+
+    def test_casual_chat_deboost(
+        self, default_scorer: ImportanceScorer, default_weights: ImportanceWeights
+    ):
+        """casual_chat intent gets 0.9x (slight de-boost)."""
+        event = MockEvent(
+            sentiment_score=0.5,
+            salience_score=0.5,
+            intent_label="casual_chat",
+        )
+        score, breakdown = default_scorer.compute_importance_score(event, default_weights)
+
+        event_no_intent = MockEvent(sentiment_score=0.5, salience_score=0.5, intent_label="")
+        base_score, _ = default_scorer.compute_importance_score(event_no_intent, default_weights)
+
+        expected = base_score * 0.9
+        assert abs(score - expected) < 0.001
+
+    def test_express_feeling_no_boost(
+        self, default_scorer: ImportanceScorer, default_weights: ImportanceWeights
+    ):
+        """express_feeling intent has no boost (1.0x) - handled by emotional component."""
+        event = MockEvent(
+            sentiment_score=0.5,
+            salience_score=0.5,
+            intent_label="express_feeling",
+        )
+        score, breakdown = default_scorer.compute_importance_score(event, default_weights)
+
+        event_no_intent = MockEvent(sentiment_score=0.5, salience_score=0.5, intent_label="")
+        base_score, _ = default_scorer.compute_importance_score(event_no_intent, default_weights)
+
+        # express_feeling is 1.0x, so no change
+        assert abs(score - base_score) < 0.001
+
+    def test_unknown_intent_no_boost(
+        self, default_scorer: ImportanceScorer, default_weights: ImportanceWeights
+    ):
+        """Unknown intents get no boost (1.0x default)."""
+        event = MockEvent(
+            sentiment_score=0.5,
+            salience_score=0.5,
+            intent_label="unknown_intent",
+        )
+        score, breakdown = default_scorer.compute_importance_score(event, default_weights)
+
+        event_no_intent = MockEvent(sentiment_score=0.5, salience_score=0.5, intent_label="")
+        base_score, _ = default_scorer.compute_importance_score(event_no_intent, default_weights)
+
+        assert abs(score - base_score) < 0.001
+
+    def test_intent_boost_stacks_with_event_type(
+        self, default_scorer: ImportanceScorer, default_weights: ImportanceWeights
+    ):
+        """Intent boost stacks multiplicatively with event type boost."""
+        # milestone (2.0x) + query_memory (1.2x) = 2.4x total multiplier
+        event = MockEvent(
+            sentiment_score=0.5,
+            salience_score=0.5,
+            content_type="milestone",
+            intent_label="query_memory",
+        )
+        score, breakdown = default_scorer.compute_importance_score(event, default_weights)
+
+        # Combined multiplier should be 2.0 * 1.2 = 2.4
+        assert abs(breakdown.multiplier - 2.4) < 0.001
+
+    def test_all_intent_multipliers_exist(self, default_scorer: ImportanceScorer):
+        """All 8 UltraBERT intent types have defined multipliers."""
+        expected_intents = [
+            "query_memory",
+            "share_news",
+            "set_reminder",
+            "make_plan",
+            "seek_advice",
+            "reflect",
+            "express_feeling",
+            "casual_chat",
+        ]
+        for intent in expected_intents:
+            assert intent in default_scorer.INTENT_BOOST_MULTIPLIERS, f"Missing intent: {intent}"

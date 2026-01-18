@@ -189,7 +189,7 @@ class TestReminderExtraction:
         assert "about the meeting" in signal.action_description
 
     def test_reminder_with_temporal_json(self, detector: IntentSignalDetector) -> None:
-        """ReminderSignal is created even with temporal_json (date parsing in Phase 6)."""
+        """ReminderSignal parses temporal_json to target_date via TemporalParser (GAP-002 fix)."""
         temporal = json.dumps({"entities": [{"text": "tomorrow at 3pm", "label": "TIME"}]})
         event = make_event(
             "evt_reminder",
@@ -203,8 +203,10 @@ class TestReminderExtraction:
         assert len(signals) == 1
         signal = signals[0]
         assert isinstance(signal, ReminderSignal)
-        # target_date is None until Phase 6 TemporalParser is implemented
-        assert signal.target_date is None
+        # GAP-002 fix: target_date is now populated by TemporalParser
+        assert signal.target_date is not None
+        # Should be tomorrow at 3pm relative to event timestamp
+        assert signal.target_date > event.timestamp
 
 
 # =============================================================================

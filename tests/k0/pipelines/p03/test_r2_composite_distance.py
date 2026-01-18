@@ -75,7 +75,7 @@ class TestDBSCANParams:
         """Default values match Dossier spec."""
         params = DBSCANParams()
 
-        assert params.eps == 0.25
+        assert params.eps == 0.15  # Optimized for UltraBERT L2-normalized embeddings
         assert params.min_samples == 2
         assert params.temporal_weight == 0.3
         assert params.max_temporal_gap_hours == 4.0

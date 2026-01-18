@@ -113,14 +113,14 @@ class TemporalParser:
     def parse_temporal_json(
         self,
         temporal_json: str,
-        reference_time: Optional[int] = None,
+        reference_time: int,
     ) -> Optional[int]:
         """
         Parse temporal_json and return target timestamp.
 
         Args:
             temporal_json: JSON string from st_hipp_events.temporal_json
-            reference_time: Reference time in ms (default: now)
+            reference_time: Reference time in ms (REQUIRED - event observation time)
 
         Returns:
             Unix ms timestamp or None if no parseable date
@@ -160,14 +160,14 @@ class TemporalParser:
     def parse_temporal_json_full(
         self,
         temporal_json: str,
-        reference_time: Optional[int] = None,
+        reference_time: int,
     ) -> ParseResult:
         """
         Parse temporal_json with full result details.
 
         Args:
             temporal_json: JSON string from st_hipp_events.temporal_json
-            reference_time: Reference time in ms (default: now)
+            reference_time: Reference time in ms (REQUIRED - event observation time)
 
         Returns:
             ParseResult with timestamp, source entity, and confidence
@@ -248,19 +248,19 @@ class TemporalParser:
     def _parse_temporal_text(
         self,
         text: str,
-        ref_time: Optional[int],
+        ref_time: int,
     ) -> Optional[int]:
         """
         Parse natural language temporal expression.
 
         Args:
             text: Temporal expression text
-            ref_time: Reference time in ms (default: now)
+            ref_time: Reference time in ms (REQUIRED - event observation time)
 
         Returns:
             Unix ms timestamp or None
         """
-        ref = datetime.fromtimestamp((ref_time or int(datetime.now().timestamp() * 1000)) / 1000)
+        ref = datetime.fromtimestamp(ref_time / 1000)
         text_lower = text.lower().strip()
 
         # Try relative date patterns
@@ -381,14 +381,14 @@ def create_temporal_parser() -> TemporalParser:
 
 def parse_temporal_expression(
     temporal_json: str,
-    reference_time: Optional[int] = None,
+    reference_time: int,
 ) -> Optional[int]:
     """
     Convenience function to parse temporal expression.
 
     Args:
         temporal_json: JSON string from st_hipp_events.temporal_json
-        reference_time: Reference time in ms (default: now)
+        reference_time: Reference time in ms (REQUIRED - event observation time)
 
     Returns:
         Unix ms timestamp or None

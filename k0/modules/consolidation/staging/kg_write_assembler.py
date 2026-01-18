@@ -35,7 +35,11 @@ from k0.pipelines.p03.phase_outputs import (
     KGEntity,
     KGEntityUpdate,
 )
-from k0.pipelines.p03.staged_writes import LAYER_ST_KG_DOM, LAYER_ST_KG_EDGES, StagedWrite
+from k0.pipelines.p03.staged_writes import (
+    LAYER_ST_KG_DOM,
+    LAYER_ST_KG_EDGES,
+    StagedWrite,
+)
 
 from .idempotency import IdempotencyKeyGenerator
 
@@ -190,6 +194,7 @@ class KGWriteAssembler:
             "version": 1,
             "canonical_name": entity.canonical_name,
             "entity_type": entity.entity_type,
+            "entity_subtype": entity.entity_subtype,  # GAP-005: Fine-grained classification
             "aliases_json": entity.aliases_json,
             "confidence_score": entity.confidence,
             "embedding_id": entity.embedding_id,
@@ -218,7 +223,12 @@ class KGWriteAssembler:
         return write
 
     def _create_entity_update(self, update: KGEntityUpdate) -> Optional[StagedWrite]:
-        """Create st_kg_dom UPDATE for existing entity."""
+        """
+        Create st_kg_dom UPDATE for existing entity.
+
+        Issue 3 Fix: Enhanced to handle REINFORCE operations that increment
+        observation_count and append new source event IDs.
+        """
         if not update.entity_id:
             return None
 
@@ -239,6 +249,13 @@ class KGWriteAssembler:
         if update.new_aliases:
             record_data["new_aliases_json"] = json.dumps(update.new_aliases)
 
+        # Issue 3 Fix: Handle REINFORCE operations
+        if update.observation_count_increment > 0:
+            record_data["observation_count_increment"] = update.observation_count_increment
+
+        if update.new_source_event_ids:
+            record_data["additional_source_event_ids"] = json.dumps(update.new_source_event_ids)
+
         idem_key = self.idempotency.for_truth_write(
             LAYER_ST_KG_DOM,
             update.entity_id,
@@ -250,7 +267,7 @@ class KGWriteAssembler:
             data=record_data,
             phase=self.source_phase,
             expected_version=None,  # No version check for canonical_name updates
-            event_ids=[],
+            event_ids=update.new_source_event_ids if update.new_source_event_ids else [],
         )
         write.idempotency_key = idem_key
 
@@ -415,6 +432,10 @@ class KGWriteAssembler:
         # Add new evidence IDs
         if update.new_evidence_ids:
             record_data["new_evidence_ids_json"] = json.dumps(update.new_evidence_ids)
+
+        # GAP-001 M9: Increment observation_count for Granger causality
+        if update.observation_count_increment > 0:
+            record_data["observation_count_increment"] = update.observation_count_increment
 
         idem_key = self.idempotency.for_truth_write(
             LAYER_ST_KG_EDGES,

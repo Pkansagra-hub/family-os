@@ -1,8 +1,8 @@
 # K0 Cognitive Architecture - Master Registry
 
 **Status**: Living Document (Source of Truth)
-**Version**: 2.0.0
-**Last Updated**: 2025-12-24
+**Version**: 2.1.0
+**Last Updated**: 2025-01-17
 **Owner**: Architecture Team
 
 ---
@@ -20,6 +20,8 @@ This document is the **single source of truth** for tracking all K0 components b
 - [Part 1: Status Dashboard](#part-1-status-dashboard)
 - [Part 2: Pipeline Registry](#part-2-pipeline-registry)
 - [Part 3: Module Registry](#part-3-module-registry)
+  - [3.4 P03 Consolidation Algorithm Registry](#34-p03-consolidation-algorithm-registry)
+  - [3.5 P03 Pipeline Component Registry](#35-p03-pipeline-component-registry)
 - [Part 4: Event Topology](#part-4-event-topology)
 - [Part 5: Contract Registry](#part-5-contract-registry)
 - [Part 6: Storage Registry](#part-6-storage-registry)
@@ -41,7 +43,10 @@ This document is the **single source of truth** for tracking all K0 components b
 | Category | Total | ✅ Active | 🎯 Planning | ❌ Deprecated |
 |----------|-------|-----------|-------------|---------------|
 | Pipelines | 20 | 2 | 18 | - |
-| Modules | 23 | 15 | 5 | 1 |
+| Modules | 28 | 15 | 5 | 1 |
+| Recall Modules | 4 | 4 | - | - |
+| P03 Algorithms | 89 | 89 | - | - |
+| P03 Pipeline | 78 | 78 | - | - |
 | Events | 35+ | 25 | 7 | 3 |
 | Contracts (Module) | 22 | 15 | 3 | 2 |
 | Contracts (Pipeline) | 2 | 2 | - | - |
@@ -64,8 +69,10 @@ This document is the **single source of truth** for tracking all K0 components b
 | Environment Vars | 35 | 35 | - | - |
 | Config Files | 10 | 10 | - | - |
 
-> **Last Updated**: 2025-12-25
-> **Module Breakdown**: 14 Production-Ready, 1 Implementation, 2 Experimental, 4 Planning, 1 Deprecated
+> **Last Updated**: 2025-01-17
+> **Module Breakdown**: 14 Production-Ready, 24 Implementation (18 P03 + 4 Recall + 2 Other), 2 Experimental, 4 Planning, 1 Deprecated
+> **P03 Algorithm Breakdown**: 89 files (45 core, 7 text_gen, 6 dream, 2 emission, 13 staging, 7 truth_writer, 7 truth_layers, 2 root)
+> **P03 Pipeline Breakdown**: 78 files (9 phases, 22 ops, 8 qos, 8 security, 4 feedback, 3 learning, 1 maintenance, 1 api, 1 cache, 21 root)
 > **ADR Breakdown**: 39 Accepted (4 Core, 4 Pipeline, 31 Module)
 > **Contract Breakdown**: 78 total (22 module, 2 pipeline, 21 schema, 33 API) - 68 active, 6 planning, 2 deprecated
 > **Kernel Breakdown**: 13 startup hooks, 7 shutdown hooks (KH-007 FAISS deprecated)
@@ -137,9 +144,9 @@ Before writing any code, ensure these are registered:
 
 | ID | Name | Status | Modules Used | Scheduler? | Kernel Hooks | ADRs | Dossier | Version | Last Updated |
 |----|------|--------|--------------|------------|--------------|------|---------|---------|--------------|
-| P01 | Recall / Read | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
+| P01 | Recall / Read | ⚠️ Implementation | M55,M56,M57,M58 | No | - | - | - | 0.2.0 | 2025-01-17 |
 | P02 | Write / Ingest | ✅ Production | M01,M02,M04,M05,M06,M07,M08,M09,M10,M11,M12,M13,M15,M16,M17,M22 | No | on_startup | K003,K007.2,K009.2,K010.1 | `docs/pipelines/P02_write_dossier.md` | 1.1.0 | 2025-12-13 |
-| P03 | Memory Consolidation | 🎯 Planning | M28,M29,M30,M31,M32,M33,M34,M35 | Yes (INTERVAL/THRESHOLD/MANUAL) | on_startup | K010.5-K010.9 | `docs/pipelines/P03_consolidation_dossier_v2.md` | 0.1.0 | 2025-12-31 |
+| P03 | Memory Consolidation | ⚠️ Implementation | M37-M54 | Yes (INTERVAL/THRESHOLD/MANUAL) | on_startup | K010.5-K010.9 | `docs/pipelines/P03_consolidation_dossier_v2.md` | 0.2.0 | 2025-01-17 |
 | P04 | Arbitration / Action | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
 | P05 | Prospective / Triggers | 🎯 Planning | - | Yes (timer) | - | - | - | 0.1.0 | 2025-12-24 |
 | P06 | Learning / Neuromodulation | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
@@ -268,6 +275,11 @@ Before writing any code, ensure these are registered:
 | M26 | EmbeddingRecompute | Model Upgrade Re-vectorizer | 🎯 Planning | `k0/contracts/modules/embedding.recompute.v1.yaml` | `k0/modules/embedding/recompute.py` | batch | - | 0.1.0 | 2025-12-13 |
 | M27 | EmbeddingCleanup | Expired Vector Garbage Collector | 🎯 Planning | `k0/contracts/modules/embedding.cleanup.v1.yaml` | `k0/modules/embedding/cleanup.py` | <50ms/batch | - | 0.1.0 | 2025-12-13 |
 | M28 | FeedbackIngestor | Neuromodulation / Feedback Loop | 🎯 Planning | `k0/contracts/modules/feedback.ingest.v1.yaml` | `k0/modules/feedback/ingest.py` | <10ms | - | 0.1.0 | 2025-12-25 |
+| M37-M54 | ConsolidationModules | P03 Consolidation | ⚠️ Implementation | `k0/contracts/modules/consolidation.*.v1.yaml` | `k0/modules/consolidation/` | batch | - | 0.1.0 | 2025-01-17 |
+| M55 | ContextExpander | Recall Context Expansion | ⚠️ Implementation | - | `k0/modules/recall/context_expander.py` | <20ms | - | 0.1.0 | 2025-01-17 |
+| M56 | EntityExtractor | Recall Entity Extraction | ⚠️ Implementation | - | `k0/modules/recall/entity_extractor.py` | <15ms | - | 0.1.0 | 2025-01-17 |
+| M57 | EntityGraphExpander | Recall Graph Expansion | ⚠️ Implementation | - | `k0/modules/recall/entity_graph_expander.py` | <25ms | - | 0.1.0 | 2025-01-17 |
+| M58 | RelatedContextFetcher | Recall Related Context | ⚠️ Implementation | - | `k0/modules/recall/related_context_fetcher.py` | <30ms | - | 0.1.0 | 2025-01-17 |
 
 ### Status Legend
 
@@ -335,6 +347,11 @@ Before writing any code, ensure these are registered:
 | M25 | - | P08 | hipp_query,vec_write,ultrabert_embed | `cognitive.embedding.backfilled.v1` |
 | M27 | - | P08 | vec_delete | `cognitive.embedding.cleaned.v1` |
 | M28 | - | P02, P08 | feedback_signal_insert (planned) | `feedback.signal.p02.v1`, `feedback.signal.p08.v1` |
+| M37-M54 | - | P03 | hipp_query,vec_write,kg_write,truth_write | `p03.*.v1` (see Part 4) |
+| M55 | - | P01 | hipp_query,vec_search | `p01.context.expanded.v1` |
+| M56 | - | P01 | - | `p01.entities.extracted.v1` |
+| M57 | M56 | P01 | kg_query | `p01.graph.expanded.v1` |
+| M58 | M55,M57 | P01 | hipp_query,vec_search | `p01.related.fetched.v1` |
 
 ### How to Track Dependencies
 
@@ -357,6 +374,331 @@ Before writing any code, ensure these are registered:
 | M13-M14 | Builders | `k0/modules/builders/README.md` | 2025-11-17 | ✅ Complete | Yes |
 | M16-M17 | Core | - | - | ❌ Missing | No |
 | M22-M27 | Embedding | - | - | ❌ Missing | No |
+| M37-M54 | Consolidation | - | - | ❌ Missing | No |
+| M55-M58 | Recall | `k0/modules/recall/README.md` | 2025-01-17 | ✅ Complete | Yes |
+
+## 3.4 P03 Consolidation Algorithm Registry
+
+> **IMPORTANT**: This section tracks the 90 algorithm files in `k0/modules/consolidation/` that support P03 Memory Consolidation.
+> These algorithms are reusable, stateless components imported by P03 pipeline phases.
+> The 18 module contracts (M37-M54) in `k0/contracts/modules/consolidation.*.v1.yaml` define the module boundaries.
+
+### Architecture Pattern
+
+```
+P03 Pipeline Phases (k0/pipelines/p03/phases/)
+    └── Import from → Consolidation Algorithms (k0/modules/consolidation/)
+                          └── Governed by → Module Contracts (k0/contracts/modules/consolidation.*.v1.yaml)
+```
+
+### 3.4.1 Root Algorithms
+
+| File | Purpose | Used By Phases | Contract |
+|------|---------|----------------|----------|
+| `batch_selector.py` | Selects memory batches for consolidation | r0 | M37 |
+| `gap_auto_resolver.py` | Automatically resolves detected memory gaps | r0, r7 | M37 |
+
+### 3.4.2 Core Algorithms (`algorithms/`)
+
+| File | Category | Purpose | Used By Phases |
+|------|----------|---------|----------------|
+| `access_tracker.py` | Analytics | Tracks memory access patterns | r2, r5 |
+| `alias_detector.py` | Dedup | Detects entity aliases | r1, r4 |
+| `ambiguous_resolver.py` | NER | Resolves ambiguous entity references | r1 |
+| `bert_ner_adapter.py` | NER | BERT-based named entity recognition | r1 |
+| `bgt_sm.py` | Clustering | BGT small model clustering | r2 |
+| `causality_thresholds.py` | Analytics | Defines causality detection thresholds | r3 |
+| `centroid_calculator.py` | Clustering | Calculates cluster centroids | r2 |
+| `cluster_quality.py` | Clustering | Evaluates cluster quality metrics | r2 |
+| `composite_distance.py` | Similarity | Multi-dimensional distance calculation | r2, r4 |
+| `confidence_router.py` | Routing | Routes based on confidence scores | r1, r3 |
+| `cpn.py` | Learning | Counter-Propagation Network | r5 |
+| `decay_engine.py` | Retention | Memory decay calculations | r5, r8 |
+| `duplicate_detector.py` | Dedup | Detects duplicate memories | r1, r4 |
+| `edge_demotion.py` | KG | Demotes weak knowledge graph edges | r6 |
+| `embedding_text_generator.py` | Embedding | Generates text for embeddings | r2, r7 |
+| `entity_disambiguator.py` | NER | Disambiguates entity references | r1 |
+| `entity_extractor.py` | NER | Extracts entities from text | r1 |
+| `entity_merger.py` | NER | Merges duplicate entities | r1, r4 |
+| `episode_splitter.py` | Episodic | Splits memories into episodes | r2 |
+| `episodic_dbscan.py` | Clustering | DBSCAN for episodic clustering | r2 |
+| `episodic_hdbscan.py` | Clustering | HDBSCAN for episodic clustering | r2 |
+| `eps_adjuster.py` | Clustering | Adjusts DBSCAN epsilon | r2 |
+| `granger_causality.py` | Analytics | Granger causality detection | r3 |
+| `hebbian_learner.py` | Learning | Hebbian learning updates | r5 |
+| `immunity_checker.py` | Retention | Checks memory immunity status | r5, r8 |
+| `importance_scorer.py` | Analytics | Scores memory importance | r2, r5 |
+| `importance_weight_learner.py` | Learning | Learns importance weights | r5 |
+| `intent_signal_detector.py` | Analytics | Detects intent signals | r3 |
+| `mcts.py` | Search | Monte Carlo Tree Search | r3, dream |
+| `mcts_shadow.py` | Search | Shadow MCTS for exploration | r3, dream |
+| `merge_threshold_learner.py` | Learning | Learns merge thresholds | r4, r5 |
+| `minhash_lsh.py` | Dedup | MinHash LSH for near-duplicates | r1, r4 |
+| `min_samples_adjuster.py` | Clustering | Adjusts DBSCAN min_samples | r2 |
+| `novelty_bonus_learner.py` | Learning | Learns novelty bonuses | r5 |
+| `observation_context.py` | Context | Carries holistic observation context through pipeline | r0, r6 |
+| `prune_audit_logger.py` | Audit | Logs pruning decisions | r8 |
+| `prune_regret_detector.py` | Learning | Detects pruning regret | r5, r8 |
+| `reconciliation_engine.py` | Sync | Reconciles memory conflicts | r4 |
+| `retention_enforcer.py` | Retention | Enforces retention policies | r5, r8 |
+| `routine_detector.py` | Analytics | Detects routine patterns | r3 |
+| `simhasher.py` | Dedup | SimHash for similarity | r1, r4 |
+| `spc_uq.py` | Uncertainty | Statistical process control UQ | r3 |
+| `subtype_classifier.py` | Classification | Classifies memory subtypes | r1 |
+| `tdl_hco.py` | Learning | Temporal difference learning HCO | r5 |
+| `temporal_parser.py` | Analytics | Parses temporal expressions | r1, r2 |
+| `two_stage_dedup.py` | Dedup | Two-stage deduplication | r1, r4 |
+
+### 3.4.3 Text Generators (`algorithms/text_generators/`)
+
+| File | Memory Layer | Purpose | Used By Phases |
+|------|--------------|---------|----------------|
+| `episodic.py` | st_epi | Generates episodic memory text | r2, r7 |
+| `kg_entity.py` | st_kg_dom | Generates KG entity descriptions | r6, r7 |
+| `procedural.py` | st_procedural | Generates procedural memory text | r3, r7 |
+| `prospective.py` | st_prospective | Generates prospective memory text | r3, r7 |
+| `semantic.py` | st_sem | Generates semantic memory text | r4, r7 |
+| `social.py` | st_social | Generates social memory text | r4, r7 |
+| `textrank.py` | - | TextRank summarization | r2, r4, r7 |
+
+### 3.4.4 Dream/Exploration (`dream/`)
+
+| File | Purpose | Used By Phases |
+|------|---------|----------------|
+| `compute_budget.py` | Manages dream compute budget | dream |
+| `config.py` | Dream exploration configuration | dream |
+| `dream_explorer.py` | Main dream exploration engine | dream |
+| `intent_signals.py` | Intent signal processing | dream |
+| `mcts_persistence.py` | MCTS state persistence | dream |
+| `models.py` | Dream data models | dream |
+
+### 3.4.5 Emission (`emission/`)
+
+| File | Purpose | Used By Phases |
+|------|---------|----------------|
+| `emitter.py` | Event emission coordinator | r7, r8 |
+| `gap_emitter.py` | Gap detection event emitter | r7 |
+
+### 3.4.6 Staging/Coordination (`staging/`)
+
+| File | Purpose | Used By Phases |
+|------|---------|----------------|
+| `dedup_metadata.py` | Deduplication metadata management | r1, r4 |
+| `idempotency.py` | Idempotency key management | r6, r7, r8 |
+| `intent_signal_assembler.py` | Assembles intent signals | r3 |
+| `kg_write_assembler.py` | Assembles KG write operations | r6 |
+| `manifest_validator.py` | Validates consolidation manifests | r0, r8 |
+| `outbox_assembler.py` | Assembles outbox events | r7, r8 |
+| `r6_coordinator.py` | Coordinates R6 phase operations | r6 |
+| `r6_output.py` | R6 phase output handling | r6 |
+| `reconciliation_recorder.py` | Records reconciliation decisions | r4 |
+| `status_marker.py` | Marks consolidation status | r0, r8 |
+| `summary_generator.py` | Generates consolidation summaries | r7 |
+| `truth_query_service.py` | Queries truth layer | r4, r6 |
+| `truth_write_assembler.py` | Assembles truth layer writes | r6 |
+
+### 3.4.7 Truth Writer (`truth_writer/`)
+
+| File | Purpose | Used By Phases |
+|------|---------|----------------|
+| `embedding_generator.py` | Generates embeddings for truth | r6, r7 |
+| `outbox.py` | Truth writer outbox | r6 |
+| `result.py` | Truth write result handling | r6 |
+| `router.py` | Routes to appropriate truth layer | r6 |
+| `source_text_fetcher.py` | Fetches source text for truth | r6 |
+| `text_vector_coordinator.py` | Coordinates text/vector writes | r6, r7 |
+| `transaction.py` | Truth write transactions | r6 |
+
+### 3.4.8 Truth Writer Layers (`truth_writer/layers/`)
+
+| File | Memory Layer | Purpose | Used By Phases |
+|------|--------------|---------|----------------|
+| `episodic.py` | st_epi | Episodic memory layer writer | r6 |
+| `kg.py` | st_kg_dom, st_kg_edges | Knowledge graph layer writer | r6 |
+| `procedural.py` | st_procedural | Procedural memory layer writer | r6 |
+| `prospective.py` | st_prospective | Prospective memory layer writer | r6 |
+| `semantic.py` | st_sem | Semantic memory layer writer | r6 |
+| `social.py` | st_social | Social memory layer writer | r6 |
+| `vector.py` | st_vec | Vector storage layer writer | r6, r7 |
+
+### 3.4.9 Algorithm Category Summary
+
+| Category | Count | Primary Purpose |
+|----------|-------|-----------------|
+| Root | 2 | Entry points (batch selection, gap resolution) |
+| Core Algorithms | 46 | Clustering, NER, dedup, learning, analytics, context |
+| Text Generators | 7 | Memory layer text generation |
+| Dream | 6 | Exploration and simulation |
+| Emission | 2 | Event emission |
+| Staging | 13 | Coordination and assembly |
+| Truth Writer | 7 | Truth layer operations |
+| Truth Layers | 7 | Layer-specific writers |
+| **Total** | **90** | |
+
+### 3.4.10 Phase-to-Algorithm Matrix
+
+| Phase | Primary Algorithms | Category Focus |
+|-------|-------------------|----------------|
+| r0 | batch_selector, gap_auto_resolver, manifest_validator, status_marker, observation_context | Selection, Validation, Context |
+| r1 | entity_*, alias_detector, minhash_lsh, simhasher, subtype_classifier | NER, Dedup |
+| r2 | episodic_*, cluster_*, centroid_*, importance_scorer, episode_splitter | Clustering, Episodic |
+| r3 | granger_causality, routine_detector, intent_signal_*, mcts* | Analytics, Intent |
+| r4 | reconciliation_*, entity_merger, duplicate_detector, semantic text_gen | Reconciliation, Semantic |
+| r5 | decay_engine, retention_enforcer, hebbian_learner, *_learner | Learning, Retention |
+| r6 | truth_writer/*, kg_write_assembler, edge_demotion, observation_context | Truth Writing, Context |
+| r7 | text_generators/*, embedding_generator, outbox_assembler | Emission, Embedding |
+| r8 | prune_audit_logger, retention_enforcer, status_marker | Pruning, Finalization |
+| dream | dream/*, mcts*, novelty_bonus_learner | Exploration |
+
+## 3.5 P03 Pipeline Component Registry
+
+> **IMPORTANT**: This section tracks the 78 pipeline orchestration files in `k0/pipelines/p03/`.
+> These are distinct from the reusable algorithms in `k0/modules/consolidation/` (section 3.4).
+> Pipeline components handle orchestration, QoS, security, and operational concerns.
+
+### Architecture Pattern
+
+```
+P03 Pipeline (k0/pipelines/p03/)
+    ├── phases/      → 9 phase orchestrators (r0-r8)
+    ├── ops/         → 22 operational utilities
+    ├── qos/         → 8 quality of service components
+    ├── security/    → 8 privacy/audit components
+    ├── feedback/    → 4 feedback loop components
+    ├── learning/    → 3 learning integration
+    ├── maintenance/ → 1 maintenance utilities
+    ├── api/         → 1 API endpoints
+    └── cache/       → 1 caching layer
+```
+
+### 3.5.1 Phase Orchestrators (`phases/`)
+
+| File | Phase | Purpose | Imports From |
+|------|-------|---------|--------------|
+| `r0_batch_selector.py` | R0 | Batch selection and gap resolution | consolidation.batch_selector, consolidation.gap_auto_resolver |
+| `r1_importance_scorer.py` | R1 | Importance scoring and NER | consolidation.algorithms.importance_scorer, consolidation.algorithms.entity_* |
+| `r2_episodic_integrator.py` | R2 | Episodic clustering and episode building | consolidation.algorithms.episodic_*, consolidation.algorithms.cluster_* |
+| `r3_dedup_decay.py` | R3 | Deduplication and decay scoring | consolidation.algorithms.simhasher, consolidation.algorithms.decay_engine |
+| `r4_kg_consolidator.py` | R4 | Knowledge graph consolidation | consolidation.algorithms.entity_merger, consolidation.staging.reconciliation_* |
+| `r5_dream_explorer.py` | R5 | Dream exploration and learning | consolidation.dream.*, consolidation.algorithms.*_learner |
+| `r6_staging.py` | R6 | Truth layer staging | consolidation.staging.*, consolidation.truth_writer.* |
+| `r7_truth_writer.py` | R7 | Truth layer writing | consolidation.truth_writer.*, consolidation.emission.* |
+| `r8_event_emitter.py` | R8 | Event emission and finalization | consolidation.emission.*, consolidation.staging.status_marker |
+
+### 3.5.2 Operational Utilities (`ops/`)
+
+| File | Category | Purpose |
+|------|----------|---------|
+| `alerting.py` | Alerting | P03 alerting integration |
+| `bus_circuit.py` | Circuit | Event bus circuit breaker |
+| `circuit_breaker.py` | Circuit | General circuit breaker |
+| `context_propagation.py` | Context | Trace context propagation |
+| `dlq_store.py` | DLQ | Dead letter queue storage |
+| `edge_case_handler.py` | Error | Edge case handling |
+| `error_classifier.py` | Error | Error classification |
+| `error_handler.py` | Error | Error handling |
+| `faiss_circuit.py` | Circuit | FAISS-specific circuit breaker |
+| `formula_comparison.py` | Testing | Formula comparison utilities |
+| `formula_tracing.py` | Tracing | Formula tracing |
+| `logging.py` | Logging | P03 logging configuration |
+| `metrics.py` | Metrics | P03 metrics collection |
+| `module_metrics.py` | Metrics | Module-level metrics |
+| `p08_circuit.py` | Circuit | P08 integration circuit |
+| `partial_failure.py` | Error | Partial failure handling |
+| `phase_logger.py` | Logging | Phase-specific logging |
+| `quarantine_metrics.py` | Metrics | Quarantine metrics |
+| `retry_config.py` | Retry | Retry configuration |
+| `security.py` | Security | Security utilities |
+| `shadow_comparator.py` | Testing | Shadow mode comparison |
+| `tracing.py` | Tracing | Distributed tracing |
+
+### 3.5.3 Quality of Service (`qos/`)
+
+| File | Purpose |
+|------|---------|
+| `adaptive_batch_sizer.py` | Adaptive batch sizing based on load |
+| `context_integration.py` | QoS context integration |
+| `learning_budget.py` | Learning compute budget management |
+| `phase_metrics.py` | Phase-level QoS metrics |
+| `query_metrics.py` | Query performance metrics |
+| `resource_metrics.py` | Resource utilization metrics |
+| `scheduler_integration.py` | Scheduler QoS integration |
+| `throughput_tracker.py` | Throughput tracking |
+
+### 3.5.4 Security & Privacy (`security/`)
+
+| File | Purpose |
+|------|---------|
+| `audit_trail.py` | Consolidation audit trail |
+| `device_retention.py` | Device-specific retention |
+| `fingerprint.py` | Memory fingerprinting |
+| `location_masking.py` | Location data masking |
+| `privacy_band.py` | Privacy band enforcement |
+| `query_auditor.py` | Query auditing |
+| `rls_verifier.py` | Row-level security verification |
+| `tombstone.py` | Tombstone management |
+
+### 3.5.5 Feedback & Learning (`feedback/`, `learning/`)
+
+| File | Category | Purpose |
+|------|----------|---------|
+| `anomaly_detector.py` | Feedback | Anomaly detection |
+| `quarantine_detector.py` | Feedback | Quarantine detection |
+| `rate_limiter.py` | Feedback | Rate limiting |
+| `velocity_detector.py` | Feedback | Velocity anomaly detection |
+| `async_audit.py` | Learning | Async audit integration |
+| `feedback_queue.py` | Learning | Feedback queue management |
+| `learning_anomaly_detector.py` | Learning | Learning anomaly detection |
+
+### 3.5.6 Support Components (`maintenance/`, `api/`, `cache/`)
+
+| File | Category | Purpose |
+|------|----------|---------|
+| `quarantine_cleanup.py` | Maintenance | Quarantine cleanup |
+| `quarantine_review.py` | API | Quarantine review endpoints |
+| `embedding_cache.py` | Cache | Embedding cache management |
+
+### 3.5.7 Root Pipeline Files
+
+| File | Purpose |
+|------|---------|
+| `audit_logger.py` | Main audit logging |
+| `checkpoint.py` | Checkpoint management |
+| `context.py` | Pipeline context |
+| `deterministic.py` | Deterministic execution |
+| `envelope.py` | Message envelope handling |
+| `erasure.py` | Data erasure support |
+| `event_state.py` | Event state management |
+| `explainability.py` | Explainability support |
+| `feedback_consumer.py` | Feedback consumption |
+| `gap_emitter.py` | Gap event emission |
+| `observability.py` | Observability integration |
+| `offset_manager.py` | Offset management |
+| `outbox_publisher.py` | Outbox publishing |
+| `phase_interface.py` | Phase interface definition |
+| `phase_outputs.py` | Phase output handling |
+| `r5_config.py` | R5 phase configuration |
+| `retention.py` | Retention policy handling |
+| `runner_contract.py` | Runner contract definition |
+| `sequential_runner.py` | Sequential phase runner |
+| `serializer.py` | Serialization utilities |
+| `staged_writes.py` | Staged write handling |
+
+### 3.5.8 P03 Component Summary
+
+| Category | Count | Primary Purpose |
+|----------|-------|-----------------|
+| Phases | 9 | Phase orchestration (r0-r8) |
+| Ops | 22 | Operational utilities |
+| QoS | 8 | Quality of service |
+| Security | 8 | Privacy and audit |
+| Feedback | 4 | Feedback loop |
+| Learning | 3 | Learning integration |
+| Maintenance | 1 | Cleanup utilities |
+| API | 1 | API endpoints |
+| Cache | 1 | Caching |
+| Root | 21 | Core pipeline files |
+| **Total** | **78** | |
 
 ---
 
@@ -1006,6 +1348,7 @@ graph LR
 | `st_learning_queue` | P03 (M35) | P06, P03 | Gap queue for active learning | ~200B | 30 days | 🎯 Planning |
 | `st_anchors` | P03 (M35), P06 | P03, P06 | Bayesian anchor beliefs | ~400B | Permanent | 🎯 Planning |
 | `st_anchor_observations` | P03, P06 | P03, P06 | Evidence log for anchors | ~200B | 90 days | 🎯 Planning |
+| `st_observations` | P03 | P01, P03 | Holistic observation log (32 cols): temporal, emotional, social, modality, location context | ~400B | 1-5 years | ✅ Active |
 | `st_consolidation_audit` | P03 | Ops | P03 cycle audit trail | ~500B | 90 days | 🎯 Planning |
 | `st_mcts_decisions` | P03 | P03, Ops | MCTS decision traces for analysis | ~1KB | 90 days | 🎯 Planning |
 | `st_mcts_shadow_log` | P03 | P03, Ops | Shadow-mode heuristic vs MCTS comparisons | ~1KB | 90 days | 🎯 Planning |
@@ -1085,6 +1428,13 @@ graph LR
 | 0058 | `0058_st_sem_pattern_types.py` | - | idx_sem_* | Add pattern types to st_sem | ❌ No |
 | 0059 | `0059_kg_query_tracking.py` | - | idx_kg_* | Add query tracking to st_kg_dom/st_kg_edges | ❌ No |
 | 0060 | `0060_st_hipp_events_activity_ultrabert.py` | - | idx_hipp_events_* | Add activity UltraBERT columns to st_hipp_events | ❌ No |
+| 0061 | `0061_st_epi_inline_vectors.py` | - | idx_epi_* | Add inline vectors to st_epi | ❌ No |
+| 0062 | `0062_st_sem_inline_vectors.py` | - | idx_sem_* | Add inline vectors to st_sem | ❌ No |
+| 0063 | `0063_st_procedural_inline_vectors.py` | - | idx_procedural_* | Add inline vectors to st_procedural | ❌ No |
+| 0064 | `0064_st_social_inline_vectors.py` | - | idx_social_* | Add inline vectors to st_social | ❌ No |
+| 0065 | `0065_st_prospective_inline_vectors.py` | - | idx_prospective_* | Add inline vectors to st_prospective | ❌ No |
+| 0066 | `0066_st_kg_dom_inline_vectors.py` | - | idx_kg_dom_* | Add inline vectors to st_kg_dom | ❌ No |
+| 0067 | `0067_st_observations.py` | st_observations | idx_obs_* (13) | Holistic observation log for truth layers | ❌ No |
 
 > **Migration Tool**: Alembic (SQLAlchemy)
 > **Location**: `k0/db/alembic/versions/`
@@ -1356,6 +1706,19 @@ graph LR
 | `idx_shadow_log_cycle` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
 | `idx_shadow_log_type_created` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
 | `idx_shadow_log_pending_eval` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
+| `idx_obs_record_time` | st_observations | layer, record_id, observed_at DESC | BTREE | Primary lookup by truth record |
+| `idx_obs_tenant_time` | st_observations | tenant_id, observed_at DESC | BTREE | Temporal range queries |
+| `idx_obs_sentiment` | st_observations | tenant_id, sentiment_label, observed_at DESC | BTREE/partial | Emotional pattern queries |
+| `idx_obs_salience_high` | st_observations | tenant_id, observed_at DESC WHERE salience_band='HIGH' | BTREE/partial | High salience queries |
+| `idx_obs_channel` | st_observations | tenant_id, ingress_channel, observed_at DESC | BTREE/partial | Modality queries |
+| `idx_obs_social` | st_observations | tenant_id, social_context, observed_at DESC | BTREE/partial | Social context queries |
+| `idx_obs_location` | st_observations | tenant_id, location_type, observed_at DESC | BTREE/partial | Location queries |
+| `idx_obs_anchor_time` | st_observations | tenant_id, anchor_time_utc DESC | BTREE/partial | Prospective memory queries |
+| `idx_obs_circadian` | st_observations | tenant_id, time_of_day_bucket, circadian_slot | BTREE/partial | Circadian pattern queries |
+| `idx_obs_high_novelty` | st_observations | tenant_id, observed_at DESC WHERE novelty_score>0.8 | BTREE/partial | High novelty queries |
+| `idx_obs_weekend` | st_observations | tenant_id, is_weekend, observed_at DESC | BTREE/partial | Weekend/weekday analysis |
+| `idx_obs_source_event` | st_observations | source_event_id | BTREE/partial | Source event lookup |
+| `idx_obs_layer_tenant_time` | st_observations | layer, tenant_id, observed_at DESC | BTREE | Layer-specific tenant queries |
 
 #### Entity Resolution/Merge Indexes (ix_ prefix)
 
@@ -1384,8 +1747,9 @@ graph LR
 | st_embedding_queue | 4 | 1 | 0 |
 | st_pipeline_* | 4 | 0 | 0 |
 | st_feedback_signals | 7 | 2 | 0 |
+| st_observations | 13 | 9 | 0 |
 | Other tables | 9 | 1 | 0 |
-| **TOTAL** | **74** | **14** | **2** |
+| **TOTAL** | **87** | **23** | **2** |
 
 > **Index Strategy**:
 >
@@ -1485,7 +1849,7 @@ graph LR
 | Component | Type | Capabilities Granted | ADR | Notes |
 |-----------|------|----------------------|-----|-------|
 | P02 (Write) | Pipeline | `st_hipp_events.write, st_vec.write, st_pipeline_processed.write, st_outbox.write, st_kg_edges.read` | ADR-P02-001 | `st_embedding_queue.write` deprecated (inline embedding) |
-| P03 (Consolidation) | Pipeline | `st_hipp_events.read, st_epi.write, st_sem.write, st_procedural.write, st_social.write, st_prospective.write, st_kg_dom.write, st_kg_edges.write, st_vec.read, st_learning_queue.write, st_anchors.write, st_anchor_observations.write, st_consolidation_audit.write, st_outbox.write` | K021 (Planning) | P03 has broad read access to st_hipp_events, write to 8 memory layers |
+| P03 (Consolidation) | Pipeline | `st_hipp_events.read, st_epi.write, st_sem.write, st_procedural.write, st_social.write, st_prospective.write, st_kg_dom.write, st_kg_edges.write, st_vec.read, st_learning_queue.write, st_anchors.write, st_anchor_observations.write, st_observations.write, st_consolidation_audit.write, st_outbox.write` | K021 (Planning) | P03 has broad read access to st_hipp_events, write to 9 memory layers + observations |
 | P06 (Learning) | Pipeline | `st_learning_queue.read, st_learning_queue.write, st_anchors.read, st_anchors.write, st_anchor_observations.write, st_learned_weights.write, st_golden_dataset_pairs.write, st_validation_results.write` | (Planning) | Active learning loop capabilities |
 | P08 (Embedding Mgmt) | Pipeline | `st_vec.read, st_vec.write, st_hipp_events.read, st_hipp_events.write, ultrabert.embed` | ADR-P08-001 | `faiss.read, faiss.write` removed (pgvector replaces) |
 | Kernel (Observe Port) | Kernel | `st_feedback_signals.write` | K020 | Persist feedback signals emitted via observe port |
@@ -1532,6 +1896,8 @@ graph LR
 | `st_anchors.read` | Storage | 🎯 Planned | P06 |
 | `st_anchors.write` | Storage | 🎯 Planned | P03, P06 |
 | `st_anchor_observations.write` | Storage | 🎯 Planned | P03, P06 |
+| `st_observations.write` | Storage | ✅ Active | P03 |
+| `st_observations.read` | Storage | 🎯 Planned | P01 |
 | `st_consolidation_audit.write` | Storage | 🎯 Planned | P03 |
 | `st_embedding_queue.write` | Storage | ❌ Deprecated | - |
 | `working_memory.write` | Storage | 🎯 Planned | - |

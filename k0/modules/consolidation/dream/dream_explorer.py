@@ -30,7 +30,7 @@ import asyncio
 import logging
 import time
 import traceback
-from typing import Any, Coroutine, Dict, List, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Optional, TypeVar
 
 from k0.modules.consolidation.dream.compute_budget import (
     AlgorithmResult,
@@ -47,8 +47,11 @@ from k0.modules.consolidation.dream.models import (
     RoutineOptimization,
 )
 
-# Note: IntentSignalDetector is imported at runtime inside explore() to avoid
-# circular import with dream/__init__.py. See GAP-001 implementation.
+# Note: IntentSignalDetector and RoutineDetector are imported at runtime inside
+# explore() to avoid circular import with dream/__init__.py. See GAP-001, GAP-003.
+
+if TYPE_CHECKING:
+    from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
 
 
 logger = logging.getLogger(__name__)
@@ -208,6 +211,17 @@ class DreamExplorer:
         intent_detector = _IntentSignalDetector()
         intent_signals = intent_detector.detect_all(input_data.event_states)
 
+        # =====================================================================
+        # PHASE 5: Retrospective Routine Detection (GAP-003)
+        # Detect recurring behavioral patterns from accumulated episodes
+        # =====================================================================
+        routine_candidates = await self._run_with_error_isolation(
+            algorithm_name="routine_detector",
+            coro=self._run_routine_detector(input_data, cycle_id),
+            orchestration=orchestration,
+        )
+        routine_candidates = routine_candidates if routine_candidates else []
+
         compute_ms = int(time.time() * 1000) - start_ms
 
         # Store final budget snapshot
@@ -223,6 +237,7 @@ class DreamExplorer:
                 "counterfactuals_count": len(counterfactuals),
                 "prospective_count": len(prospective_memories),
                 "routines_count": len(routine_optimizations),
+                "routine_candidates_count": len(routine_candidates),
                 "intent_signals_count": len(intent_signals),
                 "mcts_rollouts_used": compute_budget.used_rollouts,
                 "compute_ms": compute_ms,
@@ -236,6 +251,7 @@ class DreamExplorer:
             counterfactuals=counterfactuals,
             prospective_memories=prospective_memories,
             routine_optimizations=routine_optimizations,
+            routine_candidates=routine_candidates,
             intent_signals=intent_signals,
             mcts_decisions_evaluated=compute_budget.used_rollouts,
             compute_ms=compute_ms,
@@ -1004,6 +1020,73 @@ class DreamExplorer:
         )
 
         return result
+
+    async def _run_routine_detector(
+        self,
+        input_data: DreamExplorerInput,
+        cycle_id: str,
+    ) -> List["RoutineCandidate"]:
+        """
+        Run RoutineDetector for retrospective routine detection (GAP-003).
+
+        Detects recurring behavioral patterns from accumulated episodic memory
+        using basal ganglia-inspired habit formation principles.
+
+        Algorithm:
+        1. Convert EpisodeClusters to episode dicts
+        2. Group by activity signature (activity_type + location)
+        3. Analyze temporal patterns (regularity, frequency)
+        4. Score habit strength (frequency × consistency × recency)
+        5. Determine lifecycle state (FORMING → ESTABLISHED → DECAYING)
+
+        Args:
+            input_data: Input data with recent episodes
+            cycle_id: Cycle ID for determinism
+
+        Returns:
+            List of detected routine candidates
+        """
+        from k0.modules.consolidation.algorithms.routine_detector import RoutineDetector
+
+        self._logger.debug(
+            "RoutineDetector executing (GAP-003)",
+            extra={
+                "cycle_id": cycle_id,
+                "episodes_count": len(input_data.recent_episodes),
+            },
+        )
+
+        # Skip if no episodes to analyze
+        if not input_data.recent_episodes:
+            self._logger.debug("RoutineDetector skipped: no episodes available")
+            return []
+
+        # Convert EpisodeCluster to dict format for RoutineDetector
+        # EpisodeCluster uses: cluster_id, activity_type, location_hint, temporal_start, temporal_end
+        episodes: List[dict] = []
+        for cluster in input_data.recent_episodes:
+            episode = {
+                "episode_id": cluster.cluster_id,  # cluster_id is the ID field
+                "activity_type": cluster.activity_type,
+                "location": cluster.location_hint,  # location_hint, not location
+                "start_time_ms": cluster.temporal_start,  # temporal_start, not centroid_timestamp_ms
+                "end_time_ms": cluster.temporal_end,
+            }
+            episodes.append(episode)
+
+        # Create detector and run detection
+        detector = RoutineDetector(min_occurrences=3)  # Per GAP-003 spec
+        candidates = detector.detect(episodes)
+
+        self._logger.info(
+            "RoutineDetector completed (GAP-003)",
+            extra={
+                "episodes_analyzed": len(episodes),
+                "candidates_detected": len(candidates),
+            },
+        )
+
+        return candidates
 
     def _rank_and_limit_insights(
         self,

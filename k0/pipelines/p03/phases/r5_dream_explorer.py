@@ -37,12 +37,15 @@ from k0.pipelines.p03.r5_config import R5Config
 from k0.pipelines.p03.runner_contract import P03PhaseId
 
 if TYPE_CHECKING:
+    from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
     from k0.modules.consolidation.dream.intent_signals import IntentSignal
     from k0.pipelines.p03.envelope import P03BatchEnvelope
     from k0.pipelines.p03.phase_interface import P03RunnerContext
     from k0.pipelines.p03.phase_outputs import (
         CounterfactualScenario,
         Insight,
+        KGEdge,
+        KGEntity,
         ProspectiveMemory,
         RoutineOptimization,
     )
@@ -81,6 +84,7 @@ class R5PhaseOutputs:
         insights: BGT-SM generated insights
         counterfactuals: CPN generated counterfactual scenarios
         routine_optimizations: TDL-HCO motor rehearsal results
+        routine_candidates: RoutineDetector detected habits (GAP-003)
         prospective_memories: SPC-UQ prospective memory predictions
         intent_signals: Intent signals for layer routing (GAP-001)
         mcts_decisions_count: Number of MCTS decisions evaluated
@@ -90,7 +94,8 @@ class R5PhaseOutputs:
     insights: List["Insight"]
     counterfactuals: List["CounterfactualScenario"]
     routine_optimizations: List["RoutineOptimization"]
-    prospective_memories: List["ProspectiveMemory"]
+    routine_candidates: List["RoutineCandidate"] = field(default_factory=list)
+    prospective_memories: List["ProspectiveMemory"] = field(default_factory=list)
     intent_signals: List["IntentSignal"] = field(default_factory=list)
     mcts_decisions_count: int = 0
     compute_seconds_saved: float = 0.0
@@ -333,6 +338,9 @@ class R5DreamExplorer:
         - BGT-SM: Insight generation (Issue 8.1.9)
         - TDL-HCO: Routine optimization (Issue 8.1.11)
 
+        GAP-001 M9.2: Loads accumulated KG entities and edges from storage
+        and merges with batch-new entities for BGT-SM insight generation.
+
         Args:
             envelope: P03 batch envelope
             ctx: Runner context
@@ -370,14 +378,55 @@ class R5DreamExplorer:
         # Create DreamExplorer instance
         explorer = DreamExplorer(config=dream_config)
 
-        # Build input from envelope
+        # =====================================================================
+        # GAP-001 M9.2: Load accumulated KG entities and edges
+        # BGT-SM needs the full graph, not just batch-new entities
+        # =====================================================================
+        accumulated_entities = await self._load_accumulated_entities(
+            ctx=ctx,
+            tenant_id=envelope.context.tenant_id,
+            space_id=envelope.context.space_id,
+        )
+        accumulated_edges = await self._load_accumulated_edges(
+            ctx=ctx,
+            tenant_id=envelope.context.tenant_id,
+            space_id=envelope.context.space_id,
+        )
+
+        # Merge accumulated with new (new entities take precedence via dict)
+        new_entities = list(envelope.phases.r4_new_entities)
+        new_edges = list(envelope.phases.r4_new_edges)
+
+        # Create entity ID set for deduplication
+        new_entity_ids = {e.entity_id for e in new_entities}
+        merged_entities = new_entities + [
+            e for e in accumulated_entities if e.entity_id not in new_entity_ids
+        ]
+
+        new_edge_ids = {e.edge_id for e in new_edges}
+        merged_edges = new_edges + [e for e in accumulated_edges if e.edge_id not in new_edge_ids]
+
+        self._logger.info(
+            "R5 loaded accumulated KG for BGT-SM",
+            extra={
+                "cycle_id": envelope.context.cycle_id,
+                "new_entities": len(new_entities),
+                "accumulated_entities": len(accumulated_entities),
+                "merged_entities": len(merged_entities),
+                "new_edges": len(new_edges),
+                "accumulated_edges": len(accumulated_edges),
+                "merged_edges": len(merged_edges),
+            },
+        )
+
+        # Build input from envelope with merged KG
         input_data = DreamExplorerInput(
             cycle_id=envelope.context.cycle_id,
             tenant_id=envelope.context.tenant_id,
             space_id=envelope.context.space_id,
             recent_episodes=list(envelope.phases.r2_clusters),
-            kg_entities=list(envelope.phases.r4_new_entities),
-            kg_edges=list(envelope.phases.r4_new_edges),
+            kg_entities=merged_entities,
+            kg_edges=merged_edges,
             event_states=list(envelope.events),
         )
 
@@ -400,6 +449,7 @@ class R5DreamExplorer:
             insights=output.insights,
             counterfactuals=output.counterfactuals,
             routine_optimizations=output.routine_optimizations,
+            routine_candidates=output.routine_candidates,
             prospective_memories=output.prospective_memories,
             intent_signals=output.intent_signals,
             mcts_decisions_count=output.mcts_decisions_evaluated,
@@ -421,6 +471,7 @@ class R5DreamExplorer:
         envelope.phases.r5_insights = outputs.insights
         envelope.phases.r5_counterfactuals = outputs.counterfactuals
         envelope.phases.r5_routine_optimizations = outputs.routine_optimizations
+        envelope.phases.r5_routine_candidates = outputs.routine_candidates
         envelope.phases.r5_prospective_memories = outputs.prospective_memories
         envelope.phases.r5_intent_signals = outputs.intent_signals
         envelope.phases.r5_skipped = False
@@ -528,3 +579,169 @@ class R5DreamExplorer:
                     tenant_id=tenant_id,
                     decisions_count=outputs.mcts_decisions_count,
                 )
+
+    # =========================================================================
+    # GAP-001 M9.2: Accumulated KG Loading
+    # =========================================================================
+
+    async def _load_accumulated_entities(
+        self,
+        ctx: "P03RunnerContext",
+        tenant_id: str,
+        space_id: str,
+    ) -> List["KGEntity"]:
+        """
+        Load accumulated KG entities from storage for R5.
+
+        GAP-001 M9.2: BGT-SM needs access to the full knowledge graph
+        to find meaningful bisociative connections, not just batch-new entities.
+
+        Args:
+            ctx: Runner context with syscalls
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of KGEntity objects from storage
+        """
+        from k0.pipelines.p03.phase_outputs import KGEntity
+
+        try:
+            result = await ctx.syscalls.kg_entities_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                limit=self.config.accumulated_kg_entity_limit,
+            )
+
+            entities = []
+            for row in result.get("entities", []):
+                entity = KGEntity(
+                    entity_id=row["entity_id"],
+                    canonical_name=row["canonical_name"],
+                    entity_type=row["entity_type"],
+                    aliases_json=row.get("aliases_json", "[]"),
+                    confidence=row.get("confidence", 0.0),
+                    embedding_id=row.get("embedding_id"),
+                    source_event_ids=[],  # Not loaded for accumulated
+                    is_new=False,  # Mark as accumulated, not new
+                )
+                entities.append(entity)
+
+            # GAP-001 M9.4: Load embeddings for entities that have embedding_id
+            # BGT-SM needs semantic vectors to compute distances for bisociative insights
+            embedding_ids = [e.embedding_id for e in entities if e.embedding_id is not None]
+            if embedding_ids:
+                try:
+                    emb_result = await ctx.syscalls.embedding_vectors_batch_query(
+                        embedding_ids=embedding_ids
+                    )
+                    vectors = emb_result.get("vectors", {})
+                    populated_count = 0
+                    for entity in entities:
+                        if entity.embedding_id and entity.embedding_id in vectors:
+                            entity.embedding = vectors[entity.embedding_id]
+                            populated_count += 1
+
+                    self._logger.debug(
+                        "Loaded embeddings for accumulated entities",
+                        extra={
+                            "requested": len(embedding_ids),
+                            "populated": populated_count,
+                            "missing": len(emb_result.get("missing", [])),
+                        },
+                    )
+                except Exception as emb_err:
+                    self._logger.warning(
+                        "Failed to load embeddings for accumulated entities",
+                        extra={"error": str(emb_err)},
+                    )
+
+            self._logger.debug(
+                "Loaded accumulated KG entities",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "entity_count": len(entities),
+                    "limit": self.config.accumulated_kg_entity_limit,
+                },
+            )
+
+            return entities
+
+        except Exception as e:
+            self._logger.warning(
+                "Failed to load accumulated KG entities, proceeding with batch-only",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "error": str(e),
+                },
+            )
+            return []
+
+    async def _load_accumulated_edges(
+        self,
+        ctx: "P03RunnerContext",
+        tenant_id: str,
+        space_id: str,
+    ) -> List["KGEdge"]:
+        """
+        Load accumulated KG edges from storage for R5.
+
+        GAP-001 M9.2: BGT-SM random walks need the full graph structure
+        to traverse and discover bisociative connections.
+
+        Args:
+            ctx: Runner context with syscalls
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of KGEdge objects from storage
+        """
+        from k0.pipelines.p03.phase_outputs import KGEdge
+
+        try:
+            result = await ctx.syscalls.kg_edges_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                limit=self.config.accumulated_kg_edge_limit,
+            )
+
+            edges = []
+            for row in result.get("edges", []):
+                edge = KGEdge(
+                    edge_id=row["edge_id"],
+                    source_entity_id=row["source_entity_id"],
+                    target_entity_id=row["target_entity_id"],
+                    relationship_type=row["relationship_type"],
+                    weight=row.get("weight", 0.5),
+                    confidence=row.get("confidence", 0.0),
+                    is_causal=False,  # Not loaded for accumulated
+                    evidence_event_ids=[],  # Not loaded for accumulated
+                    is_new=False,  # Mark as accumulated, not new
+                )
+                edges.append(edge)
+
+            self._logger.debug(
+                "Loaded accumulated KG edges",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "edge_count": len(edges),
+                    "limit": self.config.accumulated_kg_edge_limit,
+                },
+            )
+
+            return edges
+
+        except Exception as e:
+            self._logger.warning(
+                "Failed to load accumulated KG edges, proceeding with batch-only",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "error": str(e),
+                },
+            )
+            return []

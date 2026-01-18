@@ -178,6 +178,21 @@ class ImportanceScorer:
     # Log2(10) for social factor normalization
     LOG2_10 = 3.321928  # log2(10)
 
+    # Intent-based boost multipliers (GAP-001 Milestone 8, Issue 8.2)
+    # UltraBERT intent types affect memory salience based on cognitive significance
+    # Scientific basis: Retrieval practice strengthens memory (Roediger & Karpicke, 2006)
+    # Intentional actions (planning, reminders) indicate future relevance
+    INTENT_BOOST_MULTIPLIERS: Dict[str, float] = {
+        "query_memory": 1.20,  # Retrieval strengthens memory traces
+        "share_news": 1.20,  # News-sharing events are typically significant
+        "set_reminder": 1.15,  # Reminders indicate future importance
+        "make_plan": 1.15,  # Planning content has intentional significance
+        "seek_advice": 1.10,  # Decision-making context matters
+        "reflect": 1.10,  # Reflective content often leads to semantic patterns
+        "express_feeling": 1.00,  # Already captured by emotional_intensity component
+        "casual_chat": 0.90,  # Routine conversation, slightly lower salience
+    }
+
     def __init__(
         self,
         space_id: str,
@@ -599,7 +614,11 @@ class ImportanceScorer:
         # Extract event attributes with safe defaults
         sentiment_score = getattr(event, "sentiment_score", 0.0) or 0.0
         affect_valence = getattr(event, "affect_valence", 0.0) or 0.0
-        novelty_score = getattr(event, "novelty_score", 0.0) or 0.0
+        # Issue 1 Fix: Use P02's salience_score as novelty proxy
+        # salience_score = 0.50×social + 0.40×affect + 0.10×recency
+        # This captures "interestingness" which novelty was meant to represent
+        # novelty_score doesn't exist - it was meant to be computed by R3 (runs AFTER R1)
+        novelty_score = getattr(event, "salience_score", 0.0) or 0.0
         participant_count = getattr(event, "participant_count", 1) or 1
         content_type = getattr(event, "content_type", "message") or "message"
 
@@ -626,6 +645,15 @@ class ImportanceScorer:
         # Apply event type multiplier
         multiplier = self.get_event_type_multiplier(content_type)
         raw_score = base_importance * multiplier
+
+        # Apply intent-based boost (GAP-001 M8 Issue 8.2)
+        # UltraBERT intent types modulate salience based on cognitive significance
+        intent_label = getattr(event, "intent_label", "") or ""
+        intent_boost = self.INTENT_BOOST_MULTIPLIERS.get(intent_label, 1.0)
+        if intent_boost != 1.0:
+            raw_score *= intent_boost
+            # Combine multipliers for breakdown tracking
+            multiplier *= intent_boost
 
         # Clamp to [0.0, 1.0]
         final_score = max(0.0, min(1.0, raw_score))

@@ -83,7 +83,10 @@ from k0.modules.consolidation.algorithms.cluster_quality import (
 )
 
 # R2 Episodic Clustering (Epic 4.2)
-from k0.modules.consolidation.algorithms.composite_distance import CompositeDistance, DBSCANParams
+from k0.modules.consolidation.algorithms.composite_distance import (
+    CompositeDistance,
+    DBSCANParams,
+)
 
 # R4 Confidence Router (Epic 4.4.5)
 from k0.modules.consolidation.algorithms.confidence_router import (
@@ -152,7 +155,10 @@ from k0.modules.consolidation.algorithms.episode_splitter import (
 )
 
 # R2 Episodic DBSCAN Clustering (Epic 4.2.3)
-from k0.modules.consolidation.algorithms.episodic_dbscan import ClusteringResult, EpisodicDBSCAN
+from k0.modules.consolidation.algorithms.episodic_dbscan import (
+    ClusteringResult,
+    EpisodicDBSCAN,
+)
 
 # R2 Episodic HDBSCAN Clustering with Noise Rescue (Epic 4.2.3 Extension)
 from k0.modules.consolidation.algorithms.episodic_hdbscan import (
@@ -266,6 +272,9 @@ from k0.modules.consolidation.algorithms.novelty_bonus_learner import (
     clamp_bonus,
     get_default_bonus,
 )
+
+# Observation Context (Issue 7.2)
+from k0.modules.consolidation.algorithms.observation_context import ObservationContext
 
 # R3 Prune Audit Logger (Epic 4.3.10)
 from k0.modules.consolidation.algorithms.prune_audit_logger import (
@@ -517,4 +526,6 @@ __all__ = [
     "ReconciliationEngine",
     "ReconciliationConfig",
     "ReconciliationDecision",
+    # Observation Context (Issue 7.2)
+    "ObservationContext",
 ]

@@ -548,3 +548,302 @@ class TestR4PhaseOutputs:
 
         assert len(envelope.phases.r4_gap_candidates) == 1
         assert envelope.phases.r4_gap_candidates[0].gap_id == "gap_001"
+
+
+# =============================================================================
+# M10.3 Edge Type Inference Tests
+# =============================================================================
+
+
+class TestEdgeTypeInference:
+    """Tests for M10.3: Infer edge type from ULTRABERT relations."""
+
+    def test_infer_family_type_from_parent_of(self) -> None:
+        """Test: parent_of relation infers FAMILY type."""
+        phase = R4KGConsolidator()
+        event_relations_map = {
+            "event_001": ["parent_of"],
+        }
+
+        result = phase._infer_edge_type_from_relations(["event_001"], event_relations_map)
+
+        assert result == "FAMILY"
+
+    def test_infer_family_type_from_spouse_of(self) -> None:
+        """Test: spouse_of relation infers FAMILY type."""
+        phase = R4KGConsolidator()
+        event_relations_map = {
+            "event_001": ["spouse_of"],
+        }
+
+        result = phase._infer_edge_type_from_relations(["event_001"], event_relations_map)
+
+        assert result == "FAMILY"
+
+    def test_infer_friend_type(self) -> None:
+        """Test: friend_of relation infers FRIEND type."""
+        phase = R4KGConsolidator()
+        event_relations_map = {
+            "event_001": ["friend_of"],
+        }
+
+        result = phase._infer_edge_type_from_relations(["event_001"], event_relations_map)
+
+        assert result == "FRIEND"
+
+    def test_infer_colleague_type(self) -> None:
+        """Test: colleague_of relation infers COLLEAGUE type."""
+        phase = R4KGConsolidator()
+        event_relations_map = {
+            "event_001": ["colleague_of"],
+        }
+
+        result = phase._infer_edge_type_from_relations(["event_001"], event_relations_map)
+
+        assert result == "COLLEAGUE"
+
+    def test_priority_family_over_friend(self) -> None:
+        """Test: FAMILY takes priority over FRIEND when both present."""
+        phase = R4KGConsolidator()
+        event_relations_map = {
+            "event_001": ["friend_of"],  # FRIEND
+            "event_002": ["parent_of"],  # FAMILY
+        }
+
+        result = phase._infer_edge_type_from_relations(
+            ["event_001", "event_002"], event_relations_map
+        )
+
+        assert result == "FAMILY"  # FAMILY priority 4 > FRIEND priority 3
+
+    def test_priority_friend_over_colleague(self) -> None:
+        """Test: FRIEND takes priority over COLLEAGUE when both present."""
+        phase = R4KGConsolidator()
+        event_relations_map = {
+            "event_001": ["colleague_of"],  # COLLEAGUE
+            "event_002": ["friend_of"],  # FRIEND
+        }
+
+        result = phase._infer_edge_type_from_relations(
+            ["event_001", "event_002"], event_relations_map
+        )
+
+        assert result == "FRIEND"  # FRIEND priority 3 > COLLEAGUE priority 2
+
+    def test_multiple_relations_in_single_event(self) -> None:
+        """Test: Multiple relations in one event, highest priority wins."""
+        phase = R4KGConsolidator()
+        event_relations_map = {
+            "event_001": ["colleague_of", "sibling_of", "friend_of"],
+        }
+
+        result = phase._infer_edge_type_from_relations(["event_001"], event_relations_map)
+
+        assert result == "FAMILY"  # sibling_of -> FAMILY wins
+
+    def test_empty_event_relations_returns_related_to(self) -> None:
+        """Test: Empty event_relations_map returns RELATED_TO default."""
+        phase = R4KGConsolidator()
+
+        result = phase._infer_edge_type_from_relations(["event_001"], {})
+
+        assert result == "RELATED_TO"
+
+    def test_empty_event_ids_returns_related_to(self) -> None:
+        """Test: Empty event_ids list returns RELATED_TO default."""
+        phase = R4KGConsolidator()
+        event_relations_map = {
+            "event_001": ["parent_of"],
+        }
+
+        result = phase._infer_edge_type_from_relations([], event_relations_map)
+
+        assert result == "RELATED_TO"
+
+    def test_unknown_relation_type_ignored(self) -> None:
+        """Test: Unknown relation types are ignored, fallback to RELATED_TO."""
+        phase = R4KGConsolidator()
+        event_relations_map = {
+            "event_001": ["unknown_relation", "made_up_type"],
+        }
+
+        result = phase._infer_edge_type_from_relations(["event_001"], event_relations_map)
+
+        assert result == "RELATED_TO"
+
+    def test_mixed_known_unknown_relations(self) -> None:
+        """Test: Known relations are used, unknown ignored."""
+        phase = R4KGConsolidator()
+        event_relations_map = {
+            "event_001": ["unknown_type", "friend_of"],  # friend_of is known
+        }
+
+        result = phase._infer_edge_type_from_relations(["event_001"], event_relations_map)
+
+        assert result == "FRIEND"
+
+    def test_all_family_relations_map_correctly(self) -> None:
+        """Test: All family relation subtypes map to FAMILY."""
+        phase = R4KGConsolidator()
+        family_relations = [
+            "parent_of",
+            "child_of",
+            "spouse_of",
+            "sibling_of",
+            "grandparent_of",
+            "grandchild_of",
+            "aunt_uncle_of",
+            "niece_nephew_of",
+            "cousin_of",
+            "pet_of",
+        ]
+
+        for i, rel in enumerate(family_relations):
+            event_id = f"event_{i:03d}"
+            event_relations_map = {event_id: [rel]}
+
+            result = phase._infer_edge_type_from_relations([event_id], event_relations_map)
+
+            assert result == "FAMILY", f"Expected FAMILY for {rel}, got {result}"
+
+
+# =============================================================================
+# M10.5 Entity Priority Threshold Tests
+# =============================================================================
+
+
+class TestEntityPriorityThreshold:
+    """Tests for M10.5: Entity priority threshold filtering."""
+
+    def test_min_entity_priority_default_value(self) -> None:
+        """Test: Default min_entity_priority is 0.65."""
+        config = R4Config()
+        assert config.min_entity_priority == 0.65
+
+    def test_min_entity_priority_custom_value(self) -> None:
+        """Test: Custom min_entity_priority is applied."""
+        config = R4Config(min_entity_priority=0.70)
+        assert config.min_entity_priority == 0.70
+
+
+# =============================================================================
+# M10.6 Canonical Name Selection Tests
+# =============================================================================
+
+
+class TestCanonicalNameSelection:
+    """Tests for M10.6: Deterministic canonical name selection."""
+
+    def test_select_single_mention(self) -> None:
+        """Test: Single mention returns that mention."""
+        phase = R4KGConsolidator()
+        result = phase._select_canonical_name(["John"])
+        assert result == "John"
+
+    def test_select_empty_mentions(self) -> None:
+        """Test: Empty mentions returns empty string."""
+        phase = R4KGConsolidator()
+        result = phase._select_canonical_name([])
+        assert result == ""
+
+    def test_select_most_common_variant(self) -> None:
+        """Test: Most common variant wins."""
+        phase = R4KGConsolidator()
+        result = phase._select_canonical_name(["Mom", "mom", "Mom", "Mom"])
+        assert result == "Mom"
+
+    def test_select_proper_case_over_lowercase(self) -> None:
+        """Test: Proper case wins when frequency is equal."""
+        phase = R4KGConsolidator()
+        # Same frequency, but "Mom" has proper case
+        result = phase._select_canonical_name(["Mom", "mom"])
+        assert result == "Mom"
+
+    def test_select_longer_variant(self) -> None:
+        """Test: Longer variant wins when frequency and case are equal."""
+        phase = R4KGConsolidator()
+        # Both lowercase, same frequency, "mother" is longer
+        result = phase._select_canonical_name(["mom", "mother"])
+        assert result == "mother"
+
+    def test_frequency_beats_case(self) -> None:
+        """Test: Frequency takes priority over proper case."""
+        phase = R4KGConsolidator()
+        # "mom" appears 3 times, "Mom" appears once
+        result = phase._select_canonical_name(["mom", "mom", "mom", "Mom"])
+        assert result == "mom"
+
+    def test_real_world_scenario(self) -> None:
+        """Test: Real-world scenario with mixed mentions."""
+        phase = R4KGConsolidator()
+        mentions = ["Grandma", "grandma", "Grandma", "grandmother", "Grandma"]
+        result = phase._select_canonical_name(mentions)
+        assert result == "Grandma"  # Most common (3x) and proper case
+
+
+# =============================================================================
+# M10.7 Temporal Edge Type Tests
+# =============================================================================
+
+
+class TestTemporalEdgeTypes:
+    """Tests for M10.7: FOLLOWS/PRECEDES temporal relationship types."""
+
+    def test_config_default_enable_temporal_edges(self) -> None:
+        """Test: enable_temporal_edges defaults to True."""
+        config = R4Config()
+        assert config.enable_temporal_edges is True
+
+    def test_config_default_temporal_follows_threshold(self) -> None:
+        """Test: temporal_follows_threshold defaults to 0.60."""
+        config = R4Config()
+        assert config.temporal_follows_threshold == 0.60
+
+    def test_config_custom_temporal_settings(self) -> None:
+        """Test: Custom temporal settings are applied."""
+        config = R4Config(
+            enable_temporal_edges=False,
+            temporal_follows_threshold=0.65,
+        )
+        assert config.enable_temporal_edges is False
+        assert config.temporal_follows_threshold == 0.65
+
+    def test_temporal_precedes_threshold_symmetric(self) -> None:
+        """Test: PRECEDES threshold is symmetric (1.0 - follows_threshold)."""
+        config = R4Config(temporal_follows_threshold=0.60)
+        precedes_threshold = 1.0 - config.temporal_follows_threshold
+        assert precedes_threshold == 0.40
+
+    def test_temporal_threshold_bounds_valid(self) -> None:
+        """Test: Temporal thresholds create valid non-overlapping ranges."""
+        config = R4Config(
+            granger_precedence_threshold=0.75,
+            temporal_follows_threshold=0.60,
+        )
+        # CAUSES: ratio >= 0.75
+        # FOLLOWS: 0.60 <= ratio < 0.75
+        # Ambiguous: 0.40 < ratio < 0.60
+        # PRECEDES: ratio <= 0.40
+        follows_min = config.temporal_follows_threshold
+        follows_max = config.granger_precedence_threshold
+        precedes_max = 1.0 - config.temporal_follows_threshold
+
+        # Validate non-overlapping ranges
+        assert follows_min < follows_max  # FOLLOWS range exists
+        assert precedes_max < follows_min  # Gap between PRECEDES and FOLLOWS
+
+    def test_temporal_threshold_custom_follows(self) -> None:
+        """Test: Custom follows threshold adjusts all ranges correctly."""
+        config = R4Config(
+            granger_precedence_threshold=0.80,
+            temporal_follows_threshold=0.70,
+        )
+        precedes_threshold = 1.0 - config.temporal_follows_threshold
+
+        # CAUSES: ratio >= 0.80
+        # FOLLOWS: 0.70 <= ratio < 0.80
+        # Ambiguous: 0.30 < ratio < 0.70
+        # PRECEDES: ratio <= 0.30
+        assert config.granger_precedence_threshold == 0.80
+        assert config.temporal_follows_threshold == 0.70
+        assert abs(precedes_threshold - 0.30) < 0.001  # Floating point tolerance

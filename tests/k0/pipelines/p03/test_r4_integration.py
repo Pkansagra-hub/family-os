@@ -48,7 +48,10 @@ from k0.modules.consolidation.algorithms.causality_thresholds import (
     CausalCategoryClassifier,
     CausalityCategory,
 )
-from k0.modules.consolidation.algorithms.confidence_router import ConfidenceBand, quick_band
+from k0.modules.consolidation.algorithms.confidence_router import (
+    ConfidenceBand,
+    quick_band,
+)
 from k0.modules.consolidation.algorithms.edge_demotion import (
     CausalEdgeFeedbackProcessor,
     CausalEdgeStalenessChecker,
@@ -59,9 +62,16 @@ from k0.modules.consolidation.algorithms.entity_extractor import (
     KGEntityType,
     UltraBERTEntityExtractor,
 )
-from k0.modules.consolidation.algorithms.granger_causality import GrangerCausalityInference
-from k0.modules.consolidation.algorithms.hebbian_learner import HebbianConfig, HebbianLearner
-from k0.modules.consolidation.algorithms.merge_threshold_learner import AdaptiveMergeThresholds
+from k0.modules.consolidation.algorithms.granger_causality import (
+    GrangerCausalityInference,
+)
+from k0.modules.consolidation.algorithms.hebbian_learner import (
+    HebbianConfig,
+    HebbianLearner,
+)
+from k0.modules.consolidation.algorithms.merge_threshold_learner import (
+    AdaptiveMergeThresholds,
+)
 
 # Phase imports
 from k0.pipelines.p03.phases.r4_kg_consolidator import (
@@ -568,9 +578,21 @@ class TestClusteringToEdgeCreationPipeline:
         # Act
         import asyncio
 
-        edges = asyncio.get_event_loop().run_until_complete(
-            phase._discover_relationships(clusters, event_entity_map)
-        )
+        # M10.3: _discover_relationships now requires event_relations_map, tenant_id, space_id, ctx
+        event_relations_map: Dict[str, List[str]] = {}  # No ULTRABERT relations for this test
+        mock_ctx = MockRunnerContext()
+
+        async def run_discover() -> List[KGUpdate]:
+            return await phase._discover_relationships(
+                clusters,
+                event_entity_map,
+                event_relations_map,
+                "test-tenant",
+                "test-space",
+                mock_ctx,
+            )
+
+        edges = asyncio.run(run_discover())
 
         # Assert: Edge created between Sarah and Costco
         assert len(edges) >= 1
@@ -699,15 +721,81 @@ class TestEdgeToGrangerCausalityPipeline:
         # Act
         import asyncio
 
-        causal_edges = asyncio.get_event_loop().run_until_complete(
-            phase._infer_causal_relationships(
+        async def run_infer() -> List[KGUpdate]:
+            return await phase._infer_causal_relationships(
                 edge_updates, clusters, "test_space", MockRunnerContext()
             )
-        )
+
+        causal_edges = asyncio.run(run_infer())
 
         # Assert: Causal edges created (if threshold met)
         # The exact result depends on the simulated precedence ratio
         assert isinstance(causal_edges, list)
+
+    def test_phase_creates_causal_edges_from_update_edge(self) -> None:
+        """
+        GAP-001 M10.1: UPDATE_EDGE with sufficient observations creates causal edge.
+
+        After M9 fix, existing edges use UPDATE_EDGE to accumulate observation_count.
+        Granger causality must process UPDATE_EDGE types, not just CREATE_EDGE.
+        """
+        # Arrange
+        config = R4Config(
+            enable_causal_inference=True,
+            enable_causality_thresholds=True,
+            granger_min_observations=5,  # Default threshold
+        )
+        phase = R4KGConsolidator(config=config)
+        phase._initialize_components(MockRunnerContext())
+
+        # Create UPDATE_EDGE with accumulated observation_count >= 5
+        edge_updates = [
+            KGUpdate(
+                update_type=KGUpdateType.UPDATE_EDGE,  # Key: UPDATE, not CREATE
+                edge_id="edge_gym_health",
+                source_id="gym_cluster",
+                target_id="health_cluster",
+                relation_type="RELATED_TO",
+                confidence=0.8,
+                observation_count=7,  # Accumulated across batches, > 5 threshold
+            )
+        ]
+
+        clusters = [
+            EntityCluster(
+                cluster_id="gym_cluster",
+                canonical_name="Gym",
+                entity_type="ACTIVITY",
+                mentions=["gym", "workout"],
+                observation_ids=["e1", "e2", "e3", "e4", "e5", "e6", "e7"],
+                confidence=0.85,
+            ),
+            EntityCluster(
+                cluster_id="health_cluster",
+                canonical_name="Health",
+                entity_type="CONCEPT",
+                mentions=["health", "fitness"],
+                observation_ids=["e1", "e2", "e3", "e4", "e5", "e6", "e7"],
+                confidence=0.85,
+            ),
+        ]
+
+        # Act
+        import asyncio
+
+        async def run_infer_update_edge() -> List[KGUpdate]:
+            return await phase._infer_causal_relationships(
+                edge_updates, clusters, "test_space", MockRunnerContext()
+            )
+
+        causal_edges = asyncio.run(run_infer_update_edge())
+
+        # Assert: UPDATE_EDGE should produce causal edge
+        assert isinstance(causal_edges, list)
+        # With observation_count=7 >= 5 and confidence=0.8, should create causal edge
+        assert len(causal_edges) >= 1, "UPDATE_EDGE with 7 observations should create causal edge"
+        assert causal_edges[0].relation_type == "CAUSES"
+        assert causal_edges[0].observation_count == 7
 
 
 # =============================================================================

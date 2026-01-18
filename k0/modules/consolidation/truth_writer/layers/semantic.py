@@ -23,17 +23,29 @@ TIMESTAMP CONVENTION (LOCKED):
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, List, Optional
 
+from k0.modules.consolidation.algorithms.observation_context import ObservationContext
+from k0.modules.consolidation.truth_writer.observation_recorder import (
+    ObservationRecorder,
+    get_observation_recorder,
+)
 from k0.modules.consolidation.truth_writer.result import LayerWriteResult
+from k0.modules.consolidation.truth_writer.text_vector_coordinator import (
+    TextVectorCoordinator,
+    get_coordinator,
+)
 from k0.pipelines.p03.phases.r7_truth_writer import OptimisticLockError
 from k0.pipelines.p03.staged_writes import LAYER_ST_SEM, StagedWrite, WriteOperation
 
 if TYPE_CHECKING:
     from k0.uow.unit_of_work import UnitOfWork
+
+logger = logging.getLogger(__name__)
 
 
 def _now_ms() -> int:
@@ -90,6 +102,12 @@ class PatternWriteData:
     is_canonical: bool = True
     parent_pattern_id: Optional[str] = None
 
+    # GAP-001: Inline vector and text preservation fields
+    source_texts_json: Optional[str] = None  # JSON array of source event texts
+    embedding_text: Optional[str] = None  # Generated text for UltraBERT embedding
+    embedding_vector: Optional[bytes] = None  # 768-dim float32 as BYTEA (3072 bytes)
+    embedding_model: Optional[str] = None  # Model version (e.g., "ultrabert-v2.1.0")
+
 
 class SemanticLayerWriter:
     """
@@ -107,6 +125,8 @@ class SemanticLayerWriter:
         EXTEND: Append episodes to source_episodes_json
         EVOLVE: Mark non-canonical and link to parent
 
+    GAP-001: Now includes source_texts_json, embedding_text, embedding_vector, embedding_model
+
     Usage:
         writer = SemanticLayerWriter()
         result = await writer.write(staged_writes, uow)
@@ -116,6 +136,82 @@ class SemanticLayerWriter:
 
     # Confidence boost per reinforcement (additive, capped at 1.0)
     REINFORCE_BOOST = 0.05
+
+    def __init__(
+        self,
+        coordinator: Optional[TextVectorCoordinator] = None,
+        observation_recorder: Optional[ObservationRecorder] = None,
+    ):
+        """
+        Initialize with optional dependencies.
+
+        Args:
+            coordinator: TextVectorCoordinator instance (uses singleton if None)
+            observation_recorder: ObservationRecorder for holistic context (uses singleton if None)
+        """
+        self._coordinator = coordinator
+        self._observation_recorder = observation_recorder
+
+    def _get_coordinator(self) -> TextVectorCoordinator:
+        """Get coordinator, using singleton if not injected."""
+        if self._coordinator is None:
+            self._coordinator = get_coordinator()
+        return self._coordinator
+
+    def _get_recorder(self) -> ObservationRecorder:
+        """Get observation recorder, using singleton if not injected."""
+        if self._observation_recorder is None:
+            self._observation_recorder = get_observation_recorder()
+        return self._observation_recorder
+
+    def _extract_context(self, write: StagedWrite) -> Optional[ObservationContext]:
+        """
+        Extract observation context from StagedWrite.
+
+        Returns the attached observation_context if present, otherwise
+        builds a minimal context from record_data.
+        """
+        if write.observation_context is not None:
+            return write.observation_context
+
+        data = write.record_data
+        observed_at = data.get("created_at") or data.get("last_observed_at") or _now_ms()
+
+        return ObservationContext(
+            observed_at=observed_at,
+            source_event_id=write.source_event_ids[0] if write.source_event_ids else None,
+        )
+
+    def _looks_like_event_ids(self, ids: List[str]) -> bool:
+        """
+        Detect if IDs are event UUIDs vs episode IDs.
+
+        Event IDs are UUIDs (e.g., 'c0326faa-4a8c-4050-9f86-4d1bd5677fd9').
+        Episode IDs are prefixed (e.g., 'weak-e8e719820b3043fa9427d2892c').
+
+        IntentSignalAssembler stores event_ids in source_episodes_json.
+        TruthWriteAssembler stores episode_ids.
+
+        Args:
+            ids: List of IDs to check
+
+        Returns:
+            True if IDs look like event UUIDs, False otherwise
+        """
+        if not ids:
+            return False
+
+        import re
+
+        # UUID pattern: 8-4-4-4-12 hex digits
+        uuid_pattern = re.compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            re.IGNORECASE,
+        )
+
+        # Check first ID (all should be same type)
+        first_id = ids[0]
+        return bool(uuid_pattern.match(first_id))
 
     @property
     def layer(self) -> str:
@@ -183,6 +279,9 @@ class SemanticLayerWriter:
         Creates a new semantic pattern record. If the pattern_id already
         exists, the insert is silently ignored (idempotent).
 
+        GAP-001: Now includes text + vector generation before insert.
+        Uses source_episodes_json to resolve episode → event texts.
+
         Args:
             uow: UnitOfWork providing database connection
             write: StagedWrite with record data
@@ -190,32 +289,96 @@ class SemanticLayerWriter:
         data = write.record_data
         now = _now_ms()
 
+        # GAP-001: Get source episode IDs and resolve to event texts
+        source_episodes_json_str = data.get("source_episodes_json", "[]")
+        try:
+            source_ids = json.loads(source_episodes_json_str)
+            if not isinstance(source_ids, list):
+                source_ids = []
+        except (json.JSONDecodeError, TypeError):
+            source_ids = []
+
+        # Generate text and embedding via coordinator
+        # Detect if we have event IDs (UUIDs) or episode IDs (prefixed like weak-xxx)
+        # IntentSignalAssembler stores event_ids directly; TruthWriteAssembler uses episode_ids
+        coordinator = self._get_coordinator()
+
+        if source_ids and self._looks_like_event_ids(source_ids):
+            # Direct event IDs (from IntentSignalAssembler: LESSON, EMOTIONAL_TREND)
+            tv_result = await coordinator.process(
+                layer=self.LAYER,
+                record_data=data,
+                source_event_ids=source_ids,
+                conn=uow.connection,
+            )
+        else:
+            # Episode IDs (from TruthWriteAssembler: THEME, ROUTINE, etc.)
+            tv_result = await coordinator.process_for_episodes(
+                layer=self.LAYER,
+                record_data=data,
+                source_episode_ids=source_ids,
+                conn=uow.connection,
+            )
+
+        # Calculate source_episode_count
+        source_episode_count = len(source_ids) if source_ids else 1
+
         await uow.connection.execute(
             """
             INSERT INTO st_sem (
-                pattern_id, tenant_id, space_id, pattern_type,
-                canonical_name, source_episodes_json,
-                initial_confidence, current_confidence,
+                pattern_id, tenant_id, space_id, pattern_type, pattern_subtype,
+                pattern_name, source_episodes_json, source_episode_count,
+                confidence_score,
                 observation_count, last_observed_at,
-                is_canonical, parent_pattern_id,
-                created_at, version
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1)
+                is_canonical, supersedes_id,
+                created_at, updated_at, valid_from, version,
+                archival_status,
+                source_texts_json, embedding_text, embedding_vector, embedding_model
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1,
+                      'ACTIVE', $17, $18, $19, $20)
             ON CONFLICT (pattern_id) DO NOTHING
             """,
             data["pattern_id"],
             data["tenant_id"],
             data["space_id"],
             data.get("pattern_type", "general"),
-            data.get("canonical_name", ""),
-            data.get("source_episodes_json", "[]"),
-            data.get("initial_confidence", 1.0),
-            data.get("current_confidence", 1.0),
+            data.get("pattern_subtype"),  # GAP-005: Fine-grained subtype
+            data.get("pattern_name") or data.get("canonical_name", ""),
+            source_episodes_json_str,
+            source_episode_count,
+            data.get("confidence_score") or data.get("current_confidence", 1.0),
             data.get("observation_count", 1),
             data.get("last_observed_at", now),
             data.get("is_canonical", True),
-            data.get("parent_pattern_id"),
+            data.get("supersedes_id") or data.get("parent_pattern_id"),
             data.get("created_at", now),
+            data.get("updated_at", now),
+            data.get("valid_from", now),
+            # GAP-001 new columns:
+            tv_result.source_texts_json,
+            tv_result.embedding_text,
+            tv_result.embedding_vector,
+            tv_result.embedding_model,
         )
+
+        # Issue 7.5: Record observation with FIRST_SEEN type
+        context = self._extract_context(write)
+        if context is not None:
+            context.observation_type = "FIRST_SEEN"
+            try:
+                await self._get_recorder().record(
+                    uow=uow,
+                    layer=self.LAYER,
+                    record_id=write.record_id,
+                    context=context,
+                    tenant_id=data["tenant_id"],
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to record observation for %s: %s",
+                    write.record_id,
+                    e,
+                )
 
     async def _update(self, uow: UnitOfWork, write: StagedWrite) -> None:
         """
@@ -278,6 +441,25 @@ class SemanticLayerWriter:
         rows_affected = _parse_rows_affected(result)
         if rows_affected == 0 and write.expected_version is not None:
             raise OptimisticLockError(f"Version conflict for st_sem:{write.record_id}")
+
+        # Issue 7.5: Record observation with REINFORCEMENT type
+        context = self._extract_context(write)
+        if context is not None:
+            context.observation_type = "REINFORCEMENT"
+            try:
+                await self._get_recorder().record(
+                    uow=uow,
+                    layer=self.LAYER,
+                    record_id=write.record_id,
+                    context=context,
+                    tenant_id=write.record_data.get("tenant_id", "unknown"),
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to record reinforcement observation for %s: %s",
+                    write.record_id,
+                    e,
+                )
 
     async def _extend(self, uow: UnitOfWork, write: StagedWrite) -> None:
         """

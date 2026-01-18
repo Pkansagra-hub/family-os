@@ -21,6 +21,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
+    from k0.modules.consolidation.algorithms.observation_context import (
+        ObservationContext,
+    )
+    from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
     from k0.modules.consolidation.dream.intent_signals import IntentSignal
     from k0.modules.consolidation.staging.r6_output import R6Output
     from k0.modules.consolidation.truth_writer.result import WriteResult
@@ -78,12 +82,15 @@ class EpisodeCluster:
 
     cluster_id: str  # ULID
     member_event_ids: List[str] = field(default_factory=list)
+    # Issue 7.6: Observation contexts for member events (for st_observations)
+    member_contexts: List["ObservationContext"] = field(default_factory=list)
     centroid_embedding_id: Optional[str] = None
     dominant_sentiment: float = 0.0
     dominant_emotion: str = ""
     temporal_start: int = 0  # MILLISECONDS
     temporal_end: int = 0  # MILLISECONDS
     location_hint: Optional[str] = None
+    location_type: Optional[str] = None  # GAP-002: location category (home/work/restaurant/etc)
     participants_json: str = "[]"
     activity_type: str = ""  # Legacy 7-type
     # UltraBERT 12-type INGRESS classification (Issue 0060)
@@ -152,14 +159,19 @@ class KGEntity:
     Knowledge graph entity extracted in R4.
 
     Can be a new entity or reference to existing one.
+
+    GAP-001 M9.4: Added embedding field for R5 BGT-SM semantic distance.
+    GAP-005: Added entity_subtype for fine-grained classification.
     """
 
     entity_id: str  # ULID (new) or existing ID
     canonical_name: str
     entity_type: str  # PERSON, LOCATION, ORG, THING, CONCEPT
+    entity_subtype: Optional[str] = None  # GAP-005: FAMILY_MEMBER, FRIEND, HOME, etc.
     aliases_json: str = "[]"
     confidence: float = 0.0
     embedding_id: Optional[str] = None
+    embedding: Optional[List[float]] = None  # GAP-001 M9.4: 768-dim vector for BGT-SM
     source_event_ids: List[str] = field(default_factory=list)
     is_new: bool = True
 
@@ -170,12 +182,18 @@ class KGEntityUpdate:
     Update to existing KG entity in R4.
 
     Partial update - only specified fields are changed.
+
+    Issue 3 Fix: Added observation_count_increment and new_source_event_ids
+    for REINFORCE operations that merge new observations into existing entities.
     """
 
     entity_id: str
     field_updates: Dict[str, Any] = field(default_factory=dict)
     confidence_delta: float = 0.0
     new_aliases: List[str] = field(default_factory=list)
+    # Issue 3 Fix: For REINFORCE operations
+    observation_count_increment: int = 0  # How many new observations to add
+    new_source_event_ids: List[str] = field(default_factory=list)  # New event IDs to append
 
 
 @dataclass
@@ -203,12 +221,15 @@ class KGEdgeUpdate:
     Update to existing KG edge in R4.
 
     Typically weight/confidence adjustments from new evidence.
+    GAP-001 M9: Added observation_count_increment for Granger causality.
     """
 
     edge_id: str
     weight_delta: float = 0.0
     confidence_delta: float = 0.0
     new_evidence_ids: List[str] = field(default_factory=list)
+    # GAP-001 M9: Increment observation_count for Granger causality
+    observation_count_increment: int = 0
 
 
 @dataclass
@@ -387,6 +408,9 @@ class ProspectiveMemory:
     deadline_ts: Optional[int] = None  # MILLISECONDS (optional)
     importance: float = 0.5
     source_episode_id: Optional[str] = None
+    # Issue 7.7: Temporal anchor context for prospective memories
+    anchor_time_utc: Optional[int] = None  # When user expressed the intention (MILLISECONDS)
+    original_temporal_expr: Optional[str] = None  # Original expression ("next week", "tomorrow")
 
 
 # =============================================================================
@@ -616,6 +640,7 @@ class P03PhaseOutputs:
     r5_counterfactuals: List[CounterfactualScenario] = field(default_factory=list)
     r5_insights: List[Insight] = field(default_factory=list)
     r5_routine_optimizations: List[RoutineOptimization] = field(default_factory=list)
+    r5_routine_candidates: List["RoutineCandidate"] = field(default_factory=list)  # GAP-003
     r5_prospective_memories: List[ProspectiveMemory] = field(default_factory=list)
     r5_intent_signals: List["IntentSignal"] = field(default_factory=list)  # GAP-001
     r5_skipped: bool = False
@@ -691,6 +716,7 @@ class P03PhaseOutputs:
             len(self.r5_counterfactuals)
             + len(self.r5_insights)
             + len(self.r5_routine_optimizations)
+            + len(self.r5_routine_candidates)
             + len(self.r5_prospective_memories)
             + len(self.r5_intent_signals)
         )

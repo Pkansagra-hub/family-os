@@ -257,32 +257,37 @@ class TestTemporalParserEdgeCases:
     def parser(self) -> TemporalParser:
         return TemporalParser()
 
-    def test_empty_json(self, parser: TemporalParser):
+    @pytest.fixture
+    def ref_time_ms(self) -> int:
+        """Fixed reference time for edge case tests."""
+        return int(datetime(2025, 1, 15, 10, 0, 0).timestamp() * 1000)
+
+    def test_empty_json(self, parser: TemporalParser, ref_time_ms: int):
         """Test empty JSON string."""
-        result = parser.parse_temporal_json("")
+        result = parser.parse_temporal_json("", ref_time_ms)
         assert result is None
 
-    def test_invalid_json(self, parser: TemporalParser):
+    def test_invalid_json(self, parser: TemporalParser, ref_time_ms: int):
         """Test invalid JSON string."""
-        result = parser.parse_temporal_json("not json")
+        result = parser.parse_temporal_json("not json", ref_time_ms)
         assert result is None
 
-    def test_no_entities(self, parser: TemporalParser):
+    def test_no_entities(self, parser: TemporalParser, ref_time_ms: int):
         """Test JSON with no entities."""
         temporal_json = json.dumps({"entities": []})
-        result = parser.parse_temporal_json(temporal_json)
+        result = parser.parse_temporal_json(temporal_json, ref_time_ms)
         assert result is None
 
-    def test_non_temporal_entity(self, parser: TemporalParser):
+    def test_non_temporal_entity(self, parser: TemporalParser, ref_time_ms: int):
         """Test entity with non-temporal label."""
         temporal_json = json.dumps({"entities": [{"text": "John", "label": "PERSON"}]})
-        result = parser.parse_temporal_json(temporal_json)
+        result = parser.parse_temporal_json(temporal_json, ref_time_ms)
         assert result is None
 
-    def test_unparseable_time(self, parser: TemporalParser):
+    def test_unparseable_time(self, parser: TemporalParser, ref_time_ms: int):
         """Test unparseable temporal text."""
         temporal_json = json.dumps({"entities": [{"text": "sometime later", "label": "TIME"}]})
-        result = parser.parse_temporal_json(temporal_json)
+        result = parser.parse_temporal_json(temporal_json, ref_time_ms)
         # "sometime later" has no specific time pattern
         assert result is None
 
@@ -328,33 +333,33 @@ class TestTemporalParserFull:
         assert result.confidence > 0.8
         assert result.parse_method == "pattern_match"
 
-    def test_full_parse_empty(self, parser: TemporalParser):
+    def test_full_parse_empty(self, parser: TemporalParser, ref_time_ms: int):
         """Test full parse with empty input."""
-        result = parser.parse_temporal_json_full("")
+        result = parser.parse_temporal_json_full("", ref_time_ms)
 
         assert result.timestamp_ms is None
         assert result.entity is None
         assert result.confidence == 0.0
         assert result.parse_method == "none"
 
-    def test_full_parse_invalid_json(self, parser: TemporalParser):
+    def test_full_parse_invalid_json(self, parser: TemporalParser, ref_time_ms: int):
         """Test full parse with invalid JSON."""
-        result = parser.parse_temporal_json_full("not json")
+        result = parser.parse_temporal_json_full("not json", ref_time_ms)
 
         assert result.timestamp_ms is None
         assert result.parse_method == "json_error"
 
-    def test_full_parse_no_entities(self, parser: TemporalParser):
+    def test_full_parse_no_entities(self, parser: TemporalParser, ref_time_ms: int):
         """Test full parse with no entities."""
-        result = parser.parse_temporal_json_full(json.dumps({"entities": []}))
+        result = parser.parse_temporal_json_full(json.dumps({"entities": []}), ref_time_ms)
 
         assert result.timestamp_ms is None
         assert result.parse_method == "no_entities"
 
-    def test_full_parse_no_match(self, parser: TemporalParser):
+    def test_full_parse_no_match(self, parser: TemporalParser, ref_time_ms: int):
         """Test full parse with unparseable entity."""
         temporal_json = json.dumps({"entities": [{"text": "sometime", "label": "TIME"}]})
-        result = parser.parse_temporal_json_full(temporal_json)
+        result = parser.parse_temporal_json_full(temporal_json, ref_time_ms)
 
         assert result.timestamp_ms is None
         assert result.parse_method == "no_match"

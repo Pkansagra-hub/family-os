@@ -120,16 +120,23 @@ class R5Config:
     mcts_max_depth: int = 10
     mcts_early_termination_threshold: float = 0.95  # Converge if best action prob > 95%
 
-    # CPN configuration (Issue 8.1.4)
+    # CPN configuration (Issue 8.1.4, GAP-001 M9.3)
     max_counterfactuals_per_event: int = 5
     cpn_perturbation_std: float = 0.1
     cpn_counterfactual_types: tuple = ("UPWARD", "DOWNWARD", "SEMIFACTUAL")
+    cpn_emotional_threshold: float = 0.3  # Min |sentiment| for regret selection (lowered from 0.6)
 
-    # BGT-SM configuration (Issue 8.1.9, 8.1.10)
+    # BGT-SM configuration (Issue 8.1.9, 8.1.10, GAP-001 M9.1)
     max_insights_per_batch: int = 10
     bgt_sm_semantic_distance_threshold: float = 0.3  # Min distance for novel connection
     bgt_sm_pmi_threshold: float = 2.0  # Min PMI for significant association
     bgt_sm_corpus_size_n: int = 10000  # Corpus size N for PMI calculation
+    bgt_sm_cold_start_threshold: int = 100  # Min corpus for BGT-SM (lowered from 10K)
+
+    # Accumulated KG limits (GAP-001 M9.2)
+    # Limits for loading accumulated KG entities/edges for R5 dream algorithms
+    accumulated_kg_entity_limit: int = 1000  # Max entities to load for BGT-SM
+    accumulated_kg_edge_limit: int = 5000  # Max edges to load for graph traversal
 
     # SPC-UQ configuration (Issue 8.1.8)
     spc_uq_uncertainty_alpha: float = 1.0  # Beta distribution alpha

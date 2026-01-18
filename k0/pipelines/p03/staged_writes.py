@@ -20,9 +20,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .context import generate_ulid
+
+if TYPE_CHECKING:
+    from k0.modules.consolidation.algorithms.observation_context import (
+        ObservationContext,
+    )
 
 # =============================================================================
 # WRITE OPERATION ENUM
@@ -70,6 +75,7 @@ class StagedWrite:
         source_event_ids: Contributing event IDs for provenance
         expected_version: For optimistic locking on UPDATE
         created_at_ms: Timestamp when write was staged (MILLISECONDS)
+        observation_context: Holistic context for observation recording (Issue 7.5)
     """
 
     write_id: str
@@ -82,6 +88,7 @@ class StagedWrite:
     source_event_ids: List[str] = field(default_factory=list)
     expected_version: Optional[int] = None
     created_at_ms: int = field(default_factory=lambda: _now_ms())
+    observation_context: Optional["ObservationContext"] = None
 
     @classmethod
     def insert(

@@ -143,6 +143,14 @@ class P03EventState:
     ner_entities_json: str = "[]"
     temporal_expressions_json: str = "[]"
 
+    # === AFFECT & SALIENCE (R0 - from P02/UltraBERT) ===
+    # Issue 1 Fix: These fields were missing, causing 55% of importance formula to be dead
+    affect_valence: float = 0.0  # Emotional valence [-1, 1]
+    affect_arousal: float = 0.0  # Emotional arousal [0, 1]
+    salience_score: float = (
+        0.0  # P02 computed salience [0, 1] (0.50×social + 0.40×affect + 0.10×recency)
+    )
+
     # === SOCIAL CONTEXT (R0 - from st_hipp_events) ===
     # Used by R4 for social relationship extraction
     participants_json: str = "[]"  # JSON array of participant IDs
@@ -156,6 +164,19 @@ class P03EventState:
     )
     actor_id: str = ""  # SELF actor ID for relationship extraction
 
+    # === TEMPORAL CONTEXT (R0 - Issue 7.6) ===
+    # Time-of-day and circadian context for st_observations
+    time_of_day_bucket: str = ""  # MORNING, AFTERNOON, EVENING, NIGHT
+    circadian_slot: str = ""  # WAKE, ACTIVE, WIND_DOWN, SLEEP
+    is_weekend: Optional[bool] = None
+    day_of_week: str = ""  # Monday, Tuesday, etc.
+
+    # === MODALITY CONTEXT (R0 - Issue 7.6) ===
+    # How user communicated - for st_observations
+    ingress_channel: str = ""  # voice, chat, api
+    ingress_source: str = ""  # Concrete origin app
+    device_kind: str = ""  # phone, desktop, tablet, speaker
+
     # === UltraBERT CLASSIFICATION (R0 - Issue 0060) ===
     # Full 12-type INGRESS classification for better episode inference
     # DIARY/TASK/HEALTH/FINANCE/RELATIONSHIP/WORK/META/MEMORY/PLANNING/CELEBRATION/CONCERN/GRATITUDE
@@ -165,6 +186,9 @@ class P03EventState:
     # log_memory/query_memory/set_reminder/express_feeling/seek_advice/share_news/reflect/other
     intent_ultrabert: str = ""
     intent_confidence: float = 0.0
+    # UltraBERT extracted relationship types (parent_of, spouse_of, friend_of, etc.)
+    # Used by R4 for relationship type inference
+    extracted_relations_json: str = "[]"
 
     # === IMPORTANCE SCORING (R1) ===
     importance_score: float = 0.0
@@ -182,6 +206,13 @@ class P03EventState:
     cluster_label: int = -1
     is_noise: bool = False
     centroid_distance: float = 0.0
+
+    # === EPISODE MATCHING (R2) - Issue 2 Fix ===
+    # R2 now queries st_epi for existing episodes before clustering.
+    # Events matching existing episodes get REINFORCE action instead of creating duplicates.
+    episode_match_id: Optional[str] = None  # Matched existing episode ID from st_epi
+    episode_match_similarity: float = 0.0  # Cosine similarity to matched episode [0, 1]
+    episode_match_version: int = 0  # Version of matched episode (for optimistic locking)
 
     # === RECONCILIATION DECISION (R3) ===
     reconciliation_action: ReconciliationAction = ReconciliationAction.PENDING

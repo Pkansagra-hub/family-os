@@ -60,6 +60,12 @@ from k0.modules.consolidation.truth_writer.layers import (
     create_social_writer,
     create_vector_writer,
 )
+
+# Observation recorder (Issue 7.4)
+from k0.modules.consolidation.truth_writer.observation_recorder import (
+    ObservationRecorder,
+    get_observation_recorder,
+)
 from k0.modules.consolidation.truth_writer.outbox import (
     OutboxStagingResult,
     OutboxWriteConfig,
@@ -144,4 +150,7 @@ __all__: list[str] = [
     "OptimisticLockError",
     "LAYER_PK_MAP",
     "create_transaction_coordinator",
+    # Issue 7.4 — Observation recorder
+    "ObservationRecorder",
+    "get_observation_recorder",
 ]

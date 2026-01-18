@@ -24,7 +24,9 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+
+import numpy as np
 
 from k0.modules.consolidation.algorithms import (
     CentroidCalculator,
@@ -46,6 +48,7 @@ from k0.modules.consolidation.algorithms import (
     SplitConfig,
     WeightingStrategy,
 )
+from k0.pipelines.p03.event_state import ReconciliationAction
 from k0.pipelines.p03.observability import P03Error
 from k0.pipelines.p03.phase_interface import P03PhaseResult
 from k0.pipelines.p03.phase_outputs import EpisodeCluster
@@ -102,6 +105,13 @@ class R2Config:
     cluster_selection_method: str = "leaf"  # 'leaf' preserves small clusters
     enable_canonicalization: bool = False  # Disabled: HDBSCAN clusters are already good
     canonicalization_time_bucket_hours: int = 1  # Time bucket for signature grouping (if enabled)
+
+    # === ISSUE 2 FIX: Episode Matching ===
+    # Query st_epi for existing episodes before clustering to avoid duplicates
+    enable_episode_matching: bool = True  # Enable matching to existing episodes
+    episode_reinforce_threshold: float = 0.85  # Cosine similarity threshold for REINFORCE
+    episode_extend_threshold: float = 0.60  # Threshold for EXTEND (future use)
+    episode_query_limit: int = 50  # Max episodes to query per batch
 
 
 # =============================================================================
@@ -335,8 +345,38 @@ class R2EpisodicIntegrator:
                     idempotency_key=self.idempotency_key(envelope),
                 )
 
+            # =================================================================
+            # ISSUE 2 FIX: Match events to existing episodes BEFORE clustering
+            # =================================================================
+            matched_events: List["P03EventState"] = []
+            novel_events = events_with_embeddings  # Default: all events are novel
+
+            if self.config.enable_episode_matching:
+                # Query existing episodes from st_epi
+                time_start = min(e.timestamp for e in events_with_embeddings)
+                time_end = max(e.timestamp for e in events_with_embeddings)
+
+                existing_episodes = await self._query_existing_episodes(
+                    ctx=ctx,
+                    space_id=space_id,
+                    tenant_id=tenant_id,
+                    time_start_ms=time_start,
+                    time_end_ms=time_end,
+                )
+
+                if existing_episodes:
+                    # Match events to existing episodes
+                    matched_events, novel_events = self._match_events_to_existing_episodes(
+                        events=events_with_embeddings,
+                        existing_episodes=existing_episodes,
+                    )
+
+            # Track matched events count for output
+            matched_event_count = len(matched_events)
+
+            # Only cluster novel events (those not matching existing episodes)
             # Adapt events to EventLike protocol
-            adapted_events = [EventAdapter(e) for e in events_with_embeddings]
+            adapted_events = [EventAdapter(e) for e in novel_events]
 
             # Step 1: Split events into sequences
             sequences = self._split_events(adapted_events)
@@ -449,6 +489,8 @@ class R2EpisodicIntegrator:
                 "min_samples": dbscan_params.min_samples,
                 "semantic_weight": self.config.semantic_weight,
                 "temporal_weight": self.config.temporal_weight,
+                "episode_matching_enabled": self.config.enable_episode_matching,
+                "matched_to_existing": matched_event_count,  # Issue 2 fix
             }
 
             # Step 6: Track quality metrics and adaptive learning
@@ -465,6 +507,7 @@ class R2EpisodicIntegrator:
                 extra={
                     "cycle_id": cycle_id,
                     "clusters_formed": len(episode_clusters),
+                    "matched_to_existing": matched_event_count,  # Issue 2 fix
                     "noise_events": len(all_noise_ids),
                     "avg_cluster_size": envelope.phases.r2_avg_cluster_size,
                     "eps": dbscan_params.eps,
@@ -479,6 +522,7 @@ class R2EpisodicIntegrator:
                 duration_ms=duration_ms,
                 outputs_summary={
                     "clusters_formed": len(episode_clusters),
+                    "matched_to_existing": matched_event_count,  # Issue 2 fix
                     "noise_events": len(all_noise_ids),
                     "avg_cluster_size": round(envelope.phases.r2_avg_cluster_size, 2),
                     "eps": dbscan_params.eps,
@@ -873,15 +917,35 @@ class R2EpisodicIntegrator:
             max(ultrabert_counts, key=ultrabert_counts.get) if ultrabert_counts else ""
         )
 
+        # GAP-002: Aggregate location_type from merged episodes
+        location_type_counts: Dict[str, int] = {}
+        for ep in episodes:
+            if ep.location_type:
+                location_type_counts[ep.location_type] = (
+                    location_type_counts.get(ep.location_type, 0) + ep.event_count
+                )
+        merged_location_type = (
+            max(location_type_counts, key=location_type_counts.get)
+            if location_type_counts
+            else None
+        )
+
+        # Issue 7.6: Aggregate member_contexts from merged episodes
+        all_member_contexts = []
+        for ep in episodes:
+            all_member_contexts.extend(ep.member_contexts)
+
         return EpisodeCluster(
             cluster_id=f"canonical-{uuid.uuid4().hex[:16]}",
             member_event_ids=all_member_ids,
+            member_contexts=all_member_contexts,  # Issue 7.6
             centroid_embedding_id=None,
             dominant_sentiment=avg_sentiment,
             dominant_emotion=dominant_emotion,
             temporal_start=temporal_start,
             temporal_end=temporal_end,
             location_hint=location or None,
+            location_type=merged_location_type,  # GAP-002: location category
             participants_json=json.dumps(sorted(all_participants)),
             activity_type=episode_type,
             activity_type_ultrabert=activity_type_ultrabert,  # Issue 0060
@@ -913,12 +977,14 @@ class R2EpisodicIntegrator:
         return EpisodeCluster(
             cluster_id=ep.cluster_id,
             member_event_ids=ep.member_event_ids,
+            member_contexts=ep.member_contexts,  # Issue 7.6: preserve contexts
             centroid_embedding_id=ep.centroid_embedding_id,
             dominant_sentiment=ep.dominant_sentiment,
             dominant_emotion=ep.dominant_emotion,
             temporal_start=ep.temporal_start,
             temporal_end=ep.temporal_end,
             location_hint=ep.location_hint,
+            location_type=ep.location_type,  # GAP-002: preserve location category
             participants_json=ep.participants_json,
             activity_type=ep.activity_type,
             cohesion_score=confidence,
@@ -1033,6 +1099,18 @@ class R2EpisodicIntegrator:
                 location_counts[loc] = location_counts.get(loc, 0) + 1
         location_hint = max(location_counts, key=location_counts.get) if location_counts else None
 
+        # GAP-002: Extract most common location type
+        location_type_counts: Dict[str, int] = {}
+        for e in cluster_events:
+            loc_type = e.event.location_type
+            if loc_type:
+                location_type_counts[loc_type] = location_type_counts.get(loc_type, 0) + 1
+        location_type = (
+            max(location_type_counts, key=location_type_counts.get)
+            if location_type_counts
+            else None
+        )
+
         # Aggregate participants across all events
         all_participants: set = set()
         for e in cluster_events:
@@ -1074,15 +1152,27 @@ class R2EpisodicIntegrator:
         # Generate summary from event texts
         summary = self._generate_episode_summary(cluster_events)
 
+        # Issue 7.6: Build ObservationContext for each member event
+        from k0.modules.consolidation.algorithms.observation_context import (
+            ObservationContext,
+        )
+
+        member_contexts = []
+        for e in cluster_events:
+            ctx = ObservationContext.from_event(e.event)
+            member_contexts.append(ctx)
+
         return EpisodeCluster(
             cluster_id=cluster_id,
             member_event_ids=list(member_ids),
+            member_contexts=member_contexts,  # Issue 7.6
             centroid_embedding_id=None,  # Will be set by R6/R7 when persisted
             dominant_sentiment=dominant_sentiment,
             dominant_emotion=dominant_emotion,
             temporal_start=temporal_start,
             temporal_end=temporal_end,
             location_hint=location_hint,
+            location_type=location_type,  # GAP-002: location category
             participants_json=participants_json,
             activity_type=activity_type,
             activity_type_ultrabert=activity_type_ultrabert,  # Issue 0060
@@ -1097,10 +1187,69 @@ class R2EpisodicIntegrator:
         location: Optional[str],
         activity: str,
     ) -> str:
-        """Generate a descriptive title for the episode."""
+        """
+        Generate a descriptive title for the episode.
+
+        Priority: Activity + Participants + Location
+        Examples:
+        - "Family Dinner with Emma, Jake at Home"
+        - "Work Meeting with John, Lisa at Office"
+        - "Coffee with Rachel at Starbucks"
+        """
+        import json
+
+        # Extract participants from events
+        participants = set()
+        for e in cluster_events:
+            p_json = getattr(e.event, "participants_json", "[]") or "[]"
+            try:
+                p_list = json.loads(p_json) if p_json else []
+                for p in p_list:
+                    if isinstance(p, str) and p:
+                        participants.add(p)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Also try to extract person entities from NER
+        for e in cluster_events:
+            ner_json = getattr(e.event, "ner_entities_json", "{}") or "{}"
+            try:
+                ner_data = json.loads(ner_json) if ner_json else {}
+                if isinstance(ner_data, dict):
+                    for source in ["ner_family", "ner_general"]:
+                        if source in ner_data and isinstance(ner_data[source], dict):
+                            entities = ner_data[source].get("entities", [])
+                            for ent in entities:
+                                if isinstance(ent, dict):
+                                    label = ent.get("label", "")
+                                    text = ent.get("text", "").strip()
+                                    # Include PERSON, PER, KINSHIP labels
+                                    if label in ("PERSON", "PER", "KINSHIP") and text:
+                                        # Clean up possessives
+                                        if text.endswith("'s"):
+                                            text = text[:-2]
+                                        # Clean up "and Jake" -> "Jake"
+                                        if text.lower().startswith(("and ", "with ")):
+                                            text = text.split(" ", 1)[1] if " " in text else text
+                                        if len(text) > 1:
+                                            participants.add(text)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Build title parts
         parts = []
+
+        # Activity type (cleaned up)
         if activity:
-            parts.append(activity.replace("_", " ").title())
+            activity_clean = activity.replace("_", " ").title()
+            parts.append(activity_clean)
+
+        # Participants (max 3)
+        if participants:
+            participant_list = sorted(participants)[:3]
+            parts.append(f"with {', '.join(participant_list)}")
+
+        # Location
         if location:
             parts.append(f"at {location}")
 
@@ -1298,6 +1447,212 @@ class R2EpisodicIntegrator:
                     )
 
         return metrics
+
+    # =========================================================================
+    # EPISODE MATCHING (Issue 2 Fix - Query st_epi before clustering)
+    # =========================================================================
+
+    async def _query_existing_episodes(
+        self,
+        ctx: "P03RunnerContext",
+        space_id: str,
+        tenant_id: str,
+        time_start_ms: int,
+        time_end_ms: int,
+    ) -> List[Dict]:
+        """
+        Query st_epi for existing episodes in the time window.
+
+        Uses syscalls to query episodes that could match incoming events.
+        Fetches embeddings for similarity comparison.
+
+        Args:
+            ctx: Runner context with syscalls
+            space_id: Space context
+            tenant_id: Tenant context
+            time_start_ms: Start of time window (milliseconds)
+            time_end_ms: End of time window (milliseconds)
+
+        Returns:
+            List of episode records with embeddings
+        """
+        # Extend time window by 7 days to catch recurring episodes
+        SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+        extended_start = time_start_ms - SEVEN_DAYS_MS
+
+        # Build query for episodes that might match
+        query = """
+            SELECT
+                e.episode_id,
+                e.episode_type,
+                e.primary_location,
+                e.location_type,
+                e.start_time_utc,
+                e.end_time_utc,
+                e.source_event_count,
+                e.cluster_confidence,
+                e.version,
+                v.vector,
+                v.vector_dim
+            FROM st_epi e
+            LEFT JOIN st_vec v ON e.embedding_id = v.embedding_id
+            WHERE e.tenant_id = $1
+              AND e.space_id = $2
+              AND e.archival_status = 'ACTIVE'
+              AND e.start_time_utc >= $3
+              AND v.vector IS NOT NULL
+            ORDER BY e.start_time_utc DESC
+            LIMIT $4
+        """
+
+        episodes: List[Dict] = []
+
+        try:
+            if hasattr(ctx.syscalls, "execute_query"):
+                rows = await ctx.syscalls.execute_query(
+                    query,
+                    tenant_id,
+                    space_id,
+                    extended_start,
+                    self.config.episode_query_limit,
+                )
+                for row in rows:
+                    episode = {
+                        "episode_id": row["episode_id"],
+                        "episode_type": row.get("episode_type", ""),
+                        "primary_location": row.get("primary_location"),
+                        "location_type": row.get("location_type"),
+                        "start_time_utc": row.get("start_time_utc", 0),
+                        "end_time_utc": row.get("end_time_utc", 0),
+                        "source_event_count": row.get("source_event_count", 0),
+                        "cluster_confidence": row.get("cluster_confidence", 0.5),
+                        "version": row.get("version", 1),
+                        "embedding": self._decode_vector(
+                            row.get("vector"), row.get("vector_dim", 768)
+                        ),
+                    }
+                    if episode["embedding"] is not None:
+                        episodes.append(episode)
+        except Exception as e:
+            logger.warning(
+                "R2: Failed to query existing episodes, will cluster all as new",
+                extra={"error": str(e)},
+            )
+
+        return episodes
+
+    def _decode_vector(
+        self, vector_bytes: Optional[bytes], vector_dim: int
+    ) -> Optional[np.ndarray]:
+        """Decode BYTEA vector to numpy array."""
+        if vector_bytes is None:
+            return None
+        try:
+            import struct
+
+            expected_size = vector_dim * 4  # float32 = 4 bytes
+            if len(vector_bytes) != expected_size:
+                return None
+            floats = struct.unpack(f"<{vector_dim}f", vector_bytes)
+            return np.array(floats, dtype=np.float64)
+        except Exception:
+            return None
+
+    def _match_events_to_existing_episodes(
+        self,
+        events: List["P03EventState"],
+        existing_episodes: List[Dict],
+    ) -> Tuple[List["P03EventState"], List["P03EventState"]]:
+        """
+        Match incoming events to existing episodes by embedding similarity.
+
+        Events matching an existing episode (similarity >= reinforce_threshold)
+        get their episode_match_id set and reconciliation_action = REINFORCE.
+        These events should UPDATE the existing episode, not create duplicates.
+
+        Args:
+            events: Events with embeddings to match
+            existing_episodes: Episodes from st_epi with embeddings
+
+        Returns:
+            Tuple of (matched_events, novel_events)
+            matched_events: Events that match existing episodes (REINFORCE)
+            novel_events: Events that need clustering (new episodes)
+        """
+        if not existing_episodes:
+            return [], events
+
+        matched_events: List["P03EventState"] = []
+        novel_events: List["P03EventState"] = []
+
+        for event in events:
+            # Skip events without embeddings
+            if event.embedding_768 is None:
+                novel_events.append(event)
+                continue
+
+            event_embedding = np.asarray(event.embedding_768, dtype=np.float64)
+
+            # Find best matching episode
+            best_match = None
+            best_similarity = 0.0
+
+            for episode in existing_episodes:
+                ep_embedding = episode.get("embedding")
+                if ep_embedding is None:
+                    continue
+
+                similarity = self._cosine_similarity(event_embedding, ep_embedding)
+
+                # Check if this is a better match
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match = episode
+
+            # Apply threshold logic
+            if best_match and best_similarity >= self.config.episode_reinforce_threshold:
+                # Mark event as matching existing episode
+                event.episode_match_id = best_match["episode_id"]
+                event.episode_match_similarity = best_similarity
+                event.episode_match_version = best_match.get("version", 1)
+                event.reconciliation_action = ReconciliationAction.REINFORCE
+                event.reconciliation_reason = (
+                    f"Matches existing episode {best_match['episode_id'][:8]}... "
+                    f"with similarity {best_similarity:.3f}"
+                )
+                matched_events.append(event)
+
+                logger.debug(
+                    "R2: Event matched to existing episode",
+                    extra={
+                        "event_id": event.event_id,
+                        "episode_id": best_match["episode_id"],
+                        "similarity": round(best_similarity, 3),
+                    },
+                )
+            else:
+                # No match - needs clustering
+                novel_events.append(event)
+
+        if matched_events:
+            logger.info(
+                "R2: Matched events to existing episodes",
+                extra={
+                    "matched_count": len(matched_events),
+                    "novel_count": len(novel_events),
+                    "threshold": self.config.episode_reinforce_threshold,
+                },
+            )
+
+        return matched_events, novel_events
+
+    def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
+        """Compute cosine similarity between two vectors."""
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        return float(np.dot(vec1, vec2) / (norm1 * norm2))
 
 
 # =============================================================================

@@ -311,23 +311,41 @@ class TestImportanceWeightLearner:
 
         assert result.loss == 0.0
         assert result.sample_count == 0
+        assert result.skipped is True
+        assert result.reason == "BATCH_EMPTY"
+
+    def test_train_step_batch_too_small(self) -> None:
+        """Issue 4: Small batches are skipped to protect weight stability."""
+        learner = ImportanceWeightLearner(space_id="sp_test")
+
+        # Create batch with 30 samples (< 50 min_batch_size)
+        samples = [TrainingSample(0.5, 0.5, 0.5, 0.5, True) for _ in range(30)]
+        batch = TrainingBatch(samples=samples)
+
+        result = learner.train_step(batch)
+
+        assert result.skipped is True
+        assert result.reason == "BATCH_TOO_SMALL"
+        assert result.sample_count == 0  # Not updated
+        assert learner.sample_count == 0  # Internal state not changed
 
     def test_train_step_updates_state(self) -> None:
         """Training step updates internal state."""
         learner = ImportanceWeightLearner(space_id="sp_test")
 
+        # Issue 4: min_batch_size=50, so use 60 samples
         samples = [
-            TrainingSample(0.9, 0.1, 0.1, 0.1, True),
-            TrainingSample(0.1, 0.1, 0.1, 0.1, False),
+            TrainingSample(0.9, 0.1, 0.1, 0.1, True if i % 2 == 0 else False) for i in range(60)
         ]
         batch = TrainingBatch(samples=samples)
 
         result = learner.train_step(batch)
 
-        assert result.sample_count == 2
-        assert learner.sample_count == 2
+        assert result.sample_count == 60
+        assert learner.sample_count == 60
         assert learner.last_loss is not None
         assert len(learner.loss_history) == 1
+        assert result.skipped is False
 
     def test_train_step_reduces_loss_over_time(self) -> None:
         """Multiple training steps should reduce loss."""
@@ -357,9 +375,9 @@ class TestImportanceWeightLearner:
         """Weights still sum to 1 after training."""
         learner = ImportanceWeightLearner(space_id="sp_test")
 
+        # Issue 4: min_batch_size=50, so use 60 samples
         samples = [
-            TrainingSample(0.9, 0.1, 0.1, 0.1, True),
-            TrainingSample(0.1, 0.9, 0.1, 0.1, False),
+            TrainingSample(0.9, 0.1, 0.1, 0.1, True if i % 2 == 0 else False) for i in range(60)
         ]
         batch = TrainingBatch(samples=samples)
 
@@ -404,8 +422,8 @@ class TestWeightLearnerRollback:
         """rollback_to_priors resets weights and disables learning."""
         learner = ImportanceWeightLearner(space_id="sp_test")
 
-        # Train to change weights
-        samples = [TrainingSample(0.9, 0.1, 0.1, 0.1, True) for _ in range(10)]
+        # Train to change weights (Issue 4: min_batch_size=50)
+        samples = [TrainingSample(0.9, 0.1, 0.1, 0.1, True) for _ in range(60)]
         batch = TrainingBatch(samples=samples)
         learner.train_step(batch)
 

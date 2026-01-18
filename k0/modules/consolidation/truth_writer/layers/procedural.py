@@ -27,6 +27,10 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from k0.modules.consolidation.truth_writer.result import LayerWriteResult
+from k0.modules.consolidation.truth_writer.text_vector_coordinator import (
+    TextVectorCoordinator,
+    get_coordinator,
+)
 from k0.pipelines.p03.phases.r7_truth_writer import OptimisticLockError
 from k0.pipelines.p03.staged_writes import (
     LAYER_ST_PROCEDURAL,
@@ -90,6 +94,12 @@ class RoutineWriteData:
     confidence: float = 1.0
     value_function: Optional[float] = None
 
+    # GAP-001: Inline vector and text preservation fields
+    source_texts_json: Optional[str] = None  # JSON array of source event texts
+    embedding_text: Optional[str] = None  # Generated text for UltraBERT embedding
+    embedding_vector: Optional[bytes] = None  # 768-dim float32 as BYTEA (3072 bytes)
+    embedding_model: Optional[str] = None  # Model version (e.g., "ultrabert-v2.1.0")
+
 
 class ProceduralLayerWriter:
     """
@@ -115,6 +125,22 @@ class ProceduralLayerWriter:
 
     # Confidence boost factor for reinforcement (multiplicative)
     REINFORCE_FACTOR = 1.1
+
+    def __init__(self, coordinator: Optional[TextVectorCoordinator] = None) -> None:
+        """
+        Initialize ProceduralLayerWriter.
+
+        Args:
+            coordinator: Optional TextVectorCoordinator for GAP-001 embedding generation.
+                        If not provided, uses singleton via get_coordinator().
+        """
+        self._coordinator = coordinator
+
+    def _get_coordinator(self) -> TextVectorCoordinator:
+        """Get coordinator, initializing singleton if needed."""
+        if self._coordinator is None:
+            self._coordinator = get_coordinator()
+        return self._coordinator
 
     @property
     def layer(self) -> str:
@@ -182,6 +208,8 @@ class ProceduralLayerWriter:
         Creates a new routine record. If the routine_id already exists,
         the insert is silently ignored (idempotent).
 
+        GAP-001: Generates embedding from routine_name (no source texts to fetch).
+
         Args:
             uow: UnitOfWork providing database connection
             write: StagedWrite with record data
@@ -189,30 +217,65 @@ class ProceduralLayerWriter:
         data = write.record_data
         now = _now_ms()
 
+        # GAP-001: Generate embedding from routine_name
+        # Procedural layer doesn't have source_events - use process_without_fetch
+        source_texts_json: Optional[str] = None
+        embedding_text: Optional[str] = None
+        embedding_vector: Optional[bytes] = None
+        embedding_model: Optional[str] = None
+
+        try:
+            routine_name = data.get("routine_name", "")
+            if routine_name:
+                coordinator = self._get_coordinator()
+                tv_result = await coordinator.process_without_fetch(
+                    layer=self.LAYER,
+                    record_data=data,
+                    source_texts=[routine_name],
+                )
+                source_texts_json = tv_result.source_texts_json
+                embedding_text = tv_result.embedding_text
+                embedding_vector = tv_result.embedding_vector
+                embedding_model = tv_result.embedding_model
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).warning(f"Procedural embedding failed: {e}")
+            # Non-fatal: continue with INSERT
+
         await uow.connection.execute(
             """
             INSERT INTO st_procedural (
-                routine_id, tenant_id, space_id, routine_name,
-                action_sequence_json, trigger_conditions_json,
-                expected_outcomes_json, temporal_regularity,
-                daily_pattern, weekly_pattern, confidence,
-                value_function, created_at, version
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1)
+                routine_id, tenant_id, space_id, actor_id, routine_name,
+                action_sequence_json,
+                regularity_score,
+                day_pattern, frequency, confidence_score,
+                source_episodes_json, source_episode_count,
+                created_at, updated_at, valid_from, version,
+                -- GAP-001: Inline vector and text preservation columns
+                source_texts_json, embedding_text, embedding_vector, embedding_model
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, $13, 1,
+                      $14, $15, $16, $17)
             ON CONFLICT (routine_id) DO NOTHING
             """,
             data["routine_id"],
             data["tenant_id"],
             data["space_id"],
+            data.get("actor_id", data["tenant_id"]),  # Default to tenant if no actor
             data.get("routine_name", ""),
             data.get("action_sequence_json", "[]"),
-            data.get("trigger_conditions_json", "{}"),
-            data.get("expected_outcomes_json", "[]"),
-            data.get("temporal_regularity", 0.0),
-            data.get("daily_pattern"),
-            data.get("weekly_pattern"),
-            data.get("confidence", 1.0),
-            data.get("value_function"),
+            data.get("regularity_score", data.get("temporal_regularity", 0.0)),
+            data.get("day_pattern", data.get("daily_pattern")),
+            data.get("frequency", data.get("weekly_pattern")),
+            data.get("confidence_score", data.get("confidence", 1.0)),
+            data.get("source_episodes_json", "[]"),
+            data.get("source_episode_count", 1),
             data.get("created_at", now),
+            # GAP-001 fields
+            source_texts_json,
+            embedding_text,
+            embedding_vector,
+            embedding_model,
         )
 
     async def _update(self, uow: UnitOfWork, write: StagedWrite) -> None:

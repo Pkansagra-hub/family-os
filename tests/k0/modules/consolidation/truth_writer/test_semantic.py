@@ -260,7 +260,8 @@ class TestWriteMethod:
 
         assert result.writes_attempted == 2
         assert result.writes_succeeded == 2
-        assert mock_uow.connection.execute.call_count == 2
+        # With observation recording: 2 INSERTs + observation INSERTs
+        assert mock_uow.connection.execute.call_count >= 2
 
     @pytest.mark.asyncio
     async def test_write_continues_on_failure(self, semantic_writer, mock_uow):
@@ -308,8 +309,8 @@ class TestInsert:
         """INSERT should call connection.execute with correct SQL."""
         await semantic_writer.write([sample_insert_write], mock_uow)
 
-        mock_uow.connection.execute.assert_called_once()
-        call_args = mock_uow.connection.execute.call_args
+        assert mock_uow.connection.execute.call_count >= 1
+        call_args = mock_uow.connection.execute.call_args_list[0]
         sql = call_args[0][0]
 
         assert "INSERT INTO st_sem" in sql
@@ -323,7 +324,7 @@ class TestInsert:
         """INSERT should provide all required column values."""
         await semantic_writer.write([sample_insert_write], mock_uow)
 
-        call_args = mock_uow.connection.execute.call_args
+        call_args = mock_uow.connection.execute.call_args_list[0]
         # Check positional args after SQL
         values = call_args[0][1:]
 
@@ -350,7 +351,7 @@ class TestReinforceAction:
 
         await semantic_writer.write([sample_reinforce_write], mock_uow)
 
-        call_args = mock_uow.connection.execute.call_args
+        call_args = mock_uow.connection.execute.call_args_list[0]
         sql = call_args[0][0]
 
         assert "UPDATE st_sem" in sql
@@ -366,7 +367,7 @@ class TestReinforceAction:
 
         await semantic_writer.write([sample_reinforce_write], mock_uow)
 
-        call_args = mock_uow.connection.execute.call_args
+        call_args = mock_uow.connection.execute.call_args_list[0]
         sql = call_args[0][0]
 
         assert "last_observed_at" in sql

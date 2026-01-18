@@ -84,9 +84,10 @@ P03_BGT_SERENDIPITY_THRESHOLD = 0.6  # novelty × relevance × actionability
 # Default corpus size for PMI calculation
 P03_BGT_DEFAULT_CORPUS_SIZE = 10000
 
-# Cold start threshold (Issue 8.1.20)
+# Cold start threshold (Issue 8.1.20, GAP-001 M9.1)
 # Minimum corpus size required for meaningful PMI calculation
-P03_BGT_COLD_START_THRESHOLD = 10_000
+# Lowered from 10_000 to 100 for early-stage KG cold start support
+P03_BGT_COLD_START_THRESHOLD = 100
 
 # Insight generation limits
 P03_BGT_MAX_INSIGHTS_PER_SEED = 5

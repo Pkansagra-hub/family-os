@@ -64,7 +64,7 @@ class CPNConfig:
     Configuration for Causal Perturbation Network.
 
     Attributes:
-        emotional_threshold: Min |sentiment| for regret event selection (default: 0.6)
+        emotional_threshold: Min |sentiment| for regret event selection (default: 0.3)
         top_k_regret_events: Number of events to analyze (default: 10)
         causal_chain_depth: Max hops in causal graph (default: 5)
         perturbation_std: Gaussian perturbation std (default: 0.1)
@@ -74,7 +74,7 @@ class CPNConfig:
         seed: RNG seed for determinism (default: None)
     """
 
-    emotional_threshold: float = 0.6
+    emotional_threshold: float = 0.3  # GAP-001 M9.3: lowered from 0.6 for family events
     top_k_regret_events: int = 10
     causal_chain_depth: int = 5
     perturbation_std: float = 0.1
@@ -449,6 +449,9 @@ class CausalPerturbationNetwork:
         - High salience (important to user)
         - Recency (more relevant for learning)
 
+        GAP-001 M9.3: Added fallback to select top episodes by salience
+        when no episodes pass emotional threshold.
+
         Args:
             episodes: All episodes to consider
             rng: Random generator for tie-breaking
@@ -475,6 +478,23 @@ class CausalPerturbationNetwork:
             impact += rng.random() * 0.0001
 
             scored.append((ep, impact))
+
+        # GAP-001 M9.3: Fallback to salience-based selection if no emotional matches
+        if not scored and episodes:
+            logger.info(
+                "CPN fallback: no episodes passed emotional threshold, selecting by salience",
+                extra={
+                    "emotional_threshold": self.config.emotional_threshold,
+                    "episode_count": len(episodes),
+                },
+            )
+            for ep in episodes:
+                salience = self._get_episode_salience(ep)
+                start_time = self._get_episode_start_time(ep)
+                recency_weight = self._compute_recency_weight(start_time)
+                impact = salience * recency_weight
+                impact += rng.random() * 0.0001
+                scored.append((ep, impact))
 
         # Sort by impact descending
         scored.sort(key=lambda x: x[1], reverse=True)
