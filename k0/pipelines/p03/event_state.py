@@ -150,6 +150,8 @@ class P03EventState:
     salience_score: float = (
         0.0  # P02 computed salience [0, 1] (0.50×social + 0.40×affect + 0.10×recency)
     )
+    salience_band: str = ""  # HIGH, MED, LOW
+    novelty_score: float = 0.0
 
     # === SOCIAL CONTEXT (R0 - from st_hipp_events) ===
     # Used by R4 for social relationship extraction
@@ -157,8 +159,10 @@ class P03EventState:
     num_participants: int = 0
     social_context: str = ""  # nuclear_family, solo, work, etc.
     social_intimacy: str = ""  # HIGH, LOW, etc.
+    is_solo_event: Optional[bool] = None
     location_name: str = ""
     location_type: str = ""
+    geohash_6: str = ""
     activity_type: str = (
         ""  # Legacy 7-type (meal/conversation/routine/milestone/social/work/unknown)
     )
@@ -226,6 +230,8 @@ class P03EventState:
     is_duplicate: bool = False
     duplicate_of_id: Optional[str] = None
     hamming_distance: int = 64  # Max = 64 (no match)
+    novelty_score: float = 1.0  # Computed novelty [0, 1], 1.0 = fully novel
+    near_duplicates_json: str = "[]"  # JSON array of near-duplicate event_ids
 
     # === DECAY (R3) ===
     decay_score: float = 1.0

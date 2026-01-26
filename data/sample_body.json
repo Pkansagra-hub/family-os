@@ -1,0 +1,11 @@
+{
+  "operation": "UPSERT",
+  "text": "Had coffee with Rachel at Starbucks and talked about her new job.",
+  "value": 10,
+  "timestamp": "2026-01-24T00:00:00Z",
+  "event_time": "2026-01-24T00:00:00Z",
+  "event_time_utc": "2026-01-24T00:00:00Z",
+  "participants": ["Rachel"],
+  "location_name": "Starbucks Downtown",
+  "activity_type": "SOCIAL"
+}

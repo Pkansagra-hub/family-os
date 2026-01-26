@@ -26,19 +26,15 @@ TIMESTAMP CONVENTION: All timestamps use MILLISECONDS since Unix epoch.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-from k0.modules.consolidation.algorithms.alias_detector import (
-    AliasCandidate,
-    AliasDetector,
-)
-from k0.modules.consolidation.algorithms.alias_detector import (
-    EntityInfo as AliasEntityInfo,
-)
+from k0.modules.consolidation.algorithms.alias_detector import AliasCandidate, AliasDetector
+from k0.modules.consolidation.algorithms.alias_detector import EntityInfo as AliasEntityInfo
 from k0.modules.consolidation.algorithms.ambiguous_resolver import (
     AmbiguousEntityResolver,
     CandidateEntity,
@@ -59,10 +55,25 @@ from k0.modules.consolidation.algorithms.edge_demotion import (
     CausalEdgeFeedbackProcessor,
     CausalEdgeStalenessChecker,
 )
+from k0.modules.consolidation.algorithms.edge_enrichers.bayesian_causal import (
+    BayesianCausalEnricher,
+)
+from k0.modules.consolidation.algorithms.edge_enrichers.contextual import ContextualEdgeEnricher
+from k0.modules.consolidation.algorithms.edge_enrichers.semantic_similarity import (
+    SemanticSimilarityEnricher,
+)
+from k0.modules.consolidation.algorithms.edge_enrichers.temporal_proximity import (
+    TemporalProximityEnricher,
+)
+from k0.modules.consolidation.algorithms.edge_enrichers.transitive_closure import (
+    TransitiveClosureEnricher,
+)
+from k0.modules.consolidation.algorithms.edge_enrichers.weight_normalization import (
+    EdgeWeightNormalizer,
+)
 from k0.modules.consolidation.algorithms.entity_disambiguator import EntityDisambiguator
 from k0.modules.consolidation.algorithms.entity_extractor import (
     ExtractedEntity,
-    KGEntityType,
     UltraBERTEntityExtractor,
 )
 from k0.modules.consolidation.algorithms.entity_merger import EntityMerger
@@ -70,16 +81,9 @@ from k0.modules.consolidation.algorithms.granger_causality import (
     CausalEdge,
     GrangerCausalityInference,
 )
-from k0.modules.consolidation.algorithms.hebbian_learner import (
-    HebbianConfig,
-    HebbianLearner,
-)
-from k0.modules.consolidation.algorithms.merge_threshold_learner import (
-    AdaptiveMergeThresholds,
-)
-from k0.modules.consolidation.algorithms.subtype_classifier import (
-    get_subtype_classifier,
-)
+from k0.modules.consolidation.algorithms.hebbian_learner import HebbianConfig, HebbianLearner
+from k0.modules.consolidation.algorithms.merge_threshold_learner import AdaptiveMergeThresholds
+from k0.modules.consolidation.algorithms.subtype_classifier import get_subtype_classifier
 from k0.pipelines.p03.observability import P03Error
 from k0.pipelines.p03.phase_interface import P03PhaseResult
 from k0.pipelines.p03.phase_outputs import (
@@ -90,6 +94,7 @@ from k0.pipelines.p03.phase_outputs import (
     KGEntityUpdate,
     SocialRelationship,
 )
+from k0.pipelines.p03.phases.r4_config import EdgeEnrichmentConfig
 from k0.pipelines.p03.runner_contract import P03PhaseId
 
 if TYPE_CHECKING:
@@ -129,11 +134,10 @@ class R4Config:
         min_entity_priority: Minimum priority score to include entity (M10.5)
         enable_temporal_edges: Enable FOLLOWS/PRECEDES edges (M10.7)
         temporal_follows_threshold: Precedence ratio for FOLLOWS edges (M10.7)
-        use_hybrid_ner: Use BERT-NER for general entities instead of UltraBERT ner_general
     """
 
     min_entities_for_edge: int = 2
-    min_co_occurrence: int = 2  # M10.4: Require 2+ co-occurrences for quality edges
+    min_co_occurrence: int = 1  # M10.4: Require 1+ co-occurrences for quality edges
     max_relationship_confidence: float = 0.9
     base_confidence: float = 0.3
     confidence_increment: float = 0.1
@@ -154,10 +158,6 @@ class R4Config:
     enable_alias_detection: bool = True  # Detect entity aliases across clusters
     alias_detection_threshold: float = 0.70  # Minimum score to consider alias pair
     alias_min_observations: int = 2  # Minimum observations to include entity in detection
-    # Hybrid NER: Use dslim/bert-base-NER for general entities instead of UltraBERT ner_general
-    # UltraBERT v2-checkpoint-18000 ner_general head produces garbage (not properly trained)
-    # BERT-NER adds ~3.8ms/event but P03 is nightly batch so latency is acceptable
-    use_hybrid_ner: bool = True  # Default to hybrid mode for correct NER
 
     # === ENTITY MATCHING (Issue 3 Fix) ===
     # R4 now queries st_kg_dom for existing entities before creating new ones.
@@ -165,6 +165,7 @@ class R4Config:
     enable_entity_matching: bool = True  # Query st_kg_dom before CREATE
     entity_reinforce_threshold: float = 0.85  # Score >= this → REINFORCE existing
     entity_query_limit: int = 1000  # Max entities to load for matching
+    edge_enrichment: EdgeEnrichmentConfig = field(default_factory=EdgeEnrichmentConfig)
 
 
 # =============================================================================
@@ -230,6 +231,13 @@ class R4PhaseStats:
     social_relationships_extracted: int = 0
     social_relationships_by_type: Dict[str, int] = field(default_factory=dict)
 
+    # GAP-007 Edge enrichment stats
+    enrichment_new_edges: int = 0
+    enrichment_updated_edges: int = 0
+    enrichment_edges_by_algorithm: Dict[str, int] = field(default_factory=dict)
+    enrichment_updates_by_algorithm: Dict[str, int] = field(default_factory=dict)
+    enrichment_duration_ms: float = 0.0
+
     # Timing
     total_duration_ms: float = 0.0
     extraction_duration_ms: float = 0.0
@@ -292,6 +300,7 @@ class KGUpdate:
     Knowledge graph update operation.
 
     Spec: Dossier §7.4.4
+    GAP-007: Added embedding field for semantic similarity enrichment.
     """
 
     update_type: KGUpdateType
@@ -306,12 +315,18 @@ class KGUpdate:
     new_observations: int = 0
     confidence: float = 0.0
     source_event_ids: List[str] = field(default_factory=list)
+    embedding: Optional[List[float]] = None  # GAP-007: For semantic similarity enrichment
+    attributes_json: Optional[Dict[str, Any]] = None
+    first_mentioned_event_id: Optional[str] = None
+    last_observed_at: Optional[int] = None
 
     # For CREATE_EDGE / UPDATE_EDGE
     source_id: Optional[str] = None
     target_id: Optional[str] = None
     relation_type: Optional[str] = None
+    relation_subtype: Optional[str] = None
     observation_count: int = 0
+    last_observed_at: Optional[int] = None
 
 
 @dataclass
@@ -327,6 +342,8 @@ class EntityCluster:
     embedding: Optional[List[float]] = None
     aliases_json: Optional[Dict[str, Any]] = None  # GAP-004: Detected aliases
     entity_subtype: Optional[str] = None  # GAP-005: Fine-grained classification
+    first_mentioned_event_id: Optional[str] = None
+    last_observed_at: Optional[int] = None
 
 
 # =============================================================================
@@ -389,8 +406,19 @@ class R4KGConsolidator:
         self._edge_feedback_processor: Optional[CausalEdgeFeedbackProcessor] = None
         self._staleness_checker: Optional[CausalEdgeStalenessChecker] = None
 
+        # GAP-007 edge enrichment
+        self._semantic_enricher: Optional[SemanticSimilarityEnricher] = None
+        self._temporal_enricher: Optional[TemporalProximityEnricher] = None
+        self._contextual_enricher: Optional[ContextualEdgeEnricher] = None
+        self._transitive_enricher: Optional[TransitiveClosureEnricher] = None
+        self._bayesian_enricher: Optional[BayesianCausalEnricher] = None
+        self._weight_normalizer: Optional[EdgeWeightNormalizer] = None
+
         # Resolved gaps cache: entity_id -> resolved_value (from st_learning_queue)
         self._resolved_gaps_cache: Dict[str, str] = {}
+
+        # Entity context cache (Epic 2.3)
+        self._entity_contexts: Dict[str, List["ObservationContext"]] = {}
 
         # Tracking
         self._stats = R4PhaseStats()
@@ -495,6 +523,63 @@ class R4KGConsolidator:
             self._edge_feedback_processor = CausalEdgeFeedbackProcessor()
             self._staleness_checker = CausalEdgeStalenessChecker(
                 staleness_days=self.config.staleness_check_days
+            )
+
+        # GAP-007: Semantic similarity enricher
+        if (
+            self.config.edge_enrichment
+            and self.config.edge_enrichment.semantic_similarity
+            and self.config.edge_enrichment.semantic_similarity.enabled
+            and ctx.syscalls is not None
+        ):
+            self._semantic_enricher = SemanticSimilarityEnricher(
+                config=self.config.edge_enrichment.semantic_similarity,
+                syscalls=ctx.syscalls,
+            )
+
+        if (
+            self.config.edge_enrichment
+            and self.config.edge_enrichment.temporal_proximity
+            and self.config.edge_enrichment.temporal_proximity.enabled
+        ):
+            self._temporal_enricher = TemporalProximityEnricher(
+                config=self.config.edge_enrichment.temporal_proximity,
+            )
+
+        if (
+            self.config.edge_enrichment
+            and self.config.edge_enrichment.contextual
+            and self.config.edge_enrichment.contextual.enabled
+        ):
+            self._contextual_enricher = ContextualEdgeEnricher(
+                config=self.config.edge_enrichment.contextual,
+            )
+
+        if (
+            self.config.edge_enrichment
+            and self.config.edge_enrichment.transitive_closure
+            and self.config.edge_enrichment.transitive_closure.enabled
+        ):
+            self._transitive_enricher = TransitiveClosureEnricher(
+                config=self.config.edge_enrichment.transitive_closure,
+            )
+
+        if (
+            self.config.edge_enrichment
+            and self.config.edge_enrichment.bayesian_causal
+            and self.config.edge_enrichment.bayesian_causal.enabled
+        ):
+            self._bayesian_enricher = BayesianCausalEnricher(
+                config=self.config.edge_enrichment.bayesian_causal,
+            )
+
+        if (
+            self.config.edge_enrichment
+            and self.config.edge_enrichment.weight_normalization
+            and self.config.edge_enrichment.weight_normalization.enabled
+        ):
+            self._weight_normalizer = EdgeWeightNormalizer(
+                config=self.config.edge_enrichment.weight_normalization,
             )
 
     async def _load_resolved_gaps(self, ctx: "P03RunnerContext") -> None:
@@ -656,19 +741,173 @@ class R4KGConsolidator:
             )
             self._stats.disambiguation_duration_ms = int(time.time() * 1000) - disambiguation_start
 
+            # Epic 2.3: Build entity-to-context map for enrichment algorithms
+            self._entity_contexts = self._build_entity_context_map(
+                events=envelope.events,
+                event_entity_map=event_entity_map,
+                clusters=resolved_clusters,
+            )
+
             # Step 4: Process entity updates (create/update based on confidence)
             # Issue 3 Fix: Now queries st_kg_dom for existing entities before creating
             kg_updates = await self._process_entity_clusters(
                 resolved_clusters, tenant_id, space_id, ctx
             )
 
+            # Build event timestamp map for temporal edge fields
+            event_timestamp_map: Dict[str, int] = {}
+            for event in envelope.events:
+                if hasattr(event, "event_id") and hasattr(event, "timestamp"):
+                    if event.event_id and event.timestamp:
+                        event_timestamp_map[event.event_id] = event.timestamp
+
             # Step 5: Discover relationships via Hebbian co-occurrence
             # M10.3: Pass event_relations_map for edge type inference
             edge_start = int(time.time() * 1000)
             edge_updates = await self._discover_relationships(
-                resolved_clusters, event_entity_map, event_relations_map, tenant_id, space_id, ctx
+                resolved_clusters,
+                event_entity_map,
+                event_relations_map,
+                tenant_id,
+                space_id,
+                ctx,
+                event_timestamp_map=event_timestamp_map,
             )
             self._stats.edge_discovery_duration_ms = int(time.time() * 1000) - edge_start
+
+            # GAP-007: Edge enrichment
+            enrichment_start = int(time.time() * 1000)
+            enrichment_new_edges: List[KGEdge] = []
+            enrichment_updated_edges: List[KGEdgeUpdate] = []
+            existing_edges_lookup: Dict[str, Dict[str, Any]] = {}
+            if ctx.syscalls is not None and (
+                self._semantic_enricher
+                or self._temporal_enricher
+                or self._contextual_enricher
+                or self._transitive_enricher
+                or self._bayesian_enricher
+            ):
+                try:
+                    existing_edges_lookup = await ctx.syscalls.kg_edges_lookup(tenant_id, space_id)
+                except Exception as exc:
+                    logger.warning("R4: enrichment edge lookup failed: %s", exc)
+
+            if self._semantic_enricher:
+                entities_for_enrichment = self._build_enrichment_entities(kg_updates)
+                new_edges, updated_edges = await self._semantic_enricher.enrich(
+                    entities=entities_for_enrichment,
+                    entity_contexts=self._entity_contexts,
+                    existing_edges=existing_edges_lookup,
+                    tenant_id=tenant_id,
+                    space_id=space_id,
+                )
+
+                enrichment_new_edges.extend(
+                    new_edges[: self.config.edge_enrichment.max_total_new_edges_per_cycle]
+                )
+                enrichment_updated_edges.extend(
+                    updated_edges[: self.config.edge_enrichment.max_total_updates_per_cycle]
+                )
+
+            if self._temporal_enricher:
+                new_edges, updated_edges = await self._temporal_enricher.enrich(
+                    entity_contexts=self._entity_contexts,
+                    existing_edges=existing_edges_lookup,
+                )
+
+                enrichment_new_edges.extend(
+                    new_edges[: self.config.edge_enrichment.max_total_new_edges_per_cycle]
+                )
+                enrichment_updated_edges.extend(
+                    updated_edges[: self.config.edge_enrichment.max_total_updates_per_cycle]
+                )
+
+            if self._contextual_enricher:
+                new_edges, updated_edges = await self._contextual_enricher.enrich(
+                    entity_contexts=self._entity_contexts,
+                    existing_edges=existing_edges_lookup,
+                )
+
+                enrichment_new_edges.extend(
+                    new_edges[: self.config.edge_enrichment.max_total_new_edges_per_cycle]
+                )
+                enrichment_updated_edges.extend(
+                    updated_edges[: self.config.edge_enrichment.max_total_updates_per_cycle]
+                )
+
+            if self._transitive_enricher:
+                entities_for_enrichment = self._build_enrichment_entities(kg_updates)
+                batch_entity_ids = [entity.entity_id for entity in entities_for_enrichment]
+                new_edges, updated_edges = await self._transitive_enricher.enrich(
+                    batch_entities=batch_entity_ids,
+                    existing_edges=existing_edges_lookup,
+                )
+
+                enrichment_new_edges.extend(
+                    new_edges[: self.config.edge_enrichment.max_total_new_edges_per_cycle]
+                )
+                enrichment_updated_edges.extend(
+                    updated_edges[: self.config.edge_enrichment.max_total_updates_per_cycle]
+                )
+
+            if self._bayesian_enricher:
+                new_edges, updated_edges = await self._bayesian_enricher.enrich(
+                    entity_contexts=self._entity_contexts,
+                    existing_edges=existing_edges_lookup,
+                )
+
+                enrichment_new_edges.extend(
+                    new_edges[: self.config.edge_enrichment.max_total_new_edges_per_cycle]
+                )
+                enrichment_updated_edges.extend(
+                    updated_edges[: self.config.edge_enrichment.max_total_updates_per_cycle]
+                )
+
+            # GAP-007: Weight normalization (applies to all enriched edges)
+            if self._weight_normalizer:
+                # Group existing edges by source entity for normalization
+                existing_edges_by_entity: Dict[str, List[KGEdge]] = {}
+                for key, edge_data in existing_edges_lookup.items():
+                    if isinstance(edge_data, dict):
+                        source_id = edge_data.get("source_entity_id")
+                        if source_id:
+                            if source_id not in existing_edges_by_entity:
+                                existing_edges_by_entity[source_id] = []
+                            # Convert dict to KGEdge-like object for normalizer
+                            edge_obj = KGEdge(
+                                edge_id=edge_data.get("edge_id", str(key)),
+                                source_entity_id=source_id,
+                                target_entity_id=edge_data.get("target_entity_id", ""),
+                                relationship_type=edge_data.get("relationship_type", "UNKNOWN"),
+                                weight=edge_data.get("weight", 1.0),
+                                confidence=edge_data.get("confidence", 1.0),
+                                source_algorithm=edge_data.get("source_algorithm", "unknown"),
+                            )
+                            existing_edges_by_entity[source_id].append(edge_obj)
+
+                normalization_updates = self._weight_normalizer.normalize(
+                    new_edges=enrichment_new_edges,
+                    updates=enrichment_updated_edges,
+                    existing_edges=existing_edges_by_entity,
+                )
+                enrichment_updated_edges.extend(normalization_updates)
+
+            # Track enrichment statistics
+            self._stats.enrichment_duration_ms = int(time.time() * 1000) - enrichment_start
+            self._stats.enrichment_new_edges = len(enrichment_new_edges)
+            self._stats.enrichment_updated_edges = len(enrichment_updated_edges)
+
+            # Track by algorithm
+            for edge in enrichment_new_edges:
+                algo = edge.source_algorithm or "unknown"
+                self._stats.enrichment_edges_by_algorithm[algo] = (
+                    self._stats.enrichment_edges_by_algorithm.get(algo, 0) + 1
+                )
+            for update in enrichment_updated_edges:
+                algo = update.source_algorithm or "unknown"
+                self._stats.enrichment_updates_by_algorithm[algo] = (
+                    self._stats.enrichment_updates_by_algorithm.get(algo, 0) + 1
+                )
 
             # Step 5.5: Extract social relationships for st_social
             social_start = int(time.time() * 1000)
@@ -685,13 +924,6 @@ class R4KGConsolidator:
                 )
 
             # Step 6: Infer causal direction via Granger causality (4.4.9)
-            # Build event timestamp map for real Granger computation
-            event_timestamp_map: Dict[str, int] = {}
-            for event in envelope.events:
-                if hasattr(event, "event_id") and hasattr(event, "timestamp"):
-                    if event.event_id and event.timestamp:
-                        event_timestamp_map[event.event_id] = event.timestamp
-
             causal_edges: List[CausalEdge] = []
             if self.config.enable_causal_inference and self._granger_causality:
                 causal_start = int(time.time() * 1000)
@@ -706,7 +938,15 @@ class R4KGConsolidator:
 
             # Step 7: Populate envelope.phases.r4_* outputs and emit decision metrics
             self._populate_phase_outputs(
-                envelope, kg_updates, edge_updates, gaps, causal_edges, social_relationships, ctx
+                envelope,
+                kg_updates,
+                edge_updates,
+                gaps,
+                causal_edges,
+                social_relationships,
+                ctx,
+                enrichment_new_edges=enrichment_new_edges,
+                enrichment_updated_edges=enrichment_updated_edges,
             )
 
             # Step 8: Emit UPDATE writes for resolved gaps not in current cycle
@@ -864,6 +1104,11 @@ class R4KGConsolidator:
                 for ent_data in family_entities_list:
                     if not isinstance(ent_data, dict):
                         continue
+                    # Only collect spans for labels that will actually be accepted
+                    # Skip REJECTED_NER_FAMILY labels (like PERSON) that ner_general handles better
+                    label = ent_data.get("label", "UNKNOWN")
+                    if label in UltraBERTEntityExtractor.REJECTED_NER_FAMILY:
+                        continue
                     start_tok = int(ent_data.get("start_token", 0))
                     end_tok = int(ent_data.get("end_token", 0))
                     family_spans.append((start_tok, end_tok))
@@ -872,41 +1117,10 @@ class R4KGConsolidator:
                     logger.debug(f"R4: Family spans collected for dedup: {family_spans}")
 
                 # Phase 2: Process all heads, but skip general entities that overlap with family spans
-                # In hybrid mode (use_hybrid_ner=True), skip ner_general entirely - will use BERT-NER instead
-
-                # Labels that ner_family produces - accept family-specific labels but NOT PERSON
-                # PERSON from ner_family is low quality (e.g., tags "authentication" as PERSON)
-                # We use BERT-NER for PERSON entities instead
-                VALID_NER_FAMILY_LABELS = {
-                    "KINSHIP",
-                    "FAMILY_EVENT",
-                    "HOME_LOC",
-                    "FAMILY_LOC",
-                    # "PERSON" - REJECTED: ner_family's PERSON is garbage (tags "authentication", etc.)
-                    # Use BERT-NER for PERSON entities via hybrid mode
-                    "DATE_REL",
-                    "DATE",
-                    "TIME",
-                    "DURATION",
-                    "MILESTONE",  # Added: family milestones
-                    "HEIRLOOM",  # Added: family heirlooms
-                    "TRADITION",  # Added: family traditions
-                    "ROUTINE",  # Added: family routines
-                    "PET",  # Added: family pets
-                    "NICKNAME",  # Added: family nicknames
-                }
 
                 for head_name, head_data in ner_data.items():
                     # Determine source head from key name
                     source_head = head_name if head_name.startswith("ner_") else f"ner_{head_name}"
-
-                    # HYBRID NER: Skip UltraBERT ner_general - it's garbage (untrained head)
-                    # We'll use BERT-NER for general entities below
-                    if self.config.use_hybrid_ner and source_head == "ner_general":
-                        logger.debug(
-                            "R4: Skipping UltraBERT ner_general (hybrid mode - using BERT-NER)"
-                        )
-                        continue
 
                     # Extract entities list from head data
                     entities_list: List[dict] = []
@@ -917,241 +1131,78 @@ class R4KGConsolidator:
                         # Format: direct list of entities
                         entities_list = head_data
 
-                    for ent_data in entities_list:
-                        if not isinstance(ent_data, dict):
-                            continue
-
-                        try:
-                            # Get the label early for filtering
-                            label = ent_data.get("label", "UNKNOWN")
-
-                            # HYBRID NER: For ner_family, only accept labels it was trained for
-                            # Reject PERSON/ORG/LOC that may leak through (like "authentication" -> PERSON)
-                            if self.config.use_hybrid_ner and source_head == "ner_family":
-                                if label not in VALID_NER_FAMILY_LABELS:
-                                    logger.debug(
-                                        f"R4: Rejecting ner_family entity with unexpected label: "
-                                        f"{ent_data.get('text')!r} ({label}) - expected {VALID_NER_FAMILY_LABELS}"
-                                    )
-                                    continue
-
-                            # For ner_general entities, check span overlap with family entities
-                            # If general entity's span is contained within a family span, skip it
-                            # This handles cases like: family="Lincoln School" (8-9), general="Lincoln" (8-8)
-                            if source_head == "ner_general":
-                                ent_start = int(ent_data.get("start_token", 0))
-                                ent_end = int(ent_data.get("end_token", 0))
-                                is_contained = any(
-                                    fam_start <= ent_start and ent_end <= fam_end
-                                    for fam_start, fam_end in family_spans
-                                )
-                                if is_contained:
-                                    logger.info(
-                                        f"R4: Skipping overlapping general entity: {ent_data.get('text')} "
-                                        f"(tokens {ent_start}-{ent_end}) contained in family span"
-                                    )
-                                    continue
-
-                            # Map UltraBERT label to KGEntityType using LABEL_MAPPING
-                            mapping = UltraBERTEntityExtractor.LABEL_MAPPING.get(label)
-
-                            if mapping:
-                                kg_type, priority = mapping
-                            else:
-                                # Unknown label, default to CONCEPT with low priority
-                                kg_type = KGEntityType.CONCEPT
-                                priority = 0.5
-
-                            text = ent_data.get("text", "")
-                            if not text:
+                    # For ner_general: pre-filter entities that overlap with family spans
+                    # This is ORCHESTRATION logic - stays in R4 (not entity_extractor)
+                    if source_head == "ner_general" and family_spans:
+                        filtered_list: List[dict] = []
+                        for ent_data in entities_list:
+                            if not isinstance(ent_data, dict):
                                 continue
-
-                            # Use entity extractor's normalize_name for proper cleanup
-                            # (strips possessives, conjunctions, etc.)
-                            normalized = self._entity_extractor.normalize_name(text)
-                            if not normalized:
-                                continue  # Skip if normalized to empty
-
-                            # Word boundary validation - reject sub-word fragments
-                            # e.g., "Fur" from "Fur Elise", "Bella" from "Bella Notte"
-                            source_text = getattr(event, "content_text", "") or ""
-                            if source_text and not self._entity_extractor.is_complete_word(
-                                normalized, source_text
-                            ):
-                                logger.debug(f"R4 rejected sub-word fragment: {normalized}")
-                                continue
-
-                            # Reclassify ORG -> LOCATION if text has location affordance
-                            if (
-                                kg_type == KGEntityType.ORGANIZATION
-                                and self._entity_extractor._has_location_affordance(normalized)
-                            ):
-                                kg_type = KGEntityType.LOCATION
-                                logger.debug(f"R4 reclassified ORG->LOCATION: {normalized}")
-
-                            entity = ExtractedEntity(
-                                text=text,
-                                kg_type=kg_type,
-                                normalized_text=normalized,
-                                source_label=label,
-                                source_head=source_head,
-                                priority=priority,
-                                start_token=int(ent_data.get("start_token", 0)),
-                                end_token=int(ent_data.get("end_token", 0)),
+                            ent_start = int(ent_data.get("start_token", 0))
+                            ent_end = int(ent_data.get("end_token", 0))
+                            is_contained = any(
+                                fam_start <= ent_start and ent_end <= fam_end
+                                for fam_start, fam_end in family_spans
                             )
-
-                            # M10.5: Filter low-priority entities before clustering
-                            if priority < self.config.min_entity_priority:
-                                logger.debug(
-                                    f"R4: Skipping low-priority entity: {text!r} "
-                                    f"({label}, priority={priority:.2f} < {self.config.min_entity_priority})"
+                            if is_contained:
+                                logger.info(
+                                    f"R4: Skipping overlapping general entity: {ent_data.get('text')} "
+                                    f"(tokens {ent_start}-{ent_end}) contained in family span"
                                 )
                                 continue
+                            filtered_list.append(ent_data)
+                        entities_list = filtered_list
 
-                            entities.append(entity)
-                        except (ValueError, KeyError, TypeError) as e:
-                            logger.debug(f"Skipping malformed entity data: {ent_data}, error: {e}")
-                            continue
+                    # EFC-004: Use consolidated filter_and_normalize() from entity_extractor
+                    # All filtering logic now lives in entity_extractor.py
+                    source_text = getattr(event, "content_text", "") or ""
+                    filtered_entities = self._entity_extractor.filter_and_normalize(
+                        raw_entities=entities_list,
+                        source_text=source_text,
+                        source_head=source_head,
+                        min_confidence=self.config.min_entity_priority,
+                    )
+                    entities.extend(filtered_entities)
             elif isinstance(ner_data, list):
-                # Legacy flat list format
+                # Legacy flat list format - convert to dict format for filter_and_normalize
+                legacy_entities: List[dict] = []
                 for ent_data in ner_data:
                     if isinstance(ent_data, str):
-                        normalized = self._entity_extractor.normalize_name(ent_data)
-                        if not normalized:
-                            continue
-                        # Word boundary validation
-                        source_text = getattr(event, "content_text", "") or ""
-                        if source_text and not self._entity_extractor.is_complete_word(
-                            normalized, source_text
-                        ):
-                            continue
-                        entity = ExtractedEntity(
-                            text=ent_data,
-                            kg_type=KGEntityType.CONCEPT,
-                            normalized_text=normalized,
-                            source_label="UNKNOWN",
-                            source_head="ner_general",
-                            priority=0.5,
-                            start_token=0,
-                            end_token=0,
+                        # Plain string entity - convert to dict format
+                        legacy_entities.append(
+                            {
+                                "text": ent_data,
+                                "label": "UNKNOWN",
+                                "confidence": 0.5,
+                                "start_token": 0,
+                                "end_token": 0,
+                            }
                         )
-                        entities.append(entity)
-                        continue
-
-                    try:
-                        kg_type_str = ent_data.get("kg_type", ent_data.get("type", "CONCEPT"))
-                        kg_type = (
-                            KGEntityType(kg_type_str)
-                            if isinstance(kg_type_str, str)
-                            else KGEntityType.CONCEPT
+                    elif isinstance(ent_data, dict):
+                        # Already dict format - ensure required fields
+                        legacy_entities.append(
+                            {
+                                "text": ent_data.get("text", ent_data.get("mention", "")),
+                                "label": ent_data.get(
+                                    "source_label", ent_data.get("label", "UNKNOWN")
+                                ),
+                                "confidence": float(
+                                    ent_data.get("priority", ent_data.get("confidence", 0.5))
+                                ),
+                                "start_token": int(ent_data.get("start_token", 0)),
+                                "end_token": int(ent_data.get("end_token", 0)),
+                            }
                         )
 
-                        raw_text = ent_data.get("text", ent_data.get("mention", ""))
-                        normalized = self._entity_extractor.normalize_name(
-                            ent_data.get("normalized", raw_text)
-                        )
-                        if not normalized:
-                            continue
-
-                        # Word boundary validation
-                        source_text = getattr(event, "content_text", "") or ""
-                        if source_text and not self._entity_extractor.is_complete_word(
-                            normalized, source_text
-                        ):
-                            continue
-
-                        entity = ExtractedEntity(
-                            text=raw_text,
-                            kg_type=kg_type,
-                            normalized_text=normalized,
-                            source_label=ent_data.get("source_label", "UNKNOWN"),
-                            source_head=ent_data.get("source_head", "ner_general"),
-                            priority=float(
-                                ent_data.get("priority", ent_data.get("confidence", 0.5))
-                            ),
-                            start_token=int(ent_data.get("start_token", 0)),
-                            end_token=int(ent_data.get("end_token", 0)),
-                        )
-                        entities.append(entity)
-                    except (ValueError, KeyError, TypeError) as e:
-                        logger.debug(f"Skipping malformed entity data: {ent_data}, error: {e}")
-                        continue
-
-            # HYBRID NER: Extract general entities using BERT-NER instead of UltraBERT ner_general
-            # This runs dslim/bert-base-NER on the source text for correct PER/ORG/LOC extraction
-            if self.config.use_hybrid_ner:
+                # Use filter_and_normalize for legacy entities too
                 source_text = getattr(event, "content_text", "") or ""
-                if source_text and source_text.strip():
-                    try:
-                        from k0.modules.consolidation.algorithms.bert_ner_adapter import (
-                            get_bert_ner,
-                        )
-
-                        bert_ner = get_bert_ner()
-                        bert_results = bert_ner.extract(source_text)
-
-                        for bert_ent in bert_results:
-                            # Map BERT-NER labels to KG types
-                            label = bert_ent.label
-                            if label == "PER":
-                                kg_type = KGEntityType.PERSON
-                                priority = 0.85
-                                mapped_label = "PERSON"
-                            elif label == "ORG":
-                                kg_type = KGEntityType.ORGANIZATION
-                                priority = 0.80
-                                mapped_label = "ORG"
-                            elif label == "LOC":
-                                kg_type = KGEntityType.LOCATION
-                                priority = 0.80
-                                mapped_label = "LOC"
-                            elif label == "MISC":
-                                kg_type = KGEntityType.CONCEPT
-                                priority = 0.65
-                                mapped_label = "MISC"
-                            else:
-                                kg_type = KGEntityType.CONCEPT
-                                priority = 0.50
-                                mapped_label = label
-
-                            # Normalize and validate
-                            normalized = self._entity_extractor.normalize_name(bert_ent.text)
-                            if not normalized:
-                                continue
-
-                            # Word boundary validation
-                            if not self._entity_extractor.is_complete_word(normalized, source_text):
-                                logger.debug(f"R4 BERT-NER rejected sub-word: {normalized}")
-                                continue
-
-                            # Reclassify ORG -> LOCATION if has location affordance
-                            if (
-                                kg_type == KGEntityType.ORGANIZATION
-                                and self._entity_extractor._has_location_affordance(normalized)
-                            ):
-                                kg_type = KGEntityType.LOCATION
-                                logger.debug(
-                                    f"R4 BERT-NER reclassified ORG->LOCATION: {normalized}"
-                                )
-
-                            entity = ExtractedEntity(
-                                text=bert_ent.text,
-                                kg_type=kg_type,
-                                normalized_text=normalized,
-                                source_label=mapped_label,
-                                source_head="bert_ner",  # Track source
-                                priority=priority,
-                                start_token=bert_ent.start,  # Char positions
-                                end_token=bert_ent.end,
-                            )
-                            entities.append(entity)
-
-                        logger.debug(
-                            f"R4 BERT-NER extracted {len(bert_results)} entities from event",
-                            extra={"event_id": event.event_id},
-                        )
-                    except Exception as e:
-                        logger.warning(f"R4 BERT-NER extraction failed: {e}")
+                filtered_entities = self._entity_extractor.filter_and_normalize(
+                    raw_entities=legacy_entities,
+                    source_text=source_text,
+                    source_head="ner_general",
+                    min_confidence=self.config.min_entity_priority,
+                )
+                entities.extend(filtered_entities)
 
             event_entity_map[event.event_id] = entities
             all_entities.extend(entities)
@@ -1166,6 +1217,29 @@ class R4KGConsolidator:
 
         # M10.3: Also return event_relations_map for edge type inference
         return all_entities, event_entity_map, event_relations_map
+
+    def _build_entity_context_map(
+        self,
+        events: List["P03EventState"],
+        event_entity_map: Dict[str, List[ExtractedEntity]],
+        clusters: List[EntityCluster],
+    ) -> Dict[str, List["ObservationContext"]]:
+        """Map entity cluster IDs to their ObservationContext list (Epic 2.3)."""
+        from k0.modules.consolidation.algorithms.observation_context import ObservationContext
+
+        cluster_ids = {cluster.cluster_id for cluster in clusters}
+        entity_contexts: Dict[str, List["ObservationContext"]] = {cid: [] for cid in cluster_ids}
+
+        for event in events:
+            context = ObservationContext.from_event(event)
+            entities = event_entity_map.get(event.event_id, [])
+            for entity in entities:
+                key = f"{entity.kg_type.value}:{entity.normalized_text.lower()}"
+                cluster_id = f"cluster_{key.replace(':', '_')}"
+                if cluster_id in entity_contexts:
+                    entity_contexts[cluster_id].append(context)
+
+        return entity_contexts
 
     def _select_canonical_name(self, mentions: List[str]) -> str:
         """
@@ -1240,6 +1314,16 @@ class R4KGConsolidator:
                     entity_groups[key] = []
                 entity_groups[key].append((entity, event.event_id))
 
+        # Build event_id -> timestamp map for temporal fields
+        event_timestamps: Dict[str, int] = {}
+        for event in events:
+            event_id = getattr(event, "event_id", None)
+            if not event_id:
+                continue
+            timestamp = getattr(event, "timestamp", 0) or 0
+            if timestamp:
+                event_timestamps[event_id] = timestamp
+
         # Build clusters
         clusters: List[EntityCluster] = []
         for key, entity_events in entity_groups.items():
@@ -1252,6 +1336,10 @@ class R4KGConsolidator:
 
             # M10.6: Select best canonical name (most common, proper case, longest)
             canonical_name = self._select_canonical_name(mentions)
+
+            # M10.7: Strip possessives from canonical name (Emma's -> Emma)
+            if canonical_name.endswith("'s") or canonical_name.endswith("'s"):
+                canonical_name = canonical_name[:-2]
 
             # Calculate average confidence (using priority as confidence)
             avg_confidence = sum(e.priority for e, _ in entity_events) / len(entity_events)
@@ -1283,6 +1371,19 @@ class R4KGConsolidator:
                 canonical_name=canonical_name,
             )
 
+            # Temporal fields for st_kg_dom
+            first_mentioned_event_id: Optional[str] = None
+            last_observed_at: Optional[int] = None
+            if event_timestamps:
+                event_times = [
+                    (eid, event_timestamps.get(eid, 0))
+                    for eid in event_ids
+                    if event_timestamps.get(eid, 0) > 0
+                ]
+                if event_times:
+                    first_mentioned_event_id = min(event_times, key=lambda x: x[1])[0]
+                    last_observed_at = max(event_times, key=lambda x: x[1])[1]
+
             cluster = EntityCluster(
                 cluster_id=cluster_id,
                 canonical_name=canonical_name,
@@ -1292,6 +1393,8 @@ class R4KGConsolidator:
                 confidence=avg_confidence,
                 embedding=None,  # Would come from embedding service
                 entity_subtype=entity_subtype,  # GAP-005
+                first_mentioned_event_id=first_mentioned_event_id,
+                last_observed_at=last_observed_at,
             )
             clusters.append(cluster)
 
@@ -1720,6 +1823,9 @@ class R4KGConsolidator:
                         new_observations=len(cluster.observation_ids),
                         confidence=cluster.confidence,
                         source_event_ids=cluster.observation_ids,
+                        embedding=cluster.embedding,  # GAP-007: For semantic similarity
+                        attributes_json=cluster.aliases_json,
+                        last_observed_at=cluster.last_observed_at,
                     )
                 )
                 logger.debug(
@@ -1740,6 +1846,10 @@ class R4KGConsolidator:
                         new_observations=len(cluster.observation_ids),
                         confidence=cluster.confidence,
                         source_event_ids=cluster.observation_ids,
+                        embedding=cluster.embedding,  # GAP-007: For semantic similarity
+                        attributes_json=cluster.aliases_json,
+                        first_mentioned_event_id=cluster.first_mentioned_event_id,
+                        last_observed_at=cluster.last_observed_at,
                     )
                 )
             else:
@@ -1756,6 +1866,10 @@ class R4KGConsolidator:
                         new_observations=len(cluster.observation_ids),
                         confidence=cluster.confidence,
                         source_event_ids=cluster.observation_ids,
+                        embedding=cluster.embedding,  # GAP-007: For semantic similarity
+                        attributes_json=cluster.aliases_json,
+                        first_mentioned_event_id=cluster.first_mentioned_event_id,
+                        last_observed_at=cluster.last_observed_at,
                     )
                 )
 
@@ -1769,6 +1883,7 @@ class R4KGConsolidator:
         tenant_id: str,
         space_id: str,
         ctx: "P03RunnerContext",
+        event_timestamp_map: Optional[Dict[str, int]] = None,
     ) -> List[KGUpdate]:
         """
         Discover relationships via Hebbian co-occurrence.
@@ -1798,6 +1913,7 @@ class R4KGConsolidator:
             List of KGUpdate edge operations
         """
         updates: List[KGUpdate] = []
+        ts_map = event_timestamp_map or {}
 
         # GAP-001 M9: Load existing edges for lookup
         existing_edges: Dict[str, Dict[str, Any]] = {}
@@ -1837,7 +1953,7 @@ class R4KGConsolidator:
             for i, cluster_a in enumerate(event_clusters):
                 for cluster_b in event_clusters[i + 1 :]:
                     # Skip self-loops: same entity appearing multiple times
-                    # (e.g., from both ner_family and bert_ner heads)
+                    # (e.g., from both ner_family and ner_general heads)
                     if cluster_a.cluster_id == cluster_b.cluster_id:
                         continue
 
@@ -1919,8 +2035,17 @@ class R4KGConsolidator:
                 new_observation_count = existing["observation_count"] + count
                 edge_id = existing["edge_id"]
 
+                # Provenance: event ids that contributed to this reinforcement in the current cycle
+                event_ids = pair_data.get("event_ids", [])
+
                 # M10.3: Preserve existing relation_type (may have been upgraded)
                 relation_type = existing.get("relation_type", "RELATED_TO")
+                inferred_subtype = self._infer_edge_subtype_from_relations(
+                    event_ids,
+                    event_relations_map,
+                )
+                relation_subtype = existing.get("relation_subtype") or inferred_subtype
+                last_observed_at = self._max_event_timestamp(event_ids, ts_map)
 
                 self._stats.existing_edges_updated += 1
                 updates.append(
@@ -1930,8 +2055,11 @@ class R4KGConsolidator:
                         source_id=cluster_a_id,
                         target_id=cluster_b_id,
                         relation_type=relation_type,
+                        relation_subtype=relation_subtype,
                         confidence=confidence,
                         observation_count=new_observation_count,
+                        source_event_ids=list(event_ids or []),
+                        last_observed_at=last_observed_at,
                     )
                 )
                 logger.debug(
@@ -1946,6 +2074,11 @@ class R4KGConsolidator:
                 # M10.3: Infer relation type from ULTRABERT relations
                 event_ids = pair_data.get("event_ids", [])
                 inferred_type = self._infer_edge_type_from_relations(event_ids, event_relations_map)
+                inferred_subtype = self._infer_edge_subtype_from_relations(
+                    event_ids,
+                    event_relations_map,
+                )
+                last_observed_at = self._max_event_timestamp(event_ids, ts_map)
 
                 updates.append(
                     KGUpdate(
@@ -1954,8 +2087,11 @@ class R4KGConsolidator:
                         source_id=cluster_a_id,
                         target_id=cluster_b_id,
                         relation_type=inferred_type,
+                        relation_subtype=inferred_subtype,
                         confidence=confidence,
                         observation_count=count,
+                        source_event_ids=list(event_ids or []),
+                        last_observed_at=last_observed_at,
                     )
                 )
 
@@ -2249,6 +2385,47 @@ class R4KGConsolidator:
                         best_type = mapped_type
 
         return best_type
+
+    def _infer_edge_subtype_from_relations(
+        self,
+        event_ids: List[str],
+        event_relations_map: Dict[str, List[str]],
+    ) -> Optional[str]:
+        """
+        Infer edge relation subtype from ULTRABERT relations.
+
+        Uses ULTRABERT_TO_SUBTYPE mapping and selects the most frequent subtype
+        across contributing events.
+        """
+        if not event_relations_map or not event_ids:
+            return None
+
+        from collections import Counter
+
+        subtype_counts: Counter[str] = Counter()
+        for event_id in event_ids:
+            relations = event_relations_map.get(event_id, [])
+            for rel in relations:
+                subtype = self.ULTRABERT_TO_SUBTYPE.get(rel)
+                if subtype:
+                    subtype_counts[subtype] += 1
+
+        if not subtype_counts:
+            return None
+
+        return subtype_counts.most_common(1)[0][0]
+
+    @staticmethod
+    def _max_event_timestamp(
+        event_ids: List[str],
+        timestamp_map: Dict[str, int],
+    ) -> Optional[int]:
+        """Return the max timestamp for a list of event ids."""
+        if not timestamp_map or not event_ids:
+            return None
+        timestamps = [timestamp_map.get(eid, 0) for eid in event_ids]
+        timestamps = [ts for ts in timestamps if ts]
+        return max(timestamps) if timestamps else None
 
     async def _extract_social_relationships(
         self,
@@ -2818,6 +2995,8 @@ class R4KGConsolidator:
         causal_edges: Optional[List[CausalEdge]] = None,
         social_relationships: Optional[List[SocialRelationship]] = None,
         ctx: Optional["P03RunnerContext"] = None,
+        enrichment_new_edges: Optional[List[KGEdge]] = None,
+        enrichment_updated_edges: Optional[List[KGEdgeUpdate]] = None,
     ) -> None:
         """
         Populate envelope.phases.r4_* outputs and emit decision metrics.
@@ -2857,9 +3036,16 @@ class R4KGConsolidator:
                         canonical_name=update.canonical_name,
                         entity_type=update.entity_type,
                         entity_subtype=update.entity_subtype,  # GAP-005
-                        aliases_json=str(update.aliases),
+                        aliases_json=json.dumps(update.aliases or []),
+                        attributes_json=(
+                            json.dumps(update.attributes_json)
+                            if update.attributes_json is not None
+                            else "{}"
+                        ),
                         confidence=update.confidence,
                         source_event_ids=update.source_event_ids,
+                        first_mentioned_event_id=update.first_mentioned_event_id,
+                        last_observed_at=update.last_observed_at,
                         is_new=True,
                     )
                 )
@@ -2880,6 +3066,7 @@ class R4KGConsolidator:
                         field_updates={"aliases": update.aliases},
                         confidence_delta=0.0,
                         new_aliases=update.aliases,
+                        last_observed_at=update.last_observed_at,
                         observation_count_increment=update.new_observations,
                         new_source_event_ids=update.source_event_ids,
                     )
@@ -2913,10 +3100,12 @@ class R4KGConsolidator:
                         source_entity_id=update.source_id,
                         target_entity_id=update.target_id,
                         relationship_type=update.relation_type,
+                        relation_subtype=update.relation_subtype,
                         weight=update.confidence,
                         confidence=update.confidence,
                         is_causal=False,
-                        evidence_event_ids=[],
+                        evidence_event_ids=list(update.source_event_ids or []),
+                        last_observed_at=update.last_observed_at,
                         is_new=True,
                     )
                 )
@@ -2936,8 +3125,9 @@ class R4KGConsolidator:
                         edge_id=update.edge_id,
                         weight_delta=0.0,
                         confidence_delta=update.confidence,
-                        new_evidence_ids=[],
+                        new_evidence_ids=list(update.source_event_ids or []),
                         observation_count_increment=update.observation_count,
+                        last_observed_at=update.last_observed_at,
                     )
                 )
                 # Issue 6.1.4: Emit REINFORCE decision metric (update edge = reinforce)
@@ -2968,6 +3158,46 @@ class R4KGConsolidator:
                         is_new=True,
                     )
                 )
+
+        # Add GAP-007 enrichment edges
+        if enrichment_new_edges:
+            envelope.phases.r4_new_edges.extend(enrichment_new_edges)
+        if enrichment_updated_edges:
+            envelope.phases.r4_updated_edges.extend(enrichment_updated_edges)
+
+    def _build_enrichment_entities(self, updates: List[KGUpdate]) -> List[KGEntity]:
+        """Build KGEntity list for enrichment from KGUpdate operations.
+
+        GAP-007: Now includes embedding for semantic similarity enrichment.
+        """
+        entities: List[KGEntity] = []
+        for update in updates:
+            if update.update_type not in (KGUpdateType.CREATE_ENTITY, KGUpdateType.UPDATE_ENTITY):
+                continue
+            if update.entity_id is None:
+                continue
+            entities.append(
+                KGEntity(
+                    entity_id=update.entity_id,
+                    canonical_name=update.canonical_name or "",
+                    entity_type=update.entity_type or "UNKNOWN",
+                    entity_subtype=update.entity_subtype,
+                    aliases_json=json.dumps(update.aliases or []),
+                    attributes_json=(
+                        json.dumps(update.attributes_json)
+                        if update.attributes_json is not None
+                        else "{}"
+                    ),
+                    confidence=update.confidence,
+                    source_event_ids=list(update.source_event_ids or []),
+                    first_mentioned_event_id=update.first_mentioned_event_id,
+                    last_observed_at=update.last_observed_at,
+                    is_new=update.update_type == KGUpdateType.CREATE_ENTITY,
+                    embedding=update.embedding,  # GAP-007: For semantic similarity
+                )
+            )
+
+        return entities
 
     async def _emit_canonical_name_updates(
         self,

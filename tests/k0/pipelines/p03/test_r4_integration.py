@@ -48,10 +48,7 @@ from k0.modules.consolidation.algorithms.causality_thresholds import (
     CausalCategoryClassifier,
     CausalityCategory,
 )
-from k0.modules.consolidation.algorithms.confidence_router import (
-    ConfidenceBand,
-    quick_band,
-)
+from k0.modules.consolidation.algorithms.confidence_router import ConfidenceBand, quick_band
 from k0.modules.consolidation.algorithms.edge_demotion import (
     CausalEdgeFeedbackProcessor,
     CausalEdgeStalenessChecker,
@@ -62,16 +59,9 @@ from k0.modules.consolidation.algorithms.entity_extractor import (
     KGEntityType,
     UltraBERTEntityExtractor,
 )
-from k0.modules.consolidation.algorithms.granger_causality import (
-    GrangerCausalityInference,
-)
-from k0.modules.consolidation.algorithms.hebbian_learner import (
-    HebbianConfig,
-    HebbianLearner,
-)
-from k0.modules.consolidation.algorithms.merge_threshold_learner import (
-    AdaptiveMergeThresholds,
-)
+from k0.modules.consolidation.algorithms.granger_causality import GrangerCausalityInference
+from k0.modules.consolidation.algorithms.hebbian_learner import HebbianConfig, HebbianLearner
+from k0.modules.consolidation.algorithms.merge_threshold_learner import AdaptiveMergeThresholds
 
 # Phase imports
 from k0.pipelines.p03.phases.r4_kg_consolidator import (
@@ -599,6 +589,7 @@ class TestClusteringToEdgeCreationPipeline:
         edge = edges[0]
         assert edge.update_type == KGUpdateType.CREATE_EDGE
         assert edge.observation_count >= 2
+        assert set(edge.source_event_ids) == {"evt_001", "evt_002"}
 
 
 # =============================================================================

@@ -98,6 +98,78 @@ class TruthCandidate:
 
 
 # =============================================================================
+# DecayCandidate Dataclass
+# =============================================================================
+
+
+@dataclass
+class DecayCandidate:
+    """
+    An entity from truth layers that needs decay evaluation.
+
+    Used by R3 to query entities with decay_factor < 1.0 for retention decisions.
+
+    Attributes:
+        entity_id: Primary key of the truth record
+        table_name: Truth layer name (st_epi, st_kg_dom, etc.)
+        last_observed_at: Last observation timestamp (epoch ms)
+        decay_factor: Current decay factor [0, 1]
+        confidence_score: Confidence score [0, 1]
+        observation_count: Number of times observed
+        entity_type: Entity type (if available, e.g., PERSON, PLACE)
+        attributes: Additional attributes dict (optional)
+    """
+
+    entity_id: str
+    table_name: str
+    last_observed_at: int
+    decay_factor: float = 1.0
+    confidence_score: float = 0.5
+    observation_count: int = 1
+    entity_type: str = ""
+    attributes: Dict[str, Any] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        """Validate fields and set defaults."""
+        if self.attributes is None:
+            self.attributes = {}
+        self.decay_factor = max(0.0, min(1.0, self.decay_factor))
+        self.confidence_score = max(0.0, min(1.0, self.confidence_score))
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict for R3 execute() consumption."""
+        return {
+            "entity_id": self.entity_id,
+            "table_name": self.table_name,
+            "last_observed_at": self.last_observed_at,
+            "decay_factor": self.decay_factor,
+            "confidence_score": self.confidence_score,
+            "observation_count": self.observation_count,
+            "entity_type": self.entity_type,
+            "attributes": self.attributes,
+        }
+
+
+# Layers that support decay evaluation (have decay_factor column)
+DECAY_LAYERS: Dict[str, str] = {
+    "st_epi": "episode_id",
+    "st_kg_dom": "entity_id",
+    "st_sem": "semantic_id",
+    "st_procedural": "routine_id",
+    "st_social": "relationship_id",
+}
+
+# Entity type column for each layer (if available)
+LAYER_ENTITY_TYPE_COLUMNS: Dict[str, Optional[str]] = {
+    "st_epi": "episode_type",
+    "st_kg_dom": "entity_type",
+    "st_sem": None,
+    "st_procedural": "routine_type",
+    "st_social": "relationship_type",
+}
+
+
+# =============================================================================
 # TruthQueryService
 # =============================================================================
 
@@ -429,6 +501,146 @@ class TruthQueryService:
 
         cos_sim = np.dot(vec1, vec2) / (norm1 * norm2)
         return float(max(0.0, min(1.0, cos_sim)))
+
+    # =========================================================================
+    # Decay Evaluation Query (R3)
+    # =========================================================================
+
+    async def query_entities_for_decay(
+        self,
+        space_id: str,
+        tenant_id: str,
+        max_decay_factor: float = 0.99,
+        limit_per_layer: int = 100,
+        layers: Optional[Tuple[str, ...]] = None,
+    ) -> List[DecayCandidate]:
+        """
+        Query entities needing decay evaluation from truth layers.
+
+        Fetches ACTIVE entities with decay_factor < max_decay_factor,
+        ordered by last_observed_at ASC (oldest first for priority pruning).
+
+        Args:
+            space_id: Space context for filtering
+            tenant_id: Tenant context for filtering
+            max_decay_factor: Maximum decay factor to include (default 0.99 = any decayed)
+            limit_per_layer: Maximum entities per layer (default 100)
+            layers: Layers to query (default: all decay-supporting layers)
+
+        Returns:
+            List of DecayCandidate sorted by last_observed_at ASC (oldest first)
+        """
+        if layers is None:
+            layers = tuple(DECAY_LAYERS.keys())
+
+        all_candidates: List[DecayCandidate] = []
+
+        for layer in layers:
+            if layer not in DECAY_LAYERS:
+                continue
+
+            layer_candidates = await self._query_decay_layer(
+                layer=layer,
+                space_id=space_id,
+                tenant_id=tenant_id,
+                max_decay_factor=max_decay_factor,
+                limit=limit_per_layer,
+            )
+            all_candidates.extend(layer_candidates)
+
+        # Sort by last_observed_at ASC (oldest entities first for priority pruning)
+        all_candidates.sort(key=lambda c: c.last_observed_at)
+
+        return all_candidates
+
+    async def _query_decay_layer(
+        self,
+        layer: str,
+        space_id: str,
+        tenant_id: str,
+        max_decay_factor: float,
+        limit: int,
+    ) -> List[DecayCandidate]:
+        """
+        Query a single truth layer for entities needing decay evaluation.
+
+        SQL:
+            SELECT {pk}, last_observed_at, decay_factor, confidence_score,
+                   observation_count, {entity_type_col}
+            FROM {layer}
+            WHERE tenant_id = $1
+              AND space_id = $2
+              AND archival_status = 'ACTIVE'
+              AND decay_factor < $3
+            ORDER BY last_observed_at ASC
+            LIMIT $4
+        """
+        pk_col = DECAY_LAYERS[layer]
+        entity_type_col = LAYER_ENTITY_TYPE_COLUMNS.get(layer)
+
+        # Build SELECT clause
+        entity_type_select = f", {entity_type_col}" if entity_type_col else ""
+
+        query = f"""
+            SELECT
+                {pk_col} as entity_id,
+                last_observed_at,
+                decay_factor,
+                confidence_score,
+                observation_count
+                {entity_type_select}
+            FROM {layer}
+            WHERE tenant_id = $1
+              AND space_id = $2
+              AND archival_status = 'ACTIVE'
+              AND decay_factor < $3
+            ORDER BY last_observed_at ASC
+            LIMIT $4
+        """
+
+        candidates: List[DecayCandidate] = []
+
+        try:
+            if self._pool is not None:
+                async with self._pool.acquire() as conn:
+                    rows = await conn.fetch(query, tenant_id, space_id, max_decay_factor, limit)
+                    for row in rows:
+                        entity_type = row.get(entity_type_col, "") if entity_type_col else ""
+                        candidates.append(
+                            DecayCandidate(
+                                entity_id=row["entity_id"],
+                                table_name=layer,
+                                last_observed_at=row["last_observed_at"] or 0,
+                                decay_factor=row["decay_factor"] or 1.0,
+                                confidence_score=row["confidence_score"] or 0.5,
+                                observation_count=row["observation_count"] or 1,
+                                entity_type=entity_type or "",
+                            )
+                        )
+            elif self._conn_factory is not None:
+                conn = await self._conn_factory()
+                try:
+                    rows = await conn.fetch(query, tenant_id, space_id, max_decay_factor, limit)
+                    for row in rows:
+                        entity_type = row.get(entity_type_col, "") if entity_type_col else ""
+                        candidates.append(
+                            DecayCandidate(
+                                entity_id=row["entity_id"],
+                                table_name=layer,
+                                last_observed_at=row["last_observed_at"] or 0,
+                                decay_factor=row["decay_factor"] or 1.0,
+                                confidence_score=row["confidence_score"] or 0.5,
+                                observation_count=row["observation_count"] or 1,
+                                entity_type=entity_type or "",
+                            )
+                        )
+                finally:
+                    await conn.close()
+        except Exception:
+            # Log error but don't fail - decay evaluation is best-effort
+            pass
+
+        return candidates
 
     # =========================================================================
     # Metrics

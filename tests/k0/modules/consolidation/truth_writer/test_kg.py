@@ -17,11 +17,7 @@ from k0.modules.consolidation.truth_writer.layers.kg import (
     KGLayerWriter,
     create_kg_writer,
 )
-from k0.pipelines.p03.staged_writes import (
-    LAYER_ST_KG_DOM,
-    LAYER_ST_KG_EDGES,
-    StagedWrite,
-)
+from k0.pipelines.p03.staged_writes import LAYER_ST_KG_DOM, LAYER_ST_KG_EDGES, StagedWrite
 
 # ============================================================================
 # Fixtures
@@ -541,7 +537,11 @@ class TestEdgeInsert:
         assert result.writes_attempted == 1
         assert result.writes_succeeded == 1
         assert result.layer == "kg"
-        mock_uow.connection.execute.assert_called_once()
+        # Edge INSERT + observation INSERT = 2 calls
+        assert mock_uow.connection.execute.call_count >= 1
+        sqls = [call.args[0] for call in mock_uow.connection.execute.call_args_list]
+        assert any("INSERT INTO st_kg_edges" in sql for sql in sqls)
+        assert any("INSERT INTO st_observations" in sql for sql in sqls)
 
     @pytest.mark.asyncio
     async def test_insert_causes_edge_with_precedence(
@@ -617,13 +617,18 @@ class TestEdgeUpdate:
         result = await kg_writer.write([sample_edge_observation_increment], mock_uow)
 
         assert result.writes_succeeded == 1
-        call_args = mock_uow.connection.execute.call_args
+        # First call is edge UPDATE; a follow-up observation INSERT may occur
+        call_args = mock_uow.connection.execute.call_args_list[0]
         sql = call_args[0][0]
         # Should use observation_count increment logic
         assert "observation_count = COALESCE(observation_count, 0) + $1" in sql
         assert "co_occurrence_count = COALESCE(co_occurrence_count, 0) + $1" in sql
         # Verify increment value is passed (3 from fixture)
         assert call_args[0][1] == 3
+
+        # And we should emit an observation for the edge
+        sqls = [call.args[0] for call in mock_uow.connection.execute.call_args_list]
+        assert any("INSERT INTO st_observations" in s for s in sqls)
 
     @pytest.mark.asyncio
     async def test_update_edge_missing_does_not_fail(self, kg_writer, mock_uow, sample_edge_update):

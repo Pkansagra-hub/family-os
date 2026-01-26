@@ -1,9 +1,9 @@
 version: 1.0.0
-generated_at: '2026-01-17T19:30:13.663682'
+generated_at: '2026-01-24T13:04:44.737581'
 generator: p03_version_manager.py v1.0.0
 directory: k0\modules\consolidation
-file_count: 89
-total_size_bytes: 1754364
+file_count: 90
+total_size_bytes: 1800307
 files:
 - path: algorithms\access_tracker.py
   sha256: e1824e8d9083053e1819bb0a9c0e5d66dbe19f10b8e9ac351d34cc34b7bc3d6e
@@ -17,10 +17,6 @@ files:
   sha256: 720311cd45b2ed64abed893eea9e327b2b08711732d85163de3ba5e44d5d3a3e
   size: 26971
   modified: '2026-01-03T04:09:11.322007'
-- path: algorithms\bert_ner_adapter.py
-  sha256: b46c0bb65be859e77fcab873299779450fadf56f51f5fef575fc8c9685462b4e
-  size: 11462
-  modified: '2026-01-09T11:37:20.376465'
 - path: algorithms\bgt_sm.py
   sha256: c013471f653527be3591a6b4dc7b113e833e37d78750c7870ae3c49c03d97150
   size: 42939
@@ -40,7 +36,7 @@ files:
 - path: algorithms\composite_distance.py
   sha256: 5cb08dfcb32ea2d9ad860499d496e4425f770fcc170bbad9662a300432c9ca66
   size: 14924
-  modified: '2026-01-08T16:10:45.587652'
+  modified: '2026-01-18T21:34:07.904979'
 - path: algorithms\confidence_router.py
   sha256: 9a700869872fe324382954bba41ee4e4294a47c2ca073b9a72fabf9a754c052a
   size: 20753
@@ -70,9 +66,9 @@ files:
   size: 39030
   modified: '2026-01-03T01:20:28.005103'
 - path: algorithms\entity_extractor.py
-  sha256: 65474e2a592f5887b6d1a0de8ab23d2533345ea9d6131e9ed3011ef9498f1bbe
-  size: 41309
-  modified: '2026-01-15T13:15:45.491951'
+  sha256: 3c75ece0782b9b20c4f43d9e809f9d8ada75c28688ecd8120d9326fab4b4fda6
+  size: 43215
+  modified: '2026-01-19T00:58:08.650557'
 - path: algorithms\entity_merger.py
   sha256: 7f6c69af08cc05f76af4d95e9b54f0ec11c27c8b915a766764b87f1fd0d7f7d6
   size: 33607
@@ -141,6 +137,10 @@ files:
   sha256: 9bc2d070b3223c8e403747e7f0ad37b3b88f8438d25cc6538e5d261500336d6a
   size: 14821
   modified: '2026-01-02T21:55:05.656542'
+- path: algorithms\observation_context.py
+  sha256: 83f104fc420d7ee387efd53cd80456883fcdc59b895d73c130dcdca81168f708
+  size: 13744
+  modified: '2026-01-17T21:53:45.906926'
 - path: algorithms\prune_audit_logger.py
   sha256: f3aa183f97cdb9061c2228c85abebac8719787a8086ea936801ffb7740f4b3cf
   size: 20027
@@ -178,9 +178,9 @@ files:
   size: 34530
   modified: '2026-01-12T12:17:26.289205'
 - path: algorithms\temporal_parser.py
-  sha256: 7b0ac469deb06b9c33c799d97d5065c378516346e96f15a3ac010481121fd99d
-  size: 13282
-  modified: '2026-01-13T00:24:06.945839'
+  sha256: 12f0bb02bb5731581e21fcdcd7adcb3d94d7d442e30f1cf410dd54237cd56100
+  size: 13261
+  modified: '2026-01-17T22:13:01.506552'
 - path: algorithms\text_generators\episodic.py
   sha256: 0a84b90de9a812832340206539d13efeef4245e74d60b9df85e7e83ea07f424a
   size: 9931
@@ -238,9 +238,9 @@ files:
   size: 14714
   modified: '2026-01-11T21:34:08.388011'
 - path: dream\models.py
-  sha256: a808b03e1d737dae0ca4036aacef222b0380346d25015367c30c139afb0a2bf3
-  size: 14149
-  modified: '2026-01-16T13:49:36.268681'
+  sha256: b485b9fdb4203ffb6a4e93e5c1ad0b2903d0185862982cdbb71b7f0887388852
+  size: 14594
+  modified: '2026-01-17T23:42:14.093656'
 - path: emission\emitter.py
   sha256: b877149c291213f13c8e7ca0d57474ae28684ee41055685294d746ae681a379e
   size: 20949
@@ -266,9 +266,9 @@ files:
   size: 23079
   modified: '2026-01-13T01:53:39.946233'
 - path: staging\kg_write_assembler.py
-  sha256: a8602f36b22566388ad15ef1127fec27446580860cb4529315a0b0cdc3d7d146
-  size: 21170
-  modified: '2026-01-17T15:21:40.555270'
+  sha256: 4b8aba4956862b15e8efea6eed9970afc5a223b5c7c342f9859ee560d4cf9df1
+  size: 26876
+  modified: '2026-01-24T02:38:02.088353'
 - path: staging\manifest_validator.py
   sha256: 945a0da3f9b0d2d7c2e21ff85c41d1209050c3189318746ec5ed123080cea4e1
   size: 17175
@@ -298,45 +298,49 @@ files:
   size: 13458
   modified: '2026-01-12T12:57:09.068115'
 - path: staging\truth_query_service.py
-  sha256: 6ad8c82ddd3666025870ce00fa1d2948c130c5986faeed16859ef3fbdbd8d072
-  size: 15867
-  modified: '2026-01-09T13:04:43.904063'
+  sha256: 34855ea6d83f7e8d1fdbfebd0d6417e8cbdcbb2ba913bf1a57db99a3bb4c66b9
+  size: 23976
+  modified: '2026-01-18T22:01:02.724718'
 - path: staging\truth_write_assembler.py
-  sha256: 0324e3a7001551ba4b01e609f73c527b7af675fe540d78da3f7bba0f087cfb79
-  size: 58783
-  modified: '2026-01-17T15:08:34.017303'
+  sha256: 4328c9e59e841e98bdb982d335ea7ff03e99643b6bab8ee666ac0e72f68e1e65
+  size: 60854
+  modified: '2026-01-17T23:42:13.806091'
 - path: truth_writer\embedding_generator.py
   sha256: ec1746b4129372ba9f64efd9e28fdd32d4b9933dfe150531f0f5955970fe161f
   size: 6645
   modified: '2026-01-15T21:06:51.874306'
 - path: truth_writer\layers\episodic.py
-  sha256: a606802a2b3a55211bc5e4b9bc7f093021cf9826af9ab4661dc4d61dc520704d
-  size: 16340
-  modified: '2026-01-17T15:08:34.057330'
+  sha256: 9537ff5210bc113121d738075dfbaa890337590f7005f94e155f8a0cec272739
+  size: 19679
+  modified: '2026-01-17T22:53:46.674745'
 - path: truth_writer\layers\kg.py
-  sha256: 786a2f5dca9a86213e85598a729091fa813a17f5cc5983ec5a2c340ef1f3b916
-  size: 32011
-  modified: '2026-01-17T15:21:40.511923'
+  sha256: 9310390701c931919b117d0c92a9b4386f23995ba7353201c84a8ce824d3a7ca
+  size: 36470
+  modified: '2026-01-23T19:04:20.126276'
 - path: truth_writer\layers\procedural.py
   sha256: 80a95eb1b48059e307d3b04d5858a3b940b67103b9f0ba1a5531cdd601ffeea1
   size: 17852
   modified: '2026-01-15T23:41:52.116942'
 - path: truth_writer\layers\prospective.py
-  sha256: 8b2099bad2a3aeb26bae16fb8db5955fe2629987a72a9a7da98a7c9e9acd9dc1
-  size: 16347
-  modified: '2026-01-15T23:41:52.699288'
+  sha256: b45391dfb89e535b67327721b599d1fa0ecacf95df0d5ffb52a9cd7f1f58c236
+  size: 18902
+  modified: '2026-01-17T23:42:13.850202'
 - path: truth_writer\layers\semantic.py
-  sha256: 048799fa7a859a6054bbd8fd546f42916639be4fe9f241b19770c1258ee7b529
-  size: 21047
-  modified: '2026-01-16T14:17:59.554604'
+  sha256: de6b086a79d1292a9445523212cd2363de8e3f5f8e70e2d22a476798fa02f79b
+  size: 23991
+  modified: '2026-01-17T22:53:46.980295'
 - path: truth_writer\layers\social.py
-  sha256: bdac288bb6188a07fa8a80ba846ee5f10419b1db59c4b25feaa206f962cde3bf
-  size: 26405
-  modified: '2026-01-15T23:41:53.008800'
+  sha256: ea2b2868d0242e5fe9230d20738c865e8e15f05fb21c7cd73b3c6fb9111c7963
+  size: 29374
+  modified: '2026-01-17T22:53:47.566833'
 - path: truth_writer\layers\vector.py
   sha256: b9684f8bbe3189c57fc3ad261e71e911c5ce8f4df01de8bc64330376d9c52df7
   size: 15118
   modified: '2026-01-03T23:29:33.239470'
+- path: truth_writer\observation_recorder.py
+  sha256: 7f4ee84ce6816c00ddb4df94b2276a4f9829440c2728d144c3983c1597e0812b
+  size: 9179
+  modified: '2026-01-23T19:04:20.142010'
 - path: truth_writer\outbox.py
   sha256: ebde4430d3f4e427de18f152eb7dee123ccf850cd1ae34ebc7223cd0ec84fe80
   size: 10322

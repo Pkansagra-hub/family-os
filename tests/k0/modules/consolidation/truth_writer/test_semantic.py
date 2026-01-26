@@ -98,7 +98,7 @@ def sample_evolve_write():
         record_id="pat_001",
         data={
             "_action": PatternAction.EVOLVE,
-            "parent_pattern_id": "pat_002",
+            "valid_to": 1704067200000,
         },
         phase="R3",
         expected_version=1,
@@ -461,8 +461,8 @@ class TestEvolveAction:
         sql = call_args[0][0]
         values = call_args[0][1:]
 
-        assert "parent_pattern_id" in sql
-        assert "pat_002" in values  # parent_pattern_id value
+        assert "valid_to" in sql
+        assert 1704067200000 in values
 
 
 # ============================================================================

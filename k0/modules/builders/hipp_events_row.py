@@ -939,6 +939,16 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         or envelope.get("content_type", "episodic"),
         "ingress_source": ingress_enrichment.get("ingress_source")
         or envelope.get("ingress_source", "mobile_app"),
+        # UltraBERT INGRESS: Full 12-type classification (Issue 0060)
+        "activity_type_ultrabert": ingress_enrichment.get("activity_type_ultrabert")
+        or envelope.get("activity_type_ultrabert"),
+        "activity_type_confidence": ingress_enrichment.get("activity_type_confidence")
+        or envelope.get("activity_type_confidence"),
+        # UltraBERT INTENT: Full 8-type classification (Issue 0060)
+        "intent_ultrabert": ingress_enrichment.get("intent_ultrabert")
+        or envelope.get("intent_ultrabert"),
+        "intent_confidence": ingress_enrichment.get("intent_confidence")
+        or envelope.get("intent_confidence"),
     }
 
     # M11 retention_lookup - Phase 4: prefer nested, fallback to flat

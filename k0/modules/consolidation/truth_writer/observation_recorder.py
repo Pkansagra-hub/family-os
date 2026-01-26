@@ -44,7 +44,9 @@ def _now_ms() -> int:
 
 
 # Valid truth layers for observations
-VALID_LAYERS = frozenset({"st_epi", "st_sem", "st_kg_dom", "st_social", "st_prospective"})
+VALID_LAYERS = frozenset(
+    {"st_epi", "st_sem", "st_kg_dom", "st_kg_edges", "st_social", "st_prospective"}
+)
 
 
 class ObservationRecorder:

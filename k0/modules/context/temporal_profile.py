@@ -60,20 +60,21 @@ DEFAULT_TIMEZONE = "America/Los_Angeles"
 BACKDATE_THRESHOLD_HOURS = 24
 YEAR_2100_TIMESTAMP = 4102444800  # Unix seconds for 2100-01-01 00:00:00 UTC
 
+# Future timestamp tolerance (clock skew, bulk import with slight future timestamps)
+# Allow timestamps up to 24 hours in the future without clamping
+# Rationale: Bulk imports, timezone confusion, device clock drift
+FUTURE_TOLERANCE_HOURS = 24
+
 # Write lag QoS bands (for P06/P17 analytics)
 WRITE_LAG_BAND_REALTIME_MS = 5_000  # <5 seconds
 WRITE_LAG_BAND_DELAYED_MS = 86_400_000  # <24 hours (1 day)
 # >24 hours = backdated
 
-# Circadian slots (configurable via contract, frozen tuples for branch-light comparisons)
-CIRCADIAN_SLOTS = (
-    ("breakfast_window", time(6, 0), time(9, 0)),
-    ("lunch_window", time(11, 30), time(13, 30)),
-    ("dinner_window", time(17, 30), time(20, 30)),
-    ("sleep_window", time(22, 0), time(6, 0)),  # Wraps around midnight
-)
+# DEPRECATED: Hardcoded circadian slots removed - culturally biased and don't generalize
+# Circadian patterns should be learned from user behavior, not assumed
+# See get_circadian_slot() docstring for rationale
 
-# Time-of-day buckets (frozen tuples)
+# Time-of-day buckets (frozen tuples) - generalized, works for all users
 TIME_OF_DAY_BUCKETS = (
     ("morning", time(6, 0), time(12, 0)),
     ("afternoon", time(12, 0), time(17, 0)),
@@ -246,11 +247,15 @@ def normalize_timestamp(envelope: dict, now_ts: Optional[int] = None) -> int:
         )
         _metrics["future_event_time_clamped"] += 1
         timestamp = now_ts
-    elif timestamp > now_ts:
-        # Future but within reason (< year 2100), clamp to now
-        logger.warning(f"Future timestamp detected: {timestamp} > {now_ts} (now), clamping to now")
+    elif timestamp > (now_ts + FUTURE_TOLERANCE_HOURS * 3600):
+        # Future beyond tolerance window (> 24 hours), clamp to now
+        logger.warning(
+            f"Future timestamp beyond tolerance: {timestamp} > {now_ts + FUTURE_TOLERANCE_HOURS * 3600} "
+            f"(now + {FUTURE_TOLERANCE_HOURS}h), clamping to now"
+        )
         _metrics["future_event_time_clamped"] += 1
         timestamp = now_ts
+    # else: timestamp is within tolerance window, accept as-is
 
     return timestamp
 
@@ -342,35 +347,32 @@ def get_time_of_day_bucket(dt: datetime) -> str:
 
 def get_circadian_slot(dt: datetime) -> Optional[str]:
     """
-    Match time against circadian slots (meal/sleep windows, config-driven).
+    Returns circadian slot for a datetime.
 
-    Uses frozen tuple for branch-light comparisons (faster than dict iteration).
-    Supports per-tenant overrides (future): if tenant_config.circadian_slots exists, override defaults.
+    DESIGN DECISION: Always returns None.
 
-    Slots (default config):
-    - breakfast_window: 06:00-09:00
-    - lunch_window: 11:30-13:30
-    - dinner_window: 17:30-20:30
-    - sleep_window: 22:00-06:00 (wraps around midnight)
+    Hardcoded meal/sleep windows (breakfast 06:00-09:00, dinner 17:30-20:30, etc.)
+    are culturally biased and don't work for:
+    - Night shift workers
+    - Different cultures (late Spanish dinners, early Japanese breakfasts)
+    - Parents with irregular schedules
+    - Freelancers, remote workers, anyone outside 9-5
 
-    Midnight wrap-around:
-    - sleep_window uses (t >= start) OR (t < end) logic
-    - Handles 22:00-23:59 and 00:00-05:59 correctly
+    The generalized time_of_day_bucket (morning/afternoon/evening/night) already
+    provides sufficient temporal context without prescriptive assumptions.
+
+    FUTURE: If circadian slots are needed, they should be learned from actual
+    user behavior patterns (e.g., user typically eats at 14:00), not hardcoded.
+    This would require a user_preferences or learned_patterns module.
+
+    Args:
+        dt: datetime to classify
 
     Returns:
-        Slot name (str) or None if no match ("unstructured" time)
+        None (always) - circadian slots should be learned, not assumed
     """
-    t = dt.time()
-
-    for slot_name, start, end in CIRCADIAN_SLOTS:
-        if slot_name == "sleep_window":
-            # Sleep wraps around midnight (22:00-06:00)
-            if t >= start or t < end:
-                return slot_name
-        else:
-            if start <= t < end:
-                return slot_name
-
+    # Removed hardcoded CIRCADIAN_SLOTS logic
+    # Use time_of_day_bucket for generalized time classification
     return None
 
 

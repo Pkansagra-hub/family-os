@@ -126,6 +126,7 @@ class RoutineCandidate:
     lifecycle_state: RoutineLifecycle = RoutineLifecycle.FORMING
     habit_strength: float = 0.0
     triggering_cues: List[str] = field(default_factory=list)
+    time_bins: List[str] = field(default_factory=list)  # Time bins this routine occurs in
 
 
 @dataclass
@@ -247,6 +248,33 @@ class RoutineDetector:
 
         return candidates
 
+    def _compute_time_bin(self, timestamp_ms: int) -> str:
+        """
+        Convert timestamp to time bin for pattern grouping.
+
+        Groups routines by time of day to separate morning coffee from evening coffee.
+
+        Args:
+            timestamp_ms: Timestamp in milliseconds
+
+        Returns:
+            Time bin: "morning", "afternoon", "evening", or "night"
+        """
+        from datetime import datetime
+
+        # Convert milliseconds to seconds for datetime
+        dt = datetime.fromtimestamp(timestamp_ms / 1000)
+        hour = dt.hour
+
+        if 5 <= hour < 12:
+            return "morning"
+        elif 12 <= hour < 17:
+            return "afternoon"
+        elif 17 <= hour < 22:
+            return "evening"
+        else:
+            return "night"
+
     def _group_by_signature(
         self,
         episodes: List[Dict[str, Any]],
@@ -272,8 +300,13 @@ class RoutineDetector:
             if not activity and not location:
                 continue
 
-            # Create signature
-            signature = f"{activity}:{location}" if location else activity
+            # Compute time bin for temporal pattern separation
+            time_bin = self._compute_time_bin(ep.get("start_time_utc", 0))
+
+            # Create signature with time binning (activity:location:time_bin)
+            signature = (
+                f"{activity}:{location}:{time_bin}" if location else f"{activity}:{time_bin}"
+            )
 
             if signature not in patterns:
                 patterns[signature] = EpisodePattern(signature=signature)
@@ -349,6 +382,9 @@ class RoutineDetector:
         # Generate routine ID (prefix for clarity)
         routine_id = f"routine-{uuid.uuid4().hex[:24]}"
 
+        # Collect unique time bins for this routine
+        time_bins = list(set(self._compute_time_bin(ts) for ts in pattern.timestamps))
+
         return RoutineCandidate(
             routine_id=routine_id,
             routine_name=routine_name,
@@ -366,6 +402,7 @@ class RoutineDetector:
             lifecycle_state=lifecycle,
             habit_strength=habit_strength,
             triggering_cues=cues,
+            time_bins=time_bins,
         )
 
     def _compute_temporal_stats(

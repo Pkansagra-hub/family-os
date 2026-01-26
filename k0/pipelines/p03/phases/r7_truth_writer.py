@@ -458,32 +458,15 @@ class R7TruthWriter:
             return self._coordinator
 
         # Import layer writers (M5 modules)
-        from k0.modules.consolidation.truth_writer.layers.episodic import (
-            EpisodicLayerWriter,
-        )
+        from k0.modules.consolidation.truth_writer.layers.episodic import EpisodicLayerWriter
         from k0.modules.consolidation.truth_writer.layers.kg import KGLayerWriter
-        from k0.modules.consolidation.truth_writer.layers.procedural import (
-            ProceduralLayerWriter,
-        )
-        from k0.modules.consolidation.truth_writer.layers.prospective import (
-            ProspectiveLayerWriter,
-        )
-        from k0.modules.consolidation.truth_writer.layers.semantic import (
-            SemanticLayerWriter,
-        )
-        from k0.modules.consolidation.truth_writer.layers.social import (
-            SocialLayerWriter,
-        )
-        from k0.modules.consolidation.truth_writer.layers.vector import (
-            VectorLayerWriter,
-        )
-        from k0.modules.consolidation.truth_writer.router import (
-            DecisionRouter,
-            WriteMode,
-        )
-        from k0.modules.consolidation.truth_writer.text_vector_coordinator import (
-            get_coordinator,
-        )
+        from k0.modules.consolidation.truth_writer.layers.procedural import ProceduralLayerWriter
+        from k0.modules.consolidation.truth_writer.layers.prospective import ProspectiveLayerWriter
+        from k0.modules.consolidation.truth_writer.layers.semantic import SemanticLayerWriter
+        from k0.modules.consolidation.truth_writer.layers.social import SocialLayerWriter
+        from k0.modules.consolidation.truth_writer.layers.vector import VectorLayerWriter
+        from k0.modules.consolidation.truth_writer.router import DecisionRouter, WriteMode
+        from k0.modules.consolidation.truth_writer.text_vector_coordinator import get_coordinator
         from k0.modules.consolidation.truth_writer.transaction import (
             TransactionConfig,
             TransactionCoordinator,
@@ -1065,6 +1048,19 @@ class R7TruthWriter:
             truth_match_id = getattr(event, "truth_match_id", None)
             truth_match_similarity = getattr(event, "truth_match_similarity", None)
 
+            # Get R3 dedup/novelty results
+            novelty_score = getattr(event, "novelty_score", None)
+            near_duplicates_json = getattr(event, "near_duplicates_json", None)
+            is_near_duplicate = getattr(event, "is_duplicate", None)
+            episode_cluster_id = getattr(event, "cluster_id", None)
+
+            # Get additional reconciliation details
+            best_match_id = getattr(event, "best_match_id", None)
+            best_match_layer = getattr(event, "best_match_layer", None)
+            similarity_score = getattr(event, "similarity_score", None)
+            confidence = getattr(event, "confidence", None)
+            reconciliation_reason = getattr(event, "reconciliation_reason", None)
+
             await uow.connection.execute(
                 """
                 UPDATE st_hipp_events
@@ -1073,8 +1069,17 @@ class R7TruthWriter:
                     consolidated_at = $3,
                     reconciliation_decision = $4,
                     truth_match_id = $5,
-                    truth_match_similarity = $6
-                WHERE event_id = $7
+                    truth_match_similarity = $6,
+                    novelty_score = $7,
+                    near_duplicates_json = $8,
+                    is_near_duplicate = $9,
+                    episode_cluster_id = $10,
+                    best_match_id = $11,
+                    best_match_layer = $12,
+                    similarity_score = $13,
+                    confidence = $14,
+                    reconciliation_reason = $15
+                WHERE event_id = $16
             """,
                 status,
                 cycle_id,
@@ -1082,6 +1087,15 @@ class R7TruthWriter:
                 reconciliation_decision,
                 truth_match_id,
                 truth_match_similarity,
+                novelty_score,
+                near_duplicates_json,
+                is_near_duplicate,
+                episode_cluster_id,
+                best_match_id,
+                best_match_layer,
+                similarity_score,
+                confidence,
+                reconciliation_reason,
                 event.event_id,
             )
 

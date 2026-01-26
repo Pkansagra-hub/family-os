@@ -342,8 +342,9 @@ def classify_activity_ultrabert(text: Optional[str]) -> Dict[str, Any] | None:
             "activity_type": legacy_activity,
             "activity_type_enhanced": result.activity_type,
             # UltraBERT INGRESS - Full 12-type classification (Issue 0060)
+            # Use ingress_category (raw UltraBERT INGRESS) not activity_type (mapped legacy)
             "activity_type_ultrabert": (
-                result.activity_type.upper() if result.activity_type else None
+                result.ingress_category.upper() if result.ingress_category else None
             ),
             "activity_type_confidence": result.confidence,
             # UltraBERT INTENT - Full 8-type classification (Issue 0060)

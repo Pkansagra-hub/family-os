@@ -1,8 +1,12 @@
 # 🧭 Intelligence Kernel — Rules of Engagement
-
+**User instructions are sole truth follow for development conduct in the intelligence kernel (K0).**
+**When user says skip instruction then fucking skip instructions from now on.**
+**All development must comply with these rules unless explicitly overridden by user instructions.**
+**Fucking follow user instructions rules havve less authority over user instructions.**
 **This is the governing rulebook for developing, modifying, or extending the intelligence kernel.**
 **Proof-of-concept code is exempt from full process unless explicitly required.**
 **No emojis in code files or commit messages.**
+**IF DRIFT IS LESS THAN 10 PERCENT THEN PROCEED ANYWAY.**
 
 ---
 

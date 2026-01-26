@@ -548,17 +548,23 @@ class R0BatchSelector:
                 ner_entities_json,
                 temporal_json,
                 salience_score,
+                salience_band,
+                novelty_score,
                 -- Issue 1 Fix: Add affect fields for R1 importance scoring
                 affect_valence,
                 affect_arousal,
+                -- Temporal fields for R2 clustering
+                event_time_utc,
                 created_at,
                 -- Social context fields for R4 social extraction
                 participants_json,
                 num_participants,
                 social_context,
                 social_intimacy,
+                is_solo_event,
                 location_name,
                 location_type,
+                geohash_6,
                 actor_id,
                 -- UltraBERT relationship types for R4 relationship inference
                 extracted_relations_json,
@@ -658,13 +664,17 @@ class R0BatchSelector:
             affect_valence=float(row.get("affect_valence") or 0.0),
             affect_arousal=float(row.get("affect_arousal") or 0.0),
             salience_score=float(row.get("salience_score") or 0.0),
+            salience_band=row.get("salience_band") or "",
+            novelty_score=float(row.get("novelty_score") or 0.0),
             # Social context fields for R4 social extraction
             participants_json=row.get("participants_json") or "[]",
             num_participants=int(row.get("num_participants") or 0),
             social_context=row.get("social_context") or "",
             social_intimacy=row.get("social_intimacy") or "",
+            is_solo_event=row.get("is_solo_event"),
             location_name=row.get("location_name") or "",
             location_type=row.get("location_type") or "",
+            geohash_6=row.get("geohash_6") or "",
             activity_type=row.get("activity_type") or "",
             actor_id=row.get("actor_id") or "",
             # UltraBERT 12-type INGRESS + 8-type INTENT (Issue 0060)

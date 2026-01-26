@@ -140,14 +140,12 @@ scripts/
 | `load_test.py` | Command port throughput/latency test (384 lines) | `python scripts/testing/load_test.py --duration 60 --concurrency 10` |
 | `test_all_ports.py` | Test all K0 ports (362 lines) | `python scripts/testing/test_all_ports.py` |
 | `test_db.py` | Basic database connectivity check | `python scripts/testing/test_db.py` |
-| `test_ner_outputs.py` | Compare BERT-NER vs UltraBERT (539 lines) | `python scripts/testing/test_ner_outputs.py` |
 | `test_recall_queries.py` | Test FAISS recall queries | `python scripts/testing/test_recall_queries.py` |
 | `test_ultrabert_family.py` | Test UltraBERT 12 capabilities | `python scripts/testing/test_ultrabert_family.py` |
 
 **When to use:**
 - Validate deployment health (test_all_ports)
 - Measure performance under load (load_test)
-- Debug NER issues (test_ner_outputs)
 - Test recall/search (test_recall_queries)
 
 ---

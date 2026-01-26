@@ -17,9 +17,9 @@ croniter>=2.0.0                     # Cron schedule parsing
 # =============================================================================
 # UltraBERT Unified Model (replaces ALL ML dependencies below)
 # =============================================================================
-# Install from wheel: pip install familyos_ultrabert-2.0.3-py3-none-any.whl
+# Install from wheel: pip install familyos_ultrabert-4.0.0-py3-none-any.whl
 # Capabilities: sentiment, emotions, safety, NER, temporal, intent, embedding
-# Size: 155M params, ~500MB memory
+# Size: 155M params, ~500MB memory, GlobalPointer NER (no more garbage!)
 # See: wheels/README.md for installation instructions
 
 # UltraBERT runtime dependencies

@@ -20843,7 +20843,7 @@ p03_automatic_rollback_cooldown_active
 |   |           action=action,                                                  |   |
 |   |           best_match_id=best_id,                                          |   |
 |   |           similarity_score=best_score,                                    |   |
-|   |           confidence=abs(best_score - 0.5)* 2  # Confidence in decision  |   |
+|   |           confidence=abs(best_score - 0.5)* 2  # Confidence in decision   |   |
 |   |       )                                                                   |   |
 |   |                                                                           |   |
 |   +---------------------------------------------------------------------------+   |
@@ -20872,18 +20872,18 @@ p03_automatic_rollback_cooldown_active
 |                                                                                   |
 |   STORAGE EFFECTS:                                                                |
 |   +-----------------------------------------------------------------------+       |
-|   | Action     | st_sem Effect                  | st_kg_edges Effect     |       |
-|   |------------|--------------------------------|------------------------|       |
-|   | REINFORCE  | observation_count++            | edge weights++         |       |
-|   |            | confidence_score = f(obs)      |                        |       |
-|   |            | last_observed_at = now()       |                        |       |
-|   |------------|--------------------------------|------------------------|       |
-|   | EXTEND     | pattern_attributes += new      | new edges created      |       |
-|   |            | embedding_centroid = weighted  |                        |       |
-|   |------------|--------------------------------|------------------------|       |
-|   | CONTRADICT | Insert conflicting_pattern_ids | contradiction edges    |       |
-|   |------------|--------------------------------|------------------------|       |
-|   | CREATE     | INSERT new st_sem record       | new entity nodes       |       |
+|   | Action     | st_sem Effect                  | st_kg_edges Effect      |       |
+|   |------------|--------------------------------|------------------------ |       |
+|   | REINFORCE  | observation_count++            | edge weights++          |       |
+|   |            | confidence_score = f(obs)      |                         |       |
+|   |            | last_observed_at = now()       |                         |       |
+|   |------------|--------------------------------|------------------------ |       |
+|   | EXTEND     | pattern_attributes += new      | new edges created       |       |
+|   |            | embedding_centroid = weighted  |                         |       |
+|   |------------|--------------------------------|------------------------ |       |
+|   | CONTRADICT | Insert conflicting_pattern_ids | contradiction edges     |       |
+|   |------------|--------------------------------|------------------------ |       |
+|   | CREATE     | INSERT new st_sem record       | new entity nodes        |       |
 |   +-----------------------------------------------------------------------+       |
 |                                                                                   |
 +-----------------------------------------------------------------------------------+
@@ -20948,7 +20948,7 @@ p03_automatic_rollback_cooldown_active
 |   |       Updates confidence scores using Bayesian principles.                |   |
 |   |                                                                           |   |
 |   |       Core Formula:                                                       |   |
-|   |         confidence = sqrt(frequency *consistency* significance)         |   |
+|   |         confidence = sqrt(frequency *consistency* significance)           |   |
 |   |                                                                           |   |
 |   |       This is a geometric mean that ensures all three factors             |   |
 |   |       must be reasonably high for confidence to be high.                  |   |
@@ -20967,7 +20967,7 @@ p03_automatic_rollback_cooldown_active
 |   |                                                                           |   |
 |   |           Formula: log(1 + obs_count) / log(1 + expected_count)           |   |
 |   |           """                                                             |   |
-|   |           expected_count = max(1, days_observed *0.5)  # Expect ~0.5/day |   |
+|   |           expected_count = max(1, days_observed *0.5)  # Expect ~0.5/day  |   |
 |   |           raw = math.log(1 + observation_count) / math.log(1 + expected)  |   |
 |   |           return min(1.0, raw)  # Cap at 1.0                              |   |
 |   |                                                                           |   |
@@ -21001,10 +21001,10 @@ p03_automatic_rollback_cooldown_active
 |   |           High emotion or high importance = memory sticks better          |   |
 |   |           (McGaugh 2004: Emotional memory enhancement)                    |   |
 |   |                                                                           |   |
-|   |           Formula: 0.5 + 0.5* max(|affect|, importance)                  |   |
+|   |           Formula: 0.5 + 0.5* max(|affect|, importance)                   |   |
 |   |           """                                                             |   |
 |   |           emotional_intensity = abs(affect_valence)                       |   |
-|   |           return 0.5 + 0.5 *max(emotional_intensity, importance_score)   |   |
+|   |           return 0.5 + 0.5 *max(emotional_intensity, importance_score)    |   |
 |   |                                                                           |   |
 |   |       def update_confidence(                                              |   |
 |   |           self,                                                           |   |
@@ -21038,10 +21038,10 @@ p03_automatic_rollback_cooldown_active
 |   |           )                                                               |   |
 |   |                                                                           |   |
 |   |           # Geometric mean (the core formula)                             |   |
-|   |           confidence = math.sqrt(frequency* consistency *significance)  |   |
+|   |           confidence = math.sqrt(frequency* consistency *significance)    |   |
 |   |                                                                           |   |
 |   |           # Apply source reliability adjustment                           |   |
-|   |           confidence*= new_observation.source_reliability                |   |
+|   |           confidence*= new_observation.source_reliability                 |   |
 |   |                                                                           |   |
 |   |           return min(1.0, max(0.0, confidence))                           |   |
 |   |                                                                           |   |
@@ -21259,11 +21259,11 @@ p03_automatic_rollback_cooldown_active
 |   CONFLICT RESOLUTION STRATEGIES:                                                 |
 |   +-----------------------------------------------------------------------+       |
 |   | Conflict Type       | Resolution Strategy                             |       |
-|   |---------------------|-----------------------------------------------|       |
-|   | Confidence Update   | Re-read, recompute with merged observations   |       |
-|   | Observation Count   | Re-read, add delta (commutative)              |       |
-|   | Embedding Centroid  | Re-read, weighted average with both updates   |       |
-|   | Pattern Attributes  | Merge JSON, union of keys                     |       |
+|   |---------------------|-----------------------------------------------  |       |
+|   | Confidence Update   | Re-read, recompute with merged observations     |       |
+|   | Observation Count   | Re-read, add delta (commutative)                |       |
+|   | Embedding Centroid  | Re-read, weighted average with both updates     |       |
+|   | Pattern Attributes  | Merge JSON, union of keys                       |       |
 |   +-----------------------------------------------------------------------+       |
 |                                                                                   |
 +-----------------------------------------------------------------------------------+

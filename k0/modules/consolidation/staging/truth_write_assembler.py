@@ -42,6 +42,11 @@ from k0.modules.consolidation.dream.models import (
     Insight,
     RoutineOptimization,
 )
+from k0.modules.context.temporal_profile import (
+    convert_to_local_timezone,
+    get_day_of_week,
+    get_time_of_day_bucket,
+)
 from k0.pipelines.p03.event_state import P03EventState, ReconciliationAction
 from k0.pipelines.p03.phase_outputs import (
     EpisodeCluster,
@@ -73,7 +78,6 @@ UPDATE_ACTIONS = frozenset(
     {
         ReconciliationAction.REINFORCE,
         ReconciliationAction.EXTEND,
-        ReconciliationAction.EVOLVE,
     }
 )
 
@@ -265,6 +269,7 @@ class TruthWriteAssembler:
         source_phase: str = "R6",
         tenant_id: str = "default",
         space_id: str = "default",
+        consolidation_cycle_id: Optional[str] = None,
     ) -> None:
         """
         Initialize assembler with idempotency generator.
@@ -279,6 +284,7 @@ class TruthWriteAssembler:
         self.source_phase = source_phase
         self.tenant_id = tenant_id
         self.space_id = space_id
+        self.consolidation_cycle_id = consolidation_cycle_id
 
     # =========================================================================
     # st_epi — Episodic Memory (from R2 EpisodeCluster)
@@ -339,6 +345,8 @@ class TruthWriteAssembler:
                 first_event_id = cluster.member_event_ids[0]
                 if first_event_id in event_states:
                     obs_context = ObservationContext.from_event(event_states[first_event_id])
+            if obs_context and self.consolidation_cycle_id:
+                obs_context.consolidation_cycle_id = self.consolidation_cycle_id
 
             # Create INSERT write
             write = StagedWrite.insert(
@@ -418,6 +426,7 @@ class TruthWriteAssembler:
                 "additional_event_count": len(new_event_ids),
                 "new_start_time_utc": min_timestamp,  # Will use MIN(existing, new)
                 "new_end_time_utc": max_timestamp,  # Will use MAX(existing, new)
+                "consolidation_cycle_id": self.consolidation_cycle_id,
                 "updated_at": now_ms,
             }
 
@@ -437,6 +446,11 @@ class TruthWriteAssembler:
                 event_ids=new_event_ids,
             )
             write.idempotency_key = idem_key
+            if events:
+                obs_context = ObservationContext.from_event(events[0])
+                if self.consolidation_cycle_id:
+                    obs_context.consolidation_cycle_id = self.consolidation_cycle_id
+                write.observation_context = obs_context
 
             writes.append(write)
 
@@ -458,6 +472,36 @@ class TruthWriteAssembler:
         now_ms = _now_ms()
         member_ids = list(cluster.member_event_ids)
 
+        first_event: Optional[P03EventState] = None
+        for event_id in member_ids:
+            if event_id in event_states:
+                first_event = event_states[event_id]
+                break
+
+        location_type = cluster.location_type
+        if not location_type and first_event:
+            location_type = getattr(first_event, "location_type", None) or None
+
+        temporal_bucket = None
+        day_of_week = None
+        if first_event:
+            bucket = getattr(first_event, "time_of_day_bucket", None) or ""
+            day = getattr(first_event, "day_of_week", None) or ""
+            temporal_bucket = bucket.upper() if bucket else None
+            day_of_week = day.upper() if day else None
+
+        if (not temporal_bucket or not day_of_week) and cluster.temporal_start > 0:
+            derived_bucket, derived_day = self._derive_temporal_fields(cluster.temporal_start)
+            temporal_bucket = temporal_bucket or derived_bucket
+            day_of_week = day_of_week or derived_day
+
+        duration_minutes = None
+        if cluster.temporal_start > 0 and cluster.temporal_end > 0:
+            if cluster.temporal_end >= cluster.temporal_start:
+                duration_minutes = int((cluster.temporal_end - cluster.temporal_start) / 60000)
+
+        last_observed_at = cluster.temporal_end if cluster.temporal_end > 0 else now_ms
+
         # Get embedding_id from cluster centroid or first member event
         embedding_id = cluster.centroid_embedding_id
         if embedding_id is None and member_ids and event_states:
@@ -474,20 +518,134 @@ class TruthWriteAssembler:
             "episode_type": cluster.activity_type or "GENERAL",
             "start_time_utc": cluster.temporal_start,
             "end_time_utc": cluster.temporal_end,
+            "duration_minutes": duration_minutes,
+            "temporal_bucket": temporal_bucket,
+            "day_of_week": day_of_week,
+            "is_recurring": None,
+            "recurrence_pattern": None,
             "primary_location": cluster.location_hint,
-            "location_type": cluster.location_type,  # GAP-002: location category
+            "location_type": location_type,  # GAP-002: location category
             "participants_json": cluster.participants_json,
             "participant_count": len(json.loads(cluster.participants_json or "[]")),
             "embedding_id": embedding_id,
             "cluster_id": cluster.cluster_id,
             "cluster_confidence": cluster.cohesion_score or 0.5,
+            "consolidation_cycle_id": self.consolidation_cycle_id,
             "source_events_json": json.dumps(member_ids),
             "source_event_count": len(member_ids),
             "archival_status": "ACTIVE",
+            "last_observed_at": last_observed_at,
             "created_at": now_ms,
             "updated_at": now_ms,
             "valid_from": now_ms,
         }
+
+    def _derive_temporal_fields(
+        self,
+        timestamp_ms: int,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """
+        Derive temporal_bucket and day_of_week from a UTC timestamp in ms.
+
+        Returns uppercase bucket/day strings or (None, None) if derivation fails.
+        """
+        if timestamp_ms <= 0:
+            return None, None
+
+        try:
+            dt_local, _ = convert_to_local_timezone(int(timestamp_ms / 1000), self.tenant_id)
+        except Exception:
+            return None, None
+
+        bucket = get_time_of_day_bucket(dt_local).upper()
+        day = get_day_of_week(dt_local).upper()
+        return bucket, day
+
+    def _format_recurrence_pattern(self, candidate: RoutineCandidate) -> Optional[str]:
+        """Format recurrence_pattern from RoutineCandidate fields."""
+        parts: List[str] = []
+
+        frequency = getattr(candidate, "frequency", None)
+        if frequency is not None:
+            freq_value = getattr(frequency, "value", None) or str(frequency)
+            if freq_value:
+                parts.append(freq_value)
+
+        day_pattern = getattr(candidate, "day_pattern", None)
+        if day_pattern:
+            parts.append(str(day_pattern).upper())
+
+        temporal_anchor = getattr(candidate, "temporal_anchor", None)
+        if temporal_anchor:
+            parts.append(str(temporal_anchor))
+
+        return ":".join(parts) if parts else None
+
+    def _merge_epi_recurrence_updates(
+        self,
+        epi_writes: List[StagedWrite],
+        routine_candidates: List[RoutineCandidate],
+    ) -> None:
+        """
+        Merge recurrence signals into existing st_epi writes or add updates.
+
+        This avoids duplicate writes for the same episode_id while allowing
+        recurrence fields to be populated when RoutineDetector emits candidates.
+        """
+        if not routine_candidates:
+            return
+
+        now_ms = _now_ms()
+        write_by_id: Dict[str, StagedWrite] = {
+            w.record_id: w for w in epi_writes if w.layer == LAYER_ST_EPI
+        }
+
+        for candidate in routine_candidates:
+            source_json = getattr(candidate, "source_episodes_json", "[]") or "[]"
+            try:
+                episode_ids = json.loads(source_json)
+                if not isinstance(episode_ids, list):
+                    episode_ids = []
+            except (json.JSONDecodeError, TypeError):
+                episode_ids = []
+
+            recurrence_pattern = self._format_recurrence_pattern(candidate)
+
+            for episode_id in episode_ids:
+                if not episode_id:
+                    continue
+
+                if episode_id in write_by_id:
+                    write = write_by_id[episode_id]
+                    write.record_data["is_recurring"] = True
+                    if recurrence_pattern:
+                        write.record_data["recurrence_pattern"] = recurrence_pattern
+                    write.record_data["updated_at"] = now_ms
+                    continue
+
+                record_data = {
+                    "is_recurring": True,
+                    "updated_at": now_ms,
+                }
+                if recurrence_pattern:
+                    record_data["recurrence_pattern"] = recurrence_pattern
+
+                idem_key = self.idempotency.for_truth_write(
+                    LAYER_ST_EPI,
+                    f"{episode_id}:recurrence",
+                )
+
+                write = StagedWrite.update(
+                    layer=LAYER_ST_EPI,
+                    record_id=episode_id,
+                    data=record_data,
+                    phase=self.source_phase,
+                    expected_version=None,
+                    event_ids=[],
+                )
+                write.idempotency_key = idem_key
+                epi_writes.append(write)
+                write_by_id[episode_id] = write
 
     # =========================================================================
     # st_sem — Semantic Memory (from R3 reconciliation decisions)
@@ -524,6 +682,9 @@ class TruthWriteAssembler:
                 if write:
                     writes.append(write)
 
+            elif action == ReconciliationAction.EVOLVE:
+                writes.extend(self._create_sem_evolve_writes(event_id, state))
+
             elif action in UPDATE_ACTIONS:
                 write = self._create_sem_update(event_id, state)
                 if write:
@@ -557,9 +718,7 @@ class TruthWriteAssembler:
         """
         import json
 
-        from k0.modules.consolidation.algorithms.subtype_classifier import (
-            get_subtype_classifier,
-        )
+        from k0.modules.consolidation.algorithms.subtype_classifier import get_subtype_classifier
 
         # Pattern ID comes from event being promoted to pattern
         pattern_id = f"sem_{event_id}"
@@ -581,13 +740,22 @@ class TruthWriteAssembler:
             source_texts=[state.content_text] if state.content_text else None,
         )
 
+        description = self._build_sem_description(state, pattern_name, pattern_type)
+        attributes_json = self._build_sem_attributes(state, pattern_type)
+        temporal_regularity, temporal_pattern_json = self._build_sem_temporal_fields(state)
+
         record_data = {
             "pattern_id": pattern_id,
             "tenant_id": self.tenant_id,
             "space_id": self.space_id,
+            "actor_id": getattr(state, "actor_id", None) or None,
             "pattern_type": pattern_type,
             "pattern_subtype": pattern_subtype,  # GAP-005
             "pattern_name": pattern_name,
+            "pattern_description": description,
+            "pattern_attributes_json": attributes_json,
+            "temporal_regularity": temporal_regularity,
+            "temporal_pattern_json": temporal_pattern_json,
             "embedding_id": state.embedding_id,
             "source_episodes_json": json.dumps([event_id]),
             "source_episode_count": 1,
@@ -615,6 +783,210 @@ class TruthWriteAssembler:
         write.observation_context = ObservationContext.from_event(state)
 
         return write
+
+    def _create_sem_evolve_writes(
+        self,
+        event_id: str,
+        state: P03EventState,
+    ) -> List[StagedWrite]:
+        """
+        Create EVOLVE writes for st_sem.
+
+        EVOLVE creates a new canonical pattern that supersedes the old one,
+        and marks the old pattern non-canonical with a valid_to timestamp.
+        """
+        writes: List[StagedWrite] = []
+
+        old_pattern_id = state.best_match_id
+        if not old_pattern_id:
+            return writes
+
+        now = _now_ms()
+        new_pattern_id = f"sem_{event_id}"
+
+        pattern_type = getattr(state, "content_type", "general").upper()
+        if pattern_type not in ("ROUTINE", "PREFERENCE", "THEME", "RELATIONSHIP", "GOAL", "VALUE"):
+            pattern_type = "THEME"
+
+        pattern_name = _generate_pattern_name(state, max_length=200)
+        description = self._build_sem_description(state, pattern_name, pattern_type)
+        attributes_json = self._build_sem_attributes(state, pattern_type)
+        temporal_regularity, temporal_pattern_json = self._build_sem_temporal_fields(state)
+
+        record_data = {
+            "pattern_id": new_pattern_id,
+            "tenant_id": self.tenant_id,
+            "space_id": self.space_id,
+            "actor_id": getattr(state, "actor_id", None) or None,
+            "pattern_type": pattern_type,
+            "pattern_subtype": None,
+            "pattern_name": pattern_name,
+            "pattern_description": description,
+            "pattern_attributes_json": attributes_json,
+            "temporal_regularity": temporal_regularity,
+            "temporal_pattern_json": temporal_pattern_json,
+            "embedding_id": state.embedding_id,
+            "source_episodes_json": json.dumps([event_id]),
+            "source_episode_count": 1,
+            "confidence_score": state.confidence or 0.5,
+            "observation_count": 1,
+            "first_observed_at": now,
+            "last_observed_at": now,
+            "created_at": now,
+            "updated_at": now,
+            "valid_from": now,
+            "archival_status": "ACTIVE",
+            "supersedes_id": old_pattern_id,
+        }
+
+        idem_key = self.idempotency.for_truth_write(LAYER_ST_SEM, new_pattern_id)
+        insert_write = StagedWrite.insert(
+            layer=LAYER_ST_SEM,
+            record_id=new_pattern_id,
+            data=record_data,
+            phase=self.source_phase,
+            event_ids=[event_id],
+        )
+        insert_write.idempotency_key = idem_key
+        insert_write.observation_context = ObservationContext.from_event(state)
+        writes.append(insert_write)
+
+        update_data = {
+            "_action": "EVOLVE",
+            "updated_at": now,
+            "valid_to": now,
+        }
+
+        update_idem = self.idempotency.for_truth_write(
+            LAYER_ST_SEM,
+            f"{old_pattern_id}:evolve",
+        )
+        update_write = StagedWrite.update(
+            layer=LAYER_ST_SEM,
+            record_id=old_pattern_id,
+            data=update_data,
+            phase=self.source_phase,
+            expected_version=None,
+            event_ids=[event_id],
+        )
+        update_write.idempotency_key = update_idem
+        update_write.observation_context = ObservationContext.from_event(state)
+        writes.append(update_write)
+
+        return writes
+
+    def _build_sem_description(
+        self,
+        state: P03EventState,
+        pattern_name: str,
+        pattern_type: str,
+    ) -> Optional[str]:
+        """Build a lightweight semantic pattern description."""
+        location = getattr(state, "location_name", "") or ""
+        activity = getattr(state, "activity_type_ultrabert", "") or getattr(
+            state, "activity_type", ""
+        )
+        activity = activity.replace("_", " ") if activity else ""
+
+        parts = [pattern_name]
+        if pattern_type:
+            parts.append(f"Type: {pattern_type}")
+        if activity:
+            parts.append(f"Activity: {activity}")
+        if location:
+            parts.append(f"Location: {location}")
+
+        description = "; ".join(parts).strip()
+        return description if description else None
+
+    def _build_sem_attributes(self, state: P03EventState, pattern_type: str) -> str:
+        """Build JSON attributes for semantic pattern."""
+        attributes: Dict[str, Any] = {
+            "pattern_type": pattern_type,
+            "activity_type": getattr(state, "activity_type_ultrabert", None)
+            or getattr(state, "activity_type", None),
+            "location_name": getattr(state, "location_name", None),
+            "location_type": getattr(state, "location_type", None),
+            "intent": getattr(state, "intent_label", None),
+            "sentiment_label": getattr(state, "sentiment_label", None),
+            "sentiment_score": getattr(state, "sentiment_score", None),
+            "source_event_id": state.event_id,
+        }
+
+        entities: List[str] = []
+        try:
+            ner_json = getattr(state, "ner_entities_json", "[]") or "[]"
+            ner_data = json.loads(ner_json)
+            if isinstance(ner_data, list):
+                for ent in ner_data:
+                    if isinstance(ent, dict) and ent.get("text"):
+                        entities.append(ent["text"])
+            elif isinstance(ner_data, dict):
+                for source in ("ner_family", "ner_general"):
+                    source_data = ner_data.get(source, {})
+                    if isinstance(source_data, dict):
+                        for ent in source_data.get("entities", []):
+                            if isinstance(ent, dict) and ent.get("text"):
+                                entities.append(ent["text"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        if entities:
+            attributes["entities"] = entities
+
+        return json.dumps(attributes)
+
+    def _build_sem_temporal_fields(
+        self,
+        state: P03EventState,
+    ) -> tuple[Optional[float], Optional[str]]:
+        """
+        Build temporal_regularity and temporal_pattern_json.
+
+        Uses explicit temporal expressions when present; otherwise
+        falls back to day_of_week/time_of_day_bucket context.
+        """
+        temporal_pattern: Dict[str, Any] = {}
+        temporal_regularity: Optional[float] = None
+
+        day_of_week = getattr(state, "day_of_week", "") or ""
+        time_bucket = getattr(state, "time_of_day_bucket", "") or ""
+
+        if day_of_week:
+            temporal_pattern["day_of_week"] = day_of_week.upper()
+        if time_bucket:
+            temporal_pattern["time_of_day_bucket"] = time_bucket.upper()
+
+        try:
+            temporal_json = getattr(state, "temporal_expressions_json", "[]") or "[]"
+            expressions = json.loads(temporal_json)
+        except (json.JSONDecodeError, TypeError):
+            expressions = []
+
+        if isinstance(expressions, list) and expressions:
+            texts: List[str] = []
+            for exp in expressions:
+                if isinstance(exp, dict) and exp.get("text"):
+                    texts.append(str(exp["text"]).lower())
+                elif isinstance(exp, str):
+                    texts.append(exp.lower())
+
+            frequency = None
+            if any("daily" in text or "every day" in text for text in texts):
+                frequency = "DAILY"
+            elif any("weekly" in text or "every week" in text for text in texts):
+                frequency = "WEEKLY"
+            elif any("monthly" in text or "every month" in text for text in texts):
+                frequency = "MONTHLY"
+
+            if frequency:
+                temporal_pattern["frequency"] = frequency
+                temporal_regularity = 0.7
+
+        if not temporal_pattern:
+            return None, None
+
+        return temporal_regularity, json.dumps(temporal_pattern)
 
     def _create_sem_update(
         self,
@@ -1437,6 +1809,7 @@ class TruthWriteAssembler:
 
         # st_epi from R2 clusters
         epi_writes = self.assemble_epi_writes(clusters or [], event_states or {})
+        self._merge_epi_recurrence_updates(epi_writes, routine_candidates or [])
         if epi_writes:
             result[LAYER_ST_EPI] = epi_writes
 

@@ -35,11 +35,7 @@ from k0.pipelines.p03.phase_outputs import (
     KGEntity,
     KGEntityUpdate,
 )
-from k0.pipelines.p03.staged_writes import (
-    LAYER_ST_KG_DOM,
-    LAYER_ST_KG_EDGES,
-    StagedWrite,
-)
+from k0.pipelines.p03.staged_writes import LAYER_ST_KG_DOM, LAYER_ST_KG_EDGES, StagedWrite
 
 from .idempotency import IdempotencyKeyGenerator
 
@@ -187,6 +183,9 @@ class KGWriteAssembler:
     def _create_entity_insert(self, entity: KGEntity) -> StagedWrite:
         """Create st_kg_dom INSERT for new entity."""
         now_ms = _now_ms()
+        first_mentioned_event_id = entity.first_mentioned_event_id or (
+            entity.source_event_ids[0] if entity.source_event_ids else None
+        )
         record_data = {
             "entity_id": entity.entity_id,
             "tenant_id": self.tenant_id,
@@ -196,12 +195,17 @@ class KGWriteAssembler:
             "entity_type": entity.entity_type,
             "entity_subtype": entity.entity_subtype,  # GAP-005: Fine-grained classification
             "aliases_json": entity.aliases_json,
+            "attributes_json": entity.attributes_json,
             "confidence_score": entity.confidence,
             "embedding_id": entity.embedding_id,
             "source_episodes_json": json.dumps(entity.source_event_ids),
+            "first_mentioned_event_id": first_mentioned_event_id,
+            "last_observed_at": entity.last_observed_at or now_ms,
             "observation_count": len(entity.source_event_ids) if entity.source_event_ids else 1,
+            "decay_factor": 1.0,
             "archival_status": "ACTIVE",
             "valid_from": now_ms,
+            "valid_from_ms": now_ms,
             "created_at": now_ms,
             "updated_at": now_ms,
         }
@@ -249,9 +253,13 @@ class KGWriteAssembler:
         if update.new_aliases:
             record_data["new_aliases_json"] = json.dumps(update.new_aliases)
 
+        if update.last_observed_at:
+            record_data["last_observed_at"] = update.last_observed_at
+
         # Issue 3 Fix: Handle REINFORCE operations
         if update.observation_count_increment > 0:
             record_data["observation_count_increment"] = update.observation_count_increment
+            record_data["decay_factor"] = 1.0
 
         if update.new_source_event_ids:
             record_data["additional_source_event_ids"] = json.dumps(update.new_source_event_ids)
@@ -298,28 +306,180 @@ class KGWriteAssembler:
         Returns:
             List of StagedWrite for st_kg_edges
         """
-        writes: List[StagedWrite] = []
+        # NOTE:
+        # It's common for R4 to emit multiple edges/causal edges with the same
+        # edge_id within a single batch (reinforcement). R6 manifest validation
+        # requires uniqueness of (layer, record_id) per cycle, so we merge.
+
+        writes_by_id: Dict[str, StagedWrite] = {}
+
+        def upsert(write: Optional[StagedWrite]) -> None:
+            if not write:
+                return
+            existing = writes_by_id.get(write.record_id)
+            if not existing:
+                writes_by_id[write.record_id] = write
+                return
+            writes_by_id[write.record_id] = self._merge_edge_writes(existing, write)
 
         # Process new edges (INSERT)
         for edge in edges:
             if edge.is_new:
-                write = self._create_edge_insert(edge)
-                writes.append(write)
+                upsert(self._create_edge_insert(edge))
 
         # Process causal edges (INSERT with is_causal=True)
         if causal_edges:
             for causal in causal_edges:
-                write = self._create_causal_edge_insert(causal)
-                writes.append(write)
+                upsert(self._create_causal_edge_insert(causal))
 
         # Process edge updates (UPDATE)
         if edge_updates:
             for update in edge_updates:
-                write = self._create_edge_update(update)
-                if write:
-                    writes.append(write)
+                upsert(self._create_edge_update(update))
 
-        return writes
+        # Preserve a stable order for determinism (helps tests/debugging)
+        return [writes_by_id[k] for k in sorted(writes_by_id.keys())]
+
+    def _merge_edge_writes(self, a: StagedWrite, b: StagedWrite) -> StagedWrite:
+        """Merge two staged writes for the same st_kg_edges record_id.
+
+        The intent is to avoid R6 manifest duplicate-record DLQ while preserving
+        reinforcement signals inside a single batch.
+
+        Rules (best-effort, schema-aware):
+        - UNION contributing event ids (source_event_ids and evidence JSON)
+        - For INSERT+INSERT: sum edge_weight for non-causal; max for CAUSES
+        - For INSERT+UPDATE: apply deltas onto the INSERT's record_data
+        - For UPDATE+UPDATE: sum deltas and union evidence ids
+        - Confidence uses max (INSERT) / sum deltas (UPDATE)
+        """
+        if a.layer != LAYER_ST_KG_EDGES or b.layer != LAYER_ST_KG_EDGES:
+            # Defensive: only merge KG edge writes
+            return a
+        if a.record_id != b.record_id:
+            return a
+
+        # Merge contributing event ids
+        merged_event_ids = sorted(set((a.source_event_ids or []) + (b.source_event_ids or [])))
+
+        # Helper: union evidence ids stored in record_data
+        def _read_json_list(value: Any) -> List[str]:
+            if not value:
+                return []
+            if isinstance(value, list):
+                return [str(x) for x in value]
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, list):
+                        return [str(x) for x in parsed]
+                except Exception:
+                    return []
+            return []
+
+        def _read_list(value: Any) -> List[str]:
+            if not value:
+                return []
+            if isinstance(value, list):
+                return [str(x) for x in value]
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, list):
+                        return [str(x) for x in parsed]
+                except Exception:
+                    return []
+            return []
+
+        def _write_json_list(items: List[str]) -> str:
+            return json.dumps(sorted(set(items)))
+
+        # Choose base write deterministically: prefer INSERT over UPDATE
+        base = a if a.operation.value == "INSERT" else b
+        other = b if base is a else a
+
+        # Ensure we don't lose idempotency key / phase provenance
+        base.source_event_ids = merged_event_ids
+
+        # INSERT base: merge in other write
+        if base.operation.value == "INSERT":
+            # Evidence ids
+            base_eids = _read_json_list(base.record_data.get("source_episodes_json"))
+            other_eids = _read_json_list(other.record_data.get("source_episodes_json"))
+            # UPDATE writes store new evidence under a different key
+            other_eids += _read_json_list(other.record_data.get("new_evidence_ids_json"))
+            merged_eids = sorted(set(base_eids + other_eids + merged_event_ids))
+            base.record_data["source_episodes_json"] = _write_json_list(merged_eids)
+            base.record_data["observation_count"] = max(1, len(merged_eids))
+
+            base_ev_ids = _read_list(base.record_data.get("evidence_event_ids"))
+            other_ev_ids = _read_list(other.record_data.get("evidence_event_ids"))
+            merged_ev_ids = sorted(set(base_ev_ids + other_ev_ids + merged_event_ids))
+            if merged_ev_ids:
+                base.record_data["evidence_event_ids"] = merged_ev_ids
+
+            base_ep_ids = _read_list(base.record_data.get("evidence_episode_ids"))
+            other_ep_ids = _read_list(other.record_data.get("evidence_episode_ids"))
+            merged_ep_ids = sorted(set(base_ep_ids + other_ep_ids))
+            if merged_ep_ids:
+                base.record_data["evidence_episode_ids"] = merged_ep_ids
+
+            # Weight/confidence
+            rel = base.record_data.get("relation_type")
+            base_weight = float(base.record_data.get("edge_weight") or 0.0)
+            other_weight = float(other.record_data.get("edge_weight") or 0.0)
+            if other.operation.value == "UPDATE":
+                other_weight += float(other.record_data.get("weight_delta") or 0.0)
+            if str(rel).upper() == "CAUSES":
+                base.record_data["edge_weight"] = max(base_weight, other_weight)
+            else:
+                base.record_data["edge_weight"] = base_weight + other_weight
+
+            base_conf = float(base.record_data.get("confidence_score") or 0.0)
+            other_conf = float(other.record_data.get("confidence_score") or 0.0)
+            if other.operation.value == "UPDATE":
+                other_conf += float(other.record_data.get("confidence_delta") or 0.0)
+            base.record_data["confidence_score"] = max(base_conf, other_conf)
+
+            base.record_data["updated_at"] = _now_ms()
+            return base
+
+        # UPDATE base: merge deltas and evidence
+        if base.operation.value == "UPDATE" and other.operation.value == "UPDATE":
+            base.record_data["weight_delta"] = float(
+                base.record_data.get("weight_delta") or 0.0
+            ) + float(other.record_data.get("weight_delta") or 0.0)
+            base.record_data["confidence_delta"] = float(
+                base.record_data.get("confidence_delta") or 0.0
+            ) + float(other.record_data.get("confidence_delta") or 0.0)
+
+            e1 = _read_json_list(base.record_data.get("new_evidence_ids_json"))
+            e2 = _read_json_list(other.record_data.get("new_evidence_ids_json"))
+            merged = sorted(set(e1 + e2 + merged_event_ids))
+            if merged:
+                base.record_data["new_evidence_ids_json"] = _write_json_list(merged)
+
+            ev1 = _read_list(base.record_data.get("new_evidence_event_ids"))
+            ev2 = _read_list(other.record_data.get("new_evidence_event_ids"))
+            merged_events = sorted(set(ev1 + ev2 + merged_event_ids))
+            if merged_events:
+                base.record_data["new_evidence_event_ids"] = merged_events
+
+            ep1 = _read_list(base.record_data.get("new_evidence_episode_ids"))
+            ep2 = _read_list(other.record_data.get("new_evidence_episode_ids"))
+            merged_eps = sorted(set(ep1 + ep2))
+            if merged_eps:
+                base.record_data["new_evidence_episode_ids"] = merged_eps
+
+            base.record_data["observation_count_increment"] = int(
+                base.record_data.get("observation_count_increment") or 0
+            ) + int(other.record_data.get("observation_count_increment") or 0)
+            base.record_data["updated_at"] = _now_ms()
+            return base
+
+        # Fallback: keep base (prefer INSERT over UPDATE due to above selection)
+        base.record_data["updated_at"] = _now_ms()
+        return base
 
     def _create_edge_insert(self, edge: KGEdge) -> StagedWrite:
         """Create st_kg_edges INSERT for new edge."""
@@ -332,12 +492,24 @@ class KGWriteAssembler:
             "source_entity_id": edge.source_entity_id,
             "target_entity_id": edge.target_entity_id,
             "relation_type": edge.relationship_type,
+            "relation_subtype": edge.relation_subtype,
             "edge_weight": edge.weight,
             "confidence_score": edge.confidence,
             "source_episodes_json": json.dumps(edge.evidence_event_ids),
+            "co_occurrence_count": len(edge.evidence_event_ids) if edge.evidence_event_ids else 1,
             "observation_count": len(edge.evidence_event_ids) if edge.evidence_event_ids else 1,
+            "last_observed_at": edge.last_observed_at or now_ms,
+            "decay_factor": 1.0,
+            # GAP-007: New enrichment fields
+            "source_algorithm": getattr(edge, "source_algorithm", None),
+            "evidence_event_ids": edge.evidence_event_ids or [],
+            "evidence_episode_ids": edge.evidence_episode_ids or [],
+            "properties_json": getattr(edge, "properties_json", None),
+            "algorithm_params_json": getattr(edge, "algorithm_params_json", None),
+            "inference_chain_json": getattr(edge, "inference_chain_json", None),
             "archival_status": "ACTIVE",
             "valid_from": now_ms,
+            "valid_from_ms": now_ms,
             "created_at": now_ms,
             "updated_at": now_ms,
         }
@@ -355,6 +527,8 @@ class KGWriteAssembler:
             event_ids=edge.evidence_event_ids,
         )
         write.idempotency_key = idem_key
+        # GAP-007: Attach observation context for st_observations recording
+        write.observation_context = getattr(edge, "observation_context", None)
 
         return write
 
@@ -389,9 +563,13 @@ class KGWriteAssembler:
             "confidence_score": causal.confidence,
             "properties_json": json.dumps(properties),
             "source_episodes_json": "[]",
+            "co_occurrence_count": 1,
             "observation_count": 1,
+            "last_observed_at": now_ms,
+            "decay_factor": 1.0,
             "archival_status": "ACTIVE",
             "valid_from": now_ms,
+            "valid_from_ms": now_ms,
             "created_at": now_ms,
             "updated_at": now_ms,
         }
@@ -429,13 +607,39 @@ class KGWriteAssembler:
         if update.confidence_delta != 0:
             record_data["confidence_delta"] = update.confidence_delta
 
+        # GAP-007: Apply new_weight (e.g., from weight_normalization)
+        if hasattr(update, "new_weight") and update.new_weight is not None:
+            record_data["new_weight"] = update.new_weight
+
         # Add new evidence IDs
         if update.new_evidence_ids:
             record_data["new_evidence_ids_json"] = json.dumps(update.new_evidence_ids)
 
+        # GAP-007: Add new evidence event IDs array
+        if hasattr(update, "new_evidence_event_ids") and update.new_evidence_event_ids:
+            record_data["new_evidence_event_ids"] = update.new_evidence_event_ids
+
+        # GAP-007: Add new evidence episode IDs array
+        if hasattr(update, "new_evidence_episode_ids") and update.new_evidence_episode_ids:
+            record_data["new_evidence_episode_ids"] = update.new_evidence_episode_ids
+
+        # GAP-007: Source algorithm attribution
+        if hasattr(update, "source_algorithm") and update.source_algorithm:
+            record_data["source_algorithm"] = update.source_algorithm
+
         # GAP-001 M9: Increment observation_count for Granger causality
         if update.observation_count_increment > 0:
             record_data["observation_count_increment"] = update.observation_count_increment
+            record_data["decay_factor"] = 1.0
+
+        if update.last_observed_at:
+            record_data["last_observed_at"] = update.last_observed_at
+        elif (
+            update.new_evidence_ids
+            or update.new_evidence_event_ids
+            or update.observation_count_increment > 0
+        ):
+            record_data["last_observed_at"] = _now_ms()
 
         idem_key = self.idempotency.for_truth_write(
             LAYER_ST_KG_EDGES,
@@ -448,9 +652,11 @@ class KGWriteAssembler:
             data=record_data,
             phase=self.source_phase,
             expected_version=0,  # Resolved at R7
-            event_ids=update.new_evidence_ids,
+            event_ids=update.new_evidence_event_ids or update.new_evidence_ids,
         )
         write.idempotency_key = idem_key
+        # GAP-007: Attach observation context for st_observations recording
+        write.observation_context = getattr(update, "observation_context", None)
 
         return write
 

@@ -69,6 +69,8 @@ required_capabilities:
   # Embedding vectors
   - st_vec.read               # Similarity queries
   - st_vec.write              # Episode/pattern embeddings
+  # FAISS union index (for semantic_similarity enricher)
+  - faiss.read                # Query union index for similar entities
   # Truth layer - Episodic
   - st_epi.read
   - st_epi.write

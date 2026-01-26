@@ -2,7 +2,7 @@
 
 **Status**: Living Document (Source of Truth)
 **Version**: 2.1.0
-**Last Updated**: 2025-01-17
+**Last Updated**: 2026-01-24
 **Owner**: Architecture Team
 
 ---
@@ -69,7 +69,7 @@ This document is the **single source of truth** for tracking all K0 components b
 | Environment Vars | 35 | 35 | - | - |
 | Config Files | 10 | 10 | - | - |
 
-> **Last Updated**: 2025-01-17
+> **Last Updated**: 2026-01-24
 > **Module Breakdown**: 14 Production-Ready, 24 Implementation (18 P03 + 4 Recall + 2 Other), 2 Experimental, 4 Planning, 1 Deprecated
 > **P03 Algorithm Breakdown**: 89 files (45 core, 7 text_gen, 6 dream, 2 emission, 13 staging, 7 truth_writer, 7 truth_layers, 2 root)
 > **P03 Pipeline Breakdown**: 78 files (9 phases, 22 ops, 8 qos, 8 security, 4 feedback, 3 learning, 1 maintenance, 1 api, 1 cache, 21 root)
@@ -405,7 +405,6 @@ P03 Pipeline Phases (k0/pipelines/p03/phases/)
 | `access_tracker.py` | Analytics | Tracks memory access patterns | r2, r5 |
 | `alias_detector.py` | Dedup | Detects entity aliases | r1, r4 |
 | `ambiguous_resolver.py` | NER | Resolves ambiguous entity references | r1 |
-| `bert_ner_adapter.py` | NER | BERT-based named entity recognition | r1 |
 | `bgt_sm.py` | Clustering | BGT small model clustering | r2 |
 | `causality_thresholds.py` | Analytics | Defines causality detection thresholds | r3 |
 | `centroid_calculator.py` | Clustering | Calculates cluster centroids | r2 |
@@ -1435,6 +1434,7 @@ graph LR
 | 0065 | `0065_st_prospective_inline_vectors.py` | - | idx_prospective_* | Add inline vectors to st_prospective | ❌ No |
 | 0066 | `0066_st_kg_dom_inline_vectors.py` | - | idx_kg_dom_* | Add inline vectors to st_kg_dom | ❌ No |
 | 0067 | `0067_st_observations.py` | st_observations | idx_obs_* (13) | Holistic observation log for truth layers | ❌ No |
+| 0068 | `0068_st_observations_allow_kg_edges_layer.py` | - | - | Allow st_kg_edges layer in st_observations CHECK constraint | ❌ No |
 
 > **Migration Tool**: Alembic (SQLAlchemy)
 > **Location**: `k0/db/alembic/versions/`
@@ -1835,9 +1835,21 @@ graph LR
 | `lock_acquire()` | `advisory_lock.acquire` | pg_advisory_lock | LOCK | ✅ Yes | <5ms | ✅ Active |
 | `lock_release()` | `advisory_lock.release` | pg_advisory_lock | UNLOCK | ✅ Yes | <5ms | ✅ Active |
 | `lock_is_held()` | `advisory_lock.read` | pg_locks | SELECT | ✅ Yes | <5ms | ✅ Active |
+| `union_index_search()` | `faiss.read` | FAISS union index | SEARCH | ✅ Yes | <20ms | ✅ Active |
+| `union_index_rebuild()` | `faiss.write` | FAISS union index | REBUILD | ✅ Yes | <5s | ✅ Active |
+| `union_index_stats()` | `faiss.read` | FAISS union index | STATS | ✅ Yes | <5ms | ✅ Active |
+| `context_expand()` | `faiss.read, context.expand` | st_vec, st_kg_dom, st_kg_edges | SELECT | ✅ Yes | <100ms | ✅ Active |
+| `kg_entities_query()` | `st_kg_dom.read` | st_kg_dom | SELECT | ✅ Yes | <100ms | ✅ Active |
+| `kg_edges_query()` | `st_kg_edges.read` | st_kg_edges | SELECT | ✅ Yes | <100ms | ✅ Active |
+| `kg_edges_lookup()` | `st_kg_edges.read` | st_kg_edges | SELECT | ✅ Yes | <50ms | ✅ Active |
+| `kg_entities_lookup()` | `st_kg_dom.read` | st_kg_dom | SELECT | ✅ Yes | <50ms | ✅ Active |
+| `kg_candidates_fuzzy_query()` | `st_kg_dom.read` | st_kg_dom | SELECT | ✅ Yes | <50ms | ✅ Active |
+| `embedding_vectors_batch_query()` | `st_vec.read` | st_vec | SELECT | ✅ Yes | <50ms | ✅ Active |
+| `observations_write()` | `st_observations.write` | st_observations | INSERT | ✅ Yes | <10ms | ✅ Active |
+| `observations_write_batch()` | `st_observations.write` | st_observations | INSERT | ✅ Yes | <50ms | ✅ Active |
 <!-- AUTOGEN:SYSCALL_TABLE:END -->
 
-> **Source**: `k0/kernel/syscalls.py` (19 syscall methods, 2623 lines)
+> **Source**: `k0/kernel/syscalls.py` (34 syscall methods, 4450 lines)
 > **Capability Check**: `_require_cap()` method at line 2565
 > **Architecture**: Dennis & Van Horn (1966) capability-based security
 > **Audit**: All syscalls include structured logging with `pipeline_id`, `operation`, `latency_ms`
@@ -1868,7 +1880,7 @@ graph LR
 4. **ADR**: Architecture Decision Record documenting the grant
 5. **Notes**: Deprecation, special conditions
 
-### All Unique Capabilities (27 Total)
+### All Unique Capabilities (29 Total)
 
 | Capability | Type | Status | Primary Consumer |
 |------------|------|--------|------------------|
@@ -1889,6 +1901,7 @@ graph LR
 | `st_social.write` | Storage | 🎯 Planned | P03 |
 | `st_prospective.write` | Storage | 🎯 Planned | P03 |
 | `st_kg_dom.write` | Storage | 🎯 Planned | P03 |
+| `st_kg_dom.read` | Storage | ✅ Active | P03, P05 |
 | `st_kg_edges.write` | Storage | 🎯 Planned | P03 |
 | `st_kg_edges.read` | Storage | ✅ Active | P02, P03 |
 | `st_learning_queue.read` | Storage | 🎯 Planned | P06 |
@@ -1903,8 +1916,9 @@ graph LR
 | `working_memory.write` | Storage | 🎯 Planned | - |
 | `embeddings.read` | Storage | 🎯 Planned | - |
 | `ultrabert.embed` | API | ✅ Active | P08, M22, M25 |
-| `faiss.read` | Index | ⚠️ pgvector replaces | - |
-| `faiss.write` | Index | ⚠️ pgvector replaces | - |
+| `context.expand` | API | ✅ Active | P03 |
+| `faiss.read` | Index | ✅ Active | P03, P08 |
+| `faiss.write` | Index | ✅ Active | P08 |
 | `st_hipp_store.write` | Storage | ❌ Deprecated | - |
 
 > **Principle**: Least-privilege (Saltzer & Schroeder 1975) - grant only what's needed
@@ -2547,6 +2561,8 @@ K{NNN}[.{sub}] - {Title}
 | k009.3 | Batch Optimization | ✅ Accepted | M13, M14 | 2025-11-16 | K0 Team | `docs/architecture/decisions-K0/modules/k009.3-batch-optimization.md` |
 | K010.1 | Atomic UoW Writer | ✅ Accepted | M16 | 2025-11-16 | K0 Team | `docs/architecture/decisions-K0/modules/k010.1-atomic-uow-writer.md` |
 | K011.1 | Outbox Emitter | ✅ Accepted | M17 | 2025-11-16 | K0 Team | `docs/architecture/decisions-K0/modules/k011.1-outbox-emitter.md` |
+| K023 | Entity Filtering Consolidation - Single Source of Truth | 📝 Draft | P03, consolidation/algorithms/entity_extractor, pipelines/p03/phases/r4_kg_consolidator | 2025-01-19 | K0 Architecture Team | `docs/architecture/decisions-K0/modules/k023-entity-filtering-consolidation.md` |
+| K023.1 | NER Quality Issues Catalog | ✅ Active | P03, UltraBERT NER post-processing | 2025-01-19 | K0 Architecture Team | `docs/architecture/decisions-K0/modules/k023.1-ner-quality-issues-catalog.md` |
 
 ### ADR Summary
 

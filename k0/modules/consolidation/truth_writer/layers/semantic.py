@@ -326,34 +326,45 @@ class SemanticLayerWriter:
         await uow.connection.execute(
             """
             INSERT INTO st_sem (
-                pattern_id, tenant_id, space_id, pattern_type, pattern_subtype,
-                pattern_name, source_episodes_json, source_episode_count,
-                confidence_score,
-                observation_count, last_observed_at,
+                pattern_id, tenant_id, space_id, actor_id, pattern_type, pattern_subtype,
+                pattern_name, pattern_description, pattern_attributes_json,
+                temporal_regularity, temporal_pattern_json,
+                source_episodes_json, source_episode_count,
+                embedding_id, confidence_score,
+                observation_count, last_observed_at, first_observed_at,
                 is_canonical, supersedes_id,
                 created_at, updated_at, valid_from, version,
                 archival_status,
                 source_texts_json, embedding_text, embedding_vector, embedding_model
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1,
-                      'ACTIVE', $17, $18, $19, $20)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26,
+                      $27, $28, $29)
             ON CONFLICT (pattern_id) DO NOTHING
             """,
             data["pattern_id"],
             data["tenant_id"],
             data["space_id"],
+            data.get("actor_id"),
             data.get("pattern_type", "general"),
             data.get("pattern_subtype"),  # GAP-005: Fine-grained subtype
             data.get("pattern_name") or data.get("canonical_name", ""),
+            data.get("pattern_description"),
+            data.get("pattern_attributes_json"),
+            data.get("temporal_regularity"),
+            data.get("temporal_pattern_json"),
             source_episodes_json_str,
             source_episode_count,
+            data.get("embedding_id"),
             data.get("confidence_score") or data.get("current_confidence", 1.0),
             data.get("observation_count", 1),
             data.get("last_observed_at", now),
+            data.get("first_observed_at", now),
             data.get("is_canonical", True),
             data.get("supersedes_id") or data.get("parent_pattern_id"),
             data.get("created_at", now),
             data.get("updated_at", now),
             data.get("valid_from", now),
+            data.get("version", 1),
+            data.get("archival_status", "ACTIVE"),
             # GAP-001 new columns:
             tv_result.source_texts_json,
             tv_result.embedding_text,
@@ -518,21 +529,21 @@ class SemanticLayerWriter:
             uow: UnitOfWork providing database connection
             write: StagedWrite with parent_pattern_id
         """
-        parent_id = write.record_data.get("parent_pattern_id")
         now = _now_ms()
 
         result = await uow.connection.execute(
             """
             UPDATE st_sem
             SET is_canonical = FALSE,
-                parent_pattern_id = $1,
-                last_observed_at = $2,
+                                last_observed_at = $1,
+                                updated_at = $1,
+                                valid_to = COALESCE($2, valid_to),
                 version = version + 1
             WHERE pattern_id = $3
               AND ($4::int IS NULL OR version = $4)
             """,
-            parent_id,
             now,
+            write.record_data.get("valid_to", now),
             write.record_id,
             write.expected_version,
         )
@@ -611,6 +622,8 @@ class SemanticLayerWriter:
             SET archival_status = 'ARCHIVED',
                 archived_at = $1,
                 archived_reason = $2,
+                                updated_at = $1,
+                                valid_to = $1,
                 version = version + 1
             WHERE pattern_id = $3
               AND (archival_status IS NULL OR archival_status != 'ARCHIVED')
@@ -639,6 +652,8 @@ class SemanticLayerWriter:
             SET archival_status = 'TOMBSTONE',
                 archived_at = $1,
                 archived_reason = 'tombstone',
+                updated_at = $1,
+                valid_to = $1,
                 version = version + 1
             WHERE pattern_id = $2
             """,

@@ -20,6 +20,7 @@ Related:
 from __future__ import annotations
 
 import logging
+import struct
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -3412,7 +3413,8 @@ class Syscalls:
                 query = f"""
                     SELECT
                         entity_id, canonical_name, entity_type, aliases_json,
-                        confidence_score, embedding_id, observation_count
+                        confidence_score, embedding_id, observation_count,
+                        embedding_vector
                     FROM st_kg_dom
                     WHERE tenant_id = $1
                       AND space_id = $2
@@ -3426,7 +3428,8 @@ class Syscalls:
                 query = """
                     SELECT
                         entity_id, canonical_name, entity_type, aliases_json,
-                        confidence_score, embedding_id, observation_count
+                        confidence_score, embedding_id, observation_count,
+                        embedding_vector
                     FROM st_kg_dom
                     WHERE tenant_id = $1
                       AND space_id = $2
@@ -3438,8 +3441,9 @@ class Syscalls:
 
             rows = await conn.fetch(query, *params)
 
-            entities = [
-                {
+            entities = []
+            for row in rows:
+                entity_dict = {
                     "entity_id": row["entity_id"],
                     "canonical_name": row["canonical_name"],
                     "entity_type": row["entity_type"],
@@ -3449,8 +3453,16 @@ class Syscalls:
                     ),
                     "embedding_id": row["embedding_id"],
                 }
-                for row in rows
-            ]
+
+                # GAP-007: Decode inline embedding_vector if present
+                embedding_bytes = row["embedding_vector"]
+                if embedding_bytes:
+                    # 768-dim float32 = 3072 bytes
+                    if len(embedding_bytes) == 768 * 4:
+                        embedding = list(struct.unpack(f"{768}f", embedding_bytes))
+                        entity_dict["embedding"] = embedding
+
+                entities.append(entity_dict)
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             logger.debug(
@@ -3605,6 +3617,287 @@ class Syscalls:
             return {
                 "edges": edges,
                 "count": len(edges),
+            }
+
+    # =========================================================================
+    # Episode Queries (R5 Parity Resolution)
+    # =========================================================================
+
+    async def episodes_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        limit: int = 100,
+        order_by: str = "start_time_utc DESC",
+    ) -> dict[str, Any]:
+        """
+        Query st_epi for accumulated episodes (requires st_epi.read cap).
+
+        R5 Parity Resolution: Load accumulated episodes from prior cycles
+        for RoutineDetector, CPN, TDL-HCO, and SPC-UQ algorithms.
+        These algorithms need historical episode context to detect patterns.
+
+        Capability Required: "st_epi.read"
+
+        Storage Table: st_epi
+        - Purpose: Episodic memory (clustered episodes)
+        - Query returns recent episodes ordered by start_time DESC
+        - Includes observation-derived sentiment/salience from st_observations
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            limit: Max episodes to return (default: 100)
+            order_by: Order clause (default: start_time_utc DESC)
+
+        Returns:
+            Dictionary with:
+            - episodes: list[dict] with episode fields
+            - count: int (number of records returned)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_epi.read" capability
+
+        Example:
+            >>> result = await syscalls.episodes_query(
+            ...     tenant_id="tenant_1",
+            ...     space_id="space_1",
+            ...     limit=100
+            ... )
+            >>> episodes = result["episodes"]
+
+        Performance:
+            - Target: <50ms P95 for 100 episodes
+            - Uses tenant_id, space_id, start_time_utc index
+
+        Related:
+            - R5 Parity Resolution: Merge historical + current-cycle episodes
+            - RoutineDetector: Needs episode history for pattern detection
+            - CPN: Needs episode context for counterfactual generation
+        """
+        self._require_cap("st_epi.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"episodes_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "limit": limit,
+                "operation": "episodes_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Query episodes with observation-derived sentiment/salience
+            query = """
+                SELECT
+                    e.episode_id,
+                    e.episode_summary,
+                    e.episode_type,
+                    e.start_time_utc,
+                    e.end_time_utc,
+                    e.source_events_json,
+                    e.source_event_count,
+                    e.primary_location,
+                    e.participants_json,
+                    e.activity_tags_json,
+                    COALESCE(o.sentiment_score, 0.0) as sentiment_score,
+                    COALESCE(o.salience_score, 0.5) as salience_score
+                FROM st_epi e
+                LEFT JOIN LATERAL (
+                    SELECT AVG(obs.sentiment_score) as sentiment_score,
+                           AVG(obs.salience_score) as salience_score
+                    FROM st_observations obs
+                    WHERE obs.record_id = e.episode_id
+                      AND obs.layer = 'st_epi'
+                ) o ON TRUE
+                WHERE e.tenant_id = $1
+                  AND e.space_id = $2
+                  AND e.archival_status = 'ACTIVE'
+                ORDER BY e.start_time_utc DESC
+                LIMIT $3
+            """
+            params = [tenant_id, space_id, limit]
+
+            rows = await conn.fetch(query, *params)
+
+            episodes = []
+            for row in rows:
+                episode_dict = {
+                    "episode_id": row["episode_id"],
+                    "episode_summary": row["episode_summary"],
+                    "episode_type": row["episode_type"],
+                    "start_time_utc": row["start_time_utc"],
+                    "end_time_utc": row["end_time_utc"],
+                    "source_events_json": row["source_events_json"],
+                    "source_event_count": row["source_event_count"],
+                    "primary_location": row["primary_location"],
+                    "participants_json": row["participants_json"],
+                    "activity_tags_json": row["activity_tags_json"],
+                    "sentiment_score": (
+                        float(row["sentiment_score"]) if row["sentiment_score"] else 0.0
+                    ),
+                    "salience_score": (
+                        float(row["salience_score"]) if row["salience_score"] else 0.5
+                    ),
+                }
+                episodes.append(episode_dict)
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"episodes_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "episode_count": len(episodes),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "episodes_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "episodes": episodes,
+                "count": len(episodes),
+            }
+
+    async def procedural_memory_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Query st_procedural for accumulated routines (requires st_procedural.read cap).
+
+        R5 Parity Resolution: Load accumulated routines from prior cycles
+        for TDL-HCO algorithm. TDL-HCO needs existing routines to optimize
+        using temporal difference learning.
+
+        Capability Required: "st_procedural.read"
+
+        Storage Table: st_procedural
+        - Purpose: Procedural memory (habits/routines)
+        - Query returns routines ordered by regularity_score DESC
+        - Includes action sequence for TD learning
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            limit: Max routines to return (default: 50)
+
+        Returns:
+            Dictionary with:
+            - routines: list[dict] with routine fields
+            - count: int (number of records returned)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_procedural.read" capability
+
+        Example:
+            >>> result = await syscalls.procedural_memory_query(
+            ...     tenant_id="tenant_1",
+            ...     space_id="space_1",
+            ...     limit=50
+            ... )
+            >>> routines = result["routines"]
+
+        Performance:
+            - Target: <30ms P95 for 50 routines
+            - Uses tenant_id, space_id index
+
+        Related:
+            - R5 Parity Resolution: Load historical routines for TDL-HCO
+            - TDL-HCO: Needs existing routines to detect bottlenecks
+        """
+        self._require_cap("st_procedural.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"procedural_memory_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "limit": limit,
+                "operation": "procedural_memory_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            query = """
+                SELECT
+                    routine_id,
+                    actor_id,
+                    routine_name,
+                    routine_category,
+                    temporal_anchor,
+                    day_pattern,
+                    frequency,
+                    regularity_score,
+                    action_sequence_json,
+                    source_episodes_json,
+                    source_episode_count,
+                    lifecycle_state
+                FROM st_procedural
+                WHERE tenant_id = $1
+                  AND space_id = $2
+                  AND archival_status = 'ACTIVE'
+                ORDER BY regularity_score DESC
+                LIMIT $3
+            """
+            params = [tenant_id, space_id, limit]
+
+            rows = await conn.fetch(query, *params)
+
+            routines = []
+            for row in rows:
+                routine_dict = {
+                    "routine_id": row["routine_id"],
+                    "actor_id": row["actor_id"],
+                    "routine_name": row["routine_name"],
+                    "routine_category": row["routine_category"],
+                    "temporal_anchor": row["temporal_anchor"],
+                    "day_pattern": row["day_pattern"],
+                    "frequency": row["frequency"],
+                    "regularity_score": (
+                        float(row["regularity_score"]) if row["regularity_score"] else 0.0
+                    ),
+                    "action_sequence_json": row["action_sequence_json"],
+                    "source_episodes_json": row["source_episodes_json"],
+                    "source_episode_count": row["source_episode_count"],
+                    "lifecycle_state": row["lifecycle_state"],
+                }
+                routines.append(routine_dict)
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"procedural_memory_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "routine_count": len(routines),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "procedural_memory_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "routines": routines,
+                "count": len(routines),
             }
 
     async def kg_edges_lookup(
@@ -4044,6 +4337,488 @@ class Syscalls:
                 "count": len(vectors),
                 "missing": missing,
             }
+
+    async def embeddings_by_event_ids(
+        self,
+        event_ids: list[str],
+    ) -> dict[str, Any]:
+        """
+        Batch query st_vec for embeddings by event IDs (requires st_vec.read cap).
+
+        GAP-007: Semantic similarity enricher needs embeddings for new entities.
+        Entities have source_event_ids from P02, use those to get embeddings.
+
+        Capability Required: "st_vec.read"
+
+        Storage Table: st_vec
+        - Query by event_id (from P02 write)
+        - Returns first embedding for each event
+
+        Args:
+            event_ids: List of event IDs to fetch embeddings for
+
+        Returns:
+            Dictionary with:
+            - embeddings: dict[event_id -> list[float]] for found embeddings
+            - count: int (number found)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_vec.read" capability
+        """
+        self._require_cap("st_vec.read")
+
+        if not event_ids:
+            return {"embeddings": {}, "count": 0}
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"embeddings_by_event_ids: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "event_count": len(event_ids),
+                "operation": "embeddings_by_event_ids",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Query by event_id - get first embedding per event
+            placeholders = ", ".join(f"${i+1}" for i in range(len(event_ids)))
+            query = f"""
+                SELECT DISTINCT ON (event_id) event_id, vector, vector_dim
+                FROM st_vec
+                WHERE event_id IN ({placeholders})
+                ORDER BY event_id, created_at DESC
+            """
+
+            rows = await conn.fetch(query, *event_ids)
+
+            embeddings: dict[str, list[float]] = {}
+            for row in rows:
+                event_id = row["event_id"]
+                vector_bytes = row["vector"]
+                vector_dim = row["vector_dim"]
+
+                if vector_bytes and vector_dim:
+                    try:
+                        float_count = len(vector_bytes) // 4
+                        floats = list(struct.unpack(f"{float_count}f", vector_bytes))
+                        embeddings[event_id] = floats
+                    except struct.error:
+                        logger.warning(
+                            f"Failed to unpack vector for event {event_id}",
+                            extra={"event_id": event_id},
+                        )
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"embeddings_by_event_ids completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "requested": len(event_ids),
+                    "found": len(embeddings),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "embeddings_by_event_ids",
+                },
+            )
+
+            return {
+                "embeddings": embeddings,
+                "count": len(embeddings),
+            }
+
+    # =========================================================================
+    # Observation Recording (Issue 7.4)
+    # =========================================================================
+
+    async def observations_write(
+        self,
+        observation_id: str,
+        tenant_id: str,
+        layer: str,
+        record_id: str,
+        observed_at: int,
+        observation_type: str,
+        source_event_id: str | None = None,
+        observation_weight: float = 1.0,
+        sentiment_score: float | None = None,
+        sentiment_label: str | None = None,
+        affect_valence: float | None = None,
+        affect_arousal: float | None = None,
+        dominant_emotion: str | None = None,
+        salience_score: float | None = None,
+        novelty_score: float | None = None,
+        salience_band: str | None = None,
+        ingress_channel: str | None = None,
+        ingress_source: str | None = None,
+        device_kind: str | None = None,
+        location_name: str | None = None,
+        location_type: str | None = None,
+        geohash_6: str | None = None,
+        social_context: str | None = None,
+        social_intimacy: float | None = None,
+        is_solo_event: bool | None = None,
+        num_participants: int | None = None,
+        time_of_day_bucket: str | None = None,
+        circadian_slot: str | None = None,
+        is_weekend: bool | None = None,
+        day_of_week: int | None = None,
+        anchor_time_utc: int | None = None,
+        original_temporal_expr: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Write observation with holistic context to st_observations (requires st_observations.write cap).
+
+        Issue 7.4: Every INSERT or MERGE to a truth layer should record an observation
+        to preserve the full context of WHEN and WITH WHAT CONTEXT each observation happened.
+
+        Capability Required: "st_observations.write"
+
+        Storage Table: st_observations
+        - Purpose: Per-observation holistic context (temporal, emotional, location, social)
+        - Called by ObservationRecorder after each truth layer INSERT/MERGE
+        - Links to truth layer record via (layer, record_id)
+
+        Args:
+            observation_id: ULID for this observation
+            tenant_id: Tenant identifier
+            layer: Truth layer ('st_epi', 'st_sem', 'st_kg_dom', 'st_social', 'st_prospective')
+            record_id: Primary key of the truth layer record
+            observed_at: When observation occurred (milliseconds since epoch)
+            observation_type: 'FIRST_SEEN' or 'REINFORCEMENT'
+            source_event_id: Optional source hipp event ID
+            observation_weight: Confidence/weight [0.0, 1.0]
+            sentiment_score: Sentiment score [-1.0, 1.0]
+            sentiment_label: 'positive', 'negative', 'neutral'
+            affect_valence: Valence dimension of affect [-1.0, 1.0]
+            affect_arousal: Arousal dimension of affect [0.0, 1.0]
+            dominant_emotion: Primary emotion label
+            salience_score: How salient/important [0.0, 1.0]
+            novelty_score: How novel [0.0, 1.0]
+            salience_band: 'HIGH', 'MEDIUM', 'LOW'
+            ingress_channel: 'whatsapp', 'sms', 'voice', etc.
+            ingress_source: Device or app source
+            device_kind: 'mobile', 'desktop', 'tablet'
+            location_name: Human-readable location name
+            location_type: 'home', 'work', 'school', etc.
+            geohash_6: 6-character geohash
+            social_context: 'solo', 'family', 'friends', 'work'
+            social_intimacy: Relationship closeness [0.0, 1.0]
+            is_solo_event: True if user was alone
+            num_participants: Number of people involved
+            time_of_day_bucket: 'morning', 'afternoon', 'evening', 'night'
+            circadian_slot: 'early_morning', 'morning', 'midday', etc.
+            is_weekend: True if weekend
+            day_of_week: 0=Monday, 6=Sunday
+            anchor_time_utc: UTC anchor time (milliseconds)
+            original_temporal_expr: Original temporal expression from text
+
+        Returns:
+            Dictionary with:
+            - observation_id: str
+            - layer: str
+            - record_id: str
+            - success: bool
+
+        Raises:
+            PermissionError: If pipeline lacks "st_observations.write" capability
+            ValueError: If required parameters missing or invalid
+
+        Example:
+            >>> await syscalls.observations_write(
+            ...     observation_id="01HQXYZ...",
+            ...     tenant_id="tenant_1",
+            ...     layer="st_epi",
+            ...     record_id="episode_abc123",
+            ...     observed_at=1705600000000,
+            ...     observation_type="FIRST_SEEN",
+            ...     sentiment_score=0.8,
+            ...     dominant_emotion="joy",
+            ... )
+
+        Performance:
+            - Target: <10ms P95 (single INSERT)
+            - Uses observation_id primary key
+
+        Related:
+            - Issue 7.4: Per-observation context preservation
+            - ObservationRecorder: Module that calls this syscall
+            - Truth layer writers: Call recorder after INSERT/MERGE
+        """
+        self._require_cap("st_observations.write")
+
+        # Validation
+        valid_layers = {"st_epi", "st_sem", "st_kg_dom", "st_social", "st_prospective"}
+        if not observation_id:
+            raise ValueError("observation_id required for observations_write")
+        if not tenant_id:
+            raise ValueError("tenant_id required for observations_write")
+        if layer not in valid_layers:
+            raise ValueError(f"Invalid layer: {layer}. Must be one of {valid_layers}")
+        if not record_id:
+            raise ValueError("record_id required for observations_write")
+        if observation_type not in ("FIRST_SEEN", "REINFORCEMENT"):
+            raise ValueError(f"Invalid observation_type: {observation_type}")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"observations_write: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "observation_id": observation_id,
+                "layer": layer,
+                "record_id": record_id,
+                "observation_type": observation_type,
+                "operation": "observations_write",
+            },
+        )
+
+        try:
+            async with self._uow_factory() as uow:
+                conn = uow._connection
+                if conn is None:
+                    raise RuntimeError("UnitOfWork connection not initialized")
+
+                await conn.execute(
+                    """
+                    INSERT INTO st_observations (
+                        observation_id, tenant_id, layer, record_id,
+                        observed_at, observation_type, source_event_id,
+                        observation_weight, sentiment_score, sentiment_label,
+                        affect_valence, affect_arousal, dominant_emotion,
+                        salience_score, novelty_score, salience_band,
+                        ingress_channel, ingress_source, device_kind,
+                        location_name, location_type, geohash_6,
+                        social_context, social_intimacy, is_solo_event,
+                        num_participants, time_of_day_bucket, circadian_slot,
+                        is_weekend, day_of_week, anchor_time_utc,
+                        original_temporal_expr
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                        $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                        $31, $32
+                    )
+                    """,
+                    observation_id,
+                    tenant_id,
+                    layer,
+                    record_id,
+                    observed_at,
+                    observation_type,
+                    source_event_id,
+                    observation_weight,
+                    sentiment_score,
+                    sentiment_label,
+                    affect_valence,
+                    affect_arousal,
+                    dominant_emotion,
+                    salience_score,
+                    novelty_score,
+                    salience_band,
+                    ingress_channel,
+                    ingress_source,
+                    device_kind,
+                    location_name,
+                    location_type,
+                    geohash_6,
+                    social_context,
+                    social_intimacy,
+                    is_solo_event,
+                    num_participants,
+                    time_of_day_bucket,
+                    circadian_slot,
+                    is_weekend,
+                    day_of_week,
+                    anchor_time_utc,
+                    original_temporal_expr,
+                )
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"observations_write completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "observation_id": observation_id,
+                    "layer": layer,
+                    "record_id": record_id,
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "observations_write",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "observation_id": observation_id,
+                "layer": layer,
+                "record_id": record_id,
+                "success": True,
+            }
+
+        except Exception as e:
+            logger.error(
+                f"observations_write failed: {self._pipeline_id}",
+                exc_info=True,
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "observation_id": observation_id,
+                    "layer": layer,
+                    "error": str(e),
+                    "operation": "observations_write",
+                },
+            )
+            raise RuntimeError(f"Failed to write observation: {e}") from e
+
+    async def observations_write_batch(
+        self,
+        observations: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """
+        Write multiple observations efficiently (requires st_observations.write cap).
+
+        Batch version of observations_write for efficiency when recording
+        multiple observations in a single transaction.
+
+        Capability Required: "st_observations.write"
+
+        Args:
+            observations: List of observation dicts, each with same fields as
+                         observations_write (observation_id, tenant_id, layer, etc.)
+
+        Returns:
+            Dictionary with:
+            - count: int (number of observations written)
+            - observation_ids: list[str]
+            - success: bool
+
+        Raises:
+            PermissionError: If pipeline lacks "st_observations.write" capability
+            ValueError: If any observation is invalid
+
+        Performance:
+            - Target: <50ms P95 for 10 observations
+            - Uses executemany for batch efficiency
+        """
+        self._require_cap("st_observations.write")
+
+        if not observations:
+            return {"count": 0, "observation_ids": [], "success": True}
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"observations_write_batch: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "batch_size": len(observations),
+                "operation": "observations_write_batch",
+            },
+        )
+
+        observation_ids: list[str] = []
+
+        try:
+            async with self._uow_factory() as uow:
+                conn = uow._connection
+                if conn is None:
+                    raise RuntimeError("UnitOfWork connection not initialized")
+
+                for obs in observations:
+                    # Validate each observation
+                    valid_layers = {"st_epi", "st_sem", "st_kg_dom", "st_social", "st_prospective"}
+                    if obs.get("layer") not in valid_layers:
+                        raise ValueError(f"Invalid layer: {obs.get('layer')}")
+                    if obs.get("observation_type") not in ("FIRST_SEEN", "REINFORCEMENT"):
+                        raise ValueError(f"Invalid observation_type: {obs.get('observation_type')}")
+
+                    await conn.execute(
+                        """
+                        INSERT INTO st_observations (
+                            observation_id, tenant_id, layer, record_id,
+                            observed_at, observation_type, source_event_id,
+                            observation_weight, sentiment_score, sentiment_label,
+                            affect_valence, affect_arousal, dominant_emotion,
+                            salience_score, novelty_score, salience_band,
+                            ingress_channel, ingress_source, device_kind,
+                            location_name, location_type, geohash_6,
+                            social_context, social_intimacy, is_solo_event,
+                            num_participants, time_of_day_bucket, circadian_slot,
+                            is_weekend, day_of_week, anchor_time_utc,
+                            original_temporal_expr
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                            $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                            $31, $32
+                        )
+                        """,
+                        obs.get("observation_id"),
+                        obs.get("tenant_id"),
+                        obs.get("layer"),
+                        obs.get("record_id"),
+                        obs.get("observed_at"),
+                        obs.get("observation_type"),
+                        obs.get("source_event_id"),
+                        obs.get("observation_weight", 1.0),
+                        obs.get("sentiment_score"),
+                        obs.get("sentiment_label"),
+                        obs.get("affect_valence"),
+                        obs.get("affect_arousal"),
+                        obs.get("dominant_emotion"),
+                        obs.get("salience_score"),
+                        obs.get("novelty_score"),
+                        obs.get("salience_band"),
+                        obs.get("ingress_channel"),
+                        obs.get("ingress_source"),
+                        obs.get("device_kind"),
+                        obs.get("location_name"),
+                        obs.get("location_type"),
+                        obs.get("geohash_6"),
+                        obs.get("social_context"),
+                        obs.get("social_intimacy"),
+                        obs.get("is_solo_event"),
+                        obs.get("num_participants"),
+                        obs.get("time_of_day_bucket"),
+                        obs.get("circadian_slot"),
+                        obs.get("is_weekend"),
+                        obs.get("day_of_week"),
+                        obs.get("anchor_time_utc"),
+                        obs.get("original_temporal_expr"),
+                    )
+                    observation_ids.append(obs.get("observation_id", ""))
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"observations_write_batch completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "batch_size": len(observations),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "observations_write_batch",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "count": len(observation_ids),
+                "observation_ids": observation_ids,
+                "success": True,
+            }
+
+        except Exception as e:
+            logger.error(
+                f"observations_write_batch failed: {self._pipeline_id}",
+                exc_info=True,
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "batch_size": len(observations),
+                    "error": str(e),
+                    "operation": "observations_write_batch",
+                },
+            )
+            raise RuntimeError(f"Failed to write observations batch: {e}") from e
 
     def _require_cap(self, capability: str) -> None:
         """

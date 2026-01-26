@@ -215,6 +215,7 @@ class R6Coordinator:
                 idempotency_gen,
                 tenant_id=tenant_id,
                 space_id=space_id,
+                consolidation_cycle_id=cycle_ulid,
             ),
             kg_assembler=KGWriteAssembler(
                 idempotency_gen,

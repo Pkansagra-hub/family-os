@@ -1,9 +1,9 @@
 version: 1.0.0
-generated_at: '2026-01-17T19:30:13.647488'
+generated_at: '2026-01-24T13:04:44.704806'
 generator: p03_version_manager.py v1.0.0
 directory: k0\pipelines\p03
 file_count: 78
-total_size_bytes: 1474087
+total_size_bytes: 1471124
 files:
 - path: api\quarantine_review.py
   sha256: fb61435e0755aafaff4b205c1ab56caa26ee3f5d9abf14fc7955e74086fc0da1
@@ -38,9 +38,9 @@ files:
   size: 23185
   modified: '2026-01-01T12:42:12.818816'
 - path: event_state.py
-  sha256: 3fa73bc42ffcd044f10cad31ec6b2fbef8dc7aecf19845e56cc3dc35382b8ea4
-  size: 21237
-  modified: '2026-01-17T15:08:34.102711'
+  sha256: fbdb0e0a7d99367ab7a5e50fd7a027a45f3ec6b3147ac2f880bc7bbe855b4380
+  size: 22002
+  modified: '2026-01-18T22:01:02.525282'
 - path: explainability.py
   sha256: be09a3eb54f66034335ac9d7d89c2b45bfda82d4d658a4f281316409d14a1066
   size: 10373
@@ -190,41 +190,41 @@ files:
   size: 22055
   modified: '2026-01-04T16:17:20.817343'
 - path: phase_outputs.py
-  sha256: 34ed309a389f451791dc6031b2381d919f2c3f70e461e2717f0fe675bbaa7787
-  size: 26230
-  modified: '2026-01-17T15:21:37.665590'
+  sha256: 07d1cf9e9da10d22ae04f6c1eee0d597400efbccf0f2e81cc5481ddf3f5fa7da
+  size: 26915
+  modified: '2026-01-18T22:01:02.085018'
 - path: phases\r0_batch_selector.py
-  sha256: 909a5aecf617f038c9ed253f70ef868fb85b1b9c9adf4404ad4ab4433701de34
-  size: 31397
-  modified: '2026-01-17T14:58:19.415992'
+  sha256: cd68f34756352100b25c025f6de6e2a53439377dd6fb601d70814baa636e01d3
+  size: 32278
+  modified: '2026-01-18T21:13:17.568515'
 - path: phases\r1_importance_scorer.py
   sha256: a479bff8f0af14e0d6d7cbaff29cb288ab1ba772c1d36acaf7c2a7ea2a254dd3
   size: 12367
   modified: '2026-01-02T15:45:34.408010'
 - path: phases\r2_episodic_integrator.py
-  sha256: 78f18947078e799e90795d184d72a3bf60618c04030e8cf80d2a9e75c9912932
-  size: 68411
-  modified: '2026-01-17T15:08:33.376782'
+  sha256: 8667f79d322b2e931d48a37e2c5bd9ba2248e2250a55b9882d19ef16d29a0a22
+  size: 69004
+  modified: '2026-01-18T22:01:02.412306'
 - path: phases\r3_dedup_decay.py
-  sha256: d7dd1b419329b0da82e530109fe73cdbcb0b0b72ae9b3fbcb543cb2702f11349
-  size: 52753
-  modified: '2026-01-13T11:36:12.541855'
+  sha256: a4da87c320aca15869c768766540e647a7e658bf6ca1a80f52296ac1631e3ff1
+  size: 55112
+  modified: '2026-01-18T22:10:24.214983'
 - path: phases\r4_kg_consolidator.py
-  sha256: 5af54a7d7adcf3d41d6978c0e9473e081ec989d195fb9d4b123f69fbb301f2c5
-  size: 133976
-  modified: '2026-01-17T16:02:59.310915'
+  sha256: 2a365c6c4bed14862b3f03a3ef65cd18632d7b9418e65919cb7cb6e7977254c5
+  size: 123947
+  modified: '2026-01-24T02:38:02.634240'
 - path: phases\r5_dream_explorer.py
   sha256: 72837f0ea1472ed190c0d4476e702f5d41d029100a7bbbb8a8a5679d8cdc61b3
   size: 28200
   modified: '2026-01-16T13:49:35.889587'
 - path: phases\r6_staging.py
-  sha256: b69940c8f242c1516e133a6ef414b537a50afd19e3672a2b54e469d1135aaa0b
-  size: 21354
-  modified: '2026-01-16T02:21:01.584918'
+  sha256: 6dee977a89e17bad3e7ba6423ead83205b20915d097cdd8408275d977f82aa52
+  size: 21607
+  modified: '2026-01-18T22:01:02.478412'
 - path: phases\r7_truth_writer.py
-  sha256: cb2881c62f8ac94bb47d916141f84f8b7c0031f1ed2ec0e1a6467332a2b2f188
-  size: 44324
-  modified: '2026-01-15T23:12:38.204186'
+  sha256: 68898725dfc7a6628b3970de23d0acf8f29550f1374a6c7d38c80978cd5c8e5d
+  size: 45558
+  modified: '2026-01-18T22:16:21.360136'
 - path: phases\r8_event_emitter.py
   sha256: db5befeaededb2f31e26536881b45d8f441902aff59f230a3f0a9a8f0834845c
   size: 25354
@@ -314,6 +314,6 @@ files:
   size: 28696
   modified: '2026-01-01T01:57:54.575752'
 - path: staged_writes.py
-  sha256: 87d1cafd3f38c01abc7b5f99b5ac203245e794cf42fbc840dce286b04e307695
-  size: 20607
-  modified: '2026-01-12T11:12:21.488223'
+  sha256: 8c3c6856e08dbd54f29048ed48de1ae97d0d8e5082c87f676139a71c755d34c0
+  size: 20903
+  modified: '2026-01-17T22:53:46.406503'

@@ -258,15 +258,19 @@ class EpisodicLayerWriter:
             INSERT INTO st_epi (
                 episode_id, tenant_id, space_id, cluster_id,
                 source_events_json, source_event_count, start_time_utc, end_time_utc,
+                duration_minutes, temporal_bucket, day_of_week, is_recurring, recurrence_pattern,
                 confidence_score, observation_count,
                 created_at, updated_at, valid_from, version,
                 archival_status,
                 source_texts_json, embedding_text, embedding_vector, embedding_model,
                 episode_summary, episode_type, primary_location, location_type,
-                participants_json, participant_count, embedding_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $11, 1,
-                      'ACTIVE', $12, $13, $14, $15,
-                      $16, $17, $18, $19, $20, $21, $22)
+                participants_json, participant_count, embedding_id,
+                cluster_confidence, consolidation_cycle_id, last_observed_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                      $16, $16, $16, 1,
+                      'ACTIVE', $17, $18, $19, $20,
+                      $21, $22, $23, $24, $25, $26, $27,
+                      $28, $29, $30)
             ON CONFLICT (episode_id) DO NOTHING
             """,
             data["episode_id"],
@@ -277,6 +281,11 @@ class EpisodicLayerWriter:
             len(source_event_ids),
             data.get("start_time_utc") or data.get("started_at", now),
             data.get("end_time_utc") or data.get("ended_at", now),
+            data.get("duration_minutes"),
+            data.get("temporal_bucket"),
+            data.get("day_of_week"),
+            data.get("is_recurring"),
+            data.get("recurrence_pattern"),
             data.get("confidence_score") or data.get("confidence", 1.0),
             data.get("observation_count", 1),
             data.get("created_at", now),
@@ -293,6 +302,9 @@ class EpisodicLayerWriter:
             data.get("participants_json", "[]"),
             data.get("participant_count", 0),
             data.get("embedding_id"),
+            data.get("cluster_confidence"),
+            data.get("consolidation_cycle_id"),
+            data.get("last_observed_at"),
         )
 
         # Issue 7.5: Record observation with FIRST_SEEN type
@@ -402,6 +414,9 @@ class EpisodicLayerWriter:
         additional_count = data.get("additional_event_count", len(additional_event_ids))
         new_start = data.get("new_start_time_utc", 0)
         new_end = data.get("new_end_time_utc", 0)
+        is_recurring = data.get("is_recurring")
+        recurrence_pattern = data.get("recurrence_pattern")
+        consolidation_cycle_id = data.get("consolidation_cycle_id")
 
         # Convert event IDs to JSON array for PostgreSQL
         additional_json = json.dumps(additional_event_ids)
@@ -422,6 +437,19 @@ class EpisodicLayerWriter:
                 observation_count = observation_count + 1,
                 start_time_utc = LEAST(start_time_utc, $3),
                 end_time_utc = GREATEST(end_time_utc, $4),
+                duration_minutes = CASE
+                    WHEN $3 > 0 AND $4 > 0
+                        THEN (GREATEST(end_time_utc, $4) - LEAST(start_time_utc, $3)) / 60000
+                    ELSE duration_minutes
+                END,
+                last_observed_at = CASE
+                    WHEN $4 > 0
+                        THEN GREATEST(COALESCE(last_observed_at, 0), $4)
+                    ELSE last_observed_at
+                END,
+                is_recurring = COALESCE($8, is_recurring),
+                recurrence_pattern = COALESCE($9, recurrence_pattern),
+                consolidation_cycle_id = COALESCE($10, consolidation_cycle_id),
                 updated_at = $5,
                 version = version + 1
             WHERE episode_id = $6
@@ -437,6 +465,9 @@ class EpisodicLayerWriter:
             now,
             write.record_id,
             write.expected_version or 0,
+            is_recurring,
+            recurrence_pattern,
+            consolidation_cycle_id,
         )
 
         # Check for version conflict
@@ -483,6 +514,8 @@ class EpisodicLayerWriter:
             SET archival_status = 'ARCHIVED',
                 archived_at = $1,
                 archived_reason = $2,
+                                updated_at = $1,
+                                valid_to = $1,
                 version = version + 1
             WHERE episode_id = $3
               AND (archival_status IS NULL OR archival_status != 'ARCHIVED')
@@ -511,6 +544,8 @@ class EpisodicLayerWriter:
             SET archival_status = 'TOMBSTONE',
                 archived_at = $1,
                 archived_reason = 'tombstone',
+                updated_at = $1,
+                valid_to = $1,
                 version = version + 1
             WHERE episode_id = $2
             """,

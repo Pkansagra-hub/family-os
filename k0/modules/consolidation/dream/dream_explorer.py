@@ -1063,14 +1063,18 @@ class DreamExplorer:
 
         # Convert EpisodeCluster to dict format for RoutineDetector
         # EpisodeCluster uses: cluster_id, activity_type, location_hint, temporal_start, temporal_end
+        # R5 Parity Fix: RoutineDetector expects "location_hint" or "primary_location", not "location"
         episodes: List[dict] = []
         for cluster in input_data.recent_episodes:
             episode = {
                 "episode_id": cluster.cluster_id,  # cluster_id is the ID field
                 "activity_type": cluster.activity_type,
-                "location": cluster.location_hint,  # location_hint, not location
+                "location_hint": cluster.location_hint,  # Fixed: was "location", now "location_hint"
+                "primary_location": cluster.location_hint,  # Also provide as primary_location
                 "start_time_ms": cluster.temporal_start,  # temporal_start, not centroid_timestamp_ms
+                "start_time_utc": cluster.temporal_start,  # Also provide as start_time_utc
                 "end_time_ms": cluster.temporal_end,
+                "episode_summary": getattr(cluster, "summary", ""),  # For pattern extraction
             }
             episodes.append(episode)
 

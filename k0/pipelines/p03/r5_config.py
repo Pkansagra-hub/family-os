@@ -138,6 +138,11 @@ class R5Config:
     accumulated_kg_entity_limit: int = 1000  # Max entities to load for BGT-SM
     accumulated_kg_edge_limit: int = 5000  # Max edges to load for graph traversal
 
+    # Accumulated Episode/Routine limits (R5 Parity Resolution)
+    # Limits for loading accumulated episodes/routines for R5 dream algorithms
+    accumulated_episode_limit: int = 100  # Max episodes to load for RoutineDetector/CPN
+    accumulated_routine_limit: int = 50  # Max routines to load for TDL-HCO
+
     # SPC-UQ configuration (Issue 8.1.8)
     spc_uq_uncertainty_alpha: float = 1.0  # Beta distribution alpha
     spc_uq_uncertainty_beta: float = 1.0  # Beta distribution beta (uniform prior)

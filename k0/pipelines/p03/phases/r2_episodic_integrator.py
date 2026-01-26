@@ -415,14 +415,11 @@ class R2EpisodicIntegrator:
                     if not member_ids:
                         continue
 
-                    # Check if this is a noise cluster (all members have label -1)
-                    # Noise clusters have only 1 member typically
-                    is_noise = len(member_ids) == 1 and any(
-                        clustering_result.labels[idx] == -1
-                        for idx, e in enumerate(adapted_events)
-                        if hasattr(e, "event_id") and e.event_id in member_ids
-                    )
-                    if is_noise:
+                    # Skip single-member clusters (likely noise)
+                    # HDBSCAN already handles noise rescue, so single-member clusters
+                    # that made it here are legitimate small clusters
+                    if len(member_ids) == 1:
+                        # Single events are not episodes - skip them
                         continue
 
                     # Get events for this cluster
@@ -935,6 +932,13 @@ class R2EpisodicIntegrator:
         for ep in episodes:
             all_member_contexts.extend(ep.member_contexts)
 
+        (
+            aggregated_sentiment,
+            aggregated_salience,
+            dominant_location,
+            dominant_social_context,
+        ) = self._aggregate_context_fields(all_member_contexts)
+
         return EpisodeCluster(
             cluster_id=f"canonical-{uuid.uuid4().hex[:16]}",
             member_event_ids=all_member_ids,
@@ -942,6 +946,10 @@ class R2EpisodicIntegrator:
             centroid_embedding_id=None,
             dominant_sentiment=avg_sentiment,
             dominant_emotion=dominant_emotion,
+            aggregated_sentiment=aggregated_sentiment,
+            aggregated_salience=aggregated_salience,
+            dominant_location=dominant_location,
+            dominant_social_context=dominant_social_context,
             temporal_start=temporal_start,
             temporal_end=temporal_end,
             location_hint=location or None,
@@ -981,6 +989,10 @@ class R2EpisodicIntegrator:
             centroid_embedding_id=ep.centroid_embedding_id,
             dominant_sentiment=ep.dominant_sentiment,
             dominant_emotion=ep.dominant_emotion,
+            aggregated_sentiment=ep.aggregated_sentiment,
+            aggregated_salience=ep.aggregated_salience,
+            dominant_location=ep.dominant_location,
+            dominant_social_context=ep.dominant_social_context,
             temporal_start=ep.temporal_start,
             temporal_end=ep.temporal_end,
             location_hint=ep.location_hint,
@@ -1153,14 +1165,19 @@ class R2EpisodicIntegrator:
         summary = self._generate_episode_summary(cluster_events)
 
         # Issue 7.6: Build ObservationContext for each member event
-        from k0.modules.consolidation.algorithms.observation_context import (
-            ObservationContext,
-        )
+        from k0.modules.consolidation.algorithms.observation_context import ObservationContext
 
         member_contexts = []
         for e in cluster_events:
             ctx = ObservationContext.from_event(e.event)
             member_contexts.append(ctx)
+
+        (
+            aggregated_sentiment,
+            aggregated_salience,
+            dominant_location,
+            dominant_social_context,
+        ) = self._aggregate_context_fields(member_contexts)
 
         return EpisodeCluster(
             cluster_id=cluster_id,
@@ -1169,6 +1186,10 @@ class R2EpisodicIntegrator:
             centroid_embedding_id=None,  # Will be set by R6/R7 when persisted
             dominant_sentiment=dominant_sentiment,
             dominant_emotion=dominant_emotion,
+            aggregated_sentiment=aggregated_sentiment,
+            aggregated_salience=aggregated_salience,
+            dominant_location=dominant_location,
+            dominant_social_context=dominant_social_context,
             temporal_start=temporal_start,
             temporal_end=temporal_end,
             location_hint=location_hint,
@@ -1288,6 +1309,38 @@ class R2EpisodicIntegrator:
         else:
             # Show first 2 and last 1 with count
             return f"{texts[0]} | {texts[1]} | ... ({len(texts)} events) | {texts[-1]}"
+
+    def _aggregate_context_fields(
+        self, contexts: List["ObservationContext"]
+    ) -> tuple[Optional[float], Optional[float], Optional[str], Optional[str]]:
+        """Aggregate context fields from member ObservationContext entries."""
+        if not contexts:
+            return None, None, None, None
+
+        sentiments = [c.sentiment_score for c in contexts if c.sentiment_score is not None]
+        aggregated_sentiment = sum(sentiments) / len(sentiments) if sentiments else None
+
+        saliences = [c.salience_score for c in contexts if c.salience_score is not None]
+        aggregated_salience = max(saliences) if saliences else None
+
+        location_counts: Dict[str, int] = {}
+        for c in contexts:
+            loc = c.location_type or c.location_name
+            if loc:
+                location_counts[loc] = location_counts.get(loc, 0) + 1
+        dominant_location = (
+            max(location_counts, key=location_counts.get) if location_counts else None
+        )
+
+        social_counts: Dict[str, int] = {}
+        for c in contexts:
+            if c.social_context:
+                social_counts[c.social_context] = social_counts.get(c.social_context, 0) + 1
+        dominant_social_context = (
+            max(social_counts, key=social_counts.get) if social_counts else None
+        )
+
+        return aggregated_sentiment, aggregated_salience, dominant_location, dominant_social_context
 
     def _update_event_states(
         self,

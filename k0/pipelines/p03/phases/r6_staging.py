@@ -431,6 +431,11 @@ class R6Staging:
         envelope: P03BatchEnvelope,
     ) -> Optional[Dict[str, DuplicationResult]]:
         """Extract dedup results from R3 outputs."""
+        # Primary location: r3_dedup_results (new canonical location)
+        if envelope.phases.r3_dedup_results:
+            return dict(envelope.phases.r3_dedup_results)
+
+        # Legacy fallback: r3.dedup_results (for backwards compatibility)
         r3_outputs = getattr(envelope.phases, "r3", None)
         if r3_outputs:
             dedup_results = getattr(r3_outputs, "dedup_results", None)

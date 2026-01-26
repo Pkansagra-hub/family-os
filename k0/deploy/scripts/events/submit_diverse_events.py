@@ -728,6 +728,74 @@ TEST_EVENTS = [
         "activity_type": "REFLECTION",
         "days_ago": 0,
     },
+    # =========================================================================
+    # REPEATING ENTITY PAIRS - To create co-occurrence edges for causal inference testing
+    # =========================================================================
+    # Repeat: John, Lisa, Mike (from team standup and lunch)
+    {
+        "text": "Follow-up project meeting with John, Lisa, and Mike to discuss sprint planning and blockers.",
+        "participants": ["John", "Lisa", "Mike"],
+        "location_name": "Conference Room A",
+        "activity_type": "WORK",
+    },
+    {
+        "text": "Happy hour drinks with John, Lisa, and Mike after work. Talked about weekend plans.",
+        "participants": ["John", "Lisa", "Mike"],
+        "location_name": "Local Bar",
+        "activity_type": "SOCIAL",
+    },
+    # Repeat: Emma, Rachel (from coffee and social events)
+    {
+        "text": "Coffee catch-up with Rachel. She shared more details about the baby shower planning.",
+        "participants": ["Rachel"],
+        "location_name": "Starbucks Downtown",
+        "activity_type": "SOCIAL",
+    },
+    {
+        "text": "Shopping with Emma and Rachel for baby clothes. Emma was so excited to help pick outfits.",
+        "participants": ["Emma", "Rachel"],
+        "location_name": "Mall",
+        "activity_type": "SOCIAL",
+    },
+    # Repeat: Emma, Jake (from family dinner)
+    {
+        "text": "Family movie night with Emma and Jake. Watched Frozen for the third time - they loved it.",
+        "participants": ["Emma", "Jake"],
+        "location_name": "Home",
+        "activity_type": "FAMILY",
+    },
+    {
+        "text": "Weekend breakfast with Emma and Jake. Made pancakes and talked about school.",
+        "participants": ["Emma", "Jake"],
+        "location_name": "Home",
+        "activity_type": "FAMILY",
+    },
+    # Repeat: Sarah, Michael (from work presentation and feedback)
+    {
+        "text": "One-on-one check-in with Sarah about quarterly goals. She gave great feedback on my progress.",
+        "participants": ["Sarah"],
+        "location_name": "Sarah's Office",
+        "activity_type": "WORK",
+    },
+    {
+        "text": "Strategy meeting with Sarah and Michael to align on Q3 priorities and resource allocation.",
+        "participants": ["Sarah", "Michael"],
+        "location_name": "Executive Conference Room",
+        "activity_type": "WORK",
+    },
+    # Repeat: Emma, Sofia (from birthday party)
+    {
+        "text": "Playdate with Emma and her friend Sofia at the park. They played on the swings for hours.",
+        "participants": ["Emma", "Sofia"],
+        "location_name": "City Park",
+        "activity_type": "SOCIAL",
+    },
+    {
+        "text": "Emma's sleepover with Sofia. They stayed up late watching movies and eating popcorn.",
+        "participants": ["Emma", "Sofia"],
+        "location_name": "Home",
+        "activity_type": "FAMILY",
+    },
 ]
 
 

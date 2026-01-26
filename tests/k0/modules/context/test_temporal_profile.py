@@ -450,35 +450,32 @@ class TestTemporalBuckets:
         dt = datetime(2025, 11, 10, 2, 0, 0, tzinfo=timezone.utc)
         assert tp.get_time_of_day_bucket(dt) == "night"
 
-    def test_circadian_breakfast_window(self):
-        """06:00-09:00 → breakfast_window."""
-        dt = datetime(2025, 11, 10, 7, 30, 0, tzinfo=timezone.utc)
-        assert tp.get_circadian_slot(dt) == "breakfast_window"
+    def test_circadian_slot_always_none(self):
+        """Circadian slots are disabled - always returns None.
 
-    def test_circadian_lunch_window(self):
-        """11:30-13:30 → lunch_window."""
-        dt = datetime(2025, 11, 10, 12, 0, 0, tzinfo=timezone.utc)
-        assert tp.get_circadian_slot(dt) == "lunch_window"
-
-    def test_circadian_dinner_window(self):
-        """17:30-20:30 → dinner_window."""
-        dt = datetime(2025, 11, 10, 18, 30, 0, tzinfo=timezone.utc)
-        assert tp.get_circadian_slot(dt) == "dinner_window"
-
-    def test_circadian_sleep_window(self):
-        """22:00-06:00 → sleep_window (wraps around midnight)."""
-        dt = datetime(2025, 11, 10, 23, 30, 0, tzinfo=timezone.utc)
-        assert tp.get_circadian_slot(dt) == "sleep_window"
-
-    def test_circadian_sleep_window_early_morning(self):
-        """03:00 → sleep_window (wraps around midnight)."""
-        dt = datetime(2025, 11, 10, 3, 0, 0, tzinfo=timezone.utc)
-        assert tp.get_circadian_slot(dt) == "sleep_window"
-
-    def test_circadian_no_match(self):
-        """10:00 → None (unstructured time)."""
-        dt = datetime(2025, 11, 10, 10, 0, 0, tzinfo=timezone.utc)
-        assert tp.get_circadian_slot(dt) is None
+        Hardcoded meal/sleep windows were culturally biased and don't generalize
+        across different lifestyles, cultures, and work schedules. The function
+        now always returns None. Use time_of_day_bucket for generalized time context.
+        """
+        # All times should return None - no hardcoded assumptions
+        assert (
+            tp.get_circadian_slot(datetime(2025, 11, 10, 7, 30, 0, tzinfo=timezone.utc)) is None
+        )  # was breakfast
+        assert (
+            tp.get_circadian_slot(datetime(2025, 11, 10, 12, 0, 0, tzinfo=timezone.utc)) is None
+        )  # was lunch
+        assert (
+            tp.get_circadian_slot(datetime(2025, 11, 10, 18, 30, 0, tzinfo=timezone.utc)) is None
+        )  # was dinner
+        assert (
+            tp.get_circadian_slot(datetime(2025, 11, 10, 23, 30, 0, tzinfo=timezone.utc)) is None
+        )  # was sleep
+        assert (
+            tp.get_circadian_slot(datetime(2025, 11, 10, 3, 0, 0, tzinfo=timezone.utc)) is None
+        )  # was sleep
+        assert (
+            tp.get_circadian_slot(datetime(2025, 11, 10, 10, 0, 0, tzinfo=timezone.utc)) is None
+        )  # was unstructured
 
 
 # ==================== Write Lag Tests ====================

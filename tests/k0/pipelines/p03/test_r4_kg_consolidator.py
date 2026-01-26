@@ -101,7 +101,7 @@ class TestR4Config:
         config = R4Config()
 
         assert config.min_entities_for_edge == 2
-        assert config.min_co_occurrence == 2
+        assert config.min_co_occurrence == 1
         assert config.max_relationship_confidence == 0.9
         assert config.base_confidence == 0.3
         assert config.confidence_increment == 0.1
@@ -516,6 +516,7 @@ class TestR4PhaseOutputs:
                 relation_type="RELATED_TO",
                 confidence=0.6,
                 observation_count=3,
+                source_event_ids=["evt_1"],
             )
         ]
 
@@ -527,6 +528,30 @@ class TestR4PhaseOutputs:
         assert edge.source_entity_id == "entity_001"
         assert edge.target_entity_id == "entity_002"
         assert edge.relationship_type == "RELATED_TO"
+        assert edge.evidence_event_ids == ["evt_1"]
+
+    def test_creates_kg_edge_update_from_update(self) -> None:
+        """Test: KGEdgeUpdate created from UPDATE_EDGE update includes evidence IDs."""
+        phase = R4KGConsolidator()
+        envelope = MockEnvelope([])
+
+        edge_updates = [
+            KGUpdate(
+                update_type=KGUpdateType.UPDATE_EDGE,
+                edge_id="edge_001",
+                confidence=0.1,
+                observation_count=2,
+                source_event_ids=["evt_42"],
+            )
+        ]
+
+        phase._populate_phase_outputs(envelope, [], edge_updates, [])  # type: ignore[arg-type]
+
+        assert len(envelope.phases.r4_updated_edges) == 1
+        upd = envelope.phases.r4_updated_edges[0]
+        assert upd.edge_id == "edge_001"
+        assert upd.new_evidence_ids == ["evt_42"]
+        assert upd.observation_count_increment == 2
 
     def test_populates_gap_candidates(self) -> None:
         """Test: Gap candidates are added to outputs."""

@@ -419,12 +419,39 @@ class R5DreamExplorer:
             },
         )
 
-        # Build input from envelope with merged KG
+        # =====================================================================
+        # R5 Parity Resolution: Load accumulated episodes
+        # RoutineDetector, CPN, TDL-HCO need historical episode context
+        # =====================================================================
+        accumulated_episodes = await self._load_accumulated_episodes(
+            ctx=ctx,
+            tenant_id=envelope.context.tenant_id,
+            space_id=envelope.context.space_id,
+        )
+
+        # Merge accumulated with current cycle (current takes precedence)
+        current_episodes = list(envelope.phases.r2_clusters)
+        current_episode_ids = {e.cluster_id for e in current_episodes}
+        merged_episodes = current_episodes + [
+            e for e in accumulated_episodes if e.cluster_id not in current_episode_ids
+        ]
+
+        self._logger.info(
+            "R5 loaded accumulated episodes for RoutineDetector/CPN",
+            extra={
+                "cycle_id": envelope.context.cycle_id,
+                "current_episodes": len(current_episodes),
+                "accumulated_episodes": len(accumulated_episodes),
+                "merged_episodes": len(merged_episodes),
+            },
+        )
+
+        # Build input from envelope with merged KG and episodes
         input_data = DreamExplorerInput(
             cycle_id=envelope.context.cycle_id,
             tenant_id=envelope.context.tenant_id,
             space_id=envelope.context.space_id,
-            recent_episodes=list(envelope.phases.r2_clusters),
+            recent_episodes=merged_episodes,
             kg_entities=merged_entities,
             kg_edges=merged_edges,
             event_states=list(envelope.events),
@@ -738,6 +765,141 @@ class R5DreamExplorer:
         except Exception as e:
             self._logger.warning(
                 "Failed to load accumulated KG edges, proceeding with batch-only",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "error": str(e),
+                },
+            )
+            return []
+
+    # =========================================================================
+    # R5 Parity Resolution: Accumulated Episode/Routine Loading
+    # =========================================================================
+
+    async def _load_accumulated_episodes(
+        self,
+        ctx: "P03RunnerContext",
+        tenant_id: str,
+        space_id: str,
+    ) -> List["EpisodeCluster"]:
+        """
+        Load accumulated episodes from st_epi for R5.
+
+        R5 Parity Resolution: Algorithms like RoutineDetector, CPN, and TDL-HCO
+        need historical episode context to detect patterns, generate counterfactuals,
+        and optimize routines. This applies the same merge pattern as GAP-001 M9.2.
+
+        Args:
+            ctx: Runner context with syscalls
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of EpisodeCluster objects from storage
+        """
+        import json
+
+        from k0.pipelines.p03.phase_outputs import EpisodeCluster
+
+        try:
+            result = await ctx.syscalls.episodes_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                limit=self.config.accumulated_episode_limit,
+            )
+
+            episodes = []
+            for row in result.get("episodes", []):
+                # Parse source_events_json to get member_event_ids
+                try:
+                    member_event_ids = json.loads(row.get("source_events_json", "[]"))
+                except (json.JSONDecodeError, TypeError):
+                    member_event_ids = []
+
+                episode = EpisodeCluster(
+                    cluster_id=row["episode_id"],
+                    member_event_ids=member_event_ids,
+                    dominant_sentiment=row.get("sentiment_score", 0.0),
+                    aggregated_sentiment=row.get("sentiment_score"),
+                    aggregated_salience=row.get("salience_score"),
+                    dominant_location=row.get("primary_location"),
+                    location_hint=row.get("primary_location"),
+                    temporal_start=row.get("start_time_utc", 0),
+                    temporal_end=row.get("end_time_utc", 0),
+                    activity_type=row.get("episode_type", ""),
+                    summary=row.get("episode_summary", ""),
+                )
+                episodes.append(episode)
+
+            self._logger.debug(
+                "Loaded accumulated episodes",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "episode_count": len(episodes),
+                    "limit": self.config.accumulated_episode_limit,
+                },
+            )
+
+            return episodes
+
+        except Exception as e:
+            self._logger.warning(
+                "Failed to load accumulated episodes, proceeding with batch-only",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "error": str(e),
+                },
+            )
+            return []
+
+    async def _load_accumulated_routines(
+        self,
+        ctx: "P03RunnerContext",
+        tenant_id: str,
+        space_id: str,
+    ) -> List[dict]:
+        """
+        Load accumulated routines from st_procedural for R5.
+
+        R5 Parity Resolution: TDL-HCO needs existing routines to optimize
+        using temporal difference learning. This loads historical routines
+        that can be passed to TDL-HCO for bottleneck detection.
+
+        Args:
+            ctx: Runner context with syscalls
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of routine dictionaries from storage
+        """
+        try:
+            result = await ctx.syscalls.procedural_memory_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                limit=self.config.accumulated_routine_limit,
+            )
+
+            routines = result.get("routines", [])
+
+            self._logger.debug(
+                "Loaded accumulated routines",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "routine_count": len(routines),
+                    "limit": self.config.accumulated_routine_limit,
+                },
+            )
+
+            return routines
+
+        except Exception as e:
+            self._logger.warning(
+                "Failed to load accumulated routines, proceeding without historical routines",
                 extra={
                     "tenant_id": tenant_id,
                     "space_id": space_id,

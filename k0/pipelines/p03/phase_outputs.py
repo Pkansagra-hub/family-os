@@ -21,9 +21,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
-    from k0.modules.consolidation.algorithms.observation_context import (
-        ObservationContext,
-    )
+    from k0.modules.consolidation.algorithms.duplicate_detector import DuplicationResult
+    from k0.modules.consolidation.algorithms.observation_context import ObservationContext
     from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
     from k0.modules.consolidation.dream.intent_signals import IntentSignal
     from k0.modules.consolidation.staging.r6_output import R6Output
@@ -87,6 +86,10 @@ class EpisodeCluster:
     centroid_embedding_id: Optional[str] = None
     dominant_sentiment: float = 0.0
     dominant_emotion: str = ""
+    aggregated_sentiment: Optional[float] = None
+    aggregated_salience: Optional[float] = None
+    dominant_location: Optional[str] = None
+    dominant_social_context: Optional[str] = None
     temporal_start: int = 0  # MILLISECONDS
     temporal_end: int = 0  # MILLISECONDS
     location_hint: Optional[str] = None
@@ -109,6 +112,55 @@ class EpisodeCluster:
     def duration_ms(self) -> int:
         """Duration of episode in milliseconds."""
         return self.temporal_end - self.temporal_start
+
+    # =========================================================================
+    # R5 Parity Resolution: CPN Compatibility Properties
+    # CPN expects sentiment_score, salience_score, start_time_ms, entity_ids
+    # =========================================================================
+
+    @property
+    def sentiment_score(self) -> float:
+        """Alias for CPN algorithm compatibility.
+
+        CPN expects sentiment_score but EpisodeCluster uses dominant_sentiment.
+        See: k0/modules/consolidation/algorithms/cpn.py Line 866-872
+        """
+        return self.dominant_sentiment
+
+    @property
+    def salience_score(self) -> float:
+        """Alias for CPN algorithm compatibility.
+
+        CPN expects salience_score but EpisodeCluster uses aggregated_salience.
+        See: k0/modules/consolidation/algorithms/cpn.py Line 874-879
+        """
+        return self.aggregated_salience if self.aggregated_salience is not None else 0.5
+
+    @property
+    def start_time_ms(self) -> int:
+        """Alias for CPN algorithm compatibility.
+
+        CPN expects start_time_ms but EpisodeCluster uses temporal_start.
+        See: k0/modules/consolidation/algorithms/cpn.py Line 881-889
+        """
+        return self.temporal_start
+
+    @property
+    def episode_id(self) -> str:
+        """Alias for CPN algorithm compatibility.
+
+        CPN expects episode_id but EpisodeCluster uses cluster_id.
+        """
+        return self.cluster_id
+
+    def get_representative_context(self) -> Optional["ObservationContext"]:
+        """Return the most salient context for this episode, if available."""
+        if not self.member_contexts:
+            return None
+        return max(
+            self.member_contexts,
+            key=lambda c: c.salience_score if c.salience_score is not None else 0.0,
+        )
 
 
 # =============================================================================
@@ -169,10 +221,13 @@ class KGEntity:
     entity_type: str  # PERSON, LOCATION, ORG, THING, CONCEPT
     entity_subtype: Optional[str] = None  # GAP-005: FAMILY_MEMBER, FRIEND, HOME, etc.
     aliases_json: str = "[]"
+    attributes_json: str = "{}"
     confidence: float = 0.0
     embedding_id: Optional[str] = None
     embedding: Optional[List[float]] = None  # GAP-001 M9.4: 768-dim vector for BGT-SM
     source_event_ids: List[str] = field(default_factory=list)
+    first_mentioned_event_id: Optional[str] = None
+    last_observed_at: Optional[int] = None
     is_new: bool = True
 
 
@@ -191,6 +246,7 @@ class KGEntityUpdate:
     field_updates: Dict[str, Any] = field(default_factory=dict)
     confidence_delta: float = 0.0
     new_aliases: List[str] = field(default_factory=list)
+    last_observed_at: Optional[int] = None
     # Issue 3 Fix: For REINFORCE operations
     observation_count_increment: int = 0  # How many new observations to add
     new_source_event_ids: List[str] = field(default_factory=list)  # New event IDs to append
@@ -202,17 +258,27 @@ class KGEdge:
     Knowledge graph edge created in R4.
 
     Represents a relationship between two entities.
+    GAP-007: Added provenance fields and observation_context for enrichment.
     """
 
     edge_id: str
     source_entity_id: str
     target_entity_id: str
     relationship_type: str  # KNOWS, LOCATED_AT, PART_OF, CAUSES, etc.
+    relation_subtype: Optional[str] = None
     weight: float = 0.5
     confidence: float = 0.0
     is_causal: bool = False
     evidence_event_ids: List[str] = field(default_factory=list)
+    last_observed_at: Optional[int] = None
     is_new: bool = True
+    # GAP-007: Edge provenance tracking
+    source_algorithm: str = "co_occurrence"  # Algorithm that created this edge
+    evidence_episode_ids: List[str] = field(default_factory=list)  # Source episodes
+    properties_json: Optional[str] = None  # Edge attributes/properties
+    algorithm_params_json: Optional[str] = None  # Algorithm-specific parameters
+    inference_chain_json: Optional[str] = None  # For transitive closure: path taken
+    observation_context: Optional["ObservationContext"] = None
 
 
 @dataclass
@@ -227,9 +293,17 @@ class KGEdgeUpdate:
     edge_id: str
     weight_delta: float = 0.0
     confidence_delta: float = 0.0
+    new_weight: Optional[float] = None
+    new_confidence: Optional[float] = None
+    source_algorithm: str = ""
+    # Evidence fields
     new_evidence_ids: List[str] = field(default_factory=list)
+    new_evidence_event_ids: List[str] = field(default_factory=list)
+    new_evidence_episode_ids: List[str] = field(default_factory=list)
     # GAP-001 M9: Increment observation_count for Granger causality
     observation_count_increment: int = 0
+    last_observed_at: Optional[int] = None
+    observation_context: Optional["ObservationContext"] = None
 
 
 @dataclass
@@ -616,6 +690,7 @@ class P03PhaseOutputs:
     # =========================================================================
     # R3 OUTPUTS (Reconciliation/Dedup/Decay)
     # =========================================================================
+    r3_dedup_results: Dict[str, "DuplicationResult"] = field(default_factory=dict)
     r3_dedup_merges: List[DedupMerge] = field(default_factory=list)
     r3_decay_updates: List[DecayUpdate] = field(default_factory=list)
     r3_archive_candidates: List[str] = field(default_factory=list)
