@@ -282,15 +282,28 @@ class TestLifecycleState:
 
     def test_established_state_many_occurrences(self, detector: RoutineDetector) -> None:
         """Many regular occurrences result in ESTABLISHED state."""
-        now_ms = 1700000000000
+        # Create 15 episodes at the same time each day to ensure they form one routine
+        base_time = 1700000000000  # Fixed time: 2023-11-14 22:13:20 UTC
         day_ms = 24 * 60 * 60 * 1000
 
-        # 15 daily occurrences ending recently
-        episodes = make_daily_episodes("coffee", "cafe", 15, now_ms - 14 * day_ms)
+        episodes = []
+        for i in range(15):
+            episodes.append(
+                make_episode(
+                    episode_id=f"ep_coffee_{i}",
+                    activity_type="coffee",
+                    location="cafe",
+                    start_time_utc=base_time + (i * day_ms),  # Same time each day
+                )
+            )
 
-        result = detector.detect(episodes, reference_time_ms=now_ms)
+        # Use reference time close to the last episode
+        reference_time = base_time + (14 * day_ms) + 3600000  # 1 hour after last episode
+        result = detector.detect(episodes, reference_time_ms=reference_time)
 
+        # Should detect exactly 1 routine with all 15 episodes
         assert len(result) == 1
+        assert result[0].source_episode_count == 15
         # Should be MAINTAINED or ESTABLISHED due to high count and consistency
         assert result[0].lifecycle_state in [
             RoutineLifecycle.ESTABLISHED,
@@ -423,3 +436,127 @@ class TestEdgeCases:
         source_ids = json.loads(result[0].source_episodes_json)
         assert len(source_ids) == 5
         assert all("ep_coffee_" in id for id in source_ids)
+
+
+class TestRoutineDetectorFieldMapping:
+    """Test RoutineDetector field mapping and detection logic — M2-E3-I1."""
+
+    def test_location_fallback_chain(self):
+        """Verify location read from primary_location or location_hint."""
+        episodes = [
+            # Episode with primary_location
+            {
+                "episode_id": "ep_1",
+                "activity_type": "coffee",
+                "primary_location": "starbucks",
+                "start_time_utc": 1705307400000,  # 2024-01-15T08:30:00Z
+            },
+            # Episode with location_hint only
+            {
+                "episode_id": "ep_2",
+                "activity_type": "coffee",
+                "location_hint": "starbucks",
+                "start_time_utc": 1705393800000,  # 2024-01-16T08:30:00Z
+            },
+            # Episode with both
+            {
+                "episode_id": "ep_3",
+                "activity_type": "coffee",
+                "primary_location": "starbucks",
+                "location_hint": "cafe",
+                "start_time_utc": 1705480200000,  # 2024-01-17T08:30:00Z
+            },
+        ]
+
+        detector = RoutineDetector(min_occurrences=3)
+        candidates = detector.detect(episodes=episodes)
+
+        # Should group all 3 as same routine (coffee:starbucks:morning)
+        assert len(candidates) >= 1
+        assert candidates[0].source_episode_count == 3
+        assert "coffee" in candidates[0].routine_name.lower()
+        assert "starbucks" in candidates[0].routine_name.lower()
+
+    def test_timestamp_parsing(self):
+        """Verify start_time_utc parsed for time binning."""
+        episodes = [
+            {
+                "episode_id": f"ep_{i}",
+                "activity_type": "commute",
+                "primary_location": "highway",
+                "start_time_utc": 1704089400000 + (i * 24 * 60 * 60 * 1000),  # 5 morning commutes
+            }
+            for i in range(5)
+        ]
+
+        detector = RoutineDetector(min_occurrences=3)
+        candidates = detector.detect(episodes=episodes)
+
+        # Should detect morning commute routine
+        assert len(candidates) >= 1
+        assert candidates[0].source_episode_count == 5
+        assert "commute" in candidates[0].routine_name.lower()
+        assert "highway" in candidates[0].routine_name.lower()
+
+    def test_min_occurrences_threshold(self):
+        """Verify min_occurrences=3 prevents detection with only 2 episodes."""
+        episodes = [
+            {
+                "episode_id": "ep_1",
+                "activity_type": "coffee",
+                "primary_location": "kitchen",
+                "start_time_utc": 1705307400000,
+            },
+            {
+                "episode_id": "ep_2",
+                "activity_type": "coffee",
+                "primary_location": "kitchen",
+                "start_time_utc": 1705393800000,
+            },
+        ]
+
+        detector = RoutineDetector(min_occurrences=3)
+        candidates = detector.detect(episodes=episodes)
+
+        # Should not detect routine with only 2 episodes
+        assert len(candidates) == 0
+
+    def test_different_activities_not_grouped(self):
+        """Verify different activities are not grouped together."""
+        episodes = [
+            {
+                "episode_id": "ep_1",
+                "activity_type": "coffee",
+                "primary_location": "kitchen",
+                "start_time_utc": 1705307400000,
+            },
+            {
+                "episode_id": "ep_2",
+                "activity_type": "coffee",
+                "primary_location": "kitchen",
+                "start_time_utc": 1705393800000,
+            },
+            {
+                "episode_id": "ep_3",
+                "activity_type": "tea",  # Different activity
+                "primary_location": "kitchen",
+                "start_time_utc": 1705480200000,
+            },
+        ]
+
+        detector = RoutineDetector(min_occurrences=2)
+        candidates = detector.detect(episodes=episodes)
+
+        # Should detect coffee routine but not tea (only 1 occurrence)
+        coffee_routines = [c for c in candidates if "coffee" in c.routine_name.lower()]
+        tea_routines = [c for c in candidates if "tea" in c.routine_name.lower()]
+
+        assert len(coffee_routines) >= 1
+        assert len(tea_routines) == 0
+
+    def test_empty_episodes_returns_empty(self):
+        """Verify empty episode list returns no candidates."""
+        detector = RoutineDetector(min_occurrences=3)
+        candidates = detector.detect(episodes=[])
+
+        assert candidates == []

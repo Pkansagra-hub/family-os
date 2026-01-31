@@ -75,10 +75,11 @@ P03_BGT_RESTART_PROBABILITY = 0.15  # Probability to restart at seed
 P03_BGT_WALK_STEPS = 1000  # Steps per exploration walk
 P03_BGT_MAX_WALKS_PER_SEED = 3  # Maximum walks per seed entity
 
-# Thresholds (per Issue 8.1.9, 8.1.10)
-P03_BGT_SEMANTIC_DISTANCE_THRESHOLD = 0.7  # Min distance for remote associate
-P03_BGT_PMI_THRESHOLD = 3.0  # Min PMI for surprising connection (2^3 = 8x expected)
-P03_BGT_NOVELTY_THRESHOLD = 0.5  # Min novelty score to surface insight
+# Thresholds (per Issue 8.1.9, 8.1.10, M3-E2 cold-start tuning)
+# Lowered for cold-start: semantic 0.7->0.5, PMI 3.0->1.5, novelty 0.5->0.3
+P03_BGT_SEMANTIC_DISTANCE_THRESHOLD = 0.5  # Min distance for remote associate (cold-start)
+P03_BGT_PMI_THRESHOLD = 1.5  # Min PMI for surprising connection (2^1.5 = 3x expected)
+P03_BGT_NOVELTY_THRESHOLD = 0.3  # Min novelty score to surface insight (cold-start)
 P03_BGT_SERENDIPITY_THRESHOLD = 0.6  # novelty × relevance × actionability
 
 # Default corpus size for PMI calculation

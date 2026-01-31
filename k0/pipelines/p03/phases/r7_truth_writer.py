@@ -458,15 +458,33 @@ class R7TruthWriter:
             return self._coordinator
 
         # Import layer writers (M5 modules)
-        from k0.modules.consolidation.truth_writer.layers.episodic import EpisodicLayerWriter
+        from k0.modules.consolidation.truth_writer.layers.episodic import (
+            EpisodicLayerWriter,
+        )
         from k0.modules.consolidation.truth_writer.layers.kg import KGLayerWriter
-        from k0.modules.consolidation.truth_writer.layers.procedural import ProceduralLayerWriter
-        from k0.modules.consolidation.truth_writer.layers.prospective import ProspectiveLayerWriter
-        from k0.modules.consolidation.truth_writer.layers.semantic import SemanticLayerWriter
-        from k0.modules.consolidation.truth_writer.layers.social import SocialLayerWriter
-        from k0.modules.consolidation.truth_writer.layers.vector import VectorLayerWriter
-        from k0.modules.consolidation.truth_writer.router import DecisionRouter, WriteMode
-        from k0.modules.consolidation.truth_writer.text_vector_coordinator import get_coordinator
+        from k0.modules.consolidation.truth_writer.layers.mcts import MCTSLayerWriter
+        from k0.modules.consolidation.truth_writer.layers.procedural import (
+            ProceduralLayerWriter,
+        )
+        from k0.modules.consolidation.truth_writer.layers.prospective import (
+            ProspectiveLayerWriter,
+        )
+        from k0.modules.consolidation.truth_writer.layers.semantic import (
+            SemanticLayerWriter,
+        )
+        from k0.modules.consolidation.truth_writer.layers.social import (
+            SocialLayerWriter,
+        )
+        from k0.modules.consolidation.truth_writer.layers.vector import (
+            VectorLayerWriter,
+        )
+        from k0.modules.consolidation.truth_writer.router import (
+            DecisionRouter,
+            WriteMode,
+        )
+        from k0.modules.consolidation.truth_writer.text_vector_coordinator import (
+            get_coordinator,
+        )
         from k0.modules.consolidation.truth_writer.transaction import (
             TransactionConfig,
             TransactionCoordinator,
@@ -485,6 +503,7 @@ class R7TruthWriter:
                 "st_procedural": ProceduralLayerWriter(coordinator=tv_coordinator),
                 "st_social": SocialLayerWriter(coordinator=tv_coordinator),
                 "st_prospective": ProspectiveLayerWriter(coordinator=tv_coordinator),
+                "st_mcts_decisions": MCTSLayerWriter(),
                 "st_kg_dom": kg_writer,  # KGLayerWriter handles both tables
                 "st_kg_edges": kg_writer,  # Same writer instance for edges
                 "st_vec": VectorLayerWriter(),  # No coordinator needed (already has vectors)

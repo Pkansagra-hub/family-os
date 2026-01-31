@@ -1736,17 +1736,21 @@ dominant_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0.0
 ### Implementation Status (2026-01-25)
 
 **Syscalls Added:**
+
 - `k0/kernel/syscalls.py` - Added `episodes_query()` and `procedural_memory_query()`
 - Both syscalls include observation JOIN for sentiment/salience enrichment
 
 **Config Limits Added:**
+
 - `k0/pipelines/p03/r5_config.py` - Added `accumulated_episode_limit` (100) and `accumulated_routine_limit` (50)
 
 **Merge Logic Added:**
+
 - `k0/pipelines/p03/phases/r5_dream_explorer.py` - Added `_load_accumulated_episodes()` and `_load_accumulated_routines()`
 - Episodes now merged: `current_episodes + accumulated_episodes` (current takes precedence)
 
 **Field Mappings Fixed:**
+
 - `k0/pipelines/p03/phase_outputs.py` - Added CPN compatibility properties:
   - `sentiment_score` → `dominant_sentiment`
   - `salience_score` → `aggregated_salience`

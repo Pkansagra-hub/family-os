@@ -112,8 +112,8 @@ class TestR4Config:
         assert config.enable_hebbian_adaptive_rates is True
         assert config.enable_causality_thresholds is True
         assert config.enable_edge_feedback is True
-        assert config.granger_min_observations == 5
-        assert config.granger_precedence_threshold == 0.75
+        assert config.granger_min_observations == 3  # M1-E2-I3: Lowered for cold-start
+        assert config.granger_precedence_threshold == 0.60  # M1-E2-I2: Lowered for cold-start
         assert config.staleness_check_days == 90
 
     def test_custom_config_values(self) -> None:

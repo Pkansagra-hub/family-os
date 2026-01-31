@@ -3900,6 +3900,162 @@ class Syscalls:
                 "count": len(routines),
             }
 
+    async def semantic_schema_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        pattern_types: list[str] | None = None,
+        min_confidence: float = 0.5,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """
+        Query st_sem for semantic schemas/patterns (requires st_sem.read cap).
+
+        M4-E2: Load schemas from st_sem for SPC-UQ reconstruction guidance.
+        SPC-UQ uses these patterns to fill gaps in ambiguous episodes
+        by sampling from learned attribute distributions.
+
+        Capability Required: "st_sem.read"
+
+        Storage Table: st_sem
+        - Purpose: Semantic memory (patterns, schemas, insights)
+        - Query returns patterns ordered by confidence_score DESC
+        - Includes pattern_attributes_json for attribute distributions
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            pattern_types: Optional filter by pattern type (ACTIVITY, LOCATION, etc.)
+            min_confidence: Minimum confidence threshold (default: 0.5)
+            limit: Max patterns to return (default: 100)
+
+        Returns:
+            Dictionary with:
+            - schemas: list[dict] with pattern fields
+            - count: int (number of records returned)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_sem.read" capability
+
+        Example:
+            >>> result = await syscalls.semantic_schema_query(
+            ...     tenant_id="tenant_1",
+            ...     space_id="space_1",
+            ...     pattern_types=["ACTIVITY", "LOCATION"],
+            ...     min_confidence=0.5,
+            ...     limit=50
+            ... )
+            >>> schemas = result["schemas"]
+
+        Performance:
+            - Target: <50ms P95 for 100 patterns
+            - Uses tenant_id, space_id index
+
+        Related:
+            - M4-E2: Schema Population for SPC-UQ
+            - SPC-UQ: Uses schemas for gap reconstruction
+        """
+        self._require_cap("st_sem.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"semantic_schema_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "pattern_types": pattern_types,
+                "min_confidence": min_confidence,
+                "limit": limit,
+                "operation": "semantic_schema_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Build query with optional pattern type filter
+            if pattern_types:
+                placeholders = ", ".join(f"${i+4}" for i in range(len(pattern_types)))
+                query = f"""
+                    SELECT
+                        pattern_id,
+                        pattern_type,
+                        pattern_name,
+                        pattern_description,
+                        confidence_score,
+                        pattern_attributes_json,
+                        temporal_regularity
+                    FROM st_sem
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND confidence_score >= $3
+                      AND archival_status = 'ACTIVE'
+                      AND pattern_type IN ({placeholders})
+                    ORDER BY confidence_score DESC
+                    LIMIT ${len(pattern_types) + 4}
+                """
+                params = [tenant_id, space_id, min_confidence, *pattern_types, limit]
+            else:
+                query = """
+                    SELECT
+                        pattern_id,
+                        pattern_type,
+                        pattern_name,
+                        pattern_description,
+                        confidence_score,
+                        pattern_attributes_json,
+                        temporal_regularity
+                    FROM st_sem
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND confidence_score >= $3
+                      AND archival_status = 'ACTIVE'
+                    ORDER BY confidence_score DESC
+                    LIMIT $4
+                """
+                params = [tenant_id, space_id, min_confidence, limit]
+
+            rows = await conn.fetch(query, *params)
+
+            schemas = []
+            for row in rows:
+                schema_dict = {
+                    "pattern_id": row["pattern_id"],
+                    "activity_type": row["pattern_type"],  # Map to SemanticPattern protocol
+                    "pattern_name": row["pattern_name"],
+                    "description": row["pattern_description"],
+                    "confidence": (
+                        float(row["confidence_score"]) if row["confidence_score"] else 0.5
+                    ),
+                    "pattern_attributes_json": row["pattern_attributes_json"],
+                    "temporal_regularity": (
+                        float(row["temporal_regularity"]) if row["temporal_regularity"] else 0.0
+                    ),
+                }
+                schemas.append(schema_dict)
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"semantic_schema_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "schema_count": len(schemas),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "semantic_schema_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "schemas": schemas,
+                "count": len(schemas),
+            }
+
     async def kg_edges_lookup(
         self,
         tenant_id: str,

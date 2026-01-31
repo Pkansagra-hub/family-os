@@ -199,7 +199,7 @@ class MinimalGate:
 
         # Gap 7: Validate timestamp is within acceptable clock skew window
         ts_raw = self._extract_optional(envelope, "ts")
-        if ts_raw is not None:
+        if ts_raw is not None and self._max_clock_skew_seconds > 0:
             try:
                 # Parse ISO8601 timestamp
                 if isinstance(ts_raw, str):

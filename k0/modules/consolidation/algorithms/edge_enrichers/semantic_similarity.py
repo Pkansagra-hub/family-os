@@ -10,12 +10,14 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from k0.modules.consolidation.algorithms.edge_enrichers.fusion import canonical_edge_key
 from k0.modules.consolidation.algorithms.observation_context import ObservationContext
 from k0.pipelines.p03.phase_outputs import KGEdge, KGEdgeUpdate, KGEntity
-from k0.pipelines.p03.phases.r4_config import SemanticSimilarityConfig
+
+if TYPE_CHECKING:
+    from k0.pipelines.p03.phases.r4_config import SemanticSimilarityConfig
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,7 @@ class SemanticSimilarityEnricher:
 
     def __init__(
         self,
-        config: Optional[SemanticSimilarityConfig],
+        config: Optional["SemanticSimilarityConfig"],
         syscalls,
     ) -> None:
         self.config = config or SemanticSimilarityConfig()

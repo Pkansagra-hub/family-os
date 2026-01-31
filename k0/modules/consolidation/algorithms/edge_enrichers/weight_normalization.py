@@ -9,10 +9,12 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import TYPE_CHECKING, Dict, List, Tuple
 
 from k0.pipelines.p03.phase_outputs import KGEdge, KGEdgeUpdate
-from k0.pipelines.p03.phases.r4_config import WeightNormalizationConfig
+
+if TYPE_CHECKING:
+    from k0.pipelines.p03.phases.r4_config import WeightNormalizationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +22,7 @@ logger = logging.getLogger(__name__)
 class EdgeWeightNormalizer:
     """Normalizes edge weights to prevent hub dominance."""
 
-    def __init__(self, config: WeightNormalizationConfig) -> None:
+    def __init__(self, config: "WeightNormalizationConfig") -> None:
         self.config = config
 
     def normalize(

@@ -45,7 +45,7 @@ This document is the **single source of truth** for tracking all K0 components b
 | Pipelines | 20 | 2 | 18 | - |
 | Modules | 28 | 15 | 5 | 1 |
 | Recall Modules | 4 | 4 | - | - |
-| P03 Algorithms | 89 | 89 | - | - |
+| P03 Algorithms | 98 | 98 | - | - |
 | P03 Pipeline | 78 | 78 | - | - |
 | Events | 35+ | 25 | 7 | 3 |
 | Contracts (Module) | 22 | 15 | 3 | 2 |
@@ -415,6 +415,15 @@ P03 Pipeline Phases (k0/pipelines/p03/phases/)
 | `decay_engine.py` | Retention | Memory decay calculations | r5, r8 |
 | `duplicate_detector.py` | Dedup | Detects duplicate memories | r1, r4 |
 | `edge_demotion.py` | KG | Demotes weak knowledge graph edges | r6 |
+| `edge_enrichers/bayesian_causal.py` | KG | Bayesian causal edge enrichment | r4 |
+| `edge_enrichers/contextual.py` | KG | Contextual similarity edge enrichment | r4 |
+| `edge_enrichers/emotion_similarity.py` | KG | Emotion-based edge enrichment | r4 |
+| `edge_enrichers/fusion.py` | KG | Edge enrichment fusion utilities | r4 |
+| `edge_enrichers/intent_similarity.py` | KG | Intent-based complementary edge enrichment | r4 |
+| `edge_enrichers/semantic_similarity.py` | KG | Semantic similarity edge enrichment | r4 |
+| `edge_enrichers/temporal_proximity.py` | KG | Temporal proximity edge enrichment | r4 |
+| `edge_enrichers/transitive_closure.py` | KG | Transitive closure edge enrichment | r4 |
+| `edge_enrichers/weight_normalization.py` | KG | Edge weight normalization | r4 |
 | `embedding_text_generator.py` | Embedding | Generates text for embeddings | r2, r7 |
 | `entity_disambiguator.py` | NER | Disambiguates entity references | r1 |
 | `entity_extractor.py` | NER | Extracts entities from text | r1 |
@@ -525,14 +534,14 @@ P03 Pipeline Phases (k0/pipelines/p03/phases/)
 | Category | Count | Primary Purpose |
 |----------|-------|-----------------|
 | Root | 2 | Entry points (batch selection, gap resolution) |
-| Core Algorithms | 46 | Clustering, NER, dedup, learning, analytics, context |
+| Core Algorithms | 55 | Clustering, NER, dedup, learning, analytics, context, KG enrichment |
 | Text Generators | 7 | Memory layer text generation |
 | Dream | 6 | Exploration and simulation |
 | Emission | 2 | Event emission |
 | Staging | 13 | Coordination and assembly |
 | Truth Writer | 7 | Truth layer operations |
 | Truth Layers | 7 | Layer-specific writers |
-| **Total** | **90** | |
+| **Total** | **99** | |
 
 ### 3.4.10 Phase-to-Algorithm Matrix
 

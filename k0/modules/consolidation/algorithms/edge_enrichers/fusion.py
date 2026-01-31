@@ -20,19 +20,6 @@ class EdgeSignal:
     properties: dict[str, object] = field(default_factory=dict)
 
 
-@dataclass
-class EdgeFusionConfig:
-    """Configuration for fusing multiple algorithm signals."""
-
-    weight_fusion: str = "weighted_sum"  # weighted_sum | mean
-    confidence_fusion: str = "noisy_or"  # noisy_or | mean
-    algorithm_weights: dict[str, float] = field(default_factory=dict)
-    min_weight: float = 0.0
-    max_weight: float = 1.0
-    min_confidence: float = 0.0
-    max_confidence: float = 1.0
-
-
 def canonical_edge_key(a: str, b: str, directed: bool = False) -> tuple[str, str]:
     """Return canonical edge key for undirected (sorted) or directed pairs."""
     if directed:

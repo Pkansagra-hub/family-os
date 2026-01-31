@@ -1,0 +1,11 @@
+name: k0_cross_domain_stress
+description: Cross-domain stress analysis from K0
+inputs:
+  domains: array
+  time_range: object
+outputs:
+  stress_report: object
+scopes:
+  - stress.read
+  - health.read
+  - finance.read

@@ -193,6 +193,38 @@ class SPCConfig:
 
 
 @dataclass
+class SemanticPatternData:
+    """
+    Concrete implementation of SemanticPattern protocol for st_sem schemas.
+
+    M4-E2: Provides schema data for SPC-UQ reconstruction guidance.
+
+    Attributes:
+        pattern_id: Unique pattern identifier from st_sem.sem_id
+        activity_type: Pattern type (ACTIVITY, LOCATION, ROUTINE, etc.)
+        confidence: Pattern confidence score
+        attribute_distributions: Attribute name -> value distribution mapping
+    """
+
+    pattern_id: str
+    activity_type: str
+    confidence: float
+    attribute_distributions: Dict[str, Dict[str, float]] = field(default_factory=dict)
+
+    def get_attribute_distribution(self, attribute_name: str) -> Dict[str, float]:
+        """
+        Get probability distribution for an attribute.
+
+        Args:
+            attribute_name: Name of the attribute (location_name, participants, etc.)
+
+        Returns:
+            Dictionary mapping values to probabilities
+        """
+        return self.attribute_distributions.get(attribute_name, {})
+
+
+@dataclass
 class AttributeGap:
     """
     Represents a missing or uncertain attribute in an episode.
@@ -834,8 +866,7 @@ class EpisodicSimulator:
 
             # Step 0: Get relevant fragments for this episode
             relevant_fragments = [
-                f for f in fragments
-                if self._get_attr(f, "source_episode_id") == episode_id
+                f for f in fragments if self._get_attr(f, "source_episode_id") == episode_id
             ]
 
             # Step 1: Detect conflicts in fragments
@@ -988,7 +1019,10 @@ class EpisodicSimulator:
         if isinstance(attributes, (list, tuple)):
             for attr_tuple in attributes:
                 if isinstance(attr_tuple, (list, tuple)) and len(attr_tuple) >= 2:
-                    if attr_tuple[0] == "provenance_type" and attr_tuple[1] in FRAGMENT_PROVENANCE_MAP:
+                    if (
+                        attr_tuple[0] == "provenance_type"
+                        and attr_tuple[1] in FRAGMENT_PROVENANCE_MAP
+                    ):
                         return FRAGMENT_PROVENANCE_MAP[attr_tuple[1]]
 
         # Try fragment ID prefix
@@ -1016,8 +1050,7 @@ class EpisodicSimulator:
 
         # Group fragments by episode
         episode_fragments = [
-            f for f in fragments
-            if self._get_attr(f, "source_episode_id") == episode_id
+            f for f in fragments if self._get_attr(f, "source_episode_id") == episode_id
         ]
 
         if len(episode_fragments) < 2:
@@ -1047,16 +1080,18 @@ class EpisodicSimulator:
                         conflicting_frag = frag_id_map.get(conflicting_id)
                         if conflicting_frag:
                             other_content = self._get_attr(conflicting_frag, "content", "")
-                            conflicts.append(FragmentConflict(
-                                attribute_name=conflict_type or "factual",
-                                conflicting_values=[content[:50], other_content[:50]],
-                                fragment_ids=[frag_id, conflicting_id],
-                                provenance_types=[
-                                    self._get_fragment_provenance(frag),
-                                    self._get_fragment_provenance(conflicting_frag),
-                                ],
-                                severity=0.7,
-                            ))
+                            conflicts.append(
+                                FragmentConflict(
+                                    attribute_name=conflict_type or "factual",
+                                    conflicting_values=[content[:50], other_content[:50]],
+                                    fragment_ids=[frag_id, conflicting_id],
+                                    provenance_types=[
+                                        self._get_fragment_provenance(frag),
+                                        self._get_fragment_provenance(conflicting_frag),
+                                    ],
+                                    severity=0.7,
+                                )
+                            )
 
         # Method 2: Detect implicit conflicts from content/entities
         # Extract values by attribute type based on fragment content/entities
@@ -1071,17 +1106,22 @@ class EpisodicSimulator:
 
             # Check for time mentions in content (look for time patterns)
             import re
-            time_patterns = re.findall(r'\d{1,2}:\d{2}(?:\s*[AP]M)?|\d{1,2}(?::\d{2})?\s*[AP]M', content, re.IGNORECASE)
+
+            time_patterns = re.findall(
+                r"\d{1,2}:\d{2}(?:\s*[AP]M)?|\d{1,2}(?::\d{2})?\s*[AP]M", content, re.IGNORECASE
+            )
             if time_patterns:
                 time_values[frag_id] = time_patterns
 
             # Check for location entities
-            loc_entities = [e for e in entities if 'loc_' in str(e) or 'location' in str(e).lower()]
+            loc_entities = [e for e in entities if "loc_" in str(e) or "location" in str(e).lower()]
             if loc_entities:
                 location_values[frag_id] = [str(e) for e in loc_entities]
 
             # Check for participant entities
-            person_entities = [e for e in entities if 'person_' in str(e) or 'person' in str(e).lower()]
+            person_entities = [
+                e for e in entities if "person_" in str(e) or "person" in str(e).lower()
+            ]
             if person_entities:
                 participant_values[frag_id] = [str(e) for e in person_entities]
 
@@ -1091,15 +1131,31 @@ class EpisodicSimulator:
             for times in time_values.values():
                 all_times.update(times)
             if len(all_times) >= 2:  # Different times mentioned
-                conflicts.append(FragmentConflict(
-                    attribute_name="temporal",
-                    conflicting_values=list(all_times),
-                    fragment_ids=list(time_values.keys()),
-                    provenance_types=[self._get_fragment_provenance(
-                        next((f for f in episode_fragments if (self._get_attr(f, "fragment_id") or self._get_attr(f, "id")) == fid), None)
-                    ) for fid in time_values.keys()],
-                    severity=0.7,
-                ))
+                conflicts.append(
+                    FragmentConflict(
+                        attribute_name="temporal",
+                        conflicting_values=list(all_times),
+                        fragment_ids=list(time_values.keys()),
+                        provenance_types=[
+                            self._get_fragment_provenance(
+                                next(
+                                    (
+                                        f
+                                        for f in episode_fragments
+                                        if (
+                                            self._get_attr(f, "fragment_id")
+                                            or self._get_attr(f, "id")
+                                        )
+                                        == fid
+                                    ),
+                                    None,
+                                )
+                            )
+                            for fid in time_values.keys()
+                        ],
+                        severity=0.7,
+                    )
+                )
 
         # Detect location conflicts
         if len(location_values) >= 2:
@@ -1107,15 +1163,31 @@ class EpisodicSimulator:
             for locs in location_values.values():
                 all_locs.update(locs)
             if len(all_locs) >= 2:  # Different locations
-                conflicts.append(FragmentConflict(
-                    attribute_name="location_name",
-                    conflicting_values=list(all_locs),
-                    fragment_ids=list(location_values.keys()),
-                    provenance_types=[self._get_fragment_provenance(
-                        next((f for f in episode_fragments if (self._get_attr(f, "fragment_id") or self._get_attr(f, "id")) == fid), None)
-                    ) for fid in location_values.keys()],
-                    severity=0.6,
-                ))
+                conflicts.append(
+                    FragmentConflict(
+                        attribute_name="location_name",
+                        conflicting_values=list(all_locs),
+                        fragment_ids=list(location_values.keys()),
+                        provenance_types=[
+                            self._get_fragment_provenance(
+                                next(
+                                    (
+                                        f
+                                        for f in episode_fragments
+                                        if (
+                                            self._get_attr(f, "fragment_id")
+                                            or self._get_attr(f, "id")
+                                        )
+                                        == fid
+                                    ),
+                                    None,
+                                )
+                            )
+                            for fid in location_values.keys()
+                        ],
+                        severity=0.6,
+                    )
+                )
 
         return conflicts
 

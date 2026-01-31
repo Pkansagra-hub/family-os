@@ -179,14 +179,18 @@ class DreamExplorer:
         counterfactuals = parallel_results.get("cpn", [])
         prospective_memories = parallel_results.get("spc_uq", [])
         mcts_scenarios = parallel_results.get("mcts", [])
+        routine_candidates = parallel_results.get(
+            "routine_detector", []
+        )  # M2-E2-I2: Extract detected routines
 
         # =====================================================================
         # PHASE 2: Run TDL-HCO (Issue 8.1.11 - Motor Rehearsal for Habits)
         # Sequential because it analyzes patterns from previous phases
+        # M2-E2-I2: Now uses detected routines from RoutineDetector
         # =====================================================================
         routine_result = await self._run_with_error_isolation(
             algorithm_name="tdl_hco",
-            coro=self._run_tdl_hco(input_data, cycle_id, compute_budget),
+            coro=self._run_tdl_hco(input_data, cycle_id, compute_budget, routine_candidates),
             orchestration=orchestration,
         )
         routine_optimizations = routine_result if routine_result else []
@@ -212,15 +216,10 @@ class DreamExplorer:
         intent_signals = intent_detector.detect_all(input_data.event_states)
 
         # =====================================================================
-        # PHASE 5: Retrospective Routine Detection (GAP-003)
-        # Detect recurring behavioral patterns from accumulated episodes
+        # NOTE: RoutineDetector already runs in _run_parallel_algorithms (PHASE 1)
+        # and routine_candidates is extracted from parallel_results above.
+        # M5-E2: Removed duplicate PHASE 5 run that was overwriting results.
         # =====================================================================
-        routine_candidates = await self._run_with_error_isolation(
-            algorithm_name="routine_detector",
-            coro=self._run_routine_detector(input_data, cycle_id),
-            orchestration=orchestration,
-        )
-        routine_candidates = routine_candidates if routine_candidates else []
 
         compute_ms = int(time.time() * 1000) - start_ms
 
@@ -253,6 +252,7 @@ class DreamExplorer:
             routine_optimizations=routine_optimizations,
             routine_candidates=routine_candidates,
             intent_signals=intent_signals,
+            mcts_scenarios=mcts_scenarios,
             mcts_decisions_evaluated=compute_budget.used_rollouts,
             compute_ms=compute_ms,
         )
@@ -288,6 +288,9 @@ class DreamExplorer:
             "cpn": self._run_cpn(input_data, cycle_id),
             "spc_uq": self._run_spc_uq(input_data, cycle_id),
             "mcts": self._run_mcts(input_data, cycle_id, orchestration.compute_budget),
+            "routine_detector": self._run_routine_detector(
+                input_data, cycle_id
+            ),  # M2-E2-I2: Run before TDL-HCO
         }
 
         results: Dict[str, List[Any]] = {}
@@ -421,7 +424,10 @@ class DreamExplorer:
         Returns:
             List of generated insights
         """
-        from k0.modules.consolidation.algorithms.bgt_sm import BGTConfig, BisociativeGraphTraversal
+        from k0.modules.consolidation.algorithms.bgt_sm import (
+            BGTConfig,
+            BisociativeGraphTraversal,
+        )
 
         seed = self.config.derive_seed(cycle_id, "bgt_sm")
 
@@ -582,7 +588,10 @@ class DreamExplorer:
         Returns:
             List of counterfactual scenarios
         """
-        from k0.modules.consolidation.algorithms.cpn import CausalPerturbationNetwork, CPNConfig
+        from k0.modules.consolidation.algorithms.cpn import (
+            CausalPerturbationNetwork,
+            CPNConfig,
+        )
 
         seed = self.config.derive_seed(cycle_id, "cpn")
 
@@ -607,11 +616,16 @@ class DreamExplorer:
 
         # Run CPN algorithm
         cpn = CausalPerturbationNetwork(config=cpn_config)
+        print(
+            f"DREAM_EXPLORER: About to call CPN.generate with {len(input_data.recent_episodes)} episodes and {len(input_data.kg_edges)} edges"
+        )
         cpn_scenarios = cpn.generate(
             episodes=input_data.recent_episodes,
             kg_edges=input_data.kg_edges,
             rng_seed=seed,
+            kg_entities=input_data.kg_entities,
         )
+        print(f"DREAM_EXPLORER: CPN.generate returned {len(cpn_scenarios)} scenarios")
 
         # Convert CPN output to CounterfactualScenario model
         return [
@@ -652,7 +666,10 @@ class DreamExplorer:
         Returns:
             List of prospective memories
         """
-        from k0.modules.consolidation.algorithms.spc_uq import EpisodicSimulator, SPCConfig
+        from k0.modules.consolidation.algorithms.spc_uq import (
+            EpisodicSimulator,
+            SPCConfig,
+        )
 
         seed = self.config.derive_seed(cycle_id, "spc_uq")
 
@@ -684,11 +701,12 @@ class DreamExplorer:
         fragments = self._extract_fragments(input_data)
 
         # Run SPC-UQ algorithm
+        # M4-E2: Use schemas from input_data for reconstruction guidance
         simulator = EpisodicSimulator(config=spc_config)
         reconstructions = simulator.simulate(
             episodes=input_data.recent_episodes,
             fragments=fragments,
-            schemas=[],  # Issue 8.1.9 will provide schemas from semantic memory
+            schemas=input_data.schemas,
             context=context,
             rng_seed=seed,
         )
@@ -821,9 +839,12 @@ class DreamExplorer:
             },
         )
 
-        # Skip if no episodes to analyze
-        if not input_data.recent_episodes:
-            self._logger.debug("MCTS skipped: no episodes available")
+        # Build available actions from entities and episodes
+        available_actions = self._build_mcts_actions(input_data)
+
+        # Skip if no available actions
+        if not available_actions:
+            self._logger.debug("MCTS skipped: no available actions")
             return []
 
         # Create MCTS config from DreamConfig
@@ -843,13 +864,6 @@ class DreamExplorer:
                 "entity_count": float(len(input_data.kg_entities)),
             },
         )
-
-        # Build available actions from entities and episodes
-        available_actions = self._build_mcts_actions(input_data)
-
-        if not available_actions:
-            self._logger.debug("MCTS skipped: no available actions")
-            return []
 
         # Create MCTS budget from shared compute budget if available
         mcts_budget = None
@@ -907,9 +921,10 @@ class DreamExplorer:
             entity_type = getattr(entity, "entity_type", "generic")
 
             if entity_id:
+                # Use full entity_id to ensure uniqueness
                 actions.append(
                     SimpleAction(
-                        action_id=f"interact_{entity_id[:8]}",
+                        action_id=f"interact_{entity_id}",
                         action_type=f"interact_{entity_type.lower()}",
                     )
                 )
@@ -929,6 +944,9 @@ class DreamExplorer:
         input_data: DreamExplorerInput,
         cycle_id: str,
         compute_budget: Optional[ComputeBudget],
+        detected_routines: Optional[
+            List["RoutineCandidate"]
+        ] = None,  # M2-E2-I2: Accept detected routines
     ) -> List[RoutineOptimization]:
         """
         Run TDL-HCO (Temporal Difference Learning for Habit/Cognitive Optimization).
@@ -981,12 +999,46 @@ class DreamExplorer:
             self._logger.debug("TDL-HCO skipped: no episodes available")
             return []
 
-        # Extract routines from episodic memory
-        routines = extract_routines_from_episodes(
-            episodes=input_data.recent_episodes,
-            min_routine_length=3,
-            min_occurrences=2,  # Lower threshold for testing
-        )
+        # =====================================================================
+        # M5-E1: Merge routine sources for TDL-HCO
+        # Priority: 1) RoutineDetector candidates 2) Accumulated from st_procedural
+        # 3) Extract from episodes as fallback
+        # =====================================================================
+        routines = []
+
+        # Source 1: Use detected routines from RoutineDetector if available
+        if detected_routines:
+            routines = self._convert_routine_candidates_to_templates(detected_routines)
+            self._logger.debug(
+                "TDL-HCO using detected routines from RoutineDetector",
+                extra={"detected_routines_count": len(detected_routines)},
+            )
+
+        # Source 2: Merge with accumulated routines from st_procedural
+        if input_data.accumulated_routines:
+            accumulated_templates = self._convert_accumulated_routines_to_templates(
+                input_data.accumulated_routines
+            )
+            # Merge: accumulated routines add to detected, avoiding duplicates
+            existing_ids = {r.routine_id for r in routines}
+            for template in accumulated_templates:
+                if template.routine_id not in existing_ids:
+                    routines.append(template)
+            self._logger.debug(
+                "TDL-HCO merged accumulated routines from st_procedural",
+                extra={
+                    "accumulated_count": len(input_data.accumulated_routines),
+                    "merged_total": len(routines),
+                },
+            )
+
+        # Source 3: Fallback to extracting from episodes if no other source
+        if not routines:
+            routines = extract_routines_from_episodes(
+                episodes=input_data.recent_episodes,
+                min_routine_length=3,
+                min_occurrences=2,  # Lower threshold for testing
+            )
 
         if not routines:
             self._logger.debug("TDL-HCO skipped: no routines found")
@@ -1091,6 +1143,201 @@ class DreamExplorer:
         )
 
         return candidates
+
+    def _convert_routine_candidates_to_templates(
+        self,
+        candidates: List["RoutineCandidate"],
+    ) -> List["RoutineTemplate"]:
+        """
+        Convert RoutineCandidate objects to RoutineTemplate format for TDL-HCO.
+
+        M2-E2-I2: Enable TDL-HCO to use detected routines from RoutineDetector.
+
+        Args:
+            candidates: Detected routine candidates from RoutineDetector
+
+        Returns:
+            RoutineTemplate objects compatible with TDL-HCO
+        """
+        from k0.modules.consolidation.algorithms.tdl_hco import (
+            RoutineExecution,
+            RoutineStepData,
+            RoutineTemplate,
+        )
+
+        templates = []
+        for candidate in candidates:
+            # Create synthetic steps from routine name and activity
+            # Since RoutineDetector doesn't provide step sequences, create basic steps
+            steps = [
+                RoutineStepData(
+                    step_id=f"{candidate.routine_id}_step_0",
+                    step_name=candidate.routine_name,
+                    step_index=0,
+                    duration_ms=int(candidate.typical_duration_minutes * 60 * 1000),
+                    success=True,
+                    reward=0.9,  # Assume high success for detected routines
+                )
+            ]
+
+            # Parse source_episodes_json if it's a string
+            import json as _json
+
+            source_episodes = candidate.source_episodes_json
+            if isinstance(source_episodes, str):
+                try:
+                    source_episodes = _json.loads(source_episodes) if source_episodes else []
+                except (_json.JSONDecodeError, TypeError):
+                    source_episodes = []
+
+            # Create execution records from source episodes
+            executions = []
+            for episode in source_episodes:
+                if isinstance(episode, dict):
+                    episode_id = episode.get("episode_id", f"ep_{len(executions)}")
+                    timestamp_ms = episode.get("start_time_ms", 0)
+                else:
+                    episode_id = str(episode)
+                    timestamp_ms = 0
+                executions.append(
+                    RoutineExecution(
+                        execution_id=f"exec_{episode_id}",
+                        routine_id=candidate.routine_id,
+                        routine_name=candidate.routine_name,
+                        steps=steps,
+                        total_duration_ms=int(candidate.typical_duration_minutes * 60 * 1000),
+                        completed=True,
+                        success=True,
+                        episode_id=episode_id,
+                        timestamp_ms=timestamp_ms,
+                    )
+                )
+
+            # Create template
+            template = RoutineTemplate(
+                routine_id=candidate.routine_id,
+                routine_name=candidate.routine_name,
+                canonical_steps=[s.step_name for s in steps],
+                execution_count=candidate.source_episode_count,
+                avg_duration_ms=int(candidate.typical_duration_minutes * 60 * 1000),
+                success_rate=0.9,  # Assume high success for detected routines
+                executions=executions,
+            )
+            templates.append(template)
+
+        return templates
+
+    def _convert_accumulated_routines_to_templates(
+        self,
+        accumulated_routines: List[dict],
+    ) -> List["RoutineTemplate"]:
+        """
+        Convert accumulated routine dicts from st_procedural to RoutineTemplate format.
+
+        M5-E1: Enable TDL-HCO to use historical routines from st_procedural.
+
+        Args:
+            accumulated_routines: Routine dicts from procedural_memory_query syscall
+
+        Returns:
+            RoutineTemplate objects compatible with TDL-HCO
+        """
+        import json
+
+        from k0.modules.consolidation.algorithms.tdl_hco import (
+            RoutineExecution,
+            RoutineStepData,
+            RoutineTemplate,
+        )
+
+        templates = []
+        for routine in accumulated_routines:
+            routine_id = routine.get("routine_id", "unknown")
+            routine_name = routine.get("routine_name", "Unnamed Routine")
+
+            # Parse action_sequence_json for steps
+            action_sequence_json = routine.get("action_sequence_json", "[]")
+            try:
+                action_sequence = json.loads(action_sequence_json) if action_sequence_json else []
+            except (json.JSONDecodeError, TypeError):
+                action_sequence = []
+
+            # Create steps from action sequence
+            steps = []
+            for i, action in enumerate(action_sequence):
+                if isinstance(action, dict):
+                    step = RoutineStepData(
+                        step_id=f"{routine_id}_step_{i}",
+                        step_name=action.get("action", f"step_{i}"),
+                        step_index=i,
+                        duration_ms=action.get("duration_ms", 60000),
+                        success=True,
+                        reward=action.get("success_rate", 0.9),
+                    )
+                else:
+                    step = RoutineStepData(
+                        step_id=f"{routine_id}_step_{i}",
+                        step_name=str(action),
+                        step_index=i,
+                        duration_ms=60000,
+                        success=True,
+                        reward=0.9,
+                    )
+                steps.append(step)
+
+            # If no steps parsed, create synthetic step from routine name
+            if not steps:
+                steps = [
+                    RoutineStepData(
+                        step_id=f"{routine_id}_step_0",
+                        step_name=routine_name,
+                        step_index=0,
+                        duration_ms=60000,
+                        success=True,
+                        reward=0.9,
+                    )
+                ]
+
+            # Parse source_episodes_json for execution history
+            source_episodes_json = routine.get("source_episodes_json", "[]")
+            try:
+                source_episodes = json.loads(source_episodes_json) if source_episodes_json else []
+            except (json.JSONDecodeError, TypeError):
+                source_episodes = []
+
+            # Create execution records
+            executions = []
+            for j, episode_id in enumerate(source_episodes):
+                executions.append(
+                    RoutineExecution(
+                        execution_id=f"exec_{routine_id}_{j}",
+                        routine_id=routine_id,
+                        routine_name=routine_name,
+                        steps=steps,
+                        total_duration_ms=steps[0].duration_ms if steps else 60000,
+                        completed=True,
+                        success=True,
+                        episode_id=str(episode_id),
+                        timestamp_ms=0,
+                    )
+                )
+
+            # Create template
+            execution_count = routine.get("source_episode_count", len(source_episodes))
+            regularity_score = routine.get("regularity_score", 0.5)
+
+            template = RoutineTemplate(
+                routine_id=routine_id,
+                routine_name=routine_name,
+                canonical_steps=[s.step_name for s in steps],
+                execution_count=execution_count,
+                avg_duration_ms=steps[0].duration_ms if steps else 60000,
+                success_rate=regularity_score,  # Use regularity as proxy for success
+                executions=executions,
+            )
+            templates.append(template)
+
+        return templates
 
     def _rank_and_limit_insights(
         self,

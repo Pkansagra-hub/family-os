@@ -1,0 +1,110 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+%% =====================================================================================
+%% SESSION KERNEL (K1) — INTERNAL-ONLY STRUCTURE (DOCS VIEW)
+%% No K0 nodes, no runtime flows. Just the kernel state + invariants + services.
+%% =====================================================================================
+
+subgraph SK["🧠 K1 SessionKernel — Internal (Text-only V1)"]
+  direction TB
+
+  subgraph TIERS["Tiering Model"]
+    direction LR
+    T_HOT["🔥 HOT CORE<br/>≤ 48KB<br/>never thrash"]:::tier_hot
+    T_WARM["🌡️ WARM TIER<br/>≤ 48KB<br/>evictable"]:::tier_warm
+    T_TOTAL["TOTAL ≤ 96KB<br/>hard cap"]:::tier_total
+  end
+
+  %% ---------------- HOT CORE ----------------
+  subgraph HOT["🔥 HOT CORE (≤ 48KB) — NEVER THRASH"]
+    direction TB
+
+    H_CONTROL["control (≤ 8KB)<br/>leases, turn lock, flow state<br/><b>NEVER EVICT</b>"]:::hot_critical
+    H_BELIEFS_ACTIVE["beliefs_active (≤ 8KB)<br/>facts needed THIS turn"]:::hot
+    H_SCOREBOARD["scoreboard (≤ 6KB)<br/>referents + QUD + salience"]:::hot
+    H_CLARIFICATIONS["clarifications (≤ 4KB)<br/>open gaps THIS turn"]:::hot
+    H_AFFECT_NOW["affective_now (≤ 4KB)<br/>current emotion snapshot"]:::hot
+    H_MENTAL_NOW["mental_now (≤ 4KB)<br/>current user model delta"]:::hot
+    H_NARR_ACTIVE["narrative_active (≤ 4KB)<br/>ONE active thread"]:::hot
+    H_META["meta (≤ 2KB)<br/>session id, band, timestamps"]:::hot
+  end
+
+  %% ---------------- WARM TIER ----------------
+  subgraph WARM["🌡️ WARM TIER (≤ 48KB) — EVICTABLE"]
+    direction TB
+
+    W_BELIEFS_HIST["beliefs_history (≤ 12KB)<br/>recent facts (capped)"]:::warm
+    W_HISTORY["history (≤ 12KB)<br/>last 5 turns only<br/>lossy summaries"]:::warm_critical
+    W_PERSONA["persona (≤ 8KB)<br/>traits, style, voice controls"]:::warm
+    W_TELEMETRY["telemetry (≤ 8KB)<br/>tokens, cost, counters (lossy)"]:::warm
+  end
+
+  %% ---------------- KERNEL ENFORCEMENT ----------------
+  subgraph SVC["🧱 Kernel Enforcement (Mandatory)"]
+    direction TB
+
+    SIZE_TRACKER["SizeTracker<br/>per-section byte accounting"]:::svc
+    MUTATION_GUARD["MutationGuard<br/>preflight estimate + reject"]:::svc_critical
+    EVICTION_ENGINE["EvictionEngine<br/>warm-only eviction + summarization"]:::svc
+    MIGRATION_ENGINE["MigrationEngine<br/>hot↔warm demote/promote"]:::svc
+    SNAPSHOT_HEALTH["Snapshot/Health<br/>size breakdown + pressure + thrash"]:::svc
+  end
+
+  %% ---------------- INVARIANTS ----------------
+  subgraph INVAR["🧷 Invariants (Non-negotiable)"]
+    direction TB
+    I_HOT["HOT ≤ 48KB"]:::inv
+    I_WARM["WARM ≤ 48KB"]:::inv
+    I_TOTAL["TOTAL ≤ 96KB (Hard Reject)"]:::inv_critical
+    I_CTRL["control never evicted"]:::inv_critical
+    I_HIST["history ≤ 5 turns"]:::inv
+  end
+end
+
+%% ---------------- Connections (Internal Logic) ----------------
+T_HOT --> HOT
+T_WARM --> WARM
+T_TOTAL --> INVAR
+
+HOT --> SIZE_TRACKER
+WARM --> SIZE_TRACKER
+
+SIZE_TRACKER --> MUTATION_GUARD
+MUTATION_GUARD --> MIGRATION_ENGINE
+MUTATION_GUARD --> EVICTION_ENGINE
+
+EVICTION_ENGINE -.->|warm-only| WARM
+MIGRATION_ENGINE -.->|demote/promote| HOT
+MIGRATION_ENGINE -.->|demote/promote| WARM
+
+H_CONTROL -.->|NEVER EVICT| EVICTION_ENGINE
+
+W_HISTORY --> I_HIST
+HOT --> I_HOT
+WARM --> I_WARM
+SK --> I_TOTAL
+H_CONTROL --> I_CTRL
+
+%% =====================================================================================
+%% STYLES
+%% =====================================================================================
+
+classDef tier_hot fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000,font-weight:bold
+classDef tier_warm fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000,font-weight:bold
+classDef tier_total fill:#e1bee7,stroke:#6a1b9a,stroke-width:3px,color:#000,font-weight:bold
+
+classDef hot fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000
+classDef hot_critical fill:#ffcdd2,stroke:#b71c1c,stroke-width:3px,color:#000,font-weight:bold
+
+classDef warm fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000
+classDef warm_critical fill:#ffe0b2,stroke:#e65100,stroke-width:3px,color:#000,font-weight:bold
+
+classDef svc fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef svc_critical fill:#c8e6c9,stroke:#1b5e20,stroke-width:3px,color:#000,font-weight:bold
+
+classDef inv fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+classDef inv_critical fill:#e1bee7,stroke:#6a1b9a,stroke-width:3px,color:#000,font-weight:bold

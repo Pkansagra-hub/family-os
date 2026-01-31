@@ -1,0 +1,7 @@
+name: stress_table
+version: 1.0.0
+description: Cross-domain stress table analysis
+tools:
+  - k0_cross_domain_stress
+agents:
+  - stress_agent

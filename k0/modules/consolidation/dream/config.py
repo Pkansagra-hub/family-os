@@ -52,15 +52,16 @@ class DreamConfig:
     max_prospective_memories: int = 5
     max_routine_optimizations: int = 5
 
-    # Quality thresholds (Issue 8.1.10)
-    min_novelty_score: float = 0.5  # Per Issue 8.1.10: novelty > 0.5
+    # Quality thresholds (Issue 8.1.10, M3-E2 cold-start tuning)
+    # Cold-start thresholds: novelty 0.5->0.3, semantic 0.7->0.5, PMI 3.0->1.5
+    min_novelty_score: float = 0.3  # M3-E2-I3: lowered for cold-start (was 0.5)
     min_confidence: float = 0.5
     coherence_threshold: float = 0.4
     serendipity_threshold: float = 0.6  # Per Issue 8.1.10: serendipity > 0.6
 
-    # BGT-SM parameters (Issue 8.1.9, 8.1.10, GAP-001 M9.1)
-    semantic_distance_threshold: float = 0.7  # Per Issue 8.1.10: distance > 0.7
-    pmi_threshold: float = 3.0  # Per Issue 8.1.10: PMI > 3.0
+    # BGT-SM parameters (Issue 8.1.9, 8.1.10, GAP-001 M9.1, M3-E2)
+    semantic_distance_threshold: float = 0.5  # M3-E2-I1: lowered for cold-start (was 0.7)
+    pmi_threshold: float = 1.5  # M3-E2-I2: lowered for cold-start (was 3.0)
     corpus_size_n: int = 10000
     cold_start_threshold: int = 100  # Min corpus for BGT-SM (lowered from 10K)
 

@@ -297,6 +297,34 @@ class SecuritySettings(BaseModel):
     )
 
 
+class GateSettings(BaseModel):
+    """Configuration for the MinimalGate envelope validation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_clock_skew_seconds: int = Field(
+        default=300,  # 5 minutes
+        ge=0,
+        le=31536000,  # Max 1 year
+        description=(
+            "Maximum allowed clock skew in seconds between envelope timestamp "
+            "and server time. Set to 0 to disable clock skew validation entirely."
+        ),
+    )
+    max_envelope_bytes: int = Field(
+        default=1048576,  # 1MB
+        ge=1024,
+        le=10485760,  # Max 10MB
+        description="Maximum allowed envelope size in bytes.",
+    )
+    max_body_bytes: int = Field(
+        default=1048576,  # 1MB
+        ge=1024,
+        le=10485760,  # Max 10MB
+        description="Maximum allowed body size in bytes.",
+    )
+
+
 class ChaosSettings(BaseModel):
     """Chaos engineering toggles for controlled fault injection.
 
@@ -416,6 +444,10 @@ class KernelSettings(BaseModel):
     security: SecuritySettings = Field(
         default_factory=SecuritySettings,
         description="Security policies for key rotation and verification.",
+    )
+    gate: GateSettings = Field(
+        default_factory=GateSettings,
+        description="Configuration for envelope validation and gate behavior.",
     )
     chaos: ChaosSettings = Field(
         default_factory=ChaosSettings,

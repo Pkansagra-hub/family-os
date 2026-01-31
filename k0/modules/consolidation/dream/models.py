@@ -23,6 +23,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
 if TYPE_CHECKING:
+    from k0.modules.consolidation.algorithms.mcts import MCTSScenario
     from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
     from k0.modules.consolidation.dream.intent_signals import IntentSignal
 
@@ -346,6 +347,8 @@ class DreamExplorerInput:
         kg_entities: Knowledge graph entities from R4
         kg_edges: Knowledge graph edges from R4
         event_states: Event states with importance scores from R1
+        schemas: Semantic patterns from st_sem for SPC-UQ reconstruction (M4-E2)
+        accumulated_routines: Historical routines from st_procedural for TDL-HCO (M5-E1)
     """
 
     cycle_id: str
@@ -355,6 +358,8 @@ class DreamExplorerInput:
     kg_entities: List = field(default_factory=list)
     kg_edges: List = field(default_factory=list)
     event_states: List = field(default_factory=list)
+    schemas: List = field(default_factory=list)
+    accumulated_routines: List = field(default_factory=list)
 
 
 @dataclass
@@ -371,6 +376,7 @@ class DreamExplorerOutput:
         routine_optimizations: Routine improvement suggestions
         routine_candidates: Detected routines from RoutineDetector (GAP-003)
         intent_signals: Intent signals detected from events (GAP-001)
+        mcts_scenarios: MCTS forward simulation scenarios
         mcts_decisions_evaluated: Number of MCTS tree evaluations
         compute_ms: Time spent in exploration (milliseconds)
     """
@@ -381,6 +387,7 @@ class DreamExplorerOutput:
     routine_optimizations: List[RoutineOptimization] = field(default_factory=list)
     routine_candidates: List["RoutineCandidate"] = field(default_factory=list)
     intent_signals: List["IntentSignal"] = field(default_factory=list)
+    mcts_scenarios: List["MCTSScenario"] = field(default_factory=list)
     mcts_decisions_evaluated: int = 0
     compute_ms: int = 0
 
@@ -394,6 +401,7 @@ class DreamExplorerOutput:
             + len(self.routine_optimizations)
             + len(self.routine_candidates)
             + len(self.intent_signals)
+            + len(self.mcts_scenarios)
         )
 
     @property

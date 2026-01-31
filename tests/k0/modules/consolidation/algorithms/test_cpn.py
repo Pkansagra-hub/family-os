@@ -147,13 +147,13 @@ class TestCPNConfigValidation:
         """CPNConfig should have sensible defaults."""
         config = CPNConfig()
 
-        assert config.emotional_threshold == 0.6
-        assert config.top_k_regret_events == 10
-        assert config.causal_chain_depth == 5
+        assert config.emotional_threshold == 0.3  # GAP-001 M9.3: lowered from 0.6
+        assert config.top_k_regret_events == 20  # M1-E3-I4: increased from 10
+        assert config.causal_chain_depth == 3  # M1-E3-I5: decreased from 5
         assert config.perturbation_std == 0.1
-        assert config.min_plausibility == 0.3
-        assert config.min_utility_delta == 0.3
-        assert len(config.counterfactual_types) == 3
+        assert config.min_plausibility == 0.1  # M1-E3-I2: lowered from 0.3
+        assert config.min_utility_delta == 0.1  # M1-E3-I3: lowered from 0.3
+        assert len(config.counterfactual_types) == 1  # M1-E3-I6: focus on UPWARD only
 
     def test_custom_values(self) -> None:
         """CPNConfig should accept custom values."""

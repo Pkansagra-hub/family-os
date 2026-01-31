@@ -50,9 +50,9 @@ PG_DB = "k0_kernel"
 PRIMARY_ACTOR_ID = "Prince"
 
 # Simulation Configuration
-DAYS_TO_SIMULATE = 10  # Spread events across 10 days (realistic week+ window)
+DAYS_TO_SIMULATE = 20  # Spread events across 3 days
 EVENTS_PER_DAY_RANGE = (40, 80)  # Random events per day
-SUBMISSION_DELAY_MS = 30  # Delay between event submissions
+SUBMISSION_DELAY_MS = 10  # Delay between event submissions
 
 
 # =============================================================================
@@ -754,23 +754,17 @@ def main():
     print("Simulating realistic daily schedule patterns")
     print("=" * 70)
 
-    # Load events from JSONL - prefer expanded file if available
-    expanded_path = Path(__file__).parent / "real_lifedata_expanded.jsonl"
-    base_path = Path(__file__).parent / "real_lifedata.jsonl"
-
-    if expanded_path.exists():
-        jsonl_path = expanded_path
-    else:
-        jsonl_path = base_path
+    # Load events from JSONL
+    jsonl_path = Path(__file__).parent / "real_lifedata.jsonl"
 
     print(f"\nLoading events from: {jsonl_path}")
 
     base_events = load_events_from_jsonl(jsonl_path)
     print(f"Loaded {len(base_events)} base events")
 
-    # Expand to target count
-    target_count = 2000
-    print(f"Expanding to {target_count} events with variations...")
+    # Use the base events without expansion
+    target_count = len(base_events)
+    print(f"Using {target_count} events without expansion...")
     all_events = expand_events(base_events, target_count)
 
     # Distribute across days with realistic timing
@@ -861,12 +855,12 @@ def main():
     print("=" * 70)
 
     print("\nWaiting 120s for P02 embeddings to process...")
-    time.sleep(120)
+    time.sleep(60)
 
     trigger_p03()
 
     print("\nWaiting 120s for P03 processing...")
-    time.sleep(120)
+    time.sleep(60)
 
     check_stats()
 

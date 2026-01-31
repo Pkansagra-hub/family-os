@@ -1139,6 +1139,24 @@ class R2EpisodicIntegrator:
                 pass
         participants_json = json.dumps(sorted(all_participants))
 
+        # Extract entity IDs from NER data across all member events
+        entity_ids: set = set()
+        for e in cluster_events:
+            try:
+                ner_json = getattr(e.event, "ner_entities_json", "{}") or "{}"
+                ner_data = json.loads(ner_json) if ner_json else {}
+                if isinstance(ner_data, dict):
+                    for source in ["ner_family", "ner_general"]:
+                        if source in ner_data and isinstance(ner_data[source], dict):
+                            entities = ner_data[source].get("entities", [])
+                            for ent in entities:
+                                if isinstance(ent, dict):
+                                    ent_id = ent.get("id")
+                                    if ent_id:
+                                        entity_ids.add(ent_id)
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
+
         # Extract most common activity type
         activity_counts: Dict[str, int] = {}
         for e in cluster_events:
@@ -1179,10 +1197,23 @@ class R2EpisodicIntegrator:
             dominant_social_context,
         ) = self._aggregate_context_fields(member_contexts)
 
+        # M0-E2-I5: Compute ambiguity_score based on missing critical fields
+        # Higher score = more ambiguous (more missing information)
+        ambiguity_score = self._compute_ambiguity_score(
+            location_hint=location_hint,
+            participants_json=participants_json,
+            activity_type=activity_type,
+            activity_type_ultrabert=activity_type_ultrabert,
+            entity_ids=entity_ids,
+            cluster_events=cluster_events,
+        )
+
         return EpisodeCluster(
             cluster_id=cluster_id,
             member_event_ids=list(member_ids),
             member_contexts=member_contexts,  # Issue 7.6
+            entity_ids=list(entity_ids),  # M0-E2-I3: Extracted from NER data
+            ambiguity_score=ambiguity_score,  # M0-E2-I5: Uncertainty quantification
             centroid_embedding_id=None,  # Will be set by R6/R7 when persisted
             dominant_sentiment=dominant_sentiment,
             dominant_emotion=dominant_emotion,
@@ -1698,6 +1729,80 @@ class R2EpisodicIntegrator:
             )
 
         return matched_events, novel_events
+
+    def _compute_ambiguity_score(
+        self,
+        location_hint: Optional[str],
+        participants_json: str,
+        activity_type: str,
+        activity_type_ultrabert: str,
+        entity_ids: set,
+        cluster_events: List,
+    ) -> float:
+        """
+        Compute ambiguity score based on missing critical fields.
+
+        Higher score = more ambiguous (more missing information).
+        Used by SPC-UQ algorithm for uncertainty quantification.
+
+        Critical fields for episode clarity:
+        - Location (where it happened)
+        - Participants (who was involved)
+        - Activity type (what type of activity)
+        - Entity IDs (named entities mentioned)
+
+        Returns:
+            Float between 0.0 (fully specified) and 1.0 (highly ambiguous)
+        """
+        import json
+
+        missing_fields = 0
+        total_fields = 4  # location, participants, activity, entities
+
+        # Check location
+        if not location_hint:
+            missing_fields += 1
+
+        # Check participants
+        try:
+            participants = json.loads(participants_json or "[]")
+            if not participants:
+                missing_fields += 1
+        except (json.JSONDecodeError, TypeError):
+            missing_fields += 1
+
+        # Check activity type (prefer UltraBERT, fallback to legacy)
+        has_activity = bool(activity_type_ultrabert or activity_type)
+        if not has_activity:
+            missing_fields += 1
+
+        # Check entity IDs
+        if not entity_ids:
+            missing_fields += 1
+
+        # Additional ambiguity factors
+        ambiguity_penalty = 0.0
+
+        # Small clusters are more ambiguous
+        if len(cluster_events) < 3:
+            ambiguity_penalty += 0.1
+
+        # No sentiment/emotion data makes it more ambiguous
+        has_sentiment_data = any(
+            getattr(e.event, "sentiment_score", None) is not None
+            or getattr(e.event, "emotion_label", None)
+            for e in cluster_events
+        )
+        if not has_sentiment_data:
+            ambiguity_penalty += 0.1
+
+        # Calculate base score from missing fields
+        base_score = missing_fields / total_fields
+
+        # Apply penalty and clamp to [0, 1]
+        final_score = min(1.0, base_score + ambiguity_penalty)
+
+        return final_score
 
     def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
         """Compute cosine similarity between two vectors."""

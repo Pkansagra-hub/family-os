@@ -1,0 +1,7 @@
+name: health
+version: 1.0.0
+description: Health-related tools and agents
+tools:
+  - k0_health_query
+agents:
+  - health_agent

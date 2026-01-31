@@ -1,0 +1,199 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+%% =====================================================================================
+%% SESSION KERNEL (K1) — HOT/WARM/COLD TIERED STATE (TEXT-ONLY V1)
+%% Constraints:
+%%   HOT  <= 48KB (never thrash)
+%%   WARM <= 48KB (evictable)
+%%   TOTAL<= 96KB (hard)
+%% =====================================================================================
+
+subgraph SK["🧠 K1 SessionKernel (Tiered) — total ≤ 96KB"]
+  direction TB
+
+  %% ---------------- HOT CORE ----------------
+  subgraph HOT["🔥 HOT CORE (≤ 48KB) — NEVER THRASH"]
+    direction TB
+
+    H_CONTROL["1) control (≤ 8KB)<br/>agent leases, turn lock, flow state<br/><b>NEVER EVICT</b>"]:::hot_critical
+    H_BELIEFS_ACTIVE["2) beliefs_active (≤ 8KB)<br/>facts needed THIS turn<br/>demote → beliefs_history"]:::hot
+    H_SCOREBOARD["3) scoreboard (≤ 6KB)<br/>referents, QUD top, salience"]:::hot
+    H_CLARIFICATIONS["4) clarifications (≤ 4KB)<br/>open gaps THIS turn"]:::hot
+    H_AFFECT_NOW["5) affective_now (≤ 4KB)<br/>current emotion snapshot"]:::hot
+    H_MENTAL_NOW["6) mental_now (≤ 4KB)<br/>current user load/knowledge delta"]:::hot
+    H_NARR_ACTIVE["7) narrative_active (≤ 4KB)<br/>ONE active thread"]:::hot
+    H_META["8) meta (≤ 2KB)<br/>session id, band, timestamps"]:::hot
+  end
+
+  %% ---------------- WARM TIER ----------------
+  subgraph WARM["🌡️ WARM TIER (≤ 48KB) — EVICTABLE"]
+    direction TB
+
+    W_BELIEFS_HIST["9) beliefs_history (≤ 12KB)<br/>recent facts, capped<br/>archive → K0"]:::warm
+    W_HISTORY["10) history (≤ 12KB)<br/>LAST 5 turns only<br/>evict → summaries"]:::warm
+    W_PERSONA["11) persona (≤ 8KB)<br/>traits, style, voice controls"]:::warm
+    W_TELEMETRY["12) telemetry (≤ 8KB)<br/>tokens, cost, counters (lossy)"]:::warm
+  end
+
+  %% ---------------- KERNEL SERVICES ----------------
+  subgraph SVC["🧱 Kernel Services (Enforced)"]
+    direction TB
+
+    SIZE_TRACKER["SizeTracker<br/>per-section byte accounting"]:::svc
+    MUTATION_GUARD["MutationGuard<br/>preflight estimate + reject<br/>API: preflight(section, op, data) → Approval"]:::svc_critical
+    EVICTION_ENGINE["EvictionEngine<br/>tier-aware eviction + summarization"]:::svc
+    MIGRATION_ENGINE["MigrationEngine<br/>HOT↔WARM demote/promote"]:::svc
+    SNAPSHOT_API["Snapshot API<br/>size breakdown + health"]:::svc
+  end
+
+  %% ---------------- CROSS-SECTION DEPENDENCIES ----------------
+  subgraph DEP["🔗 Cross-Section Dependencies"]
+    direction TB
+
+    DEP_ACTIVE_HIST["beliefs_active → beliefs_history<br/>active facts reference history<br/>eviction: pin critical facts"]:::flow
+    DEP_CONTROL_ACTIVE["control → beliefs_active<br/>leases depend on current facts<br/>eviction: cascade invalidation"]:::flow
+    DEP_SCOREBOARD_HIST["scoreboard → history<br/>referents need context<br/>eviction: degrade to summaries"]:::flow
+    DEP_NARR_THREADS["narrative_active → conversation_threads<br/>active thread references full threads<br/>eviction: archive inactive"]:::flow
+  end
+
+  %% ---------------- EMERGENCY MODE ----------------
+  subgraph EMERGENCY["🚨 Emergency Mode (≥95KB)"]
+    direction TB
+
+    EMERGENCY_SUMMARIZE["Emergency Summarization<br/>aggressive compression<br/>telemetry → aggregates"]:::warn
+    EMERGENCY_READONLY["Read-Only Mode<br/>temporarily reject writes<br/>allow reads + critical updates"]:::warn
+    EMERGENCY_SHED["Priority-Based Shedding<br/>evict WARM by priority<br/>preserve HOT control"]:::warn
+  end
+
+end
+
+%% =====================================================================================
+%% COLD SHADOW (K0) — RECONSTRUCTIBLE, NOT IN SESSION LIMIT
+%% =====================================================================================
+
+subgraph COLD["❄️ COLD SHADOW (K0-backed) — reconstructible"]
+  direction TB
+
+  K0_BELIEFS_ARCHIVE["K0 beliefs_archive<br/>full fact history"]:::cold
+  K0_HISTORY_ARCHIVE["K0 history_archive<br/>full turn log / summaries"]:::cold
+  K0_NARRATIVE_ARCHIVE["K0 narrative_archive<br/>inactive threads"]:::cold
+  K0_MULTIMODAL_RAW["K0 multimodal_raw<br/>blobs/embeddings/pointers"]:::cold
+
+  %% Reconstruction SLA
+  RECON_SLA["Reconstruction SLA<br/>Max: <100ms<br/>Partial: hydrate HOT first<br/>Degraded: operate with missing WARM"]:::cold
+end
+
+%% =====================================================================================
+%% TEXT-ONLY RUNTIME FLOWS (NO AUDIO/VISION YET)
+%% =====================================================================================
+
+subgraph FLOWS["🔄 Runtime Flows (Text-only)"]
+  direction TB
+
+  WRITE_REQ["WriteRequest<br/>(concierge mutation)"]:::flow
+  READ_REQ["ReadRequest<br/>(agents read-only)"]:::flow
+  REJECTED["RejectedMutation<br/>return reason + caps"]:::warn
+  OK_COMMIT["ApprovedMutation<br/>apply delta"]:::ok
+  WARM_EVICT["WarmEviction<br/>evict order + summarize"]:::warn
+  K0_ARCHIVE["ArchiveToK0<br/>write pointer/summary"]:::cold
+  K0_RECON["ReconstructFromK0<br/>hydrate minimal state"]:::cold
+end
+
+%% =====================================================================================
+%% GUARDS & LIMITS
+%% =====================================================================================
+
+subgraph LIMITS["🧷 Invariants"]
+  direction TB
+  LIM_HOT["HOT ≤ 48KB<br/>NEVER thrash"]:::limit
+  LIM_WARM["WARM ≤ 48KB<br/>evictable"]:::limit
+  LIM_TOTAL["TOTAL ≤ 96KB<br/>hard reject if exceeded"]:::limit_critical
+  LIM_HISTORY["history ≤ 5 turns<br/>lossy summaries"]:::limit
+end
+
+%% =====================================================================================
+%% CONNECTIONS
+%% =====================================================================================
+
+WRITE_REQ --> MUTATION_GUARD
+MUTATION_GUARD -->|pass| OK_COMMIT
+MUTATION_GUARD -->|fail| REJECTED
+
+OK_COMMIT --> SIZE_TRACKER
+SIZE_TRACKER --> SNAPSHOT_API
+
+%% If HOT pressure, only demote/promote — never evict control
+SIZE_TRACKER -->|hot pressure| MIGRATION_ENGINE
+MIGRATION_ENGINE -->|demote oldest| W_BELIEFS_HIST
+MIGRATION_ENGINE -->|demote turn| W_HISTORY
+
+%% If WARM pressure, evict + summarize + archive
+SIZE_TRACKER -->|warm pressure| EVICTION_ENGINE
+EVICTION_ENGINE --> WARM_EVICT
+WARM_EVICT -->|summarize| W_HISTORY
+WARM_EVICT -->|archive| K0_ARCHIVE
+K0_ARCHIVE --> K0_BELIEFS_ARCHIVE
+K0_ARCHIVE --> K0_HISTORY_ARCHIVE
+K0_ARCHIVE --> K0_NARRATIVE_ARCHIVE
+
+%% Read side
+READ_REQ -->|read-only| HOT
+READ_REQ -->|read-only| WARM
+READ_REQ -->|miss| K0_RECON
+K0_RECON -->|hydrate minimal| HOT
+K0_RECON -->|hydrate minimal| WARM
+
+%% Cross-section dependencies
+H_BELIEFS_ACTIVE --> DEP_ACTIVE_HIST
+DEP_ACTIVE_HIST --> W_BELIEFS_HIST
+H_CONTROL --> DEP_CONTROL_ACTIVE
+DEP_CONTROL_ACTIVE --> H_BELIEFS_ACTIVE
+H_SCOREBOARD --> DEP_SCOREBOARD_HIST
+DEP_SCOREBOARD_HIST --> W_HISTORY
+H_NARR_ACTIVE --> DEP_NARR_THREADS
+DEP_NARR_THREADS --> K0_NARRATIVE_ARCHIVE
+
+%% Emergency mode triggers
+SIZE_TRACKER -->|≥95KB| EMERGENCY_SUMMARIZE
+EMERGENCY_SUMMARIZE -->|aggressive| WARM_EVICT
+SIZE_TRACKER -->|critical| EMERGENCY_READONLY
+EMERGENCY_READONLY -->|temporary| REJECTED
+SIZE_TRACKER -->|overload| EMERGENCY_SHED
+EMERGENCY_SHED -->|priority| EVICTION_ENGINE
+
+%% Reconstruction SLA
+K0_RECON --> RECON_SLA
+RECON_SLA -->|partial first| HOT
+RECON_SLA -->|degraded mode| WARM
+
+%% Limits visualization
+HOT --> LIM_HOT
+WARM --> LIM_WARM
+SK --> LIM_TOTAL
+W_HISTORY --> LIM_HISTORY
+
+%% Prevent illegal behavior explicitly
+H_CONTROL -.->|NEVER EVICT| EVICTION_ENGINE
+
+%% Optional: narrative archive (inactive threads)
+H_NARR_ACTIVE -->|inactive thread| K0_NARRATIVE_ARCHIVE
+
+%% =====================================================================================
+%% STYLES
+%% =====================================================================================
+
+classDef hot fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000
+classDef hot_critical fill:#ffcdd2,stroke:#b71c1c,stroke-width:3px,color:#000,font-weight:bold
+classDef warm fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000
+classDef cold fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000
+classDef svc fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef svc_critical fill:#c8e6c9,stroke:#1b5e20,stroke-width:3px,color:#000,font-weight:bold
+classDef flow fill:#ede7f6,stroke:#5e35b1,stroke-width:2px,color:#000
+classDef warn fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
+classDef ok fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef limit fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+classDef limit_critical fill:#e1bee7,stroke:#6a1b9a,stroke-width:3px,color:#000,font-weight:bold

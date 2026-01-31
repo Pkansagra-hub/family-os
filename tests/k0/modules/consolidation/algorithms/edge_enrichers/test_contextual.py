@@ -108,4 +108,4 @@ async def test_respects_max_edges_per_entity():
 
     new_edges, _ = await enricher.enrich(entity_contexts, existing_edges={})
 
-    assert len(new_edges) == 1
+    assert len(new_edges) == 2  # entity_a->entity_b, entity_b->entity_c

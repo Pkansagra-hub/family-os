@@ -784,7 +784,7 @@ def analyze_affect(text: str) -> AffectResult | None:
             band_reasons=tuple(band_reasons),
             sentiment=result.sentiment,
             sentiment_confidence=getattr(result, "sentiment_confidence", 0.8),
-            model_version="ultrabert_v2.0.3",
+            model_version=client.VERSION,
             tier="ULTRABERT",
             confidence=getattr(result, "sentiment_confidence", 0.8),
             safety_severity=safety_severity_map.get(result.safety, "NONE"),

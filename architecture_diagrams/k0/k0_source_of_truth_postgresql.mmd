@@ -10,6 +10,7 @@
 %% Database: PostgreSQL 16+ (replaces SQLite), pgbouncer connection pooling
 %% Layers: 11 architectural layers (updated Layer 10 for PostgreSQL infrastructure)
 %% ADRs: K004 (Capability Mesh), K005 (PostgreSQL Migration)
+%% K1 Integration: Ports interface with K0_K1_BRIDGE for external access
 %% Purpose: Definitive reference for K0 development - V3 PostgreSQL kernel
 %% Changes from V2:
 %%   - Removed: SQLite driver, FTS5 indexer, SQLiteConnectionPool
@@ -66,7 +67,7 @@ graph TB
     subgraph L1_PORTS["⚡ LAYER 1: Kernel Ports (FastAPI HTTP Layer)"]
         direction TB
 
-        subgraph PORT_CMD["Command Port (k0/ports/command.py)"]
+        subgraph PORT_CMD["Command Port (k0/ports/command.py)<br/>Interfaces with K1 via K0_K1_BRIDGE for writes"]
             subgraph CMD_CLASSES["Command Classes"]
                 CMD_ENVELOPE["Envelope (Pydantic)"]:::port
                 CMD_RESPONSE["CommandResponse"]:::port
@@ -89,7 +90,7 @@ graph TB
             end
         end
 
-        subgraph PORT_QRY["Query Port (k0/ports/query.py)"]
+        subgraph PORT_QRY["Query Port (k0/ports/query.py)<br/>Interfaces with K1 via K0_K1_BRIDGE for reads"]
             subgraph QRY_CLASSES["Query Classes"]
                 QRY_SELECTOR["RecallSelector"]:::port
                 QRY_REQUEST["RecallRequest"]:::port
@@ -106,7 +107,7 @@ graph TB
             end
         end
 
-        subgraph PORT_SSE["SSE Port (k0/ports/sse.py)"]
+        subgraph PORT_SSE["SSE Port (k0/ports/sse.py)<br/>Interfaces with K1 via K0_K1_BRIDGE for streams"]
             subgraph SSE_CLASSES["SSE Classes"]
                 SSE_ACK_REQ["AckRequest"]:::port
                 SSE_TRACE_EVENT["SSETraceEvent"]:::port
@@ -135,7 +136,7 @@ graph TB
             end
         end
 
-        subgraph PORT_OBS["Observability Port (k0/ports/observe.py)"]
+        subgraph PORT_OBS["Observability Port (k0/ports/observe.py)<br/>Receives K1 feedback via K0_K1_BRIDGE (POST /k0/obs.emit)"]
             subgraph OBS_CLASSES["Observability Classes"]
                 OBS_METRICS_BUF["ForwardedMetricsBuffer"]:::port
                 OBS_PAYLOAD["ObservabilityPayload"]:::port
@@ -1416,6 +1417,11 @@ graph TB
     FTS_INDEX_WAL -.->|"Updates tsvector"| DB_HIPP_EVENTS
     PGVECTOR_APPLY -.->|"Stores vectors"| DB_VEC
     PGVECTOR_SEARCH -.->|"HNSW search"| DB_VEC
+
+    %% K1 Feedback Connections
+    PORT_OBS -.->|"FeedbackEnvelope from K0_K1_BRIDGE"| BUS_DISPATCHER
+    BUS_DISPATCHER -.->|"feedback.signal.p02"| PIPELINE_P02
+    BUS_DISPATCHER -.->|"feedback.signal.p08"| PIPELINE_P08
 
     %% PostgreSQL Pool Connections
     PG_POOL_ACQUIRE -.->|"Via pgbouncer"| PGBOUNCER_POOL_MODE

@@ -67,6 +67,15 @@ VALID_RELATIONSHIP_TYPES = frozenset(
         "OWNS",
         "CREATES",
         "USES",
+        # New enricher types (from enhancement plan)
+        "EMOTIONALLY_RELATED",  # EmotionSimilarityEnricher
+        "INTENT_RELATED",  # IntentSimilarityEnricher
+        "CO_MENTIONED",  # NamedEntityEnricher
+        "PARENT_OF",
+        "FRIEND_OF",  # RelationshipTypeEnricher
+        "CONTEXTUALLY_RELATED",  # Enhanced ContextualEdgeEnricher
+        "MULTI_MODAL_RELATED",  # MultiModalSimilarityEnricher
+        "TEMPORALLY_PATTERNED",  # TemporalPatternEnricher
     }
 )
 

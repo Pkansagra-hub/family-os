@@ -11,11 +11,13 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from k0.modules.consolidation.algorithms.observation_context import ObservationContext
 from k0.pipelines.p03.phase_outputs import KGEdge, KGEdgeUpdate
-from k0.pipelines.p03.phases.r4_config import BayesianCausalConfig
+
+if TYPE_CHECKING:
+    from k0.pipelines.p03.phases.r4_config import BayesianCausalConfig
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +31,7 @@ class ExistingEdgeInfo:
 class BayesianCausalEnricher:
     """Infers causal edges using Bayesian inference from temporal precedence."""
 
-    def __init__(self, config: Optional[BayesianCausalConfig]) -> None:
+    def __init__(self, config: Optional["BayesianCausalConfig"]) -> None:
         self.config = config or BayesianCausalConfig()
 
     async def enrich(

@@ -830,26 +830,173 @@ def ultrabert_classify(text: str) -> AffectAnnotation | None:
             _metrics["ultrabert_unavailable"] += 1
             return None
 
-        # Map sentiment to valence (0-1 scale)
-        sentiment_to_valence = {
-            "very_positive": 0.9,
-            "positive": 0.7,
-            "neutral": 0.5,
-            "negative": 0.3,
-            "very_negative": 0.1,
-        }
-        valence = sentiment_to_valence.get(result.sentiment, 0.5)
+        # ============================================================================
+        # PSYCHOLOGICALLY-GROUNDED VALENCE/AROUSAL CALCULATION FROM EMOTIONS
+        # ============================================================================
+        # Based on Russell's Circumplex Model, affective neuroscience, and emotion research
+        # Maps 44 UltraBERT emotions to continuous valence/arousal dimensions
 
-        # Calculate arousal from emotion intensity
-        # High-arousal emotions: joy, excitement, anger, fear
-        # Low-arousal emotions: contentment, sadness, boredom
-        high_arousal_emotions = {"joy", "excitement", "anger", "fear", "anxiety", "surprise"}
-        arousal = 0.5
-        if result.dominant_emotions:
-            arousal_sum = sum(
-                0.8 if e in high_arousal_emotions else 0.3 for e in result.dominant_emotions[:3]
-            )
-            arousal = min(1.0, arousal_sum / 3)
+        # Emotion → Valence mapping (0-1 scale, negative to positive)
+        # Based on psychological valence ratings from Warriner et al. (2013) ANEW, Stevenson et al. (2007)
+        emotion_valence_map = {
+            # Core emotions
+            "joy": 0.85,
+            "sadness": 0.15,
+            "anger": 0.20,
+            "fear": 0.25,
+            "surprise": 0.60,
+            "love": 0.90,
+            "disgust": 0.20,
+            "neutral": 0.50,
+            # Positive emotions (high valence)
+            "admiration": 0.80,
+            "amusement": 0.85,
+            "approval": 0.75,
+            "caring": 0.80,
+            "excitement": 0.85,
+            "gratitude": 0.85,
+            "optimism": 0.80,
+            "pride": 0.85,
+            "relief": 0.75,
+            "contentment": 0.75,
+            "hope": 0.75,
+            "tenderness": 0.80,
+            # Negative emotions (low valence)
+            "annoyance": 0.25,
+            "disappointment": 0.20,
+            "disapproval": 0.25,
+            "embarrassment": 0.30,
+            "grief": 0.10,
+            "nervousness": 0.35,
+            "remorse": 0.20,
+            "frustration": 0.25,
+            "overwhelmed": 0.30,
+            "emptiness": 0.15,
+            # Family-specific emotions (psychologically calibrated)
+            "nostalgia": 0.65,
+            "protectiveness": 0.70,
+            "togetherness": 0.80,
+            "longing": 0.40,
+            "warmth": 0.75,
+            "playfulness": 0.80,
+            "celebration": 0.90,
+            "belonging": 0.75,
+            "parental_pride": 0.90,
+            "parental_guilt": 0.25,
+            "patience": 0.60,
+            "worry": 0.35,
+            "bittersweet": 0.50,
+            "homesickness": 0.30,
+        }
+
+        # Emotion → Arousal mapping (0-1 scale, calm to excited)
+        # Based on Bradley & Lang (1999) IAPS arousal norms, Russell (1980) circumplex
+        emotion_arousal_map = {
+            # Core emotions
+            "joy": 0.75,
+            "sadness": 0.35,
+            "anger": 0.85,
+            "fear": 0.90,
+            "surprise": 0.80,
+            "love": 0.70,
+            "disgust": 0.60,
+            "neutral": 0.20,
+            # High arousal positive
+            "admiration": 0.65,
+            "amusement": 0.75,
+            "approval": 0.55,
+            "caring": 0.60,
+            "excitement": 0.90,
+            "gratitude": 0.65,
+            "optimism": 0.70,
+            "pride": 0.75,
+            "relief": 0.60,
+            # Moderate arousal positive
+            "contentment": 0.40,
+            "hope": 0.55,
+            "tenderness": 0.50,
+            # High arousal negative
+            "annoyance": 0.70,
+            "disappointment": 0.60,
+            "disapproval": 0.65,
+            "embarrassment": 0.75,
+            "grief": 0.55,
+            "nervousness": 0.80,
+            "remorse": 0.60,
+            "frustration": 0.75,
+            "overwhelmed": 0.85,
+            "emptiness": 0.30,
+            # Low arousal negative/family
+            "longing": 0.45,
+            "worry": 0.65,
+            "bittersweet": 0.50,
+            "homesickness": 0.55,
+            # Moderate arousal family
+            "nostalgia": 0.50,
+            "protectiveness": 0.60,
+            "togetherness": 0.55,
+            "warmth": 0.50,
+            "playfulness": 0.70,
+            "celebration": 0.80,
+            "belonging": 0.45,
+            "parental_pride": 0.70,
+            "parental_guilt": 0.60,
+            "patience": 0.35,
+        }
+
+        # Calculate valence and arousal from detected emotions
+        if result.dominant_emotions and len(result.dominant_emotions) > 0:
+            # Weight emotions by their confidence/probability (assume equal if not provided)
+            valence_sum = 0.0
+            arousal_sum = 0.0
+            emotion_count = 0
+
+            for emotion in result.dominant_emotions:
+                emotion_lower = emotion.lower()
+                if emotion_lower in emotion_valence_map:
+                    valence_sum += emotion_valence_map[emotion_lower]
+                    arousal_sum += emotion_arousal_map.get(emotion_lower, 0.5)
+                    emotion_count += 1
+
+            if emotion_count > 0:
+                # Weighted average of emotion valences/arousals
+                valence = valence_sum / emotion_count
+                arousal = arousal_sum / emotion_count
+
+                # Add small variance based on emotion diversity (mixed emotions = moderate values)
+                if emotion_count > 1:
+                    # Calculate emotional variance (psychological complexity indicator)
+                    valence_variance = (
+                        sum(
+                            (emotion_valence_map.get(e.lower(), 0.5) - valence) ** 2
+                            for e in result.dominant_emotions
+                        )
+                        / emotion_count
+                    )
+                    arousal_variance = (
+                        sum(
+                            (emotion_arousal_map.get(e.lower(), 0.5) - arousal) ** 2
+                            for e in result.dominant_emotions
+                        )
+                        / emotion_count
+                    )
+
+                    # High variance (mixed emotions) → moderate valence/arousal
+                    complexity_factor = min(0.3, (valence_variance + arousal_variance) * 0.5)
+                    valence = valence * (1 - complexity_factor) + 0.5 * complexity_factor
+                    arousal = arousal * (1 - complexity_factor) + 0.5 * complexity_factor
+            else:
+                # Fallback to neutral if no recognized emotions
+                valence = 0.5
+                arousal = 0.3
+        else:
+            # No emotions detected, use neutral baseline
+            valence = 0.5
+            arousal = 0.3
+
+        # Clamp to valid ranges
+        valence = max(0.0, min(1.0, valence))
+        arousal = max(0.0, min(1.0, arousal))
 
         # Update band metrics
         if result.affect_band == "GREEN":
@@ -865,7 +1012,7 @@ def ultrabert_classify(text: str) -> AffectAnnotation | None:
             dominant_emotions=result.dominant_emotions,
             affect_band=result.affect_band,
             band_reasons=result.band_reasons,
-            model_version="ultrabert_v2.0.3",
+            model_version=result.model_version,
             tier="ULTRABERT",
             confidence=result.confidence,
             raw_compound=None,  # Not applicable for UltraBERT

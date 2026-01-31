@@ -9,12 +9,14 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from k0.modules.consolidation.algorithms.edge_enrichers.fusion import canonical_edge_key
 from k0.modules.consolidation.algorithms.observation_context import ObservationContext
 from k0.pipelines.p03.phase_outputs import KGEdge, KGEdgeUpdate
-from k0.pipelines.p03.phases.r4_config import ContextualEdgeConfig
+
+if TYPE_CHECKING:
+    from k0.pipelines.p03.phases.r4_config import ContextualEdgeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ class ExistingEdgeInfo:
 class ContextualEdgeEnricher:
     """Creates KG edges based on shared context features."""
 
-    def __init__(self, config: Optional[ContextualEdgeConfig]) -> None:
+    def __init__(self, config: Optional["ContextualEdgeConfig"]) -> None:
         self.config = config or ContextualEdgeConfig()
         self._weights = dict(self.config.context_weights or {})
 
@@ -137,8 +139,10 @@ class ContextualEdgeEnricher:
                     features.add(f"time_of_day_bucket:{ctx.time_of_day_bucket}")
                 if ctx.sentiment_label:
                     features.add(f"sentiment_label:{ctx.sentiment_label}")
-                if ctx.ingress_channel:
-                    features.add(f"ingress_channel:{ctx.ingress_channel}")
+                if (
+                    ctx.ingress_category
+                ):  # Use meaningful UltraBERT ingress category instead of generic channel
+                    features.add(f"ingress_category:{ctx.ingress_category}")
             if features:
                 feature_map[entity_id] = features
         return feature_map

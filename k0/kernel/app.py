@@ -200,6 +200,9 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     minimal_gate = MinimalGate(
         registry=schema_registry,
         provisioning=provisioning_ledger,
+        max_clock_skew_seconds=settings.gate.max_clock_skew_seconds,
+        max_envelope_bytes=settings.gate.max_envelope_bytes,
+        max_body_bytes=settings.gate.max_body_bytes,
         metrics=metrics_exporter,
         observability=observability_emitter,
     )

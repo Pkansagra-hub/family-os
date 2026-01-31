@@ -6,6 +6,10 @@ server:
   port: 8080
   log_level: info
   timeout_graceful_shutdown: 30
+gate:
+  max_clock_skew_seconds: 0  # DISABLED: Allow any timestamp (for testing diversified data)
+  max_envelope_bytes: 1048576  # 1MB
+  max_body_bytes: 1048576      # 1MB
 retention:
   default:
     wal_days: 7

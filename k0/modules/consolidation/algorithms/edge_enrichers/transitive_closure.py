@@ -9,11 +9,13 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from k0.modules.consolidation.algorithms.edge_enrichers.fusion import canonical_edge_key
 from k0.pipelines.p03.phase_outputs import KGEdge, KGEdgeUpdate
-from k0.pipelines.p03.phases.r4_config import TransitiveClosureConfig
+
+if TYPE_CHECKING:
+    from k0.pipelines.p03.phases.r4_config import TransitiveClosureConfig
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,7 @@ class PathAggregate:
 class TransitiveClosureEnricher:
     """Infer edges via 2-hop paths in the local KG subgraph."""
 
-    def __init__(self, config: Optional[TransitiveClosureConfig]) -> None:
+    def __init__(self, config: Optional["TransitiveClosureConfig"]) -> None:
         self.config = config or TransitiveClosureConfig()
 
     async def enrich(

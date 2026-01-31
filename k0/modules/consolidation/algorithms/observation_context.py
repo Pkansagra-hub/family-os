@@ -77,6 +77,14 @@ class ObservationContext:
     affect_valence: Optional[float] = None  # -1.0 to +1.0
     affect_arousal: Optional[float] = None  # 0.0 to 1.0
     dominant_emotion: Optional[str] = None  # First from emotions array
+    dominant_emotions_json: Optional[str] = None  # Full emotions array JSON
+
+    # =========================================================================
+    # Intent Context
+    # =========================================================================
+
+    intent_ultrabert: Optional[str] = None  # 8-type intent classification
+    intent_confidence: Optional[float] = None  # Confidence in intent classification
 
     # =========================================================================
     # Salience Context
@@ -91,6 +99,7 @@ class ObservationContext:
     # =========================================================================
 
     ingress_channel: Optional[str] = None  # voice, chat, api
+    ingress_category: Optional[str] = None  # UltraBERT 12-class: DIARY, TASK, HEALTH, etc.
     ingress_source: Optional[str] = None  # Concrete origin app
     device_kind: Optional[str] = None  # phone, desktop, tablet, speaker
 
@@ -157,12 +166,17 @@ class ObservationContext:
             affect_valence=getattr(event, "affect_valence", None),
             affect_arousal=getattr(event, "affect_arousal", None),
             dominant_emotion=cls._extract_first_emotion(getattr(event, "emotions_json", None)),
+            dominant_emotions_json=getattr(event, "emotions_json", None),
+            # Intent
+            intent_ultrabert=getattr(event, "intent_ultrabert", None),
+            intent_confidence=getattr(event, "intent_confidence", None),
             # Salience
             salience_score=getattr(event, "salience_score", None),
             salience_band=getattr(event, "salience_band", None),
             novelty_score=getattr(event, "novelty_score", None),
             # Modality
             ingress_channel=getattr(event, "ingress_channel", None),
+            ingress_category=getattr(event, "activity_type_ultrabert", None),
             ingress_source=getattr(event, "ingress_source", None),
             device_kind=getattr(event, "device_kind", None),
             # Physical

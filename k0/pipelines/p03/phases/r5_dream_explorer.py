@@ -37,6 +37,7 @@ from k0.pipelines.p03.r5_config import R5Config
 from k0.pipelines.p03.runner_contract import P03PhaseId
 
 if TYPE_CHECKING:
+    from k0.modules.consolidation.algorithms.mcts import MCTSScenario
     from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
     from k0.modules.consolidation.dream.intent_signals import IntentSignal
     from k0.pipelines.p03.envelope import P03BatchEnvelope
@@ -87,6 +88,7 @@ class R5PhaseOutputs:
         routine_candidates: RoutineDetector detected habits (GAP-003)
         prospective_memories: SPC-UQ prospective memory predictions
         intent_signals: Intent signals for layer routing (GAP-001)
+        mcts_scenarios: MCTS forward simulation scenarios
         mcts_decisions_count: Number of MCTS decisions evaluated
         compute_seconds_saved: Compute time saved by skipping (for metrics)
     """
@@ -97,6 +99,7 @@ class R5PhaseOutputs:
     routine_candidates: List["RoutineCandidate"] = field(default_factory=list)
     prospective_memories: List["ProspectiveMemory"] = field(default_factory=list)
     intent_signals: List["IntentSignal"] = field(default_factory=list)
+    mcts_scenarios: List["MCTSScenario"] = field(default_factory=list)
     mcts_decisions_count: int = 0
     compute_seconds_saved: float = 0.0
 
@@ -348,7 +351,11 @@ class R5DreamExplorer:
         Returns:
             R5PhaseOutputs container with generated outputs
         """
-        from k0.modules.consolidation.dream import DreamConfig, DreamExplorer, DreamExplorerInput
+        from k0.modules.consolidation.dream import (
+            DreamConfig,
+            DreamExplorer,
+            DreamExplorerInput,
+        )
 
         # Create DreamConfig from R5Config
         dream_config = DreamConfig.from_r5_config(self.config)
@@ -446,7 +453,43 @@ class R5DreamExplorer:
             },
         )
 
-        # Build input from envelope with merged KG and episodes
+        # =====================================================================
+        # M4-E2: Load accumulated schemas for SPC-UQ reconstruction
+        # SPC-UQ needs semantic patterns to fill gaps in ambiguous episodes
+        # =====================================================================
+        accumulated_schemas = await self._load_accumulated_schemas(
+            ctx=ctx,
+            tenant_id=envelope.context.tenant_id,
+            space_id=envelope.context.space_id,
+        )
+
+        self._logger.info(
+            "R5 loaded accumulated schemas for SPC-UQ",
+            extra={
+                "cycle_id": envelope.context.cycle_id,
+                "schema_count": len(accumulated_schemas),
+            },
+        )
+
+        # =====================================================================
+        # M5-E1: Load accumulated routines for TDL-HCO optimization
+        # TDL-HCO needs historical routines from st_procedural for TD learning
+        # =====================================================================
+        accumulated_routines = await self._load_accumulated_routines(
+            ctx=ctx,
+            tenant_id=envelope.context.tenant_id,
+            space_id=envelope.context.space_id,
+        )
+
+        self._logger.info(
+            "R5 loaded accumulated routines for TDL-HCO",
+            extra={
+                "cycle_id": envelope.context.cycle_id,
+                "routine_count": len(accumulated_routines),
+            },
+        )
+
+        # Build input from envelope with merged KG, episodes, schemas, and routines
         input_data = DreamExplorerInput(
             cycle_id=envelope.context.cycle_id,
             tenant_id=envelope.context.tenant_id,
@@ -455,6 +498,8 @@ class R5DreamExplorer:
             kg_entities=merged_entities,
             kg_edges=merged_edges,
             event_states=list(envelope.events),
+            schemas=accumulated_schemas,
+            accumulated_routines=accumulated_routines,
         )
 
         self._logger.debug(
@@ -479,6 +524,7 @@ class R5DreamExplorer:
             routine_candidates=output.routine_candidates,
             prospective_memories=output.prospective_memories,
             intent_signals=output.intent_signals,
+            mcts_scenarios=output.mcts_scenarios,
             mcts_decisions_count=output.mcts_decisions_evaluated,
             compute_seconds_saved=0.0,
         )
@@ -501,6 +547,7 @@ class R5DreamExplorer:
         envelope.phases.r5_routine_candidates = outputs.routine_candidates
         envelope.phases.r5_prospective_memories = outputs.prospective_memories
         envelope.phases.r5_intent_signals = outputs.intent_signals
+        envelope.phases.r5_mcts_scenarios = outputs.mcts_scenarios
         envelope.phases.r5_skipped = False
         envelope.phases.r5_skip_reason = None
 
@@ -809,6 +856,28 @@ class R5DreamExplorer:
                 limit=self.config.accumulated_episode_limit,
             )
 
+            # Build participant name to entity_id mapping from KG
+            kg_result = await ctx.syscalls.kg_entities_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                limit=5000,  # Load enough entities for name resolution
+            )
+
+            name_to_entity_id = {}
+            for kg_entity in kg_result.get("entities", []):
+                entity_id = kg_entity["entity_id"]
+                canonical_name = kg_entity["canonical_name"].lower()
+                name_to_entity_id[canonical_name] = entity_id
+
+                # Also map aliases
+                try:
+                    aliases = json.loads(kg_entity.get("aliases_json", "[]"))
+                    for alias in aliases:
+                        if isinstance(alias, str):
+                            name_to_entity_id[alias.lower()] = entity_id
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
             episodes = []
             for row in result.get("episodes", []):
                 # Parse source_events_json to get member_event_ids
@@ -817,9 +886,28 @@ class R5DreamExplorer:
                 except (json.JSONDecodeError, TypeError):
                     member_event_ids = []
 
+                # Resolve participant names to entity_ids
+                entity_ids = []
+                try:
+                    participants = json.loads(row.get("participants_json", "[]"))
+                    for participant in participants:
+                        if isinstance(participant, str):
+                            entity_id = name_to_entity_id.get(participant.lower())
+                            if entity_id:
+                                entity_ids.append(entity_id)
+                        elif isinstance(participant, dict):
+                            name = participant.get("name", participant.get("id", ""))
+                            if name:
+                                entity_id = name_to_entity_id.get(name.lower())
+                                if entity_id:
+                                    entity_ids.append(entity_id)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
                 episode = EpisodeCluster(
                     cluster_id=row["episode_id"],
                     member_event_ids=member_event_ids,
+                    entity_ids=entity_ids,  # Populate resolved entity IDs
                     dominant_sentiment=row.get("sentiment_score", 0.0),
                     aggregated_sentiment=row.get("sentiment_score"),
                     aggregated_salience=row.get("salience_score"),
@@ -900,6 +988,78 @@ class R5DreamExplorer:
         except Exception as e:
             self._logger.warning(
                 "Failed to load accumulated routines, proceeding without historical routines",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "error": str(e),
+                },
+            )
+            return []
+
+    async def _load_accumulated_schemas(
+        self,
+        ctx: "P03RunnerContext",
+        tenant_id: str,
+        space_id: str,
+    ) -> List["SemanticPatternData"]:
+        """
+        Load accumulated schemas from st_sem for SPC-UQ.
+
+        M4-E2: SPC-UQ needs semantic patterns to fill gaps in ambiguous
+        episodes. This loads patterns with attribute distributions for
+        schema-guided reconstruction.
+
+        Args:
+            ctx: Runner context with syscalls
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of SemanticPatternData objects from storage
+        """
+        import json
+
+        from k0.modules.consolidation.algorithms.spc_uq import SemanticPatternData
+
+        try:
+            result = await ctx.syscalls.semantic_schema_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                pattern_types=["ACTIVITY", "LOCATION", "ROUTINE", "THEME"],
+                min_confidence=0.5,
+                limit=100,
+            )
+
+            schemas = []
+            for row in result.get("schemas", []):
+                # Parse pattern_attributes_json for attribute distributions
+                try:
+                    attrs = json.loads(row.get("pattern_attributes_json", "{}") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    attrs = {}
+
+                schema = SemanticPatternData(
+                    pattern_id=row["pattern_id"],
+                    activity_type=row.get("activity_type", "UNKNOWN"),
+                    confidence=row.get("confidence", 0.5),
+                    attribute_distributions=attrs,
+                )
+                schemas.append(schema)
+
+            self._logger.debug(
+                "Loaded accumulated schemas for SPC-UQ",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "schema_count": len(schemas),
+                },
+            )
+
+            return schemas
+
+        except Exception as e:
+            self._logger.warning(
+                "Failed to load accumulated schemas, proceeding with empty schemas",
                 extra={
                     "tenant_id": tenant_id,
                     "space_id": space_id,

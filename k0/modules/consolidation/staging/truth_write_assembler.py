@@ -28,6 +28,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from k0.modules.consolidation.algorithms.mcts import MCTSScenario
+
 # Issue 7.6: Import ObservationContext for attaching to StagedWrite
 from k0.modules.consolidation.algorithms.observation_context import ObservationContext
 from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
@@ -57,6 +59,7 @@ from k0.pipelines.p03.phase_outputs import (
 from k0.pipelines.p03.staged_writes import (
     LAYER_ST_EPI,
     LAYER_ST_LEARNING_QUEUE,
+    LAYER_ST_MCTS,
     LAYER_ST_PROCEDURAL,
     LAYER_ST_PROSPECTIVE,
     LAYER_ST_SEM,
@@ -718,7 +721,9 @@ class TruthWriteAssembler:
         """
         import json
 
-        from k0.modules.consolidation.algorithms.subtype_classifier import get_subtype_classifier
+        from k0.modules.consolidation.algorithms.subtype_classifier import (
+            get_subtype_classifier,
+        )
 
         # Pattern ID comes from event being promoted to pattern
         pattern_id = f"sem_{event_id}"
@@ -1449,7 +1454,7 @@ class TruthWriteAssembler:
 
         for scenario in counterfactuals:
             record_data = {
-                "prosp_id": scenario.scenario_id,
+                "intention_id": scenario.scenario_id,  # Primary key for st_prospective
                 "tenant_id": self.tenant_id,
                 "space_id": self.space_id,
                 "intention_type": "COUNTERFACTUAL",  # Type for counterfactual scenarios
@@ -1547,6 +1552,81 @@ class TruthWriteAssembler:
             write = StagedWrite.insert(
                 layer=LAYER_ST_PROCEDURAL,
                 record_id=optimization_id,
+                data=record_data,
+                phase="R5",
+                event_ids=[],
+            )
+            write.idempotency_key = idem_key
+            writes.append(write)
+
+        return writes
+
+    # =========================================================================
+    # st_mcts_decisions — MCTS Scenario Writes (R5 Forward Simulation)
+    # =========================================================================
+
+    def assemble_mcts_writes(
+        self,
+        scenarios: List[MCTSScenario],
+    ) -> List[StagedWrite]:
+        """
+        Assemble st_mcts_decisions writes from R5 MCTS scenarios.
+
+        MCTS scenarios are forward simulations from the MCTS algorithm
+        that predict future outcomes based on action sequences.
+
+        Args:
+            scenarios: List of MCTSScenario from R5
+
+        Returns:
+            List of StagedWrite for st_mcts_decisions
+        """
+        if not scenarios:
+            return []
+
+        writes: List[StagedWrite] = []
+        now_ms = _now_ms()
+
+        for scenario in scenarios:
+            # Build action sequence JSON
+            action_sequence_json = json.dumps(list(scenario.action_sequence))
+
+            # Store extended scenario data in context_json
+            # Table schema has fixed columns; extra fields go in context
+            context_data = {
+                "predicted_outcome": scenario.predicted_outcome,
+                "action_sequence": list(scenario.action_sequence),
+                "success_probability": scenario.success_probability,
+                "plausibility": scenario.plausibility,
+                "depth": scenario.depth,
+                "tenant_id": self.tenant_id,
+                "space_id": self.space_id,
+            }
+
+            record_data = {
+                "decision_id": scenario.scenario_id,
+                "cycle_id": self.consolidation_cycle_id,
+                "decision_type": "forward_simulation",
+                "context_json": json.dumps(context_data),
+                "rollouts_allocated": scenario.visit_count,
+                "rollouts_executed": scenario.visit_count,
+                "early_termination": False,
+                "termination_reason": None,
+                "chosen_action": action_sequence_json,
+                "value_estimate": scenario.expected_reward,
+                "confidence_interval_width": 1.0 - scenario.plausibility,
+                "compute_ms": 0,  # Not tracked per-scenario
+                "created_at": now_ms,
+            }
+
+            idem_key = self.idempotency.for_truth_write(
+                LAYER_ST_MCTS,
+                scenario.scenario_id,
+            )
+
+            write = StagedWrite.insert(
+                layer=LAYER_ST_MCTS,
+                record_id=scenario.scenario_id,
                 data=record_data,
                 phase="R5",
                 event_ids=[],
@@ -1783,6 +1863,8 @@ class TruthWriteAssembler:
         intent_signals: Optional[List[IntentSignal]] = None,
         # GAP-003: Routine candidates from RoutineDetector
         routine_candidates: Optional[List[RoutineCandidate]] = None,
+        # MCTS scenarios for st_mcts_decisions
+        mcts_scenarios: Optional[List[MCTSScenario]] = None,
     ) -> Dict[str, List[StagedWrite]]:
         """
         Assemble all truth layer writes from phase outputs.
@@ -1801,6 +1883,7 @@ class TruthWriteAssembler:
             routine_optimizations: R5 routine optimizations from TDL-HCO (Issue 8.1.16)
             intent_signals: R5 intent signals (GAP-001 Milestone 7)
             routine_candidates: GAP-003 routine candidates from RoutineDetector
+            mcts_scenarios: R5 MCTS forward simulation scenarios
 
         Returns:
             Dict mapping layer name to list of StagedWrite
@@ -1882,6 +1965,11 @@ class TruthWriteAssembler:
         queue_writes = self.assemble_learning_queue_writes(gaps or [])
         if queue_writes:
             result[LAYER_ST_LEARNING_QUEUE] = queue_writes
+
+        # st_mcts_decisions from R5 MCTS scenarios
+        mcts_writes = self.assemble_mcts_writes(mcts_scenarios or [])
+        if mcts_writes:
+            result[LAYER_ST_MCTS] = mcts_writes
 
         return result
 

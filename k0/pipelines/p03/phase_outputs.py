@@ -22,7 +22,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from k0.modules.consolidation.algorithms.duplicate_detector import DuplicationResult
-    from k0.modules.consolidation.algorithms.observation_context import ObservationContext
+    from k0.modules.consolidation.algorithms.mcts import MCTSScenario
+    from k0.modules.consolidation.algorithms.observation_context import (
+        ObservationContext,
+    )
     from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
     from k0.modules.consolidation.dream.intent_signals import IntentSignal
     from k0.modules.consolidation.staging.r6_output import R6Output
@@ -83,6 +86,10 @@ class EpisodeCluster:
     member_event_ids: List[str] = field(default_factory=list)
     # Issue 7.6: Observation contexts for member events (for st_observations)
     member_contexts: List["ObservationContext"] = field(default_factory=list)
+    entity_ids: List[str] = field(
+        default_factory=list
+    )  # CPN causal chain entities, BGT-SM seed selection
+    ambiguity_score: float = 0.0  # SPC-UQ uncertainty quantification
     centroid_embedding_id: Optional[str] = None
     dominant_sentiment: float = 0.0
     dominant_emotion: str = ""
@@ -230,6 +237,17 @@ class KGEntity:
     last_observed_at: Optional[int] = None
     is_new: bool = True
 
+    # Protocol adapter properties for bgt_sm.EntityProtocol compatibility
+    @property
+    def name(self) -> str:
+        """Alias for canonical_name (EntityProtocol compatibility)."""
+        return self.canonical_name
+
+    @property
+    def observation_count(self) -> int:
+        """Number of source events (EntityProtocol compatibility)."""
+        return len(self.source_event_ids)
+
 
 @dataclass
 class KGEntityUpdate:
@@ -279,6 +297,27 @@ class KGEdge:
     algorithm_params_json: Optional[str] = None  # Algorithm-specific parameters
     inference_chain_json: Optional[str] = None  # For transitive closure: path taken
     observation_context: Optional["ObservationContext"] = None
+
+    # Protocol adapter properties for bgt_sm.EdgeProtocol compatibility
+    @property
+    def source_id(self) -> str:
+        """Alias for source_entity_id (EdgeProtocol compatibility)."""
+        return self.source_entity_id
+
+    @property
+    def target_id(self) -> str:
+        """Alias for target_entity_id (EdgeProtocol compatibility)."""
+        return self.target_entity_id
+
+    @property
+    def relation_type(self) -> str:
+        """Alias for relationship_type (EdgeProtocol compatibility)."""
+        return self.relationship_type
+
+    @property
+    def observation_count(self) -> int:
+        """Number of evidence events (EdgeProtocol compatibility)."""
+        return len(self.evidence_event_ids)
 
 
 @dataclass
@@ -718,6 +757,7 @@ class P03PhaseOutputs:
     r5_routine_candidates: List["RoutineCandidate"] = field(default_factory=list)  # GAP-003
     r5_prospective_memories: List[ProspectiveMemory] = field(default_factory=list)
     r5_intent_signals: List["IntentSignal"] = field(default_factory=list)  # GAP-001
+    r5_mcts_scenarios: List["MCTSScenario"] = field(default_factory=list)
     r5_skipped: bool = False
     r5_skip_reason: Optional[str] = None
 

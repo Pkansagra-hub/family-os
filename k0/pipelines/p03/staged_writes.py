@@ -52,6 +52,19 @@ class WriteOperation(Enum):
 
 
 # =============================================================================
+# LAYER CONSTANTS
+# =============================================================================
+
+LAYER_ST_EPI = "st_epi"
+LAYER_ST_SEM = "st_sem"
+LAYER_ST_PROCEDURAL = "st_procedural"
+LAYER_ST_SOCIAL = "st_social"
+LAYER_ST_PROSPECTIVE = "st_prospective"
+LAYER_ST_LEARNING_QUEUE = "st_learning_queue"
+LAYER_ST_MCTS = "st_mcts_decisions"
+
+
+# =============================================================================
 # STAGED WRITE DATACLASS
 # =============================================================================
 
@@ -312,6 +325,7 @@ LAYER_ST_KG_EDGES = "st_kg_edges"
 LAYER_ST_VEC = "st_vec"
 LAYER_ST_HIPP_EVENTS = "st_hipp_events"
 LAYER_ST_LEARNING_QUEUE = "st_learning_queue"
+LAYER_ST_MCTS = "st_mcts_decisions"
 
 # All valid layer names
 VALID_LAYERS = frozenset(
@@ -326,6 +340,7 @@ VALID_LAYERS = frozenset(
         LAYER_ST_VEC,
         LAYER_ST_HIPP_EVENTS,
         LAYER_ST_LEARNING_QUEUE,
+        LAYER_ST_MCTS,
     }
 )
 
@@ -379,6 +394,9 @@ class P03StagedWrites:
     # === LEARNING QUEUE (P06) ===
     st_learning_queue_writes: List[StagedWrite] = field(default_factory=list)
 
+    # === MCTS DECISIONS (R5) ===
+    st_mcts_writes: List[StagedWrite] = field(default_factory=list)
+
     # === OUTBOX EVENTS ===
     outbox_events: List[StagedOutboxEvent] = field(default_factory=list)
 
@@ -398,6 +416,7 @@ class P03StagedWrites:
             LAYER_ST_PROCEDURAL: self.st_procedural_writes,
             LAYER_ST_SOCIAL: self.st_social_writes,
             LAYER_ST_PROSPECTIVE: self.st_prospective_writes,
+            LAYER_ST_MCTS: self.st_mcts_writes,
             LAYER_ST_KG_DOM: self.st_kg_dom_writes,
             LAYER_ST_KG_EDGES: self.st_kg_edges_writes,
             LAYER_ST_VEC: self.st_vec_writes,
@@ -457,6 +476,7 @@ class P03StagedWrites:
                 len(self.st_vec_writes),
                 len(self.st_hipp_events_updates),
                 len(self.st_learning_queue_writes),
+                len(self.st_mcts_writes),
             ]
         )
 
@@ -494,6 +514,7 @@ class P03StagedWrites:
             *self.st_procedural_writes,  # Routines
             *self.st_social_writes,  # Relationships
             *self.st_prospective_writes,  # Intentions
+            *self.st_mcts_writes,  # MCTS decisions
             *self.st_learning_queue_writes,  # P06 gaps
             *self.st_hipp_events_updates,  # Source status last
         ]
