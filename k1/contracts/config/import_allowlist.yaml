@@ -1,0 +1,6 @@
+allowed_prefixes:
+  - "k1/kernel"
+  - "k1/contracts"
+  - "k1/bus"
+  - "k1/tracing"
+  - "k1/config"

@@ -1,0 +1,231 @@
+$schema: "k1://schemas/wiring/wiring.contract.schema.yaml"
+
+metadata:
+  module_id: "sessionstate"
+  owner: "platform-team"
+  band: "GREEN"
+
+contract_version: 1
+impl_version: "1.0.0"
+
+code:
+  roots:
+    - "k1/sessionstate"
+  required_files:
+    - path: "k1/sessionstate/__init__.py"
+    - path: "k1/sessionstate/sections/__init__.py"
+    - path: "k1/sessionstate/tiers/__init__.py"
+    - path: "k1/sessionstate/manager.py"
+    - path: "k1/sessionstate/guard.py"
+    - path: "k1/sessionstate/eviction.py"
+    - path: "k1/sessionstate/migration.py"
+    - path: "k1/sessionstate/sizetracker.py"
+    - path: "k1/sessionstate/reconstruction.py"
+    - path: "k1/sessionstate/snapshot.py"
+
+wiring:
+  imports:
+    required_modules: ["kernel", "bus", "k0"]
+    required_symbols:
+      - from: "kernel"
+        import: "Kernel"
+        used_in_files: ["k1/sessionstate/manager.py"]
+      - from: "bus"
+        import: "EventBus"
+        used_in_files: ["k1/sessionstate/manager.py"]
+      - from: "k0"
+        import: "ColdStorage"
+        used_in_files: ["k1/sessionstate/eviction.py"]
+    forbidden: ["direct_db_access", "external_http"]
+  implementations:
+    session:read:v1:
+      files: ["k1/sessionstate/__init__.py"]
+    session:write:v1:
+      files: ["k1/sessionstate/__init__.py"]
+    session:health:v1:
+      files: ["k1/sessionstate/__init__.py"]
+
+files:
+  required:
+    - path: "k1/sessionstate/__init__.py"
+      type: "module_init"
+    - path: "k1/sessionstate/sections/__init__.py"
+      type: "submodule_init"
+    - path: "k1/sessionstate/tiers/__init__.py"
+      type: "submodule_init"
+  forbidden_patterns: ["*.pyc", "__pycache__"]
+
+runtime_assertions:
+  on_load:
+    - condition: "SessionStateManager is instantiable"
+      test: "import k1.sessionstate; mgr = k1.sessionstate.SessionStateManager()"
+    - condition: "All required exports available"
+      test: "from k1.sessionstate import SessionStateManager, MutationGuard, EvictionEngine"
+  invariants:
+    - condition: "Hot + warm size never exceeds total"
+      test: "assert hot_size + warm_size <= total_limit"
+    - condition: "No orphaned sessions"
+      test: "assert len(active_sessions) == len(session_metadata)"
+
+imports:
+  roots:
+    - "k1/sessionstate/__init__.py"
+  must_export:
+    - symbol: "SessionStateManager"
+      from_file: "k1/sessionstate/__init__.py"
+    - symbol: "MutationGuard"
+      from_file: "k1/sessionstate/__init__.py"
+    - symbol: "EvictionEngine"
+      from_file: "k1/sessionstate/__init__.py"
+    - symbol: "MigrationEngine"
+      from_file: "k1/sessionstate/__init__.py"
+    - symbol: "SizeTracker"
+      from_file: "k1/sessionstate/__init__.py"
+    - symbol: "ReconstructionSLA"
+      from_file: "k1/sessionstate/__init__.py"
+    - symbol: "SnapshotAPI"
+      from_file: "k1/sessionstate/__init__.py"
+
+capabilities:
+  provides:
+    - name: "session:read:v1"
+      interface:
+        methods:
+          - name: "get_session_data"
+            parameters:
+              - name: "section"
+                type: "string"
+              - name: "key"
+                type: "string"
+          - name: "get_full_session"
+      version: "1.0.0"
+    - name: "session:write:v1"
+      interface:
+        methods:
+          - name: "update_session_data"
+            parameters:
+              - name: "section"
+                type: "string"
+              - name: "key"
+                type: "string"
+              - name: "value"
+                type: "any"
+          - name: "preflight_mutation"
+            parameters:
+              - name: "section"
+                type: "string"
+              - name: "operation"
+                type: "string"
+              - name: "data"
+                type: "any"
+      version: "1.0.0"
+    - name: "session:health:v1"
+      interface:
+        methods:
+          - name: "get_size_breakdown"
+          - name: "get_pressure_status"
+      version: "1.0.0"
+    - name: "session:migrate:v1"
+      interface:
+        methods:
+          - name: "migrate_section"
+            parameters:
+              - name: "from_tier"
+                type: "string"
+              - name: "to_tier"
+                type: "string"
+              - name: "section"
+                type: "string"
+      version: "1.0.0"
+    - name: "session:reconstruct:v1"
+      interface:
+        methods:
+          - name: "reconstruct_state"
+            parameters:
+              - name: "sections"
+                type: "array"
+      version: "1.0.0"
+  consumes:
+    - name: "storage:archive:v1"
+      interface:
+        methods:
+          - name: "archive_data"
+          - name: "retrieve_data"
+      version: "1.0.0"
+    - name: "bus:publish:v1"
+      interface:
+        methods:
+          - name: "publish_event"
+      version: "1.0.0"
+
+events:
+  emits:
+    - topic: "session.updated.v1"
+      schema: "k1/contracts/schemas/events/session.updated.v1.json"
+    - topic: "session.eviction.v1"
+      schema: "k1/contracts/schemas/events/session.eviction.v1.json"
+    - topic: "session.emergency.v1"
+      schema: "k1/contracts/schemas/events/session.emergency.v1.json"
+    - topic: "session.section.updated.v1"
+      schema: "k1/contracts/schemas/events/session.section.updated.v1.json"
+    - topic: "session.migration.v1"
+      schema: "k1/contracts/schemas/events/session.migration.v1.json"
+    - topic: "session.reconstruction.v1"
+      schema: "k1/contracts/schemas/events/session.reconstruction.v1.json"
+  subscribes:
+    - topic: "user.action.v1"
+      schema: "k1/contracts/schemas/events/user.action.v1.json"
+    - topic: "orchestrator.mutate.v1"
+      schema: "k1/contracts/schemas/events/orchestrator.mutate.v1.json"
+
+mailboxes:
+  actors:
+    - id: "SESSIONSTATE"
+      mailbox: "session_mutations"
+      qos: "REALTIME"
+    - id: "ORCHESTRATOR"
+      mailbox: "session_mutations"
+      qos: "REALTIME"
+    - id: "CONCIERGE"
+      mailbox: "session_mutations"
+      qos: "INTERACTIVE"
+    - id: "AGENTS"
+      mailbox: "session_reads"
+      qos: "INTERACTIVE"
+  routes:
+    - from: "orchestrator"
+      via: "DIRECT_MAILBOX"
+      topic: "session.mutations"
+      to: ["sessionstate"]
+    - from: "concierge"
+      via: "DIRECT_MAILBOX"
+      topic: "session.mutations"
+      to: ["sessionstate"]
+    - from: "agents"
+      via: "DIRECT_MAILBOX"
+      topic: "session.reads"
+      to: ["sessionstate"]
+
+state:
+  reads:
+    - path: "session_data.hot"
+      access: "SHARED"
+    - path: "session_data.warm"
+      access: "SHARED"
+    - path: "session_data.meta"
+      access: "SHARED"
+  writes:
+    - path: "session_data.hot"
+      access: "EXCLUSIVE"
+    - path: "session_data.warm"
+      access: "EXCLUSIVE"
+    - path: "session_data.meta"
+      access: "EXCLUSIVE"
+
+validation:
+  rules:
+    - "size_limits_hot_warm_total"
+    - "never_evict_control"
+    - "reconstruction_sla"
+    - "cross_section_dependencies"
+    - "migration_invariants"

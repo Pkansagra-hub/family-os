@@ -22,9 +22,9 @@ subgraph SK["🧠 K1 SessionKernel (Tiered) — total ≤ 96KB"]
     H_CONTROL["1) control (≤ 8KB)<br/>agent leases, turn lock, flow state<br/><b>NEVER EVICT</b>"]:::hot_critical
     H_BELIEFS_ACTIVE["2) beliefs_active (≤ 8KB)<br/>facts needed THIS turn<br/>demote → beliefs_history"]:::hot
     H_SCOREBOARD["3) scoreboard (≤ 6KB)<br/>referents, QUD top, salience"]:::hot
-    H_CLARIFICATIONS["4) clarifications (≤ 4KB)<br/>open gaps THIS turn"]:::hot
-    H_AFFECT_NOW["5) affective_now (≤ 4KB)<br/>current emotion snapshot"]:::hot
-    H_MENTAL_NOW["6) mental_now (≤ 4KB)<br/>current user load/knowledge delta"]:::hot
+    H_HISTORY_ACTIVE["4) history_active (≤ 8KB)<br/>last 10 turns<br/>full fidelity"]:::hot
+    H_CLARIFICATIONS["5) clarifications (≤ 4KB)<br/>open gaps THIS turn"]:::hot
+    H_AFFECT_NOW["6) affective_now (≤ 4KB)<br/>current emotion snapshot"]:::hot
     H_NARR_ACTIVE["7) narrative_active (≤ 4KB)<br/>ONE active thread"]:::hot
     H_META["8) meta (≤ 2KB)<br/>session id, band, timestamps"]:::hot
   end
@@ -34,7 +34,7 @@ subgraph SK["🧠 K1 SessionKernel (Tiered) — total ≤ 96KB"]
     direction TB
 
     W_BELIEFS_HIST["9) beliefs_history (≤ 12KB)<br/>recent facts, capped<br/>archive → K0"]:::warm
-    W_HISTORY["10) history (≤ 12KB)<br/>LAST 5 turns only<br/>evict → summaries"]:::warm
+    W_HISTORY_RECENT["10) history_recent (≤ 20KB)<br/>turns 11-40<br/>lossy compression"]:::warm
     W_PERSONA["11) persona (≤ 8KB)<br/>traits, style, voice controls"]:::warm
     W_TELEMETRY["12) telemetry (≤ 8KB)<br/>tokens, cost, counters (lossy)"]:::warm
   end
@@ -112,7 +112,7 @@ subgraph LIMITS["🧷 Invariants"]
   LIM_HOT["HOT ≤ 48KB<br/>NEVER thrash"]:::limit
   LIM_WARM["WARM ≤ 48KB<br/>evictable"]:::limit
   LIM_TOTAL["TOTAL ≤ 96KB<br/>hard reject if exceeded"]:::limit_critical
-  LIM_HISTORY["history ≤ 5 turns<br/>lossy summaries"]:::limit
+  LIM_HISTORY["history ≤ 40 turns<br/>human-scale retention"]:::limit
 end
 
 %% =====================================================================================
@@ -129,12 +129,12 @@ SIZE_TRACKER --> SNAPSHOT_API
 %% If HOT pressure, only demote/promote — never evict control
 SIZE_TRACKER -->|hot pressure| MIGRATION_ENGINE
 MIGRATION_ENGINE -->|demote oldest| W_BELIEFS_HIST
-MIGRATION_ENGINE -->|demote turn| W_HISTORY
+MIGRATION_ENGINE -->|demote turn| W_HISTORY_RECENT
 
 %% If WARM pressure, evict + summarize + archive
 SIZE_TRACKER -->|warm pressure| EVICTION_ENGINE
 EVICTION_ENGINE --> WARM_EVICT
-WARM_EVICT -->|summarize| W_HISTORY
+WARM_EVICT -->|summarize| W_HISTORY_RECENT
 WARM_EVICT -->|archive| K0_ARCHIVE
 K0_ARCHIVE --> K0_BELIEFS_ARCHIVE
 K0_ARCHIVE --> K0_HISTORY_ARCHIVE
@@ -153,7 +153,7 @@ DEP_ACTIVE_HIST --> W_BELIEFS_HIST
 H_CONTROL --> DEP_CONTROL_ACTIVE
 DEP_CONTROL_ACTIVE --> H_BELIEFS_ACTIVE
 H_SCOREBOARD --> DEP_SCOREBOARD_HIST
-DEP_SCOREBOARD_HIST --> W_HISTORY
+DEP_SCOREBOARD_HIST --> W_HISTORY_RECENT
 H_NARR_ACTIVE --> DEP_NARR_THREADS
 DEP_NARR_THREADS --> K0_NARRATIVE_ARCHIVE
 
@@ -174,7 +174,7 @@ RECON_SLA -->|degraded mode| WARM
 HOT --> LIM_HOT
 WARM --> LIM_WARM
 SK --> LIM_TOTAL
-W_HISTORY --> LIM_HISTORY
+W_HISTORY_RECENT --> LIM_HISTORY
 
 %% Prevent illegal behavior explicitly
 H_CONTROL -.->|NEVER EVICT| EVICTION_ENGINE

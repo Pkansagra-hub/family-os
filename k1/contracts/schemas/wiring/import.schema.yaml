@@ -1,0 +1,29 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://schemas/wiring/import.schema.yaml"
+title: "Import/Export Spec"
+type: object
+additionalProperties: false
+required: [roots]
+properties:
+  roots:
+    type: array
+    items:
+      type: string
+      pattern: "^k1\\/.*\\.py$"
+    minItems: 1
+    maxItems: 64
+
+  must_export:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [symbol, from_file]
+      properties:
+        symbol:
+          type: string
+          pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+        from_file:
+          type: string
+          pattern: "^k1\\/.*\\.py$"
+    maxItems: 256

@@ -1,0 +1,137 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://schemas/wiring/wiring.contract.schema.yaml"
+title: "Wiring Contract"
+type: object
+
+additionalProperties: false
+unevaluatedProperties: false
+
+required: ["metadata", "contract_version", "impl_version"]
+properties:
+  $schema:
+    type: string
+  metadata:
+    $ref: "k1://schemas/base/metadata.schema.yaml"
+  contract_version:
+    type: integer
+    minimum: 1
+  impl_version:
+    $ref: "k1://schemas/base/version.schema.yaml"
+
+  code:
+    type: object
+    additionalProperties: false
+    unevaluatedProperties: false
+    required: [roots]
+    properties:
+      roots:
+        type: array
+        minItems: 1
+        maxItems: 32
+        items:
+          type: string
+          pattern: "^k1\\/[a-zA-Z0-9_\\-\\/]+$"
+        description: "Directories that define this module's file ownership boundary."
+      required_files:
+        type: array
+        items:
+          type: object
+          properties:
+            path: { type: string }
+            must_export: { type: array, items: { type: string } }
+            must_contain_constants: { type: array, items: { type: string } }
+
+  imports:
+    $ref: "k1://schemas/wiring/import.schema.yaml"
+
+  capabilities:
+    type: object
+    additionalProperties: false
+    unevaluatedProperties: false
+    properties:
+      consumes:
+        type: array
+        items: { $ref: "k1://schemas/wiring/capability.schema.yaml" }
+        maxItems: 1024
+      provides:
+        type: array
+        items: { $ref: "k1://schemas/wiring/capability.schema.yaml" }
+        maxItems: 1024
+
+  events:
+    type: object
+    additionalProperties: false
+    unevaluatedProperties: false
+    properties:
+      subscribes:
+        type: array
+        items: { $ref: "k1://schemas/wiring/event.schema.yaml" }
+        maxItems: 2048
+      emits:
+        type: array
+        items: { $ref: "k1://schemas/wiring/event.schema.yaml" }
+        maxItems: 2048
+
+  mailboxes:
+    $ref: "k1://schemas/wiring/mailbox.schema.yaml"
+
+  state:
+    $ref: "k1://schemas/wiring/state.schema.yaml"
+
+  validation:
+    type: object
+    additionalProperties: false
+    unevaluatedProperties: false
+    properties:
+      rules:
+        type: array
+        items: { type: string, maxLength: 64 }
+        maxItems: 256
+
+  # Optional wiring validation sections
+  wiring:
+    type: object
+    additionalProperties: true
+    properties:
+      imports:
+        type: object
+        properties:
+          required_modules: { type: array, items: { type: string } }
+          required_symbols:
+            type: array
+            items:
+              type: object
+              properties:
+                from: { type: string }
+                import: { type: string }
+                used_in_files: { type: array, items: { type: string } }
+          forbidden: { type: array, items: { type: string } }
+      implementations:
+        type: object
+        additionalProperties:
+          type: object
+          properties:
+            files: { type: array, items: { type: string } }
+            file: { type: string }
+
+  files:
+    type: object
+    additionalProperties: true
+    properties:
+      required: { type: array, items: { type: object } }
+      forbidden_patterns: { type: array, items: { type: string } }
+
+  runtime_assertions:
+    type: object
+    additionalProperties: true
+    properties:
+      on_load: { type: array, items: { type: object } }
+      invariants: { type: array, items: { type: object } }
+
+  visualization:
+    type: object
+    additionalProperties: true
+
+  tests:
+    type: object
+    additionalProperties: true

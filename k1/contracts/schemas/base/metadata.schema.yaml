@@ -1,0 +1,29 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://schemas/base/metadata.schema.yaml"
+title: "K1 Contract Metadata"
+type: object
+
+additionalProperties: false
+unevaluatedProperties: false
+
+required: [module_id, owner, band]
+properties:
+  module_id:
+    type: string
+    pattern: "^[a-z][a-z0-9_\\-]{1,63}$"
+    description: "Unique module id, lowercase, stable."
+  owner:
+    type: string
+    pattern: "^[a-z0-9_.\\-]{2,128}$"
+    description: "Ownership namespace, e.g. modules.health or k1.session_kernel"
+  band:
+    $ref: "k1://schemas/base/band.schema.yaml"
+  description:
+    type: string
+    maxLength: 512
+  tags:
+    type: array
+    items:
+      type: string
+      maxLength: 64
+    maxItems: 32

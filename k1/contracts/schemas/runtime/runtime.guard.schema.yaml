@@ -1,0 +1,20 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://schemas/runtime/runtime.guard.schema.yaml"
+title: "Runtime Guard Config"
+type: object
+additionalProperties: false
+required: [enabled]
+properties:
+  enabled:
+    type: boolean
+  mode:
+    type: string
+    enum: ["ENFORCE", "WARN", "OFF"]
+  checks:
+    type: object
+    additionalProperties: false
+    properties:
+      capability_calls: { type: boolean, default: true }
+      event_emits: { type: boolean, default: true }
+      mailbox_routes: { type: boolean, default: true }
+      state_writes: { type: boolean, default: true }

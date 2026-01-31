@@ -1,0 +1,6 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://schemas/base/band.schema.yaml"
+title: "Privacy Band"
+type: string
+enum: ["GREEN", "AMBER", "RED", "BLACK"]
+description: "K1 privacy bands"

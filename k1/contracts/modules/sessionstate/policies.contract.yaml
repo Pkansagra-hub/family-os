@@ -1,0 +1,35 @@
+$schema: "k1://schemas/module/policies.contract.schema.yaml"
+
+metadata:
+  module_id: "sessionstate"
+  owner: "platform-team"
+  band: "GREEN"
+  description: "Policies contract for SessionState module, enforcing security, budgets, egress, and audit for tiered state management."
+  tags: ["policies", "security", "budgets", "audit"]
+
+contract_version: 1
+impl_version: "1.0.0"
+
+capabilities:
+  granted:
+    - "session:read:v1"
+    - "session:write:v1"
+    - "session:health:v1"
+    - "session:migrate:v1"
+    - "session:reconstruct:v1"
+
+budgets:
+  latency_ms_p95: 100
+  cost_usd_per_session_max: 0.01
+  kv_cache_mb_max: 0.1
+
+egress:
+  network:
+    allowed_domains: []
+    allowed_ips: []
+  filesystem:
+    allowed_paths: []
+
+audit:
+  emit_receipts: true
+  receipt_topic: "session.audit.v1"

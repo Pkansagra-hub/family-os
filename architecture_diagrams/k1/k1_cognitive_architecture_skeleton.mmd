@@ -289,16 +289,16 @@ flowchart TB
             CONTROL["Control (8KB)<br/>Active leases, turn lock"]:::memory
             BELIEFS_ACTIVE["Beliefs Active (8KB)<br/>Current turn facts"]:::memory
             SCOREBOARD["Scoreboard (6KB)<br/>Current discourse state"]:::memory
+            HISTORY_ACTIVE["History Active (8KB)<br/>Last 10 turns, full fidelity"]:::memory
             CLARIFICATIONS["Clarifications (4KB)<br/>Open gaps THIS turn"]:::memory
             AFFECTIVE_NOW["Affective Now (4KB)<br/>Current emotion"]:::memory
-            MENTAL_NOW["Mental Now (4KB)<br/>Current user model"]:::memory
             NARRATIVE_ACTIVE["Narrative Active (4KB)<br/>ONE active thread"]:::memory
             META["Meta (2KB)<br/>Session basics"]:::memory
         end
 
         subgraph WARM_TIER["🌡️ WARM TIER (≤48KB, evictable)"]
             BELIEFS_HISTORY["Beliefs History (12KB)<br/>Recent facts (capped)"]:::memory
-            HISTORY["History (12KB)<br/>LAST 5 turns ONLY"]:::memory
+            HISTORY_RECENT["History Recent (20KB)<br/>Turns 11-40, lossy compression"]:::memory
             PERSONA["Persona (8KB)<br/>Personality (static)"]:::memory
             TELEMETRY["Telemetry (8KB)<br/>Metrics (lossy)"]:::memory
         end

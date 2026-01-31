@@ -1,0 +1,25 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://schemas/wiring/event.schema.yaml"
+title: "Event Wiring Spec"
+type: object
+additionalProperties: false
+required: [topic]
+properties:
+  topic:
+    type: string
+    pattern: "^[a-z0-9_.\\-*]+\\.v[0-9]+$"
+  schema:
+    oneOf:
+      - type: string
+        pattern: "^k1\\/contracts\\/schemas\\/events\\/.*\\.json$"
+      - type: object
+  handler:
+    type: string
+    pattern: "^[a-zA-Z0-9_.]+:[A-Za-z_][A-Za-z0-9_]*$"
+  async:
+    type: boolean
+    default: true
+  allowed_consumers:
+    type: array
+    items: { type: string, maxLength: 128 }
+    maxItems: 256

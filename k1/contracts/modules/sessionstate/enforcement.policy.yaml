@@ -1,0 +1,6 @@
+$schema: "k1://schemas/runtime/enforcement.schema.yaml"
+
+on_violation: "QUARANTINE"
+quarantine:
+  ban_seconds: 3600
+  emit_security_event: true

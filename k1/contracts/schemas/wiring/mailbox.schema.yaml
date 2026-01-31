@@ -1,0 +1,47 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://schemas/wiring/mailbox.schema.yaml"
+title: "Mailbox Wiring Spec"
+type: object
+additionalProperties: false
+required: [actors, routes]
+properties:
+  actors:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [id, mailbox]
+      properties:
+        id:
+          type: string
+          pattern: "^[A-Z][A-Z0-9_]{2,64}$"
+        mailbox:
+          type: string
+          maxLength: 128
+        qos:
+          type: string
+          enum: ["URGENT", "REALTIME", "INTERACTIVE", "BACKGROUND"]
+    maxItems: 512
+
+  routes:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [from, via, topic, to]
+      properties:
+        from:
+          type: string
+          maxLength: 128
+        via:
+          type: string
+          enum: ["K1_EVENT_BUS", "DELTA_BUS", "DIRECT_MAILBOX"]
+        topic:
+          type: string
+          maxLength: 128
+        to:
+          type: array
+          items: { type: string, maxLength: 128 }
+          minItems: 1
+          maxItems: 64
+    maxItems: 2048

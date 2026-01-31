@@ -26,9 +26,9 @@ subgraph SK["🧠 K1 SessionKernel — Internal (Text-only V1)"]
     H_CONTROL["control (≤ 8KB)<br/>leases, turn lock, flow state<br/><b>NEVER EVICT</b>"]:::hot_critical
     H_BELIEFS_ACTIVE["beliefs_active (≤ 8KB)<br/>facts needed THIS turn"]:::hot
     H_SCOREBOARD["scoreboard (≤ 6KB)<br/>referents + QUD + salience"]:::hot
+    H_HISTORY_ACTIVE["history_active (≤ 8KB)<br/>last 10 turns<br/>full fidelity"]:::hot
     H_CLARIFICATIONS["clarifications (≤ 4KB)<br/>open gaps THIS turn"]:::hot
     H_AFFECT_NOW["affective_now (≤ 4KB)<br/>current emotion snapshot"]:::hot
-    H_MENTAL_NOW["mental_now (≤ 4KB)<br/>current user model delta"]:::hot
     H_NARR_ACTIVE["narrative_active (≤ 4KB)<br/>ONE active thread"]:::hot
     H_META["meta (≤ 2KB)<br/>session id, band, timestamps"]:::hot
   end
@@ -38,7 +38,7 @@ subgraph SK["🧠 K1 SessionKernel — Internal (Text-only V1)"]
     direction TB
 
     W_BELIEFS_HIST["beliefs_history (≤ 12KB)<br/>recent facts (capped)"]:::warm
-    W_HISTORY["history (≤ 12KB)<br/>last 5 turns only<br/>lossy summaries"]:::warm_critical
+    W_HISTORY_RECENT["history_recent (≤ 20KB)<br/>turns 11-40<br/>lossy compression"]:::warm_critical
     W_PERSONA["persona (≤ 8KB)<br/>traits, style, voice controls"]:::warm
     W_TELEMETRY["telemetry (≤ 8KB)<br/>tokens, cost, counters (lossy)"]:::warm
   end
@@ -61,7 +61,7 @@ subgraph SK["🧠 K1 SessionKernel — Internal (Text-only V1)"]
     I_WARM["WARM ≤ 48KB"]:::inv
     I_TOTAL["TOTAL ≤ 96KB (Hard Reject)"]:::inv_critical
     I_CTRL["control never evicted"]:::inv_critical
-    I_HIST["history ≤ 5 turns"]:::inv
+    I_HIST["history ≤ 40 turns"]:::inv
   end
 end
 
@@ -83,7 +83,7 @@ MIGRATION_ENGINE -.->|demote/promote| WARM
 
 H_CONTROL -.->|NEVER EVICT| EVICTION_ENGINE
 
-W_HISTORY --> I_HIST
+W_HISTORY_RECENT --> I_HIST
 HOT --> I_HOT
 WARM --> I_WARM
 SK --> I_TOTAL

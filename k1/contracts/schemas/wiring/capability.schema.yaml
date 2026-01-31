@@ -1,0 +1,49 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://schemas/wiring/capability.schema.yaml"
+title: "Capability Wiring Spec"
+type: object
+additionalProperties: false
+required: [name]
+properties:
+  name:
+    type: string
+    pattern: "^[a-z0-9_\\-]+:[a-z0-9_\\-]+:[a-z0-9_\\-]+$"
+  interface:
+    type: object
+    properties:
+      methods:
+        type: array
+        items:
+          type: object
+          properties:
+            name: { type: string }
+            parameters:
+              type: array
+              items:
+                type: object
+                properties:
+                  name: { type: string }
+                  type: { type: string }
+  provider:
+    type: string
+    maxLength: 128
+  version:
+    type: string
+    minLength: 1
+  required:
+    type: boolean
+    default: true
+  handler:
+    type: string
+    pattern: "^[a-zA-Z0-9_.]+:[A-Za-z_][A-Za-z0-9_]*$"
+  timeout_ms:
+    type: integer
+    minimum: 1
+    maximum: 600000
+  qos:
+    type: string
+    enum: ["URGENT", "REALTIME", "INTERACTIVE", "BACKGROUND"]
+  allowed_callers:
+    type: array
+    items: { type: string, maxLength: 128 }
+    maxItems: 256

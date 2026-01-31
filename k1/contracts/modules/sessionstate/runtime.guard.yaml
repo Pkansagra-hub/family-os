@@ -1,0 +1,9 @@
+$schema: "k1://schemas/runtime/runtime.guard.schema.yaml"
+
+enabled: true
+mode: "ENFORCE"
+checks:
+  capability_calls: true
+  event_emits: true
+  mailbox_routes: true
+  state_writes: true

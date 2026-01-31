@@ -1,0 +1,66 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://schemas/module/module.contract.schema.yaml"
+title: "Module Contract"
+type: object
+
+additionalProperties: false
+unevaluatedProperties: false
+
+required: [metadata, contract_version, impl_version]
+properties:
+  metadata:
+    $ref: "k1://schemas/base/metadata.schema.yaml"
+
+  contract_version:
+    type: integer
+    minimum: 1
+    description: "Schema-level contract version for this file format."
+
+  impl_version:
+    $ref: "k1://schemas/base/version.schema.yaml"
+
+  exports:
+    type: array
+    description: "Public symbols this module guarantees to export."
+    items:
+      type: object
+      additionalProperties: false
+      unevaluatedProperties: false
+      required: [symbol, from_file]
+      properties:
+        symbol:
+          type: string
+          pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+        from_file:
+          type: string
+          pattern: "^k1\\/.*\\.py$"
+    maxItems: 256
+
+  entrypoints:
+    type: object
+    additionalProperties: false
+    unevaluatedProperties: false
+    properties:
+      init:
+        type: string
+        pattern: "^[a-zA-Z0-9_.]+:[A-Za-z_][A-Za-z0-9_]*$"
+      shutdown:
+        type: string
+        pattern: "^[a-zA-Z0-9_.]+:[A-Za-z_][A-Za-z0-9_]*$"
+
+  dependencies:
+    type: array
+    description: "Hard module dependencies (not capabilities)."
+    items:
+      type: object
+      additionalProperties: false
+      unevaluatedProperties: false
+      required: [module, version]
+      properties:
+        module:
+          type: string
+          pattern: "^[a-z][a-z0-9_\\-]{1,63}$"
+        version:
+          type: string
+          minLength: 1
+    maxItems: 128

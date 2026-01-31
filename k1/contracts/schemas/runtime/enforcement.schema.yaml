@@ -1,0 +1,21 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://schemas/runtime/enforcement.schema.yaml"
+title: "Enforcement Policy"
+type: object
+additionalProperties: false
+required: [on_violation]
+properties:
+  on_violation:
+    type: string
+    enum: ["RAISE", "DROP", "QUARANTINE", "WARN"]
+  quarantine:
+    type: object
+    additionalProperties: false
+    properties:
+      ban_seconds:
+        type: integer
+        minimum: 1
+        maximum: 86400
+      emit_security_event:
+        type: boolean
+        default: true

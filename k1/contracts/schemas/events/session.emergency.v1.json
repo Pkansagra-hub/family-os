@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Emitted during session emergency modes",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["summarization", "readonly", "shedding"]
+    }
+  },
+  "required": ["session_id", "mode"]
+}
