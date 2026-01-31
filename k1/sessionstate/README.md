@@ -49,10 +49,11 @@ The SessionState implements a three-tier memory hierarchy with strict size limit
 
 #### WARM TIER (4 sections, ≤48KB total)
 
-1. **beliefs_history (≤12KB)**: Recent facts with capping, archived to K0
-2. **history (≤12KB)**: Last 5 conversation turns only, lossy summaries
-3. **persona (≤8KB)**: Personality traits, style, voice controls
-4. **telemetry (≤8KB)**: Token counts, costs, counters (lossy compression)
+- **beliefs_history (≤12KB)**: Recent facts with capping, archived to K0
+- **history (≤12KB)**: Last 5 conversation turns only, lossy summaries
+- **persona (≤8KB)**: Personality traits, style, voice controls
+- **telemetry (≤8KB)**: Token counts, costs, counters (lossy compression)
+
 ## Corrected 12-Section Design Analysis
 
 ### Harsh Truth Check
@@ -62,10 +63,10 @@ The design prioritizes survivability over features. This is a survivable system,
 ### Survivability First: The Kernel Contract
 
 #### Real Numbers (Not Fantasy)
-```
+```text
 SessionState (48KB HARD HOT, 96KB WARM, ∞ COLD)
 ├── HOT CORE (≤48KB, never evict)        → Orchestration survives
-├── WARM TIER (≤48KB, evictable)         → Graceful degradation  
+├── WARM TIER (≤48KB, evictable)         → Graceful degradation
 └── COLD SHADOW (K0-backed)              → Reconstructible
 ```
 
@@ -96,7 +97,7 @@ SessionState (48KB HARD HOT, 96KB WARM, ∞ COLD)
 
 ❄️ COLD SHADOW (K0 only)
 ├── beliefs_archive            — Everything else
-├── history_archive            — Everything else  
+├── history_archive            — Everything else
 ├── multimodal_raw             — Blobs, embeddings
 └── narrative_archive          — Inactive threads
 ```
@@ -106,21 +107,21 @@ SessionState (48KB HARD HOT, 96KB WARM, ∞ COLD)
 ```python
 class SessionKernel:
     """Session Kernel - NOT Working Memory"""
-    
+
     # ---------- INVARIANTS (ENFORCED) ----------
     _MAX_HOT_KB = 48      # Never exceed
     _MAX_WARM_KB = 48     # Evictable
     _MAX_TOTAL_KB = 96    # Hard limit
-    
+
     def __init__(self):
         self._hot_size_kb = 0
         self._warm_size_kb = 0
         self._eviction_count = 0
-        
+
     # ---------- MUTATION GUARDS ----------
     def _guard_mutation(self, section: str, estimated_kb: int) -> bool:
         """REJECT writes that would break invariants"""
-        
+
         # 1. Check per-section caps (NO EXCEPTIONS)
         section_caps = {
             'control': 8, 'beliefs_active': 8, 'scoreboard': 6,
@@ -128,10 +129,10 @@ class SessionKernel:
             'narrative_active': 4, 'meta': 2,
             'beliefs_history': 12, 'history': 12, 'persona': 8, 'telemetry': 8
         }
-        
+
         if estimated_kb > section_caps.get(section, 0):
             return False  # REJECTED
-        
+
         # 2. Check HOT/WARM tier caps
         if section in ['control', 'beliefs_active', 'scoreboard', 'clarifications',
                       'affective_now', 'mental_now', 'narrative_active', 'meta']:
@@ -143,29 +144,29 @@ class SessionKernel:
             new_warm = self._warm_size_kb + estimated_kb
             if new_warm > self._MAX_WARM_KB:
                 return False  # WARM full, reject
-        
+
         # 3. Check total cap
         total = (self._hot_size_kb + self._warm_size_kb + estimated_kb)
         if total > self._MAX_TOTAL_KB:
             return False
-        
+
         return True  # Approved
-    
+
     # ---------- HISTORY RULES (CAPS ENFORCED) ----------
     def add_turn(self, user_msg: str, agent_resp: str) -> bool:
         """CAP: Only last 5 turns in WARM"""
-        
+
         # 1. Enforce lossy compression
         if len(self.history.turns) >= 5:
             # Evict oldest, keep summary
             oldest = self.history.turns.pop(0)
             self.history.summaries.append(self._summarize_turn(oldest))
-        
+
         # 2. Size check BEFORE add
         turn_kb = self._estimate_turn_kb(user_msg, agent_resp)
         if not self._guard_mutation('history', turn_kb):
             return False  # REJECTED
-        
+
         # 3. Add (if approved)
         self.history.turns.append(Turn(user_msg, agent_resp))
         return True
@@ -180,7 +181,7 @@ namespace K1.SessionKernel;
 // ----- HOT CORE (48KB cap) -----
 table HotCore {
     control: ControlSection;            // 8KB max
-    beliefs_active: ActiveBeliefs;      // 8KB max  
+    beliefs_active: ActiveBeliefs;      // 8KB max
     scoreboard: ScoreboardSection;      // 6KB max
     clarifications: Clarifications;     // 4KB max
     affective_now: CurrentAffect;       // 4KB max
@@ -193,7 +194,7 @@ table HotCore {
 table WarmTier {
     beliefs_history: BeliefHistory;     // 12KB max
     history: TurnHistory;               // 12KB max (5 turns!)
-    persona: PersonaSection;            // 8KB max  
+    persona: PersonaSection;            // 8KB max
     telemetry: TelemetrySection;        // 8KB max
 }
 
@@ -202,12 +203,12 @@ table SessionKernel {
     // Version 2: Clear tier separation
     hot: HotCore (required);
     warm: WarmTier (required);
-    
+
     // Size tracking (enforced at runtime)
     hot_size_kb: int;
     warm_size_kb: int;
     total_size_kb: int;
-    
+
     // Eviction state
     eviction_count: int;
     last_eviction_ms: long;
@@ -217,121 +218,74 @@ table SessionKernel {
 ## Corrected Section APIs (With Guards)
 
 ### HistorySection (Corrected)
+
 ```python
 class HistorySection:
     """5 TURNS MAX. NO EXCEPTIONS."""
-    
+
     MAX_TURNS = 5
     MAX_KB = 12
-    
+
     def __init__(self):
         self.turns: List[Turn] = []           # Last 5 turns
         self.summaries: List[str] = []        # Evicted turns summary
         self._size_kb = 0
-    
+
     def add_turn(self, turn: Turn) -> bool:
         # 1. SIZE CHECK FIRST
         turn_kb = self._estimate_turn_kb(turn)
         if self._size_kb + turn_kb > self.MAX_KB:
             return False  # REJECT
-        
+
         # 2. CAP ENFORCEMENT
         if len(self.turns) >= self.MAX_TURNS:
             # Evict oldest, keep summary
             oldest = self.turns.pop(0)
             self.summaries.append(self._summarize(oldest))
             self._size_kb -= self._estimate_turn_kb(oldest)
-        
+
         # 3. Add (if approved)
         self.turns.append(turn)
         self._size_kb += turn_kb
         return True
-    
+
     def get_context(self, window: int = 5) -> List[Turn]:
         """Returns at most 5 turns"""
         return self.turns[-window:] if window <= 5 else self.turns
 ```
 
 ### BeliefsSection (Tiered)
+
 ```python
 class BeliefsSection:
     """Tiered: Active (HOT) vs History (WARM)"""
-    
+
     def __init__(self):
         self.active: Dict[str, Fact] = {}     # HOT: Current turn facts
         self.history: List[Fact] = []         # WARM: Recent facts (capped)
         self.archive_ids: List[str] = []      # COLD: K0 pointers
-    
+
     def add_fact(self, key: str, value: str, confidence: float) -> bool:
         # 1. HOT check (8KB cap)
         fact_kb = len(key) + len(value) + 8
         if not self._hot_has_room(fact_kb):
             # Move oldest active to history
             self._demote_oldest_active()
-        
+
         # 2. History cap (12KB)
         if len(self.history) * 32 > 12288:  # 12KB
             # Archive to K0
             oldest = self.history.pop(0)
             self.archive_ids.append(self._archive_to_k0(oldest))
-        
+
         # 3. Add if room exists
         return self._add_with_guards(key, value, confidence)
 ```
 
-## Implementation Status
-
-### Current State
-- ✅ **Architecture finalized**: All diagrams and specifications complete
-- ✅ **Guard rails designed**: MutationGuard, SizeTracker, and emergency modes specified
-- ✅ **Integration mapped**: Connections to K0 cold storage and agent fabric defined
-- 🚧 **Code implementation**: Kernel services and section management pending
-
-### Build Order (Survivability First)
-
-#### Phase 0: Guard Rails (Week 1)
-- Implement SizeTracker (per-section byte counting)
-- Implement MutationGuard (rejects violations)
-- Implement EvictionEngine (tier-aware)
-- Test: "What happens at 49KB HOT?"
-
-#### Phase 1: HOT CORE Only (Weeks 2-4)
-- Week 2: control + meta (orchestration survives)
-- Week 3: beliefs_active + scoreboard (cognition works)
-- Week 4: clarifications + affective_now (gaps+emotion)
-
-#### Phase 2: WARM TIER (Weeks 5-6)
-- Week 5: history (5-turn cap ENFORCED)
-- Week 6: persona + telemetry (static + metrics)
-
-#### Phase 3: Integration (Week 7)
-- Cross-tier migration testing
-- Load testing at 96KB boundary
-- Failure recovery testing
-
-### Implementation Phases
-
-#### Phase 0: Guard Rails (High Priority)
-- Implement SizeTracker with per-section accounting
-- Build MutationGuard with preflight rejection API
-- Add emergency mode triggers and handlers
-- Unit tests for boundary conditions (49KB HOT, 96KB total)
-
-#### Phase 1: Core Kernel
-- Section data structures with FlatBuffers serialization
-- MigrationEngine for HOT↔WARM transitions
-- EvictionEngine with summarization logic
-- Reconstruction from K0 with SLA compliance
-
-#### Phase 2: Agent Integration
-- Single-writer/multi-reader concurrency model
-- Delta emission for agent coordination
-- Session persistence and recovery
-- Performance optimization and monitoring
-
 ## Survivability Checklist
 
 ### Must Pass Before Production
+
 - [ ] HOT CORE never exceeds 48KB in stress tests
 - [ ] System survives 1000 concurrent sessions
 - [ ] MutationGuard rejects 100% of overflow attempts
@@ -341,12 +295,14 @@ class BeliefsSection:
 - [ ] K0 reconstruction works for all COLD data
 
 ### Failure Models (Accepted)
+
 1. **Memory pressure** → Evict WARM, preserve HOT
 2. **Mutation rejected** → Agent gets "retry with less data"
 3. **History full** → Oldest turn summarized, not lost
 4. **Serialization timeout** → Delta-only serialization
 
 ### Unacceptable Failures
+
 1. HOT CORE eviction during turn
 2. Orchestration state corruption
 3. Unbounded memory growth
@@ -365,10 +321,12 @@ class BeliefsSection:
 **Otherwise, stick with 6 sections.**
 
 The choice is between:
+
 - **6 sections**: Simple, survivable, limited
 - **12 sections**: Powerful, survivable **only with discipline**
 
 You're building a **cognitive microkernel**. Treat it with kernel-level rigor, or it will fail.
+
 ### Kernel Services
 
 #### Core Enforcement
@@ -411,6 +369,32 @@ When data must be reconstructed from K0 cold storage:
 - ✅ **Guard rails designed**: MutationGuard, SizeTracker, and emergency modes specified
 - ✅ **Integration mapped**: Connections to K0 cold storage and agent fabric defined
 - 🚧 **Code implementation**: Kernel services and section management pending
+
+### Build Order (Survivability First)
+
+#### Phase 0: Guard Rails (Week 1)
+
+- Implement SizeTracker (per-section byte counting)
+- Implement MutationGuard (rejects violations)
+- Implement EvictionEngine (tier-aware)
+- Test: "What happens at 49KB HOT?"
+
+#### Phase 1: HOT CORE Only (Weeks 2-4)
+
+- Week 2: control + meta (orchestration survives)
+- Week 3: beliefs_active + scoreboard (cognition works)
+- Week 4: clarifications + affective_now (gaps+emotion)
+
+#### Phase 2: WARM TIER (Weeks 5-6)
+
+- Week 5: history (5-turn cap ENFORCED)
+- Week 6: persona + telemetry (static + metrics)
+
+#### Phase 3: Integration (Week 7)
+
+- Cross-tier migration testing
+- Load testing at 96KB boundary
+- Failure recovery testing
 
 ### Implementation Phases
 

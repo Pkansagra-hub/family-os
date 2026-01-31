@@ -312,7 +312,9 @@ class DependencyAnalyzer:
                             dec_name = decorator.func.id
                         elif isinstance(decorator.func, ast.Attribute):
                             dec_name = decorator.func.attr
-                    if dec_name and ("register" in dec_name.lower() or "module" in dec_name.lower()):
+                    if dec_name and (
+                        "register" in dec_name.lower() or "module" in dec_name.lower()
+                    ):
                         registered.append(f"@{dec_name} on {node.name}")
         return registered
 
