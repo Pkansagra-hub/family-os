@@ -3,7 +3,11 @@ config:
   layout: elk
 ---
 flowchart TB
-    subgraph L0_EXTERNAL["🌐 LAYER 0: External Interfaces & Clients"]
+    %% ======================================================================================
+    %% L0 EXTERNAL: Intentionally detached - we don't know UI/API interface yet
+    %% These nodes document possible entry points but are not wired to the system
+    %% ======================================================================================
+    subgraph L0_EXTERNAL["🌐 LAYER 0: External Interfaces & Clients (Detached - TBD)"]
         direction LR
 
         subgraph UI_CLIENTS["UI/API Clients"]
@@ -34,6 +38,7 @@ flowchart TB
             TOOL_REGISTRY["Tool Registry<br/>Auto-registers from contract.yaml"]:::registry
             PROMPT_REGISTRY["Prompt Registry<br/>Markdown prompt assets"]:::registry
             AGENT_REGISTRY["Agent Registry<br/>YAML agent templates"]:::registry
+            SCHEMA_REGISTRY["Schema Registry<br/>FlatBuffers output schemas"]:::registry
         end
 
         subgraph MODULES_DIR["Modules Directory Structure"]
@@ -51,46 +56,74 @@ flowchart TB
 
             CONCIERGE_FSM["Concierge FSM<br/>State Machine Controller"]:::brain
 
-            subgraph FSM_STATES["FSM States (Minimum Alive Loop)"]
+            subgraph FSM_CORE_LOOP["Core Loop States (Every Turn)"]
                 LISTENING["LISTENING<br/>Waiting for User Input"]:::brain
                 ACKING["ACKING (Enhanced)<br/>Intent Classification + Gap Detection + Fast Validation"]:::brain
                 CLARIFYING["CLARIFYING<br/>Progressive Disclosure<br/>Minimal Questions"]:::brain
-                EMOTIONAL_PROCESSING["EMOTIONAL_PROCESSING<br/>Real-Time Affect Analysis"]:::brain
-                EMOTIONAL_MIRRORING["EMOTIONAL_MIRRORING<br/>Adjust Emotional Tone"]:::brain
-                ANTICIPATORY_RESPONSE["ANTICIPATORY_RESPONSE<br/>Speculative Execution"]:::brain
-                NARRATIVE_WEAVING["NARRATIVE_WEAVING<br/>Thread Management"]:::brain
-                DISPATCHING["DISPATCHING<br/>Emit Orchestration Command"]:::brain
+                DISPATCHING["DISPATCHING<br/>Route: LOW→Fabric, MED/HIGH→Orchestrator"]:::brain
                 COMPANIONING["COMPANIONING<br/>Keep Conversation Moving"]:::brain
                 PROGRESSING["PROGRESSING<br/>Stream Deltas as Updates"]:::brain
                 DELIVERING["DELIVERING<br/>Final Results + Next Steps"]:::brain
                 INTERRUPT_HANDLING["INTERRUPT_HANDLING<br/>User Changes Topic"]:::brain
             end
 
+            subgraph FSM_EXPERIENCE_LAYER["Experience Layer States (Every 20-30 Turns)<br/>Long-term patterns, helps LLM understand user"]
+                EMOTIONAL_PROCESSING["EMOTIONAL_PROCESSING<br/>Analyze emotional trajectory"]:::empathy
+                EMOTIONAL_MIRRORING["EMOTIONAL_MIRRORING<br/>Adjust conversational tone"]:::empathy
+                ANTICIPATORY_RESPONSE["ANTICIPATORY_RESPONSE<br/>Predict user needs"]:::empathy
+                NARRATIVE_WEAVING["NARRATIVE_WEAVING<br/>Maintain conversation threads"]:::empathy
+            end
+
             CONVERSATION_SCHEDULER["Conversation Scheduler<br/>Deterministic Utterance Gating"]:::brain
             CONCIERGE_MAILBOX["Private Mailbox<br/>MPSC Queue<br/>WFQ Priority: REALTIME"]:::mailbox
             AGGREGATION_WINDOW["Delta Aggregation Window<br/>500ms Batching"]:::brain
+            TOOL_RESULT_BUFFER["Tool Result Buffer<br/>Stages results for LLM context<br/>Cleared after DELIVERING"]:::memory
             CONCIERGE_PERSONA["Persona Engine"]:::brain
             CONCIERGE_STYLE["Conversational Style"]:::brain
             AFFECTIVE_MIRRORING_ENGINE["Affective Mirroring Engine<br/>Emotion Detection & Resonance"]:::brain
             CONVERSATIONAL_ANTICIPATION_ENGINE["Conversational Anticipation Engine<br/>Predictive Completion"]:::brain
             CONVERSATIONAL_NARRATIVE_ENGINE["Conversational Narrative Engine<br/>Thread Management"]:::brain
 
-            subgraph ACKING_CORE["ACKING Core (Enhanced Logic)"]
-                INTENT_CLASSIFIER["Intent Classifier"]:::engine
+            subgraph ACKING_CORE["ACKING Core (UltraBERT-Powered)"]
+                subgraph ULTRABERT_ENGINE["UltraBERT v4 (22ms, 12 Heads)"]
+                    ULTRABERT_CORE["UltraBERT Core<br/>ModernBERT-base 149M params"]:::ultrabert
+                    ULTRABERT_INTENT["Intent Head V2 (MULTI-LABEL)<br/>8 classes: log_memory, set_reminder...<br/>Returns: primary + all[] + scores{}"]:::ultrabert
+                    ULTRABERT_INGRESS["Ingress Head V2 (MULTI-LABEL)<br/>12 domains: HEALTH, FINANCE...<br/>Returns: domains[] above threshold"]:::ultrabert
+                    ULTRABERT_SAFETY["Safety Head<br/>4 bands: GREEN, AMBER, RED, CRISIS"]:::ultrabert
+                    ULTRABERT_EMOTIONS["Emotions Head<br/>44 classes: joy, sadness, anxiety..."]:::ultrabert
+                    ULTRABERT_SENTIMENT["Sentiment Head<br/>5 levels: very_negative to very_positive"]:::ultrabert
+                    ULTRABERT_NER["NER Head<br/>GlobalPointer: PERSON, ORG, LOC..."]:::ultrabert
+                    ULTRABERT_RELATIONS["Relations Head<br/>spouse_of, parent_of, works_at..."]:::ultrabert
+                end
 
-                HYPOTHESIS_GENERATOR["Hypothesis Generator<br/>Multi-intent candidates"]:::engine
-                CONTRACT_SIGNAL_GAPS["Contract & Signal Gap Detector<br/>Capability requirements + signals"]:::engine
+                subgraph SAFETY_GATE["Safety Gate (Hard Stop)"]
+                    CRISIS_DETECTOR["Crisis Detector<br/>CRISIS band = immediate protocol"]:::safety
+                    SAFETY_OVERRIDE["Safety Override<br/>Bypasses all routing"]:::safety
+                end
+
+                subgraph COMPLEXITY_ROUTER["Complexity Router V2 (Multi-Factor)"]
+                    MULTI_INTENT_SCORER["Multi-Intent Scorer<br/>len(intents) + intent_types → complexity"]:::router
+                    CROSS_DOMAIN_DETECTOR["Cross-Domain Detector<br/>len(domains) > 1 → complexity bump"]:::router
+                    COMPLEXITY_CLASSIFIER["Complexity Classifier<br/>primary_intent + multi_factors → Tier"]:::router
+                    TIER_LOW["LOW Tier<br/>Tool First → LLM Response (~500 tokens)"]:::tier_low
+                    TIER_MEDIUM["MEDIUM Tier<br/>LLM Reasoning + Response (2K tokens)"]:::tier_med
+                    TIER_HIGH["HIGH Tier<br/>LLM Planning + Reasoning + Response (8K tokens)"]:::tier_high
+                    TIER_CRISIS["CRISIS Tier<br/>Safety Protocol"]:::tier_crisis
+                end
+
+                HYPOTHESIS_GENERATOR["Hypothesis Generator<br/>Receives explicit multi-intent from heads"]:::engine
+                CONTRACT_SIGNAL_GAPS["Contract & Signal Gap Detector<br/>Union of ALL intent requirements"]:::engine
                 SIGNAL_LIBRARY["Signal Library<br/>Pronouns/conflicts/multi-entities/time vagueness"]:::engine
 
                 CONTEXT_INFERENCE["Context Inference<br/>SessionState fill + entity resolution"]:::engine
-                TINY_SANITY_ARBITER["Tiny Sanity Arbiter (Fast Path)<br/>Small model + cached checks"]:::engine
+                TINY_SANITY_ARBITER["Tiny Sanity Arbiter (Fast Path)<br/>UltraBERT + cached checks"]:::engine
 
-                UNCERTAINTY_ESTIMATOR["Uncertainty Estimator<br/>Risk-weighted confidence score"]:::engine
+                UNCERTAINTY_ESTIMATOR["Uncertainty Estimator<br/>UltraBERT confidence scores"]:::engine
                 ENTROPY_MIN_QUESTION_PLANNER["Entropy-Minimizing Question Planner<br/>Progressive disclosure (1–2 Qs)"]:::engine
             end
         end
 
-        subgraph CONCIERGE_TOOLS["Concierge Tool Calls (Dynamically Discovered)"]
+        subgraph CONCIERGE_TOOLS["Concierge Direct Tools (LOW Complexity Path)"]
             TOOL_INVOKE_CAPABILITY["invoke_capability()<br/>Calls any registered tool"]:::tool
             TOOL_DISCOVER_CAPABILITIES["discover_capabilities()<br/>Queries Capability Registry"]:::tool
             TOOL_SPAWN_VIA_FABRIC["spawn_via_fabric()<br/>Capability-based Agent Creation"]:::tool
@@ -221,6 +254,38 @@ flowchart TB
             MODEL_CACHE["Model Cache<br/>Response Caching"]:::registry
             MODEL_METRICS["Model Metrics<br/>Usage & Performance Tracking"]:::engine
         end
+
+        subgraph PROMPT_MANAGEMENT["Prompt Management System"]
+            direction TB
+            PROMPT_TEMPLATE_STORE["Prompt Template Store<br/>k1/prompts/core/ + agents/"]:::registry
+            PROMPT_RESOLVER["Prompt Resolver<br/>Consumer → Template Lookup"]:::engine
+            PROMPT_VARIABLE_INJECTOR["Variable Injector<br/>SessionState → Template Vars"]:::engine
+            PROMPT_VERSION_CONTROLLER["Version Controller<br/>Template Versioning + A/B"]:::engine
+            PROMPT_COMPILER["Prompt Compiler<br/>Template + Context → Final Prompt"]:::engine
+        end
+
+        subgraph OUTPUT_VALIDATION["LLM Output Validation System"]
+            direction TB
+
+            subgraph SCHEMA_HIERARCHY["Schema Hierarchy (FlatBuffers)"]
+                CORE_OUTPUT_SCHEMA["Core Output Schema<br/>Base: output_id, agent_id, status, confidence"]:::contract
+                CONCIERGE_PAYLOAD_SCHEMA["Concierge Payload<br/>response_text, tone, next_actions"]:::contract
+                PLANNER_PAYLOAD_SCHEMA["Planner Payload<br/>plan_steps[], dependencies, duration"]:::contract
+                MEMORY_PAYLOAD_SCHEMA["Memory Payload<br/>facts[], entities[], relations[]"]:::contract
+                GENERIC_PAYLOAD_SCHEMA["Generic Agent Payload<br/>key_values[], raw_json, schema_ref"]:::contract
+            end
+
+            subgraph VALIDATION_PIPELINE["3-Tier Validation Pipeline"]
+                TIER1_STRUCTURAL["T1: Structural<br/>FlatBuffer Parse (HARD)"]:::safety
+                TIER2_SCHEMA["T2: Schema<br/>Required Fields + Types (RETRY)"]:::engine
+                TIER3_SEMANTIC["T3: Semantic<br/>Business Rules + Hallucination (REPAIR)"]:::engine
+            end
+
+            OUTPUT_VALIDATOR["Output Validator<br/>Orchestrates 3-Tier Validation"]:::engine
+            VALIDATION_FALLBACK["Validation Fallback<br/>Retry → Repair → Reject"]:::recovery
+            HALLUCINATION_DETECTOR["Hallucination Detector<br/>Cross-ref SessionState"]:::safety
+            SCHEMA_COMPILER["Schema Compiler<br/>Agent Template → FlatBuffer Schema"]:::engine
+        end
     end
     subgraph L3_PLANNER["📋 LAYER 3: Planner Engine (Conditional)"]
         direction TB
@@ -294,6 +359,11 @@ flowchart TB
             AFFECTIVE_NOW["Affective Now (4KB)<br/>Current emotion"]:::memory
             NARRATIVE_ACTIVE["Narrative Active (4KB)<br/>ONE active thread"]:::memory
             META["Meta (2KB)<br/>Session basics"]:::memory
+            PENDING_CLARIFICATIONS["Pending Clarifications (2KB)<br/>Sub-agent HIL requests"]:::memory
+            AFFECTIVE_CONTEXT["Affective Context (2KB)<br/>Emotional state for routing"]:::memory
+            MENTAL_MODEL["Mental Model (4KB)<br/>User's cognitive state (ToM)"]:::memory
+            CONVERSATION_THREADS["Conversation Threads (4KB)<br/>Active thread registry"]:::memory
+            NARRATIVE_ARC["Narrative Arc (2KB)<br/>Story progression tracking"]:::memory
         end
 
         subgraph WARM_TIER["🌡️ WARM TIER (≤48KB, evictable)"]
@@ -308,6 +378,8 @@ flowchart TB
             HISTORY_ARCHIVE["History Archive<br/>Everything else"]:::k0
             MULTIMODAL_RAW["Multimodal Raw<br/>Blobs, embeddings"]:::k0
             NARRATIVE_ARCHIVE["Narrative Archive<br/>Inactive threads"]:::k0
+            K0_SESSION_CHECKPOINTS["K0 Session Checkpoints<br/>Periodic session snapshots"]:::k0
+            K0_TURN_HISTORY["K0 Turn History<br/>All turns (full fidelity)"]:::k0
         end
 
         subgraph MEMORY_LIMITS["Memory Limits (ADR-0018)"]
@@ -337,7 +409,10 @@ flowchart TB
             COLD_DISK["COLD (Disk/Vector/KG)<br/>Long-Term Storage (<100ms)"]:::storage
         end
 
-        subgraph K0_PIPELINES["K0 Pipelines"]
+        %% K0 Pipelines: These are K0's internal concern, not K1's
+        %% K1 interacts via K0_K1_BRIDGE, not directly with pipelines
+        %% See k0_diagram.mmd for P01-P20 internal wiring
+        subgraph K0_PIPELINES["K0 Pipelines (K0 Internal - See k0_diagram.mmd)"]
             P01_RECALL["P01: Recall / Read"]:::pipeline
             P02_WRITE["P02: Write / Ingest"]:::pipeline
             P03_CONSOLIDATION["P03: Memory Consolidation"]:::pipeline
@@ -356,6 +431,9 @@ flowchart TB
         subgraph K0_K1_BRIDGE["🔗 K0 Bridge (Generic Only)"]
             K0_GENERIC_CLIENT["K0 Generic Client<br/>Only transport + auth"]:::bridge
             ENVELOPE_BUILDER["Envelope Builder<br/>Schema-driven"]:::bridge
+            JSON_ENVELOPES["JSON Envelopes<br/>K0 Command/Query payloads"]:::bridge
+            K0_SSE["K0 SSE Receiver<br/>Listens to K0 event stream"]:::bridge
+            CAPABILITY_LEARNING_BRIDGE["Capability Learning Bridge<br/>Feedback signals → K0 P06"]:::bridge
         end
     end
     subgraph K0_KERNEL["K0 Kernel (Query Interface)"]
@@ -475,15 +553,62 @@ flowchart TB
             HUB_OTHERS["Other LLM Providers<br/>Google, Meta, etc."]:::hub
         end
     end
+
+    %% ======================================================================================
+    %% MAIN CONVERSATION FLOW
+    %% ======================================================================================
+
     LISTENING -->|"k1.concierge.user_input"| ACKING
-    ACKING -->|"uncertainty < 0.2"| DISPATCHING
+
+    %% ACKING routes based on complexity tier (determined by UltraBERT)
+    %% LOW: Skip preliminary ack, execute tool fast (<2s), then LLM response with result
+    %% MEDIUM/HIGH: Generate preliminary ack for conversational continuity (tasks may take 10-30s)
     ACKING -->|"uncertainty ≥ 0.2"| CLARIFYING
+    ACKING -->|"uncertainty < 0.2 (ready to execute)"| DISPATCHING
     UNCERTAINTY_ESTIMATOR -->|"uncertainty"| ACKING
     CLARIFYING -->|"user_response"| ACKING
+
+    %% ======================================================================================
+    %% LOW TIER FLOW (Fast Path - No Preliminary Ack)
+    %% User: "Remind me at 5pm" → Tool executes (~500ms) → LLM response with result
+    %% ======================================================================================
+    DISPATCHING -->|"simple task (LOW)"| CAPABILITY_FABRIC
+    %% Tool result flows through pipeline (see TOOL EXECUTION & RESULT PIPELINE section)
+    %% CAPABILITY_FABRIC → TOOL_PROVIDERS → execute → result → COMPANIONING → TOOL_RESULT_BUFFER
+    COMPANIONING -->|"LOW: tool done"| DELIVERING
+    %% DELIVERING fetches from TOOL_RESULT_BUFFER and sends to MODEL_GATEWAY
+    DELIVERING -->|"fetch tool_results"| TOOL_RESULT_BUFFER
+    TOOL_RESULT_BUFFER -->|"LOW: tool_result[]"| DELIVERING
+    DELIVERING -->|"LOW: tool_result + context (~500 tokens)"| MODEL_GATEWAY
+    MODEL_GATEWAY -->|"LOW: response with result"| DELIVERING
+
+    %% ======================================================================================
+    %% MEDIUM/HIGH TIER FLOW (With Conversational Continuity)
+    %% User: Complex multi-step task → Preliminary ack → Background execution → Progress → Final
+    %% ======================================================================================
+    DISPATCHING -->|"complex task (MEDIUM/HIGH)"| ORCHESTRATOR_ACTOR
+
+    %% Preliminary ack for MEDIUM/HIGH: "Let me work on that..." (keeps conversation flowing)
+    DISPATCHING -->|"MEDIUM/HIGH: generate preliminary ack"| MODEL_GATEWAY
+    MODEL_GATEWAY -->|"preliminary ack sent"| COMPANIONING
+
+    %% Orchestrator execution with progress updates
     DISPATCHING -->|"k1.orchestration.execution.started"| COMPANIONING
+    ORCHESTRATOR_ACTOR -->|"execution deltas"| COMPANIONING
     COMPANIONING -->|"k1.agent.*.delta.v1"| PROGRESSING
     PROGRESSING -->|"k1.orchestration.execution.completed"| DELIVERING
+
+    %% Final response for MEDIUM/HIGH - includes all tool results
+    DELIVERING -->|"fetch all tool_results"| TOOL_RESULT_BUFFER
+    TOOL_RESULT_BUFFER -->|"MEDIUM/HIGH: all tool_results[]"| DELIVERING
+    DELIVERING -->|"MEDIUM/HIGH: tool_results + context (2-8K tokens)"| MODEL_GATEWAY
+    MODEL_GATEWAY -->|"final response"| DELIVERING
+
+    %% Clear buffer after response sent
+    DELIVERING -->|"clear buffer"| TOOL_RESULT_BUFFER
     DELIVERING -->|"user.ack"| LISTENING
+
+    %% Interrupts
     LISTENING -->|"k1.concierge.user_input (interrupt)"| INTERRUPT_HANDLING
     INTERRUPT_HANDLING -->|"user.intent.override"| ACKING
     ACKING -->|"invoke capability: k0.query_recall"| TOOL_INVOKE_CAPABILITY
@@ -495,15 +620,63 @@ flowchart TB
     WAL_DRIVER -->|"episodic memories"| TOOL_RECALL_MEMORY
     VECTOR_DRIVER -->|"semantic matches"| TOOL_RECALL_MEMORY
     TOOL_RECALL_MEMORY -->|"recall bundle"| CAPABILITY_CONTEXT_BUILDER
-    INTENT_CLASSIFIER -->|"classify"| HYPOTHESIS_GENERATOR
-    HYPOTHESIS_GENERATOR -->|"candidates"| CONTRACT_SIGNAL_GAPS
+    %% UltraBERT Flow (22ms single forward pass)
+    ACKING -->|"user_input"| ULTRABERT_CORE
+    ULTRABERT_CORE -->|"12 heads parallel"| ULTRABERT_INTENT
+    ULTRABERT_CORE -->|"12 heads parallel"| ULTRABERT_INGRESS
+    ULTRABERT_CORE -->|"12 heads parallel"| ULTRABERT_SAFETY
+    ULTRABERT_CORE -->|"12 heads parallel"| ULTRABERT_EMOTIONS
+    ULTRABERT_CORE -->|"12 heads parallel"| ULTRABERT_NER
+
+    %% Safety Gate (FIRST - before any routing)
+    ULTRABERT_SAFETY -->|"safety_band"| CRISIS_DETECTOR
+    CRISIS_DETECTOR -->|"CRISIS detected"| SAFETY_OVERRIDE
+    SAFETY_OVERRIDE -->|"immediate"| TIER_CRISIS
+    TIER_CRISIS -->|"safety.crisis.protocol"| SAFETY_MAILBOX
+
+    %% Complexity Routing (after safety clear) - Multi-Label Flow
+    ULTRABERT_INTENT -->|"intents[] + scores{}"|MULTI_INTENT_SCORER
+    ULTRABERT_INGRESS -->|"domains[]"|CROSS_DOMAIN_DETECTOR
+    MULTI_INTENT_SCORER -->|"intent_complexity"|COMPLEXITY_CLASSIFIER
+    CROSS_DOMAIN_DETECTOR -->|"domain_complexity"|COMPLEXITY_CLASSIFIER
+    ULTRABERT_SAFETY -->|"safety_band"| COMPLEXITY_CLASSIFIER
+    ULTRABERT_EMOTIONS -->|"emotion_intensity"| COMPLEXITY_CLASSIFIER
+
+    COMPLEXITY_CLASSIFIER -->|"LOW: single intent + single domain"| TIER_LOW
+    COMPLEXITY_CLASSIFIER -->|"MEDIUM: multi-intent OR multi-domain"| TIER_MEDIUM
+    COMPLEXITY_CLASSIFIER -->|"HIGH: complex + emotional"| TIER_HIGH
+
+    %% LOW tier: Tool executes FIRST, then LLM generates response with tool result
+    TIER_LOW -->|"route to tool execution"| DISPATCHING
+
+    %% MEDIUM/HIGH: LLM reasoning first (may need planning), then execution
+    TIER_MEDIUM -->|"llm.reasoning (2K tokens)"| MODEL_GATEWAY
+    TIER_HIGH -->|"llm.planning (8K tokens)"| MODEL_GATEWAY
+    MODEL_GATEWAY -->|"reasoning/plan complete"| DISPATCHING
+
+    %% Feed other ACKING components (Multi-Label aware)
+    ULTRABERT_INTENT -->|"intents[] explicit"| HYPOTHESIS_GENERATOR
+    ULTRABERT_INGRESS -->|"domains[] for context"| HYPOTHESIS_GENERATOR
+    HYPOTHESIS_GENERATOR -->|"all_intent_requirements"| CONTRACT_SIGNAL_GAPS
     CONTRACT_SIGNAL_GAPS -->|"signals"| SIGNAL_LIBRARY
+    ULTRABERT_NER -->|"entities"| CONTEXT_INFERENCE
+    ULTRABERT_RELATIONS -->|"relations"| CONTEXT_INFERENCE
     CONTRACT_SIGNAL_GAPS -->|"slot_fill_request"| CONTEXT_INFERENCE
     CONTEXT_INFERENCE -->|"filled_intent + provenance"| TINY_SANITY_ARBITER
     TINY_SANITY_ARBITER -->|"verdict + flags"| UNCERTAINTY_ESTIMATOR
+    ULTRABERT_INTENT -->|"confidence_score"| UNCERTAINTY_ESTIMATOR
     UNCERTAINTY_ESTIMATOR -->|"score + reasons"| ENTROPY_MIN_QUESTION_PLANNER
     ENTROPY_MIN_QUESTION_PLANNER -->|"question_plan"| CLARIFYING
-    ENTROPY_MIN_QUESTION_PLANNER -->|"tone_hint"| AFFECTIVE_MIRRORING_ENGINE
+    CLARIFYING -->|"generate clarification"| MODEL_GATEWAY
+    ULTRABERT_EMOTIONS -->|"tone_hint"| AFFECTIVE_MIRRORING_ENGINE
+    ULTRABERT_SENTIMENT -->|"sentiment"| AFFECTIVE_MIRRORING_ENGINE
+
+    %% UltraBERT → SessionState Updates (Multi-Label)
+    ULTRABERT_EMOTIONS -->|"update AFFECTIVE_NOW"| AFFECTIVE_NOW
+    ULTRABERT_NER -->|"update BELIEFS_ACTIVE"| BELIEFS_ACTIVE
+    ULTRABERT_SAFETY -->|"update CONTROL.safety_band"| CONTROL
+    ULTRABERT_INTENT -->|"update CONTROL.intents{primary,all[],scores}"| CONTROL
+    ULTRABERT_INGRESS -->|"update CONTROL.domains[]"| CONTROL
 
     CONTRACT_SIGNAL_GAPS -.->|capability requirements| CAPABILITY_REGISTRY
     ACKING -->|"pre_execution_check"| CONSTRAINT_MANAGER
@@ -512,6 +685,16 @@ flowchart TB
     ACKING -->|"early_validation"| STAGE3_VALIDATE
     CLARIFYING -->|"clarification"| PENDING_CLARIFICATIONS
     PENDING_CLARIFICATIONS -->|"resolved"| ACKING
+
+    %% Sub-agent clarification flow (respects Single Writer pattern)
+    %% Sub-agents CANNOT write to SessionState - they emit to DELTA_BUS
+    L4_SUBAGENTS -->|"clarification_request delta"| DELTA_BUS
+    DELTA_BUS -->|"clarification deltas"| AGGREGATION_WINDOW
+    %% Concierge (Single Writer) adds to PENDING_CLARIFICATIONS
+    AGGREGATION_WINDOW -->|"clarification_request"| CONCIERGE_FSM
+    CONCIERGE_FSM -->|"write pending"| PENDING_CLARIFICATIONS
+    PENDING_CLARIFICATIONS -->|"interrupt for clarification"| INTERRUPT_HANDLING
+    INTERRUPT_HANDLING -->|"route to user"| CLARIFYING
     STATE_PENDING -->|"Supervisor Hire"| STATE_WARMING
     STATE_WARMING -->|"Model Ready"| STATE_ACTIVE
     STATE_ACTIVE -->|"60s Idle TTL"| STATE_IDLE
@@ -527,12 +710,51 @@ flowchart TB
     TOOL_DISCOVER_CAPABILITIES -->|"Registry Query"| CAPABILITY_REGISTRY
     TOOL_SPAWN_VIA_FABRIC -->|"Agent Spawning"| AGENT_PROVIDERS
     ORCHESTRATOR_ACTOR -->|"Capability Invocation"| CAPABILITY_FABRIC
+    ORCHESTRATOR_ACTOR -->|"execution deltas"| COMPANIONING
+
+    %% ======================================================================================
+    %% TOOL EXECUTION & RESULT PIPELINE (Complete Round-Trip)
+    %% Call → Execute → Result → Context → LLM Response
+    %% ======================================================================================
+
+    %% Step 1: Fabric routes to appropriate provider
+    CAPABILITY_FABRIC -->|"invoke tool capability"| TOOL_PROVIDERS
+
+    %% Step 2: Provider executes via appropriate runner
+    TOOL_PROVIDERS -->|"MCP tool call"| MCP_RUNNERS
+    TOOL_PROVIDERS -->|"K0 memory operation"| K0_GENERIC_CLIENT
+    TOOL_PROVIDERS -->|"sandboxed execution"| WASM_SANDBOX
+
+    %% Step 3: Tool execution completes, results return
+    MCP_RUNNERS -->|"tool_result JSON"| TOOL_PROVIDERS
+    K0_GENERIC_CLIENT -->|"K0 response"| TOOL_PROVIDERS
+    WASM_SANDBOX -->|"sandbox output"| TOOL_PROVIDERS
+
+    %% Step 4: Provider packages result, returns to Fabric
+    TOOL_PROVIDERS -->|"CapabilityResult{success, data, error}"| CAPABILITY_FABRIC
+
+    %% Step 5: Fabric emits completion event with result
+    CAPABILITY_FABRIC -->|"k1.capability.completed.v1 + result"| EVENT_BUS
+
+    %% Step 6: Result routes based on complexity tier
+    %% LOW path: Direct to COMPANIONING (fast path)
+    CAPABILITY_FABRIC -->|"LOW: tool_result"| COMPANIONING
+
+    %% MEDIUM/HIGH path: Via Orchestrator for aggregation
+    CAPABILITY_FABRIC -->|"MEDIUM/HIGH: tool_result"| ORCHESTRATOR_ACTOR
+    ORCHESTRATOR_ACTOR -->|"aggregated results"| COMPANIONING
+
+    %% Step 7: COMPANIONING stages result for LLM context
+    COMPANIONING -->|"stage tool_result for LLM"| TOOL_RESULT_BUFFER
+
+    %% Step 8: DELIVERING retrieves results (see MAIN CONVERSATION FLOW section)
+    %% DELIVERING --> TOOL_RESULT_BUFFER --> DELIVERING --> MODEL_GATEWAY
+
+    %% ======================================================================================
+
     FABRIC_GATEWAY -->|"Bridge to Fabric"| CAPABILITY_FABRIC
     CAPABILITY_FABRIC -->|"Spawn Agents"| AGENT_PROVIDERS
     AGENT_PROVIDERS -->|"Instantiate"| L4_SUBAGENTS
-    CAPABILITY_FABRIC -->|"Invoke Tools"| TOOL_PROVIDERS
-    TOOL_PROVIDERS -->|"Execute"| EXECUTION_TOOLS
-    TOOL_PROVIDERS -->|"provider executes tool"| K0_GENERIC_CLIENT
     CAPABILITY_FABRIC -->|"Read Context"| SESSIONSTATE_STORE
     CAPABILITY_CONTEXT_BUILDER -->|"Build Context"| SESSIONSTATE_STORE
     QUERY_AGG -->|"return recall bundle"| CONTEXT_BUDGET
@@ -554,6 +776,18 @@ flowchart TB
     DELTA_BUS -->|"All Agent Deltas"| AGGREGATION_WINDOW
     AGGREGATION_WINDOW -->|"Aggregated State"| CONCIERGE_FSM
     CONCIERGE_FSM -->|"Coherent State Write"| SINGLE_WRITER
+    SINGLE_WRITER -->|"Write to Store"| SESSIONSTATE_STORE
+
+    %% SessionState Internal Data Flow (HOT → WARM → COLD)
+    SESSIONSTATE_STORE -->|"turn complete"| HISTORY_ACTIVE
+    HISTORY_ACTIVE -->|"evict turns 11+"| HISTORY_RECENT
+    HISTORY_RECENT -->|"archive turns 41+"| HISTORY_ARCHIVE
+    BELIEFS_ACTIVE -->|"evict old facts"| BELIEFS_HISTORY
+    BELIEFS_HISTORY -->|"archive"| BELIEFS_ARCHIVE
+    CLARIFICATIONS -->|"track discourse"| SCOREBOARD
+    CONCIERGE_PERSONA -->|"personality config"| PERSONA
+    METRICS_AGGREGATOR -->|"session metrics"| TELEMETRY
+
     CONCIERGE_FSM -->|"Write Request"| MUTATION_GUARD
     MUTATION_GUARD -->|"Approved/Rejected"| CONCIERGE_FSM
     MUTATION_GUARD -->|"Eviction Needed"| EVICTION_ENGINE
@@ -581,14 +815,23 @@ flowchart TB
     PROACTIVE_BUDGET_GATE -->|"Budget OK"| PROACTIVE_SPAWN
     PROACTIVE_SPAWN -->|"Via Fabric"| CAPABILITY_FABRIC
     CONVERSATION_SCHEDULER -->|"Rhythm Algorithms"| L1_RHYTHM
+    RHYTHM_PATTERNS -->|"Pattern Library"| CONVERSATION_BEAT
+    CONVERSATION_BEAT -->|"Timing Context"| DYNAMIC_ADJUSTMENT
+    DYNAMIC_ADJUSTMENT -->|"Adjusted Timing"| CONVERSATION_SCHEDULER
     L1_RHYTHM -->|"Pacing & Cadence"| CONCIERGE_FSM
     CONCIERGE_FSM -->|"EMOTIONAL_PROCESSING"| AFFECTIVE_MIRRORING_ENGINE
     AFFECTIVE_MIRRORING_ENGINE -->|"Adjust Emotional Tone"| CONCIERGE_FSM
-    CONCIERGE_FSM -->|"POST /k0/affect/analyze"| K0_AFFECT_ANALYSIS
-    K0_AFFECT_ANALYSIS -->|"k0.affect.analysis.completed.v1"| EVENT_BUS
+    %% AFFECT ANALYSIS: Now handled by K1 UltraBERT (not K0)
+    CONCIERGE_FSM -->|"analyze affect (local)"| ULTRABERT_EMOTIONS
+    ULTRABERT_EMOTIONS -->|"k1.affect.analyzed.v1"| EVENT_BUS
     EVENT_BUS -->|"Update affective_context"| AFFECTIVE_CONTEXT
     CONVERSATIONAL_ANTICIPATION_ENGINE -->|"Speculative Execution"| ORCHESTRATOR_ACTOR
     THEORY_OF_MIND_ENGINE -->|"Mental Model Updates"| MENTAL_MODEL
+    THEORY_OF_MIND_ENGINE -->|"Cognitive Load"| MENTAL_MODEL_MANAGEMENT
+    MENTAL_MODEL_MANAGEMENT -->|"Load State"| COGNITIVE_LOAD_ROUTING
+    MENTAL_MODEL_MANAGEMENT -->|"Capacity Estimate"| CONCIERGE_FSM
+    PREDICTIVE_COMPLETION -->|"Predictions"| CONVERSATIONAL_ANTICIPATION_ENGINE
+    CONVERSATIONAL_ANTICIPATION_ENGINE -->|"Feed Predictions"| PREDICTIVE_COMPLETION
     L3_EMPATHY -->|"Cognitive Load-Aware"| ORCHESTRATOR_ACTOR
     SUPERVISOR_MONITORING -->|"Health Monitoring"| L4_SUBAGENTS
     WFQ_SCHEDULER -->|"Priority-based Delivery"| EVENT_BUS
@@ -619,6 +862,25 @@ flowchart TB
     USER_DELETION -->|"Soft Delete"| K0_TURN_HISTORY
     GRACE_PERIOD -->|"Recovery Within Grace"| K0_SESSION_CHECKPOINTS
     GRACE_PERIOD -->|"Recovery Within Grace"| K0_TURN_HISTORY
+    %% ======================================================================================
+    %% PLANNER 4-STAGE PIPELINE (For HIGH complexity tasks)
+    %% ======================================================================================
+    ORCHESTRATOR_ACTOR -->|"HIGH: needs planning"| PLANNER_AGENT
+    PLANNER_AGENT -->|"Stage 1: sketch plan"| STAGE1_SKETCH
+    STAGE1_SKETCH -->|"rough plan"| STAGE2_EXPAND
+    STAGE2_EXPAND -->|"expanded plan with tools"| STAGE3_VALIDATE
+    STAGE3_VALIDATE -->|"validated plan"| STAGE4_COMMIT
+    STAGE4_COMMIT -->|"committed plan"| ORCHESTRATOR_ACTOR
+    STAGE4_COMMIT -->|"persist plan to K0"| K0_K1_BRIDGE
+
+    %% Planner HIL integration
+    STAGE1_SKETCH -->|"need clarification"| REQUIREMENT_CLARIFICATION
+    REQUIREMENT_CLARIFICATION -->|"user input"| STAGE1_SKETCH
+    STAGE3_VALIDATE -->|"needs approval"| PLAN_APPROVAL
+    PLAN_APPROVAL -->|"approved/modified"| STAGE3_VALIDATE
+    ORCHESTRATOR_ACTOR -->|"execution status"| EXECUTION_MONITORING
+    EXECUTION_MONITORING -->|"user override"| ORCHESTRATOR_ACTOR
+
     ORCHESTRATOR_ACTOR -->|"Workflow Scheduling"| WORKFLOW_SCHEDULER
     WORKFLOW_SCHEDULER -->|"Workflow Triggers"| EVENT_BUS
     WORKFLOW_SCHEDULER -->|"Supervise Runs"| WORKFLOW_RUN_SUPERVISOR
@@ -630,6 +892,23 @@ flowchart TB
     CONCIERGE_FSM -->|"Persona Management"| CONCIERGE_PERSONA
     CONCIERGE_FSM -->|"Style Adaptation"| CONCIERGE_STYLE
     CONCIERGE_FSM -->|"Narrative Control"| CONVERSATIONAL_NARRATIVE_ENGINE
+
+    %% ======================================================================================
+    %% EXPERIENCE LAYER (Runs every 20-30 turns, not every turn)
+    %% Analyzes long-term emotional patterns, user preferences, conversation threads
+    %% ======================================================================================
+    DELIVERING -->|"turn_count % 25 == 0"| EMOTIONAL_PROCESSING
+    EMOTIONAL_PROCESSING -->|"emotional trajectory"| EMOTIONAL_MIRRORING
+    EMOTIONAL_MIRRORING -->|"tone adjustments"| CONCIERGE_STYLE
+    EMOTIONAL_MIRRORING -->|"update persona hints"| CONCIERGE_PERSONA
+
+    DELIVERING -->|"turn_count % 20 == 0"| NARRATIVE_WEAVING
+    NARRATIVE_WEAVING -->|"active threads"| CONVERSATIONAL_NARRATIVE_ENGINE
+    NARRATIVE_WEAVING -->|"update session"| NARRATIVE_ACTIVE
+
+    DELIVERING -->|"turn_count % 30 == 0"| ANTICIPATORY_RESPONSE
+    ANTICIPATORY_RESPONSE -->|"predicted needs"| CONVERSATIONAL_ANTICIPATION_ENGINE
+    ANTICIPATORY_RESPONSE -->|"prefetch context"| CAPABILITY_FABRIC
     CONVERSATIONAL_NARRATIVE_ENGINE -->|"Update Threads"| CONVERSATION_THREADS
     CONVERSATIONAL_NARRATIVE_ENGINE -->|"Update Arc"| NARRATIVE_ARC
     LLM_MODEL_ENGINE -->|"Route to Providers"| HUB_ROUTER
@@ -658,6 +937,19 @@ flowchart TB
     CAPABILITY_FABRIC -->|"k1.capability.completed.v1"| EVENT_BUS
     EVENT_BUS -->|"Notify completion"| CONCIERGE_MAILBOX
 
+    %% ======================================================================================
+    %% FABRIC POLICY ENGINE (Affects Provider Selection)
+    %% ======================================================================================
+    AFFECTIVE_NOW -->|"current emotion"| AFFECTIVE_ROUTING
+    AFFECTIVE_ROUTING -->|"emotion-aware selection"| CAPABILITY_RESOLVER
+    CONTROL -->|"cognitive load"| COGNITIVE_LOAD_ROUTING
+    COGNITIVE_LOAD_ROUTING -->|"complexity-aware selection"| CAPABILITY_RESOLVER
+    CONTEXT_BUDGET -->|"token budget"| QOS_INTEGRATION
+    QOS_INTEGRATION -->|"budget-aware selection"| CAPABILITY_RESOLVER
+    ULTRABERT_SAFETY -->|"safety band"| SECURITY_CONTEXT
+    SECURITY_CONTEXT -->|"band-based access"| CAPABILITY_RESOLVER
+    CAPABILITY_RESOLVER -->|"selected provider"| CAPABILITY_FABRIC
+
     WORKFLOW_RUN_SUPERVISOR -->|"Execute via Fabric"| CAPABILITY_FABRIC
     WORKFLOW_COMPILER -->|"Compile to Capability DAG"| PROVIDER_MATCHER
 
@@ -665,6 +957,9 @@ flowchart TB
     CAPABILITY_FABRIC -->|"Create Agent Instance"| AGENT_PROVIDERS
 
     MCP_TOOL_DISCOVERY -->|"Discover Tools"| LOCAL_MCP_SERVERS
+    MCP_TOOL_DISCOVERY -->|"Discover Remote Tools"| REMOTE_MCP_SERVERS
+    REMOTE_MCP_SERVERS -->|"Cloud Routing"| K0_CONNECTOR_PROXY
+    K0_CONNECTOR_PROXY -->|"Auth + Cache"| MCP_CAPABILITY_REGISTRAR
     LOCAL_MCP_SERVERS -->|"Expose Capabilities"| MCP_CAPABILITY_REGISTRAR
     MCP_CAPABILITY_REGISTRAR -->|"Register Capabilities"| CAPABILITY_REGISTRY
     MCP_PROVIDER_FACTORY -->|"Create Providers"| TOOL_PROVIDERS
@@ -673,10 +968,23 @@ flowchart TB
     PROVIDER_MATCHER -->|"Generate Execution DAG"| DAG_ENGINE
 
     L4_SUBAGENTS -->|"execution_results"| LEARNING_LOOP_FRAMEWORK
+    %% Learning Loop internal flow
+    LEARNING_LOOP_FRAMEWORK -->|"collect signals"| FEEDBACK_SIGNAL_COLLECTOR
+    FEEDBACK_SIGNAL_COLLECTOR -->|"detect drift"| DRIFT_DETECTOR
+    DRIFT_DETECTOR -->|"emit advisory"| ADVISORY_EMITTER
+    ADVISORY_EMITTER -->|"to K0 P06"| K0_K1_BRIDGE
+    K0_SSE -->|"learning.advisory.validated"| PROACTIVE_AGENT_SPAWNER
+    PROACTIVE_AGENT_SPAWNER -->|"spawn via fabric"| CAPABILITY_FABRIC
 
     K0_SSE_ENDPOINT -->|"Direct SSE"| PROACTIVE_DECISION
 
     MODEL_GATEWAY -->|"Route to Providers"| HUB_ROUTER
+    %% Model Gateway internal flow
+    MODEL_ROUTER -->|"check cache"| MODEL_CACHE
+    MODEL_CACHE -->|"cache miss"| HUB_ROUTER
+    MODEL_CACHE -->|"cache hit"| MODEL_ROUTER
+    MODEL_ROUTER -->|"track usage"| MODEL_METRICS
+    HUB_ROUTER -->|"response"| MODEL_ROUTER
     CAPABILITY_FABRIC -->|"LLM Access"| MODEL_GATEWAY
     CONCIERGE_FSM -->|"LLM Inference"| MODEL_GATEWAY
     PLANNER_AGENT -->|"LLM Inference"| MODEL_GATEWAY
@@ -693,12 +1001,91 @@ flowchart TB
     MODULE_SCANNER -->|"registers"| TOOL_REGISTRY
     MODULE_SCANNER -->|"registers prompts"| PROMPT_REGISTRY
     MODULE_SCANNER -->|"registers agent templates"| AGENT_REGISTRY
+    MODULE_SCANNER -->|"registers schemas"| SCHEMA_REGISTRY
     TOOL_REGISTRY -->|"exposes"| CAPABILITY_REGISTRY
     AGENT_REGISTRY -->|"templates"| AGENT_FACTORY
     AGENT_FACTORY -->|"spawns"| DYNAMIC_INSTANCES
 
+    %% ======================================================================================
+    %% PROMPT MANAGEMENT FLOWS
+    %% All LLM calls go through Prompt Management before Model Gateway
+    %% ======================================================================================
+
+    %% Prompt Resolution: Consumer requests prompt by ID
+    CONCIERGE_FSM -->|"request prompt: concierge.response"| PROMPT_RESOLVER
+    PLANNER_AGENT -->|"request prompt: planner.sketch"| PROMPT_RESOLVER
+    MEMORY_WRITER_AGENTS -->|"request prompt: memory.extract"| PROMPT_RESOLVER
+    SOLUTION_VALIDATOR -->|"request prompt: validator.check"| PROMPT_RESOLVER
+    PROACTIVE_DECISION -->|"request prompt: proactive.decide"| PROMPT_RESOLVER
+    DYNAMIC_AGENTS -->|"request prompt: agent.{template}"| PROMPT_RESOLVER
+
+    %% Prompt Resolution Pipeline
+    PROMPT_RESOLVER -->|"lookup template"| PROMPT_TEMPLATE_STORE
+    PROMPT_TEMPLATE_STORE -->|"template found"| PROMPT_VERSION_CONTROLLER
+    PROMPT_VERSION_CONTROLLER -->|"versioned template"| PROMPT_VARIABLE_INJECTOR
+    PROMPT_VARIABLE_INJECTOR -->|"read context"| SESSIONSTATE_STORE
+    SESSIONSTATE_STORE -->|"session context"| PROMPT_VARIABLE_INJECTOR
+    PROMPT_VARIABLE_INJECTOR -->|"inject variables"| PROMPT_COMPILER
+    PROMPT_COMPILER -->|"compiled prompt"| MODEL_ROUTER
+
+    %% Dynamic Agent Schema Registration (at spawn time)
+    AGENT_FACTORY -->|"register agent schema"| SCHEMA_COMPILER
+    SCHEMA_COMPILER -->|"compile FlatBuffer schema"| SCHEMA_REGISTRY
+    AGENT_TEMPLATES -->|"schema reference"| SCHEMA_COMPILER
+
+    %% ======================================================================================
+    %% OUTPUT VALIDATION FLOWS
+    %% All LLM responses go through Output Validation before returning to consumer
+    %% ======================================================================================
+
+    %% LLM Response → Validation Pipeline
+    HUB_ROUTER -->|"raw LLM response"| OUTPUT_VALIDATOR
+
+    %% 3-Tier Validation
+    OUTPUT_VALIDATOR -->|"T1: parse"| TIER1_STRUCTURAL
+    TIER1_STRUCTURAL -->|"parse success"| TIER2_SCHEMA
+    TIER1_STRUCTURAL -->|"parse fail"| VALIDATION_FALLBACK
+
+    OUTPUT_VALIDATOR -->|"lookup schema"| SCHEMA_REGISTRY
+    SCHEMA_REGISTRY -->|"agent schema"| TIER2_SCHEMA
+    TIER2_SCHEMA -->|"schema valid"| TIER3_SEMANTIC
+    TIER2_SCHEMA -->|"schema fail"| VALIDATION_FALLBACK
+
+    TIER3_SEMANTIC -->|"check facts"| HALLUCINATION_DETECTOR
+    HALLUCINATION_DETECTOR -->|"cross-ref"| SESSIONSTATE_STORE
+    SESSIONSTATE_STORE -->|"known facts"| HALLUCINATION_DETECTOR
+    HALLUCINATION_DETECTOR -->|"hallucination score"| TIER3_SEMANTIC
+    TIER3_SEMANTIC -->|"semantic valid"| OUTPUT_VALIDATOR
+    TIER3_SEMANTIC -->|"semantic fail"| VALIDATION_FALLBACK
+
+    %% Validation Fallback Strategies
+    VALIDATION_FALLBACK -->|"retry (max 2)"| PROMPT_COMPILER
+    VALIDATION_FALLBACK -->|"repair attempt"| OUTPUT_VALIDATOR
+    VALIDATION_FALLBACK -->|"reject"| MODEL_METRICS
+
+    %% Validated Response → Consumer
+    OUTPUT_VALIDATOR -->|"validated response"| MODEL_ROUTER
+    MODEL_ROUTER -->|"validated + cached"| CONCIERGE_FSM
+    MODEL_ROUTER -->|"validated + cached"| PLANNER_AGENT
+    MODEL_ROUTER -->|"validated + cached"| MEMORY_WRITER_AGENTS
+    MODEL_ROUTER -->|"validated + cached"| DYNAMIC_AGENTS
+
+    %% Core vs Generic Schema Selection
+    CORE_OUTPUT_SCHEMA -->|"base fields"| TIER2_SCHEMA
+    CONCIERGE_PAYLOAD_SCHEMA -->|"concierge fields"| TIER2_SCHEMA
+    PLANNER_PAYLOAD_SCHEMA -->|"planner fields"| TIER2_SCHEMA
+    MEMORY_PAYLOAD_SCHEMA -->|"memory fields"| TIER2_SCHEMA
+    GENERIC_PAYLOAD_SCHEMA -->|"dynamic agent fields"| TIER2_SCHEMA
+
     classDef external fill:#e1f5ff,stroke:#01579b,stroke-width:2px,color:#000
     classDef protocol fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,color:#000
+    classDef ultrabert fill:#ff6b6b,stroke:#c92a2a,stroke-width:3px,color:#fff,font-weight:bold
+    classDef safety fill:#ff8787,stroke:#e03131,stroke-width:2px,color:#000
+    classDef router fill:#74c0fc,stroke:#1971c2,stroke-width:2px,color:#000
+    classDef tier_low fill:#b2f2bb,stroke:#2f9e44,stroke-width:2px,color:#000
+    classDef tier_med fill:#ffd43b,stroke:#f59f00,stroke-width:2px,color:#000
+    classDef tier_high fill:#ff922b,stroke:#e8590c,stroke-width:2px,color:#000
+    classDef tier_crisis fill:#ff6b6b,stroke:#c92a2a,stroke-width:3px,color:#fff,font-weight:bold
     classDef brain fill:#ffccbc,stroke:#bf360c,stroke-width:3px,color:#000,font-weight:bold
     classDef mailbox fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
     classDef tool fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
@@ -772,7 +1159,7 @@ flowchart TB
     class K0_BRIDGE,BRIDGE_PROTOCOL,K0_MEMORY,K0_POSTGRESQL,K0_RECEIPTS,K0_K1_BRIDGE,K0_CMD,K0_QRY,PORT_QRY,QUERY_AGG,WAL_DRIVER,VECTOR_DRIVER,PORT_CMD,BUS_DISPATCH,PIPELINE_ROUTER,PIPELINE_P02,PIPELINE_P03,PORT_SSE k0
     class K0_SESSION_CHECKPOINTS,K0_TURN_HISTORY,K0_DELTA_BATCHING k0
     class K0_WAL_BACKEND,K0_OBJECT_BACKEND,K0_EMOTIONAL_PATTERNS k0
-    class K0_AFFECT_ANALYSIS k0
+    %% K0_AFFECT_ANALYSIS removed - now handled by K1 UltraBERT
     class EVENT_BUS,DELTA_BUS,MAILBOX_ROUTER,TOPIC_PATTERNS,DISTRIBUTED_TRACING routing
     class SINGLE_WRITER,MULTI_READER,SIX_SECTIONS concurrency
     class SUPERVISOR_MONITORING,SESSIONSTATE_CLEANUP,BLACKLIST_MANAGEMENT recovery
@@ -809,3 +1196,20 @@ flowchart TB
     class DYNAMIC_INSTANCES agent
     class MUTATION_GUARD,EVICTION_ENGINE,RECONSTRUCTION_SLA engine
     class EMERGENCY_SUMMARIZE,EMERGENCY_READONLY,EMERGENCY_SHED recovery
+    class ULTRABERT_CORE,ULTRABERT_INTENT,ULTRABERT_INGRESS,ULTRABERT_SAFETY,ULTRABERT_EMOTIONS,ULTRABERT_SENTIMENT,ULTRABERT_NER,ULTRABERT_RELATIONS ultrabert
+    class CRISIS_DETECTOR,SAFETY_OVERRIDE safety
+    class COMPLEXITY_CLASSIFIER,MULTI_INTENT_SCORER,CROSS_DOMAIN_DETECTOR router
+    class TIER_LOW tier_low
+    class TIER_MEDIUM tier_med
+    class TIER_HIGH tier_high
+    class TIER_CRISIS tier_crisis
+
+    %% Prompt Management System classes
+    class PROMPT_TEMPLATE_STORE,SCHEMA_REGISTRY registry
+    class PROMPT_RESOLVER,PROMPT_VARIABLE_INJECTOR,PROMPT_VERSION_CONTROLLER,PROMPT_COMPILER,SCHEMA_COMPILER engine
+
+    %% Output Validation System classes
+    class CORE_OUTPUT_SCHEMA,CONCIERGE_PAYLOAD_SCHEMA,PLANNER_PAYLOAD_SCHEMA,MEMORY_PAYLOAD_SCHEMA,GENERIC_PAYLOAD_SCHEMA contract
+    class TIER1_STRUCTURAL,HALLUCINATION_DETECTOR safety
+    class TIER2_SCHEMA,TIER3_SEMANTIC,OUTPUT_VALIDATOR engine
+    class VALIDATION_FALLBACK recovery
