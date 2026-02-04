@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sessionstate.mutation.requested.v1.json",
+  "title": "SessionState Mutation Requested",
+  "description": "Emitted when a sub-agent requests a state mutation via Delta Bus",
+  "type": "object",
+  "required": ["request_id", "requester_agent_id", "target_section", "operation", "timestamp_ms"],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for tracking this mutation request"
+    },
+    "requester_agent_id": {
+      "type": "string",
+      "description": "Agent ID requesting the mutation"
+    },
+    "target_section": {
+      "type": "string",
+      "enum": [
+        "control",
+        "beliefs_active",
+        "beliefs_history",
+        "scoreboard",
+        "history_active",
+        "history_recent",
+        "clarifications",
+        "affective_now",
+        "narrative_active",
+        "meta",
+        "persona",
+        "telemetry"
+      ],
+      "description": "Target section for mutation"
+    },
+    "operation": {
+      "type": "string",
+      "description": "Operation to perform (e.g., 'add_fact', 'update_referent')"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Operation-specific data"
+    },
+    "estimated_size_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Estimated size change in bytes"
+    },
+    "priority": {
+      "type": "integer",
+      "enum": [0, 1, 2],
+      "default": 0,
+      "description": "Priority level: 0=normal, 1=high, 2=urgent"
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds"
+    }
+  },
+  "examples": [
+    {
+      "request_id": "550e8400-e29b-41d4-a716-446655440000",
+      "requester_agent_id": "lighting-agent-001",
+      "target_section": "beliefs_active",
+      "operation": "add_fact",
+      "payload": {
+        "subject": "living_room_lights",
+        "predicate": "state",
+        "object": "on",
+        "confidence": 0.95
+      },
+      "estimated_size_bytes": 256,
+      "priority": 0,
+      "timestamp_ms": 1699012200000
+    }
+  ]
+}

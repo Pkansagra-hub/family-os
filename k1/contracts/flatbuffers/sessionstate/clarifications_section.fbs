@@ -1,0 +1,89 @@
+// ============================================================================
+// clarifications_section.fbs - Clarifications Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/clarifications_section.fbs
+// Purpose: Open gaps in current turn requiring user clarification
+// Size Budget: 4KB max
+// Tier: HOT CORE
+// ADR: ADR-0017 (SessionState Design), Section 5.5
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// CLARIFICATION OPTION
+// ============================================================================
+
+/// Single option for a clarification question
+table ClarificationOption {
+    id: string (required);
+    text: string (required);          // Option text shown to user
+    action: string;                   // Action to take if selected
+    confidence: float = 0.5;          // System confidence this is correct
+}
+
+// ============================================================================
+// CLARIFICATION REQUEST
+// ============================================================================
+
+/// Clarification request from an agent
+table Clarification {
+    id: string (required);
+    agent_id: string (required);      // Which agent needs clarification
+    question: string (required);      // Question text
+    options: [ClarificationOption];   // Possible answers (if known)
+    created_at_ms: int64;
+    priority: uint8 = 0;              // 0=normal, 1=high, 2=urgent
+    status: QuestionStatus = OPEN;
+
+    // Context
+    related_entity: string;           // Entity this question is about
+    related_intent: string;           // Intent that triggered the question
+    timeout_ms: int64;                // How long to wait for answer
+
+    // Resolution
+    answered_at_ms: int64;
+    answer: string;                   // User's response
+    selected_option_id: string;       // If user selected an option
+}
+
+// ============================================================================
+// CLARIFICATIONS SECTION ROOT
+// ============================================================================
+
+/// Clarifications Section - open gaps this turn
+/// Contains questions that need user input before proceeding
+table ClarificationsSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Pending clarifications (ordered by priority, then creation time)
+    pending: [Clarification];         // Max ~20 clarifications
+
+    // Recently resolved (for context)
+    recently_resolved: [Clarification]; // Last 5 resolved
+
+    // Statistics
+    total_pending: uint16;
+    total_resolved_session: uint32;
+    avg_resolution_time_ms: uint32;
+
+    // Blocking status
+    is_blocked: bool = false;         // True if waiting for critical clarification
+    blocking_clarification_id: string;
+}
+
+root_type ClarificationsSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 4KB max
+//
+// Clarification: ~150 bytes each x 20 = 3KB
+// Recently resolved: ~150 bytes x 5 = 750 bytes
+// Header + stats: ~250 bytes
+// Total: ~4KB max
+// ============================================================================

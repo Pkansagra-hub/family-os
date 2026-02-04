@@ -43,8 +43,6 @@ from typing import Any, Dict, List, Optional
 
 from l3_execution.agents.agent_base import AgentBase, AgentState
 from l4_runtime.deltabus.deltabus import DeltaBusEvent, get_deltabus
-from l4_runtime.mailbox.mailbox import Message, Priority
-from utils.awaiters import AwaiterTimeout, await_response
 
 
 class ConciergeAgent(AgentBase):
@@ -301,6 +299,11 @@ class ConciergeAgent(AgentBase):
             intent_subtype = intent_result.get("intent_subtype")
             confidence = intent_result.get("confidence", 0.0)
 
+            print(
+                f"[INTENT-ROUTE] Classified '{user_input[:30]}...' as intent_type='{intent_type}'",
+                flush=True,
+            )
+
             self.logger.info(
                 "Intent classified",
                 intent_type=intent_type,
@@ -308,12 +311,12 @@ class ConciergeAgent(AgentBase):
                 confidence=confidence,
             )
 
-            # Step 2: Route based on intent
-            if intent_type == "meta":
+            # Step 2: Route based on intent (handle both "query" and "query-intent" variants)
+            if intent_type == "meta" or intent_type == "meta-intent":
                 response = await self._handle_meta_intent(user_input, intent_subtype)
                 self.concierge_metrics["meta_intents_handled"] += 1
 
-            elif intent_type == "query":
+            elif intent_type == "query" or intent_type == "query-intent":
                 # Query Flow: Concierge → Specialist Agents (direct, no orchestrator)
                 # Specialists query K0 independently
                 specialist_type = intent_result.get("specialist_type", "healthcare")
@@ -324,7 +327,7 @@ class ConciergeAgent(AgentBase):
                 )
                 self.concierge_metrics["specialists_routed"] += 1
 
-            elif intent_type == "planning":
+            elif intent_type == "planning" or intent_type == "planning-intent":
                 # Planning Flow: Concierge → Orchestrator (coordination required)
                 # Orchestrator handles multi-step planning, agent selection, dag execution
                 response = await self._delegate_to_orchestrator(
@@ -341,12 +344,12 @@ class ConciergeAgent(AgentBase):
             latency_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
 
             # Track per-intent latencies (Prince's fix #5)
-            if intent_type == "query":
+            if intent_type in ("query", "query-intent"):
                 self._query_latencies.append(latency_ms)
                 # Keep last 100 samples
                 if len(self._query_latencies) > 100:
                     self._query_latencies = self._query_latencies[-100:]
-            elif intent_type == "planning":
+            elif intent_type in ("planning", "planning-intent"):
                 self._planning_latencies.append(latency_ms)
                 if len(self._planning_latencies) > 100:
                     self._planning_latencies = self._planning_latencies[-100:]
@@ -667,110 +670,138 @@ class ConciergeAgent(AgentBase):
         try:
             feedback_message = f"⏳ Querying {specialist_type} specialist for insights..."
 
-            self.logger.info(
-                "[Concierge] Spawning specialist agent via AgentFabric",
-                specialist_type=specialist_type,
-                user_input=str(user_input)[:100],
+            print(f"[SPECIALIST] Starting spawn for {specialist_type}", flush=True)
+            print(f"[SPECIALIST] agent_fabric = {self.agent_fabric}", flush=True)
+
+            # Use AgentFabric if available, otherwise fallback to direct instantiation
+            use_agent_fabric = self.agent_fabric is not None and hasattr(
+                self.agent_fabric, "spawn_agent"
             )
 
-            # Check if AgentFabric is available
-            if not self.agent_fabric:
-                # Fallback: Use simulated response if AgentFabric not available
+            # Check if AgentFabric is properly configured
+            if use_agent_fabric:
+                try:
+                    # Step 1: Spawn specialist via AgentFabric (gets mailbox automatically)
+                    print(f"[SPECIALIST] Using AgentFabric to spawn {specialist_type}", flush=True)
+                    self.logger.info(
+                        "[Concierge] Spawning specialist via AgentFabric",
+                        specialist_type=specialist_type,
+                    )
+
+                    specialist_agent = await self.agent_fabric.spawn_agent(
+                        agent_type=specialist_type,
+                        session_id=self.session_id,
+                        trace_id=self.trace_id,
+                    )
+
+                    if not specialist_agent:
+                        raise Exception(f"AgentFabric returned None for {specialist_type}")
+
+                    print(
+                        f"[SPECIALIST] AgentFabric spawned: {specialist_agent.agent_id}", flush=True
+                    )
+                    self.logger.info(
+                        "[Concierge] Specialist spawned via AgentFabric",
+                        specialist_agent_id=specialist_agent.agent_id,
+                        specialist_type=specialist_type,
+                    )
+
+                    # Step 2: Send task to specialist via direct process_message call
+                    # (specialist is local, no need for mailbox round-trip in POC)
+                    specialist_result = await specialist_agent.process_message(
+                        {
+                            "user_input": user_input,
+                            "user_context": user_context,
+                            "user_id": "user_demo",
+                            "task_id": f"task_{datetime.utcnow().timestamp()}",
+                        }
+                    )
+
+                    return {
+                        "status": "success",
+                        "intent": "query",
+                        "specialist_type": specialist_type,
+                        "content": specialist_result.get(
+                            "response", "I couldn't process that request."
+                        ),
+                        "feedback_message": feedback_message,
+                        "user_input": user_input,
+                        "agent_chain": [self.agent_id, specialist_agent.agent_id],
+                        "spawned_via": "agent_fabric",
+                    }
+
+                except Exception as fabric_error:
+                    print(f"[SPECIALIST] AgentFabric spawn failed: {fabric_error}", flush=True)
+                    self.logger.warning(
+                        "[Concierge] AgentFabric spawn failed, falling back to direct instantiation",
+                        specialist_type=specialist_type,
+                        error=str(fabric_error),
+                    )
+                    use_agent_fabric = False  # Fall through to direct instantiation
+
+            if not use_agent_fabric:
+                # Fallback: Instantiate specialist agent directly for POC
+                print(
+                    f"[SPECIALIST] AgentFabric not available, instantiating {specialist_type} directly",
+                    flush=True,
+                )
                 self.logger.warning(
-                    "[Concierge] AgentFabric not available, using fallback",
+                    "[Concierge] AgentFabric not available, using direct instantiation",
                     specialist_type=specialist_type,
                 )
+
+                # Import and instantiate the specialist agent directly
+                if specialist_type == "healthcare":
+                    from l3_execution.agents.specialists.healthcare_agent import HealthcareAgent
+
+                    specialist = HealthcareAgent(
+                        agent_id=f"healthcare_fallback_{self.session_id}",
+                        session_id=self.session_id,
+                        groq_client=self.groq_client,
+                        trace_id=self.trace_id,
+                    )
+                elif specialist_type == "finance":
+                    from l3_execution.agents.specialists.finance_agent import FinanceAgent
+
+                    specialist = FinanceAgent(
+                        agent_id=f"finance_fallback_{self.session_id}",
+                        session_id=self.session_id,
+                        groq_client=self.groq_client,
+                        trace_id=self.trace_id,
+                    )
+                else:
+                    from l3_execution.agents.specialists.researcher_agent import ResearcherAgent
+
+                    specialist = ResearcherAgent(
+                        agent_id=f"research_fallback_{self.session_id}",
+                        session_id=self.session_id,
+                        groq_client=self.groq_client,
+                        trace_id=self.trace_id,
+                    )
+
+                # Call specialist's process_message directly
+                specialist_result = await specialist.process_message(
+                    {
+                        "type": "specialist_task",
+                        "payload": {
+                            "user_query": user_input,
+                            "user_id": "user_demo",
+                            "task_id": f"task_{datetime.utcnow().timestamp()}",
+                        },
+                    }
+                )
+
                 return {
                     "status": "success",
                     "intent": "query",
                     "specialist_type": specialist_type,
-                    "content": f"[POC Fallback] I would consult a {specialist_type} specialist for this query: {str(user_input)[:100]}",
+                    "content": specialist_result.get(
+                        "response", "I couldn't process that request."
+                    ),
                     "feedback_message": feedback_message,
-                    "user_input": user_input,  # Include for episodic delta
-                    "agent_chain": [self.agent_id],
-                }
-
-            # Step 1: Spawn specialist via AgentFabric (gets mailbox automatically)
-            specialist_agent = await self.agent_fabric.spawn_agent(
-                agent_type=specialist_type,
-                session_id=self.session_id,
-                trace_id=self.trace_id,
-            )
-
-            if not specialist_agent:
-                raise Exception(f"Failed to spawn {specialist_type} agent")
-
-            # Step 2: Send task to specialist's mailbox
-            task_envelope_id = f"task_{specialist_agent.agent_id}_{datetime.utcnow().timestamp()}"
-
-            task_message = Message(
-                message_id=task_envelope_id,
-                sender_id=self.agent_id,
-                receiver_id=specialist_agent.agent_id,
-                priority=Priority.STANDARD,
-                payload={
                     "user_input": user_input,
-                    "user_context": user_context,
-                },
-                trace_id=self.trace_id,
-            )
-
-            # Send to specialist mailbox (use MailboxManager, not agent's private mailbox)
-            specialist_mailbox = self.mailbox_manager.get_mailbox(specialist_agent.agent_id)
-            if not specialist_mailbox:
-                raise Exception(f"Mailbox not found for {specialist_agent.agent_id}")
-
-            sent = await specialist_mailbox.send(task_message)
-
-            if not sent:
-                raise Exception(f"Failed to send task to {specialist_type} mailbox (full)")
-
-            self.logger.info(
-                "[Concierge] Task sent to specialist mailbox",
-                specialist_type=specialist_type,
-                task_envelope_id=task_envelope_id,
-                specialist_agent_id=specialist_agent.agent_id,
-            )
-
-            # Step 3: Await response via DeltaBus (specialist publishes response.{task_envelope_id})
-            try:
-                response_data = await await_response(
-                    envelope_id=task_envelope_id,
-                    deltabus=self.deltabus,
-                    timeout=10.0,  # 10s timeout for specialist response
-                    trace_id=self.trace_id,
-                )
-
-                self.logger.info(
-                    "[Concierge] Specialist response received",
-                    specialist_type=specialist_type,
-                    status=response_data.get("status", "unknown"),
-                )
-
-                # Step 4: Return insights to user
-                return {
-                    "status": "success",
-                    "intent": "query",
-                    "specialist_type": specialist_type,
-                    "content": response_data.get("content", "No response from specialist"),
-                    "feedback_message": feedback_message,
-                    "specialist_agent_id": specialist_agent.agent_id,
-                    "user_input": user_input,  # Include for episodic delta
-                    "agent_chain": [self.agent_id, specialist_agent.agent_id],
-                }
-
-            except AwaiterTimeout as e:
-                self.logger.error(
-                    "[Concierge] Specialist response timeout",
-                    specialist_type=specialist_type,
-                    error=str(e),
-                )
-                return {
-                    "status": "error",
-                    "content": f"The {specialist_type} specialist took too long to respond. Please try again.",
-                    "error": "timeout",
-                    "user_input": user_input,  # Include for episodic delta
-                    "agent_chain": [self.agent_id],
+                    "agent_chain": [self.agent_id, specialist.agent_id],
+                    "spawned_via": "direct_instantiation",
                 }
 
         except Exception as e:
@@ -793,91 +824,59 @@ class ConciergeAgent(AgentBase):
 
     async def _classify_intent(self, user_input: str) -> Dict[str, Any]:
         """
-        Classify user intent using LLM reasoning.
+        Classify user intent using UltraBERT (fast, local, 12-head model).
 
-        Uses Concierge prompt from Prompt Registry with few-shot examples.
-        LLM decides intent type, subtype, specialist type, confidence.
+        UltraBERT provides:
+        - Intent head: 8 classes (log_memory, set_reminder, query_memory, etc.)
+        - Ingress head: 12 domains (HEALTH, FINANCE, PLANNING, META, etc.)
 
-        NO hardcoded classification logic - all decisions made by LLM.
+        Falls back to LLM if UltraBERT unavailable.
 
         Args:
             user_input: User message
 
         Returns:
             Dict with:
-              - intent_type: str (meta/query/planning)
-              - intent_subtype: str (GREETING, SMALL_TALK, etc.)
+              - intent_type: str (meta/query-intent/planning-intent)
               - specialist_type: str (healthcare, finance, research) for query-intents
               - confidence: float (0.0-1.0)
-              - reasoning: str (LLM explanation)
+              - reasoning: str (classification source)
         """
         try:
-            # Get time context for smarter intent classification (NEW: Time-aware)
-            time_context = await self._get_time_context_from_session()
+            # Try UltraBERT first (fast: ~22ms vs ~1000ms+ for LLM)
+            from k0.runtime.ultrabert_adapter import classify_activity, is_ultrabert_available
 
-            # Build context for template merging (including time context)
-            context_data = {
-                "user_context": await self.query_user_kg("get_preferences"),
-                "tools": [],  # Tools not needed for classification
-                "history": "",  # Chat history (simulated for POC)
-                "time_context": time_context,  # NEW: Include time for context-aware classification
-            }
+            if is_ultrabert_available():
+                result = classify_activity(user_input)
+                if result:
+                    # Map UltraBERT outputs to POC intent types
+                    intent_type, specialist_type = self._map_ultrabert_to_intent(
+                        result.intent, result.ingress_category
+                    )
 
-            # Add classification instruction to user input
-            classification_prompt = f"""Classify the following user message into one of these intent types:
+                    self.logger.debug(
+                        "UltraBERT intent classification",
+                        ultrabert_intent=result.intent,
+                        ultrabert_ingress=result.ingress_category,
+                        mapped_intent=intent_type,
+                        specialist=specialist_type,
+                        confidence=result.intent_confidence,
+                    )
 
-1. **meta-intent**: Casual conversation, system queries, acknowledgements
-   - Examples: "Hello", "Thanks", "What can you do?", "Help", "Cancel"
-   - Subtypes: GREETING, SMALL_TALK, ACK, TIME_QUERY, STATUS, CLARIFICATION, AFFIRMATION, REJECTION, WAIT, CANCEL, HELP
-   - NOTE: General status checks about the SYSTEM only, NOT about user's health/finances/data
+                    return {
+                        "intent_type": intent_type,
+                        "specialist_type": specialist_type,
+                        "confidence": result.intent_confidence,
+                        "reasoning": f"UltraBERT: {result.intent}/{result.ingress_category}",
+                    }
 
-2. **query-intent**: User asking about their personal data (health, finances, research)
-   - Examples: "How's my recovery?", "What's my blood pressure?", "Show my spending", "What stocks do I own?"
-   - Specialist types: healthcare (health/medical), finance (money/investments), research (general knowledge)
-   - Use healthcare for ANY health/medical/wellness questions
-   - Use finance for ANY money/spending/investment questions
+            # Fallback to LLM if UltraBERT unavailable
+            self.logger.warning("UltraBERT unavailable, falling back to LLM")
+            return await self._classify_intent_llm(user_input)
 
-3. **planning-intent**: Complex multi-step requests that need coordination
-   - Examples: "Plan a dinner", "Book a trip", "Schedule my week", "Organize a party"
-
-User message: "{user_input}"
-
-Respond in JSON format:
-{{
-  "intent_type": "meta|query|planning",
-  "intent_subtype": "GREETING|SMALL_TALK|ACK|...",
-  "specialist_type": "healthcare|finance|research" (if query-intent),
-  "confidence": 0.0-1.0,
-  "reasoning": "Brief explanation"
-}}"""
-
-            # Call LLM with Concierge prompt + classification instruction
-            response = await self.call_llm(
-                user_input=classification_prompt,
-                context_data=context_data,
-                temperature=0.2,  # Low temperature for deterministic classification
-            )
-
-            # Parse LLM response (expecting JSON)
-            import json
-
-            llm_content = response["content"].strip()
-
-            # Extract JSON from response (may be wrapped in markdown code blocks)
-            if "```json" in llm_content:
-                llm_content = llm_content.split("```json")[1].split("```")[0].strip()
-            elif "```" in llm_content:
-                llm_content = llm_content.split("```")[1].split("```")[0].strip()
-
-            intent_result = json.loads(llm_content)
-
-            self.logger.debug(
-                "Intent classification result",
-                intent_result=intent_result,
-            )
-
-            return intent_result
-
+        except ImportError:
+            self.logger.warning("UltraBERT not installed, falling back to LLM")
+            return await self._classify_intent_llm(user_input)
         except Exception as e:
             self.logger.error(
                 "Intent classification failed",
@@ -890,6 +889,137 @@ Respond in JSON format:
                 "confidence": 0.0,
                 "reasoning": f"Classification error: {str(e)}",
             }
+
+    def _map_ultrabert_to_intent(
+        self, ultrabert_intent: str, ingress_category: str
+    ) -> tuple[str, Optional[str]]:
+        """
+        Map UltraBERT intent + ingress to POC intent types.
+
+        UltraBERT Intent → POC Intent:
+        - query_memory + HEALTH → query-intent + healthcare
+        - query_memory + FINANCE → query-intent + finance
+        - set_reminder, log_memory → planning-intent
+        - PLANNING ingress → planning-intent
+        - META ingress or other → meta
+
+        Args:
+            ultrabert_intent: UltraBERT intent (log_memory, set_reminder, query_memory, etc.)
+            ingress_category: UltraBERT ingress (HEALTH, FINANCE, PLANNING, META, etc.)
+
+        Returns:
+            Tuple of (intent_type, specialist_type)
+        """
+        # Ingress-based specialist mapping
+        ingress_to_specialist = {
+            "HEALTH": "healthcare",
+            "FINANCE": "finance",
+            "EDUCATION": "research",
+            "FAMILY": "research",
+        }
+
+        # Planning intents (action-oriented)
+        planning_intents = {"set_reminder", "log_memory", "share_news", "express_emotion"}
+
+        # Query intents (information-seeking)
+        query_intents = {"query_memory", "ask_question"}
+
+        # META ingress is always meta-intent
+        if ingress_category == "META":
+            return "meta", None
+
+        # PLANNING ingress is always planning-intent
+        if ingress_category == "PLANNING":
+            specialist = ingress_to_specialist.get(ingress_category)
+            return "planning-intent", specialist
+
+        # Check intent type
+        if ultrabert_intent in planning_intents:
+            specialist = ingress_to_specialist.get(ingress_category)
+            return "planning-intent", specialist
+
+        if ultrabert_intent in query_intents:
+            specialist = ingress_to_specialist.get(ingress_category, "research")
+            return "query-intent", specialist
+
+        # Domain-specific queries (HEALTH, FINANCE) → query-intent
+        if ingress_category in ("HEALTH", "FINANCE", "EDUCATION"):
+            specialist = ingress_to_specialist.get(ingress_category, "research")
+            return "query-intent", specialist
+
+        # Default to meta for small talk, greetings, etc.
+        return "meta", None
+
+    async def _classify_intent_llm(self, user_input: str) -> Dict[str, Any]:
+        """
+        Fallback LLM-based intent classification.
+
+        Used when UltraBERT is unavailable.
+        """
+        try:
+            # Get time context for smarter intent classification
+            time_context = await self._get_time_context_from_session()
+
+            # Build context for template merging
+            context_data = {
+                "user_context": await self.query_user_kg("get_preferences"),
+                "tools": [],
+                "history": "",
+                "time_context": time_context,
+            }
+
+            # Compact classification prompt
+            classification_prompt = f"""Classify this message into: meta (greetings/small talk), query (health/finance questions), or planning (multi-step tasks).
+
+Message: "{user_input}"
+
+Return ONLY this JSON, no explanation:
+{{"intent_type":"meta|query-intent|planning-intent","specialist_type":"healthcare|finance|research","confidence":0.9}}"""
+
+            response = await self.call_llm(
+                user_input=classification_prompt,
+                context_data=context_data,
+                temperature=0.1,
+                max_tokens=150,
+            )
+
+            import json
+            import re
+
+            llm_content = response["content"].strip()
+
+            # Extract JSON from response
+            if "```json" in llm_content:
+                llm_content = llm_content.split("```json")[1].split("```")[0].strip()
+            elif "```" in llm_content:
+                llm_content = llm_content.split("```")[1].split("```")[0].strip()
+
+            try:
+                intent_result = json.loads(llm_content)
+            except json.JSONDecodeError:
+                json_match = re.search(r'\{[^{}]*"intent_type"[^{}]*\}', llm_content, re.DOTALL)
+                if json_match:
+                    intent_result = json.loads(json_match.group())
+                else:
+                    # Keyword-based fallback
+                    if "query" in llm_content.lower() or "health" in llm_content.lower():
+                        specialist = "healthcare" if "health" in llm_content.lower() else "finance"
+                        intent_result = {
+                            "intent_type": "query-intent",
+                            "specialist_type": specialist,
+                            "confidence": 0.7,
+                        }
+                    elif "planning" in llm_content.lower():
+                        intent_result = {"intent_type": "planning-intent", "confidence": 0.7}
+                    else:
+                        intent_result = {"intent_type": "meta", "confidence": 0.5}
+
+            intent_result["reasoning"] = "LLM classification"
+            return intent_result
+
+        except Exception as e:
+            self.logger.error("LLM intent classification failed", error=str(e))
+            return {"intent_type": "meta", "confidence": 0.0, "reasoning": f"LLM error: {str(e)}"}
 
     # ========================================================================
     # META-INTENT HANDLING (Direct Response with LLM)
@@ -906,6 +1036,7 @@ Respond in JSON format:
         with persona-aware LLM response.
 
         For simple queries (TIME, STATUS), generate response without LLM.
+        For action queries (REMINDER), use mock tool call.
         For conversational queries (GREETING, SMALL_TALK), use LLM with persona.
 
         Args:
@@ -934,6 +1065,13 @@ Respond in JSON format:
                     "content": "I'm here and ready to help! How can I assist you today?",
                 }
 
+            # Check for reminder/action requests - use mock tool call
+            user_lower = user_input.lower()
+            if any(
+                word in user_lower for word in ["reminder", "remind me", "set a reminder", "alert"]
+            ):
+                return await self._handle_reminder_action(user_input)
+
             # Conversational queries (use LLM with persona)
             context_data = {
                 "user_context": await self.query_user_kg("get_preferences"),
@@ -945,7 +1083,7 @@ Respond in JSON format:
                 user_input=user_input,
                 context_data=context_data,
                 temperature=0.3,  # Slightly higher for natural conversation
-                max_tokens=150,  # Keep responses brief
+                max_tokens=500,  # Adequate for complete responses
             )
 
             return {
@@ -966,6 +1104,82 @@ Respond in JSON format:
                 "content": "Sorry, I had trouble responding. Could you try again?",
                 "error": str(e),
             }
+
+    async def _handle_reminder_action(self, user_input: str) -> Dict[str, Any]:
+        """
+        Handle reminder requests with mock tool call.
+
+        Extracts time from user input and simulates setting a reminder.
+        """
+        import re
+
+        # Extract time from user input (simple regex patterns)
+        time_patterns = [
+            r"at (\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM)?)",
+            r"(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"in (\d+)\s*(?:minutes?|mins?|hours?|hrs?)",
+        ]
+
+        reminder_time = "the specified time"
+        for pattern in time_patterns:
+            match = re.search(pattern, user_input, re.IGNORECASE)
+            if match:
+                reminder_time = match.group(1)
+                break
+
+        # Extract what to remind about
+        reminder_text = user_input
+        for phrase in ["remind me to", "reminder to", "set a reminder to", "send a reminder to"]:
+            if phrase in user_input.lower():
+                idx = user_input.lower().find(phrase)
+                reminder_text = user_input[idx + len(phrase) :].strip()
+                # Remove time portion from reminder text
+                for pattern in time_patterns:
+                    reminder_text = re.sub(
+                        r"\s*at\s*" + pattern, "", reminder_text, flags=re.IGNORECASE
+                    )
+                break
+
+        # Simulate tool call receipt (POC mock)
+        import uuid
+        from datetime import datetime
+
+        tool_receipt = {
+            "receipt_id": str(uuid.uuid4()),
+            "tool_id": "reminder_set",
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat(),
+            "result": {
+                "reminder_id": f"rem_{uuid.uuid4().hex[:8]}",
+                "scheduled_time": reminder_time,
+                "message": reminder_text.strip() or "your reminder",
+                "status": "scheduled",
+            },
+        }
+
+        self.logger.info(
+            "reminder_tool_called",
+            tool_id="reminder_set",
+            reminder_time=reminder_time,
+            reminder_text=reminder_text,
+        )
+
+        # Generate friendly confirmation
+        clean_text = reminder_text.strip()
+        if clean_text:
+            response_content = f"Done! I've set a reminder for {reminder_time} to {clean_text}. I'll make sure you get notified."
+        else:
+            response_content = (
+                f"Done! I've set a reminder for {reminder_time}. I'll make sure you get notified."
+            )
+
+        return {
+            "status": "success",
+            "intent": "meta",
+            "intent_subtype": "ACTION_REMINDER",
+            "content": response_content,
+            "tool_receipt": tool_receipt,
+        }
 
     # ========================================================================
     # SPECIALIST ROUTING (Issue 4.1.2)

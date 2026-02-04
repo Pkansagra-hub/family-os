@@ -1,0 +1,432 @@
+%% ======================================================================================
+%% INTERKERNEL FABRIC LANGUAGE (IFL) - DETAILED ARCHITECTURE DIAGRAM
+%% ======================================================================================
+%% Created: 2026-02-01
+%% Updated: 2026-02-01 - Option B: Bridge owns IFL entirely
+%% Location: bridge/architecture_diagrams/ (Bridge owns ALL of IFL)
+%% ARCHITECTURE (Option B - Bridge Owns IFL):
+%%   - IFL Gateway lives in BRIDGE (bridge/ifl/gateway.py)
+%%   - IFL Core lives in BRIDGE (bridge/ifl/core/)
+%%   - IFL Adapters live in BRIDGE (bridge/ifl/adapters/)
+%%   - K0 only stores device registry/credentials (no protocol logic)
+%% Components:
+%%   1. K1 TOOLS: Tool classes that call Bridge (PhilipsHueTool, NestTool, etc.)
+%%   2. BRIDGE IFL GATEWAY: Security, auth, rate limiting
+%%   3. BRIDGE IFL CORE: Parser, Translator, Registry, Schemas
+%%   4. BRIDGE IFL ADAPTERS: Protocol-specific adapters (HomeKit, Nest, Tesla, etc.)
+%%   5. PHYSICAL DEVICES: External IoT devices, smart home, vehicles, wearables
+%% Data Flow:
+%%   K1 Tool.execute() → Bridge Gateway → IFL Gateway → IFL Core → IFL Adapter → Device
+%%   Device → IFL Adapter → IFL Core → Bridge → K0 (store event) + K1 (notify)
+%% ======================================================================================
+
+flowchart TB
+    %% ======================================================================================
+    %% LAYER -1: K1 TOOLS (Callers of IFL via Bridge)
+    %% ======================================================================================
+    subgraph L_NEG1_K1_TOOLS["🧠 K1 KERNEL: Tools That Call Bridge IFL"]
+        direction LR
+
+        subgraph K1_SMART_HOME_TOOLS["Smart Home Tools (k1/tools/)"]
+            K1_PHILIPS_TOOL["PhilipsHueTool<br/>set_brightness()<br/>set_color()"]:::k1_tool
+            K1_NEST_TOOL["NestTool<br/>set_temperature()<br/>set_mode()"]:::k1_tool
+            K1_RING_TOOL["RingTool<br/>get_snapshot()<br/>arm_alarm()"]:::k1_tool
+        end
+
+        subgraph K1_VEHICLE_TOOLS["Vehicle Tools"]
+            K1_TESLA_TOOL["TeslaTool<br/>unlock()<br/>climate_on()"]:::k1_tool
+            K1_CARPLAY_TOOL["CarPlayTool<br/>navigate()<br/>play_music()"]:::k1_tool
+        end
+
+        subgraph K1_HEALTH_TOOLS["Health Tools"]
+            K1_HEALTH_TOOL["HealthTool<br/>get_heart_rate()<br/>get_steps()"]:::k1_tool
+            K1_FITNESS_TOOL["FitnessTool<br/>get_workout()<br/>start_tracking()"]:::k1_tool
+        end
+
+        subgraph K1_CUSTOM_TOOLS["Custom Tools"]
+            K1_WEBHOOK_TOOL["WebhookTool<br/>trigger_action()"]:::k1_tool
+            K1_MQTT_TOOL["MqttTool<br/>publish()<br/>subscribe()"]:::k1_tool
+        end
+    end
+
+    %% ======================================================================================
+    %% BRIDGE GATEWAY (Entry point to IFL)
+    %% ======================================================================================
+    subgraph BRIDGE_GATEWAY["🔐 BRIDGE: Connector Gateway (bridge/connector/)"]
+        direction TB
+
+        GATEWAY_PORT["IConnectorGatewayPort<br/>execute(tool_request)"]:::bridge_port
+        GATEWAY_ROUTER["RequestRouter<br/>tool → adapter mapping"]:::bridge_internal
+        GATEWAY_AUTH["CredentialStore<br/>OAuth tokens, API keys"]:::bridge_security
+        GATEWAY_RATE["RateLimiter<br/>per-tool, per-device"]:::bridge_security
+        GATEWAY_FORWARD["IFLForwarder<br/>route to IFL Core"]:::bridge_port
+    end
+
+    %% K1 Tools → Bridge Gateway
+    K1_PHILIPS_TOOL -->|"execute()"| GATEWAY_PORT
+    K1_NEST_TOOL -->|"execute()"| GATEWAY_PORT
+    K1_RING_TOOL -->|"execute()"| GATEWAY_PORT
+    K1_TESLA_TOOL -->|"execute()"| GATEWAY_PORT
+    K1_CARPLAY_TOOL -->|"execute()"| GATEWAY_PORT
+    K1_HEALTH_TOOL -->|"execute()"| GATEWAY_PORT
+    K1_FITNESS_TOOL -->|"execute()"| GATEWAY_PORT
+    K1_WEBHOOK_TOOL -->|"execute()"| GATEWAY_PORT
+    K1_MQTT_TOOL -->|"execute()"| GATEWAY_PORT
+
+    %% Gateway internal flow
+    GATEWAY_PORT -->|"route"| GATEWAY_ROUTER
+    GATEWAY_ROUTER -->|"auth"| GATEWAY_AUTH
+    GATEWAY_AUTH -->|"rate limit"| GATEWAY_RATE
+    GATEWAY_RATE -->|"forward"| GATEWAY_FORWARD
+
+    %% ======================================================================================
+    %% LAYER 0: PHYSICAL DEVICES & DOMAIN APPLICATIONS
+    %% ======================================================================================
+    subgraph L0_DEVICES["🌍 LAYER 0: Physical Devices & Domain Applications"]
+        direction LR
+
+        subgraph WEARABLES["Wearable Devices"]
+            DEV_APPLE_WATCH["Apple Watch - HealthKit"]:::device
+            DEV_FITBIT["Fitbit - Fitbit API"]:::device
+            DEV_GARMIN["Garmin - Connect IQ"]:::device
+            DEV_WHOOP["WHOOP - API"]:::device
+        end
+
+        subgraph MOBILE_DEVICES["Mobile & Computing"]
+            DEV_IPHONE["iPhone - iOS"]:::device
+            DEV_ANDROID["Android Phone"]:::device
+            DEV_IPAD["iPad"]:::device
+            DEV_LAPTOP["Laptop"]:::device
+        end
+
+        subgraph SMART_HOME["Smart Home & IoT"]
+            DEV_HOMEKIT["HomeKit Devices"]:::device
+            DEV_ALEXA["Alexa Echo"]:::device
+            DEV_NEST["Nest Thermostat"]:::device
+            DEV_HUE["Philips Hue"]:::device
+            DEV_RING["Ring Doorbell"]:::device
+        end
+
+        subgraph HEALTH_MEDICAL["Health & Medical"]
+            DEV_CGM["Continuous Glucose Monitor"]:::device
+            DEV_BP_MONITOR["Blood Pressure Monitor"]:::device
+            DEV_SCALE["Smart Scale"]:::device
+        end
+
+        subgraph VEHICLE_MOBILITY["Vehicle & Mobility"]
+            DEV_TESLA["Tesla - API"]:::device
+            DEV_CARPLAY["CarPlay"]:::device
+            DEV_BIKE["Smart Bike"]:::device
+        end
+
+        subgraph CUSTOM_SENSORS["Custom Sensors & Apps"]
+            DEV_MQTT_SENSOR["MQTT Sensors"]:::device
+            DEV_CUSTOM_APP["Custom Domain Apps"]:::device
+            DEV_WEBHOOK["Webhook Sources"]:::device
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 0.5: INTERKERNEL FABRIC (BRIDGE-OWNED - bridge/ifl/)
+    %% ======================================================================================
+    subgraph L0_5_IFL["🔗 LAYER 0.5: Interkernel Fabric Language (BRIDGE - bridge/ifl/)"]
+        direction TB
+
+        subgraph IFL_CORE["IFL Core (bridge/ifl/)"]
+            subgraph IFL_REGISTRY["Device Registry (bridge/ifl/registry.py)"]
+                IFL_REG_DEVICE["register_device()"]:::fabric
+                IFL_UNREG_DEVICE["unregister_device()"]:::fabric
+                IFL_LIST_DEVICES["list_devices()"]:::fabric
+                IFL_GET_DEVICE["get_device()"]:::fabric
+                IFL_UPDATE_STATUS["update_device_status()"]:::fabric
+                IFL_CHECK_HEALTH["check_device_health()"]:::fabric
+            end
+
+            subgraph IFL_PARSER["IFL Parser (bridge/ifl/parser.py)"]
+                IFL_PARSE["parse()"]:::fabric
+                IFL_TO_ENVELOPE["to_envelope()"]:::fabric
+                IFL_FROM_ENVELOPE["from_envelope()"]:::fabric
+                IFL_VALIDATE_SYNTAX["validate_syntax()"]:::fabric
+                IFL_NORMALIZE["normalize_payload()"]:::fabric
+            end
+
+            subgraph IFL_TRANSLATOR["Protocol Translator (bridge/ifl/translator.py)"]
+                IFL_TRANSLATE["translate()"]:::fabric
+                IFL_DETECT_PROTO["detect_protocol()"]:::fabric
+                IFL_REGISTER_PROTO["register_protocol()"]:::fabric
+                IFL_GET_TRANSLATOR["get_translator()"]:::fabric
+            end
+        end
+
+        subgraph PROTOCOL_ADAPTERS["Protocol Adapters (bridge/ifl/adapters/) - BRIDGE OWNED"]
+            subgraph ADAPTER_HEALTH["Health Adapters"]
+                ADAPT_HEALTHKIT["HealthKitAdapter"]:::fabric_adapter
+                ADAPT_FITBIT["FitbitAdapter"]:::fabric_adapter
+                ADAPT_GARMIN["GarminAdapter"]:::fabric_adapter
+                ADAPT_WHOOP["WhoopAdapter"]:::fabric_adapter
+            end
+
+            subgraph ADAPTER_HOME["Smart Home Adapters"]
+                ADAPT_HOMEKIT["HomeKitAdapter"]:::fabric_adapter
+                ADAPT_MQTT["MqttAdapter"]:::fabric_adapter
+                ADAPT_ZIGBEE["ZigbeeAdapter"]:::fabric_adapter
+                ADAPT_ZWAVE["ZWaveAdapter"]:::fabric_adapter
+            end
+
+            subgraph ADAPTER_MOBILE["Mobile Adapters"]
+                ADAPT_IOS["iOSAdapter"]:::fabric_adapter
+                ADAPT_ANDROID["AndroidAdapter"]:::fabric_adapter
+                ADAPT_PUSH["PushNotificationAdapter"]:::fabric_adapter
+            end
+
+            subgraph ADAPTER_VEHICLE["Vehicle Adapters"]
+                ADAPT_TESLA["TeslaAdapter"]:::fabric_adapter
+                ADAPT_CARPLAY["CarPlayAdapter"]:::fabric_adapter
+                ADAPT_OBD2["OBD2Adapter"]:::fabric_adapter
+            end
+
+            subgraph ADAPTER_CUSTOM["Custom Adapters"]
+                ADAPT_WEBHOOK["WebhookAdapter"]:::fabric_adapter
+                ADAPT_REST["RestApiAdapter"]:::fabric_adapter
+                ADAPT_GRPC["GrpcAdapter"]:::fabric_adapter
+                ADAPT_WEBSOCKET["WebSocketAdapter"]:::fabric_adapter
+            end
+
+            subgraph ADAPTER_FAMILY["Family Sync Adapter"]
+                ADAPT_FAMILY_SYNC["FamilySyncAdapter<br/>P2P device-to-device"]:::fabric_adapter
+            end
+        end
+
+        subgraph IFL_BIDIRECTIONAL["Bidirectional Control (bridge/ifl/control/)"]
+            subgraph IFL_COMMAND["Command Sender (bridge/ifl/control/sender.py)"]
+                IFL_SEND_CMD["send_command()"]:::fabric
+                IFL_QUEUE_CMD["queue_command()"]:::fabric
+                IFL_BATCH_CMD["batch_commands()"]:::fabric
+                IFL_RETRY_CMD["retry_command()"]:::fabric
+            end
+
+            subgraph IFL_RESPONSE["Response Handler (bridge/ifl/control/handler.py)"]
+                IFL_HANDLE_RESP["handle_response()"]:::fabric
+                IFL_CORRELATE["correlate_request_response()"]:::fabric
+                IFL_TIMEOUT["handle_timeout()"]:::fabric
+            end
+        end
+
+        subgraph IFL_SCHEMA["IFL Schema Management (bridge/ifl/schemas/)"]
+            subgraph IFL_SCHEMA_CORE["Schema Core"]
+                IFL_SCHEMA_REG["register_device_schema()"]:::fabric
+                IFL_SCHEMA_VALIDATE["validate_device_payload()"]:::fabric
+                IFL_SCHEMA_VERSION["version_schema()"]:::fabric
+                IFL_SCHEMA_MIGRATE["migrate_schema()"]:::fabric
+            end
+
+            subgraph IFL_SCHEMA_CATALOG["Device Schema Catalog"]
+                SCHEMA_HEALTH["device://health-kit/v1"]:::fabric_schema
+                SCHEMA_LOCATION["device://location/v1"]:::fabric_schema
+                SCHEMA_HOME["device://smart-home/v1"]:::fabric_schema
+                SCHEMA_VEHICLE["device://vehicle/v1"]:::fabric_schema
+                SCHEMA_SENSOR["device://sensor/v1"]:::fabric_schema
+            end
+        end
+
+        subgraph IFL_CONNECTION["Connection Management (bridge/ifl/connection/)"]
+            subgraph IFL_CONN_POOL["Connection Pool"]
+                IFL_ACQUIRE_CONN["acquire_connection()"]:::fabric
+                IFL_RELEASE_CONN["release_connection()"]:::fabric
+                IFL_CONN_HEALTH["connection_health_check()"]:::fabric
+                IFL_RECONNECT["reconnect()"]:::fabric
+            end
+
+            subgraph IFL_LEASE["Device Lease Manager"]
+                IFL_ACQUIRE_LEASE["acquire_lease()"]:::fabric
+                IFL_RENEW_LEASE["renew_lease()"]:::fabric
+                IFL_RELEASE_LEASE["release_lease()"]:::fabric
+                IFL_LEASE_EXPIRY["handle_lease_expiry()"]:::fabric
+            end
+        end
+
+        subgraph IFL_DISCOVERY["Device Discovery (bridge/ifl/discovery/)"]
+            IFL_SCAN["scan_devices()"]:::fabric
+            IFL_AUTO_DISCOVER["auto_discover()"]:::fabric
+            IFL_ANNOUNCE["announce_device()"]:::fabric
+            IFL_MDNS["mdns_discovery()"]:::fabric
+            IFL_BLE_SCAN["ble_scan()"]:::fabric
+        end
+    end
+
+    %% ======================================================================================
+    %% K0 KERNEL (Storage Only - No IFL Protocol Logic)
+    %% ======================================================================================
+    subgraph L1_K0["⚙️ K0: Storage/Memory Only (No IFL Protocol Logic)"]
+        direction TB
+
+        subgraph K0_PORTS["K0 Ports (FastAPI)"]
+            subgraph PORT_CMD["Command Port"]
+                CMD_ENVELOPE["Envelope (Pydantic)"]:::port
+                CMD_SUBMIT_FN["submit_command()"]:::port
+            end
+
+            subgraph PORT_QRY["Query Port"]
+                QRY_SELECTOR["RecallSelector"]:::port
+                QRY_RECALL_FN["query_recall()"]:::port
+            end
+
+            subgraph PORT_SSE["SSE Port"]
+                SSE_SUBSCRIBE_FN["subscribe()"]:::port
+            end
+        end
+
+        subgraph K0_STORAGE["K0 Storage (for IFL)"]
+            DB_DEVICE_REG["st_device_registry<br/>Device metadata"]:::storage
+            DB_DEVICE_CREDS["st_device_credentials<br/>OAuth tokens, API keys"]:::storage
+            DB_DEVICE_EVENTS["st_device_events<br/>Inbound device data"]:::storage
+        end
+
+        subgraph K0_PIPELINES["K0 Pipelines"]
+            K0_P02["P02: Write/Ingest<br/>Store device events"]:::core
+            K0_P07["P07: Sync/CRDT<br/>Family device sync"]:::core
+        end
+    end
+
+    %% ======================================================================================
+    %% PHYSICAL DEVICES (External IoT, Smart Home, Vehicles, Wearables)
+    %% ======================================================================================
+    subgraph PHYSICAL_DEVICES["🏠 PHYSICAL DEVICES"]
+        direction TB
+
+        subgraph DEV_SMART_HOME["Smart Home"]
+            DEV_HUE["Philips Hue<br/>Lights"]:::device
+            DEV_NEST["Nest<br/>Thermostat"]:::device
+            DEV_RING["Ring<br/>Doorbell"]:::device
+            DEV_SONOS["Sonos<br/>Speakers"]:::device
+            DEV_LOCKS["Smart Locks"]:::device
+        end
+
+        subgraph DEV_VEHICLES["Vehicles"]
+            DEV_TESLA["Tesla<br/>Vehicle API"]:::device
+            DEV_CARPLAY["CarPlay"]:::device
+        end
+
+        subgraph DEV_HEALTH["Health & Wearables"]
+            DEV_APPLE_WATCH["Apple Watch<br/>HealthKit"]:::device
+            DEV_FITBIT["Fitbit"]:::device
+            DEV_GARMIN["Garmin"]:::device
+        end
+
+        subgraph DEV_IOT["IoT Sensors"]
+            DEV_MQTT_SENSOR["MQTT Sensors"]:::device
+            DEV_ZIGBEE["Zigbee Devices"]:::device
+            DEV_WEBHOOK["Webhook Sources"]:::device
+        end
+
+        subgraph DEV_FAMILY["Other Family Devices"]
+            DEV_IPHONE["Mom's iPhone"]:::device
+            DEV_LAPTOP["Dad's Laptop"]:::device
+            DEV_TABLET["Kid's Tablet"]:::device
+        end
+    end
+
+    %% ======================================================================================
+    %% DATA FLOWS: K1 → Bridge Gateway → IFL → Devices
+    %% ======================================================================================
+
+    %% K1 Tools → Bridge Gateway
+    K1_PHILIPS_TOOL -->|"execute(set_brightness)"| GATEWAY_PORT
+    K1_NEST_TOOL -->|"execute(set_temp)"| GATEWAY_PORT
+    K1_RING_TOOL -->|"execute(arm)"| GATEWAY_PORT
+    K1_TESLA_TOOL -->|"execute(unlock)"| GATEWAY_PORT
+    K1_CARPLAY_TOOL -->|"execute(navigate)"| GATEWAY_PORT
+    K1_HEALTH_TOOL -->|"execute(get_heart_rate)"| GATEWAY_PORT
+    K1_FITNESS_TOOL -->|"execute(get_workout)"| GATEWAY_PORT
+    K1_WEBHOOK_TOOL -->|"execute(trigger)"| GATEWAY_PORT
+    K1_MQTT_TOOL -->|"execute(publish)"| GATEWAY_PORT
+
+    %% Bridge Gateway internal
+    GATEWAY_PORT -->|"route"| GATEWAY_ROUTER
+    GATEWAY_ROUTER -->|"auth"| GATEWAY_AUTH
+    GATEWAY_AUTH -->|"rate limit"| GATEWAY_RATE
+    GATEWAY_RATE -->|"forward"| GATEWAY_FORWARD
+
+    %% Bridge Gateway → IFL Core
+    GATEWAY_FORWARD -->|"parse"| IFL_PARSE
+    IFL_PARSE -->|"translate"| IFL_TRANSLATE
+    IFL_TRANSLATE -->|"lookup"| IFL_GET_DEVICE
+    IFL_GET_DEVICE -->|"validate"| IFL_SCHEMA_VALIDATE
+
+    %% IFL Core → IFL Adapters
+    IFL_SCHEMA_VALIDATE -->|"route"| ADAPT_HOMEKIT
+    IFL_SCHEMA_VALIDATE -->|"route"| ADAPT_HEALTHKIT
+    IFL_SCHEMA_VALIDATE -->|"route"| ADAPT_TESLA
+    IFL_SCHEMA_VALIDATE -->|"route"| ADAPT_MQTT
+    IFL_SCHEMA_VALIDATE -->|"route"| ADAPT_FAMILY_SYNC
+
+    %% IFL Adapters → Physical Devices
+    ADAPT_HOMEKIT -->|"HomeKit API"| DEV_HUE
+    ADAPT_HOMEKIT -->|"HomeKit API"| DEV_NEST
+    ADAPT_HOMEKIT -->|"HomeKit API"| DEV_LOCKS
+    ADAPT_HOMEKIT -->|"Ring API"| DEV_RING
+    ADAPT_HOMEKIT -->|"Sonos API"| DEV_SONOS
+    ADAPT_TESLA -->|"Tesla API"| DEV_TESLA
+    ADAPT_HEALTHKIT -->|"HealthKit"| DEV_APPLE_WATCH
+    ADAPT_FITBIT -->|"Fitbit API"| DEV_FITBIT
+    ADAPT_GARMIN -->|"Connect IQ"| DEV_GARMIN
+    ADAPT_MQTT -->|"MQTT"| DEV_MQTT_SENSOR
+    ADAPT_ZIGBEE -->|"Zigbee"| DEV_ZIGBEE
+    ADAPT_WEBHOOK -->|"HTTP"| DEV_WEBHOOK
+
+    %% Family Sync Adapter → Other Family Devices
+    ADAPT_FAMILY_SYNC -->|"P2P E2EE"| DEV_IPHONE
+    ADAPT_FAMILY_SYNC -->|"P2P E2EE"| DEV_LAPTOP
+    ADAPT_FAMILY_SYNC -->|"P2P E2EE"| DEV_TABLET
+
+    %% ======================================================================================
+    %% DATA FLOWS: Devices → IFL → K0 (Inbound events)
+    %% ======================================================================================
+
+    %% Device events → IFL Adapters (inbound)
+    DEV_APPLE_WATCH -.->|"heart rate"| ADAPT_HEALTHKIT
+    DEV_NEST -.->|"temp change"| ADAPT_HOMEKIT
+    DEV_TESLA -.->|"location"| ADAPT_TESLA
+    DEV_MQTT_SENSOR -.->|"sensor data"| ADAPT_MQTT
+
+    %% IFL Adapters → IFL Core (parse inbound)
+    ADAPT_HEALTHKIT -.->|"parse"| IFL_PARSE
+    ADAPT_HOMEKIT -.->|"parse"| IFL_PARSE
+    ADAPT_TESLA -.->|"parse"| IFL_PARSE
+    ADAPT_MQTT -.->|"parse"| IFL_PARSE
+
+    %% IFL Core → Bridge → K0 (store events)
+    IFL_TO_ENVELOPE -.->|"store event"| CMD_SUBMIT_FN
+    CMD_SUBMIT_FN -.->|"persist"| K0_P02
+
+    %% IFL registry → K0 storage
+    IFL_REG_DEVICE -.->|"persist"| DB_DEVICE_REG
+    IFL_ACQUIRE_LEASE -.->|"persist"| DB_DEVICE_CREDS
+
+    %% Family sync → K0 P07
+    ADAPT_FAMILY_SYNC -.->|"CRDT merge"| K0_P07
+
+    %% ======================================================================================
+    %% STYLE DEFINITIONS
+    %% ======================================================================================
+
+    %% K1 Tools (Blue)
+    classDef k1_tool fill:#90caf9,stroke:#0d47a1,stroke-width:2px,color:#000
+
+    %% Bridge Components (Orange/Red)
+    classDef bridge_port fill:#ff7043,stroke:#bf360c,stroke-width:3px,color:#fff,font-weight:bold
+    classDef bridge_internal fill:#ffe0b2,stroke:#f57c00,stroke-width:1px,color:#000
+    classDef bridge_security fill:#ef5350,stroke:#b71c1c,stroke-width:2px,color:#fff,font-weight:bold
+
+    %% IFL Components (Purple - Bridge owned)
+    classDef fabric fill:#ce93d8,stroke:#7b1fa2,stroke-width:2px,color:#000,font-weight:bold
+    classDef fabric_adapter fill:#e1bee7,stroke:#6a1b9a,stroke-width:2px,color:#000
+    classDef fabric_schema fill:#f3e5f5,stroke:#9c27b0,stroke-width:1px,color:#000
+
+    %% K0 Storage (Green)
+    classDef port fill:#a5d6a7,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef storage fill:#81c784,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef core fill:#c8e6c9,stroke:#388e3c,stroke-width:2px,color:#000
+
+    %% Physical Devices (Gray)
+    classDef device fill:#78909c,stroke:#37474f,stroke-width:2px,color:#fff

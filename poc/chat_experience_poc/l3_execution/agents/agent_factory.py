@@ -418,17 +418,42 @@ class AgentFactory:
             system_prompt = await self._get_or_generate_prompt(agent_type, available_tools)
             logger.info(f"[AgentFactory] System prompt prepared: length={len(system_prompt)}")
 
-            # Step 4: Create SpecialistAgent instance with mailbox
-            agent = SpecialistAgent(
-                agent_id=agent_id,
-                agent_type=agent_type,
-                session_id=session_id,
-                groq_client=self.groq_client,
-                system_prompt=system_prompt,
-                available_tools=available_tools,
-                mailbox=mailbox,  # NEW: Pass mailbox from AgentFabric
-                trace_id=trace_id,
-            )
+            # Step 4: Create agent instance
+            # Use specialized agent classes when available, otherwise generic SpecialistAgent
+            if agent_type == "healthcare":
+                from l3_execution.agents.specialists.healthcare_agent import (
+                    HealthcareAgent,
+                )
+
+                agent = HealthcareAgent(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    groq_client=self.groq_client,
+                    trace_id=trace_id,
+                    mailbox=mailbox,  # Pass mailbox from AgentFabric
+                )
+            elif agent_type == "finance":
+                from l3_execution.agents.specialists.finance_agent import FinanceAgent
+
+                agent = FinanceAgent(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    groq_client=self.groq_client,
+                    trace_id=trace_id,
+                    mailbox=mailbox,  # Pass mailbox from AgentFabric
+                )
+            else:
+                # Generic SpecialistAgent for other types
+                agent = SpecialistAgent(
+                    agent_id=agent_id,
+                    agent_type=agent_type,
+                    session_id=session_id,
+                    groq_client=self.groq_client,
+                    system_prompt=system_prompt,
+                    available_tools=available_tools,
+                    mailbox=mailbox,  # Pass mailbox from AgentFabric
+                    trace_id=trace_id,
+                )
 
             # Step 5: Lifecycle transitions
             # PENDING (default) → WARMING

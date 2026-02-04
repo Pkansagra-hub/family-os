@@ -1,0 +1,157 @@
+// ============================================================================
+// meta_section.fbs - Meta Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/meta_section.fbs
+// Purpose: Session identifiers, lifecycle, and size tracking
+// Size Budget: 2KB max
+// Tier: HOT CORE
+// ADR: ADR-0017 (SessionState Design), Section 5.8, Section 21
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// SESSION IDENTIFIERS
+// ============================================================================
+
+/// Session identification and ownership
+table SessionIdentity {
+    session_id: string (required);    // Unique session ID
+    user_id: string (required);       // Owning user
+    device_id: string;                // Originating device
+    privacy_band: PrivacyBand = AMBER;  // Privacy classification
+
+    // Flags
+    is_anonymous: bool = false;       // Anonymous session
+    is_demo_mode: bool = false;       // Demo/test session
+}
+
+// ============================================================================
+// SESSION LIFECYCLE
+// ============================================================================
+
+/// Session lifecycle tracking
+table SessionLifecycle {
+    created_at: Timestamp;            // Session creation time
+    last_activity: Timestamp;         // Most recent turn
+    expires_at: Timestamp;            // TTL expiration
+
+    // Turn tracking
+    turn_count: uint32;
+    last_turn_id: string;
+
+    // State
+    is_active: bool = true;
+    is_expired: bool = false;
+
+    // Expiration config (milliseconds)
+    idle_timeout_ms: uint64 = 3600000;  // 1 hour default
+    max_lifetime_ms: uint64 = 86400000; // 24 hours max
+}
+
+// ============================================================================
+// SIZE TRACKING
+// ============================================================================
+
+/// Memory usage tracking for budget enforcement
+table MemoryUsage {
+    // HOT core sizes (bytes)
+    hot_control: uint32;
+    hot_beliefs_active: uint32;
+    hot_scoreboard: uint32;
+    hot_history_active: uint32;
+    hot_clarifications: uint32;
+    hot_affective_now: uint32;
+    hot_narrative_active: uint32;
+    hot_meta: uint32;
+    hot_total: uint32;                // Sum of HOT sections
+
+    // WARM tier sizes (bytes)
+    warm_beliefs_history: uint32;
+    warm_history_recent: uint32;
+    warm_persona: uint32;
+    warm_telemetry: uint32;
+    warm_total: uint32;               // Sum of WARM sections
+
+    // Totals
+    session_total: uint32;            // HOT + WARM
+    cold_references: uint32;          // LOCAL COLD pointers
+    remote_references: uint32;        // REMOTE COLD pointers
+
+    // Budget enforcement
+    hot_budget: uint32 = 49152;       // 48KB hard cap
+    warm_budget: uint32 = 49152;      // 48KB hard cap
+    total_budget: uint32 = 98304;     // 96KB total cap
+    is_over_budget: bool = false;
+    pressure_level: PressureLevel = NORMAL;
+
+    // Last resize timestamp
+    last_eviction: Timestamp;
+    eviction_count: uint32;
+}
+
+// ============================================================================
+// SCHEMA VERSIONING
+// ============================================================================
+
+/// Version tracking for forward/backward compatibility
+table VersionInfo {
+    schema: SchemaVersion;            // FlatBuffers schema version
+
+    // Session state version (for migrations)
+    state_version: uint16;
+
+    // Compatibility
+    min_compatible_version: uint16;
+    format: string;                   // "flatbuffers"
+
+    // Feature flags (bitmask for optional features)
+    features: uint32;
+}
+
+// ============================================================================
+// META SECTION ROOT
+// ============================================================================
+
+/// Meta Section - session identifiers, lifecycle, and memory tracking
+/// This section is NEVER EVICTED as it contains session identity
+table MetaSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Identity
+    identity: SessionIdentity (required);
+
+    // Lifecycle
+    lifecycle: SessionLifecycle;
+
+    // Memory tracking
+    memory: MemoryUsage;
+
+    // Versioning
+    version: VersionInfo;
+
+    // Quick access fields (denormalized for fast access)
+    session_id: string;
+    user_id: string;
+    privacy_band: PrivacyBand = AMBER;
+    turn_count: uint32;
+    is_active: bool = true;
+}
+
+root_type MetaSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 2KB max
+//
+// SessionIdentity: ~150 bytes
+// SessionLifecycle: ~80 bytes
+// MemoryUsage: ~200 bytes
+// VersionInfo: ~30 bytes
+// Header + quick access: ~200 bytes
+// Total: ~660 bytes typical, 2KB max with longer IDs
+// ============================================================================

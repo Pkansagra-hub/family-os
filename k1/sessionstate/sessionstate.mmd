@@ -6,6 +6,12 @@ flowchart TB
 
 %% =====================================================================================
 %% SESSION KERNEL (K1) — HOT/WARM/COLD TIERED STATE (TEXT-ONLY V1)
+%% =====================================================================================
+%% EDGE-FIRST DESIGN PRINCIPLE:
+%%   K1 is the brain. K0 is the library. The brain works even if the library is closed.
+%%   LOCAL COLD (K1 SQLite) = Device-local archive, always available
+%%   CLOUD SYNC (K0) = Optional enhancement for cross-device sync + long-term memory
+%% =====================================================================================
 %% Constraints:
 %%   HOT  <= 48KB (never thrash)
 %%   WARM <= 48KB (evictable)
@@ -72,19 +78,34 @@ subgraph SK["🧠 K1 SessionKernel (Tiered) — total ≤ 96KB"]
 end
 
 %% =====================================================================================
-%% COLD SHADOW (K0) — RECONSTRUCTIBLE, NOT IN SESSION LIMIT
+%% LOCAL COLD (K1 SQLite) — DEVICE-LOCAL ARCHIVE, ALWAYS AVAILABLE
 %% =====================================================================================
 
-subgraph COLD["❄️ COLD SHADOW (K0-backed) — reconstructible"]
+subgraph LOCAL_COLD["❄️ LOCAL COLD (K1 SQLite) — device-local, always available"]
   direction TB
 
-  K0_BELIEFS_ARCHIVE["K0 beliefs_archive<br/>full fact history"]:::cold
-  K0_HISTORY_ARCHIVE["K0 history_archive<br/>full turn log / summaries"]:::cold
-  K0_NARRATIVE_ARCHIVE["K0 narrative_archive<br/>inactive threads"]:::cold
+  ST_BELIEFS_ARCHIVE["st_beliefs_archive<br/>archived facts (local)"]:::local_cold
+  ST_HISTORY_ARCHIVE["st_history_archive<br/>full turn log (local)"]:::local_cold
+  ST_NARRATIVE_ARCHIVE["st_narrative_archive<br/>inactive threads (local)"]:::local_cold
+
+  %% Local Reconstruction SLA (no network dependency)
+  LOCAL_RECON_SLA["Local Reconstruction SLA<br/>Max: <50ms (disk only)<br/>Partial: hydrate HOT first<br/>Always available: no network needed"]:::local_cold
+end
+
+%% =====================================================================================
+%% CLOUD SYNC (K0) — OPTIONAL ENHANCEMENT, NOT REQUIRED FOR OPERATION
+%% =====================================================================================
+
+subgraph CLOUD_SYNC["☁️ CLOUD SYNC (K0) — optional enhancement"]
+  direction TB
+
+  K0_BELIEFS_ARCHIVE["K0 beliefs_archive<br/>cross-device sync"]:::cold
+  K0_HISTORY_ARCHIVE["K0 history_archive<br/>long-term memory"]:::cold
+  K0_NARRATIVE_ARCHIVE["K0 narrative_archive<br/>knowledge graph links"]:::cold
   K0_MULTIMODAL_RAW["K0 multimodal_raw<br/>blobs/embeddings/pointers"]:::cold
 
-  %% Reconstruction SLA
-  RECON_SLA["Reconstruction SLA<br/>Max: <100ms<br/>Partial: hydrate HOT first<br/>Degraded: operate with missing WARM"]:::cold
+  %% K0 Sync SLA (network dependent)
+  K0_SYNC_SLA["K0 Sync SLA<br/>Best-effort: async<br/>Degraded: queue locally<br/>Offline: retry on reconnect"]:::cold
 end
 
 %% =====================================================================================
@@ -99,8 +120,10 @@ subgraph FLOWS["🔄 Runtime Flows (Text-only)"]
   REJECTED["RejectedMutation<br/>return reason + caps"]:::warn
   OK_COMMIT["ApprovedMutation<br/>apply delta"]:::ok
   WARM_EVICT["WarmEviction<br/>evict order + summarize"]:::warn
-  K0_ARCHIVE["ArchiveToK0<br/>write pointer/summary"]:::cold
-  K0_RECON["ReconstructFromK0<br/>hydrate minimal state"]:::cold
+  LOCAL_ARCHIVE["ArchiveToLocal<br/>write to K1 SQLite"]:::local_cold
+  K0_SYNC_ARCHIVE["SyncToK0<br/>async cloud backup (optional)"]:::cold
+  LOCAL_RECON["ReconstructFromLocal<br/>hydrate from K1 SQLite"]:::local_cold
+  K0_RECON["ReconstructFromK0<br/>fallback if local missing"]:::cold
 end
 
 %% =====================================================================================
@@ -131,21 +154,30 @@ SIZE_TRACKER -->|hot pressure| MIGRATION_ENGINE
 MIGRATION_ENGINE -->|demote oldest| W_BELIEFS_HIST
 MIGRATION_ENGINE -->|demote turn| W_HISTORY_RECENT
 
-%% If WARM pressure, evict + summarize + archive
+%% If WARM pressure, evict + summarize + archive to LOCAL first
 SIZE_TRACKER -->|warm pressure| EVICTION_ENGINE
 EVICTION_ENGINE --> WARM_EVICT
 WARM_EVICT -->|summarize| W_HISTORY_RECENT
-WARM_EVICT -->|archive| K0_ARCHIVE
-K0_ARCHIVE --> K0_BELIEFS_ARCHIVE
-K0_ARCHIVE --> K0_HISTORY_ARCHIVE
-K0_ARCHIVE --> K0_NARRATIVE_ARCHIVE
+WARM_EVICT -->|archive local| LOCAL_ARCHIVE
+LOCAL_ARCHIVE --> ST_BELIEFS_ARCHIVE
+LOCAL_ARCHIVE --> ST_HISTORY_ARCHIVE
+LOCAL_ARCHIVE --> ST_NARRATIVE_ARCHIVE
 
-%% Read side
+%% Optional: async sync to K0 cloud (best-effort, non-blocking)
+LOCAL_ARCHIVE -.->|async sync| K0_SYNC_ARCHIVE
+K0_SYNC_ARCHIVE -.-> K0_BELIEFS_ARCHIVE
+K0_SYNC_ARCHIVE -.-> K0_HISTORY_ARCHIVE
+K0_SYNC_ARCHIVE -.-> K0_NARRATIVE_ARCHIVE
+
+%% Read side: LOCAL FIRST, K0 fallback
 READ_REQ -->|read-only| HOT
 READ_REQ -->|read-only| WARM
-READ_REQ -->|miss| K0_RECON
-K0_RECON -->|hydrate minimal| HOT
-K0_RECON -->|hydrate minimal| WARM
+READ_REQ -->|miss| LOCAL_RECON
+LOCAL_RECON -->|hydrate from local| HOT
+LOCAL_RECON -->|hydrate from local| WARM
+LOCAL_RECON -.->|local miss, K0 available| K0_RECON
+K0_RECON -.->|hydrate from cloud| HOT
+K0_RECON -.->|hydrate from cloud| WARM
 
 %% Cross-section dependencies
 H_BELIEFS_ACTIVE --> DEP_ACTIVE_HIST
@@ -155,7 +187,7 @@ DEP_CONTROL_ACTIVE --> H_BELIEFS_ACTIVE
 H_SCOREBOARD --> DEP_SCOREBOARD_HIST
 DEP_SCOREBOARD_HIST --> W_HISTORY_RECENT
 H_NARR_ACTIVE --> DEP_NARR_THREADS
-DEP_NARR_THREADS --> K0_NARRATIVE_ARCHIVE
+DEP_NARR_THREADS --> ST_NARRATIVE_ARCHIVE
 
 %% Emergency mode triggers
 SIZE_TRACKER -->|≥95KB| EMERGENCY_SUMMARIZE
@@ -165,10 +197,13 @@ EMERGENCY_READONLY -->|temporary| REJECTED
 SIZE_TRACKER -->|overload| EMERGENCY_SHED
 EMERGENCY_SHED -->|priority| EVICTION_ENGINE
 
-%% Reconstruction SLA
-K0_RECON --> RECON_SLA
-RECON_SLA -->|partial first| HOT
-RECON_SLA -->|degraded mode| WARM
+%% Reconstruction SLA - LOCAL FIRST
+LOCAL_RECON --> LOCAL_RECON_SLA
+LOCAL_RECON_SLA -->|partial first| HOT
+LOCAL_RECON_SLA -->|full state| WARM
+K0_RECON -.-> K0_SYNC_SLA
+K0_SYNC_SLA -.->|cross-device data| HOT
+K0_SYNC_SLA -.->|long-term memory| WARM
 
 %% Limits visualization
 HOT --> LIM_HOT
@@ -179,8 +214,9 @@ W_HISTORY_RECENT --> LIM_HISTORY
 %% Prevent illegal behavior explicitly
 H_CONTROL -.->|NEVER EVICT| EVICTION_ENGINE
 
-%% Optional: narrative archive (inactive threads)
-H_NARR_ACTIVE -->|inactive thread| K0_NARRATIVE_ARCHIVE
+%% Optional: narrative archive (inactive threads → local first)
+H_NARR_ACTIVE -->|inactive thread| ST_NARRATIVE_ARCHIVE
+ST_NARRATIVE_ARCHIVE -.->|async sync| K0_NARRATIVE_ARCHIVE
 
 %% =====================================================================================
 %% STYLES
@@ -189,6 +225,7 @@ H_NARR_ACTIVE -->|inactive thread| K0_NARRATIVE_ARCHIVE
 classDef hot fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000
 classDef hot_critical fill:#ffcdd2,stroke:#b71c1c,stroke-width:3px,color:#000,font-weight:bold
 classDef warm fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000
+classDef local_cold fill:#e0f2f1,stroke:#00796b,stroke-width:2px,color:#000
 classDef cold fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000
 classDef svc fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
 classDef svc_critical fill:#c8e6c9,stroke:#1b5e20,stroke-width:3px,color:#000,font-weight:bold

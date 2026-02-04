@@ -58,6 +58,9 @@ class EventType(Enum):
     AGENT_SPAWNED = "agent.spawned"
     AGENT_TERMINATED = "agent.terminated"
     TOOL_CALLED = "tool.called"
+    PROACTIVE_QUESTION = "proactive.question"
+    PROACTIVE_NOTIFICATION = "proactive.notification"
+    KNOWLEDGE_GAP_DETECTED = "knowledge.gap.detected"
 
 
 @dataclass

@@ -1,28 +1,24 @@
 """
-Groq API Configuration
+LLM API Configuration
 
-Defines default model, temperature, token limits, and timeouts for Groq API calls.
-Referenced by l5_infrastructure/groq_client.py
+Defines default model, temperature, token limits, and timeouts for LLM API calls.
+Referenced by l5_infrastructure/groq_client.py and google_client.py
 """
 
 import os
 
-# LLM Model Configuration
+# LLM Model Configuration - Now uses Google AI (Gemini)
 DEFAULT_MODEL = os.getenv(
-    "GROQ_MODEL", "groq/compound"
-)  # Using Groq's compound model for enhanced reasoning (configurable via .env)
+    "GOOGLE_MODEL", "gemini-2.5-flash"
+)  # Using Google's Gemini model (configurable via .env)
 
 # Fallback model priority list (iterative retry on timeout/rate-limit)
-# Ordered by: capability, TPM (tokens per minute), and availability
+# Ordered by: capability and availability
 FALLBACK_MODELS = [
-    "groq/compound",  # Primary: Best reasoning (70K TPM)
-    "llama-3.3-70b-versatile",  # Fast, high capability (12K TPM)
-    "meta-llama/llama-4-scout-17b-16e-instruct",  # Good balance (30K TPM)
-    "qwen/qwen3-32b",  # Reliable alternative (6K TPM, 60 RPM)
-    "llama-3.1-8b-instant",  # Fast fallback (6K TPM)
-    "openai/gpt-oss-120b",  # High capability (8K TPM)
-    "meta-llama/llama-4-maverick-17b-128e-instruct",  # Extended context (6K TPM)
-    "moonshotai/kimi-k2-instruct",  # Final fallback (10K TPM, 60 RPM)
+    "gemini-2.5-flash",  # Primary: Fast and capable
+    "gemini-2.0-flash",  # Fallback: Previous generation
+    "gemini-1.5-flash",  # Legacy fallback
+    "gemini-1.5-pro",  # Pro tier fallback
 ]
 
 # Temperature settings by agent type

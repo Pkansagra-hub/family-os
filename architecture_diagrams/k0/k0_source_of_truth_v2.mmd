@@ -1,19 +1,32 @@
 %% ======================================================================================
-%% K0 MICROKERNEL - SINGLE SOURCE OF TRUTH ARCHITECTURE DIAGRAM (V2)
+%% K0 MICROKERNEL - SINGLE SOURCE OF TRUTH ARCHITECTURE DIAGRAM (V3 - PostgreSQL)
 %% ======================================================================================
-%% Generated: 2025-12-14
-%% Scope: Capability Mesh Architecture (ADR-K004) - adds CapabilityFabric, PipelineScheduler,
-%%        and capability-based module discovery for inter-pipeline communication
+%% Generated: 2025-12-22
+%% Updated: 2026-02-01 (Added K0-K1 Bridge, IFL, P07 Sync/CRDT)
+%% Migration: SQLite → PostgreSQL 16+ / asyncpg / pgvector / Alembic / pgbouncer
+%% Scope: Capability Mesh Architecture (ADR-K004) + PostgreSQL Native Async
 %% Modules: 7 domains (affect, builders, context, hippocampus, salience, social, space)
-%% Runtime: Phase 2+ infrastructure + Capability Mesh (3-layer communication stack)
-%% Pipelines: P01-P20 execute via BusDispatcher, invoke capabilities via Fabric,
-%%           activate via declarative triggers in PipelineScheduler
-%% Layers: 11 architectural layers (added Layer 6.5: Capability Mesh)
-%% ADR: K004 - Capability Mesh Architecture
-%% Purpose: Definitive reference for K0 development - V2 kernel source of truth
+%% Runtime: PostgreSQL 16+ with asyncpg, pgvector for embeddings, tsvector for FTS
+%% Pipelines: P01-P20 execute via BusDispatcher with native async PostgreSQL
+%% Database: PostgreSQL 16+ (replaces SQLite), pgbouncer connection pooling
+%% Layers: 13 architectural layers (L0-L10 + L0.5 Bridge + L0.6 IFL)
+%% ADRs: K004 (Capability Mesh), K005 (PostgreSQL Migration), ADR-0050c (Device Sync)
+%% K1 Integration: All K1 access via K0-K1 Bridge (security gateway)
+%% Bridge: Cross-kernel security gateway for K0↔K1 + Tool→Device + Device Sync
+%% IFL: Interkernel Fabric Language for device adapters (HomeKit, Nest, Tesla, etc.)
+%% Purpose: Definitive reference for K0 development - V3 PostgreSQL kernel
+%% Changes from V2:
+%%   - Removed: SQLite driver, FTS5 indexer, SQLiteConnectionPool
+%%   - Added: PostgreSQL driver, pgvector driver, asyncpg pool, Alembic migrations
+%%   - Added: K0-K1 Bridge (Layer 0.5) - Cross-kernel security gateway
+%%   - Added: IFL Layer (Layer 0.6) - Device adapters and family device mesh
+%%   - Added: P07 Sync/CRDT pipeline details for multi-device family sync
+%%   - Updated: All storage to native async, run_in_executor removed
+%%   - Updated: FTS5 → tsvector + GIN, FAISS → pgvector HNSW
+%% NOTE: Use hierarchical layout for this diagram. Adaptive/ELK mode may fail due to size.
 %% ======================================================================================
 
-graph TB
+flowchart TB
     %% ======================================================================================
     %% LAYER 0: CLIENT INTERFACES & EXTERNAL SYSTEMS
     %% ======================================================================================
@@ -31,6 +44,7 @@ graph TB
         end
 
         subgraph HTTP_CLIENT_DETAIL["HTTP Clients"]
+            HTTP_CLIENT["HTTP Client Entry"]:::client
             HTTP_FASTAPI["FastAPI consumers"]:::client
             HTTP_JSON["JSON payloads"]:::client
             HTTP_YAML["YAML payloads"]:::client
@@ -38,16 +52,108 @@ graph TB
         end
 
         subgraph SSE_CLIENT_DETAIL["SSE Subscribers"]
+            SSE_CLIENT["SSE Client Entry"]:::client
             SSE_EVENTSOURCE["EventSource streams"]:::client
             SSE_ACK_PROTO["Ack protocol"]:::client
             SSE_BACKPRESSURE["Backpressure aware"]:::client
         end
 
         subgraph DRIVER_CLIENT_DETAIL["External Drivers"]
+            DRIVER_CLIENT["Driver Client Entry"]:::client
             DRV_HTTP["HTTP transport"]:::client
             DRV_GRPC["gRPC transport"]:::client
             DRV_HANDSHAKE["Driver handshake"]:::client
             DRV_LEASE["Lease renewal"]:::client
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 0.5: K0-K1 BRIDGE (Cross-Kernel Security Gateway)
+    %% ======================================================================================
+    subgraph L0_5_BRIDGE["🔐 LAYER 0.5: K0-K1 Bridge (Cross-Kernel Security Gateway)"]
+        direction TB
+
+        subgraph BRIDGE_CORE["Bridge Core (bridge/)"]
+            subgraph BRIDGE_KERNEL_TRANSPORT["Kernel Transport (bridge/kernel/)"]
+                BRIDGE_QUERY_PORT["IKernelQueryPort"]:::bridge
+                BRIDGE_CMD_PORT["IKernelCommandPort"]:::bridge
+                BRIDGE_SSE_PORT["IKernelSSEPort"]:::bridge
+                BRIDGE_OBS_PORT["IKernelObsPort"]:::bridge
+                BRIDGE_ENVELOPE["EnvelopeBuilder"]:::bridge
+            end
+
+            subgraph BRIDGE_CONNECTOR_SECURITY["Connector Security (bridge/connector/)"]
+                BRIDGE_GATEWAY["IConnectorGatewayPort"]:::bridge
+                BRIDGE_TOOL_REG["ToolRegistry"]:::bridge
+                BRIDGE_CREDENTIALS["CredentialManager (OAuth)"]:::bridge
+                BRIDGE_RATE_LIMIT["RateLimiter"]:::bridge
+                BRIDGE_IFL_FORWARD["IFL Forwarder"]:::bridge
+            end
+
+            subgraph BRIDGE_DEVICE_SYNC["Device Sync (bridge/sync/)"]
+                BRIDGE_DISCOVERY["mDNS Discovery"]:::bridge
+                BRIDGE_CRDT["CRDT Merge (LWW)"]:::bridge
+                BRIDGE_E2EE["E2EE (AES256-GCM)"]:::bridge
+                BRIDGE_P2P["P2P Tunnels"]:::bridge
+                BRIDGE_CERTS["Device Certificates (ED25519)"]:::bridge
+                BRIDGE_SYNC_PORT["ISyncPort → K0 P07"]:::bridge
+            end
+
+            subgraph BRIDGE_SECURITY_CORE["Security Core (bridge/core/)"]
+                BRIDGE_CAP_TOKEN["CapabilityToken"]:::bridge
+                BRIDGE_SIGNING["Request Signing (HMAC)"]:::bridge
+                BRIDGE_AUDIT["Audit Trail"]:::bridge
+                BRIDGE_BAND_ENF["Privacy Band Enforcement"]:::bridge
+            end
+        end
+
+        subgraph BRIDGE_FLOWS["Bridge Data Flows"]
+            BRIDGE_K1_TO_K0["K1 → Bridge → K0 (Writes)"]:::bridge_flow
+            BRIDGE_K0_TO_K1["K0 → Bridge → K1 (SSE Events)"]:::bridge_flow
+            BRIDGE_TOOL_TO_IFL["Tool → Bridge → IFL → Device"]:::bridge_flow
+            BRIDGE_DEVICE_SYNC_FLOW["Device A ↔ Bridge ↔ Device B"]:::bridge_flow
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 0.6: IFL (Interkernel Fabric Language - Device Adapters)
+    %% ======================================================================================
+    subgraph L0_6_IFL["🔌 LAYER 0.6: IFL (Interkernel Fabric Language)"]
+        direction TB
+
+        subgraph IFL_CORE["IFL Core (k0/ifl/)"]
+            subgraph IFL_ADAPTERS["Device Adapters"]
+                IFL_HEALTHKIT["HealthKitAdapter (Apple Watch)"]:::ifl
+                IFL_HOMEKIT["HomeKitAdapter (Philips Hue, Locks)"]:::ifl
+                IFL_NEST["NestAdapter (Climate)"]:::ifl
+                IFL_TESLA["TeslaAdapter (Vehicle)"]:::ifl
+                IFL_SONOS["SonosAdapter (Audio)"]:::ifl
+                IFL_RING["RingAdapter (Security)"]:::ifl
+                IFL_MQTT["MqttAdapter (Generic IoT)"]:::ifl
+            end
+
+            subgraph IFL_SECURITY["IFL Security"]
+                IFL_VERIFY_BRIDGE["Verify Bridge Signature"]:::ifl
+                IFL_DEVICE_AUTH["Device Authentication"]:::ifl
+                IFL_PROTOCOL_XLATE["Protocol Translation"]:::ifl
+            end
+
+            subgraph IFL_TARGETS["Physical Devices"]
+                DEV_PHILIPS["Philips Hue Bridge"]:::device
+                DEV_NEST["Nest Thermostat"]:::device
+                DEV_TESLA["Tesla Vehicle API"]:::device
+                DEV_SONOS["Sonos Speakers"]:::device
+                DEV_RING["Ring Doorbell"]:::device
+                DEV_WATCH["Apple Watch"]:::device
+                DEV_IOT["MQTT IoT Devices"]:::device
+            end
+        end
+
+        subgraph FAMILY_DEVICES["Family Device Mesh"]
+            FAM_IPHONE["iPhone (K0+K1)"]:::family_device
+            FAM_LAPTOP["Laptop (K0+K1)"]:::family_device
+            FAM_TABLET["Tablet (K0+K1)"]:::family_device
+            FAM_HUB["Family Hub (K0+K1)"]:::family_device
         end
     end
 
@@ -57,7 +163,7 @@ graph TB
     subgraph L1_PORTS["⚡ LAYER 1: Kernel Ports (FastAPI HTTP Layer)"]
         direction TB
 
-        subgraph PORT_CMD["Command Port (k0/ports/command.py)"]
+        subgraph PORT_CMD["Command Port (k0/ports/command.py)<br/>Interfaces with K1 via K0_K1_BRIDGE for writes"]
             subgraph CMD_CLASSES["Command Classes"]
                 CMD_ENVELOPE["Envelope (Pydantic)"]:::port
                 CMD_RESPONSE["CommandResponse"]:::port
@@ -80,7 +186,7 @@ graph TB
             end
         end
 
-        subgraph PORT_QRY["Query Port (k0/ports/query.py)"]
+        subgraph PORT_QRY["Query Port (k0/ports/query.py)<br/>Interfaces with K1 via K0_K1_BRIDGE for reads"]
             subgraph QRY_CLASSES["Query Classes"]
                 QRY_SELECTOR["RecallSelector"]:::port
                 QRY_REQUEST["RecallRequest"]:::port
@@ -97,7 +203,7 @@ graph TB
             end
         end
 
-        subgraph PORT_SSE["SSE Port (k0/ports/sse.py)"]
+        subgraph PORT_SSE["SSE Port (k0/ports/sse.py)<br/>Interfaces with K1 via K0_K1_BRIDGE for streams"]
             subgraph SSE_CLASSES["SSE Classes"]
                 SSE_ACK_REQ["AckRequest"]:::port
                 SSE_TRACE_EVENT["SSETraceEvent"]:::port
@@ -126,7 +232,7 @@ graph TB
             end
         end
 
-        subgraph PORT_OBS["Observability Port (k0/ports/observe.py)"]
+        subgraph PORT_OBS["Observability Port (k0/ports/observe.py)<br/>Receives K1 feedback via K0_K1_BRIDGE (POST /k0/obs.emit)"]
             subgraph OBS_CLASSES["Observability Classes"]
                 OBS_METRICS_BUF["ForwardedMetricsBuffer"]:::port
                 OBS_PAYLOAD["ObservabilityPayload"]:::port
@@ -263,7 +369,7 @@ graph TB
             end
         end
 
-        subgraph IDEM_LAYER["Idempotency (k0/idem/)"]
+        subgraph IDEM_LAYER["Idempotency (k0/idem/) - Native Async"]
             subgraph IDEM_DERIVE_DETAIL["Idem Derivation (k0/idem/derive.py)"]
                 IDEM_CANONICAL["canonical_idem_components()"]:::idem
                 IDEM_DERIVE_BLAKE["derive_idem_key() BLAKE3"]:::idem
@@ -272,8 +378,8 @@ graph TB
             end
 
             subgraph IDEM_LEDGER_DETAIL["Idempotency Ledger (k0/idem/ledger.py)"]
-                IDEM_LOOKUP["lookup()"]:::idem
-                IDEM_UPSERT["upsert()"]:::idem
+                IDEM_LOOKUP["async lookup() → conn.fetchrow()"]:::idem
+                IDEM_UPSERT["async upsert() → ON CONFLICT"]:::idem
                 IDEM_TELEM_LOOKUP["_emit_lookup_telemetry()"]:::idem
                 IDEM_TELEM_UPSERT["_emit_upsert_telemetry()"]:::idem
             end
@@ -286,33 +392,33 @@ graph TB
     subgraph L3_TXN["💼 LAYER 3: Transaction Coordination & Receipts"]
         direction TB
 
-        subgraph UOW_SUBSYS["Unit of Work (k0/uow/)"]
+        subgraph UOW_SUBSYS["Unit of Work (k0/uow/) - Native Async PostgreSQL"]
             subgraph UOW_DETAIL["UnitOfWork (k0/uow/unit_of_work.py)"]
-                UOW_ENTER["__enter__() BEGIN IMMEDIATE"]:::core
-                UOW_EXIT["__exit__()"]:::core
-                UOW_APPEND_WAL["append_wal()"]:::core
-                UOW_STAGE_OUTBOX["stage_outbox()"]:::core
-                UOW_SAVE_RECEIPT["save_receipt()"]:::core
-                UOW_UPSERT_OFFSET["upsert_offset()"]:::core
+                UOW_ENTER["async __aenter__() → BEGIN"]:::core
+                UOW_EXIT["async __aexit__()"]:::core
+                UOW_APPEND_WAL["async append_wal() → RETURNING"]:::core
+                UOW_STAGE_OUTBOX["async stage_outbox()"]:::core
+                UOW_SAVE_RECEIPT["async save_receipt()"]:::core
+                UOW_UPSERT_OFFSET["async upsert_offset() → ON CONFLICT"]:::core
                 UOW_ADD_HOOK["add_commit_hook()"]:::core
-                UOW_COMMIT["_commit()"]:::core
-                UOW_ROLLBACK["_rollback()"]:::core
-                UOW_FSYNC["_fsync_wal()"]:::core
-                UOW_FLUSH["_flush_outbox()"]:::core
+                UOW_COMMIT["async _commit() → COMMIT"]:::core
+                UOW_ROLLBACK["async _rollback() → ROLLBACK"]:::core
+                UOW_FSYNC["async _fsync_wal()"]:::core
+                UOW_FLUSH["async _flush_outbox()"]:::core
             end
         end
 
-        subgraph RECEIPT_SUBSYS["Receipt Subsystem (k0/receipts/)"]
+        subgraph RECEIPT_SUBSYS["Receipt Subsystem (k0/receipts/) - Native Async"]
             subgraph RECEIPT_ISS_DETAIL["Receipt Issuer (k0/receipts/issuer.py)"]
-                RECEIPT_ISSUE["issue()"]:::receipt
+                RECEIPT_ISSUE["async issue()"]:::receipt
                 RECEIPT_NORMALISE["_normalise_obligations()"]:::receipt
                 RECEIPT_EMIT_METRIC["_emit_metric()"]:::receipt
                 RECEIPT_EMIT_OBS["_emit_observability_event()"]:::receipt
             end
 
             subgraph RECEIPT_STORE_DETAIL["Receipt Store (k0/storage/receipts.py)"]
-                RECEIPT_SAVE["save()"]:::storage
-                RECEIPT_GET["get()"]:::storage
+                RECEIPT_SAVE["async save() → RETURNING"]:::storage
+                RECEIPT_GET["async get() → conn.fetchrow()"]:::storage
             end
         end
     end
@@ -323,69 +429,69 @@ graph TB
     subgraph L4_STORAGE["💾 LAYER 4: Storage Core"]
         direction TB
 
-        subgraph WAL_CORE["Write-Ahead Log (k0/storage/wal.py)"]
-            subgraph WAL_DETAIL["WriteAheadLog Methods"]
-                WAL_APPEND["append()"]:::storage
-                WAL_READ_FROM["read_from()"]:::storage
-                WAL_FSYNC["fsync()"]:::storage
-                WAL_BACKLOG["backlog_stats()"]:::storage
+        subgraph WAL_CORE["Write-Ahead Log (k0/storage/wal.py) - Native Async"]
+            subgraph WAL_DETAIL["WriteAheadLog Methods (asyncpg)"]
+                WAL_APPEND["async append() → RETURNING pos"]:::storage
+                WAL_READ_FROM["async read_from() → conn.fetch()"]:::storage
+                WAL_FSYNC["async fsync() → pg_current_wal_lsn()"]:::storage
+                WAL_BACKLOG["async backlog_stats()"]:::storage
             end
 
             subgraph WAL_REPLAY_DETAIL["Replayer (k0/storage/replayer.py)"]
-                REPLAY_RUN["run()"]:::storage
-                REPLAY_FETCH["_fetch_batch()"]:::storage
-                REPLAY_EXISTS["_receipt_exists()"]:::storage
+                REPLAY_RUN["async run()"]:::storage
+                REPLAY_FETCH["async _fetch_batch()"]:::storage
+                REPLAY_EXISTS["async _receipt_exists()"]:::storage
                 REPLAY_METRIC["_emit_metric()"]:::storage
                 REPLAY_OBS["_emit_observability()"]:::storage
             end
 
             subgraph WAL_SNAPSHOT_DETAIL["Snapshot Scheduler (k0/storage/snapshots.py)"]
-                SNAP_CREATE["create_snapshot()"]:::storage
-                SNAP_APPEND["_append_marker()"]:::storage
-                SNAP_BACKUP["_write_backup()"]:::storage
+                SNAP_CREATE["async create_snapshot()"]:::storage
+                SNAP_APPEND["async _append_marker() → RETURNING"]:::storage
+                SNAP_BACKUP["async _write_backup() → pg_dump"]:::storage
                 SNAP_MANIFEST["_write_manifest()"]:::storage
-                SNAP_WATERMARK["_resolve_watermark()"]:::storage
+                SNAP_WATERMARK["async _resolve_watermark()"]:::storage
                 SNAP_GEN_ID["_generate_snapshot_id()"]:::storage
             end
 
             subgraph SHARD_PROMO_DETAIL["Shard Promotion (k0/storage/shard_promotion.py)"]
-                SHARD_LAG["compute_replica_lag()"]:::storage
-                SHARD_PROMOTE["promote()"]:::storage
-                SHARD_FETCH_WAL["_fetch_wal_entries()"]:::storage
-                SHARD_FETCH_REC["_fetch_receipts()"]:::storage
-                SHARD_UPSERT_WAL["_upsert_wal_entry()"]:::storage
-                SHARD_UPSERT_REC["_upsert_receipt()"]:::storage
+                SHARD_LAG["async compute_replica_lag()"]:::storage
+                SHARD_PROMOTE["async promote()"]:::storage
+                SHARD_FETCH_WAL["async _fetch_wal_entries()"]:::storage
+                SHARD_FETCH_REC["async _fetch_receipts()"]:::storage
+                SHARD_UPSERT_WAL["async _upsert_wal_entry()"]:::storage
+                SHARD_UPSERT_REC["async _upsert_receipt()"]:::storage
             end
         end
 
         subgraph OUTBOX_CORE["Outbox Subsystem (k0/outbox/ & k0/storage/outbox.py)"]
-            subgraph OUTBOX_STORE_DETAIL["OutboxStore (k0/storage/outbox.py)"]
-                OUTBOX_ENQUEUE["enqueue()"]:::storage
-                OUTBOX_DEQUEUE["dequeue_batch()"]:::storage
-                OUTBOX_DEQUEUE_READY["dequeue_ready_batch()"]:::storage
-                OUTBOX_MARK_APPLIED["mark_applied()"]:::storage
-                OUTBOX_RECORD_FAIL["record_failure()"]:::storage
-                OUTBOX_UPDATE_METRICS["_update_pending_metrics()"]:::storage
+            subgraph OUTBOX_STORE_DETAIL["OutboxStore - Native Async"]
+                OUTBOX_ENQUEUE["async enqueue() → RETURNING id"]:::storage
+                OUTBOX_DEQUEUE["async dequeue_batch()"]:::storage
+                OUTBOX_DEQUEUE_READY["async dequeue_ready_batch() → NOW()"]:::storage
+                OUTBOX_MARK_APPLIED["async mark_applied()"]:::storage
+                OUTBOX_RECORD_FAIL["async record_failure()"]:::storage
+                OUTBOX_UPDATE_METRICS["async _update_pending_metrics()"]:::storage
             end
 
             subgraph OUTBOX_WORKER_DETAIL["OutboxWorker (k0/outbox/worker.py)"]
-                WORKER_PROCESS["process_driver()"]:::outbox
+                WORKER_PROCESS["async process_driver()"]:::outbox
                 WORKER_GET_DRV["_get_driver()"]:::outbox
-                WORKER_HANDLE_FAIL["_handle_failure()"]:::outbox
+                WORKER_HANDLE_FAIL["async _handle_failure()"]:::outbox
                 WORKER_REGISTER["register_driver()"]:::outbox
                 WORKER_UNREGISTER["unregister_driver()"]:::outbox
                 WORKER_LOAD_ALIAS["load_driver_from_alias_map()"]:::outbox
             end
 
             subgraph DRIVER_POOL_DETAIL["DriverWorkerPool (k0/outbox/pool.py)"]
-                POOL_HANDSHAKE["register_handshake()"]:::outbox
-                POOL_PROCESS["process_driver()"]:::outbox
-                POOL_GET_SESSION["get_session()"]:::outbox
+                POOL_HANDSHAKE["async register_handshake()"]:::outbox
+                POOL_PROCESS["async process_driver()"]:::outbox
+                POOL_GET_SESSION["async get_session()"]:::outbox
                 POOL_ACTIVE_SESS["active_sessions()"]:::outbox
-                POOL_ENSURE["_ensure_worker()"]:::outbox
+                POOL_ENSURE["async _ensure_worker()"]:::outbox
                 POOL_RESOLVE["_resolve_driver()"]:::outbox
                 POOL_REG_HTTP["_register_http_driver()"]:::outbox
-                POOL_CLEANUP["_cleanup_expired_sessions()"]:::outbox
+                POOL_CLEANUP["async _cleanup_expired_sessions()"]:::outbox
             end
 
             subgraph RETRY_SCHED_DETAIL["RetryScheduler (k0/outbox/scheduler.py)"]
@@ -398,31 +504,34 @@ graph TB
             end
         end
 
-        subgraph OFFSET_CORE["Offset Store (k0/storage/offsets.py)"]
-            OFFSET_UPSERT["upsert()"]:::storage
-            OFFSET_FETCH["fetch()"]:::storage
+        subgraph OFFSET_CORE["Offset Store (k0/storage/offsets.py) - Native Async"]
+            OFFSET_UPSERT["async upsert() → ON CONFLICT"]:::storage
+            OFFSET_FETCH["async fetch() → conn.fetchrow()"]:::storage
         end
 
-        subgraph DLQ_CORE["Dead Letter Queue (k0/storage/dlq.py)"]
-            DLQ_RECORD["record()"]:::storage
-            DLQ_LIST_PENDING["list_pending()"]:::storage
-            DLQ_GET["get()"]:::storage
-            DLQ_MARK_REQUEUED["mark_requeued()"]:::storage
-            DLQ_PURGE["purge()"]:::storage
+        subgraph DLQ_CORE["Dead Letter Queue (k0/storage/dlq.py) - Native Async"]
+            DLQ_RECORD["async record() → RETURNING id"]:::storage
+            DLQ_LIST_PENDING["async list_pending()"]:::storage
+            DLQ_GET["async get()"]:::storage
+            DLQ_MARK_REQUEUED["async mark_requeued()"]:::storage
+            DLQ_PURGE["async purge()"]:::storage
         end
 
         subgraph OBLIG_STORE["Obligation Store (k0/storage/obligations.py)"]
-            OBLIG_SAVE["save()"]:::storage
-            OBLIG_BULK_SAVE["bulk_save()"]:::storage
-            OBLIG_FETCH_WAL["fetch_by_wal_pos()"]:::storage
-            OBLIG_FETCH_RECENT["fetch_recent()"]:::storage
+            OBLIG_SAVE["async save()"]:::storage
+            OBLIG_BULK_SAVE["async bulk_save()"]:::storage
+            OBLIG_FETCH_WAL["async fetch_by_wal_pos()"]:::storage
+            OBLIG_FETCH_RECENT["async fetch_recent()"]:::storage
         end
 
-        subgraph FTS_STORE["FTS Store (k0/storage/fts.py)"]
-            FTS_INDEX_WAL["index_wal_entry()"]:::storage
-            FTS_REMOVE_WAL["remove_wal_entry()"]:::storage
-            FTS_SEARCH["search()"]:::storage
-            FTS_GET_STATS["get_stats()"]:::storage
+        subgraph FTS_STORE["FTS Store - tsvector (k0/storage/fts.py)"]
+            FTS_INDEX_WAL["async index_wal_entry()"]:::storage
+            FTS_REMOVE_WAL["async remove_wal_entry()"]:::storage
+            FTS_SEARCH["async search() using @@ operator"]:::storage
+            FTS_GET_STATS["async get_stats()"]:::storage
+            FTS_TSVECTOR["tsvector generated columns"]:::storage
+            FTS_GIN_INDEX["GIN indexes on tsvector"]:::storage
+            FTS_PLAINTO["plainto_tsquery() / phraseto_tsquery()"]:::storage
         end
     end
 
@@ -588,8 +697,20 @@ graph TB
                 PIPELINE_P02["P02: Episodic Write"]:::core
                 PIPELINE_P03["P03: Consolidation / Forgetting"]:::core
                 PIPELINE_P04["P04: Attention Router"]:::core
+                PIPELINE_P07["P07: Sync/CRDT (Device Sync)"]:::core
                 PIPELINE_P08["P08: Embedding Management"]:::core
                 PIPELINE_P05_TO_P20["P05-P20: Additional Pipelines"]:::core
+            end
+
+            subgraph P07_SYNC_DETAILS["P07 Sync/CRDT Pipeline Details"]
+                P07_RECEIVE_SYNC["Receive Sync Envelope"]:::core
+                P07_VERIFY_CERT["Verify Device Certificate"]:::core
+                P07_DECRYPT_E2EE["Decrypt E2EE Payload"]:::core
+                P07_CRDT_MERGE["CRDT Merge (LWW)"]:::core
+                P07_CONFLICT_RESOLVE["Conflict Resolution"]:::core
+                P07_WAL_WRITE["Write to Local WAL"]:::core
+                P07_NOTIFY_K1["Notify K1 of Changes"]:::core
+                P07_ACK_SENDER["ACK to Sender Device"]:::core
             end
 
             subgraph PIPELINE_EXECUTION["Pipeline Execution"]
@@ -800,29 +921,56 @@ graph TB
 
             subgraph ALIAS_MAP_CONFIG["Alias Configuration"]
                 ALIAS_CFG_FILE["alias_map.yaml"]:::driver
-                ALIAS_CFG_EPI["st_epi → EpisodicDriver"]:::driver
-                ALIAS_CFG_VECTOR["st_vector → FaissDriver"]:::driver
-                ALIAS_CFG_KG_DOM["st_kg_dom → SQLiteDriver"]:::driver
-                ALIAS_CFG_KG_EDGES["st_kg_edges → SQLiteDriver"]:::driver
+                ALIAS_CFG_EPI["st_epi → PostgresDriver"]:::driver
+                ALIAS_CFG_VECTOR["st_vector → PgVectorDriver"]:::driver
+                ALIAS_CFG_KG_DOM["st_kg_dom → PostgresDriver"]:::driver
+                ALIAS_CFG_KG_EDGES["st_kg_edges → PostgresDriver"]:::driver
             end
         end
 
         subgraph DRIVER_IMPL["Driver Implementations"]
-            subgraph FAISS_DRV_CORE["FAISS Driver (k0/drivers/faiss.py)"]
-                subgraph FAISS_CLASSES["FAISS Classes"]
-                    FAISS_DRV_CLASS["FaissDriver"]:::driver_impl
+            subgraph POSTGRES_DRV_CORE["PostgreSQL Driver (k0/drivers/postgres.py) - NEW"]
+                subgraph POSTGRES_CLASSES["PostgreSQL Classes"]
+                    POSTGRES_DRV_CLASS["PostgresDriver"]:::driver_impl
                 end
 
-                subgraph FAISS_METHODS["FAISS Methods"]
-                    FAISS_APPLY["apply()"]:::driver_impl
+                subgraph POSTGRES_METHODS["PostgreSQL Methods (Native Async)"]
+                    POSTGRES_CONNECT["async connect()"]:::driver_impl
+                    POSTGRES_BEGIN["async begin()"]:::driver_impl
+                    POSTGRES_COMMIT["async commit()"]:::driver_impl
+                    POSTGRES_ROLLBACK["async rollback()"]:::driver_impl
+                    POSTGRES_FETCH["async fetch()"]:::driver_impl
+                    POSTGRES_FETCHROW["async fetchrow()"]:::driver_impl
+                    POSTGRES_EXECUTE["async execute()"]:::driver_impl
+                    POSTGRES_EXECUTEMANY["async executemany()"]:::driver_impl
+                    POSTGRES_CLOSE["async close()"]:::driver_impl
                 end
 
-                subgraph FAISS_BACKEND["FAISS Backend"]
-                    FAISS_INDEX["FAISS vector index"]:::driver_impl
+                subgraph POSTGRES_BACKEND["PostgreSQL Backend"]
+                    POSTGRES_ACID["PostgreSQL ACID via asyncpg"]:::driver_impl
+                    POSTGRES_POOL["pgbouncer connection pool"]:::driver_impl
                 end
             end
 
-            subgraph NEO4J_DRV_CORE["Neo4j Driver (k0/drivers/neo4j_driver.py)"]
+            subgraph PGVECTOR_DRV_CORE["pgvector Driver (k0/drivers/pgvector.py) - NEW"]
+                subgraph PGVECTOR_CLASSES["pgvector Classes"]
+                    PGVECTOR_DRV_CLASS["PgVectorDriver"]:::driver_impl
+                end
+
+                subgraph PGVECTOR_METHODS["pgvector Methods"]
+                    PGVECTOR_APPLY["async apply()"]:::driver_impl
+                    PGVECTOR_SEARCH["async search_similar()"]:::driver_impl
+                    PGVECTOR_INDEX["async build_hnsw_index()"]:::driver_impl
+                end
+
+                subgraph PGVECTOR_BACKEND["pgvector Backend"]
+                    PGVECTOR_EXTENSION["pgvector extension"]:::driver_impl
+                    PGVECTOR_HNSW["HNSW vector index"]:::driver_impl
+                    PGVECTOR_COSINE["vector_cosine_ops"]:::driver_impl
+                end
+            end
+
+            subgraph NEO4J_DRV_CORE["Neo4j Driver (k0/drivers/neo4j_driver.py) - Optional"]
                 subgraph NEO4J_CLASSES["Neo4j Classes"]
                     NEO4J_DRV_CLASS["Neo4jKGDriver"]:::driver_impl
                 end
@@ -840,28 +988,6 @@ graph TB
 
                 subgraph NEO4J_BACKEND["Neo4j Backend"]
                     NEO4J_GRAPH_DB["Neo4j graph database"]:::driver_impl
-                end
-            end
-
-            subgraph SQLITE_DRV_CORE["SQLite Driver (k0/drivers/sqlite.py)"]
-                subgraph SQLITE_CLASSES["SQLite Classes"]
-                    SQLITE_DRV_CLASS["SQLiteDriver"]:::driver_impl
-                end
-
-                subgraph SQLITE_METHODS["SQLite Methods"]
-                    SQLITE_CONNECT["connect()"]:::driver_impl
-                    SQLITE_BEGIN["begin()"]:::driver_impl
-                    SQLITE_COMMIT["commit()"]:::driver_impl
-                    SQLITE_ROLLBACK["rollback()"]:::driver_impl
-                    SQLITE_APPEND["append()"]:::driver_impl
-                    SQLITE_READ["read()"]:::driver_impl
-                    SQLITE_SCAN["scan()"]:::driver_impl
-                    SQLITE_EXECUTE["execute()"]:::driver_impl
-                    SQLITE_CLOSE["close()"]:::driver_impl
-                end
-
-                subgraph SQLITE_BACKEND["SQLite Backend"]
-                    SQLITE_ACID["SQLite ACID operations"]:::driver_impl
                 end
             end
 
@@ -1029,26 +1155,73 @@ graph TB
             end
         end
 
-        subgraph SQLITE_INFRA["SQLite Infrastructure"]
-            subgraph SQLITE_DB_DETAIL["SQLite Runtime (k0_runtime.sqlite3)"]
-                DB_WAL_TABLE["st_wal table"]:::infra
-                DB_RECEIPTS["st_receipts"]:::infra
-                DB_OUTBOX["st_outbox"]:::infra
-                DB_OFFSETS["st_offsets"]:::infra
-                DB_DLQ["st_dlq"]:::infra
-                DB_IDEM["idem_ledger"]:::infra
-                DB_SCHEMA_REG["schema_registry"]:::infra
-                DB_DEVICE_KEYS["st_device_keys"]:::infra
-                DB_ACL["st_acl"]:::infra
-                DB_OBLIGATIONS["st_obligations"]:::infra
-                DB_TRACES["st_cognitive_traces"]:::infra
+        subgraph POSTGRES_INFRA["PostgreSQL Infrastructure (k0/db/ + k0/deploy/)"]
+            subgraph POSTGRES_DB_DETAIL["PostgreSQL 16+ Database (k0_kernel)"]
+                DB_WAL_TABLE["st_wal (BIGSERIAL PK)"]:::postgres
+                DB_RECEIPTS["st_receipts (UUID PK)"]:::postgres
+                DB_OUTBOX["st_outbox (BIGSERIAL)"]:::postgres
+                DB_OFFSETS["st_offsets (composite PK)"]:::postgres
+                DB_DLQ["st_dlq (BIGSERIAL)"]:::postgres
+                DB_IDEM["idem_ledger (VARCHAR PK)"]:::postgres
+                DB_SCHEMA_REG["schema_registry (composite PK)"]:::postgres
+                DB_DEVICE_KEYS["st_device_keys"]:::postgres
+                DB_ACL["st_acl"]:::postgres
+                DB_OBLIGATIONS["st_obligations"]:::postgres
+                DB_TRACES["st_cognitive_traces"]:::postgres
+                DB_HIPP_EVENTS["st_hipp_events (91 cols)"]:::postgres
+                DB_VEC["st_vec (pgvector)"]:::postgres
+                DB_EMBEDDING_QUEUE["st_embedding_queue"]:::postgres
+                DB_HOUSEHOLDS["households"]:::postgres
+                DB_PEOPLE["people"]:::postgres
+                DB_RELATIONSHIPS["st_relationships"]:::postgres
+                DB_KG_DOM["st_kg_dom"]:::postgres
+                DB_KG_EDGES["st_kg_edges"]:::postgres
             end
 
-            subgraph MIGRATIONS_DETAIL["Migrations (k0/automation/migrate.py)"]
-                MIG_APPLY["apply_migrations()"]:::infra
-                MIG_ROLLBACK["rollback_migration()"]:::infra
-                MIG_GENERATE["generate_rollback_script()"]:::infra
-                MIG_CATALOG["schema_migrations table"]:::infra
+            subgraph ALEMBIC_DETAIL["Alembic Migrations (k0/db/alembic/) - NEW"]
+                ALB_ENV["env.py (async migrations)"]:::postgres
+                ALB_VERSIONS["versions/ (28 revisions)"]:::postgres
+                ALB_UPGRADE["alembic upgrade head"]:::postgres
+                ALB_DOWNGRADE["alembic downgrade"]:::postgres
+                ALB_CURRENT["alembic current"]:::postgres
+                ALB_HISTORY["alembic history"]:::postgres
+            end
+
+            subgraph PGBOUNCER_DETAIL["pgbouncer (Connection Pooler) - NEW"]
+                PGBOUNCER_INI["pgbouncer.ini"]:::postgres
+                PGBOUNCER_POOL_MODE["pool_mode = transaction"]:::postgres
+                PGBOUNCER_MAX_CONN["max_client_conn = 200"]:::postgres
+                PGBOUNCER_DEFAULT_POOL["default_pool_size = 25"]:::postgres
+            end
+        end
+
+        subgraph POSTGRES_POOL["PostgreSQL Connection Pool (k0/db/) - NEW"]
+            subgraph ASYNCPG_POOL_DETAIL["AsyncPgPool (k0/db/pool.py)"]
+                PG_POOL_INIT["async initialize()"]:::postgres
+                PG_POOL_ACQUIRE["async acquire()"]:::postgres
+                PG_POOL_CLOSE["async close()"]:::postgres
+                PG_POOL_STATS["stats()"]:::postgres
+                PG_POOL_METRICS["pg_pool_connections_active"]:::postgres
+            end
+
+            subgraph CONNECTION_SCOPE_DETAIL["Connection Scopes (k0/db/connection.py)"]
+                CONN_SCOPE["async connection_scope()"]:::postgres
+                TXN_SCOPE["async transaction_scope()"]:::postgres
+                READ_ONLY_SCOPE["async read_only_scope()"]:::postgres
+            end
+
+            subgraph TYPE_CONVERTERS_DETAIL["Type Converters (k0/db/types.py)"]
+                TYPE_JSON["JSON/JSONB codec"]:::postgres
+                TYPE_UUID["UUID codec"]:::postgres
+                TYPE_TIMESTAMP["TIMESTAMPTZ codec"]:::postgres
+                TYPE_VECTOR["vector(768) codec"]:::postgres
+            end
+
+            subgraph QUERY_BUILDER_DETAIL["Query Builder (k0/db/query.py)"]
+                QUERY_BUILD["QueryBuilder"]:::postgres
+                QUERY_POSITIONAL["$1, $2, $3 params"]:::postgres
+                QUERY_RETURNING["RETURNING clause"]:::postgres
+                QUERY_CONFLICT["ON CONFLICT support"]:::postgres
             end
         end
 
@@ -1061,12 +1234,12 @@ graph TB
                 CLI_SNAPSHOT["snapshot commands"]:::cli_tool
                 CLI_REPLAY["replay commands"]:::cli_tool
                 CLI_DLQ["dlq commands"]:::cli_tool
+                CLI_DB["db commands (Alembic wrapper)"]:::cli_tool
             end
 
             subgraph AUTOMATION_DETAIL["Automation Scripts"]
                 AUTO_API_DOCS["generate_api_docs.py"]:::cli_tool
                 AUTO_LINT["lint_schemas.py"]:::cli_tool
-                AUTO_MIGRATE["migrate.py"]:::cli_tool
                 AUTO_CHECKSUMS["compute_contract_checksums.py"]:::cli_tool
                 AUTO_COMPAT["contract_compatibility_checker.py"]:::cli_tool
                 AUTO_DOCS_SYNC["verify_docs_sync.py"]:::cli_tool
@@ -1079,7 +1252,7 @@ graph TB
 
         subgraph CHAOS_LAYER["Chaos Engineering (k0/chaos/)"]
             subgraph CHAOS_TOGGLES["Chaos Toggles (k0/chaos/toggles.py)"]
-                CHAOS_FSYNC["should_fail_fsync()"]:::chaos
+                CHAOS_POOL_EXHAUST["should_exhaust_pool()"]:::chaos
                 CHAOS_STARVATION["apply_scheduler_starvation()"]:::chaos
                 CHAOS_NETWORK_DELAY["get_network_delay_ms()"]:::chaos
                 CHAOS_DROP_TELEMETRY["should_drop_telemetry()"]:::chaos
@@ -1087,6 +1260,134 @@ graph TB
 
             subgraph CHAOS_NETWORK["Chaos Network (k0/chaos/network.py)"]
                 CHAOS_TRANSPORT["ChaosTransport (httpx)"]:::chaos
+            end
+        end
+
+        subgraph PG_NATIVE_FEATURES["PostgreSQL Native Features"]
+            subgraph PG_PARTITIONING["Table Partitioning"]
+                PARTITION_WAL["st_wal PARTITION BY RANGE (created_at)"]:::postgres
+                PARTITION_HIPP["st_hipp_events PARTITION BY RANGE (ts)"]:::postgres
+                PARTITION_TRACES["st_cognitive_traces PARTITION BY HASH (trace_id)"]:::postgres
+                PARTITION_PRUNE["Partition Pruning (constraint_exclusion)"]:::postgres
+                PARTITION_ATTACH["pg_partman auto-attach"]:::postgres
+            end
+
+            subgraph PG_MONITORING["pg_stat_* Monitoring Views"]
+                PG_STAT_ACTIVITY["pg_stat_activity (active queries)"]:::postgres
+                PG_STAT_STATEMENTS["pg_stat_statements (query stats)"]:::postgres
+                PG_STAT_USER_TABLES["pg_stat_user_tables (table I/O)"]:::postgres
+                PG_STAT_BGWRITER["pg_stat_bgwriter (checkpoint stats)"]:::postgres
+                PG_STAT_REPLICATION["pg_stat_replication (replica lag)"]:::postgres
+            end
+
+            subgraph PG_EXPLAIN["Query Performance (k0/db/explain.py)"]
+                EXPLAIN_ANALYZE["EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)"]:::postgres
+                EXPLAIN_PLAN_CACHE["Query plan cache"]:::postgres
+                EXPLAIN_SLOW_LOG["Slow query logging (> 100ms)"]:::postgres
+                EXPLAIN_AUTO_ANALYZE["auto_explain module"]:::postgres
+            end
+
+            subgraph PG_FDW["Foreign Data Wrappers"]
+                FDW_POSTGRES["postgres_fdw (cross-DB queries)"]:::postgres
+                FDW_FILE["file_fdw (CSV import)"]:::postgres
+            end
+        end
+
+        subgraph PG_HA_REPLICATION["PostgreSQL HA & Replication"]
+            subgraph PG_PRIMARY["Primary Node"]
+                PG_PRIMARY_WAL["WAL Generation (wal_level=replica)"]:::postgres
+                PG_ARCHIVE_MODE["archive_mode = on"]:::postgres
+                PG_WAL_SENDERS["max_wal_senders = 10"]:::postgres
+            end
+
+            subgraph PG_REPLICAS["Read Replicas"]
+                PG_REPLICA_1["replica-1 (hot_standby)"]:::postgres
+                PG_REPLICA_2["replica-2 (hot_standby)"]:::postgres
+                PG_STREAMING["Streaming Replication (async)"]:::postgres
+                PG_REPLICA_LAG["pg_stat_replication.replay_lag"]:::postgres
+            end
+
+            subgraph PG_REPLICATION_SLOTS["Logical Replication"]
+                PG_SLOT_WAL["wal_slot_k0_primary"]:::postgres
+                PG_SLOT_LOGICAL["logical_slot_cdc"]:::postgres
+                PG_PUBLICATION["PUBLICATION k0_changes"]:::postgres
+                PG_SUBSCRIPTION["SUBSCRIPTION from_primary"]:::postgres
+            end
+
+            subgraph PG_FAILOVER["Failover & Recovery"]
+                PG_PATRONI["Patroni (HA orchestrator)"]:::postgres
+                PG_ETCD["etcd (DCS consensus)"]:::postgres
+                PG_FAILOVER_TRIGGER["pg_promote() trigger"]:::postgres
+                PG_RECONNECT["Connection failover (libpq)"]:::postgres
+            end
+        end
+
+        subgraph PG_BACKUP_RECOVERY["Backup & Point-in-Time Recovery"]
+            subgraph PG_BASEBACKUP["Physical Backups"]
+                PG_BASEBACKUP_CMD["pg_basebackup --wal-method=stream"]:::postgres
+                PG_BACKUP_MANIFEST["backup_manifest.json"]:::postgres
+                PG_BACKUP_S3["S3 backup storage"]:::postgres
+            end
+
+            subgraph PG_WAL_ARCHIVE["WAL Archiving"]
+                PG_ARCHIVE_CMD["archive_command → S3"]:::postgres
+                PG_WAL_KEEP["wal_keep_size = 1GB"]:::postgres
+                PG_RESTORE_CMD["restore_command"]:::postgres
+            end
+
+            subgraph PG_PITR["Point-in-Time Recovery"]
+                PITR_TARGET_TIME["recovery_target_time"]:::postgres
+                PITR_TARGET_XID["recovery_target_xid"]:::postgres
+                PITR_TIMELINE["recovery_target_timeline"]:::postgres
+            end
+
+            subgraph PG_BARMAN["Barman Integration"]
+                BARMAN_SERVER["barman backup k0_primary"]:::postgres
+                BARMAN_RETENTION["retention_policy = RECOVERY WINDOW OF 7 DAYS"]:::postgres
+                BARMAN_RECOVER["barman recover"]:::postgres
+            end
+        end
+
+        subgraph PG_POOL_METRICS["Connection Pool Metrics & Failover"]
+            subgraph POOL_HEALTH["Pool Health Metrics"]
+                POOL_ACTIVE["pg_pool_connections_active"]:::postgres
+                POOL_IDLE["pg_pool_connections_idle"]:::postgres
+                POOL_WAITING["pg_pool_waiting_clients"]:::postgres
+                POOL_EXHAUSTED["pg_pool_exhaustion_events_total"]:::postgres
+                POOL_ACQUIRE_TIME["pg_pool_acquire_duration_seconds"]:::postgres
+            end
+
+            subgraph POOL_FAILOVER["pgbouncer Failover"]
+                PGBOUNCER_PRIMARY["pgbouncer → primary:5432"]:::postgres
+                PGBOUNCER_REPLICA["pgbouncer → replica-1:5432 (read)"]:::postgres
+                PGBOUNCER_HEALTH_CHECK["health_check_period = 10s"]:::postgres
+                PGBOUNCER_RECONNECT["server_reset_query_always = 1"]:::postgres
+            end
+
+            subgraph POOL_CONTENTION["Contention Handling"]
+                POOL_QUEUE_DEPTH["client_login_timeout = 60s"]:::postgres
+                POOL_SERVER_LIFETIME["server_lifetime = 3600s"]:::postgres
+                POOL_MAX_DB_CONN["max_db_connections = 100"]:::postgres
+            end
+        end
+
+        subgraph PG_VECTOR_TUNING["pgvector Performance Tuning"]
+            subgraph HNSW_PARAMS["HNSW Index Parameters"]
+                HNSW_M["m = 16 (graph connectivity)"]:::postgres
+                HNSW_EF_CONSTRUCTION["ef_construction = 64 (build quality)"]:::postgres
+                HNSW_EF_SEARCH["hnsw.ef_search = 40 (query accuracy)"]:::postgres
+            end
+
+            subgraph VECTOR_OPS["Vector Operations"]
+                VEC_COSINE["vector_cosine_ops (similarity)"]:::postgres
+                VEC_L2["vector_l2_ops (Euclidean)"]:::postgres
+                VEC_IP["vector_ip_ops (inner product)"]:::postgres
+            end
+
+            subgraph VECTOR_MAINTENANCE["Index Maintenance"]
+                VEC_REINDEX["REINDEX INDEX CONCURRENTLY"]:::postgres
+                VEC_VACUUM["VACUUM (maintenance_work_mem)"]:::postgres
+                VEC_PARALLEL["max_parallel_workers_per_gather = 4"]:::postgres
             end
         end
     end
@@ -1147,8 +1448,8 @@ graph TB
     %% Flow 4: Outbox Processing
     WORKER_PROCESS -->|"1 Dequeue batch"| OUTBOX_DEQUEUE
     WORKER_PROCESS -->|"2 Resolve alias"| ALIAS_RESOLVE
-    ALIAS_RESOLVE -->|"3 Load driver"| FAISS_APPLY
-    ALIAS_RESOLVE -->|"4 Load driver"| SQLITE_EXECUTE
+    ALIAS_RESOLVE -->|"3 Load driver"| PGVECTOR_APPLY
+    ALIAS_RESOLVE -->|"4 Load driver"| POSTGRES_EXECUTE
     WORKER_PROCESS -->|"5 On failure"| RETRY_DECIDE
     RETRY_DECIDE -->|"6 Requeue DLQ"| DLQ_RECORD
 
@@ -1172,10 +1473,10 @@ graph TB
     %% Flow 8: Infrastructure
     APP_CREATE -->|"Wire components"| UOW_ENTER
     APP_CREATE -->|"Register routers"| CMD_SUBMIT_FN
-    APP_CREATE -->|"Apply migrations"| MIG_APPLY
+    APP_CREATE -->|"Apply migrations"| ALB_UPGRADE
     APP_CREATE -->|"Replay WAL"| REPLAY_RUN
     APP_CREATE -->|"Load pipelines"| LOADER_DISCOVER
-    LOADER_DISCOVER -->|"Register pipelines"| PIPELINE_REGISTRY
+    LOADER_DISCOVER -->|"Register pipelines"| PIPELINE_P01
     CLI_SERVE -->|"CLI commands"| APP_CREATE
 
     %% Flow 9: Capability Mesh (ADR-K004)
@@ -1208,7 +1509,62 @@ graph TB
     FABRIC_INVOKE -->|"Route to module"| PIPELINE_PHASE2
 
     %% ======================================================================================
-    %% STORAGE LAYER CONNECTIONS
+    %% Flow 13: K0-K1 BRIDGE DATA FLOWS
+    %% ======================================================================================
+
+    %% Bridge Kernel Transport Flows
+    BRIDGE_QUERY_PORT -->|"Query envelope"| QRY_RECALL_FN
+    BRIDGE_CMD_PORT -->|"Command envelope"| CMD_SUBMIT_FN
+    BRIDGE_SSE_PORT -->|"Subscribe"| SSE_SUBSCRIBE_FN
+    BRIDGE_OBS_PORT -->|"Emit telemetry"| OBS_EMIT_EP
+
+    %% Bridge Security Validation
+    BRIDGE_CAP_TOKEN -->|"Validate token"| GATE_VALIDATE
+    BRIDGE_SIGNING -->|"Verify signature"| CRYPTO_VERIFY_SIG
+    BRIDGE_AUDIT -->|"Log operations"| OBS_EMIT
+
+    %% Bridge Connector to IFL Flows
+    BRIDGE_GATEWAY -->|"Forward to IFL"| BRIDGE_IFL_FORWARD
+    BRIDGE_IFL_FORWARD -->|"Route to adapter"| IFL_HOMEKIT
+    BRIDGE_IFL_FORWARD -->|"Route to adapter"| IFL_NEST
+    BRIDGE_IFL_FORWARD -->|"Route to adapter"| IFL_TESLA
+    BRIDGE_IFL_FORWARD -->|"Route to adapter"| IFL_SONOS
+
+    %% IFL to Device Flows
+    IFL_HOMEKIT -->|"Hue API"| DEV_PHILIPS
+    IFL_NEST -->|"Nest API"| DEV_NEST
+    IFL_TESLA -->|"Tesla API"| DEV_TESLA
+    IFL_SONOS -->|"Sonos API"| DEV_SONOS
+    IFL_RING -->|"Ring API"| DEV_RING
+    IFL_HEALTHKIT -->|"HealthKit"| DEV_WATCH
+    IFL_MQTT -->|"MQTT"| DEV_IOT
+
+    %% Bridge Device Sync Flows
+    BRIDGE_DISCOVERY -->|"mDNS discover"| FAM_IPHONE
+    BRIDGE_DISCOVERY -->|"mDNS discover"| FAM_LAPTOP
+    BRIDGE_DISCOVERY -->|"mDNS discover"| FAM_TABLET
+    BRIDGE_DISCOVERY -->|"mDNS discover"| FAM_HUB
+    BRIDGE_SYNC_PORT -->|"Trigger sync"| PIPELINE_P07
+
+    %% P07 Sync Pipeline Flows
+    P07_RECEIVE_SYNC -->|"From peer device"| P07_VERIFY_CERT
+    P07_VERIFY_CERT -->|"Valid cert"| P07_DECRYPT_E2EE
+    P07_DECRYPT_E2EE -->|"Plaintext delta"| P07_CRDT_MERGE
+    P07_CRDT_MERGE -->|"Merge result"| P07_CONFLICT_RESOLVE
+    P07_CONFLICT_RESOLVE -->|"Resolved state"| P07_WAL_WRITE
+    P07_WAL_WRITE -->|"Persisted"| WAL_APPEND
+    P07_WAL_WRITE -->|"Notify"| P07_NOTIFY_K1
+    P07_NOTIFY_K1 -->|"SSE event"| BRIDGE_SSE_PORT
+    P07_CONFLICT_RESOLVE -->|"ACK"| P07_ACK_SENDER
+
+    %% Family Device Mesh Sync
+    FAM_IPHONE -.->|"E2EE sync"| FAM_LAPTOP
+    FAM_LAPTOP -.->|"E2EE sync"| FAM_TABLET
+    FAM_TABLET -.->|"E2EE sync"| FAM_HUB
+    FAM_HUB -.->|"E2EE sync"| FAM_IPHONE
+
+    %% ======================================================================================
+    %% STORAGE LAYER CONNECTIONS (PostgreSQL)
     %% ======================================================================================
     WAL_APPEND -.->|"Persists to"| DB_WAL_TABLE
     OUTBOX_ENQUEUE -.->|"Persists to"| DB_OUTBOX
@@ -1221,6 +1577,110 @@ graph TB
     ACL_GRANT -.->|"Persists to"| DB_ACL
     OBLIG_SAVE -.->|"Persists to"| DB_OBLIGATIONS
     OBS_EMIT -.->|"Persists to"| DB_TRACES
+    FTS_INDEX_WAL -.->|"Updates tsvector"| DB_HIPP_EVENTS
+    PGVECTOR_APPLY -.->|"Stores vectors"| DB_VEC
+    PGVECTOR_SEARCH -.->|"HNSW search"| DB_VEC
+
+    %% K1 Feedback Connections
+    PORT_OBS -.->|"FeedbackEnvelope from K0_K1_BRIDGE"| BUS_DISPATCHER_CLASS
+    BUS_DISPATCHER_CLASS -.->|"feedback.signal.p02"| PIPELINE_P02
+    BUS_DISPATCHER_CLASS -.->|"feedback.signal.p08"| PIPELINE_P08
+
+    %% PostgreSQL Pool Connections
+    PG_POOL_ACQUIRE -.->|"Via pgbouncer"| PGBOUNCER_POOL_MODE
+    CONN_SCOPE -.->|"Uses pool"| PG_POOL_ACQUIRE
+    TXN_SCOPE -.->|"Uses pool"| PG_POOL_ACQUIRE
+
+    %% Alembic Migration Flow
+    ALB_UPGRADE -.->|"Applies to"| DB_WAL_TABLE
+    ALB_UPGRADE -.->|"Creates"| DB_VEC
+    ALB_UPGRADE -.->|"Creates"| DB_HIPP_EVENTS
+
+    %% ======================================================================================
+    %% POSTGRESQL HA & REPLICATION FLOWS
+    %% ======================================================================================
+
+    %% Replication Flow
+    PG_PRIMARY_WAL -.->|"Streams WAL"| PG_STREAMING
+    PG_STREAMING -.->|"Applies to"| PG_REPLICA_1
+    PG_STREAMING -.->|"Applies to"| PG_REPLICA_2
+    PG_SLOT_WAL -.->|"Retains WAL for"| PG_REPLICA_1
+    PG_STAT_REPLICATION -.->|"Monitors"| PG_REPLICA_LAG
+
+    %% Logical Replication Flow
+    PG_PUBLICATION -.->|"Publishes changes"| PG_SLOT_LOGICAL
+    PG_SUBSCRIPTION -.->|"Subscribes to"| PG_PUBLICATION
+
+    %% Failover Flow
+    PG_PATRONI -.->|"Coordinates with"| PG_ETCD
+    PG_PATRONI -.->|"Triggers"| PG_FAILOVER_TRIGGER
+    PG_FAILOVER_TRIGGER -.->|"Promotes"| PG_REPLICA_1
+    PG_RECONNECT -.->|"Reconnects to"| PGBOUNCER_PRIMARY
+
+    %% Backup Flow
+    PG_BASEBACKUP_CMD -.->|"Backs up"| PG_PRIMARY_WAL
+    PG_BASEBACKUP_CMD -.->|"Stores to"| PG_BACKUP_S3
+    PG_ARCHIVE_CMD -.->|"Archives WAL to"| PG_BACKUP_S3
+    BARMAN_SERVER -.->|"Manages backups"| PG_BASEBACKUP_CMD
+
+    %% PITR Flow
+    PITR_TARGET_TIME -.->|"Restores from"| PG_BACKUP_S3
+    PG_RESTORE_CMD -.->|"Replays WAL from"| PG_BACKUP_S3
+
+    %% ======================================================================================
+    %% POSTGRESQL POOL FAILOVER FLOWS
+    %% ======================================================================================
+
+    %% Connection Failover
+    PGBOUNCER_PRIMARY -.->|"Primary writes"| PG_PRIMARY_WAL
+    PGBOUNCER_REPLICA -.->|"Read queries"| PG_REPLICA_1
+    PGBOUNCER_HEALTH_CHECK -.->|"Monitors"| PG_PRIMARY_WAL
+    READ_ONLY_SCOPE -.->|"Routes to"| PGBOUNCER_REPLICA
+
+    %% Pool Metrics Flow
+    PG_POOL_STATS -.->|"Exposes"| POOL_ACTIVE
+    PG_POOL_STATS -.->|"Exposes"| POOL_IDLE
+    PG_POOL_STATS -.->|"Exposes"| POOL_WAITING
+    POOL_EXHAUSTED -.->|"Triggers alert"| CHAOS_POOL_EXHAUST
+
+    %% ======================================================================================
+    %% POSTGRESQL PARTITIONING FLOWS
+    %% ======================================================================================
+
+    %% Partition Management
+    DB_WAL_TABLE -.->|"Partitioned by"| PARTITION_WAL
+    DB_HIPP_EVENTS -.->|"Partitioned by"| PARTITION_HIPP
+    DB_TRACES -.->|"Partitioned by"| PARTITION_TRACES
+    PARTITION_ATTACH -.->|"Auto-manages"| PARTITION_WAL
+
+    %% ======================================================================================
+    %% POSTGRESQL MONITORING FLOWS
+    %% ======================================================================================
+
+    %% pg_stat Monitoring
+    PG_STAT_ACTIVITY -.->|"Monitors"| PG_POOL_ACQUIRE
+    PG_STAT_STATEMENTS -.->|"Tracks"| QUERY_BUILD
+    PG_STAT_USER_TABLES -.->|"Monitors I/O"| DB_WAL_TABLE
+    PG_STAT_BGWRITER -.->|"Checkpoint stats"| PG_PRIMARY_WAL
+
+    %% Query Performance
+    EXPLAIN_ANALYZE -.->|"Analyzes"| QUERY_BUILD
+    EXPLAIN_SLOW_LOG -.->|"Logs to"| OBS_EMIT
+    EXPLAIN_AUTO_ANALYZE -.->|"Auto-explains"| EXPLAIN_SLOW_LOG
+
+    %% ======================================================================================
+    %% PGVECTOR TUNING FLOWS
+    %% ======================================================================================
+
+    %% HNSW Index Configuration
+    HNSW_M -.->|"Configures"| DB_VEC
+    HNSW_EF_CONSTRUCTION -.->|"Build quality"| DB_VEC
+    HNSW_EF_SEARCH -.->|"Search accuracy"| PGVECTOR_SEARCH
+
+    %% Vector Maintenance
+    VEC_REINDEX -.->|"Rebuilds"| DB_VEC
+    VEC_VACUUM -.->|"Maintains"| DB_VEC
+    VEC_PARALLEL -.->|"Parallelizes"| PGVECTOR_SEARCH
 
     %% ======================================================================================
     %% STYLE DEFINITIONS
@@ -1250,3 +1710,12 @@ graph TB
     classDef fabric fill:#b2ebf2,stroke:#00695c,stroke-width:2px,color:#000,font-weight:bold
     classDef scheduler fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000,font-weight:bold
     classDef scheduler_planned fill:#fff3e0,stroke:#e65100,stroke-width:1px,stroke-dasharray:5 5,color:#666,font-style:italic
+    classDef postgres fill:#336791,stroke:#1e4d6b,stroke-width:2px,color:#fff,font-weight:bold
+    classDef bridge fill:#ff7043,stroke:#bf360c,stroke-width:3px,color:#fff,font-weight:bold
+    classDef bridge_flow fill:#ffccbc,stroke:#e64a19,stroke-width:2px,color:#000,stroke-dasharray:5 5
+    classDef ifl fill:#7e57c2,stroke:#4527a0,stroke-width:2px,color:#fff,font-weight:bold
+    classDef device fill:#78909c,stroke:#37474f,stroke-width:2px,color:#fff
+    classDef family_device fill:#66bb6a,stroke:#2e7d32,stroke-width:3px,color:#fff,font-weight:bold
+
+    %% Fix for incorrect reference
+    BUS_DISPATCHER_CLASS -->|"dispatch()"| BUS_DISPATCH

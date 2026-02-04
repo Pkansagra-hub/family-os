@@ -77,72 +77,17 @@ class LearningExtractorAgent(WriterAgentBase):
         Tells LLM: "Look at this delta, extract learning signals that help the agent improve."
         """
         delta_str = json.dumps(delta, indent=2, default=str)
-        session_state_str = (
-            json.dumps(session_state, indent=2, default=str)
-            if session_state
-            else "No session context"
-        )
 
-        prompt = (
-            """You are an intelligent learning signal extraction system for an adaptive AI agent.
+        # COMPACT prompt to reduce tokens and get cleaner JSON output
+        prompt = f"""Extract learning signals from this interaction delta. Return ONLY JSON.
 
-Analyze the following SessionState delta and extract learning signals if they exist.
+Delta: {delta_str}
 
-## LEARNING SIGNAL (P06) - How to improve
-Extract if the delta shows:
-- User feedback on agent performance ("That was helpful", "That was wrong")
-- User correcting agent mistakes
-- User preference shifts or clarifications
-- Agent performance metrics (success/failure outcomes)
-- User satisfaction signals
+If there are learning signals (user feedback, corrections, performance issues), return:
+{{"learning_signals":[{{"type":"feedback|correction|performance","data":{{"feedback_text":"...","feedback_sentiment":"positive|negative|neutral"}},"confidence":0.85}}],"no_signals":false}}
 
-P06 Schema:
-{
-    "signal_type": "feedback|correction|performance|preference_shift",
-    "signal_data": {
-        "feedback_text": "What the user said or implied",
-        "feedback_sentiment": "positive|negative|neutral",
-        "agent_action": "What the agent did",
-        "user_correction": "What the user wanted instead",
-        "metric": "Performance metric if applicable",
-        "metric_value": "Numeric value if applicable"
-    },
-    "valence": "positive|negative|neutral",
-    "context": "Why this matters for agent learning"
-}
-
-## DELTA TO ANALYZE
-"""
-            + delta_str
-            + """
-
-## SESSION CONTEXT
-"""
-            + session_state_str
-            + """
-
-## RESPONSE FORMAT
-Return ONLY valid JSON with this structure (no markdown, no explanation):
-{
-    "learning_signals": [
-        {
-            "type": "feedback|correction|performance|preference_shift",
-            "data": { ... P06 schema data ... },
-            "confidence": 0.85,
-            "reason": "Why this is a learning signal"
-        }
-    ],
-    "no_signals": false
-}
-
-If no learning signals should be extracted, return:
-{
-    "learning_signals": [],
-    "no_signals": true,
-    "reason": "Why no signals apply"
-}
-"""
-        )
+If no signals found, return:
+{{"learning_signals":[],"no_signals":true}}"""
         return prompt
 
     async def _extract_with_llm(
@@ -156,12 +101,12 @@ If no learning signals should be extracted, return:
         Returns list of extraction decisions ready to send as WriterCommands.
         """
         try:
-            # Call Groq LLM
+            # Call Groq LLM with higher token limit to prevent truncation
             response = await self.groq_client.complete(
                 model=groq_config.DEFAULT_MODEL,  # Configurable via GROQ_MODEL env var
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=1000,
+                temperature=0.2,  # Lower temperature for more consistent JSON
+                max_tokens=1500,  # Increased to prevent truncation
                 trace_id=trace_id,
             )
 

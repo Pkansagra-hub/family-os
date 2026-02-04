@@ -1,0 +1,120 @@
+// ============================================================================
+// scoreboard_section.fbs - Scoreboard Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/scoreboard_section.fbs
+// Purpose: Current discourse state - referents, QUD, salience
+// Size Budget: 6KB max
+// Tier: HOT CORE
+// ADR: ADR-0017b (Scoreboard Section)
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// REFERENTS
+// ============================================================================
+
+/// Discourse referent - entity currently active in conversation
+table Referent {
+    id: string (required);
+    text: string (required);          // Surface form: "it", "the lights", "she"
+    entity_id: string;                // Resolved entity ID (if known)
+    entity_type: string;              // "device", "person", "location"
+    salience: float = 0.5;            // 0.0 = background, 1.0 = focal
+    first_mentioned_turn: uint16;
+    last_mentioned_turn: uint16;
+    mention_count: uint16 = 1;
+}
+
+// ============================================================================
+// QUESTIONS UNDER DISCUSSION (QUD)
+// ============================================================================
+
+/// Question under discussion - open conversational goal
+table Question {
+    id: string (required);
+    text: string (required);          // The question text
+    status: QuestionStatus = OPEN;
+    asked_by: string;                 // "user" or agent_id
+    asked_at_turn: uint16;
+    answered_at_turn: uint16;
+    answer_summary: string;           // Brief answer if resolved
+    priority: uint8 = 0;              // Higher = more important
+}
+
+// ============================================================================
+// TOPIC TRACKING
+// ============================================================================
+
+/// Conversation topic with salience score
+table Topic {
+    id: string (required);
+    name: string (required);          // "lighting", "dinner plans", "weather"
+    salience: float = 0.5;
+    first_turn: uint16;
+    last_turn: uint16;
+    is_primary: bool = false;
+}
+
+// ============================================================================
+// SALIENCE ENTRY
+// ============================================================================
+
+/// Salience map entry for entity tracking
+table SalienceEntry {
+    entity_id: string (required);
+    score: float;                     // 0.0 to 1.0
+    decay_rate: float = 0.1;          // Per-turn decay
+}
+
+// ============================================================================
+// SCOREBOARD SECTION ROOT
+// ============================================================================
+
+/// Scoreboard Section - current discourse state
+/// Tracks what's being talked about and what's important
+table ScoreboardSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Active referents in conversation
+    referents: [Referent];            // Max ~30 referents
+
+    // Questions under discussion (stack)
+    qud_stack: [Question];            // Max ~10 questions
+
+    // Entity salience tracking
+    salience_map: [SalienceEntry];    // Max ~50 entries
+
+    // Topic tracking (stack)
+    topic_stack: [Topic];             // Max ~10 topics
+
+    // Last user intent (for continuity)
+    last_user_intent: string;
+    last_user_intent_confidence: float;
+
+    // Turn tracking
+    current_turn: uint16;
+    last_updated_ms: int64;
+}
+
+root_type ScoreboardSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 6KB max
+//
+// Breakdown:
+// - Header: ~100 bytes
+// - Referent: ~100 bytes each x 30 = 3KB
+// - Question: ~150 bytes each x 10 = 1.5KB
+// - SalienceEntry: ~30 bytes each x 50 = 1.5KB
+// - Topic: ~80 bytes each x 10 = 800 bytes
+// - Intent + metadata: ~300 bytes
+//
+// Typical usage: 3-4KB
+// Max with full referents: 6KB
+// ============================================================================

@@ -1,0 +1,184 @@
+// ============================================================================
+// telemetry_section.fbs - Telemetry Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/telemetry_section.fbs
+// Purpose: Performance metrics (lossy aggregated)
+// Size Budget: 8KB max
+// Tier: WARM (first to evict)
+// ADR: ADR-0017 (SessionState Design), Section 6.4
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// TOKEN METRICS
+// ============================================================================
+
+/// Token usage counters
+table TokenMetrics {
+    // Totals
+    input_tokens: uint32;
+    output_tokens: uint32;
+    total_tokens: uint32;
+
+    // Per model breakdown
+    reasoning_tokens: uint32;         // Reasoning/planning model
+    generation_tokens: uint32;        // Generation model
+    embedding_tokens: uint32;         // Embedding calls
+
+    // Session averages
+    avg_input_per_turn: uint16;
+    avg_output_per_turn: uint16;
+}
+
+// ============================================================================
+// COST METRICS
+// ============================================================================
+
+/// Cost tracking in USD (microdollars for precision)
+table CostMetrics {
+    // Total cost in microdollars (1/1,000,000 USD)
+    total_cost_microdollars: uint64;
+
+    // Breakdown by model
+    reasoning_cost: uint64;
+    generation_cost: uint64;
+    embedding_cost: uint64;
+    tool_cost: uint64;
+
+    // Per-turn average (microdollars)
+    avg_cost_per_turn: uint32;
+}
+
+// ============================================================================
+// LATENCY METRICS
+// ============================================================================
+
+/// Latency metrics with percentiles
+table LatencyMetrics {
+    // Percentiles in milliseconds
+    p50_ms: uint16;
+    p90_ms: uint16;
+    p95_ms: uint16;
+    p99_ms: uint16;
+
+    // Extremes
+    min_ms: uint16;
+    max_ms: uint32;
+
+    // Component breakdown (P50)
+    model_latency_p50_ms: uint16;
+    retrieval_latency_p50_ms: uint16;
+    tool_latency_p50_ms: uint16;
+    orchestration_latency_p50_ms: uint16;
+}
+
+// ============================================================================
+// TURN METRICS
+// ============================================================================
+
+/// Per-turn timing (rolling window)
+table TurnTiming {
+    turn_number: uint16;
+    duration_ms: uint32;
+    token_count: uint16;
+    had_error: bool = false;
+    had_tool_call: bool = false;
+}
+
+// ============================================================================
+// ERROR METRICS
+// ============================================================================
+
+/// Error tracking
+table ErrorMetrics {
+    // Counts by type
+    total_errors: uint32;
+    timeout_errors: uint32;
+    rate_limit_errors: uint32;
+    model_errors: uint32;
+    tool_errors: uint32;
+    validation_errors: uint32;
+
+    // Recent errors (for debugging)
+    last_error_turn: uint16;
+    last_error_message: string;
+
+    // Error rate (0.0 to 1.0)
+    error_rate: float;
+}
+
+// ============================================================================
+// PERFORMANCE SUMMARY
+// ============================================================================
+
+/// Aggregated performance indicators
+table PerformanceSummary {
+    // Health indicators
+    avg_latency_ms: uint16;
+    error_rate: float;
+    cost_per_turn: float;
+
+    // Quality indicators
+    avg_response_length: uint16;
+    tool_call_rate: float;
+
+    // SLA compliance
+    latency_sla_met: bool = true;     // <500ms P95
+    budget_sla_met: bool = true;      // Under cost limits
+}
+
+// ============================================================================
+// TELEMETRY SECTION ROOT
+// ============================================================================
+
+/// Telemetry Section - Performance metrics
+/// LOWEST PRIORITY - First to evict (aggregate, then drop)
+table TelemetrySection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Token usage
+    tokens: TokenMetrics;
+
+    // Cost tracking
+    cost: CostMetrics;
+
+    // Latency metrics
+    latency: LatencyMetrics;
+
+    // Recent turn timings (rolling window, last 20)
+    turn_timings: [TurnTiming];
+
+    // Error tracking
+    errors: ErrorMetrics;
+
+    // Aggregated summary
+    summary: PerformanceSummary;
+
+    // Metadata
+    collection_started: Timestamp;
+    last_updated: Timestamp;
+    sample_count: uint32;             // Number of data points collected
+}
+
+root_type TelemetrySection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 8KB max
+//
+// TokenMetrics: ~50 bytes
+// CostMetrics: ~50 bytes
+// LatencyMetrics: ~40 bytes
+// TurnTiming: ~15 bytes each (20 turns = 300 bytes)
+// ErrorMetrics: ~100 bytes
+// PerformanceSummary: ~30 bytes
+// Header + metadata: ~200 bytes
+// Total: ~800 bytes typical, 8KB max with extensive history
+//
+// EVICTION: Aggregate to summary, drop turn_timings, reset counters
+// ============================================================================

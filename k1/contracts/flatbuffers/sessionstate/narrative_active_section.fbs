@@ -1,0 +1,118 @@
+// ============================================================================
+// narrative_active_section.fbs - Narrative Active Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/narrative_active_section.fbs
+// Purpose: ONE active conversation thread pointer + arc position
+// Size Budget: 4KB max
+// Tier: HOT CORE
+// ADR: ADR-0017 (SessionState Design), Section 5.7, Section 21
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// CONVERSATION THREAD
+// ============================================================================
+
+/// Thread state enumeration
+enum ThreadState : byte {
+    ACTIVE = 0,     // Currently being discussed
+    PAUSED = 1,     // User switched topics, may resume
+    RESOLVED = 2,   // Goal completed
+    ARCHIVED = 3    // Moved to COLD storage
+}
+
+/// Conversation thread - a coherent topic of discussion
+table ConversationThread {
+    id: string (required);
+    title: string;                    // Brief description
+    state: ThreadState = ACTIVE;
+
+    // Thread lifecycle
+    started_turn: uint16;
+    last_active_turn: uint16;
+    resolved_turn: uint16;
+
+    // Goal tracking
+    goal: string;                     // What user wants to achieve
+    is_goal_met: bool = false;
+
+    // Related context
+    related_entities: [string];
+    related_intents: [string];
+
+    // Resumption support
+    resumption_hint: string;          // "Earlier you mentioned..."
+    context_summary: string;          // Brief context for resumption
+}
+
+// ============================================================================
+// NARRATIVE ARC
+// ============================================================================
+
+/// Session-level narrative arc tracking
+table NarrativeArc {
+    position: ArcPosition = EXPOSITION;
+
+    // Phase boundaries (turn numbers)
+    exposition_end: uint16 = 10;      // Turns 1-10
+    rising_end: uint16 = 40;          // Turns 11-40
+    climax_end: uint16 = 60;          // Turns 41-60
+
+    // Key moments
+    inciting_incident_turn: uint16;   // When main goal was established
+    climax_turn: uint16;              // Key decision moment (if reached)
+
+    // Progress indicator (0.0 to 1.0)
+    progress: float = 0.0;
+}
+
+// ============================================================================
+// NARRATIVE ACTIVE SECTION ROOT
+// ============================================================================
+
+/// Narrative Active Section - current thread and arc
+/// Tracks conversation structure for coherent multi-turn interactions
+table NarrativeActiveSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Current active thread (only ONE at a time in HOT)
+    primary_thread: ConversationThread;
+
+    // Paused threads (user switched topics, may resume)
+    paused_threads: [ConversationThread]; // Max 5, beyond that → archive
+
+    // Thread statistics
+    total_threads_session: uint16;
+    active_thread_count: uint8;       // Should be 1 for primary
+    paused_thread_count: uint8;
+
+    // Session-level narrative arc
+    arc: NarrativeArc;
+
+    // Quick access
+    current_thread_id: string;
+    resumption_hint: string;          // From primary thread
+
+    // Archive pointers
+    archived_thread_ids: [string];    // Thread IDs in LOCAL COLD
+}
+
+root_type NarrativeActiveSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 4KB max
+//
+// ConversationThread: ~300 bytes each
+// Primary thread: ~300 bytes
+// Paused threads: ~300 bytes x 5 = 1.5KB
+// NarrativeArc: ~50 bytes
+// Header + metadata: ~200 bytes
+// Archive pointers: ~500 bytes
+// Total: ~2.5KB typical, 4KB max
+// ============================================================================

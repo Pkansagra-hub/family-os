@@ -19,7 +19,7 @@ date_created: '2025-11-03'
 date_updated: '2025-11-03'
 implementation_date: null
 implementation_phase: Phase 1 (Foundation)
-implementation_status: IN_PROGRESS
+implementation_status: FROZEN
 propagation:
   affected_adrs:
   - ADR-0011
@@ -48,7 +48,7 @@ research_citations:
 - OpenAI Custom Instructions (API Documentation, 2024)
 - Character.AI Personality Sliders (Character.AI Documentation, 2024)
 - Replika Personality Model (Replika Research, 2023)
-status: PROPOSED
+status: FROZEN
 superseded_by: []
 supersedes: []
 title: Persona Section - Personality Model & Style
@@ -460,11 +460,55 @@ def _(persona=persona):
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** 🔒 **FROZEN**
 **Created Date:** 2025-10-12
-**Target Completion:** 2025-11-09 (4 weeks)
-**Blocked By:** 0017 (SessionState 6-Section Design)
-**Blocks:** None
+**Frozen Date:** 2026-02-02
+
+---
+
+## Final Decision (2026-02-02)
+
+**STATUS: FROZEN** - This ADR represents the final architectural decision.
+
+### Persona Section - Moved to WARM TIER
+
+| Aspect | Original Design | Final Design | Change |
+|--------|----------------|--------------|--------|
+| Tier | N/A | **WARM TIER** | Moved to WARM |
+| Budget | 2-4KB | 8KB | Increased |
+| Eviction | Low priority | Priority 4 (LAST to evict) | Lowest priority |
+
+### Final Implementation
+
+**persona (WARM TIER - 8KB - Eviction Priority 4)**:
+- Personality traits (tone, style, verbosity)
+- Voice preferences (speed, pitch, prosody)
+- Custom vocabulary and interaction style
+- Rarely changes (static data)
+- Location: `k1/sessionstate/sections/persona.py`
+
+### Rationale for WARM Tier Placement
+
+1. **Static Data**: Persona rarely changes during conversation
+2. **Low Eviction Priority**: Priority 4 = LAST to evict from WARM
+3. **Reconstructable**: Can be restored from K0 long-term storage
+4. **Not Turn-Critical**: Not needed for immediate turn execution
+
+### Key Design Decisions Confirmed
+
+1. **Trait Store**: HashMap with trait_name → value (original design confirmed)
+2. **LLM Integration**: Format traits as system prompt (original design confirmed)
+3. **Low Priority**: Evict last under pressure (original design confirmed)
+4. **K0 Persistence**: Serialize for long-term storage (original design confirmed)
+
+### Performance Targets (Confirmed)
+
+| Operation | Target | Status |
+|-----------|--------|--------|
+| `set_trait(name, value)` | <300μs | Confirmed |
+| `get_trait(name)` | <100μs | Confirmed |
+| `format_for_llm()` | <5ms | Confirmed |
+| `serialize()` | <5ms | Confirmed |
 
 ---
 

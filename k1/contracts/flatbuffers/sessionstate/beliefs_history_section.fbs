@@ -1,0 +1,90 @@
+// ============================================================================
+// beliefs_history_section.fbs - Beliefs History Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/beliefs_history_section.fbs
+// Purpose: Recent facts from previous turns (LRU, max 100 facts)
+// Size Budget: 12KB max
+// Tier: WARM
+// ADR: ADR-0017 (SessionState Design), Section 6.1
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// ARCHIVED FACT
+// ============================================================================
+
+/// ArchivedFact - Fact with additional metadata for history tracking
+table ArchivedFact {
+    // Core fact data
+    fact: Fact;
+
+    // History metadata
+    original_turn: uint16;            // Turn when fact was first established
+    last_accessed_turn: uint16;       // Turn when fact was last used
+    access_count: uint32;             // How many times referenced
+    demoted_at: Timestamp;            // When demoted from HOT
+
+    // LRU tracking
+    lru_score: float;                 // Lower = more likely to evict
+    is_stale: bool = false;           // Marked for potential eviction
+}
+
+// ============================================================================
+// ENTITY INDEX ENTRY
+// ============================================================================
+
+/// Index entry mapping entity to fact indices for fast lookup
+table EntityFactIndex {
+    entity_id: string (required);     // Entity reference ID
+    fact_indices: [uint16];           // Indices into facts array
+    last_updated_turn: uint16;
+}
+
+// ============================================================================
+// BELIEFS HISTORY SECTION ROOT
+// ============================================================================
+
+/// Beliefs History Section - Recent facts demoted from HOT
+/// LRU-based, max 100 facts, oldest archived to K0
+table BeliefsHistorySection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Facts (LRU ordered, max 100)
+    facts: [ArchivedFact];
+
+    // Entity index for fast lookup
+    entity_index: [EntityFactIndex];
+
+    // Statistics
+    total_facts: uint16;
+    max_facts: uint16 = 100;          // Hard cap
+    oldest_turn: uint16;
+    newest_turn: uint16;
+
+    // LRU management
+    next_eviction_candidates: [uint16];  // Indices of facts to evict next
+    eviction_threshold: float = 0.2;     // LRU score below which to evict
+
+    // Archive pointers (facts moved to K0)
+    archived_count: uint32;           // Total archived to K0
+    archive_pointer: string;          // K0 beliefs_archive reference
+}
+
+root_type BeliefsHistorySection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 12KB max
+//
+// ArchivedFact: ~100 bytes each
+// Max 100 facts: ~10KB
+// EntityFactIndex: ~50 bytes each (assume ~20 entities)
+// Indices: ~1KB
+// Header + metadata: ~500 bytes
+// Total: ~11.5KB max with 100 facts
+// ============================================================================

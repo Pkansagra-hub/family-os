@@ -19,7 +19,7 @@ date_created: '2025-11-03'
 date_updated: '2025-11-03'
 implementation_date: null
 implementation_phase: Phase 1 (Foundation)
-implementation_status: IN_PROGRESS
+implementation_status: FROZEN
 propagation:
   affected_adrs:
   - ADR-0011
@@ -49,7 +49,7 @@ research_citations:
 - QUD Theory (Craige Roberts, Questions Under Discussion, 1996)
 - Coreference Resolution (Hugging Face Transformers, 2024)
 - Discourse Understanding (Jason Ginzburg, 2012)
-status: PROPOSED
+status: FROZEN
 superseded_by: []
 supersedes: []
 title: Scoreboard Section - Common Ground & QUD
@@ -638,11 +638,47 @@ def _(scoreboard=scoreboard):
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** 🔒 **FROZEN**
 **Created Date:** 2025-10-12
-**Target Completion:** 2025-11-09 (4 weeks)
-**Blocked By:** 0017 (SessionState 6-Section Design)
-**Blocks:** None
+**Frozen Date:** 2026-02-02
+
+---
+
+## Final Decision (2026-02-02)
+
+**STATUS: FROZEN** - This ADR represents the final architectural decision.
+
+### Scoreboard Section - Confirmed as HOT CORE
+
+| Aspect | Original Design | Final Design | Change |
+|--------|----------------|--------------|--------|
+| Tier | N/A | HOT CORE | Placed in HOT |
+| Budget | 4-8KB | 6KB | Refined |
+| Eviction | LRU | Never evict from HOT | Tier protection |
+
+### Final Implementation
+
+**scoreboard (HOT CORE - 6KB)**:
+- Referents, QUD stack, salience tracking
+- Critical for pronoun resolution ("it", "that")
+- Never evicted (HOT tier protection)
+- Location: `k1/sessionstate/sections/scoreboard.py`
+
+### Key Design Decisions Confirmed
+
+1. **QUD Stack**: Priority-ordered questions (original design confirmed)
+2. **Referent Resolution**: Pronoun → entity mapping (original design confirmed)
+3. **Salience Decay**: Exponential decay per turn (original design confirmed)
+4. **Entity Tracking**: HashMap with salience scores (original design confirmed)
+
+### Performance Targets (Confirmed)
+
+| Operation | Target | Status |
+|-----------|--------|--------|
+| `resolve_referent("it")` | <200μs | Confirmed |
+| `add_entity(name, type)` | <500μs | Confirmed |
+| `push_qud(question)` | <300μs | Confirmed |
+| `decay_salience()` | <5ms | Confirmed |
 
 ---
 

@@ -2,19 +2,25 @@
 %% K0 MICROKERNEL - SINGLE SOURCE OF TRUTH ARCHITECTURE DIAGRAM (V3 - PostgreSQL)
 %% ======================================================================================
 %% Generated: 2025-12-22
+%% Updated: 2026-02-01 (Added K0-K1 Bridge, IFL, P07 Sync/CRDT)
 %% Migration: SQLite → PostgreSQL 16+ / asyncpg / pgvector / Alembic / pgbouncer
 %% Scope: Capability Mesh Architecture (ADR-K004) + PostgreSQL Native Async
 %% Modules: 7 domains (affect, builders, context, hippocampus, salience, social, space)
 %% Runtime: PostgreSQL 16+ with asyncpg, pgvector for embeddings, tsvector for FTS
 %% Pipelines: P01-P20 execute via BusDispatcher with native async PostgreSQL
 %% Database: PostgreSQL 16+ (replaces SQLite), pgbouncer connection pooling
-%% Layers: 11 architectural layers (updated Layer 10 for PostgreSQL infrastructure)
-%% ADRs: K004 (Capability Mesh), K005 (PostgreSQL Migration)
-%% K1 Integration: Ports interface with K0_K1_BRIDGE for external access
+%% Layers: 13 architectural layers (L0-L10 + L0.5 Bridge + L0.6 IFL)
+%% ADRs: K004 (Capability Mesh), K005 (PostgreSQL Migration), ADR-0050c (Device Sync)
+%% K1 Integration: All K1 access via K0-K1 Bridge (security gateway)
+%% Bridge: Cross-kernel security gateway for K0↔K1 + Tool→Device + Device Sync
+%% IFL: Interkernel Fabric Language for device adapters (HomeKit, Nest, Tesla, etc.)
 %% Purpose: Definitive reference for K0 development - V3 PostgreSQL kernel
 %% Changes from V2:
 %%   - Removed: SQLite driver, FTS5 indexer, SQLiteConnectionPool
 %%   - Added: PostgreSQL driver, pgvector driver, asyncpg pool, Alembic migrations
+%%   - Added: K0-K1 Bridge (Layer 0.5) - Cross-kernel security gateway
+%%   - Added: IFL Layer (Layer 0.6) - Device adapters and family device mesh
+%%   - Added: P07 Sync/CRDT pipeline details for multi-device family sync
 %%   - Updated: All storage to native async, run_in_executor removed
 %%   - Updated: FTS5 → tsvector + GIN, FAISS → pgvector HNSW
 %% NOTE: Use hierarchical layout for this diagram. Adaptive/ELK mode may fail due to size.
@@ -58,6 +64,96 @@ graph TB
             DRV_GRPC["gRPC transport"]:::client
             DRV_HANDSHAKE["Driver handshake"]:::client
             DRV_LEASE["Lease renewal"]:::client
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 0.5: K0-K1 BRIDGE (Cross-Kernel Security Gateway)
+    %% ======================================================================================
+    subgraph L0_5_BRIDGE["🔐 LAYER 0.5: K0-K1 Bridge (Cross-Kernel Security Gateway)"]
+        direction TB
+
+        subgraph BRIDGE_CORE["Bridge Core (bridge/)"]
+            subgraph BRIDGE_KERNEL_TRANSPORT["Kernel Transport (bridge/kernel/)"]
+                BRIDGE_QUERY_PORT["IKernelQueryPort"]:::bridge
+                BRIDGE_CMD_PORT["IKernelCommandPort"]:::bridge
+                BRIDGE_SSE_PORT["IKernelSSEPort"]:::bridge
+                BRIDGE_OBS_PORT["IKernelObsPort"]:::bridge
+                BRIDGE_ENVELOPE["EnvelopeBuilder"]:::bridge
+            end
+
+            subgraph BRIDGE_CONNECTOR_SECURITY["Connector Security (bridge/connector/)"]
+                BRIDGE_GATEWAY["IConnectorGatewayPort"]:::bridge
+                BRIDGE_TOOL_REG["ToolRegistry"]:::bridge
+                BRIDGE_CREDENTIALS["CredentialManager (OAuth)"]:::bridge
+                BRIDGE_RATE_LIMIT["RateLimiter"]:::bridge
+                BRIDGE_IFL_FORWARD["IFL Forwarder"]:::bridge
+            end
+
+            subgraph BRIDGE_DEVICE_SYNC["Device Sync (bridge/sync/)"]
+                BRIDGE_DISCOVERY["mDNS Discovery"]:::bridge
+                BRIDGE_CRDT["CRDT Merge (LWW)"]:::bridge
+                BRIDGE_E2EE["E2EE (AES256-GCM)"]:::bridge
+                BRIDGE_P2P["P2P Tunnels"]:::bridge
+                BRIDGE_CERTS["Device Certificates (ED25519)"]:::bridge
+                BRIDGE_SYNC_PORT["ISyncPort → K0 P07"]:::bridge
+            end
+
+            subgraph BRIDGE_SECURITY_CORE["Security Core (bridge/core/)"]
+                BRIDGE_CAP_TOKEN["CapabilityToken"]:::bridge
+                BRIDGE_SIGNING["Request Signing (HMAC)"]:::bridge
+                BRIDGE_AUDIT["Audit Trail"]:::bridge
+                BRIDGE_BAND_ENF["Privacy Band Enforcement"]:::bridge
+            end
+        end
+
+        subgraph BRIDGE_FLOWS["Bridge Data Flows"]
+            BRIDGE_K1_TO_K0["K1 → Bridge → K0 (Writes)"]:::bridge_flow
+            BRIDGE_K0_TO_K1["K0 → Bridge → K1 (SSE Events)"]:::bridge_flow
+            BRIDGE_TOOL_TO_IFL["Tool → Bridge → IFL → Device"]:::bridge_flow
+            BRIDGE_DEVICE_SYNC_FLOW["Device A ↔ Bridge ↔ Device B"]:::bridge_flow
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 0.6: IFL (Interkernel Fabric Language - Device Adapters)
+    %% ======================================================================================
+    subgraph L0_6_IFL["🔌 LAYER 0.6: IFL (Interkernel Fabric Language)"]
+        direction TB
+
+        subgraph IFL_CORE["IFL Core (k0/ifl/)"]
+            subgraph IFL_ADAPTERS["Device Adapters"]
+                IFL_HEALTHKIT["HealthKitAdapter (Apple Watch)"]:::ifl
+                IFL_HOMEKIT["HomeKitAdapter (Philips Hue, Locks)"]:::ifl
+                IFL_NEST["NestAdapter (Climate)"]:::ifl
+                IFL_TESLA["TeslaAdapter (Vehicle)"]:::ifl
+                IFL_SONOS["SonosAdapter (Audio)"]:::ifl
+                IFL_RING["RingAdapter (Security)"]:::ifl
+                IFL_MQTT["MqttAdapter (Generic IoT)"]:::ifl
+            end
+
+            subgraph IFL_SECURITY["IFL Security"]
+                IFL_VERIFY_BRIDGE["Verify Bridge Signature"]:::ifl
+                IFL_DEVICE_AUTH["Device Authentication"]:::ifl
+                IFL_PROTOCOL_XLATE["Protocol Translation"]:::ifl
+            end
+
+            subgraph IFL_TARGETS["Physical Devices"]
+                DEV_PHILIPS["Philips Hue Bridge"]:::device
+                DEV_NEST["Nest Thermostat"]:::device
+                DEV_TESLA["Tesla Vehicle API"]:::device
+                DEV_SONOS["Sonos Speakers"]:::device
+                DEV_RING["Ring Doorbell"]:::device
+                DEV_WATCH["Apple Watch"]:::device
+                DEV_IOT["MQTT IoT Devices"]:::device
+            end
+        end
+
+        subgraph FAMILY_DEVICES["Family Device Mesh"]
+            FAM_IPHONE["iPhone (K0+K1)"]:::family_device
+            FAM_LAPTOP["Laptop (K0+K1)"]:::family_device
+            FAM_TABLET["Tablet (K0+K1)"]:::family_device
+            FAM_HUB["Family Hub (K0+K1)"]:::family_device
         end
     end
 
@@ -601,8 +697,20 @@ graph TB
                 PIPELINE_P02["P02: Episodic Write"]:::core
                 PIPELINE_P03["P03: Consolidation / Forgetting"]:::core
                 PIPELINE_P04["P04: Attention Router"]:::core
+                PIPELINE_P07["P07: Sync/CRDT (Device Sync)"]:::core
                 PIPELINE_P08["P08: Embedding Management"]:::core
                 PIPELINE_P05_TO_P20["P05-P20: Additional Pipelines"]:::core
+            end
+
+            subgraph P07_SYNC_DETAILS["P07 Sync/CRDT Pipeline Details"]
+                P07_RECEIVE_SYNC["Receive Sync Envelope"]:::core
+                P07_VERIFY_CERT["Verify Device Certificate"]:::core
+                P07_DECRYPT_E2EE["Decrypt E2EE Payload"]:::core
+                P07_CRDT_MERGE["CRDT Merge (LWW)"]:::core
+                P07_CONFLICT_RESOLVE["Conflict Resolution"]:::core
+                P07_WAL_WRITE["Write to Local WAL"]:::core
+                P07_NOTIFY_K1["Notify K1 of Changes"]:::core
+                P07_ACK_SENDER["ACK to Sender Device"]:::core
             end
 
             subgraph PIPELINE_EXECUTION["Pipeline Execution"]
@@ -1401,6 +1509,61 @@ graph TB
     FABRIC_INVOKE -->|"Route to module"| PIPELINE_PHASE2
 
     %% ======================================================================================
+    %% Flow 13: K0-K1 BRIDGE DATA FLOWS
+    %% ======================================================================================
+
+    %% Bridge Kernel Transport Flows
+    BRIDGE_QUERY_PORT -->|"Query envelope"| QRY_RECALL_FN
+    BRIDGE_CMD_PORT -->|"Command envelope"| CMD_SUBMIT_FN
+    BRIDGE_SSE_PORT -->|"Subscribe"| SSE_SUBSCRIBE_FN
+    BRIDGE_OBS_PORT -->|"Emit telemetry"| OBS_EMIT_EP
+
+    %% Bridge Security Validation
+    BRIDGE_CAP_TOKEN -->|"Validate token"| GATE_VALIDATE
+    BRIDGE_SIGNING -->|"Verify signature"| CRYPTO_VERIFY_SIG
+    BRIDGE_AUDIT -->|"Log operations"| OBS_EMIT
+
+    %% Bridge Connector to IFL Flows
+    BRIDGE_GATEWAY -->|"Forward to IFL"| BRIDGE_IFL_FORWARD
+    BRIDGE_IFL_FORWARD -->|"Route to adapter"| IFL_HOMEKIT
+    BRIDGE_IFL_FORWARD -->|"Route to adapter"| IFL_NEST
+    BRIDGE_IFL_FORWARD -->|"Route to adapter"| IFL_TESLA
+    BRIDGE_IFL_FORWARD -->|"Route to adapter"| IFL_SONOS
+
+    %% IFL to Device Flows
+    IFL_HOMEKIT -->|"Hue API"| DEV_PHILIPS
+    IFL_NEST -->|"Nest API"| DEV_NEST
+    IFL_TESLA -->|"Tesla API"| DEV_TESLA
+    IFL_SONOS -->|"Sonos API"| DEV_SONOS
+    IFL_RING -->|"Ring API"| DEV_RING
+    IFL_HEALTHKIT -->|"HealthKit"| DEV_WATCH
+    IFL_MQTT -->|"MQTT"| DEV_IOT
+
+    %% Bridge Device Sync Flows
+    BRIDGE_DISCOVERY -->|"mDNS discover"| FAM_IPHONE
+    BRIDGE_DISCOVERY -->|"mDNS discover"| FAM_LAPTOP
+    BRIDGE_DISCOVERY -->|"mDNS discover"| FAM_TABLET
+    BRIDGE_DISCOVERY -->|"mDNS discover"| FAM_HUB
+    BRIDGE_SYNC_PORT -->|"Trigger sync"| PIPELINE_P07
+
+    %% P07 Sync Pipeline Flows
+    P07_RECEIVE_SYNC -->|"From peer device"| P07_VERIFY_CERT
+    P07_VERIFY_CERT -->|"Valid cert"| P07_DECRYPT_E2EE
+    P07_DECRYPT_E2EE -->|"Plaintext delta"| P07_CRDT_MERGE
+    P07_CRDT_MERGE -->|"Merge result"| P07_CONFLICT_RESOLVE
+    P07_CONFLICT_RESOLVE -->|"Resolved state"| P07_WAL_WRITE
+    P07_WAL_WRITE -->|"Persisted"| WAL_APPEND
+    P07_WAL_WRITE -->|"Notify"| P07_NOTIFY_K1
+    P07_NOTIFY_K1 -->|"SSE event"| BRIDGE_SSE_PORT
+    P07_CONFLICT_RESOLVE -->|"ACK"| P07_ACK_SENDER
+
+    %% Family Device Mesh Sync
+    FAM_IPHONE -.->|"E2EE sync"| FAM_LAPTOP
+    FAM_LAPTOP -.->|"E2EE sync"| FAM_TABLET
+    FAM_TABLET -.->|"E2EE sync"| FAM_HUB
+    FAM_HUB -.->|"E2EE sync"| FAM_IPHONE
+
+    %% ======================================================================================
     %% STORAGE LAYER CONNECTIONS (PostgreSQL)
     %% ======================================================================================
     WAL_APPEND -.->|"Persists to"| DB_WAL_TABLE
@@ -1548,3 +1711,8 @@ graph TB
     classDef scheduler fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000,font-weight:bold
     classDef scheduler_planned fill:#fff3e0,stroke:#e65100,stroke-width:1px,stroke-dasharray:5 5,color:#666,font-style:italic
     classDef postgres fill:#336791,stroke:#1e4d6b,stroke-width:2px,color:#fff,font-weight:bold
+    classDef bridge fill:#ff7043,stroke:#bf360c,stroke-width:3px,color:#fff,font-weight:bold
+    classDef bridge_flow fill:#ffccbc,stroke:#e64a19,stroke-width:2px,color:#000,stroke-dasharray:5 5
+    classDef ifl fill:#7e57c2,stroke:#4527a0,stroke-width:2px,color:#fff,font-weight:bold
+    classDef device fill:#78909c,stroke:#37474f,stroke-width:2px,color:#fff
+    classDef family_device fill:#66bb6a,stroke:#2e7d32,stroke-width:3px,color:#fff,font-weight:bold

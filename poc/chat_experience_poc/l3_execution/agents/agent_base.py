@@ -35,7 +35,9 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 from l5_infrastructure.registries.prompt_registry import get_prompt_registry
-from l5_infrastructure.registries.prompt_template_engine import get_prompt_template_engine
+from l5_infrastructure.registries.prompt_template_engine import (
+    get_prompt_template_engine,
+)
 from l5_infrastructure.tool_call_handler import get_tool_call_handler
 
 
@@ -427,6 +429,13 @@ class AgentBase(ABC):
                 agent_type=self.agent_type, context_data=context_data
             )
 
+            # Debug: show rendered prompt for healthcare agent
+            if self.agent_type == "healthcare":
+                print(
+                    f"\n[DEBUG PROMPT] Healthcare final prompt (first 1000 chars):\n{final_prompt[:1000]}\n",
+                    flush=True,
+                )
+
             # Get agent-specific temperature and max_tokens if not overridden
             prompt_template = self.prompt_registry.get_prompt(self.agent_type)
             temperature = temperature or prompt_template.temperature
@@ -438,7 +447,7 @@ class AgentBase(ABC):
                 {"role": "user", "content": user_input},
             ]
 
-            # Call Groq
+            # Call LLM
             response = await self.groq_client.complete(
                 messages=messages,
                 agent_type=self.agent_type,

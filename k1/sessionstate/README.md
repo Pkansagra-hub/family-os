@@ -30,6 +30,7 @@
 20. [FlatBuffers Schemas](#20-flatbuffers-schemas)
 21. [Narrative Tracking](#21-narrative-tracking)
 22. [Implementation Status](#22-implementation-status)
+23. [Standalone vs Wired Modes](#23-standalone-vs-wired-modes)
 
 ---
 
@@ -456,10 +457,14 @@ class TelemetrySection:
 ### K0 Pipeline Integration
 
 ```
-SessionState ──► K0 Bridge ──► P02 (Episodic Write)
-                           ──► P03 (Consolidation)
-                           ──► P01 (Recall/Read)
+SessionState ──► Bridge ──► K0 P02 (Episodic Write)
+                        ──► K0 P03 (Consolidation)
+                        ──► K0 P01 (Recall/Read)
 ```
+
+> **Note**: The K0-K1 Bridge is a cross-kernel component at `bridge/` (root level).
+> See [bridge/README.md](../../bridge/README.md) for details.
+> SessionState implements `IStoragePort` which the Bridge adapter will satisfy.
 
 ---
 
@@ -1387,17 +1392,25 @@ k1/contracts/schemas/events/
 ### Implementation Progress
 
 | Component | Status | Notes |
-|-----------|--------|-------|
+| --------- | ------ | ----- |
 | Module contracts | ✅ Complete | All YAML contracts defined |
 | Event schemas | ✅ Complete | JSON schemas for all events |
-| FlatBuffers schemas | 🔄 In Progress | control_section.fbs defined in ADR |
-| SessionStateManager | ❌ Not Started | `__init__.py` is empty |
-| MutationGuard | ❌ Not Started | Design complete in ADR-0017c |
-| EvictionEngine | ❌ Not Started | Design complete in ADR-0018 |
-| Section implementations | ❌ Not Started | `sections/__init__.py` is empty |
-| Tier implementations | ❌ Not Started | `tiers/__init__.py` is empty |
-| Unit tests | ❌ Not Started | Test files not created |
-| Integration tests | ❌ Not Started | Test files not created |
+| FlatBuffers schemas | ✅ Complete | All section schemas defined |
+| Section implementations | ✅ Complete | All 12 sections (8 HOT + 4 WARM) |
+| Tier implementations | ✅ Complete | HotTier, WarmTier, LocalColdTier |
+| SessionStateManager | ✅ Complete | ~900 lines, 74 tests |
+| MutationGuard | ✅ Complete | Preflight validation |
+| EvictionEngine | ✅ Complete | 3-tier eviction strategy |
+| MigrationEngine | ✅ Complete | HOT→WARM demotion |
+| ReconstructionSLA | ✅ Complete | <100ms restore target |
+| Port interfaces | ✅ Complete | IStoragePort, IEventPort, IWriterPort, ILifecyclePort, IK0SyncPort |
+| Standalone adapters | ✅ Complete | SQLiteStorageAdapter, LocalEventAdapter, DirectWriterAdapter, StandaloneLifecycle |
+| SessionStateFactory | ✅ Complete | create_standalone, create_for_testing, create_with_ports |
+| CLI | ✅ Complete | start, stop, status, snapshot, mutate, sections, checkpoint, demo |
+| API Documentation | ✅ Complete | 7 docs in docs/ folder (~2500 lines total) |
+| Python docstrings | ✅ Complete | Google-style docstrings on all public APIs |
+| Unit tests | ✅ Complete | 400+ tests passing |
+| Integration tests | ✅ Complete | Factory integration tests |
 
 ---
 
@@ -1415,3 +1428,175 @@ k1/contracts/schemas/events/
 ---
 
 *This document is the authoritative source of truth for SessionState. All implementations must conform to this specification.*
+
+---
+
+## 23. Standalone vs Wired Modes
+
+SessionState supports two operational modes: **Standalone** for development/testing and **Wired** for production with full K1 integration.
+
+### Mode Comparison
+
+| Aspect | Standalone Mode | Wired Mode |
+| ------ | --------------- | ---------- |
+| **Use Case** | Development, testing, offline operation | Production with full K1 integration |
+| **Dependencies** | None (self-contained) | Bridge, DeltaBus, Concierge, Fabric |
+| **Persistence** | LOCAL COLD (K1 SQLite) | LOCAL COLD + K0 Sync |
+| **Events** | LocalEventAdapter (in-process) | DeltaBusAdapter (distributed) |
+| **Writer** | DirectWriterAdapter (immediate) | ConciergeAdapter (coordinated) |
+| **Lifecycle** | StandaloneLifecycle (self-managed) | FabricLifecycle (K1 managed) |
+| **Cross-Device Sync** | None | Via Bridge to K0 |
+| **Performance** | Fast (no IPC overhead) | Production-grade (with observability) |
+
+### When to Use Each Mode
+
+**Use Standalone Mode When:**
+
+- Developing new SessionState features
+- Running unit tests or integration tests
+- Debugging session state issues locally
+- Operating in offline environments
+- Building proof-of-concept implementations
+- Rapid prototyping without K1 dependencies
+
+**Use Wired Mode When:**
+
+- Deploying to production
+- Integrating with Concierge orchestration
+- Requiring cross-device state sync
+- Needing distributed event propagation
+- Running under K1 Fabric supervision
+
+### Adapter Selection Guide
+
+```text
+SessionStateFactory
+        |
+        |--- create_standalone()
+        |           |
+        |           +-- IStoragePort   -> SQLiteStorageAdapter (LOCAL COLD)
+        |           +-- IEventPort     -> LocalEventAdapter (in-process)
+        |           +-- IWriterPort    -> DirectWriterAdapter (immediate)
+        |           +-- ILifecyclePort -> StandaloneLifecycle (self-managed)
+        |
+        |--- create_for_testing()
+        |           |
+        |           +-- IStoragePort   -> InMemoryStorageAdapter (no disk I/O)
+        |           +-- IEventPort     -> LocalEventAdapter (capture mode)
+        |           +-- IWriterPort    -> DirectWriterAdapter
+        |           +-- ILifecyclePort -> StandaloneLifecycle (no checkpoints)
+        |
+        +--- create_with_ports()  [Production wiring]
+                    |
+                    +-- IStoragePort   -> BridgeStorageAdapter (future)
+                    +-- IEventPort     -> DeltaBusAdapter (future)
+                    +-- IWriterPort    -> ConciergeAdapter (future)
+                    +-- ILifecyclePort -> FabricLifecycle (future)
+                    +-- IK0SyncPort    -> BridgeSyncAdapter (optional, future)
+```
+
+### Quick Start Examples
+
+**Standalone Mode (Development):**
+
+```python
+from k1.sessionstate import create_standalone
+
+# Create and start standalone session
+manager = create_standalone(session_id="dev-session-001")
+manager.start()
+
+# Use the session
+control = manager.get_section("control")
+control.advance_turn()
+
+result = manager.mutate(
+    section="beliefs_active",
+    operation="add",
+    data={"subject": "user", "predicate": "likes", "object": "coffee"},
+)
+
+# Stop with checkpoint
+manager.stop()
+```
+
+**Testing Mode (Unit Tests):**
+
+```python
+from k1.sessionstate import create_for_testing
+
+def test_belief_mutation():
+    # Fast in-memory session
+    manager = create_for_testing()
+    manager.start()
+
+    # Test mutation
+    result = manager.mutate("beliefs_active", "add", {"fact": "test"})
+    assert result.approved
+
+    # Check captured events
+    events = manager._event_port.get_captured_events()
+    assert len(events) >= 1
+
+    manager.stop()
+```
+
+**Wired Mode (Production):**
+
+```python
+from k1.sessionstate import SessionStateFactory
+
+# Future: Production wiring with real adapters
+manager = SessionStateFactory.create_with_ports(
+    session_id="user-123-session-456",
+    storage=bridge_storage_adapter,    # BridgeStorageAdapter
+    events=deltabus_adapter,           # DeltaBusAdapter
+    writer=concierge_adapter,          # ConciergeAdapter
+    lifecycle=fabric_lifecycle,        # FabricLifecycle
+    k0_sync=bridge_sync_adapter,       # Optional K0 sync
+)
+manager.start()
+# ... production usage ...
+manager.stop()
+```
+
+### CLI for Manual Testing
+
+SessionState includes a CLI for interactive testing in standalone mode:
+
+```bash
+# Start a new session
+python -m k1.sessionstate.cli start --session-id dev-001
+
+# Check status
+python -m k1.sessionstate.cli status
+
+# Apply mutations
+python -m k1.sessionstate.cli mutate beliefs_active add '{"subject": "user"}'
+
+# View snapshot
+python -m k1.sessionstate.cli snapshot --sections
+
+# List sections with sizes
+python -m k1.sessionstate.cli sections
+
+# Create manual checkpoint
+python -m k1.sessionstate.cli checkpoint
+
+# Run interactive demo
+python -m k1.sessionstate.cli demo
+
+# Stop session
+python -m k1.sessionstate.cli stop
+```
+
+### Edge-First Design Principle
+
+SessionState follows an **edge-first design**:
+
+1. **LOCAL COLD works 100% offline** - SQLite persistence requires no network
+2. **K0 sync is optional enhancement** - Cross-device sync when available
+3. **Never block on K0 unavailability** - Graceful degradation
+4. **Standalone mode is production-capable** - Not just for testing
+
+This ensures the system works reliably on edge devices with intermittent connectivity.

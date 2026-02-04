@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sessionstate.emergency.resolved.v1.json",
+  "title": "SessionState Emergency Resolved",
+  "description": "Emitted when emergency mode is resolved (<90% capacity)",
+  "type": "object",
+  "required": ["session_id", "emergency_id", "resolution_method", "current_usage_percent", "timestamp_ms"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Session exiting emergency mode"
+    },
+    "emergency_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Emergency ID from emergency.activated event"
+    },
+    "resolution_method": {
+      "type": "string",
+      "enum": ["EVICTION", "SUMMARIZATION", "SHEDDING", "MANUAL"],
+      "description": "How the emergency was resolved"
+    },
+    "emergency_duration_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How long the session was in emergency mode"
+    },
+    "current_usage_percent": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Current capacity usage percentage"
+    },
+    "current_size_kb": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Current total size in KB"
+    },
+    "bytes_freed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total bytes freed during emergency"
+    },
+    "items_summarized": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of items summarized (if SUMMARIZATION)"
+    },
+    "items_shed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of items dropped (if SHEDDING)"
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds"
+    }
+  },
+  "examples": [
+    {
+      "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "emergency_id": "880e8400-e29b-41d4-a716-446655440003",
+      "resolution_method": "EVICTION",
+      "emergency_duration_ms": 5000,
+      "current_usage_percent": 82.3,
+      "current_size_kb": 79.01,
+      "bytes_freed": 13926,
+      "items_summarized": 0,
+      "items_shed": 0,
+      "timestamp_ms": 1699012405000
+    }
+  ]
+}

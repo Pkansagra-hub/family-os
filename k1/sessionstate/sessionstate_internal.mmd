@@ -7,16 +7,22 @@ flowchart TB
 %% =====================================================================================
 %% SESSION KERNEL (K1) — INTERNAL-ONLY STRUCTURE (DOCS VIEW)
 %% No K0 nodes, no runtime flows. Just the kernel state + invariants + services.
+%%
+%% EDGE-FIRST DESIGN:
+%%   - HOT + WARM = RAM (96KB cap)
+%%   - LOCAL COLD = K1 SQLite (offline safe, no K0 dependency)
+%%   - CLOUD SYNC = K0 (optional, for cross-device sync)
 %% =====================================================================================
 
 subgraph SK["🧠 K1 SessionKernel — Internal (Text-only V1)"]
   direction TB
 
-  subgraph TIERS["Tiering Model"]
+  subgraph TIERS["Tiering Model (Edge-First)"]
     direction LR
     T_HOT["🔥 HOT CORE<br/>≤ 48KB<br/>never thrash"]:::tier_hot
     T_WARM["🌡️ WARM TIER<br/>≤ 48KB<br/>evictable"]:::tier_warm
-    T_TOTAL["TOTAL ≤ 96KB<br/>hard cap"]:::tier_total
+    T_COLD["❄️ LOCAL COLD<br/>K1 SQLite<br/>offline safe"]:::tier_cold
+    T_TOTAL["RAM ≤ 96KB<br/>hard cap"]:::tier_total
   end
 
   %% ---------------- HOT CORE ----------------
@@ -54,6 +60,17 @@ subgraph SK["🧠 K1 SessionKernel — Internal (Text-only V1)"]
     SNAPSHOT_HEALTH["Snapshot/Health<br/>size breakdown + pressure + thrash"]:::svc
   end
 
+  %% ---------------- LOCAL COLD (K1 SQLite - Offline Safe) ----------------
+  subgraph LOCAL_COLD["❄️ LOCAL COLD (K1 SQLite - OFFLINE SAFE)"]
+    direction TB
+
+    LC_ARCHIVE["LocalColdArchive<br/>K1 SQLite storage"]:::cold
+    LC_BELIEFS["st_beliefs_archive<br/>evicted beliefs (local)"]:::cold
+    LC_HISTORY["st_history_archive<br/>full turn log (local)"]:::cold
+    LC_NARRATIVE["st_narrative_archive<br/>inactive threads (local)"]:::cold
+    LC_NOTE["NO K0 DEPENDENCY<br/>Works fully offline"]:::cold_note
+  end
+
   %% ---------------- INVARIANTS ----------------
   subgraph INVAR["🧷 Invariants (Non-negotiable)"]
     direction TB
@@ -68,6 +85,7 @@ end
 %% ---------------- Connections (Internal Logic) ----------------
 T_HOT --> HOT
 T_WARM --> WARM
+T_COLD --> LOCAL_COLD
 T_TOTAL --> INVAR
 
 HOT --> SIZE_TRACKER
@@ -78,10 +96,15 @@ MUTATION_GUARD --> MIGRATION_ENGINE
 MUTATION_GUARD --> EVICTION_ENGINE
 
 EVICTION_ENGINE -.->|warm-only| WARM
+EVICTION_ENGINE -.->|archive to local| LOCAL_COLD
 MIGRATION_ENGINE -.->|demote/promote| HOT
 MIGRATION_ENGINE -.->|demote/promote| WARM
 
 H_CONTROL -.->|NEVER EVICT| EVICTION_ENGINE
+
+%% Local COLD reconstruction (offline safe)
+LOCAL_COLD -.->|reconstruct (no K0)| HOT
+LOCAL_COLD -.->|reconstruct (no K0)| WARM
 
 W_HISTORY_RECENT --> I_HIST
 HOT --> I_HOT
@@ -108,3 +131,7 @@ classDef svc_critical fill:#c8e6c9,stroke:#1b5e20,stroke-width:3px,color:#000,fo
 
 classDef inv fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
 classDef inv_critical fill:#e1bee7,stroke:#6a1b9a,stroke-width:3px,color:#000,font-weight:bold
+
+classDef tier_cold fill:#e0f7fa,stroke:#00838f,stroke-width:2px,color:#000,font-weight:bold
+classDef cold fill:#e0f7fa,stroke:#00838f,stroke-width:2px,color:#000
+classDef cold_note fill:#b2ebf2,stroke:#00838f,stroke-width:2px,color:#000,font-style:italic

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sessionstate.mutation.rejected.v1.json",
+  "title": "SessionState Mutation Rejected",
+  "description": "Emitted when Concierge rejects a mutation request",
+  "type": "object",
+  "required": ["request_id", "reason", "reason_code", "timestamp_ms"],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Original request ID"
+    },
+    "reason_code": {
+      "type": "string",
+      "enum": [
+        "NOT_WRITER",
+        "SECTION_LOCKED",
+        "SIZE_EXCEEDED",
+        "NEVER_EVICT_VIOLATION",
+        "INVALID_OPERATION",
+        "PREFLIGHT_FAILED"
+      ],
+      "description": "Machine-readable rejection reason"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Human-readable rejection reason"
+    },
+    "section": {
+      "type": "string",
+      "enum": [
+        "control",
+        "beliefs_active",
+        "beliefs_history",
+        "scoreboard",
+        "history_active",
+        "history_recent",
+        "clarifications",
+        "affective_now",
+        "narrative_active",
+        "meta",
+        "persona",
+        "telemetry"
+      ],
+      "description": "Target section that was rejected"
+    },
+    "available_kb": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Available capacity in KB (if SIZE_EXCEEDED)"
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds"
+    }
+  },
+  "examples": [
+    {
+      "request_id": "550e8400-e29b-41d4-a716-446655440000",
+      "reason_code": "SIZE_EXCEEDED",
+      "reason": "Section beliefs_active at 7.8KB, only 0.2KB available",
+      "section": "beliefs_active",
+      "available_kb": 0.2,
+      "timestamp_ms": 1699012200050
+    },
+    {
+      "request_id": "660e8400-e29b-41d4-a716-446655440001",
+      "reason_code": "NOT_WRITER",
+      "reason": "Agent lighting-agent-001 is not authorized to write to SessionState",
+      "section": "control",
+      "timestamp_ms": 1699012201000
+    }
+  ]
+}
