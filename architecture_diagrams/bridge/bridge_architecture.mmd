@@ -3,6 +3,8 @@
 %% ======================================================================================
 %% Created: 2026-02-01
 %% Updated: 2026-02-01 - IFL moved to Bridge (Option B: Bridge owns IFL)
+%% Updated: 2026-02-01 - IFL reworked: Universal Connector Protocol (not devices only)
+%%   IFL adapters are company-built, FamilyOS-signed, manifest-based
 %% Updated: 2026-02-01 - Added offline-first architecture (K1 self-sufficient)
 %% Updated: 2026-02-01 - Added complete envelope, query, SSE schemas from K0 ports
 %% Updated: 2026-02-01 - Added observability/feedback flow from FEEDBACK.md + observe.py
@@ -19,7 +21,7 @@
 %%   - Query:   K1 -> K0 -> K1 (REQUEST/RESPONSE, two-way)
 %%   - SSE:     K0 -> K1 (ONE-WAY streaming, K0 pushes events)
 %%   - Feedback: K1 -> K0 (ONE-WAY via obs.emit kind=feedback)
-%%   - IFL:     BIDIRECTIONAL to devices (K1 operates, inbound data -> K0)
+%%   - IFL:     BIDIRECTIONAL to ALL external services (company-hosted + WASM adapters)
 %% K0 PORTS (Bridge connects to):
 %%   - /k0/command.submit  - POST - Write any topic (ONE-WAY, no response)
 %%   - /k0/query.recall    - POST - Multi-selector recall bundles (REQUEST/RESPONSE)
@@ -31,14 +33,14 @@
 %%   beliefs.archive     → P02 (Evicted beliefs from SessionState)
 %%   history.archive     → P02 (Evicted turn history from SessionState)
 %%   plan.committed      → P02 (Planner Stage 4 committed plans)
-%%   device.event.*      → P02 (IFL inbound sensor data)
+%%   device.event.*      → P02 (IFL inbound: ifl.{category}.{adapter}.{event})
 %%   learning.feedback   → P06 (K1 feedback signals)
 %%   sync.delta          → P07 (CRDT device sync)
 %% QUERY SELECTORS (RecallSelector types):
 %%   type: episodic  - topic: memory.delta   - WAL position recall
 %%   type: semantic  - query: free-text      - pgvector similarity
 %%   type: session   - topic: session.*      - SessionState history
-%%   type: device    - topic: device.event.* - IFL event history
+%%   type: device    - topic: ifl.*         - IFL adapter event history
 %% SSE EVENTS (K0 → K1):
 %%   SSETraceEvent: cursor, topic, wal_pos, commit_ts, policy_stamp
 %%   memory.formed.v1         - Memory consolidation complete
@@ -126,18 +128,18 @@ graph LR
             MW_GAP_ANSWER["Gap Answer Writer<br/>topic: memory.delta<br/>body.correlation.gap_id"]:::k1_caller
         end
 
-        subgraph K1_TOOLS["Tools & Workflows (L4)"]
-            TOOL_PHILIPS["PhilipsHueTool<br/>Light control<br/>→ IFL HomeKitAdapter"]:::k1_tool
-            TOOL_NEST["NestTool<br/>Climate control<br/>→ IFL NestAdapter"]:::k1_tool
-            TOOL_TESLA["TeslaTool<br/>Vehicle control<br/>→ IFL TeslaAdapter"]:::k1_tool
-            TOOL_SONOS["SonosTool<br/>Audio control<br/>→ IFL SonosAdapter"]:::k1_tool
-            TOOL_CALENDAR["CalendarTool<br/>Schedule access"]:::k1_tool
-            TOOL_HEALTH["HealthTool<br/>Apple Watch data<br/>→ IFL HealthKitAdapter<br/>inbound: device.event.health"]:::k1_tool
+        subgraph K1_TOOLS["IFL-Connected Tools (Auto-Registered from Manifests)"]
+            TOOL_HOME["Home Tools<br/>tool.execute.home.hue.*<br/>tool.execute.home.nest.*<br/>via IFL -> company adapters"]:::k1_tool
+            TOOL_TRANSPORT["Transport Tools<br/>tool.execute.transport.tesla.*<br/>tool.execute.transport.uber.*<br/>via IFL -> company adapters"]:::k1_tool
+            TOOL_FINANCE["Finance Tools<br/>tool.read.finance.chase.*<br/>tool.execute.finance.venmo.*<br/>via IFL -> company adapters"]:::k1_tool
+            TOOL_HEALTH["Health Tools<br/>tool.read.health.fitbit.*<br/>tool.read.health.apple_health.*<br/>via IFL -> company adapters<br/>inbound: ifl.health.*.heart_rate"]:::k1_tool
+            TOOL_CALENDAR["Calendar Tools<br/>tool.execute.calendar.google.*<br/>tool.read.calendar.outlook.*<br/>via IFL -> company adapters"]:::k1_tool
+            TOOL_SHOPPING["Shopping Tools<br/>tool.execute.shopping.instacart.*<br/>tool.read.shopping.doordash.*<br/>via IFL -> company adapters"]:::k1_tool
         end
 
         subgraph K1_FABRIC["Capability Fabric (L2.5)"]
-            FAB_INVOKE["fabric.invoke()<br/>Tool capabilities<br/>→ GATEWAY_PORT for devices"]:::k1_caller
-            FAB_RECALL["fabric.invoke(k0.query)<br/>Memory recall<br/>→ QUERY_PORT for K0"]:::k1_caller
+            FAB_INVOKE["fabric.invoke(adapter, action)<br/>ALL external services via IFL<br/>-> GATEWAY_PORT -> IFL Runtime"]:::k1_caller
+            FAB_RECALL["fabric.invoke(k0.query)<br/>Memory recall<br/>-> QUERY_PORT for K0"]:::k1_caller
             FAB_SPAWN["fabric.spawn()<br/>Agent creation<br/>K1-INTERNAL (no K0)"]:::k1_caller
         end
 
@@ -184,7 +186,7 @@ graph LR
                 QRY_EPISODIC["type: episodic<br/>topic: memory.delta<br/>WAL recall by position"]:::bridge_envelope
                 QRY_SEMANTIC["type: semantic<br/>query: free-text<br/>pgvector similarity"]:::bridge_envelope
                 QRY_SESSION["type: session<br/>topic: session.*<br/>SessionState history"]:::bridge_envelope
-                QRY_DEVICE["type: device<br/>topic: device.event.*<br/>IFL event history"]:::bridge_envelope
+                QRY_DEVICE["type: device<br/>topic: ifl.*<br/>IFL adapter event history"]:::bridge_envelope
             end
 
             subgraph TRANSPORT_COMMAND["Command Path (K1 → K0) ONE-WAY FIRE-AND-FORGET"]
@@ -199,7 +201,7 @@ graph LR
                 CMD_BELIEFS["beliefs.archive<br/>schema://beliefs.archive<br/>Archived facts"]:::bridge_envelope
                 CMD_HISTORY["history.archive<br/>schema://history.archive<br/>Turn history"]:::bridge_envelope
                 CMD_PLAN["plan.committed<br/>schema://plan.committed<br/>Planner Stage 4"]:::bridge_envelope
-                CMD_DEVICE["device.event.*<br/>schema://device.event.*<br/>IFL inbound data"]:::bridge_envelope
+                CMD_DEVICE["ifl.*<br/>schema://ifl.{category}.{adapter}.{event}<br/>IFL inbound: all external services"]:::bridge_envelope
                 CMD_LEARNING["learning.feedback<br/>schema://learning.feedback<br/>K1 feedback to K0 P06"]:::bridge_envelope
                 CMD_SYNC["sync.delta<br/>schema://sync.delta<br/>CRDT sync to K0 P07"]:::bridge_envelope
             end
@@ -316,31 +318,26 @@ graph LR
         %% ==================================================================================
         %% BRIDGE IFL (Interkernel Fabric Language - BRIDGE OWNED)
         %% ==================================================================================
-        subgraph BRIDGE_IFL["4️⃣ IFL (Interkernel Fabric Language) - BRIDGE OWNED"]
+        subgraph BRIDGE_IFL["4 IFL (Universal Connector Protocol) - BRIDGE OWNED"]
             direction TB
 
-            subgraph IFL_CORE["IFL Core (bridge/ifl/)"]
-                IFL_PARSER["IFLParser<br/>parse(), validate()"]:::bridge_ifl
-                IFL_TRANSLATOR["IFLTranslator<br/>translate()"]:::bridge_ifl
-                IFL_REGISTRY["DeviceRegistry<br/>register(), lookup()"]:::bridge_registry
-                IFL_SCHEMA["SchemaManager<br/>validate payload"]:::bridge_internal
+            subgraph IFL_CORE["IFL Runtime (bridge/ifl/)"]
+                IFL_PARSER["IFLProtocolEngine<br/>to_ifl(), from_ifl(), translate_event()"]:::bridge_ifl
+                IFL_TRANSLATOR["ManifestIngestion<br/>pull, verify (FamilyOS CA), validate, store"]:::bridge_ifl
+                IFL_REGISTRY["AdapterRegistry<br/>register(), lookup(), list(category?)<br/>Status: CONNECTED, DEGRADED, OFFLINE, REVOKED"]:::bridge_registry
+                IFL_SCHEMA["ManifestValidator<br/>ifl_manifest.schema.yaml<br/>Safety band audit, schema completeness"]:::bridge_internal
             end
 
-            subgraph IFL_ADAPTERS["IFL Adapters (bridge/ifl/adapters/)"]
-                IFL_HOMEKIT["HomeKitAdapter<br/>Philips Hue, Locks"]:::bridge_ifl
-                IFL_NEST["NestAdapter<br/>Climate control"]:::bridge_ifl
-                IFL_TESLA["TeslaAdapter<br/>Vehicle API"]:::bridge_ifl
-                IFL_SONOS["SonosAdapter<br/>Audio control"]:::bridge_ifl
-                IFL_RING["RingAdapter<br/>Security cameras"]:::bridge_ifl
-                IFL_HEALTH["HealthKitAdapter<br/>Apple Watch"]:::bridge_ifl
-                IFL_MQTT["MqttAdapter<br/>Generic IoT"]:::bridge_ifl
-                IFL_FAMILY_SYNC["FamilySyncAdapter<br/>Device P2P sync"]:::bridge_ifl
+            subgraph IFL_ADAPTERS["IFL Adapter Dispatch (Company-Hosted + WASM)"]
+                IFL_HOSTED["CompanyHostedDispatcher<br/>HTTPS/2 + TLS 1.3 to company endpoint<br/>Primary model: adapter runs on company infra<br/>FamilyOS-signed manifest required"]:::bridge_ifl
+                IFL_WASM["WASMSandboxDispatcher<br/>Local WASM modules (offline-capable)<br/>64MB mem, 5s CPU, no network<br/>For: MQTT, Zigbee, BLE, local sensors"]:::bridge_ifl
+                IFL_FAMILY_SYNC["FamilySyncAdapter<br/>Device P2P sync (WASM)"]:::bridge_ifl
             end
 
-            subgraph IFL_INBOUND["IFL Inbound (Device → K0)"]
-                IFL_INBOUND_PARSER["InboundParser<br/>Device events/data"]:::bridge_ifl
-                IFL_INBOUND_ENVELOPE["envelope.to_envelope()<br/>topic: device.event.*"]:::bridge_envelope
-                IFL_INBOUND_CMD["→ K0 command.submit<br/>Persists sensor data"]:::bridge_internal
+            subgraph IFL_INBOUND["IFL Inbound Events (External -> K0 + K1)"]
+                IFL_INBOUND_PARSER["EventIngress<br/>WebhookReceiver, SSEStream, PollReceiver<br/>Verify adapter signature on events"]:::bridge_ifl
+                IFL_INBOUND_ENVELOPE["envelope.to_envelope()<br/>topic: ifl.{category}.{adapter}.{event}"]:::bridge_envelope
+                IFL_INBOUND_CMD["-> K0 command.submit (persist)<br/>-> K1 Event Bus (real-time notify)"]:::bridge_internal
             end
         end
 
@@ -521,18 +518,41 @@ graph LR
     end
 
     %% ======================================================================================
-    %% PHYSICAL DEVICES (Far Right - External hardware)
+    %% EXTERNAL SERVICES & DEVICES (Far Right - Company-hosted adapters + local hardware)
     %% ======================================================================================
-    subgraph PHYSICAL_DEVICES["🏠 PHYSICAL DEVICES"]
+    subgraph EXTERNAL_WORLD["EXTERNAL SERVICES & DEVICES (IFL Adapters)"]
         direction TB
 
-        DEV_HUE["Philips Hue<br/>Bridge + Lights"]:::device
-        DEV_NEST_HW["Nest<br/>Thermostat"]:::device
-        DEV_TESLA_CAR["Tesla<br/>Vehicle"]:::device
-        DEV_SONOS_SPK["Sonos<br/>Speakers"]:::device
-        DEV_RING_CAM["Ring<br/>Doorbell"]:::device
-        DEV_WATCH["Apple Watch<br/>Health"]:::device
-        DEV_IOT["IoT Devices<br/>MQTT"]:::device
+        subgraph EXT_HOME["Home"]
+            DEV_HUE["Philips Hue<br/>Company Adapter"]:::device
+            DEV_NEST_HW["Nest / Google Home<br/>Company Adapter"]:::device
+            DEV_RING_CAM["Ring<br/>Company Adapter"]:::device
+        end
+
+        subgraph EXT_TRANSPORT["Transport"]
+            DEV_TESLA_CAR["Tesla<br/>Company Adapter"]:::device
+            EXT_UBER["Uber<br/>Company Adapter"]:::ext_service
+        end
+
+        subgraph EXT_FINANCE["Finance"]
+            EXT_CHASE["Chase<br/>Company Adapter"]:::ext_service
+            EXT_VENMO["Venmo<br/>Company Adapter"]:::ext_service
+        end
+
+        subgraph EXT_HEALTH["Health"]
+            DEV_WATCH["Apple Watch<br/>HealthKit Adapter"]:::device
+            EXT_FITBIT["Fitbit<br/>Company Adapter"]:::ext_service
+        end
+
+        subgraph EXT_CALENDAR["Calendar & Comms"]
+            EXT_GCAL["Google Calendar<br/>Company Adapter"]:::ext_service
+            EXT_OUTLOOK["Outlook<br/>Company Adapter"]:::ext_service
+        end
+
+        subgraph EXT_LOCAL["Local / WASM"]
+            DEV_IOT["IoT Sensors<br/>MQTT / Zigbee"]:::device
+            DEV_SONOS_SPK["Sonos<br/>Local mDNS"]:::device
+        end
     end
 
     %% ======================================================================================
@@ -570,16 +590,16 @@ graph LR
     PROACTIVE_BUDGET -->|"budget ok"| CURIOSITY_AGENT
     CURIOSITY_AGENT -->|"user answers"| MW_GAP_ANSWER
 
-    %% Tools → Bridge (Device control)
-    TOOL_PHILIPS -->|"execute(set_brightness)"| GATEWAY_PORT
-    TOOL_NEST -->|"execute(set_temp)"| GATEWAY_PORT
-    TOOL_TESLA -->|"execute(unlock)"| GATEWAY_PORT
-    TOOL_SONOS -->|"execute(play)"| GATEWAY_PORT
-    TOOL_CALENDAR -->|"execute(read)"| GATEWAY_PORT
-    TOOL_HEALTH -->|"execute(query)"| GATEWAY_PORT
+    %% Tools -> Bridge (All external services via IFL)
+    TOOL_HOME -->|"execute(adapter, action)"| GATEWAY_PORT
+    TOOL_TRANSPORT -->|"execute(adapter, action)"| GATEWAY_PORT
+    TOOL_FINANCE -->|"execute(adapter, action)"| GATEWAY_PORT
+    TOOL_HEALTH -->|"execute(adapter, action)"| GATEWAY_PORT
+    TOOL_CALENDAR -->|"execute(adapter, action)"| GATEWAY_PORT
+    TOOL_SHOPPING -->|"execute(adapter, action)"| GATEWAY_PORT
 
-    %% Fabric → Bridge (Capability invocation)
-    FAB_INVOKE -->|"invoke(tool)"| GATEWAY_PORT
+    %% Fabric -> Bridge (Capability invocation via IFL)
+    FAB_INVOKE -->|"invoke(adapter, action)"| GATEWAY_PORT
     FAB_RECALL -->|"invoke(k0.query)"| QUERY_PORT
     %% FAB_SPAWN is K1-internal - no flow to Bridge/K0
 
@@ -651,18 +671,14 @@ graph LR
     TOOL_VALIDATOR -->|"check rate"| RATE_LIMITER
     RATE_LIMITER -->|"forward"| IFL_GATEWAY
 
-    %% IFL Gateway → IFL Core → IFL Adapters
-    IFL_GATEWAY -->|"parse"| IFL_PARSER
-    IFL_PARSER -->|"translate"| IFL_TRANSLATOR
-    IFL_TRANSLATOR -->|"lookup device"| IFL_REGISTRY
-    IFL_REGISTRY -->|"validate schema"| IFL_SCHEMA
-    IFL_SCHEMA -->|"route to adapter"| IFL_HOMEKIT
-    IFL_SCHEMA -->|"route to adapter"| IFL_NEST
-    IFL_SCHEMA -->|"route to adapter"| IFL_TESLA
-    IFL_SCHEMA -->|"route to adapter"| IFL_SONOS
-    IFL_SCHEMA -->|"route to adapter"| IFL_RING
-    IFL_SCHEMA -->|"route to adapter"| IFL_HEALTH
-    IFL_SCHEMA -->|"route to adapter"| IFL_MQTT
+    %% IFL Gateway → IFL Runtime → Adapter Dispatch
+    IFL_GATEWAY -->|"parse IFL envelope"| IFL_PARSER
+    IFL_PARSER -->|"ingest manifest / validate"| IFL_TRANSLATOR
+    IFL_TRANSLATOR -->|"lookup adapter"| IFL_REGISTRY
+    IFL_REGISTRY -->|"validate manifest schema"| IFL_SCHEMA
+    IFL_SCHEMA -->|"company-hosted adapter"| IFL_HOSTED
+    IFL_SCHEMA -->|"WASM sandboxed adapter"| IFL_WASM
+    IFL_SCHEMA -->|"family sync (P2P)"| IFL_FAMILY_SYNC
 
     %% Device Sync flow internal
     MDNS_SCANNER -->|"register"| DEVICE_REGISTRY
@@ -766,29 +782,35 @@ graph LR
     K1_SQLITE -.->|"NO K0 NEEDED"| SS_RESTORE
 
     %% ======================================================================================
-    %% DATA FLOWS: IFL → PHYSICAL DEVICES (BIDIRECTIONAL)
+    %% DATA FLOWS: IFL → EXTERNAL SERVICES & DEVICES (BIDIRECTIONAL)
     %% ======================================================================================
 
-    %% Outbound: K1 Tool → IFL Adapter → Device
-    IFL_HOMEKIT -->|"Hue API"| DEV_HUE
-    IFL_NEST -->|"Nest API"| DEV_NEST_HW
-    IFL_TESLA -->|"Tesla API"| DEV_TESLA_CAR
-    IFL_SONOS -->|"Sonos API"| DEV_SONOS_SPK
-    IFL_RING -->|"Ring API"| DEV_RING_CAM
-    IFL_HEALTH -->|"HealthKit"| DEV_WATCH
-    IFL_MQTT -->|"MQTT"| DEV_IOT
+    %% Outbound: Company-Hosted Dispatcher → Company Adapter endpoints
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| DEV_HUE
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| DEV_NEST_HW
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| DEV_TESLA_CAR
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| DEV_RING_CAM
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_UBER
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_CHASE
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_VENMO
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| DEV_WATCH
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_FITBIT
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_GCAL
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_OUTLOOK
 
-    %% Inbound: Device → IFL Adapter → Bridge → K0 command.submit (device.event.*)
-    DEV_WATCH -->|"health metrics"| IFL_HEALTH
-    DEV_RING_CAM -->|"motion events"| IFL_RING
-    DEV_NEST_HW -->|"temp readings"| IFL_NEST
-    DEV_IOT -->|"sensor data"| IFL_MQTT
-    IFL_HEALTH -->|"inbound data"| IFL_INBOUND_PARSER
-    IFL_RING -->|"inbound data"| IFL_INBOUND_PARSER
-    IFL_NEST -->|"inbound data"| IFL_INBOUND_PARSER
-    IFL_MQTT -->|"inbound data"| IFL_INBOUND_PARSER
-    IFL_INBOUND_PARSER -->|"parse + validate"| IFL_INBOUND_ENVELOPE
-    IFL_INBOUND_ENVELOPE -->|"device.event.*"| CMD_PORT
+    %% Outbound: WASM Sandboxed Dispatcher → Local devices
+    IFL_WASM -->|"MQTT / Zigbee / BLE"| DEV_IOT
+    IFL_WASM -->|"mDNS local"| DEV_SONOS_SPK
+
+    %% Inbound: External events → IFL EventIngress → envelope → K0 + K1
+    DEV_WATCH -->|"ifl.health.apple_health.*"| IFL_INBOUND_PARSER
+    EXT_FITBIT -->|"ifl.health.fitbit.*"| IFL_INBOUND_PARSER
+    DEV_RING_CAM -->|"ifl.home.ring.motion"| IFL_INBOUND_PARSER
+    DEV_NEST_HW -->|"ifl.home.nest.temp"| IFL_INBOUND_PARSER
+    DEV_IOT -->|"ifl.home.sensor.*"| IFL_INBOUND_PARSER
+    EXT_CHASE -->|"ifl.finance.chase.transaction"| IFL_INBOUND_PARSER
+    IFL_INBOUND_PARSER -->|"verify adapter signature"| IFL_INBOUND_ENVELOPE
+    IFL_INBOUND_ENVELOPE -->|"ifl.{category}.{adapter}.{event}"| CMD_PORT
 
     %% ======================================================================================
     %% DATA FLOWS: DEVICE SYNC MESH
@@ -837,6 +859,9 @@ graph LR
 
     %% Physical Devices (Gray)
     classDef device fill:#78909c,stroke:#37474f,stroke-width:2px,color:#fff
+
+    %% External Services (Company-hosted adapters - Teal)
+    classDef ext_service fill:#26a69a,stroke:#00695c,stroke-width:2px,color:#fff,font-weight:bold
 
     %% Family Device Mesh
     classDef family_k0 fill:#a5d6a7,stroke:#2e7d32,stroke-width:1px,color:#000

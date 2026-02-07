@@ -775,7 +775,8 @@ class TestFlatBufferSerialization:
         """Test deserializing from FlatBuffer."""
         data = populated_section.to_flatbuffer()
 
-        restored = PersonaSection.from_flatbuffer(data)
+        restored = PersonaSection()
+        restored.from_flatbuffer(data)
 
         assert restored.vocabulary_count() == populated_section.vocabulary_count()
         assert restored.is_personalized() == populated_section.is_personalized()
@@ -789,7 +790,8 @@ class TestFlatBufferSerialization:
         section.add_trait("patience", 0.9)
 
         data = section.to_flatbuffer()
-        restored = PersonaSection.from_flatbuffer(data)
+        restored = PersonaSection()
+        restored.from_flatbuffer(data)
 
         # Float32 precision from FlatBuffer
         assert abs(restored.get_personality().warmth - 0.8) < 1e-6
@@ -808,7 +810,8 @@ class TestFlatBufferSerialization:
         section.set_language("es-ES")
 
         data = section.to_flatbuffer()
-        restored = PersonaSection.from_flatbuffer(data)
+        restored = PersonaSection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_voice().speaking_rate == 1.5
         # Float32 precision from FlatBuffer
@@ -822,7 +825,8 @@ class TestFlatBufferSerialization:
         section.add_vocabulary("mom", "Alice Smith")
 
         data = section.to_flatbuffer()
-        restored = PersonaSection.from_flatbuffer(data)
+        restored = PersonaSection()
+        restored.from_flatbuffer(data)
 
         assert restored.vocabulary_count() == 2
         assert restored.get_vocabulary("the cottage") == "vacation home"
@@ -836,7 +840,8 @@ class TestFlatBufferSerialization:
         section.set_explain_reasoning(True)
 
         data = section.to_flatbuffer()
-        restored = PersonaSection.from_flatbuffer(data)
+        restored = PersonaSection()
+        restored.from_flatbuffer(data)
 
         prefs = restored.get_response_prefs()
         assert prefs.style == InteractionStyle.TECHNICAL
@@ -849,7 +854,8 @@ class TestFlatBufferSerialization:
         section.mark_calibrated(turn_number=25, confidence=0.9)
 
         data = section.to_flatbuffer()
-        restored = PersonaSection.from_flatbuffer(data)
+        restored = PersonaSection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_last_calibrated_turn() == 25
         # Float32 precision from FlatBuffer
@@ -995,7 +1001,8 @@ class TestEdgeCases:
         section.add_trait("Geduld", 0.9)  # German for patience
 
         data = section.to_flatbuffer()
-        restored = PersonaSection.from_flatbuffer(data)
+        restored = PersonaSection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_vocabulary("die Katze") == "the cat named Müller"
         assert restored.get_personality().profile_type == "freundlich"

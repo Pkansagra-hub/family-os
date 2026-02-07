@@ -686,7 +686,8 @@ class TestFlatBufferSerialization:
         """Test deserializing from FlatBuffer."""
         data = populated_section.to_flatbuffer()
 
-        restored = TelemetrySection.from_flatbuffer(data)
+        restored = TelemetrySection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_turn_count() == 0  # Not stored
         assert restored.get_tokens().total_tokens == populated_section.get_tokens().total_tokens
@@ -700,7 +701,8 @@ class TestFlatBufferSerialization:
         )
 
         data = section.to_flatbuffer()
-        restored = TelemetrySection.from_flatbuffer(data)
+        restored = TelemetrySection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_tokens().input_tokens == 500
         assert restored.get_tokens().output_tokens == 1000
@@ -714,7 +716,8 @@ class TestFlatBufferSerialization:
         )
 
         data = section.to_flatbuffer()
-        restored = TelemetrySection.from_flatbuffer(data)
+        restored = TelemetrySection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_cost().total_cost_microdollars == 5_000_000
         assert restored.get_cost().reasoning_cost == 2_000_000
@@ -725,7 +728,8 @@ class TestFlatBufferSerialization:
             section.record_latency(duration_ms=100 + i * 10)
 
         data = section.to_flatbuffer()
-        restored = TelemetrySection.from_flatbuffer(data)
+        restored = TelemetrySection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_latency().min_ms == section.get_latency().min_ms
         assert restored.get_latency().max_ms == section.get_latency().max_ms
@@ -737,7 +741,8 @@ class TestFlatBufferSerialization:
         section.record_error(ErrorType.MODEL, turn_number=1, message="Test error")
 
         data = section.to_flatbuffer()
-        restored = TelemetrySection.from_flatbuffer(data)
+        restored = TelemetrySection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_errors().total_errors == 1
         assert restored.get_errors().model_errors == 1
@@ -749,7 +754,8 @@ class TestFlatBufferSerialization:
         section.record_turn(turn_number=2, duration_ms=200, had_error=True)
 
         data = section.to_flatbuffer()
-        restored = TelemetrySection.from_flatbuffer(data)
+        restored = TelemetrySection()
+        restored.from_flatbuffer(data)
 
         timings = restored.get_turn_timings()
         assert len(timings) == 2
@@ -765,7 +771,8 @@ class TestFlatBufferSerialization:
             section.record_latency(duration_ms=600)
 
         data = section.to_flatbuffer()
-        restored = TelemetrySection.from_flatbuffer(data)
+        restored = TelemetrySection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_summary().budget_sla_met is False
         assert restored.get_summary().latency_sla_met is False

@@ -1,0 +1,856 @@
+%% =====================================================================================
+%% PLANNER.MMD — K1 LLM-Powered Planning Engine
+%% =====================================================================================
+%%
+%% ROLE: 4-Stage LLM-Powered Planning Pipeline
+%%   Transforms PlanRequest into CommittedPlan via staged intelligence.
+%%   Conditional: Invoked ONLY for HIGH complexity tasks (Orchestrator decides).
+%%   NEVER writes SessionState. NEVER executes capabilities. NEVER spawns agents.
+%%   ALL tool calls are read-only discovery. Stage 4 COMMIT is deterministic (no LLM).
+%%
+%% GOVERNING DOCS:
+%%   - whiteboard_concierge_orchestrator_planner_fabric.md Section 5 (Planner)
+%%   - whiteboard_concierge_orchestrator_planner_fabric.md Section 12-16 (Resolved)
+%%   - k1_cognitive_architecture_skeleton.mmd L3_PLANNER
+%%   - orchestrator.mmd IPlannerPort + TP_PLANNER touchpoint
+%%   - fabric.mmd CALLER_PLANNER + Retrieval Flow
+%%   - concierge.mmd CB_PLANNER + TP_PLANNER
+%%
+%% POSITION IN K1 STACK:
+%%   L0 Rhythm -> L1 Concierge -> L2 Orchestrator -> L3 PLANNER -> L2.5 Fabric
+%%                                                   ^ we are here
+%%   Activated: Orchestrator routes HIGH tier tasks -> Planner Mailbox
+%%   Returns: CommittedPlan via k1.planner.plan.ready event
+%%
+%% =====================================================================================
+%% LLM CALL MATRIX (4 stages, 3 use LLM)
+%% =====================================================================================
+%%
+%% | Stage    | LLM? | Budget      | Purpose                                    |
+%% |----------|------|-------------|--------------------------------------------|
+%% | SKETCH   | YES  | ~2K tokens  | Rough plan from intent + discovered caps    |
+%% | EXPAND   | YES  | ~1K tokens  | Map tools, params, prompts to steps         |
+%% | VALIDATE | YES  | ~500 tokens | Arbiter: coherence, safety, feasibility     |
+%% | COMMIT   | NO   | 0 tokens    | Deterministic: persist to K0 WAL            |
+%%
+%% HIL LLM calls (interruptive, not counted in stage budgets):
+%% | HIL Type                 | Budget      | Stage    |
+%% |--------------------------|-------------|----------|
+%% | Requirement Clarification| ~300 tokens | Stage 1  |
+%% | Plan Approval            | ~400 tokens | Stage 3  |
+%%
+%% =====================================================================================
+%% DISCOVERY TOOL MATRIX (4 tools, ALL read-only)
+%% =====================================================================================
+%%
+%% | Tool                      | Routes To            | Used In Stages     | Latency |
+%% |---------------------------|----------------------|--------------------|---------|
+%% | discover_capabilities()   | Fabric Retrieval     | 1 SKETCH, 2 EXPAND | <50ms   |
+%% | find_relevant_prompts()   | Fabric Retrieval     | 2 EXPAND           | <50ms   |
+%% | query_planning_context()  | SessionState (direct) | 1 SKETCH          | <10ms   |
+%% | recall_for_planning()     | K0 Bridge            | 1 SKETCH           | <100ms  |
+%%
+%% Max tool calls per plan: 6 (3 in SKETCH + 3 in EXPAND)
+%%
+%% =====================================================================================
+%% ENVELOPE SCHEMAS
+%% =====================================================================================
+%%
+%% INBOUND:
+%%   PlanRequest {
+%%     request_id: uuid,
+%%     intent: string,
+%%     constraints: { max_steps: int, timeout_ms: int, required_capabilities: string[] },
+%%     context: { tier: "HIGH", family_member_id: string, session_id: string },
+%%     trace_id: string
+%%   }
+%%
+%%   MicroReplanRequest {               (ORCH-13: Adaptive Blind DAG)
+%%     request_id: uuid,
+%%     plan_id: uuid,
+%%     remaining_steps: Step[],         (only uncompleted steps)
+%%     failure_context: { step_id: string, error: string, partial_result: any },
+%%     trace_id: string
+%%   }
+%%
+%% OUTBOUND:
+%%   PlanAck {
+%%     request_id: uuid,
+%%     status: "accepted" | "rejected",
+%%     reason: string | null,
+%%     estimated_duration_ms: int
+%%   }
+%%
+%%   CommittedPlan {
+%%     plan_id: uuid,
+%%     request_id: uuid,
+%%     intent: string,
+%%     created_at: timestamp,
+%%     token_budget_max: int,           (ORCH-14: total budget for execution)
+%%     steps: [
+%%       {
+%%         id: string,                  (e.g., "s1", "s2")
+%%         capability: string,          (e.g., "tool.execute.send_message")
+%%         prompt_template: string | null,
+%%         params: {},
+%%         deps: string[],              (step IDs this depends on)
+%%         token_budget: int,           (per-step token budget)
+%%         output_schema: {} | null,    (ORCH-15: expected output shape)
+%%         tools_granted: string[] | null  (FAB-07: scoped tool list for agent steps)
+%%       }
+%%     ],
+%%     dependencies: { step_id: [dep_step_ids] },
+%%     trace_id: string
+%%   }
+%%
+%% HIL RESPONSE EVENTS (INBOUND via Event Bus -- GAP-1 fix):
+%%   HILClarificationResponse {          (k1.hil.clarification_response.v1)
+%%     request_id: uuid,                 (correlates to original HIL request)
+%%     plan_id: uuid,
+%%     user_response: string,            (user's answer to clarification question)
+%%     trace_id: string
+%%   }
+%%
+%%   HILApprovalResponse {               (k1.hil.approval_response.v1)
+%%     request_id: uuid,
+%%     plan_id: uuid,
+%%     response_type: "approve" | "modify" | "reject",
+%%     modifications: {} | null,         (user modifications if response_type=modify)
+%%     trace_id: string
+%%   }
+%%
+%% =====================================================================================
+%% INVARIANTS (PLAN-01 through PLAN-12)
+%% =====================================================================================
+%%
+%% PLAN-01: NEVER writes SessionState (all reads are lock-free multi-reader)
+%% PLAN-02: ALL 4 discovery tools are read-only (zero side effects)
+%% PLAN-03: Stage 4 COMMIT is deterministic (zero LLM calls)
+%% PLAN-04: Max planning time 45s (CB_PLANNER timeout, owned by Concierge)
+%% PLAN-05: Max 6 discovery tool calls per plan
+%% PLAN-06: NEVER executes capabilities (discovery only, no invoke_capability)
+%% PLAN-07: CommittedPlan MUST include token_budget_max and per-step token_budget
+%% PLAN-08: Each step MUST reference valid capability from Fabric Registry
+%% PLAN-09: Plan dependencies MUST form a DAG (no cycles -- validated in Stage 3)
+%% PLAN-10: HIL clarification max 2 rounds per plan (then best-effort)
+%% PLAN-11: All LLM calls carry budget{max_tokens, timeout_ms} (no unbounded calls)
+%% PLAN-12: Micro-replan adjusts remaining steps only (completed steps frozen)
+%%
+%% =====================================================================================
+%% PERFORMANCE BUDGET
+%% =====================================================================================
+%%
+%% | Phase               | Latency    | Tokens  | System Owned? |
+%% |---------------------|------------|---------|---------------|
+%% | Stage 1 SKETCH      | 3-8s       | ~2K     | YES           |
+%% | Stage 2 EXPAND      | 2-5s       | ~1K     | YES           |
+%% | Stage 3 VALIDATE    | 1-3s       | ~500    | YES           |
+%% | Stage 4 COMMIT      | <100ms     | 0       | YES           |
+%% | Discovery tool call | <50ms      | 0       | NO (Fabric)   |
+%% | Plan delivery       | <10ms      | 0       | YES           |
+%% | Total planning      | 10-30s     | ~3.5K   | COMPOSITE     |
+%% | Micro-replan        | 5-15s      | ~2K     | YES           |
+%% | HIL round-trip      | user-bound | ~300-400| NO (user)     |
+%%
+%% =====================================================================================
+
+flowchart TB
+
+%% =====================================================================================
+%% PLANNER CORE
+%% =====================================================================================
+
+subgraph PLANNER_CORE["Planner Core (L3 -- LLM-Powered Planning Engine)"]
+  direction TB
+
+  PLANNER_MAILBOX["Planner Mailbox<br/>WFQ Priority: INTERACTIVE<br/>Queue: PlanRequest, MicroReplanRequest<br/>Max depth: 5 (reject beyond)"]:::mailbox
+
+  PLANNER_AGENT["PlannerAgent<br/>Single-threaded async coordinator<br/>One plan at a time (V1)<br/>LLM-powered 4-Stage Pipeline<br/>4 read-only discovery tools<br/>NEVER writes SessionState<br/>NEVER executes capabilities"]:::planner
+
+  PIPELINE_CTRL["PipelineController<br/>Orchestrates SKETCH -> EXPAND -> VALIDATE -> COMMIT<br/>Tracks stage transitions, token usage, tool call count<br/>Handles micro-replan re-entry"]:::service
+
+  PLAN_FSM["Plan State Machine<br/>States: IDLE -> SKETCHING -> EXPANDING -><br/>VALIDATING -> COMMITTING -> COMPLETED | FAILED | CANCELLED<br/>Micro-replan: MICRO_SKETCH -> MICRO_EXPAND -><br/>MICRO_VALIDATE -> COMMITTING"]:::brain
+end
+
+%% =====================================================================================
+%% 4-STAGE PIPELINE
+%% =====================================================================================
+
+subgraph PIPELINE["4-Stage Planning Pipeline"]
+  direction TB
+
+  subgraph STAGE1["Stage 1: SKETCH (LLM -- ~2K tokens, 3-8s)"]
+    direction TB
+
+    S1_ENTRY["Receive PlanRequest<br/>Extract intent + constraints"]:::step
+    S1_DISCOVER["discover_capabilities(domain, intent)<br/>Semantic Top-K from Fabric Retrieval"]:::tool_fabric
+    S1_QUERY_CTX["query_planning_context(sections)<br/>Read beliefs, persona, temporal from SessionState"]:::tool_read
+    S1_RECALL["recall_for_planning(query)<br/>K0 long-term memory via Bridge"]:::tool_read
+    S1_LLM["LLM: Generate rough plan<br/>Input: intent + capabilities + context + memory<br/>Output: sketch{steps[], rationale}<br/>Budget: {max_tokens: 2048, timeout_ms: 8000}"]:::llm
+    S1_OUTPUT["SketchResult<br/>rough_steps[], capability_candidates[], rationale"]:::step
+  end
+
+  subgraph STAGE2["Stage 2: EXPAND (LLM -- ~1K tokens, 2-5s)"]
+    direction TB
+
+    S2_ENTRY["Receive SketchResult<br/>Map rough steps to concrete tools"]:::step
+    S2_DISCOVER["discover_capabilities(specific_tools)<br/>Refine Top-K for each step"]:::tool_fabric
+    S2_FIND_PROMPTS["find_relevant_prompts(intent, domain)<br/>Semantic Top-K from Prompt Registry"]:::tool_fabric
+    S2_LLM["LLM: Expand and parameterize<br/>Input: sketch + refined capabilities + prompts<br/>Output: expanded_plan{steps with params, prompts, deps}<br/>Budget: {max_tokens: 1024, timeout_ms: 5000}"]:::llm
+    S2_OUTPUT["ExpandedPlan<br/>steps[] with capability, params, prompt_template,<br/>deps, token_budget, output_schema, tools_granted"]:::step
+  end
+
+  subgraph STAGE3["Stage 3: VALIDATE (LLM Arbiter -- ~500 tokens, 1-3s)"]
+    direction TB
+
+    S3_ENTRY["Receive ExpandedPlan<br/>Validate coherence and feasibility"]:::step
+    S3_DAG_CHECK["DAG Cycle Detection<br/>Verify dependencies form acyclic graph<br/>(deterministic, no LLM)"]:::engine
+    S3_CAP_CHECK["Capability Validation<br/>Verify all referenced capabilities exist<br/>in Fabric Registry (deterministic)"]:::engine
+    S3_LLM["LLM Arbiter: Validate plan quality<br/>Input: expanded plan + original intent<br/>Checks: coherence, safety, completeness, feasibility<br/>Output: verdict{approved|revise|reject, reasons[]}<br/>Budget: {max_tokens: 512, timeout_ms: 3000}"]:::llm
+    S3_VERDICT["ValidationVerdict<br/>status: approved | revise | reject<br/>reasons[], suggested_fixes[]"]:::step
+  end
+
+  subgraph STAGE4["Stage 4: COMMIT (Deterministic -- 0 tokens, <100ms)"]
+    direction TB
+
+    S4_ENTRY["Receive validated ExpandedPlan<br/>NO LLM call (PLAN-03)"]:::step
+    S4_ASSIGN_ID["Assign plan_id (uuid)<br/>Set created_at timestamp"]:::step
+    S4_BUILD["Build CommittedPlan<br/>Assemble steps, dependencies, token_budget_max<br/>Freeze plan structure"]:::step
+    S4_PERSIST["Persist to K0 WAL<br/>Via IBridgePort (fire-and-forget)<br/>Idempotent: plan_id is dedup key"]:::step
+    S4_EMIT["Emit k1.planner.plan.ready<br/>Via IEventPort<br/>Payload: CommittedPlan"]:::step
+  end
+end
+
+%% =====================================================================================
+%% MICRO-REPLAN (ORCH-13: Adaptive Blind DAG)
+%% =====================================================================================
+
+subgraph MICRO_REPLAN["Micro-Replan (ORCH-13 -- Partial Pipeline Re-Entry)"]
+  direction TB
+
+  MR_ENTRY["Receive MicroReplanRequest<br/>remaining_steps + failure_context<br/>Completed steps are FROZEN (PLAN-12)"]:::step
+
+  MR_SKETCH["Micro-SKETCH<br/>LLM: re-plan remaining steps only<br/>Input: original intent + remaining + failure<br/>Budget: {max_tokens: 1024, timeout_ms: 5000}"]:::llm
+
+  MR_EXPAND["Micro-EXPAND<br/>LLM: re-map tools for replacement steps<br/>Budget: {max_tokens: 512, timeout_ms: 3000}"]:::llm
+
+  MR_VALIDATE["Micro-VALIDATE<br/>LLM Arbiter: validate replacement plan<br/>Budget: {max_tokens: 256, timeout_ms: 2000}"]:::llm
+
+  MR_OUTPUT["Partial CommittedPlan<br/>Only replacement steps for failed portion<br/>Orchestrator merges with completed steps"]:::step
+end
+
+%% =====================================================================================
+%% DISCOVERY TOOLS (4 Read-Only Tools)
+%% =====================================================================================
+
+subgraph DISCOVERY_TOOLS["Discovery Tools (4 Tools -- ALL Read-Only, PLAN-02)"]
+  direction TB
+
+  DTOOL_DISCOVER_CAPS["discover_capabilities(domain?, intent?)<br/>Semantic Top-K search: Tool + Agent registries<br/>Returns: Top-K capabilities with input/output schemas<br/>Route: IFabricRetrievalPort -> Fabric Retrieval API<br/>Latency: <50ms"]:::tool_fabric
+
+  DTOOL_FIND_PROMPTS["find_relevant_prompts(intent?, domain?)<br/>Semantic Top-K search: Prompt Registry<br/>Returns: Top-K prompt templates with variable defs<br/>Route: IFabricRetrievalPort -> Fabric Retrieval API<br/>Latency: <50ms"]:::tool_fabric
+
+  DTOOL_QUERY_CTX["query_planning_context(sections?)<br/>Reads SessionState sections for plan parameterization<br/>Returns: beliefs, persona, entities, temporal context<br/>Route: IStateReadPort -> SessionState (multi-reader)<br/>Latency: <10ms"]:::tool_read
+
+  DTOOL_RECALL["recall_for_planning(query)<br/>K0 long-term memory: historical preferences/outcomes<br/>Returns: facts, prior outcomes, user preferences<br/>Route: IBridgePort -> K0 Bridge<br/>Latency: <100ms"]:::tool_read
+end
+
+%% =====================================================================================
+%% HIL SYSTEM (Human-In-The-Loop)
+%% =====================================================================================
+
+subgraph HIL_SYSTEM["HIL System (2 Interaction Points)"]
+  direction TB
+
+  HIL_CLARIFICATION["Requirement Clarification (Stage 1)<br/>Trigger: intent ambiguous OR missing constraints<br/>LLM generates natural-language question (~300 tokens)<br/>Route: k1.hil.clarification.v1 -> Concierge -> User<br/>Return: k1.hil.clarification_response.v1 via Event Bus<br/>Concierge correlates via request_id in PENDING_CLARIFICATIONS<br/>Max rounds: 2 (PLAN-10)<br/>Timeout: 60s per round, then best-effort"]:::hil
+
+  HIL_APPROVAL["Plan Approval (Stage 3)<br/>Trigger: plan has HIGH-impact operations<br/>LLM formats plan summary + options (~400 tokens)<br/>Route: k1.hil.approval_request.v1 -> Concierge -> User<br/>Return: k1.hil.approval_response.v1 via Event Bus<br/>Concierge correlates via request_id in PENDING_CLARIFICATIONS<br/>Options: approve | modify | reject<br/>Timeout: 120s, then auto-approve if safe"]:::hil
+end
+
+%% =====================================================================================
+%% PORTS (Hexagonal Architecture Boundary -- 7 Ports)
+%% =====================================================================================
+
+subgraph PORTS["Ports (7 Hexagonal Boundaries -- PLAN-01: No Write Ports to SessionState)"]
+  direction TB
+
+  PORT_MAILBOX["IMailboxPort<br/>receive() -> PlanRequest | MicroReplanRequest<br/>ack(request_id) -> PlanAck<br/>cancel(request_id) -> void"]:::port
+
+  PORT_LLM["ILLMPort (Capability-Driven)<br/>execute(HubRequest{capability, payload, constraints}) -> HubResponse<br/>Capabilities: CHAT, TOOL_CALL, STRUCTURED<br/>Budget: {max_tokens, timeout_ms} per stage<br/>All 3 LLM stages + HIL prompts route here"]:::port
+
+  PORT_FABRIC_RETRIEVAL["IFabricRetrievalPort<br/>discover_capabilities(query) -> RetrievalResult[]<br/>find_relevant_prompts(query) -> RetrievalResult[]<br/>Read-only Fabric Retrieval API access"]:::port
+
+  PORT_STATE_READ["IStateReadPort<br/>read_sections(sections[]) -> StateSnapshot<br/>Multi-reader, lock-free (PLAN-01)<br/>Sections: beliefs, persona, control, temporal"]:::port
+
+  PORT_BRIDGE["IBridgePort<br/>recall(query, selectors[]) -> RecallResponse<br/>persist_plan(CommittedPlan) -> void<br/>K0 read path + WAL write path"]:::port
+
+  PORT_DELTA["IDeltaEmitPort<br/>emit(delta) -> void (fire-and-forget)<br/>All planning deltas: k1.planner.delta.v1<br/>NEVER writes SessionState directly"]:::port
+
+  PORT_EVENT["IEventPort<br/>publish(topic, payload) -> void<br/>subscribe(topic, handler) -> Subscription<br/>Pub: plan.ready, plan.failed, plan.cancelled<br/>Sub: plan.request, plan.cancel,<br/>     k1.hil.clarification_response.v1,<br/>     k1.hil.approval_response.v1"]:::port
+end
+
+%% =====================================================================================
+%% ADAPTERS (Production + Test -- Port Implementations)
+%% =====================================================================================
+
+subgraph ADAPTERS_PROD["Production Adapters (7)"]
+  direction TB
+
+  ADAPT_MAILBOX["MailboxAdapter<br/>WFQ mailbox with priority queue<br/>Dequeue: FIFO within priority band<br/>MicroReplanRequest: elevated priority"]:::adapter
+
+  ADAPT_LLM["LLMGatewayAdapter (Capability-Driven)<br/>Routes HubRequest{CHAT|TOOL_CALL|STRUCTURED} to Model Hub<br/>via LLM Request Bus<br/>Includes prompt compilation<br/>Inherits CB_MODEL protection (per provider manifest)<br/>See: k1/model_hub/model_hub.mmd"]:::adapter
+
+  ADAPT_FABRIC_RET["FabricRetrievalAdapter<br/>HTTP client to Fabric Retrieval API<br/>Timeout: 50ms, retry: 1<br/>Returns RetrievalResult[] (Top-K)"]:::adapter
+
+  ADAPT_STATE["SessionStateReadAdapter<br/>Multi-reader lock-free access<br/>Reads HOT sections only<br/>No write capability (PLAN-01 enforced at compile time)"]:::adapter
+
+  ADAPT_BRIDGE["BridgeAdapter<br/>K0 Bridge client<br/>recall() for reads, persist_plan() for WAL writes<br/>Fire-and-forget on persist"]:::adapter
+
+  ADAPT_DELTA["DeltaBusAdapter<br/>Publish-only to DeltaBus<br/>k1.planner.delta.v1 topic<br/>Fire-and-forget, log on failure"]:::adapter
+
+  ADAPT_EVENT["EventBusAdapter<br/>Pub/sub on K1 Event Bus<br/>Publish: plan.ready, plan.failed, plan.cancelled<br/>Subscribe: plan.request, plan.cancel"]:::adapter
+end
+
+subgraph ADAPTERS_TEST["Test Adapters (7 -- In-Memory)"]
+  direction TB
+
+  ADAPT_TEST_MAILBOX["TestMailboxAdapter<br/>In-memory queue, injectable PlanRequests"]:::adapter_test
+  ADAPT_TEST_LLM["TestLLMAdapter<br/>Deterministic responses, per-stage configurable"]:::adapter_test
+  ADAPT_TEST_FABRIC["TestFabricRetrievalAdapter<br/>Preset capabilities and prompts"]:::adapter_test
+  ADAPT_TEST_STATE["TestStateReadAdapter<br/>In-memory StateSnapshot"]:::adapter_test
+  ADAPT_TEST_BRIDGE["TestBridgeAdapter<br/>In-memory recall + persist capture"]:::adapter_test
+  ADAPT_TEST_DELTA["TestDeltaAdapter<br/>Capture emitted deltas for assertion"]:::adapter_test
+  ADAPT_TEST_EVENT["TestEventAdapter<br/>Capture published events for assertion"]:::adapter_test
+end
+
+%% =====================================================================================
+%% INVARIANTS (PLAN-01 through PLAN-12)
+%% =====================================================================================
+
+subgraph INVARIANTS["Invariants (PLAN-01..PLAN-12)"]
+  direction TB
+
+  subgraph INV_OWNERSHIP["Ownership and Access Control"]
+    direction TB
+
+    INV_01["PLAN-01: NEVER writes SessionState<br/>All reads are lock-free multi-reader<br/>Enforced by: IStateReadPort (no write methods)"]:::invariant
+
+    INV_02["PLAN-02: ALL 4 tools are read-only<br/>Zero side effects on any tool call<br/>Enforced by: ToolCallRouter (no action tools)"]:::invariant
+
+    INV_06["PLAN-06: NEVER executes capabilities<br/>Discovery only -- no invoke_capability()<br/>Enforced by: IFabricRetrievalPort (retrieval-only)"]:::invariant
+  end
+
+  subgraph INV_DETERMINISM["Determinism and Safety"]
+    direction TB
+
+    INV_03["PLAN-03: Stage 4 COMMIT is deterministic<br/>Zero LLM calls in COMMIT<br/>Enforced by: CommitService (no ILLMPort dependency)"]:::invariant
+
+    INV_09["PLAN-09: Plan deps MUST form DAG<br/>No cycles -- validated in Stage 3<br/>Enforced by: ValidateService DAG cycle detection"]:::invariant
+
+    INV_08["PLAN-08: Each step references valid capability<br/>From Fabric Registry (live validation)<br/>Enforced by: ValidateService capability check"]:::invariant
+  end
+
+  subgraph INV_RATE["Rate Limits and Bounds"]
+    direction TB
+
+    INV_04["PLAN-04: Max planning time 45s<br/>CB_PLANNER timeout (owned by Concierge)<br/>Enforced by: Concierge FabricOrchestratorAdapter"]:::invariant
+
+    INV_05["PLAN-05: Max 6 discovery tool calls per plan<br/>3 in SKETCH + 3 in EXPAND<br/>Enforced by: ToolCallRouter counter"]:::invariant
+
+    INV_10["PLAN-10: HIL clarification max 2 rounds<br/>Then proceed with best-effort plan<br/>Enforced by: HILCoordinator round counter"]:::invariant
+  end
+
+  subgraph INV_TOKEN["Token Management"]
+    direction TB
+
+    INV_07["PLAN-07: CommittedPlan MUST include<br/>token_budget_max + per-step token_budget<br/>Enforced by: CommitService build validation"]:::invariant
+
+    INV_11["PLAN-11: All LLM calls carry budget<br/>{max_tokens, timeout_ms} -- no unbounded calls<br/>Enforced by: PipelineController budget injection"]:::invariant
+  end
+
+  subgraph INV_MICRO["Micro-Replan Safety"]
+    direction TB
+
+    INV_12["PLAN-12: Micro-replan adjusts remaining only<br/>Completed steps are FROZEN<br/>Enforced by: MicroReplanService step filter"]:::invariant
+  end
+end
+
+%% =====================================================================================
+%% PERFORMANCE BASELINES
+%% =====================================================================================
+
+subgraph PERF["Performance Baselines (System-Owned Latencies)"]
+  direction TB
+
+  PERF_SKETCH["Stage 1 SKETCH<br/>p50: 4s | p99: 8s<br/>Tokens: ~2K"]:::perf
+  PERF_EXPAND["Stage 2 EXPAND<br/>p50: 3s | p99: 5s<br/>Tokens: ~1K"]:::perf
+  PERF_VALIDATE["Stage 3 VALIDATE<br/>p50: 2s | p99: 3s<br/>Tokens: ~500"]:::perf
+  PERF_COMMIT["Stage 4 COMMIT<br/>p50: 20ms | p99: 100ms<br/>Tokens: 0"]:::perf
+  PERF_TOTAL["Total Planning<br/>p50: 12s | p99: 30s<br/>Tokens: ~3.5K"]:::perf
+  PERF_MICRO["Micro-Replan<br/>p50: 8s | p99: 15s<br/>Tokens: ~2K"]:::perf
+  PERF_DELIVERY["Plan Delivery<br/>p50: 2ms | p99: 10ms<br/>Event publish only"]:::perf
+end
+
+%% =====================================================================================
+%% INTERNAL SERVICES (~330 tests)
+%% =====================================================================================
+
+subgraph SERVICES["Internal Services (~330 tests)"]
+  direction TB
+
+  SVC_PIPELINE["PipelineController<br/>Top-level pipeline coordinator<br/>Stage transitions, token tracking, tool call counting<br/>Micro-replan re-entry routing<br/>~80 tests"]:::service
+
+  SVC_SKETCH["SketchService<br/>Stage 1: LLM rough plan generation<br/>Calls: discover_capabilities, query_planning_context,<br/>recall_for_planning. Triggers HIL clarification.<br/>~60 tests"]:::service
+
+  SVC_EXPAND["ExpandService<br/>Stage 2: Tool mapping and parameterization<br/>Calls: discover_capabilities (refined), find_relevant_prompts<br/>Assigns token_budget, output_schema, tools_granted per step<br/>~50 tests"]:::service
+
+  SVC_VALIDATE["ValidateService<br/>Stage 3: Deterministic checks + LLM arbiter<br/>DAG cycle detection, capability existence check<br/>Triggers HIL approval. Verdict: approved|revise|reject<br/>~45 tests"]:::service
+
+  SVC_COMMIT["CommitService<br/>Stage 4: Deterministic commit (PLAN-03)<br/>Builds CommittedPlan, assigns plan_id<br/>Persists K0 WAL, emits plan.ready. NO ILLMPort dep.<br/>~30 tests"]:::service
+
+  SVC_TOOL_ROUTER["ToolCallRouter<br/>Routes 4 discovery tools to correct backends<br/>Fabric Retrieval, SessionState, Bridge<br/>Enforces PLAN-05 (max 6 calls/plan)<br/>~35 tests"]:::service
+
+  SVC_HIL["HILCoordinator<br/>Manages clarification and approval flows<br/>LLM prompt generation for HIL messages<br/>Round counting (PLAN-10: max 2), timeout handling<br/>Subscribes to k1.hil.clarification_response.v1<br/>Subscribes to k1.hil.approval_response.v1<br/>Correlates responses via request_id<br/>~35 tests"]:::service
+end
+
+%% =====================================================================================
+%% LIFECYCLE (6 Phases)
+%% =====================================================================================
+
+subgraph LIFECYCLE["Lifecycle (6 Phases)"]
+  direction TB
+
+  LC_INIT["INIT<br/>Create services, wire 7 ports<br/>Subscribe k1.planner.plan.request event<br/>Set state: IDLE"]:::lifecycle
+
+  LC_PLAN_START["PLAN_START<br/>Dequeue PlanRequest from mailbox<br/>Acquire plan lock (single plan V1)<br/>Emit PlanAck{status: accepted}<br/>Set state: SKETCHING"]:::lifecycle
+
+  LC_STAGE_TRANSITION["STAGE_TRANSITION<br/>Advance pipeline state machine<br/>Log stage completion + token usage<br/>Emit k1.planner.delta.v1 per stage"]:::lifecycle
+
+  LC_PLAN_END["PLAN_END<br/>Emit CommittedPlan via k1.planner.plan.ready<br/>Release plan lock, set state: IDLE<br/>Clear stage buffers"]:::lifecycle
+
+  LC_SHUTDOWN["SHUTDOWN<br/>Drain mailbox queue<br/>Flush pending deltas<br/>Cancel in-flight LLM calls<br/>Persist partial plan state for recovery"]:::lifecycle
+
+  LC_CRASH_RECOVERY["CRASH_RECOVERY<br/>Check WAL for in-flight plan<br/>If found: resume at last completed stage<br/>If not: discard partial state, set IDLE<br/>Emit recovery delta"]:::lifecycle
+end
+
+%% =====================================================================================
+%% CONCURRENCY MODEL
+%% =====================================================================================
+
+subgraph CONCURRENCY["Concurrency Model (V1: Single Plan)"]
+  direction TB
+
+  CONC_MODEL["Single-Threaded Async<br/>One plan at a time (V1)<br/>Plan lock prevents concurrent planning<br/>Mailbox queues additional requests"]:::concurrency
+
+  CONC_CANCEL["Cancellation Support<br/>cancel_plan(request_id)<br/>Interrupts at next await boundary<br/>Sets state: CANCELLED<br/>Emits k1.planner.plan.cancelled"]:::concurrency
+
+  CONC_MICRO["Micro-Replan Priority<br/>MicroReplanRequest: elevated priority in mailbox<br/>Waits for current plan to complete<br/>V2: May preempt SKETCH stage"]:::concurrency
+end
+
+%% =====================================================================================
+%% EXTERNAL TOUCHPOINTS
+%% =====================================================================================
+
+subgraph TOUCHPOINTS["External Touchpoints"]
+  direction TB
+
+  subgraph TP_ORCHESTRATOR["Orchestrator (Primary Caller)"]
+    direction TB
+
+    ORCH_SENDS["Orchestrator -> Planner Mailbox<br/>PlanRequest{intent, constraints, context}<br/>MicroReplanRequest{remaining_steps, failure_context}"]:::caller
+
+    ORCH_RECEIVES["Planner -> Orchestrator<br/>PlanAck (sync via mailbox ack)<br/>CommittedPlan (async via k1.planner.plan.ready)<br/>plan.failed | plan.cancelled (async events)"]:::caller
+  end
+
+  subgraph TP_FABRIC_RET["Fabric Retrieval (Read-Only Access)"]
+    direction TB
+
+    FABRIC_RET["Fabric Retrieval API<br/>discover_capabilities() -> Top-K RetrievalResult[]<br/>find_relevant_prompts() -> Top-K RetrievalResult[]<br/>Latency: <50ms per call, 3-6 calls per plan"]:::fabric
+  end
+
+  subgraph TP_SESSIONSTATE["SessionState (Multi-Reader)"]
+    direction TB
+
+    SS_READ["SessionState (HOT tier only)<br/>query_planning_context() -> StateSnapshot<br/>Sections: beliefs_active, persona, control, temporal<br/>Lock-free, multi-reader (PLAN-01)"]:::ss
+  end
+
+  subgraph TP_BRIDGE["Cross-Kernel Bridge (2 Paths)"]
+    direction TB
+
+    BRIDGE_READ["IKernelQueryPort<br/>recall_for_planning() -> RecallResponse<br/>K0 long-term memory access"]:::bridge
+
+    BRIDGE_WRITE["IKernelCommandPort<br/>persist_plan(CommittedPlan) -> void<br/>Fire-and-forget to K0 WAL"]:::bridge
+  end
+
+  subgraph TP_LLM["LLM Gateway (Model Hub -- Standalone Module)"]
+    direction TB
+
+    LLM_GW["Model Hub (Capability-Driven Plugin Architecture)<br/>3 stage LLM calls (CHAT, TOOL_CALL, STRUCTURED)<br/>+ 2 HIL prompt calls (CHAT)<br/>Total: ~3.5K tokens per plan<br/>Budget objects on every call (PLAN-11)<br/>See: k1/model_hub/model_hub.mmd"]:::gateway
+  end
+
+  subgraph TP_BUSES["Event Bus + Delta Bus"]
+    direction TB
+
+    EVT_BUS["K1 Event Bus<br/>Pub: k1.planner.plan.ready, plan.failed, plan.cancelled<br/>Sub: k1.planner.plan.request, plan.cancel<br/>Consumers: Orchestrator (plan.ready),<br/>Learning Loop (plan.failed, plan.cancelled -> drift detection)<br/>See: k1/learning/learning.mmd"]:::bus
+
+    DLT_BUS["Delta Bus<br/>Pub: k1.planner.delta.v1<br/>(planning stage deltas, NOT SessionState writes)"]:::bus
+  end
+
+  subgraph TP_CONCIERGE_HIL["Concierge (HIL Routing)"]
+    direction TB
+
+    HIL_ROUTE["Concierge OUTPUT_CHANNEL<br/>k1.hil.clarification.v1 -> User prompt<br/>k1.hil.approval_request.v1 -> User prompt<br/>User responses route back via Event Bus"]:::output
+  end
+
+  subgraph TP_CIRCUIT_BREAKERS["Circuit Breakers (Resilience)"]
+    direction TB
+
+    CB_PLANNER["CB: Planner<br/>45s timeout, 2/min threshold<br/>Fallback: skip planning, direct execution<br/>Owner: Concierge FabricOrchestratorAdapter"]:::circuit_breaker
+
+    CB_LLM_INHERIT["CB: Model Hub (inherited, per provider manifest)<br/>Config from manifest: default 3/60s -> OPEN 30s<br/>Fallback: capability-aware, stage fails -> degrade or skip<br/>Owner: LLMGatewayAdapter<br/>See: k1/model_hub/model_hub.mmd"]:::circuit_breaker
+  end
+end
+
+%% =====================================================================================
+%% ERROR RECOVERY PATHS
+%% =====================================================================================
+
+subgraph ERROR_RECOVERY["Error Recovery (Stage Failure Handling)"]
+  direction TB
+
+  ERR_SKETCH_FAIL["Stage 1 SKETCH Failure<br/>LLM timeout or error<br/>Recovery: retry once with simplified prompt<br/>If still fails: emit plan.failed"]:::recovery
+
+  ERR_EXPAND_FAIL["Stage 2 EXPAND Failure<br/>LLM timeout or tool call failure<br/>Recovery: retry once, fallback to SKETCH output as-is<br/>Degraded: less precise tool mapping"]:::recovery
+
+  ERR_VALIDATE_FAIL["Stage 3 VALIDATE Failure<br/>LLM arbiter timeout or reject verdict<br/>Recovery: if reject, retry EXPAND once<br/>If arbiter down: auto-approve if deterministic checks pass"]:::recovery
+
+  ERR_COMMIT_FAIL["Stage 4 COMMIT Failure<br/>WAL persist failure<br/>Recovery: retry persist, emit plan.ready anyway<br/>(plan valid even if WAL fails -- idempotent)"]:::recovery
+
+  ERR_HIL_TIMEOUT["HIL Timeout<br/>Clarification: proceed with best-effort interpretation<br/>Approval: auto-approve if safe (no high-impact ops)"]:::recovery
+
+  ERR_CB_OPEN["CB_PLANNER OPEN<br/>Concierge-owned: skip planning entirely<br/>Orchestrator: execute MED-tier path (direct Fabric)<br/>No Planner involvement"]:::recovery
+end
+
+%% =====================================================================================
+%% PIPELINE FLOW EDGES (Stage-to-Stage)
+%% =====================================================================================
+
+PLANNER_MAILBOX -->|"dequeue PlanRequest"| PLANNER_AGENT
+PLANNER_AGENT -->|"start pipeline"| PIPELINE_CTRL
+PIPELINE_CTRL -->|"set SKETCHING"| PLAN_FSM
+
+%% Stage 1 internal flow
+PIPELINE_CTRL -->|"invoke Stage 1"| S1_ENTRY
+S1_ENTRY -->|"discover caps"| S1_DISCOVER
+S1_ENTRY -->|"read context"| S1_QUERY_CTX
+S1_ENTRY -->|"recall memory"| S1_RECALL
+S1_DISCOVER -->|"capabilities[]"| S1_LLM
+S1_QUERY_CTX -->|"state snapshot"| S1_LLM
+S1_RECALL -->|"memories[]"| S1_LLM
+S1_LLM -->|"sketch result"| S1_OUTPUT
+S1_OUTPUT -->|"SketchResult"| S2_ENTRY
+
+%% Stage 2 internal flow
+S2_ENTRY -->|"refine caps"| S2_DISCOVER
+S2_ENTRY -->|"find prompts"| S2_FIND_PROMPTS
+S2_DISCOVER -->|"refined capabilities[]"| S2_LLM
+S2_FIND_PROMPTS -->|"prompt templates[]"| S2_LLM
+S2_LLM -->|"expanded plan"| S2_OUTPUT
+S2_OUTPUT -->|"ExpandedPlan"| S3_ENTRY
+
+%% Stage 3 internal flow
+S3_ENTRY -->|"check DAG"| S3_DAG_CHECK
+S3_ENTRY -->|"check capabilities"| S3_CAP_CHECK
+S3_DAG_CHECK -->|"DAG valid"| S3_LLM
+S3_CAP_CHECK -->|"caps valid"| S3_LLM
+S3_LLM -->|"verdict"| S3_VERDICT
+S3_VERDICT -->|"approved"| S4_ENTRY
+S3_VERDICT -->|"revise: retry EXPAND"| S2_ENTRY
+
+%% Stage 4 internal flow
+S4_ENTRY -->|"assign ID"| S4_ASSIGN_ID
+S4_ASSIGN_ID -->|"build plan"| S4_BUILD
+S4_BUILD -->|"persist WAL"| S4_PERSIST
+S4_PERSIST -->|"emit event"| S4_EMIT
+
+%% Stage transitions update FSM
+S1_OUTPUT -->|"set EXPANDING"| PLAN_FSM
+S2_OUTPUT -->|"set VALIDATING"| PLAN_FSM
+S3_VERDICT -->|"set COMMITTING"| PLAN_FSM
+S4_EMIT -->|"set COMPLETED"| PLAN_FSM
+
+%% =====================================================================================
+%% MICRO-REPLAN FLOW EDGES
+%% =====================================================================================
+
+PLANNER_MAILBOX -->|"dequeue MicroReplanRequest"| MR_ENTRY
+MR_ENTRY -->|"set MICRO_SKETCH"| PLAN_FSM
+MR_ENTRY -->|"re-sketch remaining"| MR_SKETCH
+MR_SKETCH -->|"set MICRO_EXPAND"| PLAN_FSM
+MR_SKETCH -->|"re-map tools"| MR_EXPAND
+MR_EXPAND -->|"set MICRO_VALIDATE"| PLAN_FSM
+MR_EXPAND -->|"validate replacement"| MR_VALIDATE
+MR_VALIDATE -->|"set COMMITTING"| PLAN_FSM
+MR_VALIDATE -->|"partial plan"| MR_OUTPUT
+MR_OUTPUT -->|"to Stage 4 COMMIT"| S4_ENTRY
+
+%% =====================================================================================
+%% TOOL ROUTING EDGES (Discovery Tools -> Ports -> Backends)
+%% =====================================================================================
+
+%% Stage 1 tool routing
+S1_DISCOVER -->|"via ToolCallRouter"| PORT_FABRIC_RETRIEVAL
+S1_QUERY_CTX -->|"via ToolCallRouter"| PORT_STATE_READ
+S1_RECALL -->|"via ToolCallRouter"| PORT_BRIDGE
+
+%% Stage 2 tool routing
+S2_DISCOVER -->|"via ToolCallRouter"| PORT_FABRIC_RETRIEVAL
+S2_FIND_PROMPTS -->|"via ToolCallRouter"| PORT_FABRIC_RETRIEVAL
+
+%% Port -> External system
+PORT_FABRIC_RETRIEVAL -->|"Fabric Retrieval API"| FABRIC_RET
+PORT_STATE_READ -->|"multi-reader read"| SS_READ
+PORT_BRIDGE -->|"K0 recall()"| BRIDGE_READ
+
+%% LLM routing (all stages)
+S1_LLM -->|"complete(prompt, budget)"| PORT_LLM
+S2_LLM -->|"complete(prompt, budget)"| PORT_LLM
+S3_LLM -->|"complete(prompt, budget)"| PORT_LLM
+MR_SKETCH -->|"complete(prompt, budget)"| PORT_LLM
+MR_EXPAND -->|"complete(prompt, budget)"| PORT_LLM
+MR_VALIDATE -->|"complete(prompt, budget)"| PORT_LLM
+PORT_LLM -->|"LLM Request Bus"| LLM_GW
+
+%% =====================================================================================
+%% HIL FLOW EDGES
+%% =====================================================================================
+
+S1_LLM -->|"ambiguous intent?"| HIL_CLARIFICATION
+HIL_CLARIFICATION -->|"k1.hil.clarification.v1"| HIL_ROUTE
+PORT_EVENT -->|"k1.hil.clarification_response.v1"| HIL_CLARIFICATION
+HIL_CLARIFICATION -->|"user response via Event Bus"| S1_LLM
+
+S3_LLM -->|"high-impact plan?"| HIL_APPROVAL
+HIL_APPROVAL -->|"k1.hil.approval_request.v1"| HIL_ROUTE
+PORT_EVENT -->|"k1.hil.approval_response.v1"| HIL_APPROVAL
+HIL_APPROVAL -->|"approve/modify/reject via Event Bus"| S3_LLM
+
+%% HIL LLM calls
+HIL_CLARIFICATION -->|"generate question (~300 tokens)"| PORT_LLM
+HIL_APPROVAL -->|"format summary (~400 tokens)"| PORT_LLM
+
+%% =====================================================================================
+%% EVENT AND DELTA FLOW EDGES
+%% =====================================================================================
+
+%% Plan delivery
+S4_EMIT -->|"k1.planner.plan.ready"| PORT_EVENT
+PORT_EVENT -->|"publish"| EVT_BUS
+EVT_BUS -->|"CommittedPlan"| ORCH_RECEIVES
+
+%% Plan failure
+PLAN_FSM -->|"FAILED state"| PORT_EVENT
+PORT_EVENT -->|"k1.planner.plan.failed"| EVT_BUS
+
+%% Plan cancellation
+PLAN_FSM -->|"CANCELLED state"| PORT_EVENT
+PORT_EVENT -->|"k1.planner.plan.cancelled"| EVT_BUS
+
+%% Stage deltas (per-stage progress)
+PIPELINE_CTRL -->|"k1.planner.delta.v1"| PORT_DELTA
+PORT_DELTA -->|"fire-and-forget"| DLT_BUS
+
+%% WAL persistence
+S4_PERSIST -->|"persist_plan(CommittedPlan)"| PORT_BRIDGE
+PORT_BRIDGE -->|"K0 WAL write"| BRIDGE_WRITE
+
+%% =====================================================================================
+%% PORT -> ADAPTER WIRING (Hexagonal Architecture)
+%% =====================================================================================
+
+PORT_MAILBOX -.->|"prod"| ADAPT_MAILBOX
+PORT_MAILBOX -.->|"test"| ADAPT_TEST_MAILBOX
+
+PORT_LLM -.->|"prod"| ADAPT_LLM
+PORT_LLM -.->|"test"| ADAPT_TEST_LLM
+
+PORT_FABRIC_RETRIEVAL -.->|"prod"| ADAPT_FABRIC_RET
+PORT_FABRIC_RETRIEVAL -.->|"test"| ADAPT_TEST_FABRIC
+
+PORT_STATE_READ -.->|"prod"| ADAPT_STATE
+PORT_STATE_READ -.->|"test"| ADAPT_TEST_STATE
+
+PORT_BRIDGE -.->|"prod"| ADAPT_BRIDGE
+PORT_BRIDGE -.->|"test"| ADAPT_TEST_BRIDGE
+
+PORT_DELTA -.->|"prod"| ADAPT_DELTA
+PORT_DELTA -.->|"test"| ADAPT_TEST_DELTA
+
+PORT_EVENT -.->|"prod"| ADAPT_EVENT
+PORT_EVENT -.->|"test"| ADAPT_TEST_EVENT
+
+%% =====================================================================================
+%% SERVICE DEPENDENCY GRAPH (No circular dependencies)
+%% =====================================================================================
+
+SVC_PIPELINE -->|"orchestrates"| SVC_SKETCH
+SVC_PIPELINE -->|"orchestrates"| SVC_EXPAND
+SVC_PIPELINE -->|"orchestrates"| SVC_VALIDATE
+SVC_PIPELINE -->|"orchestrates"| SVC_COMMIT
+SVC_SKETCH -->|"route tool calls"| SVC_TOOL_ROUTER
+SVC_EXPAND -->|"route tool calls"| SVC_TOOL_ROUTER
+SVC_SKETCH -->|"trigger clarification"| SVC_HIL
+SVC_VALIDATE -->|"trigger approval"| SVC_HIL
+
+%% =====================================================================================
+%% LIFECYCLE -> SERVICE DELEGATION
+%% =====================================================================================
+
+LC_INIT -->|"create + wire"| SVC_PIPELINE
+LC_INIT -->|"create"| SVC_SKETCH
+LC_INIT -->|"create"| SVC_EXPAND
+LC_INIT -->|"create"| SVC_VALIDATE
+LC_INIT -->|"create"| SVC_COMMIT
+LC_INIT -->|"create"| SVC_TOOL_ROUTER
+LC_INIT -->|"create"| SVC_HIL
+
+LC_PLAN_START -->|"acquire lock + execute"| SVC_PIPELINE
+LC_PLAN_START -->|"clear buffers"| SVC_TOOL_ROUTER
+LC_PLAN_START -->|"reset counters"| SVC_HIL
+
+LC_STAGE_TRANSITION -->|"log + delta"| SVC_PIPELINE
+LC_PLAN_END -->|"emit plan + release lock"| SVC_COMMIT
+
+LC_SHUTDOWN -->|"cancel in-flight"| SVC_PIPELINE
+LC_SHUTDOWN -->|"flush deltas"| SVC_PIPELINE
+
+LC_CRASH_RECOVERY -->|"check WAL + resume"| SVC_PIPELINE
+LC_CRASH_RECOVERY -->|"restore state"| SVC_COMMIT
+
+%% =====================================================================================
+%% LIFECYCLE -> PORT USAGE
+%% =====================================================================================
+
+LC_INIT -.->|"connect 7 ports"| PORT_MAILBOX
+LC_INIT -.->|"subscribe plan.request"| PORT_EVENT
+
+LC_PLAN_START -.->|"dequeue from mailbox"| PORT_MAILBOX
+LC_PLAN_START -.->|"ack request"| PORT_MAILBOX
+
+LC_STAGE_TRANSITION -.->|"emit delta per stage"| PORT_DELTA
+
+LC_PLAN_END -.->|"emit plan.ready"| PORT_EVENT
+LC_PLAN_END -.->|"persist to WAL"| PORT_BRIDGE
+
+LC_SHUTDOWN -.->|"flush deltas"| PORT_DELTA
+LC_SHUTDOWN -.->|"cancel LLM calls"| PORT_LLM
+
+LC_CRASH_RECOVERY -.->|"check WAL"| PORT_BRIDGE
+LC_CRASH_RECOVERY -.->|"emit recovery delta"| PORT_DELTA
+
+%% =====================================================================================
+%% SERVICE -> INVARIANT ENFORCEMENT
+%% =====================================================================================
+
+SVC_PIPELINE -.->|"PLAN-04 (45s timeout tracking)"| INV_04
+SVC_PIPELINE -.->|"PLAN-11 (budget on every LLM call)"| INV_11
+SVC_SKETCH -.->|"PLAN-01 (read-only state access)"| INV_01
+SVC_EXPAND -.->|"PLAN-02 (read-only tools)"| INV_02
+SVC_VALIDATE -.->|"PLAN-09 (DAG cycle check)"| INV_09
+SVC_VALIDATE -.->|"PLAN-08 (capability validation)"| INV_08
+SVC_COMMIT -.->|"PLAN-03 (no LLM in COMMIT)"| INV_03
+SVC_COMMIT -.->|"PLAN-07 (token_budget_max required)"| INV_07
+SVC_TOOL_ROUTER -.->|"PLAN-05 (max 6 tool calls)"| INV_05
+SVC_TOOL_ROUTER -.->|"PLAN-06 (no execution, discovery only)"| INV_06
+SVC_HIL -.->|"PLAN-10 (max 2 HIL rounds)"| INV_10
+
+%% =====================================================================================
+%% SERVICE -> PORT USAGE (Services call ports, never external systems -- PLAN-06)
+%% =====================================================================================
+
+SVC_PIPELINE -.->|"stage deltas"| PORT_DELTA
+SVC_SKETCH -.->|"LLM calls"| PORT_LLM
+SVC_SKETCH -.->|"state reads"| PORT_STATE_READ
+SVC_EXPAND -.->|"LLM calls"| PORT_LLM
+SVC_VALIDATE -.->|"LLM arbiter"| PORT_LLM
+SVC_VALIDATE -.->|"capability check via retrieval"| PORT_FABRIC_RETRIEVAL
+SVC_COMMIT -.->|"WAL persist"| PORT_BRIDGE
+SVC_COMMIT -.->|"plan.ready event"| PORT_EVENT
+SVC_TOOL_ROUTER -.->|"Fabric Retrieval"| PORT_FABRIC_RETRIEVAL
+SVC_TOOL_ROUTER -.->|"SessionState read"| PORT_STATE_READ
+SVC_TOOL_ROUTER -.->|"K0 recall"| PORT_BRIDGE
+SVC_HIL -.->|"HIL LLM prompts"| PORT_LLM
+SVC_HIL -.->|"HIL events to Concierge"| PORT_EVENT
+
+%% =====================================================================================
+%% CIRCUIT BREAKER PROTECTION
+%% =====================================================================================
+
+CB_PLANNER -.->|"protects"| PLANNER_MAILBOX
+CB_LLM_INHERIT -.->|"protects"| PORT_LLM
+CB_PLANNER -->|"OPEN: skip planning"| ORCH_SENDS
+
+%% =====================================================================================
+%% ERROR RECOVERY WIRING
+%% =====================================================================================
+
+SVC_SKETCH -->|"LLM failure"| ERR_SKETCH_FAIL
+ERR_SKETCH_FAIL -->|"retry once"| SVC_SKETCH
+ERR_SKETCH_FAIL -->|"still fails: plan.failed"| PLAN_FSM
+
+SVC_EXPAND -->|"LLM/tool failure"| ERR_EXPAND_FAIL
+ERR_EXPAND_FAIL -->|"retry once"| SVC_EXPAND
+ERR_EXPAND_FAIL -->|"fallback: use SKETCH output"| SVC_VALIDATE
+
+SVC_VALIDATE -->|"reject verdict"| ERR_VALIDATE_FAIL
+ERR_VALIDATE_FAIL -->|"retry EXPAND once"| SVC_EXPAND
+ERR_VALIDATE_FAIL -->|"arbiter down: auto-approve"| SVC_COMMIT
+
+SVC_COMMIT -->|"WAL failure"| ERR_COMMIT_FAIL
+ERR_COMMIT_FAIL -->|"retry persist"| SVC_COMMIT
+
+SVC_HIL -->|"timeout"| ERR_HIL_TIMEOUT
+ERR_HIL_TIMEOUT -->|"clarification: best-effort"| SVC_SKETCH
+ERR_HIL_TIMEOUT -->|"approval: auto-approve if safe"| SVC_VALIDATE
+
+%% =====================================================================================
+%% LIFECYCLE STATE FLOW
+%% =====================================================================================
+
+LC_INIT -->|"ready"| PLAN_FSM
+LC_PLAN_START -->|"plan request received"| PLAN_FSM
+LC_STAGE_TRANSITION -->|"stage complete"| PLAN_FSM
+LC_PLAN_END -->|"plan delivered"| PLAN_FSM
+LC_SHUTDOWN -->|"process exit"| PLAN_FSM
+LC_CRASH_RECOVERY -->|"recovered"| PLAN_FSM
+
+%% =====================================================================================
+%% STYLES
+%% =====================================================================================
+
+classDef planner fill:#bbdefb,stroke:#0d47a1,stroke-width:3px,color:#000,font-weight:bold
+classDef brain fill:#ffccbc,stroke:#bf360c,stroke-width:3px,color:#000,font-weight:bold
+classDef mailbox fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
+classDef service fill:#e0f2f1,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
+classDef step fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000
+classDef llm fill:#f3e5f5,stroke:#7b1fa2,stroke-width:3px,color:#000,font-weight:bold
+classDef engine fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef tool_fabric fill:#b2ebf2,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
+classDef tool_read fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+classDef hil fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000,font-style:italic
+classDef port fill:#e3f2fd,stroke:#1565c0,stroke-width:3px,color:#000,font-weight:bold
+classDef adapter fill:#e8eaf6,stroke:#283593,stroke-width:2px,color:#000
+classDef adapter_test fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,color:#000,font-style:italic
+classDef invariant fill:#fce4ec,stroke:#880e4f,stroke-width:3px,color:#000,font-weight:bold
+classDef perf fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:#000,font-weight:bold
+classDef lifecycle fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#000,font-weight:bold
+classDef concurrency fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+classDef caller fill:#c8e6c9,stroke:#1b5e20,stroke-width:3px,color:#000,font-weight:bold
+classDef fabric fill:#b2ebf2,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
+classDef ss fill:#ffe0b2,stroke:#e65100,stroke-width:2px,color:#000
+classDef bridge fill:#b2ebf2,stroke:#00695c,stroke-width:2px,color:#000
+classDef gateway fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef bus fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,color:#000
+classDef output fill:#a5d6a7,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+classDef circuit_breaker fill:#ffebee,stroke:#c62828,stroke-width:3px,color:#000,stroke-dasharray: 5 5
+classDef recovery fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000

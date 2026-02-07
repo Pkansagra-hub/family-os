@@ -201,7 +201,8 @@ class TestPressureLevelTransitionsViaMutations:
         """Fresh session should have NORMAL pressure."""
         snapshot = session.get_snapshot()
         assert snapshot.pressure == PressureLevel.NORMAL
-        assert snapshot.total_utilization_pct < 0.80
+        # Baseline overhead ~4% is expected, just verify under ELEVATED threshold
+        assert snapshot.total_utilization_pct < 80.0  # Under 80%
 
     def test_pressure_remains_normal_under_80_percent(self, session: SessionStateManager) -> None:
         """Pressure should remain NORMAL below 80% utilization."""

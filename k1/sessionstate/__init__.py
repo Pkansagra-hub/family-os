@@ -94,6 +94,16 @@ from .guard import Approval, MutationGuard, RejectionReason
 
 # Local cold archive
 from .local_cold import LocalColdArchive
+
+# Logging
+from .logging import (
+    LogEventType,
+    SessionStateJsonFormatter,
+    SessionStateLogger,
+    StructuredLogRecord,
+    configure_logger,
+    get_default_logger,
+)
 from .manager import (
     CheckpointResult,
     LifecycleError,
@@ -108,6 +118,9 @@ from .manager import (
     StartResult,
     StopResult,
 )
+
+# Metrics
+from .metrics import PressureLevelValue, SessionStateMetrics, get_default_metrics
 from .migration import MigrationEngine, MigrationResult
 
 # Ports (interfaces)
@@ -185,6 +198,17 @@ __all__ = [
     "SnapshotAPI",
     # Local cold
     "LocalColdArchive",
+    # Logging
+    "SessionStateLogger",
+    "SessionStateJsonFormatter",
+    "StructuredLogRecord",
+    "LogEventType",
+    "get_default_logger",
+    "configure_logger",
+    # Metrics
+    "SessionStateMetrics",
+    "PressureLevelValue",
+    "get_default_metrics",
     # Ports
     "IStoragePort",
     "IEventPort",

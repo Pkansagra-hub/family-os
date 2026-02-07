@@ -967,32 +967,31 @@ class HistoryRecentSection:
         self._fb_cache = bytes(builder.Output())
         return self._fb_cache
 
-    @classmethod
-    def from_flatbuffer(cls, data: bytes) -> "HistoryRecentSection":
+    def from_flatbuffer(self, data: bytes) -> None:
         """
-        Deserialize from FlatBuffer bytes.
+        Deserialize from FlatBuffer bytes (in-place mutation).
 
         Args:
             data: FlatBuffer bytes
-
-        Returns:
-            HistoryRecentSection: Restored section
         """
         fb = FBHistoryRecentSection.GetRootAsHistoryRecentSection(data, 0)
-
-        section = cls()
 
         # Restore session summary
         summary = fb.SessionSummary()
         if summary:
-            section._session_summary = (
+            self._session_summary = (
                 summary.decode("utf-8") if isinstance(summary, bytes) else summary
             )
 
         # Restore metadata
-        section._total_turns_archived = fb.TotalTurnsArchived()
-        section._last_eviction_ms = fb.LastEvictionMs()
-        section._bytes_evicted_total = fb.BytesEvictedTotal()
+        self._total_turns_archived = fb.TotalTurnsArchived()
+        self._last_eviction_ms = fb.LastEvictionMs()
+        self._bytes_evicted_total = fb.BytesEvictedTotal()
+
+        # Clear existing data
+        self._compressed_turns.clear()
+        self._summarized_turns.clear()
+        self._archived_turn_ids.clear()
 
         # Restore compressed turns
         for i in range(fb.CompressedTurnsLength()):
@@ -1052,7 +1051,7 @@ class HistoryRecentSection:
                 archived_to_local_cold=ct.ArchivedToLocalCold(),
                 archive_id=archive_id,
             )
-            section._compressed_turns.append(turn)
+            self._compressed_turns.append(turn)
 
         # Restore summarized turns
         for i in range(fb.SummarizedTurnsLength()):
@@ -1105,16 +1104,17 @@ class HistoryRecentSection:
                 archived_to_local_cold=st.ArchivedToLocalCold(),
                 archive_id=archive_id,
             )
-            section._summarized_turns.append(turn)
+            self._summarized_turns.append(turn)
 
         # Restore archived turn IDs
         for i in range(fb.ArchivedTurnIdsLength()):
             tid = fb.ArchivedTurnIds(i)
             if tid:
                 decoded = tid.decode("utf-8") if isinstance(tid, bytes) else str(tid)
-                section._archived_turn_ids.append(decoded)
+                self._archived_turn_ids.append(decoded)
 
-        return section
+        # Invalidate cache
+        self._fb_cache = None
 
     # =========================================================================
     # Apply Operations (MutationGuard Pattern)

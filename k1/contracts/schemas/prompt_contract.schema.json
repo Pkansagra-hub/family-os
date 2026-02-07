@@ -1,0 +1,139 @@
+{
+  "$id": "prompt_contract.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Prompt Contract Schema",
+  "description": "JSON Schema for validating prompt contracts. Prompts are templates used by agents and the Planner. They declare variables, output format, and compatibility.",
+  "type": "object",
+  "required": ["prompt_contract"],
+  "additionalProperties": false,
+  "properties": {
+    "prompt_contract": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "domain",
+        "description",
+        "variables",
+        "template_file",
+        "max_tokens",
+        "output_format"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]+(_v[0-9]+)?$",
+          "description": "Prompt template name (e.g. invitation_drafter_v1)"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Semantic version (major.minor.patch)"
+        },
+        "domain": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Domain tags for retrieval ranking"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "description": "Human-readable description used for semantic retrieval embedding"
+        },
+        "intent_match": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Intents that trigger this prompt (used for retrieval matching)"
+        },
+        "variables": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/variable_spec" },
+          "description": "Template variables that must be filled before use"
+        },
+        "template_file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to the prompt template file (e.g. k1/prompts/agents/invitation_drafter_v1.txt)"
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Recommended token budget for this prompt"
+        },
+        "output_format": {
+          "type": "string",
+          "enum": ["TEXT", "JSON", "STRUCTURED"],
+          "description": "Expected output format from the prompt"
+        },
+        "compatible_agents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^agent\\.(execute|spawn)\\.[a-z][a-z0-9_]+$"
+          },
+          "description": "Agent capability names that can use this prompt"
+        },
+        "compatible_tools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^tool\\.(execute|read|write|delete)\\.[a-z][a-z0-9_]+$"
+          },
+          "description": "Tool capability names compatible with this prompt"
+        },
+        "registered_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of initial registration"
+        },
+        "last_updated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of last update"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "variable_spec": {
+      "type": "object",
+      "required": ["name", "type", "required", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Variable name as used in the template"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["STRING", "NUMBER", "BOOLEAN", "DATE", "OBJECT", "ARRAY"],
+          "description": "Data type of the variable"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether this variable must be provided"
+        },
+        "default": {
+          "type": "string",
+          "description": "Default value if not provided (only valid when required=false)"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable description of what this variable is for"
+        }
+      }
+    }
+  }
+}

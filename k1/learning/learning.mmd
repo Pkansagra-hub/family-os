@@ -1,0 +1,724 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+%% =====================================================================================
+%% LEARNING LOOP (K1) -- DEEP ARCHITECTURE DIAGRAM
+%% =====================================================================================
+%% STATUS: COMPLETE DESIGN (Architecture-Ready, Implementation Deferred)
+%%
+%% The Learning Loop is K1's Two-System intelligence refinement layer.
+%% It spans K0 (gap detection, feedback storage) and K1 (agents, signal collection).
+%%
+%% TWO SYSTEMS:
+%%   System 1: Gap Resolution (Active Learning)
+%%     K0 detects knowledge gaps -> SSE -> K1 asks user -> answer flows back to K0
+%%     Direction: K0 -> Bridge SSE -> K1 -> User -> K0 (circular)
+%%     Pipelines: P03 -> P06 -> P05 -> K1 Curiosity Agent -> P02 -> P03
+%%
+%%   System 2: Model Refinement (Feedback Loop)
+%%     K1 detects behavioral signals -> FeedbackEnvelope -> K0 tunes parameters
+%%     Direction: K1 -> Bridge Obs Port -> K0 (one-way)
+%%     Pipelines: K1 detectors -> P21 -> P02/P03/P08 feedback handlers
+%%
+%% POSITION IN K1 STACK:
+%%   L0 Rhythm -> L1 Concierge -> L6 LEARNING LOOP
+%%                                 ^ we are here (spans all layers)
+%%   System 1 agents: spawned by Fabric on SSE trigger (Proactive Flow)
+%%   System 2 agents: run inline per conversation turn (Feedback Detectors)
+%%   Memory Writers: spawned per session (observe LLM conversations)
+%%
+%% GOVERNING DOCS:
+%%   - docs/architecture/ideas/0001-active-learning-loop.md (Idea -- theory + roadmap)
+%%   - docs/pipelines/P03_consolidation_dossier_v2.md Section 5 (P06 integration)
+%%   - k0/ports/FEEDBACK.md (K1 developer guide for feedback wiring)
+%%   - architecture_diagrams/bridge/bridge_architecture.mmd (SSE + Obs Port)
+%%   - architecture_diagrams/k1/k1_cognitive_architecture_skeleton.mmd (skeleton nodes)
+%%
+%% SKELETON TRACEABILITY:
+%%   K0_SSE_SERVER            -> SSE_INBOUND_HANDLER (this diagram)
+%%   PROACTIVE_AGENT_FLOW     -> SYSTEM_1_GAP_RESOLUTION (this diagram)
+%%   LEARNING_LOOP_FRAMEWORK  -> top-level layout (this diagram)
+%%   MEMORY_WRITER_SYSTEM     -> memory_writer.mmd (SEPARATE DIAGRAM at k1/memory_writer/)
+%%   FEEDBACK_SIGNAL_COLLECTOR -> SYSTEM_2_FEEDBACK (this diagram)
+%%   DRIFT_DETECTOR           -> DRIFT_DETECTION (this diagram)
+%%   ADVISORY_EMITTER         -> ADVISORY_EMISSION (this diagram)
+%%
+%% CROSS-DIAGRAM INTEGRATION POINTS:
+%%   concierge.mmd:
+%%     OUTPUT_CHANNEL receives proactive question text for user delivery
+%%     HIL_RESPONSE_DETECTOR routes gap answers back to Learning Loop
+%%     ACKING_CORE can detect implicit feedback (reformulation patterns)
+%%   orchestrator.mmd:
+%%     Not directly involved (proactive flows bypass Orchestrator)
+%%     EXECUTION_MONITOR may emit outcome feedback signals
+%%   fabric.mmd:
+%%     Agent Factory spawns CuriosityAgent, ReminderAgent, GapAnswerWriter
+%%     Agent Registry holds contracts for all Learning Loop agents
+%%     Capability execution results feed outcome feedback
+%%   memory_writer.mmd:
+%%     SEPARATE SYSTEM at k1/memory_writer/ (not part of Learning Loop)
+%%     Memory Writer extracts FACTS from turns (always runs)
+%%     Learning Extractor extracts META-SIGNALS (learning-specific)
+%%     Both observe turns but for completely different purposes
+%%   planner.mmd:
+%%     Not directly involved (proactive questions are pre-planned)
+%%   sessionstate:
+%%     conversation_context provides correlation IDs for feedback
+%%     NOT written by Learning Loop agents (Single Writer = Concierge only)
+%%
+%% =====================================================================================
+%% HARD INVARIANTS (LEARN-01 through LEARN-14)
+%% =====================================================================================
+%%
+%% LEARN-01: Learning Loop agents NEVER write SessionState (ADR-0017 Single Writer)
+%% LEARN-02: All K0 writes go through Bridge Command Port (memory.delta, feedback.signal)
+%% LEARN-03: Attention Budget hard cap: 3 questions/day per user (Token Bucket)
+%% LEARN-04: Curiosity Agent max 300 tokens per question (15 words target)
+%% LEARN-05: Constitutional AI filter runs on EVERY generated question before delivery
+%% LEARN-06: Privacy band enforcement: RED data questions need explicit user consent
+%% LEARN-07: GapAutoResolver (implicit path) has 24h grace period before explicit ask
+%% LEARN-08: Feedback correlation MUST include session_id + event_ids + recall_id
+%% LEARN-09: Feedback payload_hash used for dedup (same hash within 5s = ignored)
+%% LEARN-10: Rate limit: 100 feedback signals/minute per tenant
+%% LEARN-11: DriftDetector threshold: 20% confidence shift in 30-day window
+%% LEARN-12: Memory Writer batch window: 250ms (aggregate before K0 write)
+%% LEARN-13: All events carry cognitive_trace_id for observability
+%% LEARN-14: System 1 SSE events require Bridge SSE Port healthy (CB_SSE fallback)
+%%
+%% =====================================================================================
+%% STORAGE TABLES (K0-side, written via Bridge)
+%% =====================================================================================
+%%
+%% | Table                    | Role                            | Written By              |
+%% |--------------------------|---------------------------------|-------------------------|
+%% | st_learning_queue        | Gap records for P06             | P03 R8, P06 entropy     |
+%% | st_anchors               | Bayesian beliefs (Beta dist)    | P03 consolidation       |
+%% | st_anchor_observations   | Evidence audit trail            | P03 consolidation       |
+%% | st_feedback_signals      | K1 feedback persistence         | K0 observe.py           |
+%% | st_question_history      | Question analytics              | K1 Curiosity Agent      |
+%% | st_learned_weights       | Pipeline tuned parameters       | Pipeline handlers       |
+%%
+%% =====================================================================================
+%% SSE EVENT MATRIX (K0 -> Bridge -> K1)
+%% =====================================================================================
+%%
+%% | Topic                              | Producer     | Consumer              | Purpose                    |
+%% |------------------------------------|--------------|-----------------------|----------------------------|
+%% | curiosity.intent.v1                | P05/P06      | SSE Inbound Handler   | Gap question trigger       |
+%% | k0.learning.advisory.v1            | P06          | Advisory Handler      | System learning advisories |
+%% | k0.proactive.signal.v1             | P05          | Proactive Decision    | Proactive engagement       |
+%% | curiosity.intent.visual.v1         | Multimodal   | Visual Handler        | Visual gap (future)        |
+%% | curiosity.intent.counterfactual.v1 | Causal       | Socratic Coach        | Causal gap (future)        |
+%% | curiosity.intent.values.v1         | CRDT Sync    | Family Mediator       | Value conflict (future)    |
+%%
+%% =====================================================================================
+%% FEEDBACK SIGNAL CLASSES (K1 -> K0)
+%% =====================================================================================
+%%
+%% | Class        | Source         | Confidence | Priority | Handler Action             |
+%% |--------------|---------------|------------|----------|----------------------------|
+%% | CORRECTION   | User explicit | 0.85       | P0       | Update entity, mark corrected |
+%% | VALIDATION   | User confirm  | 0.90       | P0       | Boost/reduce salience      |
+%% | EXPLICIT     | Thumbs up/down| High       | P1       | Direct rating signal       |
+%% | IMPLICIT     | Behavior      | 0.50-0.75  | P2       | Reduce salience proportional |
+%% | OUTCOME      | System        | Medium     | P2       | Pipeline performance signal |
+%%
+%% =====================================================================================
+%% AGENT INVENTORY (All spawned by Fabric Agent Factory)
+%% =====================================================================================
+%%
+%% | Agent                  | System | LLM? | Tools Granted                         | Budget    |
+%% |------------------------|--------|------|---------------------------------------|-----------|
+%% | CuriosityAgent         | 1      | YES  | recall_memory (read-only)             | 300 tok   |
+%% | ReminderAgent          | 1      | YES  | recall_memory, invoke_capability      | 200 tok   |
+%% | GapAnswerWriter        | 1      | NO   | memory.delta (Bridge Command Port)    | 0 tok     |
+%% | FeedbackCollectorAgent | 2      | NO   | feedback.signal (Bridge Obs Port)     | 0 tok     |
+%% | MemoryWriterAgent      | Both   | YES  | memory.delta (Bridge Command Port)    | 500 tok   |
+%% | LearningExtractorAgent | Both   | YES  | recall_memory (read-only)             | 400 tok   |
+%% | DriftDetectorAgent     | 2      | NO   | none (pure computation)               | 0 tok     |
+%%
+%% =====================================================================================
+%% PERFORMANCE BUDGET
+%% =====================================================================================
+%%
+%% | Operation                    | Latency Target  | Tokens  | Owner           |
+%% |------------------------------|-----------------|---------|-----------------|
+%% | SSE event receive            | < 50ms          | 0       | Bridge SSE Port |
+%% | Attention budget check       | < 5ms           | 0       | Budget Gate     |
+%% | Context readiness assessment | < 100ms         | 0       | Context Monitor |
+%% | Curiosity question gen       | 1-3s            | ~300    | Curiosity Agent |
+%% | Constitutional filter        | 500ms-2s        | ~200    | Constitution    |
+%% | Gap detection (P03)          | < 500ms P95     | 0       | K0 P03          |
+%% | Entropy scan (P06)           | < 5min / 10K    | 0       | K0 P06          |
+%% | Feedback emit to K0          | < 200ms         | 0       | Feedback Emit   |
+%% | Feedback detection           | < 50ms          | 0       | Detectors       |
+%% | Memory writer batch          | 250ms window    | ~500    | Memory Writer   |
+%% | Drift detection              | < 30s / 1K      | 0       | Drift Detector  |
+%% | End-to-end gap-to-question   | < 5s            | ~500    | Composite       |
+%%
+%% =====================================================================================
+
+subgraph LEARNING_LOOP["Learning Loop -- Layer 6 (Two-System Intelligence Refinement)"]
+  direction TB
+
+  %% ==================================================================================
+  %% SSE INBOUND -- Receives K0 events via Bridge SSE Port
+  %% ==================================================================================
+
+  subgraph SSE_INBOUND["SSE Inbound Handler (K0 Events via Bridge)"]
+    direction TB
+
+    SSE_LISTENER["SSE Listener<br/>Subscribes: Bridge IKernelSSEPort<br/>Endpoint: /v1/k0/events/stream<br/>Reconnect: exponential backoff<br/>Ack protocol: per-event"]:::sse
+
+    SSE_ROUTER["SSE Event Router<br/>Routes by event topic:<br/>curiosity.intent.v1 -> System 1<br/>k0.learning.advisory.v1 -> Advisory<br/>k0.proactive.signal.v1 -> Proactive<br/>curiosity.intent.visual.v1 -> Visual (future)<br/>curiosity.intent.counterfactual.v1 -> Causal (future)<br/>curiosity.intent.values.v1 -> Mediator (future)"]:::routing
+
+    SSE_DESERIALIZER["Event Deserializer<br/>Validates payload against<br/>AsyncAPI schema contract<br/>Rejects malformed events"]:::validator
+  end
+
+  %% ==================================================================================
+  %% SYSTEM 1: GAP RESOLUTION (Active Learning)
+  %% ==================================================================================
+
+  subgraph SYSTEM_1_GAP_RESOLUTION["System 1: Gap Resolution (Active Learning -- K0 Gap -> User Question -> K0 Answer)"]
+    direction TB
+
+    subgraph PROACTIVE_DECISION_ENGINE["Proactive Decision Engine"]
+      direction TB
+
+      PROACTIVE_DECISION["Proactive Decision<br/>Receives: curiosity.intent.v1,<br/>k0.proactive.signal.v1<br/>Evaluates: priority, gap_type,<br/>contextual relevance<br/>Decides: ask now, defer, suppress"]:::brain
+
+      ATTENTION_BUDGET_GATE["Attention Budget Gate<br/>Token Bucket Algorithm<br/>---<br/>tokens: 3/day (max_tokens: 3)<br/>refill_rate: 1 token per 8 hours<br/>---<br/>can_ask_question(): tokens >= 1.0<br/>spend_token(): tokens -= 1.0<br/>refill(): min(max, tokens + hours * rate)<br/>---<br/>Per-user, per-day<br/>Persisted in K1 local state"]:::gate
+
+      CONTEXT_MONITOR["Context Monitor<br/>assess_readiness(user) -> 0.0 to 1.0<br/>---<br/>0.0: user stressed / driving / safety-critical<br/>0.1: user at work / high cognitive load<br/>0.2: user in important_call<br/>0.3: default (possible but not ideal)<br/>0.6: user idle > 5 minutes<br/>0.9: user discussing related topic<br/>     (cosine similarity > 0.7)<br/>---<br/>Reads: user_state, active_task,<br/>last_interaction_time, recent_topics<br/>Source: SessionState (multi-reader)"]:::service
+
+      PROACTIVE_QUEUE["Proactive Queue<br/>Priority queue sorted by importance_score<br/>importance = entropy * (1 / (confidence + 0.1))<br/>     * recency_boost * type_weight<br/>---<br/>type_weights:<br/>  CONTRADICTION: 1.5<br/>  AMBIGUOUS_ENTITY: 1.3<br/>  MISSING_ATTRIBUTE: 1.0<br/>  LOW_CONFIDENCE_EDGE: 0.9<br/>  CONCEPT_DRIFT: 0.7<br/>  STRUCTURAL_HOLE: 0.6<br/>  STALE_ANCHOR: 0.5<br/>---<br/>Max depth: 50 pending items<br/>Expiry: 7 days per gap record"]:::mailbox
+    end
+
+    subgraph CURIOSITY_ENGINE["Curiosity Engine (Question Generation)"]
+      direction TB
+
+      CURIOSITY_AGENT["Curiosity Agent<br/>Spawned by: Fabric Agent Factory<br/>Template: k1/contracts/agents/curiosity_agent.yaml<br/>---<br/>Persona: Curious, humble, brief<br/>Max output: 15 words (~300 tokens budget)<br/>Tools granted: recall_memory (read-only)<br/>---<br/>Strategies by gap_type:<br/>  AMBIGUOUS_ENTITY -> disambiguation Q<br/>  MISSING_ATTRIBUTE -> attribute Q<br/>  CONTRADICTION -> preference Q<br/>  CONCEPT_DRIFT -> validation Q<br/>  STRUCTURAL_HOLE -> relationship Q<br/>  STALE_ANCHOR -> re-check Q<br/>---<br/>Example: Is Sarah from work, or a friend?"]:::agent
+
+      CONSTITUTIONAL_FILTER["Constitutional AI Filter<br/>Self-critique against Family Constitution<br/>---<br/>Question Principles checked:<br/>1. Not during high-stress moments<br/>2. Respect I dont want to answer<br/>3. Avoid family conflict questions<br/>4. Question count <= budget<br/>5. Genuine curiosity framing<br/>---<br/>Privacy Band enforcement:<br/>  RED (medical/financial): explicit consent required<br/>  AMBER (moderate): consent required<br/>  GREEN: always okay<br/>---<br/>Child Safety (age < 13):<br/>  Require parental consent<br/>  Age-appropriate language<br/>  Block sensitive topics<br/>---<br/>If violation detected: revise or suppress<br/>Max revision rounds: 2"]:::safety
+
+      QUESTION_FORMATTER["Question Formatter<br/>Wraps validated question into<br/>user-facing message<br/>---<br/>Metadata attached:<br/>  gap_id, gap_type, priority<br/>  trace_id, session_id<br/>---<br/>Output: CuriosityOutput envelope"]:::service
+    end
+
+    subgraph GAP_ANSWER_PATH["Gap Answer Path (User Response -> K0)"]
+      direction TB
+
+      ANSWER_DETECTOR["Answer Detector<br/>Monitors user responses for<br/>gap_id correlation<br/>---<br/>Detection: Concierge routes<br/>user reply matching active gap<br/>to Learning Loop via Event Bus<br/>---<br/>Topic: k1.learning.gap_answer.v1"]:::service
+
+      GAP_ANSWER_WRITER["Gap Answer Writer<br/>Non-LLM agent (deterministic)<br/>---<br/>Builds K0 command envelope:<br/>  op: memory.delta<br/>  body: user_answer_text<br/>  meta: { gap_id, gap_type,<br/>          confidence: 1.0,<br/>          source: user_explicit }<br/>---<br/>Sends: POST /k0/command.submit<br/>via Bridge Command Port<br/>---<br/>On success: emit k1.learning.gap_resolved.v1<br/>On failure: retry 2x, then mark EXPIRED"]:::memory
+
+      REMINDER_AGENT["Reminder Agent<br/>Spawned by: Fabric Agent Factory<br/>Template: k1/contracts/agents/reminder_agent.yaml<br/>---<br/>Follows up on ASKED gaps with no answer<br/>after configurable delay (default 24h)<br/>Max reminders: 1 per gap<br/>Respects attention budget<br/>---<br/>Tools: recall_memory, invoke_capability<br/>Budget: 200 tokens"]:::agent
+    end
+  end
+
+  %% ==================================================================================
+  %% SYSTEM 2: MODEL REFINEMENT (Feedback Loop)
+  %% ==================================================================================
+
+  subgraph SYSTEM_2_FEEDBACK["System 2: Model Refinement (K1 Behavior -> K0 Parameter Tuning)"]
+    direction TB
+
+    subgraph FEEDBACK_DETECTION["Feedback Signal Detection (Per Conversation Turn)"]
+      direction TB
+
+      CONVERSATION_CONTEXT["Conversation Context Tracker<br/>Per-session state (NOT SessionState):<br/>  session_id, message_id<br/>  event_ids[] (from K0 recall)<br/>  recall_id (K0 query.recall correlation)<br/>  response_id (LLM response ID)<br/>  grounded_event_ids[] (memories in response)<br/>  wal_positions[] (WAL pos for events)<br/>---<br/>record_recall(): after K0 query<br/>record_response(): after LLM generation<br/>Cached for feedback correlation"]:::service
+
+      subgraph DETECTORS["Signal Detectors (5 types, inline per turn)"]
+        direction TB
+
+        CORRECTION_DETECTOR["Correction Detector<br/>Patterns: no actually, thats wrong,<br/>  I stopped, its not X its Y<br/>---<br/>Confidence: 0.85<br/>Target: grounded_event_ids[0]<br/>Signal class: CORRECTION<br/>Priority: P0 (highest)"]:::detector
+
+        VALIDATION_DETECTOR["Validation Detector<br/>Positive: yes, thats right, exactly<br/>Negative: no, thats wrong, I dont think so<br/>---<br/>Confidence: 0.90<br/>Target: grounded_event_ids[0]<br/>Signal class: VALIDATION<br/>Priority: P0"]:::detector
+
+        REFORMULATION_DETECTOR["Reformulation Detector<br/>High semantic similarity (> 0.7)<br/>+ different wording = retry<br/>---<br/>Confidence: 0.60-0.75<br/>Polarity: negative<br/>Signal class: IMPLICIT<br/>Priority: P2"]:::detector
+
+        ABANDONMENT_DETECTOR["Abandonment Detector<br/>No activity for 5+ minutes<br/>after recall without positive signal<br/>---<br/>Confidence: 0.70<br/>Signal class: IMPLICIT<br/>Priority: P2"]:::detector
+
+        HEDGING_DETECTOR["Hedging Detector<br/>LLM response uncertainty markers<br/>---<br/>Confidence: 0.50<br/>Signal class: IMPLICIT<br/>Priority: P2"]:::detector
+      end
+    end
+
+    subgraph FEEDBACK_EMISSION["Feedback Emission (K1 -> K0 via Bridge)"]
+      direction TB
+
+      FEEDBACK_ENVELOPE_BUILDER["Feedback Envelope Builder<br/>Builds FeedbackEnvelope from signal:<br/>---<br/>feedback_id: uuid<br/>pipeline_id: P02 | P03 | P08<br/>tenant_id, space_id<br/>signal_class: CORRECTION | VALIDATION |<br/>  IMPLICIT | EXPLICIT | OUTCOME<br/>signal_subtype: user_correction,<br/>  reformulation_detected, etc.<br/>---<br/>correlation: {<br/>  session_id, message_id,<br/>  wal_positions, event_ids[],<br/>  recall_id, response_id,<br/>  target_entity_type: event,<br/>  target_entity_id<br/>}<br/>---<br/>provenance: {<br/>  source_message_id,<br/>  recall_context_hash (SHA-256),<br/>  feedback_timestamp<br/>}<br/>---<br/>payload: pipeline-specific schema"]:::service
+
+      FEEDBACK_EMITTER["Feedback Emitter<br/>POST /k0/obs.emit kind=feedback<br/>via Bridge Obs Port<br/>---<br/>Timeout: 10s<br/>Retry: 2x with backoff<br/>On persistent failure: log + discard<br/>---<br/>Rate limit: 100/min per tenant<br/>Dedup: payload_hash within 5s"]:::bridge_out
+
+      FEEDBACK_TOPICS["K0 Bus Topics (downstream):<br/>feedback.signal.p02.v1 -> P02FeedbackHandler<br/>feedback.signal.p03.v1 -> P03FeedbackHandler (future)<br/>feedback.signal.p08.v1 -> P08FeedbackHandler<br/>---<br/>K0 validates via FeedbackSchemaRegistry<br/>Persists to st_feedback_signals<br/>BusDispatcher routes to pipeline handlers"]:::routing
+    end
+
+    subgraph DRIFT_DETECTION["Drift Detection (Background Process)"]
+      direction TB
+
+      DRIFT_DETECTOR["Drift Detector<br/>Periodic analysis of signal patterns<br/>---<br/>Checks:<br/>1. Embedding retrieval relevance decay<br/>   (retrieval_hit rate dropping)<br/>2. User correction rate increase<br/>   (> 2 corrections per 10 recalls)<br/>3. Abandonment rate spike<br/>   (> 3 abandonments per session)<br/>---<br/>Window: rolling 30 days<br/>Threshold: 20% shift triggers alert<br/>---<br/>Output: DriftSignal{<br/>  magnitude, direction,<br/>  affected_pipeline, evidence[]}"]:::detector
+
+      ADVISORY_EMITTER["Advisory Emitter<br/>Emits k0.learning.advisory.v1<br/>to K0 via Bridge Obs Port<br/>---<br/>Advisory types:<br/>  EMBEDDING_DECAY: P08 reindex needed<br/>  CORRECTION_SPIKE: P02 review needed<br/>  CONFIDENCE_DRIFT: P03 re-consolidate<br/>---<br/>K0 P06 consumes advisory<br/>and updates st_learned_weights"]:::bridge_out
+    end
+  end
+
+  %% ==================================================================================
+  %% MEMORY WRITER SUBSYSTEM (Spans Both Systems)
+  %% ==================================================================================
+
+  subgraph LEARNING_EXTRACTOR_SUBSYSTEM["Learning Extractor (Meta-Signal Extraction)"]
+    direction TB
+
+    LEARNING_EXTRACTOR_AGENT["Learning Extractor Agent<br/>Spawned by: Fabric Agent Factory<br/>Template: k1/contracts/agents/learning_extractor.yaml<br/>---<br/>Extracts META-KNOWLEDGE from interactions:<br/>  - Which question styles work best<br/>  - User preferred response length<br/>  - Topic sensitivity patterns<br/>---<br/>Output: learning.signal payloads<br/>Feeds into System 2 advisory path<br/>Budget: 400 tokens<br/>---<br/>NOTE: This is NOT the Memory Writer.<br/>Memory Writer is a SEPARATE system<br/>at k1/memory_writer/memory_writer.mmd"]:::agent
+  end
+
+  %% MEMORY WRITER is a SEPARATE SYSTEM (k1/memory_writer/memory_writer.mmd)
+  %% It extracts FACTS from turns -> K0 command envelopes -> Bridge -> P02.
+  %% Learning Extractor extracts META-SIGNALS -> System 2 feedback path.
+  %% Both observe conversation turns but for completely different purposes.
+
+  %% ==================================================================================
+  %% AGENT CONTRACTS (Fabric Integration)
+  %% ==================================================================================
+
+  subgraph AGENT_CONTRACTS["Agent Contracts (Registered in Fabric Agent Registry)"]
+    direction TB
+
+    CONTRACT_CURIOSITY["curiosity_agent.yaml<br/>name: agent.execute.curiosity<br/>---<br/>prompt_template: curiosity_persona.md<br/>tools_granted: [recall_memory]<br/>llm_budget_tokens: 300<br/>max_tool_calls: 1<br/>max_execution_time_ms: 3000<br/>safety_band_min: GREEN"]:::contract
+
+    CONTRACT_REMINDER["reminder_agent.yaml<br/>name: agent.execute.reminder<br/>---<br/>prompt_template: reminder_persona.md<br/>tools_granted: [recall_memory, invoke_capability]<br/>llm_budget_tokens: 200<br/>max_tool_calls: 2<br/>max_execution_time_ms: 5000<br/>safety_band_min: GREEN"]:::contract
+
+    CONTRACT_LEARNING_EXTRACTOR["learning_extractor.yaml<br/>name: agent.execute.learning_extractor<br/>---<br/>prompt_template: learning_extractor_persona.md<br/>tools_granted: [recall_memory]<br/>llm_budget_tokens: 400<br/>max_tool_calls: 2<br/>max_execution_time_ms: 5000<br/>safety_band_min: GREEN"]:::contract
+
+    %% NOTE: memory_writer.yaml contract is in memory_writer.mmd (separate system)
+
+    CONTRACT_GAP_WRITER["gap_answer_writer.yaml<br/>name: agent.execute.gap_answer_writer<br/>---<br/>prompt_template: null (deterministic, no LLM)<br/>tools_granted: [memory.delta]<br/>llm_budget_tokens: 0<br/>max_tool_calls: 1<br/>max_execution_time_ms: 2000<br/>safety_band_min: GREEN"]:::contract
+  end
+
+  %% ==================================================================================
+  %% K1 EVENT BUS TOPICS (Internal)
+  %% ==================================================================================
+
+  subgraph LEARNING_EVENTS["Learning Loop Event Bus Topics (K1 Internal)"]
+    direction TB
+
+    EVT_GAP_RECEIVED["k1.learning.gap_received.v1<br/>SSE curiosity.intent.v1 arrived<br/>Payload: gap_id, gap_type, priority"]:::event
+
+    EVT_QUESTION_READY["k1.learning.question_ready.v1<br/>Curiosity Agent generated question<br/>Payload: gap_id, question_text, trace_id<br/>Consumer: Concierge OUTPUT_CHANNEL"]:::event
+
+    EVT_QUESTION_DELIVERED["k1.learning.question_delivered.v1<br/>Question shown to user<br/>Payload: gap_id, delivered_at"]:::event
+
+    EVT_GAP_ANSWER["k1.learning.gap_answer.v1<br/>User responded to question<br/>Payload: gap_id, answer_text, session_id"]:::event
+
+    EVT_GAP_RESOLVED["k1.learning.gap_resolved.v1<br/>Gap closed in K0<br/>Payload: gap_id, resolution_type"]:::event
+
+    EVT_FEEDBACK_DETECTED["k1.learning.feedback_detected.v1<br/>Signal detector found feedback<br/>Payload: signal_class, target_event_id"]:::event
+
+    EVT_FEEDBACK_EMITTED["k1.learning.feedback_emitted.v1<br/>Feedback sent to K0 Obs Port<br/>Payload: feedback_id, pipeline_id"]:::event
+
+    EVT_DRIFT_ALERT["k1.learning.drift_alert.v1<br/>Drift detected in retrieval/correction patterns<br/>Payload: drift_type, magnitude, pipeline"]:::event
+
+    EVT_MEMORY_BATCH["k1.learning.memory_batch.v1<br/>Memory Writer batch completed<br/>Payload: batch_size, event_ids[]"]:::event
+  end
+
+  %% ==================================================================================
+  %% PORTS -- Hexagonal Boundaries (6 Ports)
+  %% LEARN-01 enforced at compile time: no IStateWritePort exists.
+  %% ==================================================================================
+
+  subgraph PORTS["Ports (6 Hexagonal Boundaries -- LEARN-01: No Write Ports to SessionState)"]
+    direction TB
+
+    PORT_SSE["ISSEPort<br/>Direction: Inbound<br/>subscribe(endpoint) -> SSEStream<br/>reconnect(backoff) -> void<br/>Endpoint: Bridge /v1/k0/events/stream<br/>Topics: curiosity.intent.v1, k0.learning.advisory.v1,<br/>  k0.proactive.signal.v1"]:::port
+
+    PORT_EVENT["IEventPort<br/>Direction: Both<br/>subscribe(topics[]) -> EventStream<br/>publish(topic, payload) -> void<br/>Sub: k1.learning.gap_answer.v1,<br/>  k1.fabric.learning.signal.v1, turn.complete.v1<br/>Pub: k1.learning.question_ready.v1,<br/>  k1.learning.feedback_detected.v1,<br/>  k1.learning.gap_resolved.v1,<br/>  k1.learning.drift_alert.v1"]:::port
+
+    PORT_STATE_READ["IStateReadPort<br/>Direction: Inbound (read-only)<br/>read(sections[]) -> StateSnapshot<br/>Multi-reader, lock-free (LEARN-01)<br/>Sections: history_active, beliefs_active,<br/>  affective_now, scoreboard, persona"]:::port
+
+    PORT_BRIDGE_CMD["IBridgeCommandPort<br/>Direction: Outbound<br/>submit(topic, schema_uri, body) -> void<br/>Topic: memory.delta (gap answers)<br/>ONE-WAY fire-and-forget (LEARN-02)"]:::port
+
+    PORT_BRIDGE_OBS["IBridgeObsPort<br/>Direction: Outbound<br/>emit(kind, payload) -> void<br/>kind: feedback<br/>POST /k0/obs.emit (LEARN-02)<br/>Rate limit: 100/min per tenant (LEARN-10)"]:::port
+
+    PORT_FABRIC["IFabricPort<br/>Direction: Outbound<br/>spawn(AgentContract) -> AgentHandle<br/>terminate(agent_id) -> void<br/>Spawns: CuriosityAgent, ReminderAgent,<br/>  GapAnswerWriter, LearningExtractorAgent"]:::port
+  end
+
+  %% ==================================================================================
+  %% ADAPTERS -- Production + Test (Infrastructure Bindings)
+  %% ==================================================================================
+
+  subgraph ADAPTERS["Adapters (Infrastructure Bindings)"]
+    direction TB
+
+    subgraph ADAPTERS_PROD["Production Adapters (6)"]
+      direction TB
+
+      ADAPT_SSE["BridgeSSEAdapter<br/>SSE stream subscription to Bridge<br/>Exponential backoff reconnect<br/>CB_SSE inherited (5s reconnect, 3/min)<br/>---<br/>Error: DEGRADED (polling mode fallback)"]:::adapter
+
+      ADAPT_EVENT["EventBusAdapter<br/>K1 Event Bus pub/sub binding<br/>turn.complete.v1 + fabric.learning.signal<br/>---<br/>Error: RECOVERABLE (resubscribe)"]:::adapter
+
+      ADAPT_STATE_READ["SessionStateReadAdapter<br/>Lock-free multi-reader access<br/>CB_SESSIONSTATE inherited (100ms, 10/min)<br/>---<br/>Error: DEGRADED (stale cached snapshot)"]:::adapter
+
+      ADAPT_BRIDGE_CMD["BridgeCommandAdapter<br/>IKernelCommandPort.submit()<br/>Gap answers: topic memory.delta<br/>---<br/>Fire-and-forget (Edge-First)<br/>Error: RECOVERABLE (retry 2x, then EXPIRED)"]:::adapter
+
+      ADAPT_BRIDGE_OBS["BridgeObsAdapter<br/>POST /k0/obs.emit kind=feedback<br/>Timeout: 10s, retry: 2x backoff<br/>---<br/>Rate limit: 100/min (LEARN-10)<br/>Dedup: payload_hash within 5s (LEARN-09)<br/>Error: RECOVERABLE (log + discard)"]:::adapter
+
+      ADAPT_FABRIC["FabricAgentAdapter<br/>Agent Factory spawn/terminate<br/>---<br/>Spawns: CuriosityAgent, ReminderAgent,<br/>  GapAnswerWriter, LearningExtractorAgent<br/>LLM access: via Fabric Agent Factory -> Model Hub<br/>Capabilities: CHAT, STRUCTURED, MODERATE (per agent)<br/>Model Hub: capability-driven plugin architecture<br/>See: k1/model_hub/model_hub.mmd<br/>Error: DEGRADED (agent unavailable)"]:::adapter
+    end
+
+    subgraph ADAPTERS_TEST["Test Adapters (6 -- In-Memory)"]
+      direction TB
+
+      ADAPT_TEST_SSE["TestSSEAdapter<br/>Inject SSE events on demand<br/>Simulate reconnect failures"]:::adapter_test
+
+      ADAPT_TEST_EVENT["TestEventAdapter<br/>Inject and capture K1 events"]:::adapter_test
+
+      ADAPT_TEST_STATE["TestStateReadAdapter<br/>Scripted SessionState snapshots"]:::adapter_test
+
+      ADAPT_TEST_BRIDGE_CMD["TestBridgeCommandAdapter<br/>Capture gap answer envelopes"]:::adapter_test
+
+      ADAPT_TEST_BRIDGE_OBS["TestBridgeObsAdapter<br/>Capture feedback emissions<br/>Assert on correlation IDs"]:::adapter_test
+
+      ADAPT_TEST_FABRIC["TestFabricAdapter<br/>Mock agent spawn/terminate"]:::adapter_test
+    end
+  end
+
+  %% ==================================================================================
+  %% INVARIANTS -- Visual Summary (LEARN-01 through LEARN-14)
+  %% ==================================================================================
+
+  subgraph INVARIANTS["Invariants (14 Non-Negotiable Rules -- LEARN-01..LEARN-14)"]
+    direction TB
+
+    INV_OWNERSHIP["OWNERSHIP (LEARN-01..02)<br/>LEARN-01: NEVER writes SessionState (ADR-0017)<br/>LEARN-02: All K0 writes via Bridge (memory.delta, feedback.signal)"]:::invariant
+
+    INV_BUDGET["BUDGET + RATE (LEARN-03..06, LEARN-10)<br/>LEARN-03: 3 questions/day per user (Token Bucket)<br/>LEARN-04: Curiosity max 300 tokens per question<br/>LEARN-05: Constitutional AI on EVERY question<br/>LEARN-06: RED data needs explicit consent<br/>LEARN-10: 100 feedback signals/min per tenant"]:::invariant
+
+    INV_TIMING["TIMING + DEDUP (LEARN-07..09)<br/>LEARN-07: GapAutoResolver 24h grace period<br/>LEARN-08: Feedback incl session_id + event_ids + recall_id<br/>LEARN-09: payload_hash dedup within 5s"]:::invariant
+
+    INV_OPERATIONAL["OPERATIONAL (LEARN-11..14)<br/>LEARN-11: Drift threshold 20% shift in 30-day window<br/>LEARN-12: Memory Writer batch: 250ms (separate system)<br/>LEARN-13: All events carry cognitive_trace_id<br/>LEARN-14: SSE events require Bridge SSE Port healthy"]:::invariant
+  end
+
+  %% ==================================================================================
+  %% PERFORMANCE BASELINES
+  %% ==================================================================================
+
+  subgraph PERF_BASELINES["Performance Baselines"]
+    direction TB
+
+    PERF_SYSTEM["SYSTEM-OWNED LATENCIES (P95)<br/>SSE event receive: < 50ms<br/>Attention budget check: < 5ms<br/>Context readiness: < 100ms<br/>Feedback detection (per turn): < 50ms<br/>Feedback emission to K0: < 200ms<br/>---<br/>Total per-turn overhead: < 100ms<br/>(feedback detectors only, inline)"]:::perf
+
+    PERF_LLM["LLM BUDGET ENVELOPES<br/>Curiosity question gen: 1-3s (~300 tok)<br/>Constitutional filter: 500ms-2s (~200 tok)<br/>End-to-end gap-to-question: < 5s (~500 tok)"]:::perf
+
+    PERF_BACKGROUND["BACKGROUND LATENCIES<br/>Gap detection (K0 P03): < 500ms P95<br/>Entropy scan (K0 P06): < 5min / 10K<br/>Drift detection: < 30s / 1K signals"]:::perf
+  end
+
+  %% ==================================================================================
+  %% INTERNAL SERVICES (8 Codeable Components -- ~350 Tests)
+  %% Dependency: SSEInboundService -> ProactiveDecisionService
+  %%           -> CuriosityService -> GapAnswerService
+  %%           FeedbackDetectionService -> FeedbackEmissionService
+  %%           DriftDetectionService (independent, periodic)
+  %%           LearningExtractorService (independent, per-turn)
+  %% No circular dependencies.
+  %% ==================================================================================
+
+  subgraph SERVICES["Internal Services (8 Codeable Components -- ~350 Tests)"]
+    direction TB
+
+    SVC_SSE_INBOUND["SSEInboundService<br/>listen() -> void (background loop)<br/>route(event) -> RouteDecision<br/>deserialize(raw) -> ValidatedEvent<br/>---<br/>Subscribes Bridge SSE Port<br/>Routes: curiosity -> System 1, advisory -> Drift<br/>Uses: ISSEPort<br/>~35 tests"]:::service
+
+    SVC_PROACTIVE["ProactiveDecisionService<br/>evaluate(gap) -> Decision (ask | defer | suppress)<br/>check_budget() -> bool (LEARN-03)<br/>assess_readiness(user) -> float 0.0-1.0<br/>enqueue(gap, importance) -> QueuePosition<br/>dequeue_next() -> GapRecord | None<br/>---<br/>Token Bucket: 3/day, 1 per 8h refill<br/>Context Monitor: user state awareness<br/>Priority Queue: importance = entropy * ...<br/>Uses: IEventPort, IStateReadPort<br/>~65 tests"]:::service
+
+    SVC_CURIOSITY["CuriosityService<br/>generate_question(gap) -> CuriosityOutput<br/>apply_constitution(question) -> FilterResult<br/>format(question, metadata) -> FormattedOutput<br/>---<br/>Spawns CuriosityAgent via IFabricPort<br/>Constitutional filter: 5 principles + privacy<br/>Max revision rounds: 2<br/>~55 tests"]:::service
+
+    SVC_GAP_ANSWER["GapAnswerService<br/>detect_answer(user_msg) -> MatchResult | None<br/>write_answer(gap_id, answer) -> WriteResult<br/>schedule_reminder(gap_id) -> void<br/>---<br/>Answer Detector: gap_id correlation<br/>GapAnswerWriter: deterministic K0 envelope<br/>ReminderAgent: 24h follow-up (max 1 per gap)<br/>Uses: IBridgeCommandPort, IFabricPort, IEventPort<br/>~45 tests"]:::service
+
+    SVC_FEEDBACK_DETECTION["FeedbackDetectionService<br/>detect(turn_context) -> Signal[]<br/>track_context(recall, response) -> ConversationCtx<br/>---<br/>5 detectors: Correction (P0), Validation (P0),<br/>  Reformulation (P2), Abandonment (P2), Hedging (P2)<br/>Runs: inline per conversation turn<br/>Trigger: turn.complete.v1 via IEventPort<br/>~60 tests"]:::service
+
+    SVC_FEEDBACK_EMISSION["FeedbackEmissionService<br/>build_envelope(signal) -> FeedbackEnvelope<br/>emit(envelope) -> EmitResult<br/>dedup(hash) -> bool (LEARN-09)<br/>---<br/>POST /k0/obs.emit via IBridgeObsPort<br/>Rate limit: 100/min (LEARN-10)<br/>Correlation: session_id + event_ids + recall_id<br/>~40 tests"]:::service
+
+    SVC_DRIFT["DriftDetectionService<br/>analyze(signals[]) -> DriftSignal | None<br/>emit_advisory(drift) -> void<br/>---<br/>Periodic: rolling 30-day window<br/>Checks: retrieval decay, correction spike,<br/>  abandonment rate, confidence shift<br/>Threshold: 20% shift (LEARN-11)<br/>Uses: IBridgeObsPort<br/>~30 tests"]:::service
+
+    SVC_LEARNING_EXTRACTOR["LearningExtractorService<br/>extract_meta(turn) -> LearningSignal[]<br/>---<br/>Meta-knowledge extraction:<br/>  question styles, response preferences,<br/>  topic sensitivity patterns<br/>Output: feeds FeedbackEmissionService<br/>Budget: 400 tokens<br/>~20 tests"]:::service
+  end
+
+  %% ==================================================================================
+  %% LIFECYCLE (5 Phases)
+  %% ==================================================================================
+
+  subgraph LIFECYCLE["Lifecycle (5 Phases)"]
+    direction TB
+
+    LC_INIT["init(session_id)<br/>Owner: Learning Loop Controller<br/>---<br/>1. Create 8 services (no I/O)<br/>2. Wire 6 ports<br/>3. Start SSE listener (ISSEPort)<br/>4. Subscribe turn.complete.v1 for detectors<br/>5. Subscribe k1.fabric.learning.signal.v1 (GAP-B2)<br/>6. Subscribe k1.learning.gap_answer.v1<br/>7. Start ProactiveQueue dequeue timer<br/>8. Set state: ACTIVE"]:::lifecycle
+
+    LC_SESSION_START["session_start()<br/>Owner: Learning Loop Controller<br/>---<br/>1. Activate FeedbackDetectionService<br/>2. Reset per-session counters<br/>3. Start DriftDetectionService timer<br/>4. Load pending gaps from local state<br/>5. Resume Proactive Queue processing"]:::lifecycle
+
+    LC_SESSION_END["session_end()<br/>Owner: Learning Loop Controller<br/>---<br/>1. Flush pending feedback (FeedbackEmissionService)<br/>2. Persist Proactive Queue state (local)<br/>3. Persist Attention Budget state (local)<br/>4. Stop per-session timers"]:::lifecycle
+
+    LC_SHUTDOWN["shutdown()<br/>Owner: Learning Loop Controller<br/>---<br/>1. Stop SSE listener (ISSEPort.close)<br/>2. Drain Proactive Queue (best-effort flush)<br/>3. Flush pending feedback<br/>4. Unsubscribe from all event topics<br/>5. Stop drift timer<br/>6. Terminate spawned agents via IFabricPort<br/>7. Disconnect ports (LIFO)"]:::lifecycle
+
+    LC_CRASH_RECOVERY["crash_recovery(session_id)<br/>---<br/>1. Bootstrap (8 services + 6 ports)<br/>2. Reconnect SSE (exponential backoff)<br/>3. Restore pending gaps from local state<br/>4. Restore Attention Budget tokens<br/>5. Resume: subscriptions, timers, ACTIVE<br/>---<br/>Max loss: in-flight question or feedback"]:::lifecycle
+  end
+
+  %% ==================================================================================
+  %% CONCURRENCY MODEL
+  %% ==================================================================================
+
+  subgraph CONCURRENCY["Concurrency Model"]
+    direction TB
+
+    CONC_SSE["SSE Listener (Background Async)<br/>---<br/>Async event loop, non-blocking<br/>Processes one SSE event at a time<br/>Reconnects on disconnect (exponential backoff)<br/>Does NOT block turn processing"]:::concurrency
+
+    CONC_DETECTORS["Feedback Detectors (Inline Per-Turn)<br/>---<br/>Triggered by turn.complete.v1<br/>Run synchronously within turn context<br/>5 detectors sequential (< 50ms total)<br/>Runs AFTER Concierge turn_end completes"]:::concurrency
+
+    CONC_PROACTIVE["Proactive Queue (Timer-Driven)<br/>---<br/>Dequeue timer: check every 30s<br/>One question at a time<br/>Budget gate serializes (no parallel questions)"]:::concurrency
+
+    CONC_DRIFT["Drift Detection (Periodic Background)<br/>---<br/>Runs: every 4 hours<br/>Window: rolling 30 days<br/>Does NOT block any other subsystem"]:::concurrency
+  end
+
+end
+
+%% =====================================================================================
+%% EXTERNAL TOUCHPOINTS (Other K1 Systems)
+%% =====================================================================================
+
+subgraph EXTERNAL_K1["External K1 Touchpoints"]
+  direction TB
+
+  TP_CONCIERGE["Concierge<br/>Delivers proactive questions<br/>Routes gap answers back<br/>OUTPUT_CHANNEL for question text"]:::external
+
+  TP_FABRIC["Capability Fabric<br/>Agent Factory spawns all agents<br/>Agent Registry holds contracts<br/>Agent Lifecycle FSM manages state"]:::external
+
+  TP_BRIDGE_SSE["Bridge SSE Port<br/>/v1/k0/events/stream<br/>Delivers K0 SSE events"]:::external
+
+  TP_BRIDGE_CMD["Bridge Command Port<br/>POST /k0/command.submit<br/>memory.delta + gap_id"]:::external
+
+  TP_BRIDGE_OBS["Bridge Obs Port<br/>POST /k0/obs.emit<br/>kind=feedback"]:::external
+
+  TP_SESSIONSTATE["SessionState<br/>Multi-reader access only<br/>conversation_context for correlation"]:::external
+end
+
+%% =====================================================================================
+%% EXTERNAL K0 TOUCHPOINTS
+%% =====================================================================================
+
+subgraph EXTERNAL_K0["K0 Pipeline Touchpoints (via Bridge)"]
+  direction TB
+
+  TP_P03["P03 Consolidation<br/>Gap detection (R2-R4, R7)<br/>GapDetector creates GapRecord<br/>GapEmitter publishes p03.gap.detected.v1<br/>GapAutoResolver (implicit resolution)"]:::k0
+
+  TP_P06["P06 Active Learning<br/>Entropy Scanner (daily 4AM cron)<br/>Priority Queue by importance_score<br/>Grace period: 24h before explicit ask"]:::k0
+
+  TP_P05["P05 Attention Manager<br/>Token Bucket (3/day)<br/>Context readiness assessment<br/>Emits curiosity.intent.v1 SSE"]:::k0
+
+  TP_P02["P02 Write<br/>Receives gap answers via memory.delta<br/>Tags with gap_resolution_id<br/>Writes to st_hipp_events"]:::k0
+
+  TP_P21["P21 Feedback Validation<br/>Validates FeedbackEnvelope<br/>Persists to st_feedback_signals<br/>Routes to pipeline handlers"]:::k0
+
+  TP_P08["P08 Embeddings<br/>Receives feedback.signal.p08.v1<br/>Adjusts retrieval weights"]:::k0
+end
+
+%% =====================================================================================
+%% FLOW EDGES -- SYSTEM 1: GAP RESOLUTION
+%% =====================================================================================
+
+%% SSE Inbound Flow
+TP_BRIDGE_SSE -->|"SSE stream"| SSE_LISTENER
+SSE_LISTENER -->|"raw event"| SSE_DESERIALIZER
+SSE_DESERIALIZER -->|"validated event"| SSE_ROUTER
+SSE_ROUTER -->|"curiosity.intent.v1"| PROACTIVE_DECISION
+SSE_ROUTER -->|"k0.proactive.signal.v1"| PROACTIVE_DECISION
+SSE_ROUTER -->|"k0.learning.advisory.v1"| DRIFT_DETECTOR
+
+%% Proactive Decision Flow
+PROACTIVE_DECISION -->|"evaluate priority"| PROACTIVE_QUEUE
+PROACTIVE_QUEUE -->|"highest importance gap"| ATTENTION_BUDGET_GATE
+ATTENTION_BUDGET_GATE -->|"tokens >= 1?"| CONTEXT_MONITOR
+CONTEXT_MONITOR -->|"readiness >= 0.6"| CURIOSITY_AGENT
+ATTENTION_BUDGET_GATE -.->|"no tokens"| EVT_GAP_RECEIVED
+CONTEXT_MONITOR -.->|"readiness < 0.3: defer"| PROACTIVE_QUEUE
+
+%% Curiosity Agent Flow
+CURIOSITY_AGENT -->|"raw question"| CONSTITUTIONAL_FILTER
+CONSTITUTIONAL_FILTER -->|"validated question"| QUESTION_FORMATTER
+CONSTITUTIONAL_FILTER -.->|"violation: suppress"| EVT_GAP_RECEIVED
+QUESTION_FORMATTER -->|"CuriosityOutput"| EVT_QUESTION_READY
+EVT_QUESTION_READY -->|"to Concierge"| TP_CONCIERGE
+TP_CONCIERGE -->|"after user sees question"| EVT_QUESTION_DELIVERED
+
+%% Answer Path
+TP_CONCIERGE -->|"user answer with gap_id"| ANSWER_DETECTOR
+ANSWER_DETECTOR -->|"k1.learning.gap_answer.v1"| GAP_ANSWER_WRITER
+GAP_ANSWER_WRITER -->|"memory.delta + gap_id"| TP_BRIDGE_CMD
+TP_BRIDGE_CMD -->|"command.submit"| TP_P02
+TP_P02 -->|"next P03 cycle"| TP_P03
+GAP_ANSWER_WRITER -->|"success"| EVT_GAP_RESOLVED
+
+%% Reminder Path
+EVT_QUESTION_DELIVERED -.->|"no answer after 24h"| REMINDER_AGENT
+REMINDER_AGENT -->|"follow-up question"| QUESTION_FORMATTER
+
+%% =====================================================================================
+%% FLOW EDGES -- SYSTEM 2: FEEDBACK
+%% =====================================================================================
+
+%% Detection Flow
+TP_SESSIONSTATE -.->|"multi-reader: correlation IDs"| CONVERSATION_CONTEXT
+CONVERSATION_CONTEXT -->|"per-turn context"| CORRECTION_DETECTOR
+CONVERSATION_CONTEXT -->|"per-turn context"| VALIDATION_DETECTOR
+CONVERSATION_CONTEXT -->|"per-turn context"| REFORMULATION_DETECTOR
+CONVERSATION_CONTEXT -->|"per-turn context"| ABANDONMENT_DETECTOR
+CONVERSATION_CONTEXT -->|"per-turn context"| HEDGING_DETECTOR
+
+%% Emission Flow
+CORRECTION_DETECTOR -->|"CORRECTION signal"| FEEDBACK_ENVELOPE_BUILDER
+VALIDATION_DETECTOR -->|"VALIDATION signal"| FEEDBACK_ENVELOPE_BUILDER
+REFORMULATION_DETECTOR -->|"IMPLICIT signal"| FEEDBACK_ENVELOPE_BUILDER
+ABANDONMENT_DETECTOR -->|"IMPLICIT signal"| FEEDBACK_ENVELOPE_BUILDER
+HEDGING_DETECTOR -->|"IMPLICIT signal"| FEEDBACK_ENVELOPE_BUILDER
+FEEDBACK_ENVELOPE_BUILDER -->|"FeedbackEnvelope"| FEEDBACK_EMITTER
+FEEDBACK_EMITTER -->|"POST /k0/obs.emit"| TP_BRIDGE_OBS
+TP_BRIDGE_OBS -->|"kind=feedback"| TP_P21
+FEEDBACK_EMITTER -->|"success"| EVT_FEEDBACK_EMITTED
+
+%% Drift + Advisory Flow
+DRIFT_DETECTOR -->|"DriftSignal"| ADVISORY_EMITTER
+DRIFT_DETECTOR -->|"alert"| EVT_DRIFT_ALERT
+ADVISORY_EMITTER -->|"advisory"| TP_BRIDGE_OBS
+
+%% =====================================================================================
+%% FLOW EDGES -- MEMORY WRITER
+%% =====================================================================================
+
+%% Learning Extractor Flow (meta-signal extraction, NOT memory writing)
+%% Memory Writer is a SEPARATE system (k1/memory_writer/memory_writer.mmd)
+TP_CONCIERGE -.->|"interaction patterns"| LEARNING_EXTRACTOR_AGENT
+LEARNING_EXTRACTOR_AGENT -->|"learning.signal"| FEEDBACK_ENVELOPE_BUILDER
+
+%% =====================================================================================
+%% FLOW EDGES -- FABRIC INTEGRATION
+%% =====================================================================================
+
+%% Agent Factory spawns all Learning Loop agents
+TP_FABRIC -.->|"spawn CuriosityAgent"| CURIOSITY_AGENT
+TP_FABRIC -.->|"spawn ReminderAgent"| REMINDER_AGENT
+TP_FABRIC -.->|"spawn GapAnswerWriter"| GAP_ANSWER_WRITER
+%% NOTE: MemoryWriterAgent is spawned by Fabric but managed in memory_writer.mmd
+TP_FABRIC -.->|"spawn LearningExtractorAgent"| LEARNING_EXTRACTOR_AGENT
+
+%% Contracts registered in Fabric
+CONTRACT_CURIOSITY -.->|"registered"| TP_FABRIC
+CONTRACT_REMINDER -.->|"registered"| TP_FABRIC
+%% memory_writer.yaml registered via memory_writer.mmd (separate system)
+CONTRACT_LEARNING_EXTRACTOR -.->|"registered"| TP_FABRIC
+CONTRACT_GAP_WRITER -.->|"registered"| TP_FABRIC
+
+%% =====================================================================================
+%% FLOW EDGES -- PORT -> ADAPTER BINDINGS (Hexagonal Wiring)
+%% =====================================================================================
+
+PORT_SSE --> ADAPT_SSE
+PORT_SSE --> ADAPT_TEST_SSE
+PORT_EVENT --> ADAPT_EVENT
+PORT_EVENT --> ADAPT_TEST_EVENT
+PORT_STATE_READ --> ADAPT_STATE_READ
+PORT_STATE_READ --> ADAPT_TEST_STATE
+PORT_BRIDGE_CMD --> ADAPT_BRIDGE_CMD
+PORT_BRIDGE_CMD --> ADAPT_TEST_BRIDGE_CMD
+PORT_BRIDGE_OBS --> ADAPT_BRIDGE_OBS
+PORT_BRIDGE_OBS --> ADAPT_TEST_BRIDGE_OBS
+PORT_FABRIC --> ADAPT_FABRIC
+PORT_FABRIC --> ADAPT_TEST_FABRIC
+
+%% =====================================================================================
+%% FLOW EDGES -- SERVICE -> PORT USAGE
+%% Services call ports, never external systems directly (LEARN-01, LEARN-02).
+%% =====================================================================================
+
+SVC_SSE_INBOUND -.->|"SSE stream"| PORT_SSE
+SVC_PROACTIVE -.->|"pub/sub events"| PORT_EVENT
+SVC_PROACTIVE -.->|"read user state"| PORT_STATE_READ
+SVC_CURIOSITY -.->|"spawn CuriosityAgent"| PORT_FABRIC
+SVC_GAP_ANSWER -.->|"submit memory.delta"| PORT_BRIDGE_CMD
+SVC_GAP_ANSWER -.->|"event bus"| PORT_EVENT
+SVC_FEEDBACK_DETECTION -.->|"subscribe turn.complete"| PORT_EVENT
+SVC_FEEDBACK_DETECTION -.->|"read conversation ctx"| PORT_STATE_READ
+SVC_FEEDBACK_EMISSION -.->|"POST /k0/obs.emit"| PORT_BRIDGE_OBS
+SVC_DRIFT -.->|"emit advisory"| PORT_BRIDGE_OBS
+SVC_LEARNING_EXTRACTOR -.->|"read SS for extraction"| PORT_STATE_READ
+
+%% =====================================================================================
+%% FLOW EDGES -- LIFECYCLE -> SERVICE USAGE
+%% =====================================================================================
+
+LC_INIT -->|"create + wire"| SVC_SSE_INBOUND
+LC_INIT -->|"create"| SVC_PROACTIVE
+LC_INIT -->|"create"| SVC_CURIOSITY
+LC_INIT -->|"create"| SVC_GAP_ANSWER
+LC_INIT -->|"create"| SVC_FEEDBACK_DETECTION
+LC_INIT -->|"create"| SVC_FEEDBACK_EMISSION
+LC_INIT -->|"create"| SVC_DRIFT
+LC_INIT -->|"create"| SVC_LEARNING_EXTRACTOR
+
+LC_SESSION_END -->|"flush"| SVC_FEEDBACK_EMISSION
+LC_SESSION_END -->|"persist queue"| SVC_PROACTIVE
+
+LC_SHUTDOWN -->|"stop SSE"| SVC_SSE_INBOUND
+LC_SHUTDOWN -->|"drain queue"| SVC_PROACTIVE
+LC_SHUTDOWN -->|"flush feedback"| SVC_FEEDBACK_EMISSION
+LC_SHUTDOWN -.->|"terminate agents"| PORT_FABRIC
+LC_SHUTDOWN -.->|"unsubscribe"| PORT_EVENT
+
+LC_CRASH_RECOVERY -->|"bootstrap"| SVC_SSE_INBOUND
+LC_CRASH_RECOVERY -->|"restore gaps"| SVC_PROACTIVE
+LC_CRASH_RECOVERY -.->|"reconnect SSE"| PORT_SSE
+LC_CRASH_RECOVERY -.->|"resubscribe"| PORT_EVENT
+
+%% =====================================================================================
+%% FLOW EDGES -- INVARIANT ENFORCEMENT
+%% =====================================================================================
+
+SVC_PROACTIVE -.->|"LEARN-03 (3/day budget)"| INV_BUDGET
+SVC_CURIOSITY -.->|"LEARN-04 (300 tok), LEARN-05 (constitutional)"| INV_BUDGET
+SVC_FEEDBACK_EMISSION -.->|"LEARN-09 (dedup), LEARN-10 (rate limit)"| INV_TIMING
+SVC_DRIFT -.->|"LEARN-11 (20% threshold)"| INV_OPERATIONAL
+SVC_GAP_ANSWER -.->|"LEARN-01 (no SS write), LEARN-02 (Bridge only)"| INV_OWNERSHIP
+
+%% =====================================================================================
+%% FLOW EDGES -- K0 GAP DETECTION (upstream)
+%% =====================================================================================
+
+TP_P03 -->|"p03.gap.detected.v1"| TP_P06
+TP_P06 -->|"priority queue + grace check"| TP_P05
+TP_P05 -->|"curiosity.intent.v1 SSE"| TP_BRIDGE_SSE
+
+%% =====================================================================================
+%% STYLE CLASSES
+%% =====================================================================================
+
+classDef brain fill:#E8D5F5,stroke:#7B2D8E,stroke-width:2px,color:#1a1a2e
+classDef sse fill:#FFF3CD,stroke:#856404,stroke-width:2px,color:#1a1a2e
+classDef routing fill:#D1ECF1,stroke:#0C5460,stroke-width:2px,color:#1a1a2e
+classDef validator fill:#F8D7DA,stroke:#721C24,stroke-width:1px,color:#1a1a2e
+classDef gate fill:#FFE0B2,stroke:#E65100,stroke-width:2px,color:#1a1a2e
+classDef service fill:#E3F2FD,stroke:#1565C0,stroke-width:1px,color:#1a1a2e
+classDef agent fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px,color:#1a1a2e
+classDef safety fill:#FFCDD2,stroke:#B71C1C,stroke-width:2px,color:#1a1a2e
+classDef memory fill:#B3E5FC,stroke:#01579B,stroke-width:2px,color:#1a1a2e
+classDef detector fill:#F3E5F5,stroke:#6A1B9A,stroke-width:1px,color:#1a1a2e
+classDef bridge_out fill:#DCEDC8,stroke:#33691E,stroke-width:2px,color:#1a1a2e
+classDef mailbox fill:#FFF9C4,stroke:#F9A825,stroke-width:1px,color:#1a1a2e
+classDef contract fill:#E0E0E0,stroke:#424242,stroke-width:1px,color:#1a1a2e
+classDef event fill:#F5F5F5,stroke:#757575,stroke-width:1px,color:#1a1a2e
+classDef external fill:#BBDEFB,stroke:#1976D2,stroke-width:1px,color:#1a1a2e
+classDef k0 fill:#FCE4EC,stroke:#AD1457,stroke-width:1px,color:#1a1a2e
+classDef policy fill:#E8EAF6,stroke:#283593,stroke-width:1px,color:#1a1a2e
+classDef port fill:#e3f2fd,stroke:#1565c0,stroke-width:3px,color:#1a1a2e,font-weight:bold
+classDef adapter fill:#e8eaf6,stroke:#283593,stroke-width:2px,color:#1a1a2e
+classDef adapter_test fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,color:#1a1a2e,font-style:italic
+classDef invariant fill:#fce4ec,stroke:#880e4f,stroke-width:3px,color:#1a1a2e,font-weight:bold
+classDef perf fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:#1a1a2e,font-weight:bold
+classDef lifecycle fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#1a1a2e,font-weight:bold
+classDef concurrency fill:#e0f7fa,stroke:#00697c,stroke-width:2px,color:#1a1a2e

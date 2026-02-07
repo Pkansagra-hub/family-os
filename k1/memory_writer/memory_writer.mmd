@@ -1,0 +1,643 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+%% =====================================================================================
+%% MEMORY WRITER (K1) -- DEEP ARCHITECTURE DIAGRAM
+%% =====================================================================================
+%% STATUS: COMPLETE DESIGN (Architecture-Ready)
+%%
+%% The Memory Writer is K1's episodic memory formation system.
+%% It converts conversation turns into short, factual K0 command envelopes
+%% that flow through the Bridge Command Port to K0's P02 pipeline.
+%%
+%% THIS IS NOT THE LEARNING LOOP.
+%% Memory Writer runs on EVERY substantive turn.
+%% Learning Loop runs only on gap/feedback signals.
+%%
+%% ROLE:
+%%   Convert K1 conversation context (SessionState) into K0 long-term memory.
+%%   K1 thinks in conversations. K0 thinks in events.
+%%   Memory Writer is the TRANSLATOR between these two worlds.
+%%
+%% POSITION IN K1 STACK:
+%%   L0 Rhythm -> L1 Concierge -> L4 MEMORY_WRITER (background per-turn agent)
+%%                                 ^ we are here
+%%   Runs: After each turn completes (Concierge emits turn.complete.v1)
+%%   Does NOT write to SessionState (single writer = Concierge only)
+%%   Reads SessionState (lock-free multi-reader)
+%%   Emits to: Bridge Command Port only (K0 bound, fire-and-forget)
+%%
+%% GOVERNING DOCS:
+%%   - docs/pipelines/P02_write_dossier.md (K0 envelope contract, body schema)
+%%   - k1/sessionstate/README.md (SessionState 6-section, tiering, delta bus)
+%%   - architecture_diagrams/bridge/bridge_architecture.mmd (Command Port path)
+%%   - architecture_diagrams/k0/k0_source_of_truth_v2.mmd (K0 hot path + P02)
+%%   - architecture_diagrams/k1/k1_cognitive_architecture_skeleton.mmd
+%%
+%% SKELETON TRACEABILITY:
+%%   MEMORY_WRITER_SYSTEM    -> this entire diagram
+%%   MEMORY_WRITER_AGENTS    -> WRITER_AGENT (this diagram)
+%%   STATE_DELTA_EMITTER     -> BATCH_EMITTER (this diagram)
+%%   DELTA_AGGREGATOR        -> DELTA_AGG (this diagram)
+%%   DELTA_BUS               -> turn.complete.v1 trigger
+%%
+%% CROSS-DIAGRAM INTEGRATION POINTS:
+%%   concierge.mmd:
+%%     - Concierge emits turn.complete.v1 on DeltaBus after DELIVERING
+%%     - Concierge is single writer to SessionState (MW reads only)
+%%   fabric.mmd:
+%%     - Agent Factory spawns MemoryWriterAgent per session
+%%     - Agent Registry holds memory_writer.yaml contract
+%%   learning.mmd:
+%%     - LearningExtractorAgent is a SEPARATE agent (stays in learning.mmd)
+%%     - Memory Writer and Learning Extractor both observe turns but for
+%%       different purposes: MW extracts facts, LE extracts meta-signals
+%%   bridge_architecture.mmd:
+%%     - IKernelCommandPort.submit(topic, schema_uri, body)
+%%     - topic: memory.delta, schema: schema://memory.delta
+%%     - ONE-WAY FIRE-AND-FORGET (no response from K0)
+%%     - Bridge signs envelope (Ed25519), adds idem_key, envelope_sha256
+%%     - Offline: queued in LocalOutbox, drained when K0 returns
+%%   k0_source_of_truth_v2.mmd:
+%%     - BRIDGE_CMD_PORT -> CMD_SUBMIT_FN -> K0 Gate -> WAL + P02
+%%     - P02 runs UltraBERT as SAFETY NET on MW output (not primary tagger)
+%%
+%% INVARIANTS (MW-01 through MW-11):
+%%   MW-01: Memory Writer NEVER writes to SessionState.
+%%          Single writer = Concierge only (ADR-0017).
+%%   MW-02: Memory Writer reads SessionState lock-free (<1ms).
+%%   MW-03: All K0 writes go through Bridge Command Port.
+%%          K1 and K0 do NOT communicate directly.
+%%   MW-04: Envelope body text MUST be <= 50 words (short factual statement).
+%%          UltraBERT optimized for <=512 tokens. Short text = sweet spot.
+%%   MW-05: Per turn: 0-3 memory extractions max.
+%%          0 = turn not worth remembering. 3 = rich multi-fact turn.
+%%   MW-06: LLM budget: 500 tokens total (input context + output).
+%%          Uses cheapest model (GPT-4o-mini or equivalent).
+%%   MW-07: Relevance filter is rule-based (no LLM cost for skip decisions).
+%%   MW-08: Batch window: 250ms aggregation before Bridge submit.
+%%   MW-09: Offline-safe: queued in LocalOutbox when K0 unavailable.
+%%   MW-10: All envelopes carry cognitive_trace_id from originating turn.
+%%   MW-11: UltraBERT in K0 P02 validates MW output (safety net, not primary).
+%%          If LLM forgot a tag, UltraBERT catches it.
+%%
+%% PERFORMANCE BUDGET:
+%%   +-----------------------------+----------+----------+---------+
+%%   | Stage                       | P50      | P95      | Budget  |
+%%   +-----------------------------+----------+----------+---------+
+%%   | Relevance Filter            | <1ms     | <2ms     | 2ms     |
+%%   | SessionState Read           | <1ms     | <1ms     | 1ms     |
+%%   | LLM Extraction              | ~200ms   | ~500ms   | 500ms   |
+%%   | Envelope Build              | <1ms     | <2ms     | 2ms     |
+%%   | Delta Aggregation (250ms)   | 250ms    | 260ms    | 260ms   |
+%%   | Bridge Submit               | ~20ms    | ~50ms    | 50ms    |
+%%   +-----------------------------+----------+----------+---------+
+%%   | TOTAL (end-to-end)          | ~475ms   | ~815ms   | 815ms   |
+%%   +-----------------------------+----------+----------+---------+
+%%   NOTE: Memory Writer runs AFTER turn delivery (background).
+%%   It does NOT affect TTFT or user-perceived latency.
+%%
+%% ENVELOPE BODY CONTRACT (what MW sends to K0):
+%%   {
+%%     "operation": "UPSERT",
+%%     "text": "Had dinner with Mom at Olive Garden for Emma's birthday",
+%%     "event_time_utc": "2026-02-06T19:00:00Z",
+%%     "participants": ["person_mom", "person_emma"],
+%%     "location_name": "Olive Garden",
+%%     "activity_type": "MEAL",
+%%     "topics": ["family", "dining", "celebration"],
+%%     "sentiment_label": "positive",
+%%     "emotion_tags": ["joy", "contentment"],
+%%     "categories": ["social", "meal"],
+%%     "session_id": "session-abc123",
+%%     "conversation_turn": 5,
+%%     "language": "en"
+%%   }
+%%
+%%   Envelope headers (added by Bridge CommandBuilder):
+%%     cognitive_trace_id, tenant_id, space_id, topic (memory.delta),
+%%     schema_uri (schema://memory.delta), actor, device_id, band,
+%%     sig_alg (Ed25519SHA512), sig_kid, envelope_sha256, sig, idem_key
+%%
+%% ULTRABERT ROLE (K0 P02, NOT K1):
+%%   UltraBERT runs in K0 as P02 module pipeline AFTER receiving MW envelope.
+%%   UltraBERT max_length=512 tokens. MW body text ~15-30 tokens = sweet spot.
+%%   Role: VALIDATION safety net, NOT primary tagger.
+%%   +-------------------+-----------------------------+---------------------------+
+%%   | Field             | LLM Writer Produces         | UltraBERT Validates       |
+%%   +-------------------+-----------------------------+---------------------------+
+%%   | sentiment_label   | "positive"                  | sentiment head confirms    |
+%%   | emotion_tags      | ["joy"]                     | emotions 44-class enriches |
+%%   | participants      | ["Mom","Emma"]              | ner_family KINSHIP check   |
+%%   | topics            | ["family","dining"]         | ingress head validates     |
+%%   | activity_type     | "MEAL"                      | intent head confirms       |
+%%   | location_name     | "Olive Garden"              | ner_general LOC extract    |
+%%   | safety            | (inferred from band)        | safety_familyos validates  |
+%%   +-------------------+-----------------------------+---------------------------+
+%%   If LLM omits a tag, UltraBERT fills it. If LLM hallucinates, UltraBERT flags.
+%% =====================================================================================
+
+subgraph MEMORY_WRITER["Memory Writer System (Conversation -> K0 Long-Term Memory)"]
+  direction TB
+
+  %% ==================================================================================
+  %% TRIGGER: TURN COMPLETION EVENT
+  %% ==================================================================================
+
+  subgraph TRIGGER["Turn Completion Trigger"]
+    direction TB
+
+    TURN_COMPLETE_EVENT["turn.complete.v1 (from DeltaBus)<br/>Emitted by: Concierge after DELIVERING<br/>---<br/>Payload:<br/>  turn_id: string<br/>  session_id: string<br/>  cognitive_trace_id: string<br/>  user_message: string<br/>  assistant_response: string<br/>  timestamp_ms: int<br/>---<br/>Every turn triggers Memory Writer pipeline"]:::event
+
+    TURN_DISPATCHER["Turn Dispatcher<br/>Routes turn events to Memory Writer<br/>Ignores duplicate turn_ids (idempotent)"]:::routing
+  end
+
+  %% ==================================================================================
+  %% STAGE 1: RELEVANCE FILTER (Rule-Based, No LLM)
+  %% ==================================================================================
+
+  subgraph RELEVANCE_FILTER["Stage 1: Relevance Filter (Rule-Based, <2ms)"]
+    direction TB
+
+    FILTER_ENGINE["Relevance Filter Engine<br/>Determines: Is this turn worth remembering?<br/>---<br/>Rule-based (NO LLM cost for skip decisions)<br/>Returns: PASS or SKIP with reason"]:::gate
+
+    subgraph SKIP_RULES["Skip Rules (Any match = SKIP)"]
+      direction TB
+
+      RULE_CLARIFICATION["R1: Pure Clarification<br/>User: 'What do you mean?'<br/>Assistant: 'I meant...'<br/>Pattern: No new facts, just repair"]:::validator
+
+      RULE_META["R2: System/Meta Talk<br/>User: 'Change your tone'<br/>User: 'Be more concise'<br/>Pattern: About the system, not life"]:::validator
+
+      RULE_DUPLICATE["R3: Recent Duplicate<br/>Same entities + same topic<br/>within last 5 minutes<br/>Pattern: Dedup by entity+topic hash"]:::validator
+
+      RULE_TRIVIAL["R4: Empty/Trivial<br/>User: 'ok', 'thanks', 'sure'<br/>Pattern: <5 words, no entities"]:::validator
+
+      RULE_CONTINUATION["R5: Pure Continuation<br/>User: 'go on', 'what else?'<br/>Pattern: No new information"]:::validator
+    end
+
+    FILTER_METRICS["Filter Metrics<br/>skip_count, pass_count<br/>skip_reason_distribution<br/>Emits: k1.mw.filter.decision.v1"]:::service
+  end
+
+  %% ==================================================================================
+  %% STAGE 2: CONTEXT ASSEMBLY (SessionState Reader)
+  %% ==================================================================================
+
+  subgraph CONTEXT_ASSEMBLY["Stage 2: Context Assembly (SessionState Read, <1ms)"]
+    direction TB
+
+    SS_READER["SessionState Reader<br/>Lock-free multi-reader access<br/>Snapshot isolation per read<br/>---<br/>READS (never writes):<br/>  history_active: last 2-3 turns for context<br/>  beliefs_active: current facts and entities<br/>  affective_now: emotional state<br/>  scoreboard: referents, topics, salience<br/>  meta: session_id, user_id, band, device_id"]:::memory
+
+    CONTEXT_BUILDER["Context Builder<br/>Assembles extraction context from SS sections<br/>---<br/>Output: ExtractionContext<br/>  recent_turns: CompressedTurn[] (2-3 turns)<br/>  active_entities: Entity[]<br/>  current_emotion: string<br/>  active_topics: string[]<br/>  privacy_band: GREEN/AMBER/RED<br/>  actor_id: string<br/>  space_id: string<br/>  device_id: string<br/>---<br/>Total context size: ~150-200 tokens"]:::service
+
+    PERSON_RESOLVER["Person Resolver<br/>Resolves natural names to person_ids<br/>---<br/>'Mom' -> person_mom<br/>'Panda' -> person_panda<br/>'Emma' -> person_emma<br/>---<br/>Source: SessionState beliefs + scoreboard<br/>Fallback: pass-through if unresolved"]:::service
+  end
+
+  %% ==================================================================================
+  %% STAGE 3: LLM EXTRACTION (Memory Writer Agent)
+  %% ==================================================================================
+
+  subgraph LLM_EXTRACTION["Stage 3: LLM Memory Extraction (200-500ms)"]
+    direction TB
+
+    WRITER_AGENT["Memory Writer Agent (LLM)<br/>Spawned by: Fabric Agent Factory (per session)<br/>Contract: k1/contracts/agents/memory_writer.yaml<br/>---<br/>Model: cheapest available (GPT-4o-mini)<br/>Budget: 500 tokens (input context + output)<br/>Max tool calls: 3 (one per extraction)<br/>Max execution time: 5000ms<br/>---<br/>Prompt: memory_writer_persona.md<br/>  'Extract 1-3 discrete factual memories<br/>   from this turn. Each memory is a SHORT<br/>   statement (1-2 sentences, <=50 words).<br/>   Include all tags K0 expects.'"]:::agent
+
+    subgraph EXTRACTION_SCHEMA["Extraction Output Schema"]
+      direction TB
+
+      EXTRACTION_OUTPUT["MemoryExtraction[]<br/>---<br/>text: string (factual stmt, <=50 words)<br/>participants: string[] (person_ids)<br/>location_name: string | null<br/>activity_type: string | null<br/>topics: string[] (1-3 topics)<br/>sentiment_label: string (5-class)<br/>emotion_tags: string[] (from 44-class)<br/>categories: string[] (activity categories)<br/>confidence: float (0.0-1.0, agent self-score)"]:::contract
+
+      EXAMPLE_1["Example Turn:<br/>  User: 'Had dinner with Mom at Olive Garden,<br/>    celebrating Emma's birthday'<br/>  ---<br/>  Extraction 1:<br/>    text: 'Had dinner with Mom at Olive Garden<br/>      to celebrate Emma's birthday'<br/>    participants: [person_mom, person_emma]<br/>    location_name: 'Olive Garden'<br/>    activity_type: 'MEAL'<br/>    topics: [family, dining, celebration]<br/>    sentiment_label: 'positive'<br/>    emotion_tags: [joy, contentment]<br/>    categories: [social, meal]"]:::contract
+
+      EXAMPLE_2["Example Turn:<br/>  User: 'Need to call dentist tomorrow<br/>    and also check SEVIS appointment'<br/>  ---<br/>  Extraction 1:<br/>    text: 'Need to call dentist tomorrow'<br/>    activity_type: 'TASK'<br/>    topics: [health, appointment]<br/>  Extraction 2:<br/>    text: 'Need to check SEVIS appointment date'<br/>    activity_type: 'TASK'<br/>    topics: [immigration, appointment]"]:::contract
+    end
+
+    EXTRACTION_VALIDATOR["Extraction Validator<br/>Post-LLM validation (deterministic):<br/>---<br/>  1. text length <= 50 words? (truncate if over)<br/>  2. participants[] resolved? (re-resolve if needed)<br/>  3. Required fields present? (text, topics mandatory)<br/>  4. Confidence > 0.3? (drop low-confidence)<br/>  5. Privacy band respected? (RED = mask locations)<br/>---<br/>Drops invalid extractions, logs reason"]:::validator
+  end
+
+  %% ==================================================================================
+  %% STAGE 4: ENVELOPE BUILDER (Deterministic, No LLM)
+  %% ==================================================================================
+
+  subgraph ENVELOPE_BUILD["Stage 4: Envelope Builder (Deterministic, <2ms)"]
+    direction TB
+
+    ENVELOPE_BUILDER["Envelope Builder<br/>Converts MemoryExtraction -> K0 CommandEnvelope body<br/>---<br/>DETERMINISTIC (no LLM, no UltraBERT)<br/>Pure field mapping + header injection"]:::service
+
+    subgraph FIELD_MAPPING["Field Mapping (Extraction -> K0 Body)"]
+      direction TB
+
+      MAP_BODY["Body Fields:<br/>  extraction.text         -> body.text<br/>  'UPSERT'               -> body.operation<br/>  extraction.participants -> body.participants<br/>  extraction.location     -> body.location_name<br/>  extraction.activity     -> body.activity_type<br/>  extraction.topics       -> body.topics<br/>  extraction.sentiment    -> body.sentiment_label<br/>  extraction.emotions     -> body.emotion_tags<br/>  extraction.categories   -> body.categories<br/>  now_utc                 -> body.event_time_utc<br/>  session_id              -> body.session_id<br/>  turn_number             -> body.conversation_turn<br/>  'en'                    -> body.language"]:::contract
+
+      MAP_HEADERS["Envelope Headers (from SessionState.meta + turn):<br/>  cognitive_trace_id: from turn event<br/>  tenant_id: from SessionState.meta<br/>  space_id: from SessionState.meta<br/>  topic: 'memory.delta' (ALWAYS)<br/>  schema_uri: 'schema://memory.delta'<br/>  schema_version: '1.0'<br/>  actor: from SessionState.meta.user_id<br/>  device_id: from SessionState.meta.device_id<br/>  band: from SessionState.meta.privacy_band<br/>---<br/>NOTE: sig, sig_alg, sig_kid, envelope_sha256,<br/>idem_key are added by Bridge CommandBuilder.<br/>K1 NEVER handles cryptographic signing."]:::contract
+    end
+
+    PRIVACY_ENFORCER["Privacy Enforcer (Pre-Submit)<br/>---<br/>Band-based field stripping BEFORE Bridge:<br/>  GREEN: all fields pass through<br/>  AMBER: location_name generalized<br/>  RED: location stripped, participants masked<br/>---<br/>Defense-in-depth: K0 Gate also enforces<br/>but MW strips early to minimize exposure"]:::safety
+  end
+
+  %% ==================================================================================
+  %% STAGE 5: BATCH AND SUBMIT (Delta Aggregator + Bridge)
+  %% ==================================================================================
+
+  subgraph BATCH_SUBMIT["Stage 5: Batch Aggregation and Bridge Submit"]
+    direction TB
+
+    DELTA_AGG["Delta Aggregator<br/>Time-window batching (250ms)<br/>---<br/>Collects envelopes from current turn<br/>Plus any stragglers from previous 250ms window<br/>---<br/>Dedup: entity+topic hash within window<br/>Merge: compatible operations (same entity, additive)<br/>Order: by event sequence (causal order)"]:::service
+
+    BATCH_EMITTER["State Delta Emitter<br/>Batch window: 250ms<br/>---<br/>On flush:<br/>  Build CommandEnvelope[] array<br/>  Submit via IKernelCommandPort<br/>---<br/>One Bridge call per batch (not per memory)<br/>Reduces HTTP overhead"]:::service
+
+    subgraph BRIDGE_PATH["Bridge Command Path (K1 -> K0, ONE-WAY)"]
+      direction TB
+
+      BRIDGE_CMD["IKernelCommandPort.submit()<br/>---<br/>Bridge receives raw envelope body + headers<br/>CommandBuilder signs (Ed25519):<br/>  1. Canonicalize envelope JSON<br/>  2. Compute envelope_sha256<br/>  3. Compute idem_key (from payload hash)<br/>  4. Sign with device key (sig_kid)<br/>  5. POST /k0/command.submit<br/>---<br/>ONE-WAY: Fire-and-forget<br/>K1 does NOT wait for K0 response<br/>K0 returns 202 Accepted (or queued offline)"]:::bridge_out
+
+      OFFLINE_QUEUE["LocalOutbox (Offline Safe)<br/>---<br/>If K0 unavailable (K0HealthChecker: OFFLINE):<br/>  Enqueue in K1 SQLite LocalOutbox<br/>  Priority: NORMAL (memory writes)<br/>  Drain when K0 returns (ONLINE)<br/>---<br/>No data loss: all memories eventually reach K0"]:::memory
+    end
+
+    subgraph K0_RECEIVES["K0 Receives Envelope (Via Bridge)"]
+      direction TB
+
+      K0_GATE["K0 Gate (PEP + Signature Verify)<br/>---<br/>1. PEP validation (policy engine)<br/>2. Ed25519 signature verification<br/>3. Policy enforcement (band obligations)<br/>4. Schema validation<br/>---<br/>Result: ALLOW (to WAL) or DENY"]:::k0
+
+      K0_HOT_PATH["K0 Hot Path (93ms)<br/>---<br/>Atomic 4-table write:<br/>  st_wal (primary durable store)<br/>  idem_ledger (idempotency)<br/>  st_outbox (P02 work queue)<br/>  st_receipts (audit trail)<br/>---<br/>Returns: 202 Accepted + receipt_id"]:::k0
+
+      K0_P02["K0 P02 Background Pipeline (50-100ms)<br/>---<br/>From st_outbox -> read st_wal -> enrich:<br/>  M01: DG pattern separation (fingerprints)<br/>  M02: Semantic projection (entities, KG triples)<br/>  M04: Affect analysis (UltraBERT safety net)<br/>  M06: Salience scoring<br/>  M07: Social graph resolve (st_relationships)<br/>  M08: Temporal profiling<br/>  M16: Atomic writer -> st_hipp_events<br/>---<br/>UltraBERT Role: VALIDATES MW LLM output<br/>  max_length=512 tokens<br/>  MW body text ~15-30 tokens = sweet spot<br/>  If LLM missed a tag, UltraBERT fills it<br/>  If LLM hallucinated, UltraBERT flags it"]:::k0
+    end
+  end
+
+  %% ==================================================================================
+  %% AGENT CONTRACT
+  %% ==================================================================================
+
+  subgraph MW_CONTRACT["Memory Writer Agent Contract"]
+    direction TB
+
+    CONTRACT_MW["memory_writer.yaml<br/>name: agent.execute.memory_writer<br/>---<br/>prompt_template: memory_writer_persona.md<br/>tools_granted: [memory.delta]<br/>llm_budget_tokens: 500<br/>max_tool_calls: 3<br/>max_execution_time_ms: 5000<br/>safety_band_min: GREEN<br/>---<br/>Lifecycle: spawned per session by Fabric<br/>Active: while session is alive<br/>Terminated: on session end<br/>---<br/>DOES NOT write to SessionState<br/>DOES NOT call UltraBERT<br/>DOES call LLM (via Model Hub)"]:::contract
+  end
+
+  %% ==================================================================================
+  %% EVICTION-TRIGGERED WRITES (SessionState WARM -> COLD)
+  %% ==================================================================================
+
+  subgraph EVICTION_WRITES["Eviction-Triggered Memory Writes"]
+    direction TB
+
+    EVICTION_LISTENER["Eviction Event Listener<br/>Listens: k1.sessionstate.eviction.v1<br/>---<br/>When SessionState WARM -> COLD eviction:<br/>  EvictionEngine archives to K0 via:<br/>    beliefs.archive (beliefs_history evicted)<br/>    history.archive (history_recent evicted)<br/>---<br/>These use SEPARATE Bridge Command topics<br/>(NOT memory.delta, which is Memory Writer's topic)<br/>---<br/>Memory Writer does NOT handle eviction.<br/>Eviction archival is SessionState's own concern."]:::service
+
+    EVICTION_NOTE["NOTE: Eviction writes are NOT Memory Writer.<br/>They are SessionState -> Bridge -> K0 directly.<br/>Topics: beliefs.archive, history.archive<br/>Memory Writer topic: memory.delta only<br/>---<br/>No overlap. No confusion. Clean separation."]:::contract
+  end
+
+  %% ==================================================================================
+  %% METRICS AND OBSERVABILITY
+  %% ==================================================================================
+
+  subgraph MW_METRICS["Memory Writer Metrics"]
+    direction TB
+
+    METRIC_TURNS["Turns Processed<br/>k1.mw.turns.total<br/>k1.mw.turns.skipped (by filter)<br/>k1.mw.turns.extracted"]:::service
+
+    METRIC_EXTRACTIONS["Extractions Per Turn<br/>k1.mw.extractions.count (histogram 0-3)<br/>k1.mw.extractions.avg_words (should be <50)<br/>k1.mw.extractions.confidence (histogram)"]:::service
+
+    METRIC_LLM["LLM Budget Usage<br/>k1.mw.llm.tokens_used (should be <500)<br/>k1.mw.llm.latency_ms (p50, p95)<br/>k1.mw.llm.errors (count)"]:::service
+
+    METRIC_BRIDGE["Bridge Submit<br/>k1.mw.bridge.submit_count<br/>k1.mw.bridge.batch_size (histogram)<br/>k1.mw.bridge.offline_queued"]:::service
+  end
+
+  %% ==================================================================================
+  %% PORTS -- Hexagonal Boundaries (5 Ports)
+  %% Each port defines a contract interface. Production and test adapters bind to ports.
+  %% MW-01 enforced at compile time: no IStateWritePort exists.
+  %% ==================================================================================
+
+  subgraph PORTS["Ports (5 Hexagonal Boundaries -- MW-01: No Write Ports to SessionState)"]
+    direction TB
+
+    PORT_EVENT["IEventPort<br/>Direction: Both<br/>subscribe(topics[]) -> EventStream<br/>publish(topic, payload) -> void<br/>Sub: turn.complete.v1, k1.sessionstate.eviction.v1<br/>Pub: k1.mw.filter.decision.v1, k1.mw.batch.complete.v1"]:::port
+
+    PORT_STATE_READ["IStateReadPort<br/>Direction: Inbound (read-only)<br/>read(sections[]) -> StateSnapshot<br/>Multi-reader, lock-free (MW-01, MW-02)<br/>Sections: history_active, beliefs_active,<br/>  affective_now, scoreboard, meta"]:::port
+
+    PORT_LLM["ILLMPort (Capability-Driven)<br/>Direction: Outbound<br/>execute(HubRequest{CHAT|STRUCTURED}) -> HubResponse<br/>Budget: {max_tokens: 500, timeout_ms: 5000}<br/>Priority: BACKGROUND (cheapest model)<br/>Routes to Model Hub via LLMGatewayAdapter<br/>See: k1/model_hub/model_hub.mmd"]:::port
+
+    PORT_BRIDGE_CMD["IBridgeCommandPort<br/>Direction: Outbound<br/>submit(topic, schema_uri, body) -> void<br/>Topic: memory.delta<br/>ONE-WAY fire-and-forget (MW-03)<br/>Offline: queued in LocalOutbox"]:::port
+
+    PORT_FABRIC["IFabricPort<br/>Direction: Inbound (lifecycle only)<br/>on_spawn(AgentContract) -> void<br/>on_terminate() -> void<br/>Lifecycle managed by Fabric Agent Factory"]:::port
+  end
+
+  %% ==================================================================================
+  %% ADAPTERS -- Production + Test (Infrastructure Bindings)
+  %% Each port has a production adapter (real infra) and a test adapter (in-memory).
+  %% Circuit breakers inherited from owning systems (Concierge, Model Hub).
+  %% ==================================================================================
+
+  subgraph ADAPTERS["Adapters (Infrastructure Bindings)"]
+    direction TB
+
+    subgraph ADAPTERS_PROD["Production Adapters (5)"]
+      direction TB
+
+      ADAPT_EVENT["EventBusAdapter<br/>K1 Event Bus subscription<br/>turn.complete.v1 + eviction events<br/>---<br/>Error: RECOVERABLE (resubscribe)"]:::adapter
+
+      ADAPT_STATE_READ["SessionStateReadAdapter<br/>Lock-free multi-reader access<br/>Snapshot isolation per read<br/>CB_SESSIONSTATE inherited (100ms, 10/min)<br/>---<br/>Error: DEGRADED (stale cached snapshot)"]:::adapter
+
+      ADAPT_LLM["LLMGatewayAdapter (Capability-Driven)<br/>Routes HubRequest{CHAT|STRUCTURED} to Model Hub<br/>via LLM Request Bus<br/>CB_MODEL inherited (per provider manifest)<br/>---<br/>LLM_CASCADE:<br/>L1: RETRY (timeout, retry once)<br/>L2: SKIP turn (no memory this turn)<br/>Error: RECOVERABLE (skip, no data loss)<br/>See: k1/model_hub/model_hub.mmd"]:::adapter
+
+      ADAPT_BRIDGE_CMD["BridgeCommandAdapter<br/>IKernelCommandPort.submit()<br/>topic: memory.delta<br/>---<br/>Fire-and-forget (Edge-First)<br/>Offline: queue in LocalOutbox<br/>Error: RECOVERABLE (queued, drain later)"]:::adapter
+
+      ADAPT_FABRIC["FabricLifecycleAdapter<br/>Agent Factory spawn/terminate callbacks<br/>---<br/>Lifecycle: session-bound<br/>Spawned: session_init<br/>Terminated: session_end"]:::adapter
+    end
+
+    subgraph ADAPTERS_TEST["Test Adapters (5 -- In-Memory)"]
+      direction TB
+
+      ADAPT_TEST_EVENT["TestEventAdapter<br/>Inject turn.complete.v1 on demand<br/>Capture published events"]:::adapter_test
+
+      ADAPT_TEST_STATE["TestStateReadAdapter<br/>Scripted SessionState snapshots<br/>Configurable per test"]:::adapter_test
+
+      ADAPT_TEST_LLM["TestLLMAdapter<br/>Deterministic MemoryExtraction[]<br/>Configurable per turn"]:::adapter_test
+
+      ADAPT_TEST_BRIDGE["TestBridgeAdapter<br/>Capture submitted envelopes<br/>Assert on body + headers"]:::adapter_test
+
+      ADAPT_TEST_FABRIC["TestFabricAdapter<br/>Mock spawn/terminate lifecycle"]:::adapter_test
+    end
+  end
+
+  %% ==================================================================================
+  %% INVARIANTS -- Visual Summary (MW-01 through MW-11)
+  %% ==================================================================================
+
+  subgraph INVARIANTS["Invariants (11 Non-Negotiable Rules -- MW-01..MW-11)"]
+    direction TB
+
+    INV_OWNERSHIP["OWNERSHIP (MW-01..03)<br/>MW-01: NEVER writes SessionState (Single Writer = Concierge)<br/>MW-02: Reads SessionState lock-free (< 1ms)<br/>MW-03: ALL K0 writes through Bridge Command Port"]:::invariant
+
+    INV_CONTENT["CONTENT (MW-04..06)<br/>MW-04: Envelope body text <= 50 words<br/>MW-05: Per turn: 0-3 memory extractions max<br/>MW-06: LLM budget: 500 tokens total"]:::invariant
+
+    INV_OPERATIONAL["OPERATIONAL (MW-07..10)<br/>MW-07: Relevance filter is rule-based (no LLM)<br/>MW-08: Batch window: 250ms aggregation<br/>MW-09: Offline-safe: queued in LocalOutbox<br/>MW-10: All envelopes carry cognitive_trace_id"]:::invariant
+
+    INV_VALIDATION["VALIDATION (MW-11)<br/>MW-11: UltraBERT in K0 P02 validates MW output<br/>Safety net, not primary tagger"]:::invariant
+  end
+
+  %% ==================================================================================
+  %% PERFORMANCE BASELINES (System-Owned + Budget Envelopes)
+  %% ==================================================================================
+
+  subgraph PERF_BASELINES["Performance Baselines (System-Owned Latencies)"]
+    direction TB
+
+    PERF_SYSTEM["SYSTEM-OWNED LATENCIES (P95)<br/>Relevance Filter: < 2ms (rule-based, no LLM)<br/>SessionState Read: < 1ms (lock-free)<br/>Context Build + Person Resolve: < 2ms<br/>Extraction Validation: < 1ms (field checks)<br/>Envelope Build + Privacy: < 2ms (deterministic)<br/>Delta Aggregation: 250ms (timer window)<br/>Bridge Submit: < 50ms (HTTP POST + sign)<br/>---<br/>Total MW system overhead: < 258ms<br/>(excl. LLM extraction: 200-500ms)"]:::perf
+
+    PERF_LLM["LLM BUDGET ENVELOPE<br/>Extraction LLM call: 500 tokens max<br/>Extraction timeout: 5000ms<br/>Model: cheapest (GPT-4o-mini)<br/>Fallback: skip turn (no memory loss)"]:::perf
+
+    PERF_END_TO_END["END-TO-END<br/>P50: ~475ms | P95: ~815ms<br/>Background after DELIVERING<br/>Zero TTFT impact"]:::perf
+  end
+
+  %% ==================================================================================
+  %% INTERNAL SERVICES (6 Codeable Components -- ~240 Tests)
+  %% Dependency: TurnDispatcherService -> RelevanceFilterService
+  %%           -> ContextAssemblyService -> ExtractionService
+  %%           -> EnvelopeBuildService -> BatchSubmitService
+  %% No circular dependencies. Sequential pipeline.
+  %% ==================================================================================
+
+  subgraph SERVICES["Internal Services (6 Codeable Components -- ~240 Tests)"]
+    direction TB
+
+    SVC_DISPATCHER["TurnDispatcherService<br/>dispatch(TurnEvent) -> DispatchResult<br/>is_duplicate(turn_id) -> bool<br/>---<br/>Routes turn.complete.v1 to pipeline<br/>Dedup by turn_id (idempotent)<br/>Uses: IEventPort<br/>~25 tests"]:::service
+
+    SVC_FILTER["RelevanceFilterService<br/>evaluate(turn) -> FilterDecision<br/>---<br/>5 skip rules: clarification, meta,<br/>duplicate, trivial, continuation<br/>Pure computation: no ports (MW-07)<br/>~45 tests"]:::service
+
+    SVC_CONTEXT["ContextAssemblyService<br/>assemble(turn, filter_pass) -> ExtractionContext<br/>resolve_persons(names[]) -> person_ids[]<br/>---<br/>Reads SS via IStateReadPort<br/>Builds context (~150-200 tokens)<br/>PersonResolver: natural name -> person_id<br/>~40 tests"]:::service
+
+    SVC_EXTRACTION["ExtractionService<br/>extract(context) -> MemoryExtraction[]<br/>validate(extractions[]) -> ValidatedExtraction[]<br/>---<br/>LLM call via ILLMPort (500 token budget)<br/>Post-LLM validation: length, fields, confidence<br/>Drops invalid extractions, logs reason<br/>~55 tests"]:::service
+
+    SVC_ENVELOPE["EnvelopeBuildService<br/>build(extractions[], ctx) -> CommandEnvelope[]<br/>enforce_privacy(envelope, band) -> SafeEnvelope<br/>---<br/>Deterministic field mapping (no LLM)<br/>Privacy enforcer: band-based stripping<br/>Uses: no ports (pure transform)<br/>~35 tests"]:::service
+
+    SVC_BATCH["BatchSubmitService<br/>aggregate(envelopes[]) -> Batch<br/>flush() -> SubmitResult<br/>start_window() / stop_window()<br/>---<br/>250ms time-window aggregation<br/>Dedup by entity+topic hash<br/>Submit via IBridgeCommandPort<br/>~40 tests"]:::service
+  end
+
+  %% ==================================================================================
+  %% LIFECYCLE (5 Phases -- Session-Bound Agent)
+  %% ==================================================================================
+
+  subgraph LIFECYCLE["Lifecycle (5 Phases -- Session-Bound Agent)"]
+    direction TB
+
+    LC_INIT["init(session_id)<br/>Owner: FabricLifecycleAdapter<br/>---<br/>1. Create 6 services (no I/O)<br/>2. Wire 5 ports<br/>3. Subscribe turn.complete.v1 via IEventPort<br/>4. Subscribe k1.sessionstate.eviction.v1<br/>5. Start BatchSubmitService 250ms timer<br/>6. Set state: READY"]:::lifecycle
+
+    LC_TURN_PROCESS["turn_process(TurnEvent)<br/>Owner: TurnDispatcherService<br/>---<br/>1. Dedup check (turn_id)<br/>2. RelevanceFilterService.evaluate()<br/>3. If SKIP: emit metric, return<br/>4. ContextAssemblyService.assemble()<br/>5. ExtractionService.extract()<br/>6. EnvelopeBuildService.build()<br/>7. BatchSubmitService.aggregate()<br/>8. Emit k1.mw.batch.complete.v1"]:::lifecycle
+
+    LC_FLUSH["flush()<br/>Owner: BatchSubmitService<br/>---<br/>1. Flush pending 250ms batch window<br/>2. Submit to Bridge (IBridgeCommandPort)<br/>3. Update metrics"]:::lifecycle
+
+    LC_SHUTDOWN["shutdown()<br/>Owner: FabricLifecycleAdapter<br/>---<br/>1. Stop accepting new turn events<br/>2. Flush pending batch (force)<br/>3. Unsubscribe from events<br/>4. Stop 250ms timer<br/>5. Disconnect ports (LIFO)<br/>6. Set state: TERMINATED"]:::lifecycle
+
+    LC_CRASH_RECOVERY["crash_recovery(session_id)<br/>---<br/>1. Bootstrap (6 services + 5 ports)<br/>2. Check: partial batch in memory?<br/>3. If found: flush to Bridge (best-effort)<br/>4. If lost: no recovery needed<br/>   (K0 idempotent, next turn continues)<br/>5. Resume: resubscribe, start timer<br/>---<br/>Max loss: 1 turn of memories"]:::lifecycle
+  end
+
+  %% ==================================================================================
+  %% CONCURRENCY MODEL (Sequential per Session)
+  %% ==================================================================================
+
+  subgraph CONCURRENCY["Concurrency Model (Sequential Pipeline per Session)"]
+    direction TB
+
+    CONC_MODEL["Single-Threaded Async Pipeline<br/>---<br/>One turn at a time per session<br/>Pipeline: Filter -> Context -> LLM -> Envelope -> Batch<br/>Batch 250ms timer: async (non-blocking)<br/>---<br/>No concurrent turn processing<br/>If turn arrives during pipeline: queue (max 2)<br/>If queue full: drop oldest (RECOVERABLE)"]:::concurrency
+
+    CONC_ORDERING["Turn Ordering<br/>---<br/>Processed in turn_sequence_number order<br/>Out-of-order: reorder buffer (max 3)<br/>Gap > 5s: process available, skip missing<br/>Guarantees: memories at K0 in causal order"]:::concurrency
+  end
+
+end
+
+%% =====================================================================================
+%% EXTERNAL K1 TOUCHPOINTS
+%% =====================================================================================
+
+subgraph EXTERNAL_K1["External K1 Systems"]
+  direction TB
+
+  TP_CONCIERGE["Concierge<br/>Emits turn.complete.v1 after DELIVERING<br/>Single writer to SessionState<br/>Memory Writer reads SS (multi-reader)"]:::external
+
+  TP_FABRIC["Capability Fabric<br/>Agent Factory spawns MemoryWriterAgent<br/>per session (lifecycle: session-bound)<br/>Agent Registry holds memory_writer.yaml"]:::external
+
+  TP_SESSIONSTATE["SessionState<br/>Memory Writer reads:<br/>  history_active, beliefs_active,<br/>  affective_now, scoreboard, meta<br/>Memory Writer NEVER writes<br/>(MW-01 invariant)"]:::external
+
+  TP_MODEL_HUB["Model Hub (Capability-Driven Plugin Architecture)<br/>Routes LLM extraction calls<br/>Capability: CHAT + STRUCTURED<br/>Priority: BACKGROUND (cheapest model auto-selected)<br/>Budget: 500 tokens per turn<br/>See: k1/model_hub/model_hub.mmd"]:::external
+
+  TP_LEARNING["Learning Loop<br/>LearningExtractorAgent is SEPARATE<br/>It extracts meta-signals, not facts<br/>Both observe turns, different purpose"]:::external
+
+  TP_DELTA_BUS["DeltaBus<br/>Transport for turn.complete.v1<br/>Memory Writer subscribes to turn events<br/>Not a SessionState writer"]:::external
+end
+
+%% =====================================================================================
+%% EXTERNAL: BRIDGE (Cross-Kernel Gateway)
+%% =====================================================================================
+
+subgraph EXTERNAL_BRIDGE["Bridge (Cross-Kernel Security Gateway)"]
+  direction TB
+
+  BR_CMD_PORT["IKernelCommandPort<br/>submit(topic, schema_uri, body)<br/>ONE-WAY: Fire-and-forget<br/>K1 never gets K0 response"]:::bridge_out
+
+  BR_CMD_BUILDER["CommandBuilder<br/>Signs envelope (Ed25519)<br/>Adds: idem_key, envelope_sha256<br/>Builds: canonical JSON"]:::bridge_out
+
+  BR_OFFLINE["LocalOutbox<br/>Queue when K0 offline<br/>Drain on reconnect<br/>Priority: NORMAL"]:::bridge_out
+end
+
+%% =====================================================================================
+%% EXTERNAL: K0 (Via Bridge Only)
+%% =====================================================================================
+
+subgraph EXTERNAL_K0["K0 Pipeline (Via Bridge Only -- NO Direct Access)"]
+  direction TB
+
+  K0_CMD_SUBMIT["POST /k0/command.submit<br/>Receives signed envelope<br/>Returns 202 Accepted"]:::k0
+
+  K0_PIPELINE["K0 P02 Pipeline<br/>DG + Affect (UltraBERT) + Social<br/>+ Embedding + Salience<br/>-> st_hipp_events (permanent memory)"]:::k0
+end
+
+%% =====================================================================================
+%% FLOW EDGES -- MAIN PIPELINE
+%% =====================================================================================
+
+%% Trigger
+TP_CONCIERGE -->|"turn.complete.v1"| TURN_COMPLETE_EVENT
+TURN_COMPLETE_EVENT -->|"dispatch"| TURN_DISPATCHER
+TURN_DISPATCHER -->|"turn payload"| FILTER_ENGINE
+
+%% Stage 1: Filter
+FILTER_ENGINE -->|"SKIP? check rules"| RULE_CLARIFICATION
+FILTER_ENGINE -->|"SKIP? check rules"| RULE_META
+FILTER_ENGINE -->|"SKIP? check rules"| RULE_DUPLICATE
+FILTER_ENGINE -->|"SKIP? check rules"| RULE_TRIVIAL
+FILTER_ENGINE -->|"SKIP? check rules"| RULE_CONTINUATION
+FILTER_ENGINE -->|"PASS (worth remembering)"| SS_READER
+FILTER_ENGINE -.->|"SKIP (not worth it)"| FILTER_METRICS
+
+%% Stage 2: Context
+SS_READER -->|"read sections (lock-free)"| TP_SESSIONSTATE
+TP_SESSIONSTATE -.->|"snapshot: history, beliefs,<br/>affect, scoreboard, meta"| SS_READER
+SS_READER -->|"raw sections"| CONTEXT_BUILDER
+CONTEXT_BUILDER -->|"ExtractionContext"| PERSON_RESOLVER
+PERSON_RESOLVER -->|"context with person_ids"| WRITER_AGENT
+
+%% Stage 3: LLM Extraction
+WRITER_AGENT -->|"LLM call (500 token budget)"| TP_MODEL_HUB
+TP_MODEL_HUB -.->|"MemoryExtraction[]"| WRITER_AGENT
+WRITER_AGENT -->|"raw extractions"| EXTRACTION_VALIDATOR
+EXTRACTION_VALIDATOR -->|"validated extractions"| ENVELOPE_BUILDER
+
+%% Stage 4: Envelope Build
+ENVELOPE_BUILDER -->|"map fields"| MAP_BODY
+ENVELOPE_BUILDER -->|"inject headers"| MAP_HEADERS
+ENVELOPE_BUILDER -->|"CommandEnvelope[]"| PRIVACY_ENFORCER
+PRIVACY_ENFORCER -->|"band-safe envelopes"| DELTA_AGG
+
+%% Stage 5: Batch and Submit
+DELTA_AGG -->|"250ms batch window"| BATCH_EMITTER
+BATCH_EMITTER -->|"batched envelopes"| BRIDGE_CMD
+
+%% Bridge Path (K1 -> Bridge -> K0)
+BRIDGE_CMD -->|"IKernelCommandPort.submit()"| BR_CMD_PORT
+BR_CMD_PORT -->|"sign + build"| BR_CMD_BUILDER
+BR_CMD_BUILDER -->|"POST /k0/command.submit"| K0_CMD_SUBMIT
+BRIDGE_CMD -.->|"K0 offline?"| OFFLINE_QUEUE
+OFFLINE_QUEUE -.->|"queue for drain"| BR_OFFLINE
+
+%% K0 Processing (Via Bridge ONLY)
+K0_CMD_SUBMIT -->|"gate + hot path"| K0_GATE
+K0_GATE -->|"ALLOW -> WAL"| K0_HOT_PATH
+K0_HOT_PATH -->|"outbox -> P02"| K0_P02
+K0_P02 -->|"st_hipp_events"| K0_PIPELINE
+
+%% Fabric Integration
+TP_FABRIC -.->|"spawn MemoryWriterAgent<br/>(per session)"| WRITER_AGENT
+CONTRACT_MW -.->|"registered in"| TP_FABRIC
+
+%% Eviction (NOT Memory Writer -- separate concern)
+TP_SESSIONSTATE -.->|"k1.sessionstate.eviction.v1"| EVICTION_LISTENER
+
+%% =====================================================================================
+%% PORT -> ADAPTER BINDINGS (Hexagonal Wiring)
+%% =====================================================================================
+
+PORT_EVENT --> ADAPT_EVENT
+PORT_EVENT --> ADAPT_TEST_EVENT
+PORT_STATE_READ --> ADAPT_STATE_READ
+PORT_STATE_READ --> ADAPT_TEST_STATE
+PORT_LLM --> ADAPT_LLM
+PORT_LLM --> ADAPT_TEST_LLM
+PORT_BRIDGE_CMD --> ADAPT_BRIDGE_CMD
+PORT_BRIDGE_CMD --> ADAPT_TEST_BRIDGE
+PORT_FABRIC --> ADAPT_FABRIC
+PORT_FABRIC --> ADAPT_TEST_FABRIC
+
+%% =====================================================================================
+%% SERVICE -> PORT USAGE (Services call ports, never external systems -- MW-03)
+%% =====================================================================================
+
+SVC_DISPATCHER -.->|"subscribe turn.complete.v1"| PORT_EVENT
+SVC_CONTEXT -.->|"read SS sections"| PORT_STATE_READ
+SVC_EXTRACTION -.->|"LLM call (500 tokens)"| PORT_LLM
+SVC_BATCH -.->|"submit batch"| PORT_BRIDGE_CMD
+SVC_DISPATCHER -.->|"publish filter metric"| PORT_EVENT
+
+%% =====================================================================================
+%% LIFECYCLE -> SERVICE USAGE
+%% =====================================================================================
+
+LC_INIT -->|"create + wire"| SVC_DISPATCHER
+LC_INIT -->|"create"| SVC_FILTER
+LC_INIT -->|"create"| SVC_CONTEXT
+LC_INIT -->|"create"| SVC_EXTRACTION
+LC_INIT -->|"create"| SVC_ENVELOPE
+LC_INIT -->|"create + start timer"| SVC_BATCH
+
+LC_TURN_PROCESS -->|"dedup"| SVC_DISPATCHER
+LC_TURN_PROCESS -->|"evaluate"| SVC_FILTER
+LC_TURN_PROCESS -->|"assemble"| SVC_CONTEXT
+LC_TURN_PROCESS -->|"extract"| SVC_EXTRACTION
+LC_TURN_PROCESS -->|"build"| SVC_ENVELOPE
+LC_TURN_PROCESS -->|"aggregate"| SVC_BATCH
+
+LC_SHUTDOWN -->|"force flush"| SVC_BATCH
+LC_SHUTDOWN -.->|"unsubscribe"| PORT_EVENT
+LC_SHUTDOWN -.->|"disconnect ports LIFO"| PORT_BRIDGE_CMD
+
+LC_CRASH_RECOVERY -->|"bootstrap"| SVC_DISPATCHER
+LC_CRASH_RECOVERY -->|"flush partial"| SVC_BATCH
+LC_CRASH_RECOVERY -.->|"resubscribe"| PORT_EVENT
+
+%% =====================================================================================
+%% INVARIANT ENFORCEMENT (Service -> Invariant)
+%% =====================================================================================
+
+SVC_FILTER -.->|"MW-07 (rule-based, no LLM)"| INV_OPERATIONAL
+SVC_EXTRACTION -.->|"MW-04 (<= 50 words), MW-05 (0-3 max), MW-06 (500 tok)"| INV_CONTENT
+SVC_ENVELOPE -.->|"MW-10 (trace_id on all envelopes)"| INV_OPERATIONAL
+SVC_BATCH -.->|"MW-08 (250ms window), MW-09 (offline-safe)"| INV_OPERATIONAL
+SVC_CONTEXT -.->|"MW-01 (read-only), MW-02 (< 1ms)"| INV_OWNERSHIP
+
+%% =====================================================================================
+%% STYLE CLASSES
+%% =====================================================================================
+
+classDef brain fill:#E8D5F5,stroke:#7B2D8E,stroke-width:2px,color:#1a1a2e
+classDef event fill:#F5F5F5,stroke:#757575,stroke-width:1px,color:#1a1a2e
+classDef routing fill:#D1ECF1,stroke:#0C5460,stroke-width:2px,color:#1a1a2e
+classDef gate fill:#FFE0B2,stroke:#E65100,stroke-width:2px,color:#1a1a2e
+classDef validator fill:#F8D7DA,stroke:#721C24,stroke-width:1px,color:#1a1a2e
+classDef service fill:#E3F2FD,stroke:#1565C0,stroke-width:1px,color:#1a1a2e
+classDef memory fill:#B3E5FC,stroke:#01579B,stroke-width:2px,color:#1a1a2e
+classDef agent fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px,color:#1a1a2e
+classDef safety fill:#FFCDD2,stroke:#B71C1C,stroke-width:2px,color:#1a1a2e
+classDef bridge_out fill:#DCEDC8,stroke:#33691E,stroke-width:2px,color:#1a1a2e
+classDef contract fill:#E0E0E0,stroke:#424242,stroke-width:1px,color:#1a1a2e
+classDef external fill:#BBDEFB,stroke:#1976D2,stroke-width:1px,color:#1a1a2e
+classDef k0 fill:#FCE4EC,stroke:#AD1457,stroke-width:1px,color:#1a1a2e
+classDef port fill:#e3f2fd,stroke:#1565c0,stroke-width:3px,color:#1a1a2e,font-weight:bold
+classDef adapter fill:#e8eaf6,stroke:#283593,stroke-width:2px,color:#1a1a2e
+classDef adapter_test fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,color:#1a1a2e,font-style:italic
+classDef invariant fill:#fce4ec,stroke:#880e4f,stroke-width:3px,color:#1a1a2e,font-weight:bold
+classDef perf fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:#1a1a2e,font-weight:bold
+classDef lifecycle fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#1a1a2e,font-weight:bold
+classDef concurrency fill:#e0f7fa,stroke:#00697c,stroke-width:2px,color:#1a1a2e

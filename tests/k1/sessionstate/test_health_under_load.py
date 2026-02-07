@@ -778,6 +778,10 @@ class TestEdgeCasesUnderLoad:
         )
         manager.start()
 
+        # Get baseline size (sections have overhead)
+        baseline = manager.get_snapshot()
+        baseline_size = baseline.total_size_bytes
+
         try:
             # No mutations - just concurrent reads
             with ThreadPoolExecutor(max_workers=10) as executor:
@@ -790,7 +794,8 @@ class TestEdgeCasesUnderLoad:
                     snapshots = future.result()
                     assert len(snapshots) == 100
                     for snap in snapshots:
-                        assert snap.total_size_bytes == 0
+                        # Size should remain at baseline (no mutations)
+                        assert snap.total_size_bytes == baseline_size
                         assert snap.pressure == PressureLevel.NORMAL
         finally:
             manager.stop(checkpoint_before_stop=False)

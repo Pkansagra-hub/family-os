@@ -25,7 +25,7 @@ flowchart TB
     %% ======================================================================================
 
     %% ======================================================================================
-    %% LLM CALL MATRIX - All MODEL_GATEWAY invocations with token budgets
+    %% LLM CALL MATRIX - All Model Hub invocations with token budgets (capability-driven)
     %% ======================================================================================
     %% | Consumer                    | Purpose                          | Tokens  | Priority    |
     %% |-----------------------------|----------------------------------|---------|-------------|
@@ -64,6 +64,17 @@ flowchart TB
     %% | HIL approval        | user.approval                    | PLAN_APPROVAL         |
     %% | HIL clarification   | user.clarification               | REQUIREMENT_CLARIF... |
     %% | Execution override  | user.override                    | EXECUTION_MONITORING  |
+    %% | HIL fallback resp   | k1.hil.fallback_response.v1      | FALLBACK_TRIGGER      |
+    %% ======================================================================================
+    %% HIL RESPONSE ROUTING (User response -> Originator via Concierge):
+    %% | User Response            | Response Event                        | Destination          |
+    %% |--------------------------|---------------------------------------|----------------------|
+    %% | Clarification answer     | k1.hil.clarification_response.v1      | Planner Stage 1      |
+    %% | Approval decision        | k1.hil.approval_response.v1           | Planner Stage 3      |
+    %% | Fallback answer          | k1.hil.fallback_response.v1           | Orch ConstraintRes   |
+    %% | Execution override       | k1.hil.override_response.v1           | Orch ExecutionMon    |
+    %% | Sub-agent answer         | clarification_response delta          | Requesting agent     |
+    %% Concierge correlates via request_id in PENDING_CLARIFICATIONS.
     %% ======================================================================================
     %% SYSTEM → USER (Outbound via OUTPUT_CHANNEL):
     %% | Source                    | Event                           | Priority   |
@@ -75,6 +86,7 @@ flowchart TB
     %% | REQUIREMENT_CLARIFICATION | k1.hil.clarification.v1          | REALTIME   |
     %% | PLAN_APPROVAL             | k1.hil.approval_request.v1       | REALTIME   |
     %% | EXECUTION_MONITORING      | k1.hil.progress.v1               | PROGRESS   |
+    %% |  (Owner: Orchestrator DAGExecutor, NOT Planner)                                 |
     %% | FALLBACK_TRIGGER          | k1.hil.fallback.v1               | REALTIME   |
     %% | CURIOSITY_AGENT           | k1.proactive.question.v1         | BACKGROUND |
     %% | PROACTIVE_DECISION        | k1.proactive.message.v1          | BACKGROUND |
@@ -107,6 +119,114 @@ flowchart TB
     %%   STAGE4_COMMIT → CommittedPlan → ORCHESTRATOR → PARALLEL_DAG → CAPABILITY_FABRIC
     %%   Each step in plan.steps[] spawns tools via Fabric
     %%   Results aggregate back through PARALLEL_DAG → ORCHESTRATOR → COMPANIONING
+    %% ======================================================================================
+
+    %% ======================================================================================
+    %% LLM TOOL ARCHITECTURE — Who has which tools, when, and how they flow
+    %% ======================================================================================
+    %%
+    %% DESIGN PRINCIPLE: LLMs interact with the system ONLY through tool/function calls.
+    %% SessionState cognitive updates are tool calls, not structured output fields.
+    %% The LLM calls a tool ONLY when it detects something worth updating.
+    %% "ok cool" turn = 0 tool calls. "Actually Thursday not Wednesday" = update_beliefs().
+    %%
+    %% TWO-PHASE WRITE PER TURN:
+    %% ┌─────────────────────────────────────────────────────────────────────────────────┐
+    %% │ PHASE 1: UltraBERT (22ms, pre-LLM, deterministic)                              │
+    %% │   Concierge FSM writes directly (NOT tool calls):                               │
+    %% │   ├─ control.intents        ← Intent Head (multi-label)                         │
+    %% │   ├─ control.domains        ← Ingress Head                                     │
+    %% │   ├─ control.safety_band    ← Safety Head                                      │
+    %% │   ├─ beliefs_active.entities← NER Head (surface: PERSON, LOC, TIME)             │
+    %% │   └─ affective_now.raw      ← Emotions + Sentiment Heads                       │
+    %% │                                                                                 │
+    %% │ PHASE 2: LLM with Tools (post-UltraBERT, semantic understanding)                │
+    %% │   LLM decides which tools to call based on conversation understanding:          │
+    %% │   ├─ update_scoreboard()    ← pronoun resolution, QUD, salience, topic shift    │
+    %% │   ├─ update_beliefs()       ← implicit facts, corrections, invalidations        │
+    %% │   ├─ update_clarifications() ← semantic gaps only LLM can detect                │
+    %% │   ├─ update_narrative()     ← thread switches, resumptions                     │
+    %% │   ├─ refine_affect()        ← sarcasm/nuance UltraBERT missed                  │
+    %% │   └─ promote_belief()       ← bring old facts back to HOT                      │
+    %% │   Each tool call → Concierge FSM → MutationGuard.preflight() → Write            │
+    %% └─────────────────────────────────────────────────────────────────────────────────┘
+    %%
+    %% TOOL AVAILABILITY BY TIER:
+    %% ┌──────────┬───────────────────┬───────────────────┬───────────────────────────────┐
+    %% │ Tier     │ Cognitive Tools   │ Read Tools        │ Action Tools                  │
+    %% ├──────────┼───────────────────┼───────────────────┼───────────────────────────────┤
+    %% │ LOW      │ ALL (6 tools)     │ ALL (3 tools)     │ invoke_capability (direct)    │
+    %% │ MEDIUM   │ ALL (6 tools)     │ ALL (3 tools)     │ FSM delegates to Orchestrator │
+    %% │ HIGH     │ ALL (6 tools)     │ ALL (3 tools)     │ FSM delegates to Orchestrator │
+    %% └──────────┴───────────────────┴───────────────────┴───────────────────────────────┘
+    %%
+    %% WHEN LLM TOOL CALLS HAPPEN PER TIER:
+    %% ┌──────────┬────────────────────────────────────────────────────────────────────────┐
+    %% │ LOW      │ DISPATCHING: LLM call with cognitive + action tools                   │
+    %% │          │   → LLM generates response + calls invoke_capability() + cognitive     │
+    %% │          │   → Tool executes via Fabric → Result in same LLM call                │
+    %% ├──────────┼────────────────────────────────────────────────────────────────────────┤
+    %% │ MEDIUM   │ DISPATCHING: LLM call with cognitive tools only (~200 token ack)      │
+    %% │          │   → LLM generates preliminary ack + calls cognitive tools              │
+    %% │          │   → FSM sends TaskEnvelope to Orchestrator (NOT a tool call)           │
+    %% │          │ DELIVERING: LLM call with cognitive tools (final response)             │
+    %% │          │   → LLM gets tool_results[] + generates response + cognitive tools     │
+    %% ├──────────┼────────────────────────────────────────────────────────────────────────┤
+    %% │ HIGH     │ Same as MEDIUM, but Orchestrator routes through Planner first          │
+    %% │          │   → Planner LLM runs 4-stage pipeline with read-only discovery tools    │
+    %% │          │   → discover_capabilities(), find_relevant_prompts(),                    │
+    %% │          │     query_planning_context(), recall_for_planning()                      │
+    %% │          │   → CommittedPlan → Orchestrator → Blind DAG execution via Fabric        │
+    %% │          │   → Results aggregate → DELIVERING with cognitive tools                │
+    %% └──────────┴────────────────────────────────────────────────────────────────────────┘
+    %%
+    %% HOW ORCHESTRATOR, PLANNER, AND FABRIC FIT IN:
+    %% ┌─────────────────────────────────────────────────────────────────────────────────┐
+    %% │ ORCHESTRATOR (Pure Deterministic Actor — NO LLM, NO tool calls)                 │
+    %% │   Receives: TaskEnvelope{intent, context, tier} from Concierge FSM             │
+    %% │   MEDIUM path: Routes directly to Capability Fabric                             │
+    %% │   HIGH path:   Sends PlanRequest to Planner → waits for CommittedPlan           │
+    %% │   Executes:    Plan steps via PARALLEL_DAG → Capability Fabric                  │
+    %% │   Returns:     Aggregated CapabilityResult[] → Concierge COMPANIONING           │
+    %% │   Reads:       SessionState (multi-reader, lock-free) for execution context     │
+    %% │   Writes:      NEVER (emits deltas to DELTA_BUS → Concierge aggregates)         │
+    %% ├─────────────────────────────────────────────────────────────────────────────────┤
+    %% │ PLANNER (LLM-Powered — uses read-only discovery tools)                          │
+    %% │   Receives: PlanRequest{intent, constraints} from Orchestrator                  │
+    %% │   Stage 1 (Sketch):   LLM + discover_capabilities() + recall_for_planning()     │
+    %% │                        + query_planning_context() → rough plan (~2K tokens)      │
+    %% │   Stage 2 (Expand):   LLM + find_relevant_prompts() → tool mapping (~1K tokens) │
+    %% │     → Planner queries Fabric retrieval (semantic Top-K) for capabilities         │
+    %% │   Stage 3 (Validate): LLM arbiter prompt → validation (~500 tokens)             │
+    %% │   Stage 4 (Commit):   Deterministic — persist plan to K0 WAL                    │
+    %% │   Returns: CommittedPlan{steps[], dependencies} to Orchestrator                 │
+    %% │   Reads:   SessionState (multi-reader) for planning context                     │
+    %% │   Writes:  NEVER (planning deltas → DELTA_BUS → Concierge aggregates)           │
+    %% ├─────────────────────────────────────────────────────────────────────────────────┤
+    %% │ CAPABILITY FABRIC (Dual Role: Retrieval Engine + Execution Engine — NO LLM)     │
+    %% │   ROLE 1 — Intelligent Retrieval (Serves Planner):                              │
+    %% │     Receives: discover_capabilities(domain?, intent?) from Planner              │
+    %% │     Performs: Semantic Top-K search across 100K+ tools/agents/prompts            │
+    %% │     Filters:  Hard (safety band, availability) then Soft (semantic 0.4,          │
+    %% │               domain 0.3, success 0.15, cost 0.15)                              │
+    %% │     Returns:  Top-10 relevant capabilities with schemas                         │
+    %% │   ROLE 2 — Resolution & Execution (Serves Orchestrator + Concierge):            │
+    %% │     Receives: CapabilityRequest{name, params, context}                          │
+    %% │     Resolves: Capability name → Provider (Agent/Tool/Workflow)                  │
+    %% │     Selects:  Provider via Policy Engine (Affective + Cognitive Load + QoS)     │
+    %% │     Builds:   Context from SessionState (via Context Builder + Token Budget)    │
+    %% │     Executes: Provider → MCP Runner / WASM Sandbox / Bridge                    │
+    %% │     Returns:  CapabilityResult{success, data, error}                           │
+    %% │   Reads:    SessionState (multi-reader) for context building                   │
+    %% │   Writes:   NEVER                                                              │
+    %% └─────────────────────────────────────────────────────────────────────────────────┘
+    %%
+    %% DYNAMIC AGENT LLM TOOLS:
+    %% │ Agents spawned via Fabric (health_agent, finance_agent, etc.)                   │
+    %% │   Tools: invoke_capability() — for sub-tool execution                           │
+    %% │   Context: SessionState sections injected via Capability Context Builder         │
+    %% │   Writes: NEVER directly — emit deltas to DELTA_BUS                            │
+    %% │   Results: CapabilityResult → back through Fabric → Orchestrator → Concierge   │
     %% ======================================================================================
 
     %% ======================================================================================
@@ -156,6 +276,9 @@ flowchart TB
     end
     subgraph L1_CONCIERGE["🧠 LAYER 1: Concierge (Deep AI Agent)"]
         direction TB
+        %% For full Concierge internal architecture (Ports, Adapters, 9 Services,
+        %% 21 Invariants, Lifecycle, Concurrency, Token Budget, Error Recovery)
+        %% see: k1/concierge/concierge.mmd
 
         subgraph CONCIERGE_CORE["Concierge Core (FSM-Driven Conversation Conductor)"]
             direction TB
@@ -243,14 +366,29 @@ flowchart TB
             end
         end
 
-        subgraph CONCIERGE_TOOLS["Concierge Direct Tools (LOW Complexity Path)"]
-            TOOL_INVOKE_CAPABILITY["invoke_capability()<br/>Calls any registered tool"]:::tool
-            TOOL_DISCOVER_CAPABILITIES["discover_capabilities()<br/>Queries Capability Registry"]:::tool
-            TOOL_SPAWN_VIA_FABRIC["spawn_via_fabric()<br/>Capability-based Agent Creation"]:::tool
-            TOOL_EXECUTE_WORKFLOW["execute_workflow()<br/>Workflow Capability Invocation"]:::tool
-            TOOL_UPDATE_STATE["update_session_state()<br/>SessionState Write"]:::tool
-            TOOL_RECALL_MEMORY["recall_memory()<br/>K0 Query Port"]:::tool
-            TOOL_SUMMARIZE_CONTEXT["summarize_context()<br/>Token Budget Manager"]:::tool
+        subgraph CONCIERGE_TOOLS["Concierge LLM Tools (Available ALL Complexity Tiers)"]
+            direction TB
+
+            subgraph COGNITIVE_TOOLS["Cognitive Tools (LLM detects what to update)"]
+                TOOL_UPDATE_SCOREBOARD["update_scoreboard()<br/>Referents, QUD, salience, topic shift<br/>LLM detects: pronoun resolution, open Qs, topic changes"]:::tool_cognitive
+                TOOL_UPDATE_BELIEFS["update_beliefs()<br/>New facts, corrections, invalidations<br/>LLM detects: implicit facts, user corrections"]:::tool_cognitive
+                TOOL_UPDATE_CLARIFICATIONS["update_clarifications()<br/>Semantic gaps, resolved gaps<br/>LLM detects: cannot proceed without user info"]:::tool_cognitive
+                TOOL_UPDATE_NARRATIVE["update_narrative()<br/>Thread switch/resume/new/continue<br/>LLM detects: topic shifts, thread resumptions"]:::tool_cognitive
+                TOOL_REFINE_AFFECT["refine_affect()<br/>Override emotion when sarcasm/nuance detected<br/>LLM overrides UltraBERT when confident"]:::tool_cognitive
+                TOOL_PROMOTE_BELIEF["promote_belief()<br/>WARM to HOT fact promotion<br/>LLM detects: user referencing old context"]:::tool_cognitive
+            end
+
+            subgraph READ_TOOLS["Read Tools (Context Retrieval)"]
+                TOOL_RECALL_MEMORY["recall_memory()<br/>K0 Long-Term Memory Query"]:::tool
+                TOOL_DISCOVER_CAPABILITIES["discover_capabilities()<br/>Queries Capability Registry"]:::tool
+                TOOL_SUMMARIZE_CONTEXT["summarize_context()<br/>Token Budget Manager"]:::tool
+            end
+
+            subgraph ACTION_TOOLS["Action Tools (Execution and Delegation)"]
+                TOOL_INVOKE_CAPABILITY["invoke_capability()<br/>Direct capability execution via Fabric<br/>LOW tier only (fast path)"]:::tool
+                TOOL_SPAWN_VIA_FABRIC["spawn_via_fabric()<br/>Capability-based Agent Creation"]:::tool
+                TOOL_EXECUTE_WORKFLOW["execute_workflow()<br/>Workflow Capability Invocation"]:::tool
+            end
         end
     end
     subgraph L1_RHYTHM["🎼 LAYER 1.5: Conversational Rhythm Controller"]
@@ -270,18 +408,13 @@ flowchart TB
             WORKFLOW_ORCHESTRATOR["Workflow Orchestrator<br/>Capability-based Workflow Execution"]:::orchestrator
         end
 
-        subgraph ORCHESTRATOR_3PHASE["3-Phase Orchestration (ADR-0006)"]
+        subgraph BLIND_DAG_EXECUTOR["Blind DAG Executor (Supersedes ADR-0006 Contract-Net)"]
             direction TB
-            PHASE1_NEGOTIATION["Phase 1: Negotiation<br/>Contract Net Protocol"]:::step
-            TASK_ANNOUNCEMENT["Task Announcement<br/>Broadcast Requirements"]:::substep
-            PROPOSAL_BIDDING["Proposal Bidding<br/>Agent Responses"]:::substep
-
-            PHASE2_SELECTION["Phase 2: Selection<br/>Winner Determination"]:::step
-            MULTI_CRITERIA_SCORING["Multi-Criteria Scoring<br/>Capability + Latency + Cost"]:::substep
-
-            PHASE3_EXECUTION["Phase 3: Execution<br/>Task Fulfillment"]:::step
-            PARALLEL_DAG["Parallel DAG Execution<br/>Concurrent Tasks"]:::substep
+            TOPOLOGICAL_WALKER["Topological Walker<br/>Walks CommittedPlan.steps[]<br/>in dependency order"]:::engine
+            PARALLEL_DAG["Parallel DAG Execution<br/>Concurrent Steps (no deps)"]:::substep
             DAG_ENGINE["DAG Engine<br/>Dependency Resolution"]:::engine
+            STEP_RETRY["Step Retry<br/>2 retries then graceful failure<br/>Independent steps continue"]:::recovery
+            STEP_CANCELLATION["Dependent Step Cancellation<br/>Cancel dependents on failure<br/>Independent steps unaffected"]:::recovery
             SAGA_RECOVERY["Saga Pattern Recovery<br/>Compensating Transactions"]:::substep
             subgraph CONSTRAINT_RESOLUTION_ENGINE["Constraint Resolution Engine<br/>Iterative Validation & HIL"]
                 CONSTRAINT_MANAGER["Constraint Manager<br/>Oversees Iterative Flow"]:::coord
@@ -303,6 +436,8 @@ flowchart TB
             SYSTEM_CLOCK["System Clock<br/>UTC time source<br/>device_local_time()"]:::engine
             WORKFLOW_RUN_SUPERVISOR["Workflow Run Supervisor<br/>Leases + Guards + Lifecycle"]:::supervisor
             RUN_MANIFEST["Run Manifest<br/>Pinned Version + Compiled Hash"]:::supervisor
+            CROSS_WORKFLOW_RESOLVER["Cross-Workflow Resolver<br/>workflow.run.* triggers sub-workflows"]:::engine
+            WORKFLOW_DEPTH_GUARD["Workflow Depth Guard<br/>Max depth: 3, cycle detection"]:::safety
         end
 
         subgraph CONNECTOR_ECOSYSTEM["Connector Ecosystem"]
@@ -328,6 +463,13 @@ flowchart TB
             CAPABILITY_RESOLVER["Capability Resolver<br/>Provider Selection + QoS"]:::engine
             CAPABILITY_CONTEXT_BUILDER["Context Builder<br/>SessionState → Fabric Context"]:::engine
             CONTEXT_BUDGET["Context Budget Manager<br/>Token: 128K, Strategy: recency + relevance"]:::engine
+        end
+
+        subgraph FABRIC_RETRIEVAL["Fabric Retrieval Engine (Serves Planner)"]
+            SEMANTIC_SEARCH_ENGINE["Semantic Search Engine<br/>Embedding cosine similarity<br/>across 100K+ tools/agents/prompts"]:::engine
+            TOP_K_RANKER["Top-K Ranker<br/>Returns top 10 per query<br/>Filtered + Scored"]:::engine
+            RETRIEVAL_HARD_FILTER["Hard Filters<br/>Safety band + Availability + Satisfiability"]:::safety
+            RETRIEVAL_SOFT_RANKER["Soft Ranker<br/>Semantic: 0.4, Domain: 0.3<br/>Success: 0.15, Cost: 0.15"]:::engine
         end
 
         subgraph FABRIC_PROVIDERS["Capability Providers"]
@@ -361,6 +503,8 @@ flowchart TB
             PROVIDER_MATCHER["Provider Matcher<br/>Capability → Implementation"]:::engine
             PROVIDER_SELECTOR["Provider Selector<br/>QoS + Affective + Context-aware"]:::engine
             PROVIDER_FACTORY["Provider Factory<br/>Instantiate capability handlers"]:::factory
+            PROVIDER_HARD_FILTER["Hard Filter Phase<br/>Safety band access + Availability != OFFLINE<br/>+ Required inputs satisfiable"]:::engine
+            PROVIDER_SOFT_RANKER["Soft Ranking Phase<br/>Semantic similarity (0.4) + Domain match (0.3)<br/>+ Success rate 30d (0.15) + Cost/latency (0.15)"]:::engine
         end
 
         subgraph CAPABILITY_TYPES["Capability Type Registry"]
@@ -370,10 +514,10 @@ flowchart TB
             CONCIERGE_CAPABILITIES["Concierge Capabilities<br/>concierge.state.*"]:::registry
         end
 
-        subgraph MODEL_GATEWAY["Model Gateway (Centralized LLM Access)"]
-            MODEL_ROUTER["Model Router<br/>Load Balancing & Fallback"]:::gateway
-            MODEL_CACHE["Model Cache<br/>Response Caching"]:::registry
-            MODEL_METRICS["Model Metrics<br/>Usage & Performance Tracking"]:::engine
+        subgraph MODEL_HUB["Model Hub (Capability-Driven Plugin Architecture)"]
+            MODEL_ROUTER["RequestRouter + CapabilityRouter<br/>Manifest-driven capability routing"]:::gateway
+            MODEL_CACHE["ResponseCache<br/>Capability-aware caching"]:::registry
+            MODEL_METRICS["CostTracker + AuditLogger<br/>Per-provider cost & audit"]:::engine
         end
 
         subgraph PROMPT_MANAGEMENT["Prompt Management System"]
@@ -427,18 +571,27 @@ flowchart TB
         end
 
         subgraph PLANNER_HIL["Human-in-the-Loop"]
-            REQUIREMENT_CLARIFICATION["Requirement Clarification"]:::hil
-            PLAN_APPROVAL["Plan Approval"]:::hil
-            EXECUTION_MONITORING["Execution Monitoring"]:::hil
+            REQUIREMENT_CLARIFICATION["Requirement Clarification<br/>Return: k1.hil.clarification_response.v1"]:::hil
+            PLAN_APPROVAL["Plan Approval<br/>Return: k1.hil.approval_response.v1"]:::hil
+            EXECUTION_MONITORING["Execution Monitoring<br/>(Owner: Orchestrator DAGExecutor)<br/>Return: k1.hil.override_response.v1"]:::hil
+        end
+
+        subgraph PLANNER_DISCOVERY_TOOLS["Planner Discovery Tools (Read-Only)"]
+            PTOOL_DISCOVER_CAPS["discover_capabilities()<br/>Semantic Top-K from Fabric<br/>domain?, intent?"]:::tool
+            PTOOL_FIND_PROMPTS["find_relevant_prompts()<br/>Prompt Registry search<br/>intent?, domain?"]:::tool
+            PTOOL_QUERY_CONTEXT["query_planning_context()<br/>SessionState multi-reader<br/>sections[]?"]:::tool
+            PTOOL_RECALL_PLANNING["recall_for_planning()<br/>K0 via Bridge<br/>query"]:::tool
         end
     end
-    subgraph L3_EMPATHY["🧠 LAYER 3.5: Cognitive Empathy Core"]
-        direction TB
-
-        THEORY_OF_MIND_ENGINE["Theory of Mind Engine<br/>User Mental Model"]:::empathy
-        MENTAL_MODEL_MANAGEMENT["Mental Model Management<br/>Cognitive Load Management"]:::empathy
-        PREDICTIVE_COMPLETION["Predictive Completion<br/>Anticipatory Response System"]:::empathy
-    end
+    %% ======================================================================================
+    %% COGNITIVE EMPATHY ENGINES (Internal to Concierge FSMController)
+    %% These are sub-components of L1_CONCIERGE, NOT a separate layer.
+    %% See k1/concierge/concierge.mmd ENGINES subgraph for full detail.
+    %% Shown here for cross-layer edge visibility only.
+    %% ======================================================================================
+    THEORY_OF_MIND_ENGINE["Theory of Mind Engine<br/>(Concierge Internal)"]:::empathy
+    MENTAL_MODEL_MANAGEMENT["Mental Model Management<br/>(Concierge Internal)"]:::empathy
+    PREDICTIVE_COMPLETION["Predictive Completion<br/>(Concierge Internal)"]:::empathy
     subgraph L4_SUBAGENTS["🤖 LAYER 4: Spawned Sub-Agents & Tools"]
         direction TB
 
@@ -483,12 +636,9 @@ flowchart TB
             AFFECTIVE_NOW["Affective Now (4KB)<br/>Current emotion"]:::memory
             NARRATIVE_ACTIVE["Narrative Active (4KB)<br/>ONE active thread"]:::memory
             META["Meta (2KB)<br/>Session basics"]:::memory
-            PENDING_CLARIFICATIONS["Pending Clarifications (2KB)<br/>Sub-agent HIL requests"]:::memory
-            AFFECTIVE_CONTEXT["Affective Context (2KB)<br/>Emotional state for routing"]:::memory
-            TEMPORAL_CONTEXT["Temporal Context (2KB)<br/>user_timezone, current_time,<br/>mentioned_times[], relative_anchors"]:::memory
-            MENTAL_MODEL["Mental Model (4KB)<br/>User's cognitive state (ToM)"]:::memory
-            CONVERSATION_THREADS["Conversation Threads (4KB)<br/>Active thread registry"]:::memory
-            NARRATIVE_ARC["Narrative Arc (2KB)<br/>Story progression tracking"]:::memory
+            %% NOTE: temporal_context, mental_model, conversation_threads, narrative_arc
+            %% are sub-fields of canonical 8 HOT sections (see whiteboard 12-Section Matrix)
+            %% NOT standalone sections. Sub-agent HIL requests go to clarifications.
         end
 
         subgraph WARM_TIER["🌡️ WARM TIER (≤48KB, evictable)"]
@@ -720,7 +870,7 @@ flowchart TB
 
         subgraph MESSAGE_ROUTING["Message Routing System"]
             EVENT_BUS["K1 Event Bus<br/>Pub/Sub Topics"]:::routing
-            DELTA_BUS["Delta Bus<br/>State Change Stream"]:::routing
+            DELTA_BUS["Delta Bus<br/>State Change Stream<br/>Types: k1.agent.{id}.delta.v1,<br/>k1.planner.delta.v1,<br/>k1.orchestration.delta.v1,<br/>k1.curiosity.delta.v1"]:::routing
             MAILBOX_ROUTER["Direct Mailbox Router<br/>Actor ID → Mailbox"]:::routing
             TOPIC_PATTERNS["Topic Patterns:<br/>k1.capability.invoked.v1<br/>k1.capability.completed.v1<br/>k1.fabric.learning.signal.v1"]:::routing
             COGNITIVE_TRACE_ID["Cognitive Trace ID<br/>Unifies Causality"]:::routing
@@ -729,7 +879,7 @@ flowchart TB
         subgraph SESSIONSTATE_CONCURRENCY["SessionState Concurrency (ADR-0017)"]
             SINGLE_WRITER["Single Writer Pattern<br/>Concierge Only Updates"]:::concurrency
             MULTI_READER["Multi-Reader Access<br/><1ms Read Latency"]:::concurrency
-            SIX_SECTIONS["6-Section Structure<br/>beliefs/control/scoreboard/persona/multimodal/meta"]:::concurrency
+            TWELVE_SECTIONS["12-Section Structure<br/>8 HOT + 4 WARM (see Detection Matrix)"]:::concurrency
         end
 
         subgraph FAILURE_RECOVERY["Failure Recovery"]
@@ -739,7 +889,7 @@ flowchart TB
         end
 
         subgraph CIRCUIT_BREAKERS["Circuit Breakers (Resilience Layer)"]
-            CB_MODEL_GATEWAY["CB: Model Gateway<br/>Timeout: 30s, Threshold: 3/min<br/>Fallback: cached response"]:::circuit_breaker
+            CB_MODEL_HUB["CB: Model Hub (per provider manifest)<br/>Config from manifest: default 3/60s -> OPEN 30s<br/>Fallback: capability-aware, cached/template"]:::circuit_breaker
             CB_ORCHESTRATOR["CB: Orchestrator<br/>Timeout: 60s, Threshold: 2/min<br/>Fallback: degrade to LOW tier"]:::circuit_breaker
             CB_PLANNER["CB: Planner<br/>Timeout: 45s, Threshold: 2/min<br/>Fallback: skip planning, direct exec"]:::circuit_breaker
             CB_FABRIC["CB: Capability Fabric<br/>Timeout: 30s, Threshold: 5/min<br/>Fallback: capability unavailable"]:::circuit_breaker
@@ -757,10 +907,10 @@ flowchart TB
 
         subgraph HITL_FEEDBACK_LOOPS["Human-in-the-Loop Feedback"]
             CONCIERGE_USER_LOOP["Concierge ↔ User<br/>Conversational Feedback"]:::hil
-            PLANNER_USER_LOOP["Planner ↔ User<br/>Requirement Clarification"]:::hil
-            SUBAGENTS_USER_LOOP["Sub-Agents ↔ User<br/>Progress Updates"]:::hil
-            ORCHESTRATOR_USER_LOOP["Orchestrator ↔ User<br/>Resource Allocation"]:::hil
-            FEEDBACK_ROUTING["Feedback Routing<br/>All through Event Bus"]:::hil
+            PLANNER_USER_LOOP["Planner ↔ User<br/>Requirement Clarification + Plan Approval<br/>Return: clarification_response + approval_response"]:::hil
+            SUBAGENTS_USER_LOOP["Sub-Agents ↔ User<br/>Progress Updates + Clarifications<br/>Correlation: agent_id in PENDING_CLARIFICATIONS"]:::hil
+            ORCHESTRATOR_USER_LOOP["Orchestrator ↔ User<br/>Execution Monitor + Constraint Fallback<br/>Return: override_response + fallback_response"]:::hil
+            FEEDBACK_ROUTING["Feedback Routing<br/>All through Concierge HIL_RESPONSE_DETECTOR<br/>Correlated by request_id, routed via Event Bus"]:::hil
         end
 
         subgraph LEARNING_LOOP_FRAMEWORK["🔄 Learning Loop Framework (Two-System Architecture)"]
@@ -793,12 +943,12 @@ flowchart TB
             DELTA_AGGREGATOR["Delta Aggregator<br/>Time-Window Batching"]:::memory
         end
 
-        %% LLM Model Hub: Centralized module for accessing external LLM APIs from providers like OpenAI, Anthropic, etc.
-        subgraph LLM_MODEL_HUB["LLM Model Hub"]
-            HUB_ROUTER["Model Router<br/>Load Balancing & Fallback<br/>Provider Selection"]:::hub
-            HUB_OPENAI["OpenAI API Access<br/>GPT-4, GPT-3.5"]:::hub
-            HUB_ANTHROPIC["Anthropic API Access<br/>Claude Models"]:::hub
-            HUB_OTHERS["Other LLM Providers<br/>Google, Meta, etc."]:::hub
+        %% Model Hub: Capability-driven plugin architecture for LLM provider access. See k1/model_hub/model_hub.mmd
+        subgraph LLM_MODEL_HUB["Model Hub Provider Plugins (IProviderPlugin)"]
+            HUB_ROUTER["ProviderDispatcher<br/>Manifest-driven routing<br/>Capability-aware fallback"]:::hub
+            HUB_OPENAI["OpenAIPlugin<br/>CHAT, TOOL_CALL, STRUCTURED, EMBED, VISION, BATCH"]:::hub
+            HUB_ANTHROPIC["AnthropicPlugin<br/>CHAT, TOOL_CALL, STRUCTURED, REASON, VISION"]:::hub
+            HUB_OTHERS["Google, vLLM, Ollama Plugins<br/>+ Future Plugins (zero hub change)"]:::hub
         end
     end
 
@@ -837,7 +987,7 @@ flowchart TB
     %% Tool result flows through pipeline (see TOOL EXECUTION & RESULT PIPELINE section)
     %% CAPABILITY_FABRIC → TOOL_PROVIDERS → execute → result → COMPANIONING → TOOL_RESULT_BUFFER
     COMPANIONING -->|"LOW: tool done"| DELIVERING
-    %% DELIVERING fetches from TOOL_RESULT_BUFFER and sends to MODEL_GATEWAY
+    %% DELIVERING fetches from TOOL_RESULT_BUFFER and sends to Model Hub via LLM_REQUEST_BUS
     DELIVERING -->|"fetch tool_results"| TOOL_RESULT_BUFFER
     TOOL_RESULT_BUFFER -->|"LOW: tool_result[]"| DELIVERING
     DELIVERING -->|"LOW: tool_result + context (~500 tokens)"| LLM_REQUEST_BUS
@@ -845,11 +995,12 @@ flowchart TB
 
     %% ======================================================================================
     %% MEDIUM/HIGH TIER FLOW (With Conversational Continuity)
-    %% User: Complex multi-step task → Preliminary ack → Background execution → Progress → Final
+    %% MEDIUM: Concierge knows WHAT to do, Orchestrator coordinates 1-2 Fabric calls (NO Planner)
+    %% HIGH: Orchestrator routes through Planner for full 4-stage planning pipeline
     %% ======================================================================================
 
     %% DISPATCHING creates TaskEnvelope and routes through mailbox
-    DISPATCHING -->|"TaskEnvelope{intent, context, tier}"| ORCHESTRATOR_MAILBOX
+    DISPATCHING -->|"MEDIUM/HIGH: TaskEnvelope{intent, context, tier}"| ORCHESTRATOR_MAILBOX
     ORCHESTRATOR_MAILBOX -->|"dequeue task"| ORCHESTRATOR_ACTOR
     ORCHESTRATOR_ACTOR -->|"k1.orchestration.task.accepted"| CONCIERGE_FSM
 
@@ -943,11 +1094,10 @@ flowchart TB
     %% LOW tier: Tool executes FIRST, then LLM generates response with tool result
     TIER_LOW -->|"route to tool execution"| DISPATCHING
 
-    %% MEDIUM/HIGH: LLM reasoning first (may need planning), then execution
-    %% NOTE: LLM calls routed via LLM_REQUEST_BUS
-    TIER_MEDIUM -->|"llm.reasoning (2K tokens)"| LLM_REQUEST_BUS
-    TIER_HIGH -->|"llm.planning (8K tokens)"| LLM_REQUEST_BUS
-    LLM_REQUEST_BUS -->|"reasoning/plan complete"| DISPATCHING
+    %% MEDIUM/HIGH: Route directly to DISPATCHING (LLM call happens IN dispatching phase)
+    %% Concierge FSM handles LLM reasoning/planning within the dispatching state
+    TIER_MEDIUM -->|"route to dispatch (LLM reasoning IN dispatching)"| DISPATCHING
+    TIER_HIGH -->|"route to dispatch (LLM planning IN dispatching)"| DISPATCHING
 
     %% Feed other ACKING components (Multi-Label aware)
     ULTRABERT_INTENT -->|"intents[] explicit"| HYPOTHESIS_GENERATOR
@@ -977,7 +1127,7 @@ flowchart TB
     %% UltraBERT → SessionState Updates (Multi-Label)
     ULTRABERT_EMOTIONS -->|"update AFFECTIVE_NOW"| AFFECTIVE_NOW
     ULTRABERT_NER -->|"update BELIEFS_ACTIVE"| BELIEFS_ACTIVE
-    TIME_RESOLVER -->|"update TEMPORAL_CONTEXT"| TEMPORAL_CONTEXT
+    TIME_RESOLVER -->|"update CONTROL.temporal_context"| CONTROL
     ULTRABERT_SAFETY -->|"update CONTROL.safety_band"| CONTROL
     ULTRABERT_INTENT -->|"update CONTROL.intents{primary,all[],scores}"| CONTROL
     ULTRABERT_INGRESS -->|"update CONTROL.domains[]"| CONTROL
@@ -987,8 +1137,8 @@ flowchart TB
     CONSTRAINT_MANAGER -->|"gaps_found"| ACKING
     ACKING -->|"gap_detection"| THEORY_OF_MIND_ENGINE
     ACKING -->|"early_validation"| STAGE3_VALIDATE
-    CLARIFYING -->|"clarification"| PENDING_CLARIFICATIONS
-    PENDING_CLARIFICATIONS -->|"resolved"| ACKING
+    CLARIFYING -->|"clarification"| CLARIFICATIONS
+    CLARIFICATIONS -->|"resolved"| ACKING
 
     %% Clarification cycle completion (user provides answer)
     CLARIFYING -->|"user_response received"| ACKING
@@ -998,10 +1148,10 @@ flowchart TB
     %% Sub-agents CANNOT write to SessionState - they emit to DELTA_BUS
     L4_SUBAGENTS -->|"clarification_request delta"| DELTA_BUS
     DELTA_BUS -->|"clarification deltas"| AGGREGATION_WINDOW
-    %% Concierge (Single Writer) adds to PENDING_CLARIFICATIONS
+    %% Concierge (Single Writer) adds to CLARIFICATIONS
     AGGREGATION_WINDOW -->|"clarification_request"| CONCIERGE_FSM
-    CONCIERGE_FSM -->|"write pending"| PENDING_CLARIFICATIONS
-    PENDING_CLARIFICATIONS -->|"interrupt for clarification"| INTERRUPT_HANDLING
+    CONCIERGE_FSM -->|"write pending clarification"| CLARIFICATIONS
+    CLARIFICATIONS -->|"interrupt for clarification"| INTERRUPT_HANDLING
     INTERRUPT_HANDLING -->|"route to user"| CLARIFYING
     STATE_PENDING -->|"Supervisor Hire"| STATE_WARMING
     STATE_WARMING -->|"Model Ready"| STATE_ACTIVE
@@ -1010,13 +1160,31 @@ flowchart TB
     STATE_ACTIVE -->|"Supervisor Drain"| STATE_DRAINING
     STATE_IDLE -->|"Supervisor Drain"| STATE_DRAINING
     STATE_DRAINING -->|"Tasks Complete"| STATE_TERMINATED
-    TASK_ANNOUNCEMENT -->|"Task Announced"| PROPOSAL_BIDDING
-    PROPOSAL_BIDDING -->|"Proposals Received"| MULTI_CRITERIA_SCORING
-    MULTI_CRITERIA_SCORING -->|"Winner Selected"| PARALLEL_DAG
-    PARALLEL_DAG -->|"Execution Started"| SAGA_RECOVERY
+    %% Blind DAG Executor: Orchestrator walks plan in topological order
+    ORCHESTRATOR_ACTOR -->|"walk CommittedPlan"| TOPOLOGICAL_WALKER
+    TOPOLOGICAL_WALKER -->|"parallel steps (no deps)"| PARALLEL_DAG
+    PARALLEL_DAG -->|"per step"| CAPABILITY_FABRIC
+    PARALLEL_DAG -->|"step failed (after 2 retries)"| STEP_RETRY
+    STEP_RETRY -->|"cancel dependent steps"| STEP_CANCELLATION
+    STEP_RETRY -->|"independent steps continue"| PARALLEL_DAG
+    STEP_CANCELLATION -->|"partial results"| SAGA_RECOVERY
     TOOL_INVOKE_CAPABILITY -->|"Fabric Invocation"| CAPABILITY_FABRIC
     TOOL_DISCOVER_CAPABILITIES -->|"Registry Query"| CAPABILITY_REGISTRY
     TOOL_SPAWN_VIA_FABRIC -->|"Agent Spawning"| AGENT_PROVIDERS
+
+    %% ======================================================================================
+    %% COGNITIVE TOOL → SessionState EDGES (All via Concierge Single Writer → MutationGuard)
+    %% LLM calls these tools → Concierge FSM executes → MutationGuard.preflight() → Write
+    %% ======================================================================================
+    TOOL_UPDATE_SCOREBOARD -->|"write referents, QUD, salience"| SCOREBOARD
+    TOOL_UPDATE_BELIEFS -->|"write facts, corrections"| BELIEFS_ACTIVE
+    TOOL_UPDATE_BELIEFS -->|"invalidate old facts"| BELIEFS_HISTORY
+    TOOL_UPDATE_CLARIFICATIONS -->|"write/resolve gaps"| CLARIFICATIONS
+    TOOL_UPDATE_NARRATIVE -->|"write thread state"| NARRATIVE_ACTIVE
+    TOOL_REFINE_AFFECT -->|"override emotion"| AFFECTIVE_NOW
+    TOOL_PROMOTE_BELIEF -->|"promote WARM to HOT"| BELIEFS_ACTIVE
+    TOOL_PROMOTE_BELIEF -->|"read from WARM"| BELIEFS_HISTORY
+
     %% Orchestrator invokes capabilities (tools/agents) via Fabric
     ORCHESTRATOR_ACTOR -->|"CapabilityRequest{name, params, context}"| CAPABILITY_FABRIC
     ORCHESTRATOR_ACTOR -->|"SpawnRequest{agent_type, config}"| CAPABILITY_FABRIC
@@ -1065,7 +1233,7 @@ flowchart TB
     COMPANIONING -->|"stage tool_result for LLM"| TOOL_RESULT_BUFFER
 
     %% Step 8: DELIVERING retrieves results (see MAIN CONVERSATION FLOW section)
-    %% DELIVERING --> TOOL_RESULT_BUFFER --> DELIVERING --> MODEL_GATEWAY
+    %% DELIVERING --> TOOL_RESULT_BUFFER --> DELIVERING --> Model Hub (via LLM_REQUEST_BUS)
 
     %% ======================================================================================
 
@@ -1081,7 +1249,7 @@ flowchart TB
     %% Temporal-Workflow Integration
     SYSTEM_CLOCK -->|"current_time"| WORKFLOW_SCHEDULER
     SYSTEM_CLOCK -->|"UTC now"| TEMPORAL_ANCHOR
-    WORKFLOW_SCHEDULER -->|"check user TZ"| TEMPORAL_CONTEXT
+    WORKFLOW_SCHEDULER -->|"check user TZ"| CONTROL
     TIME_RESOLVER -->|"scheduled_time"| WORKFLOW_SCHEDULER
     WORKFLOW_SCHEDULER -->|"trigger due"| WORKFLOW_RUN_SUPERVISOR
 
@@ -1159,15 +1327,16 @@ flowchart TB
     %% AFFECT ANALYSIS: Now handled by K1 UltraBERT (not K0)
     CONCIERGE_FSM -->|"analyze affect (local)"| ULTRABERT_EMOTIONS
     ULTRABERT_EMOTIONS -->|"k1.affect.analyzed.v1"| EVENT_BUS
-    EVENT_BUS -->|"Update affective_context"| AFFECTIVE_CONTEXT
+    EVENT_BUS -->|"Update affective_now"| AFFECTIVE_NOW
     CONVERSATIONAL_ANTICIPATION_ENGINE -->|"Speculative Execution"| ORCHESTRATOR_ACTOR
-    THEORY_OF_MIND_ENGINE -->|"Mental Model Updates"| MENTAL_MODEL
+    THEORY_OF_MIND_ENGINE -->|"Mental Model Updates"| SCOREBOARD
     THEORY_OF_MIND_ENGINE -->|"Cognitive Load"| MENTAL_MODEL_MANAGEMENT
     MENTAL_MODEL_MANAGEMENT -->|"Load State"| COGNITIVE_LOAD_ROUTING
     MENTAL_MODEL_MANAGEMENT -->|"Capacity Estimate"| CONCIERGE_FSM
     PREDICTIVE_COMPLETION -->|"Predictions"| CONVERSATIONAL_ANTICIPATION_ENGINE
     CONVERSATIONAL_ANTICIPATION_ENGINE -->|"Feed Predictions"| PREDICTIVE_COMPLETION
-    L3_EMPATHY -->|"Cognitive Load-Aware"| ORCHESTRATOR_ACTOR
+    %% Cognitive empathy engines feed into orchestrator (engines are Concierge-internal)
+    MENTAL_MODEL_MANAGEMENT -->|"Cognitive Load-Aware"| ORCHESTRATOR_ACTOR
     SUPERVISOR_MONITORING -->|"Health Monitoring"| L4_SUBAGENTS
     WFQ_SCHEDULER -->|"Priority-based Delivery"| EVENT_BUS
     WFQ_SCHEDULER -->|"Priority-based Delivery"| MAILBOX_ROUTER
@@ -1199,11 +1368,12 @@ flowchart TB
     GRACE_PERIOD -->|"Recovery Within Grace"| K0_TURN_HISTORY
     %% ======================================================================================
     %% PLANNER 4-STAGE PIPELINE (For HIGH complexity tasks)
-    %% Each stage uses LLM for intelligent processing
+    %% Each stage uses LLM with read-only discovery tools for intelligent processing
     %% ======================================================================================
 
     %% MEDIUM tier: Direct tool execution (no full planning needed)
-    ORCHESTRATOR_ACTOR -->|"MEDIUM: direct execution"| CAPABILITY_FABRIC
+    %% Concierge already knows WHAT to do (has read tools), Orchestrator coordinates 1-2 Fabric calls
+    ORCHESTRATOR_ACTOR -->|"MEDIUM: direct execution (1-2 calls, no Planner)"| CAPABILITY_FABRIC
 
     %% HIGH tier: Full planning pipeline required
     ORCHESTRATOR_ACTOR -->|"PlanRequest{intent, constraints}"| PLANNER_MAILBOX
@@ -1211,12 +1381,17 @@ flowchart TB
     PLANNER_AGENT -->|"Stage 1: sketch plan"| STAGE1_SKETCH
 
     %% Stage 1: LLM-Powered Plan Sketching (~2K tokens)
-    %% NOTE: LLM calls routed via LLM_REQUEST_BUS (see MODEL_GATEWAY HUB section)
+    %% NOTE: LLM calls routed via LLM_REQUEST_BUS (see MODEL HUB section)
+    %% Planner uses discovery tools to ground plan in real capabilities
     STAGE1_SKETCH -->|"sketch prompt (~2K tokens)"| LLM_REQUEST_BUS
+    STAGE1_SKETCH -->|"discover capabilities"| PTOOL_DISCOVER_CAPS
+    STAGE1_SKETCH -->|"query user context"| PTOOL_QUERY_CONTEXT
+    STAGE1_SKETCH -->|"recall memory for planning"| PTOOL_RECALL_PLANNING
     STAGE1_SKETCH -->|"rough plan"| STAGE2_EXPAND
 
     %% Stage 2: Tool Selection & Expansion (~1K tokens)
     STAGE2_EXPAND -->|"tool mapping (~1K tokens)"| LLM_REQUEST_BUS
+    STAGE2_EXPAND -->|"find relevant prompts"| PTOOL_FIND_PROMPTS
     STAGE2_EXPAND -->|"expanded plan with tools"| STAGE3_VALIDATE
 
     %% Stage 3: LLM Arbiter Validation (~500 tokens)
@@ -1245,6 +1420,29 @@ flowchart TB
     ORCHESTRATOR_ACTOR -->|"execution status"| EXECUTION_MONITORING
     EXECUTION_MONITORING -->|"progress narration (~200 tokens)"| LLM_REQUEST_BUS
     EXECUTION_MONITORING -->|"user override"| ORCHESTRATOR_ACTOR
+
+    %% ======================================================================================
+    %% PLANNER DISCOVERY TOOL EDGES (Read-Only, Connect to Fabric Retrieval & SessionState)
+    %% ======================================================================================
+    PTOOL_DISCOVER_CAPS -->|"semantic Top-K search"| SEMANTIC_SEARCH_ENGINE
+    PTOOL_FIND_PROMPTS -->|"semantic Top-K search"| SEMANTIC_SEARCH_ENGINE
+    SEMANTIC_SEARCH_ENGINE -->|"query registry"| CAPABILITY_REGISTRY
+    SEMANTIC_SEARCH_ENGINE -->|"query prompts"| PROMPT_TEMPLATE_STORE
+    SEMANTIC_SEARCH_ENGINE -->|"hard filter"| RETRIEVAL_HARD_FILTER
+    RETRIEVAL_HARD_FILTER -->|"pass candidates"| RETRIEVAL_SOFT_RANKER
+    RETRIEVAL_SOFT_RANKER -->|"ranked results"| TOP_K_RANKER
+    TOP_K_RANKER -->|"Top-10 capabilities"| PTOOL_DISCOVER_CAPS
+    TOP_K_RANKER -->|"Top-10 prompts"| PTOOL_FIND_PROMPTS
+    PTOOL_QUERY_CONTEXT -->|"multi-reader"| SESSIONSTATE_STORE
+    PTOOL_RECALL_PLANNING -->|"K0 query via Bridge"| BRIDGE_CLIENT
+
+    %% ======================================================================================
+    %% CROSS-WORKFLOW TRIGGER EDGES (Workflows can invoke sub-workflows)
+    %% ======================================================================================
+    WORKFLOW_PROVIDERS -->|"workflow.run.* step"| CROSS_WORKFLOW_RESOLVER
+    CROSS_WORKFLOW_RESOLVER -->|"check depth"| WORKFLOW_DEPTH_GUARD
+    WORKFLOW_DEPTH_GUARD -->|"depth <= 3, no cycles"| WORKFLOW_COMPILER
+    CROSS_WORKFLOW_RESOLVER -->|"rehydrate sub-workflow"| WORKFLOW_REGISTRY
 
     ORCHESTRATOR_ACTOR -->|"Workflow Scheduling"| WORKFLOW_SCHEDULER
     WORKFLOW_SCHEDULER -->|"Workflow Triggers"| EVENT_BUS
@@ -1277,8 +1475,8 @@ flowchart TB
     DELIVERING -->|"turn_count % 30 == 0"| ANTICIPATORY_RESPONSE
     ANTICIPATORY_RESPONSE -->|"predicted needs"| CONVERSATIONAL_ANTICIPATION_ENGINE
     ANTICIPATORY_RESPONSE -->|"prefetch context"| CAPABILITY_FABRIC
-    CONVERSATIONAL_NARRATIVE_ENGINE -->|"Update Threads"| CONVERSATION_THREADS
-    CONVERSATIONAL_NARRATIVE_ENGINE -->|"Update Arc"| NARRATIVE_ARC
+    CONVERSATIONAL_NARRATIVE_ENGINE -->|"Update Threads"| NARRATIVE_ACTIVE
+    CONVERSATIONAL_NARRATIVE_ENGINE -->|"Update Arc"| NARRATIVE_ACTIVE
     LLM_MODEL_ENGINE -->|"Route to Providers"| HUB_ROUTER
     HUB_ROUTER -->|"OpenAI API"| HUB_OPENAI
     HUB_ROUTER -->|"Anthropic API"| HUB_ANTHROPIC
@@ -1386,15 +1584,15 @@ flowchart TB
     BRIDGE_SSE -->|"k0.proactive.signal.v1"| SSE_PROACTIVE_TRIGGER
     SSE_PROACTIVE_TRIGGER -->|"workflow_id + trigger_context"| WORKFLOW_SCHEDULER
     WORKFLOW_SCHEDULER -->|"spawn reminder"| REMINDER_AGENT
-    REMINDER_AGENT -->|"with TEMPORAL_CONTEXT"| SESSIONSTATE_STORE
+    REMINDER_AGENT -->|"read temporal context"| SESSIONSTATE_STORE
     REMINDER_AGENT -->|"execute reminder capability"| CAPABILITY_FABRIC
     REMINDER_AGENT -->|"reminder delivered"| CONCIERGE_MAILBOX
 
     K0_SSE_ENDPOINT -->|"Direct SSE"| PROACTIVE_DECISION
 
     %% ======================================================================================
-    %% MODEL_GATEWAY HUB (Consolidated LLM Access)
-    %% All LLM consumers route through MODEL_GATEWAY → LLM_REQUEST_BUS → HUB_ROUTER
+    %% MODEL HUB (Capability-Driven LLM Access -- See k1/model_hub/model_hub.mmd)
+    %% All LLM consumers route through LLM_REQUEST_BUS → MODEL_HUB → HUB_ROUTER (ProviderDispatcher)
     %% Consumers: CONCIERGE_FSM, PLANNER_AGENT, DYNAMIC_AGENTS, MEMORY_WRITER_AGENTS,
     %%            PROACTIVE_DECISION, SOLUTION_VALIDATOR, CAPABILITY_FABRIC, Planner stages
     %% ======================================================================================
@@ -1407,16 +1605,16 @@ flowchart TB
     PLANNER_AGENT -->|"LLM request"| LLM_REQUEST_BUS
     DYNAMIC_AGENTS -->|"LLM request"| LLM_REQUEST_BUS
 
-    %% Request Bus → Model Gateway → Hub Router
-    LLM_REQUEST_BUS -->|"route request"| MODEL_GATEWAY
-    MODEL_GATEWAY -->|"Route to Providers"| HUB_ROUTER
+    %% Request Bus → Model Hub → ProviderDispatcher
+    LLM_REQUEST_BUS -->|"HubRequest{capability, payload}"| MODEL_HUB
+    MODEL_HUB -->|"Route to Provider Plugins"| HUB_ROUTER
 
-    %% Model Gateway internal flow
+    %% Model Hub internal flow (capability-driven)
     MODEL_ROUTER -->|"check cache"| MODEL_CACHE
     MODEL_CACHE -->|"cache miss"| HUB_ROUTER
     MODEL_CACHE -->|"cache hit"| MODEL_ROUTER
-    MODEL_ROUTER -->|"track usage"| MODEL_METRICS
-    HUB_ROUTER -->|"response"| MODEL_ROUTER
+    MODEL_ROUTER -->|"track cost"| MODEL_METRICS
+    HUB_ROUTER -->|"HubResponse"| MODEL_ROUTER
 
     DISTRIBUTED_TRACING -->|"Trace Collection"| COGNITIVE_TRACE_ID
     METRICS_AGGREGATOR -->|"Aggregate Metrics"| SESSIONSTATE_STORE
@@ -1426,7 +1624,7 @@ flowchart TB
     %% CIRCUIT BREAKER PROTECTION EDGES
     %% Each CB wraps calls to protected component, handles timeout/failure gracefully
     %% ======================================================================================
-    CB_MODEL_GATEWAY -.->|"protects"| MODEL_GATEWAY
+    CB_MODEL_HUB -.->|"protects"| MODEL_HUB
     CB_ORCHESTRATOR -.->|"protects"| ORCHESTRATOR_MAILBOX
     CB_PLANNER -.->|"protects"| PLANNER_MAILBOX
     CB_FABRIC -.->|"protects"| CAPABILITY_FABRIC
@@ -1437,7 +1635,7 @@ flowchart TB
     CB_SSE -.->|"protects"| BRIDGE_SSE
 
     %% Circuit breaker state reporting
-    CB_MODEL_GATEWAY -->|"state: CLOSED/OPEN/HALF"| HEALTH_CHECK_ORCHESTRATOR
+    CB_MODEL_HUB -->|"state: CLOSED/OPEN/HALF"| HEALTH_CHECK_ORCHESTRATOR
     CB_ORCHESTRATOR -->|"state"| HEALTH_CHECK_ORCHESTRATOR
     CB_PLANNER -->|"state"| HEALTH_CHECK_ORCHESTRATOR
     CB_FABRIC -->|"state"| HEALTH_CHECK_ORCHESTRATOR
@@ -1448,7 +1646,7 @@ flowchart TB
     %% Fallback flows when circuit is OPEN
     CB_ORCHESTRATOR -->|"OPEN: degrade"| CAPABILITY_FABRIC
     CB_PLANNER -->|"OPEN: skip planning"| CAPABILITY_FABRIC
-    CB_MODEL_GATEWAY -->|"OPEN: cached/template"| CONCIERGE_FSM
+    CB_MODEL_HUB -->|"OPEN: cached/template"| CONCIERGE_FSM
 
     MODULE_SCANNER -->|"discovers"| MODULES_DIR
     MODULE_SCANNER -->|"registers"| TOOL_REGISTRY
@@ -1461,7 +1659,7 @@ flowchart TB
 
     %% ======================================================================================
     %% PROMPT MANAGEMENT FLOWS
-    %% All LLM calls go through Prompt Management before Model Gateway
+    %% All LLM calls go through Prompt Management before Model Hub
     %% ======================================================================================
 
     %% ======================================================================================
@@ -1525,6 +1723,7 @@ flowchart TB
     classDef brain fill:#ffccbc,stroke:#bf360c,stroke-width:3px,color:#000,font-weight:bold
     classDef mailbox fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
     classDef tool fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    classDef tool_cognitive fill:#ffe0b2,stroke:#e65100,stroke-width:2px,color:#000,font-weight:bold
     classDef orchestrator fill:#c8e6c9,stroke:#1b5e20,stroke-width:3px,color:#000,font-weight:bold
     classDef registry fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
     classDef factory fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
@@ -1581,7 +1780,8 @@ flowchart TB
     class AFFECTIVE_MIRRORING_ENGINE,CONVERSATIONAL_ANTICIPATION_ENGINE,CONVERSATIONAL_NARRATIVE_ENGINE brain
     class CONCIERGE_PERSONA,CONCIERGE_STYLE,AGGREGATION_WINDOW brain
     class CONCIERGE_MAILBOX,ORCHESTRATOR_MAILBOX,PLANNER_MAILBOX,RESEARCHER_MAILBOX,SAFETY_MAILBOX,CUSTOM_MAILBOXES mailbox
-    class TOOL_INVOKE_CAPABILITY,TOOL_DISCOVER_CAPABILITIES,TOOL_SPAWN_VIA_FABRIC,TOOL_EXECUTE_WORKFLOW,TOOL_UPDATE_STATE,TOOL_RECALL_MEMORY,TOOL_SUMMARIZE_CONTEXT tool
+    class TOOL_INVOKE_CAPABILITY,TOOL_DISCOVER_CAPABILITIES,TOOL_SPAWN_VIA_FABRIC,TOOL_EXECUTE_WORKFLOW,TOOL_RECALL_MEMORY,TOOL_SUMMARIZE_CONTEXT tool
+    class TOOL_UPDATE_SCOREBOARD,TOOL_UPDATE_BELIEFS,TOOL_UPDATE_CLARIFICATIONS,TOOL_UPDATE_NARRATIVE,TOOL_REFINE_AFFECT,TOOL_PROMOTE_BELIEF tool_cognitive
     class ORCHESTRATOR_ACTOR orchestrator
     class WORKFLOW_REGISTRY,WORKFLOW_VERSION_POINTER,MODULE_CACHE,AGENT_CAPABILITIES,TOOL_CAPABILITIES,WORKFLOW_CAPABILITIES,CONCIERGE_CAPABILITIES,MODEL_CACHE registry
     class WORKFLOW_COMPILER,PROVIDER_FACTORY,MCP_PROVIDER_FACTORY factory
@@ -1589,14 +1789,16 @@ flowchart TB
     class WORKFLOW_SCHEDULER scheduling
     class WORKFLOW_RUN_SUPERVISOR,RUN_MANIFEST supervisor
     class PLANNER_AGENT planner
-    class PHASE1_NEGOTIATION,PHASE2_SELECTION,PHASE3_EXECUTION step
-    class TASK_ANNOUNCEMENT,PROPOSAL_BIDDING,MULTI_CRITERIA_SCORING,PARALLEL_DAG,SAGA_RECOVERY substep
+    %% 3-Phase Orchestration removed (superseded by Blind DAG Executor)
+    class PARALLEL_DAG,SAGA_RECOVERY substep
+    class TOPOLOGICAL_WALKER engine
+    class STEP_RETRY,STEP_CANCELLATION recovery
     class MULTI_AGENT_COORD future
     class REQUIREMENT_CLARIFICATION,PLAN_APPROVAL,EXECUTION_MONITORING,CONCIERGE_USER_LOOP,PLANNER_USER_LOOP,SUBAGENTS_USER_LOOP,ORCHESTRATOR_USER_LOOP,FEEDBACK_ROUTING hil
     class PLANNER_AGENT_INSTANCE,RESEARCHER_AGENT,SAFETY_AGENT,CUSTOM_AGENTS agent
     class MCP_RUNNERS,WASM_SANDBOX,MODEL_INFERENCE tool
     class SESSIONSTATE_STORE,STATE_BELIEFS,STATE_SCOREBOARD,STATE_CONTROL,STATE_PERSONA,STATE_MULTIMODAL,STATE_HISTORY,STATE_TELEMETRY,FLOW_CONTROL_LEASES memory
-    class AFFECTIVE_CONTEXT,TEMPORAL_CONTEXT,MENTAL_MODEL,CONVERSATION_THREADS,NARRATIVE_ARC memory
+    %% Phantom HOT sections removed — these are sub-fields of canonical 8 HOT sections
     class MEMORY_WRITER_AGENTS,STATE_DELTA_EMITTER,DELTA_AGGREGATOR memory
     class K0_BRIDGE,BRIDGE_PROTOCOL,K0_MEMORY,K0_POSTGRESQL,K0_RECEIPTS,K0_CMD,K0_QRY,PORT_QRY,QUERY_AGG,WAL_DRIVER,VECTOR_DRIVER,PORT_CMD,BUS_DISPATCH,PIPELINE_ROUTER,PIPELINE_P02,PIPELINE_P03,PORT_SSE k0
     class K0_SESSION_CHECKPOINTS,K0_TURN_HISTORY,K0_DELTA_BATCHING k0
@@ -1608,6 +1810,20 @@ flowchart TB
     class SYNC_DISCOVERY,SYNC_CRDT,SYNC_E2EE,SYNC_P2P,SYNC_CERTS,SYNC_PORT bridge
     class CAPABILITY_TOKENS,REQUEST_SIGNING,BAND_ENFORCEMENT security
 
+    %% Planner Discovery Tools
+    class PTOOL_DISCOVER_CAPS,PTOOL_FIND_PROMPTS,PTOOL_QUERY_CONTEXT,PTOOL_RECALL_PLANNING tool
+
+    %% Fabric Retrieval Engine
+    class SEMANTIC_SEARCH_ENGINE,TOP_K_RANKER,RETRIEVAL_SOFT_RANKER engine
+    class RETRIEVAL_HARD_FILTER safety
+
+    %% Cross-Workflow
+    class CROSS_WORKFLOW_RESOLVER engine
+    class WORKFLOW_DEPTH_GUARD safety
+
+    %% Provider Ranking
+    class PROVIDER_HARD_FILTER,PROVIDER_SOFT_RANKER engine
+
     %% IFL Device Adapters (K0 component - shown for context)
     class IFL_HOMEKIT,IFL_NEST,IFL_TESLA,IFL_SONOS,IFL_RING,IFL_HEALTHKIT,IFL_MQTT ifl
     class DEV_HUE,DEV_NEST,DEV_TESLA,DEV_SONOS,DEV_RING,DEV_WATCH device
@@ -1616,9 +1832,9 @@ flowchart TB
     class FAM_IPHONE,FAM_LAPTOP,FAM_TABLET,FAM_HUB family_device
 
     class EVENT_BUS,DELTA_BUS,MAILBOX_ROUTER,TOPIC_PATTERNS,DISTRIBUTED_TRACING,LLM_REQUEST_BUS routing
-    class SINGLE_WRITER,MULTI_READER,SIX_SECTIONS concurrency
+    class SINGLE_WRITER,MULTI_READER,TWELVE_SECTIONS concurrency
     class SUPERVISOR_MONITORING,SESSIONSTATE_CLEANUP,BLACKLIST_MANAGEMENT recovery
-    class CB_MODEL_GATEWAY,CB_ORCHESTRATOR,CB_PLANNER,CB_FABRIC,CB_MCP_CONNECTOR,CB_SESSIONSTATE,CB_SSE circuit_breaker
+    class CB_MODEL_HUB,CB_ORCHESTRATOR,CB_PLANNER,CB_FABRIC,CB_MCP_CONNECTOR,CB_SESSIONSTATE,CB_SSE circuit_breaker
     class WFQ_SCHEDULER,LATENCY_BALANCE,MODEL_PLACEMENT scheduling
     class FEEDBACK_SIGNAL_COLLECTOR,DRIFT_DETECTOR,ADVISORY_EMITTER,GAP_SSE_LISTENER,CURIOSITY_FLOW learning
     class PROACTIVE_AGENT_SPAWNER,CURIOSITY_AGENT,REMINDER_AGENT agent

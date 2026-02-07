@@ -927,16 +927,14 @@ class TelemetrySection:
         self._cached_flatbuffer = bytes(builder.Output())
         return self._cached_flatbuffer
 
-    @classmethod
-    def from_flatbuffer(cls, data: bytes) -> TelemetrySection:
-        """Deserialize from FlatBuffer bytes."""
-        section = cls()
+    def from_flatbuffer(self, data: bytes) -> None:
+        """Deserialize from FlatBuffer bytes (in-place mutation)."""
         fb = FBTelemetrySection.GetRootAsTelemetrySection(data, 0)
 
         # Restore tokens
         tokens = fb.Tokens()
         if tokens:
-            section._tokens = TokenData(
+            self._tokens = TokenData(
                 input_tokens=tokens.InputTokens(),
                 output_tokens=tokens.OutputTokens(),
                 total_tokens=tokens.TotalTokens(),
@@ -950,7 +948,7 @@ class TelemetrySection:
         # Restore cost
         cost = fb.Cost()
         if cost:
-            section._cost = CostData(
+            self._cost = CostData(
                 total_cost_microdollars=cost.TotalCostMicrodollars(),
                 reasoning_cost=cost.ReasoningCost(),
                 generation_cost=cost.GenerationCost(),
@@ -962,7 +960,7 @@ class TelemetrySection:
         # Restore latency
         latency = fb.Latency()
         if latency:
-            section._latency = LatencyData(
+            self._latency = LatencyData(
                 p50_ms=latency.P50Ms(),
                 p90_ms=latency.P90Ms(),
                 p95_ms=latency.P95Ms(),
@@ -976,10 +974,11 @@ class TelemetrySection:
             )
 
         # Restore turn timings
+        self._turn_timings.clear()
         for i in range(fb.TurnTimingsLength()):
             timing = fb.TurnTimings(i)
             if timing:
-                section._turn_timings.append(
+                self._turn_timings.append(
                     TurnTimingData(
                         turn_number=timing.TurnNumber(),
                         duration_ms=timing.DurationMs(),
@@ -993,7 +992,7 @@ class TelemetrySection:
         errors = fb.Errors()
         if errors:
             error_msg = errors.LastErrorMessage()
-            section._errors = ErrorData(
+            self._errors = ErrorData(
                 total_errors=errors.TotalErrors(),
                 timeout_errors=errors.TimeoutErrors(),
                 rate_limit_errors=errors.RateLimitErrors(),
@@ -1008,7 +1007,7 @@ class TelemetrySection:
         # Restore summary
         summary = fb.Summary()
         if summary:
-            section._summary = SummaryData(
+            self._summary = SummaryData(
                 avg_latency_ms=summary.AvgLatencyMs(),
                 error_rate=summary.ErrorRate(),
                 cost_per_turn=summary.CostPerTurn(),
@@ -1019,15 +1018,15 @@ class TelemetrySection:
             )
 
         # Restore metadata
-        section._sample_count = fb.SampleCount()
+        self._sample_count = fb.SampleCount()
 
         # Restore header metadata
         header = fb.Header()
         if header:
-            section._last_updated_ms = header.LastUpdatedMs()
-            # Integrity hash is computed internally
+            self._last_updated_ms = header.LastUpdatedMs()
 
-        return section
+        # Invalidate cache
+        self._cached_flatbuffer = None
 
     # -------------------------------------------------------------------------
     # Apply (MutationGuard pattern)

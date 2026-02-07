@@ -873,7 +873,8 @@ class TestFlatBufferSerialization:
         """Test deserializing from FlatBuffer."""
         data = populated_section.to_flatbuffer()
 
-        restored = HistoryRecentSection.from_flatbuffer(data)
+        restored = HistoryRecentSection()
+        restored.from_flatbuffer(data)
 
         assert restored.compressed_count() == populated_section.compressed_count()
         assert restored.summarized_count() == populated_section.summarized_count()
@@ -896,7 +897,8 @@ class TestFlatBufferSerialization:
         )
 
         data = section.to_flatbuffer()
-        restored = HistoryRecentSection.from_flatbuffer(data)
+        restored = HistoryRecentSection()
+        restored.from_flatbuffer(data)
 
         turn = restored.get_compressed_turn("t1")
         assert turn is not None
@@ -921,7 +923,8 @@ class TestFlatBufferSerialization:
         )
 
         data = section.to_flatbuffer()
-        restored = HistoryRecentSection.from_flatbuffer(data)
+        restored = HistoryRecentSection()
+        restored.from_flatbuffer(data)
 
         turn = restored.get_summarized_turn("t31")
         assert turn is not None
@@ -934,7 +937,8 @@ class TestFlatBufferSerialization:
         section.set_session_summary("Session about project planning")
 
         data = section.to_flatbuffer()
-        restored = HistoryRecentSection.from_flatbuffer(data)
+        restored = HistoryRecentSection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_session_summary() == "Session about project planning"
 
@@ -943,7 +947,8 @@ class TestFlatBufferSerialization:
         populated_section.evict_partial(target_kb=1)
 
         data = populated_section.to_flatbuffer()
-        restored = HistoryRecentSection.from_flatbuffer(data)
+        restored = HistoryRecentSection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_total_turns_archived() == populated_section.get_total_turns_archived()
         assert restored.get_bytes_evicted_total() == populated_section.get_bytes_evicted_total()
@@ -1087,7 +1092,8 @@ class TestEdgeCases:
         section.add_compressed_turn(turn)
 
         data = section.to_flatbuffer()
-        restored = HistoryRecentSection.from_flatbuffer(data)
+        restored = HistoryRecentSection()
+        restored.from_flatbuffer(data)
 
         t = restored.get_compressed_turn("t1")
         assert t is not None
@@ -1107,7 +1113,8 @@ class TestEdgeCases:
         section.set_session_summary("Session avec données françaises")
 
         data = section.to_flatbuffer()
-        restored = HistoryRecentSection.from_flatbuffer(data)
+        restored = HistoryRecentSection()
+        restored.from_flatbuffer(data)
 
         t = restored.get_compressed_turn("t1")
         assert t is not None

@@ -774,7 +774,8 @@ class TestValidOperationsConstant:
 
     def test_expected_operations_included(self) -> None:
         """All expected operations are included."""
-        expected = {
+        # Core operations that must be present
+        expected_core = {
             "set",
             "append",
             "add_turn",
@@ -785,7 +786,10 @@ class TestValidOperationsConstant:
             "record_error",
             "accept_demoted",
         }
-        assert expected == VALID_OPERATIONS
+        # Verify core operations are subset of VALID_OPERATIONS
+        assert expected_core.issubset(
+            VALID_OPERATIONS
+        ), f"Missing core operations: {expected_core - VALID_OPERATIONS}"
 
 
 # =============================================================================

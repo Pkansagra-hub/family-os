@@ -102,6 +102,7 @@ class MutationResult:
         pressure: Current pressure level after mutation
         error: Error message if failed
         reason: Rejection reason if rejected
+        cognitive_trace_id: Trace ID for distributed tracing correlation
     """
 
     success: bool
@@ -113,6 +114,7 @@ class MutationResult:
     pressure: PressureLevel = PressureLevel.NORMAL
     error: Optional[str] = None
     reason: str = ""
+    cognitive_trace_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -126,6 +128,7 @@ class MutationResult:
             "pressure": self.pressure.value,
             "error": self.error,
             "reason": self.reason,
+            "cognitive_trace_id": self.cognitive_trace_id,
         }
 
     @classmethod
@@ -135,6 +138,7 @@ class MutationResult:
         operation: str,
         reason: str,
         available_bytes: int = 0,
+        cognitive_trace_id: str = "",
     ) -> MutationResult:
         """Create a rejection result."""
         return cls(
@@ -144,16 +148,24 @@ class MutationResult:
             reason=reason,
             available_bytes=available_bytes,
             error=reason,
+            cognitive_trace_id=cognitive_trace_id,
         )
 
     @classmethod
-    def failure(cls, section: str, operation: str, error: str) -> MutationResult:
+    def failure(
+        cls,
+        section: str,
+        operation: str,
+        error: str,
+        cognitive_trace_id: str = "",
+    ) -> MutationResult:
         """Create a failure result."""
         return cls(
             success=False,
             section=section,
             operation=operation,
             error=error,
+            cognitive_trace_id=cognitive_trace_id,
         )
 
 
@@ -253,6 +265,7 @@ class StartResult:
         restored: Whether session was restored from checkpoint
         restore_source: Source of restoration ('local_cold', 'k0', 'fresh')
         error: Error message if failed
+        cognitive_trace_id: Trace ID for distributed tracing correlation
     """
 
     success: bool
@@ -261,6 +274,7 @@ class StartResult:
     restored: bool = False
     restore_source: str = "fresh"
     error: Optional[str] = None
+    cognitive_trace_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -271,6 +285,7 @@ class StartResult:
             "restored": self.restored,
             "restore_source": self.restore_source,
             "error": self.error,
+            "cognitive_trace_id": self.cognitive_trace_id,
         }
 
 
@@ -284,12 +299,14 @@ class StopResult:
         checkpoint_id: ID of final checkpoint (if any)
         duration_ms: Time taken to stop
         error: Error message if failed
+        cognitive_trace_id: Trace ID for distributed tracing correlation
     """
 
     success: bool
     checkpoint_id: Optional[str] = None
     duration_ms: float = 0.0
     error: Optional[str] = None
+    cognitive_trace_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -298,6 +315,7 @@ class StopResult:
             "checkpoint_id": self.checkpoint_id,
             "duration_ms": round(self.duration_ms, 3),
             "error": self.error,
+            "cognitive_trace_id": self.cognitive_trace_id,
         }
 
 
@@ -313,6 +331,7 @@ class CheckpointResult:
         duration_ms: Time taken
         sla_met: Whether <50ms SLA was met
         error: Error message if failed
+        cognitive_trace_id: Trace ID for distributed tracing correlation
     """
 
     success: bool
@@ -321,6 +340,7 @@ class CheckpointResult:
     duration_ms: float = 0.0
     sla_met: bool = True
     error: Optional[str] = None
+    cognitive_trace_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -331,6 +351,7 @@ class CheckpointResult:
             "duration_ms": round(self.duration_ms, 3),
             "sla_met": self.sla_met,
             "error": self.error,
+            "cognitive_trace_id": self.cognitive_trace_id,
         }
 
 
@@ -348,6 +369,7 @@ class RestoreResult:
         duration_ms: Time taken
         sla_met: Whether SLA was met
         error: Error message if failed
+        cognitive_trace_id: Trace ID for distributed tracing correlation
     """
 
     success: bool
@@ -358,6 +380,7 @@ class RestoreResult:
     duration_ms: float = 0.0
     sla_met: bool = True
     error: Optional[str] = None
+    cognitive_trace_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -370,6 +393,7 @@ class RestoreResult:
             "duration_ms": round(self.duration_ms, 3),
             "sla_met": self.sla_met,
             "error": self.error,
+            "cognitive_trace_id": self.cognitive_trace_id,
         }
 
 
@@ -757,6 +781,7 @@ class SessionStateManager:
         operation: str,
         data: Any,
         estimated_bytes: Optional[int] = None,
+        cognitive_trace_id: Optional[str] = None,
     ) -> MutationResult:
         """
         Apply a mutation to a section.
@@ -770,6 +795,7 @@ class SessionStateManager:
             operation: Operation type ('set', 'append', 'update', 'clear', 'delete')
             data: Operation-specific data payload
             estimated_bytes: Optional size estimate (auto-calculated if None)
+            cognitive_trace_id: Trace ID for distributed tracing correlation
 
         Returns:
             MutationResult with success/failure and detailed info
@@ -784,6 +810,7 @@ class SessionStateManager:
             7. If CRITICAL: trigger EvictionEngine
             8. Emit MutationApprovedEvent
         """
+        trace_id = cognitive_trace_id or ""
         with self._write_lock:
             # Estimate bytes if not provided
             if estimated_bytes is None:
@@ -798,16 +825,18 @@ class SessionStateManager:
 
             if not approval.approved:
                 logger.info(
-                    "Mutation rejected: section=%s, op=%s, reason=%s",
+                    "Mutation rejected: section=%s, op=%s, reason=%s, trace_id=%s",
                     section,
                     operation,
                     approval.reason,
+                    trace_id,
                 )
                 return MutationResult.rejected(
                     section=section,
                     operation=operation,
                     reason=approval.reason,
                     available_bytes=approval.total_available_bytes,
+                    cognitive_trace_id=trace_id,
                 )
 
             # Step 2: Apply mutation
@@ -815,15 +844,17 @@ class SessionStateManager:
                 actual_bytes = self._apply_mutation(section, operation, data)
             except Exception as e:
                 logger.error(
-                    "Mutation failed: section=%s, op=%s, error=%s",
+                    "Mutation failed: section=%s, op=%s, error=%s, trace_id=%s",
                     section,
                     operation,
                     str(e),
+                    trace_id,
                 )
                 return MutationResult.failure(
                     section=section,
                     operation=operation,
                     error=str(e),
+                    cognitive_trace_id=trace_id,
                 )
 
             # Step 3: Update size tracking
@@ -847,11 +878,12 @@ class SessionStateManager:
             available = self._size_tracker.get_total_available_bytes()
 
             logger.debug(
-                "Mutation applied: section=%s, op=%s, delta=%d, new_size=%d",
+                "Mutation applied: section=%s, op=%s, delta=%d, new_size=%d, trace_id=%s",
                 section,
                 operation,
                 actual_bytes,
                 new_size,
+                trace_id,
             )
 
             return MutationResult(
@@ -862,6 +894,7 @@ class SessionStateManager:
                 new_size_bytes=new_size,
                 available_bytes=available,
                 pressure=pressure,
+                cognitive_trace_id=trace_id,
             )
 
     def _estimate_bytes(self, data: Any) -> int:
@@ -1042,7 +1075,11 @@ class SessionStateManager:
     # Checkpoint: Periodic snapshot to LOCAL COLD
     # Restore: Hydrate from LOCAL COLD (or K0 fallback)
 
-    def start(self, restore_if_exists: bool = True) -> StartResult:
+    def start(
+        self,
+        restore_if_exists: bool = True,
+        cognitive_trace_id: Optional[str] = None,
+    ) -> StartResult:
         """
         Start the SessionState lifecycle.
 
@@ -1054,10 +1091,12 @@ class SessionStateManager:
 
         Args:
             restore_if_exists: Whether to try restoring from checkpoint
+            cognitive_trace_id: Trace ID for distributed tracing correlation
 
         Returns:
             StartResult: Success/failure with timing info
         """
+        trace_id = cognitive_trace_id or ""
         start_time = time.time()
 
         if self._state not in (ManagerState.CREATED, ManagerState.STOPPED):
@@ -1065,6 +1104,7 @@ class SessionStateManager:
                 success=False,
                 session_id=self._session_id,
                 error=f"Cannot start from state: {self._state.value}",
+                cognitive_trace_id=trace_id,
             )
 
         self._state = ManagerState.STARTING
@@ -1075,7 +1115,10 @@ class SessionStateManager:
 
             # Try to restore if requested
             if restore_if_exists:
-                restore_result = self.restore(self._session_id)
+                restore_result = self.restore(
+                    self._session_id,
+                    cognitive_trace_id=trace_id,
+                )
                 if restore_result.success and restore_result.source != "fresh":
                     restore_source = restore_result.source
                     restored = True
@@ -1090,11 +1133,12 @@ class SessionStateManager:
             duration_ms = (time.time() - start_time) * 1000
 
             logger.info(
-                "SessionStateManager started (session=%s, restored=%s, source=%s, took=%.2fms)",
+                "SessionStateManager started (session=%s, restored=%s, source=%s, took=%.2fms, trace_id=%s)",
                 self._session_id[:8] if self._session_id else "none",
                 restored,
                 restore_source,
                 duration_ms,
+                trace_id,
             )
 
             return StartResult(
@@ -1103,20 +1147,30 @@ class SessionStateManager:
                 duration_ms=duration_ms,
                 restored=restored,
                 restore_source=restore_source,
+                cognitive_trace_id=trace_id,
             )
 
         except Exception as e:
             self._state = ManagerState.ERROR
             duration_ms = (time.time() - start_time) * 1000
-            logger.error("Failed to start SessionStateManager: %s", str(e))
+            logger.error(
+                "Failed to start SessionStateManager: %s, trace_id=%s",
+                str(e),
+                trace_id,
+            )
             return StartResult(
                 success=False,
                 session_id=self._session_id,
                 duration_ms=duration_ms,
                 error=str(e),
+                cognitive_trace_id=trace_id,
             )
 
-    def stop(self, checkpoint_before_stop: bool = True) -> StopResult:
+    def stop(
+        self,
+        checkpoint_before_stop: bool = True,
+        cognitive_trace_id: Optional[str] = None,
+    ) -> StopResult:
         """
         Stop the SessionState lifecycle gracefully.
 
@@ -1127,16 +1181,19 @@ class SessionStateManager:
 
         Args:
             checkpoint_before_stop: Whether to checkpoint before stopping
+            cognitive_trace_id: Trace ID for distributed tracing correlation
 
         Returns:
             StopResult: Success/failure with timing info
         """
+        trace_id = cognitive_trace_id or ""
         start_time = time.time()
 
         if self._state not in (ManagerState.RUNNING, ManagerState.STARTING):
             return StopResult(
                 success=False,
                 error=f"Cannot stop from state: {self._state.value}",
+                cognitive_trace_id=trace_id,
             )
 
         self._state = ManagerState.STOPPING
@@ -1146,7 +1203,7 @@ class SessionStateManager:
         try:
             # Final checkpoint
             if checkpoint_before_stop:
-                checkpoint_result = self.checkpoint()
+                checkpoint_result = self.checkpoint(cognitive_trace_id=trace_id)
                 if checkpoint_result.success:
                     checkpoint_id = checkpoint_result.checkpoint_id
 
@@ -1156,29 +1213,36 @@ class SessionStateManager:
             duration_ms = (time.time() - start_time) * 1000
 
             logger.info(
-                "SessionStateManager stopped (session=%s, checkpoint=%s, took=%.2fms)",
+                "SessionStateManager stopped (session=%s, checkpoint=%s, took=%.2fms, trace_id=%s)",
                 self._session_id[:8] if self._session_id else "none",
                 checkpoint_id or "none",
                 duration_ms,
+                trace_id,
             )
 
             return StopResult(
                 success=True,
                 checkpoint_id=checkpoint_id,
                 duration_ms=duration_ms,
+                cognitive_trace_id=trace_id,
             )
 
         except Exception as e:
             self._state = ManagerState.ERROR
             duration_ms = (time.time() - start_time) * 1000
-            logger.error("Failed to stop SessionStateManager: %s", str(e))
+            logger.error(
+                "Failed to stop SessionStateManager: %s, trace_id=%s",
+                str(e),
+                trace_id,
+            )
             return StopResult(
                 success=False,
                 duration_ms=duration_ms,
                 error=str(e),
+                cognitive_trace_id=trace_id,
             )
 
-    def checkpoint(self) -> CheckpointResult:
+    def checkpoint(self, cognitive_trace_id: Optional[str] = None) -> CheckpointResult:
         """
         Checkpoint current state to LOCAL COLD (K1 SQLite).
 
@@ -1186,9 +1250,12 @@ class SessionStateManager:
             Periodic durability snapshot for offline recovery.
 
         Actions:
-            1. Serialize all sections
+            1. Serialize all sections (FlatBuffer data + metadata)
             2. Write to K1 SQLite via LocalColdTier
             3. Optional: Queue sync to K0 via IK0SyncPort (non-blocking)
+
+        Args:
+            cognitive_trace_id: Trace ID for distributed tracing correlation
 
         Returns:
             CheckpointResult with success/failure and timing info
@@ -1196,15 +1263,47 @@ class SessionStateManager:
         SLA:
             - <50ms for LOCAL COLD write
         """
+        trace_id = cognitive_trace_id or ""
         start_time = time.time()
         checkpoint_id = str(uuid.uuid4())
 
         try:
-            # Collect snapshot data
+            # Collect snapshot metadata
             snapshot = self.get_snapshot()
 
-            # Serialize snapshot
-            checkpoint_data = json.dumps(snapshot.to_dict()).encode("utf-8")
+            # Serialize ACTUAL section data (FlatBuffers), not just metadata
+            section_data: Dict[str, str] = {}
+            import base64
+
+            # Serialize HOT sections
+            for section_name in HOT_SECTIONS:
+                try:
+                    section = self._hot.get_section(section_name)
+                    if section:
+                        fb_bytes = section.to_flatbuffer()
+                        section_data[section_name] = base64.b64encode(fb_bytes).decode("ascii")
+                except Exception as e:
+                    logger.warning("Failed to serialize HOT section %s: %s", section_name, e)
+
+            # Serialize WARM sections
+            for section_name in WARM_SECTIONS:
+                try:
+                    section = self._warm.get_section(section_name)
+                    if section:
+                        fb_bytes = section.to_flatbuffer()
+                        section_data[section_name] = base64.b64encode(fb_bytes).decode("ascii")
+                except Exception as e:
+                    logger.warning("Failed to serialize WARM section %s: %s", section_name, e)
+
+            # Build checkpoint with both metadata and section data
+            checkpoint_dict = {
+                "metadata": snapshot.to_dict(),
+                "section_data": section_data,
+                "version": 2,  # Version 2 includes section data
+            }
+
+            # Serialize checkpoint
+            checkpoint_data = json.dumps(checkpoint_dict).encode("utf-8")
             size_bytes = len(checkpoint_data)
 
             # Write to LOCAL COLD
@@ -1223,11 +1322,12 @@ class SessionStateManager:
 
             if archive_result.success:
                 logger.debug(
-                    "Checkpoint created: id=%s, size=%d, took=%.2fms, sla_met=%s",
+                    "Checkpoint created: id=%s, size=%d, took=%.2fms, sla_met=%s, trace_id=%s",
                     checkpoint_id[:8],
                     size_bytes,
                     duration_ms,
                     sla_met,
+                    trace_id,
                 )
                 return CheckpointResult(
                     success=True,
@@ -1235,6 +1335,7 @@ class SessionStateManager:
                     size_bytes=size_bytes,
                     duration_ms=duration_ms,
                     sla_met=sla_met,
+                    cognitive_trace_id=trace_id,
                 )
             else:
                 return CheckpointResult(
@@ -1242,19 +1343,25 @@ class SessionStateManager:
                     checkpoint_id=checkpoint_id,
                     duration_ms=duration_ms,
                     error=archive_result.error,
+                    cognitive_trace_id=trace_id,
                 )
 
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
-            logger.error("Checkpoint failed: %s", str(e))
+            logger.error("Checkpoint failed: %s, trace_id=%s", str(e), trace_id)
             return CheckpointResult(
                 success=False,
                 checkpoint_id=checkpoint_id,
                 duration_ms=duration_ms,
                 error=str(e),
+                cognitive_trace_id=trace_id,
             )
 
-    def restore(self, session_id: str) -> RestoreResult:
+    def restore(
+        self,
+        session_id: str,
+        cognitive_trace_id: Optional[str] = None,
+    ) -> RestoreResult:
         """
         Restore session from LOCAL COLD (or K0 fallback).
 
@@ -1269,6 +1376,7 @@ class SessionStateManager:
 
         Args:
             session_id: Session to restore
+            cognitive_trace_id: Trace ID for distributed tracing correlation
 
         Returns:
             RestoreResult with success/failure and timing info
@@ -1276,6 +1384,7 @@ class SessionStateManager:
         SLA:
             - <50ms from LOCAL COLD
         """
+        trace_id = cognitive_trace_id or ""
         start_time = time.time()
 
         try:
@@ -1293,10 +1402,11 @@ class SessionStateManager:
                 sla_met = duration_ms < 50.0
 
                 logger.info(
-                    "Session restored from local_cold: session=%s, sections=%d, took=%.2fms",
+                    "Session restored from local_cold: session=%s, sections=%d, took=%.2fms, trace_id=%s",
                     session_id[:8] if session_id else "none",
                     len(sections_restored),
                     duration_ms,
+                    trace_id,
                 )
 
                 return RestoreResult(
@@ -1307,14 +1417,16 @@ class SessionStateManager:
                     warm_restored=any(s in WARM_SECTIONS for s in sections_restored),
                     duration_ms=duration_ms,
                     sla_met=sla_met,
+                    cognitive_trace_id=trace_id,
                 )
 
             # No checkpoint found - start fresh
             duration_ms = (time.time() - start_time) * 1000
 
             logger.debug(
-                "No checkpoint found, starting fresh: session=%s",
+                "No checkpoint found, starting fresh: session=%s, trace_id=%s",
                 session_id[:8] if session_id else "none",
+                trace_id,
             )
 
             return RestoreResult(
@@ -1322,48 +1434,112 @@ class SessionStateManager:
                 source="fresh",
                 sections_restored=[],
                 duration_ms=duration_ms,
+                cognitive_trace_id=trace_id,
             )
 
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
-            logger.error("Restore failed: %s", str(e))
+            logger.error("Restore failed: %s, trace_id=%s", str(e), trace_id)
             return RestoreResult(
                 success=False,
                 source="fresh",
                 duration_ms=duration_ms,
                 error=str(e),
+                cognitive_trace_id=trace_id,
             )
 
     def _hydrate_from_checkpoint(self, checkpoint_data: Dict[str, Any]) -> List[str]:
         """
         Hydrate sections from checkpoint data.
 
+        Supports two checkpoint versions:
+            - Version 1 (legacy): Only size metadata, no section data
+            - Version 2: Full section data (FlatBuffer encoded, base64 wrapped)
+
         Returns list of sections that were restored.
         """
         sections_restored: List[str] = []
+        import base64
 
-        sections_data = checkpoint_data.get("sections", {})
+        # Check checkpoint version
+        version = checkpoint_data.get("version", 1)
 
-        # Hydrate HOT sections first
-        for section_name in HOT_SECTIONS:
-            if section_name in sections_data:
-                section_info = sections_data[section_name]
-                if section_info.get("size_bytes", 0) > 0:
-                    # Update size tracker
-                    self._size_tracker.set_section_size(
-                        section_name, section_info.get("size_bytes", 0)
-                    )
-                    sections_restored.append(section_name)
+        if version >= 2:
+            # Version 2: Full section data restoration
+            section_data = checkpoint_data.get("section_data", {})
+            metadata = checkpoint_data.get("metadata", {})
+            sections_metadata = metadata.get("sections", {})
 
-        # Then WARM sections
-        for section_name in WARM_SECTIONS:
-            if section_name in sections_data:
-                section_info = sections_data[section_name]
-                if section_info.get("size_bytes", 0) > 0:
-                    # Update size tracker
-                    self._size_tracker.set_section_size(
-                        section_name, section_info.get("size_bytes", 0)
-                    )
-                    sections_restored.append(section_name)
+            # Hydrate HOT sections first
+            for section_name in HOT_SECTIONS:
+                if section_name in section_data:
+                    try:
+                        # Decode FlatBuffer data
+                        fb_bytes = base64.b64decode(section_data[section_name])
+
+                        # Get section and restore data
+                        section = self._hot.get_section(section_name)
+                        if section:
+                            section.from_flatbuffer(fb_bytes)
+
+                            # Update size tracker with actual size
+                            actual_size = section.get_size_bytes()
+                            self._size_tracker.set_section_size(section_name, actual_size)
+                            sections_restored.append(section_name)
+
+                            logger.debug(
+                                "Restored HOT section %s: %d bytes",
+                                section_name,
+                                actual_size,
+                            )
+                    except Exception as e:
+                        logger.warning("Failed to restore HOT section %s: %s", section_name, e)
+
+            # Then WARM sections
+            for section_name in WARM_SECTIONS:
+                if section_name in section_data:
+                    try:
+                        # Decode FlatBuffer data
+                        fb_bytes = base64.b64decode(section_data[section_name])
+
+                        # Get section and restore data
+                        section = self._warm.get_section(section_name)
+                        if section:
+                            section.from_flatbuffer(fb_bytes)
+
+                            # Update size tracker with actual size
+                            actual_size = section.get_size_bytes()
+                            self._size_tracker.set_section_size(section_name, actual_size)
+                            sections_restored.append(section_name)
+
+                            logger.debug(
+                                "Restored WARM section %s: %d bytes",
+                                section_name,
+                                actual_size,
+                            )
+                    except Exception as e:
+                        logger.warning("Failed to restore WARM section %s: %s", section_name, e)
+
+        else:
+            # Version 1 (legacy): Only update size tracker from metadata
+            sections_data = checkpoint_data.get("sections", {})
+
+            for section_name in HOT_SECTIONS:
+                if section_name in sections_data:
+                    section_info = sections_data[section_name]
+                    if section_info.get("size_bytes", 0) > 0:
+                        self._size_tracker.set_section_size(
+                            section_name, section_info.get("size_bytes", 0)
+                        )
+                        sections_restored.append(section_name)
+
+            for section_name in WARM_SECTIONS:
+                if section_name in sections_data:
+                    section_info = sections_data[section_name]
+                    if section_info.get("size_bytes", 0) > 0:
+                        self._size_tracker.set_section_size(
+                            section_name, section_info.get("size_bytes", 0)
+                        )
+                        sections_restored.append(section_name)
 
         return sections_restored

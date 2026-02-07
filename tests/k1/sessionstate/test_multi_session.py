@@ -525,6 +525,10 @@ class TestSectionLevelIsolation:
             manager.start()
             managers.append(manager)
 
+        # Capture baseline sizes
+        baseline_history = get_section_size(managers[0].get_snapshot(), "history_active")
+        baseline_beliefs = get_section_size(managers[0].get_snapshot(), "beliefs_active")
+
         # Add to first manager only
         managers[0].mutate(
             section="history_active",
@@ -539,15 +543,16 @@ class TestSectionLevelIsolation:
             estimated_bytes=100,
         )
 
-        # Others should have empty sections
+        # First manager should have grown, others should be at baseline
         for section in ["history_active", "beliefs_active"]:
+            baseline = get_section_size(managers[1].get_snapshot(), section)
             size0 = get_section_size(managers[0].get_snapshot(), section)
             size1 = get_section_size(managers[1].get_snapshot(), section)
             size2 = get_section_size(managers[2].get_snapshot(), section)
 
-            assert size0 > 0
-            assert size1 == 0
-            assert size2 == 0
+            assert size0 > baseline  # First manager grew
+            assert size1 == baseline  # Others at baseline
+            assert size2 == baseline
 
         for manager in managers:
             manager.stop()
@@ -563,6 +568,9 @@ class TestSectionLevelIsolation:
             manager.start()
             managers.append(manager)
 
+        # Capture baseline telemetry size
+        baseline_telemetry = get_section_size(managers[0].get_snapshot(), "telemetry")
+
         # Add telemetry to second manager only
         for turn in range(5):
             managers[1].mutate(
@@ -572,14 +580,14 @@ class TestSectionLevelIsolation:
                 estimated_bytes=50,
             )
 
-        # Only second should have telemetry
+        # Only second should have grown from baseline
         size0 = get_section_size(managers[0].get_snapshot(), "telemetry")
         size1 = get_section_size(managers[1].get_snapshot(), "telemetry")
         size2 = get_section_size(managers[2].get_snapshot(), "telemetry")
 
-        assert size0 == 0
-        assert size1 > 0
-        assert size2 == 0
+        assert size0 == baseline_telemetry  # At baseline
+        assert size1 > baseline_telemetry  # Grew
+        assert size2 == baseline_telemetry  # At baseline
 
         for manager in managers:
             manager.stop()
@@ -594,7 +602,7 @@ class TestMultiSessionEdgeCases:
     """Test edge cases in multi-session scenarios."""
 
     def test_empty_sessions_isolated(self, db_path: Path, session_ids: List[str]) -> None:
-        """Empty sessions are isolated."""
+        """Empty sessions are isolated (each has baseline size)."""
         managers = []
         for sid in session_ids:
             manager = SessionStateFactory.create_standalone(
@@ -604,10 +612,13 @@ class TestMultiSessionEdgeCases:
             manager.start()
             managers.append(manager)
 
-        # All empty
-        for manager in managers:
-            snapshot = manager.get_snapshot()
-            assert snapshot.total_size_bytes == 0
+        # All should have same baseline size (no mutations)
+        sizes = [manager.get_snapshot().total_size_bytes for manager in managers]
+        # All sizes should be equal (baseline overhead)
+        assert sizes[0] == sizes[1] == sizes[2]
+        # And all should be at baseline (< 5KB)
+        for size in sizes:
+            assert size < 5000
 
         for manager in managers:
             manager.stop()

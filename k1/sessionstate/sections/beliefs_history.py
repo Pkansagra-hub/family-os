@@ -1033,34 +1033,33 @@ class BeliefsHistorySection:
         self._fb_cache = bytes(builder.Output())
         return self._fb_cache
 
-    @classmethod
-    def from_flatbuffer(cls, data: bytes) -> "BeliefsHistorySection":
+    def from_flatbuffer(self, data: bytes) -> None:
         """
-        Deserialize from FlatBuffer bytes.
+        Deserialize from FlatBuffer bytes (in-place mutation).
 
         Args:
             data: FlatBuffer bytes
-
-        Returns:
-            BeliefsHistorySection: Restored section
         """
         fb = FBBeliefsHistorySection.GetRootAsBeliefsHistorySection(data, 0)
 
-        section = cls(
-            max_facts=fb.MaxFacts(),
-            eviction_threshold=fb.EvictionThreshold(),
-        )
-
-        section._oldest_turn = fb.OldestTurn()
-        section._newest_turn = fb.NewestTurn()
-        section._archived_count = fb.ArchivedCount()
-        section._current_turn = section._newest_turn
+        # Restore config
+        self._max_facts = fb.MaxFacts()
+        self._eviction_threshold = fb.EvictionThreshold()
+        self._oldest_turn = fb.OldestTurn()
+        self._newest_turn = fb.NewestTurn()
+        self._archived_count = fb.ArchivedCount()
+        self._current_turn = self._newest_turn
 
         archive_ptr = fb.ArchivePointer()
         if archive_ptr:
-            section._archive_pointer = (
+            self._archive_pointer = (
                 archive_ptr.decode("utf-8") if isinstance(archive_ptr, bytes) else archive_ptr
             )
+
+        # Clear existing data
+        self._facts.clear()
+        self._index.clear()
+        self._entity_index.clear()
 
         # Restore facts
         for i in range(fb.FactsLength()):
@@ -1088,8 +1087,8 @@ class BeliefsHistorySection:
                 is_stale=archived_fb.IsStale(),
             )
 
-            section._facts.append(archived)
-            section._index[fact.id] = len(section._facts) - 1
+            self._facts.append(archived)
+            self._index[fact.id] = len(self._facts) - 1
 
         # Restore entity index
         for i in range(fb.EntityIndexLength()):
@@ -1098,13 +1097,14 @@ class BeliefsHistorySection:
 
             indices = [entity_fb.FactIndices(j) for j in range(entity_fb.FactIndicesLength())]
 
-            section._entity_index[entity_id] = EntityFactIndex(
+            self._entity_index[entity_id] = EntityFactIndex(
                 entity_id=entity_id,
                 fact_indices=indices,
                 last_updated_turn=entity_fb.LastUpdatedTurn(),
             )
 
-        return section
+        # Invalidate cache
+        self._fb_cache = None
 
     # =========================================================================
     # Apply Operations (MutationGuard Pattern)

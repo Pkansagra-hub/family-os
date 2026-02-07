@@ -938,44 +938,39 @@ class PersonaSection:
         self._fb_cache = bytes(builder.Output())
         return self._fb_cache
 
-    @classmethod
-    def from_flatbuffer(cls, data: bytes) -> "PersonaSection":
+    def from_flatbuffer(self, data: bytes) -> None:
         """
-        Deserialize from FlatBuffer bytes.
+        Deserialize from FlatBuffer bytes (in-place mutation).
 
         Args:
             data: FlatBuffer bytes
-
-        Returns:
-            PersonaSection: Restored section
         """
         fb = FBPersonaSection.GetRootAsPersonaSection(data, 0)
 
-        section = cls()
-
         # Restore metadata
-        section._is_personalized = fb.IsPersonalized()
-        section._last_calibrated_turn = fb.LastCalibratedTurn()
-        section._calibration_confidence = fb.CalibrationConfidence()
-        section._interaction_style = InteractionStyle(fb.InteractionStyle())
+        self._is_personalized = fb.IsPersonalized()
+        self._last_calibrated_turn = fb.LastCalibratedTurn()
+        self._calibration_confidence = fb.CalibrationConfidence()
+        self._interaction_style = InteractionStyle(fb.InteractionStyle())
 
         # Restore personality
         personality = fb.Personality()
         if personality:
-            section._personality.warmth = personality.Warmth()
-            section._personality.formality = personality.Formality()
-            section._personality.verbosity = personality.Verbosity()
-            section._personality.humor = personality.Humor()
-            section._personality.directness = personality.Directness()
+            self._personality.warmth = personality.Warmth()
+            self._personality.formality = personality.Formality()
+            self._personality.verbosity = personality.Verbosity()
+            self._personality.humor = personality.Humor()
+            self._personality.directness = personality.Directness()
 
             profile_type = personality.ProfileType()
             if profile_type:
-                section._personality.profile_type = (
+                self._personality.profile_type = (
                     profile_type.decode("utf-8")
                     if isinstance(profile_type, bytes)
                     else str(profile_type)
                 )
 
+            self._personality.traits.clear()
             for i in range(personality.TraitsLength()):
                 trait = personality.Traits(i)
                 if trait:
@@ -985,36 +980,37 @@ class PersonaSection:
                         if isinstance(name_raw, bytes)
                         else str(name_raw) if name_raw else ""
                     )
-                    section._personality.traits.append(
+                    self._personality.traits.append(
                         PersonalityTrait(name=name, value=trait.Value())
                     )
 
         # Restore voice
         voice = fb.Voice()
         if voice:
-            section._voice.speaking_rate = voice.SpeakingRate()
-            section._voice.pitch = voice.Pitch()
-            section._voice.volume = voice.Volume()
+            self._voice.speaking_rate = voice.SpeakingRate()
+            self._voice.pitch = voice.Pitch()
+            self._voice.volume = voice.Volume()
 
             voice_id = voice.VoiceId()
             if voice_id:
-                section._voice.voice_id = (
+                self._voice.voice_id = (
                     voice_id.decode("utf-8") if isinstance(voice_id, bytes) else str(voice_id)
                 )
 
             language = voice.Language()
             if language:
-                section._voice.language = (
+                self._voice.language = (
                     language.decode("utf-8") if isinstance(language, bytes) else str(language)
                 )
 
             accent = voice.Accent()
             if accent:
-                section._voice.accent = (
+                self._voice.accent = (
                     accent.decode("utf-8") if isinstance(accent, bytes) else str(accent)
                 )
 
         # Restore vocabulary
+        self._vocabulary.clear()
         for i in range(fb.VocabularyLength()):
             entry = fb.Vocabulary(i)
             if entry:
@@ -1041,7 +1037,7 @@ class PersonaSection:
                         else str(context_raw)
                     )
 
-                section._vocabulary.append(
+                self._vocabulary.append(
                     VocabularyEntry(
                         user_term=user_term,
                         system_term=system_term,
@@ -1052,14 +1048,15 @@ class PersonaSection:
         # Restore response preferences
         prefs = fb.ResponsePrefs()
         if prefs:
-            section._response_prefs.style = InteractionStyle(prefs.Style())
-            section._response_prefs.max_response_length = prefs.MaxResponseLength()
-            section._response_prefs.use_bullet_points = prefs.UseBulletPoints()
-            section._response_prefs.use_headers = prefs.UseHeaders()
-            section._response_prefs.include_examples = prefs.IncludeExamples()
-            section._response_prefs.explain_reasoning = prefs.ExplainReasoning()
+            self._response_prefs.style = InteractionStyle(prefs.Style())
+            self._response_prefs.max_response_length = prefs.MaxResponseLength()
+            self._response_prefs.use_bullet_points = prefs.UseBulletPoints()
+            self._response_prefs.use_headers = prefs.UseHeaders()
+            self._response_prefs.include_examples = prefs.IncludeExamples()
+            self._response_prefs.explain_reasoning = prefs.ExplainReasoning()
 
-        return section
+        # Invalidate cache
+        self._fb_cache = None
 
     # =========================================================================
     # Apply Operations (MutationGuard Pattern)

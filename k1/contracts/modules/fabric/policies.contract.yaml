@@ -1,0 +1,152 @@
+$schema: "k1://schemas/module/policies.contract.schema.yaml"
+
+metadata:
+  module_id: "fabric"
+  owner: "platform-team"
+  band: "GREEN"
+
+contract_version: 1
+impl_version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# Capabilities granted to Fabric at runtime
+# ---------------------------------------------------------------------------
+capabilities:
+  granted:
+    - "fabric:execute:v1"
+    - "fabric:retrieve:v1"
+    - "fabric:register:v1"
+    - "fabric:resolve:v1"
+    - "fabric:health:v1"
+    - "session:read:v1"
+    - "bus:publish:v1"
+    - "bridge:execute:v1"
+    - "model-gateway:call:v1"
+    - "prompt-system:resolve:v1"
+    - "delta-bus:publish:v1"
+    - "scheduler:submit:v1"
+
+# ---------------------------------------------------------------------------
+# Performance and cost budgets
+# Derived from Section 22 performance targets and FAB-003 WFQ scheduler
+# ---------------------------------------------------------------------------
+budgets:
+  # Full Fabric orchestration overhead: <100ms target, 500ms hard max (Section 22)
+  latency_ms_p95: 100
+  # Cost per session (Fabric layer only, excludes provider costs)
+  cost_usd_per_session_max: 0.05
+  # Context builder token budget (FAB invariant FAB-08)
+  kv_cache_mb_max: 2.0
+  # Additional Fabric-specific budgets
+  extensions:
+    # Registry lookup latency target (Section 22): <1ms target, 5ms max
+    registry_lookup_ms_p95: 1
+    registry_lookup_ms_max: 5
+    # Retrieval latency target (Section 22): <20ms target, 50ms max for 10K corpus
+    retrieval_10k_ms_p95: 20
+    retrieval_10k_ms_max: 50
+    # Retrieval latency target (Section 22): <50ms target, 100ms max for 100K corpus
+    retrieval_100k_ms_p95: 50
+    retrieval_100k_ms_max: 100
+    # Provider resolution target (Section 22): <5ms target, 10ms max
+    provider_resolution_ms_p95: 5
+    provider_resolution_ms_max: 10
+    # Context build target (Section 22): <10ms target, 50ms max simple context
+    context_build_simple_ms_p95: 10
+    context_build_simple_ms_max: 50
+    # Context build target (Section 22): <50ms target, 200ms max full context
+    context_build_full_ms_p95: 50
+    context_build_full_ms_max: 200
+    # Max concurrent sessions sharing Fabric
+    max_concurrent_sessions: 50
+    # Per-provider execution timeouts (Section 22)
+    provider_timeout_mcp_local_s: 10
+    provider_timeout_mcp_remote_s: 15
+    provider_timeout_wasm_s: 5
+    provider_timeout_bridge_s: 10
+    provider_timeout_agent_s: 30
+    provider_timeout_workflow_s: 60
+    # Context token budget hard limit
+    context_token_budget_max: 128000
+    # WFQ scheduler queue depth (FAB-009)
+    wfq_queue_depth_max: 256
+    # Agent pool size limits (FAB-006)
+    agent_pool_max_warm: 10
+    agent_pool_max_active: 50
+
+# ---------------------------------------------------------------------------
+# Circuit breaker policies (Section 19)
+# ---------------------------------------------------------------------------
+circuit_breaker:
+  global:
+    timeout_s: 30
+    failure_threshold_per_min: 5
+    window_s: 60
+    half_open_timeout_s: 30
+    retry_strategy: "exponential_backoff"
+    retry_base_s: 1
+    retry_max_s: 30
+    retry_jitter: true
+  per_provider:
+    mcp:
+      threshold_per_min: 3
+    wasm:
+      threshold_per_min: 5
+    bridge:
+      threshold_per_min: 3
+    agent:
+      threshold_per_min: 2
+    workflow:
+      threshold_per_min: 1
+    concierge:
+      threshold_per_min: 3
+
+# ---------------------------------------------------------------------------
+# Egress rules
+# ---------------------------------------------------------------------------
+egress:
+  network:
+    # MCP remote providers may need external network access
+    allowed_domains:
+      - "localhost"
+      - "127.0.0.1"
+      - "*.internal"
+    allowed_ports: [8080, 8443, 9090]
+    max_connections_per_provider: 5
+  filesystem:
+    # WASM providers may read from sandboxed paths only
+    allowed_read_paths:
+      - "k1/fabric/providers/wasm/sandbox/"
+    allowed_write_paths: []
+
+# ---------------------------------------------------------------------------
+# Safety band enforcement (from Section 3: Three Roles)
+# ---------------------------------------------------------------------------
+safety:
+  # Fabric MUST enforce safety bands before execution
+  band_enforcement: "mandatory"
+  # RED band capabilities require explicit approval (HITL)
+  red_band_requires_approval: true
+  # Capabilities with no band classification are rejected
+  unclassified_default: "deny"
+
+# ---------------------------------------------------------------------------
+# Audit and observability
+# ---------------------------------------------------------------------------
+audit:
+  emit_receipts: true
+  receipt_topic: "k1.fabric.audit.v1"
+  # Every event must carry a cognitive_trace_id (invariant FAB-09)
+  require_trace_id: true
+  trace_id_field: "cognitive_trace_id"
+  # Log retention for fabric audit events
+  retention_days: 90
+  # Structured fields required in every audit receipt
+  required_fields:
+    - "cognitive_trace_id"
+    - "session_id"
+    - "capability_name"
+    - "provider_type"
+    - "latency_ms"
+    - "status"
+    - "timestamp_utc"

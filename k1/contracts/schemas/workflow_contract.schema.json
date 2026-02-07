@@ -1,0 +1,185 @@
+{
+  "$id": "workflow_contract.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Workflow Contract Schema",
+  "description": "JSON Schema for validating workflow contracts. Workflows are frozen CommittedPlans saved for repeated execution (cron, event trigger, or manual).",
+  "type": "object",
+  "required": ["workflow_contract"],
+  "additionalProperties": false,
+  "properties": {
+    "workflow_contract": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "domain",
+        "description",
+        "source_plan_id",
+        "trigger",
+        "steps",
+        "safety_band_min"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^workflow\\.run\\.[a-z][a-z0-9_]+$",
+          "description": "Canonical capability name. Must follow convention: workflow.run.<name>"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Semantic version (major.minor.patch)"
+        },
+        "domain": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Domain tags for retrieval ranking"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "description": "Human-readable description of the workflow"
+        },
+        "source_plan_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUID of the original CommittedPlan this workflow was compiled from"
+        },
+        "trigger": {
+          "$ref": "#/definitions/trigger_spec",
+          "description": "How and when this workflow is triggered"
+        },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/plan_step" },
+          "minItems": 1,
+          "description": "Ordered list of execution steps (frozen from CommittedPlan)"
+        },
+        "dependencies": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "description": "DAG dependency map: step_id -> [dependency_step_ids]. Must be acyclic."
+        },
+        "max_depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 3,
+          "description": "Maximum workflow nesting depth (prevents infinite recursion)"
+        },
+        "allows_sub_workflows": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether steps in this workflow may trigger sub-workflows"
+        },
+        "safety_band_min": {
+          "type": "string",
+          "enum": ["GREEN", "AMBER", "RED", "CRISIS"],
+          "description": "Minimum safety band required to execute this workflow"
+        },
+        "avg_latency_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Average total workflow execution time in milliseconds"
+        },
+        "active": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether this workflow is currently active and eligible for triggering"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of workflow creation"
+        },
+        "last_run": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of last execution"
+        },
+        "run_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of times this workflow has been executed"
+        },
+        "success_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Historical success rate (0.0 to 1.0)"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "trigger_spec": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["cron", "event", "manual"],
+          "description": "Trigger type: cron (scheduled), event (reactive), manual (user-initiated)"
+        },
+        "schedule": {
+          "type": "string",
+          "description": "Cron expression (required when type=cron, e.g. '0 8 * * MON')"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone for cron schedule (e.g. America/Los_Angeles)"
+        },
+        "event_topic": {
+          "type": "string",
+          "description": "Event topic that triggers this workflow (required when type=event)"
+        }
+      }
+    },
+    "plan_step": {
+      "type": "object",
+      "required": ["id", "capability"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Step identifier (unique within the workflow, e.g. s1, s2)"
+        },
+        "capability": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Capability name to invoke (e.g. tool.read.health_metrics)"
+        },
+        "prompt_template": {
+          "type": "string",
+          "description": "Prompt template to use for this step (if step invokes an agent)"
+        },
+        "params": {
+          "type": "object",
+          "description": "Parameters to pass to the capability. Values starting with $ reference other step results (e.g. $s1.result)"
+        },
+        "tools_granted": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tools granted to this step (if agent step)"
+        },
+        "deps": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Step IDs this step depends on (must complete before this step runs)"
+        }
+      }
+    }
+  }
+}

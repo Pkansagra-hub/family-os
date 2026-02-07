@@ -809,7 +809,8 @@ class TestFlatBufferSerialization:
         section.accept_demoted([sample_fact_dict], turn=5)
 
         data = section.to_flatbuffer()
-        restored = BeliefsHistorySection.from_flatbuffer(data)
+        restored = BeliefsHistorySection()
+        restored.from_flatbuffer(data)
 
         assert restored.count() == 1
         fact = restored.get_without_access("fact-001")
@@ -826,7 +827,8 @@ class TestFlatBufferSerialization:
         section.set_archive_pointer("k0://test")
 
         data = section.to_flatbuffer()
-        restored = BeliefsHistorySection.from_flatbuffer(data)
+        restored = BeliefsHistorySection()
+        restored.from_flatbuffer(data)
 
         assert restored.get_archived_count() == 5
         assert restored.get_archive_pointer() == "k0://test"
@@ -839,7 +841,8 @@ class TestFlatBufferSerialization:
         section.advance_turn(15)
 
         data = section.to_flatbuffer()
-        restored = BeliefsHistorySection.from_flatbuffer(data)
+        restored = BeliefsHistorySection()
+        restored.from_flatbuffer(data)
 
         assert restored.count() == section.count()
         for fact in section.list_facts():

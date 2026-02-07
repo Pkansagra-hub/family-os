@@ -213,12 +213,12 @@ class HistoryActiveSection:
         data = section.to_flatbuffer()
     """
 
-    BUDGET_BYTES = 8192  # 8KB
+    BUDGET_BYTES = 16384  # 16KB (increased for longer context)
     TIER = "hot"
     CAN_EVICT = False  # Section stays, items demote
     SECTION_NAME = "history_active"
     SCHEMA_VERSION = "1.0.0"
-    MAX_TURNS = 10  # Per schema budget notes
+    MAX_TURNS = 25  # Increased from 10 to support longer conversations
 
     def __init__(
         self,
