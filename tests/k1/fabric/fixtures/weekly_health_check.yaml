@@ -1,0 +1,35 @@
+# Sample workflow contract: weekly_health_check (HEALTH domain, cron trigger)
+# Valid against workflow_contract.schema.json
+# 2-step DAG: weather lookup -> health summary
+
+workflow_contract:
+  name: "workflow.run.weekly_health_check"
+  version: "1.0.0"
+  domain:
+    - "HEALTH"
+    - "WELLNESS"
+  description: "Weekly automated health metrics collection and summary generation"
+  source_plan_id: "plan-health-check-001"
+  trigger:
+    type: "cron"
+    schedule: "0 8 * * MON"
+    timezone: "America/Los_Angeles"
+  steps:
+    - id: "s1"
+      capability: "tool.read.weather_api"
+      params:
+        location: "San Francisco"
+    - id: "s2"
+      capability: "agent.execute.health_summarizer"
+      params:
+        time_range: "7d"
+      deps:
+        - "s1"
+  dependencies:
+    s2:
+      - "s1"
+  max_depth: 3
+  allows_sub_workflows: true
+  safety_band_min: "GREEN"
+  avg_latency_ms: 8000
+  active: true

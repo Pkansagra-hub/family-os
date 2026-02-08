@@ -22,30 +22,25 @@ Test architecture:
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import pytest
 
 from k1.fabric.providers.agent_provider import (
+    _VALID_TRANSITIONS,
     IDLE_TTL_S,
     Agent,
-    AgentExecutionError,
     AgentFactory,
     AgentFactoryConfig,
     AgentLifecycleError,
-    AgentNotImplementedError,
     AgentProvider,
     AgentProviderError,
     AgentResult,
-    AgentSpawnError,
-    IAgentFactory,
     IAgentMailbox,
     IDeltaBusPort,
     ILLMHandle,
     IModelGatewayPort,
     ISessionStateReader,
-    _VALID_TRANSITIONS,
 )
 from k1.fabric.types import (
     AgentContract,
@@ -55,7 +50,6 @@ from k1.fabric.types import (
     ExecutionContext,
     ProviderConfig,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fake implementations of port protocols
@@ -1092,10 +1086,10 @@ class TestModuleExports:
     """Verify providers __init__.py exports."""
 
     def test_all_count(self) -> None:
-        """__all__ has 68 symbols (58 prior + 10 new from 4.3.1/4.3.2)."""
+        """__all__ has 75 symbols (68 prior + 7 new from 4.3.3/4.3.4)."""
         import k1.fabric.providers as pkg
 
-        assert len(pkg.__all__) == 68
+        assert len(pkg.__all__) == 78
 
     def test_new_exports_importable(self) -> None:
         """All 10 new exports from 4.3.1/4.3.2 are importable."""

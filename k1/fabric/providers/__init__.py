@@ -78,14 +78,17 @@ Exports:
   ConciergeStateNotFoundError -- Unknown FSM state
   ConciergeHandlerError      -- State handler failed
 
-  # Agent Provider (3.3.7 -- stub)
-  AgentProvider              -- Agent execution provider (stub)
+  # Agent Provider (4.3.5 -- full)
+  AgentProvider              -- Agent execution provider (full)
   IAgentFactory              -- Agent factory port
   AgentResult                -- Agent execution result
   AgentProviderError         -- Base agent exception
-  AgentNotImplementedError   -- M3 stub error
-  AgentSpawnError            -- Agent instantiation failed (M4)
-  AgentExecutionError        -- Agent execution failed (M4)
+  AgentNotImplementedError   -- M3 stub error (backward compat)
+  AgentSpawnError            -- Agent instantiation failed
+  AgentExecutionError        -- Agent execution failed
+  AgentTemplateNotFoundError -- Agent template/contract not found (4.3.5)
+  AgentTimeoutError          -- Agent execution timeout (4.3.5)
+  DEFAULT_AGENT_TIMEOUT_MS   -- Default agent timeout (30s) (4.3.5)
 
   # Agent + AgentFactory (4.3.1, 4.3.2)
   Agent                      -- Agent instance with lifecycle FSM
@@ -98,20 +101,41 @@ Exports:
   IAgentMailbox              -- Agent mailbox port (4.4)
   ISessionStateReader        -- SessionState reader port (5.1.1)
   IDLE_TTL_S                 -- Default idle timeout (60s)
+
+  # Agent Pool (4.3.3)
+  AgentPool                  -- IDLE pool for agent reuse
+  AgentPoolConfig            -- Pool configuration
+  AgentPoolFullError         -- Pool at capacity
+
+  # Delta emission (4.3.4)
+  AgentDelta                 -- Structured delta payload
+  DeltaEmitter               -- Batched delta emission
+  DELTA_TOPIC_PATTERN        -- Topic pattern for delta bus
+  DELTA_BATCH_WINDOW_MS      -- Batch window in ms
 """
 
 from k1.fabric.providers.agent_provider import (
+    DEFAULT_AGENT_TIMEOUT_MS,
+    DELTA_BATCH_WINDOW_MS,
+    DELTA_TOPIC_PATTERN,
     IDLE_TTL_S,
     Agent,
+    AgentDelta,
     AgentExecutionError,
     AgentFactory,
     AgentFactoryConfig,
     AgentLifecycleError,
     AgentNotImplementedError,
+    AgentPool,
+    AgentPoolConfig,
+    AgentPoolFullError,
     AgentProvider,
     AgentProviderError,
     AgentResult,
     AgentSpawnError,
+    AgentTemplateNotFoundError,
+    AgentTimeoutError,
+    DeltaEmitter,
     IAgentFactory,
     IAgentMailbox,
     IDeltaBusPort,
@@ -241,7 +265,7 @@ __all__ = [
     "ConciergeProviderError",
     "ConciergeStateNotFoundError",
     "ConciergeHandlerError",
-    # Agent Provider (3.3.7 -- stub)
+    # Agent Provider (4.3.5 -- full)
     "AgentProvider",
     "IAgentFactory",
     "AgentResult",
@@ -249,6 +273,9 @@ __all__ = [
     "AgentNotImplementedError",
     "AgentSpawnError",
     "AgentExecutionError",
+    "AgentTemplateNotFoundError",
+    "AgentTimeoutError",
+    "DEFAULT_AGENT_TIMEOUT_MS",
     # Agent + AgentFactory (4.3.1, 4.3.2)
     "Agent",
     "AgentFactory",
@@ -260,4 +287,13 @@ __all__ = [
     "IAgentMailbox",
     "ISessionStateReader",
     "IDLE_TTL_S",
+    # Agent Pool (4.3.3)
+    "AgentPool",
+    "AgentPoolConfig",
+    "AgentPoolFullError",
+    # Delta emission (4.3.4)
+    "AgentDelta",
+    "DeltaEmitter",
+    "DELTA_TOPIC_PATTERN",
+    "DELTA_BATCH_WINDOW_MS",
 ]

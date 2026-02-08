@@ -1,0 +1,42 @@
+# Sample prompt contract: invitation_drafter_v1 (SOCIAL domain)
+# Valid against prompt_contract.schema.json
+# Used by: ContextBuilder tests, Prompt resolution tests
+
+prompt_contract:
+  name: "invitation_drafter_v1"
+  version: "1.0.0"
+  domain:
+    - "SOCIAL"
+    - "COMMUNICATION"
+  description: "Draft personalized event invitations with appropriate tone and detail"
+  intent_match:
+    - "send invitation"
+    - "invite guests"
+    - "plan event"
+  variables:
+    - name: "event_name"
+      type: "STRING"
+      required: true
+      description: "Name of the event"
+    - name: "guest_names"
+      type: "ARRAY"
+      required: true
+      description: "List of guest names"
+    - name: "event_date"
+      type: "DATE"
+      required: true
+      description: "Date of the event"
+    - name: "tone"
+      type: "STRING"
+      required: false
+      default: "casual"
+      description: "Message tone"
+    - name: "venue"
+      type: "STRING"
+      required: false
+      description: "Event venue name"
+  template_file: "k1/prompts/agents/invitation_drafter_v1.txt"
+  max_tokens: 2048
+  output_format: "TEXT"
+  compatible_agents:
+    - "agent.execute.invitation_sender"

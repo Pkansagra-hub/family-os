@@ -108,7 +108,7 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
     end
 
     subgraph PARAM_RESOLUTION["Parameter Resolution"]
-      PARAM_RESOLVER["Parameter Reference Resolver<br/>Resolves $step_id.result.path at execution time<br/>e.g. $s3.result.contacts, $s1.result.venue<br/>Referenced step guaranteed complete by DAG order"]:::engine
+      PARAM_RESOLVER["Parameter Reference Resolver<br/>Resolves $step_id.result.path at execution time<br/>e.g. $s3.result.contacts, $s1.result.venue<br/>Referenced step guaranteed complete by DAG order<br/>---<br/>META-AGENT CREATION (4.5.9):<br/>Also resolves CAPABILITY NAMES from prior results:<br/>  capability: $step_1.result.agent_name<br/>  -> resolves to dynamically created agent name<br/>Required for build_agent -> execute created agent flow<br/>Pattern: build_agent returns {agent_name: agent.execute.X}<br/>  next step references $step_1.result.agent_name<br/>  ParamResolver substitutes before Fabric.execute()"]:::engine
     end
 
     subgraph RETRY_FAILURE["Retry & Failure Handling"]
@@ -397,6 +397,8 @@ subgraph TOUCHPOINTS["External Touchpoints (Orchestrator Interfaces)"]
     FABRIC_REGISTRY["Fabric Capability Registry<br/>Agent/Tool/Workflow/Prompt index<br/>100K+ items at scale<br/>query(name) -> RegistryEntry | None<br/>Used by ConstraintResolver + ConnectorManager"]:::registry
 
     FABRIC_AGENT_FACTORY["Fabric Agent Factory<br/>Spawns per-step workers from YAML templates<br/>Each gets: Mailbox, LLM handle (via Model Hub), SessionState reader,<br/>scoped tools from tools_granted[] (FAB-07)<br/>LLM: capability-driven plugin architecture<br/>Capabilities scoped per AgentContract<br/>See: k1/model_hub/model_hub.mmd"]:::fabric
+
+    FABRIC_META_AGENT["Fabric Meta-Agent Creation (Epic 4.5)<br/>---<br/>tool.write.build_agent: MCP tool executed as DAG step<br/>Validates spec, composes contract, registers agent<br/>Returns: {agent_name, status}<br/>---<br/>Meta-Agent DAG Pattern:<br/>  step_1: build_agent -> {agent_name: agent.execute.X}<br/>  step_2: capability=$step_1.result.agent_name<br/>  ParamResolver resolves dynamically (4.5.9)<br/>---<br/>Safety: AMBER min, no recursive creation, depth=1<br/>See: k1/fabric/fabric.mmd META_AGENT_CREATION"]:::fabric
 
     FABRIC_WORKFLOW_PROVIDER["Fabric Workflow Provider<br/>Rehydrates frozen WorkflowSpec<br/>Routes to Orchestrator for DAG execution"]:::fabric
   end

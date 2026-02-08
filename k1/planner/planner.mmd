@@ -103,6 +103,17 @@
 %%     trace_id: string
 %%   }
 %%
+%%   META-AGENT DAG PATTERN (4.5.1-4.5.9):
+%%   Steps MAY include build_agent capabilities:
+%%     { id: "s1", capability: "tool.meta.build_agent",
+%%       params: { name: "health_advisor", role: "...",
+%%                 tools_granted: [...], prompt_template: "...",
+%%                 seed_context: {...}, ttl_turns: 3 },
+%%       deps: [], output_schema: { agent_name: "string" } }
+%%     { id: "s2", capability: "$s1.result.agent_name",
+%%       params: { query: "..." }, deps: ["s1"] }
+%%   Planner discovers and composes AgentSpec; Orchestrator executes (PLAN-06)
+%%
 %% HIL RESPONSE EVENTS (INBOUND via Event Bus -- GAP-1 fix):
 %%   HILClarificationResponse {          (k1.hil.clarification_response.v1)
 %%     request_id: uuid,                 (correlates to original HIL request)
@@ -215,7 +226,7 @@ subgraph PIPELINE["4-Stage Planning Pipeline"]
 
     S4_ENTRY["Receive validated ExpandedPlan<br/>NO LLM call (PLAN-03)"]:::step
     S4_ASSIGN_ID["Assign plan_id (uuid)<br/>Set created_at timestamp"]:::step
-    S4_BUILD["Build CommittedPlan<br/>Assemble steps, dependencies, token_budget_max<br/>Freeze plan structure"]:::step
+    S4_BUILD["Build CommittedPlan<br/>Assemble steps, dependencies, token_budget_max<br/>Freeze plan structure<br/>---<br/>META-AGENT PATTERN (4.5.1-4.5.9):<br/>May include build_agent steps with AgentSpec params:<br/>  capability: tool.meta.build_agent<br/>  params: {name, role, tools_granted, prompt_template, ...}<br/>Subsequent steps can reference created agent:<br/>  capability: $build_step.result.agent_name<br/>Planner commits DAG; Orchestrator executes (PLAN-06)"]:::step
     S4_PERSIST["Persist to K0 WAL<br/>Via IBridgePort (fire-and-forget)<br/>Idempotent: plan_id is dedup key"]:::step
     S4_EMIT["Emit k1.planner.plan.ready<br/>Via IEventPort<br/>Payload: CommittedPlan"]:::step
   end
@@ -246,7 +257,7 @@ end
 subgraph DISCOVERY_TOOLS["Discovery Tools (4 Tools -- ALL Read-Only, PLAN-02)"]
   direction TB
 
-  DTOOL_DISCOVER_CAPS["discover_capabilities(domain?, intent?)<br/>Semantic Top-K search: Tool + Agent registries<br/>Returns: Top-K capabilities with input/output schemas<br/>Route: IFabricRetrievalPort -> Fabric Retrieval API<br/>Latency: <50ms"]:::tool_fabric
+  DTOOL_DISCOVER_CAPS["discover_capabilities(domain?, intent?)<br/>Semantic Top-K search: Tool + Agent registries<br/>Returns: Top-K capabilities with input/output schemas<br/>Route: IFabricRetrievalPort -> Fabric Retrieval API<br/>Latency: <50ms<br/>---<br/>META-AGENT CREATION (4.5.1-4.5.4):<br/>Also discovers prompts, tools, and capabilities<br/>that compose an AgentSpec for build_agent steps.<br/>Planner uses discovery results to populate:<br/>  tools_granted[], prompt_template, seed_context<br/>Planner outputs build_agent as a DAG step (PLAN-06:<br/>  Planner NEVER executes -- Orchestrator runs build_agent)"]:::tool_fabric
 
   DTOOL_FIND_PROMPTS["find_relevant_prompts(intent?, domain?)<br/>Semantic Top-K search: Prompt Registry<br/>Returns: Top-K prompt templates with variable defs<br/>Route: IFabricRetrievalPort -> Fabric Retrieval API<br/>Latency: <50ms"]:::tool_fabric
 

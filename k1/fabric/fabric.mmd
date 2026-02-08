@@ -253,7 +253,7 @@ subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execut
   subgraph POLICY_ENGINE["Subsystem 5: Policy Engine (4 Dimensions)"]
     direction TB
 
-    SECURITY_CONTEXT["Dimension 1: Security Context (HARD GATE)<br/>---<br/>FIRST check. Fail = immediate reject.<br/>user_band >= capability_band_min<br/>Band ordering: GREEN < AMBER < RED < CRISIS<br/>---<br/>Also checks:<br/>Sub-Agent tool scoping (tools_granted[])<br/>Rate limiting per capability<br/>Tenant isolation (family_id)"]:::safety
+    SECURITY_CONTEXT["Dimension 1: Security Context (HARD GATE)<br/>---<br/>FIRST check. Fail = immediate reject.<br/>user_band >= capability_band_min<br/>Band ordering: GREEN < AMBER < RED < CRISIS<br/>---<br/>Also checks:<br/>Sub-Agent tool scoping (tools_granted[])<br/>Rate limiting per capability<br/>Tenant isolation (family_id)<br/>---<br/>META-OPERATION GATES (4.5.5):<br/>build_agent requires AMBER minimum<br/>Created agents inherit creator max band<br/>Restricted domains: META, SECURITY, ADMIN<br/>No recursive creation (build_agent not grantable)<br/>Depth=1: agents cannot invoke other agents"]:::safety
 
     AFFECTIVE_ROUTING["Dimension 2: Affective Routing (Soft Score)<br/>---<br/>Reads affective_now from SessionState<br/>High sadness/anxiety (>0.7): +0.1 empathetic providers<br/>High joy/excitement: +0.05 detail-rich providers<br/>Neutral/low: no adjustment<br/>Output: affective_score (0.0 - 0.2)"]:::policy
 
@@ -351,6 +351,29 @@ subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execut
   end
 
   %% ==================================================================================
+  %% META-AGENT CREATION (Epic 4.5 -- Dynamic Agent Composition)
+  %% Reference: docs/plans/meta-agent-creation-integration-proposal.md
+  %% PLAN-06 compliance: Planner discovers (read-only), commits DAG.
+  %% Orchestrator executes build_agent + created agent via Fabric.
+  %% ==================================================================================
+
+  subgraph META_AGENT_CREATION["Meta-Agent Creation (Epic 4.5 -- Dynamic Composition)"]
+    direction TB
+
+    AGENT_SPEC_VALIDATOR["AgentSpecValidator (4.5.1)<br/>Validates programmatic agent specs<br/>---<br/>Rules:<br/>1. name follows agent.execute.* pattern<br/>2. tools_granted[] all exist in registry<br/>3. required_context sections valid<br/>4. prompt_template exists (if specified)<br/>5. domain tags valid<br/>6. safety_band valid enum<br/>7. token budgets in range<br/>Returns: ValidationResult{errors[]}"]:::validator
+
+    BUILD_AGENT_TOOL["tool.write.build_agent (4.5.2)<br/>MCP Tool Contract<br/>---<br/>domain: [META, AGENT_CREATION]<br/>safety_band_min: AMBER<br/>---<br/>Inputs: agent_name, description,<br/>tools_granted[], prompt_template,<br/>domain[], required_context[],<br/>llm_budget_tokens, safety_band_min<br/>---<br/>Flow: Validate -> Compose -> Register -> Emit<br/>Returns: {agent_name, status, errors?}<br/>---<br/>NOTE: Orchestrator-executed DAG step<br/>NOT a Planner tool (PLAN-06)"]:::tool_fabric
+
+    AGENT_COMPOSER["AgentComposer (4.5.4)<br/>Builder Pattern<br/>---<br/>compose_agent(name, desc, domain)<br/>  .add_tool(tool_name)<br/>  .set_prompt(template)<br/>  .set_context(sections[])<br/>  .build() -> AgentContract<br/>---<br/>Factory: from_discovery_result(<br/>  capabilities, intent) -> auto-selects top-K tools"]:::factory
+
+    META_SAFETY_GATES["Meta-Operation Safety (4.5.5)<br/>---<br/>1. build_agent requires AMBER minimum<br/>2. Created agents inherit creator max band<br/>   (cannot escalate: GREEN -> AMBER blocked)<br/>3. Restricted domains: META, SECURITY, ADMIN<br/>   (no recursive meta-agents)<br/>4. tools_granted[] cannot include build_agent<br/>   (no recursive creation)<br/>5. Depth=1: agents CANNOT invoke other agents<br/>---<br/>Violation: emit meta.operation.blocked.v1"]:::safety
+
+    META_LIFECYCLE["Lifecycle Metadata (4.5.6)<br/>---<br/>ephemeral: bool (default true)<br/>created_by: str (planner/user/agent_id)<br/>created_at: str (ISO timestamp)<br/>session_scoped: bool<br/>---<br/>Ephemeral: removed on session end<br/>Persistent: auto-YAML to<br/>k1/contracts/agents/generated/{name}.yaml<br/>---<br/>Registry: list_created_agents() -> list"]:::lifecycle
+
+    AGENT_RESPONSE_PAYLOAD["AgentResponsePayload (4.5.8)<br/>Frozen dataclass -- standard agent output<br/>---<br/>answer: str, confidence: float,<br/>domain: list[str], sources: list[dict],<br/>domain_data: dict[str, Any] (freeform),<br/>follow_up_needed: bool,<br/>follow_up_suggestion: str,<br/>reasoning_trace: list[str],<br/>tools_used: list[str],<br/>k0_queries_made: int<br/>---<br/>Consumed by: Concierge DELIVERING state"]:::type_registry
+  end
+
+  %% ==================================================================================
   %% CAPABILITY TYPE REGISTRY
   %% ==================================================================================
 
@@ -419,6 +442,12 @@ subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execut
       EVT_AGENT_LLM_CALL["fabric.agent.{id}.llm_call.{call_num}<br/>Per-LLM round-trip during agent execution<br/>Payload: agent_id, call_num, input_tokens, output_tokens<br/>Consumer: Orchestrator sub-step observability"]:::event
 
       EVT_AGENT_ITERATION["fabric.agent.{id}.iteration.{n}<br/>Per-loop iteration during agent execution<br/>Payload: agent_id, iteration, tools_called, trace_id<br/>Consumer: Orchestrator sub-step observability"]:::event
+
+      EVT_AGENT_CREATED["k1.fabric.agent.created.v1 (4.5.7)<br/>Dynamic agent registered via build_agent<br/>Payload: agent_name, created_by, tools_granted[],<br/>domain[], prompt_template, ephemeral, session_id, trace_id"]:::event
+
+      EVT_AGENT_EXPIRED["k1.fabric.agent.expired.v1 (4.5.7)<br/>Ephemeral agent removed on session end<br/>Payload: agent_name, created_at, expired_at,<br/>invocations, trace_id"]:::event
+
+      EVT_META_BLOCKED["k1.fabric.meta.operation.blocked.v1 (4.5.7)<br/>Meta-operation violated safety policy<br/>Payload: operation, violation (recursive_creation |<br/>domain_restricted | safety_escalation | depth_exceeded),<br/>requested_by, details, trace_id"]:::event
     end
 
     subgraph EVENTS_CONSUMED["Events Consumed by Fabric"]
@@ -840,6 +869,41 @@ WORKFLOW_PROVIDER -.->|"workflow calls"| CB_WORKFLOW
 CAPABILITY_FABRIC -.->|"trace_id on every op"| OBS_TRACE
 CAPABILITY_FABRIC -.->|"structured logs per phase"| OBS_LOGGING
 CAPABILITY_FABRIC -.->|"histogram + counter"| OBS_METRICS
+
+%% =====================================================================================
+%% META-AGENT CREATION WIRING (Epic 4.5)
+%% =====================================================================================
+
+%% build_agent tool execution flow (Orchestrator-executed, NOT Planner)
+BUILD_AGENT_TOOL -->|"1. validate spec"| AGENT_SPEC_VALIDATOR
+AGENT_SPEC_VALIDATOR -->|"verify tools exist"| CAPABILITY_REGISTRY
+BUILD_AGENT_TOOL -->|"2. compose contract"| AGENT_COMPOSER
+AGENT_COMPOSER -->|"build AgentContract"| BUILD_AGENT_TOOL
+BUILD_AGENT_TOOL -->|"3. register"| CAPABILITY_REGISTRY
+BUILD_AGENT_TOOL -->|"4. emit agent.created"| EVT_AGENT_CREATED
+EVT_AGENT_CREATED --> EVENT_BUS
+
+%% Meta-safety enforcement
+BUILD_AGENT_TOOL -->|"safety check"| META_SAFETY_GATES
+META_SAFETY_GATES -->|"violation"| EVT_META_BLOCKED
+EVT_META_BLOCKED --> EVENT_BUS
+META_SAFETY_GATES -.->|"extends"| SECURITY_CONTEXT
+
+%% Lifecycle management
+META_LIFECYCLE -->|"ephemeral cleanup"| EVT_AGENT_EXPIRED
+EVT_AGENT_EXPIRED --> EVENT_BUS
+META_LIFECYCLE -->|"persistent YAML"| MODULE_LOADER
+META_LIFECYCLE -.->|"extends"| CAPABILITY_REGISTRY
+
+%% AgentResponsePayload consumed by callers
+AGENT_LIFECYCLE -->|"AgentResponsePayload (4.5.8)"| CAPABILITY_FABRIC
+
+%% Discovery tools as MCP-callable (4.5.3)
+FABRIC_RETRIEVAL_API -.->|"exposed as tool.read.discover_capabilities"| BUILD_AGENT_TOOL
+FABRIC_RETRIEVAL_API -.->|"exposed as tool.read.find_prompts"| BUILD_AGENT_TOOL
+
+%% ParamResolver dynamic resolution (4.5.9, Orchestrator scope)
+CALLER_ORCHESTRATOR -->|"ParamResolver: $step.result.agent_name<br/>resolves created agent dynamically (4.5.9)"| CAPABILITY_FABRIC
 
 %% =====================================================================================
 %% INVARIANT ENFORCEMENT MAPPING

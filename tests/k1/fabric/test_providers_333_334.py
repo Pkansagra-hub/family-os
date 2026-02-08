@@ -1138,10 +1138,10 @@ class TestProvidersPackageExports:
         assert BridgeOperationError is not None
 
     def test_all_list_count(self) -> None:
-        """__all__ has 68 symbols (5 base + 8 MCP + 9 WASM + 8 Bridge + 14 Workflow + 7 Concierge + 7 Agent stub + 10 Agent 4.3)."""
+        """__all__ has 75 symbols (5 base + 8 MCP + 9 WASM + 8 Bridge + 14 Workflow + 7 Concierge + 7 Agent stub + 10 Agent 4.3 + 7 Pool/Delta 4.3.3/4.3.4)."""
         import k1.fabric.providers as pkg
 
-        assert len(pkg.__all__) == 68
+        assert len(pkg.__all__) == 78
 
     def test_existing_exports_still_work(self) -> None:
         """Pre-existing exports (base + MCP) still importable."""

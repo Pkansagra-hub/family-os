@@ -58,7 +58,7 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
       DISPATCHING["DISPATCHING<br/>LOW: invoke_capability() direct<br/>MED/HIGH: TaskEnvelope to Orchestrator"]:::state
       COMPANIONING["COMPANIONING<br/>Keep Conversation Moving<br/>Preliminary ack (MED/HIGH)"]:::state
       PROGRESSING["PROGRESSING<br/>Stream Deltas as Updates<br/>Progress narration to user"]:::state
-      DELIVERING["DELIVERING<br/>Final Results + Next Steps<br/>LLM call with tool_results[] + cognitive tools"]:::state
+      DELIVERING["DELIVERING<br/>Final Results + Next Steps<br/>LLM call with tool_results[] + cognitive tools<br/>---<br/>META-AGENT (4.5.8):<br/>tool_results[] may contain AgentResponsePayload<br/>from dynamically created agents. Includes:<br/>  agent_name, result, tokens_used, ttl_remaining"]:::state
       INTERRUPT_HANDLING["INTERRUPT_HANDLING<br/>User Changes Topic Mid-Turn<br/>Reset routing, re-ACKING"]:::state
     end
 
@@ -156,7 +156,7 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
 
     subgraph ACTION_TOOLS["Action Tools (Execution & Delegation)"]
       TOOL_INVOKE_CAPABILITY["invoke_capability()<br/>Direct capability execution via Fabric<br/>Used in LOW tier for fast path"]:::tool
-      TOOL_SPAWN_VIA_FABRIC["spawn_via_fabric()<br/>Capability-based Agent Creation<br/>Dynamic agent instantiation"]:::tool
+      TOOL_SPAWN_VIA_FABRIC["spawn_via_fabric()<br/>Capability-based Agent Creation<br/>Dynamic agent instantiation<br/>---<br/>META-AGENT CREATION (4.5.1-4.5.9):<br/>For HIGH-tier plans, Orchestrator executes build_agent<br/>as a DAG step (not Concierge). spawn_via_fabric remains<br/>for LOW-tier YAML-template agents. Concierge receives<br/>AgentResponsePayload in tool_results[] for both paths."]:::tool
       TOOL_EXECUTE_WORKFLOW["execute_workflow()<br/>Workflow Capability Invocation<br/>Pre-compiled workflow execution<br/>Max depth: 3 (cycle detection)"]:::tool
     end
 
@@ -520,7 +520,7 @@ subgraph TOUCHPOINTS["🔗 External Touchpoints (Concierge Interfaces)"]
   subgraph TP_SUBAGENTS["Spawned Sub-Agents"]
     direction TB
 
-    DYNAMIC_AGENTS["Dynamic Agent Instances<br/>health_agent, finance_agent, etc.<br/>Created via Fabric on-demand"]:::agent
+    DYNAMIC_AGENTS["Dynamic Agent Instances<br/>health_agent, finance_agent, etc.<br/>Created via Fabric on-demand<br/>---<br/>META-AGENT CREATION (4.5.5-4.5.7):<br/>Also includes agents created by build_agent (Epic 4.5).<br/>These agents have TTL-based lifecycle (ttl_turns),<br/>scoped tools_granted (FAB-07), and depth=1 block<br/>(no agent-to-agent spawning). Expired agents cleaned<br/>up via k1.fabric.agent.expired.v1 event."]:::agent
     SAFETY_AGENT["Safety Agent<br/>CRISIS protocol handler"]:::agent
   end
 
