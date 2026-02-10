@@ -64,6 +64,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, FrozenSet, List, Optional, Protocol
 
+from k1.fabric.ports.bridge_port import (
+    BridgeCommandResult,
+    BridgeHealth,
+    IBridgePort as CanonicalIBridgePort,
+)
 from k1.fabric.providers.base_provider import BaseProvider, ProviderExecutionError
 from k1.fabric.types import (
     CapabilityRequest,
@@ -140,75 +145,11 @@ class BridgeResponse:
 # ---------------------------------------------------------------------------
 
 
-class IBridgePort(Protocol):
-    """
-    Port protocol for K0 access via the Bridge.
+# IBridgePort: Use canonical port from k1.fabric.ports.bridge_port.
+# Kept as alias for backward compatibility in type hints.
+IBridgePort = CanonicalIBridgePort
 
-    Concrete implementation: BridgeConnectionAdapter (5.2.8).
-    Injected into BridgeProvider by FabricFactory.
-
-    Implementations handle:
-      - Envelope building (Bridge envelope format)
-      - SSE transport to K0
-      - K0 health monitoring
-      - Offline detection and mode reporting
-
-    All command methods are async to support non-blocking I/O.
-    """
-
-    async def send_command(
-        self,
-        command: BridgeCommand,
-    ) -> BridgeResponse:
-        """
-        Send a command through the Bridge to K0.
-
-        Args:
-            command: The bridge command (operation, topic, body).
-
-        Returns:
-            BridgeResponse with data or error.
-
-        Raises:
-            Exception if the bridge transport fails.
-        """
-        ...
-
-    async def query(
-        self,
-        operation: str,
-        selectors: Dict[str, Any],
-        trace_id: str = "",
-    ) -> BridgeResponse:
-        """
-        Query K0 for data via the Bridge.
-
-        Used for read-only operations like memory.recall.
-
-        Args:
-            operation: The operation type (e.g. "memory.recall").
-            selectors: Query selectors/filters.
-            trace_id: Trace ID for observability.
-
-        Returns:
-            BridgeResponse with data or error.
-        """
-        ...
-
-    def is_available(self) -> bool:
-        """Check if the Bridge connection to K0 is available."""
-        ...
-
-    def health_mode(self) -> K0HealthMode:
-        """
-        Return the current K0 health mode.
-
-        Used by BridgeProvider to decide execution strategy:
-          K0_FULL     -> normal bridge execution
-          K0_DEGRADED -> bridge execution with extended timeout
-          K0_OFFLINE  -> fallback to LOCAL COLD
-        """
-        ...
+    # health_mode() removed -- use canonical get_health() from IBridgePort.
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +338,7 @@ class BridgeProvider(BaseProvider):
         """
         Check Bridge and K0 availability.
 
-        Checks bridge connectivity and K0 health mode.
+        Checks bridge connectivity and K0 health mode via get_health().
         Returns DEGRADED for K0_DEGRADED, UNHEALTHY for K0_OFFLINE.
         """
         start = time.monotonic()
@@ -409,16 +350,17 @@ class BridgeProvider(BaseProvider):
                     error="Bridge not available",
                 )
 
-            mode = self._bridge.health_mode()
+            health = self._bridge.get_health()
+            mode_str = health.mode if hasattr(health, "mode") else "K0_OFFLINE"
             latency_ms = int((time.monotonic() - start) * 1000)
 
-            if mode == K0HealthMode.K0_FULL:
+            if mode_str == K0HealthMode.K0_FULL.value:
                 return ProviderHealth(
                     provider_id=self.provider_id,
                     status=ProviderStatus.HEALTHY.value,
                     latency_ms=latency_ms,
                 )
-            if mode == K0HealthMode.K0_DEGRADED:
+            if mode_str == K0HealthMode.K0_DEGRADED.value:
                 return ProviderHealth(
                     provider_id=self.provider_id,
                     status=ProviderStatus.DEGRADED.value,
@@ -469,10 +411,11 @@ class BridgeProvider(BaseProvider):
         if not self._bridge.is_available():
             return await self._handle_offline(request, context, trace_id, start)
 
-        mode = self._bridge.health_mode()
+        health = self._bridge.get_health()
+        mode_str = health.mode if hasattr(health, "mode") else "K0_OFFLINE"
 
         # --- Step 2: K0_OFFLINE fallback ---
-        if mode == K0HealthMode.K0_OFFLINE:
+        if mode_str == K0HealthMode.K0_OFFLINE.value:
             return await self._handle_offline(request, context, trace_id, start)
 
         # --- Step 3: Classify operation ---
@@ -482,29 +425,30 @@ class BridgeProvider(BaseProvider):
             "[%s] bridge exec: operation=%s, k0_health=%s, trace=%s",
             self.provider_id,
             operation,
-            mode.value,
+            mode_str,
             trace_id,
         )
 
-        # --- Step 4: Build command ---
-        command = BridgeCommand(
-            operation=operation,
-            topic=self._operation_to_topic(operation),
-            body=dict(request.params),
-            trace_id=trace_id,
-            timeout_ms=request.timeout_ms or self.config.max_execution_ms,
-        )
+        # --- Step 4: Prepare command args (canonical IBridgePort signature) ---
+        timeout = request.timeout_ms or self.config.max_execution_ms
+        payload = dict(request.params)
 
         # --- Step 5: Send via bridge ---
         try:
             if self._is_query_operation(operation):
                 response = await self._bridge.query(
                     operation=operation,
-                    selectors=dict(request.params),
+                    selectors=payload,
                     trace_id=trace_id,
+                    timeout_ms=timeout,
                 )
             else:
-                response = await self._bridge.send_command(command)
+                response = await self._bridge.send_command(
+                    operation=operation,
+                    payload=payload,
+                    trace_id=trace_id,
+                    timeout_ms=timeout,
+                )
         except Exception as exc:
             elapsed_ms = int((time.monotonic() - start) * 1000)
             # Check timeout
@@ -608,11 +552,11 @@ class BridgeProvider(BaseProvider):
     def _parse_response(
         self,
         request: CapabilityRequest,
-        response: BridgeResponse,
+        response: Any,
         trace_id: str,
         start: float,
     ) -> CapabilityResult:
-        """Convert BridgeResponse to CapabilityResult."""
+        """Convert bridge response (BridgeResponse or BridgeCommandResult) to CapabilityResult."""
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
         if not response.success:

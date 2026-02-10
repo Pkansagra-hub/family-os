@@ -1,0 +1,57 @@
+# Sample agent contract: invitation_sender (AGENT, SOCIAL domain, GREEN)
+# Valid against agent_contract.schema.json
+# Used by: conftest.py fixtures, AgentFactory tests, integration tests
+
+agent_contract:
+  name: "agent.execute.invitation_sender"
+  version: "1.0.0"
+  domain:
+    - "SOCIAL"
+    - "COMMUNICATION"
+  description: "Draft and send personalized event invitations to guests"
+  capabilities:
+    - "draft_invitation"
+    - "personalize_message"
+    - "send_invitation"
+  limitations:
+    - "no_physical_mail"
+    - "max_100_recipients"
+  required_inputs:
+    - name: "event_name"
+      type: "STRING"
+      description: "Name of the event"
+    - name: "guest_list"
+      type: "ARRAY[STRING]"
+      description: "List of guest names"
+  optional_inputs:
+    - name: "tone"
+      type: "STRING"
+      description: "Message tone (formal/casual)"
+  required_context:
+    - "beliefs_active.entities"
+    - "beliefs_active.relationships"
+  optional_context:
+    - "beliefs_active.preferences"
+  prompt_template: "invitation_drafter_v1"
+  tools_granted:
+    - "tool.execute.restaurant_booking"
+    - "tool.read.weather_api"
+  llm_budget_tokens: 4096
+  max_tool_calls: 5
+  max_execution_time_ms: 30000
+  output:
+    type: "object"
+    properties:
+      invitations_sent:
+        type: "number"
+      status:
+        type: "string"
+    required:
+      - "invitations_sent"
+      - "status"
+  provider_type: "AGENT"
+  safety_band_min: "GREEN"
+  cost_per_call: 0.15
+  avg_latency_ms: 3000
+  max_latency_ms: 15000
+  availability: "ONLINE"

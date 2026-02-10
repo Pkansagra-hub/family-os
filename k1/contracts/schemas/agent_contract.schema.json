@@ -157,6 +157,10 @@
           "type": "string",
           "description": "Optional explicit provider ID (defaults to template_file-based resolution)"
         },
+        "provider_endpoint": {
+          "type": "string",
+          "description": "Optional endpoint URI for external provider resolution"
+        },
         "safety_band_min": {
           "type": "string",
           "enum": ["GREEN", "AMBER", "RED", "CRISIS"],

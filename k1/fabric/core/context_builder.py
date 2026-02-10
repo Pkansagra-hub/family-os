@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol
 
 from k1.fabric.core.context_budget import BudgetResult, ContextBudget, ContextBudgetConfig
+from k1.fabric.metrics import get_default_metrics
 from k1.fabric.types import CapabilityContract, ExecutionContext
 
 logger = logging.getLogger(__name__)
@@ -359,6 +360,10 @@ class ContextBuilder:
         )
 
         assembly_ms = (time.perf_counter() - t0) * 1000.0
+        try:
+            get_default_metrics().observe_context_build(contract.name, assembly_ms / 1000.0)
+        except Exception:
+            logger.warning("Failed to record context build metric", exc_info=True)
 
         return ContextBuildResult(
             context=context,

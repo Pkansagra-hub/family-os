@@ -57,7 +57,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol
 
+from k1.fabric.concurrency.dispatcher import (
+    DispatcherOverloadedError,
+    DispatcherShutdownError,
+    FabricDispatcher,
+)
 from k1.fabric.events.event_emitter import EventEmitter
+from k1.fabric.logging import get_default_logger as get_fabric_logger
+from k1.fabric.metrics import get_default_metrics
 from k1.fabric.types import CapabilityRequest, CapabilityResult, RetrievalResult, SafetyBand
 
 logger = logging.getLogger(__name__)
@@ -122,7 +129,17 @@ class IContextBuilder(Protocol):
 class IOutputValidationPipeline(Protocol):
     """Minimal output validation interface."""
 
-    def validate(self, result: Any, contract: Any, provider_type: str) -> Any: ...
+    def validate(
+        self,
+        result: Any,
+        contract: Any,
+        provider_type: str,
+        session_id: Optional[str] = None,
+        execution_context: Optional[Dict[str, Any]] = None,
+        request_id: str = "",
+        provider_id: str = "",
+        trace_id: str = "",
+    ) -> Any: ...
 
 
 class IProviderFactory(Protocol):
@@ -244,6 +261,7 @@ class CapabilityFabric:
         "_registry",
         "_provider_factory",
         "_circuit_breakers",
+        "_dispatcher",
         "_config",
     )
 
@@ -257,6 +275,7 @@ class CapabilityFabric:
         registry: Any,
         provider_factory: Any,
         circuit_breakers: Optional[Dict[str, Any]] = None,
+        dispatcher: Optional[FabricDispatcher] = None,
         config: Optional[FabricConfig] = None,
     ) -> None:
         self._resolver = resolver
@@ -266,6 +285,7 @@ class CapabilityFabric:
         self._registry = registry
         self._provider_factory = provider_factory
         self._circuit_breakers: Dict[str, Any] = circuit_breakers or {}
+        self._dispatcher = dispatcher
         self._config = config or FabricConfig()
 
     # ==================================================================
@@ -290,6 +310,78 @@ class CapabilityFabric:
         """
         Execute a single capability request.
 
+        If a FabricDispatcher is configured, execution is routed through
+        the dispatcher to enforce bounded parallelism (FAB-003).
+        """
+        if self._dispatcher is None:
+            return await self._execute_impl(request)
+
+        start_time = time.monotonic()
+        try:
+            dispatch_result = await self._dispatcher.dispatch(request, self._execute_impl)
+            return dispatch_result.result
+        except DispatcherOverloadedError as exc:
+            elapsed_ms = _elapsed_ms(start_time)
+            result = CapabilityResult.failure_result(
+                request_id=request.request_id,
+                error_code="dispatcher_overloaded",
+                error_message=str(exc),
+                retriable=True,
+                trace_id=request.trace_id,
+                duration_ms=elapsed_ms,
+            )
+            self._emit_failure(request, result, start_time)
+            self._emit_learning(
+                request=request,
+                provider_id="",
+                success=False,
+                duration_ms=elapsed_ms,
+                error_code="dispatcher_overloaded",
+            )
+            return result
+        except DispatcherShutdownError as exc:
+            elapsed_ms = _elapsed_ms(start_time)
+            result = CapabilityResult.failure_result(
+                request_id=request.request_id,
+                error_code="dispatcher_shutdown",
+                error_message=str(exc),
+                retriable=True,
+                trace_id=request.trace_id,
+                duration_ms=elapsed_ms,
+            )
+            self._emit_failure(request, result, start_time)
+            self._emit_learning(
+                request=request,
+                provider_id="",
+                success=False,
+                duration_ms=elapsed_ms,
+                error_code="dispatcher_shutdown",
+            )
+            return result
+        except Exception as exc:
+            elapsed_ms = _elapsed_ms(start_time)
+            result = CapabilityResult.failure_result(
+                request_id=request.request_id,
+                error_code="dispatcher_error",
+                error_message=str(exc),
+                retriable=True,
+                trace_id=request.trace_id,
+                duration_ms=elapsed_ms,
+            )
+            self._emit_failure(request, result, start_time)
+            self._emit_learning(
+                request=request,
+                provider_id="",
+                success=False,
+                duration_ms=elapsed_ms,
+                error_code="dispatcher_error",
+            )
+            return result
+
+    async def _execute_impl(self, request: CapabilityRequest) -> CapabilityResult:
+        """
+        Execute a single capability request.
+
         9-step pipeline:
           1. Emit invoked event
           2. Resolve provider
@@ -311,7 +403,16 @@ class CapabilityFabric:
         trace_id = request.trace_id
         capability_name = request.capability_name
         start_time = time.monotonic()
+        exec_start = time.perf_counter()
         provider_id = ""
+        provider_type = "unknown"
+        metrics = get_default_metrics()
+        fabric_logger = get_fabric_logger()
+
+        try:
+            metrics.inc_active_executions()
+        except Exception:
+            logger.warning("Failed to increment active executions", exc_info=True)
 
         try:
             # --- Step 1: Emit invoked event ---
@@ -325,7 +426,16 @@ class CapabilityFabric:
             )
 
             # --- Step 2: Resolve provider ---
+            resolve_start = time.perf_counter()
             resolved = self._resolve(request)
+            resolve_ms = (time.perf_counter() - resolve_start) * 1000.0
+            fabric_logger.resolve(
+                trace_id=trace_id,
+                request_id=request.request_id,
+                capability_name=capability_name,
+                duration_ms=round(resolve_ms, 3),
+                success=resolved is not None,
+            )
             if resolved is None:
                 # Resolution returned a failure result
                 elapsed_ms = _elapsed_ms(start_time)
@@ -339,24 +449,58 @@ class CapabilityFabric:
                     resolution_time_ms=elapsed_ms,
                 )
                 self._emit_failure(request, result, start_time)
-                return result
+                fabric_logger.result_return(
+                    trace_id=trace_id,
+                    request_id=request.request_id,
+                    capability_name=capability_name,
+                    duration_ms=elapsed_ms,
+                    success=False,
+                    error_code=result.error.code if result.error else "unknown",
+                )
+                return self._finalize_execution_metrics(
+                    request=request,
+                    result=result,
+                    provider_type=provider_type,
+                    exec_start=exec_start,
+                )
 
             provider_id = resolved.provider_config.provider_id
+            provider_type = resolved.provider_config.provider_type
             contract = resolved.contract
 
             # --- Step 3: Build context ---
+            context_start = time.perf_counter()
             context = self._build_context(request, contract)
+            context_ms = (time.perf_counter() - context_start) * 1000.0
+            fabric_logger.context_build(
+                trace_id=trace_id,
+                request_id=request.request_id,
+                capability_name=capability_name,
+                provider_id=provider_id,
+                duration_ms=round(context_ms, 3),
+                success=True,
+            )
 
             # --- Step 4: Instantiate provider ---
             provider = self._provider_factory.create(resolved.provider_config)
 
             # --- Step 5: Execute via CircuitBreaker ---
+            execute_start = time.perf_counter()
             result = await self._execute_with_breaker(
                 provider=provider,
                 provider_id=provider_id,
                 request=request,
                 context=context,
                 trace_id=trace_id,
+            )
+            execute_ms = (time.perf_counter() - execute_start) * 1000.0
+            fabric_logger.execute(
+                trace_id=trace_id,
+                request_id=request.request_id,
+                capability_name=capability_name,
+                provider_id=provider_id,
+                duration_ms=round(execute_ms, 3),
+                success=result.success,
             )
 
             # --- Step 6: Validate output ---
@@ -365,6 +509,8 @@ class CapabilityFabric:
                     result=result,
                     contract=contract,
                     provider_type=resolved.provider_config.provider_type,
+                    request=request,
+                    execution_context=context,
                 )
 
             # --- Steps 7-9: Post-execution ---
@@ -374,6 +520,16 @@ class CapabilityFabric:
                 self._emit_success(request, result, provider_id, elapsed_ms)
             else:
                 self._emit_failure(request, result, start_time, provider_id)
+
+            fabric_logger.result_return(
+                trace_id=trace_id,
+                request_id=request.request_id,
+                capability_name=capability_name,
+                provider_id=provider_id,
+                duration_ms=elapsed_ms,
+                success=result.success,
+                error_code=result.error.code if result.error else "",
+            )
 
             # Step 8: Update metrics
             self._update_metrics(capability_name, elapsed_ms, result.success)
@@ -387,7 +543,12 @@ class CapabilityFabric:
                 error_code=result.error.code if result.error else None,
             )
 
-            return result
+            return self._finalize_execution_metrics(
+                request=request,
+                result=result,
+                provider_type=provider_type,
+                exec_start=exec_start,
+            )
 
         except Exception as exc:
             elapsed_ms = _elapsed_ms(start_time)
@@ -416,7 +577,21 @@ class CapabilityFabric:
                 duration_ms=elapsed_ms,
                 error_code="execution_error",
             )
-            return result
+            fabric_logger.result_return(
+                trace_id=trace_id,
+                request_id=request.request_id,
+                capability_name=capability_name,
+                provider_id=provider_id,
+                duration_ms=elapsed_ms,
+                success=False,
+                error_code="execution_error",
+            )
+            return self._finalize_execution_metrics(
+                request=request,
+                result=result,
+                provider_type=provider_type,
+                exec_start=exec_start,
+            )
 
     # ==================================================================
     # Public API: execute_batch
@@ -572,6 +747,8 @@ class CapabilityFabric:
         result: CapabilityResult,
         contract: Any,
         provider_type: str,
+        request: CapabilityRequest,
+        execution_context: Any,
     ) -> CapabilityResult:
         """
         Run 3-tier output validation pipeline.
@@ -584,6 +761,15 @@ class CapabilityFabric:
                 result=result,
                 contract=contract,
                 provider_type=provider_type,
+                session_id=request.session_id,
+                execution_context=(
+                    execution_context.to_dict()
+                    if hasattr(execution_context, "to_dict")
+                    else execution_context
+                ),
+                request_id=request.request_id,
+                provider_id=result.provider_id,
+                trace_id=request.trace_id,
             )
         except Exception as exc:
             logger.warning(
@@ -698,6 +884,34 @@ class CapabilityFabric:
                 capability_name,
                 exc_info=True,
             )
+
+    def _finalize_execution_metrics(
+        self,
+        *,
+        request: CapabilityRequest,
+        result: CapabilityResult,
+        provider_type: str,
+        exec_start: float,
+    ) -> CapabilityResult:
+        """Finalize execution metrics and active execution gauge."""
+        metrics = get_default_metrics()
+        duration_s = time.perf_counter() - exec_start
+        try:
+            metrics.observe_execution_duration(
+                capability_name=request.capability_name,
+                provider_type=provider_type or "unknown",
+                tier=request.tier,
+                duration_seconds=duration_s,
+            )
+            metrics.inc_executions("success" if result.success else "failure")
+        except Exception:
+            logger.warning("Failed to record execution metrics", exc_info=True)
+        finally:
+            try:
+                metrics.dec_active_executions()
+            except Exception:
+                logger.warning("Failed to decrement active executions", exc_info=True)
+        return result
 
     # ==================================================================
     # Internal: Batch strategies

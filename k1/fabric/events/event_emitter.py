@@ -40,6 +40,8 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from k1.fabric.events.fabric_events import (
+    TOPIC_AGENT_CREATED,
+    TOPIC_AGENT_EXPIRED,
     TOPIC_CAPABILITY_COMPLETED,
     TOPIC_CAPABILITY_FAILED,
     TOPIC_CAPABILITY_INVOKED,
@@ -49,6 +51,7 @@ from k1.fabric.events.fabric_events import (
     TOPIC_CONTRACT_VALIDATION_FAILED,
     TOPIC_LEARNING_SIGNAL,
     TOPIC_MCP_TOOL_DISCOVERED,
+    TOPIC_META_OP_BLOCKED,
     TOPIC_OUTPUT_VALIDATION_FAILED,
     TOPIC_PRESSURE_SHEDDING,
     TOPIC_PRESSURE_WARNING,
@@ -81,6 +84,8 @@ __all__ = [
     "EventEmitter",
     "EventPort",
     "ProactiveGapDetector",
+    "TOPIC_AGENT_CREATED",
+    "TOPIC_AGENT_EXPIRED",
     "TOPIC_CAPABILITY_INVOKED",
     "TOPIC_CAPABILITY_COMPLETED",
     "TOPIC_CAPABILITY_FAILED",
@@ -88,6 +93,7 @@ __all__ = [
     "TOPIC_CAPABILITY_REGISTERED",
     "TOPIC_CAPABILITY_UNREGISTERED",
     "TOPIC_CONTRACT_UPDATED",
+    "TOPIC_META_OP_BLOCKED",
     "TOPIC_OUTPUT_VALIDATION_FAILED",
     "TOPIC_VERSION_CONFLICT",
     "TOPIC_CONTRACT_VALIDATION_FAILED",
@@ -536,6 +542,117 @@ class EventEmitter:
         )
 
     # ------------------------------------------------------------------
+    # 4.5.7 -- Agent creation lifecycle event emitters
+    # ------------------------------------------------------------------
+
+    def emit_agent_created(
+        self,
+        agent_name: str = "",
+        created_by: str = "",
+        tools_granted: List[str] | None = None,
+        domain: List[str] | None = None,
+        prompt_template: str = "",
+        ephemeral: bool = True,
+        session_id: str = "",
+        trace_id: str = "",
+    ) -> None:
+        """
+        Emit k1.fabric.agent.created.v1 after successful agent creation.
+
+        Called by BuildAgentHandler (4.5.2) step 7.  Satisfies the
+        EmitterForBuildLike protocol defined in agent_builder.py.
+
+        Args:
+            agent_name: Name of the newly created agent.
+            created_by: Identifier of the requesting agent/user.
+            tools_granted: List of capability names granted to the agent.
+            domain: Domain tags for the new agent.
+            prompt_template: System prompt template used.
+            ephemeral: Whether the agent is session-scoped.
+            session_id: Session that owns the agent.
+            trace_id: Cognitive trace ID (FAB-09).
+        """
+        self._emit(
+            TOPIC_AGENT_CREATED,
+            {
+                "agent_name": agent_name,
+                "created_by": created_by,
+                "tools_granted": list(tools_granted or []),
+                "domain": list(domain or []),
+                "prompt_template": prompt_template,
+                "ephemeral": ephemeral,
+                "session_id": session_id,
+                "timestamp_ms": _now_ms(),
+            },
+            trace_id=trace_id,
+        )
+
+    def emit_agent_expired(
+        self,
+        agent_name: str = "",
+        created_at_iso: str = "",
+        expired_at_iso: str = "",
+        invocations: int = 0,
+        trace_id: str = "",
+    ) -> None:
+        """
+        Emit k1.fabric.agent.expired.v1 when a runtime agent is removed.
+
+        Called by session cleanup or Registry.remove_expired_agents().
+
+        Args:
+            agent_name: Name of the expired agent.
+            created_at_iso: ISO timestamp when agent was created.
+            expired_at_iso: ISO timestamp when agent was expired.
+            invocations: Total invocations during agent lifetime.
+            trace_id: Cognitive trace ID (FAB-09).
+        """
+        self._emit(
+            TOPIC_AGENT_EXPIRED,
+            {
+                "agent_name": agent_name,
+                "created_at_iso": created_at_iso,
+                "expired_at_iso": expired_at_iso,
+                "invocations": invocations,
+                "timestamp_ms": _now_ms(),
+            },
+            trace_id=trace_id,
+        )
+
+    def emit_meta_blocked(
+        self,
+        operation: str = "",
+        violation_type: str = "",
+        requested_by: str = "",
+        details: Dict[str, str] | None = None,
+        trace_id: str = "",
+    ) -> None:
+        """
+        Emit k1.fabric.meta.operation.blocked.v1 on security violation.
+
+        Called by MetaOperationValidator (4.5.5) when a meta-operation
+        is rejected by one of the 5 hard gates.
+
+        Args:
+            operation: Operation attempted (e.g., 'create_agent').
+            violation_type: Type of violation (e.g., 'budget_exceeded').
+            requested_by: Identifier of the requester.
+            details: Additional context about the violation.
+            trace_id: Cognitive trace ID (FAB-09).
+        """
+        self._emit(
+            TOPIC_META_OP_BLOCKED,
+            {
+                "operation": operation,
+                "violation_type": violation_type,
+                "requested_by": requested_by,
+                "details": dict(details or {}),
+                "timestamp_ms": _now_ms(),
+            },
+            trace_id=trace_id,
+        )
+
+    # ------------------------------------------------------------------
     # Internal: emit with trace_id enforcement
     # ------------------------------------------------------------------
 
@@ -906,6 +1023,7 @@ def _mcp_tool_to_contract_dict(payload: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     # Canonical capability name from MCP tool name
+    # Format: tool.execute.mcp.<tool_name>  (4 segments, valid per updated FAB-11)
     # e.g. "get_weather" -> "tool.execute.mcp.get_weather"
     canonical_name = f"tool.execute.mcp.{tool_name}"
 
@@ -917,7 +1035,7 @@ def _mcp_tool_to_contract_dict(payload: Dict[str, Any]) -> Dict[str, Any]:
         "provider_type": "MCP",
         "provider_id": server_id or server_name or tool_name,
         "required_inputs": required_inputs,
-        "output_schema": output_schema if output_schema else {"type": "object"},
+        "output": output_schema if output_schema else {"type": "object"},
         "safety_band_min": "GREEN",
         "availability": "ONLINE",
         "tags": [f"mcp_server:{server_name}"] if server_name else ["mcp"],

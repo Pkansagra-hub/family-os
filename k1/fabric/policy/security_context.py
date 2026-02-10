@@ -1,44 +1,58 @@
 """
-k1.fabric.policy.security_context -- SecurityContext hard gate (3.2.1).
+k1.fabric.policy.security_context -- SecurityContext hard gate (3.2.1) and
+MetaOperationValidator (4.5.5).
 
 The FIRST check in every policy evaluation.  If it fails, the
 provider candidate is immediately rejected -- no soft scoring runs.
 
-Three checks:
+Three checks (SecurityContext 3.2.1):
   1. Safety band access:  ``user_band >= contract.safety_band_min``
      Band ordering: GREEN < AMBER < RED < CRISIS.
   2. Sub-agent tool scoping:  if ``tools_granted`` is provided,
      ``capability_name`` must be in the set.
   3. Rate limiting:  per-capability invocation limits (sliding window).
 
+Five hard gates (MetaOperationValidator 4.5.5):
+  1. Capability band gate: caller SafetyBand >= AMBER.
+  2. Safety band inheritance: no escalation (GREEN caller cannot create AMBER agent).
+  3. Restricted domain gate: domain cannot contain META, SECURITY, or ADMIN.
+  4. Tool grant recursion gate: tools_granted cannot contain tool.write.* meta-tools.
+  5. Agent depth gate: tools_granted cannot contain provider_type=AGENT tools.
+
 Enforces FAB-06: safety band access is ALWAYS checked before execution.
 
 Design:
-  - Stateless except for optional rate-limit counters.
+  - Stateless except for optional rate-limit counters (SecurityContext).
+  - MetaOperationValidator is stateless: pure function over inputs + registry.
   - Accept user_band from ``CapabilityRequest.safety_band`` and
     capability band from ``contract.safety_band_min``.
   - Returns ``SecurityCheckResult(allowed, reasons)``.
-  - Thread-safe: rate-limit uses threading.Lock.
+  - Thread-safe: rate-limit uses threading.Lock, registry has RLock.
 
 References:
   - fabric_discussion.md Section 10 (Dimension 1: Security Context)
   - FAB-06 invariant
-  - Epic 3.2.1 in fabric-implementation-plan.md
+  - Epic 3.2.1, 4.5.5 in fabric-implementation-plan.md
+  - meta-agent-creation-integration-proposal.md PART 1
 
 Exports:
-  SecurityContext       -- Hard-gate security evaluator
-  SecurityCheckResult   -- Frozen result dataclass
-  SecurityContextError  -- Base exception
-  AccessDeniedError     -- Safety/scope/rate check failed
+  SecurityContext            -- Hard-gate security evaluator (3.2.1)
+  SecurityCheckResult        -- Frozen result dataclass
+  SecurityContextError       -- Base exception
+  AccessDeniedError          -- Safety/scope/rate check failed
+  MetaOperationValidator     -- 5-gate meta-operation policy (4.5.5)
+  RESTRICTED_DOMAINS         -- Frozen set of forbidden domain tags
+  META_TOOL_PATTERN          -- Regex for tool.write.* meta-tools
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, List, Optional, Union
+from typing import Any, Dict, FrozenSet, List, Optional, Protocol, Union, runtime_checkable
 
 from k1.fabric.types import (
     AgentContract,
@@ -313,3 +327,229 @@ class SecurityContext:
         PromptContract may not have safety_band_min; default to GREEN.
         """
         return getattr(contract, "safety_band_min", SafetyBand.GREEN.value)
+
+
+# ---------------------------------------------------------------------------
+# 4.5.5 -- MetaOperationValidator constants
+# ---------------------------------------------------------------------------
+
+# Domains that cannot be assigned to dynamically created agents
+RESTRICTED_DOMAINS: FrozenSet[str] = frozenset({"META", "SECURITY", "ADMIN"})
+
+# Pattern matching meta-tools (tool.write.* prefix)
+META_TOOL_PATTERN = re.compile(r"^tool\.write\.")
+
+# Minimum caller band required for build_agent
+_META_OP_MIN_BAND = SafetyBand.AMBER.value
+
+
+# ---------------------------------------------------------------------------
+# 4.5.5 -- Registry lookup protocol (structural subtyping)
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class RegistryLookupLike(Protocol):
+    """
+    Minimal protocol for registry lookup in MetaOperationValidator.
+
+    Satisfied by CapabilityRegistry (2.2.1). Only needs lookup()
+    to check provider_type for gate 5 (agent depth).
+    """
+
+    def lookup(self, name: str) -> Any: ...
+
+
+# ---------------------------------------------------------------------------
+# 4.5.5 -- MetaOperationValidator
+# ---------------------------------------------------------------------------
+
+
+class MetaOperationValidator:
+    """
+    5-gate meta-operation security policy (4.5.5).
+
+    Validates that a dynamic agent creation request satisfies all
+    security constraints before allowing the agent to be composed.
+
+    5 hard gates (ANY fail -> SecurityCheckResult(allowed=False)):
+      1. Capability band gate: caller SafetyBand >= AMBER
+      2. Safety band inheritance: agent cannot exceed caller band
+      3. Restricted domain gate: no META, SECURITY, ADMIN domains
+      4. Tool grant recursion gate: no tool.write.* in tools_granted
+      5. Agent depth gate: no provider_type=AGENT tools (depth=1 only)
+
+    Satisfies SecurityGateLike protocol from agent_builder.py (4.5.2).
+
+    Constructor injection:
+      registry: CapabilityRegistry (2.2.1) for gate 5 provider_type lookup.
+
+    Thread-safe: validate_meta_operation is a pure function over inputs
+    plus registry lookups (registry has RLock).
+
+    References:
+      - fabric-implementation-plan.md Issue 4.5.5
+      - meta-agent-creation-integration-proposal.md (security gates)
+    """
+
+    __slots__ = ("_registry",)
+
+    def __init__(self, registry: RegistryLookupLike) -> None:
+        """
+        Args:
+            registry: CapabilityRegistry (2.2.1) for provider_type lookup.
+        """
+        self._registry = registry
+
+    # -- Public API (SecurityGateLike) ------------------------------------
+
+    def validate_meta_operation(
+        self,
+        request_band: str,
+        agent_spec: Dict[str, Any],
+    ) -> SecurityCheckResult:
+        """
+        Validate a meta-operation (dynamic agent creation) against 5 hard gates.
+
+        ALL gates are evaluated; all violations are collected before returning.
+        If ANY gate fails, returns SecurityCheckResult(allowed=False, reasons=[...]).
+
+        Args:
+            request_band: Caller's current safety band string (e.g., "AMBER").
+            agent_spec: Agent specification dict from BuildAgentHandler._parse_inputs().
+                Expected keys: safety_band_min, domain, tools_granted.
+
+        Returns:
+            SecurityCheckResult with allowed=True if all gates pass,
+            or allowed=False with list of violation reasons.
+        """
+        reasons: List[str] = []
+
+        # Gate 1: Capability band gate -- caller must be >= AMBER
+        self._check_capability_band(request_band, reasons)
+
+        # Gate 2: Safety band inheritance -- no escalation
+        spec_band = agent_spec.get("safety_band_min", SafetyBand.GREEN.value)
+        self._check_band_inheritance(request_band, spec_band, reasons)
+
+        # Gate 3: Restricted domain gate
+        domains = agent_spec.get("domain", [])
+        self._check_restricted_domains(domains, reasons)
+
+        # Gate 4: Tool grant recursion gate
+        tools_granted = agent_spec.get("tools_granted", [])
+        self._check_tool_grant_recursion(tools_granted, reasons)
+
+        # Gate 5: Agent depth gate
+        self._check_agent_depth(tools_granted, reasons)
+
+        if reasons:
+            return SecurityCheckResult(allowed=False, reasons=reasons)
+
+        return SecurityCheckResult(allowed=True, reasons=["meta_operation_allowed"])
+
+    # -- Gate implementations (private) ------------------------------------
+
+    def _check_capability_band(
+        self,
+        request_band: str,
+        reasons: List[str],
+    ) -> None:
+        """
+        Gate 1: Caller SafetyBand must be >= AMBER.
+
+        tool.write.build_agent is an AMBER-band capability.
+        GREEN callers cannot invoke meta-operations.
+        """
+        caller_level = _BAND_ORDER.get(request_band, -1)
+        required_level = _BAND_ORDER.get(_META_OP_MIN_BAND, 1)
+
+        if caller_level < required_level:
+            reasons.append(
+                f"capability_band_denied: caller band {request_band} "
+                f"< required {_META_OP_MIN_BAND} for meta-operations"
+            )
+
+    def _check_band_inheritance(
+        self,
+        request_band: str,
+        spec_band: str,
+        reasons: List[str],
+    ) -> None:
+        """
+        Gate 2: Agent safety_band_min cannot exceed caller band.
+
+        Prevents privilege escalation: a GREEN caller cannot create
+        an AMBER agent, an AMBER caller cannot create a RED agent.
+        """
+        caller_level = _BAND_ORDER.get(request_band, -1)
+        spec_level = _BAND_ORDER.get(spec_band, 0)
+
+        if spec_level > caller_level:
+            reasons.append(
+                f"band_escalation_denied: agent band {spec_band} "
+                f"exceeds caller band {request_band}"
+            )
+
+    def _check_restricted_domains(
+        self,
+        domains: List[str],
+        reasons: List[str],
+    ) -> None:
+        """
+        Gate 3: Agent domain cannot contain META, SECURITY, or ADMIN.
+
+        Prevents creation of meta-agents that could recursively
+        create more agents or bypass security controls.
+        """
+        for domain in domains:
+            if domain.upper() in RESTRICTED_DOMAINS:
+                reasons.append(
+                    f"restricted_domain_denied: domain {domain!r} is forbidden "
+                    f"for dynamically created agents"
+                )
+
+    def _check_tool_grant_recursion(
+        self,
+        tools_granted: List[str],
+        reasons: List[str],
+    ) -> None:
+        """
+        Gate 4: tools_granted cannot contain tool.write.* meta-tools.
+
+        Prevents recursive agent creation: a dynamically created agent
+        cannot itself create other agents or invoke write meta-tools.
+        """
+        for tool in tools_granted:
+            if META_TOOL_PATTERN.match(tool):
+                reasons.append(
+                    f"tool_recursion_denied: {tool!r} is a meta-tool "
+                    f"(tool.write.*) and cannot be granted to created agents"
+                )
+
+    def _check_agent_depth(
+        self,
+        tools_granted: List[str],
+        reasons: List[str],
+    ) -> None:
+        """
+        Gate 5: tools_granted cannot contain provider_type=AGENT tools.
+
+        Enforces depth=1 (leaf nodes only). Dynamically created agents
+        can only invoke tool/workflow capabilities, not other agents.
+        Checked via Registry.lookup() for provider_type.
+        """
+        for tool in tools_granted:
+            contract = self._registry.lookup(tool)
+            if contract is not None:
+                provider_type = getattr(contract, "provider_type", "")
+                if provider_type == "AGENT":
+                    reasons.append(
+                        f"agent_depth_denied: {tool!r} has provider_type=AGENT; "
+                        f"created agents cannot invoke other agents (depth=1)"
+                    )
+
+    # -- Repr --------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        return f"MetaOperationValidator(registry={self._registry!r})"

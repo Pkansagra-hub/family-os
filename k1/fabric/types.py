@@ -717,6 +717,14 @@ class CapabilityContract:
     success_rate_30d: float = 0.0
     total_invocations_30d: int = 0
 
+    # ---- Lifecycle Metadata (4.5.6) ----
+    # Defaults are backward-compatible: existing YAML-loaded contracts
+    # behave identically (ephemeral=True, created_by="", session_scoped=True).
+    ephemeral: bool = True
+    created_by: str = ""
+    created_at_iso: str = ""
+    session_scoped: bool = True
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -743,6 +751,10 @@ class CapabilityContract:
             "last_updated": self.last_updated,
             "success_rate_30d": self.success_rate_30d,
             "total_invocations_30d": self.total_invocations_30d,
+            "ephemeral": self.ephemeral,
+            "created_by": self.created_by,
+            "created_at_iso": self.created_at_iso,
+            "session_scoped": self.session_scoped,
         }
 
     @classmethod
@@ -772,6 +784,10 @@ class CapabilityContract:
             last_updated=data.get("last_updated", ""),
             success_rate_30d=data.get("success_rate_30d", 0.0),
             total_invocations_30d=data.get("total_invocations_30d", 0),
+            ephemeral=data.get("ephemeral", True),
+            created_by=data.get("created_by", ""),
+            created_at_iso=data.get("created_at_iso", ""),
+            session_scoped=data.get("session_scoped", True),
         )
 
 
@@ -857,6 +873,11 @@ class AgentContract(CapabilityContract):
             last_updated=data.get("last_updated", ""),
             success_rate_30d=data.get("success_rate_30d", 0.0),
             total_invocations_30d=data.get("total_invocations_30d", 0),
+            # ---- Lifecycle metadata (4.5.6) ----
+            ephemeral=data.get("ephemeral", True),
+            created_by=data.get("created_by", ""),
+            created_at_iso=data.get("created_at_iso", ""),
+            session_scoped=data.get("session_scoped", True),
             # ---- Agent-specific fields ----
             prompt_template=data.get("prompt_template", ""),
             tools_granted=data.get("tools_granted", []),
@@ -1686,3 +1707,116 @@ class ResolvedProvider:
             ),
             "policy_result": self.policy_result.to_dict(),
         }
+
+
+# ---------------------------------------------------------------------------
+# 4.5.8 -- AgentResponsePayload
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AgentResponsePayload:
+    """
+    Structured response payload from an agent execution.
+
+    Every agent returns its output wrapped in this frozen dataclass.
+    AgentFactory.execute() (4.3.2) constructs the payload then embeds
+    ``payload.to_dict()`` inside ``CapabilityResult.data["payload"]``.
+
+    Concierge (DELIVERING state) reads::
+
+        result.data["payload"]["answer"]
+        result.data["payload"]["domain_data"]
+        result.data["payload"]["sources"]
+
+    Multi-agent merging: Concierge aggregates multiple
+    AgentResponsePayload instances via existing result aggregation logic.
+
+    Validation rules (via :meth:`validate`):
+      - confidence in [0.0, 1.0]
+      - domain non-empty
+      - answer non-empty
+
+    References:
+      - Epic 4.5.8 in fabric-implementation-plan.md
+      - fabric_discussion.md Section 13 (Agent Factory execute)
+    """
+
+    answer: str = ""
+    confidence: float = 0.0
+    domain: tuple[str, ...] = ()
+    sources: tuple[dict, ...] = ()
+    domain_data: Dict[str, Any] = field(default_factory=dict)
+    follow_up_needed: bool = False
+    follow_up_suggestion: str = ""
+    reasoning_trace: tuple[str, ...] = ()
+    tools_used: tuple[str, ...] = ()
+    k0_queries_made: int = 0
+
+    # ---- Serialization ----
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        JSON-safe serialization.
+
+        Tuples are emitted as lists.  ``domain_data`` and ``sources``
+        are deep-copied to prevent caller mutation.
+        """
+        return {
+            "answer": self.answer,
+            "confidence": self.confidence,
+            "domain": list(self.domain),
+            "sources": [dict(s) for s in self.sources],
+            "domain_data": dict(self.domain_data),
+            "follow_up_needed": self.follow_up_needed,
+            "follow_up_suggestion": self.follow_up_suggestion,
+            "reasoning_trace": list(self.reasoning_trace),
+            "tools_used": list(self.tools_used),
+            "k0_queries_made": self.k0_queries_made,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AgentResponsePayload":
+        """
+        Classmethod factory with type coercion.
+
+        Accepts a plain ``dict`` (e.g. from JSON deserialization) and
+        returns a frozen ``AgentResponsePayload``.  Lists are coerced
+        to tuples where the field type requires it.
+        """
+        raw_sources = data.get("sources", ())
+        raw_domain = data.get("domain", ())
+        raw_trace = data.get("reasoning_trace", ())
+        raw_tools = data.get("tools_used", ())
+
+        return cls(
+            answer=str(data.get("answer", "")),
+            confidence=float(data.get("confidence", 0.0)),
+            domain=tuple(str(d) for d in raw_domain),
+            sources=tuple(dict(s) if isinstance(s, dict) else {} for s in raw_sources),
+            domain_data=dict(data.get("domain_data", {})),
+            follow_up_needed=bool(data.get("follow_up_needed", False)),
+            follow_up_suggestion=str(data.get("follow_up_suggestion", "")),
+            reasoning_trace=tuple(str(r) for r in raw_trace),
+            tools_used=tuple(str(t) for t in raw_tools),
+            k0_queries_made=int(data.get("k0_queries_made", 0)),
+        )
+
+    # ---- Validation ----
+
+    def validate(self) -> bool:
+        """
+        Return ``True`` when all business rules are satisfied.
+
+        Rules:
+          1. ``confidence`` in [0.0, 1.0]
+          2. ``domain`` is non-empty
+          3. ``answer`` is non-empty (after stripping whitespace)
+        """
+        if not (0.0 <= self.confidence <= 1.0):
+            return False
+        if not self.domain:
+            return False
+        if not self.answer.strip():
+            return False
+        return True

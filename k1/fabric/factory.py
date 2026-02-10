@@ -49,9 +49,11 @@ from typing import Any, Dict, Mapping, Optional
 from k1.fabric.adapters.local_event import LocalEventAdapter
 from k1.fabric.adapters.test_bridge import TestBridgeAdapter
 from k1.fabric.adapters.test_delta_bus import TestDeltaBusAdapter
+from k1.fabric.adapters.test_mcp_transport import TestMCPTransport
 from k1.fabric.adapters.test_model_gateway import TestModelGatewayAdapter
 from k1.fabric.adapters.test_prompt_system import TestPromptSystemAdapter
 from k1.fabric.adapters.test_state_reader import TestSessionStateReaderAdapter
+from k1.fabric.adapters.test_wasm_runtime import TestWASMRuntime
 from k1.fabric.circuit_breaker.breaker import CircuitBreaker
 from k1.fabric.core.context_builder import ContextBuilder
 from k1.fabric.core.contract_validator import ContractValidator
@@ -206,6 +208,82 @@ def _register_provider_handlers(
 
 
 # ---------------------------------------------------------------------------
+# Auto-populate ProviderRegistry from loaded capability contracts
+# ---------------------------------------------------------------------------
+
+
+def _auto_register_providers(
+    capability_registry: Any,
+    provider_registry: ProviderRegistry,
+) -> None:
+    """
+    Scan all contracts in the CapabilityRegistry and auto-register
+    their referenced providers into the ProviderRegistry.
+
+    Each unique provider_id gets a ProviderConfig entry derived from
+    the contract's provider_type, provider_id, and endpoint fields.
+
+    This bridges the gap between:
+      - ModuleLoader loading contracts into CapabilityRegistry (2.2.1)
+      - ProviderMatcher looking up provider_id in ProviderRegistry (3.1.1)
+
+    Without this step, resolution fails at Step 2 (provider matching)
+    because ProviderRegistry is empty even though contracts are loaded.
+
+    Called after ModuleLoader.start() in Step 20 of _construct_fabric().
+    """
+    from k1.fabric.types import ProviderConfig, ProviderType
+
+    seen: set[str] = set()
+
+    for contract in capability_registry.list_all():
+        provider_id = getattr(contract, "provider_id", "")
+        if not provider_id or provider_id in seen:
+            continue
+        seen.add(provider_id)
+
+        # Skip if already registered (e.g., by explicit setup)
+        if provider_registry.contains(provider_id):
+            continue
+
+        provider_type = getattr(contract, "provider_type", ProviderType.MCP.value)
+        endpoint = getattr(contract, "provider_endpoint", None)
+
+        # Derive transport from provider_id naming convention
+        transport = None
+        if provider_type == ProviderType.MCP.value:
+            if "stdio" in provider_id:
+                transport = "stdio"
+            elif "sse" in provider_id:
+                transport = "sse"
+            elif "handler" in provider_id:
+                transport = "stdio"  # Local handlers use stdio-like transport
+
+        # Derive module_path for WASM providers
+        module_path = None
+        if provider_type == ProviderType.WASM.value:
+            module_path = getattr(contract, "module_path", None) or f"modules/{provider_id}.wasm"
+
+        config = ProviderConfig(
+            provider_id=provider_id,
+            provider_type=provider_type,
+            endpoint=endpoint or f"local://{provider_id}",
+            transport=transport,
+            module_path=module_path,
+            max_execution_ms=30000 if provider_type != ProviderType.WASM.value else 5000,
+        )
+
+        try:
+            provider_registry.register_provider(provider_id, config)
+            logger.debug("Auto-registered provider: %s (%s)", provider_id, provider_type)
+        except Exception:
+            logger.debug(
+                "Skipped provider registration for %s (already exists or error)",
+                provider_id,
+            )
+
+
+# ---------------------------------------------------------------------------
 # 5.3.1 -- FabricFactory
 # ---------------------------------------------------------------------------
 
@@ -276,6 +354,8 @@ class FabricFactory:
         capture_events: bool = True,
         contracts_dir: Optional[str] = None,
         config: Optional[FabricConfig] = None,
+        mcp_transport: Optional[Any] = None,
+        wasm_runtime: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with test adapters + event capture mode.
@@ -288,6 +368,12 @@ class FabricFactory:
             capture_events: Enable event capture mode (default True).
             contracts_dir: Directory to scan for capability contracts.
             config: Optional FabricConfig override.
+            mcp_transport: Optional custom MCP transport. If provided,
+                used instead of TestMCPTransport.  Pass an
+                AutoDiscoveryMCPTransport for real tool execution.
+            wasm_runtime: Optional custom WASM runtime. If provided,
+                used instead of TestWASMRuntime.  Pass an
+                AutoDiscoveryWASMRuntime for real WASM execution.
 
         Returns:
             Fully wired Fabric instance with event capture.
@@ -309,6 +395,8 @@ class FabricFactory:
             production_mode=False,
             contracts_dir=contracts_dir,
             config=config,
+            mcp_transport=mcp_transport,
+            wasm_runtime=wasm_runtime,
         )
 
     @staticmethod
@@ -376,6 +464,8 @@ def _construct_fabric(
     contracts_dir: Optional[str] = None,
     config: Optional[FabricConfig] = None,
     embedding_port: Optional[Any] = None,
+    mcp_transport: Optional[Any] = None,
+    wasm_runtime: Optional[Any] = None,
 ) -> Fabric:
     """
     Internal: Build a Fabric instance in dependency-safe order.
@@ -454,6 +544,19 @@ def _construct_fabric(
     )
 
     # ===== STEP 9: ProviderFactory (port_deps) =====
+    # Build test transport/runtime adapters if not in production mode
+    # If mcp_transport was injected (e.g. AutoDiscoveryMCPTransport), use it;
+    # otherwise fall back to TestMCPTransport for unit tests.
+    # If wasm_runtime was injected (e.g. AutoDiscoveryWASMRuntime), use it;
+    # otherwise fall back to TestWASMRuntime for unit tests.
+    effective_mcp_transport: Any = mcp_transport
+    effective_wasm_runtime: Any = wasm_runtime
+    if not production_mode:
+        if effective_mcp_transport is None:
+            effective_mcp_transport = TestMCPTransport(connected=True)
+        if effective_wasm_runtime is None:
+            effective_wasm_runtime = TestWASMRuntime(available=True)
+
     provider_factory = ProviderFactory(
         bridge_port=bridge,
         model_gateway_port=model_gateway,
@@ -461,6 +564,8 @@ def _construct_fabric(
         delta_bus=delta_bus,
         context_builder=context_builder,
         registry=registry,
+        mcp_transport=effective_mcp_transport,
+        wasm_runtime=effective_wasm_runtime,
     )
     _register_provider_handlers(provider_factory)
 
@@ -541,6 +646,7 @@ def _construct_fabric(
         registry=registry,
         provider_factory=provider_factory,
         circuit_breakers=circuit_breakers,
+        dispatcher=_dispatcher,
         config=fabric_config,
     )
 
@@ -569,6 +675,9 @@ def _construct_fabric(
             "Contracts directory %s does not exist, skipping scan",
             effective_contracts_dir,
         )
+
+    # ===== STEP 20b: Auto-populate ProviderRegistry from loaded contracts =====
+    _auto_register_providers(registry, provider_registry)
 
     # 5.4.4: Wire ProactiveGapDetector event subscriptions
     gap_detector = ProactiveGapDetector(

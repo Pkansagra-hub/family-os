@@ -918,8 +918,8 @@ class TestModuleExports:
     def test_all_list_count(self) -> None:
         from k1.fabric.core import __all__
 
-        # 15 prior (M2) + 18 new (4.2) = 33
-        assert len(__all__) == 33
+        # 15 prior (M2) + 18 new (4.2) + 5 new (4.5.1) + 2 new (4.5.4) + 8 new (4.5.2) + 9 new (4.5.3) + 1 new (4.5.6) = 58
+        assert len(__all__) == 58
 
     def test_context_builder_exports(self) -> None:
         from k1.fabric.core import ContextBuilder

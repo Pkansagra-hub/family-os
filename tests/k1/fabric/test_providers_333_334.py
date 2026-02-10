@@ -193,9 +193,13 @@ class FakeWASMRuntime:
 
 class FakeBridgePort:
     """
-    Test double satisfying IBridgePort Protocol.
+    Test double satisfying canonical IBridgePort Protocol.
 
     Configurable responses, errors, availability, and K0 health mode.
+    Updated to use canonical IBridgePort signature (ports/bridge_port.py):
+      send_command(operation, payload, *, trace_id, timeout_ms) -> BridgeResponse
+      query(operation, selectors, *, trace_id, timeout_ms) -> BridgeResponse
+      get_health() -> BridgeHealth (from ports/bridge_port.py)
     """
 
     def __init__(
@@ -222,11 +226,20 @@ class FakeBridgePort:
         self._query_error = query_error
         self._available = available
         self._health = health
-        self.sent_commands: List[BridgeCommand] = []
+        self.sent_commands: List[Dict[str, Any]] = []
         self.queries: List[Dict[str, Any]] = []
 
-    async def send_command(self, command: BridgeCommand) -> BridgeResponse:
-        self.sent_commands.append(command)
+    async def send_command(
+        self,
+        operation: str,
+        payload: Dict[str, Any],
+        *,
+        trace_id: str = "",
+        timeout_ms: int = 0,
+    ) -> BridgeResponse:
+        self.sent_commands.append(
+            {"operation": operation, "payload": payload, "trace_id": trace_id}
+        )
         if self._cmd_error:
             raise self._cmd_error
         return self._cmd_response
@@ -235,7 +248,9 @@ class FakeBridgePort:
         self,
         operation: str,
         selectors: Dict[str, Any],
+        *,
         trace_id: str = "",
+        timeout_ms: int = 0,
     ) -> BridgeResponse:
         self.queries.append(
             {
@@ -251,8 +266,14 @@ class FakeBridgePort:
     def is_available(self) -> bool:
         return self._available
 
-    def health_mode(self) -> K0HealthMode:
-        return self._health
+    def get_health(self) -> Any:
+        """Return BridgeHealth-compatible object with .mode attribute."""
+        from k1.fabric.ports.bridge_port import BridgeHealth
+
+        return BridgeHealth(
+            available=self._available,
+            mode=self._health.value,
+        )
 
 
 # =========================================================================
@@ -686,7 +707,7 @@ class TestBridgeProviderExecute:
         assert result.success is True
         assert result.data == {"stored": True}
         assert len(bridge.sent_commands) == 1
-        assert bridge.sent_commands[0].operation == "memory.store"
+        assert bridge.sent_commands[0]["operation"] == "memory.store"
 
     async def test_execute_memory_recall_uses_query(self) -> None:
         """memory.recall uses bridge.query() instead of send_command()."""
@@ -710,7 +731,7 @@ class TestBridgeProviderExecute:
         req = _request(capability_name="checkpoint", params={"session": "s1"})
         result = await provider.execute(req, _context(), "trace-1")
         assert result.success is True
-        assert bridge.sent_commands[0].operation == "checkpoint"
+        assert bridge.sent_commands[0]["operation"] == "checkpoint"
 
     async def test_execute_ifl_home_device(self) -> None:
         """IFL tool.execute.home.* routes as command."""
@@ -726,7 +747,7 @@ class TestBridgeProviderExecute:
         )
         result = await provider.execute(req, _context(), "trace-1")
         assert result.success is True
-        assert bridge.sent_commands[0].operation == "tool.execute.home.lights"
+        assert bridge.sent_commands[0]["operation"] == "tool.execute.home.lights"
 
     async def test_execute_ifl_device(self) -> None:
         """IFL tool.execute.device.* routes as command."""
@@ -744,17 +765,17 @@ class TestBridgeProviderExecute:
         assert result.success is True
 
     async def test_execute_command_has_topic(self) -> None:
-        """Command topic is bridge.<operation> for direct ops."""
+        """Command operation is stored correctly for direct ops."""
         bridge = FakeBridgePort()
         provider = BridgeProvider(
             _bridge_config(), bridge=bridge, capability_names=["memory.store"]
         )
         req = _request(capability_name="memory.store")
         await provider.execute(req, _context(), "trace-1")
-        assert bridge.sent_commands[0].topic == "bridge.memory.store"
+        assert bridge.sent_commands[0]["operation"] == "memory.store"
 
     async def test_execute_ifl_command_topic_is_raw(self) -> None:
-        """IFL topic is the raw capability name."""
+        """IFL operation is the raw capability name."""
         bridge = FakeBridgePort()
         provider = BridgeProvider(
             _bridge_config(),
@@ -763,7 +784,7 @@ class TestBridgeProviderExecute:
         )
         req = _request(capability_name="tool.execute.home.thermostat")
         await provider.execute(req, _context(), "trace-1")
-        assert bridge.sent_commands[0].topic == "tool.execute.home.thermostat"
+        assert bridge.sent_commands[0]["operation"] == "tool.execute.home.thermostat"
 
 
 # =========================================================================

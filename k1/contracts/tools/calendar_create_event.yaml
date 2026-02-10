@@ -1,0 +1,73 @@
+# k1/contracts/tools/calendar_create_event.yaml
+# Calendar Create Event Tool Contract (Phase 1 -- Fabric E2E Validation)
+#
+# MCP tool contract for creating a family calendar event.
+# AMBER-band write operation. Local stdio transport.
+#
+# References:
+#   - fabric_tool_implementation_plan.md Phase 1, Section 3.1
+#   - fabric_developer_guide.md Section 3
+
+tool_contract:
+  name: "tool.write.calendar_create_event"
+  version: "1.0.0"
+  domain:
+    - "CALENDAR"
+    - "FAMILY"
+  description: >
+    Create a new event on the family calendar. Requires title,
+    start time, and end time. Optionally accepts location and
+    description. Returns the created event ID and status.
+  capabilities:
+    - "event_creation"
+    - "schedule_management"
+  limitations:
+    - "no_recurring_events"
+    - "no_invitation_sending"
+    - "single_event_per_call"
+
+  required_inputs:
+    - name: "title"
+      type: "STRING"
+      description: "Event title"
+    - name: "start_time"
+      type: "STRING"
+      description: "Event start datetime (ISO 8601)"
+    - name: "end_time"
+      type: "STRING"
+      description: "Event end datetime (ISO 8601)"
+
+  optional_inputs:
+    - name: "location"
+      type: "STRING"
+      description: "Event location"
+    - name: "description"
+      type: "STRING"
+      description: "Event description or notes"
+    - name: "attendees"
+      type: "ARRAY[STRING]"
+      description: "List of attendee names"
+
+  output:
+    type: "object"
+    properties:
+      event_id:
+        type: "string"
+        description: "Unique identifier of the created event"
+      status:
+        type: "string"
+        enum:
+          - "created"
+          - "failed"
+        description: "Creation result status"
+    required:
+      - "event_id"
+      - "status"
+
+  provider_type: "MCP"
+  provider_id: "calendar_mcp_stdio"
+  safety_band_min: "AMBER"
+  cost_per_call: 0.0
+  avg_latency_ms: 30
+  max_latency_ms: 200
+  availability: "ONLINE"

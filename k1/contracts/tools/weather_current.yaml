@@ -1,0 +1,77 @@
+# k1/contracts/tools/weather_current.yaml
+# Weather Current Conditions Tool Contract (Phase 2 -- Fabric E2E Validation)
+#
+# MCP tool contract for retrieving current weather for a location.
+# GREEN-band read-only tool. Remote SSE transport.
+#
+# References:
+#   - fabric_tool_implementation_plan.md Phase 2, Section 4.1
+
+tool_contract:
+  name: "tool.read.weather_current"
+  version: "1.0.0"
+  domain:
+    - "WEATHER"
+    - "FAMILY"
+  description: >
+    Get current weather conditions for a given location. Returns
+    temperature, humidity, wind speed, and description. Read-only,
+    no side effects. Backed by remote weather API with 5-min cache.
+  capabilities:
+    - "current_weather"
+    - "location_based"
+  limitations:
+    - "read_only"
+    - "5_minute_cache"
+    - "api_rate_limited"
+
+  required_inputs:
+    - name: "location"
+      type: "STRING"
+      description: "City name or coordinates (e.g. 'London' or '51.5,-0.1')"
+
+  optional_inputs:
+    - name: "units"
+      type: "STRING"
+      description: "Temperature units: metric (C), imperial (F), or kelvin (K)"
+      default: "metric"
+      enum:
+        - "metric"
+        - "imperial"
+        - "kelvin"
+
+  output:
+    type: "object"
+    properties:
+      location:
+        type: "string"
+        description: "Resolved location name"
+      temperature:
+        type: "number"
+        description: "Current temperature in requested units"
+      humidity:
+        type: "number"
+        description: "Relative humidity percentage"
+      wind_speed:
+        type: "number"
+        description: "Wind speed in m/s (metric) or mph (imperial)"
+      description:
+        type: "string"
+        description: "Human-readable weather description"
+      units:
+        type: "string"
+        description: "Temperature units used in response"
+    required:
+      - "location"
+      - "temperature"
+      - "humidity"
+      - "description"
+      - "units"
+
+  provider_type: "MCP"
+  provider_id: "weather_mcp_sse"
+  safety_band_min: "GREEN"
+  cost_per_call: 0.0
+  avg_latency_ms: 500
+  max_latency_ms: 2000
+  availability: "ONLINE"

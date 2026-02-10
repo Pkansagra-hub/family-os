@@ -1,0 +1,115 @@
+# k1/contracts/tools/build_agent.yaml
+# Meta-Agent Creation Tool Contract (4.5.2)
+#
+# MCP tool contract for dynamic agent creation. Orchestrator-executed
+# DAG step (NOT a Planner tool per PLAN-06). Requires AMBER band.
+#
+# References:
+#   - fabric-implementation-plan.md Issue 4.5.2
+#   - meta-agent-creation-integration-proposal.md PART 1 (Option A)
+#   - ADR-0005 (Agent Lifecycle), ADR-K004 (Capability Fabric Adaptation)
+
+tool_contract:
+  name: "tool.write.build_agent"
+  version: "1.0.0"
+  domain:
+    - "META"
+    - "AGENT_CREATION"
+  description: >
+    Create and register a new agent dynamically from discovered capabilities
+    and prompt templates. Validates the agent specification, composes the
+    contract, registers it in the capability registry, and emits lifecycle
+    events. Orchestrator-executed DAG step per PLAN-06 compliance.
+  capabilities:
+    - "agent_creation"
+    - "dynamic_composition"
+    - "contract_registration"
+  limitations:
+    - "no_recursive_meta_agents"
+    - "no_agent_chains"
+    - "max_depth_1"
+
+  required_inputs:
+    - name: "agent_name"
+      type: "STRING"
+      description: "Unique agent identifier (lowercase, alphanumeric + underscore)"
+    - name: "description"
+      type: "STRING"
+      description: "Human-readable description of the agent's purpose"
+    - name: "tools_granted"
+      type: "ARRAY[STRING]"
+      description: "List of capability names the agent may invoke"
+    - name: "prompt_template"
+      type: "STRING"
+      description: "Name of the prompt template to use"
+    - name: "domain"
+      type: "ARRAY[STRING]"
+      description: "Domain tags for the agent"
+
+  optional_inputs:
+    - name: "required_context"
+      type: "ARRAY[STRING]"
+      description: "SessionState sections needed (default: all 6 sections)"
+      default:
+        - "beliefs_active"
+        - "interaction_history"
+        - "task_context"
+        - "rhythm_state"
+        - "active_plans"
+        - "pending_clarifications"
+    - name: "llm_budget_tokens"
+      type: "NUMBER"
+      description: "LLM token budget (default: 8192, range: 512-32768)"
+      default: 8192
+    - name: "safety_band_min"
+      type: "STRING"
+      description: "Minimum safety band for the created agent (default: GREEN)"
+      default: "GREEN"
+    - name: "max_tool_calls"
+      type: "NUMBER"
+      description: "Maximum tool invocations per execution (default: 10, range: 1-50)"
+      default: 10
+    - name: "max_execution_time_ms"
+      type: "NUMBER"
+      description: "Maximum execution time in milliseconds (default: 30000, range: 1000-60000)"
+      default: 30000
+    - name: "ephemeral"
+      type: "BOOLEAN"
+      description: "Whether the agent is ephemeral and removed on session end (default: true)"
+      default: true
+    - name: "session_scoped"
+      type: "BOOLEAN"
+      description: "Whether the agent is scoped to the current session (default: true)"
+      default: true
+
+  output:
+    type: "object"
+    properties:
+      agent_name:
+        type: "string"
+        description: "Full capability name of the created agent"
+      status:
+        type: "string"
+        enum: ["registered", "failed"]
+        description: "Creation result status"
+      errors:
+        type: "array"
+        items:
+          type: "string"
+        description: "Validation or creation error messages (empty on success)"
+    required:
+      - "agent_name"
+      - "status"
+      - "errors"
+
+  provider_type: "MCP"
+  provider_id: "build_agent_handler"
+  safety_band_min: "AMBER"
+  cost_per_call: 0.0
+  avg_latency_ms: 50
+  max_latency_ms: 500
+  availability: "ONLINE"
+  tags:
+    - "meta"
+    - "agent_creation"
+    - "write_operation"

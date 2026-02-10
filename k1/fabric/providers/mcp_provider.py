@@ -479,16 +479,28 @@ class MCPProvider(BaseProvider):
             [{"type": "text", "text": "..."}, {"type": "image", ...}]
 
         We extract:
-          - Single text block → {"result": text_value}
-          - Multiple blocks → {"content": [all_blocks]}
-          - Empty → {"result": None}
+          - Single text block containing JSON object -> parsed dict
+          - Single text block (plain text) -> {"result": text_value}
+          - Multiple blocks -> {"content": [all_blocks]}
+          - Empty -> {"result": None}
         """
         if not content:
             return {"result": None}
 
-        # Single text block: unwrap for convenience
+        # Single text block: try JSON parse, fall back to string
         if len(content) == 1 and content[0].get("type") == "text":
-            return {"result": content[0].get("text", "")}
+            text_value = content[0].get("text", "")
+            # Try to parse as JSON -- MCP tools commonly return JSON in text
+            if text_value and text_value.strip().startswith("{"):
+                try:
+                    import json
+
+                    parsed = json.loads(text_value)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            return {"result": text_value}
 
         # Multiple blocks or non-text: return full content array
         return {"content": list(content)}

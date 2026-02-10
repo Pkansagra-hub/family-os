@@ -1,0 +1,45 @@
+# Sample tool contract: memory_store (BRIDGE, MEMORY domain, GREEN)
+# Valid against tool_contract.schema.json
+# Used by: integration tests (6.3.1 LOW tier bridge test)
+
+tool_contract:
+  name: "tool.execute.memory_store"
+  version: "1.0.0"
+  domain:
+    - "MEMORY"
+    - "PERSISTENCE"
+  description: "Store a key-value pair in K0 memory via the Bridge"
+  capabilities:
+    - "memory_store"
+    - "memory_persist"
+  limitations:
+    - "no_bulk_write"
+    - "max_value_size_1mb"
+  required_inputs:
+    - name: "key"
+      type: "STRING"
+      description: "Memory key to store data under"
+    - name: "value"
+      type: "STRING"
+      description: "Value to store"
+  optional_inputs:
+    - name: "ttl_seconds"
+      type: "NUMBER"
+      description: "Time-to-live in seconds (0 = permanent)"
+  output:
+    type: "object"
+    properties:
+      stored:
+        type: "boolean"
+      key:
+        type: "string"
+    required:
+      - "stored"
+  provider_type: "BRIDGE"
+  provider_id: "bridge-k0-memory"
+  provider_endpoint: "bridge://k0/memory"
+  safety_band_min: "GREEN"
+  cost_per_call: 0.01
+  avg_latency_ms: 15
+  max_latency_ms: 200
+  availability: "ONLINE"

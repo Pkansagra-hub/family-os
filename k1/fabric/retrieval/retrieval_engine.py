@@ -22,11 +22,16 @@ References:
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Optional, Protocol, Sequence
 
 import numpy as np
+
+from k1.fabric.metrics import get_default_metrics
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Protocols -- declared locally to avoid circular imports
@@ -176,6 +181,7 @@ class RetrievalEngine:
             session_context=session_context or {},
             top_k=top_k,
             filter_prompt_type=False,
+            query_type="capabilities",
         )
 
     def find_relevant_prompts(
@@ -208,6 +214,7 @@ class RetrievalEngine:
             session_context={},
             top_k=top_k,
             filter_prompt_type=True,
+            query_type="prompts",
         )
 
     @property
@@ -232,6 +239,7 @@ class RetrievalEngine:
         session_context: Dict[str, Any],
         top_k: Optional[int],
         filter_prompt_type: bool,
+        query_type: str,
     ) -> Any:
         """Execute the 4-step retrieval pipeline."""
         # Avoid importing types at module-level to prevent circular imports.
@@ -258,7 +266,7 @@ class RetrievalEngine:
 
         if not all_contracts:
             elapsed_ms = int((time.monotonic() - start) * 1000)
-            return RetrievalResult(
+            result = RetrievalResult(
                 capabilities=[],
                 total_matched=0,
                 query_latency_ms=elapsed_ms,
@@ -266,6 +274,7 @@ class RetrievalEngine:
                 index_size=self._index.size,
                 embedding_model=self._config.embedding_model,
             )
+            return self._finalize_metrics(result, start, query_type)
 
         # -- Step 1: Embed query ----------------------------------------
         query_vector = self._embedding_port.embed(query_text)
@@ -308,7 +317,7 @@ class RetrievalEngine:
 
         if not survivors:
             elapsed_ms = int((time.monotonic() - start) * 1000)
-            return RetrievalResult(
+            result = RetrievalResult(
                 capabilities=[],
                 total_matched=0,
                 query_latency_ms=elapsed_ms,
@@ -316,6 +325,7 @@ class RetrievalEngine:
                 index_size=self._index.size,
                 embedding_model=self._config.embedding_model,
             )
+            return self._finalize_metrics(result, start, query_type)
 
         # -- Step 3: Soft rank ------------------------------------------
         ranker_candidates = []
@@ -363,7 +373,7 @@ class RetrievalEngine:
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
-        return RetrievalResult(
+        result = RetrievalResult(
             capabilities=capabilities,
             total_matched=total_matched,
             query_latency_ms=elapsed_ms,
@@ -371,3 +381,15 @@ class RetrievalEngine:
             index_size=self._index.size,
             embedding_model=self._config.embedding_model,
         )
+        return self._finalize_metrics(result, start, query_type)
+
+    def _finalize_metrics(self, result: Any, start: float, query_type: str) -> Any:
+        """Record retrieval metrics and return the result."""
+        metrics = get_default_metrics()
+        try:
+            duration_s = time.monotonic() - start
+            metrics.observe_retrieval_duration(query_type, duration_s)
+            metrics.inc_retrievals()
+        except Exception:
+            logger.warning("Failed to record retrieval metrics", exc_info=True)
+        return result

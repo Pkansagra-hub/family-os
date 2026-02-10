@@ -55,8 +55,12 @@ _CONTRACT_TYPE_TO_ROOT_KEY = {
 }
 
 # Name patterns per contract type (FAB-11)
+# Tool names allow 3+ segments to support:
+#   Native:  tool.execute.send_message          (3 segments)
+#   IFL:     tool.execute.home.hue.set_brightness (5 segments)
+#   MCP:     tool.execute.mcp.get_weather         (4 segments)
 _NAME_PATTERNS = {
-    "tool_contract": re.compile(r"^tool\.(execute|read|write|delete)\.[a-z][a-z0-9_]+$"),
+    "tool_contract": re.compile(r"^tool\.(execute|read|write|delete)(\.[a-z][a-z0-9_]+)+$"),
     "agent_contract": re.compile(r"^agent\.(execute|spawn)\.[a-z][a-z0-9_]+$"),
     "prompt_contract": re.compile(r"^[a-z][a-z0-9_]+(_v[0-9]+)?$"),
     "workflow_contract": re.compile(r"^workflow\.run\.[a-z][a-z0-9_]+$"),
@@ -364,14 +368,16 @@ def _validate_agent_tools_granted(
     if not isinstance(tools, list):
         errors.append("[rule-10] tools_granted must be a list")
         return
-    tool_name_pattern = re.compile(r"^tool\.(execute|read|write|delete)\.[a-z][a-z0-9_]+$")
+    # Allow 3+ segments: native (tool.verb.name), IFL (tool.verb.cat.adapter.action),
+    # MCP dynamic (tool.verb.mcp.name)
+    tool_name_pattern = re.compile(r"^tool\.(execute|read|write|delete)(\.[a-z][a-z0-9_]+)+$")
     for i, tool_name in enumerate(tools):
         if not isinstance(tool_name, str) or not tool_name.strip():
             errors.append(f"[rule-10] tools_granted[{i}] is empty or not a string")
         elif not tool_name_pattern.match(tool_name):
             errors.append(
                 f"[rule-10] tools_granted[{i}] '{tool_name}' does not follow "
-                f"tool naming convention (tool.<verb>.<name>)"
+                f"tool naming convention (tool.<verb>.<name>[.<segments>...])"
             )
 
 

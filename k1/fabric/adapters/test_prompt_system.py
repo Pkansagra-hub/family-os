@@ -135,7 +135,7 @@ class TestPromptSystemAdapter:
 
     def compile(
         self,
-        template: str,
+        template: Any,
         variables: Dict[str, Any],
     ) -> str:
         """
@@ -143,11 +143,23 @@ class TestPromptSystemAdapter:
 
         Uses simple ``{key}`` replacement.  Unresolved placeholders
         are left as-is.  Extra variables are ignored.
+
+        Accepts either a raw ``str`` or a ``PromptTemplate`` instance
+        (extracting its ``.template`` attribute).
         """
         with self._lock:
             self._compile_count += 1
 
-        result = template
+        # ContextBuilder passes the resolve() result directly, which
+        # is a PromptTemplate.  Extract the raw string.
+        if hasattr(template, "template"):
+            raw = template.template
+        elif isinstance(template, dict):
+            raw = template.get("template", template.get("text", ""))
+        else:
+            raw = str(template)
+
+        result = raw
         for key, value in variables.items():
             result = result.replace(f"{{{key}}}", str(value))
         return result

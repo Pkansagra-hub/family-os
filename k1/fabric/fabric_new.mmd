@@ -1,0 +1,992 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+%% =====================================================================================
+%% CAPABILITY FABRIC (K1) -- DEEP AI AGENT ARCHITECTURE
+%% =====================================================================================
+%% STATUS: COMPLETE (Matches implemented code as of 2026-02-08)
+%%
+%% The Capability Fabric is K1's central resolution, retrieval, and execution engine.
+%% Layer 2.5 in K1 Cognitive Architecture Skeleton.
+%%
+%% THREE ROLES:
+%%   Role 1: Intelligent Retrieval -- serves Planner (semantic Top-K, discovery tools)
+%%   Role 2: Resolution + Execution -- serves Orchestrator and Concierge (all tiers)
+%%   Role 3: Agent Factory -- spawns per-step workers from YAML templates
+%%
+%% CONCURRENCY MODEL (ADR-1.1.9):
+%%   Hybrid async/await + Semaphore(10). NO actor mailbox.
+%%   ADR-1.1.9 bypassed Epic 4.4 (Fabric Mailbox). All requests are
+%%   async coroutines gated by a Semaphore(10) for backpressure.
+%%
+%% CALLERS:
+%%   Concierge (LOW tier -- direct fast path, < 2s)
+%%   Orchestrator (MEDIUM/HIGH tier -- DAG execution, 2-60s)
+%%   Planner (HIGH tier -- discovery only, read-only, < 50ms per call)
+%%   Sub-Agents (spawned by Fabric, scoped invoke_capability)
+%%
+%% WHAT FABRIC IS NOT:
+%%   NOT an orchestrator (Orchestrator walks the DAG)
+%%   NOT a planner (Planner decides what to do)
+%%   NOT an LLM (deterministic: lookup, filter, rank, route, execute)
+%%   NOT a state writer (NEVER writes SessionState, ADR-0017)
+%%
+%% CONTRACT REGISTRATION (3 Paths):
+%%   Path 1: YAML scan at startup via ModuleLoader.scan_directory()
+%%   Path 2: Hot-reload via daemon thread _watch_loop()
+%%   Path 3: Programmatic via ModuleLoader.register_from_dict()
+%%
+%% PERFORMANCE TARGETS (Fabric overhead, excl. provider execution):
+%%   Registry lookup: < 1ms (hash table O(1))
+%%   Retrieval search (10K caps): < 20ms
+%%   Retrieval search (100K caps): < 50ms
+%%   Provider resolution: < 5ms
+%%   Context build (small): < 10ms
+%%   Full Fabric overhead: < 100ms P95, < 500ms max
+%%
+%% TOOL INVENTORY (Who Has What -- Complete K1 Tool Map):
+%%
+%%   CONCIERGE LLM (13 tools, available ALL tiers):
+%%     Cognitive Tools (6) -- writes SessionState via MutationGuard (NOT Fabric):
+%%       update_scoreboard, update_beliefs, update_clarifications,
+%%       update_narrative, refine_affect, promote_belief
+%%     Read Tools (3) -- 1 of 3 touches Fabric:
+%%       recall_memory (Bridge), discover_capabilities (Fabric), summarize_context (internal)
+%%     Action Tools (3) -- ALL route to Fabric:
+%%       invoke_capability, spawn_via_fabric, execute_workflow
+%%     Signal Tools (1) -- NOT Fabric:
+%%       acknowledge_request (direct to OUTPUT_CHANNEL)
+%%
+%%   PLANNER LLM (4 tools, ALL read-only):
+%%     discover_capabilities, find_relevant_prompts -> Fabric Retrieval
+%%     query_planning_context, recall_for_planning -> NOT Fabric
+%%
+%%   ORCHESTRATOR: ZERO TOOLS (Blind DAG Executor, calls Fabric.execute() per step)
+%%   SUB-AGENTS: SCOPED SUBSET from tools_granted[] (FAB-07)
+%%   FABRIC: ZERO TOOLS (Fabric IS the tool runtime)
+%%
+%% BRIDGE CONNECTION (3 Ports):
+%%   IKernelQueryPort      <-- BRIDGE_PROVIDER (recall), recall_memory(), recall_for_planning()
+%%   IKernelCommandPort    <-- BRIDGE_PROVIDER (memory.delta, checkpoint, feedback.signal)
+%%   IConnectorGatewayPort <-- IFL (ALL external: devices, APIs, services, sensors)
+%%
+%% IFL UNIVERSAL CONNECTOR PROTOCOL:
+%%   IFL is NOT device-only. It is the universal language for ALL external services.
+%%   Tool naming: tool.{type}.{category}.{adapter}.{action}
+%%   Event taxonomy: ifl.{category}.{adapter}.{event}
+%%   See: architecture_diagrams/bridge/interkernel_fabric_layer.mmd
+%%
+%% GOVERNING DOCUMENTS:
+%%   Design: k1/fabric/fabric_discussion.md (26 sections)
+%%   Skeleton: architecture_diagrams/k1/k1_cognitive_architecture_skeleton.mmd
+%%   Integration Guide: k1/fabric/docs/fabric_integration_guide.md
+%%   ADRs: ADR-K004, ADR-0005, ADR-0017, ADR-0028, ADR-1.1.9
+%% =====================================================================================
+
+subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execution -- NO LLM)"]
+  direction TB
+
+  %% ==================================================================================
+  %% FABRIC CORE -- Main Entry Points and Central Coordination
+  %% ==================================================================================
+
+  subgraph FABRIC_CORE["Fabric Core (API Surface + Central Coordination)"]
+    direction TB
+
+    CAPABILITY_FABRIC["CapabilityFabric (fabric.py)<br/>execute(CapabilityRequest) -> CapabilityResult<br/>execute_batch(list[CapReq]) -> list[CapResult]<br/>---<br/>CapabilityRequest:<br/>  name, params, intent, trace_id, tier,<br/>  output_schema: JsonSchema | null (ORCH-15),<br/>  schema_hint: string | null (retry with shape guidance)<br/>---<br/>CapabilityResult:<br/>  success, data, error, duration_ms,<br/>  tokens_consumed: int (0 for non-LLM providers),<br/>  quality_score: float | null (agent only, FAB-13),<br/>  discoveries: object[] | null (agent-reported new info)<br/>---<br/>9-step pipeline: emit -> resolve -> context -> instantiate<br/>  -> CB execute -> validate output -> emit -> metrics -> learn<br/>---<br/>Concurrency: Semaphore(10) (ADR-1.1.9, NO mailbox)<br/>Stateless per-request (FAB-03)<br/>CB timeout: 30s (FAB-04)"]:::fabric_core
+
+    FABRIC_RETRIEVAL_API["FabricRetrieval (fabric.py)<br/>discover_capabilities(domain?, intent?, band, ctx, top_k=10)<br/>find_relevant_prompts(intent?, domain?, band, top_k=10)<br/>---<br/>Serves Planner discovery tools only<br/>Read-only (no execution triggered)<br/>< 50ms per call"]:::fabric_core
+
+    CAPABILITY_REGISTRY_API["CapabilityRegistryAPI (fabric.py)<br/>register(contract) | unregister(name)<br/>lookup(name) -> Contract | None<br/>update_availability(name, status)<br/>update_metrics(name, success, latency_ms)<br/>reload() | health() -> RegistryHealth"]:::fabric_core
+
+    FABRIC_CONFIG["FabricConfig (fabric.py)<br/>max_batch_size: 50<br/>default_timeout_ms: 30000"]:::fabric_core
+
+    FABRIC_CONTAINER["Fabric (fabric.py)<br/>Container holds: CapabilityFabric,<br/>FabricRetrieval, CapabilityRegistryAPI<br/>Single access point for all 3 roles"]:::fabric_core
+  end
+
+  %% ==================================================================================
+  %% FACTORY -- FabricFactory (Composition Root, 20-Step Bootstrap)
+  %% ==================================================================================
+
+  subgraph FABRIC_FACTORY["FabricFactory (factory.py -- Composition Root)"]
+    direction TB
+
+    FACTORY_METHODS["Factory Methods<br/>create_standalone() -- all test adapters<br/>create_for_testing() -- test + event capture<br/>create_with_ports() -- custom adapters (production)"]:::factory
+
+    subgraph FACTORY_STEPS["20-Step Construction Order"]
+      direction TB
+
+      FS_01["Step 1: Adapters (ports first)"]:::step
+      FS_02["Step 2: ContractValidator"]:::step
+      FS_03["Step 3: CapabilityRegistry"]:::step
+      FS_04["Step 4: ModuleLoader"]:::step
+      FS_05["Step 5: PolicyEngine subsystem"]:::step
+      FS_06["Step 6: ProviderRegistry"]:::step
+      FS_07["Step 7: CircuitBreaker config"]:::step
+      FS_08["Step 8: ContextBuilder"]:::step
+      FS_09["Step 9: ProviderFactory + handler registration"]:::step
+      FS_10["Step 10: Provider resolution chain"]:::step
+      FS_11["Step 11: Retrieval subsystem"]:::step
+      FS_12["Step 12: OutputValidationPipeline"]:::step
+      FS_13["Step 13: HealthChecker + AvailabilityTracker"]:::step
+      FS_14["Step 14: Wire HealthChecker <-> CB bidirectional"]:::step
+      FS_15["Step 15: FabricDispatcher (production only)"]:::step
+      FS_16["Step 16: EventEmitter + ProactiveGapDetector"]:::step
+      FS_17["Step 17: CapabilityFabric facade"]:::step
+      FS_18["Step 18: FabricRetrieval"]:::step
+      FS_19["Step 19: CapabilityRegistryAPI"]:::step
+      FS_20["Step 20: Return Fabric container"]:::step
+    end
+  end
+
+  %% ==================================================================================
+  %% SUBSYSTEM 1: CONTRACT SYSTEM (Contract Plane)
+  %% ==================================================================================
+
+  subgraph CONTRACT_SYSTEM["Subsystem 1: Capability Contract System (Contract Plane)"]
+    direction TB
+
+    subgraph CONTRACT_TYPES["Contract Types (YAML in k1/contracts/)"]
+      direction TB
+
+      TOOL_CONTRACTS["Tool Contracts<br/>k1/contracts/tools/*.yaml<br/>---<br/>name: tool.execute.* | tool.read.* | tool.write.* | tool.delete.*<br/>provider_type: MCP | WASM | BRIDGE<br/>required_inputs[], output schema<br/>required_context[], optional_context[]<br/>safety_band_min, cost_per_call, avg_latency_ms<br/>---<br/>15 implemented tools:<br/>tool.execute.send_message, .schedule_event, .set_reminder,<br/>  .run_diagnostic, .create_invitation, .reserve_table,<br/>  .set_thermostat, .order_groceries<br/>tool.read.weather, .contact_lookup, .calendar_events,<br/>  .recipe_search, .note_search<br/>tool.write.build_agent, .save_note"]:::contract
+
+      AGENT_CONTRACTS["Agent Contracts<br/>k1/contracts/agents/*.yaml<br/>---<br/>name: agent.execute.* | agent.spawn.*<br/>prompt_template, tools_granted[]<br/>llm_budget_tokens, max_tool_calls<br/>max_execution_time_ms<br/>template_file reference<br/>---<br/>Known Agents:<br/>memory_writer, curiosity_agent,<br/>reminder_agent, gap_answer_writer,<br/>learning_extractor"]:::contract
+
+      PROMPT_CONTRACTS["Prompt Contracts<br/>k1/contracts/prompts/*.yaml<br/>---<br/>name, version, domain[]<br/>intent_match[] (retrieval triggers)<br/>variables[] (must be filled)<br/>template_file, max_tokens<br/>compatible_agents[], output_format"]:::contract
+
+      WORKFLOW_CONTRACTS["Workflow Contracts<br/>k1/contracts/workflows/*.yaml<br/>---<br/>name: workflow.run.*<br/>source_plan_id (from CommittedPlan)<br/>trigger: cron | event | manual<br/>steps[] (frozen DAG)<br/>max_depth: 3, allows_sub_workflows"]:::contract
+    end
+
+    subgraph CONTRACT_VALIDATION["Contract Validation"]
+      direction TB
+
+      CONTRACT_VALIDATOR["ContractValidator (contract_validator.py)<br/>Schema validation for ALL contracts<br/>---<br/>Name pattern: type.verb.name (3 segments)<br/>  tool.execute.send_message<br/>  agent.spawn.health_agent<br/>  workflow.run.morning_routine<br/>  concierge.state.update<br/>---<br/>Validates: name, version, domain[], description,<br/>required_inputs[], output schema,<br/>provider_type in {MCP,WASM,BRIDGE,AGENT,WORKFLOW,CONCIERGE},<br/>safety_band_min, availability"]:::validator
+
+      CONTRACT_SCHEMAS["Contract Schemas<br/>k1/contracts/schemas/<br/>---<br/>tool_contract.schema.json<br/>agent_contract.schema.json<br/>prompt_contract.schema.json<br/>workflow_contract.schema.json"]:::contract
+    end
+
+    subgraph CONTRACT_LOADING["Contract Loading (3 Registration Paths)"]
+      direction TB
+
+      MODULE_LOADER["ModuleLoader (module_loader.py)<br/>---<br/>Path 1: scan_directory(contracts_dir)<br/>  Startup: recursively scan all YAML<br/>  Validate + register each contract<br/>---<br/>Path 2: _watch_loop() (daemon thread)<br/>  Hot-reload: watch for file changes<br/>  On create/modify: validate + re-register<br/>  On delete: unregister<br/>  Atomic per-contract, no downtime<br/>---<br/>Path 3: register_from_dict(dict)<br/>  Programmatic: direct dict registration<br/>  Used by auto-discovery adapters"]:::engine
+
+      MODULE_CACHE["Module Cache<br/>Hot-loaded contracts<br/>Invalidated on hot-reload"]:::registry
+    end
+
+    CAPABILITY_VERSIONING["Versioning and Compatibility<br/>Semver per contract<br/>Hot-reload: atomic per-contract<br/>Schema drift detection on workflows"]:::contract
+  end
+
+  %% ==================================================================================
+  %% SUBSYSTEM 2: CAPABILITY REGISTRY
+  %% ==================================================================================
+
+  subgraph REGISTRY_SYSTEM["Subsystem 2: Capability Registry (In-Memory Indexed Catalog)"]
+    direction TB
+
+    CAPABILITY_REGISTRY["CapabilityRegistry (registry.py)<br/>Agent/Tool/Workflow/Prompt index<br/>100K+ items at scale<br/>---<br/>by_name: dict (O(1) exact lookup)<br/>by_domain: inverted index<br/>by_type: grouped by prefix<br/>by_provider: grouped by provider_id<br/>metadata_cache: hot contract metadata"]:::registry
+
+    EMBEDDING_INDEX["EmbeddingIndex (embedding_index.py)<br/>FAISS (flat L2 or IVF for >10K)<br/>---<br/>vectors: ndarray[float32] (N x dim)<br/>texts: description + capabilities per contract<br/>Rebuild: startup (full), on register (incremental)"]:::registry
+  end
+
+  %% ==================================================================================
+  %% SUBSYSTEM 3: SEMANTIC RETRIEVAL ENGINE (Role 1: Serves Planner)
+  %% ==================================================================================
+
+  subgraph RETRIEVAL_ENGINE["Subsystem 3: Semantic Retrieval Engine (Role 1 -- Serves Planner)"]
+    direction TB
+
+    RETRIEVAL_ENGINE_CORE["RetrievalEngine (retrieval_engine.py)<br/>Orchestrates 4-step retrieval pipeline<br/>Receives SearchQuery{text, domain?, intent?, band, top_k}"]:::engine
+
+    subgraph RETRIEVAL_PIPELINE["4-Step Retrieval Pipeline"]
+      direction TB
+
+      EMBED_QUERY["Step 1: Embed Query<br/>Same model that indexed registry<br/>query_vector = embed(query_text)<br/>< 5ms per query"]:::step
+
+      HARD_FILTER["Step 2: HardFilter (hard_filter.py)<br/>Eliminates non-candidates<br/>---<br/>Rule 1: Safety band access (band_min <= user_band)<br/>Rule 2: Availability != OFFLINE (DEGRADED kept, penalized)<br/>Rule 3: Required inputs satisfiable from context<br/>---<br/>ANY hard rule fail = eliminated (FAB-05)<br/>< 2ms (field comparisons, no I/O)"]:::safety
+
+      SOFT_RANKER["Step 3: SoftRanker (soft_ranker.py)<br/>Scores remaining candidates<br/>---<br/>Score = (0.4 x semantic_similarity)<br/>      + (0.3 x domain_match)<br/>      + (0.15 x success_rate_30d)<br/>      + (0.15 x cost_latency_score)<br/>---<br/>DEGRADED penalty: score x 0.7<br/>< 10ms (dot products + field reads)"]:::engine
+
+      TOP_K_SELECTOR["Step 4: TopKSelector (top_k_selector.py)<br/>Default K=10, max K=25<br/>---<br/>Returns: contract + input/output schema<br/>+ score + provider type"]:::engine
+    end
+  end
+
+  %% ==================================================================================
+  %% SUBSYSTEM 4: PROVIDER RESOLUTION ENGINE (Role 2: Exact Name Lookup)
+  %% ==================================================================================
+
+  subgraph RESOLUTION_ENGINE["Subsystem 4: Provider Resolution Engine (Role 2 -- Exact Match)"]
+    direction TB
+
+    subgraph RESOLUTION_PIPELINE["5-Step Resolution Pipeline"]
+      direction TB
+
+      REGISTRY_LOOKUP["Step 1: Registry Lookup<br/>contract = registry.lookup(request.name)<br/>O(1) via by_name dict<br/>Not found -> CapabilityResult{error: capability_not_found}"]:::step
+
+      PROVIDER_MATCHER["Step 2: ProviderMatcher (provider_matcher.py)<br/>Find all providers for this contract<br/>Usually 1:1 (one provider per capability)"]:::engine
+
+      POLICY_EVALUATION["Step 3: Policy Evaluation<br/>(See Subsystem 5: Policy Engine)<br/>Security hard gate + 3 soft dimensions"]:::engine
+
+      PROVIDER_SELECTOR["Step 4: ProviderSelector (provider_selector.py)<br/>Highest composite score wins<br/>Ties: lower avg_latency_ms, then alphabetical<br/>All fail security: error=access_denied<br/>Deterministic (FAB-10)"]:::engine
+
+      PROVIDER_INSTANTIATION["Step 5: Provider Instantiation<br/>ProviderFactory creates handler by type:<br/>MCPProvider | WASMProvider | BridgeProvider<br/>AgentProvider | WorkflowProvider | ConciergeProvider"]:::factory
+    end
+
+    RESOLVER["Resolver (resolver.py)<br/>Chains: Matcher -> Policy -> Selector<br/>Returns: resolved ProviderConfig"]:::engine
+
+    PROVIDER_REGISTRY["ProviderRegistry (provider_registry.py)<br/>Maps provider_id -> ProviderConfig<br/>---<br/>Populated by _auto_register_providers()<br/>Bridges Contract Plane -> Execution Plane:<br/>Scans registry for unique provider_ids,<br/>creates ProviderConfig per provider<br/>---<br/>MCP: endpoint, transport (stdio/SSE/HTTP), max_concurrent<br/>WASM: module_path, sandbox_memory_mb, max_execution_ms<br/>Bridge: bridge_endpoint, operations[]<br/>Agent: template, budget, tools_granted[]<br/>Workflow: dag_spec, trigger<br/>Concierge: fsm_handler"]:::registry
+
+    PROVIDER_FACTORY["ProviderFactory (provider_factory.py)<br/>Instantiate capability handlers<br/>---<br/>_register_provider_handlers() registers 6 types:<br/>MCP, WASM, BRIDGE, AGENT, WORKFLOW, CONCIERGE<br/>create(config) -> CapabilityProvider"]:::factory
+  end
+
+  %% ==================================================================================
+  %% SUBSYSTEM 5: POLICY ENGINE (4 Dimensions)
+  %% ==================================================================================
+
+  subgraph POLICY_ENGINE["Subsystem 5: Policy Engine (4 Dimensions)"]
+    direction TB
+
+    SECURITY_CONTEXT["Dimension 1: SecurityContext (security_context.py) HARD GATE<br/>---<br/>FIRST check. Fail = immediate reject.<br/>user_band >= capability_band_min<br/>Band ordering: GREEN < AMBER < RED < CRISIS<br/>---<br/>Also checks: Sub-Agent tool scoping (tools_granted[]),<br/>Rate limiting per capability, Tenant isolation (family_id)<br/>---<br/>META-OPERATION GATES (4.5.5):<br/>build_agent requires AMBER minimum<br/>Created agents inherit creator max band<br/>Restricted domains: META, SECURITY, ADMIN<br/>No recursive creation (build_agent not grantable)<br/>Depth=1: agents cannot invoke other agents"]:::safety
+
+    AFFECTIVE_ROUTING["Dimension 2: AffectiveRouting (affective_routing.py)<br/>---<br/>Reads affective_now from SessionState<br/>High sadness/anxiety (>0.7): +0.1 empathetic providers<br/>Output: affective_score (0.0 - 0.2)"]:::policy
+
+    COGNITIVE_LOAD["Dimension 3: CognitiveLoadRouting (cognitive_load_routing.py)<br/>---<br/>Reads complexity_tier + cognitive state<br/>High load: +0.1 fast/simple providers<br/>Output: cognitive_score (0.0 - 0.15)"]:::policy
+
+    QOS_INTEGRATION["Dimension 4: QoSIntegration (qos_integration.py)<br/>---<br/>Budget-aware + latency-aware selection<br/>Output: qos_score (0.0 - 0.2)"]:::policy
+
+    POLICY_ENGINE_CORE["PolicyEngine (policy_engine.py)<br/>Composite Provider Score<br/>---<br/>final_score = base_relevance_score<br/>            + affective_score<br/>            + cognitive_score<br/>            + qos_score<br/>Highest score selected, deterministic"]:::engine
+  end
+
+  %% ==================================================================================
+  %% SUBSYSTEM 6: EXECUTION RUNTIME (6 Provider Types)
+  %% ==================================================================================
+
+  subgraph EXECUTION_RUNTIME["Subsystem 6: Execution Runtime (6 Provider Types)"]
+    direction TB
+
+    PROVIDER_INTERFACE["CapabilityProvider Protocol (base_provider.py)<br/>---<br/>execute(request, context, trace_id) -> CapabilityResult<br/>health_check() -> ProviderHealth<br/>capabilities() -> list[str]<br/>---<br/>BaseProvider ABC: common error handling, tracing, metrics"]:::engine
+
+    subgraph PROVIDERS["Provider Implementations"]
+      direction TB
+
+      MCP_PROVIDER["MCPProvider (mcp_provider.py)<br/>---<br/>Uses IMCPTransport (NOT Bridge routing)<br/>Direct: tool_call msg -> MCP server -> parse result<br/>---<br/>4 implemented MCP servers:<br/>calendar_mcp_server, weather_mcp_server,<br/>notes_mcp_server, recipes_mcp_server<br/>---<br/>CB per provider_id, timeout: local 10s, remote 15s"]:::provider
+
+      WASM_PROVIDER["WASMProvider (wasm_provider.py)<br/>---<br/>Uses IWASMRuntime (sandboxed computation)<br/>Memory: default 64MB, Timeout: default 5s<br/>No network access (pure computation)<br/>---<br/>2 implemented WASM modules:<br/>date_calc, unit_convert<br/>---<br/>CB per provider_id, timeout: 5s"]:::provider
+
+      BRIDGE_PROVIDER["BridgeProvider (bridge_provider.py)<br/>---<br/>Uses IBridgePort -> Cross-Kernel Bridge -> K0<br/>Operations: memory.store, memory.recall,<br/>memory.delta, checkpoint, feedback.signal<br/>---<br/>Offline fallback: LOCAL COLD (K1 SQLite)<br/>CB per provider_id, timeout: 10s"]:::provider
+
+      AGENT_PROVIDER["AgentProvider (agent_provider.py)<br/>---<br/>For agent.execute.* and agent.spawn.* capabilities<br/>Spawns per-step workers with own LLM<br/>Uses IModelGatewayPort for LLM access<br/>(See Agent Factory subgraph below)<br/>---<br/>tokens_consumed, quality_score (FAB-13),<br/>discoveries[], schema_hint injection<br/>---<br/>CB per provider_id, timeout: 30s"]:::provider
+
+      WORKFLOW_PROVIDER["WorkflowProvider (workflow_provider.py)<br/>---<br/>Rehydrates frozen WorkflowSpec<br/>Validates capabilities still exist (drift detection)<br/>Creates Run Manifest (pinned version + hash)<br/>Routes to Orchestrator for DAG execution<br/>---<br/>Max depth: 3 (sub-workflow nesting limit)<br/>CB per provider_id, timeout: 60s"]:::provider
+
+      CONCIERGE_PROVIDER["ConciergeProvider (concierge_provider.py)<br/>---<br/>Handles concierge.state.* capabilities<br/>Routes to FSM state handlers<br/>Modifies FSM state via Concierge Single Writer<br/>CB per provider_id, timeout: 10s"]:::provider
+    end
+  end
+
+  %% ==================================================================================
+  %% SUBSYSTEM 7: CONTEXT BUILDER
+  %% ==================================================================================
+
+  subgraph CONTEXT_BUILDER_SYSTEM["Subsystem 7: Context Builder"]
+    direction TB
+
+    CONTEXT_BUILDER["ContextBuilder (context_builder.py)<br/>SessionState -> ExecutionContext<br/>---<br/>Uses ISessionStateReader (multi-reader, lock-free)<br/>Uses IPromptSystemPort (template resolution)"]:::engine
+
+    subgraph CONTEXT_PIPELINE["6-Step Context Assembly"]
+      direction TB
+
+      CTX_READ_CONTRACT["Step 1: Read Contract Requirements<br/>sections_needed = required_context + optional_context"]:::step
+
+      CTX_FETCH_STATE["Step 2: Fetch From SessionState<br/>Multi-reader, lock-free reads via ISessionStateReader<br/>Optional missing: skip | Required missing: log warning"]:::step
+
+      CTX_INJECT_PARAMS["Step 3: Inject Request Params<br/>context.params = request.params<br/>context.intent = request.intent"]:::step
+
+      CTX_RESOLVE_PROMPT["Step 4: Resolve Prompt Template + Schema Hint<br/>Via IPromptSystemPort: resolve -> version -> inject -> compile<br/>---<br/>Schema Hint Injection (ORCH-15):<br/>If request.schema_hint != null: append schema guidance<br/>If request.output_schema != null: append format guidance"]:::step
+
+      CTX_APPLY_BUDGET["Step 5: Apply Token Budget<br/>Ceiling: 128K tokens (FAB-08)<br/>---<br/>Compression strategy if > 80%:<br/>1. Drop optional_context<br/>2. Truncate history (keep last 3)<br/>3. Summarize beliefs<br/>4. Emergency: drop WARM, keep only HOT"]:::step
+
+      CTX_PACKAGE["Step 6: Package and Return<br/>ExecutionContext{session_sections, params,<br/>prompt (compiled), token_count, trace_id}"]:::step
+    end
+  end
+
+  %% ==================================================================================
+  %% OUTPUT VALIDATION PIPELINE (Inside Fabric execute() -- Step 6)
+  %% ==================================================================================
+
+  subgraph OUTPUT_VALIDATION_SYSTEM["Output Validation Pipeline (Inside execute() -- Step 6)"]
+    direction TB
+
+    OUTPUT_VALIDATION["OutputValidationPipeline (pipeline.py)<br/>Orchestrates 3-Tier validation<br/>Called at step 6 of execute()"]:::engine
+
+    TIER1_FORMAT["T1: FORMAT (<1ms, sync)<br/>Valid text, within max_tokens, no template markers<br/>FAIL: retry LLM once, 2 retries max, accept with warning"]:::safety
+
+    TIER2_SCHEMA["T2: SCHEMA (SchemaValidator with coercion)<br/>Required fields + types<br/>Coercion strategies: string -> number, etc.<br/>FAIL: retry with schema_hint"]:::engine
+
+    TIER3_SEMANTIC["T3: SEMANTIC (<50ms, async)<br/>Business rules + hallucination detection<br/>Cross-ref SessionState via ISessionStateReader<br/>FAIL: strip contradictions, retry if >50%"]:::engine
+
+    VALIDATION_FALLBACK["ValidationFallback<br/>Graceful degradation: skip tier if it errors<br/>Never block execution on validation failure"]:::engine
+  end
+
+  %% ==================================================================================
+  %% AGENT FACTORY (Inside Execution Runtime)
+  %% ==================================================================================
+
+  subgraph AGENT_FACTORY_SYSTEM["Agent Factory (Role 3 -- Spawns Per-Step Workers)"]
+    direction TB
+
+    subgraph AGENT_INSTANTIATION["8-Step Agent Instantiation"]
+      direction TB
+
+      AF_LOAD_TEMPLATE["Step 1: Load Template<br/>YAML from contract.template_file<br/>Validate against agent contract schema"]:::step
+
+      AF_CREATE_MAILBOX["Step 2: Create Mailbox<br/>MPSC Mailbox, WFQ Priority: INTERACTIVE<br/>Capacity: 100 messages"]:::step
+
+      AF_GRANT_LLM["Step 3: Grant LLM Access<br/>model_hub.create_handle(budget, capabilities, trace_id)<br/>Via IModelGatewayPort -> Model Hub"]:::step
+
+      AF_GRANT_STATE["Step 4: Grant SessionState Read<br/>Multi-reader, lock-free via ISessionStateReader<br/>Scoped to contract.required_context sections"]:::step
+
+      AF_SCOPE_TOOLS["Step 5: Scope Tool Access (FAB-07)<br/>---<br/>Start: contract.tools_granted[]<br/>Override: plan_step.tools_granted[]<br/>Plan step takes precedence<br/>NEVER grant outside union of both"]:::step
+
+      AF_BUILD_CONTEXT["Step 6: Build Initial Context<br/>Uses Context Builder (Subsystem 7)"]:::step
+
+      AF_INSTANTIATE["Step 7: Instantiate Agent<br/>Agent(id, contract, mailbox, llm,<br/>state_reader, tools, context, lifecycle=PENDING)"]:::step
+
+      AF_START_LIFECYCLE["Step 8: Start Lifecycle<br/>PENDING -> WARMING -> ACTIVE<br/>ACTIVE -> IDLE (pool, 60s TTL)<br/>ACTIVE -> DRAINING -> TERMINATED"]:::step
+    end
+
+    AGENT_LIFECYCLE["Agent Lifecycle (ADR-0005)<br/>---<br/>PENDING -> WARMING -> ACTIVE -> IDLE<br/>IDLE -> ACTIVE (fast reactivate)<br/>ACTIVE -> DRAINING -> TERMINATED<br/>---<br/>IDLE pool: same-type agent reuse<br/>TERMINATED: release all resources"]:::lifecycle
+
+    TOOL_SCOPE["Tool Scope Enforcer<br/>---<br/>allowed_tools: set[str]<br/>validate(capability_name) -> bool<br/>Raises AccessDeniedError if not in allowed set"]:::safety
+  end
+
+  %% ==================================================================================
+  %% META-AGENT CREATION (Epic 4.5 -- Dynamic Agent Composition)
+  %% ==================================================================================
+
+  subgraph META_AGENT_CREATION["Meta-Agent Creation (Epic 4.5 -- Dynamic Composition)"]
+    direction TB
+
+    AGENT_SPEC_VALIDATOR["AgentSpecValidator (4.5.1)<br/>Validates programmatic agent specs<br/>Rules: name pattern, tools exist, context valid,<br/>domain/safety valid, token budgets in range"]:::validator
+
+    BUILD_AGENT_TOOL["tool.write.build_agent (4.5.2)<br/>MCP Tool Contract<br/>---<br/>domain: [META, AGENT_CREATION]<br/>safety_band_min: AMBER<br/>---<br/>Flow: Validate -> Compose -> Register -> Emit<br/>NOTE: Orchestrator-executed DAG step (NOT Planner)"]:::tool_fabric
+
+    AGENT_COMPOSER["AgentComposer (4.5.4)<br/>Builder Pattern<br/>compose_agent(name, desc, domain)<br/>  .add_tool() .set_prompt() .set_context() .build()<br/>---<br/>Factory: from_discovery_result(caps, intent)"]:::factory
+
+    META_SAFETY_GATES["Meta-Operation Safety (4.5.5)<br/>---<br/>1. build_agent requires AMBER minimum<br/>2. Created agents inherit creator max band<br/>3. Restricted domains: META, SECURITY, ADMIN<br/>4. tools_granted[] cannot include build_agent<br/>5. Depth=1: agents CANNOT invoke other agents"]:::safety
+
+    META_LIFECYCLE["Lifecycle Metadata (4.5.6)<br/>---<br/>ephemeral (default) or persistent<br/>Persistent: auto-YAML to k1/contracts/agents/generated/"]:::lifecycle
+
+    AGENT_RESPONSE_PAYLOAD["AgentResponsePayload (4.5.8)<br/>Frozen dataclass -- standard agent output<br/>---<br/>answer, confidence, domain[], sources[],<br/>domain_data, follow_up_needed, follow_up_suggestion,<br/>reasoning_trace[], tools_used[], k0_queries_made"]:::type_registry
+  end
+
+  %% ==================================================================================
+  %% CAPABILITY TYPE REGISTRY
+  %% ==================================================================================
+
+  subgraph CAPABILITY_TYPES["Capability Type Registry (Name Conventions)"]
+    direction TB
+
+    TYPE_AGENT["Agent Capabilities<br/>agent.spawn.* | agent.execute.*"]:::type_registry
+
+    TYPE_TOOL["Tool Capabilities<br/>tool.execute.* | tool.read.*<br/>tool.write.* | tool.delete.*"]:::type_registry
+
+    TYPE_WORKFLOW["Workflow Capabilities<br/>workflow.run.*"]:::type_registry
+
+    TYPE_CONCIERGE["Concierge Capabilities<br/>concierge.state.*"]:::type_registry
+  end
+
+  %% ==================================================================================
+  %% PORTS -- Hexagonal Architecture (6 Ports)
+  %% ==================================================================================
+
+  subgraph PORTS["Ports (Hexagonal Boundary Contracts -- 6 Ports)"]
+    direction TB
+
+    PORT_SESSION_STATE["ISessionStateReader (session_state.py)<br/>Direction: Inbound (read-only)<br/>read(sections[]) -> Snapshot<br/>Multi-reader, lock-free"]:::port
+
+    PORT_EVENT["IEventPort (event_port.py)<br/>Direction: Outbound<br/>emit(topic, payload, trace_id)"]:::port
+
+    PORT_BRIDGE["IBridgePort (bridge_port.py)<br/>Direction: Both<br/>recall(query) -> RecallResult<br/>submit(envelope) -> void<br/>execute_connector(adapter_id, action, params) -> ConnectorResult"]:::port
+
+    PORT_MODEL_GATEWAY["IModelGatewayPort (model_gateway.py)<br/>Direction: Outbound<br/>create_handle(budget, capabilities) -> LLMHandle<br/>Used by AgentProvider for agent LLM access"]:::port
+
+    PORT_PROMPT_SYSTEM["IPromptSystemPort (prompt_system.py)<br/>Direction: Outbound<br/>resolve(name) -> PromptTemplate<br/>Dual identity: Fabric prompt + agent prompt"]:::port
+
+    PORT_DELTA_BUS["IDeltaBusPort (delta_bus.py)<br/>Direction: Outbound<br/>emit_delta(topic, delta) -> void<br/>Agent state deltas to DeltaBus"]:::port
+  end
+
+  %% ==================================================================================
+  %% ADAPTERS -- Production + Test (8 Test + 2 Production)
+  %% ==================================================================================
+
+  subgraph ADAPTERS["Adapters (Infrastructure Bindings)"]
+    direction TB
+
+    subgraph ADAPTERS_PROD["Production Adapters"]
+      direction TB
+      ADAPT_SESSION_READER["SessionStateReaderAdapter<br/>(sessionstate_reader.py)"]:::adapter
+      ADAPT_BRIDGE_CONN["BridgeConnectionAdapter<br/>(bridge_connection.py)"]:::adapter
+      ADAPT_AUTO_MCP["AutoDiscoveryMCPTransport<br/>(auto_mcp_transport.py)<br/>3 dispatch patterns:<br/>Handler, JSON-RPC, FastMCP"]:::adapter
+      ADAPT_AUTO_WASM["AutoDiscoveryWASMRuntime<br/>(auto_wasm_runtime.py)<br/>Discovers executor.py in WASM dirs"]:::adapter
+    end
+
+    subgraph ADAPTERS_TEST["Test Adapters (In-Memory)"]
+      direction TB
+      ADAPT_TEST_STATE["TestSessionStateReaderAdapter"]:::adapter_test
+      ADAPT_TEST_EVENT["LocalEventAdapter"]:::adapter_test
+      ADAPT_TEST_BRIDGE["TestBridgeAdapter"]:::adapter_test
+      ADAPT_TEST_MCP["TestMCPTransport"]:::adapter_test
+      ADAPT_TEST_WASM["TestWASMRuntime"]:::adapter_test
+      ADAPT_TEST_MODEL["TestModelGatewayAdapter"]:::adapter_test
+      ADAPT_TEST_PROMPT["TestPromptSystemAdapter"]:::adapter_test
+      ADAPT_TEST_DELTA["TestDeltaBusAdapter"]:::adapter_test
+    end
+  end
+
+  %% ==================================================================================
+  %% CIRCUIT BREAKERS (Per provider_id, NOT per type)
+  %% ==================================================================================
+
+  subgraph CIRCUIT_BREAKERS["Circuit Breakers (Per provider_id Resilience)"]
+    direction TB
+
+    CB_NOTE["CircuitBreaker (breaker.py)<br/>One CB instance per provider_id<br/>(NOT per provider type)<br/>---<br/>States: CLOSED -> OPEN -> HALF_OPEN<br/>Configured per provider type defaults:"]:::circuit_breaker
+
+    CB_MCP_LOCAL["CB: MCP Local providers<br/>10s timeout, 3/min"]:::circuit_breaker
+
+    CB_MCP_REMOTE["CB: MCP Remote providers<br/>15s timeout, 3/min"]:::circuit_breaker
+
+    CB_WASM["CB: WASM providers<br/>5s timeout, 5/min"]:::circuit_breaker
+
+    CB_BRIDGE["CB: Bridge (K0) providers<br/>10s timeout, 3/min"]:::circuit_breaker
+
+    CB_AGENT["CB: Agent providers<br/>30s timeout, 2/min"]:::circuit_breaker
+
+    CB_WORKFLOW["CB: Workflow providers<br/>60s timeout, 1/min"]:::circuit_breaker
+  end
+
+  %% ==================================================================================
+  %% HEALTH MONITORING
+  %% ==================================================================================
+
+  subgraph HEALTH_SYSTEM["Health Monitoring"]
+    direction TB
+
+    HEALTH_CHECKER["HealthChecker (health_checker.py)<br/>Periodic health_check() per provider<br/>Interval: 60s"]:::engine
+
+    AVAILABILITY_TRACKER["AvailabilityTracker (availability_tracker.py)<br/>ONLINE | DEGRADED | OFFLINE<br/>Bidirectional wire with CircuitBreaker:<br/>CB OPEN -> OFFLINE, CB HALF_OPEN -> DEGRADED"]:::engine
+  end
+
+  %% ==================================================================================
+  %% EVENTS -- EventEmitter + ProactiveGapDetector
+  %% ==================================================================================
+
+  subgraph EVENT_SYSTEM["Event System"]
+    direction TB
+
+    EVENT_EMITTER["EventEmitter (event_emitter.py)<br/>Wraps IEventPort with structured emission<br/>All events carry cognitive_trace_id (FAB-09)"]:::engine
+
+    PROACTIVE_GAP_DETECTOR["ProactiveGapDetector (event_emitter.py)<br/>Detects capability gaps from failed lookups<br/>Emits k1.fabric.capability.gap.detected.v1<br/>Feeds Learning Loop for future tool onboarding"]:::engine
+
+    subgraph EVENTS_EMITTED["Events Emitted by Fabric"]
+      direction TB
+
+      EVT_INVOKED["k1.fabric.capability.invoked.v1<br/>Before execution starts"]:::event
+      EVT_COMPLETED["k1.fabric.capability.completed.v1<br/>After successful execution"]:::event
+      EVT_FAILED["k1.fabric.capability.failed.v1<br/>After failed execution"]:::event
+      EVT_REGISTERED["k1.fabric.capability.registered.v1<br/>New contract added"]:::event
+      EVT_UNREGISTERED["k1.fabric.capability.unregistered.v1<br/>Contract removed"]:::event
+      EVT_VALIDATION_FAILED["k1.fabric.contract.validation.failed.v1<br/>Contract failed schema validation"]:::event
+      EVT_LEARNING["k1.fabric.learning.signal.v1<br/>Learning signal from execution outcome"]:::event
+      EVT_HEALTH_CHANGED["k1.fabric.provider.health.changed.v1<br/>Provider availability changed"]:::event
+      EVT_GAP_DETECTED["k1.fabric.capability.gap.detected.v1<br/>Capability not found in registry<br/>(ProactiveGapDetector)"]:::event
+      EVT_AGENT_CREATED["k1.fabric.agent.created.v1<br/>Dynamic agent registered via build_agent"]:::event
+      EVT_AGENT_EXPIRED["k1.fabric.agent.expired.v1<br/>Ephemeral agent removed on session end"]:::event
+      EVT_META_BLOCKED["k1.fabric.meta.operation.blocked.v1<br/>Meta-operation violated safety policy"]:::event
+
+      subgraph EVENTS_AGENT_SUBSTEP["Agent Sub-Step Events (Observability)"]
+        direction TB
+        EVT_AGENT_TOOL["fabric.agent.{id}.tool_call.{tool}<br/>Per-tool invocation"]:::event
+        EVT_AGENT_LLM["fabric.agent.{id}.llm_call.{n}<br/>Per-LLM round-trip"]:::event
+        EVT_AGENT_ITER["fabric.agent.{id}.iteration.{n}<br/>Per-loop iteration"]:::event
+      end
+    end
+
+    subgraph EVENTS_CONSUMED["Events Consumed by Fabric"]
+      direction TB
+      EVT_STEP_EXECUTE["k1.orchestration.step.execute.v1<br/>From Orchestrator"]:::event
+      EVT_DISCOVERY_REQ["k1.planner.discovery.request.v1<br/>From Planner"]:::event
+      EVT_HEALTH_CHECK["k1.fabric.provider.health.check.v1<br/>From health monitor"]:::event
+    end
+  end
+
+  %% ==================================================================================
+  %% INVARIANTS (13 Non-Negotiable Rules -- FAB-01 to FAB-13)
+  %% ==================================================================================
+
+  subgraph FABRIC_INVARIANTS["Invariants (13 Non-Negotiable Rules)"]
+    direction TB
+
+    INV_STATELESS["STATELESS + NO LLM (FAB-01..03)<br/>FAB-01: NEVER writes to SessionState<br/>FAB-02: NEVER calls an LLM<br/>FAB-03: Stateless per-request"]:::invariant
+
+    INV_SAFETY_FIRST["SAFETY FIRST (FAB-05..06)<br/>FAB-05: Hard filters BEFORE soft ranking<br/>FAB-06: Safety band checked BEFORE execution"]:::invariant
+
+    INV_EXECUTION["EXECUTION GUARANTEES (FAB-04, FAB-10)<br/>FAB-04: CapabilityResult within CB timeout (30s)<br/>FAB-10: Provider selection deterministic"]:::invariant
+
+    INV_ACCESS["ACCESS CONTROL (FAB-07..08)<br/>FAB-07: Sub-Agent tools scoped to tools_granted[] only<br/>FAB-08: Context Builder respects 128K token budget"]:::invariant
+
+    INV_GOVERNANCE["GOVERNANCE (FAB-09, FAB-11..13)<br/>FAB-09: All events with cognitive_trace_id<br/>FAB-11: Capability names follow type.verb.name<br/>FAB-12: Contracts validated against schema before registration<br/>FAB-13: quality_score deterministic (0.5*schema + 0.3*density + 0.2*(1-null))"]:::invariant
+  end
+
+  %% ==================================================================================
+  %% PERFORMANCE BASELINES
+  %% ==================================================================================
+
+  subgraph FABRIC_PERF["Performance Baselines"]
+    direction TB
+
+    PERF_REGISTRY["REGISTRY (System-Owned)<br/>Exact name lookup: < 1ms (O(1) hash)<br/>Domain/type list: < 1ms (inverted index)<br/>Registry size at scale: 100K+ items"]:::perf
+
+    PERF_RETRIEVAL["RETRIEVAL (System-Owned)<br/>Embedding per query: < 5ms<br/>Hard filter: < 2ms | Soft ranking: < 10ms<br/>10K caps: < 20ms | 100K caps: < 50ms"]:::perf
+
+    PERF_RESOLUTION["RESOLUTION + OVERHEAD (System-Owned)<br/>Provider resolution: < 5ms<br/>Context build: < 10ms (small), < 50ms (large)<br/>Quality score: < 1ms | Schema hint: < 1ms<br/>Full Fabric overhead: < 100ms P95"]:::perf
+
+    PERF_PROVIDERS["PROVIDER EXECUTION (External Latency)<br/>MCP local: < 2s (CB: 10s)<br/>MCP remote: < 5s (CB: 15s)<br/>WASM: < 1s (CB: 5s)<br/>Bridge (K0): < 2s (CB: 10s)<br/>Agent: < 10s (CB: 30s)<br/>Workflow: varies (CB: 60s)"]:::perf
+  end
+
+  %% ==================================================================================
+  %% OBSERVABILITY
+  %% ==================================================================================
+
+  subgraph FABRIC_OBSERVABILITY["Observability and Telemetry"]
+    direction TB
+
+    OBS_TRACE["Cognitive Trace ID<br/>Unifies: User -> Concierge -> Orchestrator -> Fabric -> Provider"]:::observability
+
+    OBS_LOGGING["Structured Logging<br/>Phases: resolve, policy_check, context_build,<br/>execute, validate, result_return"]:::observability
+
+    OBS_METRICS["Metrics Emitted<br/>---<br/>fabric.execution.duration_ms (histogram)<br/>fabric.execution.success_rate (counter)<br/>fabric.execution.tokens_consumed (histogram)<br/>fabric.execution.quality_score (histogram, agent only)<br/>fabric.retrieval.duration_ms (histogram)<br/>fabric.registry.size (gauge)<br/>fabric.circuit_breaker.state (gauge)"]:::observability
+  end
+
+end
+
+%% =====================================================================================
+%% EXTERNAL TOUCHPOINTS (Components Fabric Interacts With)
+%% =====================================================================================
+
+subgraph TOUCHPOINTS["External Touchpoints (Fabric Interfaces)"]
+  direction TB
+
+  subgraph TP_CALLERS["Callers (Who Invokes Fabric)"]
+    direction TB
+
+    CALLER_CONCIERGE["Concierge (via IDispatchPort -> FabricOrchAdapter)<br/>---<br/>3 Action Tools -> Fabric.execute():<br/>invoke_capability(), spawn_via_fabric(), execute_workflow()<br/>1 Read Tool -> Fabric Retrieval:<br/>discover_capabilities()<br/>---<br/>9 tools do NOT touch Fabric<br/>Latency: LOW < 2s, MED 2-10s, HIGH 10-60s"]:::caller
+
+    CALLER_ORCHESTRATOR["Orchestrator (ZERO tools, Blind DAG Executor, NO LLM)<br/>---<br/>Calls Fabric.execute() directly per DAG step<br/>Parallel steps via execute_batch()<br/>Latency: 2-60s"]:::caller
+
+    CALLER_PLANNER["Planner (4 read-only tools, LLM-Powered)<br/>---<br/>2 tools -> Fabric Retrieval:<br/>discover_capabilities(), find_relevant_prompts()<br/>2 tools bypass Fabric:<br/>query_planning_context(), recall_for_planning()"]:::caller
+
+    CALLER_SUBAGENTS["Sub-Agents (Scoped tools from tools_granted[])<br/>---<br/>invoke_capability() scoped to plan step tools (FAB-07)<br/>All calls -> Fabric.execute() (same path)"]:::caller
+  end
+
+  subgraph TP_SESSIONSTATE["SessionState (Multi-Reader Access -- Read Only)"]
+    direction TB
+
+    SS_CONTROL["control<br/>Intents, domains, safety_band"]:::ss
+    SS_BELIEFS["beliefs_active<br/>Current facts, entities"]:::ss
+    SS_SCOREBOARD["scoreboard<br/>Referents, QUD, salience"]:::ss
+    SS_HISTORY["history_active<br/>Last 10 turns"]:::ss
+    SS_PERSONA["persona<br/>Personality, style config"]:::ss
+    SS_AFFECTIVE["affective_now<br/>Current emotion snapshot"]:::ss
+    SS_TEMPORAL["temporal_context<br/>Resolved time references"]:::ss
+  end
+
+  subgraph TP_MODEL_HUB["Model Hub (Capability-Driven Plugin Architecture)"]
+    direction TB
+
+    MODEL_ROUTER["RequestRouter + CapabilityRouter<br/>Plugin dispatch, fallback<br/>See: k1/model_hub/model_hub.mmd"]:::gateway
+    MODEL_CACHE["ResponseCache<br/>Capability-aware caching"]:::gateway
+    MODEL_METRICS["CostTracker + AuditLogger"]:::gateway
+  end
+
+  subgraph TP_PROMPT_SYSTEM["Prompt Management System"]
+    direction TB
+
+    PROMPT_SYSTEM["Prompt System (Unified Entry Point)"]:::engine
+    PROMPT_TEMPLATE_STORE["Template Store<br/>k1/prompts/core/ + agents/"]:::registry
+    PROMPT_RESOLVER["Resolver + Version Controller"]:::engine
+    PROMPT_VARIABLE_INJECTOR["Variable Injector<br/>SessionState -> Template Vars"]:::engine
+    PROMPT_COMPILER["Prompt Compiler<br/>Template + Context -> Final Prompt"]:::engine
+  end
+
+  subgraph TP_BRIDGE["Cross-Kernel Bridge (3 Ports)"]
+    direction TB
+
+    BRIDGE_QUERY_PORT["IKernelQueryPort<br/>query.recall(RecallSelector) -> RecallResponse<br/>Read path: K0 P01"]:::bridge
+
+    BRIDGE_CMD_PORT["IKernelCommandPort<br/>command.submit(Envelope)<br/>Write: memory.delta, checkpoint, feedback.signal<br/>ONE-WAY fire-and-forget -> K0 P02"]:::bridge
+
+    BRIDGE_GATEWAY_PORT["IConnectorGatewayPort<br/>execute(adapter_id, action, params)<br/>ALL external: devices, APIs, services, sensors"]:::bridge
+
+    subgraph BRIDGE_IFL_NOTE["IFL Universal Connector (Bridge Owned)"]
+      direction TB
+
+      IFL_FLOW["IFL Flow:<br/>BRIDGE_GATEWAY_PORT -> TokenVerifier -> AdapterVerifier<br/>-> RateLimiter -> CircuitBreaker -> DispatchRouter<br/>-> company_hosted (HTTPS/2) OR wasm_sandboxed (local)<br/>---<br/>Auto-Registration: adapter manifest -> ManifestTranslator<br/>-> Fabric tool contracts -> CapabilityRegistry<br/>---<br/>Tool naming: tool.{type}.{category}.{adapter}.{action}<br/>Event taxonomy: ifl.{category}.{adapter}.{event}<br/>---<br/>Examples: tool.execute.home.hue.set_brightness<br/>  tool.read.finance.chase.check_balance<br/>  ifl.health.fitbit.heart_rate"]:::bridge_note
+    end
+  end
+
+  subgraph TP_BUSES["Event Bus + Delta Bus"]
+    direction TB
+
+    EVENT_BUS["K1 Event Bus<br/>Pub/Sub Topics<br/>All Fabric events with trace_id (FAB-09)"]:::bus
+    DELTA_BUS["Delta Bus<br/>Agent state deltas:<br/>k1.agent.{id}.delta.v1"]:::bus
+  end
+
+  subgraph TP_ORCHESTRATOR["Orchestrator Integration"]
+    direction TB
+
+    ORCHESTRATOR_MAILBOX["Orchestrator Mailbox<br/>Receives TaskEnvelope (MED/HIGH)"]:::caller
+    TOPOLOGICAL_WALKER["Topological Walker<br/>DAG step ordering<br/>Parallel steps where no deps"]:::engine
+  end
+
+  subgraph TP_MCP_SERVERS["MCP Servers (Implemented)"]
+    direction TB
+
+    MCP_CALENDAR["CalendarMCPServer<br/>k1/tools/mcp_servers/calendar/"]:::provider
+    MCP_WEATHER["WeatherMCPServer<br/>k1/tools/mcp_servers/weather/"]:::provider
+    MCP_NOTES["NotesMCPServer<br/>k1/tools/mcp_servers/notes/"]:::provider
+    MCP_RECIPES["RecipesMCPServer<br/>k1/tools/mcp_servers/recipes/"]:::provider
+  end
+
+  subgraph TP_WASM_MODULES["WASM Modules (Implemented)"]
+    direction TB
+
+    WASM_DATE["date_calc<br/>k1/tools/wasm_modules/date_calc/"]:::provider
+    WASM_UNITS["unit_convert<br/>k1/tools/wasm_modules/unit_convert/"]:::provider
+  end
+
+  subgraph TP_MEMORY_LEARNING["Memory Writer + Learning Loop (Background)"]
+    direction TB
+
+    MW_TP["Memory Writer<br/>Subscribes: turn.complete.v1<br/>Spawns: agent.spawn.memory_writer"]:::caller
+    LL_TP["Learning Loop<br/>Subscribes: turn.complete.v1, fabric.learning.signal.v1<br/>Spawns: curiosity_agent, gap_answer_writer, etc."]:::caller
+  end
+end
+
+%% =====================================================================================
+%% FACTORY WIRING (Construction Order)
+%% =====================================================================================
+
+FACTORY_METHODS -->|"create"| FS_01
+FS_01 --> FS_02
+FS_02 --> FS_03
+FS_03 --> FS_04
+FS_04 --> FS_05
+FS_05 --> FS_06
+FS_06 --> FS_07
+FS_07 --> FS_08
+FS_08 --> FS_09
+FS_09 --> FS_10
+FS_10 --> FS_11
+FS_11 --> FS_12
+FS_12 --> FS_13
+FS_13 --> FS_14
+FS_14 --> FS_15
+FS_15 --> FS_16
+FS_16 --> FS_17
+FS_17 --> FS_18
+FS_18 --> FS_19
+FS_19 --> FS_20
+FS_20 -->|"Fabric container"| FABRIC_CONTAINER
+
+%% =====================================================================================
+%% ROLE 1: RETRIEVAL FLOW (Planner -> Fabric -> Top-K Results)
+%% =====================================================================================
+
+CALLER_PLANNER -->|"discover_capabilities(domain, intent)"| FABRIC_RETRIEVAL_API
+CALLER_PLANNER -->|"find_relevant_prompts(intent, domain)"| FABRIC_RETRIEVAL_API
+FABRIC_RETRIEVAL_API -->|"SearchQuery"| RETRIEVAL_ENGINE_CORE
+RETRIEVAL_ENGINE_CORE -->|"embed query"| EMBED_QUERY
+EMBED_QUERY -->|"query_vector"| HARD_FILTER
+HARD_FILTER -->|"filtered_set"| SOFT_RANKER
+SOFT_RANKER -->|"scored_set"| TOP_K_SELECTOR
+TOP_K_SELECTOR -->|"Top-K RetrievalResult[]"| FABRIC_RETRIEVAL_API
+RETRIEVAL_ENGINE_CORE -->|"query registries"| CAPABILITY_REGISTRY
+EMBEDDING_INDEX -->|"cosine similarity"| RETRIEVAL_ENGINE_CORE
+HARD_FILTER -->|"safety_band check"| SS_CONTROL
+
+%% =====================================================================================
+%% ROLE 2: EXECUTION FLOW (CapabilityRequest -> Resolve -> Execute -> Result)
+%% =====================================================================================
+
+CALLER_CONCIERGE -->|"LOW: CapabilityRequest"| CAPABILITY_FABRIC
+CALLER_ORCHESTRATOR -->|"MED/HIGH: CapabilityRequest per step"| CAPABILITY_FABRIC
+CALLER_SUBAGENTS -->|"scoped invoke_capability()"| CAPABILITY_FABRIC
+
+%% Fabric execute() 9-step pipeline
+CAPABILITY_FABRIC -->|"1. emit invoked"| EVENT_EMITTER
+CAPABILITY_FABRIC -->|"2. resolve"| RESOLVER
+RESOLVER -->|"lookup"| REGISTRY_LOOKUP
+REGISTRY_LOOKUP -->|"contract"| PROVIDER_MATCHER
+PROVIDER_MATCHER -->|"candidates"| POLICY_EVALUATION
+POLICY_EVALUATION -->|"scored"| PROVIDER_SELECTOR
+PROVIDER_SELECTOR -->|"best provider"| PROVIDER_INSTANTIATION
+PROVIDER_INSTANTIATION -->|"create handler"| PROVIDER_FACTORY
+
+%% Registry lookup
+REGISTRY_LOOKUP -->|"lookup(name)"| CAPABILITY_REGISTRY
+
+%% Policy Engine evaluation
+POLICY_EVALUATION -->|"security gate (HARD)"| SECURITY_CONTEXT
+POLICY_EVALUATION -->|"affective score"| AFFECTIVE_ROUTING
+POLICY_EVALUATION -->|"cognitive score"| COGNITIVE_LOAD
+POLICY_EVALUATION -->|"QoS score"| QOS_INTEGRATION
+SECURITY_CONTEXT -->|"user_band from"| SS_CONTROL
+AFFECTIVE_ROUTING -->|"emotion from"| SS_AFFECTIVE
+POLICY_ENGINE_CORE -->|"final ranking"| PROVIDER_SELECTOR
+
+%% Context Build (step 3)
+CAPABILITY_FABRIC -->|"3. build context"| CONTEXT_BUILDER
+CTX_READ_CONTRACT --> CTX_FETCH_STATE
+CTX_FETCH_STATE --> CTX_INJECT_PARAMS
+CTX_INJECT_PARAMS --> CTX_RESOLVE_PROMPT
+CTX_RESOLVE_PROMPT --> CTX_APPLY_BUDGET
+CTX_APPLY_BUDGET --> CTX_PACKAGE
+CTX_FETCH_STATE -->|"ISessionStateReader"| SS_BELIEFS
+CTX_FETCH_STATE -->|"ISessionStateReader"| SS_HISTORY
+CTX_FETCH_STATE -->|"ISessionStateReader"| SS_PERSONA
+CTX_FETCH_STATE -->|"ISessionStateReader"| SS_TEMPORAL
+CTX_RESOLVE_PROMPT -->|"IPromptSystemPort"| PROMPT_SYSTEM
+
+%% Execute via CB (step 5)
+CAPABILITY_FABRIC -->|"5. execute via CB + provider"| PROVIDER_INTERFACE
+PROVIDER_INTERFACE -->|"MCP"| MCP_PROVIDER
+PROVIDER_INTERFACE -->|"WASM"| WASM_PROVIDER
+PROVIDER_INTERFACE -->|"Bridge"| BRIDGE_PROVIDER
+PROVIDER_INTERFACE -->|"Agent"| AGENT_PROVIDER
+PROVIDER_INTERFACE -->|"Workflow"| WORKFLOW_PROVIDER
+PROVIDER_INTERFACE -->|"Concierge"| CONCIERGE_PROVIDER
+
+%% Output Validation (step 6, INSIDE execute())
+CAPABILITY_FABRIC -->|"6. validate output"| OUTPUT_VALIDATION
+OUTPUT_VALIDATION --> TIER1_FORMAT
+TIER1_FORMAT --> TIER2_SCHEMA
+TIER2_SCHEMA --> TIER3_SEMANTIC
+
+%% Provider -> external connections
+MCP_PROVIDER -->|"IMCPTransport"| MCP_CALENDAR
+MCP_PROVIDER -->|"IMCPTransport"| MCP_WEATHER
+MCP_PROVIDER -->|"IMCPTransport"| MCP_NOTES
+MCP_PROVIDER -->|"IMCPTransport"| MCP_RECIPES
+MCP_PROVIDER -->|"IFL via Bridge"| BRIDGE_GATEWAY_PORT
+WASM_PROVIDER -->|"IWASMRuntime"| WASM_DATE
+WASM_PROVIDER -->|"IWASMRuntime"| WASM_UNITS
+BRIDGE_PROVIDER -->|"IBridgePort recall"| BRIDGE_QUERY_PORT
+BRIDGE_PROVIDER -->|"IBridgePort submit"| BRIDGE_CMD_PORT
+WORKFLOW_PROVIDER -->|"rehydrated DAG"| ORCHESTRATOR_MAILBOX
+
+%% Agent Provider -> Agent Factory
+AGENT_PROVIDER -->|"trigger instantiation"| AF_LOAD_TEMPLATE
+AF_LOAD_TEMPLATE --> AF_CREATE_MAILBOX
+AF_CREATE_MAILBOX --> AF_GRANT_LLM
+AF_GRANT_LLM -->|"IModelGatewayPort"| MODEL_ROUTER
+AF_GRANT_LLM --> AF_GRANT_STATE
+AF_GRANT_STATE -->|"ISessionStateReader"| SS_BELIEFS
+AF_GRANT_STATE --> AF_SCOPE_TOOLS
+AF_SCOPE_TOOLS -->|"enforce FAB-07"| TOOL_SCOPE
+AF_SCOPE_TOOLS --> AF_BUILD_CONTEXT
+AF_BUILD_CONTEXT -->|"via Context Builder"| CONTEXT_BUILDER
+AF_BUILD_CONTEXT --> AF_INSTANTIATE
+AF_INSTANTIATE --> AF_START_LIFECYCLE
+AF_START_LIFECYCLE -->|"lifecycle transitions"| AGENT_LIFECYCLE
+
+%% Agent results
+AGENT_LIFECYCLE -->|"CapabilityResult (tokens, quality, discoveries)"| CAPABILITY_FABRIC
+AGENT_LIFECYCLE -->|"state deltas (NEVER direct write)"| DELTA_BUS
+
+%% Agent sub-step events
+AGENT_LIFECYCLE -->|"per tool call"| EVT_AGENT_TOOL
+AGENT_LIFECYCLE -->|"per LLM call"| EVT_AGENT_LLM
+AGENT_LIFECYCLE -->|"per iteration"| EVT_AGENT_ITER
+EVT_AGENT_TOOL --> EVENT_BUS
+EVT_AGENT_LLM --> EVENT_BUS
+EVT_AGENT_ITER --> EVENT_BUS
+
+%% =====================================================================================
+%% RESULT AND EVENT FLOW
+%% =====================================================================================
+
+%% Result return path
+CAPABILITY_FABRIC -->|"7. emit completed/failed"| EVENT_EMITTER
+CAPABILITY_FABRIC -->|"8. update_metrics"| CAPABILITY_REGISTRY
+CAPABILITY_FABRIC -->|"9. emit learning signal"| EVENT_EMITTER
+CAPABILITY_FABRIC -->|"CapabilityResult"| CALLER_CONCIERGE
+CAPABILITY_FABRIC -->|"CapabilityResult"| CALLER_ORCHESTRATOR
+CAPABILITY_FABRIC -->|"CapabilityResult"| CALLER_SUBAGENTS
+
+%% Event emission to bus
+EVENT_EMITTER -->|"all events"| PORT_EVENT
+PORT_EVENT -->|"emit"| EVENT_BUS
+
+%% ProactiveGapDetector
+CAPABILITY_FABRIC -->|"not found"| PROACTIVE_GAP_DETECTOR
+PROACTIVE_GAP_DETECTOR -->|"gap detected"| EVT_GAP_DETECTED
+EVT_GAP_DETECTED --> EVENT_BUS
+
+%% Registry events
+CAPABILITY_REGISTRY -->|"on register"| EVT_REGISTERED
+CAPABILITY_REGISTRY -->|"on unregister"| EVT_UNREGISTERED
+CONTRACT_VALIDATOR -->|"on validation fail"| EVT_VALIDATION_FAILED
+
+%% Events consumed
+EVT_STEP_EXECUTE -->|"from Orchestrator"| CAPABILITY_FABRIC
+EVT_DISCOVERY_REQ -->|"from Planner"| FABRIC_RETRIEVAL_API
+EVT_HEALTH_CHECK -->|"from monitor"| HEALTH_CHECKER
+
+%% =====================================================================================
+%% CONTRACT LOADING AND HOT-RELOAD (3 Paths)
+%% =====================================================================================
+
+MODULE_LOADER -->|"Path 1: scan YAML at startup"| TOOL_CONTRACTS
+MODULE_LOADER -->|"Path 1: scan YAML at startup"| AGENT_CONTRACTS
+MODULE_LOADER -->|"Path 1: scan YAML at startup"| PROMPT_CONTRACTS
+MODULE_LOADER -->|"Path 1: scan YAML at startup"| WORKFLOW_CONTRACTS
+MODULE_LOADER -->|"Path 2: _watch_loop() hot-reload"| TOOL_CONTRACTS
+MODULE_LOADER -->|"validate"| CONTRACT_VALIDATOR
+CONTRACT_VALIDATOR -->|"check against"| CONTRACT_SCHEMAS
+MODULE_LOADER -->|"valid: register"| CAPABILITY_REGISTRY
+MODULE_LOADER -->|"compute embedding"| EMBEDDING_INDEX
+CAPABILITY_VERSIONING -->|"version tracking"| CAPABILITY_REGISTRY
+
+%% _auto_register_providers bridges Contract Plane -> Execution Plane
+CAPABILITY_REGISTRY -->|"_auto_register_providers()<br/>scan unique provider_ids"| PROVIDER_REGISTRY
+
+%% =====================================================================================
+%% CIRCUIT BREAKER WIRING (per provider_id)
+%% =====================================================================================
+
+CAPABILITY_FABRIC -.->|"Semaphore(10) concurrency gate"| CB_NOTE
+MCP_PROVIDER -.->|"per provider_id"| CB_MCP_LOCAL
+MCP_PROVIDER -.->|"per provider_id"| CB_MCP_REMOTE
+WASM_PROVIDER -.->|"per provider_id"| CB_WASM
+BRIDGE_PROVIDER -.->|"per provider_id"| CB_BRIDGE
+AGENT_PROVIDER -.->|"per provider_id"| CB_AGENT
+WORKFLOW_PROVIDER -.->|"per provider_id"| CB_WORKFLOW
+
+%% Health <-> CB bidirectional
+HEALTH_CHECKER -->|"periodic checks"| PROVIDER_REGISTRY
+HEALTH_CHECKER <-->|"bidirectional wire (Step 14)"| CB_NOTE
+AVAILABILITY_TRACKER -->|"ONLINE/DEGRADED/OFFLINE"| CAPABILITY_REGISTRY
+
+%% =====================================================================================
+%% META-AGENT CREATION WIRING (Epic 4.5)
+%% =====================================================================================
+
+BUILD_AGENT_TOOL -->|"1. validate spec"| AGENT_SPEC_VALIDATOR
+AGENT_SPEC_VALIDATOR -->|"verify tools exist"| CAPABILITY_REGISTRY
+BUILD_AGENT_TOOL -->|"2. compose contract"| AGENT_COMPOSER
+BUILD_AGENT_TOOL -->|"3. register"| CAPABILITY_REGISTRY
+BUILD_AGENT_TOOL -->|"4. emit"| EVT_AGENT_CREATED
+EVT_AGENT_CREATED --> EVENT_BUS
+BUILD_AGENT_TOOL -->|"safety check"| META_SAFETY_GATES
+META_SAFETY_GATES -->|"violation"| EVT_META_BLOCKED
+EVT_META_BLOCKED --> EVENT_BUS
+META_SAFETY_GATES -.->|"extends"| SECURITY_CONTEXT
+META_LIFECYCLE -->|"ephemeral cleanup"| EVT_AGENT_EXPIRED
+EVT_AGENT_EXPIRED --> EVENT_BUS
+META_LIFECYCLE -->|"persistent YAML"| MODULE_LOADER
+AGENT_LIFECYCLE -->|"AgentResponsePayload"| CAPABILITY_FABRIC
+
+%% ParamResolver (Orchestrator scope)
+CALLER_ORCHESTRATOR -->|"ParamResolver: $step.result.agent_name<br/>resolves created agent dynamically (4.5.9)"| CAPABILITY_FABRIC
+
+%% =====================================================================================
+%% PORT -> ADAPTER WIRING (Hexagonal Architecture)
+%% =====================================================================================
+
+PORT_SESSION_STATE -.->|"prod"| ADAPT_SESSION_READER
+PORT_SESSION_STATE -.->|"test"| ADAPT_TEST_STATE
+PORT_EVENT -.->|"test"| ADAPT_TEST_EVENT
+PORT_BRIDGE -.->|"prod"| ADAPT_BRIDGE_CONN
+PORT_BRIDGE -.->|"test"| ADAPT_TEST_BRIDGE
+PORT_MODEL_GATEWAY -.->|"test"| ADAPT_TEST_MODEL
+PORT_PROMPT_SYSTEM -.->|"test"| ADAPT_TEST_PROMPT
+PORT_DELTA_BUS -.->|"test"| ADAPT_TEST_DELTA
+
+%% Transport adapters (inside providers, not ports)
+MCP_PROVIDER -.->|"prod transport"| ADAPT_AUTO_MCP
+MCP_PROVIDER -.->|"test transport"| ADAPT_TEST_MCP
+WASM_PROVIDER -.->|"prod runtime"| ADAPT_AUTO_WASM
+WASM_PROVIDER -.->|"test runtime"| ADAPT_TEST_WASM
+
+%% Adapter -> External
+ADAPT_SESSION_READER -.->|"read"| SS_CONTROL
+ADAPT_SESSION_READER -.->|"read"| SS_BELIEFS
+ADAPT_SESSION_READER -.->|"read"| SS_PERSONA
+ADAPT_BRIDGE_CONN -.->|"K0 queries"| BRIDGE_QUERY_PORT
+ADAPT_BRIDGE_CONN -.->|"K0 commands"| BRIDGE_CMD_PORT
+ADAPT_AUTO_MCP -.->|"discover + dispatch"| MCP_CALENDAR
+ADAPT_AUTO_MCP -.->|"discover + dispatch"| MCP_WEATHER
+ADAPT_AUTO_MCP -.->|"discover + dispatch"| MCP_NOTES
+ADAPT_AUTO_MCP -.->|"discover + dispatch"| MCP_RECIPES
+ADAPT_AUTO_WASM -.->|"discover executor.py"| WASM_DATE
+ADAPT_AUTO_WASM -.->|"discover executor.py"| WASM_UNITS
+
+%% =====================================================================================
+%% INVARIANT ENFORCEMENT MAPPING
+%% =====================================================================================
+
+CAPABILITY_FABRIC -.->|"FAB-01,02,03"| INV_STATELESS
+HARD_FILTER -.->|"FAB-05"| INV_SAFETY_FIRST
+SECURITY_CONTEXT -.->|"FAB-06"| INV_SAFETY_FIRST
+CAPABILITY_FABRIC -.->|"FAB-04"| INV_EXECUTION
+PROVIDER_SELECTOR -.->|"FAB-10"| INV_EXECUTION
+TOOL_SCOPE -.->|"FAB-07"| INV_ACCESS
+CTX_APPLY_BUDGET -.->|"FAB-08"| INV_ACCESS
+EVENT_EMITTER -.->|"FAB-09"| INV_GOVERNANCE
+CAPABILITY_TYPES -.->|"FAB-11"| INV_GOVERNANCE
+CONTRACT_VALIDATOR -.->|"FAB-12"| INV_GOVERNANCE
+AGENT_PROVIDER -.->|"FAB-13"| INV_GOVERNANCE
+
+%% =====================================================================================
+%% OBSERVABILITY WIRING
+%% =====================================================================================
+
+CAPABILITY_FABRIC -.->|"trace_id on every op"| OBS_TRACE
+CAPABILITY_FABRIC -.->|"structured logs per phase"| OBS_LOGGING
+CAPABILITY_FABRIC -.->|"histogram + counter"| OBS_METRICS
+
+%% =====================================================================================
+%% STYLES
+%% =====================================================================================
+
+classDef fabric_core fill:#b2ebf2,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
+classDef registry fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef engine fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef contract fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+classDef validator fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000
+classDef safety fill:#ff8787,stroke:#e03131,stroke-width:2px,color:#000
+classDef policy fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,color:#000
+classDef provider fill:#b2dfdb,stroke:#004d40,stroke-width:2px,color:#000
+classDef factory fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+classDef step fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000
+classDef lifecycle fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#000,font-weight:bold
+classDef type_registry fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef circuit_breaker fill:#ffebee,stroke:#c62828,stroke-width:3px,color:#000,stroke-dasharray: 5 5
+classDef event fill:#e0f7fa,stroke:#00838f,stroke-width:2px,color:#000
+classDef invariant fill:#fce4ec,stroke:#880e4f,stroke-width:3px,color:#000,font-weight:bold
+classDef perf fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:#000,font-weight:bold
+classDef observability fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+classDef caller fill:#c8e6c9,stroke:#1b5e20,stroke-width:3px,color:#000,font-weight:bold
+classDef ss fill:#ffe0b2,stroke:#e65100,stroke-width:2px,color:#000
+classDef gateway fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef bridge fill:#b2ebf2,stroke:#00695c,stroke-width:2px,color:#000
+classDef bridge_note fill:#e0f2f1,stroke:#00897b,stroke-width:1px,color:#000,font-style:italic
+classDef bus fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,color:#000
+classDef tool_fabric fill:#b2ebf2,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
+classDef port fill:#e3f2fd,stroke:#1565c0,stroke-width:3px,color:#000,font-weight:bold
+classDef adapter fill:#e8eaf6,stroke:#283593,stroke-width:2px,color:#000
+classDef adapter_test fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,color:#000,font-style:italic

@@ -55,6 +55,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, List, Optional, Protocol
 
+from k1.fabric.metrics import get_default_metrics
 from k1.fabric.types import CapabilityRequest, CapabilityResult, ExecutionContext
 
 logger = logging.getLogger(__name__)
@@ -324,6 +325,11 @@ class CircuitBreaker:
             if not is_retriable or attempt > self._config.max_retries:
                 break
 
+            try:
+                get_default_metrics().inc_retries(request.capability_name)
+            except Exception:
+                logger.warning("[CB:%s] failed to record retry metric", self._provider_id)
+
             logger.info(
                 "[CB:%s] retry %d/%d for %s (error=%s)",
                 self._provider_id,
@@ -587,6 +593,7 @@ class CircuitBreaker:
             old.value,
             new.value,
         )
+        self._record_state_metrics(new)
         if self._on_state_change is not None:
             try:
                 self._on_state_change.on_state_change(self._provider_id, old, new)
@@ -596,6 +603,25 @@ class CircuitBreaker:
                     self._provider_id,
                     exc,
                 )
+
+    def _record_state_metrics(self, new_state: CircuitBreakerState) -> None:
+        """Record circuit breaker state and trips metrics."""
+        metrics = get_default_metrics()
+        try:
+            for state in CircuitBreakerState:
+                metrics.set_circuit_breaker_state(
+                    self._provider_id,
+                    state.value,
+                    1 if state == new_state else 0,
+                )
+            if new_state == CircuitBreakerState.OPEN:
+                metrics.inc_circuit_breaker_trips(self._provider_id)
+        except Exception:
+            logger.warning(
+                "[CB:%s] failed to record state metrics",
+                self._provider_id,
+                exc_info=True,
+            )
 
     def _notify_state_change_locked(
         self,

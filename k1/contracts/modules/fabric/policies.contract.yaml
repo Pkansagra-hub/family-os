@@ -75,6 +75,56 @@ budgets:
     agent_pool_max_active: 50
 
 # ---------------------------------------------------------------------------
+# Service Level Indicators (SLIs) -- Epic 7.1
+# Canonical SLI definitions for Fabric module.  Latency targets (7.1.1)
+# and throughput targets (7.1.2) are the single source of truth.
+# Values under budgets.extensions remain for backward compatibility.
+# ---------------------------------------------------------------------------
+sli:
+  latency:
+    # Registry lookup latency (Section 22): P95 <1ms
+    registry_lookup_ms_p95: 1
+    # Retrieval latency (Section 22): P95 <20ms for 10K corpus
+    retrieval_10k_ms_p95: 20
+    # Retrieval latency (Section 22): P95 <50ms for 100K corpus
+    retrieval_100k_ms_p95: 50
+    # Provider resolution (Section 22): P95 <5ms
+    provider_resolution_ms_p95: 5
+    # Context build simple (Section 22): P95 <10ms
+    context_build_simple_ms_p95: 10
+    # Context build full (Section 22): P95 <50ms
+    context_build_full_ms_p95: 50
+    # Full Fabric orchestration overhead: P95 <100ms
+    full_overhead_ms_p95: 100
+    # MCP local provider round-trip: P95 <2000ms
+    mcp_local_ms_p95: 2000
+    # Agent execution end-to-end: P95 <10000ms
+    agent_execution_ms_p95: 10000
+  throughput:
+    # Max concurrent parallel executions
+    concurrent_executions: 100
+    # Registry capacity: minimum supported capabilities
+    registry_size_min: 100000
+    # Retrieval queries per second
+    retrieval_qps: 1000
+    # Execution requests per second
+    execution_qps: 100
+
+# ---------------------------------------------------------------------------
+# Service Level Objectives (SLOs) -- Epic 7.1.3
+# Availability and compliance targets as percentages or durations.
+# ---------------------------------------------------------------------------
+slo:
+  # Overall Fabric availability target (%)
+  availability_pct: 99.9
+  # Percentage of requests meeting P95 latency targets
+  latency_compliance_pct: 99.5
+  # Percentage of relevant results in Top-10 retrieval
+  retrieval_accuracy_pct: 95.0
+  # Circuit breaker recovery time target (seconds)
+  circuit_breaker_recovery_s: 60
+
+# ---------------------------------------------------------------------------
 # Circuit breaker policies (Section 19)
 # ---------------------------------------------------------------------------
 circuit_breaker:

@@ -116,8 +116,8 @@ class TestFileScanners:
     def test_scan_p03_pipeline_files_has_phases(self):
         result = scan_p03_pipeline_files()
         phases = [f for f in result if f.category == "phases"]
-        # There are 9 phases (r0-r8)
-        assert len(phases) == 9
+        # There are 10 phases (r0-r9)
+        assert len(phases) == 10
 
     def test_scan_consolidation_algorithm_files_returns_list(self):
         result = scan_consolidation_algorithm_files()

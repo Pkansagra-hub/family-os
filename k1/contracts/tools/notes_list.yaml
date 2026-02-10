@@ -1,0 +1,70 @@
+# k1/contracts/tools/notes_list.yaml
+# Notes List Tool Contract (Phase 3 -- Fabric E2E Validation)
+#
+# MCP tool contract for listing notes with optional tag filtering.
+# GREEN-band read-only tool. Local stdio transport via FastMCP.
+#
+# References:
+#   - fabric_tool_implementation_plan.md Phase 3, Section 5.1
+
+tool_contract:
+  name: "tool.read.notes_list"
+  version: "1.0.0"
+  domain:
+    - "NOTES"
+    - "FAMILY"
+  description: >
+    List all notes, optionally filtered by tag. Returns
+    note summaries ordered by creation time descending.
+    Read-only, no side effects.
+  capabilities:
+    - "list_notes"
+    - "tag_filtering"
+  limitations:
+    - "read_only"
+    - "local_storage"
+
+  required_inputs: []
+
+  optional_inputs:
+    - name: "tag"
+      type: "STRING"
+      description: "Filter notes by tag"
+    - name: "max_results"
+      type: "NUMBER"
+      description: "Maximum notes to return (default 50)"
+      default: 50
+
+  output:
+    type: "object"
+    properties:
+      notes:
+        type: "array"
+        description: "List of note summaries"
+        items:
+          type: "object"
+          properties:
+            note_id:
+              type: "string"
+            title:
+              type: "string"
+            tags:
+              type: "array"
+              items:
+                type: "string"
+            created_at:
+              type: "string"
+      count:
+        type: "number"
+        description: "Number of notes returned"
+    required:
+      - "notes"
+      - "count"
+
+  provider_type: "MCP"
+  provider_id: "notes_mcp_stdio"
+  safety_band_min: "GREEN"
+  cost_per_call: 0.0
+  avg_latency_ms: 10
+  max_latency_ms: 500
+  availability: "ONLINE"

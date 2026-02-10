@@ -121,6 +121,14 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
       TEMPORAL_ANCHOR["Temporal Anchor<br/>now, today, this_week"]:::engine
     end
 
+    subgraph SPATIAL_RESOLUTION["Spatial Context Engine (ADR-0085/0085a)"]
+      LOCATION_INGRESS["Location Ingress<br/>GPS, BLE, Wi-Fi, IP → raw signal"]:::engine
+      LOCATION_RESOLVER["Location Resolver<br/>Raw coords → semantic place<br/>lat/lng → 'home', 'gym', 'work'"]:::engine
+      PLACE_REGISTRY["Place Registry<br/>Learned places + geofences<br/>User-defined + auto-detected"]:::engine
+      MOTION_CLASSIFIER["Motion Classifier<br/>STATIONARY, WALKING, IN_VEHICLE<br/>Device accelerometer + GPS delta"]:::engine
+      SPATIAL_ANCHOR["Spatial Anchor<br/>current_place, last_transition, dwell_time"]:::engine
+    end
+
     subgraph CONTEXT_FILLING["Context Inference & Validation"]
       CONTEXT_INFERENCE["Context Inference<br/>SessionState fill + entity resolution"]:::engine
       TINY_SANITY_ARBITER["Tiny Sanity Arbiter (Fast Path)<br/>UltraBERT + cached checks"]:::engine
@@ -610,6 +618,16 @@ TIME_RESOLVER -->|"resolved time"| CONTEXT_INFERENCE
 TIME_RESOLVER -->|"ambiguous?"| SIGNAL_LIBRARY
 SIGNAL_LIBRARY -->|"time_ambiguity"| ENTROPY_MIN_QUESTION_PLANNER
 
+%% Spatial Resolution (parallel to Temporal)
+ULTRABERT_NER -->|"LOC entities"| LOCATION_RESOLVER
+LOCATION_INGRESS -->|"raw coords + signal"| LOCATION_RESOLVER
+LOCATION_RESOLVER -->|"query known places"| PLACE_REGISTRY
+PLACE_REGISTRY -->|"place match / unknown"| LOCATION_RESOLVER
+LOCATION_RESOLVER -->|"semantic place"| SPATIAL_ANCHOR
+MOTION_CLASSIFIER -->|"motion state"| SPATIAL_ANCHOR
+LOCATION_RESOLVER -->|"resolved location"| CONTEXT_INFERENCE
+LOCATION_RESOLVER -->|"unknown place?"| SIGNAL_LIBRARY
+
 %% Context Inference
 ULTRABERT_NER -->|"entities"| CONTEXT_INFERENCE
 ULTRABERT_RELATIONS -->|"relations"| CONTEXT_INFERENCE
@@ -628,6 +646,7 @@ UNCERTAINTY_ESTIMATOR -->|"uncertainty"| ACKING
 ULTRABERT_EMOTIONS -->|"update AFFECTIVE_NOW"| PORT_STATE
 ULTRABERT_NER -->|"update BELIEFS_ACTIVE"| PORT_STATE
 TIME_RESOLVER -->|"update CONTROL.temporal_context"| PORT_STATE
+SPATIAL_ANCHOR -->|"update MULTIMODAL.spatial_context"| PORT_STATE
 ULTRABERT_SAFETY -->|"update CONTROL.safety_band"| PORT_STATE
 ULTRABERT_INTENT -->|"update CONTROL.intents"| PORT_STATE
 ULTRABERT_INGRESS -->|"update CONTROL.domains[]"| PORT_STATE

@@ -171,6 +171,14 @@
           "type": "integer",
           "minimum": 0,
           "description": "Rolling 30-day invocation count"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Free-form tags for categorization and filtering (e.g. meta, write_operation)"
         }
       }
     }

@@ -37,8 +37,11 @@ Exports:
 from __future__ import annotations
 
 import logging
+import time
 from typing import FrozenSet, List, Optional, Union
 
+from k1.fabric.logging import get_default_logger as get_fabric_logger
+from k1.fabric.metrics import get_default_metrics
 from k1.fabric.policy.affective_routing import AffectiveRouting, AffectiveScore
 from k1.fabric.policy.cognitive_load_routing import CognitiveLoadRouting, CognitiveScore
 from k1.fabric.policy.qos_integration import QoSIntegration, QoSScore
@@ -153,18 +156,44 @@ class PolicyEngine:
             List of ScoredCandidates, one per input candidate.
             Rejected candidates have allowed=False, score=0.0.
         """
-        # Compute request-level soft scores ONCE (same for all candidates)
-        affective_score = self._eval_affective(request)
-        cognitive_score = self._eval_cognitive(request)
-
+        start = time.perf_counter()
+        success = True
         results: List[ScoredCandidate] = []
-        for cfg in candidates:
-            scored = self._evaluate_candidate(
-                cfg, contract, request, affective_score, cognitive_score
-            )
-            results.append(scored)
+        try:
+            # Compute request-level soft scores ONCE (same for all candidates)
+            affective_score = self._eval_affective(request)
+            cognitive_score = self._eval_cognitive(request)
 
-        return results
+            for cfg in candidates:
+                scored = self._evaluate_candidate(
+                    cfg, contract, request, affective_score, cognitive_score
+                )
+                results.append(scored)
+
+            return results
+        except Exception as exc:
+            success = False
+            logger.error("Policy evaluation error: %s", exc, exc_info=True)
+            raise
+        finally:
+            duration_s = time.perf_counter() - start
+            try:
+                get_default_metrics().observe_policy_evaluation(duration_s)
+            except Exception:
+                logger.warning("Failed to record policy evaluation metric", exc_info=True)
+            try:
+                allowed_count = sum(1 for r in results if r.policy_result.allowed) if success else 0
+                get_fabric_logger().policy_check(
+                    trace_id=request.trace_id,
+                    request_id=request.request_id,
+                    capability_name=request.capability_name,
+                    duration_ms=round(duration_s * 1000.0, 3),
+                    success=success,
+                    candidate_count=len(candidates),
+                    allowed_count=allowed_count,
+                )
+            except Exception:
+                logger.warning("Failed to record policy structured log", exc_info=True)
 
     # ======================================================================
     # Internal: per-candidate evaluation

@@ -1,0 +1,43 @@
+# Sample tool contract: weather_api (WASM, WEATHER domain, GREEN)
+# Valid against tool_contract.schema.json
+# Used by: conftest.py fixtures, ModuleLoader tests, integration tests
+
+tool_contract:
+  name: "tool.read.weather_api"
+  version: "1.2.0"
+  domain:
+    - "WEATHER"
+    - "PLANNING"
+  description: "Get weather forecast for a location using OpenWeatherMap"
+  capabilities:
+    - "current_weather"
+    - "forecast_5day"
+  limitations:
+    - "no_historical_data"
+    - "limited_to_cities"
+  required_inputs:
+    - name: "location"
+      type: "STRING"
+      description: "City name or coordinates"
+  optional_inputs:
+    - name: "units"
+      type: "STRING"
+      description: "Temperature units (metric/imperial)"
+  output:
+    type: "object"
+    properties:
+      temperature:
+        type: "number"
+      condition:
+        type: "string"
+    required:
+      - "temperature"
+      - "condition"
+  provider_type: "WASM"
+  provider_id: "wasm-weather"
+  provider_endpoint: "wasm://sandbox/weather"
+  safety_band_min: "GREEN"
+  cost_per_call: 0.01
+  avg_latency_ms: 50
+  max_latency_ms: 500
+  availability: "ONLINE"

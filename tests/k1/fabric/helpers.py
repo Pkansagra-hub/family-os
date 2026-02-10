@@ -28,6 +28,7 @@ from k1.fabric.types import (
     CapabilityContract,
     CapabilityResult,
     InputSpec,
+    ProviderConfig,
     SafetyBand,
 )
 
@@ -136,6 +137,46 @@ def create_n_contracts(
         contracts.append(contract)
 
     return contracts
+
+
+# ---------------------------------------------------------------------------
+# register_contract_with_provider
+# ---------------------------------------------------------------------------
+
+
+def register_contract_with_provider(fabric: Any, contract: Any) -> None:
+    """
+    Register a contract AND its provider in a Fabric instance.
+
+    When contracts are registered programmatically (after factory construction),
+    _auto_register_providers() has already run. This helper bridges the gap by
+    also inserting a ProviderConfig into the ProviderRegistry so that the
+    Resolver can find the provider during execution.
+
+    Args:
+        fabric: The Fabric container instance.
+        contract: The CapabilityContract to register.
+    """
+    # Step 1: Register the contract in CapabilityRegistry (+ emit event)
+    fabric.register(contract)
+
+    # Step 2: Also register the provider in ProviderRegistry
+    provider_id = getattr(contract, "provider_id", "")
+    if not provider_id:
+        return
+
+    provider_registry = fabric.facade._resolver._provider_matcher._provider_registry
+    if provider_registry.contains(provider_id):
+        return
+
+    provider_type = getattr(contract, "provider_type", "MCP")
+    config = ProviderConfig(
+        provider_id=provider_id,
+        provider_type=provider_type,
+        endpoint=f"local://{provider_id}",
+        max_execution_ms=30000 if provider_type != "WASM" else 5000,
+    )
+    provider_registry.register_provider(provider_id, config)
 
 
 # ---------------------------------------------------------------------------

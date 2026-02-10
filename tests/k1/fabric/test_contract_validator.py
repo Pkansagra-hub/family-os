@@ -357,6 +357,54 @@ class TestRule01NameConvention:
         rule01 = [e for e in errors if "rule-01" in e]
         assert len(rule01) > 0
 
+    # ------------------------------------------------------------------
+    # IFL and MCP multi-segment tool names (3+ segments supported)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            # IFL 5-segment: tool.verb.category.adapter.action
+            "tool.execute.home.hue.set_brightness",
+            "tool.read.finance.chase.check_balance",
+            "tool.execute.transport.uber.request_ride",
+            "tool.execute.health.fitbit.get_heart_rate",
+            # IFL 4-segment: tool.verb.category.action
+            "tool.execute.home.lights",
+            "tool.read.home.temperature",
+            # MCP dynamic 4-segment: tool.verb.mcp.tool_name
+            "tool.execute.mcp.get_weather",
+            "tool.read.mcp.list_files",
+            # IFL 6-segment (nested)
+            "tool.execute.home.hue.bedroom.dimmer",
+        ],
+    )
+    def test_valid_ifl_and_mcp_tool_names(self, name: str) -> None:
+        """Multi-segment tool names (IFL/MCP) must pass validation."""
+        data = _minimal_tool_contract(name=name)
+        errors = _validator.validate(data)
+        rule01 = [e for e in errors if "rule-01" in e]
+        assert rule01 == [], f"Expected no rule-01 errors for '{name}', got: {rule01}"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            # Only 2 segments (missing name)
+            "tool.execute",
+            # verb segment invalid
+            "tool.invoke.home.hue.action",
+            # uppercase in segments
+            "tool.execute.Home.hue.action",
+            "tool.execute.home.Hue.action",
+        ],
+    )
+    def test_invalid_multi_segment_tool_names(self, name: str) -> None:
+        """Multi-segment names with bad verbs or case must still fail."""
+        data = _minimal_tool_contract(name=name)
+        errors = _validator.validate(data)
+        rule01 = [e for e in errors if "rule-01" in e]
+        assert len(rule01) > 0, f"Expected rule-01 error for '{name}'"
+
 
 # ====================================================================
 # Rule 2: Semver

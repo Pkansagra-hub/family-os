@@ -798,10 +798,10 @@ k1/fabric/
 
 ```
 k1/fabric/
-├── factory.py                      # ❌ TODO: FabricFactory (20-step construction)
-├── fabric.py                       # ❌ TODO: CapabilityFabric, FabricRetrieval, CapabilityRegistryAPI
+├── factory.py                      # ✅ FabricFactory (20-step construction)
+├── fabric.py                       # ✅ CapabilityFabric, FabricRetrieval, CapabilityRegistryAPI
 └── events/
-    └── event_emitter.py            # ❌ TODO: EventEmitter (trace_id enforcement, 🆕 meta events)
+    └── event_emitter.py            # ✅ EventEmitter (trace_id enforcement, 🆕 meta events)
 ```
 
 **See**: [fabric-wiring-guide.md](../../docs/plans/fabric-wiring-guide.md) for implementation checklist
@@ -1984,13 +1984,13 @@ async def test_build_agent_recursive_creation_blocked(fabric_testing):
 - 🚧 **AgentResponsePayload type** (Issue 4.5.8) - Standard envelope + freeform payload
 - 🚧 **Orchestrator ParamResolver enhancement** (Issue 4.5.9) - Dynamic capability resolution
 
-### ❌ TODO (Epic 5.3 - Integration Layer, ~5%)
+### ✅ Done (Epic 5.3 - Integration Layer)
 
-- ❌ **FabricFactory** (Epic 5.3.1) - 20-step construction, bidirectional wiring
-- ❌ **CapabilityFabric** (Epic 5.3.2) - Main API (execute, execute_batch)
-- ❌ **FabricRetrieval** (Epic 5.3.3) - Retrieval API (discover_capabilities, find_relevant_prompts)
-- ❌ **CapabilityRegistryAPI** (Epic 5.3.4) - Registry management API
-- ❌ **EventEmitter** (Epic 5.4) - Event emission with trace_id enforcement + meta events
+- ✅ **FabricFactory** (Epic 5.3.1) - 20-step construction, bidirectional wiring
+- ✅ **CapabilityFabric** (Epic 5.3.2) - Main API (execute, execute_batch)
+- ✅ **FabricRetrieval** (Epic 5.3.3) - Retrieval API (discover_capabilities, find_relevant_prompts)
+- ✅ **CapabilityRegistryAPI** (Epic 5.3.4) - Registry management API
+- ✅ **EventEmitter** (Epic 5.4) - Event emission with trace_id enforcement + meta events
 - ❌ Integration tests (Epic 5.5)
 - ❌ **Meta-agent integration tests** (Epic 6.3.8, 6.3.9, 6.3.10) - End-to-end, safety, payload tests
 

@@ -86,6 +86,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Protocol
 
 from k1.fabric.core.context_builder import ContextBuilder
+from k1.fabric.metrics import get_default_metrics
 from k1.fabric.policy.tool_scope import ToolScope
 from k1.fabric.providers.base_provider import BaseProvider, ProviderExecutionError
 from k1.fabric.types import (
@@ -1046,7 +1047,13 @@ class AgentPool:
             agent = factory._spawn(...)
     """
 
-    __slots__ = ("_pool", "_config", "_lock", "_total_reuses", "_total_evictions")
+    __slots__ = (
+        "_pool",
+        "_config",
+        "_lock",
+        "_total_reuses",
+        "_total_evictions",
+    )
 
     def __init__(self, config: Optional[AgentPoolConfig] = None) -> None:
         self._config = config or AgentPoolConfig()
@@ -1128,6 +1135,7 @@ class AgentPool:
 
         contract_name = agent.contract.name
 
+        pool_size = 0
         with self._lock:
             bucket = self._pool.setdefault(contract_name, [])
 
@@ -1152,6 +1160,7 @@ class AgentPool:
                     )
 
             bucket.append(agent)
+            pool_size = len(bucket)
 
         logger.debug(
             "AgentPool: pooled agent %s for '%s' (pool size=%d)",
@@ -1159,6 +1168,7 @@ class AgentPool:
             contract_name,
             self.size(contract_name),
         )
+        self._set_pool_size_metric(contract_name, pool_size)
         return True
 
     def get(self, contract_name: str) -> Optional[Agent]:
@@ -1174,6 +1184,7 @@ class AgentPool:
         Returns:
             A reactivated Agent, or None if no viable agent in pool.
         """
+        pool_size = 0
         with self._lock:
             bucket = self._pool.get(contract_name)
             if not bucket:
@@ -1198,14 +1209,17 @@ class AgentPool:
                 # Valid candidate -- reactivate
                 candidate.reactivate()
                 self._total_reuses += 1
+                pool_size = len(bucket)
                 logger.debug(
                     "AgentPool: reused agent %s for '%s'",
                     candidate.id[:8],
                     contract_name,
                 )
+                self._set_pool_size_metric(contract_name, pool_size)
                 return candidate
 
-        return None
+            self._set_pool_size_metric(contract_name, pool_size)
+            return None
 
     # ------------------------------------------------------------------
     # TTL sweep
@@ -1221,6 +1235,7 @@ class AgentPool:
             Number of agents evicted.
         """
         evicted_count = 0
+        sizes: Dict[str, int] = {}
         with self._lock:
             for contract_name, bucket in self._pool.items():
                 still_alive: List[Agent] = []
@@ -1242,6 +1257,10 @@ class AgentPool:
                     else:
                         still_alive.append(agent)
                 self._pool[contract_name] = still_alive
+                sizes[contract_name] = len(still_alive)
+
+        for contract_name, size in sizes.items():
+            self._set_pool_size_metric(contract_name, size)
 
         if evicted_count:
             logger.debug("AgentPool: swept %d expired agents", evicted_count)
@@ -1257,6 +1276,7 @@ class AgentPool:
             Number of agents terminated.
         """
         terminated = 0
+        contract_names: List[str] = []
         with self._lock:
             for bucket in self._pool.values():
                 for agent in bucket:
@@ -1272,9 +1292,22 @@ class AgentPool:
                             agent.id[:8],
                             exc_info=True,
                         )
+            contract_names = list(self._pool.keys())
             self._pool.clear()
         logger.debug("AgentPool: drained %d agents", terminated)
+        for contract_name in contract_names:
+            self._set_pool_size_metric(contract_name, 0)
         return terminated
+
+    def _set_pool_size_metric(self, contract_name: str, size: int) -> None:
+        try:
+            get_default_metrics().set_agent_pool_size(contract_name, size)
+        except Exception:
+            logger.warning(
+                "AgentPool: failed to record pool size for '%s'",
+                contract_name,
+                exc_info=True,
+            )
 
     def __repr__(self) -> str:
         return (
@@ -1453,7 +1486,13 @@ class AgentFactory:
         # Steps 2-7: Spawn agent (only if not reused from pool)
         if agent is None:
             try:
-                agent = self._spawn(contract, context, request.params, trace_id)
+                agent = self._spawn(
+                    contract,
+                    context,
+                    request.params,
+                    trace_id,
+                    session_id=request.session_id,
+                )
             except AgentSpawnError as exc:
                 return AgentResult(
                     success=False,
@@ -1567,6 +1606,7 @@ class AgentFactory:
         fallback_context: ExecutionContext,
         params: Dict[str, Any],
         trace_id: str,
+        session_id: str = "",
     ) -> Agent:
         """
         Steps 2-7 of the 8-step instantiation flow.
@@ -1627,6 +1667,7 @@ class AgentFactory:
                     contract=contract,
                     params=params,
                     trace_id=trace_id,
+                    session_id=session_id,
                 )
                 initial_context = build_result.context
             except Exception as exc:
@@ -1669,6 +1710,11 @@ class AgentFactory:
             tool_scope is not None,
             delta_emitter is not None,
         )
+
+        try:
+            get_default_metrics().inc_agent_spawns()
+        except Exception:
+            logger.warning("Failed to record agent spawn metric", exc_info=True)
 
         return agent
 

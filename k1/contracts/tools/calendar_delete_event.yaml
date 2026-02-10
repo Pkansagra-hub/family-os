@@ -1,0 +1,58 @@
+# k1/contracts/tools/calendar_delete_event.yaml
+# Calendar Delete Event Tool Contract (Phase 1 -- Fabric E2E Validation)
+#
+# MCP tool contract for deleting a family calendar event by ID.
+# AMBER-band write operation. Local stdio transport.
+#
+# References:
+#   - fabric_tool_implementation_plan.md Phase 1, Section 3.1
+#   - fabric_developer_guide.md Section 3
+
+tool_contract:
+  name: "tool.write.calendar_delete_event"
+  version: "1.0.0"
+  domain:
+    - "CALENDAR"
+    - "FAMILY"
+  description: >
+    Delete a calendar event by its unique identifier. Returns the
+    event ID and deletion status. If the event does not exist,
+    returns status "not_found" without error.
+  capabilities:
+    - "event_deletion"
+    - "schedule_management"
+  limitations:
+    - "single_event_per_call"
+    - "no_bulk_delete"
+    - "no_undo"
+
+  required_inputs:
+    - name: "event_id"
+      type: "STRING"
+      description: "Unique identifier of the event to delete"
+
+  optional_inputs: []
+
+  output:
+    type: "object"
+    properties:
+      event_id:
+        type: "string"
+        description: "The event ID that was targeted for deletion"
+      status:
+        type: "string"
+        enum:
+          - "deleted"
+          - "not_found"
+        description: "Deletion result status"
+    required:
+      - "event_id"
+      - "status"
+
+  provider_type: "MCP"
+  provider_id: "calendar_mcp_stdio"
+  safety_band_min: "AMBER"
+  cost_per_call: 0.0
+  avg_latency_ms: 20
+  max_latency_ms: 200
+  availability: "ONLINE"

@@ -5,7 +5,7 @@ Re-exports public symbols from all policy dimensions and ports.
 
 Modules:
   ports                  -- ISessionStateReader Protocol
-  security_context       -- SecurityContext hard gate (3.2.1)
+  security_context       -- SecurityContext hard gate (3.2.1) + MetaOperationValidator (4.5.5)
   affective_routing      -- AffectiveRouting soft score (3.2.2)
   cognitive_load_routing -- CognitiveLoadRouting soft score (3.2.3)
   qos_integration        -- QoSIntegration soft score (3.2.4)
@@ -19,7 +19,10 @@ from k1.fabric.policy.policy_engine import PolicyEngine
 from k1.fabric.policy.ports import ISessionStateReader
 from k1.fabric.policy.qos_integration import QoSIntegration, QoSScore
 from k1.fabric.policy.security_context import (
+    META_TOOL_PATTERN,
+    RESTRICTED_DOMAINS,
     AccessDeniedError,
+    MetaOperationValidator,
     SecurityCheckResult,
     SecurityContext,
     SecurityContextError,
@@ -34,6 +37,10 @@ __all__ = [
     "SecurityCheckResult",
     "SecurityContextError",
     "AccessDeniedError",
+    # 4.5.5 -- MetaOperationValidator
+    "MetaOperationValidator",
+    "RESTRICTED_DOMAINS",
+    "META_TOOL_PATTERN",
     # 3.2.2 -- AffectiveRouting
     "AffectiveRouting",
     "AffectiveScore",

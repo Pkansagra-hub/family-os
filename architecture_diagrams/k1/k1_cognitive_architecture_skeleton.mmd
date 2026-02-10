@@ -358,6 +358,14 @@ flowchart TB
                     TEMPORAL_ANCHOR["Temporal Anchor<br/>now, today, this_week"]:::engine
                 end
 
+                subgraph SPATIAL_RESOLUTION["Spatial Context Engine (ADR-0085/0085a)"]
+                    LOCATION_INGRESS["Location Ingress<br/>GPS, BLE, Wi-Fi, IP → raw signal"]:::engine
+                    LOCATION_RESOLVER["Location Resolver<br/>Raw coords → semantic place<br/>lat/lng → 'home', 'gym', 'work'"]:::engine
+                    PLACE_REGISTRY["Place Registry<br/>Learned places + geofences<br/>User-defined + auto-detected"]:::engine
+                    MOTION_CLASSIFIER["Motion Classifier<br/>STATIONARY, WALKING, IN_VEHICLE<br/>Device accelerometer + GPS delta"]:::engine
+                    SPATIAL_ANCHOR["Spatial Anchor<br/>current_place, last_transition, dwell_time"]:::engine
+                end
+
                 CONTEXT_INFERENCE["Context Inference<br/>SessionState fill + entity resolution"]:::engine
                 TINY_SANITY_ARBITER["Tiny Sanity Arbiter (Fast Path)<br/>UltraBERT + cached checks"]:::engine
 
@@ -635,6 +643,7 @@ flowchart TB
             CLARIFICATIONS["Clarifications (4KB)<br/>Open gaps THIS turn"]:::memory
             AFFECTIVE_NOW["Affective Now (4KB)<br/>Current emotion"]:::memory
             NARRATIVE_ACTIVE["Narrative Active (4KB)<br/>ONE active thread"]:::memory
+            MULTIMODAL["Multimodal (4KB)<br/>Spatial context, device state"]:::memory
             META["Meta (2KB)<br/>Session basics"]:::memory
             %% NOTE: temporal_context, mental_model, conversation_threads, narrative_arc
             %% are sub-fields of canonical 8 HOT sections (see whiteboard 12-Section Matrix)
@@ -1113,6 +1122,16 @@ flowchart TB
     TIME_RESOLVER -->|"resolved absolute time"| CONTEXT_INFERENCE
     TIME_RESOLVER -->|"ambiguous (AM/PM?)"| SIGNAL_LIBRARY
     SIGNAL_LIBRARY -->|"time_ambiguity signal"| ENTROPY_MIN_QUESTION_PLANNER
+
+    %% Spatial Resolution (parallel to Temporal)
+    ULTRABERT_NER -->|"LOC entities"| LOCATION_RESOLVER
+    LOCATION_INGRESS -->|"raw coords + signal"| LOCATION_RESOLVER
+    LOCATION_RESOLVER -->|"query known places"| PLACE_REGISTRY
+    PLACE_REGISTRY -->|"place match / unknown"| LOCATION_RESOLVER
+    LOCATION_RESOLVER -->|"semantic place"| SPATIAL_ANCHOR
+    MOTION_CLASSIFIER -->|"motion state"| SPATIAL_ANCHOR
+    LOCATION_RESOLVER -->|"resolved location context"| CONTEXT_INFERENCE
+    LOCATION_RESOLVER -->|"unknown place?"| SIGNAL_LIBRARY
     ULTRABERT_RELATIONS -->|"relations"| CONTEXT_INFERENCE
     CONTRACT_SIGNAL_GAPS -->|"slot_fill_request"| CONTEXT_INFERENCE
     CONTEXT_INFERENCE -->|"filled_intent + provenance"| TINY_SANITY_ARBITER
@@ -1128,6 +1147,7 @@ flowchart TB
     ULTRABERT_EMOTIONS -->|"update AFFECTIVE_NOW"| AFFECTIVE_NOW
     ULTRABERT_NER -->|"update BELIEFS_ACTIVE"| BELIEFS_ACTIVE
     TIME_RESOLVER -->|"update CONTROL.temporal_context"| CONTROL
+    SPATIAL_ANCHOR -->|"update MULTIMODAL.spatial_context"| MULTIMODAL
     ULTRABERT_SAFETY -->|"update CONTROL.safety_band"| CONTROL
     ULTRABERT_INTENT -->|"update CONTROL.intents{primary,all[],scores}"| CONTROL
     ULTRABERT_INGRESS -->|"update CONTROL.domains[]"| CONTROL

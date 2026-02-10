@@ -23,6 +23,9 @@ Categories:
     - ContractUpdatedEvent          k1.fabric.capability.contract_updated.v1
     - PressureWarningEvent          k1.fabric.pressure.warning.v1
     - PressureSheddingEvent         k1.fabric.pressure.shedding.v1
+    - AgentCreatedEvent             k1.fabric.agent.created.v1       (4.5.7)
+    - AgentExpiredEvent             k1.fabric.agent.expired.v1       (4.5.7)
+    - MetaOperationBlockedEvent     k1.fabric.meta.operation.blocked.v1 (4.5.7)
 
   Consumed (by Fabric, from external):
     - StepExecuteEvent              k1.orchestration.step.execute.v1
@@ -64,6 +67,11 @@ TOPIC_CONTRACT_UPDATED = "k1.fabric.capability.contract_updated.v1"
 TOPIC_PRESSURE_WARNING = "k1.fabric.pressure.warning.v1"
 TOPIC_PRESSURE_SHEDDING = "k1.fabric.pressure.shedding.v1"
 
+# --- 4.5.7: Agent creation lifecycle events ---
+TOPIC_AGENT_CREATED = "k1.fabric.agent.created.v1"
+TOPIC_AGENT_EXPIRED = "k1.fabric.agent.expired.v1"
+TOPIC_META_OP_BLOCKED = "k1.fabric.meta.operation.blocked.v1"
+
 # --- Consumed by Fabric (from external subsystems) ---
 TOPIC_STEP_EXECUTE = "k1.orchestration.step.execute.v1"
 TOPIC_DISCOVERY_REQUEST = "k1.planner.discovery.request.v1"
@@ -85,6 +93,9 @@ EMITTED_TOPICS: List[str] = [
     TOPIC_CONTRACT_UPDATED,
     TOPIC_PRESSURE_WARNING,
     TOPIC_PRESSURE_SHEDDING,
+    TOPIC_AGENT_CREATED,
+    TOPIC_AGENT_EXPIRED,
+    TOPIC_META_OP_BLOCKED,
 ]
 
 CONSUMED_TOPICS: List[str] = [
@@ -662,3 +673,105 @@ class MCPToolDiscoveredEvent:
             trace_id=data.get("trace_id", ""),
             timestamp_ms=data.get("timestamp_ms", 0),
         )
+
+
+# ===========================================================================
+# 4.5.7 -- Agent creation lifecycle events
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class AgentCreatedEvent:
+    """
+    k1.fabric.agent.created.v1 -- Emitted when a runtime agent is created.
+
+    Emitted by BuildAgentHandler (4.5.2) step 7 after successful
+    agent registration.  Carries full creation metadata for audit,
+    Learning Loop, and observability.
+
+    Consumed by: K1 Event Bus subscribers, Learning Loop, audit log.
+    """
+
+    agent_name: str
+    created_by: str = ""
+    tools_granted: tuple[str, ...] = ()
+    domain: tuple[str, ...] = ()
+    prompt_template: str = ""
+    ephemeral: bool = True
+    session_id: str = ""
+    trace_id: str = ""
+    timestamp_iso: str = ""
+    timestamp_ms: int = field(default_factory=_now_ms)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "agent_name": self.agent_name,
+            "created_by": self.created_by,
+            "tools_granted": list(self.tools_granted),
+            "domain": list(self.domain),
+            "prompt_template": self.prompt_template,
+            "ephemeral": self.ephemeral,
+            "session_id": self.session_id,
+            "trace_id": self.trace_id,
+            "timestamp_iso": self.timestamp_iso,
+            "timestamp_ms": self.timestamp_ms,
+        }
+
+
+@dataclass(frozen=True)
+class AgentExpiredEvent:
+    """
+    k1.fabric.agent.expired.v1 -- Emitted when a runtime agent is removed.
+
+    Emitted by Registry.remove_expired_agents() (4.5.6) on session
+    cleanup.  Carries creation timestamp for lifetime calculation.
+
+    Consumed by: Learning Loop, audit log, observability.
+    """
+
+    agent_name: str
+    created_at_iso: str = ""
+    expired_at_iso: str = ""
+    invocations: int = 0
+    trace_id: str = ""
+    timestamp_ms: int = field(default_factory=_now_ms)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "agent_name": self.agent_name,
+            "created_at_iso": self.created_at_iso,
+            "expired_at_iso": self.expired_at_iso,
+            "invocations": self.invocations,
+            "trace_id": self.trace_id,
+            "timestamp_ms": self.timestamp_ms,
+        }
+
+
+@dataclass(frozen=True)
+class MetaOperationBlockedEvent:
+    """
+    k1.fabric.meta.operation.blocked.v1 -- Emitted on security violation.
+
+    Emitted by MetaOperationValidator (4.5.5) when any of the 5 hard
+    gates reject a meta-operation.  Carries violation details for
+    security audit and incident response.
+
+    Consumed by: K1 Event Bus subscribers, audit log, security monitoring.
+    """
+
+    operation: str = ""
+    violation_type: str = ""
+    requested_by: str = ""
+    details: Dict[str, str] = field(default_factory=dict)
+    trace_id: str = ""
+    timestamp_ms: int = field(default_factory=_now_ms)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "operation": self.operation,
+            "violation_type": self.violation_type,
+            "requested_by": self.requested_by,
+            "details": dict(self.details),
+            "trace_id": self.trace_id,
+            "timestamp_ms": self.timestamp_ms,
+        }

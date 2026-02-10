@@ -32,9 +32,16 @@ Exports:
   CapturedDelta
   BridgeConnectionAdapter
   BridgeConnectionConfig
+  AutoDiscoveryMCPTransport
+  AutoDiscoveryWASMRuntime
 """
 
-from k1.fabric.adapters.bridge_connection import BridgeConnectionAdapter, BridgeConnectionConfig
+from k1.fabric.adapters.auto_mcp_transport import AutoDiscoveryMCPTransport
+from k1.fabric.adapters.auto_wasm_runtime import AutoDiscoveryWASMRuntime
+from k1.fabric.adapters.bridge_connection import (
+    BridgeConnectionAdapter,
+    BridgeConnectionConfig,
+)
 from k1.fabric.adapters.local_event import LocalEventAdapter
 from k1.fabric.adapters.sessionstate_reader import SessionStateReaderAdapter
 from k1.fabric.adapters.test_bridge import CapturedBridgeCall, TestBridgeAdapter
@@ -44,6 +51,9 @@ from k1.fabric.adapters.test_prompt_system import TestPromptSystemAdapter
 from k1.fabric.adapters.test_state_reader import TestSessionStateReaderAdapter
 
 __all__ = [
+    # --- Auto-discovery adapters ---
+    "AutoDiscoveryMCPTransport",
+    "AutoDiscoveryWASMRuntime",
     # --- 5.2.1 Production SessionState ---
     "SessionStateReaderAdapter",
     # --- 5.2.2 Test SessionState ---
