@@ -1,0 +1,1 @@
+{"rustc":6817557220965521185,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[14084677476063051803,"build_script_build",false,10149643542062840655]],"local":[{"RerunIfChanged":{"output":"debug\\build\\k1_bus_core-f663605bb3170a4b\\output","paths":["D:\\familyos\\k1\\bus\\envelope\\schema.fbs"]}}],"rustflags":[],"config":0,"compile_kind":0}

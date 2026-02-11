@@ -52,7 +52,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from k1.bus.envelope import Envelope
-from k1.bus.impl.topic_trie import TopicTrie
+
+# Rust TopicTrie (if available) with Python fallback
+try:
+    from k1_bus_core import TopicTrie  # type: ignore[import-untyped]
+except ImportError:
+    from k1.bus.impl.topic_trie import TopicTrie  # type: ignore[assignment]
+
 from k1.bus.middleware import MiddlewareChain
 from k1.bus.ports.bus import BusHandler, SubscriptionHandle
 
