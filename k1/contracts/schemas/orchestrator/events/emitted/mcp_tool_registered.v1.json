@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/mcp_tool_registered.v1.json",
+  "title": "mcp.tool_registered.v1",
+  "description": "Emitted when an MCP tool is registered via MCPConnectorManager.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.mcp.tool_registered.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["connector_id", "tool_name", "server_uri"],
+      "properties": {
+        "connector_id": {
+          "type": "string",
+          "description": "MCPServerRegistration.connector_id."
+        },
+        "tool_name": {
+          "type": "string",
+          "description": "Registered MCP tool name."
+        },
+        "server_uri": {
+          "type": "string",
+          "description": "MCP server URI that hosts the tool."
+        },
+        "server_type": {
+          "type": "string",
+          "enum": ["LOCAL", "REMOTE", "K0_PROXY"],
+          "description": "MCP server deployment type."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

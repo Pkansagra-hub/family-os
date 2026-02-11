@@ -463,17 +463,17 @@ class TestBusFactory:
     """BusFactory construction."""
 
     def test_create_local(self) -> None:
-        bus = BusFactory.create_local()
+        bus = BusFactory.create_local(backend="python")
         assert isinstance(bus, LocalBus)
         assert len(bus.captured) == 0
 
     def test_create_local_with_capture(self) -> None:
-        bus = BusFactory.create_local(capture=True)
+        bus = BusFactory.create_local(capture=True, backend="python")
         bus.publish(Envelope(topic="k1.test", payload=b""))
         assert len(bus.captured) == 1
 
     def test_create_for_testing(self) -> None:
-        bus = BusFactory.create_for_testing()
+        bus = BusFactory.create_for_testing(backend="python")
         assert isinstance(bus, LocalBus)
         bus.publish(Envelope(topic="k1.test", payload=b""))
         assert len(bus.captured) == 1

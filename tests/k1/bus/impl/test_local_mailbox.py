@@ -616,7 +616,7 @@ class TestLocalMailboxRouterObservability:
 
 class TestBusFactoryMailbox:
     def test_create_mailbox_router(self) -> None:
-        router = BusFactory.create_mailbox_router()
+        router = BusFactory.create_mailbox_router(backend="python")
         assert isinstance(router, LocalMailboxRouter)
         assert isinstance(router, IMailboxRouter)
         assert router.actor_count == 0

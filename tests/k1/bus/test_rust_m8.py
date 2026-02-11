@@ -13,16 +13,16 @@ Milestones covered:
   - M8-010: bus.sweep() no-op when auto-sweep active
 """
 
-import time
 import threading
+import time
+
 import pytest
-
 from k1_bus_core import RustBus, RustEnvelope, SweepTimer
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def make_envelope(topic="k1.test.alpha", payload=b"hello", ttl_ms=0):
     return RustEnvelope(topic=topic, payload=payload, ttl_ms=ttl_ms)
@@ -30,6 +30,7 @@ def make_envelope(topic="k1.test.alpha", payload=b"hello", ttl_ms=0):
 
 class Counter:
     """Thread-safe invocation counter."""
+
     def __init__(self):
         self.n = 0
         self._lock = threading.Lock()
@@ -41,6 +42,7 @@ class Counter:
 
 class FailingHandler:
     """Handler that raises on every call."""
+
     def __init__(self):
         self.calls = 0
         self._lock = threading.Lock()
@@ -53,6 +55,7 @@ class FailingHandler:
 
 class FailNTimesHandler:
     """Handler that fails the first N calls, then succeeds."""
+
     def __init__(self, fail_count):
         self.calls = 0
         self.fail_count = fail_count
@@ -67,6 +70,7 @@ class FailNTimesHandler:
 
 class OrderTracker:
     """Records envelope_ids in arrival order."""
+
     def __init__(self):
         self.ids = []
         self._lock = threading.Lock()
@@ -79,6 +83,7 @@ class OrderTracker:
 # =========================================================================
 # Epic 8.2: Circuit Breaker (M8-005, M8-006, M8-007)
 # =========================================================================
+
 
 class TestCircuitBreakerSyncIntegration:
     """Circuit breaker in sync dispatch mode."""
@@ -270,6 +275,7 @@ class TestCircuitBreakerSyncIntegration:
 # Epic 8.1: Async Dispatch (M8-001, M8-002, M8-003, M8-004)
 # =========================================================================
 
+
 class TestAsyncDispatch:
     """Async dispatch mode: publisher returns immediately, handler called from background thread."""
 
@@ -332,9 +338,9 @@ class TestAsyncDispatch:
         assert len(tracker.ids) == 100
         # IDs should be monotonically increasing
         for i in range(1, len(tracker.ids)):
-            assert tracker.ids[i] > tracker.ids[i - 1], (
-                f"Order violation at index {i}: {tracker.ids[i-1]} >= {tracker.ids[i]}"
-            )
+            assert (
+                tracker.ids[i] > tracker.ids[i - 1]
+            ), f"Order violation at index {i}: {tracker.ids[i-1]} >= {tracker.ids[i]}"
         bus.close()
 
     def test_async_error_isolation(self):
@@ -425,12 +431,14 @@ class TestAsyncDispatch:
 # Epic 8.3: Sweep Timer (M8-008, M8-009, M8-010)
 # =========================================================================
 
+
 class TestSweepTimer:
     """Built-in sweep timer for periodic maintenance tasks."""
 
     def test_construction(self):
         """SweepTimer can be created with a Python callback."""
         counter = {"n": 0}
+
         def tick():
             counter["n"] += 1
 
@@ -520,6 +528,7 @@ class TestSweepTimer:
 # Backward Compatibility
 # =========================================================================
 
+
 class TestBackwardCompatibility:
     """Existing sync-mode behavior is unchanged."""
 
@@ -569,6 +578,7 @@ class TestBackwardCompatibility:
 # =========================================================================
 # Edge Cases
 # =========================================================================
+
 
 class TestEdgeCases:
     """Edge cases and stress tests."""

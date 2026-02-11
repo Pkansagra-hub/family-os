@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/step_skipped.v1.json",
+  "title": "step.skipped.v1",
+  "description": "Emitted when a DAG step is skipped due to conditional edges or dependency failures.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.step.skipped.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["dag_id", "step_id", "skip_reason"],
+      "properties": {
+        "dag_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Parent DAG execution identifier."
+        },
+        "step_id": {
+          "type": "string",
+          "description": "Unique step identifier within the DAG."
+        },
+        "skip_reason": {
+          "type": "string",
+          "enum": [
+            "CONDITIONAL_EDGE_FALSE",
+            "DEPENDENCY_FAILED",
+            "GUARD_SKIP"
+          ],
+          "description": "Why the step was skipped."
+        },
+        "condition_expr": {
+          "type": ["string", "null"],
+          "description": "The conditional expression that evaluated to false, if applicable."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

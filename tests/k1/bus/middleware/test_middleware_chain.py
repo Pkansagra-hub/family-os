@@ -322,13 +322,13 @@ class TestBusFactoryMiddleware:
 
     def test_create_local_with_middleware(self) -> None:
         recorder = RecordingMiddleware()
-        bus = BusFactory.create_local(middleware=[recorder])
+        bus = BusFactory.create_local(middleware=[recorder], backend="python")
         bus.publish(Envelope(topic="k1.test", payload=b"x"))
         assert len(recorder.seen) == 1
 
     def test_create_for_testing_with_middleware(self) -> None:
         recorder = RecordingMiddleware()
-        bus = BusFactory.create_for_testing(middleware=[recorder])
+        bus = BusFactory.create_for_testing(middleware=[recorder], backend="python")
         bus.publish(Envelope(topic="k1.test", payload=b"x"))
         assert len(recorder.seen) == 1
         assert len(bus.captured) == 1

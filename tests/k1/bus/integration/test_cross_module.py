@@ -38,8 +38,8 @@ from k1.bus.ports.mailbox import MailboxConfig
 
 @pytest.fixture
 def bus() -> LocalBus:
-    """Capture-mode bus for integration tests."""
-    return BusFactory.create_for_testing()
+    """Capture-mode bus for integration tests (Python backend)."""
+    return BusFactory.create_for_testing(backend="python")
 
 
 @pytest.fixture
@@ -394,7 +394,7 @@ class TestMiddlewareWithAdapters:
 
         recorder = RecordingMiddleware()
         chain = MiddlewareChain([recorder])
-        bus = BusFactory.create_for_testing(middleware=chain)
+        bus = BusFactory.create_for_testing(middleware=chain, backend="python")
         fabric = FabricBusAdapter(bus)
         session = SessionBusAdapter(bus)
 

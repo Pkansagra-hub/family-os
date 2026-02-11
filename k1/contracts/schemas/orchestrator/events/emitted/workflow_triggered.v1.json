@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/workflow_triggered.v1.json",
+  "title": "workflow.triggered.v1",
+  "description": "Emitted when a scheduled or event-driven workflow run begins.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.workflow.triggered.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["workflow_id", "trigger_type", "execution_id"],
+      "properties": {
+        "workflow_id": {
+          "type": "string",
+          "description": "WorkflowRunRequest.workflow_id identifying the workflow definition."
+        },
+        "execution_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique execution run identifier."
+        },
+        "trigger_type": {
+          "type": "string",
+          "enum": ["CRON", "EVENT", "MANUAL"],
+          "description": "How the workflow was triggered."
+        },
+        "trigger_context": {
+          "type": "object",
+          "description": "Trigger-specific context (cron expression, event topic, etc.)."
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "description": "Nesting depth for chained workflow triggers (max 3)."
+        },
+        "parent_trace_id": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "Parent trace ID if this workflow was triggered by another workflow."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

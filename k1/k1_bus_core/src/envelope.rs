@@ -16,7 +16,7 @@
 //! running `flatc --rust` on `k1/bus/envelope/schema.fbs`.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::{PyBytes, PyDict, PyList};
 
 // Include the FlatBuffers generated code.
 // build.rs generates this into OUT_DIR.
@@ -56,69 +56,69 @@ const V2_MAGIC: &[u8; 4] = b"FB02";
 pub fn envelope_to_bytes(py: Python<'_>, fields: &Bound<'_, PyDict>) -> PyResult<Py<PyBytes>> {
     // Extract fields from dict
     let topic: &str = fields
-        .get_item("topic")?
+        .get_item(pyo3::intern!(py, "topic"))?
         .map(|v| v.extract::<String>())
         .transpose()?
         .unwrap_or_default()
         .leak(); // Safe: short-lived, we just need &str for builder
     // ... actually let's use owned strings to avoid leak
     let topic: String = fields
-        .get_item("topic")?
+        .get_item(pyo3::intern!(py, "topic"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or_default();
     let priority: u8 = fields
-        .get_item("priority")?
+        .get_item(pyo3::intern!(py, "priority"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or(2);
     let envelope_id: u64 = fields
-        .get_item("envelope_id")?
+        .get_item(pyo3::intern!(py, "envelope_id"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or(0);
     let sequence: u64 = fields
-        .get_item("sequence")?
+        .get_item(pyo3::intern!(py, "sequence"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or(0);
     let cognitive_trace_id: String = fields
-        .get_item("cognitive_trace_id")?
+        .get_item(pyo3::intern!(py, "cognitive_trace_id"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or_default();
     let session_id: String = fields
-        .get_item("session_id")?
+        .get_item(pyo3::intern!(py, "session_id"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or_default();
     let request_id: String = fields
-        .get_item("request_id")?
+        .get_item(pyo3::intern!(py, "request_id"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or_default();
     let parent_id: u64 = fields
-        .get_item("parent_id")?
+        .get_item(pyo3::intern!(py, "parent_id"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or(0);
     let created_ns: u64 = fields
-        .get_item("created_ns")?
+        .get_item(pyo3::intern!(py, "created_ns"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or(0);
     let payload: Vec<u8> = fields
-        .get_item("payload")?
+        .get_item(pyo3::intern!(py, "payload"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or_default();
     let ttl_ms: u32 = fields
-        .get_item("ttl_ms")?
+        .get_item(pyo3::intern!(py, "ttl_ms"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or(0);
     let payload_format: u8 = fields
-        .get_item("payload_format")?
+        .get_item(pyo3::intern!(py, "payload_format"))?
         .map(|v| v.extract())
         .transpose()?
         .unwrap_or(0);
@@ -189,26 +189,210 @@ pub fn envelope_from_bytes(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyDict>> 
     })?;
 
     let dict = PyDict::new(py);
-    dict.set_item("topic", env.topic().unwrap_or(""))?;
-    dict.set_item("priority", env.priority())?;
-    dict.set_item("envelope_id", env.envelope_id())?;
-    dict.set_item("sequence", env.sequence())?;
-    dict.set_item("cognitive_trace_id", env.cognitive_trace_id().unwrap_or(""))?;
-    dict.set_item("session_id", env.session_id().unwrap_or(""))?;
-    dict.set_item("request_id", env.request_id().unwrap_or(""))?;
-    dict.set_item("parent_id", env.parent_id())?;
-    dict.set_item("created_ns", env.created_ns())?;
-    dict.set_item("ttl_ms", env.ttl_ms())?;
-    dict.set_item("payload_format", env.payload_format())?;
+    dict.set_item(pyo3::intern!(py, "topic"), env.topic().unwrap_or(""))?;
+    dict.set_item(pyo3::intern!(py, "priority"), env.priority())?;
+    dict.set_item(pyo3::intern!(py, "envelope_id"), env.envelope_id())?;
+    dict.set_item(pyo3::intern!(py, "sequence"), env.sequence())?;
+    dict.set_item(pyo3::intern!(py, "cognitive_trace_id"), env.cognitive_trace_id().unwrap_or(""))?;
+    dict.set_item(pyo3::intern!(py, "session_id"), env.session_id().unwrap_or(""))?;
+    dict.set_item(pyo3::intern!(py, "request_id"), env.request_id().unwrap_or(""))?;
+    dict.set_item(pyo3::intern!(py, "parent_id"), env.parent_id())?;
+    dict.set_item(pyo3::intern!(py, "created_ns"), env.created_ns())?;
+    dict.set_item(pyo3::intern!(py, "ttl_ms"), env.ttl_ms())?;
+    dict.set_item(pyo3::intern!(py, "payload_format"), env.payload_format())?;
 
     // Payload as bytes
     let payload: &[u8] = env
         .payload()
         .map(|v| v.bytes())
         .unwrap_or(&[]);
-    dict.set_item("payload", PyBytes::new(py, payload))?;
+    dict.set_item(pyo3::intern!(py, "payload"), PyBytes::new(py, payload))?;
 
     Ok(dict.into())
+}
+
+// ---------------------------------------------------------------------------
+// Batch APIs — amortize single FFI call over N envelopes
+// ---------------------------------------------------------------------------
+
+/// Serialize a list of envelope dicts to a list of V2 FlatBuffers bytes.
+///
+/// Single FFI boundary crossing for the entire batch.  GIL is held once,
+/// and the FlatBufferBuilder is reused across iterations (reset, not
+/// reallocated).
+///
+/// ```python
+/// wire_list = k1_bus_core.envelope_to_bytes_batch([dict1, dict2, ...])
+/// ```
+#[pyfunction]
+#[pyo3(signature = (items))]
+pub fn envelope_to_bytes_batch(
+    py: Python<'_>,
+    items: &Bound<'_, PyList>,
+) -> PyResult<Py<PyList>> {
+    let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(512);
+    let results = PyList::empty(py);
+
+    for item in items.iter() {
+        let fields: &Bound<'_, PyDict> = item.downcast()?;
+        builder.reset();
+
+        let topic: String = fields
+            .get_item(pyo3::intern!(py, "topic"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or_default();
+        let priority: u8 = fields
+            .get_item(pyo3::intern!(py, "priority"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(2);
+        let envelope_id: u64 = fields
+            .get_item(pyo3::intern!(py, "envelope_id"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(0);
+        let sequence: u64 = fields
+            .get_item(pyo3::intern!(py, "sequence"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(0);
+        let cognitive_trace_id: String = fields
+            .get_item(pyo3::intern!(py, "cognitive_trace_id"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or_default();
+        let session_id: String = fields
+            .get_item(pyo3::intern!(py, "session_id"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or_default();
+        let request_id: String = fields
+            .get_item(pyo3::intern!(py, "request_id"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or_default();
+        let parent_id: u64 = fields
+            .get_item(pyo3::intern!(py, "parent_id"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(0);
+        let created_ns: u64 = fields
+            .get_item(pyo3::intern!(py, "created_ns"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(0);
+        let payload: Vec<u8> = fields
+            .get_item(pyo3::intern!(py, "payload"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or_default();
+        let ttl_ms: u32 = fields
+            .get_item(pyo3::intern!(py, "ttl_ms"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(0);
+        let payload_format: u8 = fields
+            .get_item(pyo3::intern!(py, "payload_format"))?
+            .map(|v| v.extract())
+            .transpose()?
+            .unwrap_or(0);
+
+        let topic_off = builder.create_string(&topic);
+        let trace_off = builder.create_string(&cognitive_trace_id);
+        let session_off = builder.create_string(&session_id);
+        let request_off = builder.create_string(&request_id);
+        let payload_off = builder.create_vector(&payload);
+
+        let env = fb::BusEnvelope::create(
+            &mut builder,
+            &fb::BusEnvelopeArgs {
+                envelope_id,
+                sequence,
+                parent_id,
+                created_ns,
+                priority,
+                ttl_ms,
+                payload_format,
+                topic: Some(topic_off),
+                cognitive_trace_id: Some(trace_off),
+                session_id: Some(session_off),
+                request_id: Some(request_off),
+                payload: Some(payload_off),
+            },
+        );
+        builder.finish(env, None);
+        let fb_bytes = builder.finished_data();
+
+        let mut result = Vec::with_capacity(4 + fb_bytes.len());
+        result.extend_from_slice(V2_MAGIC);
+        result.extend_from_slice(fb_bytes);
+
+        results.append(PyBytes::new(py, &result))?;
+    }
+
+    Ok(results.into())
+}
+
+/// Deserialize a list of V2 FlatBuffers bytes to a list of Python dicts.
+///
+/// Single FFI boundary crossing for the entire batch.  Each item is
+/// borrowed as `&[u8]` from the Python bytes object (zero-copy).
+///
+/// ```python
+/// dict_list = k1_bus_core.envelope_from_bytes_batch([wire1, wire2, ...])
+/// ```
+#[pyfunction]
+#[pyo3(signature = (items))]
+pub fn envelope_from_bytes_batch(
+    py: Python<'_>,
+    items: &Bound<'_, PyList>,
+) -> PyResult<Py<PyList>> {
+    let results = PyList::empty(py);
+
+    for item in items.iter() {
+        let data: &[u8] = item.extract()?;
+
+        if data.len() < 4 {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Envelope data too short: {} bytes (need >= 4)",
+                data.len()
+            )));
+        }
+        if &data[..4] != V2_MAGIC {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Not a V2 FlatBuffers envelope (missing FB02 magic prefix)",
+            ));
+        }
+
+        let fb_data = &data[4..];
+        let env = fb::root_as_bus_envelope(fb_data).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Malformed FlatBuffers data: {e}"))
+        })?;
+
+        let dict = PyDict::new(py);
+        dict.set_item(pyo3::intern!(py, "topic"), env.topic().unwrap_or(""))?;
+        dict.set_item(pyo3::intern!(py, "priority"), env.priority())?;
+        dict.set_item(pyo3::intern!(py, "envelope_id"), env.envelope_id())?;
+        dict.set_item(pyo3::intern!(py, "sequence"), env.sequence())?;
+        dict.set_item(pyo3::intern!(py, "cognitive_trace_id"), env.cognitive_trace_id().unwrap_or(""))?;
+        dict.set_item(pyo3::intern!(py, "session_id"), env.session_id().unwrap_or(""))?;
+        dict.set_item(pyo3::intern!(py, "request_id"), env.request_id().unwrap_or(""))?;
+        dict.set_item(pyo3::intern!(py, "parent_id"), env.parent_id())?;
+        dict.set_item(pyo3::intern!(py, "created_ns"), env.created_ns())?;
+        dict.set_item(pyo3::intern!(py, "ttl_ms"), env.ttl_ms())?;
+        dict.set_item(pyo3::intern!(py, "payload_format"), env.payload_format())?;
+
+        let payload: &[u8] = env
+            .payload()
+            .map(|v| v.bytes())
+            .unwrap_or(&[]);
+        dict.set_item(pyo3::intern!(py, "payload"), PyBytes::new(py, payload))?;
+
+        results.append(dict)?;
+    }
+
+    Ok(results.into())
 }
 
 #[cfg(test)]

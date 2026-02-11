@@ -286,13 +286,13 @@ mod tests {
 
     fn env(topic: &str, payload: &[u8]) -> RustEnvelope {
         RustEnvelope {
-            topic: topic.to_string(),
+            topic: Arc::from(topic),
             priority: 2,
             envelope_id: 0,
             sequence: 0,
-            cognitive_trace_id: String::new(),
-            session_id: String::new(),
-            request_id: String::new(),
+            cognitive_trace_id: Arc::from(""),
+            session_id: Arc::from(""),
+            request_id: Arc::from(""),
             parent_id: 0,
             created_ns: 0,
             payload: payload.to_vec(),

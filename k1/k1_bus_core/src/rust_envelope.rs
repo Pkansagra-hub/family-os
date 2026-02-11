@@ -22,6 +22,8 @@
 //! Cross-language compatible: `RustEnvelope.to_bytes()` -> Python `Envelope.from_bytes()`
 //! and vice versa.
 
+use std::sync::Arc;
+
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -44,20 +46,16 @@ const V2_MAGIC: &[u8; 4] = b"FB02";
 #[pyclass(frozen, name = "RustEnvelope")]
 #[derive(Clone, Debug)]
 pub struct RustEnvelope {
-    #[pyo3(get)]
-    pub topic: String,
+    pub topic: Arc<str>,
     #[pyo3(get)]
     pub priority: u8,
     #[pyo3(get)]
     pub envelope_id: u64,
     #[pyo3(get)]
     pub sequence: u64,
-    #[pyo3(get)]
-    pub cognitive_trace_id: String,
-    #[pyo3(get)]
-    pub session_id: String,
-    #[pyo3(get)]
-    pub request_id: String,
+    pub cognitive_trace_id: Arc<str>,
+    pub session_id: Arc<str>,
+    pub request_id: Arc<str>,
     #[pyo3(get)]
     pub parent_id: u64,
     #[pyo3(get)]
@@ -119,13 +117,13 @@ impl RustEnvelope {
             )));
         }
         Ok(Self {
-            topic,
+            topic: Arc::from(topic.as_str()),
             priority,
             envelope_id,
             sequence,
-            cognitive_trace_id,
-            session_id,
-            request_id,
+            cognitive_trace_id: Arc::from(cognitive_trace_id.as_str()),
+            session_id: Arc::from(session_id.as_str()),
+            request_id: Arc::from(request_id.as_str()),
             parent_id,
             created_ns,
             payload,
@@ -133,6 +131,17 @@ impl RustEnvelope {
             payload_format,
         })
     }
+
+    // ── Arc<str> getters (returning &str avoids allocation) ────────
+
+    #[getter]
+    fn topic(&self) -> &str { &self.topic }
+    #[getter]
+    fn cognitive_trace_id(&self) -> &str { &self.cognitive_trace_id }
+    #[getter]
+    fn session_id(&self) -> &str { &self.session_id }
+    #[getter]
+    fn request_id(&self) -> &str { &self.request_id }
 
     /// Payload byte count.
     #[getter]
@@ -221,13 +230,13 @@ impl RustEnvelope {
             .unwrap_or_default();
 
         Ok(Self {
-            topic: env.topic().unwrap_or("").to_string(),
+            topic: Arc::from(env.topic().unwrap_or("")),
             priority: env.priority(),
             envelope_id: env.envelope_id(),
             sequence: env.sequence(),
-            cognitive_trace_id: env.cognitive_trace_id().unwrap_or("").to_string(),
-            session_id: env.session_id().unwrap_or("").to_string(),
-            request_id: env.request_id().unwrap_or("").to_string(),
+            cognitive_trace_id: Arc::from(env.cognitive_trace_id().unwrap_or("")),
+            session_id: Arc::from(env.session_id().unwrap_or("")),
+            request_id: Arc::from(env.request_id().unwrap_or("")),
             parent_id: env.parent_id(),
             created_ns: env.created_ns(),
             payload,
@@ -316,13 +325,13 @@ mod tests {
 
     fn make_full_envelope() -> RustEnvelope {
         RustEnvelope {
-            topic: "k1.test.full".to_string(),
+            topic: Arc::from("k1.test.full"),
             priority: 0,
             envelope_id: 42,
             sequence: 7,
-            cognitive_trace_id: "trace-abc".to_string(),
-            session_id: "sess-xyz".to_string(),
-            request_id: "req-123".to_string(),
+            cognitive_trace_id: Arc::from("trace-abc"),
+            session_id: Arc::from("sess-xyz"),
+            request_id: Arc::from("req-123"),
             parent_id: 41,
             created_ns: 1_000_000,
             payload: b"hello-world".to_vec(),
@@ -334,20 +343,20 @@ mod tests {
     #[test]
     fn test_default_fields() {
         let env = RustEnvelope {
-            topic: String::new(),
+            topic: Arc::from(""),
             priority: 2,
             envelope_id: 0,
             sequence: 0,
-            cognitive_trace_id: String::new(),
-            session_id: String::new(),
-            request_id: String::new(),
+            cognitive_trace_id: Arc::from(""),
+            session_id: Arc::from(""),
+            request_id: Arc::from(""),
             parent_id: 0,
             created_ns: 0,
             payload: Vec::new(),
             ttl_ms: 0,
             payload_format: 0,
         };
-        assert_eq!(env.topic, "");
+        assert_eq!(&*env.topic, "");
         assert_eq!(env.priority, 2);
         assert_eq!(env.envelope_id, 0);
         assert_eq!(env.payload.len(), 0);
@@ -360,13 +369,13 @@ mod tests {
     #[test]
     fn test_full_construction() {
         let env = make_full_envelope();
-        assert_eq!(env.topic, "k1.test.full");
+        assert_eq!(&*env.topic, "k1.test.full");
         assert_eq!(env.priority, 0);
         assert_eq!(env.envelope_id, 42);
         assert_eq!(env.sequence, 7);
-        assert_eq!(env.cognitive_trace_id, "trace-abc");
-        assert_eq!(env.session_id, "sess-xyz");
-        assert_eq!(env.request_id, "req-123");
+        assert_eq!(&*env.cognitive_trace_id, "trace-abc");
+        assert_eq!(&*env.session_id, "sess-xyz");
+        assert_eq!(&*env.request_id, "req-123");
         assert_eq!(env.parent_id, 41);
         assert_eq!(env.created_ns, 1_000_000);
         assert_eq!(env.payload, b"hello-world");
@@ -387,11 +396,11 @@ mod tests {
         assert_eq!(stamped.created_ns, 999_999);
 
         // Publisher fields preserved
-        assert_eq!(stamped.topic, "k1.test.full");
+        assert_eq!(&*stamped.topic, "k1.test.full");
         assert_eq!(stamped.priority, 0);
-        assert_eq!(stamped.cognitive_trace_id, "trace-abc");
-        assert_eq!(stamped.session_id, "sess-xyz");
-        assert_eq!(stamped.request_id, "req-123");
+        assert_eq!(&*stamped.cognitive_trace_id, "trace-abc");
+        assert_eq!(&*stamped.session_id, "sess-xyz");
+        assert_eq!(&*stamped.request_id, "req-123");
         assert_eq!(stamped.parent_id, 41);
         assert_eq!(stamped.payload, b"hello-world");
         assert_eq!(stamped.ttl_ms, 5000);
@@ -476,13 +485,13 @@ mod tests {
     #[test]
     fn test_max_uint64_fields() {
         let env = RustEnvelope {
-            topic: "k1.max".to_string(),
+            topic: Arc::from("k1.max"),
             priority: 3,
             envelope_id: u64::MAX,
             sequence: u64::MAX,
-            cognitive_trace_id: String::new(),
-            session_id: String::new(),
-            request_id: String::new(),
+            cognitive_trace_id: Arc::from(""),
+            session_id: Arc::from(""),
+            request_id: Arc::from(""),
             parent_id: u64::MAX,
             created_ns: u64::MAX,
             payload: Vec::new(),
@@ -497,13 +506,13 @@ mod tests {
     fn test_large_payload_roundtrip() {
         let big_payload: Vec<u8> = (0..=255u8).cycle().take(256 * 1024).collect();
         let env = RustEnvelope {
-            topic: "k1.bulk".to_string(),
+            topic: Arc::from("k1.bulk"),
             priority: 2,
             envelope_id: 0,
             sequence: 0,
-            cognitive_trace_id: String::new(),
-            session_id: String::new(),
-            request_id: String::new(),
+            cognitive_trace_id: Arc::from(""),
+            session_id: Arc::from(""),
+            request_id: Arc::from(""),
             parent_id: 0,
             created_ns: 0,
             payload: big_payload.clone(),
@@ -551,7 +560,7 @@ mod tests {
     fn test_ne_different_topic() {
         let a = make_full_envelope();
         let mut b = make_full_envelope();
-        b.topic = "k1.other".to_string();
+        b.topic = Arc::from("k1.other");
         assert!(!a.__eq__(&b));
     }
 

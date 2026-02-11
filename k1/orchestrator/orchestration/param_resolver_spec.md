@@ -79,6 +79,7 @@ Original `step` dict is NEVER mutated.
 #### 1. Param resolution (existing behavior)
 
 For each value in `step["params"]`:
+
 - If value is a string starting with `"$"`, resolve via `_resolve_reference(ref, completed_results)`
 - Non-string values pass through unchanged
 - Nested dicts are NOT recursed (flat params only)
@@ -131,6 +132,7 @@ def _resolve_reference(
 ```
 
 **Path traversal rules:**
+
 - First segment after `$` is the step_id
 - `"result"` keyword maps to `CapabilityResult.data` (the dict)
 - Subsequent segments are dict key lookups on `.data`
@@ -202,6 +204,7 @@ DAG Plan (committed by Planner, executed by Orchestrator):
 ```
 
 **Execution flow:**
+
 1. DAGExecutor executes `step_1a` -> Fabric executes `tool.write.build_agent`
 2. BuildAgentHandler (4.5.2) validates, composes, registers agent
 3. Returns `CapabilityResult.success_result(data={"agent_name": "agent.execute.diabetes_companion", "status": "registered"})`
@@ -242,6 +245,7 @@ from k1.fabric.types import CapabilityResult
 ```
 
 `CapabilityResult` fields used by ParamResolver:
+
 - `.success: bool` -- check if referenced step succeeded
 - `.data: Optional[Dict[str, Any]]` -- traverse path to extract values
 
@@ -250,6 +254,7 @@ from k1.fabric.types import CapabilityResult
 ## Test Scenarios (~20 tests)
 
 ### Param resolution (existing behavior)
+
 1. Static params pass through unchanged
 2. `$step_id.result.key` in params resolves correctly
 3. Missing step_id in completed_results raises `StepReferenceError`
@@ -258,24 +263,27 @@ from k1.fabric.types import CapabilityResult
 6. Multiple params with mixed static and dynamic refs
 
 ### Capability resolution (4.5.9 new)
+
 7. Static capability passes through unchanged
-8. `$step_id.result.agent_name` resolves to registered capability
-9. Resolved capability NOT in registry raises `UnresolvedCapabilityError`
-10. Referenced step not in completed_results raises `StepReferenceError`
-11. Path traversal failure raises `PathResolutionError`
-12. Resolved value is not a string raises `UnresolvedCapabilityError`
-13. Resolved value is empty string raises `UnresolvedCapabilityError`
-14. Deep path: `$step_id.result.nested.key` resolves correctly
+2. `$step_id.result.agent_name` resolves to registered capability
+3. Resolved capability NOT in registry raises `UnresolvedCapabilityError`
+4. Referenced step not in completed_results raises `StepReferenceError`
+5. Path traversal failure raises `PathResolutionError`
+6. Resolved value is not a string raises `UnresolvedCapabilityError`
+7. Resolved value is empty string raises `UnresolvedCapabilityError`
+8. Deep path: `$step_id.result.nested.key` resolves correctly
 
 ### End-to-end pattern
+
 15. build_agent -> execute created agent full flow
-16. Multiple dynamic steps in sequence
-17. Step dict is NOT mutated (immutability)
-18. Failed step (success=False) referenced raises appropriate error
+2. Multiple dynamic steps in sequence
+3. Step dict is NOT mutated (immutability)
+4. Failed step (success=False) referenced raises appropriate error
 
 ### Edge cases
+
 19. Capability field missing from step dict -- no-op
-20. Empty completed_results with no references -- pass through
+2. Empty completed_results with no references -- pass through
 
 ---
 

@@ -1,5 +1,7 @@
 """k1.orchestrator.orchestration -- DAG orchestration components."""
 
+from .error_router import ErrorRouter
+from .orchestrator_service import AdapterException, OrchestratorService
 from .param_resolver import (
     ParamResolver,
     PathResolutionError,
@@ -9,6 +11,9 @@ from .param_resolver import (
 )
 
 __all__ = [
+    "AdapterException",
+    "ErrorRouter",
+    "OrchestratorService",
     "ParamResolver",
     "RegistryPort",
     "StepReferenceError",

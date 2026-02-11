@@ -60,8 +60,8 @@ class ProcessingContext:
     current_step_id: Optional[str] = None  # updated at each step start
 
     # --- Budget snapshots (read from CommittedPlan or config) ---
-    token_budget_max: Optional[int] = None
-    cost_budget_max_usd: Optional[float] = None
+    # token_budget_max: Optional[int] = None           # **V1 REMOVED** — no upstream data source (Fabric CapabilityResult has no token/cost fields). Re-add in V2 when LLM providers report usage metadata.
+    # cost_budget_max_usd: Optional[float] = None      # **V1 REMOVED** — same reason as token_budget_max.
 ```
 
 ### 1.2 Lifecycle
@@ -162,12 +162,12 @@ class OrchestratorConfig:
     step_retry_max_delay_ms: int = 5_000            # exponential backoff cap
 
     # --- Guards ---
-    token_budget_warn_pct: float = 0.80             # warn at 80% token budget
-    token_budget_skip_pct: float = 0.95             # skip optional steps at 95%
-    cost_budget_warn_pct: float = 0.80              # warn at 80% cost budget
-    cost_budget_skip_pct: float = 0.95              # skip optional steps at 95%
-    quality_threshold_low: float = 0.3              # below = SOFT_FAIL
-    quality_threshold_high: float = 0.7             # above = PASS, between = RETRY
+    # token_budget_warn_pct: float = 0.80             # **V1 REMOVED** — no upstream data source. Re-add in V2.
+    # token_budget_skip_pct: float = 0.95             # **V1 REMOVED** — same.
+    # cost_budget_warn_pct: float = 0.80              # **V1 REMOVED** — same.
+    # cost_budget_skip_pct: float = 0.95              # **V1 REMOVED** — same.
+    # quality_threshold_low: float = 0.3              # **V1 REMOVED** — Fabric CapabilityResult has no quality_score. Re-add in V2.
+    # quality_threshold_high: float = 0.7             # **V1 REMOVED** — same.
     max_micro_replans: int = 1                      # ORCH-13
     substep_rate_limit_ms: int = 500                # max 1 sub-step delta per step per interval
 
@@ -206,7 +206,7 @@ class OrchestratorConfig:
 | `mailbox_depth` | `ORCH_MAILBOX_DEPTH` | `512` |
 | `plan_request_timeout_ms` | `ORCH_PLAN_TIMEOUT_MS` | `60000` |
 | `step_max_retries` | `ORCH_STEP_MAX_RETRIES` | `3` |
-| `quality_threshold_high` | `ORCH_QUALITY_THRESHOLD_HIGH` | `0.8` |
+| ~~`quality_threshold_high`~~ | ~~`ORCH_QUALITY_THRESHOLD_HIGH`~~ | ~~`0.8`~~ **V1 REMOVED** |
 | `max_workflow_depth` | `ORCH_MAX_WORKFLOW_DEPTH` | `3` |
 | `workflow_db_path` | `ORCH_WORKFLOW_DB_PATH` | `/data/orch.db` |
 | `mcp_config_path` | `ORCH_MCP_CONFIG_PATH` | `/etc/mcp_servers.yaml` |
@@ -240,8 +240,8 @@ def from_env(cls, config_path: Optional[str] = None) -> "OrchestratorConfig":
 | `mailbox_depth` | 1 <= x <= 10000 | `ValueError: mailbox_depth must be 1-10000` |
 | `max_concurrent_dags` | x == 1 (V1) | `ValueError: V1 supports only single-DAG` |
 | `step_max_retries` | 0 <= x <= 10 | `ValueError: step_max_retries must be 0-10` |
-| `quality_threshold_low` | 0.0 <= x <= 1.0 | `ValueError: quality threshold must be 0-1` |
-| `quality_threshold_high` | x > quality_threshold_low | `ValueError: high must exceed low` |
+| ~~`quality_threshold_low`~~ | ~~0.0 <= x <= 1.0~~ | **V1 REMOVED** |
+| ~~`quality_threshold_high`~~ | ~~x > quality_threshold_low~~ | **V1 REMOVED** |
 | `max_workflow_depth` | 1 <= x <= 10 | `ValueError: max_workflow_depth must be 1-10` |
 | `workflow_db_path` | parent dir exists | `ValueError: DB directory does not exist` |
 | `cb_bridge_failure_threshold` | x >= 1 | `ValueError: CB threshold must be >= 1` |
@@ -264,7 +264,7 @@ def from_env(cls, config_path: Optional[str] = None) -> "OrchestratorConfig":
 
 ## 3. Event Payload Schemas (P0)
 
-**Gap**: 20 emitted events and 12 consumed events have topic names from 1.2.17 but zero formal JSON Schema definitions. Contract tests (7.4.4) validate "payload schemas match contract definitions" -- those definitions don't exist.
+**Gap**: 17 emitted events (V1; was 20 pre-phantom-field removal) and 12 consumed events have topic names from 1.2.17 but zero formal JSON Schema definitions. Contract tests (7.4.4) validate "payload schemas match contract definitions" -- those definitions don't exist.
 
 **Impact**: Blocks M1 issue 1.3.1 (contract registration) and M7 issue 7.4.4 (event catalog validation).
 
@@ -279,8 +279,8 @@ k1/contracts/schemas/events/orchestration/
     dag.started.v1.json
     dag.completed.v1.json
     dag.micro_replan.v1.json
-    dag.budget_warning.v1.json
-    dag.budget_exhausted.v1.json
+    # dag.budget_warning.v1.json      # **V1 REMOVED** — no upstream token/cost data
+    # dag.budget_exhausted.v1.json     # **V1 REMOVED** — same
     step.started.v1.json
     step.completed.v1.json
     step.failed.v1.json
@@ -288,7 +288,7 @@ k1/contracts/schemas/events/orchestration/
     step.skipped.v1.json
     step.retrying.v1.json
     step.schema_retry.v1.json
-    step.quality_retry.v1.json
+    # step.quality_retry.v1.json       # **V1 REMOVED** — no upstream quality_score data
     saga.compensating.v1.json
     delta.v1.json
     workflow.triggered.v1.json
@@ -335,7 +335,7 @@ Every Orchestrator event payload wraps in a common envelope:
 }
 ```
 
-### 3.3 Emitted Event Payload Schemas (20 events)
+### 3.3 Emitted Event Payload Schemas (17 events)
 
 #### 3.3.1 task.accepted.v1
 
@@ -387,8 +387,6 @@ Every Orchestrator event payload wraps in a common envelope:
     "plan_id": { "type": "string", "format": "uuid" },
     "total_steps": { "type": "integer", "minimum": 1 },
     "total_waves": { "type": "integer", "minimum": 1 },
-    "token_budget_max": { "type": ["integer", "null"] },
-    "cost_budget_max_usd": { "type": ["number", "null"] },
     "trace_id": { "type": "string", "format": "uuid" }
   }
 }
@@ -425,10 +423,7 @@ Every Orchestrator event payload wraps in a common envelope:
     "capability": { "type": "string" },
     "status": { "type": "string", "const": "COMPLETED" },
     "duration_ms": { "type": "integer", "minimum": 0 },
-    "tokens_consumed": { "type": "integer", "minimum": 0 },
-    "cost_usd": { "type": "number", "minimum": 0 },
     "retry_attempts": { "type": "integer", "minimum": 0 },
-    "quality_score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
     "trace_id": { "type": "string", "format": "uuid" }
   }
 }
@@ -491,14 +486,11 @@ Every Orchestrator event payload wraps in a common envelope:
       "type": "string",
       "enum": [
         "CONDITIONAL_EDGE_FALSE",
-        "TOKEN_BUDGET_95_PCT",
-        "COST_BUDGET_95_PCT",
         "DEPENDENCY_FAILED",
         "GUARD_SKIP"
       ]
     },
     "condition_expr": { "type": ["string", "null"] },
-    "budget_utilization_pct": { "type": ["number", "null"] },
     "trace_id": { "type": "string", "format": "uuid" }
   }
 }
@@ -547,8 +539,12 @@ Every Orchestrator event payload wraps in a common envelope:
 }
 ```
 
-#### 3.3.11 step.quality_retry.v1
+#### ~~3.3.11 step.quality_retry.v1~~ **V1 REMOVED**
 
+> **V1 REMOVED** — Fabric `CapabilityResult` has no `quality_score` field. No upstream data source exists.
+> Re-add in V2 when LLM providers report quality metadata.
+
+<!--
 ```json
 {
   "$id": "k1://schemas/events/orchestration/step.quality_retry.v1.json",
@@ -564,6 +560,7 @@ Every Orchestrator event payload wraps in a common envelope:
   }
 }
 ```
+-->
 
 #### 3.3.12 saga.compensating.v1
 
@@ -620,8 +617,12 @@ Every Orchestrator event payload wraps in a common envelope:
 }
 ```
 
-#### 3.3.14 dag.budget_warning.v1
+#### ~~3.3.14 dag.budget_warning.v1~~ **V1 REMOVED**
 
+> **V1 REMOVED** — No upstream token/cost data from Fabric `CapabilityResult`.
+> Re-add in V2 when LLM providers report usage metadata.
+
+<!--
 ```json
 {
   "$id": "k1://schemas/events/orchestration/dag.budget_warning.v1.json",
@@ -637,9 +638,14 @@ Every Orchestrator event payload wraps in a common envelope:
   }
 }
 ```
+-->
 
-#### 3.3.15 dag.budget_exhausted.v1
+#### ~~3.3.15 dag.budget_exhausted.v1~~ **V1 REMOVED**
 
+> **V1 REMOVED** — No upstream token/cost data from Fabric `CapabilityResult`.
+> Re-add in V2 when LLM providers report usage metadata.
+
+<!--
 ```json
 {
   "$id": "k1://schemas/events/orchestration/dag.budget_exhausted.v1.json",
@@ -656,6 +662,7 @@ Every Orchestrator event payload wraps in a common envelope:
   }
 }
 ```
+-->
 
 #### 3.3.16 dag.completed.v1
 
@@ -676,8 +683,6 @@ Every Orchestrator event payload wraps in a common envelope:
     "failed": { "type": "integer", "minimum": 0 },
     "cancelled": { "type": "integer", "minimum": 0 },
     "skipped": { "type": "integer", "minimum": 0 },
-    "total_tokens_consumed": { "type": "integer", "minimum": 0 },
-    "total_cost_usd": { "type": "number", "minimum": 0 },
     "duration_ms": { "type": "integer", "minimum": 0 },
     "compensation_count": { "type": "integer", "minimum": 0 },
     "trace_id": { "type": "string", "format": "uuid" }
@@ -700,8 +705,7 @@ Every Orchestrator event payload wraps in a common envelope:
         "SUBSTEP",
         "ERROR_DIAGNOSTIC",
         "HIL_REQUEST",
-        "DEGRADATION_NOTICE",
-        "BUDGET_WARNING"
+        "DEGRADATION_NOTICE"
       ]
     },
     "dag_id": { "type": ["string", "null"] },
@@ -799,10 +803,9 @@ The Orchestrator subscribes to these events produced by other modules. Schemas d
         "items": { "type": "string" }
       }
     },
-    "token_budget_max": { "type": "integer", "minimum": 0 },
-    "cost_budget_max_usd": { "type": ["number", "null"] },
     "trace_id": { "type": "string", "format": "uuid" }
   },
+  "_V1_REMOVED": "token_budget_max and cost_budget_max_usd fields removed -- no upstream data source. Re-add in V2.",
   "$defs": {
     "PlanStep": {
       "type": "object",
@@ -814,7 +817,6 @@ The Orchestrator subscribes to these events produced by other modules. Schemas d
         "deps": { "type": "array", "items": { "type": "string" } },
         "prompt_template": { "type": ["string", "null"] },
         "tools_granted": { "type": ["array", "null"], "items": { "type": "string" } },
-        "token_budget": { "type": "integer", "minimum": 0 },
         "output_schema": { "type": ["object", "null"] },
         "condition": { "type": ["object", "null"] },
         "is_optional": { "type": "boolean" },
@@ -901,9 +903,6 @@ The Orchestrator subscribes to these events produced by other modules. Schemas d
     "capability_name": { "type": "string" },
     "status": { "type": "string", "enum": ["SUCCESS", "FAILURE", "TIMEOUT", "DEGRADED"] },
     "data": { "type": ["object", "null"] },
-    "quality_score": { "type": ["number", "null"] },
-    "cost_usd": { "type": ["number", "null"] },
-    "tokens_used": { "type": ["integer", "null"] },
     "execution_time_ms": { "type": "integer" },
     "discoveries": {
       "type": ["array", "null"],
@@ -1241,11 +1240,11 @@ code:
     - path: "k1/orchestrator/orchestration/guards/__init__.py"
     - path: "k1/orchestrator/orchestration/guards/output_schema_guard.py"
     - path: "k1/orchestrator/orchestration/guards/conditional_edge_evaluator.py"
-    - path: "k1/orchestrator/orchestration/guards/token_budget_tracker.py"
-    - path: "k1/orchestrator/orchestration/guards/quality_gate.py"
+    # - path: "k1/orchestrator/orchestration/guards/token_budget_tracker.py"   # **V1 REMOVED**
+    # - path: "k1/orchestrator/orchestration/guards/quality_gate.py"            # **V1 REMOVED**
     - path: "k1/orchestrator/orchestration/guards/micro_replan_checkpoint.py"
     - path: "k1/orchestrator/orchestration/guards/execution_monitor.py"
-    - path: "k1/orchestrator/orchestration/guards/cost_budget_guard.py"
+    # - path: "k1/orchestrator/orchestration/guards/cost_budget_guard.py"       # **V1 REMOVED**
     - path: "k1/orchestrator/orchestration/guards/concurrency_guard.py"
     - path: "k1/orchestrator/workflows/__init__.py"
     - path: "k1/orchestrator/workflows/workflow_engine.py"
@@ -1407,16 +1406,16 @@ events:
       schema: "k1/contracts/schemas/events/orchestration/step.retrying.v1.json"
     - topic: "k1.orchestration.step.schema_retry.v1"
       schema: "k1/contracts/schemas/events/orchestration/step.schema_retry.v1.json"
-    - topic: "k1.orchestration.step.quality_retry.v1"
-      schema: "k1/contracts/schemas/events/orchestration/step.quality_retry.v1.json"
+    # - topic: "k1.orchestration.step.quality_retry.v1"       # **V1 REMOVED**
+    #   schema: "k1/contracts/schemas/events/orchestration/step.quality_retry.v1.json"
     - topic: "k1.orchestration.saga.compensating.v1"
       schema: "k1/contracts/schemas/events/orchestration/saga.compensating.v1.json"
     - topic: "k1.orchestration.dag.micro_replan.v1"
       schema: "k1/contracts/schemas/events/orchestration/dag.micro_replan.v1.json"
-    - topic: "k1.orchestration.dag.budget_warning.v1"
-      schema: "k1/contracts/schemas/events/orchestration/dag.budget_warning.v1.json"
-    - topic: "k1.orchestration.dag.budget_exhausted.v1"
-      schema: "k1/contracts/schemas/events/orchestration/dag.budget_exhausted.v1.json"
+    # - topic: "k1.orchestration.dag.budget_warning.v1"       # **V1 REMOVED**
+    #   schema: "k1/contracts/schemas/events/orchestration/dag.budget_warning.v1.json"
+    # - topic: "k1.orchestration.dag.budget_exhausted.v1"     # **V1 REMOVED**
+    #   schema: "k1/contracts/schemas/events/orchestration/dag.budget_exhausted.v1.json"
     - topic: "k1.orchestration.dag.completed.v1"
       schema: "k1/contracts/schemas/events/orchestration/dag.completed.v1.json"
     - topic: "k1.orchestration.delta.v1"
@@ -1520,7 +1519,7 @@ validation:
     - "orch_11_workflow_contract_compliance"
     - "orch_12_max_workflow_depth_3"
     - "orch_13_max_1_micro_replan"
-    - "orch_14_token_budget_enforcement"
+    - "orch_14_token_budget_enforcement"    # **V1 DEFERRED** -- no upstream data; re-enable in V2
     - "orch_15_output_schema_enforcement"
     - "orch_16_conditional_edge_evaluation"
 ```
@@ -1838,15 +1837,15 @@ ERROR_CLASSIFICATION = {
 
 ## 8. Guard Pipeline Ordering (P1)
 
-**Gap**: Eight guards exist with execution points (pre-step, post-step, pre-wave, post-wave) but no single canonical ordered table.
+**Gap**: Five V1 guards exist (was eight pre-phantom-field removal) with execution points (pre-step, post-step, pre-wave, post-wave) but no single canonical ordered table.
 
 **Impact**: Causes ambiguity in M3 implementation -- guards interact and ordering matters.
 
 ### 8.1 Canonical Guard Pipeline
 
 ```
-DAG Execution Flow:
-====================
+DAG Execution Flow (V1 — 5 guards):
+=====================================
 
 OrchestratorService.process(message)
     |
@@ -1855,23 +1854,23 @@ OrchestratorService.process(message)
     +-- For each WAVE:
     |       |
     |       +-- [PRE-WAVE] ConditionalEdgeEvaluator     # [G1] prune edges BEFORE wave construction
-    |       +-- [PRE-WAVE] TokenBudgetTracker.pre_wave() # [G2] check budget, skip optional if 95%
-    |       +-- [PRE-WAVE] CostBudgetGuard.pre_wave()    # [G3] check cost budget, skip optional if 95%
     |       |
     |       +-- For each STEP in wave (parallel via asyncio.gather):
     |       |       |
     |       |       +-- StepRunner.execute(step)
     |       |       |       |
-    |       |       |       +-- [POST-STEP] OutputSchemaGuard     # [G4] validate result schema, retry with hint
-    |       |       |       +-- [POST-STEP] QualityGate           # [G5] check quality score, retry if low
-    |       |       |       +-- [POST-STEP] TokenBudgetTracker.post_step()  # [G6] accumulate tokens
-    |       |       |       +-- [POST-STEP] CostBudgetGuard.post_step()     # [G7] accumulate cost
+    |       |       |       +-- [POST-STEP] OutputSchemaGuard     # [G2] validate result schema, retry with hint
     |       |
-    |       +-- [POST-WAVE] ExecutionMonitor              # [G8] emit progress delta, check user override
-    |       +-- [POST-WAVE] MicroReplanCheckpoint         # [G9] check discovery heuristic, trigger replan
-    |       +-- [POST-WAVE] SafetyBandReRead             # [G10] re-read safety_band from StatePort (ORCH-07)
+    |       +-- [POST-WAVE] ExecutionMonitor              # [G3] emit progress delta, check user override
+    |       +-- [POST-WAVE] MicroReplanCheckpoint         # [G4] check discovery heuristic, trigger replan
+    |       +-- [POST-WAVE] SafetyBandReRead             # [G5] re-read safety_band from StatePort (ORCH-07)
     |
     +-- ConcurrencyGuard.release()          # [G0] release lock
+
+# V1 REMOVED guards (no upstream data from Fabric CapabilityResult):
+#   TokenBudgetTracker  (was G2/G6) — re-add in V2 when LLM providers report token usage
+#   CostBudgetGuard     (was G3/G7) — re-add in V2 when LLM providers report cost
+#   QualityGate         (was G5)    — re-add in V2 when LLM providers report quality_score
 ```
 
 ### 8.2 Guard Registry Table
@@ -1880,15 +1879,13 @@ OrchestratorService.process(message)
 |-------|-------|------|-------|-----------|-------------------|
 | G0 | ConcurrencyGuard | wraps `_process_one()` | pre/post dispatch | ORCH-02 | `max_concurrent_dags` |
 | G1 | ConditionalEdgeEvaluator | pre-wave | wave boundary | ORCH-16 | none |
-| G2 | TokenBudgetTracker | pre-wave + post-step | wave boundary + step end | ORCH-14 | `token_budget_warn_pct`, `token_budget_skip_pct` |
-| G3 | CostBudgetGuard | pre-wave + post-step | wave boundary + step end | ORCH-14 (cost variant) | `cost_budget_warn_pct`, `cost_budget_skip_pct` |
-| G4 | OutputSchemaGuard | post-step | step end | ORCH-15 | none |
-| G5 | QualityGate | post-step | step end | none | `quality_threshold_low`, `quality_threshold_high` |
-| G6 | TokenBudgetTracker | post-step | step end | ORCH-14 | (same as G2) |
-| G7 | CostBudgetGuard | post-step | step end | (same as G3) | (same as G3) |
-| G8 | ExecutionMonitor | post-wave | wave boundary | ORCH-09 | `substep_rate_limit_ms` |
-| G9 | MicroReplanCheckpoint | post-wave | wave boundary | ORCH-13 | `max_micro_replans` |
-| G10 | SafetyBandReRead | post-wave | wave boundary | ORCH-07 | none |
+| ~~G2~~ | ~~TokenBudgetTracker~~ | ~~pre-wave + post-step~~ | ~~wave boundary + step end~~ | ~~ORCH-14~~ | **V1 REMOVED** |
+| ~~G3~~ | ~~CostBudgetGuard~~ | ~~pre-wave + post-step~~ | ~~wave boundary + step end~~ | ~~ORCH-14 (cost variant)~~ | **V1 REMOVED** |
+| G2 | OutputSchemaGuard | post-step | step end | ORCH-15 | none |
+| ~~G5~~ | ~~QualityGate~~ | ~~post-step~~ | ~~step end~~ | ~~none~~ | **V1 REMOVED** |
+| G3 | ExecutionMonitor | post-wave | wave boundary | ORCH-09 | `substep_rate_limit_ms` |
+| G4 | MicroReplanCheckpoint | post-wave | wave boundary | ORCH-13 | `max_micro_replans` |
+| G5 | SafetyBandReRead | post-wave | wave boundary | ORCH-07 | none |
 
 ### 8.3 Guard Return Values
 
@@ -1897,10 +1894,10 @@ Each guard returns a `GuardDecision`:
 ```python
 class GuardAction(str, Enum):
     CONTINUE = "CONTINUE"     # proceed normally
-    RETRY = "RETRY"           # re-execute the step (OutputSchemaGuard, QualityGate)
-    SKIP = "SKIP"             # skip the step (TokenBudget, ConditionalEdge)
-    HARD_STOP = "HARD_STOP"   # abort remaining waves (budget exhausted)
-    BYPASS = "BYPASS"         # guard not applicable (no schema, no budget)
+    RETRY = "RETRY"           # re-execute the step (OutputSchemaGuard)
+    SKIP = "SKIP"             # skip the step (ConditionalEdge)
+    HARD_STOP = "HARD_STOP"   # abort remaining waves
+    BYPASS = "BYPASS"         # guard not applicable (no schema)
 
 @dataclass(frozen=True)
 class GuardDecision:
@@ -1935,18 +1932,18 @@ class IPostWaveGuard(Protocol):
 ### 8.5 OrchestratorFactory Guard Wiring (step 12 of 15)
 
 ```python
-# Factory step 12: Wire guard pipeline in canonical order
+# Factory step 12: Wire guard pipeline in canonical order (V1 — 5 guards)
 pre_wave_guards: List[IPreWaveGuard] = [
     ConditionalEdgeEvaluator(),
-    TokenBudgetTracker(config),          # pre-wave check
-    CostBudgetGuard(config),             # pre-wave check
+    # TokenBudgetTracker(config),          # **V1 REMOVED** — no upstream data
+    # CostBudgetGuard(config),             # **V1 REMOVED** — no upstream data
 ]
 
 post_step_guards: List[IPostStepGuard] = [
-    OutputSchemaGuard(),                  # schema validation FIRST
-    QualityGate(config),                  # quality check SECOND
-    TokenBudgetTracker(config),           # accumulate THIRD
-    CostBudgetGuard(config),             # accumulate FOURTH
+    OutputSchemaGuard(),                  # schema validation
+    # QualityGate(config),                  # **V1 REMOVED** — no upstream data
+    # TokenBudgetTracker(config),           # **V1 REMOVED** — no upstream data
+    # CostBudgetGuard(config),             # **V1 REMOVED** — no upstream data
 ]
 
 post_wave_guards: List[IPostWaveGuard] = [
@@ -2193,16 +2190,6 @@ The full JSON schema for PlanRequest as sent over the event bus / port boundary.
       "type": "object",
       "description": "Budget, time, safety, and permission constraints for plan construction.",
       "properties": {
-        "token_budget_max": {
-          "type": ["integer", "null"],
-          "minimum": 0,
-          "description": "Max tokens Planner may allocate across all steps. Null = unlimited."
-        },
-        "cost_budget_max_usd": {
-          "type": ["number", "null"],
-          "minimum": 0,
-          "description": "Max USD cost across all steps. Null = no cost limit."
-        },
         "time_budget_ms": {
           "type": ["integer", "null"],
           "minimum": 0,
@@ -2299,8 +2286,8 @@ Three POC definitions exist. The production spec must reconcile them.
 | `plan_hash` | -- | str | -- | DROP (Planner-internal integrity check) |
 | `committed_at` | -- | str (ISO8601) | float (epoch) | KEEP as float (consistent with created_at) |
 | `latency_ms` | -- | float | -- | DROP (Planner-internal metric) |
-| `token_budget_max` | -- | -- | int | **ADD** (Orchestrator needs for TokenBudgetTracker) |
-| `cost_budget_max_usd` | -- | estimated_cost (float) | Optional[float] | **ADD** (Orchestrator needs for CostBudgetGuard) |
+| `token_budget_max` | -- | -- | ~~int~~ | ~~**ADD** (Orchestrator needs for TokenBudgetTracker)~~ **V1 REMOVED** — no upstream data |
+| `cost_budget_max_usd` | -- | estimated_cost (float) | ~~Optional[float]~~ | ~~**ADD** (Orchestrator needs for CostBudgetGuard)~~ **V1 REMOVED** — no upstream data |
 | `trace_id` | str | str | str | KEEP |
 | `execution_status` | -- | str | -- | DROP (Orchestrator tracks this in its own ProcessingContext) |
 | `estimated_duration_ms` | -- | int | -- | OPTIONAL (for BUDGET-1 time pressure detection) |
@@ -2334,8 +2321,8 @@ class CommittedPlan:
     dependencies: Dict[str, List[str]]              # step_id -> [dep_step_ids]
 
     # --- Budget (Planner estimates, Orchestrator enforces) ---
-    token_budget_max: int = 0                       # total token budget across all steps
-    cost_budget_max_usd: Optional[float] = None     # total cost budget (None = no limit)
+    # token_budget_max: int = 0                       # **V1 REMOVED** — no upstream data source. Re-add in V2.
+    # cost_budget_max_usd: Optional[float] = None     # **V1 REMOVED** — same.
     estimated_duration_ms: Optional[int] = None     # Planner's estimate of total execution time
 
     # --- Metadata ---
@@ -2354,10 +2341,10 @@ The Planner produces steps; the Orchestrator consumes them. The mapping must be 
 | 4 | `deps` | Built in Stage 2 dependency graph | Input to Kahn's topological sort in `build_waves()` | Also redundantly in CommittedPlan.dependencies |
 | 5 | `prompt_template` | Resolved in Stage 2 via `find_relevant_prompts()` | Passed through to Fabric `CapabilityRequest` | None for tool-type capabilities |
 | 6 | `tools_granted` | Resolved in Stage 2 (FAB-07 scoped tools) | Passed through to Fabric `CapabilityRequest` | None for tool-type capabilities |
-| 7 | `token_budget` | Estimated in Stage 2 based on capability metadata | Enforced by TokenBudgetTracker (guard G3) | 0 = unlimited |
+| 7 | `token_budget` | Estimated in Stage 2 based on capability metadata | ~~Enforced by TokenBudgetTracker (guard G3)~~ **V1 REMOVED** — no upstream data | 0 = unlimited |
 | 8 | `output_schema` | From capability contract (if structured output) | Enforced by OutputSchemaGuard (guard G4) | JSON Schema Draft 2020-12 |
 | 9 | `condition` | Built in Stage 2 (conditional edge) | Evaluated by ConditionalEdgeEvaluator (guard G1) | None = always execute |
-| 10 | `is_optional` | Set in Stage 2 (budget-skippable steps) | Used by TokenBudgetTracker at 95% to skip | Default False |
+| 10 | `is_optional` | Set in Stage 2 (budget-skippable steps) | Checked by guards for graceful skip decisions | Default False |
 | 11 | `has_side_effects` | Set in Stage 2 from capability contract | Drives saga compensation (2.2.5) | Default False |
 | 12 | `compensation` | Pre-resolved in Stage 2 from capability contract | Used by SagaRecovery for rollback | Fallback: query_registry() |
 | 13 | `timeout_ms` | Estimated in Stage 2 | Per-step timeout in StepRunner | None = config default (30s) |
@@ -2595,14 +2582,10 @@ How budget constraints flow from Concierge through Orchestrator to Planner and b
 Concierge                   Orchestrator                      Planner
   |                              |                               |
   | TaskEnvelope.constraints:    |                               |
-  |   token_budget_max: 10000   |                               |
-  |   cost_budget_max_usd: 0.50 |                               |
   |   time_budget_ms: 30000     |                               |
   |   safety_band: GREEN        |                               |
   |                              |                               |
   |-- envelope ----------------->| PlanRequest.constraints:      |
-  |                              |   token_budget_max: 10000     |
-  |                              |   cost_budget_max_usd: 0.50   |
   |                              |   time_budget_ms: 30000       |
   |                              |   safety_band: GREEN          |
   |                              |                               |
@@ -2614,16 +2597,14 @@ Concierge                   Orchestrator                      Planner
   |                              |    budget feasibility.]        |
   |                              |                               |
   |                              |<-- CommittedPlan:             |
-  |                              |   token_budget_max: 10000     | (echoed back)
-  |                              |   cost_budget_max_usd: 0.50   | (echoed back)
   |                              |   estimated_duration_ms: 25000| (Planner's estimate)
-  |                              |   steps[].token_budget: [2k,3k,2k,3k] (per-step allocation)
   |                              |                               |
-  |                              |== ENFORCE BUDGETS ============|
-  |                              |   TokenBudgetTracker.init(10000)
-  |                              |   CostAccumulator.init(0.50)  |
-  |                              |   Per-step: StepRunner tracks |
-  |                              |   Per-wave: Guards check      |
+  |                              |== NO TOKEN/COST ENFORCEMENT ==|
+  |                              |   V1: Fabric CapabilityResult |
+  |                              |   has no token/cost fields.   |
+  |                              |   TokenBudgetTracker and      |
+  |                              |   CostAccumulator DEFERRED    |
+  |                              |   to V2.                      |
   |                              |                               |
 ```
 
@@ -2631,11 +2612,11 @@ Concierge                   Orchestrator                      Planner
 
 | Field | Concierge Sets | Orchestrator Passes | Planner Echoes | Orchestrator Enforces |
 |-------|---------------|--------------------|--------------|-----------------------|
-| `token_budget_max` | TaskEnvelope.constraints | PlanRequest.constraints | CommittedPlan.token_budget_max | TokenBudgetTracker (guard G3) |
-| `cost_budget_max_usd` | TaskEnvelope.constraints | PlanRequest.constraints | CommittedPlan.cost_budget_max_usd | CostBudgetGuard (guard G6) |
+| ~~`token_budget_max`~~ | ~~TaskEnvelope.constraints~~ | ~~PlanRequest.constraints~~ | ~~CommittedPlan.token_budget_max~~ | **V1 REMOVED** — no upstream data |
+| ~~`cost_budget_max_usd`~~ | ~~TaskEnvelope.constraints~~ | ~~PlanRequest.constraints~~ | ~~CommittedPlan.cost_budget_max_usd~~ | **V1 REMOVED** — no upstream data |
 | `time_budget_ms` | TaskEnvelope.constraints | PlanRequest.constraints | CommittedPlan.estimated_duration_ms | BUDGET-1 time pressure in ConstraintResolver |
 | `safety_band` | TaskEnvelope.constraints | PlanRequest.constraints | Validated in Stage 3 | Re-read at wave boundary (state_port) |
-| Per-step `token_budget` | -- | -- | PlanStep.token_budget (allocation) | TokenBudgetTracker per-step tracking |
+| ~~Per-step `token_budget`~~ | ~~--~~ | ~~--~~ | ~~PlanStep.token_budget (allocation)~~ | **V1 REMOVED** — no upstream data |
 
 ### 10.9 Planner 4-Stage Pipeline Types (Planner-Internal, Cross-Reference)
 
@@ -2810,7 +2791,7 @@ Planner-Orchestrator Protocol (Section 10)
     +-- CapabilityDescriptor (10.5) ---> Fabric discover_capabilities() contract
     +-- MicroReplan contract (10.6) ---> Guard G5 (3.2.5) + IPlannerPort.micro_replan()
     +-- Planner failure modes (10.7) ---> ErrorRouter (2.1.7) + CB_PLANNER (Section 7)
-    +-- Budget passthrough (10.8) ---> TokenBudgetTracker (G3) + CostBudgetGuard (G6)
+    +-- Budget passthrough (10.8) ---> **V1 DEFERRED** (TokenBudgetTracker + CostBudgetGuard removed)
     +-- request_id correlation (10.10) ---> PendingPlanContext (1.2.19) + RACE-2 tests
 
 Guard Pipeline (Section 8)

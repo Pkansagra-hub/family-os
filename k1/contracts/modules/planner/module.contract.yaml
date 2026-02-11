@@ -1,0 +1,165 @@
+# ---------------------------------------------------------------------------
+# Planner Module Contract
+# Follows Orchestrator pattern: k1/contracts/modules/orchestrator/module.contract.yaml
+# Reference: planner.mmd (authoritative), Schema Whiteboard Section 10
+# ---------------------------------------------------------------------------
+$schema: "k1://schemas/module/module.contract.schema.yaml"
+
+metadata:
+  module_id: "planner"
+  owner: "platform-team"
+  band: "GREEN"
+  description: >
+    4-Stage LLM-Powered Planning Engine for K1. L3 in kernel stack.
+    Activated only for HIGH tier tasks. Receives PlanRequest from
+    Orchestrator, produces CommittedPlan via 4-stage pipeline
+    (SKETCH -> EXPAND -> VALIDATE -> COMMIT). Pure planning --
+    NEVER writes SessionState, NEVER executes capabilities.
+  tags: ["planner", "llm", "planning", "dag", "hil"]
+
+contract_version: 1
+impl_version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# Exported symbols -- all from k1/planner/__init__.py
+# ---------------------------------------------------------------------------
+exports:
+  # --- Facade / Entry point ---
+  - symbol: "PlannerAgent"
+    from_file: "k1/planner/__init__.py"
+
+  # --- Core Services ---
+  - symbol: "PipelineController"
+    from_file: "k1/planner/__init__.py"
+  - symbol: "PlanStateMachine"
+    from_file: "k1/planner/__init__.py"
+
+  # --- Port Protocols (7 ports) ---
+  - symbol: "IMailboxPort"
+    from_file: "k1/planner/__init__.py"
+  - symbol: "ILLMPort"
+    from_file: "k1/planner/__init__.py"
+  - symbol: "IFabricRetrievalPort"
+    from_file: "k1/planner/__init__.py"
+  - symbol: "IStateReadPort"
+    from_file: "k1/planner/__init__.py"
+  - symbol: "IBridgePort"
+    from_file: "k1/planner/__init__.py"
+  - symbol: "IDeltaEmitPort"
+    from_file: "k1/planner/__init__.py"
+  - symbol: "IEventPort"
+    from_file: "k1/planner/__init__.py"
+
+  # --- Shared envelope types (produced by Planner, consumed by Orchestrator) ---
+  - symbol: "CommittedPlan"
+    from_file: "k1/planner/__init__.py"
+    note: "Canonical production type. Must match k1/orchestrator/types.py CommittedPlan field-for-field."
+
+  - symbol: "PlanAck"
+    from_file: "k1/planner/__init__.py"
+    note: "Returned within 500ms of request_plan(). status: ACCEPTED | REJECTED."
+
+  - symbol: "PlanStep"
+    from_file: "k1/planner/__init__.py"
+    note: "14-field frozen dataclass. Must match WB Section 10.4 field mapping."
+
+# ---------------------------------------------------------------------------
+# Entrypoints
+# ---------------------------------------------------------------------------
+entrypoints:
+  init: "planner:initialize"
+  shutdown: "planner:cleanup"
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+dependencies:
+  - module: "kernel"
+    version: "1.0.0"
+  - module: "bus"
+    version: "1.0.0"
+  - module: "fabric"
+    version: "1.0.0"
+    note: "Retrieval API only -- discover_capabilities(), find_relevant_prompts(). Never execute."
+  - module: "sessionstate"
+    version: "1.0.0"
+    note: "Read-only HOT tier -- PLAN-01"
+  - module: "model_hub"
+    version: "1.0.0"
+    note: "LLM calls for stages 1-3 + HIL prompt generation."
+  # bridge is required for K0 recall + WAL persist
+  - module: "bridge"
+    version: "1.0.0"
+    required: true
+
+# ---------------------------------------------------------------------------
+# 12 Hard Invariants (PLAN-01 to PLAN-12)
+# Source: planner.mmd lines 125-170
+# ---------------------------------------------------------------------------
+invariants:
+  # --- Isolation ---
+  - id: "PLAN-01"
+    description: "Planner NEVER writes SessionState. Read-only access to HOT tier only."
+    category: "isolation"
+    enforcement: "compile-time (no IStateWritePort exists)"
+
+  - id: "PLAN-02"
+    description: "All 4 discovery tools are strictly read-only. No side effects."
+    category: "isolation"
+    enforcement: "compile-time (ToolCallRouter only routes to read ports)"
+
+  - id: "PLAN-06"
+    description: "Planner NEVER executes capabilities. Discovery only (read Fabric registry)."
+    category: "isolation"
+    enforcement: "compile-time (no IFabricExecutionPort, only IFabricRetrievalPort)"
+
+  # --- Pipeline ---
+  - id: "PLAN-03"
+    description: "Stage 4 COMMIT is DETERMINISTIC. Zero LLM calls, zero tool calls."
+    category: "pipeline"
+    enforcement: "compile-time (CommitService has no ILLMPort or tool dependencies)"
+
+  - id: "PLAN-04"
+    description: "Total planning time MUST NOT exceed 45s (pipeline timeout)."
+    category: "pipeline"
+    enforcement: "runtime (PipelineController timeout guard)"
+
+  - id: "PLAN-05"
+    description: "Max 6 discovery tool calls per plan (2 per stage for stages 1-2)."
+    category: "pipeline"
+    enforcement: "runtime (ToolCallRouter call counter)"
+
+  # --- Plan quality ---
+  - id: "PLAN-07"
+    description: "CommittedPlan MUST include token_budget_max per step."
+    category: "plan-quality"
+    enforcement: "V1 DEFERRED -- no upstream data (token_budget_max removed from PlanStep)"
+    status: "deferred"
+
+  - id: "PLAN-08"
+    description: "Every PlanStep.capability_name MUST resolve to a registered Fabric capability."
+    category: "plan-quality"
+    enforcement: "runtime (ValidateService capability check via IFabricRetrievalPort)"
+
+  - id: "PLAN-09"
+    description: "CommittedPlan step graph MUST be a valid DAG (no cycles)."
+    category: "plan-quality"
+    enforcement: "runtime (ValidateService DAG cycle check)"
+
+  # --- HIL ---
+  - id: "PLAN-10"
+    description: "Max 2 HIL rounds per planning session (clarification in Stage 1, approval in Stage 3)."
+    category: "hil"
+    enforcement: "runtime (HILCoordinator round counter)"
+
+  # --- Budget ---
+  - id: "PLAN-11"
+    description: "LLM budget objects MUST be passed on every Model Hub call."
+    category: "budget"
+    enforcement: "runtime (ILLMPort.complete() requires budget parameter)"
+
+  # --- Micro-replan ---
+  - id: "PLAN-12"
+    description: "Micro-replan MUST only re-plan remaining steps. Completed steps are immutable."
+    category: "micro-replan"
+    enforcement: "runtime (MicroReplan pipeline entry skips completed_results)"

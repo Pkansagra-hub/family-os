@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/delta_v1.v1.json",
+  "title": "delta.v1",
+  "description": "Emitted as progress/substep/diagnostic updates streamed to Concierge via IDeltaEmitPort.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.delta.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["delta_type"],
+      "properties": {
+        "delta_type": {
+          "type": "string",
+          "enum": [
+            "PROGRESS",
+            "SUBSTEP",
+            "ERROR_DIAGNOSTIC",
+            "HIL_REQUEST",
+            "DEGRADATION_NOTICE"
+          ],
+          "description": "Delta category."
+        },
+        "dag_id": {
+          "type": ["string", "null"],
+          "description": "DAG execution identifier, if applicable."
+        },
+        "step_id": {
+          "type": ["string", "null"],
+          "description": "Step identifier, if applicable."
+        },
+        "progress_pct": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Progress percentage (0.0 to 1.0)."
+        },
+        "message": {
+          "type": ["string", "null"],
+          "description": "Human-readable progress or diagnostic message."
+        },
+        "data": {
+          "type": ["object", "null"],
+          "description": "Arbitrary structured data for the delta."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

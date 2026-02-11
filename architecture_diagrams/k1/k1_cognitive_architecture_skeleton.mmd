@@ -42,7 +42,7 @@ flowchart TB
     %% | PLAN_APPROVAL               | HIL approval options format      | ~400    | INTERACTIVE |
     %% | EXECUTION_MONITORING        | Progress narration               | ~200    | BACKGROUND  |
     %% | FALLBACK_TRIGGER            | HIL question generation          | ~400    | INTERACTIVE |
-    %% | SOLUTION_VALIDATOR          | Plan correctness validation      | ~500    | INTERACTIVE |
+    %% | SOLUTION_VALIDATOR          | REMOVED V1 — Rule-based only (ORCH-02: No LLM in L2) | 0 | N/A |
     %% | CURIOSITY_AGENT             | Gap question formulation         | ~300    | BACKGROUND  |
     %% | PROACTIVE_DECISION          | Proactive content generation     | ~500    | BACKGROUND  |
     %% | MEMORY_WRITER_AGENTS        | Memory summarization             | ~1K     | BACKGROUND  |
@@ -428,7 +428,7 @@ flowchart TB
                 CONSTRAINT_MANAGER["Constraint Manager<br/>Oversees Iterative Flow"]:::coord
                 ITERATION_CONTROLLER["Iteration Controller<br/>Max 3 Cycles"]:::engine
                 CONSTRAINT_GRAPH["Constraint Graph<br/>Priority & Dependencies"]:::memory
-                SOLUTION_VALIDATOR["Solution Validator<br/>LLM + Rule-Based"]:::engine
+                SOLUTION_VALIDATOR["Solution Validator<br/>Rule-Based Validation<br/>(ORCH-02: No LLM in L2)"]:::engine
                 FALLBACK_TRIGGER["Fallback Trigger<br/>→ HIL when stuck"]:::hil
                 CAPABILITY_CONSTRAINT_RESOLVER["Capability Constraint Resolver<br/>Fabric-aware Validation"]:::coord
             end
@@ -454,10 +454,10 @@ flowchart TB
             LOCAL_MCP_SERVERS["Local MCP Servers<br/>Device-Hosted<br/>Personal Tools"]:::local_mcp
             REMOTE_MCP_SERVERS["Remote MCP Servers<br/>Company-Hosted<br/>External Systems"]:::remote_mcp
             K0_CONNECTOR_PROXY["K0 Connector Proxy<br/>Cloud-Hosted<br/>Auth, Routing, Caching"]:::k0
-            CONNECTOR_SANDBOX["Connector Sandbox<br/>Isolation & Security"]:::connector
+            %% CONNECTOR_SANDBOX moved to L2_5_FABRIC (Fabric owns execution isolation via CircuitBreaker + OutputValidation)
+            %% MCP_PROVIDER_FACTORY moved to L2_5_FABRIC.PROVIDER_RESOLUTION (Fabric owns provider creation via ProviderFactory)
             MCP_CAPABILITY_REGISTRAR["MCP Capability Registrar<br/>Auto-registers Tools as Capabilities"]:::registry
             MCP_TOOL_DISCOVERY["MCP Tool Discovery<br/>Auto-discovers tool capabilities"]:::engine
-            MCP_PROVIDER_FACTORY["MCP Provider Factory<br/>Creates capability handlers"]:::factory
         end
     end
     subgraph L2_5_FABRIC["🔗 LAYER 2.5: Capability Fabric (ADR-K004 Adaptation)"]
@@ -511,6 +511,8 @@ flowchart TB
             PROVIDER_MATCHER["Provider Matcher<br/>Capability → Implementation"]:::engine
             PROVIDER_SELECTOR["Provider Selector<br/>QoS + Affective + Context-aware"]:::engine
             PROVIDER_FACTORY["Provider Factory<br/>Instantiate capability handlers"]:::factory
+            MCP_PROVIDER_FACTORY["MCP Provider Factory<br/>Creates MCP capability handlers"]:::factory
+            CONNECTOR_SANDBOX["Connector Sandbox<br/>Isolation & Security"]:::connector
             PROVIDER_HARD_FILTER["Hard Filter Phase<br/>Safety band access + Availability != OFFLINE<br/>+ Required inputs satisfiable"]:::engine
             PROVIDER_SOFT_RANKER["Soft Ranking Phase<br/>Semantic similarity (0.4) + Domain match (0.3)<br/>+ Success rate 30d (0.15) + Cost/latency (0.15)"]:::engine
         end
@@ -1348,7 +1350,8 @@ flowchart TB
     CONCIERGE_FSM -->|"analyze affect (local)"| ULTRABERT_EMOTIONS
     ULTRABERT_EMOTIONS -->|"k1.affect.analyzed.v1"| EVENT_BUS
     EVENT_BUS -->|"Update affective_now"| AFFECTIVE_NOW
-    CONVERSATIONAL_ANTICIPATION_ENGINE -->|"Speculative Execution"| ORCHESTRATOR_ACTOR
+    %% V2 EXTENSION POINT: Speculative pre-warming based on anticipation predictions
+    CONVERSATIONAL_ANTICIPATION_ENGINE -->|"Speculative Execution (V2)"| ORCHESTRATOR_ACTOR
     THEORY_OF_MIND_ENGINE -->|"Mental Model Updates"| SCOREBOARD
     THEORY_OF_MIND_ENGINE -->|"Cognitive Load"| MENTAL_MODEL_MANAGEMENT
     MENTAL_MODEL_MANAGEMENT -->|"Load State"| COGNITIVE_LOAD_ROUTING
@@ -1356,7 +1359,8 @@ flowchart TB
     PREDICTIVE_COMPLETION -->|"Predictions"| CONVERSATIONAL_ANTICIPATION_ENGINE
     CONVERSATIONAL_ANTICIPATION_ENGINE -->|"Feed Predictions"| PREDICTIVE_COMPLETION
     %% Cognitive empathy engines feed into orchestrator (engines are Concierge-internal)
-    MENTAL_MODEL_MANAGEMENT -->|"Cognitive Load-Aware"| ORCHESTRATOR_ACTOR
+    %% V2 EXTENSION POINT: Cognitive load awareness adjusts DAG execution strategy
+    MENTAL_MODEL_MANAGEMENT -->|"Cognitive Load-Aware (V2)"| ORCHESTRATOR_ACTOR
     SUPERVISOR_MONITORING -->|"Health Monitoring"| L4_SUBAGENTS
     WFQ_SCHEDULER -->|"Priority-based Delivery"| EVENT_BUS
     WFQ_SCHEDULER -->|"Priority-based Delivery"| MAILBOX_ROUTER
@@ -1505,13 +1509,13 @@ flowchart TB
     CONSTRAINT_MANAGER -->|"Load Graph"| CONSTRAINT_GRAPH
     CONSTRAINT_MANAGER -->|"Control Iterations"| ITERATION_CONTROLLER
     ITERATION_CONTROLLER -->|"Validate Solutions"| SOLUTION_VALIDATOR
-    SOLUTION_VALIDATOR -->|"validation check (~500 tokens)"| LLM_REQUEST_BUS
+    SOLUTION_VALIDATOR -->|"deterministic validation (rule-based, no LLM)"| CONSTRAINT_MANAGER
     ITERATION_CONTROLLER -->|"Trigger HIL"| FALLBACK_TRIGGER
     FALLBACK_TRIGGER -->|"HIL prompt (~400 tokens)"| LLM_REQUEST_BUS
     FALLBACK_TRIGGER -->|"HIL Request"| PLANNER_HIL
     CONSTRAINT_MANAGER -->|"Validated Solution"| SAGA_RECOVERY
-    CONSTRAINT_GRAPH -->|"Constraint State"| SESSIONSTATE_STORE
-    ITERATION_CONTROLLER -->|"Iteration Count"| SESSIONSTATE_STORE
+    CONSTRAINT_GRAPH -->|"Constraint State (read-only)"| SESSIONSTATE_STORE
+    ITERATION_CONTROLLER -->|"Iteration Progress"| DELTA_BUS
     MODEL_ROUTER -->|"API calls"| LLM_MODEL_ENGINE
     CONSTRAINT_MANAGER -->|"k1.constraint.progress.v1"| EVENT_BUS
     EVENT_BUS -->|"Progress Updates"| CONCIERGE_MAILBOX
@@ -1614,7 +1618,8 @@ flowchart TB
     %% MODEL HUB (Capability-Driven LLM Access -- See k1/model_hub/model_hub.mmd)
     %% All LLM consumers route through LLM_REQUEST_BUS → MODEL_HUB → HUB_ROUTER (ProviderDispatcher)
     %% Consumers: CONCIERGE_FSM, PLANNER_AGENT, DYNAMIC_AGENTS, MEMORY_WRITER_AGENTS,
-    %%            PROACTIVE_DECISION, SOLUTION_VALIDATOR, CAPABILITY_FABRIC, Planner stages
+    %%            PROACTIVE_DECISION, CAPABILITY_FABRIC, Planner stages
+    %%            NOTE: SOLUTION_VALIDATOR removed from LLM consumers (ORCH-02: rule-based only in V1)
     %% ======================================================================================
 
     %% LLM Request Bus (consolidates all LLM call sources)
@@ -1691,7 +1696,8 @@ flowchart TB
     CONCIERGE_FSM -->|"prompt request"| PROMPT_SYSTEM
     PLANNER_AGENT -->|"prompt request"| PROMPT_SYSTEM
     DYNAMIC_AGENTS -->|"prompt request"| PROMPT_SYSTEM
-    %% NOTE: MEMORY_WRITER_AGENTS, SOLUTION_VALIDATOR, PROACTIVE_DECISION also use PROMPT_SYSTEM
+    %% NOTE: MEMORY_WRITER_AGENTS, PROACTIVE_DECISION also use PROMPT_SYSTEM
+    %% NOTE: SOLUTION_VALIDATOR no longer uses PROMPT_SYSTEM (ORCH-02: rule-based only in V1)
 
     %% Prompt System internal (collapsed - see Prompt Management subgraph for details)
     PROMPT_SYSTEM -->|"context lookup"| SESSIONSTATE_STORE
@@ -1870,7 +1876,8 @@ flowchart TB
     class DELETION_PROCESSES,AUTOMATED_DELETION,USER_DELETION,GRACE_PERIOD deletion
     class AUDIT_COMPLIANCE,DELETION_AUDIT,COMPLIANCE_METRICS audit
     class HUB_ROUTER,HUB_OPENAI,HUB_ANTHROPIC,HUB_OTHERS hub
-    class CONSTRAINT_MANAGER,ITERATION_CONTROLLER,CONSTRAINT_GRAPH,SOLUTION_VALIDATOR,FALLBACK_TRIGGER coord
+    class CONSTRAINT_MANAGER,ITERATION_CONTROLLER,CONSTRAINT_GRAPH,FALLBACK_TRIGGER coord
+    class SOLUTION_VALIDATOR engine
     class HARD_DELETE deletion
     class LLM_MODEL_ENGINE engine
     class COGNITIVE_TRACE_ID routing

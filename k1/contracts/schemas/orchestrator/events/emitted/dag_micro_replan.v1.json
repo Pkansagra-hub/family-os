@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/dag_micro_replan.v1.json",
+  "title": "dag.micro_replan.v1",
+  "description": "Emitted when DAG execution triggers a micro-replan request to the Planner.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.dag.micro_replan.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["dag_id", "original_plan_id", "replan_request_id", "trigger_step_id"],
+      "properties": {
+        "dag_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Current DAG execution identifier."
+        },
+        "original_plan_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Original CommittedPlan.plan_id before replan."
+        },
+        "replan_request_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "MicroReplanRequest.request_id sent to Planner."
+        },
+        "trigger_step_id": {
+          "type": "string",
+          "description": "Step whose failure or output triggered the replan."
+        },
+        "trigger_reason": {
+          "type": "string",
+          "description": "Human-readable reason for the micro-replan."
+        },
+        "completed_steps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of steps completed before replan."
+        },
+        "remaining_steps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of steps remaining in original plan."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

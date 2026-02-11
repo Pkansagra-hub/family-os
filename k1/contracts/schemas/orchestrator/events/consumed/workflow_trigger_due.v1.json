@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/consumed/workflow_trigger_due.v1.json",
+  "title": "workflow.trigger_due.v1",
+  "description": "Self-emitted by WorkflowScheduler when a cron or event trigger fires.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.workflow.trigger_due.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["workflow_id", "trigger_type"],
+      "properties": {
+        "workflow_id": {
+          "type": "string",
+          "description": "Workflow definition identifier to trigger."
+        },
+        "trigger_type": {
+          "type": "string",
+          "enum": ["CRON", "EVENT"],
+          "description": "How the trigger was activated."
+        },
+        "scheduled_fire_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the trigger was scheduled to fire."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

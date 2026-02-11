@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "k1://schemas/fabric/capability_descriptor.v1.json",
+  "title": "CapabilityDescriptor",
+  "description": "Capability metadata returned by Fabric.discover_capabilities(). Planner uses this to build PlanStep fields.",
+  "type": "object",
+  "required": ["name", "provider_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Fully qualified capability name (e.g. 'tool.execute.restaurant_booking')"
+    },
+    "provider_type": {
+      "type": "string",
+      "enum": ["mcp_local", "mcp_remote", "wasm", "bridge", "agent", "workflow", "concierge"],
+      "description": "Type of provider (matches Fabric's 6+1 provider taxonomy from fabric_new.mmd). Determines whether prompt_template is needed and affects timeout estimation."
+    },
+    "input_schema": {
+      "type": ["object", "null"],
+      "description": "JSON Schema for capability input parameters. Planner validates params against this."
+    },
+    "output_schema": {
+      "type": ["object", "null"],
+      "description": "JSON Schema for capability output. Forwarded to PlanStep.output_schema for OutputSchemaGuard."
+    },
+    "safety_band_min": {
+      "type": "string",
+      "enum": ["GREEN", "AMBER", "RED"],
+      "default": "GREEN",
+      "description": "Minimum safety band required. Planner checks against PlanRequest.constraints.safety_band."
+    },
+    "has_side_effects": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, Planner sets PlanStep.has_side_effects=True for saga compensation."
+    },
+    "compensation_capability": {
+      "type": ["string", "null"],
+      "description": "Capability to call for rollback. Forwarded to PlanStep.compensation."
+    },
+    "estimated_duration_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Estimated execution time. Planner uses this for timeout_ms and BUDGET-1 time estimation."
+    },
+    "domains": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Semantic domains this capability belongs to."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description for Planner LLM context."
+    }
+  }
+}

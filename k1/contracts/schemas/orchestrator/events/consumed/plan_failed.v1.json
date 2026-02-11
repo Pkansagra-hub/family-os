@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/consumed/plan_failed.v1.json",
+  "title": "plan.failed.v1",
+  "description": "Consumed from Planner when plan construction fails.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.planner.plan.failed.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "planner"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["request_id", "reason"],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Echoed from PlanRequest.request_id for PendingPlanContext correlation."
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "CAPABILITY_NOT_FOUND",
+            "CONSTRAINT_UNSATISFIABLE",
+            "TIMEOUT",
+            "INTERNAL_ERROR"
+          ],
+          "description": "Categorized failure reason."
+        },
+        "detail": {
+          "type": "string",
+          "description": "Human-readable failure detail."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

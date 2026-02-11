@@ -1,0 +1,164 @@
+# ---------------------------------------------------------------------------
+# Orchestrator Policies Contract
+# Follows Fabric pattern: k1/contracts/modules/fabric/policies.contract.yaml
+# Reference: Schema Whiteboard Sections 4.1, 4.2; Orchestrator Implementation Plan
+# ---------------------------------------------------------------------------
+$schema: "k1://schemas/module/policies.contract.schema.yaml"
+
+metadata:
+  module_id: "orchestrator"
+  owner: "platform-team"
+  band: "GREEN"
+
+contract_version: 1
+impl_version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# Capabilities granted to Orchestrator at runtime
+# ---------------------------------------------------------------------------
+capabilities:
+  granted:
+    - "orchestrator:process:v1"
+    - "orchestrator:health:v1"
+    - "fabric:execute:v1"
+    - "session:read:v1"
+    - "bus:publish:v1"
+    - "delta-bus:publish:v1"
+    - "bridge:write:v1"     # optional, K0 audit/WAL
+    - "planner:request:v1"
+
+# ---------------------------------------------------------------------------
+# Performance budgets
+# Orchestrator overhead MUST remain within these bounds.
+# Source: Implementation plan 1.3.3 and WB Section 4.2
+# ---------------------------------------------------------------------------
+budgets:
+  # Pure orchestrator overhead (excluding Fabric execution time)
+  orchestrator_overhead_ms_p99: 18
+  # End-to-end limits per tier
+  medium_tier_total_ms: 10000
+  high_tier_total_ms: 45000
+  # Default per-step timeout before error routing
+  step_timeout_default_ms: 30000
+
+# ---------------------------------------------------------------------------
+# Step limits -- prevent runaway execution
+# ---------------------------------------------------------------------------
+step_limits:
+  # Maximum steps in any single committed plan
+  max_steps_per_plan: 50
+  # Maximum number of DAG waves (topological layers)
+  max_waves_per_plan: 20
+  # Maximum parallel steps per wave (V1: ORCH-02 caps concurrency at 1 DAG)
+  max_concurrent_per_wave: 10
+  # ORCH-13: micro-replan attempts per DAG execution
+  max_micro_replans: 1
+
+# ---------------------------------------------------------------------------
+# Retry limits
+# ORCH-06: no step may retry more than 2 times
+# ---------------------------------------------------------------------------
+retry_limits:
+  # Normal capability failures (ErrorRouter decides RETRY)
+  normal_retries: 2
+  # OutputSchemaGuard schema validation failures
+  schema_retries: 1
+  # V1 REMOVED: quality_retries (no quality scoring in V1)
+
+# ---------------------------------------------------------------------------
+# Mailbox configuration
+# The entry-point mailbox for TaskEnvelope ingestion
+# ---------------------------------------------------------------------------
+mailbox:
+  max_depth: 100
+  priority_classes:
+    - "REALTIME"
+    - "INTERACTIVE"
+    - "BACKGROUND"
+  overflow_policy: "reject"
+  drain_strategy: "priority_then_fifo"
+
+# ---------------------------------------------------------------------------
+# Workflow limits (WorkflowEngine/Registry/Scheduler)
+# ORCH-08: max nesting depth = 3
+# ---------------------------------------------------------------------------
+workflow_limits:
+  # Maximum nesting depth for workflow-triggers-workflow chains
+  max_depth: 3
+  # Maximum active workflow runs across all sessions
+  max_active_workflows: 100
+  # Scheduler tick interval for cron/event trigger evaluation
+  scheduler_tick_interval_ms: 1000
+
+# ---------------------------------------------------------------------------
+# Pending context limits (ReaperService)
+# Prevents unbounded growth of pending plans and HIL requests
+# ---------------------------------------------------------------------------
+pending_context_limits:
+  # Maximum plans waiting for Planner response
+  max_pending_plans: 50
+  # Maximum HIL override/fallback requests awaiting response
+  max_pending_hil: 20
+  # How often the Reaper scans for timed-out pending contexts
+  reaper_interval_ms: 5000
+  # TTL for a pending plan before Reaper evicts it (seconds)
+  pending_plan_ttl_s: 300
+  # TTL for a pending HIL request before Reaper evicts it (seconds)
+  pending_hil_ttl_s: 120
+
+# ---------------------------------------------------------------------------
+# Circuit breaker policies
+# Per-step execution failure thresholds
+# ---------------------------------------------------------------------------
+circuit_breaker:
+  global:
+    timeout_s: 45
+    failure_threshold_per_min: 10
+    window_s: 60
+    half_open_timeout_s: 30
+    retry_strategy: "exponential_backoff"
+    retry_base_s: 1
+    retry_max_s: 15
+    retry_jitter: true
+
+# ---------------------------------------------------------------------------
+# Safety band enforcement (Orchestrator re-reads band from Fabric)
+# ORCH-15: OutputSchemaGuard enforces schema on every step result
+# ORCH-16: ConditionalEdgeEvaluator validates edge predicates
+# ---------------------------------------------------------------------------
+safety:
+  band_enforcement: "mandatory"
+  red_band_requires_approval: true
+  unclassified_default: "deny"
+
+# ---------------------------------------------------------------------------
+# Audit and observability
+# ORCH-09: every event MUST carry a trace_id
+# ---------------------------------------------------------------------------
+audit:
+  emit_receipts: true
+  receipt_topic: "k1.orchestration.audit.v1"
+  require_trace_id: true
+  trace_id_field: "cognitive_trace_id"
+  retention_days: 90
+  required_fields:
+    - "cognitive_trace_id"
+    - "session_id"
+    - "task_id"
+    - "dag_id"
+    - "step_id"
+    - "tier"
+    - "latency_ms"
+    - "status"
+    - "timestamp_utc"
+
+# ---------------------------------------------------------------------------
+# V1 REMOVED (documented for future reference)
+# ---------------------------------------------------------------------------
+# budget_thresholds:
+#   Removed: no upstream token/cost data from Fabric in V1.
+#   See ORCH-14 (DEFERRED).
+#
+# quality_thresholds:
+#   Removed: no quality scoring pipeline in V1.
+#   See ADR ORCH-012.

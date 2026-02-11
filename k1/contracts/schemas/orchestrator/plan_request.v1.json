@@ -1,0 +1,109 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "k1://schemas/orchestrator/plan_request.v1.json",
+  "title": "PlanRequest",
+  "description": "Orchestrator -> Planner plan request. Sent via IPlannerPort.request_plan().",
+  "type": "object",
+  "required": ["request_id", "intent", "trace_id"],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique request ID for PendingPlanContext correlation. Planner MUST echo this back in CommittedPlan.request_id."
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1,
+      "description": "User intent extracted by Concierge (e.g. 'plan birthday party for Mom')"
+    },
+    "constraints": {
+      "type": "object",
+      "description": "Budget, time, safety, and permission constraints for plan construction.",
+      "properties": {
+        "time_budget_ms": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Max total execution time budget for the plan. Planner uses this for BUDGET-1 time estimation."
+        },
+        "safety_band": {
+          "type": "string",
+          "enum": ["GREEN", "AMBER", "RED"],
+          "description": "Current safety band from SessionState. Planner must not select capabilities requiring higher band."
+        },
+        "max_steps": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Hard cap on plan steps. Null = use system default (50)."
+        },
+        "allowed_domains": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "description": "Restrict capabilities to these domains only. Null = all domains allowed."
+        },
+        "forbidden_capabilities": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "description": "Capabilities the Planner must NOT include. E.g. user blocked a provider."
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "description": "Routing metadata + optional pre-fetched SessionState snapshot.",
+      "required": ["tier", "session_id"],
+      "properties": {
+        "tier": {
+          "type": "string",
+          "enum": ["HIGH"],
+          "description": "Always HIGH for PlanRequest (Planner only invoked for HIGH tier)."
+        },
+        "family_member_id": {
+          "type": "string",
+          "description": "Which family member this plan is for."
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Active session identifier."
+        },
+        "snapshot": {
+          "$ref": "#/$defs/ContextSnapshot",
+          "description": "Optional pre-fetched SessionState snapshot. Planner may also independently read via query_planning_context()."
+        }
+      }
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "default": 45000,
+      "description": "Max time Orchestrator will wait for plan. After this, PendingPlanContext expires and Planner is cancelled."
+    }
+  },
+  "$defs": {
+    "ContextSnapshot": {
+      "type": "object",
+      "description": "Read-only snapshot of SessionState sections.",
+      "properties": {
+        "sections": {
+          "type": "object",
+          "description": "Map of section_name -> section_data.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "data": { "type": "object" },
+              "version": { "type": "integer" }
+            }
+          }
+        },
+        "captured_at": {
+          "type": "number",
+          "description": "Unix timestamp when snapshot was taken."
+        }
+      }
+    }
+  }
+}

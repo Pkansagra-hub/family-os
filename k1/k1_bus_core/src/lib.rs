@@ -80,6 +80,8 @@ fn k1_bus_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Envelope submodule functions
     m.add_function(wrap_pyfunction!(envelope::envelope_to_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(envelope::envelope_from_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(envelope::envelope_to_bytes_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(envelope::envelope_from_bytes_batch, m)?)?;
 
     // TopicTrie class
     m.add_class::<topic_trie::PyTopicTrie>()?;

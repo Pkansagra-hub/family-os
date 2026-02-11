@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/error_routed.v1.json",
+  "title": "error.routed.v1",
+  "description": "Diagnostic event emitted when ErrorRouter classifies an adapter error.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.error.routed.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["adapter", "severity", "action", "trace_id"],
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "description": "Name of the adapter that produced the error."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["RECOVERABLE", "DEGRADED", "TERMINAL"],
+          "description": "ErrorSeverity classification."
+        },
+        "action": {
+          "type": "string",
+          "enum": ["RETRY", "FALLBACK", "DEGRADE", "ABORT"],
+          "description": "ErrorAction decision returned by ErrorRouter."
+        },
+        "retry_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of retries recommended (0 for non-retry actions)."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable reason for the classification."
+        },
+        "error_code": {
+          "type": "string",
+          "description": "Adapter-specific error code."
+        },
+        "error_message": {
+          "type": "string",
+          "description": "Adapter error message."
+        },
+        "operation": {
+          "type": "string",
+          "description": "Port operation that failed."
+        },
+        "trace_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Trace ID of the originating request."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

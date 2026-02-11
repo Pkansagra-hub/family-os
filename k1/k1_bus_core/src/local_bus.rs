@@ -308,7 +308,7 @@ impl RustBus {
         // Track topics seen
         {
             let mut seen = self.topics_seen.lock();
-            if seen.insert(topic.clone()) {
+            if seen.insert(topic.to_string()) {
                 self.topics_seen_count.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -689,13 +689,13 @@ impl RustBus {
         };
 
         let event = RustEnvelope {
-            topic: topic.to_string(),
+            topic: Arc::from(topic),
             priority: 3, // BACKGROUND -- lifecycle events are low priority
             envelope_id: 0,
             sequence: 0,
-            cognitive_trace_id: String::new(),
-            session_id: String::new(),
-            request_id: String::new(),
+            cognitive_trace_id: Arc::from(""),
+            session_id: Arc::from(""),
+            request_id: Arc::from(""),
             parent_id: 0,
             created_ns: monotonic_ns(),
             payload: payload.into_bytes(),

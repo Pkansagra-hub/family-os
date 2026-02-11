@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/step_completed.v1.json",
+  "title": "step.completed.v1",
+  "description": "Emitted when a DAG step completes successfully.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.step.completed.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["dag_id", "step_id", "capability", "status", "duration_ms"],
+      "properties": {
+        "dag_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Parent DAG execution identifier."
+        },
+        "step_id": {
+          "type": "string",
+          "description": "Unique step identifier within the DAG."
+        },
+        "capability": {
+          "type": "string",
+          "description": "Capability name that executed."
+        },
+        "status": {
+          "type": "string",
+          "const": "COMPLETED",
+          "description": "Always COMPLETED for this event."
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Step execution duration in milliseconds."
+        },
+        "retry_attempts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of retry attempts before success."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
