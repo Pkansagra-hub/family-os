@@ -29,6 +29,20 @@ pub mod ring_buffer;
 pub mod rust_envelope;
 pub mod topic_trie;
 
+// V2-M6: Timing chain + WFQ modules
+pub mod causal_tracker;
+pub mod gap_buffer;
+pub mod timing_config;
+pub mod wfq;
+
+// V2-M7: Mailbox + Dead-Letter Queue
+pub mod dlq;
+pub mod mailbox;
+
+// V2-M8: Circuit Breaker + Sweep Timer
+pub mod circuit_breaker;
+pub mod sweep;
+
 // ─── Module version ──────────────────────────────────────────────────
 
 /// Crate version from Cargo.toml.
@@ -78,6 +92,18 @@ fn k1_bus_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // RustBus class (V2-M5)
     m.add_class::<local_bus::RustBus>()?;
+
+    // V2-M6: TimingConfig and WFQ Scheduler
+    m.add_class::<timing_config::RustTimingConfig>()?;
+    m.add_class::<wfq::PyWfqScheduler>()?;
+
+    // V2-M7: Mailbox + DLQ
+    m.add_class::<mailbox::RustMailbox>()?;
+    m.add_class::<mailbox::RustMailboxRouter>()?;
+    m.add_class::<dlq::DeadLetterQueue>()?;
+
+    // V2-M8: Sweep Timer
+    m.add_class::<sweep::PySweepTimer>()?;
 
     Ok(())
 }

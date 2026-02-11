@@ -243,22 +243,12 @@ impl RustEnvelope {
     /// Cheap struct copy in Rust (~128 bytes). The publisher provides
     /// topic, priority, payload, trace IDs.  The bus stamps envelope_id,
     /// sequence, and created_ns.  All other fields are preserved.
-    #[pyo3(signature = (envelope_id, sequence, created_ns))]
-    fn with_bus_fields(&self, envelope_id: u64, sequence: u64, created_ns: u64) -> Self {
-        Self {
-            topic: self.topic.clone(),
-            priority: self.priority,
-            envelope_id,
-            sequence,
-            cognitive_trace_id: self.cognitive_trace_id.clone(),
-            session_id: self.session_id.clone(),
-            request_id: self.request_id.clone(),
-            parent_id: self.parent_id,
-            created_ns,
-            payload: self.payload.clone(),
-            ttl_ms: self.ttl_ms,
-            payload_format: self.payload_format,
-        }
+    /// Return a new RustEnvelope with bus-assigned fields stamped.
+    ///
+    /// Python-facing wrapper that delegates to the `pub(crate)` Rust method.
+    #[pyo3(name = "with_bus_fields", signature = (envelope_id, sequence, created_ns))]
+    fn py_with_bus_fields(&self, envelope_id: u64, sequence: u64, created_ns: u64) -> Self {
+        self.with_bus_fields(envelope_id, sequence, created_ns)
     }
 
     // ── Python dunder methods ───────────────────────────────────────
@@ -290,6 +280,31 @@ impl RustEnvelope {
             && self.payload == other.payload
             && self.ttl_ms == other.ttl_ms
             && self.payload_format == other.payload_format
+    }
+}
+
+// ─── Crate-internal helpers (callable from local_bus.rs) ────────────
+
+impl RustEnvelope {
+    /// Stamp bus-assigned fields, returning a new envelope.
+    ///
+    /// Same logic as the `#[pymethods]` version but accessible from Rust code
+    /// within this crate (e.g., `RustBus::publish()` in `local_bus.rs`).
+    pub(crate) fn with_bus_fields(&self, envelope_id: u64, sequence: u64, created_ns: u64) -> Self {
+        Self {
+            topic: self.topic.clone(),
+            priority: self.priority,
+            envelope_id,
+            sequence,
+            cognitive_trace_id: self.cognitive_trace_id.clone(),
+            session_id: self.session_id.clone(),
+            request_id: self.request_id.clone(),
+            parent_id: self.parent_id,
+            created_ns,
+            payload: self.payload.clone(),
+            ttl_ms: self.ttl_ms,
+            payload_format: self.payload_format,
+        }
     }
 }
 

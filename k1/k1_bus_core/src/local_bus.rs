@@ -42,14 +42,16 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::OnceLock;
-use std::time::Instant;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
+use crossbeam::channel;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use crate::circuit_breaker::CircuitBreakerRegistry;
 use crate::rust_envelope::RustEnvelope;
 use crate::topic_trie::TopicTrieInner;
 
@@ -65,6 +67,14 @@ fn monotonic_ns() -> u64 {
     static BASELINE: OnceLock<Instant> = OnceLock::new();
     let base = BASELINE.get_or_init(Instant::now);
     base.elapsed().as_nanos() as u64
+}
+
+// ─── Dispatch work item (async dispatch M8-001) ─────────────────────
+
+/// Work item sent to the async dispatch thread.
+struct DispatchWork {
+    stamped: RustEnvelope,
+    handler_pairs: Vec<(u64, Py<PyAny>)>,
 }
 
 // ─── Handler latency tracking (V2-M5-008) ──────────────────────────
@@ -136,23 +146,28 @@ pub struct RustBus {
     trie: RwLock<TopicTrieInner>,
     /// handler_id -> Python callable
     handlers: RwLock<HashMap<u64, Py<PyAny>>>,
+    /// handler_id -> subscription pattern (for handler_circuits())
+    handler_patterns: DashMap<u64, String>,
 
     // ── Stamp generators (V2-M5-001, V2-M5-002) ────────────────
     envelope_id_gen: AtomicU64,
     topic_sequences: DashMap<String, AtomicU64>,
 
-    // ── Stats (lock-free AtomicU64) ─────────────────────────────
+    // ── Stats (Arc-wrapped for async dispatch thread access) ────
     envelopes_published: AtomicU64,
-    envelopes_delivered: AtomicU64,
-    handler_errors: AtomicU64,
+    envelopes_delivered: Arc<AtomicU64>,
+    handler_errors: Arc<AtomicU64>,
     subscriptions_active: AtomicU64,
     subscriptions_total: AtomicU64,
     unsubscribe_count: AtomicU64,
     topics_seen_count: AtomicU64,
-    ttl_expired: AtomicU64,
+    ttl_expired: Arc<AtomicU64>,
 
-    // ── Per-handler latency (V2-M5-008) ─────────────────────────
-    handler_latencies: DashMap<u64, HandlerLatency>,
+    // ── Per-handler latency (shared for async dispatch) ─────────
+    handler_latencies: Arc<DashMap<u64, HandlerLatency>>,
+
+    // ── Circuit breakers (V2-M8-005, shared for async dispatch) ─
+    circuit_breakers: Arc<CircuitBreakerRegistry>,
 
     // ── Topics seen set ─────────────────────────────────────────
     topics_seen: Mutex<HashSet<String>>,
@@ -163,6 +178,12 @@ pub struct RustBus {
 
     // ── Closed flag ─────────────────────────────────────────────
     closed: AtomicBool,
+
+    // ── Async dispatch (V2-M8-001/002/003/004) ──────────────────
+    dispatch_mode: u8,  // 0=Sync, 1=Async
+    async_sender: Option<channel::Sender<DispatchWork>>,
+    async_stop: Arc<AtomicBool>,
+    gil_batch_size: usize,
 }
 
 #[pymethods]
@@ -172,26 +193,75 @@ impl RustBus {
     /// Args:
     ///     capture: If True, record all published envelopes in `self.captured`.
     #[new]
-    #[pyo3(signature = (capture=false))]
-    fn new(capture: bool) -> Self {
+    #[pyo3(signature = (capture=false, dispatch_mode=0, failure_threshold=5, cooldown_ms=10000, gil_batch_size=32, async_channel_size=10000))]
+    fn new(
+        capture: bool,
+        dispatch_mode: u8,
+        failure_threshold: u32,
+        cooldown_ms: u64,
+        gil_batch_size: usize,
+        async_channel_size: usize,
+    ) -> Self {
+        let envelopes_delivered = Arc::new(AtomicU64::new(0));
+        let handler_errors = Arc::new(AtomicU64::new(0));
+        let ttl_expired = Arc::new(AtomicU64::new(0));
+        let handler_latencies = Arc::new(DashMap::new());
+        let circuit_breakers = Arc::new(CircuitBreakerRegistry::new(
+            failure_threshold,
+            cooldown_ms,
+        ));
+        let async_stop = Arc::new(AtomicBool::new(false));
+
+        // Async dispatch setup (M8-001/002)
+        let async_sender = if dispatch_mode == 1 {
+            let (tx, rx) = channel::bounded::<DispatchWork>(async_channel_size);
+            let stop = async_stop.clone();
+            let delivered = envelopes_delivered.clone();
+            let errors = handler_errors.clone();
+            let expired = ttl_expired.clone();
+            let latencies = handler_latencies.clone();
+            let cbs = circuit_breakers.clone();
+            let batch = gil_batch_size;
+
+            std::thread::Builder::new()
+                .name("k1-bus-dispatch".into())
+                .spawn(move || {
+                    Self::async_dispatch_loop(
+                        rx, stop, delivered, errors, expired,
+                        latencies, cbs, batch,
+                    );
+                })
+                .expect("Failed to spawn dispatch thread");
+
+            Some(tx)
+        } else {
+            None
+        };
+
         Self {
             trie: RwLock::new(TopicTrieInner::new()),
             handlers: RwLock::new(HashMap::new()),
+            handler_patterns: DashMap::new(),
             envelope_id_gen: AtomicU64::new(0),
             topic_sequences: DashMap::new(),
             envelopes_published: AtomicU64::new(0),
-            envelopes_delivered: AtomicU64::new(0),
-            handler_errors: AtomicU64::new(0),
+            envelopes_delivered,
+            handler_errors,
             subscriptions_active: AtomicU64::new(0),
             subscriptions_total: AtomicU64::new(0),
             unsubscribe_count: AtomicU64::new(0),
             topics_seen_count: AtomicU64::new(0),
-            ttl_expired: AtomicU64::new(0),
-            handler_latencies: DashMap::new(),
+            ttl_expired,
+            handler_latencies,
+            circuit_breakers,
             topics_seen: Mutex::new(HashSet::new()),
             capture,
             captured: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
+            dispatch_mode,
+            async_sender,
+            async_stop,
+            gil_batch_size,
         }
     }
 
@@ -260,7 +330,30 @@ impl RustBus {
 
         // 5. Fan-out dispatch (V2-M5-006, V2-M5-007, V2-M5-008, V2-M5-005)
         if !handler_ids.is_empty() {
-            self.dispatch(py, &stamped, &handler_ids)?;
+            if self.dispatch_mode == 1 {
+                // Async mode (M8-001): push to channel, return immediately
+                let handler_pairs: Vec<(u64, Py<PyAny>)> = {
+                    let handlers_lock = self.handlers.read();
+                    handler_ids.iter().filter_map(|&hid| {
+                        handlers_lock.get(&hid).map(|h| (hid, h.clone_ref(py)))
+                    }).collect()
+                };
+                if !handler_pairs.is_empty() {
+                    let work = DispatchWork {
+                        stamped: stamped.clone(),
+                        handler_pairs,
+                    };
+                    if let Some(ref sender) = self.async_sender {
+                        if sender.try_send(work).is_err() {
+                            // Channel full or disconnected -- fallback to sync
+                            self.dispatch(py, &stamped, &handler_ids)?;
+                        }
+                    }
+                }
+            } else {
+                // Sync mode (default): dispatch inline
+                self.dispatch(py, &stamped, &handler_ids)?;
+            }
         }
 
         Ok(envelope_id)
@@ -277,9 +370,13 @@ impl RustBus {
     ///
     /// Returns the subscription_id string for later `unsubscribe()`.
     ///
+    /// After successful subscription, emits a lifecycle event to
+    /// `k1.bus.subscription.created` via internal fast-path dispatch
+    /// (V2-M5-012).
+    ///
     /// Raises:
     ///     ValueError: If the pattern is invalid.
-    fn subscribe(&self, pattern: &str, handler: Py<PyAny>) -> PyResult<String> {
+    fn subscribe(&self, py: Python<'_>, pattern: &str, handler: Py<PyAny>) -> PyResult<String> {
         let sub_id = format!("sub-{:016x}", {
             static SUB_COUNTER: AtomicU64 = AtomicU64::new(0);
             SUB_COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -292,8 +389,17 @@ impl RustBus {
         };
 
         self.handlers.write().insert(handler_id, handler);
+        self.handler_patterns.insert(handler_id, pattern.to_string());
         self.subscriptions_active.fetch_add(1, Ordering::Relaxed);
         self.subscriptions_total.fetch_add(1, Ordering::Relaxed);
+
+        // V2-M5-012: Emit subscription lifecycle event (internal fast-path)
+        self.emit_lifecycle_event(
+            py,
+            "k1.bus.subscription.created",
+            &sub_id,
+            pattern,
+        );
 
         Ok(sub_id)
     }
@@ -302,8 +408,12 @@ impl RustBus {
 
     /// Remove a subscription by ID.
     ///
+    /// After successful removal, emits a lifecycle event to
+    /// `k1.bus.subscription.removed` via internal fast-path dispatch
+    /// (V2-M5-012).  The event payload contains the subscription_id.
+    ///
     /// Returns True if found and removed, False otherwise.
-    fn unsubscribe(&self, subscription_id: &str) -> bool {
+    fn unsubscribe(&self, py: Python<'_>, subscription_id: &str) -> bool {
         let handler_id_opt = {
             let mut trie = self.trie.write();
             trie.remove(subscription_id)
@@ -312,6 +422,8 @@ impl RustBus {
         if let Some(handler_id) = handler_id_opt {
             self.handlers.write().remove(&handler_id);
             self.handler_latencies.remove(&handler_id);
+            self.handler_patterns.remove(&handler_id);
+            self.circuit_breakers.remove(handler_id);
 
             // Saturating decrement: guard against underflow
             let prev = self.subscriptions_active.load(Ordering::Relaxed);
@@ -319,6 +431,15 @@ impl RustBus {
                 self.subscriptions_active.fetch_sub(1, Ordering::Relaxed);
             }
             self.unsubscribe_count.fetch_add(1, Ordering::Relaxed);
+
+            // V2-M5-012: Emit subscription lifecycle event (internal fast-path)
+            self.emit_lifecycle_event(
+                py,
+                "k1.bus.subscription.removed",
+                subscription_id,
+                "",
+            );
+
             true
         } else {
             false
@@ -330,6 +451,7 @@ impl RustBus {
     /// Close the bus.  Further publishes raise RuntimeError.
     fn close(&self) {
         self.closed.store(true, Ordering::Release);
+        self.async_stop.store(true, Ordering::Release);
     }
 
     /// Whether the bus has been closed.
@@ -454,6 +576,44 @@ impl RustBus {
     fn __len__(&self) -> usize {
         self.subscriptions_active.load(Ordering::Relaxed) as usize
     }
+
+    // ── Circuit breaker observability (V2-M8-007) ───────────────
+
+    /// Per-handler circuit breaker states.
+    ///
+    /// Returns: `{pattern_string: state_string}` where state is
+    /// "CLOSED", "OPEN", or "HALF_OPEN".
+    fn handler_circuits(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        let dict = PyDict::new(py);
+        for (hid, state) in self.circuit_breakers.states() {
+            let pattern = self.handler_patterns
+                .get(&hid)
+                .map(|r| r.value().clone())
+                .unwrap_or_else(|| format!("handler-{hid}"));
+            dict.set_item(pattern, state.as_str())?;
+        }
+        Ok(dict.into())
+    }
+
+    /// Reset a circuit breaker for a specific handler pattern.
+    ///
+    /// Finds the handler_id by pattern and resets its breaker to CLOSED.
+    /// Returns True if a matching handler was found and reset.
+    fn reset_circuit(&self, pattern: &str) -> bool {
+        for entry in self.handler_patterns.iter() {
+            if entry.value() == pattern {
+                self.circuit_breakers.reset(*entry.key());
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Dispatch mode: 0=Sync, 1=Async.
+    #[getter]
+    fn dispatch_mode_value(&self) -> u8 {
+        self.dispatch_mode
+    }
 }
 
 // ─── Private impl (non-PyO3) ────────────────────────────────────────
@@ -503,6 +663,58 @@ impl RustBus {
         entry.fetch_add(1, Ordering::Relaxed) + 1
     }
 
+    /// Emit a subscription lifecycle event via internal fast-path (V2-M5-012).
+    ///
+    /// Creates a `RustEnvelope` with the lifecycle topic and JSON metadata,
+    /// then dispatches directly to any matching handlers.  Uses the normal
+    /// trie match + dispatch path but does NOT stamp or count as a regular
+    /// publish (these are internal bus housekeeping events).
+    ///
+    /// Best-effort: errors during lifecycle dispatch are silently ignored
+    /// (lifecycle events are informational, not critical).
+    fn emit_lifecycle_event(
+        &self,
+        py: Python<'_>,
+        topic: &str,
+        subscription_id: &str,
+        pattern: &str,
+    ) {
+        // Build JSON payload: {"subscription_id": "...", "pattern": "..."}
+        let payload = if pattern.is_empty() {
+            format!("{{\"subscription_id\":\"{subscription_id}\"}}")
+        } else {
+            format!(
+                "{{\"subscription_id\":\"{subscription_id}\",\"pattern\":\"{pattern}\"}}"
+            )
+        };
+
+        let event = RustEnvelope {
+            topic: topic.to_string(),
+            priority: 3, // BACKGROUND -- lifecycle events are low priority
+            envelope_id: 0,
+            sequence: 0,
+            cognitive_trace_id: String::new(),
+            session_id: String::new(),
+            request_id: String::new(),
+            parent_id: 0,
+            created_ns: monotonic_ns(),
+            payload: payload.into_bytes(),
+            ttl_ms: 0,
+            payload_format: 1, // JSON
+        };
+
+        // Trie match (GIL-free)
+        let handler_ids = {
+            let trie = self.trie.read();
+            trie.match_topic(topic)
+        };
+
+        if !handler_ids.is_empty() {
+            // Best-effort dispatch -- ignore errors
+            let _ = self.dispatch(py, &event, &handler_ids);
+        }
+    }
+
     /// Fan-out dispatch: invoke all matched handlers with the stamped envelope.
     ///
     /// ## GIL Batch Strategy (V2-M5-006)
@@ -550,6 +762,12 @@ impl RustBus {
         // Resolve handler_ids to Python callables and invoke each
         let handlers_lock = self.handlers.read();
         for &hid in handler_ids {
+            // V2-M8-005: Circuit breaker check
+            if !self.circuit_breakers.allow(hid) {
+                self.handler_errors.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+
             if let Some(handler) = handlers_lock.get(&hid) {
                 let start = Instant::now();
                 let result = handler.call1(py, (&stamped_py,));
@@ -558,6 +776,7 @@ impl RustBus {
                 match result {
                     Ok(_) => {
                         self.envelopes_delivered.fetch_add(1, Ordering::Relaxed);
+                        self.circuit_breakers.record_success(hid);
                         self.handler_latencies
                             .entry(hid)
                             .or_insert_with(HandlerLatency::new)
@@ -567,6 +786,7 @@ impl RustBus {
                         // Error isolation (V2-M5-007): swallow exception, count it.
                         // Other handlers MUST still fire.
                         self.handler_errors.fetch_add(1, Ordering::Relaxed);
+                        self.circuit_breakers.record_failure(hid);
                         self.handler_latencies
                             .entry(hid)
                             .or_insert_with(HandlerLatency::new)
@@ -578,6 +798,92 @@ impl RustBus {
 
         Ok(())
     }
+
+    /// Background thread loop for async dispatch (M8-001/002/003).
+    ///
+    /// Reads DispatchWork items from the channel, acquires GIL in batches,
+    /// and invokes Python handlers with circuit breaker integration.
+    fn async_dispatch_loop(
+        rx: channel::Receiver<DispatchWork>,
+        stop: Arc<AtomicBool>,
+        envelopes_delivered: Arc<AtomicU64>,
+        handler_errors: Arc<AtomicU64>,
+        ttl_expired: Arc<AtomicU64>,
+        handler_latencies: Arc<DashMap<u64, HandlerLatency>>,
+        circuit_breakers: Arc<CircuitBreakerRegistry>,
+        gil_batch_size: usize,
+    ) {
+        while !stop.load(Ordering::Acquire) {
+            let mut batch: Vec<DispatchWork> = Vec::with_capacity(gil_batch_size);
+
+            // Block on first item (with timeout for responsive shutdown)
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(work) => batch.push(work),
+                Err(channel::RecvTimeoutError::Timeout) => continue,
+                Err(channel::RecvTimeoutError::Disconnected) => break,
+            }
+
+            // Drain more items non-blocking (up to batch size)
+            for _ in 1..gil_batch_size {
+                match rx.try_recv() {
+                    Ok(work) => batch.push(work),
+                    Err(_) => break,
+                }
+            }
+
+            // Process batch under single GIL acquisition (M8-003)
+            Python::with_gil(|py| {
+                for work in batch {
+                    // TTL check
+                    if work.stamped.ttl_ms > 0 {
+                        let now_ns = monotonic_ns();
+                        let ttl_ns = work.stamped.ttl_ms as u64 * 1_000_000;
+                        if now_ns > work.stamped.created_ns
+                            && (now_ns - work.stamped.created_ns) > ttl_ns
+                        {
+                            ttl_expired.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                    }
+
+                    let stamped_py = match Py::new(py, work.stamped) {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+
+                    for (hid, handler) in &work.handler_pairs {
+                        if !circuit_breakers.allow(*hid) {
+                            handler_errors.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+
+                        let start = Instant::now();
+                        let result = handler.call1(py, (&stamped_py,));
+                        let elapsed_ns = start.elapsed().as_nanos() as u64;
+
+                        match result {
+                            Ok(_) => {
+                                envelopes_delivered.fetch_add(1, Ordering::Relaxed);
+                                circuit_breakers.record_success(*hid);
+                                handler_latencies
+                                    .entry(*hid)
+                                    .or_insert_with(HandlerLatency::new)
+                                    .record(elapsed_ns, false);
+                            }
+                            Err(_) => {
+                                handler_errors.fetch_add(1, Ordering::Relaxed);
+                                circuit_breakers.record_failure(*hid);
+                                handler_latencies
+                                    .entry(*hid)
+                                    .or_insert_with(HandlerLatency::new)
+                                    .record(elapsed_ns, true);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
 }
 
 // ─── Rust-native tests ──────────────────────────────────────────────
@@ -585,6 +891,11 @@ impl RustBus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test helper: create a sync-mode RustBus with defaults.
+    fn bus(capture: bool) -> RustBus {
+        RustBus::new(capture, 0, 5, 10000, 32, 10000)
+    }
 
     // ── monotonic_ns ────────────────────────────────────────────
 
@@ -686,68 +997,68 @@ mod tests {
 
     #[test]
     fn test_bus_construction() {
-        let bus = RustBus::new(false);
-        assert!(!bus.is_closed());
-        assert_eq!(bus.last_envelope_id(), 0);
-        assert_eq!(bus.subscription_count(), 0);
-        assert_eq!(bus.captured_count(), 0);
+        let b = bus(false);
+        assert!(!b.is_closed());
+        assert_eq!(b.last_envelope_id(), 0);
+        assert_eq!(b.subscription_count(), 0);
+        assert_eq!(b.captured_count(), 0);
     }
 
     #[test]
     fn test_bus_capture_mode() {
-        let bus = RustBus::new(true);
-        assert!(bus.capture);
-        assert_eq!(bus.captured_count(), 0);
+        let b = bus(true);
+        assert!(b.capture);
+        assert_eq!(b.captured_count(), 0);
     }
 
     #[test]
     fn test_bus_close() {
-        let bus = RustBus::new(false);
-        assert!(!bus.is_closed());
-        bus.close();
-        assert!(bus.is_closed());
+        let b = bus(false);
+        assert!(!b.is_closed());
+        b.close();
+        assert!(b.is_closed());
     }
 
     // ── next_sequence ───────────────────────────────────────────
 
     #[test]
     fn test_next_sequence_starts_at_1() {
-        let bus = RustBus::new(false);
-        assert_eq!(bus.next_sequence("k1.test"), 1);
+        let b = bus(false);
+        assert_eq!(b.next_sequence("k1.test"), 1);
     }
 
     #[test]
     fn test_next_sequence_monotonic() {
-        let bus = RustBus::new(false);
-        assert_eq!(bus.next_sequence("k1.test"), 1);
-        assert_eq!(bus.next_sequence("k1.test"), 2);
-        assert_eq!(bus.next_sequence("k1.test"), 3);
+        let b = bus(false);
+        assert_eq!(b.next_sequence("k1.test"), 1);
+        assert_eq!(b.next_sequence("k1.test"), 2);
+        assert_eq!(b.next_sequence("k1.test"), 3);
     }
 
     #[test]
     fn test_next_sequence_per_topic_independent() {
-        let bus = RustBus::new(false);
-        assert_eq!(bus.next_sequence("topic.a"), 1);
-        assert_eq!(bus.next_sequence("topic.b"), 1);
-        assert_eq!(bus.next_sequence("topic.a"), 2);
-        assert_eq!(bus.next_sequence("topic.b"), 2);
+        let b = bus(false);
+        assert_eq!(b.next_sequence("topic.a"), 1);
+        assert_eq!(b.next_sequence("topic.b"), 1);
+        assert_eq!(b.next_sequence("topic.a"), 2);
+        assert_eq!(b.next_sequence("topic.b"), 2);
     }
 
     #[test]
     fn test_topic_sequence_accessor() {
-        let bus = RustBus::new(false);
-        assert_eq!(bus.topic_sequence("unknown"), 0);
-        bus.next_sequence("k1.test");
-        bus.next_sequence("k1.test");
-        assert_eq!(bus.topic_sequence("k1.test"), 2);
+        let b = bus(false);
+        assert_eq!(b.topic_sequence("unknown"), 0);
+        b.next_sequence("k1.test");
+        b.next_sequence("k1.test");
+        assert_eq!(b.topic_sequence("k1.test"), 2);
     }
 
     // ── repr ────────────────────────────────────────────────────
 
     #[test]
     fn test_repr() {
-        let bus = RustBus::new(false);
-        let r = bus.__repr__();
+        let b = bus(false);
+        let r = b.__repr__();
         assert!(r.contains("RustBus"));
         assert!(r.contains("published=0"));
         assert!(r.contains("subscriptions=0"));
@@ -755,7 +1066,7 @@ mod tests {
 
     #[test]
     fn test_len() {
-        let bus = RustBus::new(false);
-        assert_eq!(bus.__len__(), 0);
+        let b = bus(false);
+        assert_eq!(b.__len__(), 0);
     }
 }
