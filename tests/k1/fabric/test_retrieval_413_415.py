@@ -157,6 +157,9 @@ class FakeRegistry:
     def list_all(self) -> Sequence[Any]:
         return list(self._contracts)
 
+    def list_by_domain(self, domain: str) -> Sequence[Any]:
+        return [c for c in self._contracts if domain in (getattr(c, "domain", None) or [])]
+
 
 # ===================================================================
 # 4.1.3 -- SoftRanker

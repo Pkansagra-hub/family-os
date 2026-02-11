@@ -1210,7 +1210,7 @@ flowchart TB
     ORCHESTRATOR_ACTOR -->|"SpawnRequest{agent_type, config}"| CAPABILITY_FABRIC
 
     %% Planner notifies Orchestrator when plan is ready
-    PLANNER_AGENT -->|"k1.planner.plan.ready"| ORCHESTRATOR_MAILBOX
+    PLANNER_AGENT -->|"k1.planner.plan.ready.v1"| ORCHESTRATOR_MAILBOX
 
     %% ======================================================================================
     %% TOOL EXECUTION & RESULT PIPELINE (Complete Round-Trip)

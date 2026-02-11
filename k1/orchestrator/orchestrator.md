@@ -140,7 +140,7 @@ The Orchestrator Mailbox is an MPSC (Multiple-Producer, Single-Consumer) queue w
 **Producers** (who can enqueue):
 
 - Concierge DISPATCHING state (via FabricOrchestratorAdapter) -- sends `TaskEnvelope`
-- Planner (via `k1.planner.plan.ready` event) -- sends `CommittedPlan`
+- Planner (via `k1.planner.plan.ready.v1` event) -- sends `CommittedPlan`
 - Workflow Scheduler (on trigger fire) -- sends `WorkflowRunRequest`
 - Workflow Provider (from Fabric, for sub-workflow triggers) -- sends rehydrated plan
 
@@ -358,7 +358,7 @@ HIGH tasks require multi-step planning with dependency management. The Orchestra
 8. Planner Stage 2 (EXPAND): LLM + find_relevant_prompts -> tool mapping + dependency graph
 9. Planner Stage 3 (VALIDATE): LLM arbiter -> all capabilities exist, DAG acyclic, no safety violations
 10. Planner Stage 4 (COMMIT): Deterministic -- persist CommittedPlan to K0 WAL
-11. Planner emits k1.planner.plan.ready -> Orchestrator Mailbox
+11. Planner emits k1.planner.plan.ready.v1 -> Orchestrator Mailbox
 --- END PLANNER ---
 
 12. OrchestratorActor receives CommittedPlan
@@ -790,7 +790,7 @@ This delta flows: DeltaBus -> Aggregation Window (500ms batching) -> Concierge F
 The Orchestrator reads from the DeltaBus only for the Planner's plan-ready signal:
 
 ```
-k1.planner.plan.ready -> contains CommittedPlan -> dequeue and execute
+k1.planner.plan.ready.v1 -> contains CommittedPlan -> dequeue and execute
 ```
 
 ### 12.3 Delta flow
@@ -966,7 +966,7 @@ When a tool schema changes and a saved workflow references it:
 ### 17.1 Detection
 
 ```
-1. Capability Registry emits: k1.capability.contract_updated.v1
+1. Capability Registry emits: k1.fabric.capability.contract_updated.v1
 2. Workflow Compiler proactively scans all active WorkflowSpecs
 3. Identifies workflows referencing the changed capability
 4. Runs schema diff: old contract vs new contract
@@ -1490,7 +1490,7 @@ quality < 0.3  -> SOFT FAIL: treat as FAILED for dependency purposes
 | Source | Message | Channel | When |
 |--------|---------|---------|------|
 | Concierge DISPATCHING | TaskEnvelope | Orchestrator Mailbox | MEDIUM/HIGH tier |
-| Planner | CommittedPlan (via k1.planner.plan.ready) | Orchestrator Mailbox | HIGH tier, after planning |
+| Planner | CommittedPlan (via k1.planner.plan.ready.v1) | Orchestrator Mailbox | HIGH tier, after planning |
 | Workflow Scheduler | WorkflowRunRequest | Orchestrator Mailbox | Cron/event trigger fires |
 | Workflow Provider (Fabric) | Rehydrated sub-workflow plan | Orchestrator Mailbox | Cross-workflow trigger |
 
@@ -1692,11 +1692,11 @@ All events emitted or consumed by the Orchestrator:
 
 | Event | From | Action |
 |-------|------|--------|
-| `k1.planner.plan.ready` | Planner | Dequeue CommittedPlan, start DAG execution |
+| `k1.planner.plan.ready.v1` | Planner | Dequeue CommittedPlan, start DAG execution |
 | `k1.planner.micro_replan.ready` | Planner | Receive adjusted plan after micro-replan (ORCH-13) |
 | `k1.capability.completed.v1` | Fabric | Process CapabilityResult for step |
 | `k1.capability.failed.v1` | Fabric | Process failure, trigger retry or cancel |
-| `k1.capability.contract_updated.v1` | Fabric Registry | Trigger workflow gap detection |
+| `k1.fabric.capability.contract_updated.v1` | Fabric Registry | Trigger workflow gap detection |
 | `k1.fabric.agent.*.tool_call.*` | Fabric | Forward sub-step progress to DeltaBus (pass-through) |
 | `k1.fabric.agent.*.llm_call.*` | Fabric | Forward sub-step progress to DeltaBus (pass-through) |
 | `k1.workflow.trigger.due` | Workflow Scheduler | Start workflow execution |

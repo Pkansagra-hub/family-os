@@ -1,0 +1,46 @@
+[package]
+name = "k1_bus_core"
+version = "0.1.0"
+edition = "2021"
+description = "Rust hot-path core for the K1 cognitive-architecture bus"
+license = "MIT"
+readme = "README.md"
+
+# PyO3 cdylib for Python extension module
+[lib]
+name = "k1_bus_core"
+crate-type = ["cdylib", "rlib"]
+
+# ── Dependencies ──────────────────────────────────────────────────────
+
+[dependencies]
+# Python bindings
+pyo3 = { version = "0.23", features = ["extension-module"] }
+
+# FlatBuffers runtime (zero-copy envelope)
+flatbuffers = "24.12"
+
+# Lock-free concurrency primitives
+crossbeam = "0.8"
+dashmap = "6"
+parking_lot = "0.12"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[build-dependencies]
+# None yet -- build.rs runs flatc via std::process::Command
+
+# ── Benchmarks ────────────────────────────────────────────────────────
+
+[[bench]]
+name = "envelope_bench"
+harness = false
+
+# ── Profile ───────────────────────────────────────────────────────────
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
+opt-level = 3

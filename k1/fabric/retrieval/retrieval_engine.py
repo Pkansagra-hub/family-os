@@ -58,6 +58,10 @@ class IRegistryPort(Protocol):
         """Return all registered contracts."""
         ...  # pragma: no cover
 
+    def list_by_domain(self, domain: str) -> Sequence[Any]:
+        """Return contracts matching the given domain tag (O(1) index lookup)."""
+        ...  # pragma: no cover
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -254,7 +258,21 @@ class RetrievalEngine:
         effective_k = max(1, min(effective_k, self._config.max_top_k))
 
         # -- Step 0: Gather contracts -----------------------------------
-        all_contracts = list(self._registry_port.list_all())
+        # When domain hints are provided, use the O(1) domain index
+        # instead of scanning all N contracts.  This reduces the
+        # candidate set to only contracts tagged with the requested
+        # domains, providing O(k) instead of O(N) performance.
+        if query_domains:
+            seen_names: set = set()
+            all_contracts = []
+            for d in query_domains:
+                for c in self._registry_port.list_by_domain(d):
+                    name = getattr(c, "name", "")
+                    if name and name not in seen_names:
+                        seen_names.add(name)
+                        all_contracts.append(c)
+        else:
+            all_contracts = list(self._registry_port.list_all())
 
         if filter_prompt_type:
             all_contracts = [

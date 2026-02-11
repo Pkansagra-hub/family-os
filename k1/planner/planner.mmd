@@ -20,7 +20,7 @@
 %%   L0 Rhythm -> L1 Concierge -> L2 Orchestrator -> L3 PLANNER -> L2.5 Fabric
 %%                                                   ^ we are here
 %%   Activated: Orchestrator routes HIGH tier tasks -> Planner Mailbox
-%%   Returns: CommittedPlan via k1.planner.plan.ready event
+%%   Returns: CommittedPlan via k1.planner.plan.ready.v1 event
 %%
 %% =====================================================================================
 %% LLM CALL MATRIX (4 stages, 3 use LLM)
@@ -60,8 +60,21 @@
 %%   PlanRequest {
 %%     request_id: uuid,
 %%     intent: string,
-%%     constraints: { max_steps: int, timeout_ms: int, required_capabilities: string[] },
-%%     context: { tier: "HIGH", family_member_id: string, session_id: string },
+%%     constraints: {
+%%       token_budget_max: int | null,    (max tokens across all steps, null = unlimited)
+%%       cost_budget_max_usd: float | null, (max USD cost, null = no limit)
+%%       time_budget_ms: int | null,      (max wall-clock time for plan execution)
+%%       safety_band: "GREEN" | "AMBER" | "RED", (from SessionState, caps above band excluded)
+%%       max_steps: int | null,           (hard cap on DAG steps, null = system default 50)
+%%       allowed_domains: string[] | null, (restrict to these capability domains)
+%%       forbidden_capabilities: string[] | null (explicit exclude list)
+%%     },
+%%     context: {
+%%       tier: "HIGH",
+%%       family_member_id: string,
+%%       session_id: string,
+%%       snapshot: ContextSnapshot | null   (optional pre-fetched SessionState; Planner may also read independently)
+%%     },
 %%     trace_id: string
 %%   }
 %%
@@ -70,6 +83,8 @@
 %%     plan_id: uuid,
 %%     remaining_steps: Step[],         (only uncompleted steps)
 %%     failure_context: { step_id: string, error: string, partial_result: any },
+%%     completed_results: { step_id: StepResult },  (results from completed steps -- feeds param resolution)
+%%     discoveries: [{ field: string, value: any, source_step_id: string }],  (runtime discoveries for replan)
 %%     trace_id: string
 %%   }
 %%
@@ -89,14 +104,20 @@
 %%     token_budget_max: int,           (ORCH-14: total budget for execution)
 %%     steps: [
 %%       {
-%%         id: string,                  (e.g., "s1", "s2")
-%%         capability: string,          (e.g., "tool.execute.send_message")
+%%         id: string,                    (e.g., "s1", "s2")
+%%         capability: string,            (e.g., "tool.execute.send_message")
 %%         prompt_template: string | null,
 %%         params: {},
-%%         deps: string[],              (step IDs this depends on)
-%%         token_budget: int,           (per-step token budget)
-%%         output_schema: {} | null,    (ORCH-15: expected output shape)
-%%         tools_granted: string[] | null  (FAB-07: scoped tool list for agent steps)
+%%         deps: string[],                (step IDs this depends on)
+%%         token_budget: int,             (per-step token budget)
+%%         output_schema: {} | null,      (ORCH-15: expected output shape)
+%%         tools_granted: string[] | null, (FAB-07: scoped tool list for agent steps)
+%%         condition: string | null,      (JSONPath guard -- step skipped if evaluates false)
+%%         is_optional: bool,             (true = failure does NOT fail the plan)
+%%         has_side_effects: bool,        (from Fabric CapabilityDescriptor, drives rollback)
+%%         compensation: string | null,   (capability to call on rollback if has_side_effects)
+%%         timeout_ms: int,               (per-step timeout, seeded from Fabric estimated_duration_ms)
+%%         required_context: string[]     (SessionState sections needed before execution)
 %%       }
 %%     ],
 %%     dependencies: { step_id: [dep_step_ids] },
@@ -228,7 +249,7 @@ subgraph PIPELINE["4-Stage Planning Pipeline"]
     S4_ASSIGN_ID["Assign plan_id (uuid)<br/>Set created_at timestamp"]:::step
     S4_BUILD["Build CommittedPlan<br/>Assemble steps, dependencies, token_budget_max<br/>Freeze plan structure<br/>---<br/>META-AGENT PATTERN (4.5.1-4.5.9):<br/>May include build_agent steps with AgentSpec params:<br/>  capability: tool.meta.build_agent<br/>  params: {name, role, tools_granted, prompt_template, ...}<br/>Subsequent steps can reference created agent:<br/>  capability: $build_step.result.agent_name<br/>Planner commits DAG; Orchestrator executes (PLAN-06)"]:::step
     S4_PERSIST["Persist to K0 WAL<br/>Via IBridgePort (fire-and-forget)<br/>Idempotent: plan_id is dedup key"]:::step
-    S4_EMIT["Emit k1.planner.plan.ready<br/>Via IEventPort<br/>Payload: CommittedPlan"]:::step
+    S4_EMIT["Emit k1.planner.plan.ready.v1<br/>Via IEventPort<br/>Payload: CommittedPlan"]:::step
   end
 end
 
@@ -437,7 +458,7 @@ subgraph LIFECYCLE["Lifecycle (6 Phases)"]
 
   LC_STAGE_TRANSITION["STAGE_TRANSITION<br/>Advance pipeline state machine<br/>Log stage completion + token usage<br/>Emit k1.planner.delta.v1 per stage"]:::lifecycle
 
-  LC_PLAN_END["PLAN_END<br/>Emit CommittedPlan via k1.planner.plan.ready<br/>Release plan lock, set state: IDLE<br/>Clear stage buffers"]:::lifecycle
+  LC_PLAN_END["PLAN_END<br/>Emit CommittedPlan via k1.planner.plan.ready.v1<br/>Release plan lock, set state: IDLE<br/>Clear stage buffers"]:::lifecycle
 
   LC_SHUTDOWN["SHUTDOWN<br/>Drain mailbox queue<br/>Flush pending deltas<br/>Cancel in-flight LLM calls<br/>Persist partial plan state for recovery"]:::lifecycle
 
@@ -453,7 +474,7 @@ subgraph CONCURRENCY["Concurrency Model (V1: Single Plan)"]
 
   CONC_MODEL["Single-Threaded Async<br/>One plan at a time (V1)<br/>Plan lock prevents concurrent planning<br/>Mailbox queues additional requests"]:::concurrency
 
-  CONC_CANCEL["Cancellation Support<br/>cancel_plan(request_id)<br/>Interrupts at next await boundary<br/>Sets state: CANCELLED<br/>Emits k1.planner.plan.cancelled"]:::concurrency
+  CONC_CANCEL["Cancellation Support<br/>cancel_plan(request_id)<br/>Interrupts at next await boundary<br/>Sets state: CANCELLED<br/>Emits k1.planner.plan.cancelled.v1"]:::concurrency
 
   CONC_MICRO["Micro-Replan Priority<br/>MicroReplanRequest: elevated priority in mailbox<br/>Waits for current plan to complete<br/>V2: May preempt SKETCH stage"]:::concurrency
 end
@@ -470,7 +491,7 @@ subgraph TOUCHPOINTS["External Touchpoints"]
 
     ORCH_SENDS["Orchestrator -> Planner Mailbox<br/>PlanRequest{intent, constraints, context}<br/>MicroReplanRequest{remaining_steps, failure_context}"]:::caller
 
-    ORCH_RECEIVES["Planner -> Orchestrator<br/>PlanAck (sync via mailbox ack)<br/>CommittedPlan (async via k1.planner.plan.ready)<br/>plan.failed | plan.cancelled (async events)"]:::caller
+    ORCH_RECEIVES["Planner -> Orchestrator<br/>PlanAck (sync via mailbox ack)<br/>CommittedPlan (async via k1.planner.plan.ready.v1)<br/>plan.failed.v1 | plan.cancelled.v1 (async events)"]:::caller
   end
 
   subgraph TP_FABRIC_RET["Fabric Retrieval (Read-Only Access)"]
@@ -502,7 +523,7 @@ subgraph TOUCHPOINTS["External Touchpoints"]
   subgraph TP_BUSES["Event Bus + Delta Bus"]
     direction TB
 
-    EVT_BUS["K1 Event Bus<br/>Pub: k1.planner.plan.ready, plan.failed, plan.cancelled<br/>Sub: k1.planner.plan.request, plan.cancel<br/>Consumers: Orchestrator (plan.ready),<br/>Learning Loop (plan.failed, plan.cancelled -> drift detection)<br/>See: k1/learning/learning.mmd"]:::bus
+    EVT_BUS["K1 Event Bus<br/>Pub: k1.planner.plan.ready.v1, plan.failed.v1, plan.cancelled.v1<br/>Sub: k1.planner.plan.request.v1, plan.cancel.v1<br/>Consumers: Orchestrator (plan.ready),<br/>Learning Loop (plan.failed, plan.cancelled -> drift detection)<br/>See: k1/learning/learning.mmd"]:::bus
 
     DLT_BUS["Delta Bus<br/>Pub: k1.planner.delta.v1<br/>(planning stage deltas, NOT SessionState writes)"]:::bus
   end
@@ -655,17 +676,17 @@ HIL_APPROVAL -->|"format summary (~400 tokens)"| PORT_LLM
 %% =====================================================================================
 
 %% Plan delivery
-S4_EMIT -->|"k1.planner.plan.ready"| PORT_EVENT
+S4_EMIT -->|"k1.planner.plan.ready.v1"| PORT_EVENT
 PORT_EVENT -->|"publish"| EVT_BUS
 EVT_BUS -->|"CommittedPlan"| ORCH_RECEIVES
 
 %% Plan failure
 PLAN_FSM -->|"FAILED state"| PORT_EVENT
-PORT_EVENT -->|"k1.planner.plan.failed"| EVT_BUS
+PORT_EVENT -->|"k1.planner.plan.failed.v1"| EVT_BUS
 
 %% Plan cancellation
 PLAN_FSM -->|"CANCELLED state"| PORT_EVENT
-PORT_EVENT -->|"k1.planner.plan.cancelled"| EVT_BUS
+PORT_EVENT -->|"k1.planner.plan.cancelled.v1"| EVT_BUS
 
 %% Stage deltas (per-stage progress)
 PIPELINE_CTRL -->|"k1.planner.delta.v1"| PORT_DELTA

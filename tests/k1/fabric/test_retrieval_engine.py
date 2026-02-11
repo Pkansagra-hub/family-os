@@ -118,6 +118,9 @@ class StubRegistryPort:
     def list_all(self) -> list[CapabilityContract]:
         return list(self._contracts)
 
+    def list_by_domain(self, domain: str) -> list[CapabilityContract]:
+        return [c for c in self._contracts if domain in (getattr(c, "domain", None) or [])]
+
 
 # ===========================================================================
 # EmbeddingIndex

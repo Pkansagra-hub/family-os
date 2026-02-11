@@ -210,7 +210,7 @@ subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execut
 
       SOFT_RANKER["Step 3: SoftRanker (soft_ranker.py)<br/>Scores remaining candidates<br/>---<br/>Score = (0.4 x semantic_similarity)<br/>      + (0.3 x domain_match)<br/>      + (0.15 x success_rate_30d)<br/>      + (0.15 x cost_latency_score)<br/>---<br/>DEGRADED penalty: score x 0.7<br/>< 10ms (dot products + field reads)"]:::engine
 
-      TOP_K_SELECTOR["Step 4: TopKSelector (top_k_selector.py)<br/>Default K=10, max K=25<br/>---<br/>Returns: contract + input/output schema<br/>+ score + provider type"]:::engine
+      TOP_K_SELECTOR["Step 4: TopKSelector (top_k_selector.py)<br/>Default K=10, max K=25<br/>---<br/>Returns: contract + input/output schema<br/>+ score + provider type<br/>+ has_side_effects + compensation_capability<br/>+ estimated_duration_ms<br/>(Planner uses these for PlanStep fields 11-13)"]:::engine
     end
   end
 
@@ -494,9 +494,9 @@ subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execut
     subgraph EVENTS_EMITTED["Events Emitted by Fabric"]
       direction TB
 
-      EVT_INVOKED["k1.fabric.capability.invoked.v1<br/>Before execution starts"]:::event
-      EVT_COMPLETED["k1.fabric.capability.completed.v1<br/>After successful execution"]:::event
-      EVT_FAILED["k1.fabric.capability.failed.v1<br/>After failed execution"]:::event
+      EVT_INVOKED["k1.capability.invoked.v1<br/>Before execution starts"]:::event
+      EVT_COMPLETED["k1.capability.completed.v1<br/>After successful execution"]:::event
+      EVT_FAILED["k1.capability.failed.v1<br/>After failed execution"]:::event
       EVT_REGISTERED["k1.fabric.capability.registered.v1<br/>New contract added"]:::event
       EVT_UNREGISTERED["k1.fabric.capability.unregistered.v1<br/>Contract removed"]:::event
       EVT_VALIDATION_FAILED["k1.fabric.contract.validation.failed.v1<br/>Contract failed schema validation"]:::event

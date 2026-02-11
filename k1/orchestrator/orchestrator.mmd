@@ -23,6 +23,11 @@ flowchart TB
 %%   - NOT a planner (walks a plan, does not create one)
 %%   - NOT a negotiator (Contract-Net from ADR-0006 is SUPERSEDED)
 %%
+%% NOTE (MISS-3 fix): Admin API (health, metrics, CB state, config reload)
+%%   is a DEPLOYMENT OVERLAY, not part of the core actor model.
+%%   See schema_whiteboard.md Section 5 for full Admin API schema.
+%%   The Orchestrator exposes admin endpoints only when admin_enabled=True.
+%%
 %% CALL CHAIN:
 %%   User -> Concierge (L1) -> Orchestrator (L2) -> Planner (L3, conditional)
 %%                                               -> Fabric (L2.5) -> Sub-Agents / Tools
@@ -36,7 +41,7 @@ flowchart TB
 %% MESSAGE ENVELOPES:
 %%   TaskEnvelope      : Concierge DISPATCHING -> Orchestrator Mailbox
 %%   PlanRequest       : Orchestrator -> Planner Mailbox (HIGH tier only)
-%%   CommittedPlan     : Planner -> Orchestrator (via k1.planner.plan.ready)
+%%   CommittedPlan     : Planner -> Orchestrator (via k1.planner.plan.ready.v1)
 %%   CapabilityRequest : Orchestrator -> Fabric Gateway (per DAG step)
 %%   CapabilityResult  : Fabric -> Orchestrator (per DAG step)
 %%   AggregatedResult  : Orchestrator -> Concierge COMPANIONING
@@ -85,7 +90,7 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
 
     ORCH_ACTOR["OrchestratorActor<br/>Pure deterministic logic, central dispatch<br/>NO LLM, NO tools, NEVER writes SessionState<br/>---<br/>Dequeue from Mailbox, route by type:<br/>  TaskEnvelope(MEDIUM): 1-2 CapReq direct to Fabric<br/>  TaskEnvelope(HIGH): PlanRequest -> Planner -> DAG<br/>  WorkflowRunRequest: rehydrate -> DAG (no Planner)<br/>  CommittedPlan: execute DAG immediately<br/>---<br/>Aggregates all results -> AggregatedResult"]:::actor
 
-    ORCH_MAILBOX["Orchestrator Mailbox<br/>MPSC queue + WFQ priority: REALTIME<br/>Single inbound entry point<br/>---<br/>Producers:<br/>  Concierge DISPATCHING (TaskEnvelope)<br/>  Planner (CommittedPlan via k1.planner.plan.ready)<br/>  Workflow Scheduler (WorkflowRunRequest)<br/>  Workflow Provider (rehydrated sub-workflow plan)"]:::mailbox
+    ORCH_MAILBOX["Orchestrator Mailbox<br/>MPSC queue + WFQ priority: REALTIME<br/>Single inbound entry point<br/>---<br/>Producers:<br/>  Concierge DISPATCHING (TaskEnvelope)<br/>  Planner (CommittedPlan via k1.planner.plan.ready.v1)<br/>  Workflow Scheduler (WorkflowRunRequest)<br/>  Workflow Provider (rehydrated sub-workflow plan)"]:::mailbox
 
     FABRIC_GATEWAY["Fabric Gateway<br/>Bridge to Capability Fabric L2.5<br/>All step execution routes through here<br/>---<br/>execute(CapabilityRequest) -> CapabilityResult<br/>execute_batch(CapReq[]) -> CapResult[] (parallel)<br/>spawn(AgentContract) -> AgentHandle"]:::gateway
   end
@@ -177,7 +182,7 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
 
     WF_DEPTH_GUARD["Workflow Depth Guard<br/>Max depth: 3 (ORCH-08)<br/>Cycle detection pre-validated by Planner Stage 3"]:::safety
 
-    GAP_DETECTOR["Proactive Gap Detector<br/>Listens: k1.capability.contract_updated.v1<br/>Scans active WorkflowSpecs<br/>SMALL gap: auto-fill defaults, notify user<br/>LARGE gap: store ProactiveGap, ask user when free"]:::engine
+    GAP_DETECTOR["Proactive Gap Detector<br/>Listens: k1.fabric.capability.registered.v1,<br/>k1.fabric.capability.unregistered.v1,<br/>k1.fabric.provider.health.changed.v1<br/>Scans active WorkflowSpecs<br/>SMALL gap: auto-fill defaults, notify user<br/>LARGE gap: store ProactiveGap, ask user when free"]:::engine
   end
 
   %% ==================================================================================
@@ -204,7 +209,7 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
 
   %% ==================================================================================
   %% PORTS -- Boundary Contracts (Hexagonal Architecture)
-  %% 7 ports define all external interactions. Internal services call ports,
+  %% 8 ports define all external interactions. Internal services call ports,
   %% NEVER external systems directly. Same pattern as Concierge.
   %% ==================================================================================
 
@@ -223,7 +228,11 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
 
     PORT_BRIDGE["IBridgeWritePort<br/>submit_audit(RunManifest) -> void<br/>submit_plan(CommittedPlan, wal_offset) -> void<br/>FIRE-AND-FORGET (Edge-First: continues if K0 offline)"]:::port
 
-    PORT_EVENT["IEventSubscriptionPort<br/>subscribe(topic, handler) -> Subscription<br/>unsubscribe(sub_id) -> void<br/>Topics: k1.planner.plan.ready, k1.capability.*,<br/>        k1.workflow.trigger.due,<br/>        k1.hil.override_response.v1,<br/>        k1.hil.fallback_response.v1"]:::port
+    PORT_EVENT["IEventSubscriptionPort<br/>subscribe(topic, handler) -> Subscription<br/>unsubscribe(sub_id) -> void<br/>Topics: k1.planner.plan.ready.v1, plan.failed.v1, plan.cancelled.v1,<br/>        k1.capability.*, k1.fabric.capability.registered.v1,<br/>        k1.fabric.capability.unregistered.v1, k1.fabric.provider.health.changed.v1,<br/>        k1.workflow.trigger.due,
+      k1.hil.override_response.v1,
+      k1.hil.fallback_response.v1"]:::port
+
+    PORT_WORKFLOW_STORAGE["IWorkflowStoragePort<br/>save_workflow(WorkflowDef) -> void<br/>load_workflow(workflow_id) -> WorkflowDef | None<br/>list_active_workflows() -> WorkflowDef[]<br/>delete_workflow(workflow_id) -> void<br/>---<br/>SQLite-backed workflow persistence<br/>Used by WorkflowSchedulerService (ORCH-16)<br/>Survives process restart (crash recovery)"]:::port
   end
 
   %% ==================================================================================
@@ -238,11 +247,11 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
 
       ADAPT_MAILBOX["MailboxAdapter<br/>In-memory MPSC + WFQ<br/>Priority: REALTIME<br/>---<br/>Backpressure: reject at depth 100<br/>Error: RECOVERABLE (re-enqueue once)"]:::adapter
 
-      ADAPT_FABRIC["FabricGatewayAdapter<br/>Routes to Capability Fabric L2.5<br/>CB_FABRIC owner (30s, 5/min)<br/>---<br/>Step timeout enforcement per CapReq<br/>Error: DEGRADED (partial results)<br/>CB OPEN: capability unavailable"]:::adapter
+      ADAPT_FABRIC["FabricGatewayAdapter<br/>Routes to Capability Fabric L2.5<br/>Protected by CB_FABRIC (30s, 5/min) (owned upstream)<br/>---<br/>Step timeout enforcement per CapReq<br/>Error: DEGRADED (partial results)<br/>CB OPEN: capability unavailable"]:::adapter
 
-      ADAPT_PLANNER["PlannerAdapter<br/>Routes PlanRequest to Planner Mailbox<br/>CB_PLANNER owner (45s, 2/min)<br/>---<br/>Await plan with timeout (Planner budget)<br/>Error: DEGRADED (skip planning, try MEDIUM)<br/>CB OPEN: degrade HIGH -> MEDIUM"]:::adapter
+      ADAPT_PLANNER["PlannerAdapter<br/>Routes PlanRequest to Planner Mailbox<br/>Protected by CB_PLANNER (45s, 2/min) (owned upstream)<br/>---<br/>Await plan with timeout (Planner budget)<br/>Error: DEGRADED (skip planning, try MEDIUM)<br/>CB OPEN: degrade HIGH -> MEDIUM"]:::adapter
 
-      ADAPT_STATE["StateReadAdapter<br/>Multi-reader lock-free SessionState access<br/>CB_SESSIONSTATE owner (100ms, 10/min)<br/>---<br/>Snapshot at TaskEnvelope dequeue time<br/>Re-read safety_band at wave boundaries (HIGH)<br/>Error: DEGRADED (stale cached snapshot)"]:::adapter
+      ADAPT_STATE["StateReadAdapter<br/>Multi-reader lock-free SessionState access<br/>Protected by CB_SESSIONSTATE (100ms, 10/min) (owned upstream)<br/>---<br/>Snapshot at TaskEnvelope dequeue time<br/>Re-read safety_band at wave boundaries (HIGH)<br/>Error: DEGRADED (stale cached snapshot)"]:::adapter
 
       ADAPT_DELTA["DeltaEmitAdapter<br/>Emits to K1 Event Bus + Delta Bus<br/>---<br/>Fire-and-forget: emit failure = log + skip<br/>Never TERMINAL (Edge-First: best-effort)<br/>Uses cognitive_trace_id on all deltas"]:::adapter
 
@@ -333,7 +342,7 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
   subgraph LIFECYCLE["Lifecycle (5 Phases)"]
     direction TB
 
-    LC_INIT["init(session_id)<br/>Owner: OrchestratorService<br/>---<br/>1. Create 6 services (no I/O)<br/>2. Connect 7 ports<br/>3. Discover MCP servers (ConnectorManager)<br/>4. Register discovered tools in Fabric registry<br/>5. Load active workflows from Registry<br/>6. Start Workflow Scheduler timer<br/>7. Subscribe to event topics (plan.ready, capability.*)<br/>8. Start mailbox processing loop<br/>---<br/>Max init time: 500ms (MCP discovery is async)"]:::lifecycle
+    LC_INIT["init(session_id)<br/>Owner: OrchestratorService<br/>---<br/>1. Create 6 services (no I/O)<br/>2. Connect 8 ports<br/>3. Discover MCP servers (ConnectorManager)<br/>4. Register discovered tools in Fabric registry<br/>5. Load active workflows from Registry<br/>6. Start Workflow Scheduler timer<br/>7. Subscribe to event topics (plan.ready, capability.*)<br/>8. Start mailbox processing loop<br/>---<br/>Max init time: 500ms (MCP discovery is async)"]:::lifecycle
 
     LC_RUN_START["run_start(message)<br/>Owner: OrchestratorService<br/>---<br/>1. Dequeue message from Mailbox<br/>2. Read SessionState snapshot via IStateReadPort<br/>3. Classify message: TaskEnvelope | CommittedPlan |<br/>   WorkflowRunRequest<br/>4. Emit k1.orchestration.task.accepted delta<br/>5. Route to dispatch_medium | dispatch_high |<br/>   dispatch_workflow | receive_plan"]:::lifecycle
 
@@ -341,7 +350,7 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
 
     LC_SHUTDOWN["shutdown()<br/>Owner: OrchestratorService<br/>---<br/>1. Stop accepting new messages (mailbox drain)<br/>2. Wait active DAG execution (30s) or force-cancel<br/>3. Compensate any in-flight side-effect steps (Saga)<br/>4. Stop Workflow Scheduler timer<br/>5. Unsubscribe from event topics<br/>6. Final audit write to K0 (5s wait)<br/>7. Disconnect ports (LIFO)"]:::lifecycle
 
-    LC_CRASH_RECOVERY["crash_recovery(session_id)<br/>Owner: OrchestratorService<br/>---<br/>1. Bootstrap (6 services + 7 ports)<br/>2. Detect: check K0 WAL for in-flight CommittedPlan<br/>3. If found: load plan, check step completion markers<br/>4. Resume from last completed wave (skip completed steps)<br/>5. If no WAL: clean start (no state to recover)<br/>6. Restart MCP discovery + workflow scheduler<br/>7. Resume mailbox processing loop<br/>---<br/>Max loss: partial DAG progress (retry from last wave)"]:::lifecycle
+    LC_CRASH_RECOVERY["crash_recovery(session_id)<br/>Owner: OrchestratorService<br/>---<br/>1. Bootstrap (6 services + 8 ports)<br/>2. Detect: check K0 WAL for in-flight CommittedPlan<br/>3. If found: load plan, check step completion markers<br/>4. Resume from last completed wave (skip completed steps)<br/>5. If no WAL: clean start (no state to recover)<br/>6. Restart MCP discovery + workflow scheduler<br/>7. Resume mailbox processing loop<br/>---<br/>Max loss: partial DAG progress (retry from last wave)"]:::lifecycle
   end
 
   %% ==================================================================================
@@ -384,7 +393,7 @@ subgraph TOUCHPOINTS["External Touchpoints (Orchestrator Interfaces)"]
 
     PLANNER_MAILBOX["Planner Mailbox<br/>Receives PlanRequest from Orchestrator"]:::planner
 
-    PLANNER_PIPELINE["Planner Pipeline<br/>Stage1 SKETCH: LLM + discover_capabilities()<br/>Stage2 EXPAND: LLM + find_relevant_prompts()<br/>Stage3 VALIDATE: DAG acyclic, caps exist, safe<br/>Stage4 COMMIT: persist CommittedPlan to K0 WAL<br/>Returns CommittedPlan via k1.planner.plan.ready"]:::planner
+    PLANNER_PIPELINE["Planner Pipeline<br/>Stage1 SKETCH: LLM + discover_capabilities()<br/>Stage2 EXPAND: LLM + find_relevant_prompts()<br/>Stage3 VALIDATE: DAG acyclic, caps exist, safe<br/>Stage4 COMMIT: persist CommittedPlan to K0 WAL<br/>Returns CommittedPlan via k1.planner.plan.ready.v1"]:::planner
 
     PLANNER_HIL["Planner HIL<br/>Requirement clarification, plan approval"]:::hil
   end
@@ -407,9 +416,9 @@ subgraph TOUCHPOINTS["External Touchpoints (Orchestrator Interfaces)"]
     direction TB
 
     SS_BELIEFS["beliefs_active<br/>Current facts, entities"]:::ss
-    SS_CONTROL["control<br/>intents, domains, safety_band"]:::ss
+    SS_CONTROL["control<br/>intents, domains, safety_band,<br/>temporal_context (sub-field)"]:::ss
     SS_PERSONA["persona<br/>Personality, style config"]:::ss
-    SS_TEMPORAL["temporal_context<br/>Resolved time references"]:::ss
+    SS_TEMPORAL["control.temporal_context<br/>Resolved time references<br/>(read-alias; data lives in control)"]:::ss
     SS_SAFETY["control.safety_band<br/>GREEN | AMBER | RED | CRISIS<br/>Re-read at wave boundaries (HIGH)"]:::ss
   end
 
@@ -426,7 +435,7 @@ subgraph TOUCHPOINTS["External Touchpoints (Orchestrator Interfaces)"]
 
     BRIDGE_CMD["Bridge Command Port<br/>Fire-and-forget writes to K0<br/>Workflow audit, CommittedPlan WAL<br/>Edge-First: continues if K0 offline"]:::bridge
 
-    BRIDGE_SSE["Bridge SSE Receiver<br/>K0 event stream<br/>k1.capability.contract_updated.v1"]:::bridge
+    BRIDGE_SSE["Bridge SSE Receiver<br/>K0 event stream<br/>k1.fabric.capability.registered.v1,<br/>k1.fabric.capability.unregistered.v1,<br/>k1.fabric.provider.health.changed.v1"]:::bridge
   end
 
   subgraph TP_CIRCUIT_BREAKERS["Circuit Breakers (Owned by Concierge FabricOrchestratorAdapter)"]
@@ -573,7 +582,7 @@ CONCIERGE_DISPATCHING -->|"TaskEnvelope{tier, intent, context}"| PORT_MAILBOX
 FABRIC_ORCH_ADAPTER -->|"CB protection + tier routing"| CONCIERGE_DISPATCHING
 
 %% Planner -> Orchestrator (CommittedPlan via event)
-PLANNER_PIPELINE -->|"k1.planner.plan.ready"| PORT_EVENT
+PLANNER_PIPELINE -->|"k1.planner.plan.ready.v1"| PORT_EVENT
 PORT_EVENT -->|"CommittedPlan"| PORT_MAILBOX
 
 %% Workflow Scheduler -> Orchestrator
@@ -619,7 +628,7 @@ ORCH_ACTOR -.->|"READ: context snapshot"| PORT_STATE
 PORT_STATE -.->|"multi-reader"| SS_BELIEFS
 PORT_STATE -.->|"multi-reader"| SS_CONTROL
 PORT_STATE -.->|"multi-reader"| SS_PERSONA
-PORT_STATE -.->|"multi-reader"| SS_TEMPORAL
+PORT_STATE -.->|"multi-reader (via control)"| SS_TEMPORAL
 PORT_STATE -.->|"re-read at wave boundaries"| SS_SAFETY
 WF_SCHEDULER -.->|"READ: user timezone"| PORT_STATE
 
@@ -628,7 +637,7 @@ CAP_RESOLVER -.->|"capability check"| PORT_FABRIC
 PORT_FABRIC -.->|"query_registry"| FABRIC_REGISTRY
 
 %% Gap Detector <- Fabric Registry events via Bridge SSE
-BRIDGE_SSE -.->|"k1.capability.contract_updated.v1"| PORT_EVENT
+BRIDGE_SSE -.->|"k1.fabric.capability.registered/unregistered/health.changed.v1"| PORT_EVENT
 PORT_EVENT -.->|"contract update"| GAP_DETECTOR
 GAP_DETECTOR -.->|"proactive gap -> DeltaBus"| PORT_DELTA
 
@@ -662,7 +671,7 @@ CB_MCP -->|"OPEN: tool offline"| FABRIC_ORCH_ADAPTER
 %% 1. TaskEnvelope{tier=HIGH} -> Orchestrator Mailbox
 %% 2. OrchestratorActor: PlanRequest -> Planner
 %% 3. Planner 4 stages: SKETCH -> EXPAND -> VALIDATE -> COMMIT
-%% 4. CommittedPlan via k1.planner.plan.ready -> Orchestrator
+%% 4. CommittedPlan via k1.planner.plan.ready.v1 -> Orchestrator
 %% 5. DAG Engine builds waves. Topological Walker executes:
 %%    Wave 0: all steps with deps=[] (parallel)
 %%    Wave 1: steps whose deps in Wave 0 (wait, then parallel)
@@ -705,7 +714,7 @@ PORT_STATE -.->|"test"| ADAPT_TEST_STATE
 ADAPT_STATE -.->|"multi-reader"| SS_BELIEFS
 ADAPT_STATE -.->|"multi-reader"| SS_CONTROL
 ADAPT_STATE -.->|"multi-reader"| SS_PERSONA
-ADAPT_STATE -.->|"multi-reader"| SS_TEMPORAL
+ADAPT_STATE -.->|"multi-reader (via control)"| SS_TEMPORAL
 
 %% IDeltaEmitPort wiring
 PORT_DELTA -.->|"prod"| ADAPT_DELTA
@@ -801,7 +810,7 @@ LC_CRASH_RECOVERY -->|"rediscover"| SVC_CONNECTOR
 %% LIFECYCLE -> PORT USAGE
 %% =====================================================================================
 
-LC_INIT -.->|"connect all 7 ports"| PORT_MAILBOX
+LC_INIT -.->|"connect all 8 ports"| PORT_MAILBOX
 LC_INIT -.->|"subscribe events"| PORT_EVENT
 LC_INIT -.->|"register tools"| PORT_FABRIC
 
