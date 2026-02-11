@@ -126,6 +126,6 @@ tmp/
 *.tar
 *.zip
 archive/
-.github
-.claude
-.qoder
+.github/
+.claude/
+.qoder/
