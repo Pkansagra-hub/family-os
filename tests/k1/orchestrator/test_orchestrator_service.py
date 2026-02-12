@@ -360,6 +360,39 @@ class FakeConnectorLifecycle:
     pass
 
 
+class FakeEventPort:
+    """Minimal fake event port for OrchestratorService tests.
+
+    Records subscribe/unsubscribe/emit calls for assertion.
+    Handlers can be triggered via emit() for event handler tests.
+    """
+
+    def __init__(self) -> None:
+        self.subscriptions: List[tuple] = []  # (topic, handler)
+        self.emitted: List[tuple] = []  # (topic, payload)
+        self._next_id = 0
+
+    def subscribe(self, topic: str, handler: Any) -> Any:
+        from k1.fabric.ports.event_port import SubscriptionHandle
+
+        self._next_id += 1
+        handle = SubscriptionHandle(
+            subscription_id=f"fake-{self._next_id}",
+            topic=topic,
+        )
+        self.subscriptions.append((topic, handler))
+        return handle
+
+    def unsubscribe(self, handle: Any) -> bool:
+        return True
+
+    def emit(self, topic: str, payload: Dict[str, Any]) -> None:
+        self.emitted.append((topic, payload))
+        for sub_topic, handler in self.subscriptions:
+            if sub_topic == topic:
+                handler(topic, payload)
+
+
 class FakeErrorRouter:
     """Returns a configurable severity classification."""
 
@@ -572,6 +605,7 @@ def _build_service(
     state_port: Optional[FakeStateReadPort] = None,
     delta_port: Optional[FakeDeltaEmitPort] = None,
     bridge_port: Optional[FakeBridgeWritePort] = None,
+    event_port: Optional[FakeEventPort] = None,
 ) -> OrchestratorService:
     """Build OrchestratorService with sensible fake defaults."""
     return OrchestratorService(
@@ -591,6 +625,7 @@ def _build_service(
         state_port=state_port or FakeStateReadPort(),
         delta_port=delta_port or FakeDeltaEmitPort(),
         bridge_port=bridge_port or FakeBridgeWritePort(),
+        event_port=event_port or FakeEventPort(),
         config=config or _default_config(),
     )
 

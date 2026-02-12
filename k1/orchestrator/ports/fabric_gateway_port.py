@@ -123,3 +123,30 @@ class IFabricGatewayPort(Protocol):
                 is unreachable.
         """
         ...  # pragma: no cover
+
+    async def query_registry_by_category(
+        self,
+        category_prefix: str,
+    ) -> List[RegistryEntry]:
+        """
+        Query the Fabric CapabilityRegistry for capabilities in a category.
+
+        Used by ConstraintResolver.find_alternatives() (3.1.3) to discover
+        same-category alternatives for missing capabilities.
+
+        Category is derived from capability naming convention:
+        ``tool.{type}.{domain}.*`` -> prefix ``tool.{type}.{domain}``.
+
+        Args:
+            category_prefix: The category prefix to search for
+                (e.g. ``"tool.calendar"`` to find all calendar tools).
+
+        Returns:
+            List of RegistryEntry for capabilities matching the
+            category prefix. Empty list if no matches found.
+
+        Raises:
+            AdapterError: With severity DEGRADED if the registry
+                is unreachable.
+        """
+        ...  # pragma: no cover

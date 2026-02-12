@@ -28,21 +28,31 @@ Exports:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import OrderedDict
-from typing import Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 from uuid import uuid4
 
+from k1.fabric.ports.event_port import SubscriptionHandle
 from k1.orchestrator.config import OrchestratorConfig
+from k1.orchestrator.connectors.mcp_registrar import RegistrationResult
 from k1.orchestrator.events import (
+    HIL_FALLBACK_RESPONSE,
+    HIL_OVERRIDE_RESPONSE,
     ORCH_DAG_COMPLETED,
+    ORCH_DELTA_V1,
     ORCH_PLAN_REQUESTED,
     ORCH_TASK_ACCEPTED,
     ORCH_WORKFLOW_SAVED,
+    PLAN_CANCELLED,
+    PLAN_FAILED,
+    PLAN_READY,
 )
 from k1.orchestrator.ports.bridge_write_port import IBridgeWritePort
 from k1.orchestrator.ports.delta_emit_port import IDeltaEmitPort
+from k1.orchestrator.ports.event_subscription_port import IEventSubscriptionPort
 from k1.orchestrator.ports.fabric_gateway_port import IFabricGatewayPort
 from k1.orchestrator.ports.mailbox_port import IMailboxPort, MailboxMessage
 from k1.orchestrator.ports.planner_port import IPlannerPort
@@ -60,6 +70,7 @@ from k1.orchestrator.types import (
     PlanRequest,
     ProcessingContext,
     ProcessResult,
+    RecoveryResult,
     StepResult,
     StepStatus,
     TaskEnvelope,
@@ -128,9 +139,13 @@ class WorkflowEngineLike(Protocol):
 
 @runtime_checkable
 class ConnectorLifecycleLike(Protocol):
-    """Placeholder protocol for ConnectorLifecycleManager (5.x)."""
+    """Protocol for ConnectorLifecycleManager (5.x)."""
 
-    ...
+    async def discover_and_register(self) -> RegistrationResult: ...
+
+    def start_lifecycle_monitoring(self) -> None: ...
+
+    def stop_lifecycle_monitoring(self) -> None: ...
 
 
 @runtime_checkable
@@ -244,6 +259,7 @@ class OrchestratorService:
         "_state_port",
         "_delta_port",
         "_bridge_port",
+        "_event_port",
         "_mailbox",
         "_config",
         "_pending_plans",
@@ -251,6 +267,11 @@ class OrchestratorService:
         "_executed_plans",
         "_requeued_envelope_ids",
         "_started_at",
+        "_initialized",
+        "_running",
+        "_loop_task",
+        "_reaper_task",
+        "_subscriptions",
     )
 
     def __init__(
@@ -268,6 +289,7 @@ class OrchestratorService:
         state_port: IStateReadPort,
         delta_port: IDeltaEmitPort,
         bridge_port: IBridgeWritePort,
+        event_port: IEventSubscriptionPort,
         config: OrchestratorConfig,
     ) -> None:
         # --- Collaborators (injected, never constructed here) ---
@@ -285,6 +307,7 @@ class OrchestratorService:
         self._state_port = state_port
         self._delta_port = delta_port
         self._bridge_port = bridge_port
+        self._event_port = event_port
 
         # --- Configuration ---
         self._config = config
@@ -295,6 +318,13 @@ class OrchestratorService:
         self._executed_plans: OrderedDict[str, float] = OrderedDict()
         self._requeued_envelope_ids: OrderedDict[str, float] = OrderedDict()
         self._started_at: float = time.time()
+
+        # --- Lifecycle state (set by init()) ---
+        self._initialized: bool = False
+        self._running: bool = False
+        self._loop_task: Optional[asyncio.Task[None]] = None
+        self._reaper_task: Optional[asyncio.Task[None]] = None
+        self._subscriptions: List[SubscriptionHandle] = []
 
     # ======================================================================
     # Properties (read-only accessors for internal state -- used by tests
@@ -325,6 +355,753 @@ class OrchestratorService:
     def config(self) -> OrchestratorConfig:
         """Orchestrator configuration (immutable after init)."""
         return self._config
+
+    @property
+    def initialized(self) -> bool:
+        """Whether init() has completed successfully."""
+        return self._initialized
+
+    @property
+    def running(self) -> bool:
+        """Whether the mailbox loop and reaper are active."""
+        return self._running
+
+    # ======================================================================
+    # Lifecycle: init() -- 10-step startup sequence (6.2.2)
+    # ======================================================================
+
+    async def init(self) -> None:
+        """Initialize the OrchestratorService (10-step startup sequence).
+
+        Idempotent: calling twice is safe (second call is a no-op).
+
+        Steps:
+          1. Validate all ports and collaborators non-None.
+          2. (Reserved) Connect ports -- no-op for V1 in-process adapters.
+          3. Assert concurrency guard not locked at boot.
+          4. MCP tool discovery and registration (500ms timeout).
+          5. (Commentary) Tools now available for DAG execution.
+          6. Load active workflows from WorkflowRegistry.
+          7. Start WorkflowScheduler tick loop.
+          8. Subscribe to consumed events (5 subscriptions).
+          9. Start GapDetector, ConnectorLifecycle monitoring, reaper task.
+         10. Start mailbox processing loop.
+
+        Raises:
+            RuntimeError: If any required port/collaborator is None.
+            AssertionError: If ConcurrencyGuard is active at init time.
+        """
+        if self._initialized:
+            log.warning("init.already_initialized")
+            return
+
+        t0 = time.monotonic()
+
+        # Step 1: Validate ports non-None
+        self._validate_ports()
+
+        # Step 2: Connect ports (no-op for V1 in-process adapters)
+        # Reserved for future: event bus connection setup, adapter handshake.
+
+        # Step 2b: Crash recovery (6.2.4) -- scan WAL, re-enqueue incomplete DAGs.
+        # Must run BEFORE mailbox loop starts (Gotcha #3 in spec).
+        recovery = await self.crash_recovery()
+        log.info(
+            "init.crash_recovery",
+            extra={
+                "recovered": recovery.recovered_dags,
+                "failed": recovery.failed_recoveries,
+                "skipped": recovery.skipped,
+            },
+        )
+
+        # Step 3: Assert concurrency guard not locked
+        assert not getattr(
+            self._concurrency_guard, "active", False
+        ), "ConcurrencyGuard must not be active at init time"
+
+        # Step 4: MCP discover + register (500ms timeout)
+        registration = await self._discover_mcp_tools()
+        log.info(
+            "init.mcp_discovery",
+            extra={
+                "registered": registration.registered,
+                "skipped": registration.skipped,
+                "errors": len(registration.errors),
+            },
+        )
+
+        # Step 5: (Commentary) Tools now available for DAG execution.
+
+        # Step 6: Load active workflows
+        workflows = await self._workflow_engine.registry.list_active()  # type: ignore[union-attr]
+        log.info("init.workflows_loaded", extra={"count": len(workflows)})
+
+        # Step 7: Start scheduler
+        await self._workflow_engine.scheduler.start()  # type: ignore[union-attr]
+
+        # Step 8: Subscribe to consumed events
+        self._subscribe_events()
+
+        # Step 9a: Start gap detector (manages own contract_updated subscription)
+        await self._workflow_engine.gap_detector.start()  # type: ignore[union-attr]
+
+        # Step 9b: Start connector lifecycle monitoring (sync call)
+        self._connector_lifecycle.start_lifecycle_monitoring()  # type: ignore[union-attr]
+
+        # Step 9c: Start timeout reaper task
+        self._running = True
+        self._reaper_task = asyncio.create_task(self._reap_loop())
+
+        # Step 10: Start mailbox processing loop
+        self._loop_task = asyncio.create_task(self._mailbox_loop())
+
+        self._initialized = True
+
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        log.info(
+            "init.complete",
+            extra={"elapsed_ms": elapsed_ms, "subscriptions": len(self._subscriptions)},
+        )
+
+    # ------------------------------------------------------------------
+    # init() helpers
+    # ------------------------------------------------------------------
+
+    def _validate_ports(self) -> None:
+        """Step 1: Validate all injected ports and collaborators are non-None.
+
+        Raises:
+            RuntimeError: If any required dependency is None.
+        """
+        required: Dict[str, Any] = {
+            "mailbox": self._mailbox,
+            "dag_executor": self._dag_executor,
+            "constraint_resolver": self._constraint_resolver,
+            "workflow_engine": self._workflow_engine,
+            "connector_lifecycle": self._connector_lifecycle,
+            "error_router": self._error_router,
+            "concurrency_guard": self._concurrency_guard,
+            "fabric_port": self._fabric_port,
+            "planner_port": self._planner_port,
+            "state_port": self._state_port,
+            "delta_port": self._delta_port,
+            "bridge_port": self._bridge_port,
+            "event_port": self._event_port,
+        }
+
+        missing = [name for name, ref in required.items() if ref is None]
+        if missing:
+            raise RuntimeError(f"OrchestratorService.init(): missing required ports: {missing}")
+
+        log.info(
+            "init.ports_validated",
+            extra={name: type(ref).__name__ for name, ref in required.items()},
+        )
+
+    async def _discover_mcp_tools(self) -> RegistrationResult:
+        """Step 4: MCP discovery with 500ms timeout (SPEC-10).
+
+        Returns:
+            RegistrationResult -- empty result on timeout.
+        """
+        try:
+            return await asyncio.wait_for(
+                self._connector_lifecycle.discover_and_register(),  # type: ignore[union-attr]
+                timeout=0.5,
+            )
+        except asyncio.TimeoutError:
+            log.warning("init.mcp_discovery_timeout", extra={"timeout_ms": 500})
+            return RegistrationResult()
+
+    def _subscribe_events(self) -> None:
+        """Step 8: Register event subscriptions for consumed events.
+
+        Subscribes to 5 event topics and stores handles for shutdown
+        unsubscription (6.2.3). GapDetector and SubStepObserver manage
+        their own subscriptions externally.
+
+        All handlers are SYNC per IEventSubscriptionPort contract.
+        """
+        subscriptions: List[SubscriptionHandle] = []
+
+        topic_handler_pairs: List[tuple[str, Callable[[str, Dict[str, Any]], None]]] = [
+            (PLAN_READY, self._on_plan_ready),
+            (PLAN_FAILED, self._on_plan_failed),
+            (PLAN_CANCELLED, self._on_plan_cancelled),
+            (HIL_OVERRIDE_RESPONSE, self._on_hil_override),
+            (HIL_FALLBACK_RESPONSE, self._on_hil_fallback),
+        ]
+
+        for topic, handler in topic_handler_pairs:
+            handle = self._event_port.subscribe(topic, handler)
+            subscriptions.append(handle)
+            log.debug(
+                "init.subscribed", extra={"topic": topic, "handle_id": handle.subscription_id}
+            )
+
+        self._subscriptions = subscriptions
+
+    # ------------------------------------------------------------------
+    # crash_recovery() -- WAL-based recovery (6.2.4)
+    # ------------------------------------------------------------------
+
+    async def crash_recovery(self) -> RecoveryResult:
+        """Scan WAL entries and recover in-flight DAGs after restart.
+
+        Called by init() between steps 2 and 3, BEFORE the mailbox loop
+        starts. This prevents race conditions with new incoming messages.
+
+        Logic per WAL entry:
+          - DAG_COMPLETE found: DAG finished before crash, skip it.
+          - PLAN_START only: DAG never began wave execution.
+            Reconstruct CommittedPlan from payload, enqueue to mailbox
+            so normal processing pipeline re-executes from wave 0.
+          - WAVE_COMPLETE(N): Partial execution. V1 limitation --
+            DAGExecutor lacks resume_from_wave, so re-enqueue the full
+            plan for re-execution from wave 0 (double-execution of
+            completed steps accepted as V1 tradeoff).
+
+        Gotchas:
+          1. K0 offline (list_wal_ids/read_wal raises AdapterException
+             with DEGRADED severity): skip recovery entirely, return
+             zero-result. Documented V1 limitation.
+          2. Recovered DAGs use fresh state_port.snapshot() at execution
+             time (stale context from crash time is lost).
+          3. Must be called BEFORE mailbox loop starts.
+
+        Returns:
+            RecoveryResult with counts of recovered, failed, skipped.
+        """
+        result = RecoveryResult()
+
+        # Step 1: List WAL IDs. K0 offline -> skip entirely.
+        try:
+            wal_ids = await self._bridge_port.list_wal_ids()  # type: ignore[union-attr]
+        except Exception as exc:
+            # Gotcha #1: K0 unavailable.
+            severity = getattr(getattr(exc, "detail", None), "severity", None)
+            if severity == ErrorSeverity.DEGRADED:
+                log.warning(
+                    "crash_recovery.k0_unavailable",
+                    extra={"note": "K0 offline, skipping crash recovery"},
+                )
+            else:
+                log.exception("crash_recovery.list_wal_ids_failed")
+            return result
+
+        if not wal_ids:
+            log.info("crash_recovery.no_pending_wals")
+            return result
+
+        log.info("crash_recovery.scanning", extra={"wal_count": len(wal_ids)})
+
+        # Step 2-7: Process each WAL entry.
+        for dag_id in wal_ids:
+            try:
+                entries = await self._bridge_port.read_wal(dag_id)  # type: ignore[union-attr]
+                if not entries:
+                    result.skipped += 1
+                    continue
+
+                # Classify the WAL state.
+                has_dag_complete = any(e.get("entry_type") == "DAG_COMPLETE" for e in entries)
+                if has_dag_complete:
+                    # Step 4: DAG already finished. Skip.
+                    result.skipped += 1
+                    log.info(
+                        "crash_recovery.dag_already_complete",
+                        extra={"dag_id": dag_id},
+                    )
+                    continue
+
+                # Find PLAN_START entry to reconstruct CommittedPlan.
+                plan_start_entry = None
+                highest_wave = -1
+                for entry in entries:
+                    etype = entry.get("entry_type", "")
+                    if etype == "PLAN_START":
+                        plan_start_entry = entry
+                    elif etype == "WAVE_COMPLETE":
+                        wave_idx = entry.get("payload", {}).get("wave_index", -1)
+                        if wave_idx > highest_wave:
+                            highest_wave = wave_idx
+
+                if plan_start_entry is None:
+                    # No PLAN_START -- corrupt WAL, cannot recover.
+                    log.warning(
+                        "crash_recovery.no_plan_start",
+                        extra={"dag_id": dag_id, "entry_count": len(entries)},
+                    )
+                    result.failed_recoveries += 1
+                    continue
+
+                # Reconstruct CommittedPlan from PLAN_START payload.
+                plan_payload = plan_start_entry.get("payload", {})
+                plan_dict = plan_payload.get("plan", plan_payload)
+
+                plan = CommittedPlan.from_dict(plan_dict)
+
+                # Enqueue the recovered plan into the mailbox.
+                # The normal mailbox loop will pick it up and route
+                # through receive_plan() -> DAGExecutor.execute().
+                self._mailbox.enqueue(plan, priority="INTERACTIVE")
+
+                if highest_wave >= 0:
+                    # Step 6: WAVE_COMPLETE(N) -- partial execution.
+                    # V1: re-execute from wave 0 (no resume support).
+                    log.info(
+                        "crash_recovery.partial_dag_recovered",
+                        extra={
+                            "dag_id": dag_id,
+                            "plan_id": plan.plan_id,
+                            "highest_wave": highest_wave,
+                            "note": "V1: re-executing from wave 0",
+                        },
+                    )
+                else:
+                    # Step 5: PLAN_START only -- never started.
+                    log.info(
+                        "crash_recovery.unstarted_dag_recovered",
+                        extra={
+                            "dag_id": dag_id,
+                            "plan_id": plan.plan_id,
+                        },
+                    )
+
+                result.recovered_dags += 1
+
+            except Exception:
+                # Step 8: Recovery error for this dag_id.
+                log.exception(
+                    "crash_recovery.dag_recovery_failed",
+                    extra={"dag_id": dag_id},
+                )
+                result.failed_recoveries += 1
+
+        log.info(
+            "crash_recovery.complete",
+            extra={
+                "recovered": result.recovered_dags,
+                "failed": result.failed_recoveries,
+                "skipped": result.skipped,
+            },
+        )
+        return result
+
+    # ------------------------------------------------------------------
+    # Event handlers (SYNC -- per IEventSubscriptionPort contract)
+    # ------------------------------------------------------------------
+
+    def _on_plan_ready(self, topic: str, payload: Dict[str, Any]) -> None:
+        """Handle PLAN_READY: deserialize CommittedPlan and enqueue to mailbox.
+
+        The CommittedPlan is enqueued at INTERACTIVE priority for the
+        mailbox loop to pick up and route to _receive_plan().
+        """
+        try:
+            plan = CommittedPlan(
+                plan_id=payload.get("plan_id", str(uuid4())),
+                request_id=payload.get("request_id", ""),
+                intent=payload.get("intent", ""),
+                steps=payload.get("steps", []),
+                trace_id=payload.get("trace_id", ""),
+                dependencies=payload.get("dependencies", {}),
+            )
+            self._mailbox.enqueue(plan, priority="INTERACTIVE")
+            log.info(
+                "on_plan_ready.enqueued",
+                extra={
+                    "plan_id": plan.plan_id,
+                    "request_id": plan.request_id,
+                    "step_count": len(plan.steps),
+                },
+            )
+        except Exception:
+            log.exception("on_plan_ready.failed")
+
+    def _on_plan_failed(self, topic: str, payload: Dict[str, Any]) -> None:
+        """Handle PLAN_FAILED: clean up pending plan context.
+
+        Payload is a raw dict (not a typed dataclass). Extracts
+        request_id and removes the PendingPlanContext.
+        """
+        request_id = payload.get("request_id", "")
+        pending = self._pending_plans.pop(request_id, None)
+        if pending is None:
+            log.warning(
+                "on_plan_failed.no_pending_context",
+                extra={"request_id": request_id},
+            )
+            return
+        log.warning(
+            "on_plan_failed.cleaned",
+            extra={
+                "request_id": request_id,
+                "reason": payload.get("reason", "unknown"),
+            },
+        )
+
+    def _on_plan_cancelled(self, topic: str, payload: Dict[str, Any]) -> None:
+        """Handle PLAN_CANCELLED: clean up pending plan context.
+
+        Same pattern as _on_plan_failed but for cancellation events.
+        """
+        request_id = payload.get("request_id", "")
+        pending = self._pending_plans.pop(request_id, None)
+        if pending is None:
+            log.warning(
+                "on_plan_cancelled.no_pending_context",
+                extra={"request_id": request_id},
+            )
+            return
+        log.info(
+            "on_plan_cancelled.cleaned",
+            extra={"request_id": request_id},
+        )
+
+    def _on_hil_override(self, topic: str, payload: Dict[str, Any]) -> None:
+        """Handle HIL_OVERRIDE_RESPONSE: resolve pending HIL context.
+
+        Extracts request_id and user choice from payload. Full DAG
+        resumption is deferred to the DAG execution pipeline; this
+        handler records the resolution and cleans up the pending state.
+        """
+        request_id = payload.get("request_id", "")
+        choice = payload.get("choice", "CONTINUE")
+        pending = self._pending_hil.pop(request_id, None)
+        if pending is None:
+            log.warning(
+                "on_hil_override.no_pending_context",
+                extra={"request_id": request_id},
+            )
+            return
+        log.info(
+            "on_hil_override.resolved",
+            extra={"request_id": request_id, "choice": choice},
+        )
+
+    def _on_hil_fallback(self, topic: str, payload: Dict[str, Any]) -> None:
+        """Handle HIL_FALLBACK_RESPONSE: resolve pending HIL context with fallback.
+
+        Same as override but the user chose a fallback action instead
+        of the primary choice.
+        """
+        request_id = payload.get("request_id", "")
+        fallback_action = payload.get("fallback_action", "CANCEL")
+        pending = self._pending_hil.pop(request_id, None)
+        if pending is None:
+            log.warning(
+                "on_hil_fallback.no_pending_context",
+                extra={"request_id": request_id},
+            )
+            return
+        log.info(
+            "on_hil_fallback.resolved",
+            extra={"request_id": request_id, "fallback_action": fallback_action},
+        )
+
+    # ======================================================================
+    # Lifecycle: shutdown() -- 9-step teardown sequence (6.2.3)
+    # ======================================================================
+
+    async def shutdown(self) -> None:
+        """Gracefully shut down the OrchestratorService (9-step sequence).
+
+        Idempotent: calling twice is safe (second call is a no-op).
+        Each step is wrapped in try/except so a failure in one step
+        does not prevent later steps from executing (Gotcha #1:
+        handles partial init -- some ports may not have been started).
+
+        Steps:
+          1. Set _running = False to stop mailbox + reaper loops.
+          2. Stop connector lifecycle monitoring (sync).
+          3. Wait for active DAG completion (30s timeout).
+          4. (Reserved) Force-compensate if DAG timed out -- V1 logs warning.
+          5. Stop WorkflowScheduler tick loop.
+          6. Unsubscribe all event subscriptions.
+          7. (Reserved) Persist trigger states -- deferred, scheduler lacks
+             get_next_fire/get_last_fire in V1.
+          8. Final audit write via bridge_port.submit_audit().
+          9. Cancel background tasks (reaper + loop), log orphaned contexts.
+        """
+        if not self._initialized:
+            log.warning("shutdown.not_initialized")
+            return
+
+        t0 = time.monotonic()
+        trace_id = f"shutdown-{uuid4()}"
+
+        log.info("shutdown.begin", extra={"trace_id": trace_id})
+
+        # Step 1: Signal loops to stop.
+        self._running = False
+
+        # Step 2: Stop connector lifecycle monitoring (sync call).
+        try:
+            self._connector_lifecycle.stop_lifecycle_monitoring()  # type: ignore[union-attr]
+            log.info("shutdown.step2.connector_lifecycle_stopped")
+        except Exception:
+            log.exception("shutdown.step2.connector_lifecycle_error")
+
+        # Step 3: Wait for active DAG completion (30s timeout).
+        dag_timed_out = False
+        try:
+            if getattr(self._concurrency_guard, "active", False):
+                log.info("shutdown.step3.waiting_for_active_dag")
+                # V1: no _dag_complete_event wiring. Poll concurrency
+                # guard with short sleeps up to 30s.
+                deadline = time.monotonic() + 30.0
+                while getattr(self._concurrency_guard, "active", False):
+                    if time.monotonic() >= deadline:
+                        dag_timed_out = True
+                        break
+                    await asyncio.sleep(0.1)
+
+                if dag_timed_out:
+                    log.warning(
+                        "shutdown.step3.dag_timeout",
+                        extra={"timeout_s": 30},
+                    )
+                else:
+                    log.info("shutdown.step3.dag_completed")
+            else:
+                log.info("shutdown.step3.no_active_dag")
+        except Exception:
+            log.exception("shutdown.step3.dag_wait_error")
+
+        # Step 4: Force-compensate if DAG timed out.
+        #   V1: Saga.compensate() not yet wired (2.2.5 deferred).
+        #   Log warning and continue -- DAG results may be incomplete.
+        if dag_timed_out:
+            try:
+                log.warning(
+                    "shutdown.step4.force_compensate_deferred",
+                    extra={
+                        "note": "Saga.compensate() not wired in V1; "
+                        "DAG may have incomplete results",
+                    },
+                )
+            except Exception:
+                log.exception("shutdown.step4.compensate_error")
+
+        # Step 5: Stop WorkflowScheduler.
+        try:
+            await self._workflow_engine.scheduler.stop()  # type: ignore[union-attr]
+            log.info("shutdown.step5.scheduler_stopped")
+        except Exception:
+            log.exception("shutdown.step5.scheduler_error")
+
+        # Step 6: Stop GapDetector and unsubscribe all event subscriptions.
+        try:
+            await self._workflow_engine.gap_detector.stop()  # type: ignore[union-attr]
+            log.info("shutdown.step6.gap_detector_stopped")
+        except Exception:
+            log.exception("shutdown.step6.gap_detector_error")
+
+        try:
+            for handle in self._subscriptions:
+                self._event_port.unsubscribe(handle)
+            unsubscribed_count = len(self._subscriptions)
+            self._subscriptions.clear()
+            log.info(
+                "shutdown.step6.events_unsubscribed",
+                extra={"count": unsubscribed_count},
+            )
+        except Exception:
+            log.exception("shutdown.step6.unsubscribe_error")
+
+        # Step 7: Persist trigger states.
+        #   V1: WorkflowScheduler does not expose get_next_fire() /
+        #   get_last_fire().  Trigger persistence deferred until
+        #   scheduler gains these accessors.
+        try:
+            log.info(
+                "shutdown.step7.trigger_persistence_deferred",
+                extra={
+                    "note": "Scheduler lacks get_next_fire/get_last_fire in V1",
+                },
+            )
+        except Exception:
+            log.exception("shutdown.step7.trigger_error")
+
+        # Step 8: Final audit write.
+        try:
+            orphan_plans = len(self._pending_plans)
+            orphan_hil = len(self._pending_hil)
+
+            # Gotcha #3: warn about orphaned contexts.
+            if orphan_plans > 0 or orphan_hil > 0:
+                log.warning(
+                    "shutdown.step8.orphaned_contexts",
+                    extra={
+                        "pending_plans": orphan_plans,
+                        "pending_hil": orphan_hil,
+                    },
+                )
+
+            await self._bridge_port.submit_audit(  # type: ignore[union-attr]
+                {
+                    "event": "orchestrator_shutdown",
+                    "pending_plans": orphan_plans,
+                    "pending_hil": orphan_hil,
+                    "trace_id": trace_id,
+                },
+                trace_id,
+            )
+            log.info("shutdown.step8.audit_written")
+        except Exception:
+            log.exception("shutdown.step8.audit_error")
+
+        # Step 9: Cancel background tasks and clear state.
+        try:
+            if self._reaper_task is not None:
+                self._reaper_task.cancel()
+                try:
+                    await self._reaper_task
+                except asyncio.CancelledError:
+                    pass
+                self._reaper_task = None
+
+            if self._loop_task is not None:
+                self._loop_task.cancel()
+                try:
+                    await self._loop_task
+                except asyncio.CancelledError:
+                    pass
+                self._loop_task = None
+
+            log.info("shutdown.step9.tasks_cancelled")
+        except Exception:
+            log.exception("shutdown.step9.task_cancel_error")
+
+        self._initialized = False
+
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        log.info(
+            "shutdown.complete",
+            extra={"elapsed_ms": elapsed_ms, "trace_id": trace_id},
+        )
+
+    # ------------------------------------------------------------------
+    # Background loops (started by init())
+    # ------------------------------------------------------------------
+
+    async def _reap_loop(self) -> None:
+        """Periodic reaper for stale pending contexts (Step 9c).
+
+        Runs every config.context_reap_interval_ms milliseconds.
+        Delegates to reap_stale_contexts() which is the one-shot
+        reaper already implemented.
+        """
+        interval_s = self._config.context_reap_interval_ms / 1000.0
+        while self._running:
+            await asyncio.sleep(interval_s)
+            try:
+                reaped = await self.reap_stale_contexts()
+                if reaped > 0:
+                    log.info("reap_loop.reaped", extra={"count": reaped})
+            except Exception:
+                log.exception("reap_loop.error")
+
+    async def _mailbox_loop(self) -> None:
+        """Mailbox processing loop (Step 10).
+
+        Polls the mailbox and routes each message through process().
+        Yields 1ms when empty to prevent busy-wait.
+        """
+        while self._running:
+            msg = self._mailbox.dequeue()
+            if msg is None:
+                await asyncio.sleep(0.001)  # 1ms yield
+                continue
+            await self._process_one(msg)
+
+    async def _process_one(self, msg: MailboxMessage) -> None:
+        """Process a single mailbox message (6.2.5).
+
+        Steps:
+          1. Extract trace_id from message (all MailboxMessage types have trace_id).
+          2. Log message type + trace_id.
+          3. Concurrency check:
+             - InterruptRequest: ALWAYS processed (bypass guard).
+             - DAG-requiring messages (TaskEnvelope, CommittedPlan,
+               WorkflowRunRequest): if ConcurrencyGuard.active,
+               re-enqueue at BACKGROUND priority and return.
+          4. Call self.process(msg).
+          5. Log result status.
+          6. If FAILED: emit error delta via delta_port.
+             If DEFERRED: no action (plan in flight).
+             If COMPLETED: no action (process() already emitted).
+
+        Catch-all exception handling ensures the mailbox loop
+        never crashes from an unhandled error.
+        """
+        # Step 1: Extract trace_id.
+        trace_id = getattr(msg, "trace_id", "") or ""
+        msg_type = type(msg).__name__
+
+        # Step 2: Log inbound message.
+        log.info(
+            "mailbox_loop.dequeued",
+            extra={"message_type": msg_type, "trace_id": trace_id},
+        )
+
+        try:
+            # Step 3: Concurrency guard check.
+            if not isinstance(msg, InterruptRequest):
+                # DAG-requiring types: defer if guard active.
+                if isinstance(msg, (TaskEnvelope, CommittedPlan, WorkflowRunRequest)):
+                    if getattr(self._concurrency_guard, "active", False):
+                        self._mailbox.enqueue(msg, priority="BACKGROUND")
+                        log.info(
+                            "mailbox_loop.deferred",
+                            extra={
+                                "message_type": msg_type,
+                                "trace_id": trace_id,
+                                "reason": "DAG active, re-enqueued at BACKGROUND",
+                            },
+                        )
+                        return
+
+            # Step 4: Dispatch to process().
+            result = await self.process(msg)
+
+            # Step 5: Log result.
+            log.info(
+                "mailbox_loop.result",
+                extra={
+                    "message_type": msg_type,
+                    "trace_id": trace_id,
+                    "result": result.value,
+                },
+            )
+
+            # Step 6: Emit error delta on FAILED.
+            if result == ProcessResult.FAILED:
+                try:
+                    await self._delta_port.emit(  # type: ignore[union-attr]
+                        event_topic=ORCH_DELTA_V1,
+                        payload={
+                            "type": "processing_error",
+                            "message_type": msg_type,
+                            "trace_id": trace_id,
+                            "result": result.value,
+                        },
+                        trace_id=trace_id,
+                    )
+                except Exception:
+                    # Fire-and-forget delta emission -- never block the loop.
+                    log.warning(
+                        "mailbox_loop.error_delta_failed",
+                        extra={"trace_id": trace_id},
+                    )
+
+        except Exception:
+            log.exception(
+                "mailbox_loop.unhandled_exception",
+                extra={"message_type": msg_type, "trace_id": trace_id},
+            )
 
     # ======================================================================
     # Primary entry point

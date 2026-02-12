@@ -203,6 +203,25 @@ class ErrorAction:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class OrchestratorPolicies:
+    """Runtime policy configuration loaded from policies.contract.yaml (1.3.3).
+
+    Provides retry limits, step timeout defaults, and step/wave caps.
+    Loaded by OrchestratorFactory at construction (6.2.1 step 10).
+    Consumed by StepRunner (2.3.1) for retry budgets and timeouts.
+
+    V1 scope: quality_retries REMOVED (no provider populates quality_score).
+    """
+
+    normal_retries: int = 2
+    schema_retries: int = 1
+    step_timeout_default_ms: int = 30000
+    max_steps_per_plan: int = 50
+    max_waves_per_plan: int = 20
+    max_concurrent_per_wave: int = 10
+
+
 @dataclass
 class CompensationRecord:
     """Record of a saga compensation action.
@@ -282,6 +301,13 @@ class InterruptRequest:
 class TriggerSpec:
     """Workflow trigger specification (nested in WorkflowSaveRequest).
 
+    Fields:
+      type        -- TriggerType enum (CRON, EVENT, MANUAL)
+      schedule    -- cron expression (croniter-parseable), required for CRON
+      timezone    -- IANA timezone string, default UTC
+      event_topic -- K1 event bus topic, required for EVENT
+      enabled     -- whether this trigger is active (for scheduler)
+
     Validation rules:
       CRON   -> schedule non-empty
       EVENT  -> event_topic non-empty
@@ -290,8 +316,9 @@ class TriggerSpec:
 
     type: TriggerType
     schedule: Optional[str] = None
-    timezone: Optional[str] = None
+    timezone: str = "UTC"
     event_topic: Optional[str] = None
+    enabled: bool = True
 
     def __post_init__(self) -> None:
         if self.type == TriggerType.CRON and not self.schedule:
@@ -359,38 +386,85 @@ class SchemaResult:
 
 
 @dataclass(frozen=True)
-class ValidationResult:
-    """Result from ConstraintResolver validation.
+class AlternativeMapping:
+    """Record of a capability substitution applied by ConstraintResolver.
 
+    Records that original_capability was replaced with
+    replacement_capability during pre-execution validation.
+    """
+
+    original_capability: str
+    replacement_capability: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class AlternativeCapability:
+    """Alternative capability candidate from find_alternatives() (3.1.3).
+
+    Represents a registry capability that could substitute for a
+    missing one. score combines schema overlap, safety band match,
+    and name similarity. param_mapping provides auto-substitution
+    hints: {original_param: alternative_param}.
+    safety_band is the candidate's safety_band_min from RegistryEntry.
+    """
+
+    capability_id: str
+    score: float
+    param_mapping: Dict[str, str] = field(default_factory=dict)
+    safety_band: str = "GREEN"
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    """Result from ConstraintResolver.validate() (3.1.1).
+
+    Aggregated validation outcome for a CommittedPlan.
     time_pressure=True when estimated critical-path duration exceeds
-    the tier time budget (per BUDGET-1).
+    the tier time budget (per BUDGET-1). hil_required=True when
+    unresolvable issues require human input.
     """
 
     valid: bool
-    issues: List[str] = field(default_factory=list)
-    alternatives: Dict[str, str] = field(default_factory=dict)
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    alternatives_applied: List[AlternativeMapping] = field(default_factory=list)
     time_pressure: bool = False
+    hil_required: bool = False
+    hil_request: Optional["HILRequest"] = None
 
 
 @dataclass(frozen=True)
 class CapabilityCheck:
-    """Per-capability validation result from ConstraintResolver."""
+    """Per-step capability validation result from ConstraintResolver (3.1.2).
+
+    Built by check_capabilities(). Returned only for steps with
+    issues (unavailable or safety_band mismatch). Empty list
+    from check_capabilities() = all capabilities valid.
+    """
 
     step_id: str
     capability: str
-    exists: bool
     available: bool
-    safety_band_ok: bool
-    alternative: Optional[str] = None
+    contract_entry: Optional["RegistryEntry"] = None
+    alternatives: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class ResolutionResult:
-    """ConstraintResolver output after attempting auto-resolution."""
+    """ConstraintResolver output after resolve_iteratively() (3.1.4).
+
+    resolved=True means all issues were auto-resolved.
+    hil_requested=True means unresolvable issues need human input.
+    alternatives_applied tracks substitutions made during resolution.
+    """
 
     resolved: bool
-    substitutions: Dict[str, str] = field(default_factory=dict)
-    remaining_issues: List[str] = field(default_factory=list)
+    modified_plan: Optional[Any] = None
+    unresolved: List[CapabilityCheck] = field(default_factory=list)
+    hil_requested: bool = False
+    cycles_used: int = 0
+    alternatives_applied: List[AlternativeMapping] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -556,16 +630,16 @@ class StepResult:
 
 @dataclass(frozen=True)
 class PlanStep:
-    """Orchestrator's 13-field PlanStep for DAG execution.
+    """Orchestrator's 14-field PlanStep for DAG execution.
 
     Re-defined (not subclassed) from Fabric's 6-field PlanStep to avoid
     tight coupling. Map from Fabric PlanStep via from_fabric() classmethod.
 
     Fields 1-6: match Fabric PlanStep (id, capability, params, deps,
                 prompt_template, tools_granted).
-    Fields 7-13: Orchestrator extensions for DAG execution (output_schema,
+    Fields 7-14: Orchestrator extensions for DAG execution (output_schema,
                  condition, is_optional, has_side_effects, compensation,
-                 timeout_ms, required_context).
+                 timeout_ms, required_context, safety_band_min).
 
     V1 scope: token_budget field REMOVED (no upstream data).
 
@@ -584,7 +658,7 @@ class PlanStep:
     prompt_template: Optional[str] = None
     tools_granted: Optional[List[str]] = None
 
-    # Orchestrator extension fields (7-13)
+    # Orchestrator extension fields (7-14)
     output_schema: Optional[Dict[str, Any]] = None
     condition: Optional[ConditionExpr] = None
     is_optional: bool = False
@@ -592,6 +666,7 @@ class PlanStep:
     compensation: Optional[str] = None
     timeout_ms: Optional[int] = None
     required_context: Optional[List[str]] = None
+    safety_band_min: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -1159,6 +1234,9 @@ class ProcessingContext:
     session_id: Optional[str] = None
     user_id: Optional[str] = None
 
+    # Interrupt flag (set by OrchestratorService.handle_interrupt())
+    interrupt_flag: bool = False
+
     def __post_init__(self) -> None:
         if not self.trace_id:
             raise ValueError("ProcessingContext.trace_id is required")
@@ -1405,3 +1483,21 @@ class DrainResult:
     active_dags_remaining: int
     timeout_reached: bool
     duration_ms: int
+
+
+@dataclass
+class RecoveryResult:
+    """Result of crash_recovery() execution (6.2.4).
+
+    Returned by OrchestratorService.crash_recovery() to summarise
+    the WAL scan and recovery attempt.
+
+    Fields:
+      recovered_dags     -- DAGs successfully re-enqueued for execution.
+      failed_recoveries  -- DAGs that could not be recovered (errors).
+      skipped            -- DAGs already completed (DAG_COMPLETE in WAL).
+    """
+
+    recovered_dags: int = 0
+    failed_recoveries: int = 0
+    skipped: int = 0

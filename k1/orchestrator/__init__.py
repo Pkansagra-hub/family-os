@@ -39,6 +39,7 @@ from k1.orchestrator.events import (  # Emitted events; Consumed events
     PLAN_READY,
     WORKFLOW_TRIGGER_DUE,
 )
+from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.ports import (
     IBridgeWritePort,
     IDeltaEmitPort,
@@ -54,6 +55,8 @@ from k1.orchestrator.types import (  # Enums; Leaf types; Core envelopes; Plan &
     ActiveDAGInfo,
     AdapterError,
     AggregatedResult,
+    AlternativeCapability,
+    AlternativeMapping,
     CapabilityCheck,
     CircuitBreakerConfig,
     CircuitBreakerState,
@@ -84,6 +87,7 @@ from k1.orchestrator.types import (  # Enums; Leaf types; Core envelopes; Plan &
     ProactiveGapStatus,
     ProcessingContext,
     ProcessResult,
+    RecoveryResult,
     RegistryEntry,
     ResolutionResult,
     SchemaResult,
@@ -103,6 +107,8 @@ from k1.orchestrator.types import (  # Enums; Leaf types; Core envelopes; Plan &
 __all__ = [
     # Config
     "OrchestratorConfig",
+    # Factory
+    "OrchestratorFactory",
     # Port Protocols
     "IBridgeWritePort",
     "IDeltaEmitPort",
@@ -123,6 +129,8 @@ __all__ = [
     "TriggerType",
     # Leaf types
     "AdapterError",
+    "AlternativeCapability",
+    "AlternativeMapping",
     "CapabilityCheck",
     "CompensationRecord",
     "ConditionExpr",
@@ -162,6 +170,7 @@ __all__ = [
     "CircuitBreakerConfig",
     "CircuitBreakerState",
     "DrainResult",
+    "RecoveryResult",
     "GuardDecision",
     "HealthStatus",
     "IPostStepGuard",

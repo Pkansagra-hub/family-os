@@ -1,19 +1,28 @@
 """
-k1.orchestrator.orchestration.param_resolver -- DAG step parameter resolution (4.5.9).
+k1.orchestrator.orchestration.param_resolver -- DAG step parameter resolution.
 
 Resolves dynamic $step_id.result.path references in DAG step definitions
 before handing them to Fabric for execution.
 
 Two resolution modes:
-  1. Param resolution -- resolves $-refs in step["params"] values
-  2. Capability resolution -- resolves $-refs in step["capability"] field
+  1. Param resolution -- resolves $-refs in step params values (recursive)
+  2. Capability resolution -- resolves $-refs in step capability field
      (enables meta-agent creation: build_agent -> execute created agent)
 
 Design:
   - Sits BEFORE the Fabric boundary. Fabric NEVER sees $-references.
   - Constructor-injected RegistryPort for capability existence checks.
-  - Stateless: resolve_step() creates new dicts per call.
+  - Stateless: resolve()/resolve_step() creates new dicts per call.
   - Thread-safe: safe for concurrent use by DAGExecutor wave parallelism.
+
+API:
+  resolve(step: PlanStep, prior_results: Dict[str, CapabilityResult])
+    -> Tuple[Dict[str, Any], Optional[str]]
+    Typed API for Orchestrator DAG execution (2.3.5).
+
+  resolve_step(step: Dict, completed_results: Dict) -> Dict
+    Legacy dict-based API (Fabric 4.5.9). Backward-compat alias.
+    Remove in M7.
 
 References:
   - param_resolver_spec.md (4.5.9)
@@ -31,8 +40,12 @@ Exports:
 
 from __future__ import annotations
 
+import copy
 import logging
-from typing import Any, Dict, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Tuple
+
+if TYPE_CHECKING:
+    from k1.orchestrator.types import PlanStep
 
 logger = logging.getLogger(__name__)
 
@@ -119,16 +132,94 @@ class ParamResolver:
     def __init__(self, registry: Optional[RegistryPort] = None) -> None:
         self._registry = registry
 
+    # ------------------------------------------------------------------
+    # Typed API (2.3.5) -- used by DAGExecutor
+    # ------------------------------------------------------------------
+
+    def resolve(
+        self,
+        step: PlanStep,
+        prior_results: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], Optional[str]]:
+        """Resolve all $-references in a PlanStep.
+
+        Typed API for Orchestrator DAG execution. Returns resolved
+        params and optionally a resolved capability name (for dynamic
+        meta-agent resolution).
+
+        Args:
+            step: PlanStep dataclass (1.2.18). Fields: .id, .capability,
+                  .params. capability may start with $ for dynamic resolution.
+            prior_results: Dict of step_id -> CapabilityResult (or any
+                duck-typed object with .success and .data fields) from
+                previously completed steps.
+
+        Returns:
+            Tuple of:
+              - resolved_params: Dict with all $-references resolved.
+                Deep-copied from step.params; original never mutated.
+              - resolved_capability_name: str if capability was dynamic
+                ($-ref resolved), None if capability was static.
+
+        Raises:
+            StepReferenceError: Referenced step_id not in prior_results,
+                or referenced step has success=False.
+            PathResolutionError: Path traversal on result.data failed.
+            UnresolvedCapabilityError: Capability ref resolved to invalid
+                value or not found in registry.
+        """
+        resolved_cap: Optional[str] = None
+
+        # 1. Resolve capability field (meta-agent dynamic resolution)
+        capability = step.capability
+        if isinstance(capability, str) and capability.startswith("$"):
+            resolved_value = self._resolve_reference(capability, prior_results)
+
+            if not isinstance(resolved_value, str) or not resolved_value:
+                raise UnresolvedCapabilityError(
+                    step_id=step.id,
+                    capability_ref=capability,
+                    resolved_value=str(resolved_value),
+                )
+            if self._registry is not None and not self._registry.contains(resolved_value):
+                raise UnresolvedCapabilityError(
+                    step_id=step.id,
+                    capability_ref=capability,
+                    resolved_value=resolved_value,
+                )
+            resolved_cap = resolved_value
+            logger.info(
+                "[ParamResolver] Resolved capability: %s -> %s (step %s)",
+                capability,
+                resolved_cap,
+                step.id,
+            )
+
+        # 2. Resolve params (recursive deep walk)
+        resolved_params = self._resolve_params(
+            copy.deepcopy(dict(step.params)) if step.params else {},
+            prior_results,
+        )
+
+        return (resolved_params, resolved_cap)
+
+    # ------------------------------------------------------------------
+    # Legacy dict API (Fabric 4.5.9) -- backward compat, remove in M7
+    # ------------------------------------------------------------------
+
     def resolve_step(
         self,
         step: Dict[str, Any],
         completed_results: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """
-        Resolve all $-references in a step definition.
+        """Resolve all $-references in a step definition (legacy dict API).
 
         Creates a shallow copy of step with resolved values.
         Original step dict is NEVER mutated.
+
+        Kept for backward compatibility with existing DAGExecutor
+        integration. Will be removed in M7 when DAGExecutor is
+        updated to call resolve() directly.
 
         Args:
             step: DAG step dict. May contain "capability" and "params" keys.
@@ -170,7 +261,7 @@ class ParamResolver:
                 resolved_cap,
             )
 
-        # 2. Resolve params
+        # 2. Resolve params (flat -- legacy behavior)
         params = resolved.get("params")
         if isinstance(params, dict):
             resolved_params = {}
@@ -188,6 +279,67 @@ class ParamResolver:
             resolved["params"] = resolved_params
 
         return resolved
+
+    # ------------------------------------------------------------------
+    # Recursive param walker (2.3.5 -- nested dict support)
+    # ------------------------------------------------------------------
+
+    def _resolve_params(
+        self,
+        params: Dict[str, Any],
+        prior_results: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Recursively walk params dict and resolve all $-references.
+
+        Only string values starting with '$' are resolved. Non-string
+        values (int, bool, list, None) pass through unchanged. Nested
+        dicts are recursed. Lists are walked element-by-element.
+
+        V1 scope: dot-navigation only (no array indexing in refs).
+
+        Args:
+            params: Deep-copied params dict (safe to mutate).
+            prior_results: Completed step results for reference lookup.
+
+        Returns:
+            params dict with all $-references resolved in place.
+        """
+        for key, value in params.items():
+            if isinstance(value, str) and value.startswith("$"):
+                params[key] = self._resolve_reference(value, prior_results)
+                logger.debug(
+                    "[ParamResolver] Resolved param %s: %s -> %s",
+                    key,
+                    value,
+                    params[key],
+                )
+            elif isinstance(value, dict):
+                self._resolve_params(value, prior_results)
+            elif isinstance(value, list):
+                self._resolve_list(value, prior_results)
+        return params
+
+    def _resolve_list(
+        self,
+        items: List[Any],
+        prior_results: Dict[str, Any],
+    ) -> None:
+        """Walk list elements and resolve $-references in place.
+
+        Only mutates string elements that start with '$'.
+        Nested dicts and lists are recursed.
+        """
+        for i, item in enumerate(items):
+            if isinstance(item, str) and item.startswith("$"):
+                items[i] = self._resolve_reference(item, prior_results)
+            elif isinstance(item, dict):
+                self._resolve_params(item, prior_results)
+            elif isinstance(item, list):
+                self._resolve_list(item, prior_results)
+
+    # ------------------------------------------------------------------
+    # Reference resolution
+    # ------------------------------------------------------------------
 
     def _resolve_reference(
         self,
@@ -238,7 +390,7 @@ class ParamResolver:
 
         # Traverse path
         current: Any = result
-        for i, segment in enumerate(path):
+        for segment in path:
             if segment == "result":
                 # "result" keyword => access .data (CapabilityResult)
                 if hasattr(current, "data"):
