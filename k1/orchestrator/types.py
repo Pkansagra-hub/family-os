@@ -737,6 +737,7 @@ class PlanStep:
             compensation=data.get("compensation"),
             timeout_ms=data.get("timeout_ms"),
             required_context=data.get("required_context"),
+            safety_band_min=data.get("safety_band_min"),
         )
 
     @classmethod
@@ -752,7 +753,8 @@ class PlanStep:
                          params, tools_granted, deps).
             **extensions: Orchestrator-specific fields (output_schema,
                           condition, is_optional, has_side_effects,
-                          compensation, timeout_ms, required_context).
+                          compensation, timeout_ms, required_context,
+                          safety_band_min).
         """
         return cls(
             id=fabric_step.id,
@@ -768,6 +770,7 @@ class PlanStep:
             compensation=extensions.get("compensation"),
             timeout_ms=extensions.get("timeout_ms"),
             required_context=extensions.get("required_context"),
+            safety_band_min=extensions.get("safety_band_min"),
         )
 
 

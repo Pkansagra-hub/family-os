@@ -68,6 +68,10 @@ ORCH_MCP_TOOL_REGISTERED: str = "k1.orchestration.mcp.tool_registered.v1"
 PLAN_READY: str = "k1.planner.plan.ready.v1"
 PLAN_FAILED: str = "k1.planner.plan.failed.v1"
 PLAN_CANCELLED: str = "k1.planner.plan.cancelled.v1"
+# NOTE: micro_replan is SYNCHRONOUS (IPlannerPort.micro_replan() returns directly).
+# This event is TELEMETRY-ONLY -- emitted by Planner for Learning Loop observability.
+# Orchestrator does NOT use this for plan delivery. Retained in ALL_CONSUMED for
+# telemetry logging / drift detection metrics only.
 MICRO_REPLAN_READY: str = "k1.planner.micro_replan.ready.v1"
 
 # Fabric capability results

@@ -50,18 +50,23 @@ exports:
   - symbol: "IEventPort"
     from_file: "k1/planner/__init__.py"
 
-  # --- Shared envelope types (produced by Planner, consumed by Orchestrator) ---
+  # --- Shared envelope types (RE-EXPORTED from k1.orchestrator.types) ---
+  # SOURCE OF TRUTH: k1/orchestrator/types.py
+  # Planner __init__.py re-exports these; it does NOT define its own copies.
   - symbol: "CommittedPlan"
     from_file: "k1/planner/__init__.py"
-    note: "Canonical production type. Must match k1/orchestrator/types.py CommittedPlan field-for-field."
+    origin: "k1/orchestrator/types.py"
+    note: "Re-export. 8-field frozen dataclass. created_at is float (epoch seconds)."
 
   - symbol: "PlanAck"
     from_file: "k1/planner/__init__.py"
-    note: "Returned within 500ms of request_plan(). status: ACCEPTED | REJECTED."
+    origin: "k1/orchestrator/types.py"
+    note: "Re-export. 3 fields: request_id, status(ACCEPTED|REJECTED), estimated_duration_ms."
 
   - symbol: "PlanStep"
     from_file: "k1/planner/__init__.py"
-    note: "14-field frozen dataclass. Must match WB Section 10.4 field mapping."
+    origin: "k1/orchestrator/types.py"
+    note: "Re-export. 14-field frozen dataclass. See wiring.contract.yaml plan_step_spec."
 
 # ---------------------------------------------------------------------------
 # Entrypoints
@@ -133,13 +138,15 @@ invariants:
   - id: "PLAN-07"
     description: "CommittedPlan MUST include token_budget_max per step."
     category: "plan-quality"
-    enforcement: "V1 DEFERRED -- no upstream data (token_budget_max removed from PlanStep)"
+    enforcement: "V1 DEFERRED -- no upstream data source. token_budget_max not in V1 PlanStep."
     status: "deferred"
+    note: "Blocked until Model Hub exposes per-capability token estimation API."
 
   - id: "PLAN-08"
-    description: "Every PlanStep.capability_name MUST resolve to a registered Fabric capability."
+    description: "Every PlanStep.capability MUST resolve to a registered Fabric capability."
     category: "plan-quality"
     enforcement: "runtime (ValidateService capability check via IFabricRetrievalPort)"
+    note: "Field is PlanStep.capability (not capability_name). See types.py."
 
   - id: "PLAN-09"
     description: "CommittedPlan step graph MUST be a valid DAG (no cycles)."

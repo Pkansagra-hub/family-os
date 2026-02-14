@@ -8,6 +8,15 @@
 %%   NEVER writes SessionState. NEVER executes capabilities. NEVER spawns agents.
 %%   ALL tool calls are read-only discovery. Stage 4 COMMIT is deterministic (no LLM).
 %%
+%% TYPE OWNERSHIP:
+%%   CommittedPlan, PlanStep, PlanRequest, PlanAck, MicroReplanRequest
+%%   are ALL defined in k1/orchestrator/types.py (source of truth).
+%%   Planner re-exports these from k1/planner/__init__.py for convenience.
+%%   Planner MUST NOT redefine these types. Field-for-field match enforced.
+%%   HubRequest, HubResponse, CapabilityType, RequestConstraints
+%%   are defined in k1/model_hub/types.py (source of truth).
+%%   Planner imports via ILLMPort adapter layer.
+%%
 %% GOVERNING DOCS:
 %%   - whiteboard_concierge_orchestrator_planner_fabric.md Section 5 (Planner)
 %%   - whiteboard_concierge_orchestrator_planner_fabric.md Section 12-16 (Resolved)
@@ -57,72 +66,70 @@
 %% =====================================================================================
 %%
 %% INBOUND:
-%%   PlanRequest {
-%%     request_id: uuid,
-%%     intent: string,
-%%     constraints: {
-%%       token_budget_max: int | null,    (max tokens across all steps, null = unlimited)
-%%       cost_budget_max_usd: float | null, (max USD cost, null = no limit)
-%%       time_budget_ms: int | null,      (max wall-clock time for plan execution)
-%%       safety_band: "GREEN" | "AMBER" | "RED", (from SessionState, caps above band excluded)
-%%       max_steps: int | null,           (hard cap on DAG steps, null = system default 50)
-%%       allowed_domains: string[] | null, (restrict to these capability domains)
-%%       forbidden_capabilities: string[] | null (explicit exclude list)
-%%     },
-%%     context: {
-%%       tier: "HIGH",
-%%       family_member_id: string,
-%%       session_id: string,
-%%       snapshot: ContextSnapshot | null   (optional pre-fetched SessionState; Planner may also read independently)
-%%     },
-%%     trace_id: string
+%%   PlanRequest {                       (SOURCE OF TRUTH: k1/orchestrator/types.py)
+%%     intent: string,                     (required, non-empty)
+%%     trace_id: string,                   (required, non-empty)
+%%     context: SessionSnapshot | null,    (V1: Fabric SessionSnapshot directly, no ContextSnapshot wrapper)
+%%     request_id: uuid,                   (auto-generated uuid4 if not set)
+%%     constraints: Dict[str, Any],        (V1: opaque dict, not structured -- schema TBD V2)
+%%     timeout_ms: int = 45000             (planning timeout, default 45s)
 %%   }
+%%   NOTE: PlanRequest.constraints is Dict[str, Any] in V1. Structured constraint
+%%   fields (token_budget_max, cost_budget_max_usd, safety_band, max_steps, etc.)
+%%   are V2-planned. See wiring.contract.yaml committed_plan_spec.v1_removed.
 %%
 %%   MicroReplanRequest {               (ORCH-13: Adaptive Blind DAG)
-%%     request_id: uuid,
-%%     plan_id: uuid,
-%%     remaining_steps: Step[],         (only uncompleted steps)
-%%     failure_context: { step_id: string, error: string, partial_result: any },
-%%     completed_results: { step_id: StepResult },  (results from completed steps -- feeds param resolution)
-%%     discoveries: [{ field: string, value: any, source_step_id: string }],  (runtime discoveries for replan)
-%%     trace_id: string
+%%                                       (SOURCE OF TRUTH: k1/orchestrator/types.py)
+%%     original_plan_id: string,          (required, non-empty)
+%%     completed_results: Dict[str, StepResult],  (results from completed steps)
+%%     remaining_steps: PlanStep[],       (required, non-empty -- only uncompleted steps)
+%%     trace_id: string,                  (required)
+%%     request_id: uuid = auto,           (auto-generated uuid4)
+%%     discoveries: Discovery[],          (runtime discoveries for replan)
+%%     failure_context: FailureContext | null  (step_id, error_code, error_message, partial_result)
 %%   }
 %%
 %% OUTBOUND:
-%%   PlanAck {
-%%     request_id: uuid,
-%%     status: "accepted" | "rejected",
-%%     reason: string | null,
-%%     estimated_duration_ms: int
+%%   PlanAck {                           (SOURCE OF TRUTH: k1/orchestrator/types.py)
+%%     request_id: string,                (echoes PlanRequest.request_id)
+%%     status: string,                    ("ACCEPTED" | "REJECTED")
+%%     estimated_duration_ms: int | null  (optional)
 %%   }
+%%   NOTE: V1 PlanAck has no 'reason' field. Rejection reason conveyed via
+%%   plan.failed.v1 event payload instead.
 %%
-%%   CommittedPlan {
-%%     plan_id: uuid,
-%%     request_id: uuid,
-%%     intent: string,
-%%     created_at: timestamp,
-%%     token_budget_max: int,           (ORCH-14: total budget for execution)
-%%     steps: [
-%%       {
-%%         id: string,                    (e.g., "s1", "s2")
-%%         capability: string,            (e.g., "tool.execute.send_message")
-%%         prompt_template: string | null,
-%%         params: {},
-%%         deps: string[],                (step IDs this depends on)
-%%         token_budget: int,             (per-step token budget)
-%%         output_schema: {} | null,      (ORCH-15: expected output shape)
-%%         tools_granted: string[] | null, (FAB-07: scoped tool list for agent steps)
-%%         condition: string | null,      (JSONPath guard -- step skipped if evaluates false)
-%%         is_optional: bool,             (true = failure does NOT fail the plan)
-%%         has_side_effects: bool,        (from Fabric CapabilityDescriptor, drives rollback)
-%%         compensation: string | null,   (capability to call on rollback if has_side_effects)
-%%         timeout_ms: int,               (per-step timeout, seeded from Fabric estimated_duration_ms)
-%%         required_context: string[]     (SessionState sections needed before execution)
-%%       }
-%%     ],
-%%     dependencies: { step_id: [dep_step_ids] },
-%%     trace_id: string
+%%   CommittedPlan {                     (SOURCE OF TRUTH: k1/orchestrator/types.py)
+%%     plan_id: string,                   (required, Planner-generated uuid)
+%%     request_id: string,                (required, echoes PlanRequest.request_id)
+%%     intent: string,                    (required)
+%%     steps: PlanStep[],                 (required, non-empty)
+%%     trace_id: string,                  (required)
+%%     dependencies: Dict[str, List[str]], (step_id -> [predecessor_step_ids])
+%%     estimated_duration_ms: int | null, (optional Planner estimate)
+%%     created_at: float = 0.0,           (epoch seconds, NOT ISO timestamp)
 %%   }
+%%   V1 REMOVED: token_budget_max, cost_budget_max_usd (no upstream data -- PLAN-07 DEFERRED)
+%%   Validation: plan_id/request_id non-empty, steps non-empty, deps form DAG (Kahn's)
+%%
+%%   PlanStep (14 fields) {              (SOURCE OF TRUTH: k1/orchestrator/types.py)
+%%     -- Fabric-aligned fields (1-6) --
+%%     id: string,                        (required, e.g., "s1", "s2")
+%%     capability: string,                (required, e.g., "tool.execute.send_message")
+%%     params: Dict[str, Any],            (forwarded as CapabilityRequest.parameters)
+%%     deps: List[str],                   (step IDs this depends on)
+%%     prompt_template: string | null,    (template name reference)
+%%     tools_granted: List[str] | null,   (FAB-07: scoped tool list for agent steps)
+%%     -- Orchestrator extension fields (7-14) --
+%%     output_schema: Dict | null,        (JSON Schema, OutputSchemaGuard validates)
+%%     condition: ConditionExpr | null,   (structured expr, NOT raw JSONPath string)
+%%     is_optional: bool = false,         (true = failure does NOT fail the plan)
+%%     has_side_effects: bool = false,    (from Fabric CapabilityDescriptor, drives rollback)
+%%     compensation: string | null,       (capability to call on rollback if has_side_effects)
+%%     timeout_ms: int | null,            (per-step timeout, seeded from Fabric estimated_duration_ms)
+%%     required_context: List[str] | null,(SessionState sections needed before execution)
+%%     safety_band_min: string | null     (minimum safety band for this step)
+%%   }
+%%   V1 REMOVED: token_budget per step (no upstream data -- PLAN-07 DEFERRED)
 %%
 %%   META-AGENT DAG PATTERN (4.5.1-4.5.9):
 %%   Steps MAY include build_agent capabilities:
@@ -162,6 +169,11 @@
 %% PLAN-05: Max 6 discovery tool calls per plan
 %% PLAN-06: NEVER executes capabilities (discovery only, no invoke_capability)
 %% PLAN-07: CommittedPlan MUST include token_budget_max and per-step token_budget
+%%          V1 DEFERRED: No upstream data source. token_budget_max and token_budget
+%%          removed from PlanStep and CommittedPlan in types.py.
+%%          Planner MAY set max_tokens in HubRequest.constraints for its own LLM calls
+%%          but does NOT set per-step token budgets in the CommittedPlan.
+%%          See: wiring.contract.yaml committed_plan_spec.v1_removed
 %% PLAN-08: Each step MUST reference valid capability from Fabric Registry
 %% PLAN-09: Plan dependencies MUST form a DAG (no cycles -- validated in Stage 3)
 %% PLAN-10: HIL clarification max 2 rounds per plan (then best-effort)
@@ -260,7 +272,14 @@ end
 subgraph MICRO_REPLAN["Micro-Replan (ORCH-13 -- Partial Pipeline Re-Entry)"]
   direction TB
 
-  MR_ENTRY["Receive MicroReplanRequest<br/>remaining_steps + failure_context<br/>Completed steps are FROZEN (PLAN-12)"]:::step
+  %% PROTOCOL: micro_replan() is SYNCHRONOUS (direct return, 10s timeout).
+  %% Unlike request_plan() which is fire-and-forget + event delivery,
+  %% micro_replan() returns Optional[CommittedPlan] directly to caller.
+  %% k1.planner.micro_replan.ready.v1 is TELEMETRY-ONLY (emitted for
+  %% Learning Loop observability, NOT used for plan delivery).
+  %% Orchestrator does NOT subscribe to micro_replan.ready for delivery.
+
+  MR_ENTRY["Receive MicroReplanRequest<br/>remaining_steps + failure_context<br/>Completed steps are FROZEN (PLAN-12)<br/>---<br/>PROTOCOL: synchronous return (10s timeout)<br/>NOT event-driven like request_plan()"]:::step
 
   MR_SKETCH["Micro-SKETCH<br/>LLM: re-plan remaining steps only<br/>Input: original intent + remaining + failure<br/>Budget: {max_tokens: 1024, timeout_ms: 5000}"]:::llm
 
@@ -268,7 +287,7 @@ subgraph MICRO_REPLAN["Micro-Replan (ORCH-13 -- Partial Pipeline Re-Entry)"]
 
   MR_VALIDATE["Micro-VALIDATE<br/>LLM Arbiter: validate replacement plan<br/>Budget: {max_tokens: 256, timeout_ms: 2000}"]:::llm
 
-  MR_OUTPUT["Partial CommittedPlan<br/>Only replacement steps for failed portion<br/>Orchestrator merges with completed steps"]:::step
+  MR_OUTPUT["Partial CommittedPlan<br/>Only replacement steps for failed portion<br/>Orchestrator merges with completed steps<br/>---<br/>DELIVERY: Returned directly to caller (synchronous)<br/>TELEMETRY: k1.planner.micro_replan.ready.v1 emitted<br/>for Learning Loop (observability only, not delivery)"]:::step
 end
 
 %% =====================================================================================
@@ -294,6 +313,11 @@ end
 subgraph HIL_SYSTEM["HIL System (2 Interaction Points)"]
   direction TB
 
+  %% HIL NAMESPACE SPLIT:
+  %%   k1.hil.clarification*.v1 / k1.hil.approval*.v1 = PLANNING-TIME (Planner owns)
+  %%   k1.hil.override*.v1 / k1.hil.fallback*.v1 = EXECUTION-TIME (Orchestrator owns)
+  %% These are distinct event families. Concierge routes both to user.
+
   HIL_CLARIFICATION["Requirement Clarification (Stage 1)<br/>Trigger: intent ambiguous OR missing constraints<br/>LLM generates natural-language question (~300 tokens)<br/>Route: k1.hil.clarification.v1 -> Concierge -> User<br/>Return: k1.hil.clarification_response.v1 via Event Bus<br/>Concierge correlates via request_id in PENDING_CLARIFICATIONS<br/>Max rounds: 2 (PLAN-10)<br/>Timeout: 60s per round, then best-effort"]:::hil
 
   HIL_APPROVAL["Plan Approval (Stage 3)<br/>Trigger: plan has HIGH-impact operations<br/>LLM formats plan summary + options (~400 tokens)<br/>Route: k1.hil.approval_request.v1 -> Concierge -> User<br/>Return: k1.hil.approval_response.v1 via Event Bus<br/>Concierge correlates via request_id in PENDING_CLARIFICATIONS<br/>Options: approve | modify | reject<br/>Timeout: 120s, then auto-approve if safe"]:::hil
@@ -308,7 +332,7 @@ subgraph PORTS["Ports (7 Hexagonal Boundaries -- PLAN-01: No Write Ports to Sess
 
   PORT_MAILBOX["IMailboxPort<br/>receive() -> PlanRequest | MicroReplanRequest<br/>ack(request_id) -> PlanAck<br/>cancel(request_id) -> void"]:::port
 
-  PORT_LLM["ILLMPort (Capability-Driven)<br/>execute(HubRequest{capability, payload, constraints}) -> HubResponse<br/>Capabilities: CHAT, TOOL_CALL, STRUCTURED<br/>Budget: {max_tokens, timeout_ms} per stage<br/>All 3 LLM stages + HIL prompts route here"]:::port
+  PORT_LLM["ILLMPort (Routes to Model Hub via LLM Request Bus)<br/>execute(HubRequest) -> HubResponse<br/>---<br/>HubRequest {<br/>  capability: CapabilityType (CHAT | TOOL_CALL | STRUCTURED),<br/>  payload: CapabilityPayload (ChatPayload | ToolCallPayload | StructuredOutputPayload),<br/>  constraints: RequestConstraints {max_tokens, timeout_ms, priority, temperature, consumer_id},<br/>  trace_id: cognitive_trace_id<br/>}<br/>HubResponse {<br/>  result: CapabilityResult,<br/>  metadata: ResponseMetadata {request_id, model_id, provider_id, usage, cost_usd, latency_ms}<br/>}<br/>---<br/>Budget: constraints.max_tokens + constraints.timeout_ms per stage (PLAN-11)<br/>Routing: Planner -> LLMGatewayAdapter -> LLM_REQUEST_BUS -> Model Hub RequestRouter<br/>3 LLM stages + 2 HIL prompt calls route here<br/>See: k1/model_hub/model_hub.mmd IModelHubPort"]:::port
 
   PORT_FABRIC_RETRIEVAL["IFabricRetrievalPort<br/>discover_capabilities(query) -> RetrievalResult[]<br/>find_relevant_prompts(query) -> RetrievalResult[]<br/>Read-only Fabric Retrieval API access"]:::port
 
@@ -330,9 +354,9 @@ subgraph ADAPTERS_PROD["Production Adapters (7)"]
 
   ADAPT_MAILBOX["MailboxAdapter<br/>WFQ mailbox with priority queue<br/>Dequeue: FIFO within priority band<br/>MicroReplanRequest: elevated priority"]:::adapter
 
-  ADAPT_LLM["LLMGatewayAdapter (Capability-Driven)<br/>Routes HubRequest{CHAT|TOOL_CALL|STRUCTURED} to Model Hub<br/>via LLM Request Bus<br/>Includes prompt compilation<br/>Inherits CB_MODEL protection (per provider manifest)<br/>See: k1/model_hub/model_hub.mmd"]:::adapter
+  ADAPT_LLM["LLMGatewayAdapter (Routes to Model Hub)<br/>Wraps IModelHubPort.execute(HubRequest) -> HubResponse<br/>Routing: LLM Request Bus (async request-reply)<br/>consumer_id: 'planner' (for cost tracking + audit MH-11)<br/>Budget enforcement: Model Hub handles (MH-04)<br/>Inherits CB_MODEL protection per provider manifest (MH-05)<br/>---<br/>V1: TestLLMAdapter (deterministic, per-stage canned responses)<br/>V2: LLMGatewayAdapter -> LLM_REQUEST_BUS -> Model Hub<br/>See: k1/model_hub/model_hub.mmd"]:::adapter
 
-  ADAPT_FABRIC_RET["FabricRetrievalAdapter<br/>HTTP client to Fabric Retrieval API<br/>Timeout: 50ms, retry: 1<br/>Returns RetrievalResult[] (Top-K)"]:::adapter
+  ADAPT_FABRIC_RET["FabricRetrievalAdapter<br/>In-process call to FabricRetrieval API (NOT HTTP)<br/>Wraps Fabric.discover_capabilities() + find_relevant_prompts()<br/>Same Python runtime, direct method call<br/>Timeout: 50ms per call, retry: 1<br/>Returns RetrievalResult[] (Top-K)"]:::adapter
 
   ADAPT_STATE["SessionStateReadAdapter<br/>Multi-reader lock-free access<br/>Reads HOT sections only<br/>No write capability (PLAN-01 enforced at compile time)"]:::adapter
 
@@ -395,7 +419,7 @@ subgraph INVARIANTS["Invariants (PLAN-01..PLAN-12)"]
   subgraph INV_TOKEN["Token Management"]
     direction TB
 
-    INV_07["PLAN-07: CommittedPlan MUST include<br/>token_budget_max + per-step token_budget<br/>Enforced by: CommitService build validation"]:::invariant
+    INV_07["PLAN-07: V1 DEFERRED<br/>token_budget_max + per-step token_budget<br/>removed from types.py (no upstream data)<br/>V2: Planner will populate from Fabric cost estimates<br/>Enforced by: CommitService (V2)"]:::invariant
 
     INV_11["PLAN-11: All LLM calls carry budget<br/>{max_tokens, timeout_ms} -- no unbounded calls<br/>Enforced by: PipelineController budget injection"]:::invariant
   end
@@ -472,11 +496,11 @@ end
 subgraph CONCURRENCY["Concurrency Model (V1: Single Plan)"]
   direction TB
 
-  CONC_MODEL["Single-Threaded Async<br/>One plan at a time (V1)<br/>Plan lock prevents concurrent planning<br/>Mailbox queues additional requests"]:::concurrency
+  CONC_MODEL["V1: Single-Threaded Async<br/>One plan at a time<br/>Plan lock prevents concurrent planning<br/>Mailbox queues additional requests<br/>---<br/>V2: Multi-plan concurrent pipeline<br/>with per-plan state isolation"]:::concurrency
 
   CONC_CANCEL["Cancellation Support<br/>cancel_plan(request_id)<br/>Interrupts at next await boundary<br/>Sets state: CANCELLED<br/>Emits k1.planner.plan.cancelled.v1"]:::concurrency
 
-  CONC_MICRO["Micro-Replan Priority<br/>MicroReplanRequest: elevated priority in mailbox<br/>Waits for current plan to complete<br/>V2: May preempt SKETCH stage"]:::concurrency
+  CONC_MICRO["Micro-Replan Priority<br/>MicroReplanRequest: elevated priority in mailbox<br/>V1: Waits for current plan to complete<br/>V2: May preempt SKETCH stage"]:::concurrency
 end
 
 %% =====================================================================================
@@ -517,7 +541,7 @@ subgraph TOUCHPOINTS["External Touchpoints"]
   subgraph TP_LLM["LLM Gateway (Model Hub -- Standalone Module)"]
     direction TB
 
-    LLM_GW["Model Hub (Capability-Driven Plugin Architecture)<br/>3 stage LLM calls (CHAT, TOOL_CALL, STRUCTURED)<br/>+ 2 HIL prompt calls (CHAT)<br/>Total: ~3.5K tokens per plan<br/>Budget objects on every call (PLAN-11)<br/>See: k1/model_hub/model_hub.mmd"]:::gateway
+    LLM_GW["Model Hub (Capability-Driven Plugin Architecture)<br/>Interface: IModelHubPort.execute(HubRequest) -> HubResponse<br/>Transport: LLM_REQUEST_BUS (async request-reply)<br/>consumer_id: 'planner' for cost tracking (MH-11)<br/>---<br/>Planner uses 3 capabilities:<br/>  CHAT (Stages 1-3 + HIL prompts)<br/>  TOOL_CALL (Stages 1-2 tool routing -- V2)<br/>  STRUCTURED (Stage 3 arbiter verdict)<br/>Total: ~3.5K tokens per plan<br/>Budget: RequestConstraints.max_tokens + timeout_ms (PLAN-11)<br/>Model selection: Model Hub handles (Planner does NOT pick model)<br/>See: k1/model_hub/model_hub.mmd"]:::gateway
   end
 
   subgraph TP_BUSES["Event Bus + Delta Bus"]

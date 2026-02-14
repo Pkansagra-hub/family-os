@@ -49,6 +49,12 @@ class SessionSnapshot:
     """
     Immutable point-in-time snapshot of SessionState sections.
 
+    IMPORTANT: This is the CANONICAL SessionSnapshot for cross-module use.
+    Orchestrator (PlanRequest.context) and Planner (IStateReadPort) use THIS type.
+    SessionState has its own internal SessionSnapshot (sessionstate/snapshot.py,
+    sessionstate/manager.py) with 12+ diagnostic fields -- those are for
+    internal monitoring only. The adapter layer maps internal -> this type.
+
     Returned by ``ISessionStateReader.get_snapshot()``.
     Contains all available sections at the moment of capture.
 

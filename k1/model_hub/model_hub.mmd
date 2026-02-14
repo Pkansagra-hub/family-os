@@ -137,6 +137,11 @@ flowchart TB
   %% | Planner STAGE2_EXPAND       | CHAT, TOOL_CALL                  | ~1K     | INTERACTIVE |
   %% | Planner STAGE3_VALIDATE     | CHAT, STRUCTURED                 | ~500    | INTERACTIVE |
   %% | Planner HIL prompts         | CHAT                             | ~300    | INTERACTIVE |
+  %% NOTE: Planner TOOL_CALL = LLM function-calling to invoke 4 read-only discovery tools
+  %%   (discover_capabilities, find_relevant_prompts, query_planning_context, recall_for_planning).
+  %%   These are routed by Planner ToolCallRouter to IFabricRetrievalPort / IStateReadPort / IBridgePort.
+  %%   Planner consumer_id: 'planner'. Total ~3.5K tokens/plan. Max 5 LLM calls/plan (3 stages + 2 HIL).
+  %%   Type ownership: HubRequest/HubResponse imported from k1.model_hub.types (source of truth).
   %% | Orchestrator EXEC_MONITOR   | CHAT                             | ~200    | BACKGROUND  |
   %% | Orchestrator SOL_VALIDATOR  | CHAT, STRUCTURED                 | ~500    | INTERACTIVE |
   %% | Curiosity Agent             | CHAT                             | ~300    | BACKGROUND  |

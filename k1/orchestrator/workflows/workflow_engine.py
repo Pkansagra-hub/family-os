@@ -40,6 +40,7 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from k1.orchestrator.tracing import new_trace_id, trace_phase
 from k1.orchestrator.types import ProcessingContext, ProcessResult, TriggerType

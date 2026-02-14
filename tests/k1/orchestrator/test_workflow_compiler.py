@@ -804,7 +804,7 @@ class TestCompileFailsOnLargeGap:
         step = _step(capability="cap.gone")
         spec = _spec(steps=[step], workflow_id="wf-hil")
         compiler = _compiler_with_registry(delta=delta)
-        await compiler.compile(spec)
+        await compiler.compile(spec, trace_id="wf-hil")
         _, payload, trace = delta.events[0]
         assert payload["workflow_id"] == "wf-hil"
         assert "gap_count" in payload

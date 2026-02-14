@@ -79,7 +79,7 @@ alerts:
     window: 5m
     severity: critical
     description: "Token budget HARD_STOP was triggered."
-    runbook_link: k1/orchestrator/docs/orchestrator_runbook.md#procedure-2-debug-stuck-dag
+    runbook_link: k1/orchestrator/docs/orchestrator_runbook.md#procedure-10-handle-token-budget-exhaustion
 
   - name: HILTimeoutRate
     metric: orchestrator.hil.request_total
