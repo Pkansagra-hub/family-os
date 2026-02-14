@@ -165,7 +165,7 @@
 %% PLAN-01: NEVER writes SessionState (all reads are lock-free multi-reader)
 %% PLAN-02: ALL 4 discovery tools are read-only (zero side effects)
 %% PLAN-03: Stage 4 COMMIT is deterministic (zero LLM calls)
-%% PLAN-04: Max planning time 45s (CB_PLANNER timeout, owned by Concierge)
+%% PLAN-04: Max planning time 45s (CB_PLANNER timeout, owned by Orchestrator PlannerAdapter)
 %% PLAN-05: Max 6 discovery tool calls per plan
 %% PLAN-06: NEVER executes capabilities (discovery only, no invoke_capability)
 %% PLAN-07: CommittedPlan MUST include token_budget_max and per-step token_budget
@@ -334,7 +334,7 @@ subgraph PORTS["Ports (7 Hexagonal Boundaries -- PLAN-01: No Write Ports to Sess
 
   PORT_LLM["ILLMPort (Routes to Model Hub via LLM Request Bus)<br/>execute(HubRequest) -> HubResponse<br/>---<br/>HubRequest {<br/>  capability: CapabilityType (CHAT | TOOL_CALL | STRUCTURED),<br/>  payload: CapabilityPayload (ChatPayload | ToolCallPayload | StructuredOutputPayload),<br/>  constraints: RequestConstraints {max_tokens, timeout_ms, priority, temperature, consumer_id},<br/>  trace_id: cognitive_trace_id<br/>}<br/>HubResponse {<br/>  result: CapabilityResult,<br/>  metadata: ResponseMetadata {request_id, model_id, provider_id, usage, cost_usd, latency_ms}<br/>}<br/>---<br/>Budget: constraints.max_tokens + constraints.timeout_ms per stage (PLAN-11)<br/>Routing: Planner -> LLMGatewayAdapter -> LLM_REQUEST_BUS -> Model Hub RequestRouter<br/>3 LLM stages + 2 HIL prompt calls route here<br/>See: k1/model_hub/model_hub.mmd IModelHubPort"]:::port
 
-  PORT_FABRIC_RETRIEVAL["IFabricRetrievalPort<br/>discover_capabilities(query) -> RetrievalResult[]<br/>find_relevant_prompts(query) -> RetrievalResult[]<br/>Read-only Fabric Retrieval API access"]:::port
+  PORT_FABRIC_RETRIEVAL["IFabricRetrievalPort<br/>discover_capabilities(query) -> RetrievalResult[]<br/>find_relevant_prompts(query) -> RetrievalResult[]<br/>Read-only Fabric Retrieval API access<br/>---<br/>NOTE: Fabric also consumes k1.planner.discovery.request.v1<br/>as alternative event-driven discovery path (kernel.md Section 35.2)<br/>V1: Planner uses direct method call via adapter (not event)"]:::port
 
   PORT_STATE_READ["IStateReadPort<br/>read_sections(sections[]) -> StateSnapshot<br/>Multi-reader, lock-free (PLAN-01)<br/>Sections: beliefs, persona, control, temporal"]:::port
 
@@ -409,7 +409,7 @@ subgraph INVARIANTS["Invariants (PLAN-01..PLAN-12)"]
   subgraph INV_RATE["Rate Limits and Bounds"]
     direction TB
 
-    INV_04["PLAN-04: Max planning time 45s<br/>CB_PLANNER timeout (owned by Concierge)<br/>Enforced by: Concierge FabricOrchestratorAdapter"]:::invariant
+    INV_04["PLAN-04: Max planning time 45s<br/>CB_PLANNER timeout (owned by Orchestrator PlannerAdapter)<br/>Enforced by: PlannerAdapter circuit breaker wrapping"]:::invariant
 
     INV_05["PLAN-05: Max 6 discovery tool calls per plan<br/>3 in SKETCH + 3 in EXPAND<br/>Enforced by: ToolCallRouter counter"]:::invariant
 
@@ -561,7 +561,7 @@ subgraph TOUCHPOINTS["External Touchpoints"]
   subgraph TP_CIRCUIT_BREAKERS["Circuit Breakers (Resilience)"]
     direction TB
 
-    CB_PLANNER["CB: Planner<br/>45s timeout, 2/min threshold<br/>Fallback: skip planning, direct execution<br/>Owner: Concierge FabricOrchestratorAdapter"]:::circuit_breaker
+    CB_PLANNER["CB: Planner<br/>60s reset, 3 failure threshold, 1 half-open probe<br/>Config: OrchestratorConfig.cb_planner_* fields<br/>Fallback: skip planning, direct execution<br/>Owner: Orchestrator PlannerAdapter (kernel.md Section 23)"]:::circuit_breaker
 
     CB_LLM_INHERIT["CB: Model Hub (inherited, per provider manifest)<br/>Config from manifest: default 3/60s -> OPEN 30s<br/>Fallback: capability-aware, stage fails -> degrade or skip<br/>Owner: LLMGatewayAdapter<br/>See: k1/model_hub/model_hub.mmd"]:::circuit_breaker
   end
@@ -584,7 +584,7 @@ subgraph ERROR_RECOVERY["Error Recovery (Stage Failure Handling)"]
 
   ERR_HIL_TIMEOUT["HIL Timeout<br/>Clarification: proceed with best-effort interpretation<br/>Approval: auto-approve if safe (no high-impact ops)"]:::recovery
 
-  ERR_CB_OPEN["CB_PLANNER OPEN<br/>Concierge-owned: skip planning entirely<br/>Orchestrator: execute MED-tier path (direct Fabric)<br/>No Planner involvement"]:::recovery
+  ERR_CB_OPEN["CB_PLANNER OPEN<br/>Orchestrator-owned: PlannerAdapter raises immediately<br/>Orchestrator: execute MED-tier path (direct Fabric)<br/>No Planner involvement"]:::recovery
 end
 
 %% =====================================================================================

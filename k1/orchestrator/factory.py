@@ -652,5 +652,3 @@ class OrchestratorFactory:
         )
 
         return service
-
-        return service

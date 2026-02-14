@@ -3,13 +3,14 @@
 ====================================================================================================
 
 ====================================================================================================
+
 1. EPISODIC MEMORIES (st_epi)
    Purpose: Stores autobiographical events - 'What happened, when, where, with whom'
 ====================================================================================================
 
     Total Episodes: 339
 
-    REAL EXAMPLES FROM YOUR LIFE:
+   REAL EXAMPLES FROM YOUR LIFE
    ------------------------------------------------------------------------------------------
 
     Episode 1: Social with Dad, Panda, Prince at Home
@@ -46,7 +47,6 @@
        Original Memory:
          "What did we decide about the monitor? I think we said to contact support."
          "Marcus's birthday party. His apartment is nice. Met his girlfriend Amy."
-
 
 ====================================================================================================
 2. SEMANTIC MEMORY (st_sem)
@@ -87,7 +87,6 @@
       Confidence: 0.80
        Learned from:
          "When I reflect on this journey, I see growth. The flicker issue taught me patience and problem-solvi..."
-
 
 ====================================================================================================
 3. KNOWLEDGE GRAPH ENTITIES (st_kg_dom)
@@ -130,7 +129,6 @@
        Mentioned in:
          "Alex asked for code review advice. We spent an hour going over best practices."
 
-
 ====================================================================================================
 4. SOCIAL RELATIONSHIPS (st_social)
    Purpose: Stores relationships between the person and others
@@ -158,7 +156,6 @@
 
     Karen (FAMILY)
       Interactions: 3 | Sentiment: 0.57 | Emotion: joy
-
 
 ====================================================================================================
 5. PROSPECTIVE MEMORY (st_prospective)
@@ -200,7 +197,6 @@
        From:
          "Should we get wedding insurance? Panda thinks its unnecessary."
 
-
 ====================================================================================================
 6. ST_OBSERVATIONS - THE HOLISTIC CONTEXT LAYER
    Purpose: Links every memory write to its full contextual situation
@@ -215,7 +211,6 @@
       st_prospective: 257 observations (avg sentiment: 0.00)
       st_social: 206 observations (avg sentiment: 0.00)
       st_kg_dom: 164 observations (avg sentiment: 0.00)
-
 
 ====================================================================================================
  HOLISTIC QUERIES - MEMORIES WITH FULL CONTEXT
@@ -266,13 +261,12 @@
     QUERY 3: When Are You Happiest? (Time-of-Day Analysis)
    ------------------------------------------------------------------------------------------
 
-
 ====================================================================================================
  YOUR LIFE STORY - A HOLISTIC VIEW
 ====================================================================================================
 
    Based on your memories, here's what the system knows about your life:
-    
+
     KEY PEOPLE IN YOUR LIFE:
       * Panda (FAMILY) - 19 interactions
       * Dad (FAMILY) - 5 interactions
@@ -298,7 +292,6 @@
        If home office had also caused issues during 'Social with Mom, Panda a...
        If Dallas's involvement during 'Routine at Home' had been different, t...
        If Tokyo had also caused issues during 'Routine with Panda at Flight',...
-
 
 ====================================================================================================
  HOW ST_OBSERVATIONS ENABLES A HOLISTIC VIEW
@@ -338,8 +331,6 @@
    |                                                                         |
    |  = A Complete Picture of How, When, Where, and Why Memories Form        |
    +-------------------------------------------------------------------------+
-    
-
 
 ====================================================================================================
 7. KNOWLEDGE GRAPH EDGES (st_kg_edges) - GAP-007 EDGE ENRICHMENT
@@ -386,7 +377,6 @@
       Edges: 1 | Relations: 1
       Weight Range: 0.697 - 0.697 (avg: 0.697)
 
-
    ----------------------------------------------------------------------------------------------
     7.1 SEMANTIC SIMILARITY - 'These concepts mean similar things'
    ----------------------------------------------------------------------------------------------
@@ -405,7 +395,6 @@
          [X] Family (FAMILY_MEMBER) <-> new house (LOCATION)
          [X] Nisha (FAMILY_MEMBER) <-> Japan (LOCATION)
 
-
    ----------------------------------------------------------------------------------------------
     7.2 CONTEXTUAL RELATIONSHIPS - 'These appear in similar contexts'
    ----------------------------------------------------------------------------------------------
@@ -415,7 +404,6 @@
 
     CONTEXTUALLY_RELATED:
       * Amy -> Rohan (weight: 0.70)
-
 
    ----------------------------------------------------------------------------------------------
     7.3 CO-OCCURRENCE - 'These are mentioned together frequently'
@@ -435,13 +423,11 @@
    5. Grandparents + Austin
       Co-occurrences: 1 | Weight: 0.17 | Type: PRECEDES
 
-
    ----------------------------------------------------------------------------------------------
     7.4 TEMPORAL PROXIMITY - 'These happen close together in time'
    ----------------------------------------------------------------------------------------------
 
    [WARN] No temporal proximity edges found
-
 
    ----------------------------------------------------------------------------------------------
     7.5 BAYESIAN CAUSAL - 'A likely causes or influences B'
@@ -456,7 +442,6 @@
          Weight: 0.000 | Evidence: 1
       3. Aryan ->-> Maya (PRECEDES)
          Weight: 0.286 | Evidence: 1
-
 
    ----------------------------------------------------------------------------------------------
     7.6 TRANSITIVE CLOSURE - 'Inferred through intermediate entities'
@@ -476,13 +461,13 @@
    5. Australia ...-> Aryan (INFERRED_RELATED)
       Weight: 0.627
 
-
    ----------------------------------------------------------------------------------------------
     7.7 RELATIONSHIP TYPE DISTRIBUTION
    ----------------------------------------------------------------------------------------------
 
-   Relation Type             | Algorithm           | Count | Avg Weight
+Relation Type             | Algorithm           | Count | Avg Weight
    ---------------------------------------------------------------------------
+
    INFERRED_RELATED         | weight_normalizati |   717 | 0.05
    SIMILAR_TO               | weight_normalizati |   323 | 0.06
    INTENT_RELATED           | weight_normalizati |   171 | 0.05
@@ -499,30 +484,28 @@
    TEMPORALLY_ASSOCIATED    | weight_normalizati |     1 | 0.02
    FAMILY                   | co_occurrence      |     1 | 2.48
 
-
    ----------------------------------------------------------------------------------------------
     7.8 GRAPH INSIGHTS - Hub Entities (Most Connected)
    ----------------------------------------------------------------------------------------------
 
     Hub entities are central to your life story - they connect many other entities.
 
-   1.  Maya (PERSON)
-      Connections: 108 
-   2.  Marcus (PERSON)
-      Connections: 94 
-   3.  Japan (LOCATION)
-      Connections: 86 
-   4.  Asus (ORGANIZATION)
-      Connections: 83 
-   5.  Chicago (LOCATION)
-      Connections: 82 
-   6.  Amy (PERSON)
-      Connections: 80 
-   7.  Nisha (PERSON)
-      Connections: 79 
-   8.  Vikram (PERSON)
-      Connections: 79 
-
+   1. Maya (PERSON)
+      Connections: 108
+   2. Marcus (PERSON)
+      Connections: 94
+   3. Japan (LOCATION)
+      Connections: 86
+   4. Asus (ORGANIZATION)
+      Connections: 83
+   5. Chicago (LOCATION)
+      Connections: 82
+   6. Amy (PERSON)
+      Connections: 80
+   7. Nisha (PERSON)
+      Connections: 79
+   8. Vikram (PERSON)
+      Connections: 79
 
 ====================================================================================================
 8. RELATIONSHIP DEEP DIVE - Who Appears Together?
@@ -583,7 +566,6 @@
       Interactions: 3 | Dominant Emotion: joy
       Sentiment Score: 0.00
 
-
 ====================================================================================================
 9. EMOTIONAL JOURNEY - Your Emotional Arc
 ====================================================================================================
@@ -591,16 +573,14 @@
     EMOTIONAL DISTRIBUTION:
 
    Positive Emotions: 588 memories (49%)
-   
+
    (joy, love, excitement, gratitude, pride, contentment)
 
    Neutral Emotions: 433 memories (36%)
-   
 
    Negative Emotions: 167 memories (14%)
-   
+
    (sadness, anxiety, frustration, nervousness)
-    
 
     EMOTION TRIGGERS - What Causes Each Emotion?
    ------------------------------------------------------------------------------------------
@@ -624,7 +604,6 @@
     PRIDE:
       * "First day back at work. Inbox had 500 emails. Marcus held down the fort."
       * "K0 memory tables growing healthy"
-
 
 ====================================================================================================
 10. P01 RECALL QUERY EXAMPLES - Practical Use Cases
@@ -689,32 +668,30 @@
       * James (1 interactions)
       * Steve (1 interactions)
 
-
 ====================================================================================================
 11. LIFE BALANCE ANALYSIS - Where Is Your Attention?
 ====================================================================================================
 
     LIFE AREA DISTRIBUTION:
-   
+
    Total Episodes: 689 | Total Interactions: 76
     FAMILY:
       Episodes: 205 | Relationships: 16 | Interactions: 48
-      
+
     OTHER:
       Episodes: 242 | Relationships: 0 | Interactions: 0
-      
+
     LEARNING:
       Episodes: 122 | Relationships: 0 | Interactions: 0
-      
+
     SOCIAL:
       Episodes: 52 | Relationships: 18 | Interactions: 18
-      
+
     WORK:
       Episodes: 45 | Relationships: 5 | Interactions: 10
-      
+
     HEALTH:
       Episodes: 23 | Relationships: 0 | Interactions: 0
-      
 
 
 ====================================================================================================
@@ -733,9 +710,8 @@
       [WARN] Stress
 
    [OK] What's Working:
-      * Avoiding triggers
+      *Avoiding triggers
       * Smaller meals
-
 
     SLEEP & ENERGY PATTERNS:
    ------------------------------------------------------------------------------------------
@@ -755,7 +731,6 @@
 
    [WARN] CURRENT BLOCKERS:
       * K0 memory pipeline is rock solid. No failures in 30 days....
-
 
     RELATIONSHIP QUALITY ANALYSIS:
    ------------------------------------------------------------------------------------------
@@ -777,26 +752,22 @@
     RECURRING THEMES (Items on Your Mind):
    ------------------------------------------------------------------------------------------
 
-
     CANONICAL ISSUES (from st_issues):
    ------------------------------------------------------------------------------------------
    [WARN] st_issues table not found - showing raw topic counts
       [RED] Monitor/Display issues: 92 mentions
 
-
     PRODUCTIVITY INSIGHTS:
    ------------------------------------------------------------------------------------------
-
 
 ====================================================================================================
  PERSONALIZED RECOMMENDATIONS (Based on Your Data)
 ====================================================================================================
 
-   1.  HEALTH
+   1. HEALTH
        Issue: GERD mentioned 8 times in 10 days
        Action: Track meals before gym sessions - heavy squats seem to trigger symptoms
        Evidence: Pattern: GERD flares after spicy food and heavy exercise
-
 
    ------------------------------------------------------------------------------------------
     10-DAY SUMMARY:
@@ -805,7 +776,6 @@
       * 130 reminders active
       * Top focus areas: FamilyOS, Wedding, Family, Health
    ------------------------------------------------------------------------------------------
-
 
 ====================================================================================================
 13. CAUSAL INTELLIGENCE - What Causes What?
@@ -816,9 +786,9 @@
    ------------------------------------------------------------------------------------------
    No causal edges discovered yet. Need more events to detect patterns.
 
-
     EXPLICIT CAUSAL STATEMENTS FROM YOUR MEMORIES:
    ------------------------------------------------------------------------------------------
+
    1. "Woke up with a headache again, probably because of bad sleep last night, remind me to track my sleep..."
    2. "GERD is a non-issue now. Diet change caused the improvement."
    3. "The SSD performance is back to normal. The high temps caused the throttling."
@@ -828,7 +798,6 @@
    7. "Morning. Coffee is making my GERD act up. I think the acidity caused the burning feeling."
    8. "K0 consolidation ran overnight, but dedup missed 12 entries, this led to duplicate entities"
 
-
     HEALTH CAUSAL CHAINS:
    ------------------------------------------------------------------------------------------
 
@@ -836,7 +805,6 @@
       Coffee --causes-- GERD flare
       Screen time --causes-- Headache
       Poor sleep --causes-- Headache
-
 
 ====================================================================================================
 14. CROSS-LAYER INTELLIGENCE - Connecting the Dots
@@ -873,7 +841,6 @@
       [OK] "After switching docks, display flicker stopped, victory"
       -> The old USB-C dock was the culprit. Problem solved by switching docks.
 
-
 ====================================================================================================
 15. DECISION SUPPORT - Informed Recommendations
     FamilyOS Demo 16: Decision Support & Context Weaving
@@ -906,7 +873,6 @@
        Related context from your memories:
          * "P03 consolidation logic rewritten, this should fix the data loss issue..."
          * "Should I schedule DMV visit this weekend or next?..."
-
 
 ====================================================================================================
 16. RELATIONSHIP INTELLIGENCE - Your Social Network
@@ -949,7 +915,6 @@
       Dad + Panda: 6 times together
       Dad + Prince: 6 times together
 
-
 ====================================================================================================
 17. TEMPORAL PATTERNS - Your Daily Rhythm
     FamilyOS Demo 17: Preference Learning & Routine Detection
@@ -958,22 +923,20 @@
     YOUR DAILY RHYTHM:
    ------------------------------------------------------------------------------------------
 
-
     WEEKEND vs WEEKDAY:
    ------------------------------------------------------------------------------------------
 
-   Weekday 
+   Weekday
       Events: 880 | Avg Sentiment: 0.66
       Common Emotions: admiration, amusement, annoyance, approval
 
-   Weekend 
+   Weekend
       Events: 308 | Avg Sentiment: 0.61
       Common Emotions: annoyance, approval, caring, contentment
 
-   Weekday 
+   Weekday
       Events: 9559 | Avg Sentiment: 0.00
-      Common Emotions: 
-
+      Common Emotions:
 
 ====================================================================================================
 18. LOCATION INTELLIGENCE - Your Spatial Patterns
@@ -984,37 +947,36 @@
    ------------------------------------------------------------------------------------------
 
     Home
-      Episodes: 232 | Sentiment: 0.56 
+      Episodes: 232 | Sentiment: 0.56
       Activities: milestone, routine, social
 
     Office
-      Episodes: 41 | Sentiment: 0.58 
+      Episodes: 41 | Sentiment: 0.58
       Activities: milestone, routine, social
 
     New House
-      Episodes: 31 | Sentiment: 0.66 
+      Episodes: 31 | Sentiment: 0.66
       Activities: milestone, routine, social
 
     Gym
-      Episodes: 13 | Sentiment: 0.64 
+      Episodes: 13 | Sentiment: 0.64
       Activities: routine, unknown
 
     Doctor
-      Episodes: 3 | Sentiment: 0.67 
+      Episodes: 3 | Sentiment: 0.67
       Activities: milestone, routine, social
 
     Park
-      Episodes: 2 | Sentiment: 0.81 
+      Episodes: 2 | Sentiment: 0.81
       Activities: milestone, social
 
     Flight
-      Episodes: 1 | Sentiment: 0.85 
+      Episodes: 1 | Sentiment: 0.85
       Activities: routine
 
     Car Dealership
-      Episodes: 1 | Sentiment: 0.78 
+      Episodes: 1 | Sentiment: 0.78
       Activities: routine
-
 
 ====================================================================================================
 19. REMINDER INTELLIGENCE - Your Mental Load
@@ -1039,25 +1001,24 @@
       [GREEN] If Dallas's involvement during 'Routine at Home' had been different, t...
       [GREEN] If Tokyo had also caused issues during 'Routine with Panda at Flight',...
 
-
 ====================================================================================================
 20. HOLISTIC LIFE VIEW - Everything Connected
     FamilyOS Vision: Context-Aware Family Intelligence
 ====================================================================================================
 
+==============================================================================
+                            YOUR LIFE IN NUMBERS
    ==============================================================================
-                            YOUR LIFE IN NUMBERS                                  
+
+      Raw Events Ingested:          1348
+      Episodic Memories:             339  (What happened)
+      Semantic Patterns:             545  (What you learned)
+      Knowledge Entities:             74  (People, places, things)
+     <->  Knowledge Edges:              1613  (How things connect)
+      Social Relationships:           39  (Who matters)
+      Prospective Intentions:        257  (What's on your mind)
+       Contextual Observations:    10747  (Holistic context layer)
    ==============================================================================
-      Raw Events Ingested:          1348                                    
-      Episodic Memories:             339  (What happened)                 
-      Semantic Patterns:             545  (What you learned)              
-      Knowledge Entities:             74  (People, places, things)        
-     <->  Knowledge Edges:              1613  (How things connect)             
-      Social Relationships:           39  (Who matters)                   
-      Prospective Intentions:        257  (What's on your mind)           
-       Contextual Observations:    10747  (Holistic context layer)        
-   ==============================================================================
-    
 
     HOW LAYERS INTERCONNECT:
    ------------------------------------------------------------------------------------------
@@ -1071,19 +1032,19 @@
     OBSERVATION:
       +-- Sentiment: 0.85
       +-- Emotion: joy
-      +-- Time: 
-        
+      +-- Time:
+
     SOCIAL: Alex
       +-- Type: COLLEAGUE
       +-- Total Interactions: 2
-                    
+
     KNOWLEDGE GRAPH: Alex
       +-- Type: PERSON
       +-- Observations: 5
-                    
+
 
 ====================================================================================================
- THIS IS THE FAMILYOS VISION:
+ THIS IS THE FAMILYOS VISION
 ====================================================================================================
 
    Every life event creates ripples across ALL memory layers:
@@ -1092,7 +1053,7 @@
                     |
          +---------+-----------------------------------------+
          |                                                   |
-                                                            
+
    +--------------+                                   +--------------+
    |  EPISODIC    |                                   | PROSPECTIVE  |
    |  "Call with  |                                   | "Plan trip   |
@@ -1100,7 +1061,7 @@
    +------+-------+                                   +--------------+
           |
           ------------------+------------------+
-                                              
+
    +--------------+   +--------------+   +--------------+
    |   SOCIAL     |   |  KNOWLEDGE   |   | OBSERVATION  |
    |   "Panda:    |   |  "Chicago:   |   | "Evening,    |
@@ -1115,7 +1076,6 @@
    [OK] "What travel plans are pending?" -> PROSPECTIVE layer
 
    THIS IS THE HOLISTIC VIEW THAT ONLY FAMILYOS CAN PROVIDE.
-    
 
 ====================================================================================================
 [OK] MEMORY LAYER EXPLORATION COMPLETE
