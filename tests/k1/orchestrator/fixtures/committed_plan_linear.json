@@ -1,0 +1,97 @@
+{
+  "plan_id": "plan-linear-123",
+  "request_id": "req-12345",
+  "intent": "Execute linear workflow",
+  "steps": [
+    {
+      "id": "step_a",
+      "capability": "tool.data.fetch",
+      "params": {
+        "source": "database",
+        "query": "SELECT * FROM users"
+      },
+      "deps": [],
+      "prompt_template": null,
+      "tools_granted": null,
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string"},
+                "name": {"type": "string"}
+              }
+            }
+          }
+        }
+      },
+      "condition": null,
+      "is_optional": false,
+      "has_side_effects": false,
+      "compensation": null,
+      "timeout_ms": 10000,
+      "required_context": null,
+      "safety_band_min": null
+    },
+    {
+      "id": "step_b",
+      "capability": "tool.data.process",
+      "params": {
+        "operation": "filter_active",
+        "input_data": "$step_a.result.users"
+      },
+      "deps": ["step_a"],
+      "prompt_template": null,
+      "tools_granted": null,
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "active_users": {
+            "type": "array"
+          }
+        }
+      },
+      "condition": null,
+      "is_optional": false,
+      "has_side_effects": false,
+      "compensation": null,
+      "timeout_ms": 15000,
+      "required_context": null,
+      "safety_band_min": null
+    },
+    {
+      "id": "step_c",
+      "capability": "tool.report.generate",
+      "params": {
+        "template": "user_summary",
+        "data": "$step_b.result.active_users"
+      },
+      "deps": ["step_b"],
+      "prompt_template": null,
+      "tools_granted": null,
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "report": {"type": "string"}
+        }
+      },
+      "condition": null,
+      "is_optional": false,
+      "has_side_effects": false,
+      "compensation": null,
+      "timeout_ms": 20000,
+      "required_context": null,
+      "safety_band_min": null
+    }
+  ],
+  "trace_id": "trace-linear-123",
+  "dependencies": {
+    "step_b": ["step_a"],
+    "step_c": ["step_b"]
+  },
+  "estimated_duration_ms": 45000,
+  "created_at": 1640995200.0
+}

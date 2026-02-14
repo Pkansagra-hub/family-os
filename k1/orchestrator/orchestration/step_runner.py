@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 import jsonschema
 
 from k1.fabric.types import CapabilityRequest, CapabilityResult, Tier
+from k1.orchestrator.metrics import OrchestratorMetrics
 from k1.orchestrator.types import OrchestratorPolicies, SchemaResult, StepResult, StepStatus
 
 if TYPE_CHECKING:
@@ -68,13 +69,14 @@ class StepRunner:
     Stateless: no mutable internal state across run() invocations.
     """
 
-    __slots__ = ("_fabric_port", "_error_router", "_policies")
+    __slots__ = ("_fabric_port", "_error_router", "_policies", "_metrics")
 
     def __init__(
         self,
         fabric_port: IFabricGatewayPort,
         error_router: ErrorRouter,
         policies: OrchestratorPolicies,
+        metrics: OrchestratorMetrics | None = None,
     ) -> None:
         """Construct StepRunner with 3 deps.
 
@@ -87,6 +89,7 @@ class StepRunner:
         self._fabric_port = fabric_port
         self._error_router = error_router
         self._policies = policies
+        self._metrics = metrics or OrchestratorMetrics(enabled=False)
 
     # ------------------------------------------------------------------
     # Primary interface
@@ -118,42 +121,46 @@ class StepRunner:
         Returns:
             StepResult with COMPLETED or FAILED status, retry metadata.
         """
-        step_start_ms = _now_ms()
+        with self._metrics.time_step_execution(
+            step_id=step.id,
+            capability_name=step.capability,
+        ):
+            step_start_ms = _now_ms()
 
-        # Step 1: Build CapabilityRequest
-        request = self._build_request(step, resolved_params, trace_id)
+            # Step 1: Build CapabilityRequest
+            request = self._build_request(step, resolved_params, trace_id)
 
-        # Step 2: Execute with retry
-        result, retry_count, schema_retried = await self._execute_with_retry(
-            request,
-            step,
-        )
+            # Step 2: Execute with retry
+            result, retry_count, schema_retried = await self._execute_with_retry(
+                request,
+                step,
+            )
 
-        step_duration_ms = _now_ms() - step_start_ms
+            step_duration_ms = _now_ms() - step_start_ms
 
-        # Step 3: Wrap in StepResult
-        if result.success:
+            # Step 3: Wrap in StepResult
+            if result.success:
+                return StepResult(
+                    step_id=step.id,
+                    capability_name=step.capability,
+                    status=StepStatus.COMPLETED,
+                    duration_ms=step_duration_ms,
+                    result=result,
+                    retry_attempts=retry_count,
+                    schema_retry=schema_retried,
+                )
+
+            error_detail = result.error.message if result.error else "Unknown failure"
             return StepResult(
                 step_id=step.id,
                 capability_name=step.capability,
-                status=StepStatus.COMPLETED,
+                status=StepStatus.FAILED,
                 duration_ms=step_duration_ms,
                 result=result,
                 retry_attempts=retry_count,
                 schema_retry=schema_retried,
+                error_detail=error_detail,
             )
-
-        error_detail = result.error.message if result.error else "Unknown failure"
-        return StepResult(
-            step_id=step.id,
-            capability_name=step.capability,
-            status=StepStatus.FAILED,
-            duration_ms=step_duration_ms,
-            result=result,
-            retry_attempts=retry_count,
-            schema_retry=schema_retried,
-            error_detail=error_detail,
-        )
 
     # ------------------------------------------------------------------
     # Request builder
@@ -338,7 +345,8 @@ class StepRunner:
 
         while True:
             try:
-                result = await self._fabric_port.execute(current_request)
+                with self._metrics.time_adapter_wait(adapter="fabric", operation="execute"):
+                    result = await self._fabric_port.execute(current_request)
             except Exception as exc:
                 # Fabric execution raised an exception (not a structured
                 # CapabilityResult failure). Wrap as failure result.
@@ -368,6 +376,7 @@ class StepRunner:
                         schema_retries_done = 1 if schema_retried else 0
                         if schema_retries_done < max_schema:
                             schema_retried = True
+                            self._metrics.increment_step_retry(reason="schema")
                             current_request = self._build_schema_retry_request(
                                 request,
                                 step,
@@ -388,6 +397,7 @@ class StepRunner:
 
             if is_retriable and normal_attempts < max_normal:
                 normal_attempts += 1
+                self._metrics.increment_step_retry(reason="transient")
                 log.info(
                     "[StepRunner] Retrying step %s (attempt %d/%d): %s",
                     step.id,

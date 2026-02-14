@@ -251,6 +251,20 @@ class TestRouteError:
         assert events[0]["trace_id"] == "error-trace"
 
     @pytest.mark.asyncio
+    async def test_route_error_no_trace_anywhere_still_emits(self) -> None:
+        """If neither context nor error has trace_id, router still emits with empty trace."""
+        delta = FakeDeltaEmitPort()
+        router = ErrorRouter(delta_port=delta)
+        error = _make_error(trace_id="")
+
+        action = await router.route_error(error, {})
+
+        assert action.action == "DEGRADE"
+        events = delta.find(ORCH_ERROR_ROUTED)
+        assert len(events) == 1
+        assert events[0]["trace_id"] == ""
+
+    @pytest.mark.asyncio
     async def test_route_error_delta_emission_failure_does_not_raise(self) -> None:
         """Delta emission failure is swallowed -- ErrorRouter must not amplify."""
         delta = FakeDeltaEmitPort(fail=True)
@@ -303,6 +317,18 @@ class TestClassify:
         exc = _make_exception(severity=ErrorSeverity.TERMINAL)
         ctx = ProcessingContext(trace_id="t1", request_id="r1", tier="MEDIUM")
         assert router.classify(exc, ctx) == ErrorSeverity.TERMINAL
+
+    def test_classify_does_not_emit_deltas(self) -> None:
+        """classify() is a pure sync path and should not emit ORCH_ERROR_ROUTED."""
+        delta = FakeDeltaEmitPort()
+        router = ErrorRouter(delta_port=delta)
+        exc = _make_exception(severity=ErrorSeverity.DEGRADED)
+        ctx = ProcessingContext(trace_id="t1", request_id="r1", tier="MEDIUM")
+
+        result = router.classify(exc, ctx)
+
+        assert result == ErrorSeverity.DEGRADED
+        assert delta.events == []
 
 
 # ===========================================================================
@@ -365,3 +391,23 @@ class TestErrorAction:
         )
         assert action.action == "DEGRADE"
         assert action.fallback_value == {"data": []}
+
+
+class TestDefensiveUnknownSeverity:
+    """Boundary: unknown severity value should fail safe to ABORT."""
+
+    def test_unknown_severity_aborts(self) -> None:
+        # Runtime allows invalid enum values if injected dynamically.
+        error = AdapterError(
+            severity="NOT_A_REAL_SEVERITY",  # type: ignore[arg-type]
+            adapter_name="fabric_gateway",
+            operation="execute",
+            error_code="X",
+            error_message="bad",
+            trace_id="t1",
+        )
+
+        action = ErrorRouter._classify_error(error)
+
+        assert action.action == "ABORT"
+        assert "unknown severity" in action.reason

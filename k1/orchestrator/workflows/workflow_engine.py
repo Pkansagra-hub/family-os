@@ -38,13 +38,16 @@ Exports:
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from k1.orchestrator.types import ProcessingContext, ProcessResult
+from k1.orchestrator.tracing import new_trace_id, trace_phase
+from k1.orchestrator.types import ProcessingContext, ProcessResult, TriggerType
 
 if TYPE_CHECKING:
     from k1.orchestrator.orchestration.constraint_resolver import ConstraintResolver
     from k1.orchestrator.orchestration.dag_executor import DAGExecutor
+    from k1.orchestrator.ports.bridge_write_port import IBridgeWritePort
     from k1.orchestrator.ports.delta_emit_port import IDeltaEmitPort
     from k1.orchestrator.types import WorkflowRunRequest, WorkflowSaveRequest
     from k1.orchestrator.workflows.cross_workflow_resolver import CrossWorkflowResolver
@@ -77,6 +80,7 @@ class WorkflowEngine:
         "_cross_resolver",
         "_gap_detector",
         "_delta",
+        "_bridge",
     )
 
     def __init__(
@@ -91,6 +95,7 @@ class WorkflowEngine:
         cross_resolver: CrossWorkflowResolver,
         gap_detector: ProactiveGapDetector,
         delta: IDeltaEmitPort,
+        bridge: IBridgeWritePort,
     ) -> None:
         self._supervisor = supervisor
         self._dag_executor = dag_executor
@@ -101,6 +106,7 @@ class WorkflowEngine:
         self._cross_resolver = cross_resolver
         self._gap_detector = gap_detector
         self._delta = delta
+        self._bridge = bridge
 
     # ------------------------------------------------------------------
     # WorkflowEngineLike Protocol: execute_workflow
@@ -131,18 +137,50 @@ class WorkflowEngine:
         Returns:
             ProcessResult reflecting execution outcome.
         """
-        trace = ctx.trace_id
+        parent_trace_id = request.trigger_context.get("parent_trace_id")
+        if parent_trace_id:
+            ctx.parent_trace_id = str(parent_trace_id)
+
+        trace = ctx.trace_id or request.trace_id
+        if request.trigger_type == TriggerType.CRON and not ctx.parent_trace_id:
+            # 8.3.1 gotcha: cron-triggered workflows start a fresh root trace.
+            trace = new_trace_id()
+        elif not trace:
+            trace = new_trace_id()
+
+        ctx.trace_id = trace
+        run_request = request if request.trace_id == trace else replace(request, trace_id=trace)
+
+        trace_phase(
+            logger,
+            "workflow_execute",
+            trace_id=trace,
+            request_id=ctx.request_id,
+            tier=ctx.tier,
+            success=True,
+            extra={"workflow_id": request.workflow_id},
+        )
 
         # 1 -- Start the run (lookup + compile + manifest).
-        run_result = await self._supervisor.start_run(request)
+        run_result = await self._supervisor.start_run(run_request)
 
         if run_result.compiled_plan is None:
             logger.warning(
                 "WorkflowEngine.execute_workflow: compilation failed "
                 "(workflow_id=%s, run_id=%s, trace_id=%s)",
-                request.workflow_id,
+                run_request.workflow_id,
                 run_result.manifest.run_id,
                 trace,
+            )
+            trace_phase(
+                logger,
+                "workflow_execute",
+                trace_id=trace,
+                request_id=ctx.request_id,
+                tier=ctx.tier,
+                success=False,
+                extra={"workflow_id": run_request.workflow_id, "reason": "compile_failed"},
+                level=logging.WARNING,
             )
             return ProcessResult.FAILED
 
@@ -150,12 +188,12 @@ class WorkflowEngine:
         manifest = run_result.manifest
 
         # 2 -- Validate plan constraints.
-        validation = await self._constraint_resolver.validate(plan)
+        validation = await self._constraint_resolver.validate(plan, ctx)
         if not validation.valid:
             logger.warning(
                 "WorkflowEngine.execute_workflow: validation failed "
                 "(workflow_id=%s, issues=%s, trace_id=%s)",
-                request.workflow_id,
+                run_request.workflow_id,
                 validation.issues,
                 trace,
             )
@@ -163,6 +201,16 @@ class WorkflowEngine:
                 manifest,
                 error=f"Constraint validation failed: {validation.issues}",
                 trace_id=trace,
+            )
+            trace_phase(
+                logger,
+                "workflow_execute",
+                trace_id=trace,
+                request_id=ctx.request_id,
+                tier=ctx.tier,
+                success=False,
+                extra={"workflow_id": run_request.workflow_id, "reason": "constraint_failed"},
+                level=logging.WARNING,
             )
             return ProcessResult.FAILED
 
@@ -175,6 +223,16 @@ class WorkflowEngine:
         # 4 -- Finalize manifest based on execution outcome.
         if aggregated.success:
             await self._supervisor.complete_run(manifest, aggregated)
+            trace_phase(
+                logger,
+                "workflow_execute",
+                trace_id=trace,
+                request_id=ctx.request_id,
+                tier=ctx.tier,
+                duration_ms=aggregated.duration_ms,
+                success=True,
+                extra={"workflow_id": run_request.workflow_id},
+            )
             return ProcessResult.COMPLETED
 
         # Partial success (some steps succeeded, independent ones failed).
@@ -185,6 +243,17 @@ class WorkflowEngine:
         )
         if has_successes:
             await self._supervisor.complete_run(manifest, aggregated)
+            trace_phase(
+                logger,
+                "workflow_execute",
+                trace_id=trace,
+                request_id=ctx.request_id,
+                tier=ctx.tier,
+                duration_ms=aggregated.duration_ms,
+                success=False,
+                extra={"workflow_id": run_request.workflow_id, "result": "degraded"},
+                level=logging.WARNING,
+            )
             return ProcessResult.DEGRADED
 
         # Full failure.
@@ -195,6 +264,17 @@ class WorkflowEngine:
             manifest,
             error=error_msg,
             trace_id=trace,
+        )
+        trace_phase(
+            logger,
+            "workflow_execute",
+            trace_id=trace,
+            request_id=ctx.request_id,
+            tier=ctx.tier,
+            duration_ms=aggregated.duration_ms,
+            success=False,
+            extra={"workflow_id": run_request.workflow_id, "result": "failed"},
+            level=logging.ERROR,
         )
         return ProcessResult.FAILED
 
@@ -209,45 +289,89 @@ class WorkflowEngine:
     ) -> ProcessResult:
         """Save a committed plan as a reusable workflow.
 
-        TODO(M4): Full implementation requires:
-          - Plan step extraction from bridge WAL or DAGExecutor cache
-            via committed_plan_id.
-          - WorkflowSpec construction with real steps.
-          - Version management via registry.save().
-
-        V1 returns FAILED because WorkflowSpec requires non-empty
-        steps (validated in __post_init__) and plan-step extraction
-        is not yet implemented.  OrchestratorService._save_workflow
-        handles the FAILED return correctly (no delta emitted).
-
-        When M4 ships, this method gains the plan-lookup logic.
-        The call site in OrchestratorService remains unchanged.
+        Implementation:
+          - Reconstruct CommittedPlan from bridge WAL PLAN_START entry.
+          - Build WorkflowSpec from that plan + request trigger.
+          - Persist via WorkflowRegistry and register trigger state.
 
         Args:
             request: WorkflowSaveRequest from Concierge.
             ctx: Request-scoped ProcessingContext.
 
         Returns:
-            FAILED (V1 -- plan-step extraction not yet implemented).
+            COMPLETED on successful persistence, FAILED otherwise.
         """
         trace = ctx.trace_id
+        from k1.orchestrator.types import CommittedPlan
+        from k1.orchestrator.workflows.workflow_types import WorkflowSpec
 
-        logger.warning(
-            "WorkflowEngine.save_workflow: not yet implemented "
-            "(plan-step extraction deferred to M4) "
-            "(name=%s, plan_id=%s, trace_id=%s)",
-            request.workflow_name,
-            request.committed_plan_id,
-            trace,
-        )
+        try:
+            wal_entries = await self._bridge.read_wal(request.committed_plan_id)
+        except Exception:
+            logger.exception(
+                "WorkflowEngine.save_workflow: WAL read failed " "(plan_id=%s, trace_id=%s)",
+                request.committed_plan_id,
+                trace,
+            )
+            return ProcessResult.FAILED
 
-        # TODO(M4): Look up committed plan by committed_plan_id from
-        #   bridge_port WAL or DAGExecutor cache.  Extract steps,
-        #   build WorkflowSpec(trigger=request.trigger_spec, steps=...,
-        #   version="1.0.0", source_plan_id=request.committed_plan_id),
-        #   then call self._registry.save(spec).
+        if not wal_entries:
+            logger.warning(
+                "WorkflowEngine.save_workflow: WAL not found " "(plan_id=%s, trace_id=%s)",
+                request.committed_plan_id,
+                trace,
+            )
+            return ProcessResult.FAILED
 
-        return ProcessResult.FAILED
+        plan_payload = None
+        for entry in wal_entries:
+            if entry.get("entry_type") == "PLAN_START":
+                payload = entry.get("payload", {})
+                plan_payload = payload.get("plan", payload)
+
+        if not isinstance(plan_payload, dict):
+            logger.warning(
+                "WorkflowEngine.save_workflow: PLAN_START payload missing "
+                "(plan_id=%s, trace_id=%s)",
+                request.committed_plan_id,
+                trace,
+            )
+            return ProcessResult.FAILED
+
+        try:
+            plan = CommittedPlan.from_dict(plan_payload)
+            workflow_id = f"wf-{uuid4()}"
+            spec = WorkflowSpec(
+                workflow_id=workflow_id,
+                name=request.workflow_name,
+                source_plan_id=request.committed_plan_id,
+                version="1.0.0",
+                trigger=request.trigger_spec,
+                steps=list(plan.steps),
+                dependencies=dict(plan.dependencies),
+                active=True,
+            )
+
+            await self._registry.save(spec)
+            await self._registry._storage.save_trigger(workflow_id, request.trigger_spec)
+
+            logger.info(
+                "WorkflowEngine.save_workflow: saved "
+                "(workflow_id=%s, name=%s, plan_id=%s, trace_id=%s)",
+                workflow_id,
+                request.workflow_name,
+                request.committed_plan_id,
+                trace,
+            )
+            return ProcessResult.COMPLETED
+        except Exception:
+            logger.exception(
+                "WorkflowEngine.save_workflow: save failed " "(name=%s, plan_id=%s, trace_id=%s)",
+                request.workflow_name,
+                request.committed_plan_id,
+                trace,
+            )
+            return ProcessResult.FAILED
 
     # ------------------------------------------------------------------
     # Sub-component accessors (read-only, for lifecycle/init wiring)

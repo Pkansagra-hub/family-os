@@ -179,7 +179,7 @@ class MailboxAdapter:
 
             # Step 2: select highest-credit class with messages
             best_class: Optional[str] = None
-            best_credit: float = -1.0
+            best_credit: float = float("-inf")
 
             for p in self._priority_order:
                 if self._queues[p] and self._wfq_credits[p] > best_credit:

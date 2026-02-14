@@ -39,11 +39,11 @@ import logging
 import sys
 from datetime import datetime
 from typing import Optional
-from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
 
+from k1.orchestrator.metrics import OrchestratorMetrics
 from k1.orchestrator.ports.mailbox_port import IMailboxPort, MailboxFullError
 from k1.orchestrator.ports.state_read_port import IStateReadPort
 from k1.orchestrator.ports.workflow_storage_port import IWorkflowStoragePort
@@ -123,12 +123,14 @@ class WorkflowScheduler:
         state_port: IStateReadPort,
         clock: SystemClock,
         tick_interval_s: float = 1.0,
+        metrics: Optional[OrchestratorMetrics] = None,
     ) -> None:
         self._storage = storage
         self._mailbox = mailbox
         self._state_port = state_port
         self._clock = clock
         self._tick_interval_s = tick_interval_s
+        self._metrics = metrics or OrchestratorMetrics(enabled=False)
         self._task: Optional[asyncio.Task[None]] = None
         self._running = False
 
@@ -244,7 +246,7 @@ class WorkflowScheduler:
             workflow_id=workflow_id,
             version=spec.version,
             trigger_type=trigger.type,
-            trace_id=str(uuid4()),
+            trace_id="",
             trigger_context={"triggered_at": now},
             priority="INTERACTIVE",
         )
@@ -258,6 +260,7 @@ class WorkflowScheduler:
             trigger.type.value,
             request.request_id,
         )
+        self._metrics.increment_workflow_trigger(trigger_type=trigger.type.value)
 
         # Advance trigger state only AFTER successful enqueue.
         next_fire = compute_next_fire(trigger, now)

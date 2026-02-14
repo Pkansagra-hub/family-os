@@ -1,0 +1,7 @@
+{
+  "target_dag_id": "dag-12345",
+  "interrupt_type": "CANCEL_DAG",
+  "reason": "User requested cancellation",
+  "trace_id": "trace-interrupt-999",
+  "request_id": "req-interrupt-999"
+}

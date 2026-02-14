@@ -93,11 +93,19 @@ class MockPlannerAdapter:
     # ------------------------------------------------------------------
 
     async def micro_replan(self, request: MicroReplanRequest) -> Optional[CommittedPlan]:
-        """Return scripted micro-replan result or None."""
+        """Return scripted micro-replan result or None.
+
+        Lookup order: request.request_id, then request.original_plan_id.
+        The guard auto-generates request_id (UUID), so pipeline tests
+        script by original_plan_id (== CommittedPlan.plan_id).
+        """
         self.micro_replan_log.append(request)
 
         if request.request_id in self.scripted_micro_replans:
             return self.scripted_micro_replans[request.request_id]
+
+        if request.original_plan_id in self.scripted_micro_replans:
+            return self.scripted_micro_replans[request.original_plan_id]
 
         return None
 

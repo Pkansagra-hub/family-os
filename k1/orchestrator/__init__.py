@@ -6,6 +6,7 @@ port interfaces, and configuration are re-exported from this package root.
 """
 
 from k1.orchestrator.config import OrchestratorConfig
+from k1.orchestrator.connectors.connector_lifecycle import ConnectorLifecycleManager
 from k1.orchestrator.events import (  # Emitted events; Consumed events
     AGENT_LLM_CALL,
     AGENT_TOOL_CALL,
@@ -40,7 +41,13 @@ from k1.orchestrator.events import (  # Emitted events; Consumed events
     WORKFLOW_TRIGGER_DUE,
 )
 from k1.orchestrator.factory import OrchestratorFactory
+from k1.orchestrator.orchestration.constraint_resolver import ConstraintResolver
+from k1.orchestrator.orchestration.dag_executor import DAGExecutor
+from k1.orchestrator.orchestration.error_router import ErrorRouter
+from k1.orchestrator.orchestration.orchestrator_service import OrchestratorService
+from k1.orchestrator.orchestration.step_runner import StepRunner
 from k1.orchestrator.ports import (
+    IAdminPort,
     IBridgeWritePort,
     IDeltaEmitPort,
     IEventSubscriptionPort,
@@ -48,6 +55,7 @@ from k1.orchestrator.ports import (
     IMailboxPort,
     IPlannerPort,
     IStateReadPort,
+    IWorkflowStoragePort,
     MailboxFullError,
     MailboxMessage,
 )
@@ -103,13 +111,25 @@ from k1.orchestrator.types import (  # Enums; Leaf types; Core envelopes; Plan &
     WorkflowRunRequest,
     WorkflowSaveRequest,
 )
+from k1.orchestrator.workflows.workflow_engine import WorkflowEngine
 
 __all__ = [
     # Config
     "OrchestratorConfig",
+    # Core services
+    "OrchestratorService",
+    "DAGExecutor",
+    "StepRunner",
+    "ConstraintResolver",
+    "ErrorRouter",
+    # Workflow services
+    "WorkflowEngine",
+    # Connector services
+    "ConnectorLifecycleManager",
     # Factory
     "OrchestratorFactory",
     # Port Protocols
+    "IAdminPort",
     "IBridgeWritePort",
     "IDeltaEmitPort",
     "IEventSubscriptionPort",
@@ -117,6 +137,7 @@ __all__ = [
     "IMailboxPort",
     "IPlannerPort",
     "IStateReadPort",
+    "IWorkflowStoragePort",
     # Port supporting types
     "MailboxFullError",
     "MailboxMessage",

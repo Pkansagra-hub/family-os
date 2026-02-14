@@ -28,6 +28,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict
 
 from k1.orchestrator.events import ORCH_ERROR_ROUTED
+from k1.orchestrator.tracing import trace_phase
 from k1.orchestrator.types import AdapterError, ErrorAction, ErrorSeverity, ProcessingContext
 
 if TYPE_CHECKING:
@@ -137,6 +138,21 @@ class ErrorRouter:
         Returns:
             ErrorSeverity from the wrapped AdapterError.
         """
+        trace_phase(
+            log,
+            "error",
+            trace_id=ctx.trace_id,
+            request_id=ctx.request_id,
+            tier=ctx.tier,
+            success=False,
+            level=logging.ERROR,
+            extra={
+                "adapter": error.adapter_name,
+                "operation": error.operation,
+                "classification": error.severity.value,
+                "error_code": error.error_code,
+            },
+        )
         return error.severity
 
     # ------------------------------------------------------------------

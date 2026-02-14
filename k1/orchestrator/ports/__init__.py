@@ -24,6 +24,7 @@ Supporting types re-exported for convenience:
   - MailboxFullError (exception for full mailbox)
 """
 
+from k1.orchestrator.ports.admin_port import IAdminPort
 from k1.orchestrator.ports.bridge_write_port import IBridgeWritePort
 from k1.orchestrator.ports.delta_emit_port import IDeltaEmitPort
 from k1.orchestrator.ports.event_subscription_port import IEventSubscriptionPort
@@ -34,7 +35,8 @@ from k1.orchestrator.ports.state_read_port import IStateReadPort
 from k1.orchestrator.ports.workflow_storage_port import IWorkflowStoragePort
 
 __all__ = [
-    # Port Protocols (8 ports)
+    # Port Protocols (9 ports -- 8 core + 1 admin)
+    "IAdminPort",
     "IBridgeWritePort",
     "IDeltaEmitPort",
     "IEventSubscriptionPort",

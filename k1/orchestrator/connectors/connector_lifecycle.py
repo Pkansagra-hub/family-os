@@ -48,6 +48,7 @@ from k1.orchestrator.connectors.mcp_registrar import (
     RegistrationResult,
     build_capability_id,
 )
+from k1.orchestrator.metrics import OrchestratorMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,7 @@ class ConnectorLifecycleManager:
         "server_capabilities",
         "_health_handle",
         "_pending_refresh",
+        "_metrics",
     )
 
     def __init__(
@@ -101,11 +103,13 @@ class ConnectorLifecycleManager:
         registrar: MCPRegistrationBridge,
         events: Any,  # IEventSubscriptionPort
         delta: Any,  # IDeltaEmitPort
+        metrics: Optional[OrchestratorMetrics] = None,
     ) -> None:
         self._discovery = discovery
         self._registrar = registrar
         self._events = events
         self._delta = delta
+        self._metrics = metrics or OrchestratorMetrics(enabled=False)
 
         # server_id -> list of registered capability_ids
         self.server_capabilities: Dict[str, List[str]] = {}
@@ -147,6 +151,7 @@ class ConnectorLifecycleManager:
 
         # Update server_capabilities mapping
         self._update_server_mapping(discovery_result.tools)
+        self._metrics.set_mcp_registered_capabilities(self._registered_capability_count())
 
         logger.info(
             "Discovery+registration complete: registered=%d, skipped=%d, errors=%d",
@@ -251,6 +256,7 @@ class ConnectorLifecycleManager:
 
         # Step 4: update mapping
         self._update_server_mapping(tools)
+        self._metrics.set_mcp_registered_capabilities(self._registered_capability_count())
 
         logger.info(
             "Refresh complete for server '%s': registered=%d, skipped=%d",
@@ -279,6 +285,7 @@ class ConnectorLifecycleManager:
             return 0
 
         count = await self._registrar.unregister_tools(cap_ids)
+        self._metrics.set_mcp_registered_capabilities(self._registered_capability_count())
         logger.info(
             "Unregistered %d capabilities for server '%s'",
             count,
@@ -410,3 +417,6 @@ class ConnectorLifecycleManager:
         pending = getattr(self, "_pending_refresh", [])
         self._pending_refresh = []
         return list(pending)
+
+    def _registered_capability_count(self) -> int:
+        return sum(len(v) for v in self.server_capabilities.values())

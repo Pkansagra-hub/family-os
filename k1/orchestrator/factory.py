@@ -40,6 +40,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
+from k1.orchestrator.adapters.admin_http_adapter import AdminHttpAdapter
+
 # -----------------------------------------------------------------------
 # Test adapters (used by create_standalone / create_for_testing)
 # -----------------------------------------------------------------------
@@ -63,6 +65,7 @@ from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.connectors.connector_lifecycle import ConnectorLifecycleManager
 from k1.orchestrator.connectors.mcp_discovery import MCPToolDiscovery
 from k1.orchestrator.connectors.mcp_registrar import MCPRegistrationBridge
+from k1.orchestrator.metrics import OrchestratorMetrics
 from k1.orchestrator.orchestration.constraint_resolver import ConstraintResolver
 
 # -----------------------------------------------------------------------
@@ -297,6 +300,7 @@ class OrchestratorFactory:
 
         # -- Derive policies from config --------------------------------------
         policies = OrchestratorFactory._build_policies(config)
+        metrics = OrchestratorMetrics(enabled=config.metrics_enabled)
 
         # =====================================================================
         # STEP 1: ErrorRouter (depends only on delta_port)
@@ -311,7 +315,7 @@ class OrchestratorFactory:
         # =====================================================================
         # STEP 11: StepRunner (fabric_port, error_router, policies)
         # =====================================================================
-        step_runner = StepRunner(fabric_port, error_router, policies)
+        step_runner = StepRunner(fabric_port, error_router, policies, metrics=metrics)
 
         # =====================================================================
         # STEP 12: Guards (ordered DAGGuard list)
@@ -338,6 +342,7 @@ class OrchestratorFactory:
             error_router,
             guards,
             ParamResolver(registry=None),
+            metrics,
         )
 
         # =====================================================================
@@ -370,6 +375,7 @@ class OrchestratorFactory:
             state_port,
             clock,
             tick_interval_s=config.scheduler_tick_interval_ms / 1000.0,
+            metrics=metrics,
         )
 
         depth_guard = WorkflowDepthGuard(max_depth=config.max_workflow_depth)
@@ -402,6 +408,7 @@ class OrchestratorFactory:
             cross_resolver=cross_resolver,
             gap_detector=gap_detector,
             delta=delta_port,
+            bridge=bridge_port,
         )
 
         # =====================================================================
@@ -414,6 +421,7 @@ class OrchestratorFactory:
             registrar,
             event_port,
             delta_port,
+            metrics,
         )
 
         # =====================================================================
@@ -422,11 +430,11 @@ class OrchestratorFactory:
         service = OrchestratorService(
             mailbox=mailbox_port,
             dag_executor=dag_executor,  # type: ignore[arg-type]  # DAGExecutor vs DAGExecutorLike param name (pre-existing)
-            constraint_resolver=constraint_resolver,  # type: ignore[arg-type]  # validate() arity mismatch (pre-existing)
+            constraint_resolver=constraint_resolver,
             workflow_engine=workflow_engine,
             connector_lifecycle=connector_lifecycle,
             error_router=error_router,
-            concurrency_guard=concurrency_guard,  # type: ignore[arg-type]  # acquire/release arity mismatch (pre-existing)
+            concurrency_guard=concurrency_guard,
             fabric_port=fabric_port,
             planner_port=planner_port,
             state_port=state_port,
@@ -434,6 +442,7 @@ class OrchestratorFactory:
             bridge_port=bridge_port,
             event_port=event_port,
             config=config,
+            metrics=metrics,
         )
 
         # =====================================================================
@@ -442,6 +451,17 @@ class OrchestratorFactory:
         # =====================================================================
         execution_monitor: ExecutionMonitor = guards[3]
         execution_monitor._service_ref = service
+
+        # =====================================================================
+        # STEP 15.5: Admin HTTP adapter (6.3.3)
+        #   Created AFTER service (circular dep -- reads service state).
+        #   Injected via service._admin attribute.
+        #   Lifecycle (start/stop) managed by service.init()/shutdown().
+        #   Disabled in test configs (admin_enabled=False).
+        # =====================================================================
+        if config.admin_enabled:
+            admin_adapter = AdminHttpAdapter(service, config)
+            service._admin = admin_adapter
 
         logger.debug(
             "OrchestratorFactory._construct_orchestrator: wiring complete "
@@ -468,7 +488,7 @@ class OrchestratorFactory:
             OrchestratorService wired with test adapters.
             Caller must call init() manually if needed.
         """
-        config = OrchestratorConfig.default()
+        config = OrchestratorConfig.from_dict({"admin_enabled": False})
         adapters = OrchestratorFactory._build_test_adapters()
         return OrchestratorFactory._construct_orchestrator(config, adapters)
 
@@ -510,7 +530,7 @@ class OrchestratorFactory:
                     f"Valid keys: {sorted(_ALL_PORT_KEYS)}"
                 )
 
-        effective_config = config or OrchestratorConfig.default()
+        effective_config = config or OrchestratorConfig.from_dict({"admin_enabled": False})
         adapters = OrchestratorFactory._build_test_adapters()
 
         if overrides:
@@ -556,7 +576,7 @@ class OrchestratorFactory:
             OrchestratorService wired with provided adapters.
             Caller must call init() manually if needed.
         """
-        effective_config = config or OrchestratorConfig.default()
+        effective_config = config or OrchestratorConfig.from_dict({"admin_enabled": False})
         adapters: Dict[str, Any] = {
             _PORT_MAILBOX: mailbox,
             _PORT_FABRIC: fabric,
@@ -630,5 +650,7 @@ class OrchestratorFactory:
             "OrchestratorFactory.create_production: service initialized " "(config=%s)",
             type(config).__name__,
         )
+
+        return service
 
         return service

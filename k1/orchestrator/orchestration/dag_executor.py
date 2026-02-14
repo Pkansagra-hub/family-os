@@ -31,12 +31,16 @@ import asyncio
 import logging
 import time
 from collections import deque
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
-from k1.orchestrator.events import ORCH_DAG_COMPLETED, ORCH_DAG_STARTED
+from k1.orchestrator.events import ORCH_DAG_COMPLETED, ORCH_DAG_STARTED, ORCH_STEP_COMPLETED
+from k1.orchestrator.metrics import OrchestratorMetrics
+from k1.orchestrator.tracing import trace_phase
 from k1.orchestrator.types import (
     AggregatedResult,
     CompensationRecord,
+    GuardAction,
     StepResult,
     StepStatus,
     Wave,
@@ -142,6 +146,7 @@ class DAGExecutor:
         "_error_router",
         "_guards",
         "_param_resolver",
+        "_metrics",
         "interrupt_flag",
         "merged_results",
         "_cancelled_steps",
@@ -158,6 +163,7 @@ class DAGExecutor:
         error_router: Any,  # ErrorRouter (2.1.7)
         guards: Optional[List[Any]] = None,  # DAGGuard list, empty in M2
         param_resolver: Optional[Any] = None,  # ParamResolver (2.3.5)
+        metrics: Optional[OrchestratorMetrics] = None,
     ) -> None:
         """Construct DAGExecutor with 8 port/service deps + guards.
 
@@ -181,6 +187,7 @@ class DAGExecutor:
         self._error_router = error_router
         self._guards: List[Any] = guards if guards is not None else []
         self._param_resolver = param_resolver
+        self._metrics = metrics or OrchestratorMetrics(enabled=False)
 
         # Mutable state (reset per execute() call)
         self.interrupt_flag: bool = False
@@ -338,6 +345,14 @@ class DAGExecutor:
             AggregatedResult with per-step results, compensations, success flag.
         """
         dag_start_ms = _now_ms()
+        trace_phase(
+            log,
+            "dag_start",
+            trace_id=plan.trace_id,
+            request_id=plan.request_id,
+            tier="HIGH",
+            success=True,
+        )
 
         # Step 1: Reset state
         self.interrupt_flag = False
@@ -345,7 +360,8 @@ class DAGExecutor:
         self._cancelled_steps = set()
 
         # Step 2: Build waves
-        waves = self.build_waves(plan.steps, plan.dependencies)
+        with self._metrics.time_dag_build(step_count=len(plan.steps)):
+            waves = self.build_waves(plan.steps, plan.dependencies)
 
         log.info(
             "[DAGExecutor] execute: plan=%s, steps=%d, waves=%d, trace=%s",
@@ -409,6 +425,51 @@ class DAGExecutor:
                 resolved_params={},
             )
 
+            # Pre-wave guards (M3): before_wave can SKIP individual steps
+            with self._metrics.time_guard_pipeline(
+                phase="pre_wave",
+                scope_id=str(active_wave.wave_index),
+            ):
+                for guard in self._guards:
+                    if hasattr(guard, "before_wave"):
+                        try:
+                            decisions = await guard.before_wave(
+                                active_wave, snapshot, self.merged_results
+                            )
+                            if decisions:
+                                skip_ids = {
+                                    d.metadata.get("step_id")
+                                    for d in decisions
+                                    if d.action == GuardAction.SKIP
+                                    and d.metadata
+                                    and d.metadata.get("step_id")
+                                }
+                                if skip_ids:
+                                    active_wave = Wave(
+                                        wave_index=active_wave.wave_index,
+                                        steps=[
+                                            s for s in active_wave.steps if s.id not in skip_ids
+                                        ],
+                                        resolved_params=active_wave.resolved_params,
+                                    )
+                                    self._cancelled_steps.update(skip_ids)
+                                    log.info(
+                                        "[DAGExecutor] before_wave guard skipped " "steps: %s",
+                                        skip_ids,
+                                    )
+                        except Exception:
+                            log.warning(
+                                "[DAGExecutor] Guard before_wave failed",
+                                exc_info=True,
+                            )
+
+            if not active_wave.steps:
+                log.debug(
+                    "[DAGExecutor] Wave %d: all steps pruned by guards",
+                    wave.wave_index,
+                )
+                continue
+
             wave_result = await self.execute_wave(active_wave, plan, snapshot)
             wave_results.append(wave_result)
 
@@ -429,16 +490,39 @@ class DAGExecutor:
                 aborted = True
                 break
 
-            # Step 5: Post-wave guards (M3 extensions, no-op in M2)
-            for guard in self._guards:
-                if hasattr(guard, "after_wave"):
-                    try:
-                        await guard.after_wave(active_wave, wave_result, plan)
-                    except Exception:
-                        log.warning(
-                            "[DAGExecutor] Guard after_wave failed",
-                            exc_info=True,
-                        )
+            # Step 5: Post-wave guards (M3)
+            # Compute remaining steps for guards that need forward visibility
+            current_idx = waves.index(wave)
+            remaining_steps = [
+                s
+                for future_wave in waves[current_idx + 1 :]
+                for s in future_wave.steps
+                if s.id not in self._cancelled_steps
+            ]
+            with self._metrics.time_guard_pipeline(
+                phase="post_wave",
+                scope_id=str(wave_result.wave_index),
+            ):
+                for guard in self._guards:
+                    if hasattr(guard, "after_wave"):
+                        try:
+                            decision = await guard.after_wave(
+                                wave_result, snapshot, remaining_steps, plan.plan_id
+                            )
+                            if decision is not None and decision.action == GuardAction.HARD_STOP:
+                                log.warning(
+                                    "[DAGExecutor] Guard %s issued HARD_STOP after wave %d: %s",
+                                    decision.guard_name,
+                                    wave_result.wave_index,
+                                    decision.reason,
+                                )
+                                self.interrupt_flag = True
+                                break
+                        except Exception:
+                            log.warning(
+                                "[DAGExecutor] Guard after_wave failed",
+                                exc_info=True,
+                            )
 
         # Step 6: Aggregate results
         dag_duration_ms = _now_ms() - dag_start_ms
@@ -454,6 +538,9 @@ class DAGExecutor:
             compensations=compensations,
             dag_duration_ms=dag_duration_ms,
         )
+        self._metrics.observe_dag_duration(duration_ms=float(dag_duration_ms), tier="HIGH")
+        if compensations:
+            self._metrics.increment_saga_compensation(count=len(compensations))
 
         # WAL write DAG_COMPLETE (fire-and-forget)
         dag_status = "COMPLETED" if result.success else "FAILED"
@@ -501,6 +588,16 @@ class DAGExecutor:
             result.skipped,
             result.duration_ms,
         )
+        trace_phase(
+            log,
+            "dag_end",
+            trace_id=plan.trace_id,
+            request_id=plan.request_id,
+            tier="HIGH",
+            duration_ms=result.duration_ms,
+            success=result.success,
+            extra={"plan_id": plan.plan_id},
+        )
 
         return result
 
@@ -533,6 +630,15 @@ class DAGExecutor:
             WaveResult with per-step results and wall-clock duration.
         """
         wave_start_ms = _now_ms()
+        trace_phase(
+            log,
+            "wave_start",
+            trace_id=plan.trace_id,
+            request_id=plan.request_id,
+            wave=wave.wave_index,
+            tier="HIGH",
+            success=True,
+        )
 
         # Step 1: Safety band check
         abort_result = await self._check_safety_band(plan.trace_id)
@@ -554,14 +660,17 @@ class DAGExecutor:
         resolved_steps: List[Tuple[PlanStep, Dict[str, Any]]] = []
         step_results: List[StepResult] = []
         for step in wave.steps:
+            effective_step = step
             resolved_params = dict(step.params) if step.params else {}
             if self._param_resolver is not None:
                 try:
-                    resolved_params, resolved_cap = self._param_resolver.resolve(
-                        step, self.merged_results
-                    )
+                    with self._metrics.time_param_resolution(step_id=step.id):
+                        resolved_params, resolved_cap = self._param_resolver.resolve(
+                            step, self.merged_results
+                        )
                     # Handle dynamic capability resolution (meta-agent)
                     if resolved_cap and resolved_cap != step.capability:
+                        effective_step = replace(step, capability=resolved_cap)
                         log.info(
                             "[DAGExecutor] Dynamic capability: %s -> %s (step %s)",
                             step.capability,
@@ -588,7 +697,7 @@ class DAGExecutor:
                     continue
 
             wave.resolved_params[step.id] = resolved_params
-            resolved_steps.append((step, resolved_params))
+            resolved_steps.append((effective_step, resolved_params))
 
         # Step 3+4: Dispatch steps with semaphore concurrency control
         semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PER_WAVE)
@@ -609,63 +718,35 @@ class DAGExecutor:
             )
             tasks[task] = step.id
 
-        # Collect results as they complete; check interrupt after each
-        for coro in asyncio.as_completed(list(tasks.keys())):
-            try:
-                result = await coro
-            except Exception as exc:
-                # Unexpected error in _execute_step wrapper
-                task_obj = None
-                for t in tasks:
-                    if t.done():
-                        try:
-                            t.result()
-                        except Exception:
-                            task_obj = t
-                            break
-                sid = tasks.get(task_obj, "unknown") if task_obj else "unknown"
+        task_list = list(tasks.keys())
+        step_ids = [tasks[t] for t in task_list]
+        with self._metrics.time_wave_dispatch(
+            wave_index=wave.wave_index,
+            step_count=len(step_ids),
+        ):
+            gathered = await asyncio.gather(*task_list, return_exceptions=True)
+
+        for sid, outcome in zip(step_ids, gathered):
+            if isinstance(outcome, Exception):
                 log.error(
                     "[DAGExecutor] Unexpected step error for %s: %s",
                     sid,
-                    exc,
+                    outcome,
                 )
                 result = StepResult(
                     step_id=sid,
                     capability_name="unknown",
                     status=StepStatus.FAILED,
-                    error_detail=f"Unexpected: {exc}",
+                    error_detail=f"Unexpected: {outcome}",
                 )
+            else:
+                result = outcome
 
             step_results.append(result)
 
             # Store in merged_results for param resolution in later waves
             if result.status == StepStatus.COMPLETED and result.result is not None:
                 self.merged_results[result.step_id] = result.result
-
-            # Check interrupt flag after EACH step (SPEC-5)
-            if self.interrupt_flag:
-                log.info(
-                    "[DAGExecutor] Interrupt detected during wave %d, "
-                    "cancelling remaining steps",
-                    wave.wave_index,
-                )
-                # Cancel remaining tasks
-                for t in tasks:
-                    if not t.done():
-                        t.cancel()
-                # Mark remaining as CANCELLED
-                completed_ids = {sr.step_id for sr in step_results}
-                for t, sid in tasks.items():
-                    if sid not in completed_ids:
-                        step_results.append(
-                            StepResult(
-                                step_id=sid,
-                                capability_name="unknown",
-                                status=StepStatus.CANCELLED,
-                                error_detail="Interrupted",
-                            )
-                        )
-                break
 
         # Add any param-resolution failures that were collected earlier
         # (they are already in the step_results preamble from the resolve loop)
@@ -700,11 +781,22 @@ class DAGExecutor:
         except Exception:
             log.warning("[DAGExecutor] progress delta failed", exc_info=True)
 
-        return WaveResult(
+        wave_result = WaveResult(
             wave_index=wave.wave_index,
             step_results=step_results,
             duration_ms=wave_duration_ms,
         )
+        trace_phase(
+            log,
+            "wave_end",
+            trace_id=plan.trace_id,
+            request_id=plan.request_id,
+            wave=wave.wave_index,
+            tier="HIGH",
+            duration_ms=wave_duration_ms,
+            success=all(sr.status != StepStatus.FAILED for sr in step_results),
+        )
+        return wave_result
 
     # ------------------------------------------------------------------
     # _execute_step -- Single step delegator (2.2.2)
@@ -732,18 +824,37 @@ class DAGExecutor:
             StepResult from step_runner (COMPLETED, FAILED, etc.).
         """
         step_start_ms = _now_ms()
+        trace_phase(
+            log,
+            "step_start",
+            trace_id=trace_id,
+            request_id=step.id,
+            step_id=step.id,
+            tier="HIGH",
+            success=True,
+        )
 
         # Pre-step guards (M3 extensions, no-op in M2)
-        for guard in self._guards:
-            if hasattr(guard, "before_step"):
-                try:
-                    await guard.before_step(step, resolved_params)
-                except Exception:
-                    log.warning(
-                        "[DAGExecutor] Guard before_step failed for %s",
-                        step.id,
-                        exc_info=True,
-                    )
+        with self._metrics.time_guard_pipeline(phase="pre_step", scope_id=step.id):
+            trace_phase(
+                log,
+                "guard_evaluate",
+                trace_id=trace_id,
+                step_id=step.id,
+                tier="HIGH",
+                level=logging.DEBUG,
+                extra={"guard_phase": "pre_step"},
+            )
+            for guard in self._guards:
+                if hasattr(guard, "before_step"):
+                    try:
+                        await guard.before_step(step, resolved_params)
+                    except Exception:
+                        log.warning(
+                            "[DAGExecutor] Guard before_step failed for %s",
+                            step.id,
+                            exc_info=True,
+                        )
 
         # Delegate to step_runner
         try:
@@ -764,17 +875,46 @@ class DAGExecutor:
                 error_detail=str(exc),
             )
 
-        # Post-step guards (M3 extensions, no-op in M2)
-        for guard in self._guards:
-            if hasattr(guard, "after_step"):
-                try:
-                    await guard.after_step(step, result)
-                except Exception:
-                    log.warning(
-                        "[DAGExecutor] Guard after_step failed for %s",
-                        step.id,
-                        exc_info=True,
-                    )
+        # Post-step guards (M3): process HARD_STOP decisions
+        with self._metrics.time_guard_pipeline(phase="post_step", scope_id=step.id):
+            trace_phase(
+                log,
+                "guard_evaluate",
+                trace_id=trace_id,
+                step_id=step.id,
+                tier="HIGH",
+                level=logging.DEBUG,
+                extra={"guard_phase": "post_step"},
+            )
+            for guard in self._guards:
+                if hasattr(guard, "after_step"):
+                    try:
+                        decision = await guard.after_step(step, result, snapshot)
+                        if decision is not None and decision.action == GuardAction.HARD_STOP:
+                            log.info(
+                                "[DAGExecutor] Guard %s HARD_STOP for step %s: %s",
+                                getattr(decision, "guard_name", "unknown"),
+                                step.id,
+                                decision.reason,
+                            )
+                            result = StepResult(
+                                step_id=step.id,
+                                capability_name=step.capability,
+                                status=StepStatus.FAILED,
+                                duration_ms=_now_ms() - step_start_ms,
+                                error_detail=(
+                                    f"Guard {getattr(decision, 'guard_name', 'unknown')}: "
+                                    f"{decision.reason}"
+                                ),
+                                schema_retry=getattr(result, "schema_retry", False),
+                            )
+                            break
+                    except Exception:
+                        log.warning(
+                            "[DAGExecutor] Guard after_step failed for %s",
+                            step.id,
+                            exc_info=True,
+                        )
 
         # WAL write STEP_COMPLETE (fire-and-forget)
         try:
@@ -794,6 +934,37 @@ class DAGExecutor:
                 step.id,
                 exc_info=True,
             )
+
+        # Emit step-completed event (fire-and-forget)
+        try:
+            await self._delta_port.emit(
+                ORCH_STEP_COMPLETED,
+                {
+                    "step_id": step.id,
+                    "capability": step.capability,
+                    "status": result.status.value,
+                    "duration_ms": result.duration_ms,
+                    "trace_id": trace_id,
+                },
+                trace_id,
+            )
+        except Exception:
+            log.warning(
+                "[DAGExecutor] STEP_COMPLETED emit failed for %s",
+                step.id,
+                exc_info=True,
+            )
+
+        trace_phase(
+            log,
+            "step_end",
+            trace_id=trace_id,
+            request_id=step.id,
+            step_id=step.id,
+            tier="HIGH",
+            duration_ms=result.duration_ms,
+            success=result.status == StepStatus.COMPLETED,
+        )
 
         return result
 
@@ -1000,23 +1171,46 @@ class DAGExecutor:
             for sr in wr.step_results:
                 result_by_id[sr.step_id] = sr
 
-        # Check if any side-effect step failed
-        has_side_effect_failure = False
-        for step in plan.steps:
-            if step.has_side_effects:
-                sr = result_by_id.get(step.id)
-                if sr is not None and sr.status == StepStatus.FAILED:
-                    has_side_effect_failure = True
-                    break
+        step_by_id: Dict[str, PlanStep] = {s.id: s for s in plan.steps}
+        failed_step_ids = {
+            sid for sid, sr in result_by_id.items() if sr.status == StepStatus.FAILED
+        }
+        if not failed_step_ids:
+            return []
 
-        if not has_side_effect_failure:
+        failed_side_effect_ids = {
+            sid
+            for sid in failed_step_ids
+            if step_by_id.get(sid) is not None and step_by_id[sid].has_side_effects
+        }
+
+        candidate_ids: Set[str] = set()
+        if failed_side_effect_ids:
+            # Legacy/contract behavior: once a side-effect step fails,
+            # unwind all previously completed side-effect steps.
+            for step in plan.steps:
+                if step.has_side_effects and step.id not in failed_side_effect_ids:
+                    candidate_ids.add(step.id)
+        else:
+            # Non-side-effect failure: only unwind side-effect steps that are
+            # causally upstream (ancestors) of failed steps.
+            for failed_id in failed_step_ids:
+                stack = list(plan.dependencies.get(failed_id, []))
+                while stack:
+                    dep_id = stack.pop()
+                    if dep_id in candidate_ids:
+                        continue
+                    candidate_ids.add(dep_id)
+                    stack.extend(plan.dependencies.get(dep_id, []))
+
+        if not candidate_ids:
             return []
 
         # Find completed side-effect steps that need compensation.
         # Order is REVERSE DECLARATION ORDER within the plan (INV-2).
         completed_side_effect_steps: List[PlanStep] = []
         for step in plan.steps:
-            if step.has_side_effects:
+            if step.has_side_effects and step.id in candidate_ids:
                 sr = result_by_id.get(step.id)
                 if sr is not None and sr.status == StepStatus.COMPLETED:
                     completed_side_effect_steps.append(step)

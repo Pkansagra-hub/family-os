@@ -144,7 +144,7 @@ class WorkflowRunSupervisor:
         await self._enforce_single_active_run(request.workflow_id, trace)
 
         # 3 -- Compile
-        compilation = await self._compiler.compile(spec)
+        compilation = await self._compiler.compile(spec, trace_id=request.trace_id)
 
         if not compilation.success:
             # Compilation failed -- store a FAILED manifest
@@ -202,6 +202,7 @@ class WorkflowRunSupervisor:
                 "workflow_id": manifest.workflow_id,
                 "version": manifest.version,
                 "trigger_type": manifest.trigger_type,
+                "trace_id": trace,
             },
             trace,
         )
@@ -235,6 +236,7 @@ class WorkflowRunSupervisor:
                 "workflow_id": updated.workflow_id,
                 "success": result.success,
                 "duration_ms": result.duration_ms,
+                "trace_id": result.trace_id,
             },
             result.trace_id,
         )
@@ -266,6 +268,7 @@ class WorkflowRunSupervisor:
                 "run_id": updated.run_id,
                 "workflow_id": updated.workflow_id,
                 "error": error,
+                "trace_id": trace_id,
             },
             trace_id,
         )
@@ -296,6 +299,7 @@ class WorkflowRunSupervisor:
                     "run_id": manifest.run_id,
                     "workflow_id": manifest.workflow_id,
                     "result": result.to_dict(),
+                    "trace_id": result.trace_id,
                 },
                 result.trace_id,
             )
@@ -360,7 +364,7 @@ class WorkflowRunSupervisor:
 
         await self._delta.emit(
             "k1.orchestration.workflow.run_aborted",
-            {"run_id": run_id, "workflow_id": workflow_id},
+            {"run_id": run_id, "workflow_id": workflow_id, "trace_id": trace_id},
             trace_id,
         )
 

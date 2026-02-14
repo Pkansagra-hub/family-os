@@ -217,14 +217,16 @@ class FakeGuard:
     async def before_wave(self, wave: Any, result: Any, plan: Any) -> None:
         self.before_wave_calls.append((wave, result, plan))
 
-    async def after_wave(self, wave: Any, result: Any, plan: Any) -> None:
-        self.after_wave_calls.append((wave, result, plan))
+    async def after_wave(
+        self, wave_result: Any, ctx: Any = None, remaining_steps: Any = None, plan_id: Any = None
+    ) -> None:
+        self.after_wave_calls.append((wave_result, ctx, remaining_steps, plan_id))
 
     async def before_step(self, step: Any, params: Any) -> None:
         self.before_step_calls.append((step, params))
 
-    async def after_step(self, step: Any, result: Any) -> None:
-        self.after_step_calls.append((step, result))
+    async def after_step(self, step: Any, result: Any, ctx: Any = None) -> None:
+        self.after_step_calls.append((step, result, ctx))
 
 
 @dataclass

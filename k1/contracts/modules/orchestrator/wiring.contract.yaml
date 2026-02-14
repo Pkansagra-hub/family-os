@@ -48,11 +48,10 @@ code:
     # --- Guards ---
     - path: "k1/orchestrator/orchestration/guards/__init__.py"
     - path: "k1/orchestrator/orchestration/guards/output_schema_guard.py"
-    - path: "k1/orchestrator/orchestration/guards/conditional_edge_evaluator.py"
-    - path: "k1/orchestrator/orchestration/guards/micro_replan_checkpoint.py"
+    - path: "k1/orchestrator/orchestration/guards/conditional_eval.py"
+    - path: "k1/orchestrator/orchestration/guards/micro_replan.py"
     - path: "k1/orchestrator/orchestration/guards/execution_monitor.py"
     - path: "k1/orchestrator/orchestration/guards/concurrency_guard.py"
-    - path: "k1/orchestrator/orchestration/guards/safety_band_reread.py"
     # V1 REMOVED: token_budget_tracker.py, cost_budget_guard.py, quality_gate.py
 
     # --- Workflows ---
@@ -67,9 +66,10 @@ code:
 
     # --- Connectors (MCP thin discovery layer) ---
     - path: "k1/orchestrator/connectors/__init__.py"
-    - path: "k1/orchestrator/connectors/connector_manager.py"
-    - path: "k1/orchestrator/connectors/connector_sandbox.py"
-    - path: "k1/orchestrator/connectors/k0_proxy.py"
+    - path: "k1/orchestrator/connectors/connector_lifecycle.py"
+    - path: "k1/orchestrator/connectors/k0_proxy_client.py"
+    - path: "k1/orchestrator/connectors/mcp_discovery.py"
+    - path: "k1/orchestrator/connectors/mcp_registrar.py"
 
     # --- Adapters (port implementations) ---
     - path: "k1/orchestrator/adapters/__init__.py"
@@ -82,10 +82,8 @@ code:
     - path: "k1/orchestrator/adapters/event_subscription_adapter.py"
     - path: "k1/orchestrator/adapters/workflow_storage_adapter.py"
 
-    # --- Factory, metrics, tracing ---
+    # --- Factory ---
     - path: "k1/orchestrator/factory.py"
-    - path: "k1/orchestrator/metrics.py"
-    - path: "k1/orchestrator/tracing.py"
 
   forbidden_patterns: ["*.pyc", "__pycache__"]
 
@@ -96,20 +94,20 @@ wiring:
   imports:
     required_modules: ["kernel", "bus", "fabric", "sessionstate"]
     required_symbols:
-      - from: "fabric"
+      - from: "fabric.types"
         import: "CapabilityRequest"
         used_in_files: ["k1/orchestrator/orchestration/step_runner.py"]
-      - from: "fabric"
+      - from: "fabric.types"
         import: "CapabilityResult"
         used_in_files: ["k1/orchestrator/orchestration/step_runner.py"]
-      - from: "fabric"
+      - from: "fabric.types"
         import: "Tier"
         used_in_files: ["k1/orchestrator/types.py"]
-      - from: "bus"
-        import: "EventBus"
+      - from: "fabric.ports.event_port"
+        import: "IEventPort"
         used_in_files: ["k1/orchestrator/adapters/event_subscription_adapter.py"]
-      - from: "sessionstate"
-        import: "SessionStateManager"
+      - from: "fabric.ports.state_reader"
+        import: "ISessionStateReader"
         used_in_files: ["k1/orchestrator/adapters/state_read_adapter.py"]
     forbidden:
       - "direct_db_access"
@@ -228,61 +226,67 @@ capabilities:
       version: "1.0.0"
 
 # ---------------------------------------------------------------------------
-# Events emitted (17) -- linked to payload schemas from WB Section 3
+# Events emitted (19) -- linked to payload schemas from WB Section 3
 # ---------------------------------------------------------------------------
 events:
   emits:
     # Task lifecycle
     - topic: "k1.orchestration.task.accepted.v1"
-      schema: "k1/contracts/schemas/events/orchestration/task.accepted.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/task_accepted.v1.json"
 
     # Plan lifecycle
     - topic: "k1.orchestration.plan.requested.v1"
-      schema: "k1/contracts/schemas/events/orchestration/plan.requested.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/plan_requested.v1.json"
 
     # DAG lifecycle
     - topic: "k1.orchestration.dag.started.v1"
-      schema: "k1/contracts/schemas/events/orchestration/dag.started.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/dag_started.v1.json"
     - topic: "k1.orchestration.dag.micro_replan.v1"
-      schema: "k1/contracts/schemas/events/orchestration/dag.micro_replan.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/dag_micro_replan.v1.json"
     - topic: "k1.orchestration.dag.completed.v1"
-      schema: "k1/contracts/schemas/events/orchestration/dag.completed.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/dag_completed.v1.json"
     # V1 REMOVED: dag.budget_warning.v1, dag.budget_exhausted.v1
 
     # Step lifecycle
     - topic: "k1.orchestration.step.started.v1"
-      schema: "k1/contracts/schemas/events/orchestration/step.started.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/step_started.v1.json"
     - topic: "k1.orchestration.step.completed.v1"
-      schema: "k1/contracts/schemas/events/orchestration/step.completed.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/step_completed.v1.json"
     - topic: "k1.orchestration.step.failed.v1"
-      schema: "k1/contracts/schemas/events/orchestration/step.failed.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/step_failed.v1.json"
     - topic: "k1.orchestration.step.cancelled.v1"
-      schema: "k1/contracts/schemas/events/orchestration/step.cancelled.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/step_cancelled.v1.json"
     - topic: "k1.orchestration.step.skipped.v1"
-      schema: "k1/contracts/schemas/events/orchestration/step.skipped.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/step_skipped.v1.json"
     - topic: "k1.orchestration.step.retrying.v1"
-      schema: "k1/contracts/schemas/events/orchestration/step.retrying.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/step_retrying.v1.json"
     - topic: "k1.orchestration.step.schema_retry.v1"
-      schema: "k1/contracts/schemas/events/orchestration/step.schema_retry.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/step_schema_retry.v1.json"
     # V1 REMOVED: step.quality_retry.v1
 
     # Saga
     - topic: "k1.orchestration.saga.compensating.v1"
-      schema: "k1/contracts/schemas/events/orchestration/saga.compensating.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/saga_compensating.v1.json"
 
     # Delta (progress)
     - topic: "k1.orchestration.delta.v1"
-      schema: "k1/contracts/schemas/events/orchestration/delta.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/delta_v1.v1.json"
 
     # Workflow lifecycle
     - topic: "k1.orchestration.workflow.triggered.v1"
-      schema: "k1/contracts/schemas/events/orchestration/workflow.triggered.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/workflow_triggered.v1.json"
     - topic: "k1.orchestration.workflow.completed.v1"
-      schema: "k1/contracts/schemas/events/orchestration/workflow.completed.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/workflow_completed.v1.json"
+    - topic: "k1.orchestration.workflow.saved.v1"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/workflow_saved.v1.json"
+
+    # Error routing diagnostics
+    - topic: "k1.orchestration.error.routed.v1"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/error_routed.v1.json"
 
     # MCP connector
     - topic: "k1.orchestration.mcp.tool_registered.v1"
-      schema: "k1/contracts/schemas/events/orchestration/mcp.tool_registered.v1.json"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/mcp_tool_registered.v1.json"
 
   # ---------------------------------------------------------------------------
   # Events consumed (12) -- Orchestrator subscribes to these
@@ -290,57 +294,57 @@ events:
   subscribes:
     # Planner responses
     - topic: "k1.planner.plan.ready.v1"
-      schema: "k1/contracts/schemas/events/planner/plan.ready.v1.json"
-      handler: "orchestrator.orchestration.orchestrator_service:on_plan_ready"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/plan_ready.v1.json"
+      handler: "k1.orchestrator.orchestration.orchestrator_service:OrchestratorService._on_plan_ready"
 
     - topic: "k1.planner.plan.failed.v1"
-      schema: "k1/contracts/schemas/events/planner/plan.failed.v1.json"
-      handler: "orchestrator.orchestration.orchestrator_service:on_plan_failed"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/plan_failed.v1.json"
+      handler: "k1.orchestrator.orchestration.orchestrator_service:OrchestratorService._on_plan_failed"
 
     - topic: "k1.planner.plan.cancelled.v1"
-      schema: "k1/contracts/schemas/events/planner/plan.cancelled.v1.json"
-      handler: "orchestrator.orchestration.orchestrator_service:on_plan_cancelled"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/plan_cancelled.v1.json"
+      handler: "k1.orchestrator.orchestration.orchestrator_service:OrchestratorService._on_plan_cancelled"
 
     - topic: "k1.planner.micro_replan.ready.v1"
-      schema: "k1/contracts/schemas/events/planner/micro_replan.ready.v1.json"
-      handler: "orchestrator.orchestration.orchestrator_service:on_micro_replan_ready"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/micro_replan_ready.v1.json"
+      handler: "k1.orchestrator.orchestration.guards.micro_replan:MicroReplanCheckpoint.after_wave"
 
     # Fabric capability results
     - topic: "k1.capability.completed.v1"
-      schema: "k1/contracts/schemas/events/fabric/capability.completed.v1.json"
-      handler: "orchestrator.orchestration.step_runner:on_capability_completed"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/capability_completed.v1.json"
+      handler: "k1.orchestrator.orchestration.step_runner:StepRunner.run"
 
     - topic: "k1.capability.failed.v1"
-      schema: "k1/contracts/schemas/events/fabric/capability.failed.v1.json"
-      handler: "orchestrator.orchestration.step_runner:on_capability_failed"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/capability_failed.v1.json"
+      handler: "k1.orchestrator.orchestration.step_runner:StepRunner.run"
 
     # Fabric contract/provider changes
     - topic: "k1.fabric.contract.updated.v1"
-      schema: "k1/contracts/schemas/events/fabric/contract.updated.v1.json"
-      handler: "orchestrator.workflows.gap_detector:on_contract_updated"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/contract_updated.v1.json"
+      handler: "k1.orchestrator.workflows.gap_detector:ProactiveGapDetector._on_contract_updated"
 
     # Fabric agent activity (ExecutionMonitor substep tracking)
     - topic: "k1.fabric.agent.tool_call.v1"
-      schema: "k1/contracts/schemas/events/fabric/agent.tool_call.v1.json"
-      handler: "orchestrator.orchestration.guards.execution_monitor:on_agent_tool_call"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/agent_tool_call.v1.json"
+      handler: "k1.orchestrator.orchestration.guards.execution_monitor:SubStepObserver._on_event_sync"
 
     - topic: "k1.fabric.agent.llm_call.v1"
-      schema: "k1/contracts/schemas/events/fabric/agent.llm_call.v1.json"
-      handler: "orchestrator.orchestration.guards.execution_monitor:on_agent_llm_call"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/agent_llm_call.v1.json"
+      handler: "k1.orchestrator.orchestration.guards.execution_monitor:SubStepObserver._on_event_sync"
 
     # Workflow scheduler (self-emitted for cron/event triggers)
     - topic: "k1.orchestration.workflow.trigger_due.v1"
-      schema: "k1/contracts/schemas/events/orchestration/workflow.trigger_due.v1.json"
-      handler: "orchestrator.workflows.workflow_scheduler:on_trigger_due"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/workflow_trigger_due.v1.json"
+      handler: "k1.orchestrator.workflows.workflow_scheduler:WorkflowScheduler._fire_trigger"
 
     # Human-in-the-loop responses
     - topic: "k1.hil.override_response.v1"
-      schema: "k1/contracts/schemas/events/hil/override_response.v1.json"
-      handler: "orchestrator.orchestration.orchestrator_service:on_hil_override"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/hil_override_response.v1.json"
+      handler: "k1.orchestrator.orchestration.orchestrator_service:OrchestratorService._on_hil_override"
 
     - topic: "k1.hil.fallback_response.v1"
-      schema: "k1/contracts/schemas/events/hil/fallback_response.v1.json"
-      handler: "orchestrator.orchestration.orchestrator_service:on_hil_fallback"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/hil_fallback_response.v1.json"
+      handler: "k1.orchestrator.orchestration.orchestrator_service:OrchestratorService._on_hil_fallback"
 
 # ---------------------------------------------------------------------------
 # State: Orchestrator NEVER writes SessionState (ORCH-01)

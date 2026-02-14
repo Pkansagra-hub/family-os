@@ -109,19 +109,44 @@ class SessionStateReaderAdapter:
             return None
 
         try:
-            section_obj = self._manager.get_section(section)
+            # Support dotted section paths used by some orchestrator reads,
+            # e.g. "control.safety_band".
+            base_section, nested_path = self._split_section_path(section)
+
+            section_obj = self._manager.get_section(base_section)
             if section_obj is None:
                 return None
-            if hasattr(section_obj, "to_dict"):
-                return section_obj.to_dict()
-            # Fallback: if section is already a dict
-            if isinstance(section_obj, dict):
-                return section_obj
-            logger.warning(
-                "Section '%s' has no to_dict(); returning None",
-                section,
-            )
-            return None
+
+            section_dict = self._section_obj_to_dict(section_obj)
+            if section_dict is None:
+                logger.warning(
+                    "Section '%s' has no dict-compatible API; returning None",
+                    base_section,
+                )
+                return None
+
+            if not nested_path:
+                return section_dict
+
+            nested_value = self._resolve_nested_path(section_dict, nested_path)
+            if nested_value is None:
+                return None
+
+            # Compatibility normalization for DAGExecutor safety-band reads:
+            # _check_safety_band currently expects {'level': 'RED|BLACK|...'}
+            # when querying section='control.safety_band'.
+            if base_section == "control" and nested_path == ["safety_band"]:
+                return {
+                    "level": nested_value,
+                    "safety_band": nested_value,
+                }
+
+            # Preserve existing adapter contract: read_section returns dict|None.
+            # Wrap scalar nested values so callers can consistently .get(...).
+            if isinstance(nested_value, dict):
+                return nested_value
+            leaf_key = nested_path[-1]
+            return {leaf_key: nested_value}
         except (KeyError, Exception) as exc:
             # SectionNotFoundError is a KeyError subclass
             logger.debug("Section '%s' not found: %s", section, exc)
@@ -214,6 +239,43 @@ class SessionStateReaderAdapter:
             "persona",
             "telemetry",
         ]
+
+    @staticmethod
+    def _split_section_path(section: str) -> tuple[str, List[str]]:
+        """Split dotted section path into base section + nested path.
+
+        Example:
+            "control.safety_band" -> ("control", ["safety_band"])
+        """
+        if "." not in section:
+            return section, []
+        parts = [p for p in section.split(".") if p]
+        if not parts:
+            return section, []
+        return parts[0], parts[1:]
+
+    @staticmethod
+    def _section_obj_to_dict(section_obj: Any) -> Optional[Dict[str, Any]]:
+        """Normalize a section object to a dictionary when possible."""
+        if isinstance(section_obj, dict):
+            return section_obj
+        if hasattr(section_obj, "to_dict"):
+            data = section_obj.to_dict()
+            return data if isinstance(data, dict) else None
+        if hasattr(section_obj, "get"):
+            data = section_obj.get()
+            return data if isinstance(data, dict) else None
+        return None
+
+    @staticmethod
+    def _resolve_nested_path(data: Dict[str, Any], path: List[str]) -> Any:
+        """Resolve a nested dotted path against a dictionary."""
+        current: Any = data
+        for segment in path:
+            if not isinstance(current, dict) or segment not in current:
+                return None
+            current = current[segment]
+        return current
 
     def __repr__(self) -> str:
         return (

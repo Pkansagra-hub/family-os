@@ -28,7 +28,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from k1.orchestrator.adapters.test_workflow_storage_adapter import TestWorkflowStorageAdapter
+from k1.orchestrator.adapters.test_workflow_storage_adapter import (
+    TestWorkflowStorageAdapter,
+)
 from k1.orchestrator.adapters.workflow_storage_adapter import WorkflowStorageAdapter
 from k1.orchestrator.orchestration.orchestrator_service import AdapterException
 from k1.orchestrator.types import (
@@ -39,7 +41,11 @@ from k1.orchestrator.types import (
     TriggerSpec,
     TriggerType,
 )
-from k1.orchestrator.workflows.workflow_types import RunManifest, RunStatus, WorkflowSpec
+from k1.orchestrator.workflows.workflow_types import (
+    RunManifest,
+    RunStatus,
+    WorkflowSpec,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures -- reusable domain objects
@@ -690,12 +696,13 @@ class TestTestWorkflowStorageAdapterHelpers:
 
 
 class TestAdapterWiring:
-    """Verify all 16 adapters are properly exported from __init__.py."""
+    """Verify all 17 adapters are properly exported from __init__.py."""
 
-    def test_all_16_adapters_in_init(self) -> None:
+    def test_all_17_adapters_in_init(self) -> None:
         from k1.orchestrator import adapters
 
         expected = [
+            "AdminHttpAdapter",
             "BridgeWriteAdapter",
             "DeltaEmitAdapter",
             "EventSubscriptionAdapter",
@@ -719,7 +726,7 @@ class TestAdapterWiring:
             cls = getattr(adapters, name)
             assert cls is not None, f"{name} not importable from adapters"
 
-    def test_count_is_16(self) -> None:
+    def test_count_is_17(self) -> None:
         from k1.orchestrator.adapters import __all__
 
-        assert len(__all__) == 16
+        assert len(__all__) == 17

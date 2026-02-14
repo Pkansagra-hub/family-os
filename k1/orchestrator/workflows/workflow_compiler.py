@@ -43,8 +43,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
-import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta
 from datetime import timezone as tz
@@ -54,6 +54,7 @@ from k1.orchestrator.ports.delta_emit_port import IDeltaEmitPort
 from k1.orchestrator.ports.fabric_gateway_port import IFabricGatewayPort
 from k1.orchestrator.ports.state_read_port import IStateReadPort
 from k1.orchestrator.ports.workflow_storage_port import IWorkflowStoragePort
+from k1.orchestrator.tracing import ensure_trace_id, trace_phase
 from k1.orchestrator.types import (
     CommittedPlan,
     PlanStep,
@@ -69,6 +70,8 @@ from k1.orchestrator.workflows.workflow_types import CompilationResult, DynamicE
 # ---------------------------------------------------------------------------
 _OFFSET_RE = re.compile(r"^([+-])(\d+)([dhms])$")
 _OFFSET_SECONDS: Dict[str, int] = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowCompiler:
@@ -110,6 +113,7 @@ class WorkflowCompiler:
         self,
         spec: WorkflowSpec,
         session_id: str = "",
+        trace_id: str = "",
     ) -> CompilationResult:
         """Compile a WorkflowSpec into a CommittedPlan.
 
@@ -123,6 +127,18 @@ class WorkflowCompiler:
             if all gaps are SMALL/auto-resolved, or success=False
             with gap details if any LARGE gap is detected.
         """
+        effective_trace_id = ensure_trace_id(trace_id)
+        trace_phase(
+            logger,
+            "workflow_compile",
+            trace_id=effective_trace_id,
+            request_id=spec.workflow_id,
+            tier="WORKFLOW",
+            success=True,
+            extra={"workflow_id": spec.workflow_id},
+            level=logging.DEBUG,
+        )
+
         # -- Step 1 + 2: deep-copy steps + resolve DynamicExpr -----------
         resolved_steps = await self._resolve_steps(spec.steps, session_id)
 
@@ -173,8 +189,19 @@ class WorkflowCompiler:
                     "gap_types": list(
                         {g.gap_type for g in gaps if g.status == ProactiveGapStatus.PENDING}
                     ),
+                    "trace_id": effective_trace_id,
                 },
-                trace_id=spec.workflow_id,
+                trace_id=effective_trace_id,
+            )
+            trace_phase(
+                logger,
+                "workflow_compile",
+                trace_id=effective_trace_id,
+                request_id=spec.workflow_id,
+                tier="WORKFLOW",
+                success=False,
+                extra={"workflow_id": spec.workflow_id, "pending_gaps": len(gaps)},
+                level=logging.WARNING,
             )
             return CompilationResult(
                 success=False,
@@ -190,7 +217,7 @@ class WorkflowCompiler:
             request_id=spec.workflow_id,
             intent=f"Workflow: {spec.name}",
             steps=resolved_steps,
-            trace_id=str(uuid.uuid4()),
+            trace_id=effective_trace_id,
             dependencies=dict(spec.dependencies),
             created_at=self._clock.utc_now(),
         )
@@ -198,13 +225,24 @@ class WorkflowCompiler:
         # -- Step 6: compute compiled_hash (SHA-256) ---------------------
         compiled_hash = self._compute_hash(plan)
 
-        return CompilationResult(
+        result = CompilationResult(
             success=True,
             compiled_plan=plan,
             gaps=gaps,
             auto_resolved=auto_resolved,
             compiled_hash=compiled_hash,
         )
+        trace_phase(
+            logger,
+            "workflow_compile",
+            trace_id=effective_trace_id,
+            request_id=spec.workflow_id,
+            tier="WORKFLOW",
+            success=True,
+            extra={"workflow_id": spec.workflow_id},
+            level=logging.DEBUG,
+        )
+        return result
 
     # ===================================================================
     # Step 1 + 2: Deep-copy + DynamicExpr resolution

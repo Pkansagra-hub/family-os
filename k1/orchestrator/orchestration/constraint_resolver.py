@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from k1.orchestrator.ports.event_subscription_port import IEventSubscriptionPort
     from k1.orchestrator.ports.fabric_gateway_port import IFabricGatewayPort
 
+from k1.orchestrator.tracing import trace_phase
 from k1.orchestrator.types import (
     AlternativeCapability,
     AlternativeMapping,
@@ -251,6 +252,7 @@ class ConstraintResolver:
     async def validate(
         self,
         plan: CommittedPlan,
+        _ctx: object = None,
     ) -> ValidationResult:
         """Validate a CommittedPlan before DAG execution.
 
@@ -262,6 +264,7 @@ class ConstraintResolver:
 
         Args:
             plan: CommittedPlan from Planner (validated, acyclic).
+            _ctx: ProcessingContext (accepted for protocol compat, ignored).
 
         Returns:
             ValidationResult with valid=True if all checks pass,
@@ -273,6 +276,17 @@ class ConstraintResolver:
           - If hil_required=True, DAGExecutor returns control to
             OrchestratorService for async HIL parking.
         """
+        trace_id = getattr(_ctx, "trace_id", None) or plan.trace_id
+        trace_phase(
+            logger,
+            "constraint_resolve",
+            trace_id=trace_id,
+            request_id=plan.request_id,
+            tier="HIGH",
+            success=True,
+            level=logging.DEBUG,
+        )
+
         errors: List[str] = []
         warnings: List[str] = []
         alternatives_applied: List[AlternativeMapping] = []
@@ -312,7 +326,7 @@ class ConstraintResolver:
             )
 
         valid = len(errors) == 0
-        return ValidationResult(
+        result = ValidationResult(
             valid=valid,
             errors=errors,
             warnings=warnings,
@@ -321,6 +335,17 @@ class ConstraintResolver:
             hil_required=hil_required,
             hil_request=hil_request,
         )
+        trace_phase(
+            logger,
+            "constraint_resolve",
+            trace_id=trace_id,
+            request_id=plan.request_id,
+            tier="HIGH",
+            success=result.valid,
+            extra={"error_count": len(result.errors), "warning_count": len(result.warnings)},
+            level=logging.DEBUG,
+        )
+        return result
 
     # ------------------------------------------------------------------
     # Capability availability check (3.1.2)

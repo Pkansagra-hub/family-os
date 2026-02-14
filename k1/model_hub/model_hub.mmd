@@ -11,7 +11,7 @@ flowchart TB
   %% Related ADRs: 0001, 0005, 0007, 0027 (Placement Cascade), 0027c (Cost-Aware Fallback),
   %%               0027d (Remote Resilience)
   %% ======================================================================================
-  %%
+
   %% DESIGN PRINCIPLES:
   %%   1. CAPABILITY-DRIVEN -- Hub routes by capability, not by method name
   %%   2. PLUGIN ARCHITECTURE -- Providers are plugins loaded from manifests
@@ -24,7 +24,7 @@ flowchart TB
   %%   9. Edge-First: local model fallback when remote providers unavailable
   %%  10. Provider manifests are the SINGLE SOURCE OF TRUTH for provider capabilities,
   %%      models, costs, rate limits, circuit breaker config, and health checks
-  %%
+
   %% ======================================================================================
   %% EXTENSIBILITY CONTRACT:
   %%

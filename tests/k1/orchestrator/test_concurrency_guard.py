@@ -1,10 +1,9 @@
-"""
-Tests for ConcurrencyGuard (Issue 3.2.9).
+"""Tests for ConcurrencyGuard (Issue 3.2.9 / ORCH-02).
 
 Enforces single-DAG-at-a-time via asyncio.Lock.
 NOT a DAGGuard -- used in OrchestratorService._process_one() before dispatch.
 
-Test classes:
+Test classes -- unit (standalone):
   TestConcurrencyGuardInit          -- Constructor, slots, repr.
   TestAcquireRelease                -- Basic lock/unlock lifecycle.
   TestNonBlockingReject             -- Second acquire fails immediately.
@@ -14,6 +13,9 @@ Test classes:
   TestActiveProperty                -- active property tracks state.
   TestReacquireAfterRelease         -- Lock reusable after release.
   TestNotDAGGuard                   -- Confirm not a DAGGuard subclass.
+
+Test classes -- pipeline (Epic 7.2.8):
+  TestConcurrencyGuardPipeline      -- Pipeline guard via OrchestratorService.process() (ORCH-02).
 """
 
 from __future__ import annotations
@@ -354,3 +356,158 @@ class TestReacquireAfterRelease:
         # Now acquisition succeeds
         assert await guard.acquire() is True
         guard.release()
+
+
+# ===========================================================================
+# Pipeline tests (Epic 7.2.8 / ORCH-02) -- via OrchestratorService.process()
+# ===========================================================================
+
+
+from k1.orchestrator.types import ProcessResult
+from tests.k1.orchestrator.helpers import (
+    cap_result,
+    make_plan,
+    make_step,
+    orchestrator_for_testing,
+    process_plan,
+    register_capabilities,
+    seed_pending_plan,
+)
+
+
+class TestConcurrencyGuardPipeline:
+    """ConcurrencyGuard verified through OrchestratorService.process() pipeline.
+
+    No direct guard.acquire() / guard.release() calls.
+    All assertions via ProcessResult, service state, and adapter logs.
+    """
+
+    # -- single plan completes normally -----------------------------------
+
+    @pytest.mark.asyncio
+    async def test_single_plan_completes(self) -> None:
+        """Single plan processes to COMPLETED (guard acquired/released)."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.x")
+        fabric.script_result("cap.x", cap_result({"ok": True}))
+
+        plan = make_plan([make_step("s1", "cap.x")])
+        result = await process_plan(service, plan)
+
+        assert result == ProcessResult.COMPLETED
+        # Guard released after execution
+        assert service._concurrency_guard.active is False
+
+    # -- concurrent plan returns DEFERRED ---------------------------------
+
+    @pytest.mark.asyncio
+    async def test_concurrent_plan_deferred(self) -> None:
+        """Second plan while first is executing returns DEFERRED."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.slow", "cap.fast")
+        fabric.script_result("cap.fast", cap_result({"v": 1}))
+
+        # Make cap.slow take 200ms so we can submit plan B while A is in DAG
+        fabric.scripted_timeouts["cap.slow"] = 0.2
+
+        plan_a = make_plan(
+            [make_step("s1", "cap.slow")],
+            plan_id="plan-a",
+            request_id="req-a",
+        )
+        plan_b = make_plan(
+            [make_step("s1", "cap.fast")],
+            plan_id="plan-b",
+            request_id="req-b",
+        )
+
+        seed_pending_plan(service, plan_a)
+        seed_pending_plan(service, plan_b)
+
+        # Start plan A (blocks on slow capability)
+        task_a = asyncio.create_task(service.process(plan_a))
+        await asyncio.sleep(0.05)  # let A acquire guard
+
+        # Plan B should get DEFERRED
+        result_b = await service.process(plan_b)
+        assert result_b == ProcessResult.DEFERRED
+
+        # Guard still held by A
+        assert service._concurrency_guard.active is True
+
+        # Wait for A to complete
+        await task_a
+        assert service._concurrency_guard.active is False
+
+    # -- sequential plans both complete -----------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sequential_plans_both_complete(self) -> None:
+        """After first plan completes, second plan can execute."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.a", "cap.b")
+        fabric.script_result("cap.a", cap_result({"v": 1}))
+        fabric.script_result("cap.b", cap_result({"v": 2}))
+
+        plan1 = make_plan(
+            [make_step("s1", "cap.a")],
+            plan_id="plan-1",
+            request_id="req-1",
+        )
+        plan2 = make_plan(
+            [make_step("s1", "cap.b")],
+            plan_id="plan-2",
+            request_id="req-2",
+        )
+
+        r1 = await process_plan(service, plan1)
+        assert r1 == ProcessResult.COMPLETED
+
+        r2 = await process_plan(service, plan2)
+        assert r2 == ProcessResult.COMPLETED
+
+    # -- guard released after DAG failure ---------------------------------
+
+    @pytest.mark.asyncio
+    async def test_guard_released_after_failure(self) -> None:
+        """Guard is released even when DAG execution fails."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.fail")
+        fabric.script_result("cap.fail", cap_result(success=False))
+
+        plan = make_plan([make_step("s1", "cap.fail")])
+        result = await process_plan(service, plan)
+
+        # Step failed -> FAILED result
+        assert result == ProcessResult.FAILED
+        # Guard released in finally block
+        assert service._concurrency_guard.active is False
+
+    # -- guard NOT in DAG pipeline ----------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_guard_not_in_dag_pipeline(self) -> None:
+        """ConcurrencyGuard is NOT in DAGExecutor._guards list."""
+        service, _ = await orchestrator_for_testing()
+        for g in service._dag_executor._guards:
+            assert type(g).__name__ != "ConcurrencyGuard"
+
+    # -- guard is ConcurrencyGuard ----------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_guard_is_concurrency_guard(self) -> None:
+        """service._concurrency_guard is a ConcurrencyGuard instance."""
+        service, _ = await orchestrator_for_testing()
+        assert type(service._concurrency_guard).__name__ == "ConcurrencyGuard"
+
+    # -- guard idle after init --------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_guard_idle_on_init(self) -> None:
+        """Guard starts inactive before any plan is processed."""
+        service, _ = await orchestrator_for_testing()
+        assert service._concurrency_guard.active is False

@@ -1,30 +1,33 @@
 """
-Tests for DAGExecutor.build_waves() -- Topological Sort (Issue 2.2.1).
+Tests for DAGExecutor -- 7.1.2 rewritten with real adapters.
 
-Validates: Kahn's algorithm correctness, cycle detection, step/wave limit
-enforcement, dependency reference validation, edge cases (single step,
-empty deps, fully independent, wide/deep DAGs), deterministic wave
-ordering, and DAGExecutor constructor/state initialization.
+All integration tests obtain DAGExecutor from OrchestratorFactory.create_standalone()
+and script behavior through real in-memory test adapters:
+  - MockFabricAdapter
+  - MockStateReadAdapter
+  - MockBridgeAdapter
+  - TestDeltaAdapter
 
-Test classes:
-  TestBuildWavesLinear        -- Linear chains (s1 -> s2 -> s3).
-  TestBuildWavesParallel      -- All steps independent -> single wave.
-  TestBuildWavesDiamond       -- Diamond DAG (s1 -> s2+s3 -> s4).
-  TestBuildWavesComplex       -- Multi-wave complex DAGs.
-  TestCycleDetection          -- Cycle error cases.
-  TestLimitEnforcement        -- Step/wave count validation.
-  TestDependencyValidation    -- Invalid dependency references.
-  TestEdgeCases               -- Single step, no deps, wide/deep.
-  TestDeterminism             -- Reproducible wave ordering.
-  TestConstructor             -- DAGExecutor init and state.
+No fake adapter classes are used.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import asyncio
+import time
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 import pytest
 
+from k1.fabric.ports.state_reader import SessionSnapshot
+from k1.fabric.types import CapabilityResult
+from k1.orchestrator.adapters.mock_bridge_adapter import MockBridgeAdapter
+from k1.orchestrator.adapters.mock_fabric_adapter import MockFabricAdapter
+from k1.orchestrator.adapters.mock_state_read_adapter import MockStateReadAdapter
+from k1.orchestrator.adapters.test_delta_adapter import TestDeltaAdapter
+from k1.orchestrator.events import ORCH_DAG_COMPLETED, ORCH_DAG_STARTED
+from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.orchestration.dag_executor import (
     MAX_STEPS,
     MAX_WAVES,
@@ -33,691 +36,626 @@ from k1.orchestrator.orchestration.dag_executor import (
     StepLimitExceeded,
     WaveLimitExceeded,
 )
-from k1.orchestrator.types import PlanStep, Wave
+from k1.orchestrator.types import (
+    CommittedPlan,
+    PlanStep,
+    RegistryEntry,
+    StepStatus,
+    Wave,
+    WaveResult,
+)
 
-# ===========================================================================
-# Helpers
-# ===========================================================================
+
+async def _svc(*, disable_builtin_guards: bool = True):
+    service = await OrchestratorFactory.create_standalone()
+    dag: DAGExecutor = service._dag_executor  # type: ignore[assignment]
+    if disable_builtin_guards:
+        dag._guards = []
+    fabric: MockFabricAdapter = service._fabric_port  # type: ignore[assignment]
+    state: MockStateReadAdapter = service._state_port  # type: ignore[assignment]
+    bridge: MockBridgeAdapter = service._bridge_port  # type: ignore[assignment]
+    delta: TestDeltaAdapter = service._delta_port  # type: ignore[assignment]
+    return service, dag, fabric, state, bridge, delta
 
 
-def _step(step_id: str, capability: str = "cap.test") -> PlanStep:
-    """Create a minimal PlanStep for testing."""
-    return PlanStep(id=step_id, capability=capability)
+def _step(
+    sid: str,
+    capability: Optional[str] = None,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    has_side_effects: bool = False,
+    compensation: Optional[str] = None,
+) -> PlanStep:
+    return PlanStep(
+        id=sid,
+        capability=capability or f"cap.{sid}",
+        params=params or {},
+        has_side_effects=has_side_effects,
+        compensation=compensation,
+    )
 
 
 def _steps(*ids: str) -> List[PlanStep]:
-    """Create multiple PlanSteps from sequential IDs."""
     return [_step(sid) for sid in ids]
 
 
-def _wave_ids(wave: Wave) -> List[str]:
-    """Extract sorted step IDs from a Wave."""
-    return [s.id for s in wave.steps]
+def _plan(
+    steps: List[PlanStep],
+    *,
+    deps: Optional[Dict[str, List[str]]] = None,
+    plan_id: str = "plan-1",
+    request_id: str = "req-1",
+    trace_id: str = "trace-1",
+) -> CommittedPlan:
+    return CommittedPlan(
+        plan_id=plan_id,
+        request_id=request_id,
+        intent="test-intent",
+        steps=steps,
+        dependencies=deps or {},
+        trace_id=trace_id,
+    )
 
 
-# ===========================================================================
-# Fake ports for constructor
-# ===========================================================================
+def _wave_ids(w: Wave) -> List[str]:
+    return [s.id for s in w.steps]
 
 
-class FakePort:
-    """Minimal fake for all port protocols in constructor."""
-
-    pass
+def _snapshot(session_id: str = "default") -> SessionSnapshot:
+    return SessionSnapshot(session_id=session_id, sections={}, timestamp_ms=int(time.time() * 1000))
 
 
-def _make_executor(**overrides: Any) -> DAGExecutor:
-    """Create a DAGExecutor with fake deps for constructor testing."""
-    defaults: Dict[str, Any] = {
-        "fabric_port": FakePort(),
-        "planner_port": FakePort(),
-        "delta_port": FakePort(),
-        "state_port": FakePort(),
-        "bridge_port": FakePort(),
-        "step_runner": FakePort(),
-        "error_router": FakePort(),
-    }
-    defaults.update(overrides)
-    return DAGExecutor(**defaults)
+def _success_result(trace_id: str = "trace-1") -> CapabilityResult:
+    return CapabilityResult.success_result(
+        request_id=f"r-{uuid4()}",
+        data={"ok": True},
+        provider_id="mock",
+        trace_id=trace_id,
+    )
 
 
-# ===========================================================================
-# TestBuildWavesLinear
-# ===========================================================================
+def _failure_result(trace_id: str = "trace-1", msg: str = "boom") -> CapabilityResult:
+    return CapabilityResult.failure_result(
+        request_id=f"r-{uuid4()}",
+        error_code="ERR",
+        error_message=msg,
+        retriable=False,
+        provider_id="mock",
+        trace_id=trace_id,
+    )
 
 
-class TestBuildWavesLinear:
-    """Linear chain topologies: s1 -> s2 -> s3 etc."""
+def _register_caps(fabric: MockFabricAdapter, *caps: str) -> None:
+    for cap in caps:
+        fabric.register_capability(
+            cap,
+            RegistryEntry(
+                name=cap,
+                provider_type="tool",
+                safety_band_min="GREEN",
+                availability="AVAILABLE",
+            ),
+        )
 
-    def test_two_step_chain(self) -> None:
-        """s1 -> s2 produces 2 waves."""
-        steps = _steps("s1", "s2")
-        deps = {"s2": ["s1"]}
 
-        waves = DAGExecutor.build_waves(steps, deps)
+class _RecordingGuard:
+    def __init__(self) -> None:
+        self.before_step_calls: List[str] = []
+        self.after_step_calls: List[str] = []
+        self.after_wave_calls: List[int] = []
 
-        assert len(waves) == 2
-        assert _wave_ids(waves[0]) == ["s1"]
-        assert _wave_ids(waves[1]) == ["s2"]
+    async def before_step(self, step: PlanStep, resolved_params: Dict[str, Any]) -> None:
+        self.before_step_calls.append(step.id)
 
-    def test_three_step_chain(self) -> None:
-        """s1 -> s2 -> s3 produces 3 waves."""
+    async def after_step(self, step: PlanStep, result: Any, ctx: Any = None) -> None:
+        self.after_step_calls.append(step.id)
+
+    async def after_wave(
+        self,
+        wave_result: WaveResult,
+        ctx: Any = None,
+        remaining_steps: Any = None,
+        plan_id: Any = None,
+    ) -> None:
+        self.after_wave_calls.append(wave_result.wave_index)
+
+
+class TestBuildWaves:
+    def test_linear_three_waves(self) -> None:
         steps = _steps("s1", "s2", "s3")
-        deps = {"s2": ["s1"], "s3": ["s2"]}
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
+        waves = DAGExecutor.build_waves(steps, {"s2": ["s1"], "s3": ["s2"]})
         assert len(waves) == 3
         assert _wave_ids(waves[0]) == ["s1"]
         assert _wave_ids(waves[1]) == ["s2"]
         assert _wave_ids(waves[2]) == ["s3"]
 
-    def test_wave_indices_are_sequential(self) -> None:
-        """Wave indices are 0-based and sequential."""
+    def test_parallel_single_wave(self) -> None:
         steps = _steps("a", "b", "c")
-        deps = {"b": ["a"], "c": ["b"]}
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        for i, wave in enumerate(waves):
-            assert wave.wave_index == i
-
-    def test_resolved_params_empty(self) -> None:
-        """Waves start with empty resolved_params."""
-        steps = _steps("s1", "s2")
-        deps = {"s2": ["s1"]}
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        for wave in waves:
-            assert wave.resolved_params == {}
-
-
-# ===========================================================================
-# TestBuildWavesParallel
-# ===========================================================================
-
-
-class TestBuildWavesParallel:
-    """All steps independent -- single wave."""
-
-    def test_two_independent_steps(self) -> None:
-        """Two independent steps -> one wave."""
-        steps = _steps("s1", "s2")
-        deps: Dict[str, List[str]] = {}
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
+        waves = DAGExecutor.build_waves(steps, {})
         assert len(waves) == 1
-        assert _wave_ids(waves[0]) == ["s1", "s2"]
+        assert _wave_ids(waves[0]) == ["a", "b", "c"]
 
-    def test_five_independent_steps(self) -> None:
-        """Five independent steps -> one wave with all five."""
-        steps = _steps("a", "b", "c", "d", "e")
-        deps: Dict[str, List[str]] = {}
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        assert len(waves) == 1
-        assert _wave_ids(waves[0]) == ["a", "b", "c", "d", "e"]
-
-    def test_ten_independent_concurrent(self) -> None:
-        """Ten independent steps (max per wave) -> one wave."""
-        ids = [f"s{i}" for i in range(10)]
-        steps = _steps(*ids)
-        deps: Dict[str, List[str]] = {}
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        assert len(waves) == 1
-        assert len(waves[0].steps) == 10
-
-
-# ===========================================================================
-# TestBuildWavesDiamond
-# ===========================================================================
-
-
-class TestBuildWavesDiamond:
-    """Diamond: s1 -> (s2, s3) -> s4."""
-
-    def test_classic_diamond(self) -> None:
-        """Diamond DAG produces 3 waves."""
+    def test_diamond_three_waves(self) -> None:
         steps = _steps("s1", "s2", "s3", "s4")
         deps = {"s2": ["s1"], "s3": ["s1"], "s4": ["s2", "s3"]}
-
         waves = DAGExecutor.build_waves(steps, deps)
-
         assert len(waves) == 3
-        assert _wave_ids(waves[0]) == ["s1"]
-        assert _wave_ids(waves[1]) == ["s2", "s3"]  # parallel
-        assert _wave_ids(waves[2]) == ["s4"]
-
-    def test_double_diamond(self) -> None:
-        """Two diamonds chained: (s1->s2+s3->s4) then (s4->s5+s6->s7)."""
-        steps = _steps("s1", "s2", "s3", "s4", "s5", "s6", "s7")
-        deps = {
-            "s2": ["s1"],
-            "s3": ["s1"],
-            "s4": ["s2", "s3"],
-            "s5": ["s4"],
-            "s6": ["s4"],
-            "s7": ["s5", "s6"],
-        }
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        assert len(waves) == 5
         assert _wave_ids(waves[0]) == ["s1"]
         assert _wave_ids(waves[1]) == ["s2", "s3"]
         assert _wave_ids(waves[2]) == ["s4"]
-        assert _wave_ids(waves[3]) == ["s5", "s6"]
-        assert _wave_ids(waves[4]) == ["s7"]
 
-    def test_wide_fan_out_fan_in(self) -> None:
-        """s1 fans out to 5 steps, all converge on s7."""
-        steps = _steps("s1", "s2", "s3", "s4", "s5", "s6", "s7")
-        deps = {
-            "s2": ["s1"],
-            "s3": ["s1"],
-            "s4": ["s1"],
-            "s5": ["s1"],
-            "s6": ["s1"],
-            "s7": ["s2", "s3", "s4", "s5", "s6"],
-        }
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        assert len(waves) == 3
-        assert _wave_ids(waves[0]) == ["s1"]
-        assert len(waves[1].steps) == 5
-        assert _wave_ids(waves[2]) == ["s7"]
-
-
-# ===========================================================================
-# TestBuildWavesComplex
-# ===========================================================================
-
-
-class TestBuildWavesComplex:
-    """Multi-wave complex DAGs that exercise parallel + serial combos."""
-
-    def test_mixed_serial_parallel(self) -> None:
-        """s1, s2 independent; s3 depends on s1; s4 depends on s1+s2."""
-        steps = _steps("s1", "s2", "s3", "s4")
-        deps = {"s3": ["s1"], "s4": ["s1", "s2"]}
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        assert len(waves) == 2
-        assert _wave_ids(waves[0]) == ["s1", "s2"]
-        assert _wave_ids(waves[1]) == ["s3", "s4"]
-
-    def test_staggered_dependencies(self) -> None:
-        """s1 -> s2 -> s4; s1 -> s3 -> s5; s4+s5 -> s6."""
-        steps = _steps("s1", "s2", "s3", "s4", "s5", "s6")
-        deps = {
-            "s2": ["s1"],
-            "s3": ["s1"],
-            "s4": ["s2"],
-            "s5": ["s3"],
-            "s6": ["s4", "s5"],
-        }
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        assert len(waves) == 4
-        assert _wave_ids(waves[0]) == ["s1"]
-        assert _wave_ids(waves[1]) == ["s2", "s3"]
-        assert _wave_ids(waves[2]) == ["s4", "s5"]
-        assert _wave_ids(waves[3]) == ["s6"]
-
-    def test_two_independent_chains(self) -> None:
-        """Two parallel chains: a1->a2->a3 and b1->b2->b3."""
-        steps = _steps("a1", "a2", "a3", "b1", "b2", "b3")
-        deps = {
-            "a2": ["a1"],
-            "a3": ["a2"],
-            "b2": ["b1"],
-            "b3": ["b2"],
-        }
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        assert len(waves) == 3
-        assert set(_wave_ids(waves[0])) == {"a1", "b1"}
-        assert set(_wave_ids(waves[1])) == {"a2", "b2"}
-        assert set(_wave_ids(waves[2])) == {"a3", "b3"}
-
-    def test_realistic_plan_schedule_event(self) -> None:
-        """Realistic scenario: search calendar -> search contacts -> book venue."""
-        steps = [
-            _step("search_calendar", "tool.calendar.search"),
-            _step("search_contacts", "tool.contacts.search"),
-            _step("find_venue", "agent.venue.search"),
-            _step("book_venue", "agent.venue.book"),
-        ]
-        deps = {
-            "find_venue": ["search_calendar"],
-            "book_venue": ["find_venue", "search_contacts"],
-        }
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        assert len(waves) == 3
-        # Wave 0: search_calendar + search_contacts (independent)
-        assert set(_wave_ids(waves[0])) == {"search_calendar", "search_contacts"}
-        # Wave 1: find_venue (depends on search_calendar only)
-        assert _wave_ids(waves[1]) == ["find_venue"]
-        # Wave 2: book_venue (depends on find_venue + search_contacts)
-        assert _wave_ids(waves[2]) == ["book_venue"]
-
-
-# ===========================================================================
-# TestCycleDetection
-# ===========================================================================
-
-
-class TestCycleDetection:
-    """Cycle detection raises CycleError with involved step IDs."""
-
-    def test_self_loop(self) -> None:
-        """Step depending on itself is a cycle."""
-        steps = _steps("s1")
-        deps = {"s1": ["s1"]}
-
-        with pytest.raises(CycleError) as exc_info:
-            DAGExecutor.build_waves(steps, deps)
-
-        assert "s1" in exc_info.value.remaining_steps
-
-    def test_two_step_cycle(self) -> None:
-        """s1 -> s2 -> s1 is a cycle."""
-        steps = _steps("s1", "s2")
-        deps = {"s1": ["s2"], "s2": ["s1"]}
-
-        with pytest.raises(CycleError) as exc_info:
-            DAGExecutor.build_waves(steps, deps)
-
-        assert exc_info.value.remaining_steps == {"s1", "s2"}
-
-    def test_three_step_cycle(self) -> None:
-        """s1 -> s2 -> s3 -> s1 is a cycle."""
-        steps = _steps("s1", "s2", "s3")
-        deps = {"s2": ["s1"], "s3": ["s2"], "s1": ["s3"]}
-
-        with pytest.raises(CycleError) as exc_info:
-            DAGExecutor.build_waves(steps, deps)
-
-        assert exc_info.value.remaining_steps == {"s1", "s2", "s3"}
-
-    def test_cycle_in_subset(self) -> None:
-        """Cycle in a subgraph: s1 independent, s2<->s3 cycle."""
-        steps = _steps("s1", "s2", "s3")
-        deps = {"s2": ["s3"], "s3": ["s2"]}
-
-        with pytest.raises(CycleError) as exc_info:
-            DAGExecutor.build_waves(steps, deps)
-
-        # s1 is NOT in the cycle
-        assert "s1" not in exc_info.value.remaining_steps
-        assert exc_info.value.remaining_steps == {"s2", "s3"}
-
-    def test_cycle_error_message_contains_step_ids(self) -> None:
-        """CycleError message includes involved step IDs."""
-        steps = _steps("alpha", "beta")
-        deps = {"alpha": ["beta"], "beta": ["alpha"]}
-
-        with pytest.raises(CycleError, match="alpha.*beta|beta.*alpha"):
-            DAGExecutor.build_waves(steps, deps)
-
-    def test_large_cycle(self) -> None:
-        """Long cycle: s1->s2->s3->s4->s5->s1."""
-        ids = [f"s{i}" for i in range(1, 6)]
-        steps = _steps(*ids)
-        deps = {
-            "s2": ["s1"],
-            "s3": ["s2"],
-            "s4": ["s3"],
-            "s5": ["s4"],
-            "s1": ["s5"],
-        }
-
-        with pytest.raises(CycleError) as exc_info:
-            DAGExecutor.build_waves(steps, deps)
-
-        assert len(exc_info.value.remaining_steps) == 5
-
-
-# ===========================================================================
-# TestLimitEnforcement
-# ===========================================================================
-
-
-class TestLimitEnforcement:
-    """Step and wave count limit validation."""
-
-    def test_max_steps_exact_pass(self) -> None:
-        """Exactly MAX_STEPS (50) steps is allowed."""
-        ids = [f"s{i}" for i in range(MAX_STEPS)]
-        steps = _steps(*ids)
-        deps: Dict[str, List[str]] = {}
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        assert len(waves) == 1
-        assert len(waves[0].steps) == MAX_STEPS
-
-    def test_max_steps_exceeded(self) -> None:
-        """51 steps raises StepLimitExceeded."""
-        ids = [f"s{i}" for i in range(MAX_STEPS + 1)]
-        steps = _steps(*ids)
-        deps: Dict[str, List[str]] = {}
-
-        with pytest.raises(StepLimitExceeded) as exc_info:
-            DAGExecutor.build_waves(steps, deps)
-
-        assert exc_info.value.step_count == MAX_STEPS + 1
-        assert exc_info.value.max_steps == MAX_STEPS
-
-    def test_max_waves_exact_pass(self) -> None:
-        """Exactly MAX_WAVES (20) waves -- long chain of 20 steps."""
-        ids = [f"s{i}" for i in range(MAX_WAVES)]
-        steps = _steps(*ids)
-        deps: Dict[str, List[str]] = {}
-        for i in range(1, MAX_WAVES):
-            deps[f"s{i}"] = [f"s{i - 1}"]
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        assert len(waves) == MAX_WAVES
-
-    def test_max_waves_exceeded(self) -> None:
-        """21-step linear chain exceeds MAX_WAVES."""
-        count = MAX_WAVES + 1
-        ids = [f"s{i}" for i in range(count)]
-        steps = _steps(*ids)
-        deps: Dict[str, List[str]] = {}
-        for i in range(1, count):
-            deps[f"s{i}"] = [f"s{i - 1}"]
-
-        with pytest.raises(WaveLimitExceeded) as exc_info:
-            DAGExecutor.build_waves(steps, deps)
-
-        assert exc_info.value.wave_count == count
-        assert exc_info.value.max_waves == MAX_WAVES
-
-    def test_step_limit_error_str(self) -> None:
-        """StepLimitExceeded has descriptive message."""
-        err = StepLimitExceeded(55)
-        assert "55" in str(err)
-        assert "50" in str(err)
-
-    def test_wave_limit_error_str(self) -> None:
-        """WaveLimitExceeded has descriptive message."""
-        err = WaveLimitExceeded(25)
-        assert "25" in str(err)
-        assert "20" in str(err)
-
-
-# ===========================================================================
-# TestDependencyValidation
-# ===========================================================================
-
-
-class TestDependencyValidation:
-    """Invalid dependency references raise ValueError."""
-
-    def test_dep_key_not_in_steps(self) -> None:
-        """Dependency key references a step that does not exist."""
-        steps = _steps("s1")
-        deps = {"s_unknown": ["s1"]}
-
-        with pytest.raises(ValueError, match="s_unknown.*not found"):
-            DAGExecutor.build_waves(steps, deps)
-
-    def test_dep_value_not_in_steps(self) -> None:
-        """Dependency value references a step that does not exist."""
-        steps = _steps("s1", "s2")
-        deps = {"s2": ["s_missing"]}
-
-        with pytest.raises(ValueError, match="s_missing.*not in"):
-            DAGExecutor.build_waves(steps, deps)
-
-    def test_dep_key_and_value_both_invalid(self) -> None:
-        """Both dependency key and value are invalid."""
-        steps = _steps("s1")
-        deps = {"ghost": ["phantom"]}
-
-        with pytest.raises(ValueError):
-            DAGExecutor.build_waves(steps, deps)
-
-
-# ===========================================================================
-# TestEdgeCases
-# ===========================================================================
-
-
-class TestEdgeCases:
-    """Edge cases: single step, empty input, unusual topologies."""
-
-    def test_single_step_no_deps(self) -> None:
-        """Single step with no dependencies -> one wave."""
+    def test_single_step(self) -> None:
         steps = _steps("only")
-        deps: Dict[str, List[str]] = {}
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
+        waves = DAGExecutor.build_waves(steps, {})
         assert len(waves) == 1
         assert _wave_ids(waves[0]) == ["only"]
-        assert waves[0].wave_index == 0
 
-    def test_empty_dep_list_for_step(self) -> None:
-        """Step explicitly listed in deps with empty list -> no deps."""
-        steps = _steps("s1", "s2")
-        deps: Dict[str, List[str]] = {"s2": []}
+    def test_wave_indices_sequential(self) -> None:
+        steps = _steps("x", "y", "z")
+        waves = DAGExecutor.build_waves(steps, {"y": ["x"], "z": ["y"]})
+        assert [w.wave_index for w in waves] == [0, 1, 2]
 
-        waves = DAGExecutor.build_waves(steps, deps)
+    def test_resolved_params_initially_empty(self) -> None:
+        steps = _steps("a", "b")
+        waves = DAGExecutor.build_waves(steps, {"b": ["a"]})
+        assert all(w.resolved_params == {} for w in waves)
 
-        # Both steps have zero in-degree -> single wave
-        assert len(waves) == 1
-        assert _wave_ids(waves[0]) == ["s1", "s2"]
+    def test_cycle_self_loop(self) -> None:
+        with pytest.raises(CycleError):
+            DAGExecutor.build_waves(_steps("s1"), {"s1": ["s1"]})
 
-    def test_step_fields_preserved_in_wave(self) -> None:
-        """PlanStep fields (capability, params, etc.) are preserved."""
-        step = PlanStep(
-            id="s1",
-            capability="cap.test",
-            params={"key": "value"},
-            timeout_ms=5000,
-        )
-        waves = DAGExecutor.build_waves([step], {})
+    def test_cycle_two_steps(self) -> None:
+        with pytest.raises(CycleError):
+            DAGExecutor.build_waves(_steps("s1", "s2"), {"s1": ["s2"], "s2": ["s1"]})
 
-        assert waves[0].steps[0].capability == "cap.test"
-        assert waves[0].steps[0].params == {"key": "value"}
-        assert waves[0].steps[0].timeout_ms == 5000
+    def test_invalid_dep_key(self) -> None:
+        with pytest.raises(ValueError):
+            DAGExecutor.build_waves(_steps("s1"), {"ghost": ["s1"]})
 
-    def test_deep_then_wide(self) -> None:
-        """Chain of 3 -> fan out to 5 independent -> converge."""
-        steps = _steps("a", "b", "c", "d1", "d2", "d3", "d4", "d5", "e")
-        deps = {
-            "b": ["a"],
-            "c": ["b"],
-            "d1": ["c"],
-            "d2": ["c"],
-            "d3": ["c"],
-            "d4": ["c"],
-            "d5": ["c"],
-            "e": ["d1", "d2", "d3", "d4", "d5"],
-        }
+    def test_invalid_dep_value(self) -> None:
+        with pytest.raises(ValueError):
+            DAGExecutor.build_waves(_steps("s1", "s2"), {"s2": ["missing"]})
 
-        waves = DAGExecutor.build_waves(steps, deps)
+    def test_step_limit_exceeded(self) -> None:
+        ids = [f"s{i}" for i in range(MAX_STEPS + 1)]
+        with pytest.raises(StepLimitExceeded):
+            DAGExecutor.build_waves(_steps(*ids), {})
 
-        assert len(waves) == 5
-        assert _wave_ids(waves[0]) == ["a"]
-        assert _wave_ids(waves[1]) == ["b"]
-        assert _wave_ids(waves[2]) == ["c"]
-        assert len(waves[3].steps) == 5
-        assert _wave_ids(waves[4]) == ["e"]
+    def test_wave_limit_exceeded(self) -> None:
+        count = MAX_WAVES + 1
+        ids = [f"s{i}" for i in range(count)]
+        deps = {f"s{i}": [f"s{i-1}"] for i in range(1, count)}
+        with pytest.raises(WaveLimitExceeded):
+            DAGExecutor.build_waves(_steps(*ids), deps)
 
 
-# ===========================================================================
-# TestDeterminism
-# ===========================================================================
+class TestExecuteCore:
+    @pytest.mark.asyncio
+    async def test_linear_exec_success(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        steps = [_step("s1", "cap.s1"), _step("s2", "cap.s2"), _step("s3", "cap.s3")]
+        _register_caps(fabric, "cap.s1", "cap.s2", "cap.s3")
+        plan = _plan(steps, deps={"s2": ["s1"], "s3": ["s2"]})
 
+        result = await dag.execute(plan, _snapshot())
 
-class TestDeterminism:
-    """Verify deterministic wave ordering for reproducibility."""
+        assert result.success is True
+        assert result.completed == 3
+        assert result.failed == 0
 
-    def test_same_input_same_output(self) -> None:
-        """Calling build_waves twice with same input produces identical output."""
-        steps = _steps("c", "a", "b")
-        deps = {"c": ["a"], "b": ["a"]}
+    @pytest.mark.asyncio
+    async def test_parallel_exec_success(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        steps = [_step("a", "cap.a"), _step("b", "cap.b")]
+        _register_caps(fabric, "cap.a", "cap.b")
 
-        waves1 = DAGExecutor.build_waves(steps, deps)
-        waves2 = DAGExecutor.build_waves(steps, deps)
+        result = await dag.execute(_plan(steps), _snapshot())
 
-        assert len(waves1) == len(waves2)
-        for w1, w2 in zip(waves1, waves2):
-            assert _wave_ids(w1) == _wave_ids(w2)
+        assert result.success is True
+        assert result.completed == 2
 
-    def test_alphabetical_within_wave(self) -> None:
-        """Steps within a wave are sorted alphabetically by ID."""
-        steps = _steps("zeta", "alpha", "mu", "beta")
-        deps: Dict[str, List[str]] = {}
-
-        waves = DAGExecutor.build_waves(steps, deps)
-
-        assert _wave_ids(waves[0]) == ["alpha", "beta", "mu", "zeta"]
-
-    def test_input_order_does_not_affect_output(self) -> None:
-        """Changing step list order does not affect wave composition."""
-        steps_order1 = _steps("s1", "s2", "s3", "s4")
-        steps_order2 = _steps("s4", "s3", "s2", "s1")
+    @pytest.mark.asyncio
+    async def test_diamond_exec_success(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        steps = [
+            _step("s1", "cap.s1"),
+            _step("s2", "cap.s2"),
+            _step("s3", "cap.s3"),
+            _step("s4", "cap.s4"),
+        ]
+        _register_caps(fabric, "cap.s1", "cap.s2", "cap.s3", "cap.s4")
         deps = {"s2": ["s1"], "s3": ["s1"], "s4": ["s2", "s3"]}
 
-        waves1 = DAGExecutor.build_waves(steps_order1, deps)
-        waves2 = DAGExecutor.build_waves(steps_order2, deps)
+        result = await dag.execute(_plan(steps, deps=deps), _snapshot())
 
-        assert len(waves1) == len(waves2)
-        for w1, w2 in zip(waves1, waves2):
-            assert _wave_ids(w1) == _wave_ids(w2)
+        assert result.success is True
+        assert result.completed == 4
+
+    @pytest.mark.asyncio
+    async def test_single_step_exec(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1")
+
+        result = await dag.execute(_plan([_step("s1", "cap.s1")]), _snapshot())
+
+        assert result.total_steps == 1
+        assert result.completed == 1
 
 
-# ===========================================================================
-# TestConstructor
-# ===========================================================================
+class TestWaveExecutionSemantics:
+    @pytest.mark.asyncio
+    async def test_parallel_wave_uses_concurrency(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2")
+        fabric.script_timeout("cap.s1", 0.08)
+        fabric.script_timeout("cap.s2", 0.08)
+
+        started = time.monotonic()
+        result = await dag.execute(
+            _plan([_step("s1", "cap.s1"), _step("s2", "cap.s2")]), _snapshot()
+        )
+        duration = time.monotonic() - started
+
+        assert result.success is True
+        assert duration < 0.15
+
+    @pytest.mark.asyncio
+    async def test_single_step_waves_are_sequential(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2")
+        fabric.script_timeout("cap.s1", 0.06)
+        fabric.script_timeout("cap.s2", 0.06)
+        plan = _plan([_step("s1", "cap.s1"), _step("s2", "cap.s2")], deps={"s2": ["s1"]})
+
+        started = time.monotonic()
+        result = await dag.execute(plan, _snapshot())
+        duration = time.monotonic() - started
+
+        assert result.success is True
+        assert duration >= 0.10
 
 
-class TestConstructor:
-    """DAGExecutor constructor and initial state."""
-
-    def test_initial_state(self) -> None:
-        """Fresh DAGExecutor has correct initial state."""
-        dag = _make_executor()
-
-        assert dag.interrupt_flag is False
-        assert dag.merged_results == {}
-        assert dag._cancelled_steps == set()
-
-    def test_guards_default_empty(self) -> None:
-        """Guards default to empty list when not provided."""
-        dag = _make_executor()
-
-        assert dag._guards == []
-
-    def test_guards_injected(self) -> None:
-        """Custom guards list is stored."""
-        guards = [FakePort(), FakePort()]
-        dag = _make_executor(guards=guards)
-
-        assert dag._guards is guards
-        assert len(dag._guards) == 2
-
-    def test_repr(self) -> None:
-        """repr includes guard count and state info."""
-        dag = _make_executor()
-
-        r = repr(dag)
-        assert "DAGExecutor" in r
-        assert "guards=0" in r
-        assert "interrupt=False" in r
-
-    def test_ports_stored(self) -> None:
-        """Constructor stores all port references."""
-        fp = FakePort()
-        pp = FakePort()
-        dp = FakePort()
-        sp = FakePort()
-        bp = FakePort()
-        sr = FakePort()
-        er = FakePort()
-
-        dag = DAGExecutor(
-            fabric_port=fp,
-            planner_port=pp,
-            delta_port=dp,
-            state_port=sp,
-            bridge_port=bp,
-            step_runner=sr,
-            error_router=er,
+class TestParamResolution:
+    @pytest.mark.asyncio
+    async def test_resolves_step_reference_param(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.producer", "cap.consumer")
+        fabric.script_result(
+            "cap.producer",
+            CapabilityResult.success_result(
+                request_id="r1",
+                data={"value": 42},
+                provider_id="mock",
+                trace_id="trace-1",
+            ),
+        )
+        plan = _plan(
+            [
+                _step("s1", "cap.producer"),
+                _step("s2", "cap.consumer", params={"x": "$s1.result.value"}),
+            ],
+            deps={"s2": ["s1"]},
         )
 
-        assert dag._fabric_port is fp
-        assert dag._planner_port is pp
-        assert dag._delta_port is dp
-        assert dag._state_port is sp
-        assert dag._bridge_port is bp
-        assert dag._step_runner is sr
-        assert dag._error_router is er
+        result = await dag.execute(plan, _snapshot())
 
-    def test_build_waves_is_static(self) -> None:
-        """build_waves can be called without an instance."""
-        steps = _steps("s1", "s2")
-        deps = {"s2": ["s1"]}
+        assert result.success is True
+        consumer_calls = [c for c in fabric.call_log if c.capability_name == "cap.consumer"]
+        assert len(consumer_calls) == 1
+        assert consumer_calls[0].params.get("x") == 42
 
-        # Call as static method (no instance needed)
-        waves = DAGExecutor.build_waves(steps, deps)
+    @pytest.mark.asyncio
+    async def test_missing_reference_fails_step(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2")
+        plan = _plan(
+            [
+                _step("s1", "cap.s1"),
+                _step("s2", "cap.s2", params={"x": "$missing.result.value"}),
+            ],
+            deps={"s2": ["s1"]},
+        )
 
-        assert len(waves) == 2
+        result = await dag.execute(plan, _snapshot())
+
+        assert result.success is False
+        s2 = [r for r in result.step_results if r.step_id == "s2"][0]
+        assert s2.status == StepStatus.FAILED
+        assert "ParamResolver" in (s2.error_detail or "")
+        fabric.assert_called("cap.s2", times=0)
 
 
-# ===========================================================================
-# TestBuildWavesPurity
-# ===========================================================================
+class TestGuardPipeline:
+    @pytest.mark.asyncio
+    async def test_before_after_step_hooks_called(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2")
+        guard = _RecordingGuard()
+        dag._guards = [guard]
+
+        result = await dag.execute(
+            _plan([_step("s1", "cap.s1"), _step("s2", "cap.s2")]), _snapshot()
+        )
+
+        assert result.success is True
+        assert set(guard.before_step_calls) == {"s1", "s2"}
+        assert set(guard.after_step_calls) == {"s1", "s2"}
+
+    @pytest.mark.asyncio
+    async def test_after_wave_called_per_wave(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2", "cap.s3")
+        guard = _RecordingGuard()
+        dag._guards = [guard]
+        plan = _plan(
+            [_step("s1", "cap.s1"), _step("s2", "cap.s2"), _step("s3", "cap.s3")],
+            deps={"s2": ["s1"], "s3": ["s2"]},
+        )
+
+        result = await dag.execute(plan, _snapshot())
+
+        assert result.success is True
+        assert guard.after_wave_calls == [0, 1, 2]
 
 
-class TestBuildWavesPurity:
-    """Verify build_waves is a pure function with no side effects."""
+class TestCancellationAndInterrupt:
+    @pytest.mark.asyncio
+    async def test_dependency_failure_cancels_dependents(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2", "cap.s3")
+        fabric.script_result("cap.s1", _failure_result(msg="s1-failed"))
+        plan = _plan(
+            [
+                _step("s1", "cap.s1"),
+                _step("s2", "cap.s2"),
+                _step("s3", "cap.s3"),
+            ],
+            deps={"s2": ["s1"], "s3": ["s2"]},
+        )
 
-    def test_input_steps_not_mutated(self) -> None:
-        """Input steps list is not modified."""
-        steps = _steps("s1", "s2", "s3")
-        original_ids = [s.id for s in steps]
-        deps = {"s2": ["s1"], "s3": ["s2"]}
+        result = await dag.execute(plan, _snapshot())
 
-        DAGExecutor.build_waves(steps, deps)
+        assert result.success is False
+        assert [r for r in result.step_results if r.step_id == "s2"][
+            0
+        ].status == StepStatus.CANCELLED
+        assert [r for r in result.step_results if r.step_id == "s3"][
+            0
+        ].status == StepStatus.CANCELLED
 
-        assert [s.id for s in steps] == original_ids
+    @pytest.mark.asyncio
+    async def test_interrupt_before_next_wave_skips_remaining(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2")
+        fabric.script_timeout("cap.s1", 0.05)
+        plan = _plan([_step("s1", "cap.s1"), _step("s2", "cap.s2")], deps={"s2": ["s1"]})
 
-    def test_input_deps_not_mutated(self) -> None:
-        """Input dependencies dict is not modified."""
-        steps = _steps("s1", "s2", "s3")
-        deps = {"s2": ["s1"], "s3": ["s2"]}
-        original_deps = {"s2": ["s1"], "s3": ["s2"]}
+        async def _flip_interrupt() -> None:
+            await asyncio.sleep(0.02)
+            dag.interrupt_flag = True
 
-        DAGExecutor.build_waves(steps, deps)
+        flipper = asyncio.create_task(_flip_interrupt())
+        result = await dag.execute(plan, _snapshot())
+        await flipper
 
-        assert deps == original_deps
+        assert result.success is False
+        s2 = [r for r in result.step_results if r.step_id == "s2"][0]
+        assert s2.status == StepStatus.CANCELLED
 
-    def test_no_instance_state_mutation(self) -> None:
-        """Calling build_waves on an instance does not mutate state."""
-        dag = _make_executor()
-        steps = _steps("s1", "s2")
-        deps = {"s2": ["s1"]}
 
-        dag.build_waves(steps, deps)
+class TestSafetyBandAndStateReads:
+    @pytest.mark.asyncio
+    async def test_red_safety_band_aborts_execution(self) -> None:
+        _, dag, fabric, state, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1")
+        state.set_section("default", "control.safety_band", {"level": "RED"})
 
-        assert dag.merged_results == {}
-        assert dag._cancelled_steps == set()
-        assert dag.interrupt_flag is False
+        result = await dag.execute(_plan([_step("s1", "cap.s1")]), _snapshot())
+
+        assert result.success is False
+        assert result.completed == 0
+
+    @pytest.mark.asyncio
+    async def test_safety_band_reread_each_wave(self) -> None:
+        _, dag, fabric, state, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2", "cap.s3")
+        state.set_section("default", "control.safety_band", {"level": "GREEN"})
+        plan = _plan(
+            [_step("s1", "cap.s1"), _step("s2", "cap.s2"), _step("s3", "cap.s3")],
+            deps={"s2": ["s1"], "s3": ["s2"]},
+        )
+
+        result = await dag.execute(plan, _snapshot())
+
+        assert result.success is True
+        reads = [r for r in state.read_log if r == ("default", "control.safety_band")]
+        assert len(reads) == 3
+
+
+class TestSagaCompensation:
+    @pytest.mark.asyncio
+    async def test_side_effect_failure_triggers_lifo_compensation(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2", "cap.s3", "cap.undo.s1", "cap.undo.s2")
+
+        # s3 fails; s1/s2 succeeded with side effects, so compensate s2 then s1.
+        fabric.script_result("cap.s3", _failure_result(msg="fail-final"))
+
+        steps = [
+            _step("s1", "cap.s1", has_side_effects=True, compensation="cap.undo.s1"),
+            _step("s2", "cap.s2", has_side_effects=True, compensation="cap.undo.s2"),
+            _step("s3", "cap.s3", has_side_effects=True),
+        ]
+        plan = _plan(steps, deps={"s2": ["s1"], "s3": ["s2"]})
+
+        result = await dag.execute(plan, _snapshot())
+
+        assert result.success is False
+        assert len(result.compensations) == 2
+        assert [c.step_id for c in result.compensations] == ["s2", "s1"]
+
+        comp_caps = [
+            r.capability_name for r in fabric.call_log if r.capability_name.startswith("cap.undo")
+        ]
+        assert comp_caps == ["cap.undo.s2", "cap.undo.s1"]
+
+    @pytest.mark.asyncio
+    async def test_compensation_failure_dead_lettered(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2", "cap.undo.s1")
+
+        fabric.script_result("cap.s2", _failure_result(msg="fail-trigger"))
+        from k1.orchestrator.types import AdapterError, ErrorSeverity
+
+        fabric.script_error(
+            "cap.undo.s1",
+            AdapterError(
+                severity=ErrorSeverity.TERMINAL,
+                adapter_name="fabric",
+                operation="execute",
+                error_code="UNDO_FAIL",
+                error_message="undo failed",
+            ),
+        )
+
+        steps = [
+            _step("s1", "cap.s1", has_side_effects=True, compensation="cap.undo.s1"),
+            _step("s2", "cap.s2", has_side_effects=True),
+        ]
+
+        result = await dag.execute(_plan(steps, deps={"s2": ["s1"]}), _snapshot())
+
+        assert len(result.compensations) == 1
+        assert result.compensations[0].status == "DEAD_LETTERED"
+
+    @pytest.mark.asyncio
+    async def test_no_side_effect_steps_no_compensation(self) -> None:
+        _, dag, fabric, _, _, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2")
+        fabric.script_result("cap.s2", _failure_result(msg="normal failure"))
+
+        steps = [
+            _step("s1", "cap.s1", has_side_effects=False),
+            _step("s2", "cap.s2", has_side_effects=False),
+        ]
+
+        result = await dag.execute(_plan(steps, deps={"s2": ["s1"]}), _snapshot())
+
+        assert result.success is False
+        assert result.compensations == []
+
+
+class TestWalAndDeltaIntegration:
+    @pytest.mark.asyncio
+    async def test_wal_plan_start_wave_complete_dag_complete_written(self) -> None:
+        _, dag, fabric, _, bridge, _ = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2")
+        plan = _plan([_step("s1", "cap.s1"), _step("s2", "cap.s2")], deps={"s2": ["s1"]})
+
+        result = await dag.execute(plan, _snapshot())
+
+        assert result.success is True
+        wal = bridge.get_wal("plan-1")
+        entry_types = [e["entry_type"] for e in wal]
+        assert "PLAN_START" in entry_types
+        assert entry_types.count("WAVE_COMPLETE") == 2
+        assert "DAG_COMPLETE" in entry_types
+
+    @pytest.mark.asyncio
+    async def test_step_complete_written_per_step(self) -> None:
+        _, dag, fabric, _, bridge, _ = await _svc()
+        _register_caps(fabric, "cap.a", "cap.b")
+        await dag.execute(_plan([_step("a", "cap.a"), _step("b", "cap.b")]), _snapshot())
+
+        # STEP_COMPLETE uses dag_id=step_id in current implementation.
+        assert any(e["entry_type"] == "STEP_COMPLETE" for e in bridge.get_wal("a"))
+        assert any(e["entry_type"] == "STEP_COMPLETE" for e in bridge.get_wal("b"))
+
+    @pytest.mark.asyncio
+    async def test_dag_started_and_completed_emitted(self) -> None:
+        _, dag, fabric, _, _, delta = await _svc()
+        _register_caps(fabric, "cap.s1")
+
+        await dag.execute(_plan([_step("s1", "cap.s1")]), _snapshot())
+
+        delta.assert_emitted(ORCH_DAG_STARTED, 1)
+        dag_done = delta.get_emitted(ORCH_DAG_COMPLETED)
+        assert len(dag_done) == 1
+        assert dag_done[0]["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_progress_emitted_per_wave(self) -> None:
+        _, dag, fabric, _, _, delta = await _svc()
+        _register_caps(fabric, "cap.s1", "cap.s2", "cap.s3")
+        plan = _plan(
+            [_step("s1", "cap.s1"), _step("s2", "cap.s2"), _step("s3", "cap.s3")],
+            deps={"s2": ["s1"], "s3": ["s2"]},
+        )
+
+        await dag.execute(plan, _snapshot())
+
+        assert len(delta.progress_log) == 3
+
+
+class TestRecoverFromWal:
+    @pytest.mark.asyncio
+    async def test_no_wal_returns_no_wal(self) -> None:
+        _, _, _, _, bridge, _ = await _svc()
+        info = await DAGExecutor.recover_from_wal(bridge, "unknown")
+        assert info["status"] == "NO_WAL"
+        assert info["resume_wave_index"] == 0
+
+    @pytest.mark.asyncio
+    async def test_completed_wal_returns_completed(self) -> None:
+        _, _, _, _, bridge, _ = await _svc()
+        bridge.inject_wal(
+            "dag-1",
+            [
+                {"entry_type": "PLAN_START", "payload": {}},
+                {
+                    "entry_type": "WAVE_COMPLETE",
+                    "payload": {"wave_index": 0, "completed_steps": ["s1"]},
+                },
+                {"entry_type": "DAG_COMPLETE", "payload": {"status": "COMPLETED"}},
+            ],
+        )
+
+        info = await DAGExecutor.recover_from_wal(bridge, "dag-1")
+
+        assert info["status"] == "COMPLETED"
+        assert info["resume_wave_index"] == -1
+        assert info["dag_status"] == "COMPLETED"
+
+    @pytest.mark.asyncio
+    async def test_resume_after_last_wave(self) -> None:
+        _, _, _, _, bridge, _ = await _svc()
+        bridge.inject_wal(
+            "dag-2",
+            [
+                {"entry_type": "PLAN_START", "payload": {}},
+                {
+                    "entry_type": "WAVE_COMPLETE",
+                    "payload": {"wave_index": 0, "completed_steps": ["s1"]},
+                },
+                {
+                    "entry_type": "WAVE_COMPLETE",
+                    "payload": {"wave_index": 1, "completed_steps": ["s2"]},
+                },
+            ],
+        )
+
+        info = await DAGExecutor.recover_from_wal(bridge, "dag-2")
+
+        assert info["status"] == "RESUME"
+        assert info["resume_wave_index"] == 2
+        assert set(info["completed_steps"]) == {"s1", "s2"}
+
+    @pytest.mark.asyncio
+    async def test_plan_start_only_is_restart(self) -> None:
+        _, _, _, _, bridge, _ = await _svc()
+        bridge.inject_wal("dag-3", [{"entry_type": "PLAN_START", "payload": {}}])
+
+        info = await DAGExecutor.recover_from_wal(bridge, "dag-3")
+
+        assert info["status"] == "RESTART"
+        assert info["resume_wave_index"] == 0

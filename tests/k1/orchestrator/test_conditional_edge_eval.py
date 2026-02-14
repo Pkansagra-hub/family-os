@@ -1,7 +1,7 @@
 """
 Tests for ConditionalEdgeEvaluator (Issue 3.2.2 / ORCH-16).
 
-Test classes:
+Test classes -- unit (pure-function helpers):
   TestResolvePathHelper          -- _resolve_path() unit tests.
   TestDrillDataHelper            -- _drill_data() unit tests.
   TestCoerceLiteral              -- _coerce_literal() type coercion tests.
@@ -16,6 +16,9 @@ Test classes:
   TestConditionalEdgeAllSkipped  -- Entire wave skipped (all conditions FALSE).
   TestConditionalEdgeMergedEmpty -- No merged_results -> conservative skip.
   TestConditionalEdgeRepr        -- __repr__ coverage.
+
+Test classes -- factory-backed real-component (Epic 7.2.2):
+  TestConditionalEdgeEvalReal    -- Factory-wired guard with real types (ORCH-16).
 """
 
 from __future__ import annotations
@@ -831,3 +834,266 @@ class TestPlanExamples:
         decisions = await guard.before_wave(wave, _make_ctx(), merged_results=merged)
 
         assert decisions == []  # TRUE -> dispatch
+
+
+# ===========================================================================
+# Pipeline Tests (Epic 7.2.2 / ORCH-16)
+#
+# Guard tests do NOT import guard classes directly -- they verify guard
+# behaviour through OrchestratorService.process() -> DAGExecutor pipeline.
+# ===========================================================================
+
+import pytest
+
+from k1.orchestrator.types import ProcessResult
+from tests.k1.orchestrator.helpers import (
+    make_plan,
+    make_step,
+    orchestrator_for_testing,
+    process_plan,
+    register_capabilities,
+)
+
+
+class TestConditionalEdgeEvalPipeline:
+    """Verify ORCH-16 (conditional edge evaluation) through process() pipeline.
+
+    Creates multi-wave plans where later steps have conditions referencing
+    prior step results. Verifies which capabilities actually executed via
+    MockFabricAdapter.call_log.
+    """
+
+    # -- (1) Guard is second in pipeline --------------------------------
+
+    @pytest.mark.asyncio
+    async def test_guard_is_second_in_pipeline(self) -> None:
+        service, _ = await orchestrator_for_testing()
+        names = [g.__class__.__name__ for g in service._dag_executor._guards]
+        assert names[1] == "ConditionalEdgeEvaluator"
+
+    # -- (2) No condition -> step always executes -----------------------
+
+    @pytest.mark.asyncio
+    async def test_no_condition_step_always_executes(self) -> None:
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.a", "cap.b")
+
+        s1 = make_step("s1", "cap.a")
+        s2 = make_step("s2", "cap.b")
+        plan = make_plan([s1, s2], deps={"s2": ["s1"]})
+
+        result = await process_plan(service, plan)
+
+        assert result == ProcessResult.COMPLETED
+        fabric.assert_called("cap.a", times=1)
+        fabric.assert_called("cap.b", times=1)
+
+    # -- (3) TRUE condition -> step executes ----------------------------
+
+    @pytest.mark.asyncio
+    async def test_true_condition_step_executes(self) -> None:
+        """s1 succeeds -> s2 condition (s1.status==COMPLETED) TRUE -> s2 runs."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.a", "cap.b")
+
+        s1 = make_step("s1", "cap.a")
+        s2 = make_step(
+            "s2",
+            "cap.b",
+            condition=ConditionExpr(type="EQ", path="s1.status", literal="COMPLETED"),
+        )
+        plan = make_plan([s1, s2], deps={"s2": ["s1"]})
+
+        result = await process_plan(service, plan)
+
+        assert result == ProcessResult.COMPLETED
+        fabric.assert_called("cap.a", times=1)
+        fabric.assert_called("cap.b", times=1)
+
+    # -- (4) FALSE condition -> step skipped ----------------------------
+
+    @pytest.mark.asyncio
+    async def test_false_condition_step_skipped(self) -> None:
+        """s1 succeeds but condition says s1.status==FAILED -> FALSE -> skip s2."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.a", "cap.b")
+
+        s1 = make_step("s1", "cap.a")
+        s2 = make_step(
+            "s2",
+            "cap.b",
+            condition=ConditionExpr(type="EQ", path="s1.status", literal="FAILED"),
+        )
+        plan = make_plan([s1, s2], deps={"s2": ["s1"]})
+
+        result = await process_plan(service, plan)
+
+        # s2 skipped -> cancelled=1, completed=1 -> FAILED (no DEGRADED path for cancelled)
+        assert result == ProcessResult.FAILED
+        fabric.assert_called("cap.a", times=1)
+        fabric.assert_not_called("cap.b")
+
+    # -- (5) AND condition: both true -> step executes ------------------
+
+    @pytest.mark.asyncio
+    async def test_and_both_true_step_executes(self) -> None:
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.a", "cap.b", "cap.c")
+
+        s1 = make_step("s1", "cap.a")
+        s2 = make_step("s2", "cap.b")
+        s3 = make_step(
+            "s3",
+            "cap.c",
+            condition=ConditionExpr(
+                type="AND",
+                operands=[
+                    ConditionExpr(type="EQ", path="s1.status", literal="COMPLETED"),
+                    ConditionExpr(type="EQ", path="s2.status", literal="COMPLETED"),
+                ],
+            ),
+        )
+        plan = make_plan([s1, s2, s3], deps={"s3": ["s1", "s2"]})
+
+        result = await process_plan(service, plan)
+
+        assert result == ProcessResult.COMPLETED
+        fabric.assert_called("cap.c", times=1)
+
+    # -- (6) AND condition: one false -> step skipped -------------------
+
+    @pytest.mark.asyncio
+    async def test_and_one_false_step_skipped(self) -> None:
+        """s1 succeeds, s2 condition checks nonexistent s99 -> FALSE -> skip."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.a", "cap.c")
+
+        s1 = make_step("s1", "cap.a")
+        # s3 depends on s1 completing AND s99 completing (s99 never ran)
+        s3 = make_step(
+            "s3",
+            "cap.c",
+            condition=ConditionExpr(
+                type="AND",
+                operands=[
+                    ConditionExpr(type="EQ", path="s1.status", literal="COMPLETED"),
+                    ConditionExpr(type="EQ", path="s99.status", literal="COMPLETED"),
+                ],
+            ),
+        )
+        plan = make_plan([s1, s3], deps={"s3": ["s1"]})
+
+        result = await process_plan(service, plan)
+
+        fabric.assert_called("cap.a", times=1)
+        fabric.assert_not_called("cap.c")
+
+    # -- (7) OR condition: one true -> step executes --------------------
+
+    @pytest.mark.asyncio
+    async def test_or_one_true_step_executes(self) -> None:
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.a", "cap.c")
+
+        s1 = make_step("s1", "cap.a")
+        s3 = make_step(
+            "s3",
+            "cap.c",
+            condition=ConditionExpr(
+                type="OR",
+                operands=[
+                    ConditionExpr(type="EQ", path="s1.status", literal="COMPLETED"),
+                    ConditionExpr(type="EQ", path="s99.status", literal="COMPLETED"),
+                ],
+            ),
+        )
+        plan = make_plan([s1, s3], deps={"s3": ["s1"]})
+
+        result = await process_plan(service, plan)
+
+        assert result == ProcessResult.COMPLETED
+        fabric.assert_called("cap.c", times=1)
+
+    # -- (8) NOT condition: inverts result ------------------------------
+
+    @pytest.mark.asyncio
+    async def test_not_inverts_false_to_true(self) -> None:
+        """NOT(s1.status==FAILED) when s1 COMPLETED -> NOT(FALSE) -> TRUE."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.a", "cap.b")
+
+        s1 = make_step("s1", "cap.a")
+        s2 = make_step(
+            "s2",
+            "cap.b",
+            condition=ConditionExpr(
+                type="NOT",
+                operands=[
+                    ConditionExpr(type="EQ", path="s1.status", literal="FAILED"),
+                ],
+            ),
+        )
+        plan = make_plan([s1, s2], deps={"s2": ["s1"]})
+
+        result = await process_plan(service, plan)
+
+        assert result == ProcessResult.COMPLETED
+        fabric.assert_called("cap.b", times=1)
+
+    # -- (9) All steps unconditional -> all execute ---------------------
+
+    @pytest.mark.asyncio
+    async def test_all_unconditional_all_execute(self) -> None:
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        caps = [f"cap.s{i}" for i in range(4)]
+        register_capabilities(fabric, *caps)
+
+        steps = [make_step(f"s{i}", f"cap.s{i}") for i in range(4)]
+        plan = make_plan(steps)
+
+        result = await process_plan(service, plan)
+
+        assert result == ProcessResult.COMPLETED
+        for cap in caps:
+            fabric.assert_called(cap, times=1)
+
+    # -- (10) Mixed wave: some conditional, some not --------------------
+
+    @pytest.mark.asyncio
+    async def test_mixed_wave_partial_skip(self) -> None:
+        """Wave 2 has 3 steps: sa (TRUE), sb (FALSE), sc (no cond). Only sb skipped."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        register_capabilities(fabric, "cap.s1", "cap.sa", "cap.sb", "cap.sc")
+
+        s1 = make_step("s1", "cap.s1")
+        sa = make_step(
+            "sa",
+            "cap.sa",
+            condition=ConditionExpr(type="EQ", path="s1.status", literal="COMPLETED"),
+        )
+        sb = make_step(
+            "sb",
+            "cap.sb",
+            condition=ConditionExpr(type="EQ", path="s1.status", literal="FAILED"),
+        )
+        sc = make_step("sc", "cap.sc")
+        plan = make_plan(
+            [s1, sa, sb, sc],
+            deps={"sa": ["s1"], "sb": ["s1"], "sc": ["s1"]},
+        )
+
+        result = await process_plan(service, plan)
+
+        fabric.assert_called("cap.s1", times=1)
+        fabric.assert_called("cap.sa", times=1)
+        fabric.assert_not_called("cap.sb")
+        fabric.assert_called("cap.sc", times=1)

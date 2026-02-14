@@ -1,7 +1,7 @@
 """
 Tests for MicroReplanCheckpoint (Issue 3.2.5 / ORCH-13).
 
-Test classes:
+Test classes -- unit (pure-function helpers):
   TestExtractDiscoveries            -- _extract_discoveries() unit tests.
   TestCheckParamOverlap             -- _check_param_overlap() heuristic tests.
   TestMicroReplanInit               -- Constructor, reset, properties.
@@ -17,6 +17,9 @@ Test classes:
   TestMicroReplanDiscoveryParsing   -- Edge cases in discovery extraction.
   TestMicroReplanOverlapHeuristic   -- Substring/exact match combinations.
   TestMicroReplanRepr               -- __repr__ coverage.
+
+Test classes -- factory-backed real-component (Epic 7.2.5):
+  TestMicroReplanReal               -- Factory-wired guard with real adapters (ORCH-13).
 """
 
 from __future__ import annotations
@@ -1024,3 +1027,225 @@ class TestMicroReplanRepr:
         r = repr(guard)
         assert "max_replans=3" in r
         assert "replans_used=2" in r
+
+
+# ===========================================================================
+# Pipeline Tests (Epic 7.2.5 / ORCH-13)
+#
+# Guard tests do NOT import guard classes directly -- they verify guard
+# behaviour through OrchestratorService.process() -> DAGExecutor pipeline.
+# ===========================================================================
+
+from uuid import uuid4
+
+import pytest
+
+from k1.orchestrator.types import ProcessResult
+from tests.k1.orchestrator.helpers import (
+    make_plan,
+    make_step,
+    orchestrator_for_testing,
+    process_plan,
+    register_capabilities,
+)
+
+
+def _cap_with_discovery(field: str, value, trace_id: str = "trace-test"):
+    """CapabilityResult containing a discovery that triggers replan heuristic."""
+    return CapabilityResult(
+        request_id=f"r-{uuid4()}",
+        success=True,
+        data={
+            "output": "ok",
+            "discoveries": [{"field": field, "value": value, "source_step_id": "s1"}],
+        },
+        error=None,
+        provider_id="mock",
+        trace_id=trace_id,
+    )
+
+
+def _cap_ok(data=None, trace_id: str = "trace-test"):
+    return CapabilityResult(
+        request_id=f"r-{uuid4()}",
+        success=True,
+        data=data or {},
+        error=None,
+        provider_id="mock",
+        trace_id=trace_id,
+    )
+
+
+class TestMicroReplanPipeline:
+    """Verify ORCH-13 (max 1 replan per DAG) through process() pipeline.
+
+    MicroReplanCheckpoint fires after_wave. When wave step results contain
+    discoveries overlapping remaining step params, it calls
+    planner.micro_replan(). Observable via planner.micro_replan_log.
+    """
+
+    # -- (1) Guard is third in pipeline ---------------------------------
+
+    @pytest.mark.asyncio
+    async def test_guard_is_third_in_pipeline(self) -> None:
+        service, _ = await orchestrator_for_testing()
+        names = [g.__class__.__name__ for g in service._dag_executor._guards]
+        assert names[2] == "MicroReplanCheckpoint"
+
+    # -- (2) Discovery triggers micro_replan call -----------------------
+
+    @pytest.mark.asyncio
+    async def test_discovery_triggers_micro_replan(self) -> None:
+        """Wave 1 returns discovery overlapping s2.params -> planner called."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        planner = adapters["planner"]
+        register_capabilities(fabric, "cap.discover", "cap.use")
+
+        # s1 returns discovery with field "venue_type"
+        fabric.script_result("cap.discover", _cap_with_discovery("venue_type", "outdoor"))
+
+        s1 = make_step("s1", "cap.discover")
+        s2 = make_step("s2", "cap.use", params={"venue_type": "indoor"})
+        plan = make_plan([s1, s2], deps={"s2": ["s1"]})
+
+        await process_plan(service, plan)
+
+        # MicroReplanCheckpoint should have called planner.micro_replan
+        planner.assert_micro_replan_requested(count=1)
+        req = planner.micro_replan_log[0]
+        assert len(req.discoveries) >= 1
+
+    # -- (3) No discovery -> no replan call -----------------------------
+
+    @pytest.mark.asyncio
+    async def test_no_discovery_no_replan(self) -> None:
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        planner = adapters["planner"]
+        register_capabilities(fabric, "cap.a", "cap.b")
+
+        s1 = make_step("s1", "cap.a")
+        s2 = make_step("s2", "cap.b", params={"key": "val"})
+        plan = make_plan([s1, s2], deps={"s2": ["s1"]})
+
+        await process_plan(service, plan)
+
+        assert planner.micro_replan_log == []
+
+    # -- (4) No param overlap -> no replan ------------------------------
+
+    @pytest.mark.asyncio
+    async def test_discovery_no_param_overlap_no_replan(self) -> None:
+        """Discovery field doesn't overlap any remaining step params."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        planner = adapters["planner"]
+        register_capabilities(fabric, "cap.discover", "cap.use")
+
+        fabric.script_result("cap.discover", _cap_with_discovery("weather", "sunny"))
+
+        s1 = make_step("s1", "cap.discover")
+        s2 = make_step("s2", "cap.use", params={"budget": 100})  # No overlap
+        plan = make_plan([s1, s2], deps={"s2": ["s1"]})
+
+        await process_plan(service, plan)
+
+        assert planner.micro_replan_log == []
+
+    # -- (5) Max 1 replan per DAG (ORCH-13) -----------------------------
+
+    @pytest.mark.asyncio
+    async def test_max_one_replan_per_dag(self) -> None:
+        """Second wave discovery should NOT trigger another replan."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        planner = adapters["planner"]
+        register_capabilities(fabric, "cap.d1", "cap.d2", "cap.use")
+
+        # s1 discovery triggers replan, s2 discovery should be blocked
+        fabric.script_result("cap.d1", _cap_with_discovery("key1", "val1"))
+        fabric.script_result("cap.d2", _cap_with_discovery("key2", "val2"))
+
+        s1 = make_step("s1", "cap.d1")
+        s2 = make_step("s2", "cap.d2", params={"key1": "old1"})
+        s3 = make_step("s3", "cap.use", params={"key2": "old2"})
+        plan = make_plan(
+            [s1, s2, s3],
+            deps={"s2": ["s1"], "s3": ["s2"]},
+        )
+
+        # Script planner to return a plan for the first replan
+        # (budget is only consumed when planner returns a plan)
+        # Key by plan_id since MicroReplanRequest.original_plan_id == plan.plan_id
+        planner.script_micro_replan(plan.plan_id, plan)
+
+        await process_plan(service, plan)
+
+        # Only ONE micro_replan call despite two discoveries
+        planner.assert_micro_replan_requested(count=1)
+
+    # -- (6) Final wave (no remaining steps) -> no replan ---------------
+
+    @pytest.mark.asyncio
+    async def test_final_wave_no_remaining_no_replan(self) -> None:
+        """Single-wave plan: discovery in final wave has no remaining steps."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        planner = adapters["planner"]
+        register_capabilities(fabric, "cap.discover")
+
+        fabric.script_result("cap.discover", _cap_with_discovery("venue", "park"))
+
+        s1 = make_step("s1", "cap.discover")
+        plan = make_plan([s1])  # No future waves
+
+        await process_plan(service, plan)
+
+        assert planner.micro_replan_log == []
+
+    # -- (7) Planner returns None -> original plan continues ------------
+
+    @pytest.mark.asyncio
+    async def test_planner_returns_none_continues(self) -> None:
+        """planner.micro_replan returns None -> execution continues normally."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        planner = adapters["planner"]
+        register_capabilities(fabric, "cap.discover", "cap.use")
+
+        fabric.script_result("cap.discover", _cap_with_discovery("key", "val"))
+        # planner.micro_replan returns None by default (not scripted)
+
+        s1 = make_step("s1", "cap.discover")
+        s2 = make_step("s2", "cap.use", params={"key": "old"})
+        plan = make_plan([s1, s2], deps={"s2": ["s1"]})
+
+        result = await process_plan(service, plan)
+
+        assert result == ProcessResult.COMPLETED
+        planner.assert_micro_replan_requested(count=1)
+        fabric.assert_called("cap.use", times=1)  # s2 still executed
+
+    # -- (8) Pipeline completes with discovery + replan -----------------
+
+    @pytest.mark.asyncio
+    async def test_pipeline_completes_with_discovery(self) -> None:
+        """Full pipeline: s1 discovery -> replan called -> s2 executes -> COMPLETED."""
+        service, adapters = await orchestrator_for_testing()
+        fabric = adapters["fabric"]
+        planner = adapters["planner"]
+        register_capabilities(fabric, "cap.discover", "cap.use")
+
+        fabric.script_result("cap.discover", _cap_with_discovery("budget", 500))
+
+        s1 = make_step("s1", "cap.discover")
+        s2 = make_step("s2", "cap.use", params={"budget": 100})
+        plan = make_plan([s1, s2], deps={"s2": ["s1"]})
+
+        result = await process_plan(service, plan)
+
+        assert result == ProcessResult.COMPLETED
+        fabric.assert_called("cap.discover", times=1)
+        fabric.assert_called("cap.use", times=1)
+        planner.assert_micro_replan_requested(count=1)

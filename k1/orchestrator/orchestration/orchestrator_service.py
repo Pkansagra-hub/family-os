@@ -32,7 +32,7 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, cast, runtime_checkable
 from uuid import uuid4
 
 from k1.fabric.ports.event_port import SubscriptionHandle
@@ -50,6 +50,7 @@ from k1.orchestrator.events import (
     PLAN_FAILED,
     PLAN_READY,
 )
+from k1.orchestrator.metrics import OrchestratorMetrics
 from k1.orchestrator.ports.bridge_write_port import IBridgeWritePort
 from k1.orchestrator.ports.delta_emit_port import IDeltaEmitPort
 from k1.orchestrator.ports.event_subscription_port import IEventSubscriptionPort
@@ -57,6 +58,7 @@ from k1.orchestrator.ports.fabric_gateway_port import IFabricGatewayPort
 from k1.orchestrator.ports.mailbox_port import IMailboxPort, MailboxMessage
 from k1.orchestrator.ports.planner_port import IPlannerPort
 from k1.orchestrator.ports.state_read_port import IStateReadPort
+from k1.orchestrator.tracing import trace_phase
 from k1.orchestrator.types import (
     AdapterError,
     AggregatedResult,
@@ -66,7 +68,6 @@ from k1.orchestrator.types import (
     InterruptRequest,
     PendingHILContext,
     PendingPlanContext,
-    PlanAck,
     PlanRequest,
     ProcessingContext,
     ProcessResult,
@@ -161,9 +162,13 @@ class ErrorRouterLike(Protocol):
 
 @runtime_checkable
 class ConcurrencyGuardLike(Protocol):
-    """Placeholder protocol for ConcurrencyGuard (3.2.x)."""
+    """Protocol for ConcurrencyGuard (3.2.x).
 
-    def acquire(self, ctx: ProcessingContext) -> bool: ...
+    acquire() is async (asyncio.Lock). release() is sync.
+    Both accept ProcessingContext for tracing (may be ignored).
+    """
+
+    async def acquire(self, ctx: ProcessingContext) -> bool: ...
 
     def release(self, ctx: ProcessingContext) -> None: ...
 
@@ -272,6 +277,8 @@ class OrchestratorService:
         "_loop_task",
         "_reaper_task",
         "_subscriptions",
+        "_admin",
+        "_metrics",
     )
 
     def __init__(
@@ -291,6 +298,7 @@ class OrchestratorService:
         bridge_port: IBridgeWritePort,
         event_port: IEventSubscriptionPort,
         config: OrchestratorConfig,
+        metrics: Optional[OrchestratorMetrics] = None,
     ) -> None:
         # --- Collaborators (injected, never constructed here) ---
         self._mailbox = mailbox
@@ -308,6 +316,7 @@ class OrchestratorService:
         self._delta_port = delta_port
         self._bridge_port = bridge_port
         self._event_port = event_port
+        self._metrics = metrics or OrchestratorMetrics(enabled=config.metrics_enabled)
 
         # --- Configuration ---
         self._config = config
@@ -325,6 +334,7 @@ class OrchestratorService:
         self._loop_task: Optional[asyncio.Task[None]] = None
         self._reaper_task: Optional[asyncio.Task[None]] = None
         self._subscriptions: List[SubscriptionHandle] = []
+        self._admin: Optional[Any] = None
 
     # ======================================================================
     # Properties (read-only accessors for internal state -- used by tests
@@ -422,6 +432,7 @@ class OrchestratorService:
 
         # Step 4: MCP discover + register (500ms timeout)
         registration = await self._discover_mcp_tools()
+        self._metrics.set_mcp_registered_capabilities(registration.registered)
         log.info(
             "init.mcp_discovery",
             extra={
@@ -435,6 +446,9 @@ class OrchestratorService:
 
         # Step 6: Load active workflows
         workflows = await self._workflow_engine.registry.list_active()  # type: ignore[union-attr]
+        self._metrics.set_workflow_active_count(len(workflows))
+        self._metrics.set_pending_plans(len(self._pending_plans))
+        self._metrics.set_pending_hil(len(self._pending_hil))
         log.info("init.workflows_loaded", extra={"count": len(workflows)})
 
         # Step 7: Start scheduler
@@ -455,6 +469,17 @@ class OrchestratorService:
 
         # Step 10: Start mailbox processing loop
         self._loop_task = asyncio.create_task(self._mailbox_loop())
+
+        # Step 10.5: Start admin HTTP server (if configured and adapter injected).
+        if self._admin is not None and self._config.admin_enabled:
+            try:
+                await self._admin.start(self._config.admin_port)
+                log.info(
+                    "init.step10_5.admin_started",
+                    extra={"port": self._config.admin_port},
+                )
+            except Exception:
+                log.exception("init.step10_5.admin_start_error")
 
         self._initialized = True
 
@@ -728,6 +753,7 @@ class OrchestratorService:
         """
         request_id = payload.get("request_id", "")
         pending = self._pending_plans.pop(request_id, None)
+        self._metrics.set_pending_plans(len(self._pending_plans))
         if pending is None:
             log.warning(
                 "on_plan_failed.no_pending_context",
@@ -749,6 +775,7 @@ class OrchestratorService:
         """
         request_id = payload.get("request_id", "")
         pending = self._pending_plans.pop(request_id, None)
+        self._metrics.set_pending_plans(len(self._pending_plans))
         if pending is None:
             log.warning(
                 "on_plan_cancelled.no_pending_context",
@@ -770,6 +797,7 @@ class OrchestratorService:
         request_id = payload.get("request_id", "")
         choice = payload.get("choice", "CONTINUE")
         pending = self._pending_hil.pop(request_id, None)
+        self._metrics.set_pending_hil(len(self._pending_hil))
         if pending is None:
             log.warning(
                 "on_hil_override.no_pending_context",
@@ -780,6 +808,7 @@ class OrchestratorService:
             "on_hil_override.resolved",
             extra={"request_id": request_id, "choice": choice},
         )
+        self._metrics.increment_hil_request(outcome="responded")
 
     def _on_hil_fallback(self, topic: str, payload: Dict[str, Any]) -> None:
         """Handle HIL_FALLBACK_RESPONSE: resolve pending HIL context with fallback.
@@ -790,6 +819,7 @@ class OrchestratorService:
         request_id = payload.get("request_id", "")
         fallback_action = payload.get("fallback_action", "CANCEL")
         pending = self._pending_hil.pop(request_id, None)
+        self._metrics.set_pending_hil(len(self._pending_hil))
         if pending is None:
             log.warning(
                 "on_hil_fallback.no_pending_context",
@@ -800,6 +830,7 @@ class OrchestratorService:
             "on_hil_fallback.resolved",
             extra={"request_id": request_id, "fallback_action": fallback_action},
         )
+        self._metrics.increment_hil_request(outcome="responded")
 
     # ======================================================================
     # Lifecycle: shutdown() -- 9-step teardown sequence (6.2.3)
@@ -953,6 +984,14 @@ class OrchestratorService:
         except Exception:
             log.exception("shutdown.step8.audit_error")
 
+        # Step 8.5: Stop admin HTTP server.
+        if self._admin is not None:
+            try:
+                await self._admin.stop()
+                log.info("shutdown.step8_5.admin_stopped")
+            except Exception:
+                log.exception("shutdown.step8_5.admin_stop_error")
+
         # Step 9: Cancel background tasks and clear state.
         try:
             if self._reaper_task is not None:
@@ -1011,7 +1050,20 @@ class OrchestratorService:
         Yields 1ms when empty to prevent busy-wait.
         """
         while self._running:
-            msg = self._mailbox.dequeue()
+            with self._metrics.time_dequeue():
+                msg = self._mailbox.dequeue()
+            trace_phase(
+                log,
+                "dequeue",
+                trace_id=getattr(msg, "trace_id", "") if msg is not None else None,
+                request_id=getattr(msg, "request_id", None) if msg is not None else None,
+                success=msg is not None,
+                level=logging.DEBUG,
+            )
+            try:
+                self._metrics.set_mailbox_depth(self._mailbox.depth())
+            except Exception:
+                pass
             if msg is None:
                 await asyncio.sleep(0.001)  # 1ms yield
                 continue
@@ -1048,54 +1100,64 @@ class OrchestratorService:
         )
 
         try:
-            # Step 3: Concurrency guard check.
-            if not isinstance(msg, InterruptRequest):
-                # DAG-requiring types: defer if guard active.
-                if isinstance(msg, (TaskEnvelope, CommittedPlan, WorkflowRunRequest)):
-                    if getattr(self._concurrency_guard, "active", False):
-                        self._mailbox.enqueue(msg, priority="BACKGROUND")
-                        log.info(
-                            "mailbox_loop.deferred",
-                            extra={
+            with self._metrics.time_route(message_type=msg_type):
+                trace_phase(
+                    log,
+                    "route",
+                    trace_id=trace_id,
+                    request_id=getattr(msg, "request_id", None),
+                    tier=getattr(msg, "tier", None),
+                    level=logging.DEBUG,
+                )
+                # Step 3: Concurrency guard check.
+                if not isinstance(msg, InterruptRequest):
+                    # DAG-requiring types: defer if guard active.
+                    if isinstance(msg, (TaskEnvelope, CommittedPlan, WorkflowRunRequest)):
+                        if getattr(self._concurrency_guard, "active", False):
+                            self._mailbox.enqueue(msg, priority="BACKGROUND")
+                            log.info(
+                                "mailbox_loop.deferred",
+                                extra={
+                                    "message_type": msg_type,
+                                    "trace_id": trace_id,
+                                    "reason": "DAG active, re-enqueued at BACKGROUND",
+                                },
+                            )
+                            return
+
+                # Step 4: Dispatch to process().
+                result = await self.process(msg)
+
+                # Step 5: Log result.
+                log.info(
+                    "mailbox_loop.result",
+                    extra={
+                        "message_type": msg_type,
+                        "trace_id": trace_id,
+                        "result": result.value,
+                    },
+                )
+                self._metrics.increment_mailbox_processed(message_type=msg_type)
+
+                # Step 6: Emit error delta on FAILED.
+                if result == ProcessResult.FAILED:
+                    try:
+                        await self._delta_port.emit(  # type: ignore[union-attr]
+                            event_topic=ORCH_DELTA_V1,
+                            payload={
+                                "type": "processing_error",
                                 "message_type": msg_type,
                                 "trace_id": trace_id,
-                                "reason": "DAG active, re-enqueued at BACKGROUND",
+                                "result": result.value,
                             },
+                            trace_id=trace_id,
                         )
-                        return
-
-            # Step 4: Dispatch to process().
-            result = await self.process(msg)
-
-            # Step 5: Log result.
-            log.info(
-                "mailbox_loop.result",
-                extra={
-                    "message_type": msg_type,
-                    "trace_id": trace_id,
-                    "result": result.value,
-                },
-            )
-
-            # Step 6: Emit error delta on FAILED.
-            if result == ProcessResult.FAILED:
-                try:
-                    await self._delta_port.emit(  # type: ignore[union-attr]
-                        event_topic=ORCH_DELTA_V1,
-                        payload={
-                            "type": "processing_error",
-                            "message_type": msg_type,
-                            "trace_id": trace_id,
-                            "result": result.value,
-                        },
-                        trace_id=trace_id,
-                    )
-                except Exception:
-                    # Fire-and-forget delta emission -- never block the loop.
-                    log.warning(
-                        "mailbox_loop.error_delta_failed",
-                        extra={"trace_id": trace_id},
-                    )
+                    except Exception:
+                        # Fire-and-forget delta emission -- never block the loop.
+                        log.warning(
+                            "mailbox_loop.error_delta_failed",
+                            extra={"trace_id": trace_id},
+                        )
 
         except Exception:
             log.exception(
@@ -1140,52 +1202,56 @@ class OrchestratorService:
         t0 = time.monotonic()
         result = ProcessResult.FAILED  # default pessimistic
 
-        try:
-            if isinstance(message, TaskEnvelope):
-                result = await self._route_task(message, ctx)
-            elif isinstance(message, CommittedPlan):
-                result = await self._receive_plan(message, ctx)
-            elif isinstance(message, WorkflowRunRequest):
-                result = await self._dispatch_workflow(message, ctx)
-            elif isinstance(message, WorkflowSaveRequest):
-                result = await self._save_workflow(message, ctx)
-            elif isinstance(message, InterruptRequest):
-                result = await self._handle_interrupt(message, ctx)
-            else:
-                log.warning(
-                    "process.unknown_message_type",
+        with self._metrics.time_total_overhead(
+            message_type=type(message).__name__,
+            tier=ctx.tier,
+        ):
+            try:
+                if isinstance(message, TaskEnvelope):
+                    result = await self._route_task(message, ctx)
+                elif isinstance(message, CommittedPlan):
+                    result = await self._receive_plan(message, ctx)
+                elif isinstance(message, WorkflowRunRequest):
+                    result = await self._dispatch_workflow(message, ctx)
+                elif isinstance(message, WorkflowSaveRequest):
+                    result = await self._save_workflow(message, ctx)
+                elif isinstance(message, InterruptRequest):
+                    result = await self._handle_interrupt(message, ctx)
+                else:
+                    log.warning(
+                        "process.unknown_message_type",
+                        extra={
+                            "trace_id": ctx.trace_id,
+                            "message_type": type(message).__name__,
+                        },
+                    )
+                    result = ProcessResult.FAILED
+
+            except AdapterException as exc:
+                result = self._handle_adapter_error(exc, ctx)
+
+            except Exception:
+                log.exception(
+                    "process.unhandled_exception",
                     extra={
                         "trace_id": ctx.trace_id,
-                        "message_type": type(message).__name__,
+                        "request_id": ctx.request_id,
                     },
                 )
                 result = ProcessResult.FAILED
 
-        except AdapterException as exc:
-            result = self._handle_adapter_error(exc, ctx)
-
-        except Exception:
-            log.exception(
-                "process.unhandled_exception",
-                extra={
-                    "trace_id": ctx.trace_id,
-                    "request_id": ctx.request_id,
-                },
-            )
-            result = ProcessResult.FAILED
-
-        finally:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            log.info(
-                "process.exit",
-                extra={
-                    "trace_id": ctx.trace_id,
-                    "request_id": ctx.request_id,
-                    "result": result.value,
-                    "elapsed_ms": elapsed_ms,
-                    "message_type": type(message).__name__,
-                },
-            )
+            finally:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                log.info(
+                    "process.exit",
+                    extra={
+                        "trace_id": ctx.trace_id,
+                        "request_id": ctx.request_id,
+                        "result": result.value,
+                        "elapsed_ms": elapsed_ms,
+                        "message_type": type(message).__name__,
+                    },
+                )
 
         return result
 
@@ -1247,6 +1313,7 @@ class OrchestratorService:
                 return ProcessResult.FAILED
 
         except AdapterException as exc:
+            self._emit_error_routed_async(exc, ctx)
             severity = self._error_router.classify(exc, ctx)
             log.warning(
                 "route_task.dispatch_error",
@@ -1305,6 +1372,13 @@ class OrchestratorService:
         from k1.fabric.types import CapabilityRequest
 
         t0 = time.monotonic()
+        trace_phase(
+            log,
+            "dispatch_medium",
+            trace_id=ctx.trace_id,
+            request_id=ctx.request_id,
+            tier=ctx.tier,
+        )
 
         # 1. ORCH-10 precondition (defence-in-depth; TaskEnvelope.__post_init__
         #    also validates this, but dispatch_medium is the authoritative gate).
@@ -1367,7 +1441,8 @@ class OrchestratorService:
         step_results: List[StepResult] = []
         for i, (cap_name, req) in enumerate(zip(envelope.capabilities, requests)):
             try:
-                cap_result = await self._fabric_port.execute(req)
+                with self._metrics.time_adapter_wait(adapter="fabric", operation="execute"):
+                    cap_result = await self._fabric_port.execute(req)
                 status = StepStatus.COMPLETED if cap_result.success else StepStatus.FAILED
                 error_detail = (
                     None
@@ -1385,6 +1460,7 @@ class OrchestratorService:
                     )
                 )
             except AdapterException as exc:
+                self._emit_error_routed_async(exc, ctx)
                 log.warning(
                     "dispatch_medium.step_adapter_error",
                     extra={
@@ -1419,6 +1495,15 @@ class OrchestratorService:
 
         # 7. Emit DAG_COMPLETED + audit (fire-and-forget).
         await self._emit_result(aggregated, ctx)
+        trace_phase(
+            log,
+            "dispatch_medium",
+            trace_id=ctx.trace_id,
+            request_id=ctx.request_id,
+            tier=ctx.tier,
+            duration_ms=aggregated.duration_ms,
+            success=aggregated.success,
+        )
 
         return self._result_to_process_result(aggregated)
 
@@ -1450,6 +1535,13 @@ class OrchestratorService:
             FAILED if Planner rejects or pending_plans limit exceeded.
         """
         session_id = envelope.context.get("session_id", "")
+        trace_phase(
+            log,
+            "dispatch_high",
+            trace_id=ctx.trace_id,
+            request_id=ctx.request_id,
+            tier=ctx.tier,
+        )
 
         # 1. Capture state snapshot for planning context.
         try:
@@ -1472,7 +1564,7 @@ class OrchestratorService:
         # 3. Build PlanRequest.
         plan_request = PlanRequest(
             intent=envelope.intent,
-            trace_id=envelope.trace_id,
+            trace_id=ctx.trace_id,
             context=snapshot,
             request_id=request_id,
             constraints=envelope.constraints,
@@ -1481,8 +1573,10 @@ class OrchestratorService:
 
         # 4. Send to Planner (fire-and-forget).
         try:
-            ack: PlanAck = await self._planner_port.request_plan(plan_request)
+            with self._metrics.time_adapter_wait(adapter="planner", operation="request_plan"):
+                ack = await self._planner_port.request_plan(plan_request)
         except AdapterException as exc:
+            self._emit_error_routed_async(exc, ctx)
             log.error(
                 "dispatch_high.planner_unreachable",
                 extra={
@@ -1515,7 +1609,8 @@ class OrchestratorService:
             )
             # Best-effort cancel the request we just sent.
             try:
-                await self._planner_port.cancel_plan(request_id)
+                with self._metrics.time_adapter_wait(adapter="planner", operation="cancel_plan"):
+                    await self._planner_port.cancel_plan(request_id)
             except Exception:
                 log.debug("dispatch_high.cancel_after_limit_failed", exc_info=True)
             return ProcessResult.FAILED
@@ -1528,6 +1623,7 @@ class OrchestratorService:
             created_at=time.time(),
             timeout_ms=self._config.plan_request_timeout_ms,
         )
+        self._metrics.set_pending_plans(len(self._pending_plans))
 
         # 7. Emit PLAN_REQUESTED event (fire-and-forget).
         await self._delta_port.emit(
@@ -1548,6 +1644,14 @@ class OrchestratorService:
                 "request_id": request_id,
                 "intent": envelope.intent,
             },
+        )
+        trace_phase(
+            log,
+            "dispatch_high",
+            trace_id=ctx.trace_id,
+            request_id=request_id,
+            tier=ctx.tier,
+            success=True,
         )
 
         return ProcessResult.DEFERRED
@@ -1595,6 +1699,7 @@ class OrchestratorService:
 
         # 2. Correlate with pending_plans via request_id (WB 10.10).
         pending = self._pending_plans.pop(plan.request_id, None)
+        self._metrics.set_pending_plans(len(self._pending_plans))
         if pending is None:
             # Orphan plan (RACE-2): timeout already expired or unknown.
             log.warning(
@@ -1621,6 +1726,21 @@ class OrchestratorService:
             except AdapterException:
                 log.debug("receive_plan.wal_read_failed", exc_info=True)
 
+            try:
+                await self._delta_port.emit(
+                    event_topic=ORCH_DELTA_V1,
+                    payload={
+                        "type": "processing_error",
+                        "reason": "orphan_plan_no_context",
+                        "plan_id": plan.plan_id,
+                        "request_id": plan.request_id,
+                        "trace_id": ctx.trace_id,
+                    },
+                    trace_id=ctx.trace_id,
+                )
+            except Exception:
+                log.debug("receive_plan.orphan_error_delta_failed", exc_info=True)
+
             return ProcessResult.FAILED
 
         # 3. Record in executed_plans LRU (before execution, for dedup).
@@ -1646,7 +1766,8 @@ class OrchestratorService:
 
         # 5. Validate plan via ConstraintResolver.
         try:
-            validation = await self._constraint_resolver.validate(plan, ctx)
+            with self._metrics.time_constraint_validation(step_count=len(plan.steps)):
+                validation = await self._constraint_resolver.validate(plan, ctx)
         except AdapterException as exc:
             log.error(
                 "receive_plan.validation_failed",
@@ -1670,7 +1791,7 @@ class OrchestratorService:
             return ProcessResult.FAILED
 
         # 6. Acquire ConcurrencyGuard (V1: single DAG at a time).
-        if not self._concurrency_guard.acquire(ctx):
+        if not await self._concurrency_guard.acquire(ctx):
             log.warning(
                 "receive_plan.concurrency_rejected",
                 extra={
@@ -1679,6 +1800,7 @@ class OrchestratorService:
                 },
             )
             return ProcessResult.DEFERRED
+        self._metrics.set_dag_active(True)
 
         try:
             # 7. Execute DAG.
@@ -1697,6 +1819,7 @@ class OrchestratorService:
         finally:
             # 8. Always release ConcurrencyGuard.
             self._concurrency_guard.release(ctx)
+            self._metrics.set_dag_active(False)
 
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
@@ -1835,7 +1958,7 @@ class OrchestratorService:
         ctx.workflow_id = request.workflow_id
 
         # ConcurrencyGuard: workflows compete for the same DAG slot.
-        if not self._concurrency_guard.acquire(ctx):
+        if not await self._concurrency_guard.acquire(ctx):
             log.info(
                 "dispatch_workflow.concurrency_rejected",
                 extra={
@@ -1844,6 +1967,7 @@ class OrchestratorService:
                 },
             )
             return ProcessResult.DEFERRED
+        self._metrics.set_dag_active(True)
 
         try:
             return await self._workflow_engine.execute_workflow(request, ctx)
@@ -1860,6 +1984,7 @@ class OrchestratorService:
             return ProcessResult.FAILED
         finally:
             self._concurrency_guard.release(ctx)
+            self._metrics.set_dag_active(False)
 
     async def _save_workflow(
         self,
@@ -1940,6 +2065,12 @@ class OrchestratorService:
                 },
             )
 
+            try:
+                workflows = await self._workflow_engine.registry.list_active()  # type: ignore[union-attr]
+                self._metrics.set_workflow_active_count(len(workflows))
+            except Exception:
+                pass
+
         return result
 
     # ======================================================================
@@ -1972,6 +2103,14 @@ class OrchestratorService:
             )
             return ProcessResult.FAILED
 
+        trace_phase(
+            log,
+            "interrupt",
+            trace_id=ctx.trace_id,
+            request_id=ctx.request_id,
+            tier=ctx.tier,
+            success=True,
+        )
         log.info(
             "handle_interrupt.cancel_dag",
             extra={
@@ -1980,6 +2119,15 @@ class OrchestratorService:
                 "reason": request.reason,
             },
         )
+        try:
+            if hasattr(self._dag_executor, "interrupt_flag"):
+                setattr(self._dag_executor, "interrupt_flag", True)
+        except Exception:
+            log.debug(
+                "handle_interrupt.set_interrupt_flag_failed",
+                exc_info=True,
+                extra={"trace_id": ctx.trace_id},
+            )
         # DAG cancellation is cooperative: set interrupt flag on DAGExecutor.
         # The actual cancellation happens at the next step completion.
         # For 2.1.1, we return CANCELLED; actual interrupt flag set is in DAGExecutor (2.2.x).
@@ -2050,6 +2198,7 @@ class OrchestratorService:
             )
             await self._emit_result(aggregated, ctx)
             reaped += 1
+        self._metrics.set_pending_plans(len(self._pending_plans))
 
         # Reap stale HIL contexts.
         stale_hil_ids = [
@@ -2070,7 +2219,9 @@ class OrchestratorService:
                     "age_s": round(now - hctx.created_at, 2),
                 },
             )
+            self._metrics.increment_hil_request(outcome="timed_out")
             reaped += 1
+        self._metrics.set_pending_hil(len(self._pending_hil))
 
         return reaped
 
@@ -2271,6 +2422,14 @@ class OrchestratorService:
         ctx: ProcessingContext,
     ) -> None:
         """Emit DAG_COMPLETED event and submit audit (both fire-and-forget)."""
+        if aggregated.success:
+            status = "success"
+        elif aggregated.cancelled > 0:
+            status = "interrupted"
+        else:
+            status = "failed"
+        self._metrics.increment_dag_completed(status=status)
+
         await self._delta_port.emit(
             event_topic=ORCH_DAG_COMPLETED,
             payload=aggregated.to_dict(),
@@ -2301,7 +2460,24 @@ class OrchestratorService:
         ctx: ProcessingContext,
     ) -> ProcessResult:
         """Classify an AdapterException and return the appropriate ProcessResult."""
+        self._emit_error_routed_async(exc, ctx)
         severity = self._error_router.classify(exc, ctx)
+        self._metrics.increment_error(classification=severity.value)
+        trace_phase(
+            log,
+            "error",
+            trace_id=ctx.trace_id,
+            request_id=ctx.request_id,
+            tier=ctx.tier,
+            success=False,
+            level=logging.ERROR,
+            extra={
+                "adapter": exc.adapter_name,
+                "operation": exc.operation,
+                "classification": severity.value,
+                "error_code": exc.error_code,
+            },
+        )
 
         log.warning(
             "adapter_error",
@@ -2322,6 +2498,34 @@ class OrchestratorService:
         else:
             # RECOVERABLE -- caller should re-enqueue if possible.
             return ProcessResult.DEFERRED
+
+    def _emit_error_routed_async(
+        self,
+        exc: AdapterException,
+        ctx: ProcessingContext,
+    ) -> None:
+        """Best-effort async emission of ORCH_ERROR_ROUTED via ErrorRouter.route_error.
+
+        Keeps existing synchronous severity mapping intact while allowing
+        process-path diagnostics to be emitted for Concierge observability.
+        """
+        route_error = getattr(self._error_router, "route_error", None)
+        if not callable(route_error):
+            return
+
+        try:
+            maybe_coro = route_error(exc.detail, {"trace_id": ctx.trace_id})
+            if asyncio.iscoroutine(maybe_coro):
+                asyncio.create_task(
+                    cast("Any", maybe_coro),
+                    name="orchestrator-error-routed",
+                )
+        except Exception:
+            log.debug(
+                "emit_error_routed_async.failed",
+                exc_info=True,
+                extra={"trace_id": ctx.trace_id},
+            )
 
     def aggregate(
         self,
@@ -2359,19 +2563,29 @@ class OrchestratorService:
         Returns:
             AggregatedResult with computed success, counts, and classification.
         """
-        if plan_id is not None:
-            return AggregatedResult.from_dag(
-                plan_id=plan_id,
+        with self._metrics.time_aggregation(plan_id=plan_id or "medium"):
+            trace_phase(
+                log,
+                "aggregate",
+                trace_id=trace_id,
+                request_id=None,
+                tier="HIGH" if plan_id else "MEDIUM",
+                duration_ms=duration_ms,
+                level=logging.DEBUG,
+            )
+            if plan_id is not None:
+                return AggregatedResult.from_dag(
+                    plan_id=plan_id,
+                    step_results=step_results,
+                    compensations=compensations,
+                    trace_id=trace_id,
+                    duration_ms=duration_ms,
+                )
+            return AggregatedResult.from_medium(
                 step_results=step_results,
-                compensations=compensations,
                 trace_id=trace_id,
                 duration_ms=duration_ms,
             )
-        return AggregatedResult.from_medium(
-            step_results=step_results,
-            trace_id=trace_id,
-            duration_ms=duration_ms,
-        )
 
     @staticmethod
     def _result_to_process_result(aggregated: AggregatedResult) -> ProcessResult:

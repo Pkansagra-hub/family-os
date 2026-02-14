@@ -21,6 +21,7 @@ orchestrator-implementation-plan.md):
   - TestWorkflowStorageAdapter (6.1.16) -- IWorkflowStoragePort test adapter (in-memory)
 """
 
+from k1.orchestrator.adapters.admin_http_adapter import AdminHttpAdapter
 from k1.orchestrator.adapters.bridge_write_adapter import BridgeWriteAdapter
 from k1.orchestrator.adapters.delta_emit_adapter import DeltaEmitAdapter
 from k1.orchestrator.adapters.event_subscription_adapter import EventSubscriptionAdapter
@@ -35,10 +36,13 @@ from k1.orchestrator.adapters.state_read_adapter import StateReadAdapter
 from k1.orchestrator.adapters.test_delta_adapter import TestDeltaAdapter
 from k1.orchestrator.adapters.test_event_adapter import TestEventAdapter
 from k1.orchestrator.adapters.test_mailbox_adapter import TestMailboxAdapter
-from k1.orchestrator.adapters.test_workflow_storage_adapter import TestWorkflowStorageAdapter
+from k1.orchestrator.adapters.test_workflow_storage_adapter import (
+    TestWorkflowStorageAdapter,
+)
 from k1.orchestrator.adapters.workflow_storage_adapter import WorkflowStorageAdapter
 
 __all__ = [
+    "AdminHttpAdapter",
     "BridgeWriteAdapter",
     "DeltaEmitAdapter",
     "EventSubscriptionAdapter",

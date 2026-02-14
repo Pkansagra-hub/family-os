@@ -29,7 +29,9 @@ from k1.orchestrator.adapters.mock_state_read_adapter import MockStateReadAdapte
 from k1.orchestrator.adapters.test_delta_adapter import TestDeltaAdapter
 from k1.orchestrator.adapters.test_event_adapter import TestEventAdapter
 from k1.orchestrator.adapters.test_mailbox_adapter import TestMailboxAdapter
-from k1.orchestrator.adapters.test_workflow_storage_adapter import TestWorkflowStorageAdapter
+from k1.orchestrator.adapters.test_workflow_storage_adapter import (
+    TestWorkflowStorageAdapter,
+)
 from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.orchestration.guards import (
@@ -224,7 +226,9 @@ class TestCreateStandalone:
     @pytest.mark.asyncio
     async def test_uses_default_config(self) -> None:
         service = await OrchestratorFactory.create_standalone()
-        assert service._config == OrchestratorConfig.default()
+        # create_standalone() disables admin to avoid HTTP server in tests
+        expected = OrchestratorConfig.from_dict({"admin_enabled": False})
+        assert service._config == expected
 
 
 # ======================================================================
@@ -380,7 +384,9 @@ class TestWiringIntegrity:
 
     @pytest.mark.asyncio
     async def test_connector_lifecycle_is_wired(self) -> None:
-        from k1.orchestrator.connectors.connector_lifecycle import ConnectorLifecycleManager
+        from k1.orchestrator.connectors.connector_lifecycle import (
+            ConnectorLifecycleManager,
+        )
 
         service = await OrchestratorFactory.create_standalone()
         assert isinstance(service._connector_lifecycle, ConnectorLifecycleManager)

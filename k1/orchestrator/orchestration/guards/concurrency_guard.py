@@ -65,11 +65,14 @@ class ConcurrencyGuard:
     # Public API
     # ------------------------------------------------------------------
 
-    async def acquire(self) -> bool:
+    async def acquire(self, _ctx: object = None) -> bool:
         """Attempt non-blocking lock acquisition.
 
         Returns True if the lock was acquired (no DAG currently active).
         Returns False immediately if a DAG is already running (lock held).
+
+        Args:
+            _ctx: ProcessingContext (accepted for protocol compat, ignored).
 
         Caller is responsible for calling release() in a finally block
         when acquire() returns True.
@@ -83,8 +86,11 @@ class ConcurrencyGuard:
         logger.debug("ConcurrencyGuard.acquire: lock acquired")
         return True
 
-    def release(self) -> None:
+    def release(self, _ctx: object = None) -> None:
         """Release the concurrency lock.
+
+        Args:
+            _ctx: ProcessingContext (accepted for protocol compat, ignored).
 
         MUST be called in a finally block after acquire() returns True.
         Safe to call even if lock is not held (logs warning, no-op).

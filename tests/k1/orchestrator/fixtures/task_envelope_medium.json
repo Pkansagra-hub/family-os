@@ -1,0 +1,26 @@
+{
+  "intent": "Search for calendar events and summarize them",
+  "trace_id": "trace-12345-medium",
+  "caller_id": "user-abc",
+  "envelope_id": "env-12345",
+  "context": {
+    "user_timezone": "America/New_York",
+    "session_id": "sess-abc"
+  },
+  "tier": "MEDIUM",
+  "capabilities": [
+    "tool.calendar.search",
+    "tool.calendar.summarize"
+  ],
+  "params": {
+    "tool.calendar.search": {
+      "query": "meetings today",
+      "limit": 10
+    },
+    "tool.calendar.summarize": {
+      "format": "bullet_points"
+    }
+  },
+  "constraints": {},
+  "timeout_ms": 30000
+}
