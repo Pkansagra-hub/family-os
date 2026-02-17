@@ -33,7 +33,7 @@ flowchart TB
 %%                                               -> Fabric (L2.5) -> Sub-Agents / Tools
 %%
 %% TIER INVOLVEMENT:
-%%   LOW    -> NO  (Concierge calls Fabric directly via invoke_capability())
+%%   LOW    -> NO  (Concierge uses LLM tool loop; action tools invoke_capability/spawn_via_fabric/execute_workflow route to Fabric)
 %%   MEDIUM -> YES (TaskEnvelope, 1-2 Fabric calls, no planning)
 %%   HIGH   -> YES (TaskEnvelope -> PlanRequest -> CommittedPlan -> DAG execution)
 %%   CRISIS -> NO  (Safety Agent handles immediately)
@@ -135,7 +135,7 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
 
       CAP_RESOLVER["Capability Constraint Resolver<br/>Queries Fabric Capability Registry:<br/>Is capability available? Provider ONLINE?<br/>Safety band allowed? Suggests alternatives"]:::engine
 
-      FALLBACK_TRIGGER["Fallback Trigger<br/>Routes to HIL when automated resolution stalls<br/>Question routed via DeltaBus -> Concierge"]:::hil
+      FALLBACK_TRIGGER["Fallback Trigger<br/>Routes to HIL when automated resolution stalls<br/>Question routed via K1 Bus -> Concierge"]:::hil
     end
 
     RESULT_AGGREGATOR["Result Aggregator<br/>Collects per step: CapResult, duration,<br/>status (COMPLETED|FAILED|CANCELLED|SKIPPED),<br/>error details, retry attempts consumed<br/>---<br/>AggregatedResult:<br/>  total_steps, completed, failed, cancelled, skipped<br/>  total_tokens_consumed, budget_utilization<br/>  success: true only if zero failures"]:::engine
@@ -153,7 +153,7 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
 
       QUALITY_GATE["Quality Gate<br/>Soft failure detection for agent results<br/>---<br/>quality_score from Fabric (deterministic):<br/>  0.5 * schema_completeness +<br/>  0.3 * content_density +<br/>  0.2 * (1.0 - null_ratio)<br/>---<br/>quality >= 0.7: PASS<br/>0.3 <= quality < 0.7: RETRY with quality hint<br/>quality < 0.3: SOFT FAIL (treat as FAILED)<br/>null (non-agent): always PASS (bypass gate)"]:::guard
 
-      EXECUTION_MONITOR["Execution Monitor (GAP-2 fix)<br/>Emits step progress narration to user via DeltaBus<br/>---<br/>After each wave completion:<br/>  Emit k1.hil.progress.v1 via PORT_DELTA<br/>  Content: step_id, summary, progress_pct<br/>  Priority: BACKGROUND (~200 tokens narration)<br/>---<br/>user.override handling:<br/>  Receives via PORT_EVENT subscription<br/>  Actions: CANCEL_DAG | MODIFY_PARAMS | CONTINUE<br/>  On CANCEL: interrupt flag set, cancel at next wave"]:::hil
+      EXECUTION_MONITOR["Execution Monitor (GAP-2 fix)<br/>Emits step progress narration to user via K1 Bus (delta lane)<br/>---<br/>After each wave completion:<br/>  Emit k1.hil.progress.v1 via PORT_DELTA<br/>  Content: step_id, summary, progress_pct<br/>  Priority: BACKGROUND (~200 tokens narration)<br/>---<br/>user.override handling:<br/>  Receives via PORT_EVENT subscription<br/>  Actions: CANCEL_DAG | MODIFY_PARAMS | CONTINUE<br/>  On CANCEL: interrupt flag set, cancel at next wave"]:::hil
     end
   end
 
@@ -253,7 +253,7 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
 
       ADAPT_STATE["StateReadAdapter<br/>Multi-reader lock-free SessionState access<br/>Protected by CB_SESSIONSTATE (100ms, 10/min) (owned upstream)<br/>---<br/>Snapshot at TaskEnvelope dequeue time<br/>Re-read safety_band at wave boundaries (HIGH)<br/>Error: DEGRADED (stale cached snapshot)"]:::adapter
 
-      ADAPT_DELTA["DeltaEmitAdapter<br/>Emits to K1 Event Bus + Delta Bus<br/>---<br/>Fire-and-forget: emit failure = log + skip<br/>Never TERMINAL (Edge-First: best-effort)<br/>Uses cognitive_trace_id on all deltas"]:::adapter
+      ADAPT_DELTA["DeltaEmitAdapter<br/>Emits to K1 Bus (one physical; event+delta lanes)<br/>---<br/>Fire-and-forget: emit failure = log + skip<br/>Never TERMINAL (Edge-First: best-effort)<br/>Uses cognitive_trace_id on all deltas"]:::adapter
 
       ADAPT_BRIDGE["BridgeWriteAdapter<br/>Fire-and-forget writes to K0 via Bridge<br/>---<br/>Workflow audit records, CommittedPlan WAL<br/>Error: RECOVERABLE (skip, continues offline)<br/>Edge-First: never blocks on K0"]:::adapter
 
@@ -364,7 +364,7 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
 
     CONC_LOOP["Mailbox Processing Loop<br/>---<br/>while running:<br/>  msg = mailbox.dequeue()  # blocks until available<br/>  run_start(msg)<br/>  result = process(msg)    # may fan out DAG waves<br/>  run_end(result)<br/>---<br/>Single-threaded: one message at a time<br/>Parallel only within execute_batch() per wave<br/>No concurrent DAG executions (V1)"]:::concurrency
 
-    CONC_INTERRUPT["Interrupt Handling<br/>---<br/>Concierge sends interrupt via DeltaBus:<br/>  k1.orchestration.cancel_request<br/>At next wave boundary: check interrupt flag<br/>If set: cancel remaining waves, compensate (Saga)<br/>Return partial AggregatedResult"]:::concurrency
+    CONC_INTERRUPT["Interrupt Handling<br/>---<br/>Concierge sends interrupt via K1 Bus (delta lane):<br/>  k1.orchestration.cancel_request<br/>At next wave boundary: check interrupt flag<br/>If set: cancel remaining waves, compensate (Saga)<br/>Return partial AggregatedResult"]:::concurrency
   end
 
 end
@@ -383,7 +383,7 @@ subgraph TOUCHPOINTS["External Touchpoints (Orchestrator Interfaces)"]
 
     CONCIERGE_COMPANIONING["Concierge COMPANIONING<br/>Receives AggregatedResult from Orchestrator<br/>Stages in TOOL_RESULT_BUFFER<br/>Triggers DELIVERING: LLM final response"]:::concierge
 
-    CONCIERGE_PROGRESSING["Concierge PROGRESSING<br/>Receives step progress via DeltaBus<br/>Streams to user: 'Booking restaurant...'"]:::concierge
+    CONCIERGE_PROGRESSING["Concierge PROGRESSING<br/>Receives step progress via K1 Bus (delta lane)<br/>Streams to user: 'Booking restaurant...'"]:::concierge
 
     FABRIC_ORCH_ADAPTER["FabricOrchestratorAdapter (Concierge side)<br/>Owns CB_ORCHESTRATOR (60s, 2/min)<br/>Owns CB_PLANNER (45s, 2/min)<br/>Owns CB_FABRIC (30s, 5/min)<br/>Owns CB_MCP (10s, 3/min)<br/>TIER_DEGRADATION: HIGH->MED->LOW->canned"]:::adapter
   end
@@ -422,12 +422,12 @@ subgraph TOUCHPOINTS["External Touchpoints (Orchestrator Interfaces)"]
     SS_SAFETY["control.safety_band<br/>GREEN | AMBER | RED | CRISIS<br/>Re-read at wave boundaries (HIGH)"]:::ss
   end
 
-  subgraph TP_BUS["Event Bus + Delta Bus"]
+  subgraph TP_BUS["K1 Bus (one physical bus; two logical lanes)"]
     direction TB
 
-    EVENT_BUS["K1 Event Bus<br/>Pub/Sub topics<br/>All events carry cognitive_trace_id"]:::bus
+    EVENT_BUS["K1 Bus — Event lane<br/>Topics: k1.*<br/>All events carry cognitive_trace_id"]:::bus
 
-    DELTA_BUS["Delta Bus<br/>k1.orchestration.delta.v1<br/>500ms aggregation -> Concierge FSM<br/>-> MutationGuard -> SessionState"]:::bus
+    DELTA_BUS["K1 Bus — Delta lane<br/>k1.orchestration.delta.v1<br/>500ms aggregation -> Concierge FSM<br/>-> MutationGuard -> SessionState"]:::bus
   end
 
   subgraph TP_BRIDGE["Cross-Kernel Bridge (K0 Gateway)"]
@@ -611,7 +611,7 @@ PORT_FABRIC -->|"step result"| RESULT_AGGREGATOR
 %% Orchestrator -> Concierge (aggregated results)
 RESULT_AGGREGATOR -->|"AggregatedResult"| CONCIERGE_COMPANIONING
 
-%% Orchestrator -> DeltaBus (progress)
+%% Orchestrator -> K1 Bus (delta lane) (progress)
 ORCH_ACTOR -->|"k1.orchestration.delta.v1"| PORT_DELTA
 PORT_DELTA -->|"emit"| DELTA_BUS
 DELTA_BUS -->|"500ms aggregation"| CONCIERGE_PROGRESSING
@@ -639,7 +639,7 @@ PORT_FABRIC -.->|"query_registry"| FABRIC_REGISTRY
 %% Gap Detector <- Fabric Registry events via Bridge SSE
 BRIDGE_SSE -.->|"k1.fabric.capability.registered/unregistered/health.changed.v1"| PORT_EVENT
 PORT_EVENT -.->|"contract update"| GAP_DETECTOR
-GAP_DETECTOR -.->|"proactive gap -> DeltaBus"| PORT_DELTA
+GAP_DETECTOR -.->|"proactive gap -> K1 Bus (delta lane)"| PORT_DELTA
 
 %% Connector -> Fabric Registry (tool registration)
 MCP_REGISTRAR -->|"register capabilities"| PORT_FABRIC

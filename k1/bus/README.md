@@ -2,12 +2,12 @@
 
 ## Overview
 
-The `bus/` module implements the **Coordination: The Nervous System** layer of the K1 Cognitive Architecture. This module provides the communication infrastructure for all K1 components, enabling low-latency, high-frequency coordination through pub/sub event bus and direct mailbox routing.
+The `bus/` module implements the **Coordination: The Nervous System** layer of the K1 Cognitive Architecture. This module provides the communication infrastructure for all K1 components, enabling low-latency, high-frequency coordination through a single physical bus (with two logical lanes: event topics and delta topics) plus direct mailbox routing.
 
 ## Purpose
 
-- **Event Bus**: In-memory pub/sub for broadcast coordination (task announcements, FSM transitions, tool status)
-- **Delta Bus**: Transport for SessionState deltas with aggregation
+- **Event lane (k1.* topics)**: Pub/sub for lifecycle + coordination events (STRICT/RELAXED/BEST_EFFORT by prefix)
+- **Delta lane (k1.*.delta.v1 topics)**: Fire-and-forget progress/state deltas (STRICT by convention)
 - **Mailbox Router**: Location-transparent routing for actor-to-actor communication
 - **Message Passing**: Actor Model communication with backpressure management
 
@@ -15,8 +15,8 @@ The `bus/` module implements the **Coordination: The Nervous System** layer of t
 
 ### Core Components
 
-- **`event_bus.py`**: aiokafka-based pub/sub for K1 internal events (k1.* namespace)
-- **`delta_bus.py`**: Dumb transport for state deltas (delegates aggregation to Concierge)
+- **`event_bus.py`**: shared transport implementation for the K1 bus (topic publish/subscribe)
+- **`delta_bus.py`**: ergonomic delta-lane wrapper (topic conventions; delegates aggregation to Concierge)
 - **`mailbox_router.py`**: UUID-to-mailbox mapping with location transparency
 
 ### Event Categories

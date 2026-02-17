@@ -1,0 +1,1277 @@
+{
+  "timestamp": "20260217T211306Z",
+  "scenario_count": 1,
+  "results": [
+    {
+      "scenario_id": "test_10_concierge_full",
+      "scenario_name": "Concierge Full Tool Suite (13 tools)",
+      "naive": {
+        "runner_name": "naive_react",
+        "scenario_id": "test_10_concierge_full",
+        "success": true,
+        "final_answer": "[Calling acknowledge({'ack_type': 'progress', 'message': \"Great! I've noted all the details about Mom's birthday, including the dietary needs for Sarah and Jake, and the number of guests. We're on track to find a perfect spot!\", 'next_tool': 'discover_capabilities'})]",
+        "turns": [
+          {
+            "iteration": 0,
+            "assistant_message": "\n[Calling acknowledge({'ack_type': 'commit', 'message': \"Absolutely, I can help you plan a wonderful vegan dinner for your mom's birthday next Saturday!\", 'next_tool': 'update_narrative'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-ba123fc8",
+                "name": "acknowledge",
+                "arguments": {
+                  "ack_type": "commit",
+                  "message": "Absolutely, I can help you plan a wonderful vegan dinner for your mom's birthday next Saturday!",
+                  "next_tool": "update_narrative"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "acknowledge",
+                "call_id": "call-ba123fc8",
+                "ok": true,
+                "output": {
+                  "displayed": true,
+                  "formatted_message": "Absolutely, I can help you plan a wonderful vegan dinner for your mom's birthday next Saturday!",
+                  "display_latency_ms": 45
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 622,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 1,
+            "assistant_message": "\n[Calling update_narrative({'domains': ['family', 'planning', 'food', 'events'], 'operation': 'new_thread', 'topic': \"Mom's birthday dinner\", 'goal': 'Plan a special vegan dinner for the family, accommodating dietary needs'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-9e952065",
+                "name": "update_narrative",
+                "arguments": {
+                  "domains": "['family', 'planning', 'food', 'events']",
+                  "operation": "new_thread",
+                  "topic": "Mom's birthday dinner",
+                  "goal": "Plan a special vegan dinner for the family, accommodating dietary needs"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_narrative",
+                "call_id": "call-9e952065",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "thread_id": "57ab118a-402f-4431-b644-50f2e2609731",
+                  "active_threads": 1,
+                  "thread_status": "ACTIVE"
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 717,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 2,
+            "assistant_message": "\n[Calling refine_affect({'override_emotion': 'mixed', 'override_intensity': 0.7, 'reasoning': 'User expressed both excitement and stress about the event.', 'override_valence': 'mixed'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-57ff165b",
+                "name": "refine_affect",
+                "arguments": {
+                  "override_emotion": "mixed",
+                  "override_intensity": 0.7,
+                  "reasoning": "User expressed both excitement and stress about the event.",
+                  "override_valence": "mixed"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "refine_affect",
+                "call_id": "call-57ff165b",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "previous_emotion": "neutral",
+                  "previous_intensity": 0.0,
+                  "override_applied": true,
+                  "reasoning": "User expressed both excitement and stress about the event."
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 811,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 3,
+            "assistant_message": "\n[Calling recall_memory({'selectors': ['beliefs', 'conversations', 'events', 'preferences'], 'query': \"Mom's birthday dinner, vegan preferences, family dietary needs, past birthday celebrations\"})]",
+            "tool_calls": [
+              {
+                "call_id": "call-910b2e9d",
+                "name": "recall_memory",
+                "arguments": {
+                  "selectors": "['beliefs', 'conversations', 'events', 'preferences']",
+                  "query": "Mom's birthday dinner, vegan preferences, family dietary needs, past birthday celebrations"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "recall_memory",
+                "call_id": "call-910b2e9d",
+                "ok": true,
+                "output": {
+                  "results": [],
+                  "total_matched": 0,
+                  "query_latency_ms": 85,
+                  "source": "k0_bridge"
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 908,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 4,
+            "assistant_message": "\n[Calling update_beliefs({'subject': 'Mom', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegan', 'predicate': 'diet'})]\n[Calling update_beliefs({'subject': \"Mom's birthday dinner\", 'operation': 'add_fact', 'source': 'user_stated', 'predicate': 'number of guests', 'object_value': '8'})]\n[Calling update_beliefs({'subject': 'Sarah', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegetarian', 'predicate': 'diet'})]\n[Calling update_beliefs({'subject': 'Jake', 'operation': 'add_fact', 'source': 'user_stated', 'predicate': 'allergy', 'object_value': 'nuts'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-dff39cba",
+                "name": "update_beliefs",
+                "arguments": {
+                  "subject": "Mom",
+                  "operation": "add_fact",
+                  "source": "user_stated",
+                  "object_value": "vegan",
+                  "predicate": "diet"
+                }
+              },
+              {
+                "call_id": "call-f7f596d4",
+                "name": "update_beliefs",
+                "arguments": {
+                  "subject": "Mom's birthday dinner",
+                  "operation": "add_fact",
+                  "source": "user_stated",
+                  "predicate": "number of guests",
+                  "object_value": "8"
+                }
+              },
+              {
+                "call_id": "call-60d6f161",
+                "name": "update_beliefs",
+                "arguments": {
+                  "subject": "Sarah",
+                  "operation": "add_fact",
+                  "source": "user_stated",
+                  "object_value": "vegetarian",
+                  "predicate": "diet"
+                }
+              },
+              {
+                "call_id": "call-9941e36b",
+                "name": "update_beliefs",
+                "arguments": {
+                  "subject": "Jake",
+                  "operation": "add_fact",
+                  "source": "user_stated",
+                  "predicate": "allergy",
+                  "object_value": "nuts"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-dff39cba",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "d3387640-1f95-4944-b5b1-c95bbee93198",
+                  "is_correction": false,
+                  "section_bytes": 316,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-f7f596d4",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "54ba7ff3-042a-4d00-a949-f5a44610cb90",
+                  "is_correction": false,
+                  "section_bytes": 466,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-60d6f161",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "5fb4fd01-f7f5-4b55-aa11-da6524164cb2",
+                  "is_correction": false,
+                  "section_bytes": 616,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-9941e36b",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "d7a0fada-e4d1-456d-b812-54b917b7ca74",
+                  "is_correction": false,
+                  "section_bytes": 766,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 984,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 5,
+            "assistant_message": "\n[Calling update_scoreboard({'operation': 'set_task', 'task_status': 'in_progress', 'task_name': \"Plan Mom's vegan birthday dinner\"})]\n[Calling update_clarifications({'description': 'Budget for the dinner is not yet known.', 'gap_type': 'CONSTRAINT_UNCLEAR', 'operation': 'record_gap'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-bd7a276f",
+                "name": "update_scoreboard",
+                "arguments": {
+                  "operation": "set_task",
+                  "task_status": "in_progress",
+                  "task_name": "Plan Mom's vegan birthday dinner"
+                }
+              },
+              {
+                "call_id": "call-901b02b4",
+                "name": "update_clarifications",
+                "arguments": {
+                  "description": "Budget for the dinner is not yet known.",
+                  "gap_type": "CONSTRAINT_UNCLEAR",
+                  "operation": "record_gap"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_scoreboard",
+                "call_id": "call-bd7a276f",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "section_bytes": 60,
+                  "available_bytes": 6084,
+                  "operation": "set_task"
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_clarifications",
+                "call_id": "call-901b02b4",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "gap_id": "7069aec7-6ba9-4bd4-8a3b-a9a49137615d",
+                  "open_gaps_count": 1
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1293,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 6,
+            "assistant_message": "[Calling acknowledge({'ack_type': 'progress', 'message': \"Great! I've noted all the details about Mom's birthday, including the dietary needs for Sarah and Jake, and the number of guests. We're on track to find a perfect spot!\", 'next_tool': 'discover_capabilities'})]",
+            "tool_calls": [],
+            "tool_results": [],
+            "context_tokens_estimate": 1426,
+            "findings_snapshot": {},
+            "final_answer_fragment": "[Calling acknowledge({'ack_type': 'progress', 'message': \"Great! I've noted all the details about Mom's birthday, including the dietary needs for Sarah and Jake, and the number of guests. We're on track to find a perfect spot!\", 'next_tool': 'discover_capabilities'})]"
+          }
+        ],
+        "metrics": {
+          "iterations": 7,
+          "tool_calls": 10,
+          "message_count_final": 18,
+          "context_tokens_final": 1426,
+          "token_input": 21803,
+          "token_output": 514,
+          "latency_ms": 13173,
+          "context_tokens_per_iteration": [
+            622,
+            717,
+            811,
+            908,
+            984,
+            1293,
+            1426
+          ]
+        },
+        "errors": [],
+        "started_at": "2026-02-17T21:11:44.739793+00:00",
+        "finished_at": "2026-02-17T21:11:57.913708+00:00",
+        "total_compactions": 0,
+        "total_findings": 0,
+        "total_sub_agents": 0,
+        "max_nesting_depth": 0,
+        "budget_overspend": false
+      },
+      "smart": {
+        "runner_name": "smart_react",
+        "scenario_id": "test_10_concierge_full",
+        "success": true,
+        "final_answer": "Budget exhausted. Summary of findings:\n### DATE\n- date: next Saturday \n### ERROR\n- recall_status: No results found from memory. \n- error: None \n### FACT\n- event_type: birthday dinner \n- dietary_preference: vegan-friendly \n- recipient: mom \n- success: True \n- thread_id: 05feaf7f-2204-4bb3-a3ca-3b4d1d3d7da2 \n- active_threads: 1 \n- thread_status: ACTIVE \n- previous_emotion: neutral \n- previous_intensity: 0.0 \n- override_applied: True \n- reasoning: The user explicitly stated both excitement and stress regarding the event, indicating a mixed emotional state. \n- belief_id: 54a1e930-bf5f-4c45-afbb-e502a4125652 \n- is_correction: False \n- section_bytes: 60 bytes \n- available_bytes: 6084 bytes \n- operation: set_task \n- gap_id: 36f51d3d-c894-4212-af07-6d5f65951e6b \n- open_gaps_count: 1 \n- birthday_dinner_details_status: All details for the birthday dinner are collected \n- dietary_needs_status: Dietary needs are known \n- guest_count_status: Guest count is known ",
+        "turns": [
+          {
+            "iteration": 1,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-88523a21",
+                "name": "acknowledge",
+                "arguments": {
+                  "ack_type": "commit",
+                  "message": "Absolutely! I'm here to help you plan a special vegan-friendly birthday dinner for your mom next Saturday. Let's make it stress-free!",
+                  "next_tool": "update_narrative"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "acknowledge",
+                "call_id": "call-88523a21",
+                "ok": true,
+                "output": {
+                  "displayed": true,
+                  "formatted_message": "Absolutely! I'm here to help you plan a special vegan-friendly birthday dinner for your mom next Saturday. Let's make it stress-free!",
+                  "display_latency_ms": 45
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 648,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "dietary_preference": {
+                "value": "vegan-friendly",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "next Saturday",
+                "type": "date"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 2,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-05b61f91",
+                "name": "update_narrative",
+                "arguments": {
+                  "domains": "['event_planning', 'restaurant_selection', 'dietary_needs']",
+                  "operation": "new_thread",
+                  "topic": "Mom's Birthday Dinner Planning",
+                  "goal": "Plan a special vegan-friendly birthday dinner for Mom next Saturday for 8 people, accommodating various dietary needs (vegetarian, nut allergy), and find a suitable restaurant."
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_narrative",
+                "call_id": "call-05b61f91",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "thread_id": "05feaf7f-2204-4bb3-a3ca-3b4d1d3d7da2",
+                  "active_threads": 1,
+                  "thread_status": "ACTIVE"
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 788,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "dietary_preference": {
+                "value": "vegan-friendly",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "next Saturday",
+                "type": "date"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "05feaf7f-2204-4bb3-a3ca-3b4d1d3d7da2",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 3,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-6884de41",
+                "name": "refine_affect",
+                "arguments": {
+                  "override_intensity": 0.7,
+                  "override_emotion": "mixed",
+                  "reasoning": "The user explicitly stated both excitement and stress regarding the event, indicating a mixed emotional state.",
+                  "override_valence": "mixed"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "refine_affect",
+                "call_id": "call-6884de41",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "previous_emotion": "neutral",
+                  "previous_intensity": 0.0,
+                  "override_applied": true,
+                  "reasoning": "The user explicitly stated both excitement and stress regarding the event, indicating a mixed emotional state."
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 950,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "dietary_preference": {
+                "value": "vegan-friendly",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "next Saturday",
+                "type": "date"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "05feaf7f-2204-4bb3-a3ca-3b4d1d3d7da2",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "The user explicitly stated both excitement and stress regarding the event, indicating a mixed emotional state.",
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 4,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-7d70985f",
+                "name": "recall_memory",
+                "arguments": {
+                  "selectors": "['beliefs', 'preferences']",
+                  "query": "past birthday dinner preferences or any relevant information for mom's vegan-friendly birthday dinner",
+                  "max_results": 5.0
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "recall_memory",
+                "call_id": "call-7d70985f",
+                "ok": true,
+                "output": {
+                  "results": [],
+                  "total_matched": 0,
+                  "query_latency_ms": 85,
+                  "source": "k0_bridge"
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1020,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "dietary_preference": {
+                "value": "vegan-friendly",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "next Saturday",
+                "type": "date"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "05feaf7f-2204-4bb3-a3ca-3b4d1d3d7da2",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "The user explicitly stated both excitement and stress regarding the event, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "recall_status": {
+                "value": "No results found from memory.",
+                "type": "error"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 5,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-1397c226",
+                "name": "update_beliefs",
+                "arguments": {
+                  "subject": "mom",
+                  "operation": "add_fact",
+                  "source": "user_stated",
+                  "object_value": "8",
+                  "predicate": "number_of_guests"
+                }
+              },
+              {
+                "call_id": "call-90f1c687",
+                "name": "update_beliefs",
+                "arguments": {
+                  "subject": "mom",
+                  "operation": "add_fact",
+                  "source": "user_stated",
+                  "object_value": "nut allergy",
+                  "predicate": "dietary_restriction"
+                }
+              },
+              {
+                "call_id": "call-0a68275a",
+                "name": "update_beliefs",
+                "arguments": {
+                  "subject": "mom",
+                  "operation": "add_fact",
+                  "source": "user_stated",
+                  "object_value": "vegetarian",
+                  "predicate": "dietary_preference"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-1397c226",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "9198ddb7-575c-4481-9251-1682aab9704f",
+                  "is_correction": false,
+                  "section_bytes": 316,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-90f1c687",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "385dc781-1425-450f-b9d7-7238c7ed6e30",
+                  "is_correction": false,
+                  "section_bytes": 466,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-0a68275a",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "54a1e930-bf5f-4c45-afbb-e502a4125652",
+                  "is_correction": false,
+                  "section_bytes": 616,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1120,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "dietary_preference": {
+                "value": "vegan-friendly",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "next Saturday",
+                "type": "date"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "05feaf7f-2204-4bb3-a3ca-3b4d1d3d7da2",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "The user explicitly stated both excitement and stress regarding the event, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "recall_status": {
+                "value": "No results found from memory.",
+                "type": "error"
+              },
+              "belief_id": {
+                "value": "54a1e930-bf5f-4c45-afbb-e502a4125652",
+                "type": "fact"
+              },
+              "is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "error": {
+                "value": null,
+                "type": "error"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 6,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-5b868236",
+                "name": "update_scoreboard",
+                "arguments": {
+                  "operation": "set_task",
+                  "task_status": "in_progress",
+                  "task_name": "Plan birthday dinner"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_scoreboard",
+                "call_id": "call-5b868236",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "section_bytes": 60,
+                  "available_bytes": 6084,
+                  "operation": "set_task"
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1043,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "dietary_preference": {
+                "value": "vegan-friendly",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "next Saturday",
+                "type": "date"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "05feaf7f-2204-4bb3-a3ca-3b4d1d3d7da2",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "The user explicitly stated both excitement and stress regarding the event, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "recall_status": {
+                "value": "No results found from memory.",
+                "type": "error"
+              },
+              "belief_id": {
+                "value": "54a1e930-bf5f-4c45-afbb-e502a4125652",
+                "type": "fact"
+              },
+              "is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "error": {
+                "value": null,
+                "type": "error"
+              },
+              "section_bytes": {
+                "value": "60 bytes",
+                "type": "fact"
+              },
+              "available_bytes": {
+                "value": "6084 bytes",
+                "type": "fact"
+              },
+              "operation": {
+                "value": "set_task",
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 7,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-805283c0",
+                "name": "update_clarifications",
+                "arguments": {
+                  "description": "The user has not specified a preferred location or city for the dinner.",
+                  "gap_type": "CONSTRAINT_UNCLEAR",
+                  "operation": "record_gap"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_clarifications",
+                "call_id": "call-805283c0",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "gap_id": "36f51d3d-c894-4212-af07-6d5f65951e6b",
+                  "open_gaps_count": 1
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1033,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "dietary_preference": {
+                "value": "vegan-friendly",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "next Saturday",
+                "type": "date"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "05feaf7f-2204-4bb3-a3ca-3b4d1d3d7da2",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "The user explicitly stated both excitement and stress regarding the event, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "recall_status": {
+                "value": "No results found from memory.",
+                "type": "error"
+              },
+              "belief_id": {
+                "value": "54a1e930-bf5f-4c45-afbb-e502a4125652",
+                "type": "fact"
+              },
+              "is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "error": {
+                "value": null,
+                "type": "error"
+              },
+              "section_bytes": {
+                "value": "60 bytes",
+                "type": "fact"
+              },
+              "available_bytes": {
+                "value": "6084 bytes",
+                "type": "fact"
+              },
+              "operation": {
+                "value": "set_task",
+                "type": "fact"
+              },
+              "gap_id": {
+                "value": "36f51d3d-c894-4212-af07-6d5f65951e6b",
+                "type": "fact"
+              },
+              "open_gaps_count": {
+                "value": 1,
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 8,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-c8250a90",
+                "name": "acknowledge",
+                "arguments": {
+                  "ack_type": "progress",
+                  "message": "Great! I have all the details about the birthday dinner, including dietary needs and guest count. Now, let's figure out the best way to make this happen.",
+                  "next_tool": "discover_capabilities"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "acknowledge",
+                "call_id": "call-c8250a90",
+                "ok": true,
+                "output": {
+                  "displayed": true,
+                  "formatted_message": "Great! I have all the details about the birthday dinner, including dietary needs and guest count. Now, let's figure out the best way to make this happen.",
+                  "display_latency_ms": 45
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1061,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "dietary_preference": {
+                "value": "vegan-friendly",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "next Saturday",
+                "type": "date"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "05feaf7f-2204-4bb3-a3ca-3b4d1d3d7da2",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "The user explicitly stated both excitement and stress regarding the event, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "recall_status": {
+                "value": "No results found from memory.",
+                "type": "error"
+              },
+              "belief_id": {
+                "value": "54a1e930-bf5f-4c45-afbb-e502a4125652",
+                "type": "fact"
+              },
+              "is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "error": {
+                "value": null,
+                "type": "error"
+              },
+              "section_bytes": {
+                "value": "60 bytes",
+                "type": "fact"
+              },
+              "available_bytes": {
+                "value": "6084 bytes",
+                "type": "fact"
+              },
+              "operation": {
+                "value": "set_task",
+                "type": "fact"
+              },
+              "gap_id": {
+                "value": "36f51d3d-c894-4212-af07-6d5f65951e6b",
+                "type": "fact"
+              },
+              "open_gaps_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "birthday_dinner_details_status": {
+                "value": "All details for the birthday dinner are collected",
+                "type": "fact"
+              },
+              "dietary_needs_status": {
+                "value": "Dietary needs are known",
+                "type": "fact"
+              },
+              "guest_count_status": {
+                "value": "Guest count is known",
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          }
+        ],
+        "metrics": {
+          "iterations": 8,
+          "tool_calls": 10,
+          "compactions": 5,
+          "scratchpad_messages_final": 8,
+          "context_tokens_final": 1170,
+          "findings_count": 24,
+          "typed_findings_count": 3,
+          "failed_count": 0,
+          "cognitive_writes_count": 0,
+          "remaining_tool_calls": 10,
+          "remaining_iterations": 4,
+          "token_input": 25043,
+          "token_output": 518,
+          "elapsed_budget_ms": 68827,
+          "latency_ms": 68827,
+          "sub_agent_count": 0,
+          "max_nesting_depth": 0,
+          "context_tokens_per_iteration": [
+            648,
+            788,
+            950,
+            1020,
+            1120,
+            1043,
+            1033,
+            1061
+          ],
+          "findings_per_iteration": [
+            4,
+            8,
+            12,
+            13,
+            16,
+            19,
+            21,
+            24
+          ]
+        },
+        "errors": [
+          "ITERATION_BUDGET_EXHAUSTED"
+        ],
+        "started_at": "2026-02-17T21:11:57.922265+00:00",
+        "finished_at": "2026-02-17T21:13:06.749736+00:00",
+        "total_compactions": 5,
+        "total_findings": 24,
+        "total_sub_agents": 0,
+        "max_nesting_depth": 0,
+        "budget_overspend": false
+      },
+      "comparison": {
+        "scenario_id": "test_10_concierge_full",
+        "scenario_name": "Concierge Full Tool Suite (13 tools)",
+        "naive_success": true,
+        "smart_success": true,
+        "winner": "smart",
+        "naive_iterations": 7,
+        "smart_iterations": 8,
+        "naive_tool_calls": 10,
+        "smart_tool_calls": 10,
+        "naive_context_final": 1426,
+        "smart_context_final": 1170,
+        "context_savings_pct": 17.952314165497896,
+        "naive_tokens_total": 22317,
+        "smart_tokens_total": 25561,
+        "token_savings_pct": -14.53600394318233,
+        "naive_latency_ms": 13173,
+        "smart_latency_ms": 68827,
+        "compactions": 5,
+        "findings_count": 24,
+        "sub_agent_count": 0,
+        "max_nesting_depth": 0,
+        "failed_attempts": 0,
+        "naive_context_growth": [
+          622,
+          717,
+          811,
+          908,
+          984,
+          1293,
+          1426
+        ],
+        "smart_context_growth": [
+          648,
+          788,
+          950,
+          1020,
+          1120,
+          1043,
+          1033,
+          1061
+        ],
+        "findings_per_iteration": [
+          4,
+          8,
+          12,
+          13,
+          16,
+          19,
+          21,
+          24
+        ],
+        "winner_reasons": [
+          "Naive used fewer tokens",
+          "Smart extracted 24 structured findings",
+          "Smart performed 5 compactions"
+        ]
+      }
+    }
+  ],
+  "aggregate": {
+    "scenario_count": 1,
+    "naive_success_rate": 100.0,
+    "smart_success_rate": 100.0,
+    "naive_wins": 0,
+    "smart_wins": 1,
+    "ties": 0,
+    "avg_context_savings_pct": 17.952314165497896,
+    "avg_token_savings_pct": -14.53600394318233,
+    "naive_avg_latency_ms": 13173.0,
+    "smart_avg_latency_ms": 68827.0,
+    "total_compactions": 5,
+    "total_findings": 24,
+    "total_sub_agents": 0,
+    "max_nesting_depth": 0,
+    "overall_winner": "SMART (Scratchpad)",
+    "summary": "Smart wins 1/1 scenarios. Context savings: 18.0%. Token savings: -14.5%. Total findings extracted: 24. Compactions performed: 5."
+  }
+}

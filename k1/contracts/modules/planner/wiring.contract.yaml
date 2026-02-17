@@ -289,6 +289,12 @@ events:
       description: "Per-stage progress delta. Fire-and-forget to Delta Bus."
       consumers: ["concierge"]
 
+    # Micro-replan telemetry (synchronous path has no event delivery)
+    - topic: "k1.planner.micro_replan.ready.v1"
+      description: "Partial CommittedPlan emitted for telemetry. TELEMETRY-ONLY -- Orchestrator receives CommittedPlan synchronously via micro_replan() return."
+      payload_type: "CommittedPlan (partial -- replacement steps only)"
+      consumers: ["learning-loop"]
+
     # HIL outbound (clarification + approval requests to Concierge)
     - topic: "k1.hil.clarification.v1"
       description: "Stage 1 ambiguous intent. Routed via Concierge OUTPUT_CHANNEL to user."
@@ -320,6 +326,67 @@ events:
     - topic: "k1.hil.approval_response.v1"
       description: "User approve/modify/reject response to Stage 3 approval request. PLAN-10."
       handler: "planner.services.hil_coordinator:on_approval_response"
+
+# ---------------------------------------------------------------------------
+# Port specifications (7 hexagonal boundaries -- Section 15)
+# Protocol classes defined in k1/planner/ports/
+# ---------------------------------------------------------------------------
+port_specs:
+  - name: "IMailboxPort"
+    direction: "inbound"
+    file: "k1/planner/ports/mailbox_port.py"
+    adapter_prod: "MailboxAdapter"
+    adapter_test: "TestMailboxAdapter"
+    methods: ["enqueue", "send_cancel", "micro_replan"]
+    note: "Consumer-driven contract (IPlannerMailbox on Orchestrator side)"
+
+  - name: "ILLMPort"
+    direction: "outbound"
+    file: "k1/planner/ports/llm_port.py"
+    adapter_prod: "LLMGatewayAdapter"
+    adapter_test: "TestLLMAdapter"
+    methods: ["execute"]
+    note: "Single LLM inference call via Model Hub"
+
+  - name: "IFabricRetrievalPort"
+    direction: "outbound"
+    file: "k1/planner/ports/fabric_retrieval_port.py"
+    adapter_prod: "FabricRetrievalAdapter"
+    adapter_test: "TestFabricRetrievalAdapter"
+    methods: ["discover_capabilities", "find_relevant_prompts"]
+    note: "PLAN-06: discovery only, never execute"
+
+  - name: "IStateReadPort"
+    direction: "outbound"
+    file: "k1/planner/ports/state_read_port.py"
+    adapter_prod: "SessionStateReadAdapter"
+    adapter_test: "TestStateReadAdapter"
+    methods: ["read_sections"]
+    note: "PLAN-01: no write methods"
+
+  - name: "IBridgePort"
+    direction: "outbound"
+    file: "k1/planner/ports/bridge_port.py"
+    adapter_prod: "BridgeAdapter"
+    adapter_test: "TestBridgeAdapter"
+    methods: ["recall", "persist_plan"]
+    note: "K0 recall (read) + WAL persist (fire-and-forget)"
+
+  - name: "IDeltaEmitPort"
+    direction: "outbound"
+    file: "k1/planner/ports/delta_emit_port.py"
+    adapter_prod: "DeltaBusAdapter"
+    adapter_test: "TestDeltaAdapter"
+    methods: ["emit"]
+    note: "Synchronous fire-and-forget, never raises"
+
+  - name: "IEventPort"
+    direction: "inbound_outbound"
+    file: "k1/planner/ports/event_port.py"
+    adapter_prod: "EventBusAdapter"
+    adapter_test: "TestEventAdapter"
+    methods: ["publish", "subscribe", "unsubscribe"]
+    note: "Bidirectional event bus pub/sub"
 
 # ---------------------------------------------------------------------------
 # Protocol contracts (cross-module guarantees)

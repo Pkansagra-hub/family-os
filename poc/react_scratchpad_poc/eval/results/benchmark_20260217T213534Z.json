@@ -1,0 +1,1867 @@
+{
+  "timestamp": "20260217T213534Z",
+  "scenario_count": 1,
+  "results": [
+    {
+      "scenario_id": "test_10_concierge_full",
+      "scenario_name": "Concierge Full Tool Suite (15 tools)",
+      "naive": {
+        "runner_name": "naive_react",
+        "scenario_id": "test_10_concierge_full",
+        "success": true,
+        "final_answer": "Great news! I've found a few excellent restaurant options that should be perfect for Mom's birthday dinner, accommodating everyone's dietary needs and seating for 8. \n\nHere are some top choices:\n\n1. **The Green Garden (Modern Vegan)**:\n   - **Cuisine:** Modern Vegan\n   - **Ambiance:** Fine Dining\n   - **Accommodations:** Excellent for vegan (Mom), vegetarian (Sarah), and nut-free (Jake) diets with 28 vegan, 28 vegetarian, and 22 nut-free options. Seats up to 20.\n   - **Average Price:** $75 per person (higher end)\n   - **Review Highlight:** 'Outstanding vegan fine dining. Creative menu changes seasonally.'\n\n2. **Sage & Thyme (Plant-Based Contemporary)**:\n   - **Cuisine:** Plant-Based Contemporary\n   - **Ambiance:** Casual Elegant\n   - **Accommodations:** Great for vegan, vegetarian, and nut-free needs with 22 vegan, 22 vegetarian, and 15 nut-free options. Seats up to 16.\n   - **Average Price:** $55 per person\n   - **Review Highlight:** 'Beautiful plant-based dishes with a focus on local ingredients. Great for special occasions.'\n\n3. **Lotus Blossom (Asian Vegan Fusion)**:\n   - **Cuisine:** Asian Vegan Fusion\n   - **Ambiance:** Upscale Asian\n   - **Accommodations:** Extensive options with 35 vegan, 35 vegetarian, and 20 nut-free options. Seats up to 14.\n   - **Average Price:** $65 per person\n   - **Review Highlight:** 'Exceptional Asian fusion vegan cuisine. Beautiful presentation.'\n\nAll of these restaurants have availability for next Saturday, March 15th (the system provided 2026-03-15 as next Saturday's date). Let me know which one sounds best, or if you'd like to explore other options or specific cuisines!",
+        "turns": [
+          {
+            "iteration": 0,
+            "assistant_message": "\n[Calling acknowledge({'ack_type': 'commit', 'message': \"I can definitely help you plan a special birthday dinner for your mom next Saturday! It sounds like a wonderful celebration, and I understand it can be stressful, but we'll work through all the details together to make it perfect. I'll start by setting up a new planning thread and checking our memory for any existing family preferences.\", 'next_tool': 'update_narrative'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-aac11b28",
+                "name": "acknowledge",
+                "arguments": {
+                  "ack_type": "commit",
+                  "message": "I can definitely help you plan a special birthday dinner for your mom next Saturday! It sounds like a wonderful celebration, and I understand it can be stressful, but we'll work through all the details together to make it perfect. I'll start by setting up a new planning thread and checking our memory for any existing family preferences.",
+                  "next_tool": "update_narrative"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "acknowledge",
+                "call_id": "call-aac11b28",
+                "ok": true,
+                "output": {
+                  "displayed": true,
+                  "formatted_message": "I can definitely help you plan a special birthday dinner for your mom next Saturday! It sounds like a wonderful celebration, and I understand it can be stressful, but we'll work through all the details together to make it perfect. I'll start by setting up a new planning thread and checking our memory for any existing family preferences.",
+                  "display_latency_ms": 45
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 670,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 1,
+            "assistant_message": "\n[Calling update_narrative({'operation': 'new_thread', 'topic': \"Mom's birthday dinner planning\", 'goal': 'Plan a special vegan-friendly birthday dinner for Mom, accommodating other family dietary needs and seating for 8.'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-c399f386",
+                "name": "update_narrative",
+                "arguments": {
+                  "operation": "new_thread",
+                  "topic": "Mom's birthday dinner planning",
+                  "goal": "Plan a special vegan-friendly birthday dinner for Mom, accommodating other family dietary needs and seating for 8."
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_narrative",
+                "call_id": "call-c399f386",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "thread_id": "0846939d-bb83-497a-9276-5bbd7023ed25",
+                  "active_threads": 1,
+                  "thread_status": "ACTIVE"
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 886,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 2,
+            "assistant_message": "\n[Calling recall_memory({'query': \"family's dietary preferences, past birthday dinner plans, restaurant preferences\"})]",
+            "tool_calls": [
+              {
+                "call_id": "call-5d9a3792",
+                "name": "recall_memory",
+                "arguments": {
+                  "query": "family's dietary preferences, past birthday dinner plans, restaurant preferences"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "recall_memory",
+                "call_id": "call-5d9a3792",
+                "ok": true,
+                "output": {
+                  "results": [
+                    {
+                      "memory_id": "mem-001",
+                      "type": "event",
+                      "content": "Mom's birthday is March 15. Last year we celebrated at Giovanni's Italian restaurant with 8 family members.",
+                      "confidence": 0.95,
+                      "timestamp": "2024-03-15T18:00:00Z",
+                      "source": "user_stated",
+                      "tags": [
+                        "birthday",
+                        "mom",
+                        "family_event"
+                      ]
+                    },
+                    {
+                      "memory_id": "mem-002",
+                      "type": "preference",
+                      "content": "Mom loves flowers, especially roses and tulips. She also enjoys classical music.",
+                      "confidence": 0.88,
+                      "timestamp": "2024-06-12T10:30:00Z",
+                      "source": "inferred",
+                      "tags": [
+                        "mom",
+                        "preferences",
+                        "flowers",
+                        "music"
+                      ]
+                    },
+                    {
+                      "memory_id": "mem-003",
+                      "type": "belief",
+                      "content": "Mom was vegetarian for 3 years before going fully vegan in January 2025.",
+                      "confidence": 0.75,
+                      "timestamp": "2024-09-20T14:15:00Z",
+                      "source": "user_stated",
+                      "tags": [
+                        "mom",
+                        "diet",
+                        "vegetarian"
+                      ]
+                    },
+                    {
+                      "memory_id": "mem-004",
+                      "type": "relationship",
+                      "content": "Family members: Dad (Robert), Mom (Catherine), Sister (Sarah, age 28), Brother (Jake, age 22). Sarah is vegetarian. Jake has a nut allergy.",
+                      "confidence": 0.92,
+                      "timestamp": "2024-01-05T09:00:00Z",
+                      "source": "user_stated",
+                      "tags": [
+                        "family",
+                        "relationships",
+                        "dietary"
+                      ]
+                    },
+                    {
+                      "memory_id": "mem-005",
+                      "type": "event",
+                      "content": "Previous birthday dinners: 2023 at La Bella (Italian, 6 guests), 2024 at Giovanni's (Italian, 8 guests). Mom's favorite dish was the risotto both times.",
+                      "confidence": 0.85,
+                      "timestamp": "2025-01-10T20:00:00Z",
+                      "source": "conversation_summary",
+                      "tags": [
+                        "birthday",
+                        "mom",
+                        "restaurants",
+                        "history"
+                      ]
+                    }
+                  ],
+                  "total_matched": 7,
+                  "query_latency_ms": 85,
+                  "source": "k0_bridge"
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 980,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 3,
+            "assistant_message": "\n[Calling resolve_entity({'entity_type': 'person', 'name': 'Mom'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-5abd1126",
+                "name": "resolve_entity",
+                "arguments": {
+                  "entity_type": "person",
+                  "name": "Mom"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "resolve_entity",
+                "call_id": "call-5abd1126",
+                "ok": true,
+                "output": {
+                  "found": false,
+                  "entity_id": "person:Mom:9f57d793",
+                  "canonical_name": "Mom",
+                  "entity_type": "person",
+                  "confidence": 0.6
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1413,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 4,
+            "assistant_message": "\n[Calling resolve_entity({'entity_type': 'person', 'name': 'Sarah'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-a6ff3adb",
+                "name": "resolve_entity",
+                "arguments": {
+                  "entity_type": "person",
+                  "name": "Sarah"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "resolve_entity",
+                "call_id": "call-a6ff3adb",
+                "ok": true,
+                "output": {
+                  "found": false,
+                  "entity_id": "person:Sarah:ae923dbc",
+                  "canonical_name": "Sarah",
+                  "entity_type": "person",
+                  "confidence": 0.6
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1467,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 5,
+            "assistant_message": "\n[Calling resolve_entity({'entity_type': 'person', 'name': 'Jake'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-e188936f",
+                "name": "resolve_entity",
+                "arguments": {
+                  "entity_type": "person",
+                  "name": "Jake"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "resolve_entity",
+                "call_id": "call-e188936f",
+                "ok": true,
+                "output": {
+                  "found": false,
+                  "entity_id": "person:Jake:24313449",
+                  "canonical_name": "Jake",
+                  "entity_type": "person",
+                  "confidence": 0.6
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1523,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 6,
+            "assistant_message": "\n[Calling update_beliefs({'entity_id': 'person:Mom:9f57d793', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegan', 'predicate': 'diet'})]\n[Calling update_beliefs({'object_value': 'vegetarian', 'operation': 'add_fact', 'source': 'user_stated', 'predicate': 'diet', 'entity_id': 'person:Sarah:ae923dbc'})]\n[Calling update_beliefs({'object_value': 'nuts', 'operation': 'add_fact', 'entity_id': 'person:Jake:24313449', 'predicate': 'allergy', 'source': 'user_stated'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-4e8e908a",
+                "name": "update_beliefs",
+                "arguments": {
+                  "entity_id": "person:Mom:9f57d793",
+                  "operation": "add_fact",
+                  "source": "user_stated",
+                  "object_value": "vegan",
+                  "predicate": "diet"
+                }
+              },
+              {
+                "call_id": "call-9c7c4a63",
+                "name": "update_beliefs",
+                "arguments": {
+                  "object_value": "vegetarian",
+                  "operation": "add_fact",
+                  "source": "user_stated",
+                  "predicate": "diet",
+                  "entity_id": "person:Sarah:ae923dbc"
+                }
+              },
+              {
+                "call_id": "call-26e75113",
+                "name": "update_beliefs",
+                "arguments": {
+                  "object_value": "nuts",
+                  "operation": "add_fact",
+                  "entity_id": "person:Jake:24313449",
+                  "predicate": "allergy",
+                  "source": "user_stated"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-4e8e908a",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "d5e63062-40f3-4377-a0e3-b67f3be8eff1",
+                  "entity_id": "person:Mom:9f57d793",
+                  "is_correction": false,
+                  "section_bytes": 316,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-9c7c4a63",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "9a1c5ced-4b66-4540-8730-945d5c0a94fe",
+                  "entity_id": "person:Sarah:ae923dbc",
+                  "is_correction": false,
+                  "section_bytes": 466,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-26e75113",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "9b8e4703-fb16-43db-bc5b-9506241ddd1b",
+                  "entity_id": "person:Jake:24313449",
+                  "is_correction": false,
+                  "section_bytes": 616,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1577,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 7,
+            "assistant_message": "\n[Calling update_scoreboard({'intent': 'Plan a special vegan-friendly birthday dinner for Mom, accommodating other family dietary needs and seating for 8.', 'task_status': 'in_progress', 'operation': 'set_task', 'progress_pct': 20.0, 'task_name': \"Plan Mom's Birthday Dinner\"})]",
+            "tool_calls": [
+              {
+                "call_id": "call-1c3a8232",
+                "name": "update_scoreboard",
+                "arguments": {
+                  "intent": "Plan a special vegan-friendly birthday dinner for Mom, accommodating other family dietary needs and seating for 8.",
+                  "task_status": "in_progress",
+                  "operation": "set_task",
+                  "progress_pct": 20.0,
+                  "task_name": "Plan Mom's Birthday Dinner"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_scoreboard",
+                "call_id": "call-1c3a8232",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "section_bytes": 450,
+                  "available_bytes": 5694,
+                  "operation": "set_task"
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1846,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 8,
+            "assistant_message": "\n[Calling discover_capabilities({'intent': 'find restaurants for a birthday dinner', 'domain': ['dining', 'restaurants']})]",
+            "tool_calls": [
+              {
+                "call_id": "call-c6780b62",
+                "name": "discover_capabilities",
+                "arguments": {
+                  "intent": "find restaurants for a birthday dinner",
+                  "domain": "['dining', 'restaurants']"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "discover_capabilities",
+                "call_id": "call-c6780b62",
+                "ok": true,
+                "output": {
+                  "capabilities": [],
+                  "total_matched": 0,
+                  "query_latency_ms": 18
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1946,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 9,
+            "assistant_message": "\n[Calling invoke_capability({'capability': 'tool.execute.restaurant_search', 'params': <proto.marshal.collections.maps.MapComposite object at 0x00000221EAD19130>})]",
+            "tool_calls": [
+              {
+                "call_id": "call-bb61398b",
+                "name": "invoke_capability",
+                "arguments": {
+                  "capability": "tool.execute.restaurant_search",
+                  "params": "<proto.marshal.collections.maps.MapComposite object at 0x00000221EAD19130>"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "invoke_capability",
+                "call_id": "call-bb61398b",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "provider_id": "opentable_mcp",
+                  "duration_ms": 420,
+                  "trace_id": "tr-cap-rest-001",
+                  "data": {
+                    "restaurants": [
+                      {
+                        "id": "rest-001",
+                        "name": "The Green Garden",
+                        "cuisine": "Modern Vegan",
+                        "rating": 4.8,
+                        "price_range": "$$$$",
+                        "avg_price_per_person": 75,
+                        "location": "Downtown",
+                        "distance_km": 3.2,
+                        "vegan_options": 28,
+                        "vegetarian_options": 28,
+                        "nut_free_options": 22,
+                        "gluten_free_options": 18,
+                        "ambiance": "Fine Dining",
+                        "private_dining": true,
+                        "max_party_size": 20,
+                        "next_availability": "2026-03-15 18:00",
+                        "reviews_summary": "Outstanding vegan fine dining. Creative menu changes seasonally. Excellent wine list with organic options."
+                      },
+                      {
+                        "id": "rest-002",
+                        "name": "Sage & Thyme",
+                        "cuisine": "Plant-Based Contemporary",
+                        "rating": 4.6,
+                        "price_range": "$$$",
+                        "avg_price_per_person": 55,
+                        "location": "Midtown",
+                        "distance_km": 5.1,
+                        "vegan_options": 22,
+                        "vegetarian_options": 22,
+                        "nut_free_options": 15,
+                        "gluten_free_options": 12,
+                        "ambiance": "Casual Elegant",
+                        "private_dining": true,
+                        "max_party_size": 16,
+                        "next_availability": "2026-03-15 19:00",
+                        "reviews_summary": "Beautiful plant-based dishes with a focus on local ingredients. Great for special occasions."
+                      },
+                      {
+                        "id": "rest-003",
+                        "name": "Harvest Moon",
+                        "cuisine": "Farm-to-Table Vegan",
+                        "rating": 4.5,
+                        "price_range": "$$$",
+                        "avg_price_per_person": 60,
+                        "location": "West End",
+                        "distance_km": 4.8,
+                        "vegan_options": 20,
+                        "vegetarian_options": 25,
+                        "nut_free_options": 18,
+                        "gluten_free_options": 16,
+                        "ambiance": "Rustic Elegant",
+                        "private_dining": false,
+                        "max_party_size": 12,
+                        "next_availability": "2026-03-15 18:30",
+                        "reviews_summary": "Farm-to-table concept with organic produce. Intimate setting. Limited party size."
+                      },
+                      {
+                        "id": "rest-004",
+                        "name": "Verde Kitchen",
+                        "cuisine": "Mediterranean Vegan",
+                        "rating": 4.3,
+                        "price_range": "$$",
+                        "avg_price_per_person": 40,
+                        "location": "East Side",
+                        "distance_km": 6.5,
+                        "vegan_options": 18,
+                        "vegetarian_options": 24,
+                        "nut_free_options": 14,
+                        "gluten_free_options": 10,
+                        "ambiance": "Casual",
+                        "private_dining": false,
+                        "max_party_size": 30,
+                        "next_availability": "2026-03-15 17:30",
+                        "reviews_summary": "Great value Mediterranean vegan food. Large venue, good for groups. Quality varies."
+                      },
+                      {
+                        "id": "rest-005",
+                        "name": "Lotus Blossom",
+                        "cuisine": "Asian Vegan Fusion",
+                        "rating": 4.7,
+                        "price_range": "$$$",
+                        "avg_price_per_person": 65,
+                        "location": "Chinatown",
+                        "distance_km": 7.2,
+                        "vegan_options": 35,
+                        "vegetarian_options": 35,
+                        "nut_free_options": 20,
+                        "gluten_free_options": 25,
+                        "ambiance": "Upscale Asian",
+                        "private_dining": true,
+                        "max_party_size": 14,
+                        "next_availability": "2026-03-15 19:30",
+                        "reviews_summary": "Exceptional Asian fusion vegan cuisine. Beautiful presentation. Must try the dim sum and ramen."
+                      }
+                    ],
+                    "total_results": 5,
+                    "search_criteria": {
+                      "cuisine": "vegan",
+                      "date": "2026-03-15",
+                      "party_size": 8,
+                      "dietary": [
+                        "vegan",
+                        "vegetarian",
+                        "nut-free"
+                      ]
+                    }
+                  }
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 2001,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 10,
+            "assistant_message": "\n[Calling summarize_context({'sections': ['beliefs', 'narrative', 'scoreboard', 'memory'], 'strategy': 'abstractive', 'target_tokens': 200.0})]",
+            "tool_calls": [
+              {
+                "call_id": "call-f6373af4",
+                "name": "summarize_context",
+                "arguments": {
+                  "sections": "['beliefs', 'narrative', 'scoreboard', 'memory']",
+                  "strategy": "abstractive",
+                  "target_tokens": 200.0
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "summarize_context",
+                "call_id": "call-f6373af4",
+                "ok": true,
+                "output": {
+                  "summary": "Empty session state.",
+                  "original_tokens": 112,
+                  "summary_tokens": 5,
+                  "compression_ratio": 0.045,
+                  "sections_included": [
+                    "beliefs",
+                    "narrative",
+                    "scoreboard",
+                    "memory"
+                  ],
+                  "sections_dropped": [],
+                  "strategy_used": "abstractive",
+                  "section_details": {
+                    "beliefs": {
+                      "error": "section not available"
+                    },
+                    "narrative": {
+                      "error": "section not available"
+                    },
+                    "scoreboard": {
+                      "referent_count": 3,
+                      "referents": [
+                        {
+                          "text": "Mom",
+                          "entity_id": "person:Mom:9f57d793"
+                        },
+                        {
+                          "text": "Sarah",
+                          "entity_id": "person:Sarah:ae923dbc"
+                        },
+                        {
+                          "text": "Jake",
+                          "entity_id": "person:Jake:24313449"
+                        }
+                      ],
+                      "size_bytes": 450
+                    },
+                    "memory": {
+                      "error": "section not available"
+                    }
+                  }
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 2763,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 11,
+            "assistant_message": "Great news! I've found a few excellent restaurant options that should be perfect for Mom's birthday dinner, accommodating everyone's dietary needs and seating for 8. \n\nHere are some top choices:\n\n1. **The Green Garden (Modern Vegan)**:\n   - **Cuisine:** Modern Vegan\n   - **Ambiance:** Fine Dining\n   - **Accommodations:** Excellent for vegan (Mom), vegetarian (Sarah), and nut-free (Jake) diets with 28 vegan, 28 vegetarian, and 22 nut-free options. Seats up to 20.\n   - **Average Price:** $75 per person (higher end)\n   - **Review Highlight:** 'Outstanding vegan fine dining. Creative menu changes seasonally.'\n\n2. **Sage & Thyme (Plant-Based Contemporary)**:\n   - **Cuisine:** Plant-Based Contemporary\n   - **Ambiance:** Casual Elegant\n   - **Accommodations:** Great for vegan, vegetarian, and nut-free needs with 22 vegan, 22 vegetarian, and 15 nut-free options. Seats up to 16.\n   - **Average Price:** $55 per person\n   - **Review Highlight:** 'Beautiful plant-based dishes with a focus on local ingredients. Great for special occasions.'\n\n3. **Lotus Blossom (Asian Vegan Fusion)**:\n   - **Cuisine:** Asian Vegan Fusion\n   - **Ambiance:** Upscale Asian\n   - **Accommodations:** Extensive options with 35 vegan, 35 vegetarian, and 20 nut-free options. Seats up to 14.\n   - **Average Price:** $65 per person\n   - **Review Highlight:** 'Exceptional Asian fusion vegan cuisine. Beautiful presentation.'\n\nAll of these restaurants have availability for next Saturday, March 15th (the system provided 2026-03-15 as next Saturday's date). Let me know which one sounds best, or if you'd like to explore other options or specific cuisines!",
+            "tool_calls": [
+              {
+                "call_id": "call-8da48cbb",
+                "name": "final_answer",
+                "arguments": {
+                  "answer": "Great news! I've found a few excellent restaurant options that should be perfect for Mom's birthday dinner, accommodating everyone's dietary needs and seating for 8. \n\nHere are some top choices:\n\n1. **The Green Garden (Modern Vegan)**:\n   - **Cuisine:** Modern Vegan\n   - **Ambiance:** Fine Dining\n   - **Accommodations:** Excellent for vegan (Mom), vegetarian (Sarah), and nut-free (Jake) diets with 28 vegan, 28 vegetarian, and 22 nut-free options. Seats up to 20.\n   - **Average Price:** $75 per person (higher end)\n   - **Review Highlight:** 'Outstanding vegan fine dining. Creative menu changes seasonally.'\n\n2. **Sage & Thyme (Plant-Based Contemporary)**:\n   - **Cuisine:** Plant-Based Contemporary\n   - **Ambiance:** Casual Elegant\n   - **Accommodations:** Great for vegan, vegetarian, and nut-free needs with 22 vegan, 22 vegetarian, and 15 nut-free options. Seats up to 16.\n   - **Average Price:** $55 per person\n   - **Review Highlight:** 'Beautiful plant-based dishes with a focus on local ingredients. Great for special occasions.'\n\n3. **Lotus Blossom (Asian Vegan Fusion)**:\n   - **Cuisine:** Asian Vegan Fusion\n   - **Ambiance:** Upscale Asian\n   - **Accommodations:** Extensive options with 35 vegan, 35 vegetarian, and 20 nut-free options. Seats up to 14.\n   - **Average Price:** $65 per person\n   - **Review Highlight:** 'Exceptional Asian fusion vegan cuisine. Beautiful presentation.'\n\nAll of these restaurants have availability for next Saturday, March 15th (the system provided 2026-03-15 as next Saturday's date). Let me know which one sounds best, or if you'd like to explore other options or specific cuisines!"
+                }
+              }
+            ],
+            "tool_results": [],
+            "context_tokens_estimate": 2965,
+            "findings_snapshot": {},
+            "final_answer_fragment": "Great news! I've found a few excellent restaurant options that should be perfect for Mom's birthday dinner, accommodating everyone's dietary needs and seating for 8. \n\nHere are some top choices:\n\n1. **The Green Garden (Modern Vegan)**:\n   - **Cuisine:** Modern Vegan\n   - **Ambiance:** Fine Dining\n   - **Accommodations:** Excellent for vegan (Mom), vegetarian (Sarah), and nut-free (Jake) diets with 28 vegan, 28 vegetarian, and 22 nut-free options. Seats up to 20.\n   - **Average Price:** $75 per person (higher end)\n   - **Review Highlight:** 'Outstanding vegan fine dining. Creative menu changes seasonally.'\n\n2. **Sage & Thyme (Plant-Based Contemporary)**:\n   - **Cuisine:** Plant-Based Contemporary\n   - **Ambiance:** Casual Elegant\n   - **Accommodations:** Great for vegan, vegetarian, and nut-free needs with 22 vegan, 22 vegetarian, and 15 nut-free options. Seats up to 16.\n   - **Average Price:** $55 per person\n   - **Review Highlight:** 'Beautiful plant-based dishes with a focus on local ingredients. Great for special occasions.'\n\n3. **Lotus Blossom (Asian Vegan Fusion)**:\n   - **Cuisine:** Asian Vegan Fusion\n   - **Ambiance:** Upscale Asian\n   - **Accommodations:** Extensive options with 35 vegan, 35 vegetarian, and 20 nut-free options. Seats up to 14.\n   - **Average Price:** $65 per person\n   - **Review Highlight:** 'Exceptional Asian fusion vegan cuisine. Beautiful presentation.'\n\nAll of these restaurants have availability for next Saturday, March 15th (the system provided 2026-03-15 as next Saturday's date). Let me know which one sounds best, or if you'd like to explore other options or specific cuisines!"
+          }
+        ],
+        "metrics": {
+          "iterations": 12,
+          "tool_calls": 13,
+          "message_count_final": 26,
+          "context_tokens_final": 2965,
+          "token_input": 51510,
+          "token_output": 1077,
+          "latency_ms": 25354,
+          "context_tokens_per_iteration": [
+            670,
+            886,
+            980,
+            1413,
+            1467,
+            1523,
+            1577,
+            1846,
+            1946,
+            2001,
+            2763,
+            2965
+          ]
+        },
+        "errors": [],
+        "started_at": "2026-02-17T21:33:56.752644+00:00",
+        "finished_at": "2026-02-17T21:34:22.107292+00:00",
+        "total_compactions": 0,
+        "total_findings": 0,
+        "total_sub_agents": 0,
+        "max_nesting_depth": 0,
+        "budget_overspend": false
+      },
+      "smart": {
+        "runner_name": "smart_react",
+        "scenario_id": "test_10_concierge_full",
+        "success": true,
+        "final_answer": "Budget exhausted. Summary of findings:\n### FACT\n- event_type: Birthday dinner \n- occasion: Mom's birthday \n- event_date: next Saturday \n- success: True \n- previous_emotion: neutral \n- previous_intensity: 0.0 \n- override_applied: True \n- reasoning: User expressed both excitement (\"excited\") and stress (\"stressed\") about planning the dinner, indicating a mixed emotional state. \n- thread_id: f8594c13-0be0-4c62-8680-c210b3b46e6f \n- active_threads: 1 \n- thread_status: ACTIVE \n- operation_successful: True \n- gap_id: 58c2cc34-14d9-4bc4-a109-6f5525e282b1 \n- open_gaps_count: 1 \n- results_status: No matching results found \n- query_latency: 85ms \n- source: k0_bridge \n- recipient: Mom \n- date: Next Saturday \n- main_dietary_preference: Vegan-friendly \n- guest_dietary_preference: Vegetarian guest \n- allergy: Nut allergy \n- found: False \n- entity_id: person:Mom:b1addd97 \n- canonical_name: Mom \n- entity_type: person \n- confidence: 0.6 \n- belief_id: 836cb67f-fdf6-42ee-85b0-292645852ac6 \n- entity: Mom \n- is_correction: False \n- section_bytes: 190 \n- available_bytes: 5954 \n- operation: set_task \n- total_matched: 0 \n- query_latency_ms: 18 \n### PRICE\n- info_needed: Budget ",
+        "turns": [
+          {
+            "iteration": 1,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-eb464eb7",
+                "name": "acknowledge",
+                "arguments": {
+                  "ack_type": "commit",
+                  "message": "Absolutely! I can help you plan a special vegan-friendly dinner for your Mom's birthday next Saturday. It sounds like a lovely idea, and I'm here to take the stress out of it.",
+                  "next_tool": "refine_affect"
+                }
+              },
+              {
+                "call_id": "call-e9406261",
+                "name": "refine_affect",
+                "arguments": {
+                  "override_intensity": 0.7,
+                  "override_emotion": "mixed",
+                  "reasoning": "User expressed both excitement (\"excited\") and stress (\"stressed\") about planning the dinner, indicating a mixed emotional state.",
+                  "override_valence": "mixed"
+                }
+              },
+              {
+                "call_id": "call-c19f7c34",
+                "name": "update_narrative",
+                "arguments": {
+                  "operation": "new_thread",
+                  "topic": "Mom's Birthday Dinner",
+                  "goal": "Plan and book a special dinner for Mom's birthday, accommodating dietary needs for 8 people."
+                }
+              },
+              {
+                "call_id": "call-f9c1ba40",
+                "name": "update_clarifications",
+                "arguments": {
+                  "description": "Budget for the birthday dinner is not yet specified.",
+                  "gap_type": "CONSTRAINT_UNCLEAR",
+                  "operation": "record_gap"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "acknowledge",
+                "call_id": "call-eb464eb7",
+                "ok": true,
+                "output": {
+                  "displayed": true,
+                  "formatted_message": "Absolutely! I can help you plan a special vegan-friendly dinner for your Mom's birthday next Saturday. It sounds like a lovely idea, and I'm here to take the stress out of it.",
+                  "display_latency_ms": 45
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "refine_affect",
+                "call_id": "call-e9406261",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "previous_emotion": "neutral",
+                  "previous_intensity": 0.0,
+                  "override_applied": true,
+                  "reasoning": "User expressed both excitement (\"excited\") and stress (\"stressed\") about planning the dinner, indicating a mixed emotional state."
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_narrative",
+                "call_id": "call-c19f7c34",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "thread_id": "f8594c13-0be0-4c62-8680-c210b3b46e6f",
+                  "active_threads": 1,
+                  "thread_status": "ACTIVE"
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_clarifications",
+                "call_id": "call-f9c1ba40",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "gap_id": "58c2cc34-14d9-4bc4-a109-6f5525e282b1",
+                  "open_gaps_count": 1
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 695,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "special vegan-friendly dinner",
+                "type": "fact"
+              },
+              "occasion": {
+                "value": "Mom's birthday",
+                "type": "fact"
+              },
+              "event_date": {
+                "value": "next Saturday",
+                "type": "fact"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "User expressed both excitement (\"excited\") and stress (\"stressed\") about planning the dinner, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "f8594c13-0be0-4c62-8680-c210b3b46e6f",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "operation_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "gap_id": {
+                "value": "58c2cc34-14d9-4bc4-a109-6f5525e282b1",
+                "type": "fact"
+              },
+              "open_gaps_count": {
+                "value": 1,
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 2,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-5053bad6",
+                "name": "recall_memory",
+                "arguments": {
+                  "selectors": "['beliefs', 'conversations', 'events', 'relationships', 'preferences']",
+                  "query": "dietary preferences for family members or past birthday dinner experiences"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "recall_memory",
+                "call_id": "call-5053bad6",
+                "ok": true,
+                "output": {
+                  "results": [],
+                  "total_matched": 0,
+                  "query_latency_ms": 85,
+                  "source": "k0_bridge"
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1154,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "special vegan-friendly dinner",
+                "type": "fact"
+              },
+              "occasion": {
+                "value": "Mom's birthday",
+                "type": "fact"
+              },
+              "event_date": {
+                "value": "next Saturday",
+                "type": "fact"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "User expressed both excitement (\"excited\") and stress (\"stressed\") about planning the dinner, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "f8594c13-0be0-4c62-8680-c210b3b46e6f",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "operation_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "gap_id": {
+                "value": "58c2cc34-14d9-4bc4-a109-6f5525e282b1",
+                "type": "fact"
+              },
+              "open_gaps_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "results_status": {
+                "value": "No matching results found",
+                "type": "fact"
+              },
+              "query_latency": {
+                "value": "85ms",
+                "type": "fact"
+              },
+              "source": {
+                "value": "k0_bridge",
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 3,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-c846e30a",
+                "name": "acknowledge",
+                "arguments": {
+                  "ack_type": "commit",
+                  "message": "Okay, I understand. I will help you plan a special vegan-friendly birthday dinner for your Mom next Saturday, taking into account the vegetarian guest and nut allergy. I will also make sure to find out about your budget.",
+                  "next_tool": "resolve_entity"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "acknowledge",
+                "call_id": "call-c846e30a",
+                "ok": true,
+                "output": {
+                  "displayed": true,
+                  "formatted_message": "Okay, I understand. I will help you plan a special vegan-friendly birthday dinner for your Mom next Saturday, taking into account the vegetarian guest and nut allergy. I will also make sure to find out about your budget.",
+                  "display_latency_ms": 45
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1116,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "Birthday dinner",
+                "type": "fact"
+              },
+              "occasion": {
+                "value": "Mom's birthday",
+                "type": "fact"
+              },
+              "event_date": {
+                "value": "next Saturday",
+                "type": "fact"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "User expressed both excitement (\"excited\") and stress (\"stressed\") about planning the dinner, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "f8594c13-0be0-4c62-8680-c210b3b46e6f",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "operation_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "gap_id": {
+                "value": "58c2cc34-14d9-4bc4-a109-6f5525e282b1",
+                "type": "fact"
+              },
+              "open_gaps_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "results_status": {
+                "value": "No matching results found",
+                "type": "fact"
+              },
+              "query_latency": {
+                "value": "85ms",
+                "type": "fact"
+              },
+              "source": {
+                "value": "k0_bridge",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "Next Saturday",
+                "type": "fact"
+              },
+              "main_dietary_preference": {
+                "value": "Vegan-friendly",
+                "type": "fact"
+              },
+              "guest_dietary_preference": {
+                "value": "Vegetarian guest",
+                "type": "fact"
+              },
+              "allergy": {
+                "value": "Nut allergy",
+                "type": "fact"
+              },
+              "info_needed": {
+                "value": "Budget",
+                "type": "price"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 4,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-2969eff5",
+                "name": "resolve_entity",
+                "arguments": {
+                  "entity_type": "person",
+                  "name": "Mom"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "resolve_entity",
+                "call_id": "call-2969eff5",
+                "ok": true,
+                "output": {
+                  "found": false,
+                  "entity_id": "person:Mom:b1addd97",
+                  "canonical_name": "Mom",
+                  "entity_type": "person",
+                  "confidence": 0.6
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1221,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "Birthday dinner",
+                "type": "fact"
+              },
+              "occasion": {
+                "value": "Mom's birthday",
+                "type": "fact"
+              },
+              "event_date": {
+                "value": "next Saturday",
+                "type": "fact"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "User expressed both excitement (\"excited\") and stress (\"stressed\") about planning the dinner, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "f8594c13-0be0-4c62-8680-c210b3b46e6f",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "operation_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "gap_id": {
+                "value": "58c2cc34-14d9-4bc4-a109-6f5525e282b1",
+                "type": "fact"
+              },
+              "open_gaps_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "results_status": {
+                "value": "No matching results found",
+                "type": "fact"
+              },
+              "query_latency": {
+                "value": "85ms",
+                "type": "fact"
+              },
+              "source": {
+                "value": "k0_bridge",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "Next Saturday",
+                "type": "fact"
+              },
+              "main_dietary_preference": {
+                "value": "Vegan-friendly",
+                "type": "fact"
+              },
+              "guest_dietary_preference": {
+                "value": "Vegetarian guest",
+                "type": "fact"
+              },
+              "allergy": {
+                "value": "Nut allergy",
+                "type": "fact"
+              },
+              "info_needed": {
+                "value": "Budget",
+                "type": "price"
+              },
+              "found": {
+                "value": false,
+                "type": "fact"
+              },
+              "entity_id": {
+                "value": "person:Mom:b1addd97",
+                "type": "fact"
+              },
+              "canonical_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "confidence": {
+                "value": 0.6,
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 5,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-92ef3dfb",
+                "name": "update_beliefs",
+                "arguments": {
+                  "entity_id": "person:Mom:b1addd97",
+                  "operation": "add_preference",
+                  "source": "user_stated",
+                  "predicate": "diet",
+                  "object_value": "vegan"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-92ef3dfb",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "836cb67f-fdf6-42ee-85b0-292645852ac6",
+                  "entity_id": "person:Mom:b1addd97",
+                  "is_correction": false,
+                  "section_bytes": 316,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1200,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "Birthday dinner",
+                "type": "fact"
+              },
+              "occasion": {
+                "value": "Mom's birthday",
+                "type": "fact"
+              },
+              "event_date": {
+                "value": "next Saturday",
+                "type": "fact"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "User expressed both excitement (\"excited\") and stress (\"stressed\") about planning the dinner, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "f8594c13-0be0-4c62-8680-c210b3b46e6f",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "operation_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "gap_id": {
+                "value": "58c2cc34-14d9-4bc4-a109-6f5525e282b1",
+                "type": "fact"
+              },
+              "open_gaps_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "results_status": {
+                "value": "No matching results found",
+                "type": "fact"
+              },
+              "query_latency": {
+                "value": "85ms",
+                "type": "fact"
+              },
+              "source": {
+                "value": "k0_bridge",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "Next Saturday",
+                "type": "fact"
+              },
+              "main_dietary_preference": {
+                "value": "Vegan-friendly",
+                "type": "fact"
+              },
+              "guest_dietary_preference": {
+                "value": "Vegetarian guest",
+                "type": "fact"
+              },
+              "allergy": {
+                "value": "Nut allergy",
+                "type": "fact"
+              },
+              "info_needed": {
+                "value": "Budget",
+                "type": "price"
+              },
+              "found": {
+                "value": false,
+                "type": "fact"
+              },
+              "entity_id": {
+                "value": "person:Mom:b1addd97",
+                "type": "fact"
+              },
+              "canonical_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "belief_id": {
+                "value": "836cb67f-fdf6-42ee-85b0-292645852ac6",
+                "type": "fact"
+              },
+              "entity": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "is_correction": {
+                "value": false,
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 6,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-57ca8a66",
+                "name": "update_scoreboard",
+                "arguments": {
+                  "task_status": "in_progress",
+                  "operation": "set_task",
+                  "task_name": "Plan Mom's vegan birthday dinner"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_scoreboard",
+                "call_id": "call-57ca8a66",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "section_bytes": 190,
+                  "available_bytes": 5954,
+                  "operation": "set_task"
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1238,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "Birthday dinner",
+                "type": "fact"
+              },
+              "occasion": {
+                "value": "Mom's birthday",
+                "type": "fact"
+              },
+              "event_date": {
+                "value": "next Saturday",
+                "type": "fact"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "User expressed both excitement (\"excited\") and stress (\"stressed\") about planning the dinner, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "f8594c13-0be0-4c62-8680-c210b3b46e6f",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "operation_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "gap_id": {
+                "value": "58c2cc34-14d9-4bc4-a109-6f5525e282b1",
+                "type": "fact"
+              },
+              "open_gaps_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "results_status": {
+                "value": "No matching results found",
+                "type": "fact"
+              },
+              "query_latency": {
+                "value": "85ms",
+                "type": "fact"
+              },
+              "source": {
+                "value": "k0_bridge",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "Next Saturday",
+                "type": "fact"
+              },
+              "main_dietary_preference": {
+                "value": "Vegan-friendly",
+                "type": "fact"
+              },
+              "guest_dietary_preference": {
+                "value": "Vegetarian guest",
+                "type": "fact"
+              },
+              "allergy": {
+                "value": "Nut allergy",
+                "type": "fact"
+              },
+              "info_needed": {
+                "value": "Budget",
+                "type": "price"
+              },
+              "found": {
+                "value": false,
+                "type": "fact"
+              },
+              "entity_id": {
+                "value": "person:Mom:b1addd97",
+                "type": "fact"
+              },
+              "canonical_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "belief_id": {
+                "value": "836cb67f-fdf6-42ee-85b0-292645852ac6",
+                "type": "fact"
+              },
+              "entity": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "section_bytes": {
+                "value": 190,
+                "type": "fact"
+              },
+              "available_bytes": {
+                "value": 5954,
+                "type": "fact"
+              },
+              "operation": {
+                "value": "set_task",
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 7,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-963c3e7c",
+                "name": "discover_capabilities",
+                "arguments": {
+                  "intent": "find a restaurant that can accommodate vegan, vegetarian, and nut allergy dietary restrictions",
+                  "domain": "['food', 'dining']"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "discover_capabilities",
+                "call_id": "call-963c3e7c",
+                "ok": true,
+                "output": {
+                  "capabilities": [],
+                  "total_matched": 0,
+                  "query_latency_ms": 18
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1208,
+            "findings_snapshot": {
+              "event_type": {
+                "value": "Birthday dinner",
+                "type": "fact"
+              },
+              "occasion": {
+                "value": "Mom's birthday",
+                "type": "fact"
+              },
+              "event_date": {
+                "value": "next Saturday",
+                "type": "fact"
+              },
+              "success": {
+                "value": true,
+                "type": "fact"
+              },
+              "previous_emotion": {
+                "value": "neutral",
+                "type": "fact"
+              },
+              "previous_intensity": {
+                "value": 0.0,
+                "type": "fact"
+              },
+              "override_applied": {
+                "value": true,
+                "type": "fact"
+              },
+              "reasoning": {
+                "value": "User expressed both excitement (\"excited\") and stress (\"stressed\") about planning the dinner, indicating a mixed emotional state.",
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "f8594c13-0be0-4c62-8680-c210b3b46e6f",
+                "type": "fact"
+              },
+              "active_threads": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "operation_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "gap_id": {
+                "value": "58c2cc34-14d9-4bc4-a109-6f5525e282b1",
+                "type": "fact"
+              },
+              "open_gaps_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "results_status": {
+                "value": "No matching results found",
+                "type": "fact"
+              },
+              "query_latency": {
+                "value": "85ms",
+                "type": "fact"
+              },
+              "source": {
+                "value": "k0_bridge",
+                "type": "fact"
+              },
+              "recipient": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "date": {
+                "value": "Next Saturday",
+                "type": "fact"
+              },
+              "main_dietary_preference": {
+                "value": "Vegan-friendly",
+                "type": "fact"
+              },
+              "guest_dietary_preference": {
+                "value": "Vegetarian guest",
+                "type": "fact"
+              },
+              "allergy": {
+                "value": "Nut allergy",
+                "type": "fact"
+              },
+              "info_needed": {
+                "value": "Budget",
+                "type": "price"
+              },
+              "found": {
+                "value": false,
+                "type": "fact"
+              },
+              "entity_id": {
+                "value": "person:Mom:b1addd97",
+                "type": "fact"
+              },
+              "canonical_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "belief_id": {
+                "value": "836cb67f-fdf6-42ee-85b0-292645852ac6",
+                "type": "fact"
+              },
+              "entity": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "section_bytes": {
+                "value": 190,
+                "type": "fact"
+              },
+              "available_bytes": {
+                "value": 5954,
+                "type": "fact"
+              },
+              "operation": {
+                "value": "set_task",
+                "type": "fact"
+              },
+              "total_matched": {
+                "value": 0,
+                "type": "fact"
+              },
+              "query_latency_ms": {
+                "value": 18,
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          }
+        ],
+        "metrics": {
+          "iterations": 7,
+          "tool_calls": 10,
+          "compactions": 7,
+          "scratchpad_messages_final": 8,
+          "context_tokens_final": 1220,
+          "findings_count": 36,
+          "typed_findings_count": 2,
+          "failed_count": 0,
+          "cognitive_writes_count": 0,
+          "remaining_tool_calls": 20,
+          "remaining_iterations": 13,
+          "token_input": 25059,
+          "token_output": 486,
+          "elapsed_budget_ms": 72619,
+          "latency_ms": 72619,
+          "sub_agent_count": 0,
+          "max_nesting_depth": 0,
+          "context_tokens_per_iteration": [
+            695,
+            1154,
+            1116,
+            1221,
+            1200,
+            1238,
+            1208
+          ],
+          "findings_per_iteration": [
+            14,
+            17,
+            23,
+            28,
+            31,
+            34,
+            36
+          ]
+        },
+        "errors": [
+          "ITERATION_BUDGET_EXHAUSTED"
+        ],
+        "started_at": "2026-02-17T21:34:22.115016+00:00",
+        "finished_at": "2026-02-17T21:35:34.734252+00:00",
+        "total_compactions": 7,
+        "total_findings": 36,
+        "total_sub_agents": 0,
+        "max_nesting_depth": 0,
+        "budget_overspend": false
+      },
+      "comparison": {
+        "scenario_id": "test_10_concierge_full",
+        "scenario_name": "Concierge Full Tool Suite (15 tools)",
+        "naive_success": true,
+        "smart_success": true,
+        "winner": "smart",
+        "naive_iterations": 12,
+        "smart_iterations": 7,
+        "naive_tool_calls": 13,
+        "smart_tool_calls": 10,
+        "naive_context_final": 2965,
+        "smart_context_final": 1220,
+        "context_savings_pct": 58.85328836424958,
+        "naive_tokens_total": 52587,
+        "smart_tokens_total": 25545,
+        "token_savings_pct": 51.4233555821781,
+        "naive_latency_ms": 25354,
+        "smart_latency_ms": 72619,
+        "compactions": 7,
+        "findings_count": 36,
+        "sub_agent_count": 0,
+        "max_nesting_depth": 0,
+        "failed_attempts": 0,
+        "naive_context_growth": [
+          670,
+          886,
+          980,
+          1413,
+          1467,
+          1523,
+          1577,
+          1846,
+          1946,
+          2001,
+          2763,
+          2965
+        ],
+        "smart_context_growth": [
+          695,
+          1154,
+          1116,
+          1221,
+          1200,
+          1238,
+          1208
+        ],
+        "findings_per_iteration": [
+          14,
+          17,
+          23,
+          28,
+          31,
+          34,
+          36
+        ],
+        "winner_reasons": [
+          "Smart used 59% less context",
+          "Smart used 51% fewer tokens",
+          "Smart extracted 36 structured findings",
+          "Smart performed 7 compactions"
+        ]
+      }
+    }
+  ],
+  "aggregate": {
+    "scenario_count": 1,
+    "naive_success_rate": 100.0,
+    "smart_success_rate": 100.0,
+    "naive_wins": 0,
+    "smart_wins": 1,
+    "ties": 0,
+    "avg_context_savings_pct": 58.85328836424958,
+    "avg_token_savings_pct": 51.4233555821781,
+    "naive_avg_latency_ms": 25354.0,
+    "smart_avg_latency_ms": 72619.0,
+    "total_compactions": 7,
+    "total_findings": 36,
+    "total_sub_agents": 0,
+    "max_nesting_depth": 0,
+    "overall_winner": "SMART (Scratchpad)",
+    "summary": "Smart wins 1/1 scenarios. Context savings: 58.9%. Token savings: 51.4%. Total findings extracted: 36. Compactions performed: 7."
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "scenario_count": 1,
+  "naive_success_rate": 100.0,
+  "smart_success_rate": 100.0,
+  "naive_wins": 0,
+  "smart_wins": 0,
+  "ties": 1,
+  "avg_context_savings_pct": -8.520179372197312,
+  "avg_token_savings_pct": -79.60031435949253,
+  "naive_avg_latency_ms": 49654.0,
+  "smart_avg_latency_ms": 168396.0,
+  "total_compactions": 0,
+  "total_findings": 186,
+  "total_sub_agents": 0,
+  "max_nesting_depth": 0,
+  "overall_winner": "TIE",
+  "summary": "Smart wins 0/1 scenarios. Context savings: -8.5%. Token savings: -79.6%. Total findings extracted: 186. Compactions performed: 0."
+}

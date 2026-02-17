@@ -171,17 +171,18 @@ flowchart TB
 
         subgraph EVENT_TOPICS["Event Topics (fire-and-forget fan-out)"]
             direction TB
-            T_RESPONSE["k1.response.* (STRICT)<br/>final.v1 | ack.v1 | progress.v1"]:::topic_concierge
+            T_RESPONSE["k1.response.* (STRICT)<br/>final.v1 | ack.v1 | intent_ack.v1 | clarification.v1 | progress.v1"]:::topic_concierge
             T_CAPABILITY["k1.capability.* (STRICT)<br/>invoked.v1 | completed.v1 | failed.v1"]:::topic_fabric
             T_ORCHESTRATION["k1.orchestration.* (STRICT)<br/>task.accepted | execution.* | step.progress"]:::topic_orch
             T_PLANNER["k1.planner.* (STRICT)<br/>plan.ready.v1 | plan.failed.v1"]:::topic_planner
-            T_HIL["k1.hil.* (STRICT)<br/>clarification.v1 | approval_request.v1"]:::topic_hil
+            T_HIL["k1.hil.* (STRICT)<br/>clarification.v1 | clarification_response.v1<br/>approval_request.v1 | approval_response.v1<br/>fallback_response.v1 | override_response.v1<br/>progress.v1"]:::topic_hil
             T_SESSION["k1.session.* (STRICT)<br/>checkpoint.v1 | eviction.v1 | emergency.v1"]:::topic_session
             T_AFFECT["k1.affect.* (RELAXED)<br/>analyzed.v1"]:::topic_relaxed
             T_CONSTRAINT["k1.constraint.* (RELAXED)<br/>progress.v1 | resolved.v1"]:::topic_relaxed
             T_PROACTIVE["k1.proactive.* (RELAXED)<br/>question.v1 | message.v1"]:::topic_relaxed
             T_WORKFLOW["k1.workflow.* (RELAXED)<br/>trigger.due | run.*"]:::topic_relaxed
             T_SSE["k1.k0.sse.* (BEST_EFFORT)<br/>received.v1 | curiosity.intent.v1"]:::topic_besteffort
+            T_FABRIC_CTRL["k1.fabric.* (RELAXED)<br/>capability.registered.v1 | capability.unregistered.v1<br/>provider.health.changed.v1 | capability.gap.detected.v1<br/>agent.created.v1 | agent.expired.v1<br/>contract.validation.failed.v1 | meta.operation.blocked.v1"]:::topic_relaxed
             T_FABRIC_LEARN["k1.fabric.learning.* (BEST_EFFORT)<br/>signal.v1"]:::topic_besteffort
         end
 
@@ -206,7 +207,6 @@ flowchart TB
             MID_CONCIERGE["concierge<br/>REALTIME, cap:100"]:::topic_concierge
             MID_ORCHESTRATOR["orchestrator<br/>REALTIME, cap:50"]:::topic_orch
             MID_PLANNER["planner<br/>INTERACTIVE, cap:20"]:::topic_planner
-            MID_FABRIC["fabric<br/>REALTIME, cap:200"]:::topic_fabric
             MID_AGENTS["agent.{id}<br/>varies"]:::topic_delta
         end
     end
@@ -217,7 +217,7 @@ flowchart TB
     subgraph TIMING_TABLE["Timing Delivery Modes (per topic prefix)"]
         direction LR
         TM_STRICT["STRICT<br/>Ordered, buffer on gap<br/>k1.capability.* | k1.orchestration.*<br/>k1.planner.* | k1.hil.*<br/>k1.agent.*.delta.* | k1.response.*<br/>k1.session.*"]:::tm_strict
-        TM_RELAXED["RELAXED<br/>Deliver as-is, log reorder<br/>k1.affect.* | k1.constraint.*<br/>k1.proactive.* | k1.workflow.*"]:::tm_relaxed
+        TM_RELAXED["RELAXED<br/>Deliver as-is, log reorder<br/>k1.affect.* | k1.constraint.*<br/>k1.proactive.* | k1.workflow.*<br/>k1.fabric.*"]:::tm_relaxed
         TM_BESTEFFORT["BEST_EFFORT<br/>Drop OK under pressure<br/>k1.k0.sse.*<br/>k1.fabric.learning.*"]:::tm_besteffort
     end
 
@@ -236,11 +236,11 @@ flowchart TB
         end
 
         subgraph MOD_L25["Layer 2.5 -- Capabilities"]
-            F_SVC["CAPABILITY FABRIC<br/>Resolution + Execution<br/>pub: k1.capability.*<br/>k1.fabric.learning.signal.*<br/>k1.agent.{id}.delta.*<br/>mailbox: fabric<br/>via FabricBusAdapter"]:::svc_fabric
+            F_SVC["CAPABILITY FABRIC<br/>Resolution + Execution<br/>pub: k1.capability.*<br/>k1.fabric.* (control-plane) + k1.fabric.learning.*<br/>k1.agent.{id}.delta.*<br/>No mailbox (in-process async API)<br/>via FabricBusAdapter"]:::svc_fabric
         end
 
         subgraph MOD_L3["Layer 3 -- Intelligence"]
-            P_SVC["PLANNER<br/>LLM-Powered 4-Stage<br/>pub: k1.planner.plan.ready.*<br/>k1.hil.clarification.*<br/>k1.planner.delta.*<br/>sub: k1.hil.*_response.*<br/>mailbox: planner"]:::svc_planner
+            P_SVC["PLANNER<br/>LLM-Powered 4-Stage<br/>pub: k1.planner.plan.ready.*<br/>k1.hil.clarification.*<br/>k1.hil.approval_request.*<br/>k1.planner.delta.*<br/>sub: k1.hil.*_response.*<br/>mailbox: planner"]:::svc_planner
         end
 
         subgraph MOD_L4["Layer 4 -- Execution"]
@@ -283,7 +283,6 @@ flowchart TB
     %% Modules use mailbox router
     C_SVC -->|"send_to + mailbox"| IMR_PORT
     O_SVC -->|"send_to + mailbox"| IMR_PORT
-    F_SVC -->|"mailbox"| IMR_PORT
     P_SVC -->|"mailbox"| IMR_PORT
     SA_SVC -->|"mailbox"| IMR_PORT
 

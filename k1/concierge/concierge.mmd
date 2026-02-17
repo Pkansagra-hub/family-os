@@ -55,11 +55,12 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
       LISTENING["LISTENING<br/>Waiting for User Input<br/>Entry: session start or DELIVERING complete"]:::state
       ACKING["ACKING (Enhanced)<br/>UltraBERT 22ms + Gap Detection<br/>Complexity Routing (LOW/MED/HIGH)<br/>Signal: acknowledge_request() → user (~50ms)"]:::state
       CLARIFYING["CLARIFYING<br/>Progressive Disclosure<br/>Entropy-Minimizing Questions (1-2 Qs)"]:::state
-      DISPATCHING["DISPATCHING<br/>LOW: invoke_capability() direct<br/>MED/HIGH: TaskEnvelope to Orchestrator"]:::state
+      DISPATCHING["DISPATCHING<br/>LOW: LLM tool loop (invoke_capability/execute_workflow/spawn_via_fabric)<br/>MED/HIGH: TaskEnvelope to Orchestrator"]:::state
       COMPANIONING["COMPANIONING<br/>Keep Conversation Moving<br/>Preliminary ack (MED/HIGH)"]:::state
       PROGRESSING["PROGRESSING<br/>Stream Deltas as Updates<br/>Progress narration to user"]:::state
       DELIVERING["DELIVERING<br/>Final Results + Next Steps<br/>LLM call with tool_results[] + cognitive tools<br/>---<br/>META-AGENT (4.5.8):<br/>tool_results[] may contain AgentResponsePayload<br/>from dynamically created agents. Includes:<br/>  agent_name, result, tokens_used, ttl_remaining"]:::state
       INTERRUPT_HANDLING["INTERRUPT_HANDLING<br/>User Changes Topic Mid-Turn<br/>Reset routing, re-ACKING"]:::state
+      BACKGROUND_WORKING["BACKGROUND_WORKING (Design Proposal)<br/>MED/HIGH DAG runs in background<br/>User can send foreground micro-turns<br/>---<br/>FG micro-turn: LOW tier, max 2 tools,<br/>cognitive OK, action tools BLOCKED<br/>BG: Orchestrator DAG continues, deltas buffer<br/>Single Writer: FG holds lock during micro-turn<br/>Needs: ADR-0097, CONC-15 revision"]:::state
     end
 
     subgraph FSM_EXPERIENCE_LAYER["Experience Layer (Every 20-30 Turns — Heuristic, NOT LLM)"]
@@ -88,8 +89,8 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
         ULTRABERT_SAFETY["Safety Head<br/>4 bands: GREEN, AMBER, RED, CRISIS"]:::ultrabert
         ULTRABERT_EMOTIONS["Emotions Head<br/>44 classes: joy, sadness, anxiety..."]:::ultrabert
         ULTRABERT_SENTIMENT["Sentiment Head<br/>5 levels: very_negative to very_positive"]:::ultrabert
-        ULTRABERT_NER["NER Head (GlobalPointer)<br/>PERSON, ORG, LOC, TIME, DATE, DURATION"]:::ultrabert
-        ULTRABERT_RELATIONS["Relations Head<br/>spouse_of, parent_of, works_at..."]:::ultrabert
+        ULTRABERT_NER["NER Heads (3x GlobalPointer)<br/>General: PER, ORG, LOC, MISC<br/>Family: PERSON, KINSHIP, PET, HOME_LOC...<br/>Temporal: DATE_ABS, DATE_REL, TIME, DURATION, FREQUENCY, AGE"]:::ultrabert
+        ULTRABERT_RELATIONS["Relations Head<br/>15 types: parent_of, child_of,<br/>spouse_of, sibling_of, pet_of..."]:::ultrabert
       end
     end
 
@@ -102,7 +103,7 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
       MULTI_INTENT_SCORER["Multi-Intent Scorer<br/>len(intents) + intent_types → complexity"]:::router
       CROSS_DOMAIN_DETECTOR["Cross-Domain Detector<br/>len(domains) > 1 → complexity bump"]:::router
       COMPLEXITY_CLASSIFIER["Complexity Classifier<br/>primary_intent + multi_factors → Tier"]:::router
-      TIER_LOW["LOW Tier<br/>Tool First → LLM Response (~500 tokens)<br/>Latency: <2s"]:::tier_low
+      TIER_LOW["LOW Tier<br/>LLM tool loop → Action tools + cognitive tools + response (~500 tokens)<br/>Latency: <2s"]:::tier_low
       TIER_MEDIUM["MEDIUM Tier<br/>LLM Reasoning + Response (2K tokens)<br/>Latency: 2-10s"]:::tier_med
       TIER_HIGH["HIGH Tier<br/>LLM Planning + Reasoning + Response (8K tokens)<br/>Latency: 10-60s"]:::tier_high
       TIER_CRISIS["CRISIS Tier<br/>Safety Protocol → SAFETY_MAILBOX"]:::tier_crisis
@@ -138,6 +139,10 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
       UNCERTAINTY_ESTIMATOR["Uncertainty Estimator<br/>UltraBERT confidence scores"]:::engine
       ENTROPY_MIN_QUESTION_PLANNER["Entropy-Minimizing Question Planner<br/>Progressive disclosure (1-2 Qs max)"]:::engine
     end
+
+    subgraph WRITE_ELISION["Write Elision Gate (Signal Significance)"]
+      WRITE_ELISION_GATE["Write Elision Gate<br/>Per-section signal significance scoring<br/>Low-signal turns: ELIDE writes, carry forward<br/>previous turn's SessionState values<br/>---<br/>safety_band: ALWAYS (CONC-05)<br/>intent/domains: if significant<br/>entities/temporal: if detected<br/>emotions/sentiment: if non-neutral or changed<br/>---<br/>Backchannels (ok, yeah, ummm what more?):<br/>1 write (safety, idempotent), 5 elisions"]:::engine
+    end
   end
 
   %% ==================================================================================
@@ -146,6 +151,8 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
 
   subgraph CONCIERGE_TOOLS["🔧 Concierge LLM Tools (Available ALL Complexity Tiers)"]
     direction TB
+
+    PARALLEL_TOOL_NOTE["TIERED PARALLEL EXECUTION (ADR-0078)<br/>---<br/>Phase A: acknowledge_request() — sequential, first<br/>Phase B: Read + Action tools — asyncio.gather()<br/>Phase C: Cognitive tools — sequential (SS writes)<br/>See: concierge.md Section 7.5.1"]:::engine
 
     subgraph COGNITIVE_TOOLS["Cognitive Tools (LLM detects what to update)"]
       TOOL_UPDATE_SCOREBOARD["update_scoreboard()<br/>Referents, QUD, salience, topic shift<br/>LLM detects: pronoun resolution, open Qs"]:::tool_cognitive
@@ -238,7 +245,7 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
   %% PENDING CLARIFICATIONS (Sub-agent HIL requests)
   %% ==================================================================================
 
-  PENDING_CLARIFICATIONS["Pending Clarifications (2KB)<br/>Active HIL requests (Planner + Orchestrator + Sub-agents)<br/>Written by Concierge from DeltaBus + HIL events<br/>Keyed by: {request_id, originator, agent_id?}<br/>Cleared on: user response or timeout"]:::memory
+  PENDING_CLARIFICATIONS["Pending Clarifications (2KB)<br/>Active HIL requests (Planner + Orchestrator + Sub-agents)<br/>Written by Concierge from K1 Bus (delta lane) + HIL events<br/>Keyed by: {request_id, originator, agent_id?}<br/>Cleared on: user response or timeout"]:::memory
 
   %% ==================================================================================
   %% PORTS — Hexagonal Architecture (Epic 1)
@@ -252,10 +259,10 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
     PORT_INPUT["IInputPort<br/>Direction: Inbound<br/>receive() → UserMessage"]:::port
     PORT_OUTPUT["IOutputPort<br/>Direction: Outbound<br/>send(OutputEvent) → DeliveryReceipt"]:::port
     PORT_CLASSIFICATION["IClassificationPort<br/>Direction: Outbound<br/>classify(text) → ClassificationResult"]:::port
-    PORT_LLM["ILLMPort<br/>Direction: Outbound<br/>execute(HubRequest{capability, payload, constraints}) → HubResponse<br/>stream_execute(HubRequest) → AsyncIterator[HubChunk]<br/>Capabilities used: CHAT, TOOL_CALL, STRUCTURED, VISION, REASON<br/>Routes to Model Hub via LLMGatewayAdapter"]:::port
+    PORT_LLM["ILLMPort<br/>Direction: Outbound<br/>execute(HubRequest{capability, payload, constraints}) → HubResponse<br/>stream_execute(HubRequest) → AsyncIterator[HubChunk]<br/>Capabilities used: CHAT, TOOL_CALL, STRUCTURED, VISION, REASON<br/>Routes to Model Hub via LLMGatewayAdapter<br/>---<br/>Prompt injection boundary: LLM text is non-operative; side effects only via tool_call.<br/>Tool calls are allowlisted + schema-gated by ToolDispatcher (state/tier/safety)."]:::port
     PORT_STATE["IStatePort<br/>Direction: Both<br/>read(sections[]) → Snapshot<br/>write(section, op, data) → WriteResult"]:::port
     PORT_DISPATCH["IDispatchPort<br/>Direction: Outbound<br/>dispatch_direct(CapReq) → CapResult<br/>dispatch_envelope(TaskEnv) → void"]:::port
-    PORT_DELTA["IDeltaPort<br/>Direction: Inbound<br/>subscribe(topics[]) → DeltaStream<br/>errors() → ErrorStream"]:::port
+    PORT_DELTA["IDeltaPort<br/>Direction: Both<br/>subscribe(topics[]) → DeltaStream<br/>publish(event) → void<br/>errors() → ErrorStream"]:::port
     PORT_MEMORY["IMemoryPort<br/>Direction: Outbound<br/>recall(query, selectors[]) → MemoryResult"]:::port
   end
 
@@ -306,7 +313,7 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
 
     INV_SAFETY["SAFETY (INV-05..07)<br/>INV-05: Safety Gate evaluates FIRST, before any routing<br/>INV-06: CRISIS band = immediate protocol, bypasses all FSM states<br/>INV-07: safety_band written BEFORE any routing decision"]:::invariant
 
-    INV_RATE["RATE LIMITS (INV-08..12)<br/>INV-08: Tool calls per turn: 20 (hard cap)<br/>INV-09: Clarification rounds per intent: 3<br/>INV-10: Output queue depth: 50<br/>INV-11: Workflow execution depth: 3<br/>INV-12: Concurrent active turns per session: 1"]:::invariant
+    INV_RATE["RATE LIMITS (INV-08..12)<br/>INV-08: Tool calls per turn: 20 (hard cap)<br/>INV-09: Clarification rounds per intent: 3<br/>INV-10: Output queue depth: 50<br/>INV-11: Workflow execution depth: 3<br/>INV-12: Concurrent active turns per session: 1<br/>(Proposed revision: 1 BG + 1 FG micro-turn, needs ADR-0097)"]:::invariant
 
     INV_TIMING["TIMING (INV-13..14)<br/>INV-13: FSM state transition <= 1ms (no I/O in transitions)<br/>INV-14: Delta aggregation window = 500ms fixed"]:::invariant
 
@@ -353,7 +360,7 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
 
     SVC_COMPLEXITY["ComplexityRouter<br/>route(processed_intent) \u2192 Tier<br/>---<br/>5 factors: intent_count, domain_count,<br/>safety_band, emotion_intensity, combined<br/>Pure computation \u2014 no ports<br/>~45 tests"]:::service
 
-    SVC_TOOL_DISP["ToolDispatcher<br/>dispatch(tool_call) \u2192 ToolResult<br/>get_buffered_results() \u2192 ToolResult[]<br/>clear_buffer()<br/>active_count() \u2192 int<br/>---<br/>4 categories: Cognitive(6), Read(3),<br/>Action(3), Signal(1)<br/>~80 tests"]:::service
+    SVC_TOOL_DISP["ToolDispatcher<br/>dispatch(tool_call) \u2192 ToolResult<br/>get_buffered_results() \u2192 ToolResult[]<br/>clear_buffer()<br/>active_count() \u2192 int<br/>---<br/>Enforces: allowlist by FSM state/tier/safety band<br/>Schema-gates params before execution (e.g., get_capability_schema)<br/>4 categories: Cognitive(6), Read(3),<br/>Action(3), Signal(1)<br/>~80 tests"]:::service
 
     SVC_OUTPUT_MGR["OutputManager<br/>enqueue(event, priority) \u2192 QueuePosition<br/>deliver_next() \u2192 DeliveryReceipt<br/>flush() \u2192 DeliveryReceipt[]<br/>depth() \u2192 int<br/>---<br/>Sub: ConversationScheduler<br/>9 event types, 3 priority levels<br/>~55 tests"]:::service
 
@@ -361,7 +368,65 @@ subgraph CONCIERGE["🧠 Concierge — Deep AI Agent (Conversation Conductor)"]
 
     SVC_CLARIFY["ClarificationTracker<br/>track_round(intent_id) \u2192 RoundCount<br/>max_reached(intent_id) \u2192 bool<br/>escalate(intent_id) \u2192 EscalationDecision<br/>add_pending(sub_agent_req)<br/>get_pending() \u2192 PendingClarification[]<br/>~40 tests"]:::service
 
-    SVC_CTX_ASM["ContextAssembler<br/>assemble(tier, intent, tool_results) \u2192 LLMContext<br/>track_usage(tokens_consumed)<br/>remaining_budget() \u2192 int<br/>needs_summarization(ctx) \u2192 bool<br/>summarize(ctx) \u2192 CompressedContext<br/>---<br/>CONTEXT_PROFILES: 6 static profiles by (call_type, tier)<br/>TOKEN_ESTIMATOR: ceil(chars / 3.5), conservative cross-tokenizer<br/>SUMMARIZATION_TRIGGER: &gt;80% of 128K (102,400 tokens)<br/>PER_TURN_TRACKING: input_tokens, output_tokens, llm_calls<br/>OUTPUT_BUDGET: pass-through to provider (not enforced)<br/>~55 tests"]:::service
+    SVC_CTX_ASM["ContextAssembler<br/>assemble(tier, intent, tool_results) → LLMContext<br/>track_usage(tokens_consumed)<br/>remaining_budget() → int<br/>needs_summarization(ctx) → bool<br/>summarize(ctx) → CompressedContext<br/>---<br/>CONTEXT_PROFILES: 6 static profiles by (call_type, tier)<br/>TOKEN_ESTIMATOR: ceil(chars / 3.5), conservative cross-tokenizer<br/>SUMMARIZATION_TRIGGER: >80% of 128K (102,400 tokens)<br/>PER_TURN_TRACKING: input_tokens, output_tokens, llm_calls<br/>OUTPUT_BUDGET: pass-through to provider (not enforced)<br/>~55 tests"]:::service
+  end
+
+  %% ==================================================================================
+  %% REACT LOOP SCRATCHPAD -- Ephemeral Working Memory (ADR-0098)
+  %% Created per ReAct loop execution, destroyed when loop ends.
+  %% Two distinct memory systems: SessionState (persistent, 96KB) vs
+  %% ReactLoopScratchpad (ephemeral, per-loop). Scratchpad replaces naive
+  %% messages.append() with structured, budget-aware, managed context.
+  %% ==================================================================================
+
+  subgraph SCRATCHPAD["💭 ReactLoopScratchpad (Ephemeral — ADR-0098)"]
+    direction TB
+
+    SCRATCHPAD_NOTE["EPHEMERAL WORKING MEMORY<br/>---<br/>Created: Phase 2 dispatch start<br/>Destroyed: Phase 2 dispatch end<br/>Never persisted. Never enters SessionState.<br/>Only final deltas extracted at turn_end()."]:::scratchpad_note
+
+    SCRATCHPAD_CORE["ReactLoopScratchpad<br/>turn_id, tier, iteration, final_content<br/>---<br/>is_complete() → bool<br/>to_llm_messages() → List (managed, not naive append)<br/>compact_messages(keep_last_n=3) → void<br/>needs_compaction() → bool<br/>record_tool(call, result) → void<br/>record_agent(agent_result) → void<br/>record_cognitive_write(write) → void<br/>snapshot_iteration(response) → void<br/>extract_scoreboard_deltas() → Optional<br/>extract_belief_deltas() → Optional<br/>extract_narrative_deltas() → Optional<br/>elapsed_ms() → int"]:::scratchpad
+
+    LOOP_BUDGET["LoopBudget<br/>---<br/>LOW: max_tools=6, timeout=2s, tokens=500<br/>MEDIUM: max_tools=10, timeout=10s, tokens=2K<br/>HIGH: max_tools=15, timeout=45s, tokens=8K<br/>---<br/>tools_used, tokens_in, tokens_out, elapsed_ms<br/>exhausted → bool<br/>remaining_tools → int<br/>remaining_tokens_out → int"]:::scratchpad
+
+    TOOL_EXEC_LIST["tool_executions: List[ToolExecution]<br/>---<br/>Structured: ToolCall + ToolResult pair<br/>duration_ms, tokens_used per call<br/>NOT raw text in messages[]"]:::scratchpad
+
+    AGENT_RESULTS["agent_results: List[AgentResult]<br/>---<br/>Sub-agent + Dynamic Agent results<br/>agent_id, agent_type, snapshot_ref<br/>findings[], structured_output, confidence"]:::scratchpad
+
+    COGNITIVE_WRITES["cognitive_writes: List[CognitiveWrite]<br/>---<br/>Audit trail: section, operation, key<br/>old_value, new_value (rollback analysis)<br/>iteration, tool_call_id"]:::scratchpad
+
+    ITER_SNAPSHOTS["iteration_snapshots: List[IterationSnapshot]<br/>---<br/>Per-iteration: thought, action, observation<br/>tokens_used, duration_ms, success, error"]:::scratchpad
+
+    SCRATCHPAD_CORE --> LOOP_BUDGET
+    SCRATCHPAD_CORE --> TOOL_EXEC_LIST
+    SCRATCHPAD_CORE --> AGENT_RESULTS
+    SCRATCHPAD_CORE --> COGNITIVE_WRITES
+    SCRATCHPAD_CORE --> ITER_SNAPSHOTS
+  end
+
+  %% ==================================================================================
+  %% STREAMING INFRASTRUCTURE -- Model Hub Stream Consumption (LLM Real-Time UX)
+  %% Consumes ILLMPort.stream_execute() AsyncIterator[HubChunk] for real-time delivery.
+  %% Model Hub MH-10 handles chunk validation; Concierge handles UX delivery.
+  %% ==================================================================================
+
+  subgraph STREAMING["📡 Streaming Infrastructure (8 Components — ~150 Tests)"]
+    direction TB
+
+    STREAM_CONSUMER["StreamConsumer<br/>consume(AsyncIterator[HubChunk]) → void<br/>apply_backpressure() → void<br/>cancel() → void<br/>---<br/>Backpressure: buffer_high_water=100 chunks<br/>Consumes ILLMPort.stream_execute() output<br/>~25 tests"]:::service
+
+    CHUNK_ROUTER["ChunkRouter<br/>route(HubChunk) → void<br/>---<br/>Routes by chunk_type:<br/>text → TextChunkAggregator<br/>tool_call_delta → ToolCallStreamHandler<br/>thinking → ThinkingTraceHandler<br/>error → ErrorPath<br/>done → Finalize<br/>~20 tests"]:::service
+
+    TEXT_AGGREGATOR["TextChunkAggregator<br/>accumulate(content: str) → void<br/>flush_at_boundary() → str<br/>---<br/>Aggregates text chunks<br/>Flushes at word boundaries for smooth UX<br/>Triggers SSE delivery every ~5 tokens<br/>~15 tests"]:::service
+
+    TOOL_CALL_HANDLER["ToolCallStreamHandler<br/>receive_delta(ToolCallDelta) → void<br/>is_complete(call_id) → bool<br/>get_completed() → ToolCall<br/>---<br/>Accumulates JSON fragments<br/>Parses when is_complete=True<br/>Emits tool_call_start, progress, complete<br/>~25 tests"]:::service
+
+    THINKING_HANDLER["ThinkingTraceHandler<br/>receive(content: str) → void<br/>---<br/>Captures REASON capability traces<br/>(o1, Claude thinking tokens)<br/>Emits thinking_chunk events<br/>~15 tests"]:::service
+
+    SSE_EMITTER["StreamingSSEEmitter<br/>emit_text(chunk: str) → void<br/>emit_tool_start(call_id, name) → void<br/>emit_tool_progress(call_id, delta) → void<br/>emit_tool_complete(call_id, result) → void<br/>emit_thinking(trace: str) → void<br/>---<br/>Wraps chunks in OutputEvent<br/>Sends to OutputManager REALTIME queue<br/>~20 tests"]:::service
+
+    CANCEL_GUARD["StreamCancellationGuard<br/>on_interrupt() → void<br/>cancel_upstream() → void<br/>---<br/>Handles user interrupts mid-stream<br/>Cancels AsyncIterator[HubChunk]<br/>Preserves partial buffer for recovery<br/>~15 tests"]:::service
+
+    PARTIAL_BUFFER["PartialResponseBuffer<br/>buffer(content: str) → void<br/>get_partial() → str<br/>finalize() → str<br/>clear() → void<br/>---<br/>Buffers partial response text<br/>Used for FSM state transitions<br/>Cleared at turn_end()<br/>~15 tests"]:::service
   end
 
   %% ==================================================================================
@@ -481,11 +546,11 @@ subgraph TOUCHPOINTS["🔗 External Touchpoints (Concierge Interfaces)"]
     BRIDGE_SSE["SSE Receiver<br/>K0 event stream listener"]:::bridge
   end
 
-  subgraph TP_BUS["Event & Delta Bus"]
+  subgraph TP_BUS["K1 Bus (one physical bus; two logical lanes)"]
     direction TB
 
-    EVENT_BUS["K1 Event Bus<br/>Pub/Sub Topics"]:::routing
-    DELTA_BUS["Delta Bus<br/>4 Typed Deltas:<br/>k1.agent.{id}.delta.v1<br/>k1.planner.delta.v1<br/>k1.orchestration.delta.v1<br/>k1.curiosity.delta.v1"]:::routing
+    EVENT_BUS["K1 Bus — Event lane<br/>Topics: k1.*"]:::routing
+    DELTA_BUS["K1 Bus — Delta lane<br/>Topics: k1.*.delta.v1<br/>Examples:<br/>k1.agent.{id}.delta.v1<br/>k1.planner.delta.v1<br/>k1.orchestration.delta.v1<br/>k1.curiosity.delta.v1"]:::routing
   end
 
   subgraph TP_RHYTHM["Rhythm Controller"]
@@ -528,6 +593,8 @@ subgraph TOUCHPOINTS["🔗 External Touchpoints (Concierge Interfaces)"]
   subgraph TP_SUBAGENTS["Spawned Sub-Agents"]
     direction TB
 
+    AGENT_DISTINCTION["SUB-AGENT vs DYNAMIC AGENT<br/>---<br/>Sub-Agent: session-scoped, pre-registered,<br/>full HOT snapshot, known at bootstrap<br/>(e.g., ProactiveAgent, CuriosityAgent)<br/>---<br/>Dynamic Agent: ephemeral, TTL-based,<br/>scoped snapshot (required_context only),<br/>created by spawn_via_fabric() or build_agent DAG step<br/>(e.g., health_agent, finance_agent)<br/>---<br/>Both: NEVER write SS, mutate via Delta Bus<br/>See: concierge.md Section 1.5.1"]:::engine
+
     DYNAMIC_AGENTS["Dynamic Agent Instances<br/>health_agent, finance_agent, etc.<br/>Created via Fabric on-demand<br/>---<br/>META-AGENT CREATION (4.5.5-4.5.7):<br/>Also includes agents created by build_agent (Epic 4.5).<br/>These agents have TTL-based lifecycle (ttl_turns),<br/>scoped tools_granted (FAB-07), and depth=1 block<br/>(no agent-to-agent spawning). Expired agents cleaned<br/>up via k1.fabric.agent.expired.v1 event."]:::agent
     SAFETY_AGENT["Safety Agent<br/>CRISIS protocol handler"]:::agent
   end
@@ -557,6 +624,7 @@ CONCIERGE_FSM -->|"transition"| COMPANIONING
 CONCIERGE_FSM -->|"transition"| PROGRESSING
 CONCIERGE_FSM -->|"transition"| DELIVERING
 CONCIERGE_FSM -->|"transition"| INTERRUPT_HANDLING
+CONCIERGE_FSM -->|"transition"| BACKGROUND_WORKING
 
 PORT_INPUT -->|"k1.concierge.user_input"| LISTENING
 LISTENING -->|"user_input received"| ACKING
@@ -566,6 +634,12 @@ CLARIFYING -->|"user_response"| ACKING
 DELIVERING -->|"user.ack"| LISTENING
 LISTENING -->|"interrupt"| INTERRUPT_HANDLING
 INTERRUPT_HANDLING -->|"re-classify"| ACKING
+
+%% BACKGROUND_WORKING transitions (Design Proposal — needs ADR-0097)
+DISPATCHING -->|"MED/HIGH: bg dispatch"| BACKGROUND_WORKING
+BACKGROUND_WORKING -->|"DAG complete"| DELIVERING
+BACKGROUND_WORKING -->|"FG micro-turn: LOW tier,<br/>max 2 tools, cognitive OK,<br/>action BLOCKED"| ACKING
+BACKGROUND_WORKING -->|"user interrupt"| INTERRUPT_HANDLING
 
 %% =====================================================================================
 %% ACKING INTERNAL FLOW (UltraBERT Pipeline)
@@ -640,16 +714,31 @@ ENTROPY_MIN_QUESTION_PLANNER -->|"question_plan"| CLARIFYING
 UNCERTAINTY_ESTIMATOR -->|"uncertainty"| ACKING
 
 %% =====================================================================================
-%% PHASE 1 WRITES: UltraBERT → SessionState (Deterministic, NOT tool calls)
+%% PHASE 1 WRITES: UltraBERT → SessionState (via Write Elision Gate)
+%% Write Elision Gate computes per-section signal significance.
+%% Low-signal turns (backchannels, continuations, fillers) ELIDE writes —
+%% previous turn's SessionState values carry forward unchanged.
+%% Exception: safety_band is ALWAYS evaluated (CONC-05).
 %% =====================================================================================
 
-ULTRABERT_EMOTIONS -->|"update AFFECTIVE_NOW"| PORT_STATE
-ULTRABERT_NER -->|"update BELIEFS_ACTIVE"| PORT_STATE
-TIME_RESOLVER -->|"update CONTROL.temporal_context"| PORT_STATE
-SPATIAL_ANCHOR -->|"update MULTIMODAL.spatial_context"| PORT_STATE
-ULTRABERT_SAFETY -->|"update CONTROL.safety_band"| PORT_STATE
-ULTRABERT_INTENT -->|"update CONTROL.intents"| PORT_STATE
-ULTRABERT_INGRESS -->|"update CONTROL.domains[]"| PORT_STATE
+ULTRABERT_EMOTIONS -->|"emotions[]"| WRITE_ELISION_GATE
+ULTRABERT_NER -->|"entities[]"| WRITE_ELISION_GATE
+TIME_RESOLVER -->|"resolved_time"| WRITE_ELISION_GATE
+SPATIAL_ANCHOR -->|"spatial_context"| WRITE_ELISION_GATE
+ULTRABERT_SAFETY -->|"safety_band"| WRITE_ELISION_GATE
+ULTRABERT_INTENT -->|"intents[] + scores{}"| WRITE_ELISION_GATE
+ULTRABERT_INGRESS -->|"domains[]"| WRITE_ELISION_GATE
+ULTRABERT_SENTIMENT -->|"sentiment"| WRITE_ELISION_GATE
+ULTRABERT_RELATIONS -->|"relations[]"| WRITE_ELISION_GATE
+
+WRITE_ELISION_GATE -->|"WRITE control.safety_band (ALWAYS)"| PORT_STATE
+WRITE_ELISION_GATE -->|"WRITE control.intents (if significant)"| PORT_STATE
+WRITE_ELISION_GATE -->|"WRITE control.domains[] (if detected)"| PORT_STATE
+WRITE_ELISION_GATE -->|"WRITE beliefs_active (if entities/temporal)"| PORT_STATE
+WRITE_ELISION_GATE -->|"WRITE affective_now (if non-neutral)"| PORT_STATE
+WRITE_ELISION_GATE -->|"WRITE scoreboard (if referents changed)"| PORT_STATE
+WRITE_ELISION_GATE -->|"ELIDE: carry forward previous state"| CONCIERGE_FSM
+
 ULTRABERT_EMOTIONS -->|"tone_hint"| AFFECTIVE_MIRRORING_ENGINE
 ULTRABERT_SENTIMENT -->|"sentiment"| AFFECTIVE_MIRRORING_ENGINE
 
@@ -678,25 +767,29 @@ PORT_STATE -->|"Approved/Rejected"| CONCIERGE_FSM
 %% Skipped on trivial turns ("ok cool" = 0 tool calls = no ack).
 %% =====================================================================================
 
-ACKING -->|"LLM first tool call"| TOOL_ACKNOWLEDGE_REQUEST
-TOOL_ACKNOWLEDGE_REQUEST -->|"intent + plan preview<br/>budget: {max_tokens: 150}"| PORT_LLM
-PORT_LLM -->|"generated ack"| TOOL_ACKNOWLEDGE_REQUEST
+ACKING -->|"LLM tool loop (TOOL_CALL)<br/>budget: {max_tokens: 150}"| PORT_LLM
+PORT_LLM -->|"tool_call: acknowledge_request(intent, plan_preview)"| SVC_TOOL_DISP
+SVC_TOOL_DISP -->|"Signal tool"| TOOL_ACKNOWLEDGE_REQUEST
 TOOL_ACKNOWLEDGE_REQUEST -->|"k1.response.intent_ack.v1"| OUT_INTENT_ACK
 OUT_INTENT_ACK --> PORT_OUTPUT
 PORT_OUTPUT -->|"deliver"| OUTPUT_CHANNEL
 
 %% =====================================================================================
-%% LOW TIER FLOW (Fast Path — Tool First, Then LLM Response)
+%% LOW TIER FLOW (Fast Path — LLM Tool Loop Executes Actions)
+%% With ADR-0078 Tiered Parallel Execution:
+%%   Phase A: ack tools sequential (user-facing)
+%%   Phase B: read + action tools via asyncio.gather() (no SS writes)
+%%   Phase C: cognitive tools sequential (SS writes, order-dependent)
 %% =====================================================================================
 
-DISPATCHING -->|"LOW: invoke_capability()"| PORT_DISPATCH
+DISPATCHING -->|"LOW: LLM tool loop (TOOL_CALL)"| PORT_LLM
+PORT_LLM -->|"tool_call: invoke_capability()/execute_workflow()"| SVC_TOOL_DISP
+SVC_TOOL_DISP -->|"dispatch_direct(CapReq)"| PORT_DISPATCH
 PORT_DISPATCH -->|"dispatch_direct(CapReq)"| CAPABILITY_FABRIC
-CAPABILITY_FABRIC -->|"LOW: tool_result"| COMPANIONING
-COMPANIONING -->|"LOW: tool done"| DELIVERING
-DELIVERING -->|"fetch tool_results"| TOOL_RESULT_BUFFER
-TOOL_RESULT_BUFFER -->|"LOW: tool_result[]"| DELIVERING
-DELIVERING -->|"LOW: result + context<br/>budget: {max_tokens: 500}"| PORT_LLM
-PORT_LLM -->|"response + cognitive tool calls"| DELIVERING
+CAPABILITY_FABRIC -->|"tool_result"| SVC_TOOL_DISP
+SVC_TOOL_DISP -->|"buffer tool_result[]"| TOOL_RESULT_BUFFER
+TOOL_RESULT_BUFFER -->|"tool_results[]"| PORT_LLM
+PORT_LLM -->|"final response + cognitive tool calls<br/>budget: {max_tokens: 500}"| DELIVERING
 
 %% =====================================================================================
 %% MEDIUM/HIGH TIER FLOW (Preliminary Ack + Background Execution)
@@ -714,6 +807,14 @@ TOOL_RESULT_BUFFER -->|"MED/HIGH: all tool_results[]"| DELIVERING
 DELIVERING -->|"MED/HIGH: results + context<br/>budget: {max_tokens: MED=2K, HIGH=8K}"| PORT_LLM
 PORT_LLM -->|"final response + cognitive tool calls"| DELIVERING
 DELIVERING -->|"clear buffer"| TOOL_RESULT_BUFFER
+
+%% ReactLoopScratchpad lifecycle connections (ADR-0098)
+%% Scratchpad created at dispatch start, destroyed at dispatch end.
+%% Only final deltas flow scratchpad → SessionState via extract_*_deltas().
+SCRATCHPAD_CORE -->|"extract_scoreboard_deltas()"| PORT_STATE
+SCRATCHPAD_CORE -->|"extract_belief_deltas()"| PORT_STATE
+SCRATCHPAD_CORE -->|"extract_narrative_deltas()"| PORT_STATE
+TOOL_RESULT_BUFFER -->|"structured record"| TOOL_EXEC_LIST
 
 %% Orchestrator → Fabric → Results back
 ORCHESTRATOR_ACTOR -->|"MED: direct to Fabric"| CAPABILITY_FABRIC
@@ -757,8 +858,8 @@ OUT_HIL_CLARIFICATION --> PORT_OUTPUT
 OUT_HIL_APPROVAL --> PORT_OUTPUT
 
 %% HIL requests from Orchestrator go through output event nodes (GAP-3 fix)
-ORCHESTRATOR_ACTOR -->|"k1.hil.fallback.v1 via DeltaBus"| OUT_HIL_FALLBACK
-ORCHESTRATOR_ACTOR -->|"k1.hil.progress.v1 via DeltaBus"| OUT_HIL_PROGRESS
+ORCHESTRATOR_ACTOR -->|"k1.hil.fallback.v1 via K1 Bus"| OUT_HIL_FALLBACK
+ORCHESTRATOR_ACTOR -->|"k1.hil.progress.v1 via K1 Bus"| OUT_HIL_PROGRESS
 OUT_HIL_FALLBACK --> PORT_OUTPUT
 OUT_HIL_PROGRESS -->|"FIRE_AND_FORGET"| PORT_OUTPUT
 
@@ -787,7 +888,7 @@ DELIVERING -->|"append Turn{user_msg, response, tool_calls}"| PORT_STATE
 CONCIERGE_PERSONA -->|"personality config"| PORT_STATE
 
 %% =====================================================================================
-%% DELTA AGGREGATION (Sub-Agents → DeltaBus → Concierge)
+%% DELTA AGGREGATION (Sub-Agents → K1 Bus (delta lane) → Concierge)
 %% =====================================================================================
 
 DYNAMIC_AGENTS -->|"state deltas"| DELTA_BUS
@@ -807,7 +908,28 @@ INTERRUPT_HANDLING -->|"route to user"| CLARIFYING
 %% Sub-agent clarification response (GAP-4 fix: return with agent_id)
 CLARIFYING -->|"user response to sub-agent HIL"| HIL_RESPONSE_DETECTOR
 HIL_RESPONSE_DETECTOR -->|"agent clarification response<br/>{agent_id, request_id, user_response}"| PORT_DELTA
-PORT_DELTA -->|"route to requesting agent<br/>via DeltaBus agent_id match"| DYNAMIC_AGENTS
+PORT_DELTA -->|"route to requesting agent<br/>via K1 Bus (delta lane) agent_id match"| DYNAMIC_AGENTS
+
+%% =====================================================================================
+%% STREAMING FLOW (ILLMPort.stream_execute() → User Real-Time Display)
+%% Model Hub handles provider abstraction + MH-10 chunk validation.
+%% Concierge StreamConsumer handles UX delivery + interrupt cancellation.
+%% =====================================================================================
+
+PORT_LLM -->|"stream_execute(HubRequest)"| STREAM_CONSUMER
+STREAM_CONSUMER -->|"HubChunk"| CHUNK_ROUTER
+CHUNK_ROUTER -->|"chunk_type: text"| TEXT_AGGREGATOR
+CHUNK_ROUTER -->|"chunk_type: tool_call_delta"| TOOL_CALL_HANDLER
+CHUNK_ROUTER -->|"chunk_type: thinking"| THINKING_HANDLER
+TEXT_AGGREGATOR -->|"aggregated text"| SSE_EMITTER
+TOOL_CALL_HANDLER -->|"tool_call_start/progress/complete"| SSE_EMITTER
+THINKING_HANDLER -->|"thinking_chunk"| SSE_EMITTER
+SSE_EMITTER -->|"streaming_chunk event"| OUTPUT_QUEUE
+STREAM_CONSUMER -->|"buffer partial"| PARTIAL_BUFFER
+PARTIAL_BUFFER -->|"partial response for FSM"| DELIVERING
+INTERRUPT_HANDLING -->|"cancel mid-stream"| CANCEL_GUARD
+CANCEL_GUARD -->|"cancel iterator"| STREAM_CONSUMER
+TOOL_CALL_HANDLER -->|"complete tool_call"| SVC_TOOL_DISP
 
 %% =====================================================================================
 %% READ TOOL → BRIDGE / FABRIC CONNECTIONS
@@ -1035,6 +1157,7 @@ SVC_FSM_CTRL -->|"orchestrates"| SVC_TURN_PROC
 SVC_TURN_PROC -->|"Phase 1: classify"| SVC_INTENT_PROC
 SVC_INTENT_PROC -->|"tier selection"| SVC_COMPLEXITY
 SVC_TURN_PROC -->|"tool execution"| SVC_TOOL_DISP
+SVC_TOOL_DISP -->|"creates per ReAct loop (ADR-0098)"| SCRATCHPAD_CORE
 SVC_TURN_PROC -->|"context assembly"| SVC_CTX_ASM
 SVC_TURN_PROC -->|"output delivery"| SVC_OUTPUT_MGR
 SVC_DELTA_AGG -->|"flush batches"| SVC_FSM_CTRL
@@ -1234,3 +1357,5 @@ classDef invariant fill:#fce4ec,stroke:#880e4f,stroke-width:3px,color:#000,font-
 classDef perf fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:#000,font-weight:bold
 classDef service fill:#e0f2f1,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
 classDef lifecycle fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#000,font-weight:bold
+classDef scratchpad fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#000
+classDef scratchpad_note fill:#fff8e1,stroke:#f57c00,stroke-width:1px,color:#000,font-style:italic

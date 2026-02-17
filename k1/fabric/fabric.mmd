@@ -647,17 +647,17 @@ subgraph TOUCHPOINTS["External Touchpoints (Fabric Interfaces)"]
     end
   end
 
-  subgraph TP_BUSES["Event Bus + Delta Bus"]
+  subgraph TP_BUSES["K1 Bus (one physical bus; two logical lanes)"]
     direction TB
 
-    EVENT_BUS["K1 Event Bus<br/>Pub/Sub Topics<br/>All Fabric events with trace_id"]:::bus
-    DELTA_BUS["Delta Bus<br/>Sub-Agents emit state deltas here<br/>k1.agent.{id}.delta.v1"]:::bus
+    EVENT_BUS["K1 Bus — Event lane<br/>Topics: k1.*<br/>All Fabric events with trace_id"]:::bus
+    DELTA_BUS["K1 Bus — Delta lane<br/>Sub-Agents emit state deltas here<br/>k1.agent.{id}.delta.v1"]:::bus
   end
 
   subgraph TP_ORCHESTRATOR_MAILBOX["Orchestrator Integration"]
     direction TB
 
-    ORCHESTRATOR_MAILBOX["Orchestrator Mailbox<br/>Receives TaskEnvelope (MED/HIGH)<br/>Returns CapabilityResult via DeltaBus"]:::caller
+    ORCHESTRATOR_MAILBOX["Orchestrator Mailbox<br/>Receives TaskEnvelope (MED/HIGH)<br/>Returns CapabilityResult via K1 Bus"]:::caller
     TOPOLOGICAL_WALKER["Topological Walker<br/>DAG step ordering<br/>Parallel steps where no deps"]:::engine
   end
 

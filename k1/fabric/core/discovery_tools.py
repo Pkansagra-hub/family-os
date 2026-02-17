@@ -1,17 +1,21 @@
 """
 k1.fabric.core.discovery_tools -- MCP discovery tool wrappers (4.5.3).
 
-Two MCP-callable tool handlers that expose Fabric retrieval as capability
-discovery tools for Planner consumption via Orchestrator DAG steps.
+Three MCP-callable tool handlers that expose Fabric retrieval and registry
+as capability discovery tools for Planner consumption via Orchestrator DAG
+steps.
 
 Public API:
   - ``DiscoverCapabilitiesHandler`` -- tool.read.discover_capabilities
   - ``FindPromptsHandler``          -- tool.read.find_prompts
+  - ``GetCapabilitySchemaHandler``  -- tool.read.get_capability_schema
   - ``DiscoveryToolError``          -- Input validation exception
   - ``DISCOVER_CAPABILITIES_NAME``  -- Tool capability name constant
   - ``DISCOVER_CAPABILITIES_PROVIDER_ID`` -- Provider ID constant
   - ``FIND_PROMPTS_NAME``           -- Tool capability name constant
   - ``FIND_PROMPTS_PROVIDER_ID``    -- Provider ID constant
+  - ``GET_CAPABILITY_SCHEMA_NAME``  -- Tool capability name constant
+  - ``GET_CAPABILITY_SCHEMA_PROVIDER_ID`` -- Provider ID constant
   - ``DEFAULT_DISCOVER_TOP_K``      -- Default top_k for discover (10)
   - ``DEFAULT_FIND_PROMPTS_TOP_K``  -- Default top_k for find_prompts (5)
 
@@ -64,6 +68,12 @@ DEFAULT_DISCOVER_TOP_K: int = 10
 DEFAULT_FIND_PROMPTS_TOP_K: int = 5
 """Default top_k for find_prompts (matches contract YAML)."""
 
+GET_CAPABILITY_SCHEMA_NAME: str = "tool.read.get_capability_schema"
+"""MCP tool name for exact capability schema lookup."""
+
+GET_CAPABILITY_SCHEMA_PROVIDER_ID: str = "get_capability_schema_handler"
+"""Provider ID for GetCapabilitySchemaHandler."""
+
 
 # ---------------------------------------------------------------------------
 # Protocol -- RetrievalLike
@@ -99,6 +109,25 @@ class RetrievalLike(Protocol):
         safety_band: str = "GREEN",
         top_k: Optional[int] = None,
     ) -> Any: ...
+
+
+# ---------------------------------------------------------------------------
+# Protocol -- RegistryLookupLike
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class RegistryLookupLike(Protocol):
+    """
+    Minimal registry lookup surface for schema handler.
+
+    Satisfied by:
+      - ``CapabilityRegistry`` (2.2.1) -- production use.
+      - ``CapabilityRegistryAPI`` (5.3.3) -- facade.
+      - Any test adapter with matching method signature.
+    """
+
+    def lookup(self, name: str, *, version: Optional[str] = None) -> Any: ...
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +478,158 @@ class FindPromptsHandler:
 
     def __repr__(self) -> str:
         return f"FindPromptsHandler(retrieval={self._retrieval!r})"
+
+
+# ---------------------------------------------------------------------------
+# 4.5.3 -- GetCapabilitySchemaHandler
+# ---------------------------------------------------------------------------
+
+
+class GetCapabilitySchemaHandler:
+    """
+    Handler for tool.read.get_capability_schema MCP Tool.
+
+    3-step execute() orchestrates exact capability contract lookup:
+      1. Parse+validate inputs (capability_name required)
+      2. Delegate to Registry.lookup(name)
+      3. Map contract to CapabilityResult.success/failure
+
+    Constructor injection (1 dep):
+      registry: RegistryLookupLike (satisfied by CapabilityRegistry 2.2.1
+      or CapabilityRegistryAPI 5.3.3)
+
+    GREEN band, read-only, no state mutation.
+    Returns the full CapabilityContract as a dict so EXPAND can read
+    required_inputs, optional_inputs, output schema, required_context,
+    safety_band_min, avg_latency_ms, and other contract metadata needed
+    for PlanStep parameterization and post-LLM enrichment.
+
+    Thread safety: stateless handler, safe for concurrent calls.
+    """
+
+    __slots__ = ("_registry",)
+
+    def __init__(self, registry: RegistryLookupLike) -> None:
+        """
+        Args:
+            registry: CapabilityRegistry or CapabilityRegistryAPI instance.
+        """
+        self._registry = registry
+
+    # -- Public API --------------------------------------------------------
+
+    def execute(self, request: CapabilityRequest) -> CapabilityResult:
+        """
+        Execute the get_capability_schema tool (3-step pipeline).
+
+        Args:
+            request: CapabilityRequest with params containing:
+                Required: capability_name (str)
+                Optional: version (str)
+
+        Returns:
+            CapabilityResult with:
+              - success: data=contract.to_dict() (full schema)
+              - failure: error with code and message
+        """
+        trace_id = request.trace_id
+        request_id = request.request_id
+        params = request.params
+        start_ms = _now_ms()
+
+        try:
+            # Step 1: Parse + validate inputs
+            capability_name, version = self._parse_inputs(params)
+
+            # Step 2: Delegate to registry lookup
+            contract = self._registry.lookup(capability_name, version=version)
+
+            if contract is None:
+                return CapabilityResult.failure_result(
+                    request_id=request_id,
+                    error_code="not_found",
+                    error_message=(f"Capability '{capability_name}' not found in registry"),
+                    trace_id=trace_id,
+                    duration_ms=_now_ms() - start_ms,
+                )
+
+            # Step 3: Map contract to CapabilityResult
+            contract_data = contract.to_dict() if hasattr(contract, "to_dict") else {}
+
+            return CapabilityResult.success_result(
+                request_id=request_id,
+                data=contract_data,
+                provider_id=GET_CAPABILITY_SCHEMA_PROVIDER_ID,
+                trace_id=trace_id,
+                duration_ms=_now_ms() - start_ms,
+            )
+
+        except DiscoveryToolError as exc:
+            return CapabilityResult.failure_result(
+                request_id=request_id,
+                error_code="validation_failed",
+                error_message=str(exc),
+                trace_id=trace_id,
+                duration_ms=_now_ms() - start_ms,
+            )
+
+        except Exception as exc:
+            logger.error(
+                "GetCapabilitySchemaHandler unexpected error: %s",
+                exc,
+                exc_info=True,
+            )
+            return CapabilityResult.failure_result(
+                request_id=request_id,
+                error_code="internal_error",
+                error_message=(f"Unexpected error: {type(exc).__name__}: {exc}"),
+                trace_id=trace_id,
+                duration_ms=_now_ms() - start_ms,
+            )
+
+    # -- Input parsing -----------------------------------------------------
+
+    def _parse_inputs(
+        self,
+        params: Dict[str, Any],
+    ) -> tuple:
+        """
+        Parse and validate get_capability_schema inputs.
+
+        Args:
+            params: Raw request parameters from CapabilityRequest.params.
+
+        Returns:
+            Tuple of (capability_name, version).
+
+        Raises:
+            DiscoveryToolError: If required inputs are missing or invalid.
+        """
+        errors: List[str] = []
+
+        # Required: capability_name (non-empty string)
+        capability_name = params.get("capability_name")
+        if not isinstance(capability_name, str) or not capability_name.strip():
+            errors.append("Missing or invalid required input: " "'capability_name' (non-empty str)")
+
+        if errors:
+            raise DiscoveryToolError(errors)
+
+        # Optional: version (string, default=None -> latest)
+        version = params.get("version")
+        if version is not None:
+            if not isinstance(version, str) or not version.strip():
+                errors.append("'version' must be a non-empty string when provided")
+
+        if errors:
+            raise DiscoveryToolError(errors)
+
+        return capability_name, version
+
+    # -- Repr --------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        return f"GetCapabilitySchemaHandler(registry={self._registry!r})"
 
 
 # ---------------------------------------------------------------------------

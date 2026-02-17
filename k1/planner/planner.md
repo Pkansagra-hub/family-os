@@ -91,8 +91,8 @@ The L3_PLANNER subgraph contains 4 major subsystems:
 
 | Component | Purpose | Notes |
 |-----------|---------|-------|
-| **SketchService** | Stage 1: LLM rough plan generation (~2K tokens) | Calls discover_capabilities, query_planning_context, recall_for_planning. Triggers HIL clarification |
-| **ExpandService** | Stage 2: Tool mapping + parameterization (~1K tokens) | Calls discover_capabilities (refined), find_relevant_prompts. Assigns output_schema, tools_granted per step |
+| **SketchService** | Stage 1: LLM rough plan generation (~2K tokens) | Agentic loop with 4 tools: discover_capabilities, query_session_context, recall_long_term_memory, find_prompts. Triggers HIL clarification |
+| **ExpandService** | Stage 2: Tool mapping + parameterization (~1K tokens) | Agentic loop with 4 tools: discover_capabilities, get_capability_schema, find_prompts, query_session_context. Deterministic post-LLM enrichment of infrastructure fields |
 | **ValidateService** | Stage 3: Deterministic checks + LLM arbiter (~500 tokens) | DAG cycle detection, capability existence check. Triggers HIL approval. Verdict: approved/revise/reject |
 | **CommitService** | Stage 4: Deterministic commit (0 tokens) | Builds CommittedPlan, assigns plan_id. Persists K0 WAL, emits plan.ready. NO ILLMPort dependency |
 
@@ -107,10 +107,11 @@ The L3_PLANNER subgraph contains 4 major subsystems:
 
 | Tool | Routes To | Used In Stages | Latency |
 |------|-----------|----------------|---------|
-| `discover_capabilities()` | Fabric Retrieval | SKETCH, EXPAND | <50ms |
-| `find_relevant_prompts()` | Fabric Retrieval | EXPAND | <50ms |
-| `query_planning_context()` | SessionState (direct) | SKETCH | <10ms |
-| `recall_for_planning()` | K0 Bridge | SKETCH | <100ms |
+| `discover_capabilities` | Fabric: `DiscoverCapabilitiesHandler` -> `RetrievalLike` | SKETCH, EXPAND | <50ms |
+| `get_capability_schema` | Fabric: `GetCapabilitySchemaHandler` -> `RegistryLookupLike` | EXPAND | <5ms |
+| `find_prompts` | Fabric: `FindPromptsHandler` -> `RetrievalLike` | SKETCH, EXPAND | <50ms |
+| `query_session_context` | Planner-internal: `IStateReadPort` | SKETCH, EXPAND | <10ms |
+| `recall_long_term_memory` | K0 Bridge: `IBridgePort` | SKETCH | <100ms |
 
 ---
 
@@ -590,20 +591,27 @@ Orchestrator._dispatch_high(envelope: TaskEnvelope{tier=HIGH}):
          Latency: <50ms
          ToolCallRouter: tool_call_count += 1
 
-     6b. query_planning_context(sections=["beliefs_active", "persona", "control", "temporal"])
+     6b. query_session_context(sections=["beliefs_active", "persona", "control", "temporal"])
          Route: ToolCallRouter -> IStateReadPort -> SessionStateReadAdapter
                 -> SessionState multi-reader (lock-free, PLAN-01)
          Returns: StateSnapshot{sections: {beliefs_active: {...}, persona: {...}, ...}}
          Latency: <10ms
          ToolCallRouter: tool_call_count += 1
 
-     6c. recall_for_planning(query=PlanRequest.intent)
+     6c. recall_long_term_memory(query=PlanRequest.intent)
          Route: ToolCallRouter -> IBridgePort -> BridgeAdapter -> K0 Bridge
          Returns: RecallResponse with historical preferences, prior outcomes
          Latency: <100ms
          ToolCallRouter: tool_call_count += 1
 
-     After 6a-6c: tool_call_count = 3 (of max 6, PLAN-05)
+     6d. find_prompts(intent=<meta-agent task description>)  [optional, called if meta-agent steps needed]
+         Route: ToolCallRouter -> IFabricRetrievalPort -> FabricRetrievalAdapter
+                -> Fabric.find_prompts()
+         Returns: Scored prompt templates with names, descriptions, required variables, domain tags
+         Latency: <50ms
+         ToolCallRouter: tool_call_count += 1
+
+     After 6a-6d: tool_call_count = 3-4 (of max 6, PLAN-05)
 
   7. HIL CLARIFICATION CHECK (conditional)
      SketchService evaluates: is intent ambiguous? Missing critical constraints?
@@ -668,15 +676,13 @@ Orchestrator._dispatch_high(envelope: TaskEnvelope{tier=HIGH}):
           Refines Top-K: e.g., "restaurant booking near San Jose" -> exact capabilities
           ToolCallRouter: tool_call_count += 1 (now 4)
 
-     10b. find_relevant_prompts(intent=PlanRequest.intent, domain=inferred)
-          Route: ToolCallRouter -> IFabricRetrievalPort -> FabricRetrievalAdapter
-                 -> Fabric.find_relevant_prompts()
-          Returns: Top-K prompt templates with variable definitions
-          Latency: <50ms
-          ToolCallRouter: tool_call_count += 1 (now 5)
-
-     (Optional 10c: if 6th call needed for specific capability lookup)
-          ToolCallRouter: tool_call_count += 1 (now 6, MAX reached PLAN-05)
+     10b. (Agentic loop -- LLM decides which tools to call)
+          Available tools: discover_capabilities, get_capability_schema,
+          find_prompts, query_session_context
+          LLM may call get_capability_schema(capability_name) for exact contract
+          LLM may call find_prompts(intent) for prompt templates
+          LLM may call query_session_context(sections) for param values
+          Each tool call dispatched via ToolCallRouter to Fabric handlers
 
      After Stage 2 tools: tool_call_count <= 6 (PLAN-05 enforced)
 
@@ -933,9 +939,9 @@ STAGE 1 SKETCH (6.2s):
           {name: "tool.execute.cake_order", input: {type, flavor, date}},
           {name: "tool.read.k0_recall", input: {query}},
           {name: "agent.execute.invitation_sender", tools: [send_message, contact_lookup]}]
-    query_planning_context(["beliefs_active", "persona", "temporal"])
+    query_session_context(["beliefs_active", "persona", "temporal"])
       -> {beliefs_active: {family_members: 8, mom_birthday: "Feb 21"}, ...}
-    recall_for_planning("Mom birthday party preferences")
+    recall_long_term_memory("Mom birthday party preferences")
       -> {facts: ["Mom prefers Italian food", "Last party was at Olive Garden"]}
 
   HIL check: intent is clear (4 explicit sub-tasks) -> no clarification needed
@@ -958,8 +964,10 @@ STAGE 2 EXPAND (3.1s):
   Tool calls:
     discover_capabilities("Italian restaurant booking San Jose Feb 21")
       -> refined: tool.execute.restaurant_booking with exact param schema
-    find_relevant_prompts("family event invitation")
+    find_prompts("family event invitation")
       -> [{name: "invitation_drafter_v1", variables: [event, recipients, venue, date]}]
+    get_capability_schema("tool.execute.restaurant_booking")
+      -> {required_inputs: [cuisine, location, date, party_size], output: {booking_id, ...}}
 
   LLM call (1,024 tokens budget):
     Prompt: "Map rough steps to concrete PlanStep with params, deps, output_schema."
@@ -1021,19 +1029,19 @@ OUTPUT:
 
 ## 6. Stage 1: SKETCH -- Deep Dive
 
-LLM-powered rough plan generation. Performance envelope: ~2K tokens, p50 4s / p99 8s.
+LLM-powered rough plan generation via agentic tool-calling loop.
 This is the creative core of planning -- where intent becomes structure.
 
 Plan FSM transition on entry: `IDLE -> SKETCHING`. On exit: `SKETCHING -> EXPANDING`.
 
-SketchService is the owning internal service (~60 tests). It coordinates 3 tool calls
-via ToolCallRouter, an optional HIL clarification round via HILCoordinator, and exactly
-one LLM call via ILLMPort. SketchService has dependencies on:
+SketchService is the owning internal service (~140 tests). It runs a multi-round
+agentic loop where the LLM decides which tools to call (discover capabilities, read
+session context, recall long-term memory) and when it has enough information to produce
+a plan. SketchService dependencies:
 
-- `ILLMPort` (LLM call)
-- `ToolCallRouter` (routes 3 discovery tools to backends)
-- `HILCoordinator` (optional clarification)
-- `PipelineController` (receives stage result, tracks token usage)
+- `ILLMPort` (LLM calls -- multiple rounds possible)
+- `ToolCallRouter` (routes LLM-invoked tool calls to backends)
+- `HILCoordinator` (optional clarification after first attempt)
 
 ### 6.1 Inputs
 
@@ -1061,24 +1069,7 @@ SessionSnapshot (frozen dataclass):
   section_names: List[str]                  -- Sorted section names present
 ```
 
-Available section names from `ISessionStateReader` that SKETCH may consume:
-
-| Section | Contents | SKETCH Usage |
-|---------|----------|-------------|
-| `beliefs_active` | Active belief set (entities, relationships, facts) | Ground plan in known facts |
-| `persona` | Tone, formality, user communication preferences | Shape LLM prompt style |
-| `control` | Safety band, user preferences, policy overrides | Constrain capability selection |
-| `temporal` | Current time, device timezone, recurring schedules | Time-aware step sequencing |
-| `cognitive` | Cognitive load / complexity tier | Not used in SKETCH |
-| `history_recent` | Recent conversation turns | Contextual disambiguation |
-| `scoreboard` | Current QUD (question under discussion) | Clarify primary objective |
-
-**Important**: The `context` snapshot in PlanRequest is captured by Orchestrator's
-`dispatch_high()` at enqueue time. By the time SKETCH runs (after mailbox wait, 0-5s),
-the snapshot may be slightly stale. This is acceptable -- Orchestrator re-reads fresh
-state at execution time (_receive_plan step 4) to catch any changes during planning.
-
-SketchService also receives the constraints dict which defaults to:
+SketchService also receives constraints which defaults to:
 
 ```
 constraints: {
@@ -1086,246 +1077,189 @@ constraints: {
 }
 ```
 
-### 6.2 Discovery Tool Calls (3 max, concurrent)
+### 6.2 Agentic Tool-Calling Architecture
 
-SKETCH issues up to 3 tool calls through ToolCallRouter. These are the first 3 of the
-6-call budget for the entire plan (PLAN-05: max 6 discovery tool calls per plan, 3 in
-SKETCH + 3 in EXPAND). All tools are read-only (PLAN-02). The Planner NEVER executes
-capabilities (PLAN-06).
+Unlike a traditional pre-fetch approach (where all tools are called upfront), SKETCH
+uses an **agentic loop** where the LLM decides which tools to invoke. The LLM receives
+tool definitions in OpenAI function-calling format and autonomously calls them as needed
+across multiple conversation rounds.
 
-ToolCallRouter dispatches each call to the correct backend port. Calls are issued
-concurrently (asyncio.gather or equivalent).
+#### 6.2.1 Tool Definitions
 
-#### 6.2.1 Tool 1: `discover_capabilities(domain?, intent?)`
+Four tools are exposed to the LLM via `SKETCH_TOOL_DEFINITIONS`:
 
-**Route**: ToolCallRouter -> `IFabricRetrievalPort` -> `FabricRetrievalAdapter`
-         -> `RetrievalEngine.discover_capabilities()` (in-process, NOT HTTP)
+| Tool | Purpose | Parameters |
+|------|---------|------------|
+| `discover_capabilities` | Find available capabilities for intent | `intent: str`, `domain?: str`, `top_k?: int` |
+| `query_session_context` | Read session state sections | `sections: List[str]` |
+| `recall_long_term_memory` | Query K0 memory for context | `query: str` |
+| `find_prompts` | Find prompt templates for meta-agent steps | `intent: str`, `domain?: str`, `top_k?: int` |
 
-**Backend signature** (from `k1/fabric/retrieval/retrieval_engine.py`):
+Tool definitions are structured in OpenAI function-calling format with JSON Schema
+parameter descriptions. The LLM sees these as callable functions and decides when and
+how to invoke them based on the user intent.
 
-```python
-def discover_capabilities(
-    self,
-    domain: Optional[List[str]] = None,   # Domain tag filter (e.g. ["cooking", "scheduling"])
-    intent: str = "",                      # Natural-language capability description
-    safety_band: str = "GREEN",            # Caller's safety band
-    session_context: Optional[Dict[str, Any]] = None,  # Available session keys
-    top_k: Optional[int] = None,           # Results cap (default: 10, max: 25)
-) -> RetrievalResult
-```
+#### 6.2.2 Tool Routing
 
-**Pipeline** (4-step semantic retrieval):
+`ToolCallRouter` dispatches each LLM-requested tool call to the correct backend:
 
-```
- 1. Embed intent text -> query_vector (IEmbeddingPort, ultrabert-v4.0.0)
- 2. HardFilter -> eliminate offline / unsafe / unsatisfiable capabilities
-    - Safety band check: capability.safety_band_min <= caller safety_band
-    - Availability check: must be ONLINE
-    - Required inputs check: caller must have matching session keys / params
- 3. SoftRanker -> composite scoring (cosine similarity + domain match + success rate + cost)
- 4. TopKSelector -> truncate to top K results
-```
+- `discover_capabilities` -> `ToolCallRouter.discover()` -> `IFabricRetrievalPort`
+- `query_session_context` -> `ToolCallRouter.read_context()` -> `IStateReadPort`
+- `recall_long_term_memory` -> `ToolCallRouter.recall_memory()` -> `IBridgePort`
+- `find_prompts` -> `ToolCallRouter.find_prompts()` -> `IFabricRetrievalPort`
 
-**Return type** (from `k1/fabric/types.py`):
-
-```
-RetrievalResult (frozen dataclass):
-  capabilities: List[ScoredCapability]   -- Top-K results, descending by score
-  total_matched: int                     -- Total after hard filter (>= len(capabilities))
-  query_latency_ms: int                  -- End-to-end retrieval time
-  query_intent: str                      -- Echo of input intent
-  index_size: int                        -- Total capabilities in index
-  embedding_model: str                   -- "ultrabert-v4.0.0"
-
-ScoredCapability (frozen dataclass):
-  contract: CapabilityContract           -- Full capability snapshot
-  score: float                           -- Cosine similarity [0.0, 1.0]
-```
-
-Each `CapabilityContract` carries (relevant fields for SKETCH):
-
-```
-CapabilityContract (frozen dataclass, from k1/fabric/types.py):
-  name: str               -- e.g. "tool.execute.restaurant_booking"
-  version: str            -- semver
-  domain: List[str]       -- ["dining", "scheduling"]
-  description: str        -- Human-readable purpose
-  capabilities: List[str] -- What it can do
-  limitations: List[str]  -- What it cannot do
-  required_inputs: List[InputSpec]   -- Parameter specs
-  optional_inputs: List[InputSpec]   -- Optional parameter specs
-  required_context: List[str]        -- SessionState sections needed
-  output: Dict[str, Any]             -- JSON Schema fragment
-  provider_type: str       -- "tool", "agent", "prompt", etc.
-  safety_band_min: str     -- Minimum safety band required
-  cost_per_call: float     -- Cost estimate
-  avg_latency_ms: int      -- Average latency estimate
-  availability: str        -- ONLINE / OFFLINE / DEGRADED
-```
-
-**Latency target**: <50ms per call (`FabricRetrievalAdapter` timeout: 50ms, 1 retry).
-**Performance targets**: RetrievalEngine: <20ms for 10K capabilities, <50ms for 100K.
-
-**What SKETCH uses from the result**: The SketchService extracts capability names,
-descriptions, input schemas, and domains from the top-K results. These become the
-"available tools menu" in the LLM prompt, enabling the LLM to reference real capabilities.
-
-#### 6.2.2 Tool 2: `query_planning_context(sections?)`
-
-**Route**: ToolCallRouter -> `IStateReadPort` -> `SessionStateReadAdapter`
-         -> SessionState (multi-reader, lock-free, PLAN-01)
-
-**Backend signature** (from `k1/fabric/ports/state_reader.py`):
+ToolCallRouter implements the `ToolCallRouterLike` protocol:
 
 ```python
-# ISessionStateReader protocol -- two options:
-
-def read_sections(
-    self,
-    session_id: str,          # From PlanRequest.context.session_id
-    names: List[str],         # e.g. ["beliefs_active", "persona", "temporal"]
-) -> Dict[str, Any]           # Section name -> section data (missing sections omitted)
-
-def get_snapshot(
-    self,
-    session_id: str,
-) -> SessionSnapshot            # All available sections at capture time
+@runtime_checkable
+class ToolCallRouterLike(Protocol):
+    @property
+    def tool_call_count(self) -> int: ...
+    def reset(self) -> None: ...
+    async def discover(self, intent, *, domain?, top_k?) -> Any: ...
+    async def read_context(self, session_id, sections) -> Dict: ...
+    async def recall_memory(self, query, trace_id) -> Any: ...
+    async def find_prompts(self, intent, *, domain?, top_k?) -> Any: ...
 ```
 
-**SKETCH typically requests**: `["beliefs_active", "persona", "temporal", "control"]`
+#### 6.2.3 The Agentic Loop (`_run_agentic_loop`)
 
-This supplements the `PlanRequest.context` snapshot (which was captured at dispatch time)
-with a FRESH read. If the Orchestrator snapshot is recent enough (<5s), SketchService
-MAY skip this call and use `PlanRequest.context` directly -- but the canonical path
-always makes the call for consistency.
+The core execution loop in SketchService:
 
-**Latency target**: <10ms (in-process, lock-free read).
-
-**What SKETCH uses from the result**: Beliefs ground the plan in known entities and
-relationships (e.g., "8 family members", "Mom's birthday is Feb 21"). Persona shapes
-LLM prompt tone. Temporal context provides clock awareness. Control provides the
-effective safety band.
-
-#### 6.2.3 Tool 3: `recall_for_planning(query)`
-
-**Route**: ToolCallRouter -> `IBridgePort` -> `BridgeAdapter` -> K0 Bridge -> K0 Memory
-
-**Backend signature** (from `k1/fabric/ports/bridge_port.py`):
-
-```python
-# IBridgePort protocol -- recall uses the query method:
-
-async def query(
-    self,
-    operation: str,               # "memory.recall"
-    selectors: Dict[str, Any],    # {query: "...", ...} -- recall selectors
-    *,
-    trace_id: str = "",           # Cognitive trace ID (FAB-09)
-    timeout_ms: int = 0,          # Per-query timeout (0 = adapter default)
-) -> BridgeCommandResult
+```
+ Round 1..MAX_TOOL_ROUNDS (default 6):
+   1. Send messages + tool definitions to LLM via ILLMPort.execute()
+   2. Parse HubResponse:
+      a. If response has tool_calls:
+         - For each tool_call: dispatch via _dispatch_tool_call()
+         - Append assistant message + tool results to conversation
+         - Continue to next round
+      b. If response has content (no tool_calls):
+         - Final answer reached; return (content, accumulated_discovery_results)
+         - Loop exits
+   3. Check cancellation via ctx.cancel_check (if True, raise SketchFailedError)
+   4. If MAX_TOOL_ROUNDS exhausted with no final answer: raise SketchFailedError
 ```
 
-ToolCallRouter invokes:
+The LLM organically decides how many tools to call and in what order. Simple intents
+may need zero tool calls (LLM answers directly). Complex intents may use all 4 tools
+across multiple rounds.
+
+#### 6.2.4 Tool Call Dispatch (`_dispatch_tool_call`)
+
+Each tool call from the LLM is dispatched:
+
+1. Parse `function.name` and `function.arguments` from tool call dict
+2. If arguments JSON is malformed: fall back to `{}` (no exception)
+3. Route to the correct ToolCallRouter method by name
+4. If the tool name is unknown: return `{"error": "Unknown tool: <name>"}`
+5. If the router method raises: return `{"error": "<exception message>"}`
+
+Tool results are serialized back into the conversation as tool-role messages
+so the LLM can reason over them in the next round.
+
+### 6.3 LLM Interaction
+
+#### 6.3.1 System Prompt
+
+The system prompt is assembled by `_assemble_system_prompt()` and contains:
+
+1. **Role definition**: "You are the SKETCH stage planner..."
+2. **Output schema**: The full `SKETCH_OUTPUT_SCHEMA` JSON embedded in the prompt
+3. **Tool guidance**: Instruction that tools are available for capability discovery,
+   session context, long-term memory recall, and prompt template search
+
+The prompt is concise and focuses on the planning task. It does NOT include
+pre-fetched context -- the LLM fetches what it needs via tools.
+
+#### 6.3.2 Initial Messages
+
+`_build_initial_messages(intent, constraints?, hil_addendum?)` constructs:
+
+1. **System message**: Output of `_assemble_system_prompt()`
+2. **User message**: Contains the intent text, plus optional constraint hints
+   (safety band, temporal context) and any HIL clarification addendum
+
+#### 6.3.3 HubRequest Construction
+
+Each LLM call in the agentic loop is wrapped in a `HubRequest`:
 
 ```python
-bridge_port.query(
-    operation="memory.recall",
-    selectors={"query": "<planning_recall_query>"},
-    trace_id=plan_request.trace_id,
-    timeout_ms=100,  # 100ms budget for K0 recall
+HubRequest(
+    capability="CHAT",
+    payload={
+        "messages": <conversation messages>,
+        "temperature": 0.7,
+        "tools": <SKETCH_TOOL_DEFINITIONS when use_tools=True>,
+    },
+    constraints=RequestConstraints(
+        max_tokens=<ctx.stage_budget or 2048>,
+        timeout_ms=<ctx.stage_budget or 8000>,
+        priority="INTERACTIVE",
+        temperature=0.7,
+        consumer_id="planner.sketch",
+    ),
+    trace_id=ctx.trace_id,
 )
 ```
 
-**Return type**:
+When `use_tools=False` (simplified retry mode), the `tools` key is omitted from
+the payload, forcing the LLM to produce a direct answer.
+
+### 6.4 HIL Clarification (Conditional)
+
+After the agentic loop completes, SketchService checks the parsed response for
+`needs_clarification == true`. If set, and HIL is allowed for the current attempt:
 
 ```
-BridgeCommandResult (frozen dataclass):
-  success: bool             -- True if K0 responded
-  data: Dict[str, Any]      -- {facts: [...], prior_outcomes: [...], preferences: [...]}
-  error_code: str           -- Machine-readable error (empty on success)
-  error_message: str        -- Human-readable error (empty on success)
-  k0_mode: str              -- "K0_FULL" | "K0_DEGRADED" | "K0_OFFLINE"
-  latency_ms: int           -- Round-trip to K0
-  trace_id: str             -- Echoed back
+ 1. _parse_response returns (result, needs_clarification=True, question)
+ 2. SketchService calls HILCoordinator.request_clarification(question)
+ 3. If user responds: re-run agentic loop with clarification as hil_addendum
+ 4. If user returns None (timeout/skip): accept the initial result as-is
 ```
 
-**Offline handling**: If K0 is offline (`BridgeCommandResult.success == false`,
-`k0_mode == "K0_OFFLINE"`), SKETCH proceeds without long-term memory. The LLM generates
-a plan based only on session context and discovered capabilities. This is a graceful
-degradation -- the plan may be less personalized but remains functionally valid.
+HILCoordinator implements the `HILCoordinatorLike` protocol:
 
-**Latency target**: <100ms.
-
-**What SKETCH uses from the result**: Historical preferences (e.g., "Mom prefers Italian
-food"), prior outcomes (e.g., "Last party was at Olive Garden -- 4 stars"), and user
-preference patterns. These inform the LLM to make contextually better choices.
-
-#### 6.2.4 Concurrency and Tool Call Accounting
-
-```
- ToolCallRouter state before SKETCH:
-   tool_call_count = 0  (reset at LC_PLAN_START)
-
- SKETCH issues 3 calls concurrently:
-   [discover_capabilities, query_planning_context, recall_for_planning]
-   -> asyncio.gather(*calls)
-   -> tool_call_count += 3
-
- ToolCallRouter state after SKETCH:
-   tool_call_count = 3  (of 6 max, PLAN-05)
-   Remaining budget: 3 calls for EXPAND
-
- If any tool call fails:
-   - ToolCallRouter retries once (within 50ms/10ms/100ms budget per tool)
-   - On second failure: return empty result for that tool
-   - SKETCH proceeds with whatever context succeeded
-   - Degraded but functional: LLM has fewer inputs
+```python
+@runtime_checkable
+class HILCoordinatorLike(Protocol):
+    @property
+    def round_count(self) -> int: ...
+    def reset(self) -> None: ...
+    async def request_clarification(self, question: str) -> Optional[str]: ...
 ```
 
-### 6.3 LLM Call: Rough Plan Generation
+The clarification question comes from the LLM's response (`clarification_question`
+field in the output schema), not from a separate LLM call.
 
-After the 3 tool calls resolve, SketchService assembles a prompt and makes exactly
-one LLM call through ILLMPort.
+### 6.5 Output: SketchResult
 
-#### 6.3.1 Prompt Assembly Architecture
-
-SketchService uses a **slot-based prompt composition** pattern. The prompt is NOT a
-hardcoded string -- it is assembled at runtime from structured slots, each backed by
-a concrete data source. The actual natural-language framing of each slot is an
-implementation detail owned by SketchService and testable in isolation.
-
-**Prompt structure** (2 segments: system + user):
+The LLM response JSON is parsed into a `SketchResult`:
 
 ```
- SYSTEM SEGMENT
-   Slot: ROLE_DEFINITION      -- Declares planning task, output schema contract
-   Slot: OUTPUT_SCHEMA         -- JSON Schema for expected response structure
-
- USER SEGMENT  (assembled from tool call results + PlanRequest)
-   Slot: INTENT                -- Source: PlanRequest.intent
-   Slot: CAPABILITY_CATALOG    -- Source: discover_capabilities() result
-   Slot: SESSION_CONTEXT       -- Source: query_planning_context() result
-   Slot: LONG_TERM_MEMORY      -- Source: recall_for_planning() result (nullable)
-   Slot: CONSTRAINTS           -- Source: PlanRequest.constraints + control section
-   Slot: HIL_ADDENDUM          -- Source: HILCoordinator (conditional, post-clarification)
+SketchResult {
+  rough_steps: List[RoughStep]
+    Each RoughStep: {
+      intent: str                        -- Natural-language step description
+      suggested_capability: Optional[str] -- Capability name from discovery (if matched)
+    }
+  capability_candidates: List[ScoredCapability]
+                                          -- Discovery results carried forward for EXPAND
+  rationale: str                         -- LLM reasoning for the plan structure
+}
 ```
 
-**Slot input contracts** (what exact data feeds each slot):
+**Response parsing** (`_parse_response`):
 
-| Slot | Source Type | Required | Content |
-| ---- | ----------- | -------- | ------- |
-| INTENT | `PlanRequest.intent: str` | Yes | Raw user intent string, unmodified |
-| CAPABILITY_CATALOG | `RetrievalResult.capabilities: List[ScoredCapability]` | Yes (may be empty) | Per capability: `contract.name`, `contract.description`, `contract.required_inputs[].name`, `contract.required_inputs[].type`, `contract.domain[]` |
-| SESSION_CONTEXT | `Dict[str, Dict[str, Any]]` from `IStateReadPort.read_sections()` | Yes (may be partial) | Per section requested: section name as key, section data dict as value. Sections: `beliefs_active`, `persona`, `temporal`, `control` |
-| LONG_TERM_MEMORY | `BridgeCommandResult.data: Dict[str, Any]` | No (K0 offline = omitted) | If present: `data.facts: List[str]`, `data.preferences: List[str]`, `data.prior_outcomes: List[str]`. If absent: slot omitted entirely (not rendered as empty) |
-| CONSTRAINTS | `PlanRequest.constraints: Dict` + `control` section | Yes | `safety_band: str`, `temporal.now: str` (ISO 8601), `temporal.device_tz: str` |
-| HIL_ADDENDUM | `str` from HILCoordinator clarification response | No (only if clarification occurred) | Raw user clarification text appended as additional context |
-| OUTPUT_SCHEMA | Static JSON Schema | Yes | Declares expected response shape (see Output Contract below) |
+1. Strip markdown fences from LLM output (```json...```)
+2. Parse JSON; raise `SketchFailedError` if invalid
+3. Validate: `rough_steps` non-empty, `rationale` non-empty
+4. Build `RoughStep` objects from each step dict
+5. Resolve `depends_on` indices to intent strings (out-of-range indices silently dropped)
+6. Collect `ScoredCapability` objects from discovery tool results
+7. Return `(SketchResult, needs_clarification: bool, clarification_question: str)`
 
-**Output contract** (what the LLM MUST return):
-
-The SYSTEM segment declares a JSON Schema that constrains the LLM response. SketchService
-validates the parsed response against this schema before constructing SketchResult.
+**SKETCH_OUTPUT_SCHEMA** (declared as module-level constant):
 
 ```json
 {
@@ -1339,370 +1273,59 @@ validates the parsed response against this schema before constructing SketchResu
         "type": "object",
         "required": ["intent"],
         "properties": {
-          "intent": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Natural-language description of what this step achieves"
-          },
-          "suggested_capability": {
-            "type": "string",
-            "description": "Capability name from CAPABILITY_CATALOG (if matched)"
-          },
+          "intent": { "type": "string", "minLength": 1 },
+          "suggested_capability": { "type": "string" },
           "depends_on": {
             "type": "array",
-            "items": {"type": "integer"},
-            "description": "Zero-indexed references to prior steps this depends on"
+            "items": { "type": "integer" }
           }
         }
       }
     },
-    "rationale": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Reasoning for plan structure, ordering, and capability choices"
-    },
-    "needs_clarification": {
-      "type": "boolean",
-      "description": "True if intent is ambiguous and HIL clarification is recommended"
-    },
-    "clarification_question": {
-      "type": "string",
-      "description": "Question to ask user if needs_clarification is true"
-    }
+    "rationale": { "type": "string", "minLength": 1 },
+    "needs_clarification": { "type": "boolean" },
+    "clarification_question": { "type": "string" }
   }
-}
-```
-
-**Token budget allocation**:
-
-| Component | Budget | Notes |
-| --------- | ------ | ----- |
-| System segment (ROLE + OUTPUT_SCHEMA) | ~200 tokens | Fixed overhead, independent of request |
-| INTENT slot | Variable | Mirrors user input length |
-| CAPABILITY_CATALOG slot | ~50 tokens per capability x top-K | Top-10 default = ~500 tokens |
-| SESSION_CONTEXT slot | ~100-300 tokens | Depends on section count and density |
-| LONG_TERM_MEMORY slot | ~50-150 tokens | Depends on K0 recall depth (0 if offline) |
-| CONSTRAINTS + HIL_ADDENDUM | ~50-100 tokens | Small fixed + optional clarification |
-| **Total input estimate** | **800-1200 tokens** | Leaves 800-1200 for LLM response |
-| **LLM response budget** | **max_tokens: 2048** | PLAN-11 enforced ceiling |
-
-SketchService MUST ensure total input does not exceed the budget. If input exceeds
-~1200 tokens, SketchService applies truncation in priority order (lowest priority
-truncated first):
-
-1. LONG_TERM_MEMORY -- truncate to most recent 3 facts/preferences
-2. CAPABILITY_CATALOG -- reduce top-K from 10 to 5
-3. SESSION_CONTEXT -- omit `history_recent` section
-4. INTENT -- never truncated (source of truth for planning)
-
-#### 6.3.2 HubRequest Construction
-
-The assembled prompt is wrapped in a `HubRequest` for Model Hub routing.
-Schema (from `planner.mmd` ILLMPort specification):
-
-```yaml
-HubRequest:
-  capability: CapabilityType.CHAT           # Single-shot generation (no tool_call, no structured)
-  payload:
-    type: ChatPayload
-    fields:
-      system_prompt: str                    # SYSTEM SEGMENT (ROLE_DEFINITION + OUTPUT_SCHEMA)
-      user_prompt: str                      # USER SEGMENT (all slots rendered)
-      messages: []                          # Empty -- single-shot, no conversation history
-  constraints:
-    type: RequestConstraints
-    fields:
-      max_tokens: 2048                      # PLAN-11: every LLM call carries budget
-      timeout_ms: 8000                      # SKETCH LLM timeout
-      priority: "INTERACTIVE"               # Matches mailbox WFQ priority
-      temperature: 0.7                      # Creative stage -- moderate temperature
-      consumer_id: "planner"                # Cost tracking + audit (MH-11)
-  trace_id: PlanRequest.trace_id            # Cognitive trace propagation (FAB-09)
-```
-
-**Routing path**:
-
-```
- SketchService.execute()
-   |
-   |-- assemble_prompt(intent, discovery, context, memory, constraints, hil)
-   |     -> system_prompt: str, user_prompt: str
-   |
-   |-- build_hub_request(system_prompt, user_prompt, sketch_constraints)
-   |     -> HubRequest
-   |
-   |-- ILLMPort.execute(hub_request)
-   |     |
-   |     |-- LLMGatewayAdapter (V2) / TestLLMAdapter (V1)
-   |     |     |
-   |     |     |-- LLM_REQUEST_BUS (async request-reply)
-   |     |     |     |
-   |     |     |     |-- Model Hub RequestRouter
-   |     |     |     |     |-- Provider selection (capability type + constraints)
-   |     |     |     |     |-- LLM inference
-   |     |     |     |     <- CapabilityResult
-   |     |     |     <- HubResponse
-   |     |     <- HubResponse
-   |     <- HubResponse
-   |
-   |-- parse_sketch_response(hub_response.result.content)
-   |     -> validates against OUTPUT_SCHEMA (Section 6.3.1)
-   |     -> SketchResult
-   |
-   |-- record_token_usage(hub_response.metadata.usage)
-         -> stage_token_usage[SKETCH] += total_tokens
-```
-
-**HubResponse schema** (from `planner.mmd`):
-
-```yaml
-HubResponse:
-  result:
-    type: CapabilityResult
-    fields:
-      content: str                          # Raw LLM output (JSON string matching OUTPUT_SCHEMA)
-  metadata:
-    type: ResponseMetadata
-    fields:
-      request_id: str                       # Model Hub internal correlation ID
-      model_id: str                         # Which model was used (e.g. "gpt-4o")
-      provider_id: str                      # Which provider (e.g. "azure-openai-eastus")
-      usage:                                # Token consumption
-        prompt_tokens: int
-        completion_tokens: int
-        total_tokens: int
-      cost_usd: float                       # Estimated cost for this call
-      latency_ms: int                       # Model Hub observed latency (end-to-end)
-```
-
-SketchService extracts `result.content`, parses it as JSON, validates against the
-OUTPUT_SCHEMA declared in Section 6.3.1, and constructs the `SketchResult` (Section 6.5).
-Token usage from `metadata.usage` is recorded in `stage_token_usage[SKETCH]`.
-
-#### 6.3.3 Budget Enforcement (PLAN-11)
-
-Every LLM call carries explicit `{max_tokens, timeout_ms}` -- no unbounded calls.
-PipelineController injects SKETCH budgets before the call:
-
-| Parameter | SKETCH Value | Enforced By |
-|-----------|-------------|-------------|
-| `max_tokens` | 2048 | Model Hub (MH-04) truncates at limit |
-| `timeout_ms` | 8000 | LLMGatewayAdapter cancels on timeout |
-| `temperature` | 0.7 | Model Hub passes to provider |
-| Circuit breaker | CB_LLM (inherited per provider, MH-05) | Model Hub provider manifest |
-
-If the LLM call exceeds 8000ms, LLMGatewayAdapter raises a timeout error. SketchService
-catches this and enters the ERR_SKETCH_FAIL recovery path (Section 6.6).
-
-### 6.4 HIL Clarification (Conditional)
-
-Between tool call resolution and the LLM call, SketchService evaluates whether HIL
-(Human-in-the-Loop) clarification is needed. This is the first of two HIL interaction
-points (the second is HIL Approval in Stage 3 VALIDATE).
-
-#### 6.4.1 Trigger Conditions
-
-SketchService triggers HIL clarification when:
-
-1. **Ambiguous intent**: The intent string is too vague to produce a meaningful plan
-   (e.g., "help me with something" vs. "book a restaurant for 8 on Saturday").
-2. **Missing constraints**: Required information is absent from both session context
-   and K0 memory (e.g., no date specified for a time-sensitive task).
-3. **Conflicting signals**: Context and memory disagree (e.g., beliefs say mom prefers
-   sushi but last party was Italian -- which takes precedence?).
-
-The decision to trigger is made by a lightweight LLM check embedded in the main SKETCH
-prompt, OR as a pre-check LLM call (~300 tokens, counted within the 2048 SKETCH budget).
-
-#### 6.4.2 Clarification Flow
-
-```
- SketchService -> HILCoordinator.request_clarification(
-     request_id=plan_request.request_id,
-     question=<LLM-generated natural language question>   (~300 tokens)
-   )
-
- HILCoordinator:
-   1. Generate question via ILLMPort:
-      HubRequest{capability: CHAT, constraints: {max_tokens: 300, timeout_ms: 3000}}
-      Prompt: "Given intent '<intent>' and context, what specific question
-               would resolve the ambiguity? Keep it natural for a family context."
-      (Note: this 300-token LLM call is WITHIN the SKETCH stage budget)
-
-   2. Emit event via IEventPort:
-      topic: "k1.hil.clarification.v1"
-      payload: {
-        request_id: plan_request.request_id,
-        question: "<generated question text>",
-        context_hint: "<what the Planner already knows>",
-        round: 1,
-        max_rounds: 2
-      }
-
-   3. Route: IEventPort -> Event Bus -> Concierge -> User
-      Concierge stores request_id in PENDING_CLARIFICATIONS map.
-      Concierge presents question to user via active channel.
-
-   4. WAIT for response event:
-      topic: "k1.hil.clarification_response.v1"
-      HILCoordinator subscribes, correlates by request_id
-      Timeout: 60s per round
-
-   5. On response:
-      payload: {
-        request_id: plan_request.request_id,
-        response: "<user's answer>",
-        round: 1
-      }
-      HILCoordinator returns response to SketchService.
-      SketchService incorporates response into LLM prompt context.
-
-   6. IF answer still insufficient AND round < 2 (PLAN-10):
-      Repeat steps 1-5 with round=2 and refined question.
-
-   7. IF timeout OR round == 2 reached:
-      Proceed with best-effort interpretation.
-      SketchService LLM call includes note: "(User clarification unavailable,
-      proceeding with best-effort interpretation)"
-```
-
-#### 6.4.3 Invariant: PLAN-10 (Max 2 Rounds)
-
-HILCoordinator enforces a hard cap of 2 clarification rounds. After 2 rounds (or
-60s timeout on either round), the Planner MUST proceed. This prevents indefinite
-blocking on user input and keeps the total planning time within the 45s budget (PLAN-04).
-
-The round counter is reset at `LC_PLAN_START` alongside `tool_call_count`.
-
-#### 6.4.4 Event Namespace
-
-The HIL clarification events belong to the PLANNING-TIME namespace:
-
-```
- PLANNING-TIME (Planner owns):
-   k1.hil.clarification.v1              -- Planner -> Concierge -> User
-   k1.hil.clarification_response.v1     -- User -> Concierge -> Planner
-
- EXECUTION-TIME (Orchestrator owns, distinct family):
-   k1.hil.override*.v1                  -- Orchestrator -> Concierge -> User
-   k1.hil.fallback*.v1                  -- Orchestrator -> Concierge -> User
-```
-
-Concierge routes both families to the user but correlates them independently.
-
-### 6.5 Output: SketchResult
-
-The LLM response is parsed into a `SketchResult` structure:
-
-```
-SketchResult {
-  rough_steps: List[RoughStep]
-    Each RoughStep: {
-      intent: str                        -- Natural-language step description
-      suggested_capability: Optional[str] -- Capability name from discovery (if matched)
-    }
-  capability_candidates: List[ScoredCapability]
-                                          -- Full discovery results carried forward for EXPAND
-  rationale: str                         -- LLM's reasoning for the plan structure
-                                          -- (e.g., "Parallel independent tasks then sequential")
-}
-```
-
-SketchResult is an internal type (not in `k1.orchestrator.types` -- it does not cross
-the Planner boundary). It flows from SketchService -> PipelineController -> ExpandService.
-
-**Schema validation**: SketchService validates the parsed JSON before constructing
-SketchResult:
-
-1. `rough_steps` must be a non-empty list
-2. Each step must have a non-empty `intent` string
-3. `rationale` must be a non-empty string
-4. If `suggested_capability` is present, it must match a name from the discovery results
-
-If validation fails, SketchService attempts one re-parse (LLM output may have minor
-JSON formatting issues). If re-parse also fails, enter ERR_SKETCH_FAIL.
-
-**Token accounting**: After the LLM call, SketchService records:
-
-```
-stage_token_usage[SKETCH] = hub_response.metadata.usage.total_tokens
-```
-
-PipelineController accumulates this for the total plan token count reported in
-the PLAN_END delta.
-
-**Stage completion delta**: On success, PipelineController emits:
-
-```
-k1.planner.delta.v1 {
-  type: "stage_complete",
-  stage: "SKETCH",
-  status: "completed",
-  tokens_used: stage_token_usage[SKETCH],
-  tool_calls_used: 3,
-  hil_rounds: 0 | 1 | 2,
-  duration_ms: <stage wall time>
 }
 ```
 
 ### 6.6 Error Recovery: ERR_SKETCH_FAIL
 
-SKETCH errors are handled by the ERR_SKETCH_FAIL recovery path defined in `planner.mmd`.
-The error wiring: `SVC_SKETCH -> ERR_SKETCH_FAIL -> retry / plan.failed`.
-
-#### 6.6.1 Failure Scenarios in SKETCH
-
-| Failure | Cause | Detection |
-|---------|-------|-----------|
-| Discovery timeout | Fabric Retrieval slow or unavailable | ToolCallRouter 50ms timeout |
-| Context read failure | SessionState unavailable | ToolCallRouter 10ms timeout |
-| K0 recall failure | Bridge offline | BridgeCommandResult.success == false |
-| LLM timeout | Model Hub / provider slow | LLMGatewayAdapter 8000ms timeout |
-| LLM error | Provider error, rate limit | HubResponse error or exception |
-| JSON parse failure | LLM output malformed | SketchService JSON validation |
-| HIL timeout | User unresponsive | HILCoordinator 60s timeout |
-
-#### 6.6.2 Recovery Strategy
+#### 6.6.1 Execute Flow (try / retry)
 
 ```
- ERR_SKETCH_FAIL decision tree:
-
- 1. Tool call failure (any of the 3):
-    -> Retry once within tool's latency budget
-    -> On second failure: proceed without that tool's data
-    -> NOT a stage failure (degraded input, but SKETCH continues)
-
- 2. LLM timeout or error (first attempt):
-    -> RETRY ONCE with SIMPLIFIED PROMPT:
-       - Remove K0 memory context (recall results)
-       - Reduce capability list to top-3 only
-       - Add instruction: "Generate a minimal plan with available information"
-       - Keep same budget: {max_tokens: 2048, timeout_ms: 8000}
-    -> If simplified attempt succeeds: continue to EXPAND (degraded quality)
-
- 3. LLM timeout or error (second attempt):
-    -> PLAN FAILED
-    -> Plan FSM transitions: SKETCHING -> FAILED
-    -> Emit: k1.planner.plan.failed.v1 {
-         request_id: plan_request.request_id,
-         stage: "SKETCH",
-         error: "ERR_SKETCH_FAIL",
-         message: "LLM failed after retry with simplified prompt",
-         trace_id: plan_request.trace_id
-       }
-    -> Orchestrator receives via Event Bus subscription, cleans up PendingPlanContext
-
- 4. JSON parse failure (LLM output malformed):
-    -> Re-parse once (strip markdown fences, attempt recovery)
-    -> If still malformed: treat as LLM error, follow path (2) above
-
- 5. HIL timeout:
-    -> NOT a stage failure
-    -> Proceed with best-effort interpretation (Section 6.4.2 step 7)
-    -> Plan quality may be reduced but pipeline continues
+ execute(request, ctx):
+   1. First attempt: _execute_attempt(request, ctx, allow_hil=True)
+      - Builds messages, runs agentic loop with tools, parses response
+      - If HIL triggered: re-runs with clarification addendum
+   2. If SketchFailedError caught:
+      - Retry: _execute_attempt(request, ctx, simplified=True)
+      - Simplified mode: no tools (forces direct LLM answer), no HIL
+   3. If retry also fails: raise SketchFailedError
 ```
 
-#### 6.6.3 Cascading Impact
+#### 6.6.2 Failure Scenarios
+
+| Failure | Cause | Handling |
+|---------|-------|----------|
+| Tool call failure | Router backend error | `_dispatch_tool_call` returns error dict; LLM sees error and adapts |
+| LLM empty response | No content, no tool calls | `_run_agentic_loop` raises SketchFailedError |
+| Round limit exhausted | LLM keeps calling tools indefinitely | Raises after `_MAX_TOOL_ROUNDS` (6) rounds |
+| JSON parse failure | LLM output not valid JSON | `_parse_response` raises SketchFailedError |
+| Missing rough_steps | LLM omitted required field | `_parse_response` raises SketchFailedError |
+| Cancellation | `ctx.cancel_check` returns True | Raises SketchFailedError mid-loop |
+
+#### 6.6.3 Micro-Replan (`micro_execute`)
+
+For mid-DAG replanning, `micro_execute` provides a simplified SKETCH path:
+
+1. Builds intent from `MicroReplanRequest` context (failure info + remaining steps)
+2. Remaining step capabilities are listed in the intent string
+3. Runs agentic loop (with tools)
+4. No HIL clarification allowed
+5. On any failure: raises SketchFailedError (no retry)
+
+#### 6.6.4 Cascading Impact
 
 If SKETCH fails (plan FSM -> FAILED), no downstream stages execute. The entire plan
 request terminates. The Orchestrator's PendingPlanContext (stored in `pending_plans`
@@ -1711,26 +1334,39 @@ dict keyed by `request_id`) will be cleaned up either by:
 1. The `k1.planner.plan.failed.v1` event handler in Orchestrator, OR
 2. The Orchestrator timeout reaper (if the failure event itself fails to deliver)
 
-The Orchestrator may then degrade future HIGH-tier requests to MEDIUM-tier processing
-if CB_PLANNER trips (3 consecutive failures -> circuit open, 60s reset, 1 probe call).
-
 ---
 
 ## 7. Stage 2: EXPAND -- Deep Dive
 
-LLM-powered tool mapping and parameterization. Performance envelope: ~1K tokens,
-p50 3s / p99 5s. This is where rough intent becomes concrete executable structure.
+LLM-powered tool mapping and parameterization via agentic tool-calling loop.
+This is where rough intent becomes concrete executable structure.
 
 Plan FSM transition on entry: `SKETCHING -> EXPANDING`. On exit: `EXPANDING -> VALIDATING`.
 
-ExpandService is the owning internal service (~50 tests). It takes the rough plan from
-SKETCH, issues refined discovery calls to map each step to a concrete capability, and
-makes one LLM call to produce fully parameterized `PlanStep` objects. ExpandService has
-dependencies on:
+### Why SKETCH and EXPAND are separate stages
 
-- `ILLMPort` (LLM call)
-- `ToolCallRouter` (routes 2-3 remaining discovery tools to backends)
-- `PipelineController` (receives stage result, tracks token usage)
+Both stages use the same agentic mechanism (LLM + tool-calling loop), but they serve
+different purposes:
+
+| Aspect | SKETCH | EXPAND |
+|--------|--------|--------|
+| **Question** | "What should we do?" | "How exactly do we do it?" |
+| **Temperature** | 0.7 (creative, exploratory) | 0.3 (precise, structural) |
+| **Output** | RoughSteps (intents + capability hints) | PlanSteps (14 fields, fully parameterized) |
+| **On failure** | Plan DEAD (no downstream stages) | Graceful FALLBACK to degraded plan from SKETCH |
+| **Revise loop** | N/A | VALIDATE can send EXPAND back without redoing SKETCH |
+
+Two smaller LLM calls (~2K + ~1K) are more predictable than one ~3K monolithic call.
+Splitting also means SKETCH-only token spend when EXPAND can gracefully degrade.
+
+ExpandService is the owning internal service (~50 tests). It runs a multi-round agentic
+loop where the LLM decides which tools to call (resolve capabilities, get schemas, find
+prompts, read context) and produces fully parameterized PlanStep objects. After the
+agentic loop, a deterministic post-LLM enrichment pass fills infrastructure fields from
+CapabilityContract metadata (not hallucinated by the LLM). ExpandService dependencies:
+
+- `ILLMPort` (LLM calls -- multiple rounds possible)
+- `ToolCallRouter` (routes LLM-invoked tool calls to backends)
 
 ExpandService does NOT interact with HILCoordinator. EXPAND has no HIL interaction point
 -- clarification happens in SKETCH, approval happens in VALIDATE.
@@ -1756,7 +1392,7 @@ SketchResult:
 **From PlanRequest** (carried through pipeline context):
 
 | Field | Type | EXPAND Usage |
-| ----- | ---- | ------------ |
+|-------|------|-------------|
 | `intent` | `str` | Injected into EXPAND prompt for alignment check |
 | `trace_id` | `str` | Propagated to all port calls (FAB-09) |
 | `context` | `SessionSnapshot` | Section data available for prompt parameterization |
@@ -1767,164 +1403,169 @@ into `PlanStep.capability` + `PlanStep.params` (structured, executable). The SKE
 output tells the LLM WHAT to do; the EXPAND output tells the Orchestrator HOW to do it
 with exact parameters.
 
-### 7.2 Discovery Tool Calls (up to 3, from remaining budget)
+### 7.2 Agentic Tool-Calling Architecture
 
-EXPAND uses the remaining tool call budget from PLAN-05 (max 6 per plan, SKETCH used 3).
-ExpandService issues 2-3 calls through ToolCallRouter. These calls are more targeted than
-SKETCH -- they refine discovery per-step rather than doing broad intent matching.
+Like SKETCH, EXPAND uses an agentic loop where the LLM decides which tools to invoke.
+The LLM receives the SKETCH rough plan in its initial prompt and uses tools to gather
+the precise information needed for full parameterization.
 
-#### 7.2.1 Tool 1: `discover_capabilities(specific_tools)` -- Refined Per-Step
+#### 7.2.1 Tool Definitions
 
-**Route**: ToolCallRouter -> `IFabricRetrievalPort` -> `FabricRetrievalAdapter`
-         -> `RetrievalEngine.discover_capabilities()` (in-process)
+Four tools are exposed to the LLM via `EXPAND_TOOL_DEFINITIONS`:
 
-**Purpose**: For each `RoughStep` that has a `suggested_capability` hint, EXPAND
-issues a refined discovery call to confirm the capability exists, retrieve its full
-input/output schema, and find the best match if the hint was approximate.
+| Tool | Purpose | Parameters |
+|------|---------|------------|
+| `discover_capabilities` | Refine/confirm capability for a step | `intent: str`, `domain?: str`, `top_k?: int` |
+| `get_capability_schema` | Get full contract for a capability by exact name | `capability_name: str`, `version?: str` |
+| `find_prompts` | Find prompt templates for agent steps | `intent: str`, `domain?: str`, `top_k?: int` |
+| `query_session_context` | Read session sections for parameterization | `sections: List[str]` |
 
-**Backend signature** (same as Section 6.2.1):
+**Fabric backend handlers** (`k1/fabric/core/discovery_tools.py`):
+
+| LLM-facing tool name | Fabric MCP name | Handler class | Backend protocol |
+|----------------------|-----------------|---------------|------------------|
+| `discover_capabilities` | `tool.read.discover_capabilities` | `DiscoverCapabilitiesHandler` | `RetrievalLike` -> `RetrievalEngine.discover_capabilities()` |
+| `get_capability_schema` | `tool.read.get_capability_schema` | `GetCapabilitySchemaHandler` | `RegistryLookupLike` -> `Registry.lookup(name, version=)` |
+| `find_prompts` | `tool.read.find_prompts` | `FindPromptsHandler` | `RetrievalLike` -> `RetrievalEngine.find_relevant_prompts()` |
+| `query_session_context` | N/A (Planner-internal) | N/A | `IStateReadPort` (no Fabric MCP handler) |
+
+Note: LLM-facing tool names are short (`discover_capabilities`) while Fabric registers
+MCP tool names as `tool.read.<name>`. The ToolCallRouter translates between them.
+the Fabric handler for `discover_capabilities` requires `domain: list[str]`; the
+ToolCallRouter wraps the LLM's `domain: str` into `[domain]` before dispatch.
+
+EXPAND vs SKETCH tool usage:
+
+| Aspect | SKETCH | EXPAND |
+|--------|--------|--------|
+| `discover_capabilities` | Broad intent (entire plan), top-K 10 | Per-step intent, top-K 3-5 |
+| `get_capability_schema` | Not available | Exact name lookup for full contract |
+| `find_prompts` | Available (meta-agent prompt selection) | Prompt template discovery (top-K 5) |
+| `query_session_context` | Available | Same -- used for param values |
+| `recall_long_term_memory` | Available | Not available (SKETCH already gathered) |
+
+The LLM sees SKETCH's `capability_candidates` in its initial prompt and uses tools
+only when it needs more detail (full schema, prompts, or fresh context).
+
+#### 7.2.2 Tool Routing
+
+`ToolCallRouter` dispatches each LLM-requested tool call to the correct backend:
+
+- `discover_capabilities` -> `ToolCallRouter.discover()` -> `DiscoverCapabilitiesHandler` -> `RetrievalLike`
+- `get_capability_schema` -> `ToolCallRouter.get_schema()` -> `GetCapabilitySchemaHandler` -> `RegistryLookupLike`
+- `find_prompts` -> `ToolCallRouter.find_prompts()` -> `FindPromptsHandler` -> `RetrievalLike`
+- `query_session_context` -> `ToolCallRouter.read_context()` -> `IStateReadPort`
+
+Note: `get_capability_schema` uses `RegistryLookupLike` (direct registry lookup by
+exact name), NOT `RetrievalLike` (semantic search). This is a different backend
+protocol -- ToolCallRouter holds both a `RetrievalLike` and `RegistryLookupLike` dep.
+
+ExpandService reuses the same `ToolCallRouterLike` protocol from SKETCH (extended
+with `get_schema` and `find_prompts` methods).
+
+#### 7.2.3 The Agentic Loop (`_run_agentic_loop`)
+
+Same pattern as SKETCH (Section 6.2.3):
+
+```
+ Round 1..MAX_TOOL_ROUNDS:
+   1. Send messages + tool definitions to LLM via ILLMPort.execute()
+   2. Parse HubResponse:
+      a. If response has tool_calls:
+         - For each tool_call: dispatch via _dispatch_tool_call()
+         - Append assistant message + tool results to conversation
+         - Continue to next round
+      b. If response has content (no tool_calls):
+         - Final answer reached; return (content, accumulated_results)
+         - Loop exits
+   3. Check cancellation via ctx.cancel_check
+   4. If MAX_TOOL_ROUNDS exhausted: raise ExpandFailedError
+```
+
+Simple intents (where SKETCH already provided good capability candidates) may need
+zero tool calls -- the LLM can parameterize directly from the prompt context.
+
+### 7.3 LLM Interaction
+
+#### 7.3.1 System Prompt
+
+The system prompt is assembled by `_assemble_system_prompt()` and contains:
+
+1. **Role definition**: "You are the EXPAND stage planner. You receive a rough plan and
+   must produce fully parameterized steps."
+2. **Output schema**: The full `EXPAND_OUTPUT_SCHEMA` JSON embedded in the prompt
+3. **Tool guidance**: Instruction that tools are available for capability resolution,
+   schema lookup, prompt discovery, and session context
+4. **Enrichment note**: Infrastructure fields (has_side_effects, timeout_ms, compensation,
+   required_context, safety_band_min) are filled automatically after LLM output -- the
+   LLM should focus on id, capability, params, deps, prompt_template, tools_granted,
+   is_optional, output_schema
+
+#### 7.3.2 Initial Messages
+
+`_build_initial_messages(sketch_result, request, arbiter_feedback?)` constructs:
+
+1. **System message**: Output of `_assemble_system_prompt()`
+2. **User message**: Contains:
+   - Original user intent (alignment anchor)
+   - SKETCH rough plan (rough_steps + rationale)
+   - SKETCH capability candidates (summarized names + descriptions)
+   - Constraints (safety_band, temporal context)
+   - Arbiter feedback (if revise loop -- verdict reasons + suggested fixes)
+
+#### 7.3.3 HubRequest Construction
+
+Each LLM call in the agentic loop is wrapped in a `HubRequest`:
 
 ```python
-def discover_capabilities(
-    self,
-    domain: Optional[List[str]] = None,
-    intent: str = "",                      # More specific than SKETCH: per-step intent
-    safety_band: str = "GREEN",
-    session_context: Optional[Dict[str, Any]] = None,
-    top_k: Optional[int] = None,           # Typically 3-5 (narrower than SKETCH's 10)
-) -> RetrievalResult
+HubRequest(
+    capability="CHAT",
+    payload={
+        "messages": <conversation messages>,
+        "temperature": 0.3,                # Precision task (vs SKETCH's 0.7)
+        "tools": <EXPAND_TOOL_DEFINITIONS when use_tools=True>,
+    },
+    constraints=RequestConstraints(
+        max_tokens=<ctx.stage_budget or 1024>,
+        timeout_ms=<ctx.stage_budget or 5000>,
+        priority="INTERACTIVE",
+        temperature=0.3,
+        consumer_id="planner.expand",
+    ),
+    trace_id=ctx.trace_id,
+)
 ```
 
-**EXPAND vs SKETCH discovery**:
+Key difference from SKETCH: `temperature: 0.3` (precision mapping, not creativity).
 
-| Aspect | SKETCH (Section 6.2.1) | EXPAND |
-| ------ | ---------------------- | ------ |
-| Query granularity | Broad intent (entire plan) | Per-step intent (one capability) |
-| top_k | 10 (default, wide net) | 3-5 (narrow, targeted) |
-| Purpose | Build capability menu for LLM | Confirm + schema-resolve per step |
-| Call count | 1 | 1-2 (may batch multiple steps) |
+### 7.4 Output: ExpandedPlan
 
-**What EXPAND uses from the result**: Full `CapabilityContract` details -- specifically
-`required_inputs[]` (parameter names and types for `PlanStep.params`),
-`output` (JSON schema for `PlanStep.output_schema`), `required_context[]` (for
-`PlanStep.required_context`), `safety_band_min`, `avg_latency_ms` (seeds
-`PlanStep.timeout_ms`), and capability metadata that determines `has_side_effects`
-and `compensation`.
+#### 7.4.1 Response Parsing and ExpandedPlan Structure
 
-**Latency target**: <50ms (same as SKETCH).
-**ToolCallRouter accounting**: `tool_call_count += 1` (now 4 of 6).
+The LLM response JSON is parsed into an `ExpandedPlan`:
 
-#### 7.2.2 Tool 2: `find_relevant_prompts(intent, domain)`
-
-**Route**: ToolCallRouter -> `IFabricRetrievalPort` -> `FabricRetrievalAdapter`
-         -> `RetrievalEngine.find_relevant_prompts()` (in-process)
-
-**Backend signature** (from `k1/fabric/retrieval/retrieval_engine.py`):
-
-```python
-def find_relevant_prompts(
-    self,
-    intent: str = "",                      # Plan-level or step-level intent
-    domain: Optional[List[str]] = None,    # Inferred from SKETCH step domains
-    safety_band: str = "GREEN",
-    top_k: Optional[int] = None,
-) -> RetrievalResult
+```yaml
+ExpandedPlan:
+  steps: List[PlanStep]                    # Fully parameterized steps (14 fields each)
+  dependencies: Dict[str, List[str]]       # step_id -> [predecessor_step_ids]
+  tool_mappings: Dict[str, str]            # step_id -> capability mapping
+  rationale: str                           # LLM reasoning for expansion decisions
 ```
 
-This is the same 4-step retrieval pipeline as `discover_capabilities` but pre-filters
-to prompt-type contracts only (`provider_type` starts with `"prompt"` or `name` starts
-with `"prompt."`).
+**Response parsing** (`_parse_response`):
 
-**Purpose**: Find prompt templates that should be attached to agent-type steps.
-Agent steps (`capability: "agent.execute.*"`) often need a `prompt_template` reference
-to shape the agent's behavior. EXPAND discovers available prompt templates so the LLM
-can assign the best match to each agent step.
+1. Strip markdown fences from LLM output
+2. Parse JSON; raise `ExpandFailedError` if invalid
+3. Validate: `steps` non-empty, each has `id` (^s[0-9]+$), `capability` (non-empty), `params` (object)
+4. Extract `dependencies` map
+5. Return parsed data for enrichment
 
-**Return type**: `RetrievalResult` (same as Section 6.2.1). Each `ScoredCapability`
-wraps a `CapabilityContract` where `provider_type` is prompt-related. Relevant fields:
-
-- `contract.name` -- Prompt template identifier (e.g., `"prompt.invitation_drafter_v1"`)
-- `contract.description` -- What the prompt does
-- `contract.required_inputs[]` -- Variable slots in the template
-- `contract.domain[]` -- Domain tag alignment
-
-**Latency target**: <50ms.
-**ToolCallRouter accounting**: `tool_call_count += 1` (now 5 of 6).
-
-#### 7.2.3 Optional Tool 3: Additional Capability Resolution
-
-If a `RoughStep.suggested_capability` from SKETCH did not match any known capability
-in the EXPAND refined discovery (Tool 1), ExpandService MAY issue a third discovery
-call with a broader query to find alternatives.
-
-**ToolCallRouter accounting**: `tool_call_count += 1` (now 6 of 6, MAX reached).
-After this, PLAN-05 prevents any further tool calls in this plan.
-
-#### 7.2.4 Tool Call Budget After EXPAND
-
-```
- ToolCallRouter state entering EXPAND:
-   tool_call_count = 3  (from SKETCH)
-
- EXPAND issues 2-3 calls:
-   [discover_capabilities (refined), find_relevant_prompts, (optional) additional]
-   -> tool_call_count = 5 or 6
-
- ToolCallRouter state after EXPAND:
-   tool_call_count = 5 or 6  (of 6 max, PLAN-05)
-   Remaining budget: 0-1 calls (no further stages use tools)
-   VALIDATE and COMMIT stages do NOT make tool calls.
-
- If any tool call fails:
-   - ToolCallRouter retries once (within 50ms budget)
-   - On second failure: return empty result for that tool
-   - EXPAND proceeds -- LLM maps steps using SKETCH capability_candidates as fallback
-   - Degraded: less precise param mapping, but structurally valid
-```
-
-### 7.3 LLM Call: Tool Mapping and Parameterization
-
-After tool calls resolve, ExpandService assembles a prompt and makes exactly one LLM
-call through ILLMPort.
-
-#### 7.3.1 Prompt Assembly Architecture
-
-ExpandService uses the same slot-based composition pattern as SKETCH (Section 6.3.1),
-with EXPAND-specific slots.
-
-**Prompt structure** (2 segments: system + user):
-
-```
- SYSTEM SEGMENT
-   Slot: ROLE_DEFINITION      -- Declares expansion task, precision requirements
-   Slot: OUTPUT_SCHEMA         -- JSON Schema for expected response structure
-
- USER SEGMENT (assembled from SKETCH output + EXPAND tool results)
-   Slot: ORIGINAL_INTENT       -- Source: PlanRequest.intent (alignment anchor)
-   Slot: SKETCH_PLAN           -- Source: SketchResult.rough_steps[] + rationale
-   Slot: REFINED_CAPABILITIES  -- Source: EXPAND discover_capabilities() result
-   Slot: PROMPT_TEMPLATES      -- Source: find_relevant_prompts() result
-   Slot: SKETCH_CAPABILITIES   -- Source: SketchResult.capability_candidates (fallback)
-   Slot: CONSTRAINTS           -- Source: PlanRequest.constraints + safety_band
-```
-
-**Slot input contracts**:
-
-| Slot | Source Type | Required | Content |
-| ---- | ----------- | -------- | ------- |
-| ORIGINAL_INTENT | `PlanRequest.intent: str` | Yes | Raw user intent (ensures EXPAND stays aligned with user's actual request, not just SKETCH's interpretation) |
-| SKETCH_PLAN | `SketchResult.rough_steps: List[RoughStep]` | Yes | Per step: `intent`, `suggested_capability`, `depends_on`. Plus `SketchResult.rationale` |
-| REFINED_CAPABILITIES | `RetrievalResult.capabilities: List[ScoredCapability]` | Yes (may be empty) | Per capability: `contract.name`, `contract.required_inputs[]` (name, type, required), `contract.optional_inputs[]`, `contract.output` (JSON schema), `contract.required_context[]`, `contract.avg_latency_ms`, `contract.safety_band_min`, `contract.domain[]` |
-| PROMPT_TEMPLATES | `RetrievalResult.capabilities: List[ScoredCapability]` | No (empty if no prompts found) | Per prompt: `contract.name`, `contract.description`, `contract.required_inputs[]` (variable slots), `contract.domain[]` |
-| SKETCH_CAPABILITIES | `SketchResult.capability_candidates: List[ScoredCapability]` | Fallback | Used when EXPAND refined discovery returns empty -- LLM falls back to SKETCH's broader results |
-| CONSTRAINTS | `PlanRequest.constraints: Dict` | Yes | `safety_band`, effective temporal context |
-
-**Output contract** (what the LLM MUST return):
+**EXPAND_OUTPUT_SCHEMA** (declared as module-level constant):
 
 ```json
 {
   "type": "object",
-  "required": ["steps", "dependencies"],
+  "required": ["steps", "dependencies", "rationale"],
   "properties": {
     "steps": {
       "type": "array",
@@ -1933,262 +1574,63 @@ with EXPAND-specific slots.
         "type": "object",
         "required": ["id", "capability", "params"],
         "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^s[0-9]+$",
-            "description": "Step identifier (s1, s2, ...)"
-          },
-          "capability": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Fully qualified capability name from discovery results"
-          },
-          "params": {
-            "type": "object",
-            "description": "Key-value parameters matching capability.required_inputs schema. Values may reference prior step outputs via $<step_id>.result.<field> syntax"
-          },
-          "deps": {
-            "type": "array",
-            "items": {"type": "string", "pattern": "^s[0-9]+$"},
-            "description": "Step IDs this depends on (must reference earlier steps)"
-          },
-          "prompt_template": {
-            "type": ["string", "null"],
-            "description": "Prompt template name from PROMPT_TEMPLATES slot (agent steps)"
-          },
-          "tools_granted": {
-            "type": ["array", "null"],
-            "items": {"type": "string"},
-            "description": "Scoped tool list for agent steps (FAB-07)"
-          },
-          "output_schema": {
-            "type": ["object", "null"],
-            "description": "JSON Schema fragment declaring expected output fields"
-          },
-          "is_optional": {
-            "type": "boolean",
-            "default": false,
-            "description": "True = step failure does not fail the plan"
-          },
-          "has_side_effects": {
-            "type": "boolean",
-            "default": false,
-            "description": "True = step modifies external state (drives rollback)"
-          },
-          "compensation": {
-            "type": ["string", "null"],
-            "description": "Capability to call for rollback if has_side_effects=true"
-          },
-          "timeout_ms": {
-            "type": ["integer", "null"],
-            "minimum": 1,
-            "description": "Per-step timeout, seeded from capability.avg_latency_ms"
-          },
-          "required_context": {
-            "type": ["array", "null"],
-            "items": {"type": "string"},
-            "description": "SessionState sections needed before execution"
-          },
-          "safety_band_min": {
-            "type": ["string", "null"],
-            "enum": ["GREEN", "AMBER", "RED", null],
-            "description": "Minimum safety band for this step"
-          }
+          "id": { "type": "string", "pattern": "^s[0-9]+$" },
+          "capability": { "type": "string", "minLength": 1 },
+          "params": { "type": "object" },
+          "deps": { "type": "array", "items": { "type": "string" } },
+          "prompt_template": { "type": ["string", "null"] },
+          "tools_granted": { "type": ["array", "null"] },
+          "output_schema": { "type": ["object", "null"] },
+          "is_optional": { "type": "boolean" }
         }
       }
     },
     "dependencies": {
       "type": "object",
-      "additionalProperties": {
-        "type": "array",
-        "items": {"type": "string"}
-      },
-      "description": "step_id -> [predecessor_step_ids] dependency map"
-    }
+      "additionalProperties": { "type": "array", "items": { "type": "string" } }
+    },
+    "rationale": { "type": "string", "minLength": 1 }
   }
 }
 ```
 
-This output schema maps directly to the `PlanStep` dataclass (14 fields) defined in
-`k1/orchestrator/types.py`. Every field in the schema corresponds to a `PlanStep` field.
+Note: The LLM produces 8 fields per step (id, capability, params, deps, prompt_template,
+tools_granted, output_schema, is_optional). The remaining 6 infrastructure fields are
+filled by post-LLM enrichment.
 
-**Token budget allocation**:
+#### 7.4.2 Post-LLM Enrichment
 
-| Component | Budget | Notes |
-| --------- | ------ | ----- |
-| System segment (ROLE + OUTPUT_SCHEMA) | ~250 tokens | Larger schema than SKETCH |
-| ORIGINAL_INTENT | Variable | Same as SKETCH INTENT slot |
-| SKETCH_PLAN | ~100-200 tokens | Proportional to rough_steps count |
-| REFINED_CAPABILITIES | ~80 tokens per capability x 3-5 | ~300 tokens |
-| PROMPT_TEMPLATES | ~50 tokens per template x 2-3 | ~120 tokens |
-| CONSTRAINTS | ~30 tokens | Minimal |
-| **Total input estimate** | **700-1000 tokens** | Leaves ~200-500 for LLM response |
-| **LLM response budget** | **max_tokens: 1024** | PLAN-11 enforced ceiling |
+After parsing, ExpandService performs a deterministic enrichment pass. The LLM does NOT
+generate infrastructure fields -- these are populated from CapabilityContract metadata
+discovered during the agentic loop.
 
-The response is typically compact because it is structured JSON with well-defined fields.
-Most token consumption is in the `params` values and `output_schema` fragments.
-
-**Truncation priority** (if input exceeds budget):
-
-1. SKETCH_CAPABILITIES -- omit fallback slot entirely (REFINED_CAPABILITIES suffices)
-2. PROMPT_TEMPLATES -- reduce to top-2
-3. REFINED_CAPABILITIES -- reduce capability detail (omit optional_inputs)
-4. SKETCH_PLAN -- never truncated (structural source of truth for expansion)
-
-#### 7.3.2 HubRequest Construction
-
-```yaml
-HubRequest:
-  capability: CapabilityType.CHAT           # Single-shot generation
-  payload:
-    type: ChatPayload
-    fields:
-      system_prompt: str                    # SYSTEM SEGMENT (ROLE_DEFINITION + OUTPUT_SCHEMA)
-      user_prompt: str                      # USER SEGMENT (all slots rendered)
-      messages: []                          # Empty -- single-shot
-  constraints:
-    type: RequestConstraints
-    fields:
-      max_tokens: 1024                      # PLAN-11: half of SKETCH budget (less creative work)
-      timeout_ms: 5000                      # EXPAND LLM timeout (tighter than SKETCH)
-      priority: "INTERACTIVE"
-      temperature: 0.3                      # Low temperature -- precision mapping, not creativity
-      consumer_id: "planner"                # Cost tracking (MH-11)
-  trace_id: PlanRequest.trace_id            # Cognitive trace propagation (FAB-09)
-```
-
-**Key difference from SKETCH**: `temperature: 0.3` (vs SKETCH's `0.7`). EXPAND is a
-precision task -- mapping known capabilities to known parameters -- not a creative task.
-Lower temperature produces more deterministic, schema-conformant output.
-
-**Routing path**:
-
-```
- ExpandService.execute()
-   |
-   |-- assemble_prompt(sketch_result, refined_caps, prompts, intent, constraints)
-   |     -> system_prompt: str, user_prompt: str
-   |
-   |-- build_hub_request(system_prompt, user_prompt, expand_constraints)
-   |     -> HubRequest
-   |
-   |-- ILLMPort.execute(hub_request)
-   |     -> LLMGatewayAdapter -> LLM_REQUEST_BUS -> Model Hub -> Provider
-   |     <- HubResponse
-   |
-   |-- parse_expand_response(hub_response.result.content)
-   |     -> validates against OUTPUT_SCHEMA
-   |     -> ExpandedPlan (internal) -> List[PlanStep] (typed)
-   |
-   |-- record_token_usage(hub_response.metadata.usage)
-         -> stage_token_usage[EXPAND] += total_tokens
-```
-
-#### 7.3.3 Budget Enforcement (PLAN-11)
-
-| Parameter | EXPAND Value | Enforced By |
-| --------- | ------------ | ----------- |
-| `max_tokens` | 1024 | Model Hub (MH-04) truncates at limit |
-| `timeout_ms` | 5000 | LLMGatewayAdapter cancels on timeout |
-| `temperature` | 0.3 | Model Hub passes to provider |
-| Circuit breaker | CB_LLM (inherited per provider, MH-05) | Model Hub provider manifest |
-
-### 7.4 Output: ExpandedPlan
-
-The LLM response is parsed into an `ExpandedPlan` structure, which is then converted
-into typed `PlanStep` objects.
-
-#### 7.4.1 ExpandedPlan Structure
-
-`ExpandedPlan` is an internal type (does not cross the Planner boundary). It flows
-from ExpandService -> PipelineController -> ValidateService.
-
-```yaml
-ExpandedPlan:
-  steps: List[PlanStep]                    # Fully parameterized steps (14 fields each)
-  dependencies: Dict[str, List[str]]       # step_id -> [predecessor_step_ids]
-```
-
-Each `PlanStep` in the output carries all 14 fields from `k1/orchestrator/types.py`:
-
-```yaml
-PlanStep (frozen dataclass, 14 fields):
-  # Fabric-aligned fields (1-6)
-  id: str                                  # Required. "s1", "s2", etc.
-  capability: str                          # Required. Fully qualified name from Fabric registry
-  params: Dict[str, Any]                   # Forwarded as CapabilityRequest.parameters
-  deps: List[str]                          # Step IDs this depends on
-  prompt_template: str | null              # Template name reference (agent steps)
-  tools_granted: List[str] | null          # Scoped tool list for agent steps (FAB-07)
-
-  # Orchestrator extension fields (7-14)
-  output_schema: Dict | null               # JSON Schema for OutputSchemaGuard validation
-  condition: ConditionExpr | null           # Structured conditional (EXPAND does not set -- V2)
-  is_optional: bool                        # False = failure fails the plan
-  has_side_effects: bool                   # True = drives rollback/compensation
-  compensation: str | null                 # Capability to call for rollback
-  timeout_ms: int | null                   # Seeded from capability.avg_latency_ms
-  required_context: List[str] | null       # SessionState sections needed pre-execution
-  safety_band_min: str | null              # Minimum safety band for step execution
-```
-
-**PlanStep field validation** (enforced at construction, `__post_init__`):
-
-- `id` must be non-empty
-- `capability` must be non-empty
-- `timeout_ms` must be > 0 if set
-- `deps` validated at CommittedPlan level (DAG cycle check in VALIDATE)
-
-#### 7.4.2 Field Population Sources
-
-Each PlanStep field is populated from a specific source. The LLM does not invent values
-for infrastructure fields -- those are enriched deterministically by ExpandService after
-parsing the LLM response.
-
-| PlanStep Field | Population Source | LLM-Generated? |
-| -------------- | ----------------- | --------------- |
-| `id` | LLM output (`"s1"`, `"s2"`, ...) | Yes |
-| `capability` | LLM output (from REFINED_CAPABILITIES names) | Yes |
-| `params` | LLM output (keys from `contract.required_inputs`, values from context) | Yes |
-| `deps` | LLM output (from SKETCH `depends_on` + LLM inference) | Yes |
-| `prompt_template` | LLM output (from PROMPT_TEMPLATES names) | Yes |
-| `tools_granted` | LLM output (for agent steps, from discovery) | Yes |
-| `output_schema` | LLM output (from `contract.output` JSON Schema) or ExpandService enrichment | Partial |
+| PlanStep Field | Source | LLM-Generated? |
+|----------------|--------|----------------|
+| `id` | LLM output | Yes |
+| `capability` | LLM output | Yes |
+| `params` | LLM output | Yes |
+| `deps` | LLM output | Yes |
+| `prompt_template` | LLM output | Yes |
+| `tools_granted` | LLM output | Yes |
+| `output_schema` | LLM output or enrichment from `contract.output` | Partial |
+| `is_optional` | LLM output | Yes |
 | `condition` | Not set in V1 (always `null`) | No |
-| `is_optional` | LLM output (boolean) | Yes |
-| `has_side_effects` | ExpandService enrichment from `CapabilityContract` metadata | No |
-| `compensation` | ExpandService enrichment from `CapabilityContract` metadata | No |
-| `timeout_ms` | ExpandService enrichment: `contract.avg_latency_ms * 2` (safety margin) | No |
-| `required_context` | ExpandService enrichment from `contract.required_context[]` | No |
-| `safety_band_min` | ExpandService enrichment from `contract.safety_band_min` | No |
+| `has_side_effects` | Enrichment from `CapabilityContract` metadata | No |
+| `compensation` | Enrichment from `CapabilityContract` metadata | No |
+| `timeout_ms` | Enrichment: `contract.avg_latency_ms * 2` (or default 10000) | No |
+| `required_context` | Enrichment from `contract.required_context[]` | No |
+| `safety_band_min` | Enrichment from `contract.safety_band_min` | No |
 
-**Post-LLM enrichment**: After parsing the LLM response, ExpandService performs a
-deterministic enrichment pass over each step:
-
-```
- for step in llm_parsed_steps:
-   contract = lookup_contract(step.capability, refined_capabilities)
-   if contract:
-     step.has_side_effects = infer_side_effects(contract)
-     step.compensation = infer_compensation(contract)
-     step.timeout_ms = contract.avg_latency_ms * 2  (or default 10000)
-     step.required_context = contract.required_context
-     step.safety_band_min = contract.safety_band_min
-     if not step.output_schema and contract.output:
-       step.output_schema = contract.output
-```
-
-This separation ensures infrastructure fields are deterministic and sourced from the
-Fabric registry, not hallucinated by the LLM.
+Enrichment uses capability contracts collected during the agentic loop (from
+`discover_capabilities` and `get_capability_schema` tool call results).
 
 #### 7.4.3 Step Parameter Reference Syntax
 
-PlanStep params MAY contain **inter-step references** using `$<step_id>.result.<field>`
-syntax. These are NOT resolved at plan time -- they are symbolic references that the
-Orchestrator's DAG executor resolves at execution time by substituting actual step outputs.
+PlanStep params MAY contain inter-step references using `$<step_id>.result.<field>`
+syntax. These are symbolic -- resolved by the Orchestrator's DAG executor at execution
+time, not by the Planner.
 
 ```yaml
-# Example: step s4 references outputs from steps s1 and s3
 PlanStep:
   id: "s4"
   capability: "agent.execute.invitation_sender"
@@ -2199,193 +1641,104 @@ PlanStep:
   deps: ["s1", "s3"]                        # Must depend on referenced steps
 ```
 
-**Invariant**: If a param value uses `$<step_id>.result.*` syntax, that `step_id` MUST
-appear in `deps`. VALIDATE (Stage 3) checks this constraint during DAG validation.
+Invariant: If a param uses `$<step_id>.result.*`, that `step_id` MUST appear in `deps`.
+VALIDATE checks this constraint.
 
-#### 7.4.4 Token Accounting and Stage Completion
+### 7.5 Meta-Agent DAG Pattern
 
-After the LLM call, ExpandService records token usage:
+When the plan requires a dynamically created agent, EXPAND produces `build_agent` DAG
+steps. The Planner NEVER executes agents (PLAN-06) -- it only describes them.
 
-```
-stage_token_usage[EXPAND] = hub_response.metadata.usage.total_tokens
-```
-
-PipelineController emits the stage completion delta:
-
-```yaml
-k1.planner.delta.v1:
-  type: "stage_complete"
-  stage: "EXPAND"
-  status: "completed"
-  tokens_used: stage_token_usage[EXPAND]
-  tool_calls_used: 2-3                     # Tools used in EXPAND specifically
-  hil_rounds: 0                            # EXPAND has no HIL interaction
-  duration_ms: <stage wall time>
-  step_count: <number of PlanSteps produced>
-```
-
-### 7.5 Meta-Agent DAG Pattern (4.5.1-4.5.9)
-
-EXPAND is where meta-agent composition happens. When the plan requires a dynamically
-created agent (not a pre-registered one), EXPAND produces `build_agent` DAG steps
-using the meta-agent pattern defined in planner.mmd sections 4.5.1-4.5.9.
-
-#### 7.5.1 Pattern Overview
-
-The meta-agent pattern allows the Planner to compose an `AgentSpec` from discovered
-capabilities, prompts, and tools -- and emit it as a DAG step for the Orchestrator
-to execute. The Planner NEVER executes agents (PLAN-06) -- it only describes them.
-
-```
- PLANNER (EXPAND stage):                  ORCHESTRATOR (execution time):
-   1. Discover tools for agent              4. Execute build_agent step
-   2. Discover prompt template              5. Fabric creates agent from AgentSpec
-   3. Compose build_agent PlanStep          6. Execute subsequent step using new agent
-      with AgentSpec in params
-```
-
-#### 7.5.2 build_agent PlanStep Schema
-
-When EXPAND determines a step requires a dynamically created agent, it produces a
-PlanStep with `capability: "tool.meta.build_agent"`:
+#### 7.5.1 build_agent PlanStep Schema
 
 ```yaml
 PlanStep:
   id: "s1"
   capability: "tool.meta.build_agent"      # Reserved capability for agent creation
   params:
-    name: str                              # Agent name (e.g., "health_advisor")
+    name: str                              # Agent name
     role: str                              # Agent role description
-    tools_granted: List[str]               # Tools the agent may use (FAB-07 scoped)
-    prompt_template: str                   # Prompt template from find_relevant_prompts()
-    seed_context: Dict[str, Any]           # Initial context for the agent
-    ttl_turns: int                         # Max conversation turns before auto-teardown
-  deps: []                                 # build_agent typically has no dependencies
-  output_schema:
-    agent_name: "string"                   # The created agent's registered name
-  tools_granted: null                      # This is not an agent step itself
-  has_side_effects: true                   # Creates a resource (the agent)
-  compensation: null                       # Agent teardown handled by TTL, not rollback
+    tools_granted: List[str]               # Tools the agent may use (FAB-07)
+    prompt_template: str                   # From find_prompts()
+    seed_context: Dict[str, Any]           # Initial context
+    ttl_turns: int                         # Max turns before auto-teardown
+  deps: []
+  has_side_effects: true                   # Creates a resource
 ```
 
-#### 7.5.3 Referencing a Created Agent
+Subsequent steps reference the created agent via `$s1.result.agent_name`.
 
-Subsequent steps reference the agent created by `build_agent` using the inter-step
-reference syntax `$<build_step_id>.result.agent_name`:
+#### 7.5.2 EXPAND's Role in Meta-Agent Composition
 
-```yaml
-PlanStep:
-  id: "s2"
-  capability: "$s1.result.agent_name"      # Resolved at execution time to actual agent name
-  params:
-    query: "What exercises are safe for pregnancy?"
-  deps: ["s1"]                             # MUST depend on the build_agent step
-  prompt_template: null                    # Agent already has its prompt from build_agent
-  tools_granted: null                      # Agent already has tools from build_agent
-```
-
-The Orchestrator's DAG executor resolves `$s1.result.agent_name` to the actual
-registered agent name returned by the `build_agent` execution.
-
-#### 7.5.4 EXPAND's Role in Meta-Agent Composition
-
-ExpandService populates `build_agent` params from EXPAND discovery results:
+The LLM populates `build_agent` params using tool call results:
 
 | AgentSpec Field | Source |
-| --------------- | ------ |
+|-----------------|--------|
 | `name` | LLM generates from intent context |
 | `role` | LLM generates from intent + capability descriptions |
-| `tools_granted` | From `discover_capabilities()` result: matching capability names |
-| `prompt_template` | From `find_relevant_prompts()` result: best-matching template name |
-| `seed_context` | From `PlanRequest.context` sections relevant to the agent's domain |
+| `tools_granted` | From `discover_capabilities()` or `get_capability_schema()` results |
+| `prompt_template` | From `find_prompts()` result |
+| `seed_context` | From `query_session_context()` or `PlanRequest.context` |
 | `ttl_turns` | LLM estimates based on task complexity (default: 3) |
-
-**Invariant**: PLAN-06 -- the Planner outputs `build_agent` as a DAG step. The Planner
-NEVER calls `tool.meta.build_agent` itself. The Orchestrator receives the CommittedPlan
-and executes the DAG, including agent creation.
 
 ### 7.6 Error Recovery: ERR_EXPAND_FAIL
 
-EXPAND errors are handled by the ERR_EXPAND_FAIL recovery path defined in `planner.mmd`.
-The error wiring: `SVC_EXPAND -> ERR_EXPAND_FAIL -> retry / fallback / plan.failed`.
-
-#### 7.6.1 Failure Scenarios in EXPAND
-
-| Failure | Cause | Detection |
-| ------- | ----- | --------- |
-| Refined discovery timeout | Fabric Retrieval slow or unavailable | ToolCallRouter 50ms timeout |
-| Prompt discovery failure | No matching prompts found | Empty RetrievalResult |
-| LLM timeout | Model Hub / provider slow | LLMGatewayAdapter 5000ms timeout |
-| LLM error | Provider error, rate limit | HubResponse error or exception |
-| JSON parse failure | LLM output malformed or non-conformant | ExpandService schema validation |
-| Invalid capability reference | LLM referenced a capability not in discovery results | ExpandService post-parse check |
-| Invalid dependency graph | LLM produced circular or self-referencing deps | ExpandService pre-check (full DAG validation in VALIDATE) |
-
-#### 7.6.2 Recovery Strategy
+#### 7.6.1 Execute Flow (try / retry / fallback)
 
 ```
- ERR_EXPAND_FAIL decision tree:
-
- 1. Tool call failure (discovery or prompts):
-    -> Retry once within 50ms budget
-    -> On second failure: proceed using SketchResult.capability_candidates as fallback
-    -> NOT a stage failure (degraded input, EXPAND continues with SKETCH data)
-
- 2. LLM timeout or error (first attempt):
-    -> RETRY ONCE with same prompt
-    -> Same budget: {max_tokens: 1024, timeout_ms: 5000}
-
- 3. LLM timeout or error (second attempt):
-    -> FALLBACK: Use SKETCH output as-is (degraded)
-    -> Convert SketchResult.rough_steps to minimal PlanSteps:
-         PlanStep{
-           id: "s<n>",
-           capability: rough_step.suggested_capability or "UNRESOLVED",
-           params: {},                     -- No params (Orchestrator will attempt best-effort)
-           deps: <from rough_step.depends_on>,
-           output_schema: null,
-           timeout_ms: 10000               -- Default fallback timeout
-         }
-    -> These degraded PlanSteps proceed to VALIDATE (Stage 3)
-    -> VALIDATE will likely flag missing params but MAY approve if safe
-
- 4. JSON parse failure:
-    -> Re-parse once (strip markdown fences, attempt recovery)
-    -> If still malformed: follow path (2) above for retry
-    -> If retry also malformed: follow path (3) above for fallback
-
- 5. Invalid capability reference:
-    -> Replace invalid references with best match from SketchResult.capability_candidates
-    -> If no match: mark step as is_optional=true (Orchestrator skips on execution failure)
-
- 6. Invalid dependency graph:
-    -> Remove circular edges, flatten to sequential ordering
-    -> Log warning in stage delta
+ execute(sketch_result, request, ctx, arbiter_feedback?):
+   1. First attempt: _execute_attempt(sketch_result, request, ctx, arbiter_feedback)
+      - Builds messages, runs agentic loop with tools, parses, enriches
+   2. If ExpandFailedError caught:
+      - Retry: _execute_attempt(sketch_result, request, ctx, simplified=True)
+      - Simplified mode: no tools, forces direct LLM parameterization
+   3. If retry also fails:
+      - FALLBACK: _build_degraded_plan(sketch_result)
+      - Convert RoughSteps to minimal PlanSteps (UNRESOLVED capability, empty params)
+      - These proceed to VALIDATE which may flag issues but pipeline continues
 ```
 
-**Key difference from SKETCH error recovery**: EXPAND has a FALLBACK path (use SKETCH
-output degraded) instead of PLAN FAILED. Only SKETCH failure terminates the entire plan.
-EXPAND degradation produces lower-quality plans that VALIDATE may catch and reject, but
-the pipeline continues.
+Key difference from SKETCH: EXPAND has a FALLBACK path instead of PLAN FAILED.
+Only SKETCH failure terminates the entire plan.
 
-#### 7.6.3 Stage Delta on Failure
+#### 7.6.2 Failure Scenarios
 
-If EXPAND uses the fallback path, PipelineController emits:
+| Failure | Cause | Handling |
+|---------|-------|----------|
+| Tool call failure | Router backend error | `_dispatch_tool_call` returns error dict; LLM adapts |
+| LLM empty response | No content, no tool calls | Raises ExpandFailedError |
+| Round limit exhausted | LLM keeps calling tools | Raises after MAX_TOOL_ROUNDS |
+| JSON parse failure | LLM output not valid JSON | Raises ExpandFailedError |
+| Missing steps | LLM omitted required field | Raises ExpandFailedError |
+| Invalid capability | LLM referenced unknown capability | Enrichment uses fallback defaults |
+| Invalid deps (cycle) | LLM produced circular deps | Remove circular edges, flatten to sequential |
+| Cancellation | `ctx.cancel_check` returns True | Raises ExpandFailedError |
 
-```yaml
-k1.planner.delta.v1:
-  type: "stage_complete"
-  stage: "EXPAND"
-  status: "degraded"                       # Not "completed" -- signals quality reduction
-  tokens_used: stage_token_usage[EXPAND]   # May be 0 if LLM never responded
-  tool_calls_used: <count>
-  hil_rounds: 0
-  duration_ms: <stage wall time>
-  degradation_reason: "expand_llm_fallback" | "expand_parse_fallback"
+#### 7.6.3 Degraded Plan Construction
+
+When both attempts fail, `_build_degraded_plan(sketch_result)` converts SKETCH output:
+
+```python
+for i, step in enumerate(sketch_result.rough_steps):
+    PlanStep(
+        id=f"s{i + 1}",
+        capability=step.suggested_capability or "UNRESOLVED",
+        params={},
+        timeout_ms=10000,
+    )
 ```
 
-The `"degraded"` status is recorded by the Learning Loop for quality tracking. It does
-NOT prevent the pipeline from continuing to VALIDATE.
+These minimal steps proceed to VALIDATE, which will likely flag missing params but
+MAY approve if safe. The pipeline continues rather than dying.
+
+#### 7.6.4 Micro-Replan (`micro_execute`)
+
+For mid-DAG replanning, `micro_execute` provides a simplified EXPAND path:
+
+1. Receives micro-SketchResult + completed_results from prior steps
+2. Runs agentic loop with tools
+3. No arbiter feedback, no revise loop
+4. On failure: raises ExpandFailedError (no fallback for micro)
 
 ---
 
@@ -6543,8 +5896,8 @@ for internal buffering or async dispatch.  If the bus is unavailable, the adapte
 logs the failure and drops the delta.  Delta loss is acceptable -- these are
 observability signals, not control-plane messages.
 
-**PLAN-01 emphasis**: Delta emission is NOT a SessionState write.  Deltas go to the
-Delta Bus (`k1.planner.delta.v1` topic), which is a separate pub/sub channel.
+**PLAN-01 emphasis**: Delta emission is NOT a SessionState write. Deltas go to the
+K1 Bus delta lane (`k1.planner.delta.v1` topic family: `k1.*.delta.v1`).
 SessionState consumers may subscribe to deltas and incorporate them, but the
 Planner has no knowledge of or dependency on this.
 
@@ -9656,13 +9009,14 @@ V2 decisions will be captured in a dedicated ADR when implementation is planned.
 
 ---
 
-## 26. Delta Bus & Event Bus Integration
+## 26. Delta Lane & Event Lane Integration (K1 Bus)
 
-The Planner uses two separate pub/sub channels.  The **Delta Bus** carries
-fire-and-forget cognitive deltas (`k1.planner.delta.v1`).  The **Event Bus**
-carries lifecycle events (plan.ready, plan.failed, plan.cancelled) and HIL
-messages.  These are distinct transports with different delivery guarantees
-(Section 22.4.4).
+The Planner uses two logical lanes on a single physical K1 bus. The **delta lane** carries
+fire-and-forget cognitive deltas (`k1.planner.delta.v1`). The **event lane** carries lifecycle
+events (plan.ready, plan.failed, plan.cancelled) and HIL messages.
+
+These are distinct topic families / QoS policies with different delivery guarantees
+(Section 22.4.4), not separate physical transports.
 
 ### 26.1 Delta Bus: What Planner Emits
 
@@ -11342,7 +10696,7 @@ format optimization) are deferred and tracked outside this document.
 All shared planning types are defined in `k1/orchestrator/types.py` (source of truth). Planner re-exports from `k1/planner/__init__.py` for convenience.
 
 | Type | Owner | Fields | Used By |
-|------|-------|--------|---------|
+| ------ | ------- | -------- | --------- |
 | PlanRequest | k1/orchestrator/types.py | intent, trace_id, context, request_id, constraints, timeout_ms | Orchestrator -> Planner |
 | PlanAck | k1/orchestrator/types.py | request_id, status, estimated_duration_ms | Planner -> Orchestrator |
 | CommittedPlan | k1/orchestrator/types.py | plan_id, request_id, intent, steps, trace_id, dependencies, estimated_duration_ms, created_at | Planner -> Orchestrator -> DAGExecutor |

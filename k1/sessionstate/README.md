@@ -617,7 +617,7 @@ INVARIANTS = {
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         SINGLE WRITER PATTERN                               │
 │                                                                             │
-│   Sub-Agents ──► DeltaBus ──► AggregationWindow ──► Concierge ──► WRITE    │
+│   Sub-Agents ──► K1 Bus (delta lane) ──► AggregationWindow ──► Concierge ──► WRITE │
 │       │              │              │                   │                   │
 │   (emit deltas)  (transport)   (500ms batch)    (SINGLE WRITER)             │
 │                                                         │                   │
@@ -690,7 +690,7 @@ INVARIANTS = {
 
 ## 12. Delta Aggregation
 
-### DeltaBus Flow
+### Delta lane flow (K1 Bus)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -709,8 +709,8 @@ INVARIANTS = {
 │                          │                                                  │
 │                          ▼                                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │                       DELTA_BUS                                     │   │
-│   │                  (Central Event Bus)                                │   │
+│   │                   K1 BUS (DELTA LANE)                               │   │
+│   │            (same physical bus as event lane)                         │   │
 │   │                                                                     │   │
 │   │  Delta Types:                                                       │   │
 │   │  • state_update: Agent state changes                                │   │
@@ -1440,9 +1440,9 @@ SessionState supports two operational modes: **Standalone** for development/test
 | Aspect | Standalone Mode | Wired Mode |
 | ------ | --------------- | ---------- |
 | **Use Case** | Development, testing, offline operation | Production with full K1 integration |
-| **Dependencies** | None (self-contained) | Bridge, DeltaBus, Concierge, Fabric |
+| **Dependencies** | None (self-contained) | Bridge, K1 Bus (delta lane), Concierge, Fabric |
 | **Persistence** | LOCAL COLD (K1 SQLite) | LOCAL COLD + K0 Sync |
-| **Events** | LocalEventAdapter (in-process) | DeltaBusAdapter (distributed) |
+| **Events** | LocalEventAdapter (in-process) | DeltaBusAdapter (K1 Bus delta lane) |
 | **Writer** | DirectWriterAdapter (immediate) | ConciergeAdapter (coordinated) |
 | **Lifecycle** | StandaloneLifecycle (self-managed) | FabricLifecycle (K1 managed) |
 | **Cross-Device Sync** | None | Via Bridge to K0 |
@@ -1489,7 +1489,7 @@ SessionStateFactory
         +--- create_with_ports()  [Production wiring]
                     |
                     +-- IStoragePort   -> BridgeStorageAdapter (future)
-                    +-- IEventPort     -> DeltaBusAdapter (future)
+                    +-- IEventPort     -> DeltaBusAdapter (K1 Bus delta lane, future)
                     +-- IWriterPort    -> ConciergeAdapter (future)
                     +-- ILifecyclePort -> FabricLifecycle (future)
                     +-- IK0SyncPort    -> BridgeSyncAdapter (optional, future)

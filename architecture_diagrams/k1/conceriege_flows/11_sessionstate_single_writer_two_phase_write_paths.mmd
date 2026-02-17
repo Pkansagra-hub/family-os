@@ -1,0 +1,96 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+subgraph PH1["Phase 1: deterministic writes (UltraBERT)"]
+  direction TB
+  U["UltraBERT outputs"]
+  W1["control.safety_band"]
+  W2["control.intents/domains"]
+  W3["beliefs_active entities"]
+  W4["affective_now"]
+  W5["temporal/spatial context"]
+  U --> W1
+  U --> W2
+  U --> W3
+  U --> W4
+  U --> W5
+end
+
+subgraph PH2["Phase 2: llm cognitive tool writes"]
+  direction TB
+  LLM["LLM tool calls"]
+  C1["update_scoreboard"]
+  C2["update_beliefs"]
+  C3["update_clarifications"]
+  C4["update_narrative"]
+  C5["refine_affect"]
+  C6["promote_belief"]
+  C7["update_persona_hints"]
+  LLM --> C1
+  LLM --> C2
+  LLM --> C3
+  LLM --> C4
+  LLM --> C5
+  LLM --> C6
+  LLM --> C7
+end
+
+subgraph SW["Single writer boundary"]
+  direction TB
+  MG["MutationGuard preflight"]
+  ST["IStatePort read/write"]
+  SS["SessionState\n8 HOT + 4 WARM"]
+  REJ["Rejected mutations\nrecoverable skip"]
+end
+
+W1 --> ST
+W2 --> ST
+W3 --> ST
+W4 --> ST
+W5 --> ST
+
+C1 --> MG
+C2 --> MG
+C3 --> MG
+C4 --> MG
+C5 --> MG
+C6 --> MG
+C7 --> MG
+
+MG -->|"approved"| ST --> SS
+MG -->|"rejected"| REJ
+
+subgraph INV["Invariants"]
+  direction TB
+  I1["Only Concierge writes SessionState"]
+  I2["Orchestrator/Planner/Fabric agents are non-writers"]
+  I3["Every phase2 write requires preflight"]
+end
+
+subgraph EXP["Periodic experience writes"]
+  direction TB
+  E1["turn%20 -> narrative threads/arc update"]
+  E2["turn%25 -> emotional trajectory/mirroring"]
+  E3["turn%30 -> anticipation/prefetch hints"]
+end
+
+E1 --> MG
+E2 --> MG
+E3 --> MG
+
+TEL["TELEMETRY warm tier (8KB)\nrolling latency/tokens/errors + health"]
+ST --> TEL
+
+MG -.enforces.-> I3
+ST -.enforces.-> I1
+SS -.policy.-> I2
+
+classDef p fill:#fff3e0,stroke:#ef6c00,stroke-width:2px;
+classDef s fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+classDef i fill:#fce4ec,stroke:#ad1457,stroke-width:2px;
+class U,W1,W2,W3,W4,W5,LLM,C1,C2,C3,C4,C5,C6,C7,E1,E2,E3 p;
+class MG,ST,SS,REJ,TEL s;
+class I1,I2,I3 i;

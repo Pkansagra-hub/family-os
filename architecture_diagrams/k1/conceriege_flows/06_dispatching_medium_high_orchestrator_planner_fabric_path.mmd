@@ -1,0 +1,67 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+D["DISPATCHING (tier=MEDIUM/HIGH)"] --> ENV["Build TaskEnvelope{intent,context,tier,trace_id}"]
+ENV --> SEND["IDispatchPort.dispatch_envelope(TaskEnv)\nFIRE_AND_FORGET"]
+SEND --> OMB["Orchestrator mailbox"]
+
+D --> PA["LLM preliminary ack\nmax_tokens=200"] --> COMP["COMPANIONING"]
+COMP --> ACK["k1.response.ack.v1"] --> OUT["OUTPUT_CHANNEL"]
+
+subgraph MED["MEDIUM path"]
+  direction TB
+  OMED["Orchestrator direct execution"] --> FABM["Fabric execute 1-2 calls"] --> RSM["Aggregated results"]
+end
+
+subgraph HIGH["HIGH path"]
+  direction TB
+  OH["Orchestrator requests plan"] --> PR["PlanRequest -> Planner"]
+  PR --> P1["Sketch"] --> P2["Expand"] --> P3["Validate"] --> P4["Commit"]
+  P2 --> RH["Requirement clarification (HIL)"]
+  P3 --> AH["Plan approval (HIL)"]
+  RH --> P2
+  AH --> P4
+  P4 --> CP["CommittedPlan"] --> DAG["Orchestrator topological DAG walk"]
+  DAG --> FABH["Fabric per-step execution"] --> RSH["Aggregated DAG results"]
+end
+
+OMB --> OMED
+OMB --> OH
+RSM --> BUF["Tool result buffer"]
+RSH --> BUF
+
+COMP --> PROG["PROGRESSING\nconsume k1.agent.*.delta.v1 and orchestration deltas"]
+CPROG["k1.constraint.progress.v1\npercentage + current constraint"]
+DAG --> CPROG
+CPROG --> PROG
+PROG --> PROGEV["k1.response.progress.v1"] --> OUT
+BUF --> DEL["DELIVERING"]
+DEL --> FINAL["k1.response.final.v1"] --> OUT
+
+RC["Resource conflict / long-running intervention\nask user for priority or fallback"]
+OMB --> RC
+RC --> OMED
+RC --> OH
+
+subgraph FAIL["Failure/degradation cascade"]
+  direction TB
+  F1["HIGH fail -> MEDIUM (skip planning)"]
+  F2["MEDIUM fail -> LOW (limited direct)"]
+  F3["LOW fail -> canned response"]
+end
+
+OH -.on failure.-> F1
+OMED -.on failure.-> F2
+F2 -.if exhausted.-> F3
+
+classDef c fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+classDef p fill:#fff3e0,stroke:#ef6c00,stroke-width:2px;
+classDef x fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+classDef f fill:#ffebee,stroke:#c62828,stroke-width:2px;
+class D,ENV,SEND,OMB,COMP,PROG,DEL,OUT c;
+class OMED,OH,PR,P1,P2,P3,P4,CP,DAG p;
+class FABM,FABH,RSM,RSH,ACK,PROGEV,FINAL,BUF x;
+class F1,F2,F3 f;

@@ -693,7 +693,6 @@ Relation Type             | Algorithm           | Count | Avg Weight
     HEALTH:
       Episodes: 23 | Relationships: 0 | Interactions: 0
 
-
 ====================================================================================================
 12. DEEP PERSONALIZED INSIGHTS - What Your Memories Reveal
 ====================================================================================================
@@ -1041,7 +1040,6 @@ Relation Type             | Algorithm           | Count | Avg Weight
     KNOWLEDGE GRAPH: Alex
       +-- Type: PERSON
       +-- Observations: 5
-
 
 ====================================================================================================
  THIS IS THE FAMILYOS VISION

@@ -1,0 +1,408 @@
+# ---------------------------------------------------------------------------
+# Planner Pipeline Contract
+# Defines the 4-stage pipeline structure, per-stage budgets, FSM states,
+# micro-replan variant, and validation rules.
+#
+# Reference: planner.md Section 5 (Pipeline Flow), Section 13.3 (Budget),
+#   Section 18 (FSM), Section 10 (Micro-replan), Section 30.5.1 F07 (Config)
+#
+# Consumed by:
+#   - PipelineController: reads stage budgets for budget injection
+#   - Tests: validate pipeline ordering and budget constraints
+#
+# Anti-hallucination: This is a DECLARATION-ONLY contract.
+#   No runtime behaviour is implemented here. Contract validation
+#   logic is part of M2 (PipelineController) and M6 (PlannerFactory).
+# ---------------------------------------------------------------------------
+$schema: "k1://schemas/pipeline/pipeline.contract.schema.yaml"
+
+metadata:
+  module_id: "planner"
+  pipeline_id: "planner_pipeline"
+  owner: "platform-team"
+  description: >
+    4-stage LLM-powered planning pipeline: SKETCH -> EXPAND -> VALIDATE -> COMMIT.
+    Receives PlanRequest, produces CommittedPlan. Stages 1-3 use LLM calls with
+    per-stage token budgets (PLAN-11). Stage 4 is deterministic (PLAN-03).
+    Micro-replan variant uses abbreviated 3-stage pipeline plus COMMIT.
+
+contract_version: 1
+impl_version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# Full pipeline: 4 ordered stages (Section 5.2)
+# ---------------------------------------------------------------------------
+pipeline:
+  stages:
+    - name: "SKETCH"
+      order: 1
+      service: "SketchService"
+      file: "k1/planner/stages/sketch_service.py"
+      fsm_state: "SKETCHING"
+      max_tokens: 2048
+      timeout_ms: 8000
+      temperature: 0.7
+      llm_required: true
+      llm_call_type: "CHAT"
+      tool_calls_max: 3
+      hil_interaction: "clarification"
+      input: "PlanRequest"
+      output: "SketchResult"
+      description: >
+        Discovery tool calls (up to 3 concurrent) followed by LLM call to
+        produce rough plan (RoughStep[]). Optional HIL clarification if
+        ambiguity detected (max 2 rounds, PLAN-10).
+      error_code: "ERR_SKETCH_FAIL"
+      recovery: "Retry with simplified prompt (reduced capabilities, no K0 memory)"
+
+    - name: "EXPAND"
+      order: 2
+      service: "ExpandService"
+      file: "k1/planner/stages/expand_service.py"
+      fsm_state: "EXPANDING"
+      max_tokens: 1024
+      timeout_ms: 5000
+      temperature: 0.3
+      llm_required: true
+      llm_call_type: "CHAT"
+      tool_calls_max: 3
+      hil_interaction: null
+      input: "SketchResult"
+      output: "ExpandedPlan"
+      description: >
+        Tool mapping and parameterization. Maps rough steps to concrete
+        PlanStep objects with capability references, params, dependencies.
+        Additional discovery calls from remaining tool budget (PLAN-05).
+      error_code: "ERR_EXPAND_FAIL"
+      recovery: "Retry LLM, then fallback to SKETCH output as degraded PlanSteps"
+
+    - name: "VALIDATE"
+      order: 3
+      service: "ValidateService"
+      file: "k1/planner/stages/validate_service.py"
+      fsm_state: "VALIDATING"
+      max_tokens: 512
+      timeout_ms: 3000
+      temperature: 0.2
+      llm_required: true
+      llm_call_type: "STRUCTURED"
+      tool_calls_max: 0
+      hil_interaction: "approval"
+      input: "ExpandedPlan"
+      output: "ValidationVerdict"
+      description: >
+        Deterministic checks (DAG cycle detection, capability existence,
+        dependency validation) followed by LLM arbiter call (structured
+        output). Optional HIL approval for high-risk plans (has_side_effects
+        + safety_band_min above GREEN).
+      error_code: "ERR_VALIDATE_FAIL"
+      recovery: "Revise loop (back to EXPAND, max 1 retry), then FAILED"
+      checks:
+        - "dag_no_cycles (PLAN-09)"
+        - "capability_exists (PLAN-08)"
+        - "dependency_valid"
+        - "step_count_bounds"
+        - "tool_budget_respected (PLAN-05)"
+
+    - name: "COMMIT"
+      order: 4
+      service: "CommitService"
+      file: "k1/planner/stages/commit_service.py"
+      fsm_state: "COMMITTING"
+      max_tokens: 0
+      timeout_ms: 1000
+      temperature: null
+      llm_required: false
+      llm_call_type: null
+      tool_calls_max: 0
+      hil_interaction: null
+      input: "ExpandedPlan + ValidationVerdict"
+      output: "CommittedPlan"
+      description: >
+        Deterministic plan assembly (PLAN-03). Constructs CommittedPlan from
+        validated ExpandedPlan. Persists to K0 WAL (fire-and-forget).
+        Emits plan.ready.v1 event. Transitions FSM to COMPLETED.
+      error_code: "ERR_COMMIT_FAIL"
+      recovery: "FAILED (no retry -- deterministic stage should not fail)"
+
+  # Stage ordering rule
+  stage_order: ["SKETCH", "EXPAND", "VALIDATE", "COMMIT"]
+  stage_order_fixed: true
+
+# ---------------------------------------------------------------------------
+# Micro-replan variant (Section 10.3)
+# Abbreviated 3-stage pipeline + COMMIT reuse
+# ---------------------------------------------------------------------------
+micro_replan:
+  description: >
+    Abbreviated pipeline for mid-DAG replanning (ORCH-13). Receives
+    MicroReplanRequest with completed_results, discoveries, remaining_steps.
+    Produces partial CommittedPlan with replacement steps only. PLAN-12:
+    completed steps are frozen, only remaining steps adjusted.
+  total_timeout_ms: 10000
+  total_token_budget: 2000
+  hil_enabled: false
+  max_calls_per_dag: 1
+
+  stages:
+    - name: "MICRO_SKETCH"
+      order: 1
+      service: "SketchService"
+      fsm_state: "MICRO_SKETCH"
+      max_tokens: 1024
+      timeout_ms: 5000
+      temperature: 0.7
+      llm_required: true
+      description: "Re-sketch remaining steps using discoveries + failure context"
+
+    - name: "MICRO_EXPAND"
+      order: 2
+      service: "ExpandService"
+      fsm_state: "MICRO_EXPAND"
+      max_tokens: 512
+      timeout_ms: 3000
+      temperature: 0.3
+      llm_required: true
+      description: "Re-map tools for replacement steps"
+
+    - name: "MICRO_VALIDATE"
+      order: 3
+      service: "ValidateService"
+      fsm_state: "MICRO_VALIDATE"
+      max_tokens: 256
+      timeout_ms: 2000
+      temperature: 0.2
+      llm_required: true
+      description: "Validate replacement steps (abbreviated checks)"
+
+    - name: "COMMIT"
+      order: 4
+      service: "CommitService"
+      fsm_state: "COMMITTING"
+      max_tokens: 0
+      timeout_ms: 100
+      llm_required: false
+      description: "Assemble partial CommittedPlan (reuse full pipeline COMMIT)"
+
+  stage_order: ["MICRO_SKETCH", "MICRO_EXPAND", "MICRO_VALIDATE", "COMMIT"]
+
+# ---------------------------------------------------------------------------
+# Budget constraints (Section 13.3, PLAN-05, PLAN-11)
+# ---------------------------------------------------------------------------
+budgets:
+  # Overall pipeline (PLAN-04)
+  pipeline_timeout_ms: 45000
+
+  # Token budgets (PLAN-11)
+  total_token_budget: 3500
+  per_stage_tokens:
+    SKETCH: 2048
+    EXPAND: 1024
+    VALIDATE: 512
+    COMMIT: 0
+  token_budget_rule: "total_token_budget >= SKETCH + EXPAND + VALIDATE"
+
+  # Tool call budget (PLAN-05)
+  max_tool_calls_per_plan: 6
+  tool_call_distribution:
+    SKETCH: 3
+    EXPAND: 3
+    VALIDATE: 0
+    COMMIT: 0
+  tool_call_rule: "SKETCH + EXPAND <= max_tool_calls_per_plan"
+
+  # HIL budget (PLAN-10)
+  max_hil_rounds: 2
+  hil_clarification_timeout_ms: 60000
+  hil_approval_timeout_ms: 120000
+
+  # Micro-replan budgets
+  micro_replan_timeout_ms: 10000
+  micro_replan_total_tokens: 2000
+  micro_replan_per_stage_tokens:
+    MICRO_SKETCH: 1024
+    MICRO_EXPAND: 512
+    MICRO_VALIDATE: 256
+    COMMIT: 0
+
+# ---------------------------------------------------------------------------
+# FSM states (Section 18 -- 11 states)
+# Note: planner.md Section 18.1 header says "10 states" but the
+#   enumeration lists 11 members. Our PlanState enum correctly has 11.
+# ---------------------------------------------------------------------------
+fsm:
+  states:
+    # Transient states (active pipeline)
+    - name: "IDLE"
+      category: "transient"
+      description: "Initial and resting state. No plan in progress."
+    - name: "SKETCHING"
+      category: "transient"
+      description: "Stage 1 active -- discovery tools + LLM sketch call."
+    - name: "EXPANDING"
+      category: "transient"
+      description: "Stage 2 active -- tool mapping + LLM expand call."
+    - name: "VALIDATING"
+      category: "transient"
+      description: "Stage 3 active -- deterministic checks + LLM arbiter + optional HIL."
+    - name: "COMMITTING"
+      category: "transient"
+      description: "Stage 4 active -- plan assembly + WAL persist + event emit."
+
+    # Micro-replan states (abbreviated pipeline)
+    - name: "MICRO_SKETCH"
+      category: "micro_replan"
+      description: "Micro-replan Stage 1 -- re-sketch remaining steps."
+    - name: "MICRO_EXPAND"
+      category: "micro_replan"
+      description: "Micro-replan Stage 2 -- re-map tools for replacement steps."
+    - name: "MICRO_VALIDATE"
+      category: "micro_replan"
+      description: "Micro-replan Stage 3 -- validate replacement steps."
+
+    # Terminal states (plan outcome resolved)
+    - name: "COMPLETED"
+      category: "terminal"
+      description: "Plan successfully committed and delivered."
+    - name: "FAILED"
+      category: "terminal"
+      description: "Plan failed at any stage (unrecoverable after retry)."
+    - name: "CANCELLED"
+      category: "terminal"
+      description: "Plan cancelled by Orchestrator via send_cancel()."
+
+  state_count: 11
+  terminal_states: ["COMPLETED", "FAILED", "CANCELLED"]
+  micro_replan_states: ["MICRO_SKETCH", "MICRO_EXPAND", "MICRO_VALIDATE"]
+
+  transitions:
+    # Full pipeline
+    - from: "IDLE"
+      to: "SKETCHING"
+      trigger: "PLAN_START"
+    - from: "SKETCHING"
+      to: "EXPANDING"
+      trigger: "stage_complete"
+    - from: "EXPANDING"
+      to: "VALIDATING"
+      trigger: "stage_complete"
+    - from: "VALIDATING"
+      to: "COMMITTING"
+      trigger: "approved"
+    - from: "COMMITTING"
+      to: "COMPLETED"
+      trigger: "commit_complete"
+    - from: "COMPLETED"
+      to: "IDLE"
+      trigger: "lock_released"
+
+    # Micro-replan pipeline
+    - from: "IDLE"
+      to: "MICRO_SKETCH"
+      trigger: "MICRO_REPLAN_START"
+    - from: "MICRO_SKETCH"
+      to: "MICRO_EXPAND"
+      trigger: "stage_complete"
+    - from: "MICRO_EXPAND"
+      to: "MICRO_VALIDATE"
+      trigger: "stage_complete"
+    - from: "MICRO_VALIDATE"
+      to: "COMMITTING"
+      trigger: "stage_complete"
+
+    # Revise loop (VALIDATE -> EXPAND retry)
+    - from: "VALIDATING"
+      to: "EXPANDING"
+      trigger: "revise"
+      note: "Max 1 revise loop before FAILED"
+
+    # Failure from any non-terminal state
+    - from: "SKETCHING"
+      to: "FAILED"
+      trigger: "error"
+    - from: "EXPANDING"
+      to: "FAILED"
+      trigger: "error"
+    - from: "VALIDATING"
+      to: "FAILED"
+      trigger: "reject"
+    - from: "COMMITTING"
+      to: "FAILED"
+      trigger: "error"
+    - from: "MICRO_SKETCH"
+      to: "FAILED"
+      trigger: "error"
+    - from: "MICRO_EXPAND"
+      to: "FAILED"
+      trigger: "error"
+    - from: "MICRO_VALIDATE"
+      to: "FAILED"
+      trigger: "error"
+
+    # Cancel from any non-terminal state
+    - from: "SKETCHING"
+      to: "CANCELLED"
+      trigger: "cancel"
+    - from: "EXPANDING"
+      to: "CANCELLED"
+      trigger: "cancel"
+    - from: "VALIDATING"
+      to: "CANCELLED"
+      trigger: "cancel"
+    - from: "COMMITTING"
+      to: "CANCELLED"
+      trigger: "cancel"
+    - from: "MICRO_SKETCH"
+      to: "CANCELLED"
+      trigger: "cancel"
+    - from: "MICRO_EXPAND"
+      to: "CANCELLED"
+      trigger: "cancel"
+    - from: "MICRO_VALIDATE"
+      to: "CANCELLED"
+      trigger: "cancel"
+
+  rules:
+    - "Monotonic: no backward transitions except COMPLETED -> IDLE reset"
+    - "Stage order is fixed: SKETCH -> EXPAND -> VALIDATE -> COMMIT"
+    - "COMMITTING is reused for micro-replan Stage 4"
+    - "Cancel check happens between stages (not mid-stage)"
+    - "FAILED and CANCELLED reset to IDLE via lock_released"
+
+# ---------------------------------------------------------------------------
+# Validation rules
+# ---------------------------------------------------------------------------
+validation:
+  rules:
+    - id: "PIPELINE_ORDER"
+      description: "Stage execution order is fixed and cannot be reordered."
+      rule: "stage_order == ['SKETCH', 'EXPAND', 'VALIDATE', 'COMMIT']"
+
+    - id: "COMMIT_NO_LLM"
+      description: "COMMIT stage has zero LLM calls (PLAN-03)."
+      rule: "stages[COMMIT].llm_required == false AND stages[COMMIT].max_tokens == 0"
+
+    - id: "TOKEN_BUDGET_SUM"
+      description: "Total token budget must cover per-stage budgets."
+      rule: "total_token_budget >= sum(per_stage_tokens)"
+
+    - id: "TOOL_BUDGET_SUM"
+      description: "Tool call distribution must not exceed total budget."
+      rule: "sum(tool_call_distribution) <= max_tool_calls_per_plan"
+
+    - id: "MICRO_NO_HIL"
+      description: "Micro-replan variant has no HIL interactions."
+      rule: "micro_replan.hil_enabled == false"
+
+    - id: "MICRO_REPLAN_FROZEN"
+      description: "Micro-replan adjusts remaining steps only (PLAN-12)."
+      rule: "completed_results are immutable in micro-replan pipeline"
+
+    - id: "PIPELINE_TIMEOUT"
+      description: "Total pipeline timeout is 45s (PLAN-04, outer bound)."
+      rule: "pipeline_timeout_ms == 45000"
+      note: "CB_PLANNER owned by Orchestrator PlannerAdapter"
+
+    - id: "FSM_MONOTONIC"
+      description: "FSM transitions are monotonic (no backward except reset)."
+      rule: "no transition from terminal to non-IDLE state"

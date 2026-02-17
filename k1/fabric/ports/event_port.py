@@ -45,7 +45,7 @@ Exports:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 # ---------------------------------------------------------------------------
 # Supporting types
@@ -105,7 +105,7 @@ class IEventPort(Protocol):
     def emit(
         self,
         topic: str,
-        payload: Dict[str, Any],
+        payload: Any,
     ) -> None:
         """
         Emit an event to all subscribers of the given topic.
@@ -115,15 +115,15 @@ class IEventPort(Protocol):
 
         Args:
             topic: Event topic string (e.g. ``"k1.fabric.capability.registered.v1"``).
-            payload: Event payload dict.  Should contain ``cognitive_trace_id``
-                per FAB-09.
+            payload: Event payload (dataclass or dict).  Should contain
+                ``cognitive_trace_id`` per FAB-09.
         """
         ...  # pragma: no cover
 
     def subscribe(
         self,
         topic: str,
-        handler: Callable[[str, Dict[str, Any]], None],
+        handler: Callable[[str, Any], None],
     ) -> SubscriptionHandle:
         """
         Subscribe a handler to events on the given topic.

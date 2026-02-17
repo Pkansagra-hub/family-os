@@ -1,0 +1,51 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+COMP["COMPANIONING"] --> ACK["Emit preliminary ack\nk1.response.ack.v1"]
+ACK --> OUTQ["Output queue"] --> OUT["OUTPUT_CHANNEL"]
+
+COMP --> P["PROGRESSING"]
+P --> P1["Consume progress deltas\nk1.agent.*.delta.v1\nk1.orchestration.delta.v1"]
+P1 --> P2["Aggregate narratable updates"]
+P2 --> PE["k1.response.progress.v1"] --> OUTQ
+
+RHY["ConversationBeat pacing\n(min_delay + stream cadence)"]
+P2 --> RHY --> PE
+
+P --> DONE["execution.completed"] --> D["DELIVERING"]
+D --> B1["Fetch buffered tool_results[]"]
+B1 --> LLM["ILLMPort final compose\nMED budget=2K, HIGH budget=8K"]
+LLM --> COG["Optional cognitive tools\nstate refinements"]
+COG --> ST["IStatePort via MutationGuard"]
+LLM --> FE["k1.response.final.v1"] --> OUTQ
+
+VAL["Validated output envelope\nstatus/confidence/hallucination_score"]
+LLM --> VAL --> FE
+
+D --> TURNEND["turn_end"]
+TURNEND --> TCE["turn.complete.v1\ncontains turn_id,session_id,trace_id,user_message,assistant_response,timestamp"]
+TCE --> MW["Memory Writer consumer"]
+TCE --> LL["Learning Loop consumer"]
+TCE --> OBS["Tracing + metrics\nper-turn latency/tokens/errors"]
+
+subgraph PRIORITY["Queue priorities"]
+  direction TB
+  Q1["REALTIME: intent_ack, critical"]
+  Q2["INTERACTIVE: clarification/final"]
+  Q3["BACKGROUND: turn.complete/proactive"]
+end
+
+OUTQ -.policy.-> Q1
+OUTQ -.policy.-> Q2
+OUTQ -.policy.-> Q3
+
+classDef s fill:#fff3e0,stroke:#ef6c00,stroke-width:2px;
+classDef q fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+classDef e fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+class COMP,P,D,TURNEND,LLM,COG,B1,P1,P2,RHY,VAL s;
+class OUTQ,OUT q;
+class ACK,PE,FE,TCE,MW,LL,ST,DONE,OBS e;
+class Q1,Q2,Q3 q;

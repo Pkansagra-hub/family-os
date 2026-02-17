@@ -362,7 +362,7 @@ subgraph ADAPTERS_PROD["Production Adapters (7)"]
 
   ADAPT_BRIDGE["BridgeAdapter<br/>K0 Bridge client<br/>recall() for reads, persist_plan() for WAL writes<br/>Fire-and-forget on persist"]:::adapter
 
-  ADAPT_DELTA["DeltaBusAdapter<br/>Publish-only to DeltaBus<br/>k1.planner.delta.v1 topic<br/>Fire-and-forget, log on failure"]:::adapter
+  ADAPT_DELTA["DeltaBusAdapter<br/>Publish-only to K1 Bus (delta lane)<br/>k1.planner.delta.v1 topic<br/>Fire-and-forget, log on failure"]:::adapter
 
   ADAPT_EVENT["EventBusAdapter<br/>Pub/sub on K1 Event Bus<br/>Publish: plan.ready, plan.failed, plan.cancelled<br/>Subscribe: plan.request, plan.cancel"]:::adapter
 end
@@ -544,12 +544,12 @@ subgraph TOUCHPOINTS["External Touchpoints"]
     LLM_GW["Model Hub (Capability-Driven Plugin Architecture)<br/>Interface: IModelHubPort.execute(HubRequest) -> HubResponse<br/>Transport: LLM_REQUEST_BUS (async request-reply)<br/>consumer_id: 'planner' for cost tracking (MH-11)<br/>---<br/>Planner uses 3 capabilities:<br/>  CHAT (Stages 1-3 + HIL prompts)<br/>  TOOL_CALL (Stages 1-2 tool routing -- V2)<br/>  STRUCTURED (Stage 3 arbiter verdict)<br/>Total: ~3.5K tokens per plan<br/>Budget: RequestConstraints.max_tokens + timeout_ms (PLAN-11)<br/>Model selection: Model Hub handles (Planner does NOT pick model)<br/>See: k1/model_hub/model_hub.mmd"]:::gateway
   end
 
-  subgraph TP_BUSES["Event Bus + Delta Bus"]
+  subgraph TP_BUSES["K1 Bus (one physical bus; two logical lanes)"]
     direction TB
 
-    EVT_BUS["K1 Event Bus<br/>Pub: k1.planner.plan.ready.v1, plan.failed.v1, plan.cancelled.v1<br/>Sub: k1.planner.plan.request.v1, plan.cancel.v1<br/>Consumers: Orchestrator (plan.ready),<br/>Learning Loop (plan.failed, plan.cancelled -> drift detection)<br/>See: k1/learning/learning.mmd"]:::bus
+    EVT_BUS["K1 Bus — Event lane<br/>Pub: k1.planner.plan.ready.v1, plan.failed.v1, plan.cancelled.v1<br/>Sub: k1.planner.plan.request.v1, plan.cancel.v1<br/>Consumers: Orchestrator (plan.ready),<br/>Learning Loop (plan.failed, plan.cancelled -> drift detection)<br/>See: k1/learning/learning.mmd"]:::bus
 
-    DLT_BUS["Delta Bus<br/>Pub: k1.planner.delta.v1<br/>(planning stage deltas, NOT SessionState writes)"]:::bus
+    DLT_BUS["K1 Bus — Delta lane<br/>Pub: k1.planner.delta.v1<br/>(planning stage deltas, NOT SessionState writes)"]:::bus
   end
 
   subgraph TP_CONCIERGE_HIL["Concierge (HIL Routing)"]

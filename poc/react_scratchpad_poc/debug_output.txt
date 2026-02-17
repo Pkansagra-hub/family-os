@@ -1,0 +1,59 @@
+D:\familyos\poc\react_scratchpad_poc\llm\gemini_client.py:22: FutureWarning: 
+
+All support for the `google.generativeai` package has ended. It will no longer be receiving 
+updates or bug fixes. Please switch to the `google.genai` package as soon as possible.
+See README for more details:
+
+https://github.com/google-gemini/deprecated-generative-ai-python/blob/main/README.md
+
+  import google.generativeai as genai
+
+Loading 1 scenario(s)...
+Initializing Gemini client...
+LLM ready: gemini-2.5-flash
+Tools ready: 17 tools registered
+
+----------------------------- Starting Benchmark ------------------------------
+  Mode: naive
+  Scenarios: 1
+  Output: D:\familyos\poc\react_scratchpad_poc\eval\results
+
+------------- Scenario 1/1: Concierge Full Tool Suite (13 tools) --------------
+  Birthday dinner planning using all 13 Concierge tools with real SessionState 
+mutations. Tests Signal/Cognitive/Read/Action categories.
+  Tier: HIGH | Max iter: 12 | Max tools: 20
+react_poc.naive | [NAIVE iter=0] ctx_tokens=622 tools=13 should_force=True min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #1] force_tool_call=True
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (2) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm | --- TOOLS (13) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow']
+react_poc.llm | --- CONTENTS TO GEMINI (1 parts) ---
+react_poc.llm |   content[0] role=? parts=0
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=function_calling_config {
+  mode: ANY
+}
+
+react_poc.naive | [NAIVE iter=0] response: has_tool_calls=False tool_count=0 text_len=696
+  Naive:  PASS | 1 iters | 0 tools | 622 ctx tokens
+No comparisons to display (single-mode run).
+
+LLM calls: 1 | Tokens in: 0 | Tokens out: 0
+Results saved to: D:\familyos\poc\react_scratchpad_poc\eval\results

@@ -880,8 +880,8 @@ flowchart TB
         direction TB
 
         subgraph MESSAGE_ROUTING["Message Routing System"]
-            EVENT_BUS["K1 Event Bus<br/>Pub/Sub Topics"]:::routing
-            DELTA_BUS["Delta Bus<br/>State Change Stream<br/>Types: k1.agent.{id}.delta.v1,<br/>k1.planner.delta.v1,<br/>k1.orchestration.delta.v1,<br/>k1.curiosity.delta.v1"]:::routing
+            EVENT_BUS["K1 Bus — Event lane<br/>Topics: k1.*"]:::routing
+            DELTA_BUS["K1 Bus — Delta lane<br/>State Change Stream<br/>Topics: k1.*.delta.v1<br/>Types: k1.agent.{id}.delta.v1,<br/>k1.planner.delta.v1,<br/>k1.orchestration.delta.v1,<br/>k1.curiosity.delta.v1"]:::routing
             MAILBOX_ROUTER["Direct Mailbox Router<br/>Actor ID → Mailbox"]:::routing
             TOPIC_PATTERNS["Topic Patterns:<br/>k1.capability.invoked.v1<br/>k1.capability.completed.v1<br/>k1.fabric.learning.signal.v1"]:::routing
             COGNITIVE_TRACE_ID["Cognitive Trace ID<br/>Unifies Causality"]:::routing

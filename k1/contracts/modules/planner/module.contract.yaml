@@ -113,11 +113,6 @@ invariants:
     category: "isolation"
     enforcement: "compile-time (ToolCallRouter only routes to read ports)"
 
-  - id: "PLAN-06"
-    description: "Planner NEVER executes capabilities. Discovery only (read Fabric registry)."
-    category: "isolation"
-    enforcement: "compile-time (no IFabricExecutionPort, only IFabricRetrievalPort)"
-
   # --- Pipeline ---
   - id: "PLAN-03"
     description: "Stage 4 COMMIT is DETERMINISTIC. Zero LLM calls, zero tool calls."
@@ -133,6 +128,11 @@ invariants:
     description: "Max 6 discovery tool calls per plan (2 per stage for stages 1-2)."
     category: "pipeline"
     enforcement: "runtime (ToolCallRouter call counter)"
+
+  - id: "PLAN-06"
+    description: "Planner NEVER executes capabilities. Discovery only (read Fabric registry)."
+    category: "isolation"
+    enforcement: "compile-time (no IFabricExecutionPort, only IFabricRetrievalPort)"
 
   # --- Plan quality ---
   - id: "PLAN-07"

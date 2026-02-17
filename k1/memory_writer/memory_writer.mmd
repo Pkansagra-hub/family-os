@@ -32,7 +32,7 @@ flowchart TB
 %%
 %% GOVERNING DOCS:
 %%   - docs/pipelines/P02_write_dossier.md (K0 envelope contract, body schema)
-%%   - k1/sessionstate/README.md (SessionState 6-section, tiering, delta bus)
+%%   - k1/sessionstate/README.md (SessionState 6-section, tiering, delta lane on K1 Bus)
 %%   - architecture_diagrams/bridge/bridge_architecture.mmd (Command Port path)
 %%   - architecture_diagrams/k0/k0_source_of_truth_v2.mmd (K0 hot path + P02)
 %%   - architecture_diagrams/k1/k1_cognitive_architecture_skeleton.mmd
@@ -46,7 +46,7 @@ flowchart TB
 %%
 %% CROSS-DIAGRAM INTEGRATION POINTS:
 %%   concierge.mmd:
-%%     - Concierge emits turn.complete.v1 on DeltaBus after DELIVERING
+%%     - Concierge emits turn.complete.v1 on K1 Bus after DELIVERING
 %%     - Concierge is single writer to SessionState (MW reads only)
 %%   fabric.mmd:
 %%     - Agent Factory spawns MemoryWriterAgent per session
@@ -150,7 +150,7 @@ subgraph MEMORY_WRITER["Memory Writer System (Conversation -> K0 Long-Term Memor
   subgraph TRIGGER["Turn Completion Trigger"]
     direction TB
 
-    TURN_COMPLETE_EVENT["turn.complete.v1 (from DeltaBus)<br/>Emitted by: Concierge after DELIVERING<br/>---<br/>Payload:<br/>  turn_id: string<br/>  session_id: string<br/>  cognitive_trace_id: string<br/>  user_message: string<br/>  assistant_response: string<br/>  timestamp_ms: int<br/>---<br/>Every turn triggers Memory Writer pipeline"]:::event
+    TURN_COMPLETE_EVENT["turn.complete.v1 (from K1 Bus)<br/>Emitted by: Concierge after DELIVERING<br/>---<br/>Payload:<br/>  turn_id: string<br/>  session_id: string<br/>  cognitive_trace_id: string<br/>  user_message: string<br/>  assistant_response: string<br/>  timestamp_ms: int<br/>---<br/>Every turn triggers Memory Writer pipeline"]:::event
 
     TURN_DISPATCHER["Turn Dispatcher<br/>Routes turn events to Memory Writer<br/>Ignores duplicate turn_ids (idempotent)"]:::routing
   end
@@ -284,7 +284,7 @@ subgraph MEMORY_WRITER["Memory Writer System (Conversation -> K0 Long-Term Memor
   subgraph EVICTION_WRITES["Eviction-Triggered Memory Writes"]
     direction TB
 
-    EVICTION_LISTENER["Eviction Event Listener<br/>Listens: k1.sessionstate.eviction.v1<br/>---<br/>When SessionState WARM -> COLD eviction:<br/>  EvictionEngine archives to K0 via:<br/>    beliefs.archive (beliefs_history evicted)<br/>    history.archive (history_recent evicted)<br/>---<br/>These use SEPARATE Bridge Command topics<br/>(NOT memory.delta, which is Memory Writer's topic)<br/>---<br/>Memory Writer does NOT handle eviction.<br/>Eviction archival is SessionState's own concern."]:::service
+    EVICTION_LISTENER["Eviction Event Listener<br/>Listens: k1.session.eviction.v1<br/>---<br/>When SessionState WARM -> COLD eviction:<br/>  EvictionEngine archives to K0 via:<br/>    beliefs.archive (beliefs_history evicted)<br/>    history.archive (history_recent evicted)<br/>---<br/>These use SEPARATE Bridge Command topics<br/>(NOT memory.delta, which is Memory Writer's topic)<br/>---<br/>Memory Writer does NOT handle eviction.<br/>Eviction archival is SessionState's own concern."]:::service
 
     EVICTION_NOTE["NOTE: Eviction writes are NOT Memory Writer.<br/>They are SessionState -> Bridge -> K0 directly.<br/>Topics: beliefs.archive, history.archive<br/>Memory Writer topic: memory.delta only<br/>---<br/>No overlap. No confusion. Clean separation."]:::contract
   end
@@ -314,7 +314,7 @@ subgraph MEMORY_WRITER["Memory Writer System (Conversation -> K0 Long-Term Memor
   subgraph PORTS["Ports (5 Hexagonal Boundaries -- MW-01: No Write Ports to SessionState)"]
     direction TB
 
-    PORT_EVENT["IEventPort<br/>Direction: Both<br/>subscribe(topics[]) -> EventStream<br/>publish(topic, payload) -> void<br/>Sub: turn.complete.v1, k1.sessionstate.eviction.v1<br/>Pub: k1.mw.filter.decision.v1, k1.mw.batch.complete.v1"]:::port
+    PORT_EVENT["IEventPort<br/>Direction: Both<br/>subscribe(topics[]) -> EventStream<br/>publish(topic, payload) -> void<br/>Sub: turn.complete.v1, k1.session.eviction.v1<br/>Pub: k1.mw.filter.decision.v1, k1.mw.batch.complete.v1"]:::port
 
     PORT_STATE_READ["IStateReadPort<br/>Direction: Inbound (read-only)<br/>read(sections[]) -> StateSnapshot<br/>Multi-reader, lock-free (MW-01, MW-02)<br/>Sections: history_active, beliefs_active,<br/>  affective_now, scoreboard, meta"]:::port
 
@@ -424,7 +424,7 @@ subgraph MEMORY_WRITER["Memory Writer System (Conversation -> K0 Long-Term Memor
   subgraph LIFECYCLE["Lifecycle (5 Phases -- Session-Bound Agent)"]
     direction TB
 
-    LC_INIT["init(session_id)<br/>Owner: FabricLifecycleAdapter<br/>---<br/>1. Create 6 services (no I/O)<br/>2. Wire 5 ports<br/>3. Subscribe turn.complete.v1 via IEventPort<br/>4. Subscribe k1.sessionstate.eviction.v1<br/>5. Start BatchSubmitService 250ms timer<br/>6. Set state: READY"]:::lifecycle
+    LC_INIT["init(session_id)<br/>Owner: FabricLifecycleAdapter<br/>---<br/>1. Create 6 services (no I/O)<br/>2. Wire 5 ports<br/>3. Subscribe turn.complete.v1 via IEventPort<br/>4. Subscribe k1.session.eviction.v1<br/>5. Start BatchSubmitService 250ms timer<br/>6. Set state: READY"]:::lifecycle
 
     LC_TURN_PROCESS["turn_process(TurnEvent)<br/>Owner: TurnDispatcherService<br/>---<br/>1. Dedup check (turn_id)<br/>2. RelevanceFilterService.evaluate()<br/>3. If SKIP: emit metric, return<br/>4. ContextAssemblyService.assemble()<br/>5. ExtractionService.extract()<br/>6. EnvelopeBuildService.build()<br/>7. BatchSubmitService.aggregate()<br/>8. Emit k1.mw.batch.complete.v1"]:::lifecycle
 
@@ -466,7 +466,7 @@ subgraph EXTERNAL_K1["External K1 Systems"]
 
   TP_LEARNING["Learning Loop<br/>LearningExtractorAgent is SEPARATE<br/>It extracts meta-signals, not facts<br/>Both observe turns, different purpose"]:::external
 
-  TP_DELTA_BUS["DeltaBus<br/>Transport for turn.complete.v1<br/>Memory Writer subscribes to turn events<br/>Not a SessionState writer"]:::external
+  TP_DELTA_BUS["K1 Bus (delta lane)<br/>Transport for turn.complete.v1<br/>Memory Writer subscribes to turn events<br/>Not a SessionState writer"]:::external
 end
 
 %% =====================================================================================
@@ -554,7 +554,7 @@ TP_FABRIC -.->|"spawn MemoryWriterAgent<br/>(per session)"| WRITER_AGENT
 CONTRACT_MW -.->|"registered in"| TP_FABRIC
 
 %% Eviction (NOT Memory Writer -- separate concern)
-TP_SESSIONSTATE -.->|"k1.sessionstate.eviction.v1"| EVICTION_LISTENER
+TP_SESSIONSTATE -.->|"k1.session.eviction.v1"| EVICTION_LISTENER
 
 %% =====================================================================================
 %% PORT -> ADAPTER BINDINGS (Hexagonal Wiring)

@@ -5,7 +5,7 @@ This document outlines the proposed directory structure for the `k1/` module, ba
 ## Overview
 
 - **Layers**: Hierarchical separation (L0 External Interfaces → L1 Concierge → L2 Orchestrator → L2.5 Fabric → L3 Planner → L4 Agents/Tools → L5 SessionState → L6 K0 Bridge).
-- **Coordination**: Event Bus, Delta Bus, Mailbox Router for pub/sub and direct routing. SSE integration with K0 for proactive notifications.
+- **Coordination**: K1 Bus (one physical bus; event lane `k1.*` + delta lane `k1.*.delta.v1`) and Mailbox Router for pub/sub and direct routing. SSE integration with K0 for proactive notifications.
 - **Principles**: Actor-based concurrency, single-writer/multi-reader SessionState, WFQ scheduling, HITL feedback, learning loops with proactive agent spawning.
 - **ADRs**: All components link to formal architectural decisions (e.g., ADR-0005 for agent lifecycle).
 
@@ -14,7 +14,7 @@ This document outlines the proposed directory structure for the `k1/` module, ba
 ```text
 k1/
 ├── __init__.py                          # Exports: ConciergeAgent, OrchestratorActor, CapabilityFabric, EventBus, SessionState, DeltaBus, MailboxRouter, ProactiveDecisionEngine
-├── main.py                              # Wiring only: Load config (pydantic), instantiate actors/buses/bridges, connect Event Bus/Delta Bus, start supervisors, handle shutdown (signal handlers)
+├── main.py                              # Wiring only: Load config (pydantic), instantiate actors/bus/bridges, connect K1 bus lanes, start supervisors, handle shutdown (signal handlers)
 ├── README.md                            # Full spec: Layers (L0-L6), flows (e.g., 3-phase orchestration, Delta aggregation), ADRs (e.g., ADR-0005, ADR-0006), setup (deps, env vars), usage (API endpoints), troubleshooting (common errors, logs)
 ├── pyproject.toml                       # Deps: flatbuffers, pydantic, aiohttp, pykka (actors), aiokafka (Event Bus), opentelemetry (tracing), pytest (tests), uvicorn (if web APIs needed)
 ├── contracts/                           # Existing: Schemas & interfaces (expanded per diagram)

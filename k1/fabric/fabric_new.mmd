@@ -415,7 +415,7 @@ subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execut
 
     PORT_PROMPT_SYSTEM["IPromptSystemPort (prompt_system.py)<br/>Direction: Outbound<br/>resolve(name) -> PromptTemplate<br/>Dual identity: Fabric prompt + agent prompt"]:::port
 
-    PORT_DELTA_BUS["IDeltaBusPort (delta_bus.py)<br/>Direction: Outbound<br/>emit_delta(topic, delta) -> void<br/>Agent state deltas to DeltaBus"]:::port
+    PORT_DELTA_BUS["IDeltaBusPort (delta_bus.py)<br/>Direction: Outbound<br/>emit_delta(topic, delta) -> void<br/>Agent state deltas to K1 Bus (delta lane)"]:::port
   end
 
   %% ==================================================================================
@@ -638,11 +638,11 @@ subgraph TOUCHPOINTS["External Touchpoints (Fabric Interfaces)"]
     end
   end
 
-  subgraph TP_BUSES["Event Bus + Delta Bus"]
+  subgraph TP_BUSES["K1 Bus (one physical bus; two logical lanes)"]
     direction TB
 
-    EVENT_BUS["K1 Event Bus<br/>Pub/Sub Topics<br/>All Fabric events with trace_id (FAB-09)"]:::bus
-    DELTA_BUS["Delta Bus<br/>Agent state deltas:<br/>k1.agent.{id}.delta.v1"]:::bus
+    EVENT_BUS["K1 Bus — Event lane<br/>Topics: k1.*<br/>All Fabric events with trace_id (FAB-09)"]:::bus
+    DELTA_BUS["K1 Bus — Delta lane<br/>Agent state deltas:<br/>k1.agent.{id}.delta.v1"]:::bus
   end
 
   subgraph TP_ORCHESTRATOR["Orchestrator Integration"]

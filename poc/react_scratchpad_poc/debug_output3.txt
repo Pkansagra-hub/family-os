@@ -1,0 +1,1202 @@
+D:\familyos\poc\react_scratchpad_poc\llm\gemini_client.py:22: FutureWarning: 
+
+All support for the `google.generativeai` package has ended. It will no longer be receiving 
+updates or bug fixes. Please switch to the `google.genai` package as soon as possible.
+See README for more details:
+
+https://github.com/google-gemini/deprecated-generative-ai-python/blob/main/README.md
+
+  import google.generativeai as genai
+
+Loading 1 scenario(s)...
+Initializing Gemini client...
+LLM ready: gemini-2.5-flash
+Tools ready: 17 tools registered
+
+----------------------------- Starting Benchmark ------------------------------
+  Mode: naive
+  Scenarios: 1
+  Output: D:\familyos\poc\react_scratchpad_poc\eval\results
+
+------------- Scenario 1/1: Concierge Full Tool Suite (13 tools) --------------
+  Birthday dinner planning using all 13 Concierge tools with real SessionState 
+mutations. Tests Signal/Cognitive/Read/Action categories.
+  Tier: HIGH | Max iter: 12 | Max tools: 20
+react_poc.naive | [NAIVE iter=0] ctx_tokens=622 tools=13 should_force=True min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #1] force_tool_call=True
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (2) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm | --- TOOLS (13) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow']
+react_poc.llm | --- CONTENTS TO GEMINI (1 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=function_calling_config {
+  mode: ANY
+}
+
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "acknowledge",
+                  "args": {
+                    "ack_type": "commit",
+                    "message": "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a g
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=1
+react_poc.llm |     part[0] has_function_call=acknowledge has_text=
+react_poc.llm |       -> function_call: name=acknowledge args={'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommodates everyone's dietary needs. I'll start by setting up a new conversation thread for this.", 'next_tool': 'update_narrative'}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=1: ['acknowledge']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=2676 tokens_out=77
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=0] response: has_tool_calls=True tool_count=1 text_len=0
+react_poc.naive |   -> tool_call: acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommodates everyone's dieta)
+react_poc.naive | [NAIVE iter=1] ctx_tokens=787 tools=13 should_force=True min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #2] force_tool_call=True
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (4) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm |   msg[2] role=assistant len=329: 
+[Calling acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommo
+react_poc.llm |   msg[3] role=user len=330: Tool acknowledge result: {'displayed': True, 'formatted_message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant th
+react_poc.llm | --- TOOLS (13) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow']
+react_poc.llm | --- CONTENTS TO GEMINI (3 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm |   content[1] role=model parts=1
+react_poc.llm |   content[2] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=function_calling_config {
+  mode: ANY
+}
+
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "update_narrative",
+                  "args": {
+                    "domains": [
+                      "family",
+                      "planning",
+                      "dining"
+                    ],
+                    "operation"
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=1
+react_poc.llm |     part[0] has_function_call=update_narrative has_text=
+react_poc.llm |       -> function_call: name=update_narrative args={'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietary restrictions and seating for 8.'}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=1: ['update_narrative']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=2830 tokens_out=58
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=1] response: has_tool_calls=True tool_count=1 text_len=0
+react_poc.naive |   -> tool_call: update_narrative({'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietary restrictions and seating )
+k1.sessionstate.factory | Creating test SessionStateManager (session=test-054bb343)
+k1.sessionstate.sizetracker | SizeTracker initialized with 12 sections
+k1.sessionstate.guard | MutationGuard initialized with SizeTracker
+k1.sessionstate.local_cold | LocalColdArchive schema initialized
+k1.sessionstate.local_cold | LocalColdArchive initialized at C:\Users\princ\.familyos\k1\sessionstate.db
+k1.sessionstate.tiers.hot | HotTier initialized with 8 sections (session=test-054)
+k1.sessionstate.tiers.warm | WarmTier initialized with 4 sections (session=test-054)
+k1.sessionstate.tiers.local_cold | LocalColdTier initialized (session=test-054, storage=attached)
+k1.sessionstate.eviction | EvictionEngine initialized for session test-054
+k1.sessionstate.migration | MigrationEngine initialized for session test-054
+k1.sessionstate.manager | SessionStateManager initialized (session=test-054, state=created)
+k1.sessionstate.adapters.standalone_lifecycle | StandaloneLifecycle initialized (session=test-054, interval=0ms)
+k1.sessionstate.manager | No checkpoint found, starting fresh: session=test-054, trace_id=
+k1.sessionstate.sizetracker | Set section 'clarifications': 0 -> 150
+k1.sessionstate.sizetracker | Set section 'affective_now': 0 -> 234
+k1.sessionstate.sizetracker | Set section 'control': 0 -> 650
+k1.sessionstate.sizetracker | Set section 'beliefs_history': 0 -> 200
+k1.sessionstate.sizetracker | Set section 'narrative_active': 0 -> 150
+k1.sessionstate.sizetracker | Set section 'meta': 0 -> 610
+k1.sessionstate.sizetracker | Set section 'history_active': 0 -> 150
+k1.sessionstate.sizetracker | Set section 'history_recent': 0 -> 500
+k1.sessionstate.sizetracker | Set section 'telemetry': 0 -> 400
+k1.sessionstate.sizetracker | Set section 'persona': 0 -> 650
+k1.sessionstate.sizetracker | Set section 'scoreboard': 0 -> 60
+k1.sessionstate.sizetracker | Set section 'beliefs_active': 0 -> 166
+k1.sessionstate.manager | Size tracker synced with actual section sizes (total=3920 bytes)
+k1.sessionstate.manager | SessionStateManager started (session=test-054, restored=False, source=fresh, took=2.70ms, trace_id=)
+k1.sessionstate.guard | Preflight approved: section='narrative_active', operation='create_thread', bytes=136
+k1.sessionstate.sizetracker | Updated section 'narrative_active': 150 -> 347 (delta=+197)
+k1.sessionstate.manager | Mutation applied: section=narrative_active, op=create_thread, delta=197, new_size=347, trace_id=
+react_poc.naive | [NAIVE iter=2] ctx_tokens=883 tools=13 should_force=True min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #3] force_tool_call=True
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (6) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm |   msg[2] role=assistant len=329: 
+[Calling acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommo
+react_poc.llm |   msg[3] role=user len=330: Tool acknowledge result: {'displayed': True, 'formatted_message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant th
+react_poc.llm |   msg[4] role=assistant len=237: 
+[Calling update_narrative({'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietar
+react_poc.llm |   msg[5] role=user len=148: Tool update_narrative result: {'success': True, 'thread_id': 'b0f67fa2-eb04-414c-8e35-c53af5433e13', 'active_threads': 1, 'thread_status': 'ACTIVE'}
+react_poc.llm | --- TOOLS (13) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow']
+react_poc.llm | --- CONTENTS TO GEMINI (5 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm |   content[1] role=model parts=1
+react_poc.llm |   content[2] role=user parts=1
+react_poc.llm |   content[3] role=model parts=1
+react_poc.llm |   content[4] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=function_calling_config {
+  mode: ANY
+}
+
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "refine_affect",
+                  "args": {
+                    "override_emotion": "excited_stressed",
+                    "override_intensity": 0.7,
+                    "reasoning": "User expressed both excitement ('I'm excited')
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=1
+react_poc.llm |     part[0] has_function_call=refine_affect has_text=
+react_poc.llm |       -> function_call: name=refine_affect args={'override_emotion': 'excited_stressed', 'override_intensity': 0.7, 'reasoning': "User expressed both excitement ('I'm excited') and stress ('honestly kinda stressed') about planning the dinner.", 'override_valence': 'mixed'}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=1: ['refine_affect']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=2959 tokens_out=66
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=2] response: has_tool_calls=True tool_count=1 text_len=0
+react_poc.naive |   -> tool_call: refine_affect({'override_emotion': 'excited_stressed', 'override_intensity': 0.7, 'reasoning': "User expressed both excitement ('I'm excited') and stress ('honestly kinda stressed') about planning the dinner.", 'ov)
+k1.sessionstate.guard | Preflight approved: section='affective_now', operation='update', bytes=107
+k1.sessionstate.sizetracker | Updated section 'affective_now': 234 -> 348 (delta=+114)
+k1.sessionstate.manager | Mutation applied: section=affective_now, op=update, delta=114, new_size=348, trace_id=
+react_poc.naive | [NAIVE iter=3] ctx_tokens=1010 tools=13 should_force=True min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #4] force_tool_call=True
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (8) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm |   msg[2] role=assistant len=329: 
+[Calling acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommo
+react_poc.llm |   msg[3] role=user len=330: Tool acknowledge result: {'displayed': True, 'formatted_message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant th
+react_poc.llm |   msg[4] role=assistant len=237: 
+[Calling update_narrative({'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietar
+react_poc.llm |   msg[5] role=user len=148: Tool update_narrative result: {'success': True, 'thread_id': 'b0f67fa2-eb04-414c-8e35-c53af5433e13', 'active_threads': 1, 'thread_status': 'ACTIVE'}
+react_poc.llm |   msg[6] role=assistant len=251: 
+[Calling refine_affect({'override_emotion': 'excited_stressed', 'override_intensity': 0.7, 'reasoning': "User expressed both excitement ('I'm excited') and stress ('honestly kinda stressed') about pl
+react_poc.llm |   msg[7] role=user len=257: Tool refine_affect result: {'success': True, 'previous_emotion': 'neutral', 'previous_intensity': 0.0, 'override_applied': True, 'reasoning': "User expressed both excitement ('I'm excited') and stress
+react_poc.llm | --- TOOLS (13) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow']
+react_poc.llm | --- CONTENTS TO GEMINI (7 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm |   content[1] role=model parts=1
+react_poc.llm |   content[2] role=user parts=1
+react_poc.llm |   content[3] role=model parts=1
+react_poc.llm |   content[4] role=user parts=1
+react_poc.llm |   content[5] role=model parts=1
+react_poc.llm |   content[6] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=function_calling_config {
+  mode: ANY
+}
+
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "recall_memory",
+                  "args": {
+                    "selectors": [
+                      "beliefs",
+                      "conversations",
+                      "events",
+                      "preferences"
+            
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=1
+react_poc.llm |     part[0] has_function_call=recall_memory has_text=
+react_poc.llm |       -> function_call: name=recall_memory args={'selectors': ['beliefs', 'conversations', 'events', 'preferences'], 'query': "Mom's birthday, vegan preference, Sarah's vegetarian, Jake's nut allergy, family dining preferences, past birthday celebrations, restaurants for 8 people."}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=1: ['recall_memory']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=3089 tokens_out=61
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=3] response: has_tool_calls=True tool_count=1 text_len=0
+react_poc.naive |   -> tool_call: recall_memory({'selectors': ['beliefs', 'conversations', 'events', 'preferences'], 'query': "Mom's birthday, vegan preference, Sarah's vegetarian, Jake's nut allergy, family dining preferences, past birthday celebr)
+react_poc.naive | [NAIVE iter=4] ctx_tokens=1103 tools=13 should_force=True min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #5] force_tool_call=True
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (10) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm |   msg[2] role=assistant len=329: 
+[Calling acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommo
+react_poc.llm |   msg[3] role=user len=330: Tool acknowledge result: {'displayed': True, 'formatted_message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant th
+react_poc.llm |   msg[4] role=assistant len=237: 
+[Calling update_narrative({'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietar
+react_poc.llm |   msg[5] role=user len=148: Tool update_narrative result: {'success': True, 'thread_id': 'b0f67fa2-eb04-414c-8e35-c53af5433e13', 'active_threads': 1, 'thread_status': 'ACTIVE'}
+react_poc.llm |   msg[6] role=assistant len=251: 
+[Calling refine_affect({'override_emotion': 'excited_stressed', 'override_intensity': 0.7, 'reasoning': "User expressed both excitement ('I'm excited') and stress ('honestly kinda stressed') about pl
+react_poc.llm |   msg[7] role=user len=257: Tool refine_affect result: {'success': True, 'previous_emotion': 'neutral', 'previous_intensity': 0.0, 'override_applied': True, 'reasoning': "User expressed both excitement ('I'm excited') and stress
+react_poc.llm |   msg[8] role=assistant len=261: 
+[Calling recall_memory({'selectors': ['beliefs', 'conversations', 'events', 'preferences'], 'query': "Mom's birthday, vegan preference, Sarah's vegetarian, Jake's nut allergy, family dining preferenc
+react_poc.llm |   msg[9] role=user len=109: Tool recall_memory result: {'results': [], 'total_matched': 0, 'query_latency_ms': 85, 'source': 'k0_bridge'}
+react_poc.llm | --- TOOLS (13) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow']
+react_poc.llm | --- CONTENTS TO GEMINI (9 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm |   content[1] role=model parts=1
+react_poc.llm |   content[2] role=user parts=1
+react_poc.llm |   content[3] role=model parts=1
+react_poc.llm |   content[4] role=user parts=1
+react_poc.llm |   content[5] role=model parts=1
+react_poc.llm |   content[6] role=user parts=1
+react_poc.llm |   content[7] role=model parts=1
+react_poc.llm |   content[8] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=function_calling_config {
+  mode: ANY
+}
+
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "update_beliefs",
+                  "args": {
+                    "subject": "Mom",
+                    "operation": "add_fact",
+                    "source": "user_stated",
+                    "object_value": "vegan",
+             
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=5
+react_poc.llm |     part[0] has_function_call=update_beliefs has_text=
+react_poc.llm |       -> function_call: name=update_beliefs args={'subject': 'Mom', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegan', 'predicate': 'diet'}
+react_poc.llm |     part[1] has_function_call=update_beliefs has_text=
+react_poc.llm |       -> function_call: name=update_beliefs args={'subject': 'Sarah', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegetarian', 'predicate': 'diet'}
+react_poc.llm |     part[2] has_function_call=update_beliefs has_text=
+react_poc.llm |       -> function_call: name=update_beliefs args={'subject': 'Jake', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'nuts', 'predicate': 'allergy'}
+react_poc.llm |     part[3] has_function_call=update_beliefs has_text=
+react_poc.llm |       -> function_call: name=update_beliefs args={'subject': 'dinner_party', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': '8', 'predicate': 'number_of_guests'}
+react_poc.llm |     part[4] has_function_call=update_beliefs has_text=
+react_poc.llm |       -> function_call: name=update_beliefs args={'subject': 'dinner_party', 'operation': 'add_fact', 'source': 'user_stated', 'predicate': 'occasion', 'object_value': "Mom's birthday"}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=5: ['update_beliefs', 'update_beliefs', 'update_beliefs', 'update_beliefs', 'update_beliefs']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=3189 tokens_out=217
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=4] response: has_tool_calls=True tool_count=5 text_len=0
+react_poc.naive |   -> tool_call: update_beliefs({'subject': 'Mom', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegan', 'predicate': 'diet'})
+react_poc.naive |   -> tool_call: update_beliefs({'subject': 'Sarah', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegetarian', 'predicate': 'diet'})
+react_poc.naive |   -> tool_call: update_beliefs({'subject': 'Jake', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'nuts', 'predicate': 'allergy'})
+react_poc.naive |   -> tool_call: update_beliefs({'subject': 'dinner_party', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': '8', 'predicate': 'number_of_guests'})
+react_poc.naive |   -> tool_call: update_beliefs({'subject': 'dinner_party', 'operation': 'add_fact', 'source': 'user_stated', 'predicate': 'occasion', 'object_value': "Mom's birthday"})
+k1.sessionstate.guard | Preflight approved: section='beliefs_active', operation='add_fact', bytes=99
+k1.sessionstate.sizetracker | Updated section 'beliefs_active': 166 -> 316 (delta=+150)
+k1.sessionstate.manager | Mutation applied: section=beliefs_active, op=add_fact, delta=150, new_size=316, trace_id=
+k1.sessionstate.guard | Preflight approved: section='beliefs_active', operation='add_fact', bytes=106
+k1.sessionstate.sizetracker | Updated section 'beliefs_active': 316 -> 466 (delta=+150)
+k1.sessionstate.manager | Mutation applied: section=beliefs_active, op=add_fact, delta=150, new_size=466, trace_id=
+k1.sessionstate.guard | Preflight approved: section='beliefs_active', operation='add_fact', bytes=102
+k1.sessionstate.sizetracker | Updated section 'beliefs_active': 466 -> 616 (delta=+150)
+k1.sessionstate.manager | Mutation applied: section=beliefs_active, op=add_fact, delta=150, new_size=616, trace_id=
+k1.sessionstate.guard | Preflight approved: section='beliefs_active', operation='add_fact', bytes=116
+k1.sessionstate.sizetracker | Updated section 'beliefs_active': 616 -> 766 (delta=+150)
+k1.sessionstate.manager | Mutation applied: section=beliefs_active, op=add_fact, delta=150, new_size=766, trace_id=
+k1.sessionstate.guard | Preflight approved: section='beliefs_active', operation='add_fact', bytes=121
+k1.sessionstate.sizetracker | Updated section 'beliefs_active': 766 -> 916 (delta=+150)
+k1.sessionstate.manager | Mutation applied: section=beliefs_active, op=add_fact, delta=150, new_size=916, trace_id=
+react_poc.naive | [NAIVE iter=5] ctx_tokens=1490 tools=13 should_force=True min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #6] force_tool_call=True
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (16) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm |   msg[2] role=assistant len=329: 
+[Calling acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommo
+react_poc.llm |   msg[3] role=user len=330: Tool acknowledge result: {'displayed': True, 'formatted_message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant th
+react_poc.llm |   msg[4] role=assistant len=237: 
+[Calling update_narrative({'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietar
+react_poc.llm |   msg[5] role=user len=148: Tool update_narrative result: {'success': True, 'thread_id': 'b0f67fa2-eb04-414c-8e35-c53af5433e13', 'active_threads': 1, 'thread_status': 'ACTIVE'}
+react_poc.llm |   msg[6] role=assistant len=251: 
+[Calling refine_affect({'override_emotion': 'excited_stressed', 'override_intensity': 0.7, 'reasoning': "User expressed both excitement ('I'm excited') and stress ('honestly kinda stressed') about pl
+react_poc.llm |   msg[7] role=user len=257: Tool refine_affect result: {'success': True, 'previous_emotion': 'neutral', 'previous_intensity': 0.0, 'override_applied': True, 'reasoning': "User expressed both excitement ('I'm excited') and stress
+react_poc.llm |   msg[8] role=assistant len=261: 
+[Calling recall_memory({'selectors': ['beliefs', 'conversations', 'events', 'preferences'], 'query': "Mom's birthday, vegan preference, Sarah's vegetarian, Jake's nut allergy, family dining preferenc
+react_poc.llm |   msg[9] role=user len=109: Tool recall_memory result: {'results': [], 'total_matched': 0, 'query_latency_ms': 85, 'source': 'k0_bridge'}
+react_poc.llm |   msg[10] role=assistant len=754: 
+[Calling update_beliefs({'subject': 'Mom', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegan', 'predicate': 'diet'})]
+[Calling update_beliefs({'subject': 'Sarah', 'operation': 
+react_poc.llm |   msg[11] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '8fdf8af8-df70-4019-ac61-05a3aa336a69', 'is_correction': False, 'section_bytes': 316, 'error': None}
+react_poc.llm |   msg[12] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '6c9a0fcf-fc36-4c17-b6e9-411936cec7d2', 'is_correction': False, 'section_bytes': 466, 'error': None}
+react_poc.llm |   msg[13] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '918e3fe4-c83c-4498-8f97-a0f32c915ce4', 'is_correction': False, 'section_bytes': 616, 'error': None}
+react_poc.llm |   msg[14] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '42e11982-0f80-473e-b8d7-a94204e3558e', 'is_correction': False, 'section_bytes': 766, 'error': None}
+react_poc.llm |   msg[15] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': 'd8a381b2-c6fa-48a7-b157-a39d3c111867', 'is_correction': False, 'section_bytes': 916, 'error': None}
+react_poc.llm | --- TOOLS (13) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow']
+react_poc.llm | --- CONTENTS TO GEMINI (15 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm |   content[1] role=model parts=1
+react_poc.llm |   content[2] role=user parts=1
+react_poc.llm |   content[3] role=model parts=1
+react_poc.llm |   content[4] role=user parts=1
+react_poc.llm |   content[5] role=model parts=1
+react_poc.llm |   content[6] role=user parts=1
+react_poc.llm |   content[7] role=model parts=1
+react_poc.llm |   content[8] role=user parts=1
+react_poc.llm |   content[9] role=model parts=1
+react_poc.llm |   content[10] role=user parts=1
+react_poc.llm |   content[11] role=user parts=1
+react_poc.llm |   content[12] role=user parts=1
+react_poc.llm |   content[13] role=user parts=1
+react_poc.llm |   content[14] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=function_calling_config {
+  mode: ANY
+}
+
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "update_scoreboard",
+                  "args": {
+                    "task_status": "in_progress",
+                    "operation": "set_task",
+                    "task_name": "Plan Mom's vegan birthday dinner"
+                  }
+
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=1
+react_poc.llm |     part[0] has_function_call=update_scoreboard has_text=
+react_poc.llm |       -> function_call: name=update_scoreboard args={'task_status': 'in_progress', 'operation': 'set_task', 'task_name': "Plan Mom's vegan birthday dinner"}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=1: ['update_scoreboard']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=3790 tokens_out=39
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=5] response: has_tool_calls=True tool_count=1 text_len=0
+react_poc.naive |   -> tool_call: update_scoreboard({'task_status': 'in_progress', 'operation': 'set_task', 'task_name': "Plan Mom's vegan birthday dinner"})
+k1.sessionstate.guard | Preflight approved: section='scoreboard', operation='set', bytes=145
+k1.sessionstate.sizetracker | Updated section 'scoreboard': 60 -> 60 (delta=+0)
+k1.sessionstate.manager | Mutation applied: section=scoreboard, op=set, delta=0, new_size=60, trace_id=
+react_poc.naive | [NAIVE iter=6] ctx_tokens=1553 tools=14 should_force=False min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #7] force_tool_call=False
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (18) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm |   msg[2] role=assistant len=329: 
+[Calling acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommo
+react_poc.llm |   msg[3] role=user len=330: Tool acknowledge result: {'displayed': True, 'formatted_message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant th
+react_poc.llm |   msg[4] role=assistant len=237: 
+[Calling update_narrative({'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietar
+react_poc.llm |   msg[5] role=user len=148: Tool update_narrative result: {'success': True, 'thread_id': 'b0f67fa2-eb04-414c-8e35-c53af5433e13', 'active_threads': 1, 'thread_status': 'ACTIVE'}
+react_poc.llm |   msg[6] role=assistant len=251: 
+[Calling refine_affect({'override_emotion': 'excited_stressed', 'override_intensity': 0.7, 'reasoning': "User expressed both excitement ('I'm excited') and stress ('honestly kinda stressed') about pl
+react_poc.llm |   msg[7] role=user len=257: Tool refine_affect result: {'success': True, 'previous_emotion': 'neutral', 'previous_intensity': 0.0, 'override_applied': True, 'reasoning': "User expressed both excitement ('I'm excited') and stress
+react_poc.llm |   msg[8] role=assistant len=261: 
+[Calling recall_memory({'selectors': ['beliefs', 'conversations', 'events', 'preferences'], 'query': "Mom's birthday, vegan preference, Sarah's vegetarian, Jake's nut allergy, family dining preferenc
+react_poc.llm |   msg[9] role=user len=109: Tool recall_memory result: {'results': [], 'total_matched': 0, 'query_latency_ms': 85, 'source': 'k0_bridge'}
+react_poc.llm |   msg[10] role=assistant len=754: 
+[Calling update_beliefs({'subject': 'Mom', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegan', 'predicate': 'diet'})]
+[Calling update_beliefs({'subject': 'Sarah', 'operation': 
+react_poc.llm |   msg[11] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '8fdf8af8-df70-4019-ac61-05a3aa336a69', 'is_correction': False, 'section_bytes': 316, 'error': None}
+react_poc.llm |   msg[12] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '6c9a0fcf-fc36-4c17-b6e9-411936cec7d2', 'is_correction': False, 'section_bytes': 466, 'error': None}
+react_poc.llm |   msg[13] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '918e3fe4-c83c-4498-8f97-a0f32c915ce4', 'is_correction': False, 'section_bytes': 616, 'error': None}
+react_poc.llm |   msg[14] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '42e11982-0f80-473e-b8d7-a94204e3558e', 'is_correction': False, 'section_bytes': 766, 'error': None}
+react_poc.llm |   msg[15] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': 'd8a381b2-c6fa-48a7-b157-a39d3c111867', 'is_correction': False, 'section_bytes': 916, 'error': None}
+react_poc.llm |   msg[16] role=assistant len=134: 
+[Calling update_scoreboard({'task_status': 'in_progress', 'operation': 'set_task', 'task_name': "Plan Mom's vegan birthday dinner"})]
+react_poc.llm |   msg[17] role=user len=119: Tool update_scoreboard result: {'success': True, 'section_bytes': 60, 'available_bytes': 6084, 'operation': 'set_task'}
+react_poc.llm | --- TOOLS (14) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow', 'final_answer']
+react_poc.llm | --- CONTENTS TO GEMINI (17 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm |   content[1] role=model parts=1
+react_poc.llm |   content[2] role=user parts=1
+react_poc.llm |   content[3] role=model parts=1
+react_poc.llm |   content[4] role=user parts=1
+react_poc.llm |   content[5] role=model parts=1
+react_poc.llm |   content[6] role=user parts=1
+react_poc.llm |   content[7] role=model parts=1
+react_poc.llm |   content[8] role=user parts=1
+react_poc.llm |   content[9] role=model parts=1
+react_poc.llm |   content[10] role=user parts=1
+react_poc.llm |   content[11] role=user parts=1
+react_poc.llm |   content[12] role=user parts=1
+react_poc.llm |   content[13] role=user parts=1
+react_poc.llm |   content[14] role=user parts=1
+react_poc.llm |   content[15] role=model parts=1
+react_poc.llm |   content[16] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=None
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "update_clarifications",
+                  "args": {
+                    "description": "Budget for the dinner is unknown.",
+                    "gap_type": "CONSTRAINT_UNCLEAR",
+                    "operation": "record_gap"
+       
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=1
+react_poc.llm |     part[0] has_function_call=update_clarifications has_text=
+react_poc.llm |       -> function_call: name=update_clarifications args={'description': 'Budget for the dinner is unknown.', 'gap_type': 'CONSTRAINT_UNCLEAR', 'operation': 'record_gap'}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=1: ['update_clarifications']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=3922 tokens_out=38
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=6] response: has_tool_calls=True tool_count=1 text_len=0
+react_poc.naive |   -> tool_call: update_clarifications({'description': 'Budget for the dinner is unknown.', 'gap_type': 'CONSTRAINT_UNCLEAR', 'operation': 'record_gap'})
+k1.sessionstate.guard | Preflight approved: section='clarifications', operation='request', bytes=110
+k1.sessionstate.sizetracker | Updated section 'clarifications': 150 -> 300 (delta=+150)
+k1.sessionstate.manager | Mutation applied: section=clarifications, op=request, delta=150, new_size=300, trace_id=
+react_poc.naive | [NAIVE iter=7] ctx_tokens=1621 tools=14 should_force=False min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #8] force_tool_call=False
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (20) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm |   msg[2] role=assistant len=329: 
+[Calling acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommo
+react_poc.llm |   msg[3] role=user len=330: Tool acknowledge result: {'displayed': True, 'formatted_message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant th
+react_poc.llm |   msg[4] role=assistant len=237: 
+[Calling update_narrative({'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietar
+react_poc.llm |   msg[5] role=user len=148: Tool update_narrative result: {'success': True, 'thread_id': 'b0f67fa2-eb04-414c-8e35-c53af5433e13', 'active_threads': 1, 'thread_status': 'ACTIVE'}
+react_poc.llm |   msg[6] role=assistant len=251: 
+[Calling refine_affect({'override_emotion': 'excited_stressed', 'override_intensity': 0.7, 'reasoning': "User expressed both excitement ('I'm excited') and stress ('honestly kinda stressed') about pl
+react_poc.llm |   msg[7] role=user len=257: Tool refine_affect result: {'success': True, 'previous_emotion': 'neutral', 'previous_intensity': 0.0, 'override_applied': True, 'reasoning': "User expressed both excitement ('I'm excited') and stress
+react_poc.llm |   msg[8] role=assistant len=261: 
+[Calling recall_memory({'selectors': ['beliefs', 'conversations', 'events', 'preferences'], 'query': "Mom's birthday, vegan preference, Sarah's vegetarian, Jake's nut allergy, family dining preferenc
+react_poc.llm |   msg[9] role=user len=109: Tool recall_memory result: {'results': [], 'total_matched': 0, 'query_latency_ms': 85, 'source': 'k0_bridge'}
+react_poc.llm |   msg[10] role=assistant len=754: 
+[Calling update_beliefs({'subject': 'Mom', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegan', 'predicate': 'diet'})]
+[Calling update_beliefs({'subject': 'Sarah', 'operation': 
+react_poc.llm |   msg[11] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '8fdf8af8-df70-4019-ac61-05a3aa336a69', 'is_correction': False, 'section_bytes': 316, 'error': None}
+react_poc.llm |   msg[12] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '6c9a0fcf-fc36-4c17-b6e9-411936cec7d2', 'is_correction': False, 'section_bytes': 466, 'error': None}
+react_poc.llm |   msg[13] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '918e3fe4-c83c-4498-8f97-a0f32c915ce4', 'is_correction': False, 'section_bytes': 616, 'error': None}
+react_poc.llm |   msg[14] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '42e11982-0f80-473e-b8d7-a94204e3558e', 'is_correction': False, 'section_bytes': 766, 'error': None}
+react_poc.llm |   msg[15] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': 'd8a381b2-c6fa-48a7-b157-a39d3c111867', 'is_correction': False, 'section_bytes': 916, 'error': None}
+react_poc.llm |   msg[16] role=assistant len=134: 
+[Calling update_scoreboard({'task_status': 'in_progress', 'operation': 'set_task', 'task_name': "Plan Mom's vegan birthday dinner"})]
+react_poc.llm |   msg[17] role=user len=119: Tool update_scoreboard result: {'success': True, 'section_bytes': 60, 'available_bytes': 6084, 'operation': 'set_task'}
+react_poc.llm |   msg[18] role=assistant len=147: 
+[Calling update_clarifications({'description': 'Budget for the dinner is unknown.', 'gap_type': 'CONSTRAINT_UNCLEAR', 'operation': 'record_gap'})]
+react_poc.llm |   msg[19] role=user len=124: Tool update_clarifications result: {'success': True, 'gap_id': 'a64c10f0-5c2b-4969-a32c-860b8321a48e', 'open_gaps_count': 1}
+react_poc.llm | --- TOOLS (14) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow', 'final_answer']
+react_poc.llm | --- CONTENTS TO GEMINI (19 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm |   content[1] role=model parts=1
+react_poc.llm |   content[2] role=user parts=1
+react_poc.llm |   content[3] role=model parts=1
+react_poc.llm |   content[4] role=user parts=1
+react_poc.llm |   content[5] role=model parts=1
+react_poc.llm |   content[6] role=user parts=1
+react_poc.llm |   content[7] role=model parts=1
+react_poc.llm |   content[8] role=user parts=1
+react_poc.llm |   content[9] role=model parts=1
+react_poc.llm |   content[10] role=user parts=1
+react_poc.llm |   content[11] role=user parts=1
+react_poc.llm |   content[12] role=user parts=1
+react_poc.llm |   content[13] role=user parts=1
+react_poc.llm |   content[14] role=user parts=1
+react_poc.llm |   content[15] role=model parts=1
+react_poc.llm |   content[16] role=user parts=1
+react_poc.llm |   content[17] role=model parts=1
+react_poc.llm |   content[18] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=None
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "acknowledge",
+                  "args": {
+                    "ack_type": "progress",
+                    "message": "Okay, I've noted everyone's dietary needs and that the budget is still TBD. Now I'll look for suitable restaurant
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=1
+react_poc.llm |     part[0] has_function_call=acknowledge has_text=
+react_poc.llm |       -> function_call: name=acknowledge args={'ack_type': 'progress', 'message': "Okay, I've noted everyone's dietary needs and that the budget is still TBD. Now I'll look for suitable restaurants.", 'next_tool': 'discover_capabilities'}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=1: ['acknowledge']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=4028 tokens_out=56
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=7] response: has_tool_calls=True tool_count=1 text_len=0
+react_poc.naive |   -> tool_call: acknowledge({'ack_type': 'progress', 'message': "Okay, I've noted everyone's dietary needs and that the budget is still TBD. Now I'll look for suitable restaurants.", 'next_tool': 'discover_capabilities'})
+react_poc.naive | [NAIVE iter=8] ctx_tokens=1728 tools=14 should_force=False min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #9] force_tool_call=False
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (22) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm |   msg[2] role=assistant len=329: 
+[Calling acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommo
+react_poc.llm |   msg[3] role=user len=330: Tool acknowledge result: {'displayed': True, 'formatted_message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant th
+react_poc.llm |   msg[4] role=assistant len=237: 
+[Calling update_narrative({'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietar
+react_poc.llm |   msg[5] role=user len=148: Tool update_narrative result: {'success': True, 'thread_id': 'b0f67fa2-eb04-414c-8e35-c53af5433e13', 'active_threads': 1, 'thread_status': 'ACTIVE'}
+react_poc.llm |   msg[6] role=assistant len=251: 
+[Calling refine_affect({'override_emotion': 'excited_stressed', 'override_intensity': 0.7, 'reasoning': "User expressed both excitement ('I'm excited') and stress ('honestly kinda stressed') about pl
+react_poc.llm |   msg[7] role=user len=257: Tool refine_affect result: {'success': True, 'previous_emotion': 'neutral', 'previous_intensity': 0.0, 'override_applied': True, 'reasoning': "User expressed both excitement ('I'm excited') and stress
+react_poc.llm |   msg[8] role=assistant len=261: 
+[Calling recall_memory({'selectors': ['beliefs', 'conversations', 'events', 'preferences'], 'query': "Mom's birthday, vegan preference, Sarah's vegetarian, Jake's nut allergy, family dining preferenc
+react_poc.llm |   msg[9] role=user len=109: Tool recall_memory result: {'results': [], 'total_matched': 0, 'query_latency_ms': 85, 'source': 'k0_bridge'}
+react_poc.llm |   msg[10] role=assistant len=754: 
+[Calling update_beliefs({'subject': 'Mom', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegan', 'predicate': 'diet'})]
+[Calling update_beliefs({'subject': 'Sarah', 'operation': 
+react_poc.llm |   msg[11] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '8fdf8af8-df70-4019-ac61-05a3aa336a69', 'is_correction': False, 'section_bytes': 316, 'error': None}
+react_poc.llm |   msg[12] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '6c9a0fcf-fc36-4c17-b6e9-411936cec7d2', 'is_correction': False, 'section_bytes': 466, 'error': None}
+react_poc.llm |   msg[13] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '918e3fe4-c83c-4498-8f97-a0f32c915ce4', 'is_correction': False, 'section_bytes': 616, 'error': None}
+react_poc.llm |   msg[14] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '42e11982-0f80-473e-b8d7-a94204e3558e', 'is_correction': False, 'section_bytes': 766, 'error': None}
+react_poc.llm |   msg[15] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': 'd8a381b2-c6fa-48a7-b157-a39d3c111867', 'is_correction': False, 'section_bytes': 916, 'error': None}
+react_poc.llm |   msg[16] role=assistant len=134: 
+[Calling update_scoreboard({'task_status': 'in_progress', 'operation': 'set_task', 'task_name': "Plan Mom's vegan birthday dinner"})]
+react_poc.llm |   msg[17] role=user len=119: Tool update_scoreboard result: {'success': True, 'section_bytes': 60, 'available_bytes': 6084, 'operation': 'set_task'}
+react_poc.llm |   msg[18] role=assistant len=147: 
+[Calling update_clarifications({'description': 'Budget for the dinner is unknown.', 'gap_type': 'CONSTRAINT_UNCLEAR', 'operation': 'record_gap'})]
+react_poc.llm |   msg[19] role=user len=124: Tool update_clarifications result: {'success': True, 'gap_id': 'a64c10f0-5c2b-4969-a32c-860b8321a48e', 'open_gaps_count': 1}
+react_poc.llm |   msg[20] role=assistant len=216: 
+[Calling acknowledge({'ack_type': 'progress', 'message': "Okay, I've noted everyone's dietary needs and that the budget is still TBD. Now I'll look for suitable restaurants.", 'next_tool': 'discover_
+react_poc.llm |   msg[21] role=user len=210: Tool acknowledge result: {'displayed': True, 'formatted_message': "Okay, I've noted everyone's dietary needs and that the budget is still TBD. Now I'll look for suitable restaurants.", 'display_latenc
+react_poc.llm | --- TOOLS (14) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow', 'final_answer']
+react_poc.llm | --- CONTENTS TO GEMINI (21 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm |   content[1] role=model parts=1
+react_poc.llm |   content[2] role=user parts=1
+react_poc.llm |   content[3] role=model parts=1
+react_poc.llm |   content[4] role=user parts=1
+react_poc.llm |   content[5] role=model parts=1
+react_poc.llm |   content[6] role=user parts=1
+react_poc.llm |   content[7] role=model parts=1
+react_poc.llm |   content[8] role=user parts=1
+react_poc.llm |   content[9] role=model parts=1
+react_poc.llm |   content[10] role=user parts=1
+react_poc.llm |   content[11] role=user parts=1
+react_poc.llm |   content[12] role=user parts=1
+react_poc.llm |   content[13] role=user parts=1
+react_poc.llm |   content[14] role=user parts=1
+react_poc.llm |   content[15] role=model parts=1
+react_poc.llm |   content[16] role=user parts=1
+react_poc.llm |   content[17] role=model parts=1
+react_poc.llm |   content[18] role=user parts=1
+react_poc.llm |   content[19] role=model parts=1
+react_poc.llm |   content[20] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=None
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "discover_capabilities",
+                  "args": {
+                    "domain": [
+                      "dining",
+                      "events",
+                      "planning"
+                    ],
+                    "intent
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=1
+react_poc.llm |     part[0] has_function_call=discover_capabilities has_text=
+react_poc.llm |       -> function_call: name=discover_capabilities args={'domain': ['dining', 'events', 'planning'], 'intent': 'find a restaurant for a special dinner', 'top_k': 5.0}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=1: ['discover_capabilities']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=4141 tokens_out=39
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=8] response: has_tool_calls=True tool_count=1 text_len=0
+react_poc.naive |   -> tool_call: discover_capabilities({'domain': ['dining', 'events', 'planning'], 'intent': 'find a restaurant for a special dinner', 'top_k': 5.0})
+react_poc.naive | [NAIVE iter=9] ctx_tokens=1793 tools=14 should_force=False min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #10] force_tool_call=False
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (24) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm |   msg[2] role=assistant len=329: 
+[Calling acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommo
+react_poc.llm |   msg[3] role=user len=330: Tool acknowledge result: {'displayed': True, 'formatted_message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant th
+react_poc.llm |   msg[4] role=assistant len=237: 
+[Calling update_narrative({'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietar
+react_poc.llm |   msg[5] role=user len=148: Tool update_narrative result: {'success': True, 'thread_id': 'b0f67fa2-eb04-414c-8e35-c53af5433e13', 'active_threads': 1, 'thread_status': 'ACTIVE'}
+react_poc.llm |   msg[6] role=assistant len=251: 
+[Calling refine_affect({'override_emotion': 'excited_stressed', 'override_intensity': 0.7, 'reasoning': "User expressed both excitement ('I'm excited') and stress ('honestly kinda stressed') about pl
+react_poc.llm |   msg[7] role=user len=257: Tool refine_affect result: {'success': True, 'previous_emotion': 'neutral', 'previous_intensity': 0.0, 'override_applied': True, 'reasoning': "User expressed both excitement ('I'm excited') and stress
+react_poc.llm |   msg[8] role=assistant len=261: 
+[Calling recall_memory({'selectors': ['beliefs', 'conversations', 'events', 'preferences'], 'query': "Mom's birthday, vegan preference, Sarah's vegetarian, Jake's nut allergy, family dining preferenc
+react_poc.llm |   msg[9] role=user len=109: Tool recall_memory result: {'results': [], 'total_matched': 0, 'query_latency_ms': 85, 'source': 'k0_bridge'}
+react_poc.llm |   msg[10] role=assistant len=754: 
+[Calling update_beliefs({'subject': 'Mom', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegan', 'predicate': 'diet'})]
+[Calling update_beliefs({'subject': 'Sarah', 'operation': 
+react_poc.llm |   msg[11] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '8fdf8af8-df70-4019-ac61-05a3aa336a69', 'is_correction': False, 'section_bytes': 316, 'error': None}
+react_poc.llm |   msg[12] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '6c9a0fcf-fc36-4c17-b6e9-411936cec7d2', 'is_correction': False, 'section_bytes': 466, 'error': None}
+react_poc.llm |   msg[13] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '918e3fe4-c83c-4498-8f97-a0f32c915ce4', 'is_correction': False, 'section_bytes': 616, 'error': None}
+react_poc.llm |   msg[14] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '42e11982-0f80-473e-b8d7-a94204e3558e', 'is_correction': False, 'section_bytes': 766, 'error': None}
+react_poc.llm |   msg[15] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': 'd8a381b2-c6fa-48a7-b157-a39d3c111867', 'is_correction': False, 'section_bytes': 916, 'error': None}
+react_poc.llm |   msg[16] role=assistant len=134: 
+[Calling update_scoreboard({'task_status': 'in_progress', 'operation': 'set_task', 'task_name': "Plan Mom's vegan birthday dinner"})]
+react_poc.llm |   msg[17] role=user len=119: Tool update_scoreboard result: {'success': True, 'section_bytes': 60, 'available_bytes': 6084, 'operation': 'set_task'}
+react_poc.llm |   msg[18] role=assistant len=147: 
+[Calling update_clarifications({'description': 'Budget for the dinner is unknown.', 'gap_type': 'CONSTRAINT_UNCLEAR', 'operation': 'record_gap'})]
+react_poc.llm |   msg[19] role=user len=124: Tool update_clarifications result: {'success': True, 'gap_id': 'a64c10f0-5c2b-4969-a32c-860b8321a48e', 'open_gaps_count': 1}
+react_poc.llm |   msg[20] role=assistant len=216: 
+[Calling acknowledge({'ack_type': 'progress', 'message': "Okay, I've noted everyone's dietary needs and that the budget is still TBD. Now I'll look for suitable restaurants.", 'next_tool': 'discover_
+react_poc.llm |   msg[21] role=user len=210: Tool acknowledge result: {'displayed': True, 'formatted_message': "Okay, I've noted everyone's dietary needs and that the budget is still TBD. Now I'll look for suitable restaurants.", 'display_latenc
+react_poc.llm |   msg[22] role=assistant len=144: 
+[Calling discover_capabilities({'domain': ['dining', 'events', 'planning'], 'intent': 'find a restaurant for a special dinner', 'top_k': 5.0})]
+react_poc.llm |   msg[23] role=user len=116: Tool discover_capabilities error: HANDLER_ERROR - slice indices must be integers or None or have an __index__ method
+react_poc.llm | --- TOOLS (14) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow', 'final_answer']
+react_poc.llm | --- CONTENTS TO GEMINI (23 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm |   content[1] role=model parts=1
+react_poc.llm |   content[2] role=user parts=1
+react_poc.llm |   content[3] role=model parts=1
+react_poc.llm |   content[4] role=user parts=1
+react_poc.llm |   content[5] role=model parts=1
+react_poc.llm |   content[6] role=user parts=1
+react_poc.llm |   content[7] role=model parts=1
+react_poc.llm |   content[8] role=user parts=1
+react_poc.llm |   content[9] role=model parts=1
+react_poc.llm |   content[10] role=user parts=1
+react_poc.llm |   content[11] role=user parts=1
+react_poc.llm |   content[12] role=user parts=1
+react_poc.llm |   content[13] role=user parts=1
+react_poc.llm |   content[14] role=user parts=1
+react_poc.llm |   content[15] role=model parts=1
+react_poc.llm |   content[16] role=user parts=1
+react_poc.llm |   content[17] role=model parts=1
+react_poc.llm |   content[18] role=user parts=1
+react_poc.llm |   content[19] role=model parts=1
+react_poc.llm |   content[20] role=user parts=1
+react_poc.llm |   content[21] role=model parts=1
+react_poc.llm |   content[22] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=None
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "acknowledge",
+                  "args": {
+                    "ack_type": "progress",
+                    "message": "It seems there was a temporary issue finding capabilities. I will try again now to discover suitable tools for fi
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=1
+react_poc.llm |     part[0] has_function_call=acknowledge has_text=
+react_poc.llm |       -> function_call: name=acknowledge args={'ack_type': 'progress', 'message': 'It seems there was a temporary issue finding capabilities. I will try again now to discover suitable tools for finding a restaurant.', 'next_tool': 'discover_capabilities'}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=1: ['acknowledge']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=4208 tokens_out=51
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=9] response: has_tool_calls=True tool_count=1 text_len=0
+react_poc.naive |   -> tool_call: acknowledge({'ack_type': 'progress', 'message': 'It seems there was a temporary issue finding capabilities. I will try again now to discover suitable tools for finding a restaurant.', 'next_tool': 'discover_capab)
+react_poc.naive | [NAIVE iter=10] ctx_tokens=1908 tools=14 should_force=False min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #11] force_tool_call=False
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (26) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm |   msg[2] role=assistant len=329: 
+[Calling acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommo
+react_poc.llm |   msg[3] role=user len=330: Tool acknowledge result: {'displayed': True, 'formatted_message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant th
+react_poc.llm |   msg[4] role=assistant len=237: 
+[Calling update_narrative({'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietar
+react_poc.llm |   msg[5] role=user len=148: Tool update_narrative result: {'success': True, 'thread_id': 'b0f67fa2-eb04-414c-8e35-c53af5433e13', 'active_threads': 1, 'thread_status': 'ACTIVE'}
+react_poc.llm |   msg[6] role=assistant len=251: 
+[Calling refine_affect({'override_emotion': 'excited_stressed', 'override_intensity': 0.7, 'reasoning': "User expressed both excitement ('I'm excited') and stress ('honestly kinda stressed') about pl
+react_poc.llm |   msg[7] role=user len=257: Tool refine_affect result: {'success': True, 'previous_emotion': 'neutral', 'previous_intensity': 0.0, 'override_applied': True, 'reasoning': "User expressed both excitement ('I'm excited') and stress
+react_poc.llm |   msg[8] role=assistant len=261: 
+[Calling recall_memory({'selectors': ['beliefs', 'conversations', 'events', 'preferences'], 'query': "Mom's birthday, vegan preference, Sarah's vegetarian, Jake's nut allergy, family dining preferenc
+react_poc.llm |   msg[9] role=user len=109: Tool recall_memory result: {'results': [], 'total_matched': 0, 'query_latency_ms': 85, 'source': 'k0_bridge'}
+react_poc.llm |   msg[10] role=assistant len=754: 
+[Calling update_beliefs({'subject': 'Mom', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegan', 'predicate': 'diet'})]
+[Calling update_beliefs({'subject': 'Sarah', 'operation': 
+react_poc.llm |   msg[11] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '8fdf8af8-df70-4019-ac61-05a3aa336a69', 'is_correction': False, 'section_bytes': 316, 'error': None}
+react_poc.llm |   msg[12] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '6c9a0fcf-fc36-4c17-b6e9-411936cec7d2', 'is_correction': False, 'section_bytes': 466, 'error': None}
+react_poc.llm |   msg[13] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '918e3fe4-c83c-4498-8f97-a0f32c915ce4', 'is_correction': False, 'section_bytes': 616, 'error': None}
+react_poc.llm |   msg[14] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '42e11982-0f80-473e-b8d7-a94204e3558e', 'is_correction': False, 'section_bytes': 766, 'error': None}
+react_poc.llm |   msg[15] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': 'd8a381b2-c6fa-48a7-b157-a39d3c111867', 'is_correction': False, 'section_bytes': 916, 'error': None}
+react_poc.llm |   msg[16] role=assistant len=134: 
+[Calling update_scoreboard({'task_status': 'in_progress', 'operation': 'set_task', 'task_name': "Plan Mom's vegan birthday dinner"})]
+react_poc.llm |   msg[17] role=user len=119: Tool update_scoreboard result: {'success': True, 'section_bytes': 60, 'available_bytes': 6084, 'operation': 'set_task'}
+react_poc.llm |   msg[18] role=assistant len=147: 
+[Calling update_clarifications({'description': 'Budget for the dinner is unknown.', 'gap_type': 'CONSTRAINT_UNCLEAR', 'operation': 'record_gap'})]
+react_poc.llm |   msg[19] role=user len=124: Tool update_clarifications result: {'success': True, 'gap_id': 'a64c10f0-5c2b-4969-a32c-860b8321a48e', 'open_gaps_count': 1}
+react_poc.llm |   msg[20] role=assistant len=216: 
+[Calling acknowledge({'ack_type': 'progress', 'message': "Okay, I've noted everyone's dietary needs and that the budget is still TBD. Now I'll look for suitable restaurants.", 'next_tool': 'discover_
+react_poc.llm |   msg[21] role=user len=210: Tool acknowledge result: {'displayed': True, 'formatted_message': "Okay, I've noted everyone's dietary needs and that the budget is still TBD. Now I'll look for suitable restaurants.", 'display_latenc
+react_poc.llm |   msg[22] role=assistant len=144: 
+[Calling discover_capabilities({'domain': ['dining', 'events', 'planning'], 'intent': 'find a restaurant for a special dinner', 'top_k': 5.0})]
+react_poc.llm |   msg[23] role=user len=116: Tool discover_capabilities error: HANDLER_ERROR - slice indices must be integers or None or have an __index__ method
+react_poc.llm |   msg[24] role=assistant len=233: 
+[Calling acknowledge({'ack_type': 'progress', 'message': 'It seems there was a temporary issue finding capabilities. I will try again now to discover suitable tools for finding a restaurant.', 'next_
+react_poc.llm |   msg[25] role=user len=227: Tool acknowledge result: {'displayed': True, 'formatted_message': 'It seems there was a temporary issue finding capabilities. I will try again now to discover suitable tools for finding a restaurant.'
+react_poc.llm | --- TOOLS (14) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow', 'final_answer']
+react_poc.llm | --- CONTENTS TO GEMINI (25 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm |   content[1] role=model parts=1
+react_poc.llm |   content[2] role=user parts=1
+react_poc.llm |   content[3] role=model parts=1
+react_poc.llm |   content[4] role=user parts=1
+react_poc.llm |   content[5] role=model parts=1
+react_poc.llm |   content[6] role=user parts=1
+react_poc.llm |   content[7] role=model parts=1
+react_poc.llm |   content[8] role=user parts=1
+react_poc.llm |   content[9] role=model parts=1
+react_poc.llm |   content[10] role=user parts=1
+react_poc.llm |   content[11] role=user parts=1
+react_poc.llm |   content[12] role=user parts=1
+react_poc.llm |   content[13] role=user parts=1
+react_poc.llm |   content[14] role=user parts=1
+react_poc.llm |   content[15] role=model parts=1
+react_poc.llm |   content[16] role=user parts=1
+react_poc.llm |   content[17] role=model parts=1
+react_poc.llm |   content[18] role=user parts=1
+react_poc.llm |   content[19] role=model parts=1
+react_poc.llm |   content[20] role=user parts=1
+react_poc.llm |   content[21] role=model parts=1
+react_poc.llm |   content[22] role=user parts=1
+react_poc.llm |   content[23] role=model parts=1
+react_poc.llm |   content[24] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=None
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "discover_capabilities",
+                  "args": {
+                    "intent": "find a restaurant for a special dinner",
+                    "domain": [
+                      "dining",
+                      "events",
+           
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=1
+react_poc.llm |     part[0] has_function_call=discover_capabilities has_text=
+react_poc.llm |       -> function_call: name=discover_capabilities args={'intent': 'find a restaurant for a special dinner', 'domain': ['dining', 'events', 'planning'], 'top_k': 5.0}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=1: ['discover_capabilities']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=4311 tokens_out=39
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=10] response: has_tool_calls=True tool_count=1 text_len=0
+react_poc.naive |   -> tool_call: discover_capabilities({'intent': 'find a restaurant for a special dinner', 'domain': ['dining', 'events', 'planning'], 'top_k': 5.0})
+react_poc.naive | [NAIVE iter=11] ctx_tokens=1973 tools=14 should_force=False min_tool_iter=6
+react_poc.llm | ================================================================================
+react_poc.llm | [LLM CALL #12] force_tool_call=False
+react_poc.llm | --- SYSTEM INSTRUCTION (2058 chars) ---
+react_poc.llm | You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without tool calls are FORBIDDEN. You must call at least one tool per turn.
+
+RULE 2: You MUST call acknowledge() as your FIRST tool call. Effectful tools without preceding acknowledge are REJECTED by the system.
+
+RULE 3: You MUST complete ALL of the following steps IN ORDER. Do NOT skip steps. Do NOT combine 
+react_poc.llm | --- MESSAGES (28) ---
+react_poc.llm |   msg[0] role=system len=2058: You are the FamilyOS Concierge -- a warm, proactive family assistant.
+
+CRITICAL OPERATING RULES (MUST follow ALL rules):
+
+RULE 1: You MUST call tools in EVERY iteration. Text-only responses without to
+react_poc.llm |   msg[1] role=user len=433: Hey, Mom's birthday is next Saturday! She mentioned she's gone vegan recently. Can you help plan a special dinner for the family? I'm excited but honestly kinda stressed about pulling it off. We'll ne
+react_poc.llm |   msg[2] role=assistant len=329: 
+[Calling acknowledge({'ack_type': 'commit', 'message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant that accommo
+react_poc.llm |   msg[3] role=user len=330: Tool acknowledge result: {'displayed': True, 'formatted_message': "Absolutely! I can help you plan a special vegan-friendly birthday dinner for your mom next Saturday. We'll find a great restaurant th
+react_poc.llm |   msg[4] role=assistant len=237: 
+[Calling update_narrative({'domains': ['family', 'planning', 'dining'], 'operation': 'new_thread', 'topic': "Mom's vegan birthday dinner", 'goal': 'Plan a special dinner for Mom, accommodating dietar
+react_poc.llm |   msg[5] role=user len=148: Tool update_narrative result: {'success': True, 'thread_id': 'b0f67fa2-eb04-414c-8e35-c53af5433e13', 'active_threads': 1, 'thread_status': 'ACTIVE'}
+react_poc.llm |   msg[6] role=assistant len=251: 
+[Calling refine_affect({'override_emotion': 'excited_stressed', 'override_intensity': 0.7, 'reasoning': "User expressed both excitement ('I'm excited') and stress ('honestly kinda stressed') about pl
+react_poc.llm |   msg[7] role=user len=257: Tool refine_affect result: {'success': True, 'previous_emotion': 'neutral', 'previous_intensity': 0.0, 'override_applied': True, 'reasoning': "User expressed both excitement ('I'm excited') and stress
+react_poc.llm |   msg[8] role=assistant len=261: 
+[Calling recall_memory({'selectors': ['beliefs', 'conversations', 'events', 'preferences'], 'query': "Mom's birthday, vegan preference, Sarah's vegetarian, Jake's nut allergy, family dining preferenc
+react_poc.llm |   msg[9] role=user len=109: Tool recall_memory result: {'results': [], 'total_matched': 0, 'query_latency_ms': 85, 'source': 'k0_bridge'}
+react_poc.llm |   msg[10] role=assistant len=754: 
+[Calling update_beliefs({'subject': 'Mom', 'operation': 'add_fact', 'source': 'user_stated', 'object_value': 'vegan', 'predicate': 'diet'})]
+[Calling update_beliefs({'subject': 'Sarah', 'operation': 
+react_poc.llm |   msg[11] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '8fdf8af8-df70-4019-ac61-05a3aa336a69', 'is_correction': False, 'section_bytes': 316, 'error': None}
+react_poc.llm |   msg[12] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '6c9a0fcf-fc36-4c17-b6e9-411936cec7d2', 'is_correction': False, 'section_bytes': 466, 'error': None}
+react_poc.llm |   msg[13] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '918e3fe4-c83c-4498-8f97-a0f32c915ce4', 'is_correction': False, 'section_bytes': 616, 'error': None}
+react_poc.llm |   msg[14] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': '42e11982-0f80-473e-b8d7-a94204e3558e', 'is_correction': False, 'section_bytes': 766, 'error': None}
+react_poc.llm |   msg[15] role=user len=159: Tool update_beliefs result: {'success': True, 'belief_id': 'd8a381b2-c6fa-48a7-b157-a39d3c111867', 'is_correction': False, 'section_bytes': 916, 'error': None}
+react_poc.llm |   msg[16] role=assistant len=134: 
+[Calling update_scoreboard({'task_status': 'in_progress', 'operation': 'set_task', 'task_name': "Plan Mom's vegan birthday dinner"})]
+react_poc.llm |   msg[17] role=user len=119: Tool update_scoreboard result: {'success': True, 'section_bytes': 60, 'available_bytes': 6084, 'operation': 'set_task'}
+react_poc.llm |   msg[18] role=assistant len=147: 
+[Calling update_clarifications({'description': 'Budget for the dinner is unknown.', 'gap_type': 'CONSTRAINT_UNCLEAR', 'operation': 'record_gap'})]
+react_poc.llm |   msg[19] role=user len=124: Tool update_clarifications result: {'success': True, 'gap_id': 'a64c10f0-5c2b-4969-a32c-860b8321a48e', 'open_gaps_count': 1}
+react_poc.llm |   msg[20] role=assistant len=216: 
+[Calling acknowledge({'ack_type': 'progress', 'message': "Okay, I've noted everyone's dietary needs and that the budget is still TBD. Now I'll look for suitable restaurants.", 'next_tool': 'discover_
+react_poc.llm |   msg[21] role=user len=210: Tool acknowledge result: {'displayed': True, 'formatted_message': "Okay, I've noted everyone's dietary needs and that the budget is still TBD. Now I'll look for suitable restaurants.", 'display_latenc
+react_poc.llm |   msg[22] role=assistant len=144: 
+[Calling discover_capabilities({'domain': ['dining', 'events', 'planning'], 'intent': 'find a restaurant for a special dinner', 'top_k': 5.0})]
+react_poc.llm |   msg[23] role=user len=116: Tool discover_capabilities error: HANDLER_ERROR - slice indices must be integers or None or have an __index__ method
+react_poc.llm |   msg[24] role=assistant len=233: 
+[Calling acknowledge({'ack_type': 'progress', 'message': 'It seems there was a temporary issue finding capabilities. I will try again now to discover suitable tools for finding a restaurant.', 'next_
+react_poc.llm |   msg[25] role=user len=227: Tool acknowledge result: {'displayed': True, 'formatted_message': 'It seems there was a temporary issue finding capabilities. I will try again now to discover suitable tools for finding a restaurant.'
+react_poc.llm |   msg[26] role=assistant len=144: 
+[Calling discover_capabilities({'intent': 'find a restaurant for a special dinner', 'domain': ['dining', 'events', 'planning'], 'top_k': 5.0})]
+react_poc.llm |   msg[27] role=user len=116: Tool discover_capabilities error: HANDLER_ERROR - slice indices must be integers or None or have an __index__ method
+react_poc.llm | --- TOOLS (14) ---
+react_poc.llm |   tool_names=['acknowledge', 'update_scoreboard', 'update_beliefs', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'recall_memory', 'discover_capabilities', 'summarize_context', 'invoke_capability', 'spawn_via_fabric', 'execute_workflow', 'final_answer']
+react_poc.llm | --- CONTENTS TO GEMINI (27 parts) ---
+react_poc.llm |   content[0] role=user parts=1
+react_poc.llm |   content[1] role=model parts=1
+react_poc.llm |   content[2] role=user parts=1
+react_poc.llm |   content[3] role=model parts=1
+react_poc.llm |   content[4] role=user parts=1
+react_poc.llm |   content[5] role=model parts=1
+react_poc.llm |   content[6] role=user parts=1
+react_poc.llm |   content[7] role=model parts=1
+react_poc.llm |   content[8] role=user parts=1
+react_poc.llm |   content[9] role=model parts=1
+react_poc.llm |   content[10] role=user parts=1
+react_poc.llm |   content[11] role=user parts=1
+react_poc.llm |   content[12] role=user parts=1
+react_poc.llm |   content[13] role=user parts=1
+react_poc.llm |   content[14] role=user parts=1
+react_poc.llm |   content[15] role=model parts=1
+react_poc.llm |   content[16] role=user parts=1
+react_poc.llm |   content[17] role=model parts=1
+react_poc.llm |   content[18] role=user parts=1
+react_poc.llm |   content[19] role=model parts=1
+react_poc.llm |   content[20] role=user parts=1
+react_poc.llm |   content[21] role=model parts=1
+react_poc.llm |   content[22] role=user parts=1
+react_poc.llm |   content[23] role=model parts=1
+react_poc.llm |   content[24] role=user parts=1
+react_poc.llm |   content[25] role=model parts=1
+react_poc.llm |   content[26] role=user parts=1
+react_poc.llm | --- TOOL CONFIG ---
+react_poc.llm |   gemini_tools=True, tool_config=None
+react_poc.llm | --- RAW RESPONSE TYPE: GenerateContentResponse ---
+react_poc.llm | --- RAW RESPONSE repr (first 500 chars): response:
+GenerateContentResponse(
+    done=True,
+    iterator=None,
+    result=protos.GenerateContentResponse({
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "function_call": {
+                  "name": "acknowledge",
+                  "args": {
+                    "ack_type": "progress",
+                    "message": "Apologies for the repeated technical hiccup. It seems I made an error in the previous tool call's parameters. I'm
+react_poc.llm | --- RAW RESPONSE ---
+react_poc.llm |   candidates=1
+react_poc.llm |   candidate.finish_reason=1
+react_poc.llm |   candidate.content.role=model
+react_poc.llm |   candidate.content.parts=1
+react_poc.llm |     part[0] has_function_call=acknowledge has_text=
+react_poc.llm |       -> function_call: name=acknowledge args={'ack_type': 'progress', 'message': "Apologies for the repeated technical hiccup. It seems I made an error in the previous tool call's parameters. I'm correcting that now and will retry finding the right capabilities to search for restaurants.", 'next_tool': 'discover_capabilities'}
+react_poc.llm | --- PARSED OUTPUT ---
+react_poc.llm |   tool_calls=1: ['acknowledge']
+react_poc.llm |   text_parts=0, total_text_len=0
+react_poc.llm |   tokens_in=4378 tokens_out=69
+react_poc.llm | ================================================================================
+react_poc.naive | [NAIVE iter=11] response: has_tool_calls=True tool_count=1 text_len=0
+react_poc.naive |   -> tool_call: acknowledge({'ack_type': 'progress', 'message': "Apologies for the repeated technical hiccup. It seems I made an error in the previous tool call's parameters. I'm correcting that now and will retry finding the ri)
+  Naive:  FAIL | 12 iters | 16 tools | 2,125 ctx tokens
+No comparisons to display (single-mode run).
+
+LLM calls: 12 | Tokens in: 43,521 | Tokens out: 810
+Results saved to: D:\familyos\poc\react_scratchpad_poc\eval\results

@@ -64,7 +64,7 @@ subgraph SK["🧠 K1 SessionKernel (Tiered) — total ≤ 96KB"]
 
     SIZE_TRACKER["SizeTracker (62 tests)<br/>per-section byte accounting"]:::svc
     MUTATION_GUARD["MutationGuard (79 tests)<br/>preflight estimate + reject<br/>API: preflight(section, op, data) → Approval"]:::svc_critical
-    EVICTION_ENGINE["EvictionEngine (63 tests)<br/>tier-aware eviction + summarization<br/>Emits: k1.sessionstate.eviction.v1 via IEventPort<br/>Consumers: Memory Writer (eviction listener)"]:::svc
+    EVICTION_ENGINE["EvictionEngine (63 tests)<br/>tier-aware eviction + summarization<br/>Emits: k1.session.eviction.v1 via IEventPort<br/>Consumers: Memory Writer (eviction listener)"]:::svc
     MIGRATION_ENGINE["MigrationEngine (102 tests)<br/>HOT↔WARM demote/promote"]:::svc
     SNAPSHOT_API["SnapshotAPI (64 tests)<br/>size breakdown + health"]:::svc
     RECON_SLA["ReconstructionSLA (85 tests)<br/>P95 < 50ms, partial hydration"]:::svc
@@ -203,7 +203,7 @@ MIGRATION_ENGINE -->|demote turn| W_HISTORY_RECENT
 %% If WARM pressure, evict + summarize + archive to LOCAL first
 SIZE_TRACKER -->|warm pressure| EVICTION_ENGINE
 EVICTION_ENGINE --> WARM_EVICT
-EVICTION_ENGINE -->|"emit k1.sessionstate.eviction.v1"| PORT_EVENT
+EVICTION_ENGINE -->|"emit k1.session.eviction.v1"| PORT_EVENT
 WARM_EVICT -->|summarize| W_HISTORY_RECENT
 WARM_EVICT -->|archive local| LOCAL_ARCHIVE
 LOCAL_ARCHIVE --> ST_BELIEFS_ARCHIVE

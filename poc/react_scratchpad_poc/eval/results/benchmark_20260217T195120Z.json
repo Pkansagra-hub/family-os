@@ -1,0 +1,490 @@
+{
+  "timestamp": "20260217T195120Z",
+  "scenario_count": 1,
+  "results": [
+    {
+      "scenario_id": "test_04_recovery",
+      "scenario_name": "Recovery from Failure",
+      "naive": {
+        "runner_name": "naive_react",
+        "scenario_id": "test_04_recovery",
+        "success": true,
+        "final_answer": "Premium flight options from SFO to London (using fallback): {'from': 'SFO', 'to': 'London', 'date': '2025-06-01', 'flights': [{'airline': 'Generic Air', 'flight': 'GA001', 'price': 500, 'stops': 1}], 'count': 1}. Weather in London: {'city': 'London', 'country': 'UK', 'temp_c': 15, 'condition': 'Rainy', 'humidity': 80, 'wind_kph': 20}",
+        "turns": [
+          {
+            "iteration": 0,
+            "assistant_message": "\n[Calling flaky_api({'endpoint': 'premium_flight_search', 'from_city': 'SFO', 'to_city': 'London'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-d71e4e73",
+                "name": "flaky_api",
+                "arguments": {
+                  "endpoint": "premium_flight_search",
+                  "from_city": "SFO",
+                  "to_city": "London"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "flaky_api",
+                "call_id": "call-d71e4e73",
+                "ok": false,
+                "output": null,
+                "error_code": "EXECUTION_ERROR",
+                "error_message": "CannedToolRegistry._handle_flaky_api() got an unexpected keyword argument 'from_city'"
+              }
+            ],
+            "context_tokens_estimate": 140,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 1,
+            "assistant_message": "\n[Calling flaky_api({'endpoint': 'premium_flight_search'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-3c2add6b",
+                "name": "flaky_api",
+                "arguments": {
+                  "endpoint": "premium_flight_search"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "flaky_api",
+                "call_id": "call-3c2add6b",
+                "ok": false,
+                "output": null,
+                "error_code": "RATE_LIMITED",
+                "error_message": "API rate limit exceeded, try again later"
+              }
+            ],
+            "context_tokens_estimate": 196,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 2,
+            "assistant_message": "\n[Calling flight_search({'from_city': 'SFO', 'to_city': 'London'})]\n[Calling weather_api({'city': 'London'})]",
+            "tool_calls": [
+              {
+                "call_id": "call-b46d1830",
+                "name": "flight_search",
+                "arguments": {
+                  "from_city": "SFO",
+                  "to_city": "London"
+                }
+              },
+              {
+                "call_id": "call-060d4baa",
+                "name": "weather_api",
+                "arguments": {
+                  "city": "London"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "flight_search",
+                "call_id": "call-b46d1830",
+                "ok": true,
+                "output": {
+                  "from": "SFO",
+                  "to": "London",
+                  "date": "2025-06-01",
+                  "flights": [
+                    {
+                      "airline": "Generic Air",
+                      "flight": "GA001",
+                      "price": 500,
+                      "stops": 1
+                    }
+                  ],
+                  "count": 1
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "weather_api",
+                "call_id": "call-060d4baa",
+                "ok": true,
+                "output": {
+                  "city": "London",
+                  "country": "UK",
+                  "temp_c": 15,
+                  "condition": "Rainy",
+                  "humidity": 80,
+                  "wind_kph": 20
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 230,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 3,
+            "assistant_message": "Premium flight options from SFO to London (using fallback): {'from': 'SFO', 'to': 'London', 'date': '2025-06-01', 'flights': [{'airline': 'Generic Air', 'flight': 'GA001', 'price': 500, 'stops': 1}], 'count': 1}. Weather in London: {'city': 'London', 'country': 'UK', 'temp_c': 15, 'condition': 'Rainy', 'humidity': 80, 'wind_kph': 20}",
+            "tool_calls": [
+              {
+                "call_id": "call-ee53676d",
+                "name": "final_answer",
+                "arguments": {
+                  "answer": "Premium flight options from SFO to London (using fallback): {'from': 'SFO', 'to': 'London', 'date': '2025-06-01', 'flights': [{'airline': 'Generic Air', 'flight': 'GA001', 'price': 500, 'stops': 1}], 'count': 1}. Weather in London: {'city': 'London', 'country': 'UK', 'temp_c': 15, 'condition': 'Rainy', 'humidity': 80, 'wind_kph': 20}"
+                }
+              }
+            ],
+            "tool_results": [],
+            "context_tokens_estimate": 334,
+            "findings_snapshot": {},
+            "final_answer_fragment": "Premium flight options from SFO to London (using fallback): {'from': 'SFO', 'to': 'London', 'date': '2025-06-01', 'flights': [{'airline': 'Generic Air', 'flight': 'GA001', 'price': 500, 'stops': 1}], 'count': 1}. Weather in London: {'city': 'London', 'country': 'UK', 'temp_c': 15, 'condition': 'Rainy', 'humidity': 80, 'wind_kph': 20}"
+          }
+        ],
+        "metrics": {
+          "iterations": 4,
+          "tool_calls": 4,
+          "message_count_final": 9,
+          "context_tokens_final": 334,
+          "token_input": 4277,
+          "token_output": 263,
+          "latency_ms": 5623,
+          "context_tokens_per_iteration": [
+            140,
+            196,
+            230,
+            334
+          ]
+        },
+        "errors": [],
+        "started_at": "2026-02-17T19:51:04.715919+00:00",
+        "finished_at": "2026-02-17T19:51:10.339046+00:00",
+        "total_compactions": 0,
+        "total_findings": 0,
+        "total_sub_agents": 0,
+        "max_nesting_depth": 0,
+        "budget_overspend": false
+      },
+      "smart": {
+        "runner_name": "smart_react",
+        "scenario_id": "test_04_recovery",
+        "success": true,
+        "final_answer": "I found one flight from SFO to London on 2025-06-01 with Generic Air, flight GA001, for $500 with 1 stop. The weather in London on that date is expected to be Rainy, with a temperature of 15\u00b0C, 80% humidity, and wind speed of 20 kph.",
+        "turns": [
+          {
+            "iteration": 1,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-f338af23",
+                "name": "flaky_api",
+                "arguments": {
+                  "endpoint": "premium_flight_search"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "flaky_api",
+                "call_id": "call-f338af23",
+                "ok": false,
+                "output": null,
+                "error_code": "RATE_LIMITED",
+                "error_message": "API rate limit exceeded, try again later"
+              }
+            ],
+            "context_tokens_estimate": 165,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 2,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-cb6790e4",
+                "name": "flight_search",
+                "arguments": {
+                  "from_city": "SFO",
+                  "to_city": "London"
+                }
+              },
+              {
+                "call_id": "call-02471603",
+                "name": "weather_api",
+                "arguments": {
+                  "city": "London"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "flight_search",
+                "call_id": "call-cb6790e4",
+                "ok": true,
+                "output": {
+                  "from": "SFO",
+                  "to": "London",
+                  "date": "2025-06-01",
+                  "flights": [
+                    {
+                      "airline": "Generic Air",
+                      "flight": "GA001",
+                      "price": 500,
+                      "stops": 1
+                    }
+                  ],
+                  "count": 1
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "weather_api",
+                "call_id": "call-02471603",
+                "ok": true,
+                "output": {
+                  "city": "London",
+                  "country": "UK",
+                  "temp_c": 15,
+                  "condition": "Rainy",
+                  "humidity": 80,
+                  "wind_kph": 20
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 241,
+            "findings_snapshot": {
+              "departure_airport": {
+                "value": "SFO",
+                "type": "location"
+              },
+              "arrival_city": {
+                "value": "London",
+                "type": "location"
+              },
+              "flight_date": {
+                "value": "2025-06-01",
+                "type": "flight"
+              },
+              "flights_found_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "airline": {
+                "value": "Generic Air",
+                "type": "flight"
+              },
+              "flight_number": {
+                "value": "GA001",
+                "type": "flight"
+              },
+              "price": {
+                "value": 500,
+                "type": "price"
+              },
+              "stops": {
+                "value": 1,
+                "type": "flight"
+              },
+              "city": {
+                "value": "London",
+                "type": "location"
+              },
+              "country": {
+                "value": "UK",
+                "type": "location"
+              },
+              "temperature": {
+                "value": "15\u00b0C",
+                "type": "weather"
+              },
+              "condition": {
+                "value": "Rainy",
+                "type": "weather"
+              },
+              "humidity": {
+                "value": "80%",
+                "type": "weather"
+              },
+              "wind_speed": {
+                "value": "20 kph",
+                "type": "weather"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 3,
+            "assistant_message": "I found one flight from SFO to London on 2025-06-01 with Generic Air, flight GA001, for $500 with 1 stop. The weather in London on that date is expected to be Rainy, with a temperature of 15\u00b0C, 80% humidity, and wind speed of 20 kph.",
+            "tool_calls": [
+              {
+                "call_id": "call-017c1206",
+                "name": "final_answer",
+                "arguments": {
+                  "answer": "I found one flight from SFO to London on 2025-06-01 with Generic Air, flight GA001, for $500 with 1 stop. The weather in London on that date is expected to be Rainy, with a temperature of 15\u00b0C, 80% humidity, and wind speed of 20 kph."
+                }
+              }
+            ],
+            "tool_results": [],
+            "context_tokens_estimate": 377,
+            "findings_snapshot": {
+              "departure_airport": {
+                "value": "SFO",
+                "type": "location"
+              },
+              "arrival_city": {
+                "value": "London",
+                "type": "location"
+              },
+              "flight_date": {
+                "value": "2025-06-01",
+                "type": "flight"
+              },
+              "flights_found_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "airline": {
+                "value": "Generic Air",
+                "type": "flight"
+              },
+              "flight_number": {
+                "value": "GA001",
+                "type": "flight"
+              },
+              "price": {
+                "value": 500,
+                "type": "price"
+              },
+              "stops": {
+                "value": 1,
+                "type": "flight"
+              },
+              "city": {
+                "value": "London",
+                "type": "location"
+              },
+              "country": {
+                "value": "UK",
+                "type": "location"
+              },
+              "temperature": {
+                "value": "15\u00b0C",
+                "type": "weather"
+              },
+              "condition": {
+                "value": "Rainy",
+                "type": "weather"
+              },
+              "humidity": {
+                "value": "80%",
+                "type": "weather"
+              },
+              "wind_speed": {
+                "value": "20 kph",
+                "type": "weather"
+              }
+            },
+            "final_answer_fragment": "I found one flight from SFO to London on 2025-06-01 with Generic Air, flight GA001, for $500 with 1 stop. The weather in London on that date is expected to be Rainy, with a temperature of 15\u00b0C, 80% humidity, and wind speed of 20 kph."
+          }
+        ],
+        "metrics": {
+          "iterations": 3,
+          "tool_calls": 3,
+          "compactions": 0,
+          "scratchpad_messages_final": 7,
+          "findings_count": 14,
+          "typed_findings_count": 5,
+          "failed_count": 1,
+          "cognitive_writes_count": 0,
+          "remaining_tool_calls": 5,
+          "remaining_iterations": 9,
+          "token_input": 2072,
+          "token_output": 60,
+          "elapsed_budget_ms": 9703,
+          "latency_ms": 9703,
+          "sub_agent_count": 0,
+          "max_nesting_depth": 0,
+          "context_tokens_per_iteration": [
+            165,
+            241,
+            377
+          ]
+        },
+        "errors": [],
+        "started_at": "2026-02-17T19:51:10.339735+00:00",
+        "finished_at": "2026-02-17T19:51:20.043705+00:00",
+        "total_compactions": 0,
+        "total_findings": 14,
+        "total_sub_agents": 0,
+        "max_nesting_depth": 0,
+        "budget_overspend": false
+      },
+      "comparison": {
+        "scenario_id": "test_04_recovery",
+        "scenario_name": "Recovery from Failure",
+        "naive_success": true,
+        "smart_success": true,
+        "winner": "smart",
+        "naive_iterations": 4,
+        "smart_iterations": 3,
+        "naive_tool_calls": 4,
+        "smart_tool_calls": 3,
+        "naive_context_final": 334,
+        "smart_context_final": 7,
+        "context_savings_pct": 97.90419161676647,
+        "naive_tokens_total": 4540,
+        "smart_tokens_total": 2132,
+        "token_savings_pct": 53.039647577092516,
+        "naive_latency_ms": 5623,
+        "smart_latency_ms": 9703,
+        "compactions": 0,
+        "findings_count": 14,
+        "sub_agent_count": 0,
+        "max_nesting_depth": 0,
+        "failed_attempts": 1,
+        "naive_context_growth": [
+          140,
+          196,
+          230,
+          334
+        ],
+        "smart_context_growth": [
+          165,
+          241,
+          377
+        ],
+        "winner_reasons": [
+          "Smart used 98% less context",
+          "Smart used 53% fewer tokens",
+          "Smart extracted 14 structured findings"
+        ]
+      }
+    }
+  ],
+  "aggregate": {
+    "scenario_count": 1,
+    "naive_success_rate": 100.0,
+    "smart_success_rate": 100.0,
+    "naive_wins": 0,
+    "smart_wins": 1,
+    "ties": 0,
+    "avg_context_savings_pct": 97.90419161676647,
+    "avg_token_savings_pct": 53.039647577092516,
+    "naive_avg_latency_ms": 5623.0,
+    "smart_avg_latency_ms": 9703.0,
+    "total_compactions": 0,
+    "total_findings": 14,
+    "total_sub_agents": 0,
+    "max_nesting_depth": 0,
+    "overall_winner": "SMART (Scratchpad)",
+    "summary": "Smart wins 1/1 scenarios. Context savings: 97.9%. Token savings: 53.0%. Total findings extracted: 14. Compactions performed: 0."
+  }
+}

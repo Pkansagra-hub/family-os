@@ -1,0 +1,18 @@
+{
+  "scenario_count": 10,
+  "naive_success_rate": 50.0,
+  "smart_success_rate": 100.0,
+  "naive_wins": 0,
+  "smart_wins": 10,
+  "ties": 0,
+  "avg_context_savings_pct": 99.00197572457259,
+  "avg_token_savings_pct": 29.442387627777226,
+  "naive_avg_latency_ms": 7666.8,
+  "smart_avg_latency_ms": 45016.7,
+  "total_compactions": 8,
+  "total_findings": 283,
+  "total_sub_agents": 16,
+  "max_nesting_depth": 1,
+  "overall_winner": "SMART (Scratchpad)",
+  "summary": "Smart wins 10/10 scenarios. Context savings: 99.0%. Token savings: 29.4%. Total findings extracted: 283. Compactions performed: 8."
+}

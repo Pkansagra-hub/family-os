@@ -7,10 +7,10 @@ Status: PLANNING -- fill as implementation proceeds.
 ## 1. Purpose
 
 This document is the single reference for wiring Bus, Fabric, SessionState,
-and Orchestrator into a unified K1 kernel runtime.  Each component is
+Orchestrator, and Planner into a unified K1 kernel runtime.  Each component is
 self-contained with hexagonal ports.  The kernel bootstrap creates shared
 infrastructure (Bus, MailboxRouter) and injects real adapters into each
-component's factory.  Four managed components total.
+component's factory.  Five managed components total.
 
 ---
 
@@ -22,6 +22,7 @@ component's factory.  Four managed components total.
 | Fabric | `FabricFactory.create_with_ports()` | 6 | Test stubs for all 6 | `FabricBusAdapter` |
 | SessionState | `SessionStateFactory.create_with_ports()` | 5 (4 mandatory + 1 optional) | Local/in-memory for all | `SessionBusAdapter` |
 | Orchestrator | `OrchestratorFactory.create_production()` | 9 (8 core + IAdminPort): IMailboxPort, IFabricGatewayPort, IPlannerPort, IStateReadPort, IDeltaEmitPort, IBridgeWritePort, IEventSubscriptionPort, IWorkflowStoragePort, IAdminPort | 17 adapters (8 production + 8 test + AdminHttpAdapter) | Reuses `FabricBusAdapter` via EventSubscriptionAdapter + DeltaEmitAdapter |
+| Planner | `PlannerFactory.create_production()` | 7: IMailboxPort, ILLMPort, IFabricRetrievalPort, IStateReadPort, IBridgePort, IDeltaEmitPort, IEventPort | 7 test adapters (all 7 slots) | Reuses `FabricBusAdapter` via EventBusAdapter + DeltaBusAdapter |
 | Kernel | `k1/kernel/` | 0 | n/a | n/a |
 
 ---
@@ -69,6 +70,22 @@ k1.kernel.bootstrap
   |     bridge_write:  BridgeWriteAdapter(bridge_client)           <-- requires Bridge connector
   |     workflow_store: WorkflowStorageAdapter(SQLiteWorkflowAdapter(config.workflow_db_path)) <-- standalone SQLite
   |
+  +-- creates --> PlannerFactory.create_production(config)
+  |     # Planner reuses existing Bus, Fabric, SessionState instances:
+  |     llm_port:     LLMGatewayAdapter(model_hub)                 <-- wraps Model Hub (Phase 2: TestLLMAdapter)
+  |     fabric_port:  FabricRetrievalAdapter(fabric)               <-- wraps Fabric capability/prompt retrieval
+  |     state_port:   SessionStateReadAdapter(state_reader)        <-- wraps same SessionStateReaderAdapter
+  |     bridge_port:  BridgeAdapter(bridge_client)                 <-- K0 recall + persist (Phase 1: TestBridgeAdapter)
+  |     delta_port:   DeltaBusAdapter(fabric_bus)                  <-- wraps FabricBusAdapter delta bus
+  |     event_port:   EventBusAdapter(fabric_bus)                  <-- wraps FabricBusAdapter event port
+  |     mailbox_port: MailboxAdapter(max_depth=config.mailbox_max_depth) <-- standalone FIFO queue
+  |
+  +-- cross-wires --> Orchestrator.IPlannerPort
+  |     planner_mailbox = planner.get_mailbox()                    <-- extract Planner's mailbox
+  |     cb_planner = CircuitBreaker("CB_PLANNER", orch_config)     <-- Orchestrator owns CB
+  |     planner_adapter = PlannerAdapter(planner_mailbox, cb_planner)
+  |     orchestrator._planner_port = planner_adapter               <-- hot-swap MockPlannerAdapter
+  |
   +-- exposes --> Kernel API surface
 ```
 
@@ -111,6 +128,18 @@ k1.kernel.bootstrap
 | `ILifecyclePort` | ABC | `StandaloneLifecycle(config)` | `k1.sessionstate.adapters.standalone_lifecycle` | Self-managed checkpointing |
 | `IK0SyncPort` | ABC (optional) | `NullSyncPort()` | `k1.sessionstate.ports.k0_sync` | No cloud sync until Bridge ready |
 
+### 4.4 Planner Ports (7 total)
+
+| Port | Protocol | Wired Adapter | Source Module | Notes |
+|------|----------|---------------|---------------|-------|
+| `IMailboxPort` | `Protocol` (structural) | `MailboxAdapter(max_depth=config.mailbox_max_depth)` | `k1.planner.adapters.mailbox_adapter` | FIFO async queue: `enqueue(PlanRequest)`, `dequeue()`, `drain()`. Standalone in-process. |
+| `ILLMPort` | `Protocol` (structural) | `LLMGatewayAdapter(model_hub)` | `k1.planner.adapters.llm_gateway_adapter` | Phase 1: `TestLLMAdapter`. Phase 2: real Model Hub gateway. `generate()`, `generate_structured()`. |
+| `IFabricRetrievalPort` | `Protocol` (structural) | `FabricRetrievalAdapter(fabric)` | `k1.planner.adapters.fabric_retrieval_adapter` | Wraps Fabric facade. `discover_capabilities()`, `search_prompts()`. Read-only. |
+| `IStateReadPort` | `Protocol` (structural) | `SessionStateReadAdapter(state_reader)` | `k1.planner.adapters.session_state_adapter` | Wraps same `SessionStateReaderAdapter` used by Fabric and Orchestrator. Read-only (PLAN-01). |
+| `IBridgePort` | `Protocol` (structural) | `BridgeAdapter(bridge_client)` | `k1.planner.adapters.bridge_adapter` | Phase 1: `TestBridgeAdapter`. K0 long-term recall + plan persistence. |
+| `IDeltaEmitPort` | `Protocol` (structural) | `DeltaBusAdapter(fabric_bus)` | `k1.planner.adapters.delta_bus_adapter` | Wraps `FabricBusAdapter` delta bus. Fire-and-forget: `emit_delta(topic, payload)`. |
+| `IEventPort` | `Protocol` (structural) | `EventBusAdapter(fabric_bus)` | `k1.planner.adapters.event_bus_adapter` | Wraps `FabricBusAdapter` event port. `emit()`, `subscribe()`, `unsubscribe()`. Tracks handles for bulk cleanup at shutdown. |
+
 ---
 
 ## 5. Bus Adapter Contracts
@@ -144,6 +173,34 @@ k1.kernel.bootstrap
 - Satisfies: Fabric `ISessionStateReader` (structural)
 - Delegates: `read_section()`, `read_sections()`, `get_snapshot()` to the real manager
 
+### 5.4 PlannerEventBusAdapter
+
+- Location: `k1/planner/adapters/event_bus_adapter.py`
+- Constructor: `EventBusAdapter(event_port: Any)` -- wraps Fabric `IEventPort` (5.1.2)
+- Satisfies: Planner `IEventPort` (SS15.8, structural Protocol)
+- Serialization: passthrough (Planner and Fabric `IEventPort` are interface-identical per SS15.9)
+- Topic mapping:
+  - `emit(topic, payload)` --> `fabric_event_port.emit(topic, payload)` (direct passthrough)
+  - `subscribe(topic, handler)` --> `fabric_event_port.subscribe(topic, handler)` --> returns `SubscriptionHandle`
+  - `unsubscribe(handle)` --> `fabric_event_port.unsubscribe(handle)` --> returns `bool`
+- Fire-and-forget: `emit()` catches all exceptions and logs; NEVER raises to caller
+- Slots: `_bus` (single slot, the wrapped Fabric `IEventPort`)
+- Used by: PlannerAgent (4 subscriptions at INIT), CommitService (plan.ready emission), HILCoordinator (clarification/approval emission)
+
+### 5.5 PlannerDeltaBusAdapter
+
+- Location: `k1/planner/adapters/delta_bus_adapter.py`
+- Constructor: `DeltaBusAdapter(delta_bus: Any, agent_id: str = "planner")` -- wraps Fabric `IDeltaBusPort` (5.1.6)
+- Satisfies: Planner `IDeltaEmitPort` (SS15.7, structural Protocol)
+- Serialization: maps Planner `DeltaPayload` fields to Fabric `IDeltaBusPort.emit_delta()` positional args
+- Topic mapping:
+  - `emit(delta: DeltaPayload)` --> `fabric_delta_bus.emit_delta(agent_id, delta.delta_type, delta.section, delta.data)`
+  - Topic on wire: `k1.agent.planner.delta.v1` (pre-stamped `agent_id="planner"`)
+- Fire-and-forget: `emit()` catches all exceptions and logs; NEVER raises to caller
+- Slots: `_bus`, `_agent_id`
+- Delta loss is acceptable (observability signals, not control-plane)
+- Used by: PipelineController (stage transition deltas), CommitService (commit result delta)
+
 ---
 
 ## 6. Topic Namespace Registry
@@ -154,8 +211,17 @@ k1.kernel.bootstrap
 | `k1.agent.{id}.delta.v1` | FabricBusAdapter | Agent delta broadcasts |
 | `k1.fabric.*` | FabricBusAdapter | Fabric lifecycle/execution events |
 | `k1.orchestration.*` | DeltaEmitAdapter | Orchestrator task/DAG/step/workflow/saga events (17 emitted topics via `events.py`) |
-| `k1.planner.*` | PlannerAdapter / Bus | Planner plan lifecycle events (consumed by Orchestrator: plan.ready, plan.failed, plan.cancelled, micro_replan.ready) |
-| `k1.hil.*` | DeltaEmitAdapter / Bus | Human-in-the-loop request/response events (emitted by Orchestrator, consumed: override_response, fallback_response) |
+| `k1.planner.plan.request.v1` | Orchestrator (via PlannerAdapter) | Plan request enqueued to Planner mailbox |
+| `k1.planner.plan.ready.v1` | PlannerAgent (CommitService) | Committed plan emitted; consumed by Orchestrator EventSubscriptionAdapter |
+| `k1.planner.plan.failed.v1` | PlannerAgent | Planning pipeline failed (stage error or timeout); consumed by Orchestrator |
+| `k1.planner.plan.cancelled.v1` | PlannerAgent | Plan cancelled (cancel set or shutdown drain); consumed by Orchestrator |
+| `k1.planner.plan.cancel.v1` | Orchestrator (via PlannerAdapter) | Cancel request for in-flight/queued plan |
+| `k1.planner.micro_replan.ready.v1` | PlannerAgent | Micro-replan completed; consumed by Orchestrator |
+| `k1.planner.delta.v1` | PlannerAgent (PipelineController) | Stage progress deltas (sketch/expand/validate/commit transitions) |
+| `k1.hil.clarification.v1` | PlannerAgent (HILCoordinator) | HIL clarification question emitted to user via Bridge |
+| `k1.hil.approval_request.v1` | PlannerAgent (HILCoordinator) | HIL approval request emitted to user via Bridge |
+| `k1.hil.clarification_response.v1` | Bridge / Bus | User clarification response; consumed by PlannerAgent |
+| `k1.hil.approval_response.v1` | Bridge / Bus | User approval response; consumed by PlannerAgent |
 | `k1.capability.*` | Fabric / Bus | Capability completion/failure events (consumed by Orchestrator via EventSubscriptionAdapter) |
 | `k1.bus.lifecycle.*` | RustBus/LocalBus | Internal bus lifecycle (subscribe/unsubscribe) |
 | `k1.kernel.*` | Kernel bootstrap | Kernel-level events (startup, shutdown, health) |
@@ -228,14 +294,42 @@ orchestrator = await OrchestratorFactory.create_production(
 # orchestrator is now initialized: ports validated, MCP discovered, scheduler started,
 # events subscribed, mailbox loop running, admin HTTP server started (if admin_enabled).
 
-# Phase 5: Planner cross-wiring (TODO: when Planner module is ready)
-# from k1.fabric.circuit_breaker.breaker import CircuitBreaker
-# planner_mailbox = planner_module.get_mailbox()
-# cb_planner = CircuitBreaker("CB_PLANNER",
-#     failure_threshold=orch_config.cb_planner_failure_threshold,
-#     reset_timeout_s=orch_config.cb_planner_reset_timeout_ms / 1000)
-# planner_adapter = PlannerAdapter(planner_mailbox, cb_planner)
-# orchestrator._planner_port = planner_adapter  # hot-swap planner port
+# Phase 5: Planner (needs bus + fabric + session_manager)
+from k1.planner.factory import PlannerFactory
+from k1.planner.config import PlannerConfig
+from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter        # Phase 2; use TestLLMAdapter for Phase 1
+from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
+from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter
+from k1.planner.adapters.bridge_adapter import BridgeAdapter                  # Phase 2; use TestBridgeAdapter for Phase 1
+from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter
+from k1.planner.adapters.event_bus_adapter import EventBusAdapter
+from k1.planner.adapters.mailbox_adapter import PlannerMailboxAdapter as PlannerMailbox
+
+planner_config = PlannerConfig.from_dict(config.planner_overrides)  # or PlannerConfig() for defaults
+planner = await PlannerFactory.create_production(
+    llm_port=TestLLMAdapter(),                                        # Phase 1 stub; Phase 2: LLMGatewayAdapter(model_hub)
+    fabric_port=FabricRetrievalAdapter(fabric),                       # wraps Fabric facade from Phase 3
+    state_port=SessionStateReadAdapter(state_reader),                 # wraps same SessionStateReaderAdapter
+    bridge_port=TestBridgeAdapter(),                                  # Phase 1 stub; Phase 2: BridgeAdapter(bridge_client)
+    delta_port=DeltaBusAdapter(fabric_bus),                           # wraps FabricBusAdapter delta bus
+    event_port=EventBusAdapter(fabric_bus),                           # wraps FabricBusAdapter event port
+    mailbox_port=PlannerMailbox(max_depth=planner_config.mailbox_max_depth),
+    config=planner_config,
+)
+# planner is now wired but NOT started -- start() enters infinite dequeue loop.
+# Kernel spawns it as a background task:
+planner_task = asyncio.create_task(planner.start())
+
+# Phase 5b: Cross-wire Orchestrator.IPlannerPort with real Planner
+from k1.fabric.circuit_breaker.breaker import CircuitBreaker
+planner_mailbox = planner.get_mailbox()      # extract Planner's IMailboxPort
+cb_planner = CircuitBreaker(
+    "CB_PLANNER",
+    failure_threshold=orch_config.cb_planner_failure_threshold,
+    reset_timeout_s=orch_config.cb_planner_reset_timeout_ms / 1000,
+)
+planner_adapter = PlannerAdapter(planner_mailbox, cb_planner)
+orchestrator._planner_port = planner_adapter  # hot-swap MockPlannerAdapter -> real PlannerAdapter
 
 # Phase 6: Start lifecycle
 session_manager.start()
@@ -243,7 +337,7 @@ session_manager.start()
 # Phase 7: Expose kernel API
 return KernelRuntime(bus=bus, mailbox_router=mailbox_router,
                      session=session_manager, fabric=fabric,
-                     orchestrator=orchestrator)
+                     orchestrator=orchestrator, planner=planner)
 ```
 
 ---
@@ -252,14 +346,18 @@ return KernelRuntime(bus=bus, mailbox_router=mailbox_router,
 
 ```
 1. orchestrator.shutdown()    -- stop admin HTTP, drain active DAG (30s), stop scheduler, unsubscribe events, persist trigger states, cancel loops
-2. fabric.shutdown()          -- drain pending executions
-3. session_manager.stop()     -- final checkpoint, flush events
-4. bus.close()                -- drain subscribers, close ring buffer
-5. mailbox_router.close()     -- drain all mailboxes
+2. planner.stop()             -- set _running=False, drain mailbox (emit plan.cancelled for each), cancel in-flight plan (grace period), unsubscribe 4 events, log shutdown.complete
+3. planner_task.cancel()      -- cancel the background asyncio task spawned in Phase 5
+4. fabric.shutdown()          -- drain pending executions
+5. session_manager.stop()     -- final checkpoint, flush events
+6. bus.close()                -- drain subscribers, close ring buffer
+7. mailbox_router.close()     -- drain all mailboxes
 ```
 
 Order matters: consumers shut down before infrastructure.
-Orchestrator is a consumer of Fabric, Fabric is a consumer of SessionState.
+Orchestrator is a consumer of Planner (via PlannerAdapter).
+Planner is a consumer of Fabric (via FabricRetrievalAdapter) and Bus (via EventBusAdapter).
+Fabric is a consumer of SessionState.
 
 ---
 
@@ -345,6 +443,66 @@ Planner completes planning for request_id "r-42"
   --> DeltaEmitAdapter.emit("k1.orchestration.dag.completed.v1", result, trace_id)
 ```
 
+### 9.7 Planner Internal Pipeline (PlanRequest -> 4-stage pipeline -> plan.ready)
+
+```
+PlannerAgent._run_loop() blocks on mailbox.dequeue()
+  --> PlanRequest arrives (enqueued by EventBusAdapter subscription handler)
+  --> Cancel pre-check: request_id in _cancel_set? Yes -> emit plan.cancelled.v1, skip
+  --> Acquire _plan_lock (V1 single-plan exclusion)
+  --> _in_flight_request_id = request.request_id
+  --> PipelineController.execute(request, cancel_check)
+      |
+      |-- DeltaBusAdapter.emit(DeltaPayload(stage="SKETCH", status="STARTED"))
+      |-- Stage 1: SketchService.execute(request, state_snapshot, cancel_check)
+      |     --> ILLMPort.generate(sketch_prompt) -> raw sketch
+      |     --> ToolCallRouter dispatches tool calls (IFabricRetrievalPort, IStateReadPort, IBridgePort)
+      |     --> HILCoordinator: if ambiguous -> emit k1.hil.clarification.v1, await response
+      |     --> returns SketchResult(intent_graph, capabilities_needed, tool_results)
+      |
+      |-- Cancel checkpoint #2: cancel_check() -> if True, raise PlanCancelledError
+      |-- DeltaBusAdapter.emit(DeltaPayload(stage="EXPAND", status="STARTED"))
+      |-- Stage 2: ExpandService.execute(sketch_result, cancel_check)
+      |     --> ILLMPort.generate(expand_prompt) -> expanded steps
+      |     --> ToolCallRouter: additional discovery/refinement tool calls
+      |     --> returns ExpandResult(steps, dependencies, resource_estimates)
+      |
+      |-- Cancel checkpoint #3: cancel_check() -> if True, raise PlanCancelledError
+      |-- DeltaBusAdapter.emit(DeltaPayload(stage="VALIDATE", status="STARTED"))
+      |-- Stage 3: ValidateService.execute(expand_result, cancel_check)
+      |     --> Deterministic checks (dependency cycles, resource bounds, safety band)
+      |     --> ILLMPort.generate(arbiter_prompt) -> LLM arbiter verdict
+      |     --> HILCoordinator: if high-risk -> emit k1.hil.approval_request.v1, await response
+      |     --> IFabricRetrievalPort.discover_capabilities() -> verify all steps resolvable
+      |     --> returns ValidateResult(approved, issues, arbiter_verdict)
+      |
+      |-- Cancel checkpoint #4: cancel_check() -> if True, raise PlanCancelledError
+      |-- DeltaBusAdapter.emit(DeltaPayload(stage="COMMIT", status="STARTED"))
+      |-- Stage 4: CommitService.execute(validate_result)  [NO ILLMPort -- PLAN-03]
+      |     --> IBridgePort.persist_plan(frozen_plan) -> fire-and-forget to K0
+      |     --> IDeltaEmitPort.emit(DeltaPayload(stage="COMMIT", status="COMPLETED"))
+      |     --> IEventPort.emit("k1.planner.plan.ready.v1", {request_id, committed_plan})
+      |     --> returns CommittedPlan
+      |
+  --> PipelineController returns CommittedPlan to PlannerAgent
+  --> _in_flight_request_id = None
+  --> pipeline.reset() -> FSM back to IDLE
+  --> _plan_lock.release()
+  --> Loop back to mailbox.dequeue()
+
+Error path:
+  --> Any stage raises PlannerError
+  --> PipelineController catches, emits plan.failed.v1 via IEventPort
+  --> DeltaBusAdapter.emit(DeltaPayload(stage=current, status="FAILED"))
+  --> PlannerAgent logs, resets pipeline, releases lock, continues loop
+
+Cancel path:
+  --> cancel_check() returns True at any checkpoint
+  --> PipelineController raises PlanCancelledError
+  --> PlannerAgent emits plan.cancelled.v1 via IEventPort
+  --> Resets pipeline, releases lock, continues loop
+```
+
 ---
 
 ## 10. Validation Checklist
@@ -361,7 +519,7 @@ is considered wired.
 | W-05 | Session events flow through bus | Subscribe to `k1.session.*`, mutate, assert handler called | [ ] |
 | W-06 | Fabric deltas flow through bus | Subscribe to `k1.agent.*.delta.v1`, execute agent, assert | [ ] |
 | W-07 | Fabric can read session state | Execute capability that reads `affective_now`, assert data | [ ] |
-| W-08 | Shutdown order correct | Stop orchestrator, stop fabric, stop session, close bus -- no errors | [ ] |
+| W-08 | Shutdown order correct | Stop orchestrator, stop planner, stop fabric, stop session, close bus -- no errors | [ ] |
 | W-09 | No circular imports | `python -c "from k1.kernel.bootstrap import KernelRuntime"` succeeds | [ ] |
 | W-10 | All 172 Rust + 1005 Python bus tests still pass | `cargo test` + `pytest tests/k1/bus/` | [ ] |
 | W-11 | Orchestrator factory completes < 500ms | `time OrchestratorFactory.create_production(config)` | [ ] |
@@ -371,9 +529,19 @@ is considered wired.
 | W-15 | EventSub receives events through Bus | Subscribe to `k1.planner.plan.ready.v1`, fire event via Bus, assert handler called | [ ] |
 | W-16 | DeltaEmit events visible on Bus | emit via DeltaEmitAdapter, subscribe on Bus, assert received | [ ] |
 | W-17 | Orchestrator processes TaskEnvelope E2E | enqueue -> mailbox -> process -> dag events emitted on Bus | [ ] |
-| W-18 | Shutdown order correct (Orch before Fabric) | Stop orchestrator, stop fabric, stop session, close bus -- no errors | [ ] |
+| W-18 | Shutdown order correct (Orch before Planner before Fabric) | Stop orchestrator, stop planner, stop fabric, stop session, close bus -- no errors | [ ] |
 | W-19 | No Orchestrator circular imports | `python -c "from k1.orchestrator.factory import OrchestratorFactory"` succeeds | [ ] |
 | W-20 | Orchestrator health ready after init | `orchestrator.health_ready() == True` after init() completes | [ ] |
+| W-21 | Planner factory completes < 500ms | `time PlannerFactory.create_production(...)` | [ ] |
+| W-22 | All 7 Planner ports injected | All 7 port slots non-None after factory returns | [ ] |
+| W-23 | Planner ready after start | `planner.ready() == True` after `start()` sets `_running = True` | [ ] |
+| W-24 | Planner health reports correctly | `planner.health()` returns `HealthStatus` with `running=True` | [ ] |
+| W-25 | Planner receives plan.request via Bus | Publish to `k1.planner.plan.request.v1`, assert Planner handler fires | [ ] |
+| W-26 | Planner emits plan.ready via Bus | Complete a plan, subscribe to `k1.planner.plan.ready.v1`, assert event received | [ ] |
+| W-27 | Planner stop() drains mailbox cleanly | Enqueue requests, call `planner.stop()`, assert `plan.cancelled.v1` emitted for each | [ ] |
+| W-28 | No Planner circular imports | `python -c "from k1.planner.factory import PlannerFactory"` succeeds | [ ] |
+| W-29 | Orchestrator IPlannerPort hot-swapped | After Phase 5b cross-wiring, `orchestrator._planner_port` is `PlannerAdapter` (not Mock) | [ ] |
+| W-30 | Planner get_mailbox() returns IMailboxPort | `planner.get_mailbox()` returns the injected mailbox_port instance | [ ] |
 
 ---
 
@@ -429,6 +597,17 @@ is considered wired.
 | ConcurrencyGuard | `k1/orchestrator/orchestration/guards/concurrency_guard.py` |
 | Kernel bootstrap (TODO) | `k1/kernel/bootstrap.py` |
 | This document | `k1/kernel/kernel.md` |
+| Planner factory | `k1/planner/factory.py` |
+| Planner config | `k1/planner/config.py` |
+| Planner types | `k1/planner/types.py` |
+| Planner events | `k1/planner/events.py` |
+| Planner ports | `k1/planner/ports/*.py` (7 files) |
+| Planner adapters (production) | `k1/planner/adapters/*.py` (7 files: mailbox, llm_gateway, fabric_retrieval, session_state, bridge, delta_bus, event_bus) |
+| Planner adapters (test) | `tests/k1/planner/adapters/*.py` (7 test adapters) |
+| PlannerAgent | `k1/planner/planner_agent.py` |
+| PipelineController | `k1/planner/pipeline_controller.py` |
+| Stage services | `k1/planner/stages/*.py` (4 files: sketch, expand, validate, commit) |
+| Leaf services | `k1/planner/services/*.py` (tool_call_router, hil_coordinator) |
 
 ---
 
@@ -1236,6 +1415,21 @@ Critical ordering and wiring traps to avoid during kernel bootstrap implementati
 | G-10 | `OrchestratorConfig.from_dict()` ignores unknown keys silently + validates in `__post_init__` | Missing config keys use defaults (may surprise), invalid values raise ValueError |
 | G-11 | Test factories set `admin_enabled=False` by default. Do NOT create AdminHttpAdapter for tests. | Port conflict if multiple tests run admin servers |
 | G-12 | `MailboxAdapter` capacity (`mailbox_capacity`) must match between config and adapter constructor | Queue silently drops envelopes at wrong depth |
+
+### 25.1 Planner Bootstrap Gotchas
+
+| # | Gotcha | Consequence if Violated |
+| - | ------ | ----------------------- |
+| P-01 | `PlannerFactory.create_production()` does NOT call `agent.start()` -- it returns an unwired agent. Kernel MUST spawn `asyncio.create_task(planner.start())` as a separate background task. | Planner never enters dequeue loop, plan requests silently queue forever |
+| P-02 | `planner.stop()` must be called BEFORE `planner_task.cancel()` in shutdown. `stop()` drains the mailbox and emits `plan.cancelled.v1` per queued request; `cancel()` just kills the task. | Queued plan requests silently lost (no cancelled event, Orchestrator never notified) |
+| P-03 | `EventBusAdapter(event_port)` wraps Fabric `IEventPort`. `DeltaBusAdapter(delta_bus)` wraps Fabric `IDeltaBusPort`. These are DIFFERENT Fabric interfaces, though both may originate from the same `FabricBusAdapter` instance. | Passing `FabricBusAdapter` for both is correct; passing a non-dual-interface object for one causes AttributeError at runtime |
+| P-04 | `DeltaBusAdapter` pre-stamps `agent_id="planner"` at construction. All deltas publish to topic `k1.agent.planner.delta.v1` regardless of request. | Passing wrong agent_id causes deltas to route to wrong topic; subscribers miss Planner progress |
+| P-05 | `SessionStateReadAdapter(reader, session_id)` requires a pre-bound `session_id`. In V1, the kernel must determine the active session before creating the Planner. | Passing wrong `session_id` causes Planner to read stale/wrong session state for plan context |
+| P-06 | All 7 port slots must be distinct `id()` objects -- `DuplicatePortError` raised if two slots share identity. The only acceptable sharing is the underlying `FabricBusAdapter` BEHIND two different adapter wrappers (`EventBusAdapter` and `DeltaBusAdapter`). | `DuplicatePortError` at factory validation; factory refuses to wire |
+| P-07 | `TestLLMAdapter` and `TestBridgeAdapter` are Phase 1 stubs. Production requires `LLMGatewayAdapter` and `BridgeAdapter`. Phase 1 bootstrap uses test stubs for these two ports only. | Test stubs return canned responses -- plans are deterministic but not real |
+| P-08 | `PlannerConfig.from_dict(overrides)` validates all 10 config bounds (mailbox_max_depth >= 1, pipeline_timeout_ms > 0, etc.). Invalid values raise `InvalidConfigError` at factory creation, not at runtime. | Misconfigured Planner silently wired; errors surface at plan execution time with confusing symptoms |
+| P-09 | `MailboxAdapter(max_depth=N)` must use `planner_config.mailbox_max_depth` for N. Mismatched depth between config and adapter causes silent queue pressure differences. | Config says depth=10 but adapter uses default 5 -- requests rejected at wrong threshold |
+| P-10 | Phase 5b cross-wire (`orchestrator._planner_port = planner_adapter`) must happen AFTER `PlannerFactory.create_production()` returns and BEFORE any `TaskEnvelope` arrives at the Orchestrator that requires planning. There is no locking -- the hot-swap is a single attribute assignment. | Plan requests routed to `MockPlannerAdapter` (canned responses) instead of real Planner |
 
 ---
 
@@ -3663,3 +3857,1057 @@ Bus is **LAST to close** -- all other components depend on it for event delivery
 | TimingConfig | `k1/bus/timing/timing_config.py` |
 | Default rules | `k1/bus/timing/defaults.py` |
 | Rust crate | `k1/k1_bus_core/src/*.rs` |
+
+---
+
+## PART E: Planner Deep Dive
+
+---
+
+## 69. Planner Architecture Overview
+
+The Planner is the **planning engine** of K1. It receives plan requests from the
+Orchestrator (via mailbox), runs them through a 4-stage pipeline
+(Sketch -> Expand -> Validate -> Commit), and emits `CommittedPlan` events back
+to the Orchestrator for DAG execution. The Planner also supports micro-replan
+(mid-execution plan amendments) and Human-in-the-Loop (HIL) clarification and
+approval flows.
+
+### 69.1 Planner Container
+
+Unlike Fabric (which uses a `@dataclass` container), the Planner is organised
+around `PlannerAgent` as the top-level actor. The factory builds the full object
+graph and returns the agent.
+
+```
+PlannerAgent (top-level actor)
+  |-- IMailboxPort (inbound plan requests)
+  |-- IEventPort   (pub/sub lifecycle events)
+  |-- PipelineController (4-stage orchestrator)
+  |     |-- SketchService  (stage 1)
+  |     |-- ExpandService  (stage 2)
+  |     |-- ValidateService (stage 3)
+  |     |-- CommitService  (stage 4)
+  |     |-- IDeltaEmitPort (stage transition deltas)
+  |     |-- IEventPort     (plan lifecycle events)
+  |     |-- PlanStateMachine (FSM)
+  |-- PlannerConfig
+```
+
+Leaf services shared across stages:
+
+```
+ToolCallRouter (used by Sketch, Expand)
+  |-- IFabricRetrievalPort
+  |-- IStateReadPort
+  |-- IBridgePort
+
+HILCoordinator (used by Sketch, Validate)
+  |-- ILLMPort
+  |-- IEventPort
+```
+
+### 69.2 Design Principles
+
+| # | Principle | Implementation |
+|---|-----------|----------------|
+| 1 | Hexagonal architecture | 7 port Protocols, 7 production adapters, 7 test adapters |
+| 2 | Single-threaded async actor | One asyncio event loop, one plan at a time (V1) |
+| 3 | Cooperative cancellation | Flag-based cancel set, checked between stages |
+| 4 | Fire-and-forget deltas | Delta loss acceptable (observability, not control-plane) |
+| 5 | PLAN-01: Read-only state | No writes to SessionState (IStateReadPort only) |
+| 6 | PLAN-03: No LLM at commit | CommitService has zero ILLMPort (structural) |
+| 7 | PLAN-05: Tool budget | Max 6 tool calls per plan (configurable) |
+| 8 | PLAN-10: HIL budget | Max 2 HIL rounds per plan (configurable) |
+
+---
+
+## 70. Planner Ports (7 total)
+
+All Planner ports use `@runtime_checkable` Protocol (structural typing).
+
+### 70.1 IMailboxPort
+
+```python
+class IMailboxPort(Protocol):
+    async def dequeue(self) -> PlanRequest: ...
+    async def enqueue(self, request: PlanRequest) -> None: ...
+    async def send_cancel(self, request_id: str) -> None: ...
+    def drain(self) -> List[PlanRequest]: ...
+    async def micro_replan(self, request: MicroReplanRequest) -> CommittedPlan: ...
+```
+
+Supporting types: `PlanRequest(intent, trace_id, request_id, ...)` from `k1.orchestrator.types`,
+`MicroReplanRequest(request_id, completed_results, remaining_steps, ...)` from `k1.orchestrator.types`.
+Wired to: PlannerAgent (dequeue loop, shutdown drain), Kernel (via PlannerAdapter).
+
+### 70.2 ILLMPort
+
+```python
+class ILLMPort(Protocol):
+    async def execute(self, request: HubRequest) -> HubResponse: ...
+```
+
+Supporting types: `HubRequest(capability, payload, constraints, trace_id)`,
+`HubResponse(result, metadata)`, `RequestConstraints(max_tokens, timeout_ms, priority, temperature, consumer_id)`.
+Wired to: SketchService, ExpandService, ValidateService, HILCoordinator.
+NOT wired to: CommitService (PLAN-03).
+
+### 70.3 IFabricRetrievalPort
+
+```python
+class IFabricRetrievalPort(Protocol):
+    async def discover_capabilities(self, domain=None, intent="", safety_band="GREEN",
+                                     session_context=None, top_k=10) -> RetrievalResult: ...
+    async def find_relevant_prompts(self, intent="", domain=None, safety_band="GREEN",
+                                     top_k=10) -> RetrievalResult: ...
+```
+
+Supporting type: `RetrievalResult` from `k1.fabric.types`.
+Wired to: ToolCallRouter (discover_capabilities, find_relevant_prompts),
+ValidateService (capability existence verification).
+
+### 70.4 IStateReadPort
+
+```python
+class IStateReadPort(Protocol):
+    async def read_sections(self, sections: List[str], trace_id: str = "") -> SessionSnapshot: ...
+```
+
+Supporting type: `SessionSnapshot(session_id, sections)` from `k1.fabric.ports.state_reader`.
+Wired to: ToolCallRouter (query_planning_context).
+PLAN-01: read-only, no mutations.
+
+### 70.5 IBridgePort
+
+```python
+class IBridgePort(Protocol):
+    async def recall(self, query: str, selectors: Optional[List[str]] = None,
+                     *, trace_id: str = "") -> RecallResponse: ...
+    async def persist_plan(self, plan: CommittedPlan, *, trace_id: str = "") -> None: ...
+```
+
+Supporting type: `RecallResponse(facts, scores, trace_id)`.
+Wired to: ToolCallRouter (recall_for_planning), CommitService (WAL persist).
+
+### 70.6 IDeltaEmitPort
+
+```python
+class IDeltaEmitPort(Protocol):
+    def emit(self, delta: DeltaPayload) -> None: ...
+```
+
+Synchronous. Fire-and-forget. Must not raise.
+Supporting type: `DeltaPayload(agent_id, delta_type, section, data, trace_id)`.
+Wired to: PipelineController (stage transitions), CommitService (commit deltas).
+
+### 70.7 IEventPort
+
+```python
+class IEventPort(Protocol):
+    def emit(self, topic: str, payload: Any) -> None: ...
+    def subscribe(self, topic: str, handler: Callable[[str, Any], None]) -> SubscriptionHandle: ...
+    def unsubscribe(self, handle: SubscriptionHandle) -> bool: ...
+```
+
+All synchronous. `emit()` is fire-and-forget.
+Supporting type: `SubscriptionHandle(subscription_id, topic)` from `k1.fabric.ports.event_port`.
+Wired to: PlannerAgent (4 subscriptions), PipelineController (plan.ready, plan.failed, plan.cancelled),
+CommitService (plan.ready delivery), HILCoordinator (clarification/approval pub/sub).
+
+---
+
+## 71. Planner Adapters (7 production + 7 test)
+
+### 71.1 Production Adapters
+
+| Adapter | Satisfies Port | Constructor | Location | Notes |
+| ------- | -------------- | ----------- | -------- | ----- |
+| `MailboxAdapter` | `IMailboxPort` | `(max_depth=5, priority_class="INTERACTIVE")` | `k1/planner/adapters/mailbox_adapter.py` | asyncio.Queue-backed FIFO. Cancel set. Plan lock. Shutdown rejection. |
+| `LLMGatewayAdapter` | `ILLMPort` | `(llm_request_bus: ILLMRequestBus, consumer_id="planner")` | `k1/planner/adapters/llm_gateway_adapter.py` | Maps TimeoutError -> LLMTimeoutError, budget errors -> BudgetExceededError. Phase 2 adapter. |
+| `FabricRetrievalAdapter` | `IFabricRetrievalPort` | `(fabric_retrieval: Any, timeout_ms=50, max_retries=1)` | `k1/planner/adapters/fabric_retrieval_adapter.py` | In-process call to `FabricRetrieval`. Returns empty `RetrievalResult` on exhaustion (degraded). |
+| `SessionStateReadAdapter` | `IStateReadPort` | `(reader: Any, session_id: str)` | `k1/planner/adapters/session_state_adapter.py` | Pre-bound session_id. Returns empty `SessionSnapshot` on error. |
+| `BridgeAdapter` | `IBridgePort` | `(bridge_port: Any)` | `k1/planner/adapters/bridge_adapter.py` | Wraps Fabric IBridgePort. `recall` -> `bridge.query("memory.recall")`. `persist_plan` -> `bridge.send_command("memory.store")`. Offline: degraded (empty recall, drop persist). |
+| `DeltaBusAdapter` | `IDeltaEmitPort` | `(delta_bus: Any, agent_id="planner")` | `k1/planner/adapters/delta_bus_adapter.py` | Pre-stamps agent_id. Maps `DeltaPayload` -> `emit_delta()`. Fire-and-forget. |
+| `EventBusAdapter` | `IEventPort` | `(event_port: Any)` | `k1/planner/adapters/event_bus_adapter.py` | Thin passthrough to Fabric IEventPort (interface-identical per SS15.9). Fire-and-forget emit. |
+
+### 71.2 Test Adapters
+
+| Adapter | Satisfies Port | Constructor | Location | Test Features |
+| ------- | -------------- | ----------- | -------- | ------------- |
+| `TestMailboxAdapter` | `IMailboxPort` | `(max_depth=10)` | `tests/k1/planner/adapters/test_mailbox_adapter.py` | In-memory. Direct enqueue/dequeue. Sync drain. |
+| `TestLLMAdapter` | `ILLMPort` | `(stage_responses=DEFAULT)` | `tests/k1/planner/adapters/test_llm_adapter.py` | Deterministic responses per stage. Capture mode. Error injection via `error_stages`. |
+| `TestFabricRetrievalAdapter` | `IFabricRetrievalPort` | `(preset_capabilities=DEFAULT)` | `tests/k1/planner/adapters/test_fabric_retrieval_adapter.py` | Canned `RetrievalResult`. Capture mode. |
+| `TestStateReadAdapter` | `IStateReadPort` | `(preset_sections=DEFAULT)` | `tests/k1/planner/adapters/test_state_read_adapter.py` | Dict-based. `load(section, data)` for setup. |
+| `TestBridgeAdapter` | `IBridgePort` | `()` | `tests/k1/planner/adapters/test_bridge_adapter.py` | Canned responses. Capture mode. |
+| `TestDeltaAdapter` | `IDeltaEmitPort` | `()` | `tests/k1/planner/adapters/test_delta_adapter.py` | Stores `DeltaPayload` list. `drain()`, `get_deltas()`. |
+| `TestEventAdapter` | `IEventPort` | `()` | `tests/k1/planner/adapters/test_event_adapter.py` | Stores emitted events. `drain()`, `get_captured()`. Subscription handling. |
+
+---
+
+## 72. PlannerAgent Constructor Reference
+
+```python
+class PlannerAgent:
+    __slots__ = (
+        "_mailbox",                  # IMailboxPort -- inbound request queue
+        "_pipeline",                 # PipelineController -- 4-stage orchestrator
+        "_event_port",               # IEventPort -- pub/sub lifecycle events
+        "_config",                   # PlannerConfig -- budgets, timeouts, temps
+        "_plan_lock",                # asyncio.Lock -- V1 single-plan exclusion
+        "_cancel_set",               # Set[str] -- pending cancel request IDs
+        "_running",                  # bool -- dequeue loop active
+        "_subscriptions",            # List[SubscriptionHandle] -- 4 active subs
+        "_in_flight_request_id",     # Optional[str] -- current plan request ID
+    )
+```
+
+Constructor: `PlannerAgent(mailbox, pipeline, event_port, config)` -- 4 injected deps.
+All validated non-None (raises `ValueError`).
+
+### 72.1 Properties
+
+| Property | Return Type | Semantics |
+|----------|-------------|-----------|
+| `mailbox` | `IMailboxPort` | Injected mailbox port (read-only) |
+| `pipeline` | `PipelineController` | Injected pipeline controller (read-only) |
+| `event_port` | `IEventPort` | Injected event port (read-only) |
+| `config` | `PlannerConfig` | Planner configuration (read-only) |
+| `plan_lock` | `asyncio.Lock` | V1 single-plan exclusion lock reference |
+| `cancel_set` | `Set[str]` | Shallow copy of pending cancellation IDs |
+| `running` | `bool` | True when dequeue loop is active |
+| `subscriptions` | `List[SubscriptionHandle]` | Copy of active event subscriptions |
+| `in_flight_request_id` | `Optional[str]` | Request ID of currently executing plan |
+
+### 72.2 Public Query Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `get_mailbox()` | `-> IMailboxPort` | Returns injected mailbox. Used by kernel Phase 5 to connect PlannerAdapter. |
+| `ready()` | `-> bool` | Returns `_running` flag. True after successful `start()`. |
+| `health()` | `-> HealthStatus` | Returns `HealthStatus(status="HEALTHY/UNHEALTHY", details={...})`. Details include: `running`, `subscriptions` count, `cancel_set_size`, `plan_lock_locked`, `in_flight_request_id`. |
+
+---
+
+## 73. PlannerFactory Internal Wiring (10 Steps)
+
+`PlannerFactory._wire(ports, config)` builds all internal components and returns a
+`PlannerAgent`. Adapters are passed as a dict. All factory methods are `@staticmethod`.
+`PlannerFactory.__init__` raises `TypeError` (pure static, no instance state).
+
+### 73.1 Step-by-Step Wiring Order
+
+```text
+Step 1:   ToolCallRouter(fabric_retrieval=fabric_port, state_read=state_port,
+                          bridge_port=bridge_port, config=config)
+             -- Leaf service. Routes tool calls to 3 backend ports.
+             -- Routing table: 4 tools -> 3 ports.
+
+Step 2:   HILCoordinator(llm_port=llm_port, event_port=event_port, config=config)
+             -- Leaf service. Manages HIL clarification/approval flow.
+             -- Pub/sub on event bus for human responses.
+
+Step 3:   SketchService(llm_port=llm_port, tool_router=tool_router, hil_coord=hil_coord)
+             -- Stage 1. Agentic sketch with tool use + HIL clarification.
+
+Step 4:   ExpandService(llm_port=llm_port, tool_router=tool_router)
+             -- Stage 2. Agentic expand with tool use. No HIL.
+
+Step 5:   ValidateService(llm_port=llm_port, fabric_retrieval=fabric_port,
+                           hil_coord=hil_coord)
+             -- Stage 3. Deterministic checks + LLM arbiter + HIL approval.
+
+Step 6:   CommitService(bridge_port=bridge_port, delta_port=delta_port,
+                         event_port=event_port)
+             -- Stage 4. ZERO LLM (PLAN-03 structurally enforced).
+             -- WAL persist + plan delivery event.
+
+Step 7:   PipelineController(sketch=sketch, expand=expand, validate=validate,
+                              commit=commit, delta_port=delta_port,
+                              event_port=event_port, config=config)
+             -- 4-stage pipeline orchestrator. Owns FSM + cancel checks.
+
+Step 8:   PlannerAgent(mailbox=mailbox_port, pipeline=pipeline,
+                        event_port=event_port, config=config)
+             -- Top-level actor. Owns dequeue loop + plan lock.
+
+Step 9:   (reserved -- start() NOT called here)
+             -- start() enters infinite dequeue loop.
+             -- Kernel must spawn: asyncio.create_task(agent.start())
+
+Step 10:  return agent
+```
+
+### 73.2 Port-to-Service Wiring Matrix
+
+| Port Slot | ToolCallRouter | HILCoordinator | Sketch | Expand | Validate | Commit | Pipeline | Agent |
+|-----------|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `llm_port` | | X | X | X | X | | | |
+| `fabric_port` | X | | | | X | | | |
+| `state_port` | X | | | | | | | |
+| `bridge_port` | X | | | | | X | | |
+| `delta_port` | | | | | | X | X | |
+| `event_port` | | X | | | | X | X | X |
+| `mailbox_port` | | | | | | | | X |
+
+### 73.3 Port Validation (3 Passes)
+
+| Pass | Check | Error |
+|------|-------|-------|
+| 1 | Completeness: all 7 ports non-None | `MissingPortError(port_name)` |
+| 2 | Protocol compliance: `isinstance(port, Protocol)` | `InvalidPortError(port_name, expected_protocol, actual_type)` |
+| 3 | Uniqueness: no two slots share `id()` | `DuplicatePortError(port_a, port_b)` |
+
+### 73.4 Config Validation (10 Bounds)
+
+| Field | Constraint |
+|-------|-----------|
+| `mailbox_max_depth` | >= 1 |
+| `pipeline_timeout_ms` | > 0 |
+| `max_tool_calls_per_plan` | >= 1 |
+| `max_hil_rounds` | >= 0 |
+| `total_token_budget` | > 0 |
+| `sketch_timeout_ms` | > 0 |
+| `expand_timeout_ms` | > 0 |
+| `validate_timeout_ms` | > 0 |
+| `commit_timeout_ms` | > 0 |
+| `shutdown_grace_period_ms` | > 0 |
+
+---
+
+## 74. PlannerFactory Public Methods (4 total)
+
+| Method | Signature | Returns | Use Case |
+|--------|-----------|---------|----------|
+| `create_standalone` | `async (config=None) -> PlannerAgent` | Agent with all 7 test adapters | Zero-dep unit tests |
+| `create_for_testing` | `async (config=None, **overrides) -> Tuple[PlannerAgent, Dict[str, Any]]` | `(agent, adapters_dict)` -- selective overrides | Integration tests |
+| `create_with_ports` | `async (*, 7 typed ports, config=None) -> PlannerAgent` | Agent with explicit ports | Cross-subsystem tests |
+| `create_production` | `async (*, 7 typed ports, config=None) -> PlannerAgent` | Agent with production adapters | Kernel Phase 5 bootstrap |
+
+All methods: validate config -> validate ports (except `create_standalone`) -> `_wire()` -> return.
+
+`create_standalone` defers test adapter imports inside function body (prevents production
+code from depending on test infrastructure).
+
+`create_for_testing` validates override keys against known port slot names. Returns tuple
+`(agent, ports_dict)` so tests can access capture adapters for assertion.
+
+`create_with_ports` and `create_production` have identical signatures (7 keyword-only
+typed port args). Both validate ports. Semantic difference: `create_production` is for
+kernel bootstrap; `create_with_ports` is for cross-subsystem tests mixing real and test adapters.
+
+---
+
+## 75. PlannerAgent start() Sequence (5 Steps, SS23.1)
+
+```python
+async def start(self) -> None:
+```
+
+`start()` blocks indefinitely (enters dequeue loop at step 5). The kernel must
+spawn it as a background task: `asyncio.create_task(planner.start())`.
+
+```text
+Step 1:  VALIDATE WIRING
+           Log confirmation that mailbox, pipeline, and event_port are wired.
+           In V1, all deps injected at construction; __init__ already validates non-None.
+
+Step 2:  (no-op) Ports injected at construction.
+
+Step 3:  SUBSCRIBE 4 EVENT TOPICS
+           _subscriptions.append(event_port.subscribe(TOPIC_PLAN_REQUEST, _on_plan_request))
+           _subscriptions.append(event_port.subscribe(TOPIC_PLAN_CANCEL, _on_plan_cancel))
+           _subscriptions.append(event_port.subscribe(TOPIC_HIL_CLARIFICATION_RESP, _on_hil_clarification))
+           _subscriptions.append(event_port.subscribe(TOPIC_HIL_APPROVAL_RESP, _on_hil_approval))
+           Log: subscriptions_created {count: 4}
+
+Step 4:  SET STATE
+           _pipeline.reset()              -- FSM -> IDLE
+           _cancel_set.clear()
+           _in_flight_request_id = None
+           _running = True
+
+Step 4b: CRASH_RECOVERY (SS23.6)
+           V1 simplified: log "v1_discard", no WAL check, no partial state resume.
+           Full crash recovery (WAL-based resume) deferred to V2.
+
+Step 5:  ENTER DEQUEUE LOOP (_run_loop)
+           Blocks until _running = False. See Section 78 for loop details.
+```
+
+### 75.1 Event Handlers Registered at Step 3
+
+| Handler | Topic | Behaviour |
+|---------|-------|-----------|
+| `_on_plan_request` | `k1.planner.plan.request.v1` | Parse PlanRequest from payload (dict or instance). If not running, reject. Schedule `_safe_enqueue(request)` via `loop.create_task()`. |
+| `_on_plan_cancel` | `k1.planner.plan.cancel.v1` | Extract `request_id`. Add to `_cancel_set`. |
+| `_on_hil_clarification` | `k1.hil.clarification_response.v1` | V1 stub: log warning, discard. HILCoordinator handles via its own subscription. |
+| `_on_hil_approval` | `k1.hil.approval_response.v1` | V1 stub: log warning, discard. HILCoordinator handles via its own subscription. |
+
+---
+
+## 76. PlannerAgent stop() Sequence (8 Steps, SS23.5)
+
+```python
+async def stop(self) -> None:
+```
+
+Graceful shutdown with configurable grace period (`config.shutdown_grace_period_ms`,
+default 5000ms).
+
+```text
+Step 1:  STOP ACCEPTING
+           _running = False
+           (dequeue loop will exit on next iteration)
+
+Step 2:  DRAIN MAILBOX
+           drained_requests = _mailbox.drain()      -- synchronous, non-blocking
+           For each drained request:
+             event_port.emit(TOPIC_PLAN_CANCELLED, PlanCancelledPayload(
+               request_id=req.request_id, reason="shutdown",
+               stage="QUEUED", trace_id=req.trace_id
+             ))
+           (best-effort: emit failures logged and swallowed)
+
+Step 3:  CANCEL IN-FLIGHT PLAN
+           If _plan_lock.locked() AND _in_flight_request_id is set:
+             _cancel_set.add(_in_flight_request_id)
+             Wait for in-flight plan to finish:
+               asyncio.wait_for(_plan_lock.acquire(), timeout=grace_s)
+               On success: release lock (plan finished cleanly)
+               On TimeoutError: log warning, continue
+           Inject sentinel PlanRequest(intent="__shutdown_sentinel__") to
+           unblock dequeue() if loop is waiting (best-effort).
+
+Step 4:  FLUSH PENDING DELTAS
+           V1: no-op. Future: flush buffered deltas to DeltaBusAdapter.
+
+Step 5:  PERSIST PARTIAL PLAN STATE
+           V1: no-op (skip). Future: fire-and-forget IBridgePort.persist_plan().
+
+Step 6:  SAFETY RELEASE LOCK
+           If _plan_lock.locked():
+             try: _plan_lock.release()
+             except RuntimeError: pass    -- lock not owned by this task
+
+Step 7:  UNSUBSCRIBE ALL EVENTS
+           For each sub in _subscriptions:
+             event_port.unsubscribe(sub)   -- catch + log failures
+           _subscriptions.clear()
+
+Step 8:  LOG SHUTDOWN COMPLETE
+           Log: planner_agent.shutdown_complete {plans_drained: N, in_flight_cancelled: bool}
+```
+
+---
+
+## 77. PlannerConfig Field Reference
+
+`@dataclass(frozen=True)`. Defined in `k1/planner/config.py`.
+
+### 77.1 Mailbox
+
+| Field | Type | Default | Validation |
+|-------|------|---------|------------|
+| `mailbox_max_depth` | `int` | `5` | [1, 20] |
+
+### 77.2 Pipeline Timeouts
+
+| Field | Type | Default | Validation |
+|-------|------|---------|------------|
+| `pipeline_timeout_ms` | `int` | `45_000` | > 0 |
+| `sketch_timeout_ms` | `int` | `8_000` | > 0 |
+| `expand_timeout_ms` | `int` | `5_000` | > 0 |
+| `validate_timeout_ms` | `int` | `3_000` | > 0 |
+| `commit_timeout_ms` | `int` | `1_000` | > 0 |
+
+### 77.3 Token Budgets
+
+| Field | Type | Default | Validation |
+|-------|------|---------|------------|
+| `total_token_budget` | `int` | `3_500` | > 0, >= sketch + expand + validate |
+| `sketch_max_tokens` | `int` | `2_000` | > 0 |
+| `expand_max_tokens` | `int` | `1_000` | > 0 |
+| `validate_max_tokens` | `int` | `500` | > 0 |
+
+### 77.4 Temperatures
+
+| Field | Type | Default | Validation |
+|-------|------|---------|------------|
+| `sketch_temperature` | `float` | `0.7` | [0.0, 2.0] |
+| `expand_temperature` | `float` | `0.3` | [0.0, 2.0] |
+| `validate_temperature` | `float` | `0.2` | [0.0, 2.0] |
+
+### 77.5 Tool and HIL Limits
+
+| Field | Type | Default | Validation |
+|-------|------|---------|------------|
+| `max_tool_calls_per_plan` | `int` | `6` | [1, 20] PLAN-05 |
+| `max_hil_rounds` | `int` | `2` | [0, 5] PLAN-10 |
+| `hil_clarification_timeout_ms` | `int` | `60_000` | > 0 |
+| `hil_approval_timeout_ms` | `int` | `120_000` | > 0 |
+
+### 77.6 Micro-Replan
+
+| Field | Type | Default | Validation |
+|-------|------|---------|------------|
+| `micro_replan_timeout_ms` | `int` | `10_000` | > 0 |
+| `micro_replan_max_tokens` | `int` | `2_000` | > 0, >= micro_sketch + micro_expand + micro_validate |
+| `micro_sketch_max_tokens` | `int` | `1_024` | > 0 |
+| `micro_sketch_timeout_ms` | `int` | `5_000` | > 0 |
+| `micro_expand_max_tokens` | `int` | `512` | > 0 |
+| `micro_expand_timeout_ms` | `int` | `3_000` | > 0 |
+| `micro_validate_max_tokens` | `int` | `256` | > 0 |
+| `micro_validate_timeout_ms` | `int` | `2_000` | > 0 |
+
+### 77.7 Shutdown
+
+| Field | Type | Default | Validation |
+|-------|------|---------|------------|
+| `shutdown_grace_period_ms` | `int` | `5_000` | > 0 |
+
+### 77.8 Construction
+
+`PlannerConfig()` -- all defaults.
+`PlannerConfig.from_dict(overrides)` -- class method, validates unknown keys, raises
+`ValueError` on unknown. `__post_init__` validates cross-field constraints
+(total_token_budget >= stage sum, micro_replan_max_tokens >= micro stage sum).
+
+---
+
+## 78. Planner Dequeue Loop (_run_loop)
+
+The dequeue loop is the central execution driver. It runs inside `PlannerAgent.start()`
+(step 5) and blocks until `_running` is set to False.
+
+```text
+while _running:
+  1. request = await _mailbox.dequeue()     -- BLOCKS until a PlanRequest arrives
+  2. Shutdown guard: if not _running, break
+  3. CANCEL PRE-CHECK (checkpoint 1):
+       if request.request_id in _cancel_set:
+         _cancel_set.discard(request.request_id)
+         emit TOPIC_PLAN_CANCELLED(request_id, reason="cancelled_before_start",
+                                    stage="PRE_CHECK", trace_id)
+         continue   -- skip to next request
+  4. _in_flight_request_id = request.request_id
+  5. await _plan_lock.acquire()
+  6. try:
+       cancel_check = lambda: request.request_id in self._cancel_set
+       await _pipeline.execute(request, cancel_check)
+     except PlanCancelledError:
+       (already handled by PipelineController -- emit plan.cancelled.v1)
+     except PlannerError as e:
+       log plan_failed {stage, error}
+     except Exception as e:
+       log unexpected_error
+       emit TOPIC_PLAN_FAILED(PlanFailedPayload(
+         request_id, stage="INTERNAL", error_code="INTERNAL_ERROR",
+         error_message=str(e), tokens_used=0, duration_ms=0, trace_id
+       ))
+     finally:
+       _in_flight_request_id = None
+       _cancel_set.discard(request.request_id)
+       _pipeline.reset()    -- FSM -> IDLE
+       _plan_lock.release()
+```
+
+---
+
+## 79. PipelineController Reference
+
+### 79.1 Constructor
+
+```python
+class PipelineController:
+    __slots__ = (
+        "_sketch", "_expand", "_validate", "_commit",
+        "_delta_port", "_event_port", "_config", "_fsm",
+        "_stage_token_usage", "_stage_cost", "_stage_latency",
+        "_total_plan_tokens", "_tool_call_count", "_hil_round_count",
+        "_current_request", "_plan_start_time", "_revise_count",
+        "_active_cancel_check",
+    )
+```
+
+Constructor: `PipelineController(sketch, expand, validate, commit, delta_port, event_port, config)`
+-- 7 injected deps. All validated non-None.
+
+### 79.2 FSM (PlanStateMachine)
+
+```python
+class PlanState(str, Enum):
+    IDLE          = "IDLE"           # Resting
+    SKETCHING     = "SKETCHING"      # Stage 1
+    EXPANDING     = "EXPANDING"      # Stage 2
+    VALIDATING    = "VALIDATING"     # Stage 3
+    COMMITTING    = "COMMITTING"     # Stage 4
+    MICRO_SKETCH  = "MICRO_SKETCH"   # Micro Stage 1
+    MICRO_EXPAND  = "MICRO_EXPAND"   # Micro Stage 2
+    MICRO_VALIDATE= "MICRO_VALIDATE" # Micro Stage 3
+    COMPLETED     = "COMPLETED"      # Terminal
+    FAILED        = "FAILED"         # Terminal
+    CANCELLED     = "CANCELLED"      # Terminal
+```
+
+| Property | Logic |
+|----------|-------|
+| `is_terminal` | COMPLETED, FAILED, CANCELLED |
+| `is_micro` | MICRO_SKETCH, MICRO_EXPAND, MICRO_VALIDATE |
+| `is_active` | not IDLE and not terminal |
+
+Transition table:
+
+| Source | Legal Targets |
+|--------|---------------|
+| IDLE | {SKETCHING, MICRO_SKETCH} |
+| SKETCHING | {EXPANDING, FAILED, CANCELLED} |
+| EXPANDING | {VALIDATING, FAILED, CANCELLED} |
+| VALIDATING | {COMMITTING, EXPANDING, FAILED, CANCELLED} |
+| COMMITTING | {COMPLETED, CANCELLED} |
+| COMPLETED | {IDLE} |
+| FAILED | {IDLE} |
+| CANCELLED | {IDLE} |
+| MICRO_SKETCH | {MICRO_EXPAND, FAILED} |
+| MICRO_EXPAND | {MICRO_VALIDATE, FAILED} |
+| MICRO_VALIDATE | {COMMITTING, FAILED} |
+
+Special methods: `reset()` (terminal -> IDLE, no callback), `force_failed()` (active -> FAILED,
+bypass table), `force_cancelled()` (active -> CANCELLED, bypass table).
+
+### 79.3 execute() Orchestration (14 Steps)
+
+```text
+Step 1:   reset(), set _current_request, _plan_start_time, _active_cancel_check
+Step 2:   FSM: IDLE -> SKETCHING (trigger "plan_start")
+Step 3:   SKETCH: ctx = _create_stage_context(SKETCH)
+            sketch_result = await _sketch.execute(request, ctx)
+Step 4:   Cancel check + timeout check
+Step 5:   FSM: SKETCHING -> EXPANDING (trigger "sketch_complete")
+
+--- EXPAND + VALIDATE LOOP (revise routing) ---
+Step 6:   EXPAND: ctx = _create_stage_context(EXPAND)
+            expanded_plan = await _expand.execute(sketch_result, ctx)
+Step 7:   Cancel check + timeout check
+Step 8:   FSM: EXPANDING -> VALIDATING (trigger "expand_complete")
+Step 9:   VALIDATE: ctx = _create_stage_context(VALIDATE)
+            verdict = await _validate.execute(expanded_plan, ctx)
+Step 10:  VERDICT ROUTING:
+            approved -> break to COMMIT
+            revise (1st) -> _revise_count++, FSM -> EXPANDING, continue loop
+            revise (2nd) -> treat as approved, break
+            reject (1st) -> _revise_count++, FSM -> EXPANDING, continue loop
+            reject (2nd) -> force_failed(), raise ValidateRejectedError
+Step 10b: Cancel check + timeout check (checkpoint 4)
+--- END LOOP ---
+
+Step 11:  FSM: VALIDATING -> COMMITTING (trigger "verdict_approved")
+Step 12:  COMMIT: await _commit.execute(expanded_plan, verdict, ctx)
+Step 13:  FSM: COMMITTING -> COMPLETED (trigger "commit_complete")
+Step 14:  Emit plan_end delta. Return CommittedPlan.
+
+Error: any stage exception -> force_failed(), emit plan.failed.v1, re-raise.
+Cancel: PlanCancelledError -> re-raise (FSM already CANCELLED).
+```
+
+### 79.4 micro_replan() Flow
+
+Abbreviated 3-stage flow (SKETCH -> EXPAND -> VALIDATE -> COMMIT):
+
+```text
+1. Validate request fields, reset counters, set micro context
+2. _validate_overlap(request) -- 3-way match (exact, substring)
+3. FSM: IDLE -> MICRO_SKETCH
+4. micro_sketch = await _sketch.micro_execute(request, ctx)
+5. Cancel + timeout check
+6. FSM: MICRO_SKETCH -> MICRO_EXPAND
+7. micro_expand = await _expand.micro_execute(micro_sketch, ctx)
+8. _enforce_plan12(replacement_plan, completed_ids)
+9. Cancel + timeout check
+10. FSM: MICRO_EXPAND -> MICRO_VALIDATE
+11. verdict = await _validate.micro_execute(micro_expand, ctx)
+12. Verdict routing: reject -> None; approved/revise -> COMMIT
+13. FSM: MICRO_VALIDATE -> COMMITTING
+14. Commit + emit telemetry + return CommittedPlan
+All failures -> return None (no plan.failed.v1).
+```
+
+### 79.5 Per-Plan Telemetry State
+
+| Field | Type | Reset Value | Purpose |
+|-------|------|-------------|---------|
+| `_stage_token_usage` | `Dict[str, int]` | `{SKETCH: 0, EXPAND: 0, VALIDATE: 0, COMMIT: 0}` | Token count per stage |
+| `_stage_cost` | `Dict[str, float]` | `{SKETCH: 0.0, ...}` | Cost per stage |
+| `_stage_latency` | `Dict[str, int]` | `{SKETCH: 0, ...}` | Latency ms per stage |
+| `_total_plan_tokens` | `int` | `0` | Running total across stages |
+| `_tool_call_count` | `int` | `0` | PLAN-05 counter |
+| `_hil_round_count` | `int` | `0` | PLAN-10 counter |
+| `_revise_count` | `int` | `0` | Validate revise loop counter (max 1) |
+
+---
+
+## 80. Planner Event Reference
+
+### 80.1 Events Emitted by Planner
+
+| Topic | Constant | Producer | Payload | When |
+|-------|----------|----------|---------|------|
+| `k1.planner.plan.ready.v1` | `TOPIC_PLAN_READY` | CommitService | `CommittedPlan` | Plan committed successfully |
+| `k1.planner.plan.failed.v1` | `TOPIC_PLAN_FAILED` | PipelineController / PlannerAgent | `PlanFailedPayload(request_id, stage, error_code, error_message, tokens_used, duration_ms, trace_id, partial_state)` | Stage error, timeout, or internal error |
+| `k1.planner.plan.cancelled.v1` | `TOPIC_PLAN_CANCELLED` | PlannerAgent | `PlanCancelledPayload(request_id, reason, stage, trace_id)` | Cancel at pre-check, between stages, or shutdown drain |
+| `k1.planner.micro_replan.ready.v1` | `TOPIC_MICRO_REPLAN_READY` | PipelineController | `CommittedPlan` | Micro-replan committed |
+| `k1.planner.delta.v1` | `TOPIC_DELTA` | PipelineController | `DeltaPayload` | Stage transitions, tool results, plan end |
+| `k1.hil.clarification.v1` | `TOPIC_HIL_CLARIFICATION` | HILCoordinator | `HILClarificationPayload(request_id, question, context, trace_id)` | Ambiguous intent needs user clarification |
+| `k1.hil.approval_request.v1` | `TOPIC_HIL_APPROVAL_REQ` | HILCoordinator | `HILApprovalRequestPayload(request_id, summary, options, side_effects, safety_assessment)` | High-risk plan needs user approval |
+
+### 80.2 Events Consumed by Planner
+
+| Topic | Constant | Consumer | Handler | Behaviour |
+|-------|----------|----------|---------|-----------|
+| `k1.planner.plan.request.v1` | `TOPIC_PLAN_REQUEST` | PlannerAgent | `_on_plan_request` | Parse PlanRequest, schedule enqueue to mailbox |
+| `k1.planner.plan.cancel.v1` | `TOPIC_PLAN_CANCEL` | PlannerAgent | `_on_plan_cancel` | Add request_id to cancel set |
+| `k1.hil.clarification_response.v1` | `TOPIC_HIL_CLARIFICATION_RESP` | PlannerAgent (stub) + HILCoordinator (real) | PlannerAgent: log + discard (V1). HILCoordinator: correlate by request_id, resolve asyncio.Event | User clarification response |
+| `k1.hil.approval_response.v1` | `TOPIC_HIL_APPROVAL_RESP` | PlannerAgent (stub) + HILCoordinator (real) | PlannerAgent: log + discard (V1). HILCoordinator: correlate by request_id, resolve asyncio.Event | User approval response |
+
+### 80.3 Delta Payload Types
+
+| `delta_type` Constant | When Emitted | `section` | `data` Contents |
+|-----------------------|-------------|-----------|-----------------|
+| `DELTA_STAGE_TRANSITION` | FSM state change | `"pipeline"` | `{from_state, to_state, trigger}` |
+| `DELTA_TOOL_RESULT` | Tool call completes | `"tools"` | `{tool_name, status, result}` |
+| `DELTA_HIL_EVENT` | HIL interaction | `"pipeline"` | `{type, request_id, question/response}` |
+| `DELTA_PLAN_UPDATE` | Intermediate progress | `"plan"` | `{stage, step_count, ...}` |
+| `DELTA_PLAN_END` | Plan completes/fails | `"plan"` | `{status, duration_ms, tokens_used}` |
+| `DELTA_PLAN_CANCELLED` | Plan cancelled | `"plan"` | `{reason, stage, request_id}` |
+| `DELTA_MICRO_REPLAN` | Micro-replan progress | `"plan"` | `{stage, status}` |
+| `DELTA_CRASH_RECOVERY` | Recovery at startup | `"pipeline"` | `{action: "v1_discard"}` |
+
+---
+
+## 81. Pipeline Stages Reference
+
+### 81.1 SketchService (Stage 1)
+
+- Location: `k1/planner/stages/sketch_service.py` (1307 lines)
+- Constructor: `SketchService(llm_port, tool_router, hil_coord)`
+- Slots: `_llm_port`, `_tool_router`, `_hil_coord`
+- Input: `PlanRequest` + `StageContext`
+- Output: `SketchResult(rough_steps, capability_candidates, rationale)`
+- Ports used: `ILLMPort` (CHAT capability), `ToolCallRouterLike` (4 tools), `HILCoordinatorLike` (clarification)
+- LLM config: `sketch_max_tokens`, `sketch_temperature` (0.7)
+- Max tool rounds: 6 (`_MAX_TOOL_ROUNDS`)
+- Output schema: `SKETCH_OUTPUT_SCHEMA` (rough_steps array, rationale string, needs_clarification boolean)
+- Retry: on `SketchFailedError`, retry once simplified (no tools, no HIL). Second failure raises.
+- HIL: if `needs_clarification=true` in LLM response and `allow_hil=True`, call
+  `hil_coord.request_clarification()`, re-run with clarification addendum.
+- 4 available tools: `discover_capabilities`, `query_session_context`, `recall_long_term_memory`, `find_prompts`
+- Micro variant: `micro_execute(request: MicroReplanRequest, ctx)` -- no HIL, no retry, abbreviated prompt
+
+### 81.2 ExpandService (Stage 2)
+
+- Location: `k1/planner/stages/expand_service.py` (1562 lines)
+- Constructor: `ExpandService(llm_port, tool_router)`
+- Slots: `_llm_port`, `_tool_router`
+- Input: `SketchResult` + `PlanRequest` + `StageContext` + optional `arbiter_feedback: List[str]`
+- Output: `ExpandedPlan(steps, dependencies, tool_mappings, rationale)`
+- Ports used: `ILLMPort` (STRUCTURED capability), `ExpandToolRouterLike` (4 tools)
+- LLM config: `expand_max_tokens`, `expand_temperature` (0.3)
+- Max tool rounds: 6
+- Output schema: `EXPAND_OUTPUT_SCHEMA` (steps array, dependencies object, rationale string)
+- Retry: on failure, retry simplified. Second failure: `_build_degraded_plan(sketch_result)` (direct-map rough_steps -> Plan Steps)
+- Post-LLM enrichment (`_enrich_steps`): fills 6 infra fields per step from CapabilityContract metadata
+  (`has_side_effects`, `compensation`, `timeout_ms`, `required_context`, `safety_band_min`, `condition`)
+- 4 available tools: `discover_capabilities`, `get_capability_schema`, `find_prompts`, `query_session_context`
+- Step ID pattern: `^s[0-9]+$` (enforced by regex, `_STEP_ID_RE`)
+- Default step timeout: 10000ms
+- Micro variant: `micro_execute(micro_sketch_result, completed_results, ctx)` -- no retry, no degraded fallback
+
+### 81.3 ValidateService (Stage 3)
+
+- Location: `k1/planner/stages/validate_service.py` (1216 lines)
+- Constructor: `ValidateService(llm_port, fabric_retrieval, hil_coord)`
+- Slots: `_llm_port`, `_fabric_retrieval`, `_hil_coord`
+- Input: `ExpandedPlan` + `PlanRequest` + `StageContext` + optional `cached_capabilities`
+- Output: `ValidationVerdict(status, issues, confidence, rationale, deterministic_pass, safety_assessment, suggested_fixes)`
+- Ports used: `ILLMPort` (STRUCTURED capability), `IFabricRetrievalPort` (capability existence), `HILCoordinatorLike` (approval)
+- NO ToolCallRouter (validate does NOT use tools)
+- Phase 1: Deterministic checks (DAG acyclicity via Kahn's algorithm, capability existence, structural)
+- Phase 2: LLM arbiter (STRUCTURED, 512 tokens, 0.1 temperature, 3s timeout). If LLM unavailable + det pass -> auto-approve.
+- Phase 3: HIL approval for high-impact plans (side effects or caution/unsafe safety)
+- Verdict schema: `VALIDATE_VERDICT_SCHEMA` (status, reasons array, coherence_score, safety_assessment, completeness)
+- 10 deterministic check names: `CHECK_DAG_CYCLE`, `CHECK_CAPABILITY_MISSING`, `CHECK_PARAM_TYPE_MISMATCH`,
+  `CHECK_UNSAFE_CAPABILITY`, `CHECK_LLM_ARBITER_REJECT`, `CHECK_TOOL_BUDGET_EXCEEDED`, `CHECK_STEP_ID_DUPLICATE`,
+  `CHECK_DANGLING_DEPENDENCY`, `CHECK_SELF_REFERENCE`, `CHECK_INTER_STEP_REF`
+- Meta-capability `tool.meta.build_agent` always passes capability existence check
+- Micro variant: `micro_execute(expanded_plan, ctx, cached_capabilities, completed_step_ids)` -- det checks with cross-boundary allowance, reduced arbiter (256 tokens, 2s), no HIL, `revise` upgraded to `approved`
+
+### 81.4 CommitService (Stage 4)
+
+- Location: `k1/planner/stages/commit_service.py` (538 lines)
+- Constructor: `CommitService(bridge_port, delta_port, event_port)` -- **NO LLM** (PLAN-03)
+- Slots: `_bridge_port`, `_delta_port`, `_event_port`
+- Input: `ExpandedPlan` + `ValidationVerdict` + `StageContext`
+- Output: `CommittedPlan(plan_id, request_id, intent, steps, trace_id, dependencies, estimated_duration_ms, created_at)`
+- Ports used: `IBridgePort` (WAL persist), `IDeltaEmitPort` (deltas), `IEventPort` (plan.ready delivery)
+- 11-step assembly: `plan_id = uuid4()`, `created_at = time.time()`, `steps = expanded_plan.steps`,
+  `dependencies = expanded_plan.dependencies`, `estimated_duration_ms` via critical path
+  (Kahn's DP on DAG), assemble `CommittedPlan`
+- WAL persist: `bridge_port.persist_plan(plan, trace_id=trace_id)` -- retry once, fire-and-forget on failure
+- Delivery: `event_port.emit(TOPIC_PLAN_READY, committed_plan)` -- retry once
+- Emit stage delta + plan_end delta after delivery
+- Deterministic: zero non-determinism, zero LLM calls, pure assembly
+
+---
+
+## 82. Leaf Services Reference
+
+### 82.1 ToolCallRouter
+
+- Location: `k1/planner/services/tool_call_router.py` (411 lines)
+- Constructor: `ToolCallRouter(fabric_retrieval, state_read, bridge_port, *, config=None)`
+- Slots: `_fabric_retrieval`, `_state_read`, `_bridge_port`, `_tool_call_count`, `_config`
+- Purpose: routes tool calls from SketchService and ExpandService to the 3 backend ports
+
+Routing table (frozen `MappingProxyType`):
+
+| Tool Name | Port | Method |
+|-----------|------|--------|
+| `discover_capabilities` | `IFabricRetrievalPort` | `discover_capabilities(domain, intent, safety_band, session_context, top_k)` |
+| `find_relevant_prompts` | `IFabricRetrievalPort` | `find_relevant_prompts(intent, domain, safety_band, top_k)` |
+| `query_planning_context` | `IStateReadPort` | `read_sections(sections, trace_id)` |
+| `recall_for_planning` | `IBridgePort` | `recall(query, selectors, trace_id)` |
+
+Retry policy:
+
+| Tool Name | Timeout | Retries |
+|-----------|---------|---------|
+| `discover_capabilities` | 50ms | 1 |
+| `find_relevant_prompts` | 50ms | 1 |
+| `query_planning_context` | 10ms | 0 |
+| `recall_for_planning` | 100ms | 0 |
+
+Key methods:
+- `call(tool_name, **params)` -- route + dispatch + increment `_tool_call_count`
+- `discover(intent, *, domain, safety_band, top_k)` -- convenience
+- `find_prompts(intent, *, domain, top_k)` -- convenience
+- `read_context(session_id, sections)` -- convenience
+- `recall_memory(query, trace_id)` -- convenience
+- `get_schema(capability_name, *, version)` -- bypasses routing table, does NOT count against PLAN-05
+- `reset()` -- sets `_tool_call_count = 0`
+
+Budget enforcement (PLAN-05): `_check_budget()` raises `BudgetExhaustedError` if
+`_tool_call_count >= config.max_tool_calls_per_plan`.
+
+### 82.2 HILCoordinator
+
+- Location: `k1/planner/services/hil_coordinator.py` (575 lines)
+- Constructor: `HILCoordinator(llm_port, event_port, *, config=None)`
+- Slots: `_llm_port`, `_event_port`, `_config`, `_round_count`, `_pending_request_id`, `_hil_type`, `_waiting`
+- Purpose: manages Human-in-the-Loop clarification and approval flows
+
+Protocol: `HILCoordinatorLike(Protocol)` with `round_count`, `reset()`,
+`request_clarification(request_id, question_context)`, `request_approval(request_id, plan_summary, side_effects, safety_assessment, estimated_duration_ms)`.
+
+Key methods:
+
+`request_clarification(request_id, question_context) -> Optional[str]` (7 steps):
+
+```text
+1. Check round budget: _round_count < max_hil_rounds (PLAN-10). Exhausted -> return None.
+2. Generate question via LLM (CHAT, 300 tokens, 3s). Failure -> return None.
+3. Emit TOPIC_HIL_CLARIFICATION with HILClarificationPayload.
+4. Set pending state (_pending_request_id, _hil_type="clarification", _waiting=True).
+5. _wait_for_response(TOPIC_HIL_CLARIFICATION_RESP, request_id, hil_clarification_timeout_ms).
+   Timeout -> increment round, return None.
+6. Clear pending state.
+7. Increment _round_count, return user response text.
+```
+
+`request_approval(request_id, plan_summary, side_effects, safety_assessment, estimated_duration_ms) -> str` (5 steps):
+
+```text
+1. Generate summary via LLM (CHAT, 400 tokens, 3s). Failure -> _evaluate_auto_approve_decision.
+2. Emit TOPIC_HIL_APPROVAL_REQ with HILApprovalRequestPayload(options=["approve", "modify", "reject"]).
+3. Set pending state.
+4. _wait_for_response(TOPIC_HIL_APPROVAL_RESP, request_id, hil_approval_timeout_ms).
+   Timeout -> _evaluate_auto_approve_decision.
+5. Parse response -> one of "approve", "modify", "reject".
+```
+
+`_evaluate_auto_approve_decision`: if safety == "safe" or no side effects -> "approve",
+else raise `HILTimeoutError`.
+
+`_wait_for_response(topic, request_id, timeout_ms)`: subscribe inline handler that
+correlates by `request_id` and sets `asyncio.Event`. `asyncio.wait_for(event.wait(), timeout)`.
+Unsubscribe in `finally`.
+
+`reset()`: `_round_count = 0`, clear pending state.
+
+---
+
+## 83. Planner Error Hierarchy
+
+All Planner errors extend `PlannerError(Exception)`.
+
+```text
+PlannerError(stage, request_id, trace_id)
+  |-- SketchFailedError          -- SKETCH failed after retries
+  |-- ExpandFailedError          -- EXPAND failed after retries
+  |-- ValidateRejectedError      -- Plan rejected by VALIDATE (2nd reject)
+  |-- CommitFailedError          -- COMMIT stage failed
+  |-- BudgetExhaustedError       -- Total token budget exhausted (PLAN-04)
+  |-- MailboxFullError           -- Mailbox at max depth
+  |-- ShutdownError              -- Planner shutting down, rejecting requests
+  |-- PlanCancelledError         -- Cancelled by Orchestrator (cancel set)
+  |-- HILTimeoutError            -- HIL response timed out
+  |-- HILBudgetExceededError     -- PLAN-10 HIL round budget exceeded
+  |-- LLMTimeoutError            -- Model Hub request timed out
+  |-- BudgetExceededError        -- Token budget exceeded (MH-04)
+  |-- AdapterException(degraded) -- Adapter infrastructure failure
+  |-- UnknownToolError           -- Unknown tool name in ToolCallRouter
+```
+
+Factory errors (not thrown during planning):
+
+```text
+  |-- InvalidPortError(port_name, expected_protocol, actual_type)
+  |-- MissingPortError(port_name)
+  |-- DuplicatePortError(port_a, port_b)
+  |-- InvalidConfigError(field_name, value, constraint)
+  |-- PlannerInitError(detail)
+```
+
+FSM error:
+
+```text
+  |-- IllegalStateTransitionError(from_state, to_state, trigger)
+```
+
+---
+
+## 84. Planner Types Reference
+
+### 84.1 Core Dataclasses
+
+| Type | Frozen | Fields | Validation |
+|------|--------|--------|------------|
+| `RoughStep` | Yes | `intent: str`, `suggested_capability: Optional[str]`, `depends_on: List[str]`, `confidence: float` | intent non-empty, confidence [0.0, 1.0] |
+| `SketchResult` | Yes | `rough_steps: List[RoughStep]`, `capability_candidates: List[ScoredCapability]`, `rationale: str` | rough_steps non-empty, rationale non-empty |
+| `ExpandedPlan` | Yes | `steps: List[PlanStep]`, `dependencies: Dict[str, List[str]]`, `tool_mappings: Dict[str, str]`, `rationale: str` | steps non-empty, rationale non-empty |
+| `ValidationIssue` | Yes | `check_name: str`, `severity: str`, `step_id: Optional[str]`, `detail: str` | check_name non-empty, severity in {"error", "warning"} |
+| `ValidationVerdict` | Yes | `status: str`, `issues: List[ValidationIssue]`, `confidence: float`, `rationale: str`, `deterministic_pass: bool`, `safety_assessment: str`, `suggested_fixes: List[str]` | status in {"approved", "revise", "reject"}, rationale non-empty |
+| `StageContext` | Yes | `request_id: str`, `trace_id: str`, `timeout_remaining_ms: int`, `token_budget_remaining: int`, `cancel_check: Callable[[], bool]`, `stage_budget: Optional[RequestConstraints]` | request_id/trace_id non-empty, timeout > 0 |
+| `DeltaPayload` | Yes | `agent_id: str`, `delta_type: str`, `section: str`, `data: Dict[str, Any]`, `trace_id: str` | agent_id/trace_id non-empty, delta_type/section from valid sets |
+| `RequestConstraints` | Yes | `max_tokens: int`, `timeout_ms: int`, `priority: str`, `temperature: float`, `consumer_id: str` | max_tokens > 0, timeout_ms > 0, temperature [0.0, 1.0] |
+| `HubRequest` | Yes | `capability: str`, `payload: Dict[str, Any]`, `constraints: RequestConstraints`, `trace_id: str` | capability in {"CHAT", "STRUCTURED"} |
+| `HubResponse` | Yes | `result: Dict[str, Any]`, `metadata: Dict[str, Any]` | (none) |
+| `RecallResponse` | Yes | `facts: List[Dict[str, Any]]`, `scores: List[float]`, `trace_id: str` | (none) |
+| `TokenUsageRecord` | **Mutable** | `stage: str`, `prompt_tokens: int`, `completion_tokens: int`, `total_tokens: int` | stage non-empty, all counts >= 0 |
+| `HealthStatus` | Yes | `status: str`, `details: Dict[str, Any]` | (none) |
+
+### 84.2 Enums
+
+| Enum | Values |
+|------|--------|
+| `StagePhase(str, Enum)` | `SKETCH`, `EXPAND`, `VALIDATE`, `COMMIT` |
+| `ToolCallStatus(str, Enum)` | `SUCCESS`, `TIMEOUT`, `ERROR`, `BUDGET_EXHAUSTED` |
+
+### 84.3 Constants
+
+| Category | Constants |
+|----------|-----------|
+| Verdict statuses | `VERDICT_APPROVED`, `VERDICT_REVISE`, `VERDICT_REJECT` |
+| Severities | `SEVERITY_ERROR`, `SEVERITY_WARNING` |
+| Check names | `CHECK_DAG_CYCLE`, `CHECK_CAPABILITY_MISSING`, `CHECK_PARAM_TYPE_MISMATCH`, `CHECK_UNSAFE_CAPABILITY`, `CHECK_LLM_ARBITER_REJECT`, `CHECK_TOOL_BUDGET_EXCEEDED`, `CHECK_STEP_ID_DUPLICATE`, `CHECK_DANGLING_DEPENDENCY`, `CHECK_SELF_REFERENCE`, `CHECK_INTER_STEP_REF` |
+| Safety levels | `SAFETY_SAFE`, `SAFETY_CAUTION`, `SAFETY_UNSAFE`, `SAFETY_UNKNOWN` |
+| Delta types | `DELTA_STAGE_TRANSITION`, `DELTA_TOOL_RESULT`, `DELTA_HIL_EVENT`, `DELTA_PLAN_UPDATE`, `DELTA_PLAN_END`, `DELTA_PLAN_CANCELLED`, `DELTA_MICRO_REPLAN`, `DELTA_CRASH_RECOVERY` |
+| Sections | `SECTION_PIPELINE`, `SECTION_PLAN`, `SECTION_TOOLS` |
+| Agent ID | `PLANNER_AGENT_ID = "planner"` |
+
+---
+
+## 85. Planner Concurrency Model
+
+### 85.1 V1: Single-Plan Exclusion
+
+One plan at a time. `asyncio.Lock` (`_plan_lock`) acquired at dequeue loop step 5,
+released in `finally` after pipeline completes or errors. Additional requests queue
+in the mailbox (max depth 5, configurable).
+
+### 85.2 Cancel Protocol (SS24.2)
+
+Cooperative flag-based cancellation checked at 5 checkpoints:
+
+| # | Location | Guard |
+|---|----------|-------|
+| 1 | Dequeue loop pre-check | `request_id in _cancel_set` before acquire |
+| 2 | After SKETCH | `cancel_check()` in PipelineController |
+| 3 | After EXPAND | `cancel_check()` in PipelineController |
+| 4 | After VALIDATE | `cancel_check()` in PipelineController |
+| 5 | At shutdown | `_cancel_set.add(_in_flight_request_id)` during stop() |
+
+On cancel: FSM -> CANCELLED, emit `plan.cancelled.v1`, raise `PlanCancelledError`.
+`_cancel_set` is the sole source of truth. Idempotent (Set ignores duplicate adds).
+
+### 85.3 Micro-Replan Concurrency
+
+`micro_replan()` acquires `_plan_lock` -- blocks until any in-flight plan completes.
+With 10s caller-side timeout and typical plan duration ~12s p50, micro-replan will
+almost always timeout during active plan (by design -- Orchestrator falls back to
+original plan). Micro-replan bypasses the mailbox queue.
+
+---
+
+## 86. Planner Gotchas
+
+| # | Gotcha | Consequence if Violated |
+| - | ------ | ----------------------- |
+| PG-01 | `PipelineController.reset()` must be called after every plan (in loop `finally`), not just on success | FSM stuck in terminal state, next plan gets `IllegalStateTransitionError` |
+| PG-02 | `SketchService` retry uses simplified mode (no tools, no HIL). If both attempts fail, `SketchFailedError` propagates to PlannerAgent. | Swallowing error = plan silently lost |
+| PG-03 | `ExpandService` degraded fallback (`_build_degraded_plan`) creates a direct-map plan from `SketchResult.rough_steps`. Degraded plans may not have valid capability bindings. | Degraded plan reaches COMMIT but Orchestrator DAG may fail at execution |
+| PG-04 | `ValidateService` arbiter uses 0.1 temperature (near-deterministic). If LLM unavailable AND deterministic checks pass, auto-approve kicks in. | No LLM arbiter = only deterministic validation, may miss semantic issues |
+| PG-05 | `CommitService` has zero ILLMPort (PLAN-03). Adding LLM to commit breaks the `no LLM at commit` invariant structurally enforced by the constructor. | Factory `_wire()` step 6 does not pass `llm_port` -- changing this requires architectural review |
+| PG-06 | `ToolCallRouter._tool_call_count` is per-plan (reset by `reset()`). If reset is missed between plans, PLAN-05 budget carries over. | Second plan immediately hits budget limit from first plan's count |
+| PG-07 | `HILCoordinator._round_count` is per-plan (reset by `reset()`). If reset is missed, PLAN-10 budget carries over. | HIL requests rejected even for fresh plan |
+| PG-08 | `_on_plan_request` handler uses `loop.create_task(_safe_enqueue)` -- enqueue is async. If the event loop is blocked, enqueue is deferred. | Plan request delivery latency increases under load |
+| PG-09 | `_on_hil_clarification` and `_on_hil_approval` in PlannerAgent are V1 stubs (log + discard). Real handling is via HILCoordinator's own inline subscriptions. | Do not add logic to PlannerAgent handlers -- it would conflict with HILCoordinator's subscription |
+| PG-10 | `micro_replan()` returns `None` on all failures (never raises, never emits `plan.failed.v1`). The caller (Orchestrator) must handle None = keep original plan. | Treating None as success = executing a stale plan |
+| PG-11 | Validate revise loop allows exactly 1 retry. Second `revise` is treated as `approved`. Second `reject` raises `ValidateRejectedError`. | Infinite revise loop impossible by design; but 2nd-revise auto-approval may pass a marginal plan |
+| PG-12 | `MailboxAdapter.set_pipeline_controller(controller)` must be called after both `MailboxAdapter` and `PipelineController` are created. Factory `_wire()` does not call this -- manual step if micro_replan is used. | `micro_replan()` raises `RuntimeError("PipelineController not set")` |
+
+---
+
+## 87. Planner File Locations Reference
+
+| What | Path |
+| ---- | ---- |
+| Package facade | `k1/planner/__init__.py` |
+| PlannerAgent | `k1/planner/planner_agent.py` |
+| PlannerFactory | `k1/planner/factory.py` |
+| PipelineController | `k1/planner/pipeline_controller.py` |
+| PlanStateMachine | `k1/planner/plan_fsm.py` |
+| PlannerConfig | `k1/planner/config.py` |
+| Types + errors | `k1/planner/types.py` |
+| Events + payloads | `k1/planner/events.py` |
+| Port: IMailboxPort | `k1/planner/ports/mailbox_port.py` |
+| Port: ILLMPort | `k1/planner/ports/llm_port.py` |
+| Port: IFabricRetrievalPort | `k1/planner/ports/fabric_retrieval_port.py` |
+| Port: IStateReadPort | `k1/planner/ports/state_read_port.py` |
+| Port: IBridgePort | `k1/planner/ports/bridge_port.py` |
+| Port: IDeltaEmitPort | `k1/planner/ports/delta_emit_port.py` |
+| Port: IEventPort | `k1/planner/ports/event_port.py` |
+| Adapter: MailboxAdapter | `k1/planner/adapters/mailbox_adapter.py` |
+| Adapter: LLMGatewayAdapter | `k1/planner/adapters/llm_gateway_adapter.py` |
+| Adapter: FabricRetrievalAdapter | `k1/planner/adapters/fabric_retrieval_adapter.py` |
+| Adapter: SessionStateReadAdapter | `k1/planner/adapters/session_state_adapter.py` |
+| Adapter: BridgeAdapter | `k1/planner/adapters/bridge_adapter.py` |
+| Adapter: DeltaBusAdapter | `k1/planner/adapters/delta_bus_adapter.py` |
+| Adapter: EventBusAdapter | `k1/planner/adapters/event_bus_adapter.py` |
+| Stage: SketchService | `k1/planner/stages/sketch_service.py` |
+| Stage: ExpandService | `k1/planner/stages/expand_service.py` |
+| Stage: ValidateService | `k1/planner/stages/validate_service.py` |
+| Stage: CommitService | `k1/planner/stages/commit_service.py` |
+| Service: ToolCallRouter | `k1/planner/services/tool_call_router.py` |
+| Service: HILCoordinator | `k1/planner/services/hil_coordinator.py` |
+| Test Adapters | `tests/k1/planner/adapters/` |
+| Factory Tests | `tests/k1/planner/test_factory.py` |
