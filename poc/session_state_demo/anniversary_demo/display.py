@@ -137,6 +137,22 @@ def clear_screen() -> None:
 
 
 # ============================================================================
+# Streaming Text Output
+# ============================================================================
+
+
+def print_streaming_text(text_chunk: str) -> None:
+    """Write a streaming text chunk to stdout without trailing newline.
+
+    Designed as the ``on_text_delta`` callback for
+    ``SimpleLLMClient.generate_stream()``.  Writes the raw chunk and
+    immediately flushes so each piece appears in real time.
+    """
+    sys.stdout.write(text_chunk)
+    sys.stdout.flush()
+
+
+# ============================================================================
 # Progress Indicators
 # ============================================================================
 

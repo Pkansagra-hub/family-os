@@ -188,6 +188,146 @@ class SimpleLLMClient:
         result = await self.complete_with_tools(system_prompt, messages, [])
         return result.get("content", "")
 
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: List[Dict[str, str]],
+        tools: List[Dict[str, Any]],
+        force_tool_call: bool = False,
+        on_text_delta: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Streaming completion with tool calling support.
+
+        Uses ``client.models.generate_content_stream()`` for real-time
+        text delivery.  Function-call responses are accumulated across
+        chunks -- text deltas are NOT emitted when the response contains
+        tool calls (since the text is not a final answer).
+
+        Args:
+            system_prompt: System prompt
+            messages: Conversation history
+            tools: Tool definitions
+            force_tool_call: If True, forces LLM to call a tool (ANY mode)
+            on_text_delta: Callable[[str], None] called for each text chunk
+                           during streaming. Only called for text-only
+                           responses (not when the response contains
+                           function calls).
+
+        Returns:
+            Dict with 'content' and/or 'tool_calls' -- identical contract
+            to complete_with_tools().
+        """
+        # Build contents -- same as complete_with_tools()
+        contents = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                continue
+            elif role == "assistant":
+                contents.append(
+                    types.Content(
+                        role="model",
+                        parts=[types.Part.from_text(text=content)],
+                    )
+                )
+            else:
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=content)],
+                    )
+                )
+
+        # Build tool declarations -- same as complete_with_tools()
+        func_decls = []
+        for tool in tools:
+            func_decls.append(
+                types.FunctionDeclaration(
+                    name=tool["name"],
+                    description=tool.get("description", ""),
+                    parameters=tool.get("parameters", {"type": "object", "properties": {}}),
+                )
+            )
+
+        gemini_tools = [types.Tool(function_declarations=func_decls)] if func_decls else None
+
+        tool_config_obj = None
+        if gemini_tools and force_tool_call:
+            tool_config_obj = types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(
+                    mode=types.FunctionCallingConfigMode.ANY
+                )
+            )
+
+        config = types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            tools=gemini_tools,
+            tool_config=tool_config_obj,
+        )
+
+        # Attempt streaming call
+        try:
+            stream = self._client.models.generate_content_stream(
+                model=self.model_name,
+                contents=contents,
+                config=config,
+            )
+        except Exception:
+            # Stream setup failed -- fall back to non-streaming
+            return await self.complete_with_tools(
+                system_prompt, messages, tools, force_tool_call
+            )
+
+        # Accumulate all parts across chunks.  We buffer everything
+        # because function_call parts can appear in any chunk and we
+        # must NOT emit text deltas if the response contains tool calls.
+        all_text_parts: List[str] = []
+        all_tool_calls: List[Dict[str, Any]] = []
+        has_function_calls = False
+
+        try:
+            for chunk in stream:
+                if not chunk.candidates:
+                    continue
+
+                candidate = chunk.candidates[0]
+                if not candidate.content or not candidate.content.parts:
+                    continue
+
+                for part in candidate.content.parts:
+                    if (
+                        hasattr(part, "function_call")
+                        and part.function_call
+                        and getattr(part.function_call, "name", None)
+                    ):
+                        has_function_calls = True
+                        fc = part.function_call
+                        all_tool_calls.append(
+                            {
+                                "name": fc.name,
+                                "args": dict(fc.args) if fc.args else {},
+                            }
+                        )
+                    elif hasattr(part, "text") and part.text:
+                        all_text_parts.append(part.text)
+
+        except Exception:
+            pass  # Use partial data collected so far
+
+        # Emit text deltas retroactively only for text-only responses.
+        # For FC responses the text is thinking/reasoning -- not for display.
+        if not has_function_calls and on_text_delta and all_text_parts:
+            for text_chunk in all_text_parts:
+                on_text_delta(text_chunk)
+
+        result: Dict[str, Any] = {
+            "content": "".join(all_text_parts),
+            "tool_calls": all_tool_calls,
+        }
+        return result
+
     async def agentic_loop(
         self,
         system_prompt: str,
