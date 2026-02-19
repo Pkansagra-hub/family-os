@@ -328,6 +328,49 @@ class SimpleLLMClient:
         }
         return result
 
+    async def summarize_messages(
+        self,
+        messages: List[Dict[str, str]],
+    ) -> str:
+        """Summarise conversation messages into a concise digest.
+
+        Used by scratchpad compaction to replace older turns with a brief
+        summary, preserving key information while reducing token count.
+
+        Args:
+            messages: List of {"role": ..., "content": ...} dicts.
+
+        Returns:
+            A 2-3 sentence summary string.
+        """
+        formatted = []
+        for m in messages:
+            role_label = m.get("role", "user").upper()
+            content = m.get("content", "")[:500]
+            formatted.append(f"[{role_label}]: {content}")
+
+        messages_text = "\n".join(formatted)
+
+        prompt = (
+            "Summarize the following conversation excerpt in 2-3 sentences. "
+            "Focus on: what was asked, what tools were called, what was found. "
+            "Be factual and concise. Do not add opinions.\n\n"
+            f"CONVERSATION:\n{messages_text}\n\n"
+            "SUMMARY:"
+        )
+
+        try:
+            response = self._client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+            )
+            if response.candidates and response.candidates[0].content.parts:
+                return response.candidates[0].content.parts[0].text.strip()
+        except Exception:
+            return f"Previous conversation covered: {messages_text[:200]}..."
+
+        return "Previous conversation context (summarization failed)."
+
     async def agentic_loop(
         self,
         system_prompt: str,

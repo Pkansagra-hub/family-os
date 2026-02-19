@@ -315,6 +315,44 @@ class ToolRegistry:
         """Get all tool categories."""
         return list(self._categories.keys())
 
+    def get_llm_declarations(self, tier: str) -> List[Dict[str, Any]]:
+        """Return Gemini-compatible function-calling declarations filtered by tier.
+
+        Tier filtering:
+          LOW:    cognitive tools only (add_belief, update_persona, update_emotion, acknowledge)
+          MEDIUM: cognitive + search + booking + family + calendar tools
+          HIGH:   all registered tools
+
+        Each dict has ``name``, ``description``, ``parameters`` -- the shape
+        Gemini ``tools=[{"function_declarations": [...]}]`` expects.
+        """
+        _LOW_TOOLS = frozenset({
+            "add_belief", "update_persona", "update_emotion", "acknowledge",
+        })
+        _MEDIUM_TOOLS = _LOW_TOOLS | frozenset({
+            "search_accommodations", "get_accommodation_details",
+            "book_accommodation", "search_restaurants", "book_restaurant",
+            "book_spa_service", "search_activities", "plan_route",
+            "get_family_member_info", "send_family_message",
+            "schedule_family_checkin",
+            "create_calendar_event", "schedule_reminder",
+            "generate_trip_summary",
+        })
+
+        upper = tier.upper()
+        if upper == "LOW":
+            allowed = _LOW_TOOLS
+        elif upper == "MEDIUM":
+            allowed = _MEDIUM_TOOLS
+        else:  # HIGH
+            allowed = None  # all tools
+
+        declarations = []
+        for schema in sorted(self._tools.values(), key=lambda s: s.name):
+            if allowed is None or schema.name in allowed:
+                declarations.append(schema.to_gemini_format())
+        return declarations
+
     def __len__(self) -> int:
         return len(self._tools)
 
