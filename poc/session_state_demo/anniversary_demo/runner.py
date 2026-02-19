@@ -59,19 +59,18 @@ from poc.session_state_demo.anniversary_demo.display import (
     print_act_header,
     print_assistant_message,
     print_background_task_started,
-    print_clarification,
     print_crash_screen,
     print_demo_complete,
     print_demo_header,
     print_demo_stats,
     print_divider,
     print_fsm_state_transition,
-    print_gap_detected,
     print_gap_detection_call,
     print_k1_coverage_report,
     print_llm_call,
     print_llm_response,
     print_restore_screen,
+    print_streaming_text,
     print_subagent_dispatch,
     print_subagent_response,
     print_system_activity,
@@ -86,8 +85,23 @@ from poc.session_state_demo.anniversary_demo.display import (
     wait_for_key,
 )
 
+# FSMController (Phase 3) and ReAct loop (Phase 4)
+from poc.session_state_demo.anniversary_demo.fsm_controller import Event as FSMCtrlEvent
+from poc.session_state_demo.anniversary_demo.fsm_controller import FSMController
+from poc.session_state_demo.anniversary_demo.fsm_controller import State as FSMCtrlState
+
 # Canonical Plan Object (Fix 1: Authoritative Plan State)
 from poc.session_state_demo.anniversary_demo.plan import PlanController
+from poc.session_state_demo.anniversary_demo.react import (
+    ReActLoop,
+    ReActResult,
+    Scratchpad,
+)
+from poc.session_state_demo.anniversary_demo.react.events import (
+    LoopEvent,
+    LoopEventType,
+)
+from poc.session_state_demo.anniversary_demo.react.loop import Phase1Result
 
 # Script data (user inputs only)
 from poc.session_state_demo.anniversary_demo.script import (
@@ -109,6 +123,7 @@ from poc.session_state_demo.anniversary_demo.tools.registry import (
 
 # Real components - NO MOCKS
 from poc.session_state_demo.bridge import SessionLLMBridge
+from poc.session_state_demo.concierge.classifier import IntentClassifier
 
 # ConciergeFSM - the orchestrator
 from poc.session_state_demo.concierge.fsm import ConciergeFSM, FSMEvent, FSMObserver
@@ -203,6 +218,195 @@ class DisplayObserver(FSMObserver):
 
 
 # =============================================================================
+# DEMO EVENT HANDLER (Phase 5 -- maps ReAct loop events to display functions)
+# =============================================================================
+
+
+class DemoEventHandler:
+    """Maps ReAct LoopEvent emissions to anniversary demo display functions.
+
+    Implements the ``LoopEventHandler`` protocol defined in
+    ``react/events.py``.  Each ``LoopEventType`` is dispatched to
+    the appropriate ``display.py`` function so the terminal shows
+    live progress as the ReAct loop runs.
+    """
+
+    def __init__(self, verbose: bool = True) -> None:
+        self.verbose = verbose
+        self._streamed_any_text = False
+
+    def on_event(self, event: LoopEvent) -> None:
+        """Route a single LoopEvent to its display function."""
+        if not self.verbose:
+            return
+
+        etype = event.type
+        data = event.data
+
+        if etype == LoopEventType.ITERATION_START:
+            iteration = data.get("iteration", 0)
+            if iteration > 1:
+                print_system_message(f"ReAct iteration {iteration}", "info")
+
+        elif etype == LoopEventType.LLM_CALL_START:
+            print_llm_call(
+                model="gemini",
+                prompt_preview="",
+                message_count=data.get("message_count", 0),
+                tool_count=data.get("tool_count", 0),
+            )
+
+        elif etype == LoopEventType.LLM_CALL_END:
+            has_tools = data.get("has_tool_calls", False)
+            if has_tools:
+                print_system_message("LLM returned tool calls", "info")
+
+        elif etype == LoopEventType.TEXT_DELTA:
+            text = data.get("text", "")
+            if text:
+                print_streaming_text(text)
+                self._streamed_any_text = True
+
+        elif etype == LoopEventType.TOOL_CALL_START:
+            tool_name = data.get("tool_name", "")
+            arguments = data.get("arguments", {})
+            print_tool_call(tool_name, arguments)
+
+        elif etype == LoopEventType.TOOL_CALL_END:
+            tool_name = data.get("tool_name", "")
+            success = data.get("success", False)
+            summary = data.get("summary", "")
+            # Show execution results for significant tools
+            if any(
+                word in tool_name.lower()
+                for word in ["book", "send", "create_calendar", "schedule", "monitor"]
+            ):
+                print_tool_execution_result(
+                    tool_name=tool_name,
+                    success=success,
+                    message=summary,
+                    data={},
+                )
+            # Always show acknowledge tool results
+            if tool_name == "acknowledge" and summary:
+                print(f"\n{CYAN}[ACK] {summary}{RESET}")
+
+        elif etype == LoopEventType.FINDING_EXTRACTED:
+            key = data.get("key", "")
+            value = data.get("value", "")
+            print_system_message(f"Finding: {key} = {value[:80]}", "info")
+
+        elif etype == LoopEventType.FSM_TRANSITION:
+            from_state = data.get("from_state", "")
+            evt = data.get("event", "")
+            to_state = data.get("to_state", "")
+            print_system_message(f"FSM: {from_state} --{evt}--> {to_state}", "info")
+
+        elif etype == LoopEventType.ACK_DELIVERED:
+            message = data.get("message", "")
+            if message:
+                print(f"\n{CYAN}[ACK] {message}{RESET}")
+
+        elif etype == LoopEventType.COMPACTION:
+            summary_len = data.get("summary_len", 0)
+            print_system_message(f"Context compacted ({summary_len} chars)", "info")
+
+        elif etype == LoopEventType.LOOP_COMPLETE:
+            iterations = data.get("iterations", 0)
+            tools_used = data.get("tools_used", 0)
+            exhausted = data.get("budget_exhausted", False)
+            status = "budget exhausted" if exhausted else "complete"
+            print_system_message(
+                f"ReAct loop {status}: {iterations} iterations, " f"{tools_used} tool calls",
+                "info",
+            )
+
+        elif etype == LoopEventType.BUDGET_WARNING:
+            resource = data.get("resource", "")
+            used = data.get("used", 0)
+            limit = data.get("limit", 0)
+            print_system_message(f"Budget warning: {resource} {used}/{limit}", "warning")
+
+        elif etype == LoopEventType.THOUGHT:
+            text = data.get("text", "")
+            if text:
+                print_system_message(f"Thought: {text[:120]}", "info")
+
+        elif etype == LoopEventType.CYCLE_DETECTED:
+            pattern = data.get("pattern", [])
+            print_system_message(f"Cycle detected: {' -> '.join(pattern)}", "warning")
+
+        elif etype == LoopEventType.TOOL_CACHE_HIT:
+            tool_name = data.get("tool_name", "")
+            print_system_message(f"Cache hit: {tool_name}", "info")
+
+    @property
+    def streamed_text(self) -> bool:
+        """Whether any TEXT_DELTA events were received."""
+        return self._streamed_any_text
+
+    def reset(self) -> None:
+        """Reset state for a new turn."""
+        self._streamed_any_text = False
+
+
+# =============================================================================
+# PHASE 1 CLASSIFIER ADAPTER
+# =============================================================================
+
+
+def classify_to_phase1(
+    user_input: str,
+    classifier: Any,
+    session_context: Optional[Dict[str, Any]] = None,
+    is_clarification: bool = False,
+) -> Phase1Result:
+    """Adapt IntentClassifier's ClassificationResult to Phase1Result.
+
+    Bridges the ConciergeFSM classification pipeline to the
+    ReActLoop's Phase1Result dataclass.
+
+    Args:
+        user_input: Raw user message.
+        classifier: IntentClassifier instance.
+        session_context: Optional session context dict.
+        is_clarification: Whether this is a clarification response.
+
+    Returns:
+        Phase1Result compatible with ReActLoop.run().
+    """
+    result = classifier.classify(
+        user_input,
+        session_context=session_context,
+        is_clarification_response=is_clarification,
+    )
+
+    # Map ComplexityTier to tier string
+    tier_map = {
+        "low": "LOW",
+        "medium": "MEDIUM",
+        "high": "HIGH",
+    }
+    tier = tier_map.get(result.complexity.value, "MEDIUM")
+
+    # Map gaps to string list
+    gap_strings = [g.question for g in result.gaps] if result.gaps else []
+
+    # Extract entities dict
+    entities = result.detected_entities or {}
+
+    return Phase1Result(
+        intent=result.primary_intent.value,
+        tier=tier,
+        safety_band="GREEN",
+        entities=entities,
+        emotion="neutral",
+        confidence=result.confidence,
+        gaps=gap_strings,
+    )
+
+
+# =============================================================================
 # DYNAMIC CONCIERGE PROMPT BUILDER
 # =============================================================================
 
@@ -259,7 +463,7 @@ INVALID (WILL BE REJECTED):
 
 ACK TYPES:
 - "commit": State change happening
-- "progress": Work starting  
+- "progress": Work starting
 - "closure": Branch complete
 
 ACK MESSAGE RULES:
@@ -739,7 +943,6 @@ Results come back automatically via Delta Bus - no need to wait."""
         return "\n".join(lines)
 
 
-
 # =============================================================================
 # SCOREBOARD TRACKER (M9.1)
 # =============================================================================
@@ -1215,6 +1418,13 @@ class DemoRunner:
         # Canonical Plan Controller (Fix 1: Authoritative Plan State)
         self.plan_controller: Optional[PlanController] = None
 
+        # ReAct loop components (Phase 5)
+        self._demo_event_handler: DemoEventHandler = DemoEventHandler(
+            verbose=not auto_mode,
+        )
+        self._intent_classifier: IntentClassifier = IntentClassifier()
+        self._is_clarification_pending: bool = False
+
         # Walkthrough explanations
         self._walkthrough_topics: Dict[str, str] = {
             "session_state": (
@@ -1381,7 +1591,15 @@ class DemoRunner:
             self.bridge.stop(checkpoint_before_stop=True)
 
     async def _execute_turn(self, turn: DemoTurn) -> None:
-        """Execute a single turn with REAL LLM call."""
+        """Execute a single turn through the ReAct loop.
+
+        Flow (Phase 5):
+        1. Classify intent via IntentClassifier -> Phase1Result
+        2. Create per-turn FSMController + Scratchpad
+        3. Drive FSM through MESSAGE_RECEIVED -> PHASE1_COMPLETE -> DISPATCHING
+        4. Run ReActLoop (streaming, tool calling, FSM transitions)
+        5. Post-loop: update trackers, PlanController, SessionState
+        """
         # Track activity for this turn
         session_ops: List[str] = []
         tool_calls_made: List[str] = []
@@ -1434,250 +1652,207 @@ class DemoRunner:
 
         # Record user turn in REAL SessionState
         if self.bridge:
-            changes = self.bridge.record_user_turn(user_input)
+            self.bridge.record_user_turn(user_input)
 
         # =================================================================
-        # FSM ORCHESTRATION via TwoWayConcierge (M10)
+        # PHASE 1: CLASSIFICATION -> Phase1Result
         # =================================================================
 
         start_time = time.time()
-        pending_notifications: List[Notification] = []
 
-        # Use TwoWayConcierge if available (wraps FSM + adds background support)
-        if self.two_way_concierge:
+        session_context = {}
+        if self.bridge:
             try:
-                # Process through TwoWayConcierge (which wraps FSM)
-                concierge_response = await self.two_way_concierge.process_input(user_input)
+                session_context = {
+                    "history": self.bridge.get_section_data("history_active"),
+                    "persona": self.bridge.get_section_data("persona"),
+                    "beliefs": self.bridge.get_section_data("beliefs_active"),
+                    "scoreboard": self.bridge.get_section_data("scoreboard"),
+                }
+            except Exception:
+                pass
 
-                # Extract the underlying TurnResult for FSM state info
-                turn_result = concierge_response.turn_result
-                if turn_result:
-                    # Show FSM state transitions
-                    state_history = turn_result.state_history
-                    intent_type = ""
-                    complexity_tier = ""
+        phase1 = classify_to_phase1(
+            user_input,
+            self._intent_classifier,
+            session_context=session_context,
+            is_clarification=self._is_clarification_pending,
+        )
+        self._is_clarification_pending = False
 
-                    if turn_result.classification:
-                        intent_type = turn_result.classification.primary_intent.value
-                        complexity_tier = turn_result.tier.value.upper()
+        classification_ms = int((time.time() - start_time) * 1000)
 
-                    print_fsm_state_transition(
-                        state_history=[s.name for s in state_history],
-                        intent_type=intent_type,
-                        complexity_tier=complexity_tier,
-                        classification_ms=turn_result.classification_ms,
-                    )
+        # =================================================================
+        # PHASE 2: FSMController + ReAct Loop
+        # =================================================================
 
-                    # Get tool calls and response
-                    tool_calls = turn_result.tool_calls
-                    content = concierge_response.response
+        # Create per-turn FSMController
+        fsm_ctrl = FSMController()
 
-                    # Handle clarification
-                    if concierge_response.needs_clarification:
-                        self.state.gap_detections += 1
-                        self.state.clarifications += 1
-                        self.state.k1_coverage["Gap Detection"] = True
-                        print_gap_detected(["missing_info"])
-                        state_changes["gap_detected"] = True
-                        print_clarification(concierge_response.clarification_question)
-                        content = concierge_response.clarification_question
-                else:
-                    # Fallback if no turn_result
-                    tool_calls = []
-                    content = concierge_response.response
+        # Drive FSM: LISTENING -> ACKING -> DISPATCHING
+        fsm_ctrl.transition(FSMCtrlEvent.MESSAGE_RECEIVED)  # -> ACKING
 
-                # Collect pending notifications (M10: background alerts)
-                if concierge_response.has_notifications:
-                    pending_notifications = concierge_response.notifications
-
-                # Track active background tasks
-                if concierge_response.background_tasks_active > 0:
-                    print_system_activity(
-                        turn_num=turn.turn_number,
-                        session_ops=[f"Background tasks active: {concierge_response.background_tasks_active}"]
-                    )
-
-            except Exception as e:
-                print(colorize(f"  TwoWayConcierge Error: {e}", RED))
-                tool_calls = []
-                content = f"I apologize, I encountered an error: {e}"
-
-        elif self.fsm:
-            # Fallback: Use FSM directly if TwoWayConcierge not available
-            try:
-                result = await self.fsm.process_input(user_input)
-
-                # Show FSM state transitions
-                state_history = result.state_history
-                intent_type = ""
-                complexity_tier = ""
-
-                if result.classification:
-                    intent_type = result.classification.primary_intent.value
-                    complexity_tier = result.tier.value.upper()
-
-                print_fsm_state_transition(
-                    state_history=[s.name for s in state_history],
-                    intent_type=intent_type,
-                    complexity_tier=complexity_tier,
-                    classification_ms=result.classification_ms,
-                )
-
-                # Get tool calls and response from FSM result
-                tool_calls = result.tool_calls
-                content = result.response
-
-                # Handle clarification from FSM
-                if result.needs_clarification:
-                    self.state.gap_detections += 1
-                    self.state.clarifications += 1
-                    self.state.k1_coverage["Gap Detection"] = True
-                    print_gap_detected(["missing_info"])
-                    state_changes["gap_detected"] = True
-                    print_clarification(result.clarification_question)
-                    content = result.clarification_question
-
-            except Exception as e:
-                print(colorize(f"  FSM Error: {e}", RED))
-                # Fallback to direct LLM call
-                tool_calls = []
-                content = f"I apologize, I encountered an error: {e}"
+        # Handle gaps from Phase1
+        if phase1.gaps and len(phase1.gaps) > 0:
+            fsm_ctrl.transition(FSMCtrlEvent.GAPS_DETECTED)  # -> CLARIFYING
+            # For now, force-proceed (LLM handles clarification inline)
+            fsm_ctrl.transition(FSMCtrlEvent.MAX_ROUNDS_REACHED)  # -> DISPATCHING
         else:
-            # Fallback: Direct LLM call if FSM not available
-            # Use DYNAMIC prompt builder
-            prompt_builder = DynamicPromptBuilder(
-                self.bridge, self.tool_registry, plan_controller=self.plan_controller
-            )
-            system_prompt = prompt_builder.build_prompt()
+            fsm_ctrl.transition(FSMCtrlEvent.PHASE1_COMPLETE)  # -> DISPATCHING
 
-            context = self.bridge.build_llm_context() if self.bridge else {}
-            messages = context.get("messages", []).copy()
-            messages.append({"role": "user", "content": user_input})
+        # Show FSM state path so far
+        fsm_history = fsm_ctrl.history
+        state_path = [FSMCtrlState.LISTENING.value] + [h[2].value for h in fsm_history]
+        print_fsm_state_transition(
+            state_history=state_path,
+            intent_type=phase1.intent,
+            complexity_tier=phase1.tier,
+            classification_ms=classification_ms,
+        )
+        session_ops.append(f"classify({phase1.intent}, tier={phase1.tier})")
 
+        self.state.k1_coverage["Intent Classification"] = True
+
+        # Create per-turn Scratchpad
+        scratchpad = Scratchpad()
+
+        # Reset event handler for new turn
+        self._demo_event_handler.reset()
+
+        # Build session overview for the ReAct loop prompt
+        session_overview = None
+        if self.bridge:
             try:
-                response = await self.llm.complete_with_tools(
-                    system_prompt=system_prompt,
-                    messages=messages,
-                    tools=self.tool_registry.get_all_schemas_for_llm(),
-                )
-                tool_calls = response.get("tool_calls", [])
-                content = response.get("content", "")
-            except Exception as e:
-                print(colorize(f"  LLM Error: {e}", RED))
-                tool_calls = []
-                content = f"I apologize, I encountered an error: {e}"
+                session_overview = self.bridge.get_snapshot()
+            except Exception:
+                pass
+
+        # Create and run ReAct loop
+        react_loop = ReActLoop(
+            fsm=fsm_ctrl,
+            registry=self.tool_registry,
+            llm=self.llm,
+            scratchpad=scratchpad,
+            event_handler=self._demo_event_handler,
+        )
+
+        # First tool call walkthrough
+        if self.walkthrough_mode and self.state.tool_calls == 0:
+            print_walkthrough_explanation("Tool Calling", self._walkthrough_topics["tool_calling"])
+
+        try:
+            react_result: ReActResult = await react_loop.run(
+                phase1=phase1,
+                user_message=user_input,
+                turn_number=turn.turn_number,
+                session_overview=session_overview,
+            )
+        except Exception as e:
+            print(colorize(f"  ReAct loop error: {e}", RED))
+            react_result = ReActResult(
+                final_response=f"I apologize, I encountered an error: {e}",
+                error=str(e),
+            )
 
         latency_ms = int((time.time() - start_time) * 1000)
         self.state.turn_latencies.append(latency_ms)
 
-        # Process tool calls from FSM/LLM result
-        if tool_calls:
-            # First tool call - show walkthrough
-            if self.walkthrough_mode and self.state.tool_calls == 0:
-                print_walkthrough_explanation(
-                    "Tool Calling", self._walkthrough_topics["tool_calling"]
+        # =================================================================
+        # POST-LOOP: Extract results
+        # =================================================================
+
+        content = react_result.final_response
+        tool_calls = []
+
+        # Collect tool calls from scratchpad history
+        for entry in scratchpad.tool_history:
+            tool_calls.append({"name": entry.tool_name, "args": entry.arguments})
+            tool_calls_made.append(entry.tool_name)
+
+        # Update tool call metrics
+        self.state.tool_calls += react_result.tool_calls_made
+        if react_result.tool_calls_made > 0:
+            self.state.k1_coverage["LLM Tool Calling"] = True
+
+        # Track K1 coverage from tool calls
+        for entry in scratchpad.tool_history:
+            tool_name = entry.tool_name
+            if tool_name == "add_belief":
+                session_ops.append("beliefs.upsert(belief_triple)")
+                self.state.k1_coverage["Belief Storage"] = True
+            elif tool_name == "update_persona":
+                session_ops.append("persona.append(trait)")
+                self.state.k1_coverage["Persona Learning"] = True
+            elif tool_name == "update_emotion":
+                session_ops.append("affective.update(emotion)")
+            elif tool_name in ("book_accommodation", "book_restaurant", "book_spa_service"):
+                session_ops.append(f"bookings.add({tool_name.replace('book_', '')})")
+                # Notify PlanController to LOCK booking as fact
+                if self.plan_controller:
+                    self.plan_controller.on_tool_result(
+                        tool_name=tool_name,
+                        args=entry.arguments,
+                        result={},
+                    )
+                    print_system_activity(
+                        turn_num=turn.turn_number,
+                        session_ops=[f"Plan: {tool_name.replace('book_', '')} LOCKED as fact"],
+                    )
+            elif tool_name == "start_background_monitor":
+                session_ops.append("monitors.register(weather)")
+                self.state.background_tasks += 1
+                self.state.k1_coverage["Background Tasks"] = True
+                self.state.k1_coverage["Weather Monitoring"] = True
+                state_changes["background_task"] = f"mon-{turn.turn_number:02d}"
+                monitor_type = entry.arguments.get(
+                    "monitor_type", entry.arguments.get("type", "weather")
                 )
+                print_background_task_started(monitor_type, f"mon-{turn.turn_number:02d}")
 
-            for call in tool_calls:
-                tool_name = call.get("name", "")
-                tool_args = call.get("args", {})
-
-                # Display the tool call
-                print_tool_call(tool_name, tool_args)
-                tool_calls_made.append(tool_name)
-                self.state.tool_calls += 1
-                self.state.k1_coverage["LLM Tool Calling"] = True
-
-                # Execute tool via ToolExecutor (FSM may have already executed, but we track here)
-                if self.tool_executor and not self.fsm:
-                    # Only execute if FSM is not handling it
-                    exec_result = self.tool_executor.execute(tool_name, tool_args)
-                    if exec_result.wrote_to_session:
-                        session_ops.append(f"session.{tool_name}()")
-                else:
-                    session_ops.append(f"session.{tool_name}()")
-
-                # Track K1 coverage by tool type
-                if tool_name == "add_belief":
-                    session_ops.append("beliefs.upsert(belief_triple)")
-                    self.state.k1_coverage["Belief Storage"] = True
-                elif tool_name == "update_persona":
-                    session_ops.append("persona.append(trait)")
-                    self.state.k1_coverage["Persona Learning"] = True
-                elif tool_name == "update_emotion":
-                    session_ops.append("affective.update(emotion)")
-                elif tool_name in ("book_accommodation", "book_restaurant", "book_spa_service"):
-                    session_ops.append(f"bookings.add({tool_name.replace('book_', '')})")
-
-                    # Fix 1: Notify PlanController to LOCK this booking as a fact
-                    if self.plan_controller:
-                        # Get the execution result if available
-                        exec_result = None
-                        if self.tool_executor and self.fsm:
-                            # The FSM already executed - we need to get result from tool_results
-                            pass  # Result captured via on_tool_result hook
-
-                        # Hook into plan controller
-                        self.plan_controller.on_tool_result(
-                            tool_name=tool_name,
-                            args=tool_args,
-                            result={},  # Result not available here, controller uses args
+                # Start monitor via TwoWayConcierge if available
+                if self.two_way_concierge:
+                    try:
+                        monitor_id = await self.two_way_concierge.start_monitor(
+                            monitor_type=monitor_type,
+                            check_interval=30.0,
+                            max_runs=10,
+                            location=entry.arguments.get("target", "Sonoma"),
+                            dates=entry.arguments.get("dates", ["Saturday", "Sunday"]),
+                            alert_conditions=entry.arguments.get(
+                                "alert_conditions", ["rain", "storm"]
+                            ),
                         )
+                        self._active_weather_monitor_id = monitor_id
+                    except Exception as e:
                         print_system_activity(
                             turn_num=turn.turn_number,
-                            session_ops=[f"Plan: {tool_name.replace('book_', '')} LOCKED as fact"]
+                            session_ops=[f"Warning: Could not start monitor: {e}"],
                         )
-                elif tool_name == "start_background_monitor":
-                    session_ops.append("monitors.register(weather)")
-                    self.state.background_tasks += 1
-                    self.state.k1_coverage["Background Tasks"] = True
-                    self.state.k1_coverage["Weather Monitoring"] = True
-                    state_changes["background_task"] = f"mon-{turn.turn_number:02d}"
-                    print_background_task_started(
-                        tool_args.get("monitor_type", tool_args.get("type", "weather")),
-                        f"mon-{turn.turn_number:02d}",
-                    )
+            elif tool_name == "send_family_message":
+                session_ops.append("outbox.queue(family_msg)")
+                self.state.k1_coverage["Family Messaging"] = True
+            elif tool_name in ("create_calendar_event", "schedule_reminder"):
+                self.state.k1_coverage["Calendar Integration"] = True
+            elif tool_name == "spawn_agent":
+                self.state.k1_coverage["Sub-Agent Spawning"] = True
 
-                    # M10: Also start monitor via TwoWayConcierge for real background processing
-                    if self.two_way_concierge:
-                        try:
-                            monitor_type = tool_args.get(
-                                "monitor_type", tool_args.get("type", "weather")
-                            )
-                            monitor_id = await self.two_way_concierge.start_monitor(
-                                monitor_type=monitor_type,
-                                check_interval=30.0,  # Check every 30 seconds in demo
-                                max_runs=10,  # Max 10 checks
-                                location=tool_args.get("target", "Sonoma"),
-                                dates=tool_args.get("dates", ["Saturday", "Sunday"]),
-                                alert_conditions=tool_args.get(
-                                    "alert_conditions", ["rain", "storm"]
-                                ),
-                            )
-                            self._active_weather_monitor_id = monitor_id
-                            print_system_activity(
-                                turn_num=turn.turn_number,
-                                session_ops=[f"TwoWayConcierge monitor started: {monitor_id}"]
-                            )
-                        except Exception as e:
-                            print_system_activity(
-                                turn_num=turn.turn_number,
-                                session_ops=[f"Warning: Could not start TwoWayConcierge monitor: {e}"]
-                            )
-                elif tool_name == "send_family_message":
-                    session_ops.append("outbox.queue(family_msg)")
-                    self.state.k1_coverage["Family Messaging"] = True
-                elif tool_name in ("create_calendar_event", "schedule_reminder"):
-                    self.state.k1_coverage["Calendar Integration"] = True
+            session_ops.append(f"session.{tool_name}()")
 
-        # Display response (if not already handled as clarification)
-        if content and not state_changes.get("gap_detected"):
+        # Track FSM transitions from the ReAct loop
+        for from_s, evt, to_s in react_result.fsm_transitions:
+            state_changes[f"fsm_{from_s}_{evt}"] = to_s
+
+        # Display final response (unless streamed already)
+        if content and not self._demo_event_handler.streamed_text:
             print_assistant_message(content)
-            session_ops.append(f"history.append(assistant_msg, len={len(content)})")
+        elif content and self._demo_event_handler.streamed_text:
+            # Newline after streaming to separate from activity panel
+            print()
+        session_ops.append(f"history.append(assistant_msg, len={len(content or '')})")
 
         # Record assistant turn in REAL SessionState
         if self.bridge and content:
-            changes = self.bridge.record_assistant_turn(
+            self.bridge.record_assistant_turn(
                 content=content,
                 duration_ms=latency_ms,
                 had_tool_call=len(tool_calls) > 0,
@@ -1702,52 +1877,45 @@ class DemoRunner:
                     f"scoreboard.update_topic({self.scoreboard_tracker._topic if self.scoreboard_tracker else 'unknown'})"
                 )
 
-            # Decay referent salience each turn (via bridge for compatibility)
-            if self.fsm and self.fsm._context.classification:
-                classification = self.fsm._context.classification
-                # Topic already updated by tracker, just use for QUD
-                self.bridge.update_scoreboard(
-                    qud=user_input[:100] if user_input else None,  # Last user utterance as QUD
-                )
-
-                # Decay referent salience each turn
-                self.bridge.decay_referent_salience(decay_factor=0.9)
+            # Update QUD from user input
+            self.bridge.update_scoreboard(
+                qud=user_input[:100] if user_input else None,
+            )
+            self.bridge.decay_referent_salience(decay_factor=0.9)
 
             # === WARM TIER MAINTENANCE ===
-            # Check if beliefs need demotion to history
             if self.bridge.check_beliefs_capacity():
                 result = self.bridge.demote_beliefs_to_history(count=3)
                 if result.success:
                     session_ops.append("beliefs_history.accept_demoted()")
-                    self.state.k1_coverage["Beliefs Eviction"] = True
 
-            # Check if history needs compression
             if self.bridge.check_history_overflow():
                 result = self.bridge.overflow_history_to_recent()
                 if result.success:
                     session_ops.append("history_recent.compress()")
-                    self.state.k1_coverage["History Compression"] = True
 
-        # === M10: DISPLAY PENDING NOTIFICATIONS ===
-        # Check for notifications from TwoWayConcierge background tasks
-        if pending_notifications:
-            for notification in pending_notifications:
-                if notification.priority in (
-                    NotificationPriority.HIGH,
-                    NotificationPriority.URGENT,
-                ):
-                    # For weather alerts, use the dedicated display
-                    if notification.notification_type == NotificationType.ALERT:
-                        print_weather_alert()
-                        self.state.k1_coverage["Proactive Notifications"] = True
-                    else:
-                        print_system_activity(
-                            turn_num=turn.turn_number,
-                            session_ops=[f"Notification: {notification.message}"]
+        # === M10: CHECK PENDING NOTIFICATIONS ===
+        if self.two_way_concierge:
+            try:
+                notifications = self.two_way_concierge.get_pending_notifications()
+                for notification in notifications:
+                    if notification.priority in (
+                        NotificationPriority.HIGH,
+                        NotificationPriority.URGENT,
+                    ):
+                        if notification.notification_type == NotificationType.ALERT:
+                            print_weather_alert()
+                            self.state.k1_coverage["Proactive Notifications"] = True
+                        else:
+                            print_system_activity(
+                                turn_num=turn.turn_number,
+                                session_ops=[f"Notification: {notification.message}"],
+                            )
+                        session_ops.append(
+                            f"notification.deliver({notification.notification_type.name})"
                         )
-                    session_ops.append(
-                        f"notification.deliver({notification.notification_type.name})"
-                    )
+            except Exception:
+                pass  # TwoWayConcierge may not have get_pending_notifications
 
         # Get bytes from real snapshot
         turn_bytes = 0
@@ -1899,8 +2067,8 @@ class DemoRunner:
             task_type = result.task_type if hasattr(result, "task_type") else "unknown"
             status = result.status.value if hasattr(result, "status") else "unknown"
             print_system_activity(
-                turn_num=self.turn_number,
-                session_ops=[f"Agent result received: {agent_type}.{task_type} -> {status}"]
+                turn_num=self.state.current_turn,
+                session_ops=[f"Agent result received: {agent_type}.{task_type} -> {status}"],
             )
 
     async def spawn_search_agent(
@@ -1922,8 +2090,7 @@ class DemoRunner:
             raise RuntimeError("SearchAgent not initialized")
 
         print_system_activity(
-            turn_num=self.turn_number,
-            session_ops=[f"spawn_search_agent({search_type})"]
+            turn_num=self.state.current_turn, session_ops=[f"spawn_search_agent({search_type})"]
         )
 
         if search_type == "accommodations":
@@ -1954,8 +2121,7 @@ class DemoRunner:
             raise RuntimeError("BookingAgent not initialized")
 
         print_system_activity(
-            turn_num=self.turn_number,
-            session_ops=[f"spawn_booking_agent({booking_type})"]
+            turn_num=self.state.current_turn, session_ops=[f"spawn_booking_agent({booking_type})"]
         )
 
         if booking_type == "accommodation":
@@ -1989,7 +2155,7 @@ class DemoRunner:
 
         The plan controller is the SINGLE SOURCE OF TRUTH for plan state.
         Rule: If it's in the plan and locked, the LLM cannot question it.
-        
+
         IMPORTANT: Plan starts EMPTY. Details are added dynamically as the user
         provides them through conversation. The concierge LEARNS, not assumes.
         """
@@ -2036,13 +2202,13 @@ class DemoRunner:
         """
         if notification.priority == NotificationPriority.URGENT:
             print_system_activity(
-                turn_num=self.turn_number,
-                session_ops=[f"URGENT notification: {notification.notification_type.name}"]
+                turn_num=self.state.current_turn,
+                session_ops=[f"URGENT notification: {notification.notification_type.name}"],
             )
         elif notification.priority == NotificationPriority.HIGH:
             print_system_activity(
-                turn_num=self.turn_number,
-                session_ops=[f"High-priority notification: {notification.message[:50]}..."]
+                turn_num=self.state.current_turn,
+                session_ops=[f"High-priority notification: {notification.message[:50]}..."],
             )
 
     async def _stop_two_way_concierge(self) -> None:
