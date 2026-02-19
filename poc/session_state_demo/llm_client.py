@@ -2,13 +2,18 @@
 Simple Google AI Client for Session State Demo
 ================================================
 
-A minimal wrapper around google-generativeai that doesn't depend
+A minimal wrapper around google-genai (new SDK) that doesn't depend
 on the chat_experience_poc config structure.
 
 Supports:
   - Single-turn tool calling (complete_with_tools)
   - Multi-turn agentic loops (agentic_loop) -- model calls tools,
     we execute them and feed results back until the model stops calling tools
+
+SDK: google-genai (new SDK)
+  - Client: genai.Client(api_key=...)
+  - Call:   client.models.generate_content(model=..., contents=..., config=...)
+  - Types:  google.genai.types (Content, Part, Tool, FunctionDeclaration, etc.)
 """
 
 from __future__ import annotations
@@ -18,9 +23,8 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 try:
-    import google.generativeai as genai
-    from google.generativeai.protos import FunctionCallingConfig, ToolConfig
-    from google.generativeai.types import HarmBlockThreshold, HarmCategory
+    from google import genai
+    from google.genai import types
 
     GOOGLE_AI_AVAILABLE = True
 except ImportError:
@@ -28,38 +32,11 @@ except ImportError:
 
 
 class SimpleLLMClient:
-
-    @staticmethod
-    def _deep_proto_to_dict(obj: Any) -> Any:
-        """
-        Recursively convert protobuf MapComposite/RepeatedComposite to
-        plain Python dicts/lists.
-
-        Google's ``dict(fc.args)`` only does a shallow conversion --
-        nested structures like ``steps[].params`` remain as
-        MapComposite with inaccessible data. This walks the tree
-        and converts everything to native types.
-        """
-        # MapComposite -> dict
-        if hasattr(obj, "keys") and hasattr(obj, "values") and not isinstance(obj, dict):
-            return {str(k): SimpleLLMClient._deep_proto_to_dict(v) for k, v in obj.items()}
-        # RepeatedComposite -> list
-        if (
-            hasattr(obj, "pb")
-            and hasattr(obj, "__iter__")
-            and not isinstance(obj, (str, bytes, dict))
-        ):
-            return [SimpleLLMClient._deep_proto_to_dict(item) for item in obj]
-        # Plain list (already converted)
-        if isinstance(obj, list):
-            return [SimpleLLMClient._deep_proto_to_dict(item) for item in obj]
-        # Plain dict (already converted)
-        if isinstance(obj, dict):
-            return {str(k): SimpleLLMClient._deep_proto_to_dict(v) for k, v in obj.items()}
-        return obj
-
     """
     Simple async wrapper for Google AI with tool calling support.
+
+    Uses the new google-genai SDK (genai.Client) instead of the old
+    google-generativeai (genai.configure + GenerativeModel).
 
     Usage:
         client = SimpleLLMClient(api_key="...")
@@ -76,7 +53,7 @@ class SimpleLLMClient:
         model: str = "gemini-2.5-pro-preview-05-06",
     ):
         """
-        Initialize client.
+        Initialize client with new google-genai SDK.
 
         Args:
             api_key: Google AI API key
@@ -84,16 +61,15 @@ class SimpleLLMClient:
         """
         if not GOOGLE_AI_AVAILABLE:
             raise ImportError(
-                "google-generativeai package not installed. " "Run: pip install google-generativeai"
+                "google-genai package not installed. " "Run: pip install google-genai"
             )
 
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
         if not self.api_key:
             raise ValueError("API key required")
 
-        genai.configure(api_key=self.api_key)
+        self._client = genai.Client(api_key=self.api_key)
         self.model_name = model
-        self._model = genai.GenerativeModel(model)
 
     async def complete_with_tools(
         self,
@@ -115,85 +91,86 @@ class SimpleLLMClient:
         Returns:
             Dict with 'content' and/or 'tool_calls'
         """
-        # Convert messages to Google format
+        # Convert messages to google-genai Content objects
         contents = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
             if role == "system":
-                continue  # Handle separately
+                continue  # Handle via system_instruction in config
             elif role == "assistant":
-                contents.append({"role": "model", "parts": [content]})
+                contents.append(
+                    types.Content(
+                        role="model",
+                        parts=[types.Part.from_text(text=content)],
+                    )
+                )
             else:
-                contents.append({"role": "user", "parts": [content]})
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=content)],
+                    )
+                )
 
-        # Convert tools to Google format - consolidate all function declarations
-        function_declarations = []
+        # Build tool declarations using new SDK types
+        func_decls = []
         for tool in tools:
-            function_declarations.append(
-                {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
-                }
+            func_decls.append(
+                types.FunctionDeclaration(
+                    name=tool["name"],
+                    description=tool.get("description", ""),
+                    parameters=tool.get("parameters", {"type": "object", "properties": {}}),
+                )
             )
 
-        # Single tool object with all functions
-        google_tools = (
-            [{"function_declarations": function_declarations}] if function_declarations else None
-        )
+        # Build tools list for config
+        gemini_tools = [types.Tool(function_declarations=func_decls)] if func_decls else None
 
         # Configure function calling mode
         # ANY = MUST call a function (no text fallback)
         # AUTO = can choose text OR function call
-        if google_tools:
-            mode = (
-                FunctionCallingConfig.Mode.ANY
-                if force_tool_call
-                else FunctionCallingConfig.Mode.AUTO
+        tool_config_obj = None
+        if gemini_tools and force_tool_call:
+            tool_config_obj = types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(
+                    mode=types.FunctionCallingConfigMode.ANY
+                )
             )
-            tool_config = ToolConfig(function_calling_config=FunctionCallingConfig(mode=mode))
-        else:
-            tool_config = None
 
-        # Create model with system instruction
-        model = genai.GenerativeModel(
-            self.model_name,
+        config = types.GenerateContentConfig(
             system_instruction=system_prompt,
+            tools=gemini_tools,
+            tool_config=tool_config_obj,
         )
 
         try:
-            response = model.generate_content(
-                contents,
-                tools=google_tools,
-                tool_config=tool_config,
-                safety_settings=[
-                    {
-                        "category": HarmCategory.HARM_CATEGORY_HARASSMENT,
-                        "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-                    },
-                    {
-                        "category": HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                        "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-                    },
-                ],
+            response = self._client.models.generate_content(
+                model=self.model_name,
+                contents=contents,
+                config=config,
             )
 
-            # Parse response
+            # Parse response -- same output contract as before
             result: Dict[str, Any] = {"content": "", "tool_calls": []}
 
             if response.candidates:
                 candidate = response.candidates[0]
                 if candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
-                        if hasattr(part, "text"):
+                        if hasattr(part, "text") and part.text:
                             result["content"] += part.text
-                        if hasattr(part, "function_call") and part.function_call:
+                        if (
+                            hasattr(part, "function_call")
+                            and part.function_call
+                            and getattr(part.function_call, "name", None)
+                        ):
                             fc = part.function_call
+                            # New SDK returns native Python dicts from fc.args
                             result["tool_calls"].append(
                                 {
                                     "name": fc.name,
-                                    "args": self._deep_proto_to_dict(fc.args) if fc.args else {},
+                                    "args": dict(fc.args) if fc.args else {},
                                 }
                             )
 
@@ -252,34 +229,39 @@ class SimpleLLMClient:
               - 'turns': number of conversation turns
               - 'total_ms': total wall-clock time
         """
-        import google.generativeai as genai
-        from google.generativeai import protos
-
         start = time.monotonic()
 
-        # Build Google-format tool declarations
-        function_declarations = []
+        # Build tool declarations using new SDK types
+        func_decls = []
         for tool in tools:
-            function_declarations.append(
-                {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
-                }
+            func_decls.append(
+                types.FunctionDeclaration(
+                    name=tool["name"],
+                    description=tool.get("description", ""),
+                    parameters=tool.get("parameters", {"type": "object", "properties": {}}),
+                )
             )
 
-        google_tools = [{"function_declarations": function_declarations}]
-        tool_config = ToolConfig(
-            function_calling_config=FunctionCallingConfig(mode=FunctionCallingConfig.Mode.ANY)
+        gemini_tools = [types.Tool(function_declarations=func_decls)]
+        tool_config_obj = types.ToolConfig(
+            function_calling_config=types.FunctionCallingConfig(
+                mode=types.FunctionCallingConfigMode.ANY
+            )
         )
 
-        model = genai.GenerativeModel(
-            self.model_name,
+        config = types.GenerateContentConfig(
             system_instruction=system_prompt,
+            tools=gemini_tools,
+            tool_config=tool_config_obj,
         )
 
         # Build initial contents
-        contents = [{"role": "user", "parts": [user_message]}]
+        contents: list[Any] = [
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=user_message)],
+            )
+        ]
 
         tool_calls_log: List[Dict[str, Any]] = []
         terminal_tool: str | None = None
@@ -287,20 +269,10 @@ class SimpleLLMClient:
         final_content = ""
 
         for turn in range(max_turns):
-            response = model.generate_content(
-                contents,
-                tools=google_tools,
-                tool_config=tool_config,
-                safety_settings=[
-                    {
-                        "category": HarmCategory.HARM_CATEGORY_HARASSMENT,
-                        "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-                    },
-                    {
-                        "category": HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                        "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-                    },
-                ],
+            response = self._client.models.generate_content(
+                model=self.model_name,
+                contents=contents,
+                config=config,
             )
 
             if not response.candidates:
@@ -315,12 +287,16 @@ class SimpleLLMClient:
             for part in candidate.content.parts:
                 if hasattr(part, "text") and part.text:
                     final_content += part.text
-                if hasattr(part, "function_call") and part.function_call:
+                if (
+                    hasattr(part, "function_call")
+                    and part.function_call
+                    and getattr(part.function_call, "name", None)
+                ):
                     fc = part.function_call
                     turn_function_calls.append(
                         {
                             "name": fc.name,
-                            "args": self._deep_proto_to_dict(fc.args) if fc.args else {},
+                            "args": dict(fc.args) if fc.args else {},
                         }
                     )
 
@@ -375,13 +351,11 @@ class SimpleLLMClient:
                 if on_tool_call:
                     on_tool_call(fn_name, fn_args, result, turn)
 
-                # Build function response part for Gemini
+                # Build function response part using new SDK
                 function_response_parts.append(
-                    protos.Part(
-                        function_response=protos.FunctionResponse(
-                            name=fn_name,
-                            response={"result": result},
-                        )
+                    types.Part.from_function_response(
+                        name=fn_name,
+                        response={"result": result},
                     )
                 )
 
@@ -392,7 +366,7 @@ class SimpleLLMClient:
             # Send function responses back to model
             if function_response_parts:
                 contents.append(
-                    protos.Content(
+                    types.Content(
                         role="user",
                         parts=function_response_parts,
                     )
