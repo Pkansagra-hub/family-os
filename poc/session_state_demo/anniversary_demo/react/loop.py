@@ -148,26 +148,37 @@ and the user's request.
 
 ## Core Principles
 
-### 1. Always Act, Always Be Honest
-Route every request to the closest available tool. If information is \
-missing, infer from session state or make a reasonable assumption and \
-state it. If a tool fails, say so and suggest an alternative.
+### 1. FUNCTIONAL TOOLS FIRST
+Your primary job is to USE FUNCTIONAL TOOLS (search_accommodations, \
+get_family_member_info, book_accommodation, etc.) to fulfill the user's \
+request. Call the tools that will gather real data or take real actions. \
+Do NOT call acknowledge, add_belief, or update_persona unless you have \
+already called at least one functional tool in this turn, or you are \
+deliberately responding with just text.
 
-### 2. Think -> Act (skip steps you don't need)
+### 2. Cognitive Tools Are Secondary
+- Call at most ONE acknowledge per response.
+- Call at most ONE belief-write (add_belief / update_persona / update_emotion) per response.
+- NEVER loop on cognitive tools. If you find yourself calling only \
+cognitive tools, STOP and either call a functional tool or write your \
+final answer.
+
+### 3. Think -> Act (skip steps you don't need)
 1. **Orient** -- check what tools/capabilities are available.
-2. **Assess** -- review session state for context.
-3. **Act** -- call the appropriate tool(s).
+2. **Assess** -- review session state and family profile for context.
+3. **Act** -- call the appropriate FUNCTIONAL tool(s).
+4. **Record** -- optionally call ONE cognitive tool to store a key fact.
 Skip steps when you already have the information.
 
-### 3. Use Family Context
+### 4. Use Family Context
 Check beliefs and the family profile for names, ages, allergies, \
 and preferences. Apply them without being asked.
 
-### 4. Respond with Substance
+### 5. Respond with Substance
 Include specific details from tool results: names, prices, times, ratings. \
-End with a concrete next step.
+End with a concrete next step. Do NOT apologize for tool issues.
 
-### 5. Honor Constraints and Sources
+### 6. Honor Constraints and Sources
 Apply every constraint the user states. Only state facts if a tool returned them.
 
 ---
@@ -325,9 +336,7 @@ class ReActLoop:
         Returns a dict with ``success`` bool and either ``data`` or ``error``.
         Read-only tools are cached within the same loop run.
         """
-        _CACHEABLE_TOOLS = frozenset(
-            {"get_family_member_info", "list_active_monitors"}
-        )
+        _CACHEABLE_TOOLS = frozenset({"get_family_member_info", "list_active_monitors"})
         if tool_name in _CACHEABLE_TOOLS:
             cache_key = f"{tool_name}:{json.dumps(arguments, sort_keys=True, default=str)}"
             if cache_key in self._tool_cache:
@@ -410,11 +419,17 @@ class ReActLoop:
 
         # Safety band filtering: remove action tools for RED/CRISIS
         if safety_band in ("RED", "CRISIS"):
-            _ACTION_TOOLS = frozenset({
-                "book_accommodation", "book_restaurant", "book_spa_service",
-                "send_family_message", "create_calendar_event",
-                "schedule_reminder", "spawn_agent",
-            })
+            _ACTION_TOOLS = frozenset(
+                {
+                    "book_accommodation",
+                    "book_restaurant",
+                    "book_spa_service",
+                    "send_family_message",
+                    "create_calendar_event",
+                    "schedule_reminder",
+                    "spawn_agent",
+                }
+            )
             tool_declarations = [t for t in tool_declarations if t["name"] not in _ACTION_TOOLS]
 
         # MEDIUM path: fire PRELIMINARY_ACK_SENT -> COMPANIONING (T7)
@@ -555,9 +570,23 @@ class ReActLoop:
             if response_text:
                 messages.append({"role": "assistant", "content": response_text})
 
+            # --- Cognitive cap: max 1 acknowledge + 1 belief-write per iteration ---
+            _ack_used = False
+            _belief_used = False
+            _BELIEF_WRITE_TOOLS = frozenset({"add_belief", "update_persona", "update_emotion"})
+
             for tc in tool_calls:
                 tc_name = tc["name"]
                 tc_args = tc.get("args", {})
+
+                # Enforce cognitive cap
+                if tc_name in COGNITIVE_TOOLS:
+                    if tc_name == "acknowledge" and _ack_used:
+                        logger.debug("Skipping duplicate acknowledge in iteration %d", self.scratchpad.iteration)
+                        continue
+                    if tc_name in _BELIEF_WRITE_TOOLS and _belief_used:
+                        logger.debug("Skipping duplicate belief-write %s in iteration %d", tc_name, self.scratchpad.iteration)
+                        continue
 
                 self._emit(
                     LoopEventType.TOOL_CALL_START,
@@ -567,6 +596,12 @@ class ReActLoop:
                 result = self._execute_tool(tc_name, tc_args)
 
                 if tc_name in COGNITIVE_TOOLS:
+                    # Track cognitive cap usage
+                    if tc_name == "acknowledge":
+                        _ack_used = True
+                    if tc_name in _BELIEF_WRITE_TOOLS:
+                        _belief_used = True
+
                     summary = _cognitive_summary(result)
                     self.scratchpad.record_tool_call(
                         tc_name,
@@ -694,18 +729,77 @@ class ReActLoop:
                     pattern=recent_names,
                     iteration=self.scratchpad.iteration,
                 )
-                logger.warning("Cycle detected: %s", recent_names)
-                _force_text_only = True
-                messages.append(
+                logger.warning("Cycle detected: %s -- breaking loop", recent_names)
+
+                # Compact scratchpad if there are findings
+                if self.scratchpad.findings:
+                    compact_text = self.scratchpad.findings_summary()
+                    self.scratchpad.add_compaction_summary(compact_text)
+                    self._emit(LoopEventType.COMPACTION, summary_len=len(compact_text))
+
+                # Force one final text-only LLM call with a strong directive
+                system_prompt = build_system_prompt(
+                    fsm_state=self.fsm.state.value,
+                    turn_number=turn_number,
+                    tier=tier,
+                    safety_band=safety_band,
+                    session_overview=session_overview,
+                    tool_declarations=tool_declarations,
+                    family_persona=family_persona,
+                )
+                cycle_messages: list[dict[str, Any]] = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ]
+                findings_text = self.scratchpad.findings_summary()
+                if findings_text:
+                    cycle_messages.append(
+                        {
+                            "role": "system",
+                            "content": f"## Known Facts From Previous Tool Calls\n{findings_text}",
+                        }
+                    )
+                cycle_messages.append(
                     {
                         "role": "user",
                         "content": (
-                            "You are repeating the same tool calls. "
-                            "Based on the facts you have gathered so far, "
-                            "provide your best answer to the user now."
+                            "STOP calling tools. You were stuck in a loop. "
+                            "Respond to the user NOW using what you know. "
+                            "Be helpful and specific."
                         ),
                     }
                 )
+                recovery_response = await self.llm.generate_stream(
+                    system_prompt=system_prompt,
+                    messages=cycle_messages,
+                    tools=[],  # No tools -- force text
+                    on_text_delta=lambda t: self._emit(LoopEventType.TEXT_DELTA, text=t),
+                )
+                recovery_text = (recovery_response.get("content") or "").strip()
+                if recovery_text:
+                    # Fire FSM to DELIVERING
+                    if self.fsm.state in (
+                        State.DISPATCHING,
+                        State.COMPANIONING,
+                        State.PROGRESSING,
+                    ):
+                        self._fire(Event.DISPATCH_COMPLETE)
+                    self._emit(
+                        LoopEventType.LOOP_COMPLETE,
+                        iterations=self.scratchpad.iteration,
+                        tools_used=self.scratchpad.budget.tools_used,
+                        budget_exhausted=False,
+                    )
+                    return ReActResult(
+                        final_response=recovery_text,
+                        tool_calls_made=self.scratchpad.budget.tools_used,
+                        iterations=self.scratchpad.iteration,
+                        findings_count=len(self.scratchpad.findings),
+                        fsm_transitions=list(self._fsm_transitions),
+                        budget_exhausted=False,
+                    )
+                # If recovery also empty, fall through to budget-exhausted path
+                break
 
         # ---- Budget exhausted: generate best-effort response -------------
         if self.fsm.state in (
@@ -715,19 +809,66 @@ class ReActLoop:
         ):
             self._fire(Event.DISPATCH_COMPLETE)
 
-        if self.scratchpad.findings:
-            bullets: list[str] = []
-            for f in self.scratchpad.findings.values():
-                if f.type == "error":
-                    bullets.append(f"I encountered an issue: {f.value}")
-                else:
-                    bullets.append(f"{f.key.replace('_', ' ').title()}: {f.value}")
-            body = "; ".join(bullets) if len(bullets) <= 3 else "\n".join(f"- {b}" for b in bullets)
-            final_text = f"Here is what I found so far: {body}"
-        else:
+        # Attempt a final text-only LLM call for a substantive response
+        try:
+            system_prompt = build_system_prompt(
+                fsm_state=self.fsm.state.value,
+                turn_number=turn_number,
+                tier=tier,
+                safety_band=safety_band,
+                session_overview=session_overview,
+                tool_declarations=tool_declarations,
+                family_persona=family_persona,
+            )
+            recovery_messages: list[dict[str, Any]] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ]
+            findings_text = self.scratchpad.findings_summary()
+            if findings_text:
+                recovery_messages.append(
+                    {
+                        "role": "system",
+                        "content": f"## Known Facts From Previous Tool Calls\n{findings_text}",
+                    }
+                )
+            recovery_messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Respond helpfully to the user's message using what you "
+                        "know from the conversation and session state. "
+                        "Do NOT call any tools."
+                    ),
+                }
+            )
+            recovery_response = await self.llm.generate_stream(
+                system_prompt=system_prompt,
+                messages=recovery_messages,
+                tools=[],
+                on_text_delta=lambda t: self._emit(LoopEventType.TEXT_DELTA, text=t),
+            )
+            recovery_text = (recovery_response.get("content") or "").strip()
+            if recovery_text:
+                final_text = recovery_text
+            elif self.scratchpad.findings:
+                bullets: list[str] = []
+                for f in self.scratchpad.findings.values():
+                    if f.type == "error":
+                        bullets.append(f"I encountered an issue: {f.value}")
+                    else:
+                        bullets.append(f"{f.key.replace('_', ' ').title()}: {f.value}")
+                body = "; ".join(bullets) if len(bullets) <= 3 else "\n".join(f"- {b}" for b in bullets)
+                final_text = f"Here is what I found so far: {body}"
+            else:
+                final_text = (
+                    "I wasn't able to complete my search in time. "
+                    "Could you tell me a bit more about what you need?"
+                )
+        except Exception:
             final_text = (
-                "I was unable to gather enough information to answer "
-                "your request. Could you please try rephrasing?"
+                "I wasn't able to complete my search in time. "
+                "Could you tell me a bit more about what you need?"
             )
 
         self._emit(

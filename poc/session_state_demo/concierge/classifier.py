@@ -99,8 +99,29 @@ INTENT_PATTERNS: List[IntentPattern] = [
             r"\b(i am|i'm|we are|we're|my|our|i have|we have|i've|we've)\b",
             r"\b(i work|i live|i like|i love|i prefer|i enjoy)\b",
             r"\b(my (wife|husband|kids?|children|family|son|daughter|mother|father|mom|dad))\b",
+            r"\b(just us|just the|both of us|the two of us|just me)\b",
+            r"\b(she|he|they)\s+(can|will|is|are|has|have)\b",
+            r"\b(she's|he's|they're)\s+\d+",
+            r"\$\d+",  # Dollar amounts (sharing budget info)
+            r"\b(around|about|roughly|maybe|approximately)\s+\$?\d+\b",
+            r"\b(allerg|diet|restrict|intoleran)\b",  # Health info sharing
+            r"\b(has a|have a)\s+(mild|severe|serious)?\s*(allerg|condition)\b",
         ],
         priority=3,
+        complexity_hint=ComplexityTier.MEDIUM,
+    ),
+    # Decision / preference - user making a choice
+    IntentPattern(
+        intent=IntentType.DECISION,
+        patterns=[
+            r"\b(sounds? (better|good|great|perfect|nice))\b",
+            r"\b(let'?s? (go|do|try|pick|choose|stick))\b",
+            r"\b(i'?d? (prefer|rather|choose|pick|go with))\b",
+            r"\b(more relaxed|better than|instead of|rather than)\b",
+            r"\b(definitely|absolutely|for sure|that one|this one)\b",
+            r"\b(option [a-d1-4]|the (first|second|third|last) one)\b",
+        ],
+        priority=7,
         complexity_hint=ComplexityTier.MEDIUM,
     ),
 ]

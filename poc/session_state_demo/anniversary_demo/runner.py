@@ -1897,7 +1897,7 @@ class DemoRunner:
         # === M10: CHECK PENDING NOTIFICATIONS ===
         if self.two_way_concierge:
             try:
-                notifications = self.two_way_concierge.get_pending_notifications()
+                notifications = await self.two_way_concierge.get_pending_notifications()
                 for notification in notifications:
                     if notification.priority in (
                         NotificationPriority.HIGH,

@@ -162,6 +162,7 @@ class IntentType(Enum):
     QUESTION = "question"  # User asking something
     REQUEST = "request"  # User requesting action
     CLARIFICATION_RESPONSE = "clarification_response"  # Answering our question
+    DECISION = "decision"  # User making a choice or stating a preference
     UNKNOWN = "unknown"
 
 
