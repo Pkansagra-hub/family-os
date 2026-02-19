@@ -763,9 +763,9 @@ class ReActLoop:
                     {
                         "role": "user",
                         "content": (
-                            "STOP calling tools. You were stuck in a loop. "
-                            "Respond to the user NOW using what you know. "
-                            "Be helpful and specific."
+                            "Now respond directly to the user's message. "
+                            "Use what you know from the session and tools. "
+                            "Be helpful, specific, and suggest a next step."
                         ),
                     }
                 )
@@ -934,12 +934,22 @@ class ReActLoop:
     # ------------------------------------------------------------------ #
 
     def _detect_cycle(self) -> bool:
-        """Detect repeating tool-call patterns that indicate a stuck loop."""
-        history = self.scratchpad.tool_history
-        if len(history) < 3:
+        """Detect repeating tool-call patterns that indicate a stuck loop.
+
+        Only considers non-cognitive (functional) tools.  Cognitive tools
+        (acknowledge, add_belief, update_persona, update_emotion) are
+        capped at 1+1 per iteration and their repetition across iterations
+        is expected, not a cycle.
+        """
+        # Filter to functional tools only
+        functional_history = [
+            e for e in self.scratchpad.tool_history
+            if e.tool_name not in COGNITIVE_TOOLS
+        ]
+        if len(functional_history) < 3:
             return False
 
-        recent = [e.tool_name for e in history[-6:]]
+        recent = [e.tool_name for e in functional_history[-6:]]
 
         # Pattern 1: A-B-A-B alternating pair
         if len(recent) >= 4:
@@ -952,7 +962,7 @@ class ReActLoop:
             return True
 
         # Pattern 3: same tool with similar arguments 3+ times
-        last_3 = history[-3:]
+        last_3 = functional_history[-3:]
         if last_3[0].tool_name == last_3[1].tool_name == last_3[2].tool_name:
             arg_strs = [json.dumps(e.arguments, sort_keys=True, default=str) for e in last_3]
             if len(set(arg_strs)) <= 2:
