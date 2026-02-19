@@ -312,6 +312,31 @@ flowchart TB
             CONCIERGE_MAILBOX["Private Mailbox<br/>MPSC Queue<br/>WFQ Priority: REALTIME"]:::mailbox
             AGGREGATION_WINDOW["Delta Aggregation Window<br/>500ms Batching"]:::brain
             TOOL_RESULT_BUFFER["Tool Result Buffer<br/>Stages results for LLM context<br/>Cleared after DELIVERING"]:::memory
+            %% ============================================================================
+            %% V2 NOTE: TOOL_RESULT_BUFFER will be REPLACED by ReactLoopScratchpad (ADR-0098)
+            %%
+            %% ReactLoopScratchpad is ephemeral per-intent working memory:
+            %%   - Created at DISPATCHING, destroyed at DELIVERING
+            %%   - Structured findings extracted ONLY from READ + ACTION tools
+            %%   - Cognitive tool results (update_beliefs, update_scoreboard, etc.) are
+            %%     NOT extracted into findings -- they write to SessionState directly.
+            %%     This prevents data duplication between scratchpad and SessionState.
+            %%   - LLM compaction (token-based, 80% of 128K)
+            %%   - Budget tracking (tool calls, iterations, tokens, time)
+            %%   - Sub-agent management with inherited budget
+            %%   - Failure tracking + recovery
+            %%
+            %% SEPARATION OF CONCERNS (scratchpad vs SessionState):
+            %%   SessionState (L5):  Persistent cross-intent truth (beliefs, scoreboard,
+            %%                       narrative, affect, clarifications) written by cognitive tools
+            %%   Scratchpad:         Ephemeral per-intent novel data (recall_memory results,
+            %%                       discover_capabilities results, invoke_capability results,
+            %%                       spawn_agent output) -- dies when loop completes
+            %%
+            %% PoC validated in poc/react_scratchpad_poc/ (90 tests, Smart WINS benchmark)
+            %% When implementing V2: replace TOOL_RESULT_BUFFER node + edges with
+            %% REACT_SCRATCHPAD node, add COGNITIVE_TOOLS filter set, update edges.
+            %% ============================================================================
             CONCIERGE_PERSONA["Persona Engine"]:::brain
             CONCIERGE_STYLE["Conversational Style"]:::brain
             AFFECTIVE_MIRRORING_ENGINE["Affective Mirroring Engine<br/>Emotion Detection & Resonance"]:::brain
