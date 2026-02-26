@@ -91,13 +91,21 @@ class SimpleLLMClient:
         Returns:
             Dict with 'content' and/or 'tool_calls'
         """
-        # Convert messages to google-genai Content objects
+        # Convert messages to google-genai Content objects.
+        # System messages are merged into system_instruction instead of
+        # being silently dropped -- the Gemini API only supports
+        # user/model roles in contents.
+        additional_system_parts: list[str] = []
         contents = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
             if role == "system":
-                continue  # Handle via system_instruction in config
+                # Merge into system_instruction so the LLM actually
+                # sees beliefs, findings, and directive messages.
+                if content and content != system_prompt:
+                    additional_system_parts.append(content)
+                continue
             elif role == "assistant":
                 contents.append(
                     types.Content(
@@ -112,6 +120,12 @@ class SimpleLLMClient:
                         parts=[types.Part.from_text(text=content)],
                     )
                 )
+
+        # Merge additional system context into the system instruction
+        # so all context (beliefs, findings, directives) reaches the LLM.
+        effective_system = system_prompt or ""
+        if additional_system_parts:
+            effective_system = effective_system + "\n\n" + "\n\n".join(additional_system_parts)
 
         # Build tool declarations using new SDK types
         func_decls = []
@@ -139,7 +153,7 @@ class SimpleLLMClient:
             )
 
         config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
+            system_instruction=effective_system if effective_system else None,
             tools=gemini_tools,
             tool_config=tool_config_obj,
         )
@@ -218,12 +232,15 @@ class SimpleLLMClient:
             Dict with 'content' and/or 'tool_calls' -- identical contract
             to complete_with_tools().
         """
-        # Build contents -- same as complete_with_tools()
+        # Build contents -- same merging logic as complete_with_tools().
+        additional_system_parts: list[str] = []
         contents = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
             if role == "system":
+                if content and content != system_prompt:
+                    additional_system_parts.append(content)
                 continue
             elif role == "assistant":
                 contents.append(
@@ -239,6 +256,10 @@ class SimpleLLMClient:
                         parts=[types.Part.from_text(text=content)],
                     )
                 )
+
+        effective_system = system_prompt or ""
+        if additional_system_parts:
+            effective_system = effective_system + "\n\n" + "\n\n".join(additional_system_parts)
 
         # Build tool declarations -- same as complete_with_tools()
         func_decls = []
@@ -262,7 +283,7 @@ class SimpleLLMClient:
             )
 
         config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
+            system_instruction=effective_system if effective_system else None,
             tools=gemini_tools,
             tool_config=tool_config_obj,
         )
@@ -276,9 +297,7 @@ class SimpleLLMClient:
             )
         except Exception:
             # Stream setup failed -- fall back to non-streaming
-            return await self.complete_with_tools(
-                system_prompt, messages, tools, force_tool_call
-            )
+            return await self.complete_with_tools(system_prompt, messages, tools, force_tool_call)
 
         # Accumulate all parts across chunks.  We buffer everything
         # because function_call parts can appear in any chunk and we

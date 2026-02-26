@@ -35,6 +35,12 @@ class MonitorType(Enum):
     WEATHER = "weather"
     PRICE = "price"
     AVAILABILITY = "availability"
+    OVEN = "oven"
+    LAUNDRY = "laundry"
+    SMOKE_DETECTOR = "smoke_detector"
+    DOORBELL = "doorbell"
+    THERMOSTAT = "thermostat"
+    BABY_MONITOR = "baby_monitor"
 
 
 class MonitorStatus(Enum):
@@ -443,6 +449,35 @@ def start_background_monitor(
         message = (
             f"Price monitor started for {target}. I'll alert you about significant price changes."
         )
+    elif mt == MonitorType.OVEN:
+        message = (
+            f"Oven monitor started for {target}. "
+            f"I'll track the temperature and timer, and alert you when it's done or if something needs attention."
+        )
+    elif mt == MonitorType.LAUNDRY:
+        message = (
+            f"Laundry monitor started for {target}. " f"I'll let you know when the cycle is done."
+        )
+    elif mt == MonitorType.SMOKE_DETECTOR:
+        message = (
+            f"Smoke detector monitor active for {target}. "
+            f"I'll alert immediately if smoke or CO is detected."
+        )
+    elif mt == MonitorType.DOORBELL:
+        message = (
+            f"Doorbell monitor active for {target}. "
+            f"I'll notify you when someone is at the door."
+        )
+    elif mt == MonitorType.THERMOSTAT:
+        message = (
+            f"Thermostat monitor started for {target}. "
+            f"I'll track temperature and alert on significant changes."
+        )
+    elif mt == MonitorType.BABY_MONITOR:
+        message = (
+            f"Baby monitor active for {target}. "
+            f"I'll alert you on sound, motion, or temperature changes in the nursery."
+        )
     else:
         message = (
             f"Availability monitor started for {target}. I'll let you know if availability changes."
@@ -553,6 +588,88 @@ def check_monitors(demo_turn: Optional[int] = None) -> List[MonitorAlert]:
                 # Update stored forecast
                 monitor.metadata["current_forecast"] = [f.to_dict() for f in new_forecast]
                 monitor.metadata["last_forecast_update"] = datetime.now().isoformat()
+
+        elif monitor.monitor_type == MonitorType.OVEN:
+            monitor.check_count += 1
+            monitor.last_check_at = datetime.now()
+            # Simulate oven timer finishing after N checks
+            checks_to_alert = monitor.metadata.get("checks_to_alert", 3)
+            if monitor.check_count >= checks_to_alert and not any(
+                a.monitor_id == monitor.monitor_id for a in store._alerts
+            ):
+                alert = MonitorAlert(
+                    alert_id=f"alert-{uuid.uuid4().hex[:8]}",
+                    monitor_id=monitor.monitor_id,
+                    monitor_type=MonitorType.OVEN,
+                    severity=AlertSeverity.WARNING,
+                    message=(
+                        f"Oven timer done! {monitor.target} should be ready. "
+                        f"Current temperature: {monitor.metadata.get('temp_f', 375)}F. "
+                        f"Please check and turn off the oven."
+                    ),
+                    data={
+                        "target": monitor.target,
+                        "temp_f": monitor.metadata.get("temp_f", 375),
+                        "elapsed_minutes": monitor.metadata.get("cook_time_minutes", 45),
+                    },
+                    suggested_action="Turn off oven and check food",
+                )
+                store.add_alert(alert)
+                new_alerts.append(alert)
+
+        elif monitor.monitor_type == MonitorType.LAUNDRY:
+            monitor.check_count += 1
+            monitor.last_check_at = datetime.now()
+            checks_to_alert = monitor.metadata.get("checks_to_alert", 3)
+            if monitor.check_count >= checks_to_alert and not any(
+                a.monitor_id == monitor.monitor_id for a in store._alerts
+            ):
+                alert = MonitorAlert(
+                    alert_id=f"alert-{uuid.uuid4().hex[:8]}",
+                    monitor_id=monitor.monitor_id,
+                    monitor_type=MonitorType.LAUNDRY,
+                    severity=AlertSeverity.INFO,
+                    message=f"Laundry cycle complete for {monitor.target}. Time to move to dryer!",
+                    data={"target": monitor.target, "cycle": "wash"},
+                    suggested_action="Move laundry to dryer",
+                )
+                store.add_alert(alert)
+                new_alerts.append(alert)
+
+        elif monitor.monitor_type == MonitorType.SMOKE_DETECTOR:
+            monitor.check_count += 1
+            monitor.last_check_at = datetime.now()
+            # Smoke detectors only alert on actual events (simulated trigger)
+            if monitor.metadata.get("trigger_alert"):
+                alert = MonitorAlert(
+                    alert_id=f"alert-{uuid.uuid4().hex[:8]}",
+                    monitor_id=monitor.monitor_id,
+                    monitor_type=MonitorType.SMOKE_DETECTOR,
+                    severity=AlertSeverity.URGENT,
+                    message=f"SMOKE DETECTED at {monitor.target}! Check immediately.",
+                    data={"target": monitor.target, "level": "elevated"},
+                    suggested_action="Check the area immediately",
+                )
+                store.add_alert(alert)
+                new_alerts.append(alert)
+                monitor.metadata["trigger_alert"] = False
+
+        elif monitor.monitor_type == MonitorType.BABY_MONITOR:
+            monitor.check_count += 1
+            monitor.last_check_at = datetime.now()
+            if monitor.metadata.get("trigger_alert"):
+                alert = MonitorAlert(
+                    alert_id=f"alert-{uuid.uuid4().hex[:8]}",
+                    monitor_id=monitor.monitor_id,
+                    monitor_type=MonitorType.BABY_MONITOR,
+                    severity=AlertSeverity.WARNING,
+                    message=f"Activity detected on baby monitor for {monitor.target}. Sound level elevated.",
+                    data={"target": monitor.target, "sound_level": "elevated"},
+                    suggested_action="Check on baby",
+                )
+                store.add_alert(alert)
+                new_alerts.append(alert)
+                monitor.metadata["trigger_alert"] = False
 
     return new_alerts
 

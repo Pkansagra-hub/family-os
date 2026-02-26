@@ -1,0 +1,184 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+%% =====================================================================================
+%% SESSION KERNEL (K1) — INTERNAL STRUCTURE (FINAL IMPLEMENTATION)
+%% No K0 nodes, no runtime flows. Just the kernel state + invariants + services.
+%%
+%% STATUS: ALL MILESTONES COMPLETE (M1-M4)
+%%   - 12 Sections (8 HOT + 4 WARM) — IMPLEMENTED
+%%   - 6 Kernel Services — IMPLEMENTED (455+ tests)
+%%   - 5 Ports, 6 Adapters, Factory — IMPLEMENTED
+%%   - Test Coverage: 400+ tests across unit/integration/contract
+%%
+%% PERFORMANCE BASELINES:
+%%   HOT Read P99:  0.20 us | Write P99: 18.8 us | Reconstruct P95: 2.6 ms
+%%
+%% EDGE-FIRST DESIGN:
+%%   - HOT + WARM = RAM (96KB cap)
+%%   - LOCAL COLD = K1 SQLite (offline safe, no K0 dependency)
+%%   - CLOUD SYNC = K0 (optional, for cross-device sync)
+%% =====================================================================================
+
+subgraph SK["🧠 K1 SessionKernel — Internal (FINAL)"]
+  direction TB
+
+  subgraph TIERS["Tiering Model (Edge-First)"]
+    direction LR
+    T_HOT["🔥 HOT CORE<br/>≤ 48KB<br/>never thrash"]:::tier_hot
+    T_WARM["🌡️ WARM TIER<br/>≤ 48KB<br/>evictable"]:::tier_warm
+    T_COLD["❄️ LOCAL COLD<br/>K1 SQLite<br/>offline safe"]:::tier_cold
+    T_TOTAL["RAM ≤ 96KB<br/>hard cap"]:::tier_total
+  end
+
+  %% ---------------- HOT CORE ----------------
+  subgraph HOT["🔥 HOT CORE (≤ 48KB) — NEVER THRASH"]
+    direction TB
+
+    H_CONTROL["control (≤ 8KB)<br/>leases, turn lock, flow state<br/><b>NEVER EVICT</b>"]:::hot_critical
+    H_BELIEFS_ACTIVE["beliefs_active (≤ 8KB)<br/>facts needed THIS turn"]:::hot
+    H_SCOREBOARD["scoreboard (≤ 6KB)<br/>referents + QUD + salience"]:::hot
+    H_HISTORY_ACTIVE["history_active (≤ 8KB)<br/>last 10 turns<br/>full fidelity"]:::hot
+    H_CLARIFICATIONS["clarifications (≤ 4KB)<br/>open gaps THIS turn"]:::hot
+    H_AFFECT_NOW["affective_now (≤ 4KB)<br/>current emotion snapshot"]:::hot
+    H_NARR_ACTIVE["narrative_active (≤ 4KB)<br/>ONE active thread"]:::hot
+    H_META["meta (≤ 2KB)<br/>session id, band, timestamps"]:::hot
+  end
+
+  %% ---------------- WARM TIER ----------------
+  subgraph WARM["🌡️ WARM TIER (≤ 48KB) — EVICTABLE"]
+    direction TB
+
+    W_BELIEFS_HIST["beliefs_history (≤ 12KB)<br/>recent facts (capped)"]:::warm
+    W_HISTORY_RECENT["history_recent (≤ 20KB)<br/>turns 11-40<br/>lossy compression"]:::warm_critical
+    W_PERSONA["persona (≤ 8KB)<br/>traits, style, voice controls"]:::warm
+    W_TELEMETRY["telemetry (≤ 8KB)<br/>tokens, cost, counters (lossy)"]:::warm
+  end
+
+  %% ---------------- KERNEL ENFORCEMENT ----------------
+  subgraph SVC["🧱 Kernel Services (455+ tests)"]
+    direction TB
+
+    SIZE_TRACKER["SizeTracker (62 tests)<br/>per-section byte accounting"]:::svc
+    MUTATION_GUARD["MutationGuard (79 tests)<br/>preflight estimate + reject"]:::svc_critical
+    EVICTION_ENGINE["EvictionEngine (63 tests)<br/>warm-only eviction + summarization"]:::svc
+    MIGRATION_ENGINE["MigrationEngine (102 tests)<br/>hot↔warm demote/promote"]:::svc
+    SNAPSHOT_HEALTH["SnapshotAPI (64 tests)<br/>size breakdown + pressure + thrash"]:::svc
+    RECON_SLA["ReconstructionSLA (85 tests)<br/>P95 < 50ms, partial hydration"]:::svc
+  end
+
+  %% ---------------- PORTS (INTERFACE LAYER) ----------------
+  subgraph PORTS["🔌 Ports (Hexagonal)"]
+    direction TB
+
+    PORT_STORAGE["IStoragePort"]:::port
+    PORT_EVENT["IEventPort"]:::port
+    PORT_WRITER["IWriterPort"]:::port
+    PORT_LIFECYCLE["ILifecyclePort"]:::port
+    PORT_K0SYNC["IK0SyncPort"]:::port
+  end
+
+  %% ---------------- ADAPTERS ----------------
+  subgraph ADAPTERS["🔧 Adapters"]
+    direction TB
+
+    ADAPT_SQLITE["SQLiteStorageAdapter"]:::adapter
+    ADAPT_MEMORY["InMemoryStorageAdapter"]:::adapter
+    ADAPT_EVENTS["LocalEventAdapter"]:::adapter
+    ADAPT_WRITER["DirectWriterAdapter"]:::adapter
+    ADAPT_LIFECYCLE["StandaloneLifecycle"]:::adapter
+    ADAPT_NULLSYNC["NullSyncPort"]:::adapter
+  end
+
+  %% ---------------- LOCAL COLD (K1 SQLite - Offline Safe) ----------------
+  subgraph LOCAL_COLD["❄️ LOCAL COLD (K1 SQLite - OFFLINE SAFE)"]
+    direction TB
+
+    LC_ARCHIVE["LocalColdArchive<br/>K1 SQLite storage"]:::cold
+    LC_BELIEFS["st_beliefs_archive<br/>evicted beliefs (local)"]:::cold
+    LC_HISTORY["st_history_archive<br/>full turn log (local)"]:::cold
+    LC_NARRATIVE["st_narrative_archive<br/>inactive threads (local)"]:::cold
+    LC_NOTE["NO K0 DEPENDENCY<br/>Works fully offline"]:::cold_note
+  end
+
+  %% ---------------- INVARIANTS ----------------
+  subgraph INVAR["🧷 Invariants (Non-negotiable)"]
+    direction TB
+    I_HOT["HOT ≤ 48KB"]:::inv
+    I_WARM["WARM ≤ 48KB"]:::inv
+    I_TOTAL["TOTAL ≤ 96KB (Hard Reject)"]:::inv_critical
+    I_CTRL["control never evicted"]:::inv_critical
+    I_HIST["history ≤ 40 turns"]:::inv
+  end
+end
+
+%% ---------------- Connections (Internal Logic) ----------------
+T_HOT --> HOT
+T_WARM --> WARM
+T_COLD --> LOCAL_COLD
+T_TOTAL --> INVAR
+
+HOT --> SIZE_TRACKER
+WARM --> SIZE_TRACKER
+
+SIZE_TRACKER --> MUTATION_GUARD
+MUTATION_GUARD --> MIGRATION_ENGINE
+MUTATION_GUARD --> EVICTION_ENGINE
+
+EVICTION_ENGINE -.->|warm-only| WARM
+EVICTION_ENGINE -.->|archive to local| LOCAL_COLD
+MIGRATION_ENGINE -.->|demote/promote| HOT
+MIGRATION_ENGINE -.->|demote/promote| WARM
+
+H_CONTROL -.->|NEVER EVICT| EVICTION_ENGINE
+
+%% Local COLD reconstruction (offline safe)
+LOCAL_COLD -.->|reconstruct (no K0)| HOT
+LOCAL_COLD -.->|reconstruct (no K0)| WARM
+
+W_HISTORY_RECENT --> I_HIST
+HOT --> I_HOT
+WARM --> I_WARM
+SK --> I_TOTAL
+H_CONTROL --> I_CTRL
+
+%% Port-to-Adapter bindings (hexagonal architecture)
+PORT_STORAGE --> ADAPT_SQLITE
+PORT_STORAGE --> ADAPT_MEMORY
+PORT_EVENT --> ADAPT_EVENTS
+PORT_WRITER --> ADAPT_WRITER
+PORT_LIFECYCLE --> ADAPT_LIFECYCLE
+PORT_K0SYNC --> ADAPT_NULLSYNC
+
+%% Kernel services use ports
+SVC --> PORTS
+RECON_SLA --> PORT_STORAGE
+
+%% =====================================================================================
+%% STYLES
+%% =====================================================================================
+
+classDef tier_hot fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000,font-weight:bold
+classDef tier_warm fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000,font-weight:bold
+classDef tier_total fill:#e1bee7,stroke:#6a1b9a,stroke-width:3px,color:#000,font-weight:bold
+
+classDef hot fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000
+classDef hot_critical fill:#ffcdd2,stroke:#b71c1c,stroke-width:3px,color:#000,font-weight:bold
+
+classDef warm fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000
+classDef warm_critical fill:#ffe0b2,stroke:#e65100,stroke-width:3px,color:#000,font-weight:bold
+
+classDef svc fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef svc_critical fill:#c8e6c9,stroke:#1b5e20,stroke-width:3px,color:#000,font-weight:bold
+
+classDef inv fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+classDef inv_critical fill:#e1bee7,stroke:#6a1b9a,stroke-width:3px,color:#000,font-weight:bold
+
+classDef tier_cold fill:#e0f7fa,stroke:#00838f,stroke-width:2px,color:#000,font-weight:bold
+classDef cold fill:#e0f7fa,stroke:#00838f,stroke-width:2px,color:#000
+classDef cold_note fill:#b2ebf2,stroke:#00838f,stroke-width:2px,color:#000,font-style:italic
+classDef port fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
+classDef adapter fill:#f1f8e9,stroke:#558b2f,stroke-width:2px,color:#000

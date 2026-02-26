@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -179,7 +180,11 @@ Include specific details from tool results: names, prices, times, ratings. \
 End with a concrete next step. Do NOT apologize for tool issues.
 
 ### 6. Honor Constraints and Sources
-Apply every constraint the user states. Only state facts if a tool returned them.
+Apply every constraint the user states. Only state facts if a tool returned them. \
+NEVER invent, hallucinate, or fabricate names, prices, or details that were \
+not in the tool results. Present ONLY the options the tools returned. \
+If the tool returned 3 hotels, present exactly those 3 hotels by their \
+exact names and prices -- do not add extras.
 
 ---
 
@@ -283,12 +288,14 @@ class ReActLoop:
         llm: Any,  # SimpleLLMClient
         scratchpad: Scratchpad,
         event_handler: LoopEventHandler | None = None,
+        tool_executor: Any | None = None,  # anniversary demo ToolExecutor
     ) -> None:
         self.fsm = fsm
         self.registry = registry
         self.llm = llm
         self.scratchpad = scratchpad
         self.event_handler: LoopEventHandler = event_handler or NullEventHandler()
+        self.tool_executor = tool_executor
         self.interrupt = InterruptSignal()
         self._fsm_transitions: list[tuple[str, str, str]] = []
         self._tool_cache: dict[str, dict[str, Any]] = {}
@@ -331,7 +338,7 @@ class ReActLoop:
     # ------------------------------------------------------------------ #
 
     def _execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Execute a single tool via the registry.
+        """Execute a single tool via ToolExecutor (preferred) or registry handler.
 
         Returns a dict with ``success`` bool and either ``data`` or ``error``.
         Read-only tools are cached within the same loop run.
@@ -348,6 +355,29 @@ class ReActLoop:
                 logger.debug("Cache hit: %s", tool_name)
                 return self._tool_cache[cache_key]
 
+        # Primary path: use ToolExecutor if available
+        if self.tool_executor is not None:
+            try:
+                result = self.tool_executor.execute(tool_name, arguments)
+                # Adapt ToolResult dataclass to dict format
+                rv: dict[str, Any] = {
+                    "success": result.success,
+                    "data": result.data if result.success else {},
+                }
+                if not result.success:
+                    rv["error"] = result.message or "Tool execution failed"
+                if result.data.get("formatted_message"):
+                    rv["data"] = result.data
+            except Exception as e:
+                logger.warning("ToolExecutor %s failed: %s", tool_name, e)
+                rv = {"success": False, "error": str(e)}
+
+            if tool_name in _CACHEABLE_TOOLS and rv.get("success"):
+                cache_key = f"{tool_name}:{json.dumps(arguments, sort_keys=True, default=str)}"
+                self._tool_cache[cache_key] = rv
+            return rv
+
+        # Fallback: use registry handler
         tool_schema = self.registry.get(tool_name)
         if tool_schema is None:
             return {"success": False, "error": f"Unknown tool: {tool_name}"}
@@ -358,7 +388,7 @@ class ReActLoop:
 
         try:
             result = handler(**arguments)
-            rv: dict[str, Any] = {"success": True, "data": result}
+            rv = {"success": True, "data": result}
         except Exception as e:
             logger.warning("Tool %s failed: %s", tool_name, e)
             rv = {"success": False, "error": str(e)}
@@ -381,6 +411,8 @@ class ReActLoop:
         turn_number: int = 1,
         session_overview: dict[str, Any] | None = None,
         family_persona: dict[str, Any] | None = None,
+        beliefs_context: str = "",
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> ReActResult:
         """Execute the Phase 2 ReAct loop.
 
@@ -399,6 +431,10 @@ class ReActLoop:
             SessionState overview dict.
         family_persona:
             Family persona dict with members, allergies, preferences.
+        beliefs_context:
+            Formatted string of known beliefs/facts from session state.
+            Injected into LLM context so it can use stored facts
+            (dates, allergies, preferences) for tool arguments.
 
         Returns
         -------
@@ -436,9 +472,24 @@ class ReActLoop:
         if tier == "MEDIUM" and self.fsm.state == State.DISPATCHING:
             self._fire(Event.PRELIMINARY_ACK_SENT)
 
-        # Conversation messages accumulated during the loop
+        # Conversation messages accumulated during the loop.
+        # Seed with actual conversation history so the model has
+        # real user/assistant turns -- not just flat text in system.
         messages: list[dict[str, Any]] = []
+        if conversation_history:
+            for hist_turn in conversation_history[-5:]:
+                u = hist_turn.get("user", "")
+                a = hist_turn.get("assistant", "")
+                if u:
+                    messages.append({"role": "user", "content": u})
+                if a:
+                    messages.append({"role": "assistant", "content": a})
         _force_text_only = False
+
+        # Cross-iteration cognitive caps (persist across the entire turn)
+        _turn_ack_done = False  # Once ack delivered, block ALL further acks
+        _turn_belief_count = 0  # Cap belief-writes across the turn
+        _MAX_BELIEFS_PER_TURN = 2
 
         # ---- Main iteration loop ----------------------------------------
         while not self.scratchpad.is_complete:
@@ -469,6 +520,22 @@ class ReActLoop:
                 {"role": "user", "content": user_message},
             ]
 
+            # Inject beliefs context so LLM knows stored facts (dates,
+            # allergies, preferences) and can use them for tool arguments.
+            if beliefs_context:
+                iter_messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "## Known Facts From Session State\n"
+                            "Use these facts for tool call arguments. "
+                            "Do NOT ask the user to repeat information "
+                            "already captured here.\n"
+                            f"{beliefs_context}"
+                        ),
+                    }
+                )
+
             # Inject findings context
             findings_text = self.scratchpad.findings_summary()
             if findings_text:
@@ -483,7 +550,12 @@ class ReActLoop:
             iter_messages.extend(messages)
 
             # -- Call LLM (streaming) -------------------------------------
-            iter_tools = [] if _force_text_only else tool_declarations
+            # After acknowledge has been delivered, remove it from tool
+            # declarations so the LLM cannot even attempt to call it again.
+            if _turn_ack_done and not _force_text_only:
+                iter_tools = [t for t in tool_declarations if t.get("name") != "acknowledge"]
+            else:
+                iter_tools = [] if _force_text_only else tool_declarations
             self._emit(
                 LoopEventType.LLM_CALL_START,
                 message_count=len(iter_messages),
@@ -539,6 +611,42 @@ class ReActLoop:
                     )
                     break
 
+                # Strip <tool_code> blocks that Gemini sometimes emits
+                # when forced text-only (no tool declarations provided).
+                response_text = re.sub(
+                    r"<tool_code>.*?</tool_code>",
+                    "",
+                    response_text,
+                    flags=re.DOTALL,
+                ).strip()
+
+                # Strip markdown code blocks containing tool_code or
+                # function-call-like content that Gemini emits when
+                # tools are unavailable.
+                response_text = re.sub(
+                    r"```[a-z]*\s*\n?\{[^}]*tool_code[^}]*\}\s*\n?```",
+                    "",
+                    response_text,
+                    flags=re.DOTALL,
+                ).strip()
+                # Also strip standalone ```json blocks that look like
+                # function calls (contain print(...) or function_name(...)).
+                response_text = re.sub(
+                    r"```[a-z]*\s*\n?.*?(?:print|search_|book_|plan_|get_|send_|create_|schedule_|start_|stop_|list_|generate_|spawn_)\w*\(.*?\).*?\n?```",
+                    "",
+                    response_text,
+                    flags=re.DOTALL,
+                ).strip()
+
+                # Strip <ctrl42>call:... Gemini internal control tokens
+                # that leak into text when the model tries to call tools
+                # but tool declarations are not available.
+                response_text = re.sub(
+                    r"<ctrl42>[^\n]*",
+                    "",
+                    response_text,
+                ).strip()
+
                 # Fire DISPATCH_COMPLETE from current dispatch-phase state
                 if self.fsm.state in (
                     State.DISPATCHING,
@@ -570,24 +678,60 @@ class ReActLoop:
             if response_text:
                 messages.append({"role": "assistant", "content": response_text})
 
-            # --- Cognitive cap: max 1 acknowledge + 1 belief-write per iteration ---
-            _ack_used = False
-            _belief_used = False
+            # --- Cognitive cap per-iteration + cross-iteration ack guard ---
+            _iter_ack_used = False
+            _iter_belief_used = False
+            _iter_executed = 0  # Count tool calls actually executed
+            _iter_blocked = 0  # Count tool calls blocked by caps
+            _ack_next_tool: str | None = None  # Track acknowledge's planned next tool
             _BELIEF_WRITE_TOOLS = frozenset({"add_belief", "update_persona", "update_emotion"})
 
             for tc in tool_calls:
                 tc_name = tc["name"]
                 tc_args = tc.get("args", {})
 
-                # Enforce cognitive cap
+                # Enforce cognitive cap (cross-iteration + per-iteration)
                 if tc_name in COGNITIVE_TOOLS:
-                    if tc_name == "acknowledge" and _ack_used:
-                        logger.debug("Skipping duplicate acknowledge in iteration %d", self.scratchpad.iteration)
+                    # CROSS-ITERATION: once ack delivered, block all further
+                    if tc_name == "acknowledge" and _turn_ack_done:
+                        logger.debug(
+                            "Blocking acknowledge in iteration %d " "(already delivered this turn)",
+                            self.scratchpad.iteration,
+                        )
+                        _iter_blocked += 1
                         continue
-                    if tc_name in _BELIEF_WRITE_TOOLS and _belief_used:
-                        logger.debug("Skipping duplicate belief-write %s in iteration %d", tc_name, self.scratchpad.iteration)
+                    # PER-ITERATION: max 1 ack per iteration
+                    if tc_name == "acknowledge" and _iter_ack_used:
+                        logger.debug(
+                            "Skipping duplicate acknowledge in iteration %d",
+                            self.scratchpad.iteration,
+                        )
+                        _iter_blocked += 1
+                        continue
+                    # CROSS-ITERATION: cap belief-writes across the turn
+                    if (
+                        tc_name in _BELIEF_WRITE_TOOLS
+                        and _turn_belief_count >= _MAX_BELIEFS_PER_TURN
+                    ):
+                        logger.debug(
+                            "Blocking %s in iteration %d " "(turn belief cap %d reached)",
+                            tc_name,
+                            self.scratchpad.iteration,
+                            _MAX_BELIEFS_PER_TURN,
+                        )
+                        _iter_blocked += 1
+                        continue
+                    # PER-ITERATION: max 1 belief-write per iteration
+                    if tc_name in _BELIEF_WRITE_TOOLS and _iter_belief_used:
+                        logger.debug(
+                            "Skipping duplicate belief-write %s in iteration %d",
+                            tc_name,
+                            self.scratchpad.iteration,
+                        )
+                        _iter_blocked += 1
                         continue
 
+                _iter_executed += 1
                 self._emit(
                     LoopEventType.TOOL_CALL_START,
                     tool_name=tc_name,
@@ -596,11 +740,14 @@ class ReActLoop:
                 result = self._execute_tool(tc_name, tc_args)
 
                 if tc_name in COGNITIVE_TOOLS:
-                    # Track cognitive cap usage
+                    # Track cognitive cap usage (per-iteration + cross-iteration)
                     if tc_name == "acknowledge":
-                        _ack_used = True
+                        _iter_ack_used = True
+                        _turn_ack_done = True
+                        _ack_next_tool = tc_args.get("next_tool", "none")
                     if tc_name in _BELIEF_WRITE_TOOLS:
-                        _belief_used = True
+                        _iter_belief_used = True
+                        _turn_belief_count += 1
 
                     summary = _cognitive_summary(result)
                     self.scratchpad.record_tool_call(
@@ -615,12 +762,28 @@ class ReActLoop:
                         success=result.get("success", False),
                         summary=summary[:120],
                     )
-                    messages.append(
-                        {
-                            "role": "assistant",
-                            "content": f"[Tool {tc_name}]: {summary[:200]}",
-                        }
-                    )
+                    # Use "system" role so LLM does not echo cognitive
+                    # tool results verbatim in its response to the user.
+                    if tc_name == "acknowledge":
+                        # Strong signal: ack is done, do not repeat
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    "ACKNOWLEDGMENT COMPLETED - Message delivered to user. "
+                                    "Do NOT call acknowledge again this turn. "
+                                    "Now either call a FUNCTIONAL tool (search, book, plan) "
+                                    "or respond directly with text."
+                                ),
+                            }
+                        )
+                    else:
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": f"[Internal] {tc_name} completed: {summary[:120]}",
+                            }
+                        )
                 else:
                     if result.get("success"):
                         non_cognitive_results.append((tc_name, result["data"]))
@@ -648,7 +811,11 @@ class ReActLoop:
                         success=result.get("success", False),
                         summary=str(result.get("data", result.get("error", "")))[:120],
                     )
-                    # Append tool result for context
+                    # Append tool result for context.
+                    # Use role="user" so the model treats this as input
+                    # (not something it said that it should continue).
+                    # Summarise instead of raw JSON to prevent the model
+                    # from echoing or completing truncated JSON fragments.
                     result_data = (
                         result.get("data", {})
                         if result.get("success")
@@ -657,14 +824,75 @@ class ReActLoop:
                             "status": "FAILED",
                         }
                     )
-                    if not isinstance(result_data, dict):
-                        result_data = {"result": str(result_data)[:500]}
+                    if isinstance(result_data, dict):
+                        summary_parts: list[str] = []
+                        for k, v in result_data.items():
+                            # For lists of dicts (search results), format
+                            # each item individually so nothing is truncated.
+                            if isinstance(v, list) and v and isinstance(v[0], dict):
+                                items_text: list[str] = []
+                                for idx, item in enumerate(v[:6], 1):
+                                    fields = ", ".join(
+                                        f"{ik}: {iv}"
+                                        for ik, iv in item.items()
+                                        if ik not in ("available",)
+                                    )
+                                    items_text.append(f"    {idx}. {fields}")
+                                summary_parts.append(f"  {k}:\n" + "\n".join(items_text))
+                            else:
+                                v_str = str(v)
+                                if len(v_str) > 500:
+                                    v_str = v_str[:497] + "..."
+                                summary_parts.append(f"  {k}: {v_str}")
+                        result_text = "\n".join(summary_parts)
+                    else:
+                        result_text = str(result_data)[:800]
                     messages.append(
                         {
-                            "role": "assistant",
-                            "content": f"[Tool {tc_name} result]: {json.dumps(result_data, default=str)[:500]}",
+                            "role": "user",
+                            "content": (f"[System: Tool '{tc_name}' completed]\n" f"{result_text}"),
                         }
                     )
+
+            # -- Anti-spin: force text if no functional work was done ----
+            # Case 1: ALL tool calls blocked by caps
+            _all_blocked = tool_calls and _iter_executed == 0 and _iter_blocked > 0
+            # Case 2: Only cognitive tools executed (ack done, no functional)
+            _cognitive_only = _iter_executed > 0 and _turn_ack_done and not non_cognitive_results
+
+            # EXCEPTION: If acknowledge signaled a functional next_tool,
+            # the LLM intends to call it in the next iteration. Do NOT
+            # force text-only -- let the functional tool fire.
+            if _cognitive_only and _ack_next_tool and _ack_next_tool != "none":
+                logger.info(
+                    "Cognitive-only iteration %d but acknowledge signaled "
+                    "next_tool='%s' -- allowing functional tool next iteration",
+                    self.scratchpad.iteration,
+                    _ack_next_tool,
+                )
+                _cognitive_only = False
+
+            if _all_blocked or _cognitive_only:
+                logger.info(
+                    "Cognitive-only iteration %d (executed=%d, blocked=%d, "
+                    "functional=%d) -- forcing text-only next iteration",
+                    self.scratchpad.iteration,
+                    _iter_executed,
+                    _iter_blocked,
+                    len(non_cognitive_results),
+                )
+                _force_text_only = True
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "All cognitive tools for this turn are done. "
+                            "Do NOT call any more tools. "
+                            "Respond directly with text now. "
+                            "Summarize what you know and suggest a concrete next step."
+                        ),
+                    }
+                )
 
             # -- Extract findings from non-cognitive tool results ----------
             if non_cognitive_results:
@@ -672,22 +900,43 @@ class ReActLoop:
                 for tool_name, raw_data in non_cognitive_results:
                     if isinstance(raw_data, dict):
                         for k, v in raw_data.items():
-                            v_str = str(v)
-                            if len(v_str) > 300:
-                                v_str = v_str[:300] + "..."
-                            findings.append(
-                                Finding(
-                                    key=f"{tool_name}_{k}",
-                                    value=v_str,
-                                    type="fact",
-                                    source_tool=tool_name,
+                            # For lists of dicts (search results), create
+                            # a finding per item so each is individually
+                            # visible without truncation.
+                            if isinstance(v, list) and v and isinstance(v[0], dict):
+                                for idx, item in enumerate(v[:6]):
+                                    item_str = ", ".join(
+                                        f"{ik}: {iv}"
+                                        for ik, iv in item.items()
+                                        if ik not in ("available",)
+                                    )
+                                    if len(item_str) > 500:
+                                        item_str = item_str[:497] + "..."
+                                    findings.append(
+                                        Finding(
+                                            key=f"{tool_name}_{k}_{idx}",
+                                            value=item_str,
+                                            type="fact",
+                                            source_tool=tool_name,
+                                        )
+                                    )
+                            else:
+                                v_str = str(v)
+                                if len(v_str) > 500:
+                                    v_str = v_str[:497] + "..."
+                                findings.append(
+                                    Finding(
+                                        key=f"{tool_name}_{k}",
+                                        value=v_str,
+                                        type="fact",
+                                        source_tool=tool_name,
+                                    )
                                 )
-                            )
                     else:
                         findings.append(
                             Finding(
                                 key=f"{tool_name}_result",
-                                value=str(raw_data)[:300],
+                                value=str(raw_data)[:500],
                                 type="fact",
                                 source_tool=tool_name,
                             )
@@ -858,7 +1107,11 @@ class ReActLoop:
                         bullets.append(f"I encountered an issue: {f.value}")
                     else:
                         bullets.append(f"{f.key.replace('_', ' ').title()}: {f.value}")
-                body = "; ".join(bullets) if len(bullets) <= 3 else "\n".join(f"- {b}" for b in bullets)
+                body = (
+                    "; ".join(bullets)
+                    if len(bullets) <= 3
+                    else "\n".join(f"- {b}" for b in bullets)
+                )
                 final_text = f"Here is what I found so far: {body}"
             else:
                 final_text = (
@@ -943,8 +1196,7 @@ class ReActLoop:
         """
         # Filter to functional tools only
         functional_history = [
-            e for e in self.scratchpad.tool_history
-            if e.tool_name not in COGNITIVE_TOOLS
+            e for e in self.scratchpad.tool_history if e.tool_name not in COGNITIVE_TOOLS
         ]
         if len(functional_history) < 3:
             return False

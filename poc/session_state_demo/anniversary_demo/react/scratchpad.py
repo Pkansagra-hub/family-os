@@ -82,9 +82,7 @@ class LoopBudget:
         Limits are sized for real Gemini API latency (~8-21s per call).
         """
         presets: dict[Tier, dict[str, int]] = {
-            Tier.LOW: dict(
-                max_tools=5, max_iterations=3, timeout_ms=45_000, max_tokens_out=16_000
-            ),
+            Tier.LOW: dict(max_tools=5, max_iterations=3, timeout_ms=45_000, max_tokens_out=16_000),
             Tier.MEDIUM: dict(
                 max_tools=15,
                 max_iterations=6,
@@ -270,7 +268,7 @@ class Scratchpad:
             "fact_",
         ):
             if k.startswith(prefix):
-                k = k[len(prefix):]
+                k = k[len(prefix) :]
         tokens = sorted(k.split("_"))
         return "_".join(tokens)
 

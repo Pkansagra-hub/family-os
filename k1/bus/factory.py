@@ -49,8 +49,14 @@ from k1.bus.timing.timing_config import TimingConfig
 
 logger = logging.getLogger(__name__)
 
-# Probe for Rust backend once at import time
+# Probe for Rust backend once at import time.
+# Two checks are needed:
+#   1. Can we import the Python wrapper classes? (always True -- they're .py files)
+#   2. Can we import the native k1_bus_core extension? (only True if compiled)
+# Both must pass for the Rust backend to be usable.
 try:
+    import k1_bus_core  # type: ignore[import-untyped]  # noqa: F401 -- native check
+
     from k1.bus.impl.rust_bus_adapter import RustBusAdapter
     from k1.bus.impl.rust_mailbox_adapter import RustMailboxRouterAdapter
 

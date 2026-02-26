@@ -348,12 +348,13 @@ class ToolExecutor:
 
         # Filter by budget
         results = [a for a in self._accommodations if a["price_per_night"] <= budget + 100]
+        capped = results[:4]
 
         return ToolResult(
             tool_name="search_accommodations",
             success=True,
-            data={"results": results[:3], "total_found": len(results)},
-            message=f"Found {len(results)} accommodations in {location}",
+            data={"results": capped, "total_found": len(capped)},
+            message=f"Found {len(capped)} accommodations in {location}",
         )
 
     def _exec_get_accommodation_details(self, args: Dict[str, Any]) -> ToolResult:
@@ -382,6 +383,16 @@ class ToolExecutor:
         nights = args.get("nights", 2)
         guests = args.get("guests", 2)
 
+        # Validate name -- the LLM MUST specify which property to book
+        if not name:
+            avail = [a["name"] for a in self._accommodations]
+            return ToolResult(
+                tool_name="book_accommodation",
+                success=False,
+                data={"available_properties": avail},
+                message=f"Missing required parameter 'name'. Available properties: {', '.join(avail)}",
+            )
+
         # Check if accommodation is already booked via plan controller
         if self._plan_controller:
             accom_item = self._plan_controller.plan.items.get("accommodation")
@@ -393,9 +404,25 @@ class ToolExecutor:
                     message=f"Accommodation already booked! Existing reservation: {accom_item.name} (Confirmation: {accom_item.confirmation}). Use modify_booking to change.",
                 )
 
+        # Find matching property
+        matched = None
+        for a in self._accommodations:
+            if name.lower() in a["name"].lower():
+                matched = a
+                break
+        if not matched:
+            avail = [a["name"] for a in self._accommodations]
+            return ToolResult(
+                tool_name="book_accommodation",
+                success=False,
+                data={"available_properties": avail},
+                message=f"Property '{name}' not found. Available: {', '.join(avail)}",
+            )
+
+        price = matched["price_per_night"]
         booking = {
             "confirmation_number": f"ACM-{random.randint(100000, 999999)}",
-            "property": name,
+            "property": matched["name"],
             "check_in": check_in,
             "check_out": f"{nights} nights after {check_in}",
             "guests": guests,
@@ -404,31 +431,25 @@ class ToolExecutor:
         }
         self._bookings.append(booking)
 
-        # Find price
-        price = 299
-        for a in self._accommodations:
-            if name.lower() in a["name"].lower():
-                price = a["price_per_night"]
-                break
-
         return ToolResult(
             tool_name="book_accommodation",
             success=True,
             data={
                 "confirmation": booking["confirmation_number"],
-                "property": name,
+                "property": matched["name"],
                 "check_in": check_in,
                 "nights": nights,
                 "total_cost": price * nights,
             },
-            message=f"Booked {name} for {nights} nights (${price * nights} total)",
+            message=f"Booked {matched['name']} for {nights} nights (${price * nights} total)",
         )
 
     def _exec_search_restaurants(self, args: Dict[str, Any]) -> ToolResult:
         """Search for restaurants - returns mock Sonoma results."""
         location = args.get("location", "Sonoma")
-        cuisine = args.get("cuisine", "").lower()
-        avoid = [i.lower() for i in args.get("avoid_ingredients", [])]
+        cuisine_raw = args.get("cuisine") or ""
+        cuisine = cuisine_raw.lower()
+        avoid = [i.lower() for i in (args.get("avoid_ingredients") or [])]
 
         results = self._restaurants.copy()
 
@@ -436,19 +457,22 @@ class ToolExecutor:
         if cuisine:
             results = [r for r in results if cuisine in r["cuisine"].lower()]
 
-        # Filter by allergies
+        # Filter by allergies using structured contains_allergens list
+        # (not substring matching on allergen_warning text)
         if avoid:
             results = [
                 r
                 for r in results
-                if not any(a in r.get("allergen_warning", "").lower() for a in avoid)
+                if not any(a in [x.lower() for x in r.get("contains_allergens", [])] for a in avoid)
             ]
+
+        capped = results[:4]
 
         return ToolResult(
             tool_name="search_restaurants",
             success=True,
-            data={"results": results[:4], "total_found": len(results)},
-            message=f"Found {len(results)} restaurants in {location}"
+            data={"results": capped, "total_found": len(capped)},
+            message=f"Found {len(capped)} restaurants in {location}"
             + (f" avoiding {', '.join(avoid)}" if avoid else ""),
         )
 
@@ -551,12 +575,13 @@ class ToolExecutor:
         results = self._activities.copy()
         if category:
             results = [a for a in results if category.lower() in a.get("category", "").lower()]
+        capped = results[:5]
 
         return ToolResult(
             tool_name="search_activities",
             success=True,
-            data={"results": results[:5], "total_found": len(results)},
-            message=f"Found {len(results)} activities in {location}",
+            data={"results": capped, "total_found": len(capped)},
+            message=f"Found {len(capped)} activities in {location}",
         )
 
     def _exec_book_spa_service(self, args: Dict[str, Any]) -> ToolResult:
@@ -910,6 +935,7 @@ class ToolExecutor:
                 "description": "Classic Tuscan cuisine with homemade pasta and warm ambiance",
                 "specialties": ["Handmade pasta", "Veal piccata", "Tiramisu"],
                 "allergen_warning": "Menu clearly marks allergens. Can accommodate shellfish allergies.",
+                "contains_allergens": [],
                 "reservations": "Recommended",
             },
             {
@@ -921,6 +947,7 @@ class ToolExecutor:
                 "description": "Farm-to-table French cuisine with fig-themed dishes",
                 "specialties": ["Duck confit", "Fig salad", "Cheese board"],
                 "allergen_warning": "Some dishes contain shellfish. Ask server.",
+                "contains_allergens": ["shellfish"],
                 "reservations": "Required",
             },
             {
@@ -932,6 +959,7 @@ class ToolExecutor:
                 "description": "Unique Portuguese cuisine with Sonoma wine pairings",
                 "specialties": ["Bacalhau", "Pork and clams", "Pasteis de nata"],
                 "allergen_warning": "Many dishes contain shellfish",
+                "contains_allergens": ["shellfish"],
                 "reservations": "Recommended",
             },
             {
@@ -943,6 +971,7 @@ class ToolExecutor:
                 "description": "Casual upscale with seasonal local ingredients",
                 "specialties": ["Wood-fired pizzas", "Seasonal salads", "Local wines"],
                 "allergen_warning": "Shellfish-free options available",
+                "contains_allergens": [],
                 "reservations": "Walk-ins welcome",
             },
             {
@@ -954,6 +983,7 @@ class ToolExecutor:
                 "description": "Intimate fine dining with exceptional tasting menus",
                 "specialties": ["Tasting menu", "Wine pairings", "Seasonal specials"],
                 "allergen_warning": "Can accommodate all allergies with advance notice",
+                "contains_allergens": [],
                 "reservations": "Essential",
             },
         ]

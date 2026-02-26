@@ -866,9 +866,10 @@ class TestToolRegistryTierFiltering:
     def test_low_tier_returns_cognitive_tools(self, registry):
         decls = registry.get_llm_declarations(Tier.LOW)
         names = {d["name"] for d in decls}
-        # LOW tier should include cognitive tools
+        # LOW tier should include cognitive tools + essential functional tools
         assert "acknowledge" in names
-        assert len(decls) <= 6  # small set
+        assert "get_family_member_info" in names  # functional tool now in LOW
+        assert len(decls) <= 12  # cognitive + essential functional
 
     def test_medium_tier_returns_more(self, registry):
         low_decls = registry.get_llm_declarations(Tier.LOW)

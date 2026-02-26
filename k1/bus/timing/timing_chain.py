@@ -636,28 +636,32 @@ class TimingChain:
     def _cascade_causal(self, envelope_id: int, dispatch: DispatchFn) -> None:
         """
         After delivering an envelope, check if any children were
-        waiting for it as their causal parent.  Cascade recursively.
+        waiting for it as their causal parent.  Iterative (no recursion)
+        to avoid stack overflow on deep causal chains.
         """
-        children = self._causal.mark_delivered(envelope_id)
-        for child_be in children:
-            child = child_be.envelope
-            self._stats.released_causal += 1
+        pending: list[int] = [envelope_id]
+        while pending:
+            eid = pending.pop()
+            children = self._causal.mark_delivered(eid)
+            for child_be in children:
+                child = child_be.envelope
+                self._stats.released_causal += 1
 
-            # The child still needs sequence check
-            now_ns = time.monotonic_ns()
-            is_ready, released = self._gap.check_and_buffer(child, now_ns)
+                # The child still needs sequence check
+                now_ns = time.monotonic_ns()
+                is_ready, released = self._gap.check_and_buffer(child, now_ns)
 
-            if is_ready:
-                self._deliver(child, dispatch)
-                for rel in released:
-                    self._deliver(rel, dispatch)
-                    self._stats.released_gap += 1
-                # Cascade further
-                self._cascade_causal(child.envelope_id, dispatch)
-                for rel in released:
-                    self._cascade_causal(rel.envelope_id, dispatch)
-            else:
-                self._stats.buffered_gap += 1
+                if is_ready:
+                    self._deliver(child, dispatch)
+                    for rel in released:
+                        self._deliver(rel, dispatch)
+                        self._stats.released_gap += 1
+                    # Schedule further cascade (iterative, not recursive)
+                    pending.append(child.envelope_id)
+                    for rel in released:
+                        pending.append(rel.envelope_id)
+                else:
+                    self._stats.buffered_gap += 1
 
     def _deliver(self, envelope: Envelope, dispatch: DispatchFn) -> None:
         """Deliver an envelope via the dispatch callback."""

@@ -11,6 +11,8 @@ These defaults encode the K1 cognitive architecture's ordering requirements:
         - k1.response       Final responses to users
         - k1.session        Session state transitions
         - k1.agent          Agent state deltas (delta sub-topic)
+        - k1.internal       Internal bus mechanics (weave batching)
+        - k1.tool           Tool execution lifecycle events
 
     RELAXED topics (order-preferred but not critical):
         - k1.affect         Emotional/affect state updates
@@ -49,6 +51,8 @@ DEFAULT_RULES: dict[str, DeliveryMode] = {
     "k1.response": DeliveryMode.STRICT,
     "k1.session": DeliveryMode.STRICT,
     "k1.agent": DeliveryMode.STRICT,
+    "k1.internal": DeliveryMode.STRICT,
+    "k1.tool": DeliveryMode.STRICT,
     # RELAXED: order-preferred
     "k1.affect": DeliveryMode.RELAXED,
     "k1.constraint": DeliveryMode.RELAXED,

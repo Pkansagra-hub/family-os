@@ -1,0 +1,911 @@
+"""
+M03 Live Gemini Integration Tests
+===================================
+
+Real API calls to Gemini to verify the full adapter pipeline.
+These tests exercise: text completion, tool calling, streaming,
+structured JSON output, model selection, error handling, and
+multi-turn conversation.
+
+Requires: GOOGLE_API_KEY env var or explicit key passed to adapter.
+
+Run:
+    python -m pytest tests/poc/test_m03_live_gemini.py -v --tb=short -x
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from poc.k1_poc.llm.gemini_adapter import GeminiConciergeAdapter
+from poc.k1_poc.llm.ports import IConciergeModelPort
+from poc.k1_poc.llm.types import (
+    ConciergeModelRequest,
+    ConciergeModelResponse,
+    ModelMessage,
+    StreamChunk,
+    ToolCallResult,
+    ToolSchema,
+)
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+_API_KEY = "AIzaSyB0ThkKf8KCyFZHoddRJs2YPqIpcn54PUs"
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def adapter() -> GeminiConciergeAdapter:
+    """Create a single adapter for all tests in this module."""
+    return GeminiConciergeAdapter(api_key=_API_KEY)
+
+
+@pytest.fixture(scope="module")
+def event_loop():
+    """Module-scoped event loop for module-scoped async fixtures."""
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Helper: standard tool schemas used across tests
+# ---------------------------------------------------------------------------
+
+_WEATHER_TOOL = ToolSchema(
+    name="get_weather",
+    description="Get the current weather for a given city. Returns temperature in Celsius and conditions.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "city": {"type": "string", "description": "City name, e.g. 'London'"},
+        },
+        "required": ["city"],
+    },
+    returns={
+        "type": "object",
+        "properties": {"temp_c": {"type": "number"}, "condition": {"type": "string"}},
+    },
+    actor="front",
+    category="read",
+    side_effects=False,
+)
+
+_CALCULATOR_TOOL = ToolSchema(
+    name="calculate",
+    description="Evaluate a mathematical expression and return the numeric result.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "expression": {"type": "string", "description": "Math expression, e.g. '2 + 3 * 4'"},
+        },
+        "required": ["expression"],
+    },
+    returns={"type": "object", "properties": {"result": {"type": "number"}}},
+    actor="front",
+    category="action",
+    side_effects=False,
+)
+
+_SET_REMINDER_TOOL = ToolSchema(
+    name="set_reminder",
+    description="Set a reminder for a specific time with a message.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "time": {"type": "string", "description": "When to remind, e.g. '3pm'"},
+            "message": {"type": "string", "description": "Reminder text"},
+        },
+        "required": ["time", "message"],
+    },
+    returns={"type": "object", "properties": {"status": {"type": "string"}}},
+    actor="front",
+    category="action",
+    side_effects=True,
+)
+
+
+# =========================================================================
+# 1. Basic Text Completion (CHAT capability)
+# =========================================================================
+
+
+class TestBasicCompletion:
+    """Verify text-in, text-out works end-to-end."""
+
+    @pytest.mark.asyncio
+    async def test_simple_chat_response(self, adapter: GeminiConciergeAdapter) -> None:
+        """Simple user message gets a non-empty text response."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="You are a helpful assistant. Reply briefly.",
+            messages=[ModelMessage(role="user", content="What is 2 + 2?")],
+            actor="front",
+            scenario="user_input",
+            max_tokens=256,
+            temperature=0.1,
+        )
+        response = await adapter.generate(request)
+
+        assert isinstance(response, ConciergeModelResponse)
+        assert response.has_text, f"Expected text, got: {response!r}"
+        assert "4" in response.text, f"Expected '4' in response: {response.text}"
+        assert response.model_id, "model_id should be set"
+        assert response.finish_reason == "stop"
+        assert response.latency_ms > 0
+        assert response.tokens_in > 0
+        assert response.tokens_out > 0
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_obeyed(self, adapter: GeminiConciergeAdapter) -> None:
+        """System prompt constrains model behavior."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="You are a pirate. Every response must include the word 'arrr'. Keep it to one sentence.",
+            messages=[ModelMessage(role="user", content="Tell me about the weather today.")],
+            actor="front",
+            scenario="user_input",
+            max_tokens=256,
+            temperature=0.3,
+        )
+        response = await adapter.generate(request)
+
+        assert response.has_text
+        assert "arr" in response.text.lower(), f"Expected pirate speak: {response.text}"
+
+    @pytest.mark.asyncio
+    async def test_multi_turn_conversation(self, adapter: GeminiConciergeAdapter) -> None:
+        """Multi-turn conversation maintains context."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="You are a helpful assistant. Be brief.",
+            messages=[
+                ModelMessage(role="user", content="My name is Zephyr."),
+                ModelMessage(role="assistant", content="Hello Zephyr! How can I help you today?"),
+                ModelMessage(role="user", content="What is my name?"),
+            ],
+            actor="front",
+            scenario="user_input",
+            max_tokens=128,
+            temperature=0.1,
+        )
+        response = await adapter.generate(request)
+
+        assert response.has_text
+        assert "zephyr" in response.text.lower(), f"Expected name recall: {response.text}"
+
+    @pytest.mark.asyncio
+    async def test_empty_system_prompt(self, adapter: GeminiConciergeAdapter) -> None:
+        """Works even with empty system prompt."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="",
+            messages=[ModelMessage(role="user", content="Say the word 'hello'.")],
+            actor="front",
+            scenario="user_input",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert response.has_text
+        assert "hello" in response.text.lower()
+
+
+# =========================================================================
+# 2. Tool Calling (TOOL_CALL capability)
+# =========================================================================
+
+
+class TestToolCalling:
+    """Verify the adapter correctly handles tool call requests and responses."""
+
+    @pytest.mark.asyncio
+    async def test_single_tool_call(self, adapter: GeminiConciergeAdapter) -> None:
+        """Model calls a single tool when prompted."""
+        request = ConciergeModelRequest(
+            capability="TOOL_CALL",
+            system_prompt="You have access to tools. Use them when needed. Do not answer without using a tool.",
+            messages=[
+                ModelMessage(role="user", content="What is the weather in Paris right now?"),
+            ],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            actor="front",
+            scenario="user_input",
+            max_tokens=512,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert response.has_tool_calls, f"Expected tool calls, got: {response!r}"
+        assert len(response.tool_calls) >= 1
+        tc = response.tool_calls[0]
+        assert tc.name == "get_weather", f"Expected get_weather, got: {tc.name}"
+        assert "city" in tc.arguments, f"Expected city arg: {tc.arguments}"
+        assert tc.id.startswith("call_"), f"Expected synthetic ID: {tc.id}"
+        assert response.finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_tool_call_with_result_round_trip(self, adapter: GeminiConciergeAdapter) -> None:
+        """Full round-trip: tool call -> tool result -> final answer."""
+        # Step 1: Initial request triggers tool call
+        request1 = ConciergeModelRequest(
+            capability="TOOL_CALL",
+            system_prompt=(
+                "You have access to a weather tool. Always use it when asked about weather. "
+                "After receiving the tool result, provide a natural language summary."
+            ),
+            messages=[
+                ModelMessage(role="user", content="What is the weather in Tokyo?"),
+            ],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            actor="front",
+            scenario="user_input",
+            max_tokens=512,
+            temperature=0.0,
+        )
+        response1 = await adapter.generate(request1)
+
+        assert response1.has_tool_calls, f"Step 1 should produce tool call: {response1!r}"
+        tc = response1.tool_calls[0]
+
+        # Step 2: Provide tool result, get final answer
+        request2 = ConciergeModelRequest(
+            capability="TOOL_CALL",
+            system_prompt=request1.system_prompt,
+            messages=[
+                ModelMessage(role="user", content="What is the weather in Tokyo?"),
+                ModelMessage(
+                    role="assistant",
+                    content=response1.text,
+                    tool_calls=response1.tool_calls,
+                ),
+                ModelMessage(
+                    role="tool",
+                    content=json.dumps({"temp_c": 22, "condition": "partly cloudy"}),
+                    tool_call_id=tc.id,
+                    name=tc.name,
+                ),
+            ],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            actor="front",
+            scenario="user_input",
+            max_tokens=512,
+            temperature=0.0,
+        )
+        response2 = await adapter.generate(request2)
+
+        assert response2.has_text, f"Step 2 should produce text: {response2!r}"
+        text_lower = response2.text.lower()
+        assert (
+            "tokyo" in text_lower or "22" in text_lower or "cloud" in text_lower
+        ), f"Final answer should reference tool result: {response2.text}"
+        assert response2.finish_reason == "stop"
+
+    @pytest.mark.asyncio
+    async def test_multiple_tools_available(self, adapter: GeminiConciergeAdapter) -> None:
+        """Model selects correct tool when multiple are available."""
+        request = ConciergeModelRequest(
+            capability="TOOL_CALL",
+            system_prompt="You have tools. Use the correct one. Do not answer without a tool.",
+            messages=[
+                ModelMessage(role="user", content="Calculate 15 * 7 + 3"),
+            ],
+            tools=[_WEATHER_TOOL, _CALCULATOR_TOOL, _SET_REMINDER_TOOL],
+            tool_choice="auto",
+            actor="front",
+            scenario="user_input",
+            max_tokens=512,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert response.has_tool_calls
+        tc = response.tool_calls[0]
+        assert tc.name == "calculate", f"Expected calculate tool, got: {tc.name}"
+        assert "expression" in tc.arguments
+
+    @pytest.mark.asyncio
+    async def test_tool_choice_required(self, adapter: GeminiConciergeAdapter) -> None:
+        """tool_choice='required' forces a tool call even for simple questions."""
+        request = ConciergeModelRequest(
+            capability="TOOL_CALL",
+            system_prompt="You have tools available.",
+            messages=[
+                ModelMessage(role="user", content="Hello, how are you?"),
+            ],
+            tools=[_WEATHER_TOOL],
+            tool_choice="required",
+            actor="front",
+            scenario="user_input",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert response.has_tool_calls, f"tool_choice=required should force a call: {response!r}"
+        assert response.finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_tool_arguments_correct_types(self, adapter: GeminiConciergeAdapter) -> None:
+        """Tool call arguments have correct types per schema."""
+        request = ConciergeModelRequest(
+            capability="TOOL_CALL",
+            system_prompt="Use tools. Always call set_reminder when asked.",
+            messages=[
+                ModelMessage(role="user", content="Remind me at 3pm to call Mom."),
+            ],
+            tools=[_SET_REMINDER_TOOL],
+            tool_choice="auto",
+            actor="front",
+            scenario="user_input",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert response.has_tool_calls
+        tc = response.tool_calls[0]
+        assert tc.name == "set_reminder"
+        assert isinstance(tc.arguments, dict)
+        assert "time" in tc.arguments
+        assert "message" in tc.arguments
+        assert isinstance(tc.arguments["time"], str)
+        assert isinstance(tc.arguments["message"], str)
+
+
+# =========================================================================
+# 3. Streaming (generate_stream)
+# =========================================================================
+
+
+class TestStreaming:
+    """Verify streaming text and tool calls via generate_stream()."""
+
+    @pytest.mark.asyncio
+    async def test_stream_text_chunks(self, adapter: GeminiConciergeAdapter) -> None:
+        """Streaming yields text_delta chunks and ends with done."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="You are a helpful assistant. Write a short paragraph about the moon.",
+            messages=[
+                ModelMessage(role="user", content="Tell me about the moon in 2-3 sentences."),
+            ],
+            actor="front",
+            scenario="user_input",
+            max_tokens=256,
+            temperature=0.3,
+        )
+
+        chunks: list[StreamChunk] = []
+        async for chunk in adapter.generate_stream(request):
+            chunks.append(chunk)
+
+        assert len(chunks) >= 2, f"Expected multiple chunks, got {len(chunks)}"
+
+        # Last chunk should be 'done'
+        done_chunks = [c for c in chunks if c.chunk_type == "done"]
+        assert len(done_chunks) == 1, f"Expected exactly one done chunk, got {len(done_chunks)}"
+        done = done_chunks[0]
+        assert done.response is not None
+        assert isinstance(done.response, ConciergeModelResponse)
+        assert done.response.model_id, "done chunk should have model_id"
+        assert done.response.latency_ms > 0
+        assert done.response.finish_reason in ("stop", "tool_calls")
+
+        # Text deltas should assemble into full text
+        text_chunks = [c for c in chunks if c.chunk_type == "text_delta"]
+        if text_chunks:
+            assembled_text = "".join(c.text for c in text_chunks)
+            assert len(assembled_text) > 10, f"Expected substantial text: {assembled_text}"
+            # The done response text should match assembled deltas
+            assert (
+                done.response.text == assembled_text
+            ), f"Done text mismatch.\nAssembled: {assembled_text}\nDone: {done.response.text}"
+
+    @pytest.mark.asyncio
+    async def test_stream_tool_call(self, adapter: GeminiConciergeAdapter) -> None:
+        """Streaming with tool calls yields tool_call_delta chunks."""
+        request = ConciergeModelRequest(
+            capability="TOOL_CALL",
+            system_prompt="You have tools. Use them when needed. Do not answer without a tool.",
+            messages=[
+                ModelMessage(role="user", content="What is the weather in Berlin?"),
+            ],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            actor="front",
+            scenario="user_input",
+            max_tokens=256,
+            temperature=0.0,
+        )
+
+        chunks: list[StreamChunk] = []
+        async for chunk in adapter.generate_stream(request):
+            chunks.append(chunk)
+
+        done_chunks = [c for c in chunks if c.chunk_type == "done"]
+        assert len(done_chunks) == 1
+        done = done_chunks[0]
+
+        assert done.response is not None
+        # Streaming tool calls: either in done response or via tool_call_delta
+        tool_deltas = [c for c in chunks if c.chunk_type == "tool_call_delta"]
+
+        if done.response.has_tool_calls:
+            tc = done.response.tool_calls[0]
+            assert tc.name == "get_weather"
+            assert "city" in tc.arguments
+        elif tool_deltas:
+            # Tool call appeared via delta chunks
+            assert any("get_weather" in str(c.tool_call_partial) for c in tool_deltas)
+        else:
+            # Model may have answered directly -- at least verify we got a response
+            assert done.response.has_text, f"Expected text or tool call: {done.response!r}"
+
+
+# =========================================================================
+# 4. Structured JSON Output (STRUCTURED capability)
+# =========================================================================
+
+
+class TestStructuredOutput:
+    """Verify the adapter can produce structured JSON output."""
+
+    @pytest.mark.asyncio
+    async def test_json_output(self, adapter: GeminiConciergeAdapter) -> None:
+        """Model produces valid JSON when asked."""
+        request = ConciergeModelRequest(
+            capability="STRUCTURED",
+            system_prompt=(
+                "You are a JSON generator. Always respond with valid JSON only, no markdown, no explanation. "
+                'Output format: {"name": string, "age": number, "city": string}'
+            ),
+            messages=[
+                ModelMessage(
+                    role="user",
+                    content="Generate a JSON object for a person named Alice who is 30 years old and lives in London.",
+                ),
+            ],
+            actor="back",
+            scenario="structured_output",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert response.has_text
+        # Strip markdown code fences if present
+        text = response.text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [line for line in lines if not line.strip().startswith("```")]
+            text = "\n".join(lines).strip()
+
+        parsed = json.loads(text)
+        assert isinstance(parsed, dict), f"Expected dict, got: {type(parsed)}"
+        assert "name" in parsed
+        assert "age" in parsed
+        assert "city" in parsed
+        assert parsed["name"].lower() == "alice"
+        assert parsed["age"] == 30
+        assert parsed["city"].lower() == "london"
+
+    @pytest.mark.asyncio
+    async def test_json_list_output(self, adapter: GeminiConciergeAdapter) -> None:
+        """Model produces a JSON array."""
+        request = ConciergeModelRequest(
+            capability="STRUCTURED",
+            system_prompt=(
+                "You are a JSON generator. Always respond with a valid JSON array only, "
+                'no markdown fences, no explanation. Each item has: {"item": string, "count": number}'
+            ),
+            messages=[
+                ModelMessage(
+                    role="user",
+                    content="List 3 fruits with their counts: apple 5, banana 3, cherry 8.",
+                ),
+            ],
+            actor="back",
+            scenario="structured_output",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert response.has_text
+        text = response.text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [line for line in lines if not line.strip().startswith("```")]
+            text = "\n".join(lines).strip()
+
+        parsed = json.loads(text)
+        assert isinstance(parsed, list), f"Expected list, got: {type(parsed)}"
+        assert len(parsed) == 3
+        names = {item["item"].lower() for item in parsed}
+        assert "apple" in names
+        assert "banana" in names
+        assert "cherry" in names
+
+
+# =========================================================================
+# 5. Model Selection (verify different models are actually used)
+# =========================================================================
+
+
+class TestModelSelection:
+    """Verify model selection works with real calls."""
+
+    @pytest.mark.asyncio
+    async def test_flash_model_for_chat(self, adapter: GeminiConciergeAdapter) -> None:
+        """CHAT + front -> flash model."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="Reply with one word.",
+            messages=[ModelMessage(role="user", content="Say yes.")],
+            actor="front",
+            scenario="ack",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+        assert "flash" in response.model_id, f"Expected flash model: {response.model_id}"
+
+    @pytest.mark.asyncio
+    async def test_pro_model_for_tool_call(self, adapter: GeminiConciergeAdapter) -> None:
+        """TOOL_CALL + front -> pro model."""
+        request = ConciergeModelRequest(
+            capability="TOOL_CALL",
+            system_prompt="You have tools. Use them.",
+            messages=[ModelMessage(role="user", content="What is the weather in NYC?")],
+            tools=[_WEATHER_TOOL],
+            actor="front",
+            scenario="tool_dispatch",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+        assert "pro" in response.model_id, f"Expected pro model: {response.model_id}"
+
+    @pytest.mark.asyncio
+    async def test_hint_overrides_model(self, adapter: GeminiConciergeAdapter) -> None:
+        """model_hint='fast' forces flash even for TOOL_CALL."""
+        request = ConciergeModelRequest(
+            capability="TOOL_CALL",
+            system_prompt="You have tools. Use them.",
+            messages=[ModelMessage(role="user", content="What is the weather in NYC?")],
+            tools=[_WEATHER_TOOL],
+            actor="front",
+            scenario="tool_dispatch",
+            max_tokens=256,
+            temperature=0.0,
+            model_hint="fast",
+        )
+        response = await adapter.generate(request)
+        assert "flash" in response.model_id, f"Hint=fast should use flash: {response.model_id}"
+
+    @pytest.mark.asyncio
+    async def test_explicit_model_passthrough(self, adapter: GeminiConciergeAdapter) -> None:
+        """Explicit model name is passed through."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="Reply with one word.",
+            messages=[ModelMessage(role="user", content="Say hello.")],
+            actor="front",
+            scenario="ack",
+            max_tokens=256,
+            temperature=0.0,
+            model_hint="gemini-2.5-flash",
+        )
+        response = await adapter.generate(request)
+        assert "flash" in response.model_id
+
+
+# =========================================================================
+# 6. Response Metadata Validation
+# =========================================================================
+
+
+class TestResponseMetadata:
+    """Verify response metadata fields are correctly populated."""
+
+    @pytest.mark.asyncio
+    async def test_token_counts_populated(self, adapter: GeminiConciergeAdapter) -> None:
+        """Token counts should be non-zero for real calls."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="Be brief.",
+            messages=[ModelMessage(role="user", content="What is Python?")],
+            actor="front",
+            scenario="user_input",
+            max_tokens=128,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert response.tokens_in > 0, f"tokens_in should be > 0: {response.tokens_in}"
+        assert response.tokens_out > 0, f"tokens_out should be > 0: {response.tokens_out}"
+
+    @pytest.mark.asyncio
+    async def test_latency_reasonable(self, adapter: GeminiConciergeAdapter) -> None:
+        """Latency should be a positive reasonable value."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="Say OK.",
+            messages=[ModelMessage(role="user", content="Ping")],
+            actor="front",
+            scenario="ack",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert response.latency_ms > 0
+        # Should complete within 30 seconds
+        assert response.latency_ms < 30000, f"Too slow: {response.latency_ms}ms"
+
+    @pytest.mark.asyncio
+    async def test_finish_reason_stop(self, adapter: GeminiConciergeAdapter) -> None:
+        """Normal text response has finish_reason='stop'."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="Reply with one word.",
+            messages=[ModelMessage(role="user", content="Say hello.")],
+            actor="front",
+            scenario="ack",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+        assert response.finish_reason == "stop", f"Expected stop: {response.finish_reason}"
+
+
+# =========================================================================
+# 7. Protocol Compliance
+# =========================================================================
+
+
+class TestProtocolCompliance:
+    """Verify adapter satisfies IConciergeModelPort protocol."""
+
+    def test_isinstance_check(self, adapter: GeminiConciergeAdapter) -> None:
+        """Adapter is a runtime instance of IConciergeModelPort."""
+        assert isinstance(adapter, IConciergeModelPort)
+
+    @pytest.mark.asyncio
+    async def test_generate_returns_correct_type(self, adapter: GeminiConciergeAdapter) -> None:
+        """generate() returns ConciergeModelResponse."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="Be brief.",
+            messages=[ModelMessage(role="user", content="Hi")],
+            actor="front",
+            scenario="ack",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+        assert isinstance(response, ConciergeModelResponse)
+
+    @pytest.mark.asyncio
+    async def test_stream_yields_stream_chunks(self, adapter: GeminiConciergeAdapter) -> None:
+        """generate_stream() yields StreamChunk objects."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="Be brief.",
+            messages=[ModelMessage(role="user", content="Hi")],
+            actor="front",
+            scenario="ack",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        async for chunk in adapter.generate_stream(request):
+            assert isinstance(chunk, StreamChunk)
+            assert chunk.chunk_type in ("text_delta", "tool_call_delta", "done")
+
+
+# =========================================================================
+# 8. Edge Cases and Error Handling
+# =========================================================================
+
+
+class TestEdgeCases:
+    """Verify adapter handles edge cases gracefully."""
+
+    @pytest.mark.asyncio
+    async def test_very_short_max_tokens(self, adapter: GeminiConciergeAdapter) -> None:
+        """Very short max_tokens still returns a valid response."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="Be brief.",
+            messages=[
+                ModelMessage(
+                    role="user",
+                    content="Write a very long essay about the history of the universe.",
+                ),
+            ],
+            actor="front",
+            scenario="user_input",
+            max_tokens=10,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert isinstance(response, ConciergeModelResponse)
+        # Should still return something even with very limited tokens
+        assert response.model_id
+
+    @pytest.mark.asyncio
+    async def test_long_system_prompt(self, adapter: GeminiConciergeAdapter) -> None:
+        """Long system prompt is handled correctly."""
+        long_prompt = "You are a helpful assistant. " * 100
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt=long_prompt,
+            messages=[ModelMessage(role="user", content="Say OK.")],
+            actor="front",
+            scenario="user_input",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert isinstance(response, ConciergeModelResponse)
+        assert response.has_text
+
+    @pytest.mark.asyncio
+    async def test_tool_choice_none_prevents_tool_calls(
+        self, adapter: GeminiConciergeAdapter
+    ) -> None:
+        """tool_choice='none' should prevent tool calls."""
+        request = ConciergeModelRequest(
+            capability="TOOL_CALL",
+            system_prompt="You have tools but must not use them this time. Answer directly.",
+            messages=[
+                ModelMessage(role="user", content="What is the weather in London?"),
+            ],
+            tools=[_WEATHER_TOOL],
+            tool_choice="none",
+            actor="front",
+            scenario="user_input",
+            max_tokens=512,
+            temperature=0.0,
+            model_hint="fast",
+        )
+        response = await adapter.generate(request)
+
+        assert (
+            not response.has_tool_calls
+        ), f"tool_choice=none should prevent tool calls: {response.tool_calls}"
+        # finish_reason may be "stop" or "length" depending on thinking budget
+        assert response.finish_reason in ("stop", "length")
+
+    @pytest.mark.asyncio
+    async def test_multiple_consecutive_tool_results(self, adapter: GeminiConciergeAdapter) -> None:
+        """Multiple tool results in sequence are merged correctly (Gemini requirement)."""
+        request = ConciergeModelRequest(
+            capability="TOOL_CALL",
+            system_prompt=(
+                "You have tools. After receiving all tool results, "
+                "summarize the information in one sentence."
+            ),
+            messages=[
+                ModelMessage(role="user", content="What is the weather in Tokyo and Berlin?"),
+                ModelMessage(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ToolCallResult(
+                            id="call_001", name="get_weather", arguments={"city": "Tokyo"}
+                        ),
+                        ToolCallResult(
+                            id="call_002", name="get_weather", arguments={"city": "Berlin"}
+                        ),
+                    ],
+                ),
+                # Two consecutive tool results -- adapter must merge into single Content
+                ModelMessage(
+                    role="tool",
+                    content=json.dumps({"temp_c": 25, "condition": "sunny"}),
+                    tool_call_id="call_001",
+                    name="get_weather",
+                ),
+                ModelMessage(
+                    role="tool",
+                    content=json.dumps({"temp_c": 12, "condition": "rainy"}),
+                    tool_call_id="call_002",
+                    name="get_weather",
+                ),
+            ],
+            tools=[_WEATHER_TOOL],
+            tool_choice="auto",
+            actor="front",
+            scenario="user_input",
+            max_tokens=256,
+            temperature=0.0,
+        )
+        response = await adapter.generate(request)
+
+        assert response.has_text, f"Expected text summary: {response!r}"
+        text_lower = response.text.lower()
+        # Should reference both cities or their weather data
+        has_context = ("tokyo" in text_lower or "25" in text_lower or "sunny" in text_lower) and (
+            "berlin" in text_lower or "12" in text_lower or "rain" in text_lower
+        )
+        assert has_context, f"Expected both cities in response: {response.text}"
+
+
+# =========================================================================
+# 9. Timeout Handling
+# =========================================================================
+
+
+class TestTimeout:
+    """Verify timeout enforcement works."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_raises_on_extremely_short(self, adapter: GeminiConciergeAdapter) -> None:
+        """Extremely short timeout should raise asyncio.TimeoutError."""
+        request = ConciergeModelRequest(
+            capability="CHAT",
+            system_prompt="Write a very long essay about the entire history of human civilization.",
+            messages=[
+                ModelMessage(
+                    role="user",
+                    content="Write 10000 words about every major civilization.",
+                ),
+            ],
+            actor="front",
+            scenario="user_input",
+            max_tokens=8192,
+            temperature=0.5,
+            timeout_ms=1,  # 1ms -- impossible to complete
+        )
+        with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+            await adapter.generate(request)
+
+
+# =========================================================================
+# 10. Concurrent Requests
+# =========================================================================
+
+
+class TestConcurrency:
+    """Verify adapter handles concurrent requests correctly."""
+
+    @pytest.mark.asyncio
+    async def test_parallel_requests(self, adapter: GeminiConciergeAdapter) -> None:
+        """Multiple concurrent requests all succeed."""
+        requests = [
+            ConciergeModelRequest(
+                capability="CHAT",
+                system_prompt="Reply with one word only.",
+                messages=[ModelMessage(role="user", content=f"Say the number {i}.")],
+                actor="front",
+                scenario="ack",
+                max_tokens=256,
+                temperature=0.0,
+            )
+            for i in range(3)
+        ]
+
+        responses = await asyncio.gather(*[adapter.generate(r) for r in requests])
+
+        assert len(responses) == 3
+        for resp in responses:
+            assert isinstance(resp, ConciergeModelResponse)
+            assert resp.has_text
+            assert resp.model_id

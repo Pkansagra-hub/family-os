@@ -115,6 +115,9 @@ from poc.session_state_demo.anniversary_demo.script import (
 # Tool executor for all 21 tools
 from poc.session_state_demo.anniversary_demo.tools.executor import ToolExecutor
 
+# Family mock data (for family_persona in system prompt)
+from poc.session_state_demo.anniversary_demo.tools.family import MOCK_FAMILY_MEMBERS
+
 # Tool registry with all 21 tools
 from poc.session_state_demo.anniversary_demo.tools.registry import (
     ToolRegistry,
@@ -1378,11 +1381,13 @@ class DemoRunner:
         auto_mode: bool = False,
         fast_mode: bool = False,
         walkthrough_mode: bool = False,
+        interactive: bool = False,
     ):
         """Initialize the runner with real components."""
         self.auto_mode = auto_mode
         self.fast_mode = fast_mode
         self.walkthrough_mode = walkthrough_mode
+        self.interactive = interactive
         self.state = DemoState()
         self.state.start_time = time.time()
 
@@ -1572,13 +1577,16 @@ class DemoRunner:
             if not self.auto_mode:
                 wait_for_key()
 
-        # Run through all turns
-        for turn in self.turns:
-            await self._execute_turn(turn)
+        # Run through turns
+        if self.interactive:
+            await self._run_interactive()
+        else:
+            for turn in self.turns:
+                await self._execute_turn(turn)
 
-            # Small delay between turns
-            if not self.fast_mode:
-                await asyncio.sleep(0.3)
+                # Small delay between turns
+                if not self.fast_mode:
+                    await asyncio.sleep(0.3)
 
         # Show completion
         await self._show_completion()
@@ -1589,6 +1597,459 @@ class DemoRunner:
         # Cleanup
         if self.bridge:
             self.bridge.stop(checkpoint_before_stop=True)
+
+    def _build_family_persona(self) -> dict:
+        """Build a family_persona dict from mock family data.
+
+        Transforms MOCK_FAMILY_MEMBERS into the format expected by
+        ``build_system_prompt()`` so the LLM knows family members,
+        ages, allergies, and preferences from the start.
+
+        Returns
+        -------
+        Dict with family_name, home_location, and members list.
+        """
+        members = []
+        for name, member in MOCK_FAMILY_MEMBERS.items():
+            m: dict = {
+                "name": member.name,
+                "role": member.relationship,
+                "age": member.age,
+            }
+            allergies = member.health.get("allergies", [])
+            if allergies:
+                m["allergies"] = allergies
+            prefs = list(member.preferences.values())[:3]
+            if prefs:
+                m["preferences"] = prefs
+            members.append(m)
+        return {
+            "family_name": "The Family",
+            "home_location": "San Francisco, CA",
+            "members": members,
+        }
+
+    def _build_beliefs_context_for_loop(self) -> str:
+        """Build full session context string for the ReAct loop.
+
+        Reads ALL relevant SessionState sections and formats them so
+        the LLM has access to stored facts, preferences, emotional
+        state, conversation phase, pending gaps, and conversation
+        history when making tool call decisions.
+
+        Returns
+        -------
+        Formatted string, or empty string if nothing available.
+        """
+        if not self.bridge:
+            return ""
+
+        parts: list[str] = []
+
+        # === HOT TIER ===
+
+        # 1. Active beliefs (dates, allergies, family facts)
+        try:
+            data = self.bridge.get_section_data("beliefs_active")
+            if "error" not in data:
+                beliefs = data.get("beliefs", data.get("raw", ""))
+                if isinstance(beliefs, dict) and beliefs:
+                    parts.append("KNOWN FACTS:")
+                    for subject, predicates in beliefs.items():
+                        if isinstance(predicates, dict):
+                            for predicate, obj in predicates.items():
+                                parts.append(f"- {subject} {predicate} {obj}")
+                        else:
+                            parts.append(f"- {subject}: {predicates}")
+                elif beliefs:
+                    parts.append(f"KNOWN FACTS:\n{str(beliefs)[:500]}")
+        except Exception:
+            pass
+
+        # 2. Persona traits (preferences, style)
+        try:
+            data = self.bridge.get_section_data("persona")
+            if "error" not in data:
+                traits = data.get("traits", {})
+                if traits:
+                    parts.append("USER PREFERENCES:")
+                    for trait, value in list(traits.items())[:10]:
+                        parts.append(f"- {trait} = {value}")
+        except Exception:
+            pass
+
+        # 3. Scoreboard (current topic, QUD, active referents)
+        try:
+            data = self.bridge.get_section_data("scoreboard")
+            if "error" not in data and data:
+                sb_parts: list[str] = []
+                if data.get("topic"):
+                    sb_parts.append(f"- Current topic: {data['topic']}")
+                if data.get("qud"):
+                    sb_parts.append(f"- Question under discussion: {data['qud']}")
+                if data.get("referents"):
+                    refs = list(data["referents"].items())[:5]
+                    for name, info in refs:
+                        sal = info.get("salience", 0)
+                        if sal > 0.3:  # Only include salient referents
+                            sb_parts.append(f"- Active referent: {name} (salience={sal:.1f})")
+                if sb_parts:
+                    parts.append("CURRENT FOCUS:")
+                    parts.extend(sb_parts)
+        except Exception:
+            pass
+
+        # 4. Affective state (emotion, intensity)
+        try:
+            data = self.bridge.get_section_data("affective_now")
+            if "error" not in data and data:
+                emotion = data.get("emotion")
+                intensity = data.get("intensity", 0.5)
+                if emotion and emotion != "neutral":
+                    parts.append(f"EMOTIONAL STATE: {emotion} (intensity={intensity:.1f})")
+                    if data.get("empathy_needed"):
+                        parts.append("- Empathetic response recommended")
+        except Exception:
+            pass
+
+        # 5. Clarifications (pending gaps the user hasn't answered)
+        try:
+            data = self.bridge.get_section_data("clarifications")
+            if "error" not in data and data:
+                gaps = data.get("gaps", [])
+                if gaps:
+                    parts.append("PENDING CLARIFICATIONS:")
+                    for gap in gaps[:3]:
+                        parts.append(
+                            f"- Missing: {gap.get('type', 'unknown')} - {gap.get('question', '')}"
+                        )
+        except Exception:
+            pass
+
+        # 6. Narrative phase (conversation arc position)
+        try:
+            data = self.bridge.get_section_data("narrative_active")
+            if "error" not in data and data:
+                phase = data.get("phase")
+                thread = data.get("thread")
+                if phase and phase != "unknown":
+                    line = f"CONVERSATION PHASE: {phase}"
+                    if thread:
+                        line += f" (thread: {thread})"
+                    parts.append(line)
+        except Exception:
+            pass
+
+        # === WARM TIER ===
+
+        # 7. Beliefs history (demoted older facts -- still relevant)
+        try:
+            data = self.bridge.get_section_data("beliefs_history")
+            if "error" not in data and data:
+                facts = data.get("facts", [])
+                if facts:
+                    parts.append("HISTORICAL FACTS (older, still relevant):")
+                    for fact in facts[:5]:
+                        subj = fact.get("subject", "")
+                        pred = fact.get("predicate", "")
+                        obj = fact.get("object", "")
+                        if subj and obj:
+                            parts.append(f"- {subj} {pred} {obj}")
+        except Exception:
+            pass
+
+        # 8. History recent (compressed older conversation)
+        try:
+            data = self.bridge.get_section_data("history_recent")
+            if "error" not in data and data:
+                summary = data.get("session_summary", "")
+                summarized = data.get("summarized_turns", [])
+                if summary:
+                    parts.append(f"SESSION SUMMARY: {summary}")
+                elif summarized:
+                    parts.append("OLDER CONVERSATION SUMMARY:")
+                    for st in summarized[:3]:
+                        parts.append(
+                            f"- Turn {st.get('turn_number', 0)}: {st.get('summary', '')[:80]}"
+                        )
+        except Exception:
+            pass
+
+        # 9. Active bookings / plan state so LLM knows what is DONE
+        try:
+            if self.tool_executor and self.tool_executor.bookings:
+                parts.append("CONFIRMED BOOKINGS (already done, do NOT re-book):")
+                for bk in self.tool_executor.bookings:
+                    conf = bk.get("confirmation_number", "")
+                    prop = bk.get("property", bk.get("restaurant_name", bk.get("service", "")))
+                    parts.append(f"- {prop} (confirmation: {conf})")
+        except Exception:
+            pass
+
+        # NOTE: history_active is NO LONGER injected here as flat text.
+        # It is passed as real user/assistant messages to the ReAct loop
+        # via the conversation_history parameter, so the model sees
+        # actual multi-turn conversation flow.
+
+        return "\n".join(parts) if parts else ""
+
+    async def _run_interactive(self) -> None:
+        """Run in interactive mode where the user types each message.
+
+        Slash commands available anytime:
+            /crash     - Simulate a crash, then auto-restore from checkpoint
+            /monitors  - List all active background monitors
+            /alert     - Force-fire alerts from all active monitors
+            /checkpoint - Save a checkpoint manually
+            /help      - Show available commands
+            quit/exit  - End session
+        """
+        turn_number = 0
+        self.current_act = Act.SETUP
+        print()
+        print(colorize("  INTERACTIVE MODE", GREEN, bold=True))
+        print(colorize("  Type your messages as Sarah. Type 'quit' or 'exit' to end.", GRAY))
+        print(colorize("  Slash commands: /crash /monitors /alert /checkpoint /help", GRAY))
+        print()
+
+        while True:
+            turn_number += 1
+
+            # Check monitors each turn - fire alerts proactively
+            await self._check_monitors_interactive(turn_number)
+
+            # Prompt for user input
+            print()
+            try:
+                user_text = input(colorize("SARAH> ", GREEN, bold=True))
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+
+            user_text = user_text.strip()
+            if not user_text:
+                turn_number -= 1
+                continue
+            if user_text.lower() in ("quit", "exit", "/quit", "/exit"):
+                break
+
+            # Handle slash commands
+            if user_text.startswith("/"):
+                handled = await self._handle_interactive_command(user_text, turn_number)
+                if handled:
+                    turn_number -= 1  # Don't count commands as turns
+                    continue
+
+            # Build a synthetic DemoTurn from user input
+            turn = DemoTurn(
+                turn_number=turn_number,
+                user_input=user_text,
+                act=self.current_act,
+                description=f"interactive-turn-{turn_number}",
+            )
+            self.state.total_turns = turn_number
+
+            await self._execute_turn(turn)
+
+    async def _handle_interactive_command(self, command: str, turn_number: int) -> bool:
+        """Handle slash commands in interactive mode. Returns True if handled."""
+        cmd = command.lower().strip()
+
+        if cmd == "/crash":
+            await self._handle_interactive_crash(turn_number)
+            return True
+
+        elif cmd == "/monitors":
+            self._show_active_monitors()
+            return True
+
+        elif cmd == "/alert":
+            await self._force_monitor_alerts(turn_number)
+            return True
+
+        elif cmd == "/checkpoint":
+            if self.bridge:
+                success, msg, size = self.bridge.checkpoint()
+                print_system_message(f"Checkpoint saved: {size:,} bytes", "info")
+            else:
+                print_system_message("No session bridge - checkpoint not available", "warning")
+            return True
+
+        elif cmd == "/help":
+            print()
+            print(colorize("  Available commands:", CYAN, bold=True))
+            print(colorize("    /crash      ", CYAN) + "- Simulate crash + auto-restore")
+            print(colorize("    /monitors   ", CYAN) + "- List active background monitors")
+            print(colorize("    /alert      ", CYAN) + "- Force-fire alerts from active monitors")
+            print(colorize("    /checkpoint ", CYAN) + "- Save a manual checkpoint")
+            print(colorize("    /help       ", CYAN) + "- Show this help")
+            print(colorize("    quit/exit   ", CYAN) + "- End session")
+            return True
+
+        # Unknown command - treat as regular input
+        return False
+
+    async def _handle_interactive_crash(self, turn_number: int) -> None:
+        """Simulate crash and auto-restore during interactive mode."""
+        print()
+        print(colorize("  [Session interrupted mid-conversation...]", GRAY))
+
+        # Checkpoint before crash
+        if self.bridge:
+            success, msg, size = self.bridge.checkpoint()
+            print_system_message(f"Pre-crash checkpoint: {size:,} bytes", "info")
+
+        # Show crash
+        print_crash_screen()
+        self.state.has_crashed = True
+        self.state.crash_restores += 1
+
+        # Auto-restore
+        print_restore_screen()
+
+        if self.bridge:
+            db_path = self.bridge._db_path
+            session_id = self.bridge._session_id
+
+            self.bridge.stop(checkpoint_before_stop=False)
+
+            self.bridge = SessionLLMBridge(
+                session_id=session_id,
+                db_path=db_path,
+                restore_on_start=True,
+            )
+            success, msg = self.bridge.start()
+
+        self.state.k1_coverage["Checkpoint/Restore"] = True
+
+        print()
+        print(colorize("  SESSION RESTORED SUCCESSFULLY", GREEN, bold=True))
+        print()
+
+        if self.bridge:
+            snapshot = self.bridge.get_snapshot()
+            stats = self.bridge.get_stats()
+            print(colorize("  Restored data:", CYAN))
+            print(f"    - Turn number: {stats.total_turns}")
+            print(f"    - Total size: {snapshot.get('total_size_bytes', 0):,} bytes")
+            print(f"    - Sections: {len(snapshot.get('sections', {}))}")
+        print()
+
+        # LLM recovery response
+        restore_prompt = (
+            "The session just crashed and has been restored from checkpoint. "
+            "Acknowledge the restore and remind the user where you left off. "
+            "Be brief and helpful."
+        )
+
+        try:
+            prompt_builder = DynamicPromptBuilder(self.bridge, self.tool_registry)
+            system_prompt = prompt_builder.build_prompt()
+            response = await self.llm.complete_with_tools(
+                system_prompt=system_prompt,
+                messages=[{"role": "user", "content": restore_prompt}],
+                tools=[],
+            )
+            content = response.get("content", "")
+            if content:
+                print_assistant_message(content)
+        except Exception:  # noqa: BLE001
+            print_assistant_message(
+                "Welcome back! I've restored the session from checkpoint. "
+                "Where were we? I'm ready to continue."
+            )
+
+    def _show_active_monitors(self) -> None:
+        """Show all active background monitors."""
+        if not self.tool_executor:
+            print_system_message("No tool executor - monitors not available", "warning")
+            return
+
+        monitors = self.tool_executor._monitors
+        if not monitors:
+            print()
+            print(colorize("  No active monitors.", GRAY))
+            return
+
+        print()
+        print(colorize("  ACTIVE MONITORS:", CYAN, bold=True))
+        for mid, mon in monitors.items():
+            elapsed = int((time.time() - mon.started_at) / 60)
+            print(f"    [{mid}] {mon.monitor_type} -> {mon.target} ({elapsed}m running)")
+
+    async def _force_monitor_alerts(self, turn_number: int) -> None:
+        """Force-fire alerts from all active monitors."""
+        from poc.session_state_demo.anniversary_demo.tools.monitors import (
+            MonitorStore,
+            check_monitors,
+        )
+
+        store = MonitorStore()
+
+        # Set triggers for home monitors that require explicit triggers
+        for monitor in store.get_active_monitors():
+            if monitor.monitor_type.value in ("smoke_detector", "baby_monitor"):
+                monitor.metadata["trigger_alert"] = True
+            elif monitor.monitor_type.value in ("oven", "laundry"):
+                monitor.metadata["checks_to_alert"] = 0  # Fire immediately
+
+        new_alerts = check_monitors(demo_turn=turn_number)
+
+        if not new_alerts:
+            print()
+            print(colorize("  No monitors have pending alerts.", GRAY))
+            return
+
+        for alert in new_alerts:
+            print()
+            print(
+                colorize(f"  [{alert.severity.value.upper()}] {alert.message}", YELLOW, bold=True)
+            )
+            if alert.suggested_action:
+                print(colorize(f"    Suggested: {alert.suggested_action}", GRAY))
+
+        # Let LLM respond to the alerts
+        alert_text = " | ".join(a.message for a in new_alerts)
+        alert_prompt = (
+            f"Background monitor alerts fired: {alert_text}. "
+            "Inform the user proactively about these alerts and suggest next steps."
+        )
+
+        try:
+            prompt_builder = DynamicPromptBuilder(self.bridge, self.tool_registry)
+            system_prompt = prompt_builder.build_prompt()
+            response = await self.llm.complete_with_tools(
+                system_prompt=system_prompt,
+                messages=[{"role": "user", "content": alert_prompt}],
+                tools=self.tool_registry.get_all_schemas_for_llm(),
+            )
+            content = response.get("content", "")
+            if content:
+                print_assistant_message(content)
+        except Exception:  # noqa: BLE001
+            print_assistant_message(f"Heads up - monitor alert: {alert_text}")
+
+    async def _check_monitors_interactive(self, turn_number: int) -> None:
+        """Check monitors at each interactive turn and deliver any pending alerts."""
+        from poc.session_state_demo.anniversary_demo.tools.monitors import (
+            check_monitors,
+        )
+
+        try:
+            new_alerts = check_monitors(demo_turn=turn_number)
+            for alert in new_alerts:
+                print()
+                print(
+                    colorize(
+                        f"  [MONITOR ALERT - {alert.severity.value.upper()}] {alert.message}",
+                        YELLOW,
+                        bold=True,
+                    )
+                )
+                if alert.suggested_action:
+                    print(colorize(f"    Suggested: {alert.suggested_action}", GRAY))
+        except Exception:  # noqa: BLE001
+            pass  # Monitors are best-effort
 
     async def _execute_turn(self, turn: DemoTurn) -> None:
         """Execute a single turn through the ReAct loop.
@@ -1641,13 +2102,14 @@ class DemoRunner:
         if turn.pause_before and not self.auto_mode:
             wait_for_key()
 
-        # Get user input from script
+        # Get user input
         user_input = turn.user_input
         if not user_input:
             return
 
-        # Show user input
-        print_user_message(user_input)
+        # In interactive mode user already typed at the prompt, just echo formatted
+        if not self.interactive:
+            print_user_message(user_input)
         session_ops.append(f"history.append(user_msg, len={len(user_input)})")
 
         # Record user turn in REAL SessionState
@@ -1721,11 +2183,26 @@ class DemoRunner:
 
         # Build session overview for the ReAct loop prompt
         session_overview = None
+        beliefs_context = ""
+        family_persona = None
         if self.bridge:
             try:
                 session_overview = self.bridge.get_snapshot()
             except Exception:
                 pass
+            # Build full session context so the ReAct loop LLM knows
+            # stored facts, preferences, emotional state, conversation
+            # phase, pending gaps, and conversation history.
+            try:
+                beliefs_context = self._build_beliefs_context_for_loop()
+            except Exception:
+                pass
+        # Build family persona so the LLM knows family members,
+        # ages, allergies, and preferences from the start.
+        try:
+            family_persona = self._build_family_persona()
+        except Exception:
+            pass
 
         # Create and run ReAct loop
         react_loop = ReActLoop(
@@ -1734,6 +2211,7 @@ class DemoRunner:
             llm=self.llm,
             scratchpad=scratchpad,
             event_handler=self._demo_event_handler,
+            tool_executor=self.tool_executor,
         )
 
         # First tool call walkthrough
@@ -1741,11 +2219,24 @@ class DemoRunner:
             print_walkthrough_explanation("Tool Calling", self._walkthrough_topics["tool_calling"])
 
         try:
+            # Extract real conversation history for multi-turn context
+            conversation_history: list[dict[str, str]] = []
+            if self.bridge:
+                try:
+                    hist_data = self.bridge.get_section_data("history_active")
+                    if "error" not in hist_data:
+                        conversation_history = hist_data.get("turns", [])
+                except Exception:
+                    pass
+
             react_result: ReActResult = await react_loop.run(
                 phase1=phase1,
                 user_message=user_input,
                 turn_number=turn.turn_number,
                 session_overview=session_overview,
+                family_persona=family_persona,
+                beliefs_context=beliefs_context,
+                conversation_history=conversation_history,
             )
         except Exception as e:
             print(colorize(f"  ReAct loop error: {e}", RED))
@@ -2522,11 +3013,13 @@ async def main() -> None:
     auto_mode = "--auto" in sys.argv
     fast_mode = "--fast" in sys.argv
     walkthrough_mode = "--walkthrough" in sys.argv
+    interactive = "--interactive" in sys.argv
 
     runner = DemoRunner(
         auto_mode=auto_mode,
         fast_mode=fast_mode,
         walkthrough_mode=walkthrough_mode,
+        interactive=interactive,
     )
     await runner.run()
 

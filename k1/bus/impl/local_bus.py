@@ -395,10 +395,17 @@ class LocalBus:
         # Dispatch outside the lock (handlers may take arbitrarily long)
         if self._timing_chain is not None:
             # Route through timing chain for ordering enforcement.
-            # Closure captures handlers at publish time -- correct behavior:
-            # subscriptions at time of publish determine routing.
-            def _dispatch_fn(env: Envelope, _h: list[BusHandler] = handlers) -> None:
-                self._dispatch(env, _h)
+            # Causal cascade may deliver CHILD envelopes whose topic
+            # differs from the parent.  The dispatch function must
+            # match handlers per-envelope so children reach the
+            # correct subscribers (not the parent's handlers).
+            def _dispatch_fn(env: Envelope) -> None:
+                self._rw_lock.acquire_read()
+                try:
+                    child_handlers = self._trie.match(env.topic)
+                finally:
+                    self._rw_lock.release_read()
+                self._dispatch(env, child_handlers)
 
             self._timing_chain.process(stamped, _dispatch_fn)
         else:

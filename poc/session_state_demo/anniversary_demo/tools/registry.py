@@ -319,25 +319,49 @@ class ToolRegistry:
         """Return Gemini-compatible function-calling declarations filtered by tier.
 
         Tier filtering:
-          LOW:    cognitive tools only (add_belief, update_persona, update_emotion, acknowledge)
+          LOW:    cognitive + essential functional tools (family, calendar, summary)
           MEDIUM: cognitive + search + booking + family + calendar tools
           HIGH:   all registered tools
 
         Each dict has ``name``, ``description``, ``parameters`` -- the shape
         Gemini ``tools=[{"function_declarations": [...]}]`` expects.
         """
-        _LOW_TOOLS = frozenset({
-            "add_belief", "update_persona", "update_emotion", "acknowledge",
-        })
-        _MEDIUM_TOOLS = _LOW_TOOLS | frozenset({
-            "search_accommodations", "get_accommodation_details",
-            "book_accommodation", "search_restaurants", "book_restaurant",
-            "book_spa_service", "search_activities", "plan_route",
-            "get_family_member_info", "send_family_message",
-            "schedule_family_checkin",
-            "create_calendar_event", "schedule_reminder",
-            "generate_trip_summary",
-        })
+        _COGNITIVE_TOOLS = frozenset(
+            {
+                "add_belief",
+                "update_persona",
+                "update_emotion",
+                "acknowledge",
+            }
+        )
+        _LOW_TOOLS = _COGNITIVE_TOOLS | frozenset(
+            {
+                "get_family_member_info",
+                "send_family_message",
+                "schedule_family_checkin",
+                "generate_trip_summary",
+                "search_accommodations",
+                "search_restaurants",
+            }
+        )
+        _MEDIUM_TOOLS = _LOW_TOOLS | frozenset(
+            {
+                "search_accommodations",
+                "get_accommodation_details",
+                "book_accommodation",
+                "search_restaurants",
+                "book_restaurant",
+                "book_spa_service",
+                "search_activities",
+                "plan_route",
+                "get_family_member_info",
+                "send_family_message",
+                "schedule_family_checkin",
+                "create_calendar_event",
+                "schedule_reminder",
+                "generate_trip_summary",
+            }
+        )
 
         upper = tier.upper()
         if upper == "LOW":
@@ -1220,7 +1244,18 @@ Then IMMEDIATELY call: search_accommodations(...)""",
                     param_type=ParamType.STRING,
                     description="What to monitor",
                     required=True,
-                    enum=["weather", "price", "availability", "traffic"],
+                    enum=[
+                        "weather",
+                        "price",
+                        "availability",
+                        "traffic",
+                        "oven",
+                        "laundry",
+                        "smoke_detector",
+                        "doorbell",
+                        "thermostat",
+                        "baby_monitor",
+                    ],
                 ),
                 ParamSchema(
                     name="target",
