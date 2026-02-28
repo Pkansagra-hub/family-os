@@ -14,6 +14,7 @@ Usage::
 
 from poc.k1_poc.bus.builders import (  # noqa: F401
     BUILDERS,
+    BuilderEntry,
     build_affect_update,
     build_artifact_created,
     build_clarification_out,
@@ -41,6 +42,7 @@ from poc.k1_poc.bus.builders import (  # noqa: F401
     build_turn_started,
     build_user_input,
     build_weave_batch,
+    get_builder_registry,
 )
 from poc.k1_poc.bus.setup import (  # noqa: F401; V3 E0.2.3: POC_MAILBOX_CAPACITY and POC_GAP_TIMEOUT_MS removed.; Use get_config().bus.mailbox_capacity / .gap_timeout_ms instead.
     ACTOR_BACK,

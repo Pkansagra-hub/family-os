@@ -126,6 +126,8 @@ class DirectWriterAdapter(IWriterPort):
             "total_duration_ms": 0.0,
             "total_bytes_delta": 0,
         }
+        # M4 E4.5.4: Per-turn mutation tracking for audit events
+        self._turn_stats: Dict[str, Any] = self._empty_turn_stats()
 
         logger.info(
             "DirectWriterAdapter initialized (writer_id=%s, session=%s)",
@@ -190,6 +192,12 @@ class DirectWriterAdapter(IWriterPort):
             if request.is_expired():
                 duration_ms = (time.perf_counter() - start_time) * 1000
                 self._stats["rejected_count"] += 1
+                self._record_turn_mutation(
+                    request.section,
+                    "rejected",
+                    reason="Request expired",
+                    duration_ms=duration_ms,
+                )
                 logger.debug(
                     "Request expired: request_id=%s, section=%s",
                     request.request_id,
@@ -209,6 +217,12 @@ class DirectWriterAdapter(IWriterPort):
             if not auth.authorized:
                 duration_ms = (time.perf_counter() - start_time) * 1000
                 self._stats["rejected_count"] += 1
+                self._record_turn_mutation(
+                    request.section,
+                    "rejected",
+                    reason=auth.reason,
+                    duration_ms=duration_ms,
+                )
                 logger.warning(
                     "Unauthorized writer: writer_id=%s, request_id=%s",
                     request.writer_id,
@@ -223,6 +237,39 @@ class DirectWriterAdapter(IWriterPort):
                     duration_ms=duration_ms,
                 )
 
+            # 2b. M4 E4.2.4: LLM tool writers may only write to
+            #     llm_writable_sections; reject system-owned sections.
+            if request.writer_id.startswith("tool:"):
+                from poc.k1_poc.config import get_config
+
+                allowlist = get_config().sessionstate.llm_writable_sections
+                if request.section not in allowlist:
+                    duration_ms = (time.perf_counter() - start_time) * 1000
+                    self._stats["rejected_count"] += 1
+                    self._record_turn_mutation(
+                        request.section,
+                        "rejected",
+                        reason="system-owned section",
+                        duration_ms=duration_ms,
+                    )
+                    logger.warning(
+                        "Tool write to system-owned section blocked: "
+                        "writer_id=%s, section=%s, request_id=%s",
+                        request.writer_id,
+                        request.section,
+                        request.request_id,
+                    )
+                    return MutationResponse.rejected(
+                        request_id=request.request_id,
+                        section=request.section,
+                        operation=request.operation,
+                        reason=(
+                            f"Section '{request.section}' is system-owned, " "not LLM-writable"
+                        ),
+                        category=RejectionCategory.AUTHORIZATION,
+                        duration_ms=duration_ms,
+                    )
+
             # 3. Preflight validation via MutationGuard
             approval = self._guard.preflight(
                 section=request.section,
@@ -233,6 +280,12 @@ class DirectWriterAdapter(IWriterPort):
             if not approval.approved:
                 duration_ms = (time.perf_counter() - start_time) * 1000
                 self._stats["rejected_count"] += 1
+                self._record_turn_mutation(
+                    request.section,
+                    "rejected",
+                    reason=approval.reason,
+                    duration_ms=duration_ms,
+                )
                 logger.info(
                     "Mutation rejected by guard: section=%s, op=%s, reason=%s, trace=%s",
                     request.section,
@@ -261,6 +314,11 @@ class DirectWriterAdapter(IWriterPort):
             except Exception as e:
                 duration_ms = (time.perf_counter() - start_time) * 1000
                 self._stats["failed_count"] += 1
+                self._record_turn_mutation(
+                    request.section,
+                    "failed",
+                    duration_ms=duration_ms,
+                )
                 logger.error(
                     "Mutation exception: section=%s, op=%s, error=%s, trace=%s",
                     request.section,
@@ -285,6 +343,12 @@ class DirectWriterAdapter(IWriterPort):
                 bytes_delta = getattr(result, "bytes_delta", 0)
                 self._stats["applied_count"] += 1
                 self._stats["total_bytes_delta"] += bytes_delta
+                self._record_turn_mutation(
+                    request.section,
+                    "approved",
+                    bytes_delta=bytes_delta,
+                    duration_ms=duration_ms,
+                )
                 logger.debug(
                     "Mutation applied: section=%s, op=%s, bytes=%d, trace=%s",
                     request.section,
@@ -305,6 +369,12 @@ class DirectWriterAdapter(IWriterPort):
                 self._stats["rejected_count"] += 1
                 reason = getattr(result, "reason", None) or getattr(
                     result, "error", "Unknown error"
+                )
+                self._record_turn_mutation(
+                    request.section,
+                    "rejected",
+                    reason=str(reason),
+                    duration_ms=duration_ms,
                 )
                 logger.info(
                     "Mutation not successful: section=%s, op=%s, reason=%s",
@@ -527,6 +597,83 @@ class DirectWriterAdapter(IWriterPort):
                 "total_duration_ms": 0.0,
                 "total_bytes_delta": 0,
             }
+
+    # =========================================================================
+    # M4 E4.5.4: Per-turn mutation audit
+    # =========================================================================
+
+    @staticmethod
+    def _empty_turn_stats() -> Dict[str, Any]:
+        """Create a fresh per-turn stats dict."""
+        return {
+            "approved_count": 0,
+            "rejected_count": 0,
+            "failed_count": 0,
+            "by_section": {},
+            "by_rejection_reason": {},
+            "total_bytes_delta": 0,
+            "total_duration_ms": 0.0,
+        }
+
+    def _record_turn_mutation(
+        self,
+        section: str,
+        status: str,
+        reason: Optional[str] = None,
+        bytes_delta: int = 0,
+        duration_ms: float = 0.0,
+    ) -> None:
+        """Record a single mutation decision in per-turn stats.
+
+        Args:
+            section: SS section name.
+            status: "approved", "rejected", or "failed".
+            reason: Rejection reason (only for rejected).
+            bytes_delta: Bytes change (only for approved).
+            duration_ms: Processing time.
+        """
+        ts = self._turn_stats
+        if section not in ts["by_section"]:
+            ts["by_section"][section] = {"approved": 0, "rejected": 0}
+        if status == "approved":
+            ts["approved_count"] += 1
+            ts["by_section"][section]["approved"] += 1
+            ts["total_bytes_delta"] += bytes_delta
+        elif status == "rejected":
+            ts["rejected_count"] += 1
+            ts["by_section"][section]["rejected"] += 1
+            if reason:
+                ts["by_rejection_reason"][reason] = ts["by_rejection_reason"].get(reason, 0) + 1
+        elif status == "failed":
+            ts["failed_count"] += 1
+        ts["total_duration_ms"] += duration_ms
+
+    def snapshot_turn_stats(self) -> Dict[str, Any]:
+        """Snapshot and reset per-turn mutation stats.
+
+        Called at turn completion to get the mutation summary before
+        resetting for the next turn.
+
+        Returns:
+            Dict with approved_count, rejected_count, failed_count,
+            by_section, by_rejection_reason, total_bytes_delta,
+            total_duration_ms.
+        """
+        with self._lock:
+            snapshot = dict(self._turn_stats)
+            snapshot["by_section"] = dict(self._turn_stats["by_section"])
+            snapshot["by_rejection_reason"] = dict(self._turn_stats["by_rejection_reason"])
+            self._turn_stats = self._empty_turn_stats()
+            return snapshot
+
+    @property
+    def mutation_stats(self) -> Dict[str, Any]:
+        """Current per-turn mutation stats (read-only snapshot).
+
+        Does NOT reset. Use snapshot_turn_stats() at turn end.
+        """
+        with self._lock:
+            return dict(self._turn_stats)
 
     # =========================================================================
     # PRIVATE HELPERS

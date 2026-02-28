@@ -87,6 +87,8 @@ class BusConfig:
     actor_front_id: str = "front_half"
     actor_back_id: str = "back_half"
     priority_wfq: bool = True
+    # M1 E1.3: Validate canonical event payloads in builders (off in prod, on in tests)
+    validate_canonical_events: bool = False
 
 
 @dataclass
@@ -288,6 +290,7 @@ class ReactConfig:
     default_back_max_iterations: int = 10
     front_degenerate_fallback: str = "Let me think about that for a moment."
     front_budget_fallback: str = "Let me get back to you on that."
+    parallel_tools_enabled: bool = True
 
 
 @dataclass
@@ -340,6 +343,37 @@ class ArbiterConfig:
     high_impact_actions: list[str] = field(
         default_factory=lambda: ["booking", "payment", "deletion", "send_message"]
     )
+    cancel_keywords: list[str] = field(
+        default_factory=lambda: [
+            "cancel",
+            "stop",
+            "abort",
+            "nevermind",
+            "never mind",
+            "don't bother",
+            "forget it",
+            "skip it",
+            "call it off",
+        ]
+    )
+    defer_keywords: list[str] = field(
+        default_factory=lambda: [
+            "ok",
+            "okay",
+            "sure",
+            "keep going",
+            "i'll wait",
+            "no rush",
+            "take your time",
+            "sounds good",
+            "got it",
+            "alright",
+            "fine",
+            "go ahead",
+            "continue",
+            "carry on",
+        ]
+    )
 
 
 # =========================================================================
@@ -388,6 +422,7 @@ class LedgerConfig:
 class Phase1Config:
     """Knobs from fsm/ultrabert_phase1.py (M10: UltraBERT Integration)."""
 
+    pipeline: str = "stub"  # "ultrabert" | "stub" -- default stub for tests
     intent_confidence_threshold: float = 0.3
     complexity_thresholds: dict[str, int] = field(
         default_factory=lambda: {"low_max": 0, "medium_max": 2}
@@ -651,6 +686,30 @@ class SessionStateConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     cold: ColdTierConfig = field(default_factory=ColdTierConfig)
     sections: SessionStateSectionsConfig = field(default_factory=SessionStateSectionsConfig)
+    # M4 E4.2.2: LLM-writable vs system-owned section classification
+    llm_writable_sections: list[str] = field(
+        default_factory=lambda: [
+            "beliefs_active",
+            "scoreboard",
+            "clarifications",
+            "narrative_active",
+            "affective_now",
+        ]
+    )
+    system_owned_sections: list[str] = field(
+        default_factory=lambda: [
+            "control",
+            "task_state",
+            "task_artifacts",
+            "meta",
+            "history_active",
+            "beliefs_history",
+            "history_recent",
+            "persona",
+            "telemetry",
+            "artifacts_warm",
+        ]
+    )
 
 
 @dataclass
@@ -996,6 +1055,10 @@ def _build_arbiter(raw: dict[str, Any]) -> ArbiterConfig:
         cfg.high_impact_confirmation_required = bool(raw["high_impact_confirmation_required"])
     if "high_impact_actions" in raw and isinstance(raw["high_impact_actions"], list):
         cfg.high_impact_actions = [str(a) for a in raw["high_impact_actions"]]
+    if "cancel_keywords" in raw and isinstance(raw["cancel_keywords"], list):
+        cfg.cancel_keywords = [str(k) for k in raw["cancel_keywords"]]
+    if "defer_keywords" in raw and isinstance(raw["defer_keywords"], list):
+        cfg.defer_keywords = [str(k) for k in raw["defer_keywords"]]
     return cfg
 
 
@@ -1049,6 +1112,8 @@ def _build_phase1(raw: dict[str, Any]) -> Phase1Config:
     cfg = Phase1Config()
     if not raw:
         return cfg
+    if "pipeline" in raw:
+        cfg.pipeline = str(raw["pipeline"]).lower()
     if "intent_confidence_threshold" in raw:
         cfg.intent_confidence_threshold = float(raw["intent_confidence_threshold"])
     if "complexity_thresholds" in raw and isinstance(raw["complexity_thresholds"], dict):
@@ -1288,7 +1353,7 @@ def _build_sessionstate(raw: dict[str, Any]) -> SessionStateConfig:
     if not raw:
         return SessionStateConfig()
     fbo = raw.get("flatbuffer_overhead_factor", 1.10)
-    return SessionStateConfig(
+    cfg = SessionStateConfig(
         tiers=_build_ss_tiers(raw.get("tiers", {})),
         eviction=_build_ss_eviction(raw.get("eviction", {})),
         migration=_build_ss_migration(raw.get("migration", {})),
@@ -1299,6 +1364,12 @@ def _build_sessionstate(raw: dict[str, Any]) -> SessionStateConfig:
         cold=_build_ss_cold(raw.get("cold", {})),
         sections=_build_ss_sections(raw.get("sections", {})),
     )
+    # M4 E4.2.2: LLM-writable / system-owned section classification
+    if "llm_writable_sections" in raw and isinstance(raw["llm_writable_sections"], list):
+        cfg.llm_writable_sections = [str(s) for s in raw["llm_writable_sections"]]
+    if "system_owned_sections" in raw and isinstance(raw["system_owned_sections"], list):
+        cfg.system_owned_sections = [str(s) for s in raw["system_owned_sections"]]
+    return cfg
 
 
 def _build_config(raw: dict[str, Any]) -> PocConfig:

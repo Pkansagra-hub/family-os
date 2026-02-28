@@ -128,15 +128,19 @@ class WeaveBatcher:
         "_front_busy",
         "_queued",
         "_batch_count",
+        "_max_queued_depth",
     )
 
     def __init__(
         self,
         flush_fn: Callable[[list[WeaveResult]], Awaitable[None]],
         batch_window_ms: int | None = None,
+        max_queued_depth: int | None = None,
     ) -> None:
         if batch_window_ms is None:
             batch_window_ms = get_config().protocols.weave_batch_window_ms
+        if max_queued_depth is None:
+            max_queued_depth = get_config().protocols.weave_max_queued_depth
         self.batch_window_ms = batch_window_ms
         self._flush_fn = flush_fn
         self._pending: list[WeaveResult] = []
@@ -144,33 +148,52 @@ class WeaveBatcher:
         self._front_busy: bool = False
         self._queued: list[WeaveResult] = []
         self._batch_count: int = 0
+        self._max_queued_depth = max_queued_depth
         logger.info(
-            "WeaveBatcher initialised  batch_window_ms=%d",
+            "WeaveBatcher initialised  batch_window_ms=%d max_queued_depth=%d",
             batch_window_ms,
+            max_queued_depth,
         )
 
     # -----------------------------------------------------------------
     # Public API
     # -----------------------------------------------------------------
 
-    async def on_task_complete(self, result: WeaveResult) -> None:
+    async def on_task_complete(self, result: WeaveResult) -> WeaveResult | None:
         """Called when a task completes.
 
         If Front is busy (LLM generating), queue the result.
         Otherwise, collect into the current batch window.
+
+        M2 E2.2.5: If the queued list exceeds max_queued_depth,
+        the oldest queued result is evicted and returned for
+        dead-letter publishing by the caller.
+
+        Returns:
+            The evicted WeaveResult if overflow occurred, else None.
         """
         if self._front_busy:
+            evicted: WeaveResult | None = None
+            if len(self._queued) >= self._max_queued_depth:
+                evicted = self._queued.pop(0)
+                logger.warning(
+                    "WeaveBatcher overflow: dead-lettering task %s " "(queued=%d, max=%d)",
+                    evicted.task_id,
+                    len(self._queued),
+                    self._max_queued_depth,
+                )
             self._queued.append(result)
             logger.info(
                 "WeaveBatcher: Front busy, queued result for task %s",
                 result.task_id,
             )
-            return
+            return evicted
 
         self._pending.append(result)
 
         if self._timer is None:
             self._timer = asyncio.create_task(self._flush_after_delay())
+        return None
 
     async def flush(self) -> list[WeaveResult] | None:
         """Flush pending results to Front LLM.

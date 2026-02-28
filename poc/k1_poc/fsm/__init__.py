@@ -16,14 +16,10 @@ V2 Design Ref: Section 4 (FSM: Event Router & State Machine)
 
 # --- Epics 8.9-8.11 ---
 from poc.k1_poc.fsm.control_extension import ConciergeControlExtension  # noqa: F401
-from poc.k1_poc.fsm.controller import (  # noqa: F401
-    ConciergeController,
-    TypedHistoryEntry,
-)
-from poc.k1_poc.fsm.errors import (  # noqa: F401
-    FrontLockOverflowError,
-    IllegalTransitionError,
-)
+from poc.k1_poc.fsm.controller import ConciergeController, TypedHistoryEntry  # noqa: F401
+from poc.k1_poc.fsm.dead_letter import DeadLetterPayload, build_dead_letter_payload  # noqa: F401
+from poc.k1_poc.fsm.dead_letter_consumer import DeadLetterConsumer  # noqa: F401
+from poc.k1_poc.fsm.errors import FrontLockOverflowError, IllegalTransitionError  # noqa: F401
 from poc.k1_poc.fsm.front_lock import (  # noqa: F401
     DEFAULT_MAX_QUEUE_DEPTH,
     PRIORITY_ERROR,
@@ -44,15 +40,18 @@ from poc.k1_poc.fsm.history_writer import (  # noqa: F401
     history_to_back_context,
     history_to_front_messages,
 )
-from poc.k1_poc.fsm.interrupt_handler import (  # noqa: F401
-    InterruptClassifier,
-    ProactiveWakeHandler,
-)
+from poc.k1_poc.fsm.idempotency import IdempotencyLedger  # noqa: F401
+from poc.k1_poc.fsm.interrupt_handler import InterruptClassifier, ProactiveWakeHandler  # noqa: F401
 from poc.k1_poc.fsm.phase1 import (  # noqa: F401
     Phase1Pipeline,
     Phase1Result,
     StubPhase1Pipeline,
     TurnLock,
+)
+from poc.k1_poc.fsm.response_final_table import (  # noqa: F401
+    ResponseFinalAction,
+    ResponseFinalDecision,
+    decide_response_final,
 )
 from poc.k1_poc.fsm.states import ConciergeState  # noqa: F401
 from poc.k1_poc.fsm.task_bridge import (  # noqa: F401

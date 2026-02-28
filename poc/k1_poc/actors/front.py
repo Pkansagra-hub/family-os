@@ -30,6 +30,11 @@ from typing import Any
 
 from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
+
+# Shared actor utilities (M3 E3.5)
+from poc.k1_poc.actors.shared import never_cancel as _never_cancel
+from poc.k1_poc.actors.shared import parse_envelope_payload as _parse_payload
+from poc.k1_poc.actors.shared import safe_get_section as _safe_get_section
 from poc.k1_poc.bus.builders import (
     build_final_response,
     build_response_stream,
@@ -52,21 +57,25 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================================
-# Envelope payload helper
+# _parse_routing_metadata -- M5 E5.3.3
 # =========================================================================
 
 
-def _parse_payload(envelope: Envelope) -> dict[str, Any]:
-    """Safely parse JSON bytes payload from Envelope.
+def _parse_routing_metadata(envelope: Envelope) -> dict[str, Any] | None:
+    """Extract routing_metadata from enriched envelope payload.
 
-    Returns empty dict if payload is empty or invalid JSON.
+    M5 E5.3.2 enriches the envelope payload with an ``routing_metadata``
+    key before delivering to Front.  This helper safely extracts it so
+    ``determine_mode()`` can receive it as a kwarg.
+
+    Returns:
+        The routing_metadata dict if present, else None.
     """
-    if not envelope.payload:
-        return {}
     try:
-        return json.loads(envelope.payload)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return {}
+        payload = _parse_payload(envelope)
+        return payload.get("routing_metadata")
+    except Exception:
+        return None
 
 
 # =========================================================================
@@ -115,6 +124,25 @@ def _extract_scenario_data(
         payload_count = payload.get("count")
         result_count = payload_count if isinstance(payload_count, int) else len(pending)
 
+        # M8 E8.5.5: Check if this is a digest payload
+        if isinstance(payload_results, list) and len(payload_results) == 1:
+            first = payload_results[0]
+            if isinstance(first, dict) and first.get("is_digest"):
+                narrative = _safe_get_section(ss, "narrative_active")
+                thread_name = payload.get("current_thread", "")
+                if not thread_name and narrative and hasattr(narrative, "get_active_thread_name"):
+                    thread_name = narrative.get_active_thread_name() or ""
+                # M8 E8.5.6: Emotional context for digest
+                affect_dict = _get_affect_dict(ss)
+                emotional_context = _build_emotional_context(affect_dict)
+                return {
+                    "result_count": first.get("digest_count", 0),
+                    "results_summary": first.get("digest_summary", ""),
+                    "current_thread": thread_name,
+                    "urgency_label": "Summary -- present as a brief update",
+                    "emotional_context": emotional_context,
+                }
+
         payload_summary = payload.get("results_summary")
         if isinstance(payload_summary, str) and payload_summary:
             results_summary = payload_summary
@@ -134,10 +162,36 @@ def _extract_scenario_data(
         thread_name = payload.get("current_thread", "")
         if not thread_name and narrative and hasattr(narrative, "get_active_thread_name"):
             thread_name = narrative.get_active_thread_name() or ""
+
+        # M8 E8.5.6: Urgency label from result metadata
+        has_critical = any(
+            (r.get("result", r) if isinstance(r, dict) else {}).get("urgency")
+            in ("critical", "urgent")
+            for r in pending
+            if isinstance(r, dict)
+        )
+        if has_critical:
+            urgency_label = (
+                "URGENT -- present the time-critical result(s) prominently. "
+                "The user needs to know about this immediately."
+            )
+        elif result_count >= 3:
+            urgency_label = (
+                "Summary -- these are routine updates. " "Present as a brief, natural aside."
+            )
+        else:
+            urgency_label = "Informational -- weave this result lightly into the conversation."
+
+        # M8 E8.5.6: Emotional context from affective_now
+        affect_dict = _get_affect_dict(ss)
+        emotional_context = _build_emotional_context(affect_dict)
+
         return {
             "result_count": result_count,
             "results_summary": results_summary,
             "current_thread": thread_name,
+            "urgency_label": urgency_label,
+            "emotional_context": emotional_context,
         }
 
     if mode == PromptMode.HITL_RELAY:
@@ -196,11 +250,12 @@ def _extract_scenario_data(
 
     # STANDARD / INTERRUPT: inject family context + preloaded memories
     # so the LLM knows WHO it's talking to and can be proactive.
-    # Back-task results are now delivered via PRESENT/WEAVE mode
-    # (V2 Section 8.10) -- no async_results injection needed.
+    # M8 E8.5.4: Deferred weave results injected via async_results_context.
     if mode in (PromptMode.STANDARD, PromptMode.INTERRUPT):
         context = _extract_family_context(ss)
-        context["async_results_context"] = ""
+        # M8 E8.5.4: Read async_results_context from payload (set by controller
+        # from deferred results, or empty string if none).
+        context["async_results_context"] = payload.get("async_results_context", "")
         return context
 
     return {}
@@ -318,14 +373,6 @@ def _build_resolution(scenario_data: dict[str, Any]) -> dict[str, Any]:
 # =========================================================================
 
 
-def _safe_get_section(ss: Any, name: str) -> Any:
-    """Get a section from SessionStateManager, returning None on error."""
-    try:
-        return ss.get_section(name)
-    except Exception:
-        return None
-
-
 def _get_affect_dict(ss: Any) -> dict[str, Any]:
     """Get affect dict from affective_now section, with fallback."""
     section = _safe_get_section(ss, "affective_now")
@@ -334,6 +381,46 @@ def _get_affect_dict(ss: Any) -> dict[str, Any]:
     if hasattr(section, "to_dict"):
         return section.to_dict()
     return {}
+
+
+def _build_emotional_context(affect_dict: dict[str, Any]) -> str:
+    """M8 E8.5.6: Build emotional context string from affect state.
+
+    Used by _extract_scenario_data WEAVE mode to populate the
+    {emotional_context} placeholder in the WEAVE scenario template.
+    """
+    if not affect_dict:
+        return (
+            "User affect is neutral. Standard weave -- respond to their "
+            "topic first, then naturally transition to the result."
+        )
+
+    valence = affect_dict.get("valence", 0.0)
+    band = affect_dict.get("band", affect_dict.get("affect_band", ""))
+
+    if band == "crisis" or valence < -0.5:
+        return (
+            "The user is in emotional distress. Be extremely gentle. "
+            "Acknowledge their state before presenting any result. "
+            "If the result is not safety-critical, consider deferring it entirely. "
+            "Example: 'I know this is a really hard time...'"
+        )
+    if valence < -0.3:
+        return (
+            "The user's mood is negative (sad, frustrated, or stressed). "
+            "Be sensitive. Acknowledge what they're going through before "
+            "transitioning to the result. Frame results positively: "
+            "'One less thing to worry about -- your hotel is confirmed.'"
+        )
+    if band == "positive" or valence > 0.3:
+        return (
+            "The user is in a positive mood. Match their energy. "
+            "Present results enthusiastically: 'Great news -- everything went through!'"
+        )
+    return (
+        "User affect is neutral. Standard weave -- respond to their "
+        "topic first, then naturally transition to the result."
+    )
 
 
 def _get_clarification_state(ss: Any) -> dict[str, Any]:
@@ -489,6 +576,7 @@ async def front_handler(
         clarification_state=clarification_state,
         task_state=task_state_dict,
         affect=affect_dict,
+        routing_metadata=_parse_routing_metadata(envelope),
     )
 
     logger.info(
@@ -566,6 +654,7 @@ async def front_handler(
         domain=domain,
         affect_confidence=affect_confidence,
         tier=tier,
+        ss=ss,
     )
 
     # 9. Run ReAct loop (Section 7)
@@ -938,8 +1027,3 @@ async def _emit_streaming_response(
             parent_id=parent_id,
         )
         bus.publish(env)
-
-
-async def _never_cancel() -> bool:
-    """Front is not cancellable -- always returns False."""
-    return False

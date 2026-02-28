@@ -179,6 +179,367 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
 # =========================================================================
 
 
+# =========================================================================
+# SS section helper: safe section access
+# =========================================================================
+
+
+def _safe_get_ss_section(ss: Any, section_name: str) -> Any:
+    """Get an SS section by name, returning None on any failure.
+
+    Supports get_section(name) on SessionStateManager.
+    """
+    try:
+        if hasattr(ss, "get_section"):
+            return ss.get_section(section_name)
+    except Exception:
+        pass
+    return None
+
+
+# =========================================================================
+# SECTION_RENDERERS -- 10 pairs of (full_fn, slim_fn) (E4.4.1)
+# =========================================================================
+
+
+def _render_task_state_full(section: Any, cfg: SSReadConfig) -> str:
+    """Delegate to section.to_prompt()."""
+    if hasattr(section, "to_prompt"):
+        return section.to_prompt()
+    return ""
+
+
+def _render_task_state_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Delegate to section.to_slim_prompt()."""
+    if hasattr(section, "to_slim_prompt"):
+        return section.to_slim_prompt()
+    return ""
+
+
+def _render_task_artifacts_full(section: Any, cfg: SSReadConfig) -> str:
+    """Delegate to section.to_prompt()."""
+    if hasattr(section, "to_prompt"):
+        return section.to_prompt()
+    return ""
+
+
+def _render_task_artifacts_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Delegate to section.to_slim_prompt()."""
+    if hasattr(section, "to_slim_prompt"):
+        return section.to_slim_prompt()
+    return ""
+
+
+def _render_history_active_full(section: Any, cfg: SSReadConfig) -> str:
+    """Call format_for_prompt(n=window)."""
+    if hasattr(section, "format_for_prompt"):
+        return section.format_for_prompt(n=cfg.history_window)
+    return ""
+
+
+def _render_history_active_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Slim: format_for_prompt with reduced window."""
+    if hasattr(section, "format_for_prompt"):
+        window = min(5, cfg.history_window)
+        return section.format_for_prompt(n=window)
+    return ""
+
+
+def _render_beliefs_active_full(section: Any, cfg: SSReadConfig) -> str:
+    """Format facts as SVO lines with confidence."""
+    lines: list[str] = []
+    facts = []
+    if hasattr(section, "list_facts"):
+        facts = section.list_facts()
+    for f in facts:
+        subj = getattr(f, "subject", "")
+        pred = getattr(f, "predicate", "")
+        obj = getattr(f, "object", "")
+        conf = getattr(f, "confidence", 1.0)
+        lines.append(f"- {subj} {pred} {obj} (confidence: {conf})")
+    # Entity refs
+    if hasattr(section, "_entities") and section._entities:
+        for eid, eref in section._entities.items():
+            name = getattr(eref, "display_name", eid)
+            etype = getattr(eref, "type", "")
+            lines.append(f"  [entity: {name} ({etype})]")
+    # Mentioned time/location
+    if hasattr(section, "_mentioned_time") and section._mentioned_time:
+        raw = getattr(section._mentioned_time, "raw_text", "")
+        if raw:
+            lines.append(f"  [time: {raw}]")
+    if hasattr(section, "_mentioned_location") and section._mentioned_location:
+        raw = getattr(section._mentioned_location, "raw_text", "")
+        if raw:
+            lines.append(f"  [location: {raw}]")
+    return "\n".join(lines)
+
+
+def _render_beliefs_active_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Slim: fact count + pinned facts only."""
+    count = 0
+    if hasattr(section, "get_fact_count"):
+        count = section.get_fact_count()
+    pinned: list[str] = []
+    if hasattr(section, "get_pinned_fact_ids"):
+        pinned = section.get_pinned_fact_ids()
+    parts = [f"Facts: {count}"]
+    if pinned:
+        parts.append(f"Pinned: {', '.join(pinned)}")
+    return "\n".join(parts)
+
+
+def _render_scoreboard_full(section: Any, cfg: SSReadConfig) -> str:
+    """Format referents, current topic, QUD stack."""
+    lines: list[str] = []
+    # Referents
+    if hasattr(section, "_referents"):
+        for ref in section._referents.values():
+            text = getattr(ref, "text", "")
+            sal = getattr(ref, "salience", 0)
+            lines.append(f"- referent: {text} (salience: {sal:.2f})")
+    # Primary topic
+    if hasattr(section, "get_primary_topic"):
+        topic = section.get_primary_topic()
+        if topic:
+            lines.append(f"Topic: {topic.name}")
+    # QUD stack
+    if hasattr(section, "_qud_stack"):
+        for q in section._qud_stack:
+            status = getattr(q, "status", "")
+            lines.append(f"- QUD: {q.text} [{status}]")
+    return "\n".join(lines)
+
+
+def _render_scoreboard_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Slim: current topic + referent count."""
+    parts: list[str] = []
+    if hasattr(section, "get_primary_topic"):
+        topic = section.get_primary_topic()
+        if topic:
+            parts.append(f"Topic: {topic.name}")
+    ref_count = len(section._referents) if hasattr(section, "_referents") else 0
+    parts.append(f"Referents: {ref_count}")
+    return "\n".join(parts)
+
+
+def _render_clarifications_full(section: Any, cfg: SSReadConfig) -> str:
+    """Format pending + blocking clarifications."""
+    lines: list[str] = []
+    pending = []
+    if hasattr(section, "list_pending"):
+        pending = section.list_pending()
+    elif hasattr(section, "get_pending"):
+        pending = section.get_pending()
+    for c in pending:
+        q = getattr(c, "question", "")
+        pri = getattr(c, "priority", 0)
+        lines.append(f"- pending: {q} (priority: {pri})")
+    if hasattr(section, "get_blocking"):
+        blocking = section.get_blocking()
+        if blocking:
+            lines.append(f"- BLOCKING: {blocking.question}")
+    return "\n".join(lines)
+
+
+def _render_clarifications_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Slim: count of pending."""
+    count = 0
+    if hasattr(section, "list_pending"):
+        count = len(section.list_pending())
+    elif hasattr(section, "get_pending"):
+        count = len(section.get_pending())
+    return f"Pending: {count}"
+
+
+def _render_narrative_active_full(section: Any, cfg: SSReadConfig) -> str:
+    """Full: active thread name, goal, related entities."""
+    lines: list[str] = []
+    thread = getattr(section, "_primary_thread", None)
+    if thread is None and hasattr(section, "primary_thread"):
+        thread = section.primary_thread
+    if thread:
+        lines.append(f"Thread: {thread.title}")
+        if thread.goal:
+            lines.append(f"Goal: {thread.goal}")
+        if thread.related_entities:
+            lines.append(f"Entities: {', '.join(thread.related_entities)}")
+    return "\n".join(lines)
+
+
+def _render_narrative_active_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Slim: active thread name only."""
+    if hasattr(section, "get_active_thread_name"):
+        name = section.get_active_thread_name()
+        if name:
+            return f"Thread: {name}"
+    return ""
+
+
+def _tone_to_hints(tone: dict[str, Any]) -> list[str]:
+    """Convert tone adjustment dict to natural-language advisory hints."""
+    hints: list[str] = []
+    warmth = tone.get("warmth", 0.0)
+    formality = tone.get("formality", 0.0)
+    pace = tone.get("pace", "")
+    mirror = tone.get("mirror_intensity", 0.0)
+
+    if warmth > 0.1:
+        hints.append("- Use a warmer, more caring tone")
+    elif warmth < -0.1:
+        hints.append("- Use a cooler, more matter-of-fact tone")
+
+    if formality > 0.1:
+        hints.append("- Be more structured and formal")
+    elif formality < -0.1:
+        hints.append("- Be more casual and approachable")
+
+    if pace == "slower":
+        hints.append("- Slower pacing. Shorter sentences. Less cognitive load.")
+    elif pace == "faster":
+        hints.append("- Quick, energetic pacing. Match their momentum.")
+
+    if mirror > 0.5:
+        hints.append("- Mirror their emotional energy and language style")
+    elif mirror > 0.2:
+        hints.append("- Lightly reflect their emotional tone")
+
+    return hints
+
+
+def _style_to_hints(style: dict[str, Any]) -> list[str]:
+    """Convert response style dict to natural-language advisory hints."""
+    hints: list[str] = []
+    length_pref = style.get("response_length_preference", "balanced")
+    msg_style = style.get("message_style", "single_complete")
+    verbosity = style.get("verbosity_level", 0.5)
+
+    if length_pref == "concise":
+        hints.append("- User prefers SHORT responses. Be brief and direct.")
+    elif length_pref == "detailed":
+        hints.append("- User prefers DETAILED responses. Elaborate when helpful.")
+
+    if msg_style == "conversational_bursts":
+        hints.append("- User sends rapid short messages. Match with concise replies.")
+
+    if verbosity < 0.3:
+        hints.append("- Minimize filler words and preamble.")
+    elif verbosity > 0.7:
+        hints.append("- OK to be more expressive and thorough.")
+
+    return hints
+
+
+def _render_affective_now_full(section: Any, cfg: SSReadConfig) -> str:
+    """Full: emotion, intensity, valence, arousal + tone/style hints."""
+    emotion = getattr(section, "current_emotion", "neutral")
+    intensity = getattr(section, "intensity", 0.0)
+    valence = getattr(section, "valence", 0.0)
+    arousal = getattr(section, "arousal", 0.5)
+    lines = [
+        f"Emotion: {emotion}",
+        f"Intensity: {intensity}",
+        f"Valence: {valence}",
+        f"Arousal: {arousal}",
+    ]
+
+    # Tone adjustment from AffectiveMirror (Experience Layer)
+    tone = getattr(section, "_tone_adjustment", None)
+    if tone and isinstance(tone, dict):
+        tone_hints = _tone_to_hints(tone)
+        if tone_hints:
+            lines.append("== TONE FINE-TUNING ==")
+            lines.extend(tone_hints)
+
+    # Response style from ResponseStyleAdapter (Experience Layer)
+    style = getattr(section, "_response_style", None)
+    if style and isinstance(style, dict):
+        style_hints = _style_to_hints(style)
+        if style_hints:
+            lines.append("== RESPONSE STYLE ==")
+            lines.extend(style_hints)
+
+    return "\n".join(lines)
+
+
+def _render_affective_now_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Slim: emotion (intensity) + style hint when non-default."""
+    emotion = getattr(section, "current_emotion", "neutral")
+    intensity = getattr(section, "intensity", 0.0)
+    parts = [f"{emotion} ({intensity})"]
+    style = getattr(section, "_response_style", None)
+    if style and isinstance(style, dict):
+        pref = style.get("response_length_preference", "")
+        if pref and pref != "balanced":
+            parts.append(f"Style: {pref}")
+    return " | ".join(parts)
+
+
+def _render_control_full(section: Any, cfg: SSReadConfig) -> str:
+    """Full: get_metadata() dict including fsm_overlay."""
+    if hasattr(section, "get_metadata"):
+        meta = section.get_metadata()
+        lines: list[str] = []
+        for key, val in meta.items():
+            lines.append(f"{key}: {val}")
+        return "\n".join(lines)
+    return ""
+
+
+def _render_control_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Slim: fsm_state + safety band only."""
+    parts: list[str] = []
+    if hasattr(section, "get_metadata"):
+        meta = section.get_metadata()
+        if "fsm_state" in meta:
+            parts.append(f"FSM: {meta['fsm_state']}")
+        parts.append(f"Safety: {meta.get('safety_band', 'unknown')}")
+    elif hasattr(section, "fsm_overlay"):
+        overlay = section.fsm_overlay
+        if overlay.get("fsm_state"):
+            parts.append(f"FSM: {overlay['fsm_state']}")
+    return "\n".join(parts)
+
+
+def _render_persona_full(section: Any, cfg: SSReadConfig) -> str:
+    """Full: preferences (payment_method, dietary, accessibility etc)."""
+    lines: list[str] = []
+    if hasattr(section, "get_all_preferences"):
+        prefs = section.get_all_preferences()
+        for key, val in prefs.items():
+            lines.append(f"{key}: {val}")
+    return "\n".join(lines)
+
+
+def _render_persona_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Slim: preference key names only."""
+    if hasattr(section, "get_all_preferences"):
+        keys = list(section.get_all_preferences().keys())
+        if keys:
+            return f"Preferences: {', '.join(keys)}"
+    return ""
+
+
+# Dispatch table: section_name -> (full_renderer, slim_renderer)
+SECTION_RENDERERS: dict[str, tuple] = {
+    "task_state": (_render_task_state_full, _render_task_state_slim),
+    "task_artifacts": (_render_task_artifacts_full, _render_task_artifacts_slim),
+    "history_active": (_render_history_active_full, _render_history_active_slim),
+    "beliefs_active": (_render_beliefs_active_full, _render_beliefs_active_slim),
+    "scoreboard": (_render_scoreboard_full, _render_scoreboard_slim),
+    "clarifications": (_render_clarifications_full, _render_clarifications_slim),
+    "narrative_active": (_render_narrative_active_full, _render_narrative_active_slim),
+    "affective_now": (_render_affective_now_full, _render_affective_now_slim),
+    "control": (_render_control_full, _render_control_slim),
+    "persona": (_render_persona_full, _render_persona_slim),
+}
+
+
+# =========================================================================
+# BuiltContext -- output of DynamicPromptBuilder.build()
+# =========================================================================
+
+
 @dataclass
 class BuiltContext:
     """Complete assembled context for a single Front LLM invocation.
@@ -314,6 +675,7 @@ class DynamicPromptBuilder:
         domain: str | None = None,
         affect_confidence: float = 1.0,
         tier: str = "LOW",
+        ss: Any = None,
     ) -> BuiltContext:
         """Assemble complete context for one Front LLM invocation.
 
@@ -329,6 +691,9 @@ class DynamicPromptBuilder:
             domain: Optional domain string from Phase 1 classification.
             affect_confidence: Phase 1 affect confidence for conditional tools.
             tier: Task complexity tier for conditional tool inclusion.
+            ss: SessionStateManager instance (duck typed). When provided,
+                stage 8 reads and renders SS sections per SS_READ_CONFIGS.
+                When None, stage 8 is a no-op (backward compatible).
 
         Returns:
             BuiltContext with everything react_loop() needs.
@@ -411,8 +776,12 @@ class DynamicPromptBuilder:
             if scenario_block:
                 prompt_parts.append(scenario_block)
 
-        # Stage 8: SS sections placeholder -- caller provides via history_messages
-        # Full SS read is handled by front_handler via SS_READ_CONFIGS
+        # Stage 8: Read and render SS sections per mode config
+        if ss is not None:
+            ss_configs = SS_READ_CONFIGS.get(mode, [])
+            ss_block = self._read_ss_sections(ss, ss_configs)
+            if ss_block:
+                prompt_parts.append(ss_block)
 
         # Stage 9: Apply affect modifiers + pre-call budget check
         base_max_iter = self._get_max_iterations(mode, affect_band)
@@ -553,3 +922,56 @@ class DynamicPromptBuilder:
             (c.history_window for c in configs if c.section == "history_active"),
             0,
         )
+
+    # =====================================================================
+    # Stage 8: SS section rendering (E4.4.1)
+    # =====================================================================
+
+    def _read_ss_sections(
+        self,
+        ss: Any,
+        configs: list[SSReadConfig],
+    ) -> str:
+        """Render SS sections per mode config into a prompt block.
+
+        For each SSReadConfig:
+        - Skip if read_mode == "skip"
+        - Get the section from ss (via get_section or _safe_get_section)
+        - Look up (full_fn, slim_fn) in SECTION_RENDERERS
+        - Call appropriate renderer
+        - Assemble as labeled blocks
+
+        Args:
+            ss: SessionStateManager (duck typed, has get_section()).
+            configs: List of SSReadConfig for the current mode.
+
+        Returns:
+            Assembled SS block string, or empty string if nothing rendered.
+        """
+        parts: list[str] = []
+        for cfg in configs:
+            if cfg.read_mode == "skip":
+                continue
+            # Get section from SS manager
+            section = _safe_get_ss_section(ss, cfg.section)
+            if section is None:
+                continue
+            renderers = SECTION_RENDERERS.get(cfg.section)
+            if renderers is None:
+                logger.warning("No renderer for SS section %r -- skipped", cfg.section)
+                continue
+            full_fn, slim_fn = renderers
+            try:
+                if cfg.read_mode == "full":
+                    text = full_fn(section, cfg)
+                else:
+                    text = slim_fn(section, cfg)
+            except Exception:
+                logger.exception("Renderer error for SS section %r -- skipped", cfg.section)
+                continue
+            if text:
+                parts.append(f"## {cfg.section}\n{text}")
+
+        if not parts:
+            return ""
+        return "== SESSION STATE ==\n\n" + "\n\n".join(parts)

@@ -23,14 +23,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from poc.k1_poc.protocols.suspension import (
     SuspensionLimitExceeded,
     SuspensionRequest,
     SuspensionResolution,
+    SuspensionType,
     _get_max_suspensions_per_task,
 )
+
+if TYPE_CHECKING:
+    from poc.k1_poc.ledger.store import LedgerEntry
+    from poc.k1_poc.ledger.writer import LedgerWriter
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +60,7 @@ class SuspensionManager:
     __slots__ = (
         "_active",
         "_contexts",
+        "_ledger",
         "_suspension_counts",
         "_timeout_tasks",
         "_on_timeout_fn",
@@ -65,9 +71,11 @@ class SuspensionManager:
         self,
         on_timeout_fn: Callable[[str], Awaitable[None]] | None = None,
         on_resume_fn: Callable[[str, SuspensionResolution], Awaitable[None]] | None = None,
+        ledger: LedgerWriter | None = None,
     ) -> None:
         self._active: dict[str, SuspensionRequest] = {}
         self._contexts: dict[str, dict] = {}
+        self._ledger: LedgerWriter | None = ledger
         self._suspension_counts: dict[str, int] = {}
         self._timeout_tasks: dict[str, asyncio.Task[None]] = {}
         self._on_timeout_fn = on_timeout_fn
@@ -78,14 +86,16 @@ class SuspensionManager:
             on_resume_fn is not None,
         )
 
-    async def suspend(self, request: SuspensionRequest) -> None:
+    async def suspend(self, request: SuspensionRequest, ledger: Any = None) -> None:
         """Register a suspension request from Back.
 
         Validates limits (max 2 per task, 1 concurrent per task)
         and starts the timeout watcher.
+        V3 M1 E1.2.3: Optional ledger param for event sourcing.
 
         Args:
             request: The suspension request from Back.
+            ledger:  Optional LedgerWriter for event sourcing.
 
         Raises:
             SuspensionLimitExceeded: If task has exceeded max suspensions.
@@ -108,6 +118,21 @@ class SuspensionManager:
 
         self._suspension_counts[task_id] = count
         request.suspension_count = count
+
+        # M9 E9.2.1: Write-before-mutate -- emit TaskSuspended to ledger
+        writer = ledger or self._ledger
+        if writer is not None:
+            from poc.k1_poc.events.hitl import TaskSuspended as TaskSuspendedEvt
+
+            evt = TaskSuspendedEvt(
+                task_id=task_id,
+                suspension_type=request.suspension_type.value,
+                suspension_count=count,
+                has_react_history=bool(request.react_history),
+                react_history_len=len(request.react_history),
+            )
+            writer.append_sync(evt)
+
         self._active[task_id] = request
 
         # Start timeout watcher
@@ -123,19 +148,36 @@ class SuspensionManager:
             timeout,
         )
 
-    async def resolve(self, resolution: SuspensionResolution) -> SuspensionRequest | None:
+    async def resolve(
+        self, resolution: SuspensionResolution, ledger: Any = None
+    ) -> SuspensionRequest | None:
         """Resolve a suspension with user's answer.
 
         Cancels the timeout watcher and returns the original request
         (which contains the ReAct history for Back resume).
+        V3 M1 E1.2.3: Optional ledger param for event sourcing.
 
         Args:
             resolution: The user's answer from Front.
+            ledger:     Optional LedgerWriter for event sourcing.
 
         Returns:
             The original SuspensionRequest, or None if task not suspended.
         """
         task_id = resolution.task_id
+
+        # M9 E9.2.1: Write-before-mutate -- emit TaskResumed to ledger
+        writer = ledger or self._ledger
+        if writer is not None and task_id in self._active:
+            from poc.k1_poc.events.hitl import TaskResumed as TaskResumedEvt
+
+            evt = TaskResumedEvt(
+                task_id=task_id,
+                resume_instruction=str(resolution.resolution or ""),
+                has_resume_context=task_id in self._contexts,
+            )
+            writer.append_sync(evt)
+
         request = self._active.pop(task_id, None)
 
         if request is None:
@@ -198,9 +240,22 @@ class SuspensionManager:
         Called by FSM after the task is fully resolved (completed,
         failed, or cancelled after timeout).
 
+        M3 E3.7.3: Emits a warning if there is still active suspension
+        context at cleanup time (indicates incomplete HITL flow).
+
         Args:
             task_id: The task to clean up.
         """
+        had_active = task_id in self._active
+        had_context = task_id in self._contexts
+        if had_active or had_context:
+            logger.warning(
+                "SuspensionManager.cleanup_task: task=%s had leftover state "
+                "(active=%s, context=%s) -- HITL flow may be incomplete",
+                task_id,
+                had_active,
+                had_context,
+            )
         self._active.pop(task_id, None)
         self._contexts.pop(task_id, None)
         timer = self._timeout_tasks.pop(task_id, None)
@@ -254,6 +309,51 @@ class SuspensionManager:
     def has_context(self, task_id: str) -> bool:
         """Check if context exists for a task."""
         return task_id in self._contexts or task_id in self._active
+
+    def set_ledger(self, writer: LedgerWriter) -> None:
+        """Attach ledger writer post-construction.
+
+        M9 E9.2.1: Allows wiring ledger after SuspensionManager is
+        already created (e.g. bootstrap sequence order).
+        """
+        self._ledger = writer
+
+    def rebuild_from_events(self, entries: list[LedgerEntry]) -> int:
+        """Rebuild suspension state from ledger events.
+
+        M9 E9.2.4: Uses project_suspension_state() to replay events
+        and reconstruct _active, _suspension_counts, _contexts.
+        Does NOT restart timeout watchers (handled by recovery orchestrator).
+
+        Returns:
+            Number of active suspensions restored.
+        """
+        from poc.k1_poc.ledger.projections import project_suspension_state
+
+        active_payloads, counts = project_suspension_state(entries)
+
+        self._active.clear()
+        self._suspension_counts.clear()
+        self._contexts.clear()
+
+        for task_id, payload in active_payloads.items():
+            s_type_str = payload.get("suspension_type", "clarification")
+            try:
+                s_type = SuspensionType(s_type_str)
+            except ValueError:
+                s_type = SuspensionType.CLARIFICATION
+            self._active[task_id] = SuspensionRequest(
+                task_id=task_id,
+                suspension_type=s_type,
+                question=payload.get("question", ""),
+                options=payload.get("options", []),
+                react_history=payload.get("react_history", []),
+                tool_state=payload.get("tool_state", {}),
+                suspension_count=payload.get("suspension_count", 1),
+            )
+
+        self._suspension_counts = dict(counts)
+        return len(self._active)
 
     def reset(self) -> None:
         """Reset all state. Called at session end or test teardown."""

@@ -1141,6 +1141,8 @@ class ScoreboardSection:
                 data["text"],
                 data.get("asked_by", "user"),
             )
+        elif operation == "pop_question":
+            return self.pop_question()
         elif operation == "answer_question":
             return self.answer_question(
                 data["question_id"],
@@ -1151,6 +1153,7 @@ class ScoreboardSection:
                 data["text"],
                 data.get("entity_id", ""),
                 data.get("entity_type", ""),
+                data.get("salience", 0.5),
             )
         elif operation == "set_salience":
             return self.set_salience(

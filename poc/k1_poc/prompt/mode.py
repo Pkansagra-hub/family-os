@@ -145,6 +145,12 @@ def get_tool_allowlist(
     """
     base = list(TOOL_ALLOWLIST[mode])
 
+    # HITL_RELAY is strictly text-only -- no conditional tools.
+    # Adding tools here wastes the tight 2-iteration budget and
+    # causes degenerate empty responses.
+    if mode == PromptMode.HITL_RELAY:
+        return base
+
     # Conditional: refine_affect when Phase 1 affect is uncertain
     threshold = get_config().prompt.affect_confidence_threshold
     if affect_confidence < threshold and "refine_affect" not in base:
@@ -236,6 +242,7 @@ def determine_mode(
     clarification_state: dict[str, Any] | None = None,
     task_state: dict[str, Any] | None = None,
     affect: dict[str, Any] | None = None,
+    routing_metadata: dict[str, Any] | None = None,
 ) -> PromptMode:
     """Resolve FSM state + event topic + SS signals to a single PromptMode.
 
@@ -253,6 +260,9 @@ def determine_mode(
             open_gaps (int), blocking_gaps (int), depth (int).
         task_state: Dict with key "tasks" (list of task dicts with "status" field).
         affect: Dict with "valence" and "arousal" floats.
+        routing_metadata: Arbiter routing metadata from M5 E5.3.3.
+            Currently passed through for future mode refinement (M8+).
+            Contains arbiter_reason, domain overlap, entity overlap, etc.
 
     Returns:
         PromptMode: The resolved prompt mode. Guaranteed to be exactly one.
@@ -324,7 +334,7 @@ def determine_mode(
     # 4. SS-signal-driven fallbacks (only for user input)
     if envelope_topic == _TOPIC_USER_INPUT:
         tasks = task_state.get("tasks", [])
-        suspended = [t for t in tasks if t.get("status") == "SUSPENDED"]
+        suspended = [t for t in tasks if t.status == "SUSPENDED"]
         if suspended:
             logger.info(
                 "determine_mode  topic=user_input suspended_tasks=%d -> HITL_RESOLVE",

@@ -38,6 +38,11 @@ from typing import Any
 
 from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
+
+# Shared actor utilities (M3 E3.5)
+from poc.k1_poc.actors.shared import never_cancel as _never_cancel
+from poc.k1_poc.actors.shared import parse_envelope_payload as _parse_payload
+from poc.k1_poc.actors.shared import safe_get_section as _safe_get_section
 from poc.k1_poc.bus.builders import (
     build_artifact_created,
     build_task_complete,
@@ -51,6 +56,7 @@ from poc.k1_poc.llm.ports import IConciergeModelPort
 from poc.k1_poc.llm.types import ModelMessage
 from poc.k1_poc.llm.validator import LLMOutputValidator
 from poc.k1_poc.prompt.back_prompt import build_back_prompt
+from poc.k1_poc.protocols.cancellation import CancellationToken, CancelReason
 from poc.k1_poc.react.history import build_chat_history_for_back
 from poc.k1_poc.react.loop import ReactResult, react_loop
 from poc.k1_poc.tools.dispatcher import ToolDispatcher
@@ -148,18 +154,14 @@ def _status_to_error_code(status: str) -> str:
 # =========================================================================
 
 
-def _safe_get_section(ss: Any, name: str) -> Any:
-    """Get a section from SessionStateManager, returning None on error."""
-    try:
-        return ss.get_section(name)
-    except Exception:
-        return None
-
-
 def _read_ss_snapshot(ss: Any) -> dict[str, Any]:
     """Read selective SS snapshot for Back context.
 
     Back reads ONCE at task start. It does NOT re-read during ReAct iterations.
+
+    M4 E4.5.6: Uses SECTION_RENDERERS from prompt.builder for task_state,
+    task_artifacts, and beliefs_active to ensure consistent formatting
+    between Front prompt assembly and Back context reads.
 
     Sections read:
       beliefs_active   -- User facts, constraints, preferences
@@ -184,9 +186,26 @@ def _read_ss_snapshot(ss: Any) -> dict[str, Any]:
     history = _safe_get_section(ss, "history_active")
     persona = _safe_get_section(ss, "persona")
 
-    def _to_prompt(section: Any) -> str:
+    def _render_via_renderer(section: Any, section_name: str) -> str:
+        """Render section using SECTION_RENDERERS (full mode) for consistency.
+
+        Falls back to section.to_prompt() if no renderer is registered.
+        """
         if section is None:
             return ""
+        try:
+            from poc.k1_poc.prompt.builder import SECTION_RENDERERS, SSReadConfig
+
+            renderers = SECTION_RENDERERS.get(section_name)
+            if renderers is not None:
+                full_fn = renderers[0]
+                cfg = SSReadConfig(section=section_name, read_mode="full")
+                text = full_fn(section, cfg)
+                if text:
+                    return text
+        except Exception:
+            pass
+        # Fallback: direct to_prompt
         if hasattr(section, "to_prompt"):
             return section.to_prompt()
         return ""
@@ -233,10 +252,10 @@ def _read_ss_snapshot(ss: Any) -> dict[str, Any]:
         return []
 
     return {
-        "beliefs_prompt": _to_prompt(beliefs),
+        "beliefs_prompt": _render_via_renderer(beliefs, "beliefs_active"),
         "referents": _get_referents(scoreboard),
-        "task_state_prompt": _to_prompt(task_state),
-        "task_artifacts_prompt": _to_prompt(task_artifacts),
+        "task_state_prompt": _render_via_renderer(task_state, "task_state"),
+        "task_artifacts_prompt": _render_via_renderer(task_artifacts, "task_artifacts"),
         "safety_band": _get_safety_band(control),
         "history_entries": _get_history_entries(history),
         "persona_prefs": _get_persona_prefs(persona),
@@ -248,17 +267,49 @@ def _read_ss_snapshot(ss: Any) -> dict[str, Any]:
 # =========================================================================
 
 
-def _parse_payload(envelope: Envelope) -> dict[str, Any]:
-    """Safely parse JSON bytes payload from Envelope.
+# =========================================================================
+# Message serialization helpers (M3 E3.3.4)
+# =========================================================================
 
-    Returns empty dict if payload is empty or invalid JSON.
+
+def _serialize_messages(messages: list[ModelMessage]) -> list[dict[str, Any]]:
+    """Serialize ModelMessage list to JSON-safe dicts for resume context.
+
+    M3 E3.3.4: When Back suspends, the react history is serialized
+    and included in the task.suspended payload so the FSM can store
+    it via SuspensionManager.store_context and deliver it back on
+    resume via the enriched envelope.
     """
-    if not envelope.payload:
-        return {}
-    try:
-        return json.loads(envelope.payload)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return {}
+    result = []
+    for m in messages:
+        entry: dict[str, Any] = {"role": m.role, "content": m.content}
+        if m.tool_call_id:
+            entry["tool_call_id"] = m.tool_call_id
+        if m.name:
+            entry["name"] = m.name
+        if m.tool_calls:
+            entry["tool_calls"] = [
+                {"name": tc.name, "arguments": tc.arguments} for tc in m.tool_calls
+            ]
+        result.append(entry)
+    return result
+
+
+def _deserialize_messages(data: list[dict]) -> list[ModelMessage]:
+    """Reconstruct ModelMessage list from serialized dicts.
+
+    M3 E3.3.2: Used by back_resume_handler to reconstruct the prior
+    message history from the envelope-carried resume_context.
+    """
+    return [
+        ModelMessage(
+            role=d.get("role", "user"),
+            content=d.get("content", ""),
+            tool_call_id=d.get("tool_call_id"),
+            name=d.get("name"),
+        )
+        for d in data
+    ]
 
 
 # =========================================================================
@@ -271,6 +322,8 @@ def _emit_back_result(
     envelope: Envelope,
     task_id: str,
     result: ReactResult,
+    react_history: list[ModelMessage] | None = None,
+    original_task: dict[str, Any] | None = None,
 ) -> None:
     """Emit the appropriate bus event based on ReactResult status.
 
@@ -279,15 +332,19 @@ def _emit_back_result(
       suspended        -> k1.orchestration.task.suspended.v1
       cancelled        -> k1.orchestration.task.failed.v1
       budget_exhausted -> k1.orchestration.task.failed.v1
+
+    M3 E3.3.4: When status is 'suspended', react_history and
+    original_task are included in the payload so the FSM can store
+    them via SuspensionManager and deliver them back on resume.
     """
     parent_id = envelope.envelope_id
 
     # Extract original task action from dispatch envelope for
     # downstream PRESENT mode scenario data
-    original_task = _parse_payload(envelope)
-    task_action = original_task.get("action", "")
+    envelope_task = _parse_payload(envelope)
+    task_action = envelope_task.get("action", "")
     if not task_action:
-        intents = original_task.get("intents")
+        intents = envelope_task.get("intents")
         if isinstance(intents, list) and intents:
             task_action = intents[0].get("action", "")
 
@@ -308,15 +365,22 @@ def _emit_back_result(
 
     elif result.status == "suspended":
         data = result.data or {}
+        suspended_payload: dict[str, Any] = {
+            "task_id": task_id,
+            "hil_type": data.get("hil_type", "clarification"),
+            "question": data.get("question", ""),
+            "options": data.get("options", []),
+            "side_effects": data.get("side_effects", []),
+            "timeout_s": get_config().actors.back.hitl_timeout_s,
+        }
+        # M3 E3.3.4: Include react history and original task so FSM
+        # can store them via SuspensionManager and deliver on resume.
+        if react_history is not None:
+            suspended_payload["react_history"] = _serialize_messages(react_history)
+        if original_task is not None:
+            suspended_payload["original_task"] = original_task
         env = build_task_suspended(
-            payload={
-                "task_id": task_id,
-                "hil_type": data.get("hil_type", "clarification"),
-                "question": data.get("question", ""),
-                "options": data.get("options", []),
-                "side_effects": data.get("side_effects", []),
-                "timeout_s": get_config().actors.back.hitl_timeout_s,
-            },
+            payload=suspended_payload,
             parent_id=parent_id,
         )
         bus.publish(env)
@@ -347,6 +411,7 @@ async def back_handler(
     bus: IBus,
     tool_dispatcher: ToolDispatcher,
     fsm_state: Any | None = None,
+    cancel_token: CancellationToken | None = None,
 ) -> ReactResult:
     """Back handler: ReAct agent for task execution.
 
@@ -379,8 +444,9 @@ async def back_handler(
         ss: SessionStateManager instance (duck typed for section access).
         bus: IBus instance for publishing response events.
         tool_dispatcher: Back ToolDispatcher for tool execution.
-        fsm_state: FSMTurnState for cancellation checking. If None,
-            cancellation is never triggered.
+        fsm_state: FSM controller for token extraction (legacy fallback).
+        cancel_token: Per-task CancellationToken (M3 E3.2.5). If None,
+            extracted from fsm_state.cancel_handler.get_token(task_id).
 
     Returns:
         ReactResult from the ReAct loop execution.
@@ -438,6 +504,14 @@ async def back_handler(
 
     # 4. Select tools by tier
     tools = _filter_back_tools(tier)
+
+    # M5 E5.5.4: Register messages list with controller for inter-iteration
+    # injection (modify-inflight).  The controller's RunningTaskHandle stores
+    # a reference to this SAME list object so _handle_arbiter_modify() can
+    # append a synthetic PARAMETER_UPDATE message between iterations.
+    if fsm_state and hasattr(fsm_state, "register_running_task_messages"):
+        fsm_state.register_running_task_messages(task_id, messages)
+
     logger.info(
         "back_handler: LLM INPUT  prompt_len=%d messages=%d tools=%d max_iter=%d tier=%s",
         len(system_prompt),
@@ -454,8 +528,13 @@ async def back_handler(
     # Build output validator with tier-filtered tools (Epic 4.1)
     validator = LLMOutputValidator(tools) if tools else None
 
-    # 5. Build cancellation callback
-    cancellation_check = _build_cancellation_check(fsm_state)
+    # 5. Build cancellation callback (M3 E3.2.3: per-task token)
+    if cancel_token is None:
+        cancel_token = _extract_cancel_token(fsm_state, task_id)
+    cancellation_check = _build_cancellation_check(
+        cancel_token=cancel_token,
+        fsm_state=fsm_state,
+    )
 
     # 6. Run ReAct loop (V2 Section 7, ITEM #14, ITEM #19)
     result = await react_loop(
@@ -474,7 +553,15 @@ async def back_handler(
     )
 
     # 7. Emit result to bus (Epic 7.3)
-    _emit_back_result(bus, envelope, task_id, result)
+    # M3 E3.3.4: Pass react history + original task for suspended payloads
+    _emit_back_result(
+        bus,
+        envelope,
+        task_id,
+        result,
+        react_history=messages,
+        original_task=task,
+    )
 
     logger.info(
         "back_handler: LLM OUTPUT  status=%s text_len=%d tool_calls=%d trace=%s",
@@ -511,6 +598,7 @@ async def back_resume_handler(
     bus: IBus,
     tool_dispatcher: ToolDispatcher,
     fsm_state: Any | None = None,
+    cancel_token: CancellationToken | None = None,
 ) -> ReactResult:
     """Resume a suspended Back task with user's resolution.
 
@@ -537,7 +625,9 @@ async def back_resume_handler(
         ss: SessionStateManager instance.
         bus: IBus instance for publishing response events.
         tool_dispatcher: Back ToolDispatcher for tool execution.
-        fsm_state: FSMTurnState with pending_context for the suspended task.
+        fsm_state: FSM controller for token extraction (legacy fallback).
+        cancel_token: Per-task CancellationToken (M3 E3.2.5). If None,
+            extracted from fsm_state.cancel_handler.get_token(task_id).
 
     Returns:
         ReactResult from the resumed ReAct loop execution.
@@ -560,22 +650,56 @@ async def back_resume_handler(
         trace_id[:8] if trace_id else "",
     )
 
-    # 1. Retrieve prior context from FSMTurnState
-    pending = _get_pending_context(fsm_state, task_id)
-    if not pending:
-        env = build_task_failed(
-            payload={
-                "task_id": task_id,
-                "reason": "no_pending_context",
-                "error_code": "NO_PENDING_CONTEXT",
-            },
-            parent_id=envelope.envelope_id,
-        )
-        bus.publish(env)
-        return ReactResult(status="cancelled", data={"reason": "no_pending_context"})
+    # 1. Retrieve prior context
+    # M3 E3.3.1 + 3.3.2: SuspensionManager is single resume-context owner.
+    # Primary path: read from envelope-carried resume_context (enriched
+    # by FSM _on_task_resume via SuspensionManager.pop_context).
+    # Fallback: legacy _get_pending_context (deprecated, warns).
+    original_task: dict[str, Any] = {}
+    prior_messages: list[ModelMessage] = []
 
-    original_task = pending.get("original_task", {})
-    prior_messages = pending.get("prior_messages", [])
+    if resume_context and (
+        resume_context.get("original_task") or resume_context.get("react_history")
+    ):
+        # Primary path: envelope-carried context from SuspensionManager
+        original_task = resume_context.get("original_task", {})
+        raw_history = resume_context.get("react_history", [])
+        if isinstance(raw_history, list) and raw_history:
+            prior_messages = _deserialize_messages(raw_history)
+        logger.info(
+            "back_resume_handler: using envelope-carried resume_context "
+            "(primary path) original_task_keys=%s prior_msgs=%d",
+            list(original_task.keys())[:5] if original_task else [],
+            len(prior_messages),
+        )
+    else:
+        # Fallback: legacy _get_pending_context (deprecated M3 E3.3.3)
+        pending = _get_pending_context(fsm_state, task_id)
+        if pending:
+            original_task = pending.get("original_task", {})
+            prior_messages = pending.get("prior_messages", [])
+            logger.warning(
+                "back_resume_handler: using legacy _get_pending_context "
+                "fallback (deprecated) for task_id=%s",
+                task_id,
+            )
+        else:
+            logger.warning(
+                "back_resume_handler: no resume context available for "
+                "task_id=%s (neither envelope nor fsm_state)",
+                task_id,
+            )
+            env = build_task_failed(
+                payload={
+                    "task_id": task_id,
+                    "reason": "no_pending_context",
+                    "error_code": "NO_PENDING_CONTEXT",
+                },
+                parent_id=envelope.envelope_id,
+            )
+            bus.publish(env)
+            return ReactResult(status="cancelled", data={"reason": "no_pending_context"})
+
     tier = original_task.get("tier", "LOW")
 
     # 2. Re-read SS at resume time (may have changed during suspension)
@@ -641,8 +765,13 @@ async def back_resume_handler(
     # Build output validator for resume (Epic 4.1)
     resume_validator = LLMOutputValidator(tools) if tools else None
 
-    # 7. Build cancellation callback
-    cancellation_check = _build_cancellation_check(fsm_state)
+    # 7. Build cancellation callback (M3 E3.2.3: per-task token)
+    if cancel_token is None:
+        cancel_token = _extract_cancel_token(fsm_state, task_id)
+    cancellation_check = _build_cancellation_check(
+        cancel_token=cancel_token,
+        fsm_state=fsm_state,
+    )
 
     # 8. Continue ReAct loop
     result = await react_loop(
@@ -661,7 +790,15 @@ async def back_resume_handler(
     )
 
     # 9. Emit result (same as back_handler)
-    _emit_back_result(bus, envelope, task_id, result)
+    # M3 E3.3.4: Pass react history + original task for re-suspension
+    _emit_back_result(
+        bus,
+        envelope,
+        task_id,
+        result,
+        react_history=messages,
+        original_task=original_task,
+    )
 
     # 10. Clean up pending context
     _clear_pending_context(fsm_state, task_id)
@@ -684,36 +821,194 @@ async def back_resume_handler(
 def back_cancel_handler(
     envelope: Envelope,
     fsm_state: Any | None = None,
+    cancel_token: CancellationToken | None = None,
 ) -> None:
-    """Handle task cancellation by setting the FSM cancellation flag.
+    """Handle task cancellation via CancellationToken.
 
-    When task.cancel.v1 arrives, sets fsm_state.cancellation_requested = True
-    and records the task_id in fsm_state.cancelled_tasks. The ReAct loop
-    checks cancellation_check() between iterations and exits cleanly.
+    M3 E3.2.4: Uses per-task CancellationToken.cancel() instead of
+    setting raw fsm_state.cancellation_requested boolean. The ReAct loop
+    checks the token's is_cancelled property between iterations.
+
+    Falls back to legacy fsm_state attribute mutation if no token
+    is available (backward compatibility).
 
     Args:
         envelope: The incoming bus Envelope (task.cancel).
-        fsm_state: FSMTurnState for setting cancellation flag.
+        fsm_state: FSM controller for token extraction (legacy fallback).
+        cancel_token: Per-task CancellationToken (M3 E3.2.5). If None,
+            extracted from fsm_state.cancel_handler.get_token(task_id).
     """
-    if fsm_state is None:
-        logger.warning("back_cancel_handler: no fsm_state provided, cannot cancel")
-        return
-
     payload = _parse_payload(envelope)
     task_id = payload.get("task_id", "")
 
     logger.info("back_cancel_handler: cancelling task_id=%s", task_id)
 
-    # Set the cancellation flag (react_loop checks this between iterations)
+    # M3 E3.2.4: Extract token if not provided
+    if cancel_token is None:
+        cancel_token = _extract_cancel_token(fsm_state, task_id)
+
+    if cancel_token is not None:
+        # Per-task cancellation via CancellationToken API
+        if not cancel_token.is_cancelled:
+            cancel_token.cancel(CancelReason.USER_REQUESTED)
+            logger.info(
+                "back_cancel_handler: token.cancel() called for task_id=%s",
+                task_id,
+            )
+        else:
+            logger.debug(
+                "back_cancel_handler: token already cancelled for task_id=%s",
+                task_id,
+            )
+        return
+
+    # Legacy fallback: raw boolean on fsm_state
+    if fsm_state is None:
+        logger.warning(
+            "back_cancel_handler: no fsm_state or token, cannot cancel task_id=%s", task_id
+        )
+        return
+
     if hasattr(fsm_state, "cancellation_requested"):
         fsm_state.cancellation_requested = True
-        logger.debug("back_cancel_handler: cancellation_requested flag set")
+        logger.debug("back_cancel_handler: legacy cancellation_requested flag set")
 
-    # Record cancelled task_id
     if hasattr(fsm_state, "cancelled_tasks"):
         if isinstance(fsm_state.cancelled_tasks, set):
             fsm_state.cancelled_tasks.add(task_id)
-            logger.debug("back_cancel_handler: task_id=%s added to cancelled_tasks set", task_id)
+            logger.debug(
+                "back_cancel_handler: task_id=%s added to cancelled_tasks set (legacy)", task_id
+            )
+
+
+# =========================================================================
+# route_back_envelope -- M3 E3.1.1 (Back Mailbox Topic Router)
+# =========================================================================
+
+
+async def route_back_envelope(
+    envelope: Envelope,
+    model: IConciergeModelPort,
+    ss: Any,
+    bus: IBus,
+    tool_dispatcher: ToolDispatcher,
+    fsm_state: Any | None = None,
+    cancel_token: CancellationToken | None = None,
+) -> ReactResult | None:
+    """Central topic-based dispatcher for all back-bound envelopes.
+
+    Routes an incoming Envelope to the correct back handler based on
+    envelope.topic, replacing the previous pattern where callers had
+    to select the handler themselves.
+
+    M3 E3.2.5: Extracts per-task CancellationToken from the FSM's
+    CancellationHandler and passes it to each handler.
+
+    M7 E7.3.3: Accepts cancel_token from TaskLease (passed by
+    coordinator via BackTopicRouter). If provided, this takes
+    priority over the FSM-extracted token.
+
+    Topic routing table:
+      - task.dispatch.v1       -> back_handler
+      - task.resume.v1         -> back_resume_handler
+      - task.cancel.v1         -> back_cancel_handler  (sync, returns None)
+      - clarification.response -> back_resume_handler
+
+    Args:
+        envelope: Incoming bus Envelope with .topic set.
+        model: LLM port for ReAct execution.
+        ss: SessionState snapshot.
+        bus: IBus for event emission.
+        tool_dispatcher: ToolDispatcher for ReAct tool calls.
+        fsm_state: FSM controller for CancellationToken extraction.
+
+    Returns:
+        ReactResult from the handler, or None for cancel/unknown topics.
+    """
+    from poc.k1_poc.bus.topics import (
+        TOPIC_CLARIFICATION_RESPONSE,
+        TOPIC_TASK_CANCEL,
+        TOPIC_TASK_DISPATCH,
+        TOPIC_TASK_RESUME,
+    )
+
+    topic = getattr(envelope, "topic", None) or ""
+
+    # M7 E7.3.3: Prefer cancel_token from TaskLease (passed by coordinator)
+    # Fall back to FSM-extracted token (M3 E3.2.5)
+    payload = _parse_payload(envelope)
+    task_id = payload.get("task_id", "")
+    if cancel_token is None:
+        cancel_token = _extract_cancel_token(fsm_state, task_id)
+
+    if topic == TOPIC_TASK_DISPATCH:
+        logger.info("route_back_envelope: dispatching to back_handler topic=%s", topic)
+        return await back_handler(
+            envelope=envelope,
+            model=model,
+            ss=ss,
+            bus=bus,
+            tool_dispatcher=tool_dispatcher,
+            fsm_state=fsm_state,
+            cancel_token=cancel_token,
+        )
+
+    if topic == TOPIC_TASK_RESUME:
+        logger.info("route_back_envelope: dispatching to back_resume_handler topic=%s", topic)
+        return await back_resume_handler(
+            envelope=envelope,
+            model=model,
+            ss=ss,
+            bus=bus,
+            tool_dispatcher=tool_dispatcher,
+            fsm_state=fsm_state,
+            cancel_token=cancel_token,
+        )
+
+    if topic == TOPIC_CLARIFICATION_RESPONSE:
+        logger.info(
+            "route_back_envelope: dispatching to back_resume_handler (clarification) topic=%s",
+            topic,
+        )
+        return await back_resume_handler(
+            envelope=envelope,
+            model=model,
+            ss=ss,
+            bus=bus,
+            tool_dispatcher=tool_dispatcher,
+            fsm_state=fsm_state,
+            cancel_token=cancel_token,
+        )
+
+    if topic == TOPIC_TASK_CANCEL:
+        logger.info("route_back_envelope: dispatching to back_cancel_handler topic=%s", topic)
+        back_cancel_handler(
+            envelope=envelope,
+            fsm_state=fsm_state,
+            cancel_token=cancel_token,
+        )
+        return None
+
+    # M3 E3.7.1: Publish dead-letter for unknown back topics instead of
+    # silently dropping.  This makes unroutable envelopes observable via
+    # the standard dead-letter consumer.
+    from poc.k1_poc.bus.builders import build_dead_letter
+
+    dl_payload = {
+        "reason": "unknown_back_topic",
+        "original_topic": topic,
+        "envelope_id": getattr(envelope, "envelope_id", None),
+        "task_id": task_id,
+    }
+    bus.publish(
+        build_dead_letter(payload=dl_payload, parent_id=getattr(envelope, "envelope_id", 0))
+    )
+    logger.warning(
+        "route_back_envelope: unknown topic=%r, envelope_id=%s -- dead-lettered",
+        topic,
+        getattr(envelope, "envelope_id", "?"),
+    )
+    return None
 
 
 # =========================================================================
@@ -729,9 +1024,12 @@ def store_pending_context(
 ) -> None:
     """Store ReAct message history on suspend for later resume.
 
-    Called when Back suspends (submit_result returns status="suspended").
-    Stores original_task + prior_messages in fsm_state.pending_context
-    for retrieval by back_resume_handler.
+    .. deprecated:: M3 E3.3.3
+        SuspensionManager is now the single resume-context owner.
+        Resume context flows via envelope payload (FSM enriches on
+        resume via SuspensionManager.pop_context). This function is
+        no longer called by any production path.
+        Scheduled for removal in M8.
 
     Args:
         fsm_state: FSMTurnState with pending_context dict.
@@ -739,6 +1037,7 @@ def store_pending_context(
         original_task: The full TaskDispatch payload.
         prior_messages: Complete ReAct message list before suspend.
     """
+    # TODO: Remove in M8 -- replaced by SuspensionManager (M3 E3.3.1)
     if fsm_state is None:
         return
 
@@ -769,6 +1068,12 @@ def subscribe_back_events(
 ) -> list[Any]:
     """Subscribe to all Back-relevant bus topics.
 
+    .. deprecated:: M3 E3.1.5
+        This function is dead code. The FSM controller delivers envelopes
+        via MailboxRouter and route_back_envelope handles topic-based
+        dispatch. Do NOT call this function in new code.
+        Scheduled for removal in M8.
+
     Wires up the Back handler to receive events from the bus.
     The 4 primary subscriptions per V2 Section 6.2:
       - k1.orchestration.task.dispatch.v1
@@ -783,6 +1088,15 @@ def subscribe_back_events(
     Returns:
         List of SubscriptionHandle objects from bus.subscribe().
     """
+    import warnings
+
+    warnings.warn(
+        "subscribe_back_events is deprecated (M3 E3.1.5). "
+        "Use route_back_envelope for topic-based dispatch. "
+        "Removal scheduled for M8.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     from poc.k1_poc.bus.topics import (
         TOPIC_CLARIFICATION_RESPONSE,
         TOPIC_TASK_CANCEL,
@@ -933,28 +1247,112 @@ async def _noop_text(text: str) -> None:
     pass
 
 
-def _build_cancellation_check(fsm_state: Any) -> Any:
-    """Build cancellation check callback from FSMTurnState.
+def _extract_cancel_token(
+    fsm_state: Any,
+    task_id: str,
+) -> CancellationToken | None:
+    """Extract a per-task CancellationToken from the FSM controller.
 
-    Returns an async callable that checks fsm_state.cancellation_requested.
-    If no fsm_state, returns a lambda that always returns False.
+    M3 E3.2.2: The FSM's CancellationHandler creates a CancellationToken
+    per dispatched task (via register_task). This helper retrieves it
+    so Back handlers can use per-task cancellation instead of the old
+    global boolean.
+
+    Lookup chain:
+      1. fsm_state.cancel_handler.get_token(task_id)  -- ConciergeController
+      2. fsm_state._cancel_handler.get_token(task_id)  -- direct attribute
+      3. None (fallback)
+
+    Args:
+        fsm_state: The FSM controller (or any object with cancel_handler).
+        task_id: The task to look up.
+
+    Returns:
+        CancellationToken if found, else None.
     """
-    if fsm_state is None:
-        return _never_cancel
+    if fsm_state is None or not task_id:
+        return None
 
-    async def _check() -> bool:
-        return getattr(fsm_state, "cancellation_requested", False)
+    # Try public property first (ConciergeController.cancel_handler)
+    handler = getattr(fsm_state, "cancel_handler", None)
+    if handler is None:
+        # Try private attribute (direct access)
+        handler = getattr(fsm_state, "_cancel_handler", None)
+    if handler is not None and hasattr(handler, "get_token"):
+        token = handler.get_token(task_id)
+        if token is not None:
+            logger.debug(
+                "_extract_cancel_token: found token for task_id=%s cancelled=%s",
+                task_id,
+                token.is_cancelled,
+            )
+            return token
 
-    return _check
+    logger.debug(
+        "_extract_cancel_token: no token for task_id=%s (fsm_type=%s)",
+        task_id,
+        type(fsm_state).__name__,
+    )
+    return None
 
 
-async def _never_cancel() -> bool:
-    """Always returns False -- no cancellation."""
-    return False
+def _build_cancellation_check(
+    cancel_token: CancellationToken | None = None,
+    fsm_state: Any = None,
+) -> Any:
+    """Build cancellation check callback from CancellationToken.
+
+    M3 E3.2.3: Uses per-task CancellationToken.is_cancelled instead of
+    the old global fsm_state.cancellation_requested boolean.
+
+    M6 E6.2.3: Cancellation callback is mandatory for Back dispatch.
+    Without it, HITL timeout cannot cancel a resumed Back loop between
+    iterations. A warning is emitted if no token is available.
+
+    Falls back to fsm_state.cancellation_requested for backward compat
+    if no token is provided.
+
+    Args:
+        cancel_token: Per-task CancellationToken (preferred, M3 E3.2).
+        fsm_state: Legacy FSMTurnState (fallback only).
+
+    Returns:
+        An async callable that returns True if cancellation is requested.
+    """
+    if cancel_token is not None:
+
+        async def _check_token() -> bool:
+            return cancel_token.is_cancelled
+
+        return _check_token
+
+    # Legacy fallback: raw boolean on fsm_state
+    if fsm_state is not None:
+
+        async def _check_legacy() -> bool:
+            return getattr(fsm_state, "cancellation_requested", False)
+
+        return _check_legacy
+
+    # M6 E6.2.3: No cancel token = no way to stop a resumed Back loop
+    # between iterations on HITL timeout. Log a warning.
+    logger.warning(
+        "_build_cancellation_check: no CancellationToken or fsm_state "
+        "provided — Back loop will not be interruptible by HITL timeout"
+    )
+    return _never_cancel
 
 
 def _get_pending_context(fsm_state: Any, task_id: str) -> dict[str, Any] | None:
-    """Retrieve pending context for a suspended task from FSMTurnState."""
+    """Retrieve pending context for a suspended task from FSMTurnState.
+
+    .. deprecated:: M3 E3.3.3
+        SuspensionManager is now the single resume-context owner.
+        back_resume_handler reads from envelope.payload.resume_context
+        as the primary path. This function is only used as a legacy
+        fallback. Scheduled for removal in M8.
+    """
+    # TODO: Remove in M8 -- replaced by envelope-carried resume_context
     if fsm_state is None:
         return None
     if not hasattr(fsm_state, "pending_context"):
@@ -963,7 +1361,14 @@ def _get_pending_context(fsm_state: Any, task_id: str) -> dict[str, Any] | None:
 
 
 def _clear_pending_context(fsm_state: Any, task_id: str) -> None:
-    """Remove pending context after resume completes."""
+    """Remove pending context after resume completes.
+
+    .. deprecated:: M3 E3.3.3
+        SuspensionManager is now the single resume-context owner.
+        Cleanup is handled by SuspensionManager.cleanup_task on
+        task terminal states. Scheduled for removal in M8.
+    """
+    # TODO: Remove in M8 -- replaced by SuspensionManager.cleanup_task
     if fsm_state is None:
         return
     if not hasattr(fsm_state, "pending_context"):

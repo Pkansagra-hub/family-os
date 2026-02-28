@@ -55,11 +55,45 @@ class ConciergeControlExtension:
         self._active_task_ids: list[str] = []
         self._complexity_tier: str = "LOW"
         self._update_count: int = 0
+        self._control_section: Any | None = None  # M4 E4.1.2: bound SS ControlSection
         logger.info(
             "ConciergeControlExtension initialized (initial_state=%s, tier=%s)",
             self._fsm_state,
             self._complexity_tier,
         )
+
+    # ------------------------------------------------------------------
+    # SS Binding (M4 E4.1.2)
+    # ------------------------------------------------------------------
+
+    def bind_control_section(self, section: Any) -> None:
+        """Bind to a real SS ControlSection so mutators mirror state.
+
+        Called by ``ConciergeController.set_session_state()`` after the
+        SessionStateManager is attached.  Once bound, every call to
+        ``set_fsm_state``, ``add_active_task``, ``remove_active_task``,
+        and ``set_complexity_tier`` syncs the overlay into the section.
+
+        Args:
+            section: A ControlSection instance from the SessionState manager.
+        """
+        self._control_section = section
+        self._sync_to_section()
+        logger.info("ConciergeControlExtension bound to ControlSection")
+
+    @property
+    def is_bound(self) -> bool:
+        """Whether bind_control_section() has been called."""
+        return self._control_section is not None
+
+    def _sync_to_section(self) -> None:
+        """Push current local state into the bound ControlSection overlay."""
+        if self._control_section is not None:
+            self._control_section.set_fsm_overlay(
+                fsm_state=self._fsm_state,
+                active_task_ids=list(self._active_task_ids),
+                complexity_tier=self._complexity_tier,
+            )
 
     # ------------------------------------------------------------------
     # FSM State
@@ -78,6 +112,7 @@ class ConciergeControlExtension:
         """
         self._fsm_state = state.name
         self._update_count += 1
+        self._sync_to_section()
         logger.debug("ControlExtension: fsm_state -> %s", state.name)
 
     # ------------------------------------------------------------------
@@ -105,6 +140,7 @@ class ConciergeControlExtension:
         if task_id not in self._active_task_ids:
             self._active_task_ids.append(task_id)
             self._update_count += 1
+            self._sync_to_section()
             logger.debug(
                 "ControlExtension: task added %s (active=%d)",
                 task_id,
@@ -123,6 +159,7 @@ class ConciergeControlExtension:
         if task_id in self._active_task_ids:
             self._active_task_ids.remove(task_id)
             self._update_count += 1
+            self._sync_to_section()
             logger.debug(
                 "ControlExtension: task removed %s (active=%d)",
                 task_id,
@@ -155,6 +192,7 @@ class ConciergeControlExtension:
             tier = "LOW"
         self._complexity_tier = tier
         self._update_count += 1
+        self._sync_to_section()
 
     # ------------------------------------------------------------------
     # Snapshot / observability
@@ -182,3 +220,4 @@ class ConciergeControlExtension:
         self._active_task_ids.clear()
         self._complexity_tier = "LOW"
         self._update_count = 0
+        self._control_section = None

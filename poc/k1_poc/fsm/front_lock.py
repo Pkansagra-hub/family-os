@@ -29,6 +29,14 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from k1.bus.envelope import Envelope
+from poc.k1_poc.bus.topics import (
+    TOPIC_FINDINGS_READY,
+    TOPIC_TASK_COMPLETE,
+    TOPIC_TASK_FAILED,
+    TOPIC_TASK_SUSPENDED,
+    TOPIC_USER_INPUT,
+    TOPIC_WEAVE_BATCH,
+)
 from poc.k1_poc.config import get_config
 
 logger = logging.getLogger(__name__)
@@ -43,13 +51,14 @@ PRIORITY_ERROR = 4
 PRIORITY_INFO = 5
 
 # Topic-to-priority mapping
+# M2 E2.1.6: Use topic constants instead of hardcoded strings.
 TOPIC_PRIORITY: dict[str, int] = {
-    "k1.session.user.input.v1": PRIORITY_URGENT,
-    "k1.orchestration.task.suspended.v1": PRIORITY_INTERACTIVE,
-    "k1.orchestration.task.complete.v1": PRIORITY_RESULT,
-    "k1.orchestration.task.failed.v1": PRIORITY_ERROR,
-    "k1.orchestration.findings.ready.v1": PRIORITY_INFO,
-    "k1.internal.weave.batch.v1": PRIORITY_RESULT,
+    TOPIC_USER_INPUT: PRIORITY_URGENT,
+    TOPIC_TASK_SUSPENDED: PRIORITY_INTERACTIVE,
+    TOPIC_TASK_COMPLETE: PRIORITY_RESULT,
+    TOPIC_TASK_FAILED: PRIORITY_ERROR,
+    TOPIC_FINDINGS_READY: PRIORITY_INFO,
+    TOPIC_WEAVE_BATCH: PRIORITY_RESULT,
 }
 
 # Kept as module constant for backward compatibility; runtime reads from config

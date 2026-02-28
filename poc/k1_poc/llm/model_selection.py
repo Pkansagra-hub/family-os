@@ -25,41 +25,56 @@ logger = logging.getLogger(__name__)
 
 MODEL_SELECTION_TABLE: dict[tuple[str, str], str] = {
     # (capability, actor) -> model
-    ("CHAT", "front"): "gemini-3.1-pro-preview-customtools",  # fast acks, presentations
+    (
+        "CHAT",
+        "front",
+    ): "gemini-2.5-flash-lite",  # fast acks, presentations
     (
         "TOOL_CALL",
         "front",
-    ): "gemini-3.1-pro-preview-customtools",  # cognitive tool selection
-    ("TOOL_CALL", "back"): "gemini-3.1-pro-preview-customtools",  # action tool execution
+    ): "gemini-2.5-flash-lite",  # cognitive tool selection
+    (
+        "TOOL_CALL",
+        "back",
+    ): "gemini-2.5-flash-lite",  # action tool execution
     (
         "STRUCTURED",
         "front",
-    ): "gemini-3.1-pro-preview-customtools",  # dispatch intent parsing
+    ): "gemini-2.5-flash-lite",  # dispatch intent parsing
     (
         "STRUCTURED",
         "back",
-    ): "gemini-3.1-pro-preview-customtools",  # final answer formatting
+    ): "gemini-2.5-flash-lite",  # final answer formatting
     (
         "REASON",
         "back",
-    ): "gemini-3.1-pro-preview-customtools",  # complex multi-step reasoning
-    ("REASON", "front"): "gemini-3.1-pro-preview-customtools",  # complex reasoning
-    ("CHAT", "back"): "gemini-3.1-pro-preview-customtools",  # error reports (internal)
-    ("STREAM", "front"): "gemini-3.1-pro-preview-customtools",  # streaming ack/response
-    ("TOOL_CALL", "planner"): "gemini-3.1-pro-preview-customtools",  # planner reasoning
-    ("CHAT", "planner"): "gemini-3.1-pro-preview-customtools",  # planner chat
+    ): "gemini-2.5-flash-lite",  # complex multi-step reasoning
+    ("REASON", "front"): "gemini-2.5-flash-lite",  # complex reasoning
+    (
+        "CHAT",
+        "back",
+    ): "gemini-2.5-flash-lite",  # error reports (internal)
+    (
+        "STREAM",
+        "front",
+    ): "gemini-2.5-flash-lite",  # streaming ack/response
+    (
+        "TOOL_CALL",
+        "planner",
+    ): "gemini-2.5-flash-lite",  # planner reasoning
+    ("CHAT", "planner"): "gemini-2.5-flash-lite",  # planner chat
 }
 
 MODEL_HINT_OVERRIDES: dict[str, str] = {
-    "fast": "gemini-3.1-pro-preview-customtools",
-    "smart": "gemini-3.1-pro-preview-customtools",
-    "cheap": "gemini-3.1-pro-preview-customtools",
-    "thinking": "gemini-3.1-pro-preview-customtools",  # with thinking
-    "pro": "gemini-3.1-pro-preview-customtools",
-    "flash": "gemini-3.1-pro-preview-customtools",
+    "fast": "gemini-2.5-flash-lite",
+    "smart": "gemini-2.5-flash-lite",
+    "cheap": "gemini-2.5-flash-lite",
+    "thinking": "gemini-2.5-flash-lite",  # with thinking
+    "pro": "gemini-2.5-flash-lite",
+    "flash": "gemini-2.5-flash-lite",
 }
 
-DEFAULT_MODEL = "gemini-3.1-pro-preview-customtools"
+DEFAULT_MODEL = "gemini-2.5-flash-lite"
 
 
 def _get_selection_table() -> dict[tuple[str, str], str]:

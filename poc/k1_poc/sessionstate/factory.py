@@ -41,6 +41,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from poc.k1_poc.config import get_config
+
 from .adapters.direct_writer import DirectWriterAdapter
 from .adapters.local_events import LocalEventAdapter
 from .adapters.memory_storage import InMemoryStorageAdapter
@@ -53,8 +55,6 @@ from .ports.k0_sync import IK0SyncPort
 from .ports.lifecycle import ILifecyclePort, LifecycleConfig
 from .ports.storage import IStoragePort
 from .ports.writer import IWriterPort
-
-from poc.k1_poc.config import get_config
 
 logger = logging.getLogger(__name__)
 

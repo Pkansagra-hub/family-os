@@ -3,11 +3,15 @@ poc.k1_poc.task.parallel_safety -- Tool parallelism classification for ReAct loo
 
 V2 Design Ref: Section 7.8 (Parallel vs Sequential Tool Calling)
 
-The POC react_loop() executes non-terminal tools in parallel via
-asyncio.gather (see react/loop.py:508).  This module defines the safety
-classification constants for production-grade parallel batching where
-side-effect tools must be sequenced while reads and cognitive writes
-can run concurrently.
+The POC react_loop() executes non-terminal tool calls in parallel via
+asyncio.gather (see react/loop.py).  This module provides safety
+classification so that side-effect tools are forced to run sequentially
+while reads and cognitive writes can safely run concurrently.
+
+Integration (M3 E3.4.2): react_loop calls classify_tool_batch() before
+execution.  Parallel-safe tools run via asyncio.gather; sequential tools
+run one at a time in order.  A config toggle (react.parallel_tools_enabled)
+can force all tools to run sequentially for debugging.
 
 Classification table (V2 Section 7.8):
 

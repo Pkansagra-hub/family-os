@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from poc.k1_poc.config import get_config
 from poc.k1_poc.protocols.hitl import (
@@ -56,6 +56,10 @@ from poc.k1_poc.protocols.suspension import (
     SuspensionType,
 )
 from poc.k1_poc.protocols.suspension_manager import SuspensionManager
+
+if TYPE_CHECKING:
+    from poc.k1_poc.ledger.store import LedgerEntry
+    from poc.k1_poc.ledger.writer import LedgerWriter
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +131,7 @@ class HILCoordinator:
 
     __slots__ = (
         "_config",
+        "_ledger",
         "_suspension_mgr",
         "_pending_requests",
         "_hil_counts",
@@ -143,8 +148,10 @@ class HILCoordinator:
         on_emit_resume: Callable[[HILResponse], Awaitable[None]] | None = None,
         on_timeout: Callable[[str], Awaitable[None]] | None = None,
         on_blocked_red: Callable[[str, str], Awaitable[None]] | None = None,
+        ledger: LedgerWriter | None = None,
     ) -> None:
         self._config = config or HILCoordinatorConfig()
+        self._ledger: LedgerWriter | None = ledger
         self._pending_requests: dict[str, HILRequest] = {}
         self._hil_counts: dict[str, int] = {}
         self._on_emit_suspended = on_emit_suspended
@@ -178,12 +185,14 @@ class HILCoordinator:
         context: dict[str, Any] | None = None,
         safety_band: SafetyBand | str = SafetyBand.GREEN,
         react_history: list[dict[str, Any]] | None = None,
+        ledger: Any = None,
     ) -> HILRequest:
         """Process Back's submit_result(needs_human) call.
 
         V2 Design Ref: Section 9.1 (Steps 1-5)
         V2 Design Ref: Section 9.3 (Safety Band Escalation)
         V2 Design Ref: Section 9.5 (Suspension Limits)
+        V3 M1 E1.2.3: Optional ledger param for event sourcing.
 
         Flow:
             1. Validate and escalate safety band.
@@ -260,6 +269,24 @@ class HILCoordinator:
         self._pending_requests[task_id] = request
         self._hil_counts[task_id] = count
 
+        # M9 E9.3.1: Write-before-mutate -- emit HILRequested to ledger
+        writer = ledger or self._ledger
+        if writer is not None:
+            from poc.k1_poc.events.hitl import HILRequested as HILRequestedEvt
+
+            evt = HILRequestedEvt(
+                task_id=task_id,
+                hil_type=hil_type,
+                question=question,
+                options=options or [],
+                context=context or {},
+                side_effects=side_effects or [],
+                safety_band=effective_band.value,
+                timeout_s=timeout_ms / 1000.0,
+                max_rounds=self._config.max_rounds,
+            )
+            writer.append_sync(evt)
+
         # 6. Delegate to SuspensionManager for timeout
         suspension_type = HIL_TO_SUSPENSION.get(hil_type, SuspensionType.CLARIFICATION)
         suspension_request = SuspensionRequest(
@@ -298,11 +325,13 @@ class HILCoordinator:
         decision: str = "answered",
         resolution: dict[str, Any] | None = None,
         raw_user_text: str = "",
+        ledger: Any = None,
     ) -> HILResponse | None:
         """Process user's response to a HITL question.
 
         V2 Design Ref: Section 9.1 (Steps 7-8)
         V2 Design Ref: Section 9.4 (HITL_RESOLVE mode)
+        V3 M1 E1.2.3: Optional ledger param for event sourcing.
 
         Flow:
             1. Resolve the suspension (cancels timeout timer).
@@ -330,6 +359,19 @@ class HILCoordinator:
         if original_suspension is None:
             logger.warning("Task %s: user response for non-suspended task", task_id)
             return None
+
+        # M9 E9.3.1: Write-before-mutate -- emit HILResolved to ledger
+        writer = ledger or self._ledger
+        if writer is not None:
+            from poc.k1_poc.events.hitl import HILResolved as HILResolvedEvt
+
+            evt = HILResolvedEvt(
+                task_id=task_id,
+                resolution=resolution or {},
+                resolution_type=decision,
+                raw_user_text=raw_user_text,
+            )
+            writer.append_sync(evt)
 
         # 2. Build HILResponse
         response = HILResponse(
@@ -505,6 +547,52 @@ class HILCoordinator:
         self._pending_requests.pop(task_id, None)
         self._hil_counts.pop(task_id, None)
         self._suspension_mgr.cleanup_task(task_id)
+
+    # -----------------------------------------------------------------
+    # M9 E9.3.1/E9.3.3: Ledger integration
+    # -----------------------------------------------------------------
+
+    def set_ledger(self, writer: LedgerWriter) -> None:
+        """Attach ledger writer post-construction.
+
+        M9 E9.3.1: Allows wiring ledger after HILCoordinator is
+        already created (e.g. bootstrap sequence order).
+        """
+        self._ledger = writer
+
+    def rebuild_from_events(self, entries: list[LedgerEntry]) -> int:
+        """Rebuild HITL coordinator state from ledger events.
+
+        M9 E9.3.3: Uses project_hitl_state() to replay events and
+        reconstruct _pending_requests, _hil_counts, and inject
+        hil_history into task state entries.
+
+        Returns:
+            Number of pending HITL requests restored.
+        """
+        from poc.k1_poc.ledger.projections import project_hitl_state
+
+        pending, counts, _histories = project_hitl_state(entries)
+
+        self._pending_requests.clear()
+        self._hil_counts.clear()
+
+        for task_id, payload in pending.items():
+            request = HILRequest(
+                task_id=task_id,
+                hil_type=payload.get("hil_type", "clarification"),
+                question=payload.get("question", ""),
+                options=payload.get("options", []),
+                context=payload.get("context", {}),
+                side_effects=payload.get("side_effects", []),
+                safety_band=SafetyBand(payload.get("safety_band", "AMBER")),
+                timeout_ms=int(payload.get("timeout_s", 60.0) * 1000),
+                max_rounds=payload.get("max_rounds", 2),
+            )
+            self._pending_requests[task_id] = request
+
+        self._hil_counts = dict(counts)
+        return len(self._pending_requests)
 
     # -----------------------------------------------------------------
     # Internal

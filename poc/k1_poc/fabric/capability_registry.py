@@ -24,6 +24,85 @@ from typing import Any, Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
+# Domain aliases: LLM-generated domain names -> canonical domain names.
+# The LLM often uses synonyms (e.g. "communication" instead of "messaging")
+# which causes strict domain filter mismatches. This map normalises them.
+DOMAIN_ALIASES: dict[str, str] = {
+    # messaging aliases
+    "communication": "messaging",
+    "communications": "messaging",
+    "notifications": "messaging",
+    "alerts": "messaging",
+    "texting": "messaging",
+    "sms": "messaging",
+    "chat": "messaging",
+    "message": "messaging",
+    # household aliases
+    "home": "household",
+    "chores": "household",
+    "chores_management": "household",
+    "cleaning": "household",
+    "laundry": "household",
+    # iot aliases
+    "smart_home": "iot",
+    "devices": "iot",
+    "appliances": "iot",
+    "home_automation": "iot",
+    # school aliases
+    "education": "school",
+    "academic": "school",
+    "homework": "school",
+    "learning": "school",
+    # health aliases
+    "medical": "health",
+    "wellness": "health",
+    "medication": "health",
+    "healthcare": "health",
+    "fitness": "health",
+    # transport aliases
+    "driving": "transport",
+    "commute": "transport",
+    "ride": "transport",
+    "transit": "transport",
+    "transportation": "transport",
+    # finance aliases
+    "money": "finance",
+    "banking": "finance",
+    "payments": "finance",
+    "budget": "finance",
+    # calendar aliases
+    "scheduling": "calendar",
+    "calendar_management": "calendar",
+    "appointments": "calendar",
+    "events": "calendar",
+    # family_activities aliases
+    "activities": "family_activities",
+    "family": "family_activities",
+    "outings": "family_activities",
+    "recreation": "family_activities",
+    # productivity aliases
+    "reminders": "productivity",
+    "tasks": "productivity",
+    "todo": "productivity",
+    "to_do": "productivity",
+    # travel aliases
+    "trips": "travel",
+    "vacation": "travel",
+    "booking": "travel",
+    # shopping aliases
+    "groceries": "shopping",
+    "grocery": "shopping",
+    "purchases": "shopping",
+}
+
+
+def resolve_domain(domain: str) -> str:
+    """Resolve a domain name through aliases to its canonical form."""
+    if not domain:
+        return domain
+    normalised = domain.strip().lower().replace("-", "_").replace(" ", "_")
+    return DOMAIN_ALIASES.get(normalised, normalised)
+
 
 class CapabilityRegistry:
     """In-memory Fabric capability registry for POC.
@@ -99,6 +178,10 @@ class CapabilityRegistry:
         This is sufficient for POC. Production would use semantic search
         via the K0 Fabric's capability discovery service.
 
+        Domain aliases are resolved automatically (e.g. "communication" ->
+        "messaging", "smart_home" -> "iot"). If domain-filtered search
+        yields no results, a fallback intent-only search is attempted.
+
         Args:
             intent: Natural language description of what needs to be done.
             domain: Optional domain filter ("travel", "productivity", etc.).
@@ -107,21 +190,22 @@ class CapabilityRegistry:
         Returns:
             Dict with 'capabilities' (list of matching defs) and 'count'.
         """
-        matches: list[dict[str, Any]] = []
-        intent_lower = intent.lower()
-        intent_words = intent_lower.split()
+        # Resolve domain aliases (e.g. "communication" -> "messaging")
+        resolved_domain = resolve_domain(domain) if domain else None
 
-        for name, cap in self._capabilities.items():
-            # Domain filter
-            if domain and cap.get("domain", "").lower() != domain.lower():
-                continue
+        matches = self._fuzzy_match(intent, resolved_domain)
 
-            # Fuzzy match: any intent word in name or description
-            desc_lower = cap.get("description", "").lower()
-            name_lower = name.lower()
-
-            if any(word in desc_lower or word in name_lower for word in intent_words):
-                matches.append(cap)
+        # Fallback: if domain filter yielded 0 results, retry intent-only.
+        # This prevents empty results when the LLM guesses wrong domain.
+        if not matches and resolved_domain:
+            logger.info(
+                "discover: domain '%s' (resolved='%s') yielded 0 matches, "
+                "retrying intent-only for '%s'",
+                domain,
+                resolved_domain,
+                intent[:60],
+            )
+            matches = self._fuzzy_match(intent, domain=None)
 
         result: dict[str, Any] = {"capabilities": matches, "count": len(matches)}
 
@@ -138,13 +222,38 @@ class CapabilityRegistry:
                 "Try broader keywords or check domain filter."
             )
             logger.info(
-                "discover: no match for intent=%s domain=%s (registered=%d)",
+                "discover: no match for intent=%s domain=%s resolved=%s (registered=%d)",
                 intent[:60],
                 domain,
+                resolved_domain,
                 len(self._capabilities),
             )
 
         return result
+
+    def _fuzzy_match(
+        self,
+        intent: str,
+        domain: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Core fuzzy matching: intent word overlap + optional domain filter."""
+        matches: list[dict[str, Any]] = []
+        intent_lower = intent.lower()
+        intent_words = intent_lower.split()
+
+        for name, cap in self._capabilities.items():
+            # Domain filter (already resolved by caller)
+            if domain and cap.get("domain", "").lower() != domain.lower():
+                continue
+
+            # Fuzzy match: any intent word in name or description
+            desc_lower = cap.get("description", "").lower()
+            name_lower = name.lower()
+
+            if any(word in desc_lower or word in name_lower for word in intent_words):
+                matches.append(cap)
+
+        return matches
 
     async def invoke(
         self,

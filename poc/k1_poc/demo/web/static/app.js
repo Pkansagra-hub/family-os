@@ -239,7 +239,9 @@ function finishStreaming() {
 function handleProactive(msg) {
     finishStreaming();
     addMessage("proactive", "Concierge", msg.text, { label: "proactive" });
-    showToast("Background Update", msg.text);
+    showToast("Notification", msg.text);
+    // Pulse the header to draw attention
+    animateElement(dom.turnBadge);
 }
 
 function handleWeave(msg) {
@@ -267,13 +269,125 @@ function handleMemberSwitched(msg) {
     highlightActiveMember();
 }
 
+// Tools that represent external actions the user cares about
+const EXTERNAL_TOOLS = new Set([
+    "invoke_capability",
+    "batch_invoke_capabilities",
+    "spawn_via_fabric",
+    "execute_workflow",
+]);
+
+// Human-readable labels for tool actions
+const TOOL_ICONS = {
+    invoke_capability:        { icon: "\u26A1", verb: "Executing" },
+    batch_invoke_capabilities:{ icon: "\u26A1\u26A1", verb: "Batch executing" },
+    discover_capabilities:    { icon: "\uD83D\uDD0D", verb: "Discovering" },
+    spawn_via_fabric:         { icon: "\uD83E\uDDF5", verb: "Spawning agent" },
+    execute_workflow:         { icon: "\u2699\uFE0F", verb: "Running workflow" },
+    recall_memory:            { icon: "\uD83E\uDDE0", verb: "Recalling" },
+    submit_result:            { icon: "\u2705", verb: "Submitting" },
+};
+
+function _parseCapabilityName(argsSummary) {
+    // Extract capability_name from args_summary string like
+    // "{'capability_name': 'tool.execute.smart_home_control', ...}"
+    if (!argsSummary) return null;
+    const m = argsSummary.match(/capability_name['"]?\s*[:=]\s*['"]([^'"]+)['"]/);
+    return m ? m[1] : null;
+}
+
+function _humanizeCapName(name) {
+    if (!name) return "";
+    // Strip tool.execute. prefix for display
+    let clean = name.replace(/^tool\.execute\./, "");
+    return clean.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
 function handleToolEvent(msg) {
+    // Always add to timeline
     addTimelineEntry({
-        elapsed_ms: 0,
+        elapsed_ms: msg.duration_ms || 0,
         phase: "tool",
         component: msg.actor,
         summary: `${msg.phase}: ${msg.tool_name}`,
     });
+
+    // Show external tool executions as chips in the chat area
+    if (EXTERNAL_TOOLS.has(msg.tool_name)) {
+        const capName = _parseCapabilityName(msg.args_summary || "");
+        const info = TOOL_ICONS[msg.tool_name] || { icon: "\u2699\uFE0F", verb: "Running" };
+        const label = capName ? _humanizeCapName(capName) : msg.tool_name.replace(/_/g, " ");
+
+        if (msg.phase === "started") {
+            addToolChip(msg.tool_name, info.icon, `${info.verb}: ${label}`, "running", capName);
+        } else {
+            // completed -- update existing chip or add a new one
+            updateToolChip(capName || msg.tool_name, msg.success !== false, msg.duration_ms || 0);
+        }
+    }
+}
+
+function addToolChip(toolName, icon, label, status, capName) {
+    const chipId = `tool-chip-${(capName || toolName).replace(/[^a-z0-9]/gi, "-")}-${Date.now()}`;
+    const div = document.createElement("div");
+    div.className = `message tool-chip ${status}`;
+    div.id = chipId;
+    div.dataset.capName = capName || toolName;
+
+    // Extract device/target from args for more context (e.g. coffee_machine, bedroom_speaker)
+    const deviceMatch = (label || "").match(/Smart Home Control/i);
+    const displayLabel = deviceMatch ? label : label;
+
+    div.innerHTML = `
+        <div class="tool-chip-content">
+            <span class="tool-chip-icon">${icon}</span>
+            <span class="tool-chip-label">${escapeHtml(displayLabel)}</span>
+            <span class="tool-chip-spinner"></span>
+        </div>
+    `;
+
+    // Insert BEFORE streaming indicator or at end of messages
+    const streaming = dom.messages.querySelector(".streaming-indicator");
+    if (streaming && streaming.parentNode === dom.messages) {
+        dom.messages.insertBefore(div, streaming);
+    } else {
+        dom.messages.appendChild(div);
+    }
+    scrollToBottom();
+    return chipId;
+}
+
+function updateToolChip(capOrTool, success, durationMs) {
+    // Find the most recent running chip matching this capability
+    const normalizedKey = (capOrTool || "").replace(/[^a-z0-9]/gi, "-");
+    const chips = dom.messages.querySelectorAll(".tool-chip.running");
+    let chip = null;
+    for (let i = chips.length - 1; i >= 0; i--) {
+        if (chips[i].dataset.capName && chips[i].dataset.capName.replace(/[^a-z0-9]/gi, "-") === normalizedKey) {
+            chip = chips[i];
+            break;
+        }
+    }
+    // Fallback: pick last running chip
+    if (!chip && chips.length) chip = chips[chips.length - 1];
+    if (!chip) return;
+
+    chip.classList.remove("running");
+    chip.classList.add(success ? "done" : "failed");
+
+    const spinner = chip.querySelector(".tool-chip-spinner");
+    if (spinner) {
+        spinner.textContent = success ? "\u2713" : "\u2717";
+        spinner.className = `tool-chip-status ${success ? "ok" : "err"}`;
+    }
+
+    // Add duration
+    if (durationMs > 0) {
+        const dur = document.createElement("span");
+        dur.className = "tool-chip-dur";
+        dur.textContent = `${durationMs}ms`;
+        chip.querySelector(".tool-chip-content").appendChild(dur);
+    }
 }
 
 function handleStatusReport(data) {

@@ -446,7 +446,8 @@ class TestSuspendInIncompatibleState:
         """Transition table: DISPATCHING has no TOPIC_TASK_SUSPENDED trigger."""
         assert not is_legal(ConciergeState.DISPATCHING, TOPIC_TASK_SUSPENDED)
 
-    def test_suspended_in_dispatching_is_deferred(self):
+    @pytest.mark.asyncio
+    async def test_suspended_in_dispatching_is_deferred(self):
         ctrl, bus, router = _make_controller()
 
         # Advance to DISPATCHING (user input sent)
@@ -472,7 +473,8 @@ class TestSuspendInIncompatibleState:
         stored = ctrl.suspension_manager._contexts.get("task-prior")
         assert stored is not None
 
-    def test_deferred_hitl_surfaces_after_listening(self):
+    @pytest.mark.asyncio
+    async def test_deferred_hitl_surfaces_after_listening(self):
         ctrl, bus, router = _make_controller()
 
         # Register a prior task and mark suspended
@@ -781,7 +783,8 @@ class TestBackTaskResumeRouting:
 
         assert callable(back_handler)
 
-    def test_fsm_routes_task_resume_through_transition(self):
+    @pytest.mark.asyncio
+    async def test_fsm_routes_task_resume_through_transition(self):
         """FSM _on_task_resume transitions CLARIFYING_WORKER -> COMPANIONING."""
         ctrl, bus, router = _make_controller()
         _advance_to_companioning(ctrl)
@@ -796,7 +799,8 @@ class TestBackTaskResumeRouting:
         ctrl._on_task_resume(resume)
         assert ctrl.state == ConciergeState.COMPANIONING
 
-    def test_resume_delivered_to_back_via_router(self):
+    @pytest.mark.asyncio
+    async def test_resume_delivered_to_back_via_router(self):
         """Verify FSM delivers resume envelope to back_half via router."""
         ctrl, bus, router = _make_controller()
         _advance_to_companioning(ctrl)
@@ -1614,23 +1618,35 @@ class TestBusSubscriptionRoutingInvariant:
     def test_all_topics_are_covered(self):
         """Every topic in ALL_TOPICS must appear in at least one subscription group,
         FSM_ROUTED_TOPICS, or be a response/observability topic."""
+        # Response/observability topics are handled by OutputChannel or FSM directly
         from poc.k1_poc.bus.topics import (
             ALL_TOPICS,
             BACK_SUBSCRIPTIONS,
             FRONT_SUBSCRIPTIONS,
             FSM_ROUTED_TOPICS,
             TOPIC_ARTIFACT_CREATED,
+            TOPIC_BACKPOOL_WORKER_ACQUIRED,
+            TOPIC_BACKPOOL_WORKER_RELEASED,
             TOPIC_CLARIFICATION_OUT,
+            TOPIC_DEAD_LETTER,
             TOPIC_FINAL_RESPONSE,
+            TOPIC_HITL_BLOCKED_RED,
+            TOPIC_HITL_REQUESTED,
+            TOPIC_HITL_RESOLVED,
+            TOPIC_HITL_TIMED_OUT,
+            TOPIC_INTENT_ARBITRATED,
             TOPIC_RESPONSE_STREAM,
             TOPIC_STATE_UPDATED,
+            TOPIC_TASK_LEASED,
+            TOPIC_TASK_MODIFY,
             TOPIC_TOOL_COMPLETED,
             TOPIC_TOOL_STARTED,
             TOPIC_TURN_COMPLETED,
             TOPIC_TURN_STARTED,
+            TOPIC_UI_TYPING,
+            TOPIC_WEAVE_DECIDED,
         )
 
-        # Response/observability topics are handled by OutputChannel or FSM directly
         response_and_obs = {
             TOPIC_RESPONSE_STREAM,
             TOPIC_FINAL_RESPONSE,
@@ -1641,6 +1657,18 @@ class TestBusSubscriptionRoutingInvariant:
             TOPIC_TOOL_STARTED,
             TOPIC_TOOL_COMPLETED,
             TOPIC_ARTIFACT_CREATED,
+            TOPIC_DEAD_LETTER,
+            TOPIC_INTENT_ARBITRATED,
+            TOPIC_TASK_MODIFY,
+            TOPIC_HITL_REQUESTED,
+            TOPIC_HITL_RESOLVED,
+            TOPIC_HITL_TIMED_OUT,
+            TOPIC_HITL_BLOCKED_RED,
+            TOPIC_BACKPOOL_WORKER_ACQUIRED,
+            TOPIC_BACKPOOL_WORKER_RELEASED,
+            TOPIC_TASK_LEASED,
+            TOPIC_UI_TYPING,
+            TOPIC_WEAVE_DECIDED,
         }
 
         covered = FRONT_SUBSCRIPTIONS | BACK_SUBSCRIPTIONS | FSM_ROUTED_TOPICS | response_and_obs

@@ -85,6 +85,8 @@ class TaskStateEntry:
         pending_hil: True if awaiting human-in-the-loop input
         hil_suspensions_count: number of times suspended for HIL
         presented_at_turn: turn number when result was shown to user (0 = not yet)
+        pending_hil_data: M6 E6.1.2 -- serialized HILSubTask dict for crash
+                         recovery (None when no HITL pending).
     """
 
     task_id: str = ""
@@ -97,6 +99,7 @@ class TaskStateEntry:
     pending_hil: bool = False
     hil_suspensions_count: int = 0
     presented_at_turn: int = 0
+    pending_hil_data: Optional[Dict[str, Any]] = None
 
 
 # Pruning threshold: remove completed tasks N turns after presentation
@@ -195,6 +198,7 @@ class TaskStateSection:
                 pending_hil=t.get("pending_hil", False),
                 hil_suspensions_count=t.get("hil_suspensions_count", 0),
                 presented_at_turn=t.get("presented_at_turn", 0),
+                pending_hil_data=t.get("pending_hil_data"),
             )
             self._tasks[entry.task_id] = entry
         self._cache_valid = False
@@ -301,6 +305,7 @@ class TaskStateSection:
             entry.hil_suspensions_count += 1
         if new_status == TaskStatus.ACTIVE and entry.pending_hil:
             entry.pending_hil = False
+            entry.pending_hil_data = None  # M6 E6.1.2: clear HILSubTask on resume
 
         self._last_updated_ms = now_ms
         self._cache_valid = False
@@ -322,6 +327,26 @@ class TaskStateSection:
         if not 0 <= progress_pct <= 100:
             raise ValueError(f"progress_pct must be 0-100, got {progress_pct}")
         self._tasks[task_id].progress_pct = progress_pct
+        self._last_updated_ms = int(time.time() * 1000)
+        self._cache_valid = False
+
+    def set_pending_hil_data(self, task_id: str, data: Optional[Dict[str, Any]]) -> None:
+        """Store serialized HILSubTask on a task entry for crash recovery.
+
+        M6 E6.1.2 / E6.4.1: Persists the full HILSubTask dict alongside
+        the boolean pending_hil flag so scan_for_recovery() can
+        reconstruct HITL state after a crash.
+
+        Args:
+            task_id: Task UUID.
+            data:    Serialized HILSubTask dict, or None to clear.
+
+        Raises:
+            KeyError: If task_id not found.
+        """
+        if task_id not in self._tasks:
+            raise KeyError(f"Task not found: {task_id}")
+        self._tasks[task_id].pending_hil_data = data
         self._last_updated_ms = int(time.time() * 1000)
         self._cache_valid = False
 

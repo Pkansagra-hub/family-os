@@ -72,6 +72,9 @@ class Phase1Result:
         "domain_context",
         "safety_band",
         "complexity_tier",
+        "temporal_expressions",
+        "relations",
+        "_degraded",
     )
 
     def __init__(
@@ -87,6 +90,8 @@ class Phase1Result:
         domain_context: str = "general",
         safety_band: str = "GREEN",
         complexity_tier: str = "LOW",
+        temporal_expressions: list[dict[str, Any]] | None = None,
+        relations: list[str] | None = None,
     ) -> None:
         self.intents = intents or []
         self.entities = entities or []
@@ -99,6 +104,9 @@ class Phase1Result:
         self.domain_context = domain_context
         self.safety_band = safety_band
         self.complexity_tier = complexity_tier
+        self.temporal_expressions = temporal_expressions or []
+        self.relations = relations or []
+        self._degraded = False
 
     def to_metadata(self) -> dict[str, Any]:
         """Convert to metadata dict for TypedHistoryEntry attachment.
@@ -115,6 +123,8 @@ class Phase1Result:
             "safety_band": self.safety_band,
             "domain": self.domain_context,
             "complexity_tier": self.complexity_tier,
+            "temporal_expressions": self.temporal_expressions,
+            "relations": self.relations,
         }
 
 

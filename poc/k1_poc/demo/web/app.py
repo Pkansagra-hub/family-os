@@ -117,6 +117,72 @@ async def get_status() -> dict:
     return _coordinator.get_status_report()
 
 
+# M2 E2.5.5: Dead-letter observability endpoint
+@app.get("/api/dead-letters")
+async def get_dead_letters() -> dict:
+    """Return dead-letter consumer summary and recent events."""
+    if _coordinator is None or _coordinator.dead_letter_consumer is None:
+        return {"enabled": False}
+    consumer = _coordinator.dead_letter_consumer
+    snapshot = consumer.snapshot()
+    recent = [e.to_dict() for e in consumer.events[-10:]]
+    return {
+        "enabled": True,
+        "total": snapshot.get("total_dead_letters", 0),
+        "by_reason": snapshot.get("counts_by_reason", {}),
+        "by_state": snapshot.get("counts_by_state", {}),
+        "by_topic": snapshot.get("counts_by_topic", {}),
+        "recent": recent,
+    }
+
+
+# M2 E2.5.5: Ledger stats endpoint
+@app.get("/api/ledger/stats")
+async def get_ledger_stats() -> dict:
+    """Return ledger operational statistics."""
+    if _coordinator is None or _coordinator.ledger_store is None:
+        return {"enabled": False}
+    store = _coordinator.ledger_store
+    total = store.count()
+    dead_letter_count = (
+        len(store.read_by_type(_coordinator.ledger.session_id, "conversation.dead_lettered"))
+        if _coordinator.ledger
+        else 0
+    )
+    return {
+        "enabled": True,
+        "total_events": total,
+        "dead_letter_events": dead_letter_count,
+        "store_type": type(store).__name__,
+    }
+
+
+# M4 E4.5.2: Control section diagnostics endpoint
+@app.get("/api/session/control")
+async def get_session_control() -> dict:
+    """Return control section snapshot with FSM overlay."""
+    if _coordinator is None or _coordinator.session_state is None:
+        return {"available": False}
+    try:
+        from poc.k1_poc.actors.shared import safe_get_section
+
+        control = safe_get_section(_coordinator.session_state, "control")
+        if control is None:
+            return {"available": False, "reason": "control section not found"}
+        result: dict = {"available": True}
+        if hasattr(control, "to_dict"):
+            result["data"] = control.to_dict()
+        if hasattr(control, "fsm_overlay"):
+            overlay = control.fsm_overlay
+            result["fsm_overlay"] = overlay if overlay is not None else None
+            result["overlay_bound"] = overlay is not None
+        if hasattr(control, "get_metadata"):
+            result["metadata"] = control.get_metadata()
+        return result
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+
+
 # ---------------------------------------------------------------------------
 # WebSocket handler
 # ---------------------------------------------------------------------------
@@ -375,6 +441,8 @@ def _wire_web_timeline_hooks(coord: Any) -> None:
                 phase="started" if "started" in envelope.topic else "completed",
                 duration_ms=p.get("duration_ms", 0),
                 success=p.get("success", True),
+                args_summary=p.get("args_summary", ""),
+                result_summary=p.get("result_summary", ""),
             )
         except Exception:
             pass

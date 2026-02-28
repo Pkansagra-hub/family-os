@@ -30,6 +30,8 @@ from poc.k1_poc.react.loop import (
     MODE_MAX_ITERATIONS,
     ReactResult,
     _resolve_tool_choice,
+    get_crisis_max_iterations,
+    get_mode_max_iterations,
     react_loop,
 )
 
@@ -45,4 +47,6 @@ __all__ = [
     "CRISIS_MAX_ITERATIONS",
     "FRONT_DEGENERATE_FALLBACK",
     "FRONT_BUDGET_FALLBACK",
+    "get_mode_max_iterations",
+    "get_crisis_max_iterations",
 ]

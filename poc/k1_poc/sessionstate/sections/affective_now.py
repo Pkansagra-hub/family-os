@@ -522,6 +522,25 @@ class AffectiveNowSection:
             "last_significant_change_ms": self._last_significant_change_ms,
         }
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Return current state as dict for prompt builder and affect pipeline.
+
+        Keys match the contract expected by compute_affect_band() and
+        _get_affect_dict() in the front handler.
+        """
+        return {
+            "current_emotion": self._current_emotion,
+            "intensity": self._intensity,
+            "valence": self._dimensions.valence,
+            "arousal": self._dimensions.arousal,
+            "dominance": self._dimensions.dominance,
+            "trajectory": self._trajectory.name,
+            "confidence": self._confidence,
+            "source": self._source,
+            "empathy_needed": self._empathy_needed,
+            "celebration_appropriate": self._celebration_appropriate,
+        }
+
     # =========================================================================
     # State Update Operations
     # =========================================================================

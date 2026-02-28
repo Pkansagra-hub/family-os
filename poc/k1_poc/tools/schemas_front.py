@@ -495,6 +495,96 @@ DISPATCH_TASK_SCHEMA = ToolSchema(
 )
 
 # ===================================================================
+# BUNDLE (1) -- M4 E4.3.1
+# ===================================================================
+
+UPDATE_SESSION_BUNDLE_SCHEMA = ToolSchema(
+    name="update_session_bundle",
+    description=(
+        "Write to multiple Session State sections in a single tool call. Use when "
+        "you need to update beliefs + scoreboard + narrative (or any combination) "
+        "atomically in one turn. Reduces token cost by batching 2-5 writes into "
+        "one tool call/result round-trip. Each mutation specifies a section, "
+        "operation, and data payload. Duplicate calls with the same "
+        "idempotency_key are safely ignored."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "mutations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "section": {
+                            "type": "string",
+                            "description": (
+                                "Target SS section "
+                                "(beliefs_active, scoreboard, clarifications, "
+                                "narrative_active, affective_now)"
+                            ),
+                        },
+                        "operation": {
+                            "type": "string",
+                            "description": (
+                                "Operation for the section (add_fact, push_question, "
+                                "request, create_thread, update, etc.)"
+                            ),
+                        },
+                        "data": {
+                            "type": "object",
+                            "description": "Operation-specific payload",
+                        },
+                    },
+                    "required": ["section", "operation", "data"],
+                },
+                "minItems": 1,
+                "description": "Ordered list of mutations to apply.",
+            },
+            "idempotency_key": {
+                "type": "string",
+                "description": (
+                    "Unique key for this bundle. If the same key is sent again, "
+                    "the cached result is returned without re-applying mutations."
+                ),
+            },
+            "stop_on_rejection": {
+                "type": "boolean",
+                "default": True,
+                "description": (
+                    "If true, cancel remaining mutations on first rejection. "
+                    "If false, continue processing after rejection."
+                ),
+            },
+        },
+        "required": ["mutations", "idempotency_key"],
+    },
+    returns={
+        "type": "object",
+        "properties": {
+            "applied": {"type": "integer", "description": "Number of mutations applied"},
+            "rejected": {"type": "integer", "description": "Number rejected"},
+            "cancelled": {"type": "integer", "description": "Number cancelled"},
+            "stopped_early": {"type": "boolean"},
+            "details": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "section": {"type": "string"},
+                        "status": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                },
+            },
+        },
+    },
+    actor="front",
+    category="cognitive",
+    side_effects=True,
+)
+
+# ===================================================================
 # Aggregated list -- all 10 Front tools
 # ===================================================================
 
@@ -506,6 +596,8 @@ FRONT_TOOL_SCHEMAS: list[ToolSchema] = [
     UPDATE_NARRATIVE_SCHEMA,
     REFINE_AFFECT_SCHEMA,
     PROMOTE_BELIEF_SCHEMA,
+    # Bundle
+    UPDATE_SESSION_BUNDLE_SCHEMA,
     # Read
     RECALL_MEMORY_SCHEMA,
     SUMMARIZE_CONTEXT_SCHEMA,

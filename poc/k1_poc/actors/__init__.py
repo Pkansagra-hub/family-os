@@ -35,6 +35,11 @@ Exports:
 
   Back Resume/Cancel (Epic 7.4):
     - store_pending_context: Store ReAct history on suspend
+
+  Shared Actor Utilities (E3.5):
+    - parse_envelope_payload: Safely parse JSON bytes from Envelope
+    - safe_get_section: Safely read a SessionState section
+    - never_cancel: Async no-op cancellation check
 """
 
 from poc.k1_poc.actors.back import (
@@ -48,6 +53,7 @@ from poc.k1_poc.actors.back import (
     emit_artifact_created,
     emit_tool_completed,
     emit_tool_started,
+    route_back_envelope,
     store_pending_context,
     subscribe_back_events,
 )
@@ -60,6 +66,9 @@ from poc.k1_poc.actors.front import (
     front_handler,
     subscribe_front_events,
 )
+
+# Shared Actor Utilities (E3.5)
+from poc.k1_poc.actors.shared import never_cancel, parse_envelope_payload, safe_get_section
 
 __all__ = [
     # Front
@@ -74,7 +83,8 @@ __all__ = [
     "back_handler",
     "back_resume_handler",
     "back_cancel_handler",
-    "subscribe_back_events",
+    "route_back_envelope",
+    # subscribe_back_events: deprecated M3 E3.1.5, removal in M8
     "emit_tool_started",
     "emit_tool_completed",
     "emit_artifact_created",
@@ -83,4 +93,8 @@ __all__ = [
     "_filter_back_tools",
     "_summarize_args",
     "_summarize_result",
+    # Shared utilities (E3.5)
+    "parse_envelope_payload",
+    "safe_get_section",
+    "never_cancel",
 ]

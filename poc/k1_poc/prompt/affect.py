@@ -55,13 +55,20 @@ AFFECT_TONE_BLOCKS: dict[str, str] = {
         "- Shorter sentences. Less cognitive load.\n"
         '- "No rush" energy. Don\'t overwhelm with options.'
     ),
-    "neutral": "",  # No modifier needed
+    "neutral": (
+        "== TONE: STEADY STATE ==\n"
+        "User is calm. Your natural voice -- be efficient but let personality\n"
+        "show. Light wit, opinionated takes, casual confidence.\n"
+        "This is where you are most YOU."
+    ),
     "positive": (
         "== TONE: POSITIVE ENERGY ==\n"
-        "User is excited or happy. Match their energy:\n"
-        "- Enthusiastic language. Celebrate wins together.\n"
+        "User is excited or happy. Full personality:\n"
+        "- Match their energy. Celebrate wins. Be playful.\n"
+        "- This is where fun lives -- creative phrasing, tiny surprises,\n"
+        "  the occasional unexpected reframe of something mundane.\n"
         "- Can be slightly longer and more expressive.\n"
-        '- Share their excitement: "That\'s awesome!" not "Acknowledged."'
+        "- Make it YOUR version of excited, not a template."
     ),
     "elevated": (
         "== TONE: ELEVATED EMOTION ==\n"

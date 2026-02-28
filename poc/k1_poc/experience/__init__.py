@@ -22,7 +22,7 @@ from poc.k1_poc.experience.emotional_processor import EmotionalProcessor, Emotio
 from poc.k1_poc.experience.layer import ExperienceLayer
 from poc.k1_poc.experience.narrative_weaver import NarrativeContext, NarrativeWeaver
 from poc.k1_poc.experience.proactive_agent import FillMessage, ProactiveAgent
-from poc.k1_poc.experience.rhythm_controller import RhythmController, TimingParams
+from poc.k1_poc.experience.rhythm_controller import ResponseStyle, RhythmController, TimingParams
 
 __all__ = [
     # Output dataclasses
@@ -30,6 +30,7 @@ __all__ = [
     "EmotionalTrajectory",
     "FillMessage",
     "NarrativeContext",
+    "ResponseStyle",
     "TimingParams",
     "ToneAdjustment",
     # Component stubs

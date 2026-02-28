@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from poc.k1_poc.sessionstate.tiers.warm import WarmTier
 
 from poc.k1_poc.config import get_config
+
 from .sizetracker import (
     HOT_SECTIONS,
     HOT_SIZE_LIMIT_BYTES,
@@ -521,7 +522,10 @@ class SnapshotAPI:
         if migrations >= _cfg_thrash.severe_migrations or evictions >= _cfg_thrash.severe_evictions:
             severity = 3
             thrash_detected = True
-        elif migrations >= _cfg_thrash.moderate_migrations or evictions >= _cfg_thrash.moderate_evictions:
+        elif (
+            migrations >= _cfg_thrash.moderate_migrations
+            or evictions >= _cfg_thrash.moderate_evictions
+        ):
             severity = 2
             thrash_detected = True
         elif migrations >= _cfg_thrash.mild_migrations or evictions >= _cfg_thrash.mild_evictions:

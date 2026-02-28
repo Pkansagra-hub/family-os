@@ -25,18 +25,17 @@ Why a bridge instead of direct SS calls:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from poc.k1_poc.sessionstate.sections.task_artifacts import (
     ArtifactType,
     TaskArtifactEntry,
     TaskArtifactsSection,
 )
-from poc.k1_poc.sessionstate.sections.task_state import (
-    TaskStateEntry,
-    TaskStateSection,
-    TaskStatus,
-)
+from poc.k1_poc.sessionstate.sections.task_state import TaskStateEntry, TaskStateSection, TaskStatus
+
+if TYPE_CHECKING:
+    from poc.k1_poc.ledger.writer import LedgerWriter
 
 logger = logging.getLogger(__name__)
 
@@ -74,18 +73,95 @@ class TaskBridge:
         self,
         task_state: TaskStateSection | None = None,
         task_artifacts: TaskArtifactsSection | None = None,
+        ledger: LedgerWriter | None = None,
     ) -> None:
         self._task_state = task_state or TaskStateSection()
         self._task_artifacts = task_artifacts or TaskArtifactsSection()
+        self._ledger: LedgerWriter | None = ledger
         self._total_dispatched: int = 0
         self._total_completed: int = 0
         self._total_failed: int = 0
         self._total_cancelled: int = 0
+        self._rebound: bool = False
         logger.info(
-            "TaskBridge initialized (task_state=%s, task_artifacts=%s)",
+            "TaskBridge initialized (task_state=%s, task_artifacts=%s, ledger=%s)",
             type(self._task_state).__name__,
             type(self._task_artifacts).__name__,
+            "yes" if ledger else "no",
         )
+
+    # ------------------------------------------------------------------
+    # Rebind (M4 E4.1.1)
+    # ------------------------------------------------------------------
+
+    def rebind(
+        self,
+        task_state: TaskStateSection,
+        task_artifacts: TaskArtifactsSection,
+    ) -> None:
+        """Rebind to real SessionState sections, replacing local fallbacks.
+
+        Called by ``ConciergeController.set_session_state()`` after the
+        SessionStateManager is attached so that FSM lifecycle writes land
+        in the sections that Front/Back actors read.
+
+        Any tasks dispatched before rebind (defensive -- in practice
+        bootstrap wires before first user input) are copied into the new
+        sections.  Raises if called while tasks are in ACTIVE state to
+        prevent mid-flight data loss.
+
+        Args:
+            task_state:     Real TaskStateSection from SS manager.
+            task_artifacts: Real TaskArtifactsSection from SS manager.
+
+        Raises:
+            RuntimeError: If any task is currently ACTIVE (mid-flight).
+        """
+        # Guard: reject mid-flight rebind
+        active = [t for t in self._task_state.get_active() if t.status == TaskStatus.ACTIVE]
+        if active:
+            raise RuntimeError(
+                f"Cannot rebind TaskBridge while {len(active)} task(s) are ACTIVE: "
+                f"{[t.task_id for t in active]}"
+            )
+
+        old_state = self._task_state
+        old_artifacts = self._task_artifacts
+
+        # Copy any pre-rebind tasks into the new sections
+        for entry in old_state.get_all():
+            if task_state.get_by_id(entry.task_id) is None:
+                task_state.add_task(
+                    task_id=entry.task_id,
+                    action=entry.action,
+                    status=entry.status,
+                )
+
+        for artifact in old_artifacts.get_all():
+            existing = [
+                a for a in task_artifacts.get_all() if a.artifact_id == artifact.artifact_id
+            ]
+            if not existing:
+                task_artifacts.add_artifact(
+                    task_id=artifact.task_id,
+                    content=artifact.content,
+                    artifact_type=artifact.artifact_type,
+                    metadata=artifact.metadata or {},
+                )
+
+        self._task_state = task_state
+        self._task_artifacts = task_artifacts
+        self._rebound = True
+        logger.info(
+            "TaskBridge rebound to real SS sections " "(copied %d tasks, %d artifacts)",
+            len(old_state.get_all()),
+            len(old_artifacts.get_all()),
+        )
+
+    @property
+    def is_rebound(self) -> bool:
+        """Whether rebind() has been called with real SS sections."""
+        return self._rebound
 
     # ------------------------------------------------------------------
     # Properties
@@ -125,10 +201,20 @@ class TaskBridge:
     # Task lifecycle (write operations)
     # ------------------------------------------------------------------
 
+    def set_ledger(self, ledger: LedgerWriter) -> None:
+        """Wire the ledger writer after construction.
+
+        M9 E9.4.1: Allows bootstrap to attach the ledger after
+        the TaskBridge is created but before the first mutation.
+        """
+        self._ledger = ledger
+        logger.info("TaskBridge: ledger wired (session=%s)", ledger.session_id)
+
     def dispatch_task(self, task_id: str, action: str) -> TaskStateEntry:
         """Register a newly dispatched task.
 
         Called by FSM on task.dispatch.v1.
+        M9 E9.4.1: Ledger write BEFORE in-memory mutation.
 
         Args:
             task_id: Unique task identifier.
@@ -137,6 +223,17 @@ class TaskBridge:
         Returns:
             The created TaskStateEntry.
         """
+        if self._ledger is not None:
+            from poc.k1_poc.events.task import TaskCreated
+
+            self._ledger.append_sync(
+                TaskCreated(
+                    session_id=self._ledger.session_id,
+                    task_id=task_id,
+                    action=action,
+                    actor="fsm",
+                )
+            )
         entry = self._task_state.add_task(
             task_id=task_id,
             action=action,
@@ -150,6 +247,7 @@ class TaskBridge:
         """Mark task as actively executing.
 
         Called by FSM on tool.started.v1.
+        M9 E9.4.1: Ledger write BEFORE in-memory mutation.
 
         Args:
             task_id: Task to activate.
@@ -158,6 +256,17 @@ class TaskBridge:
             Updated entry, or None if task not found.
         """
         try:
+            if self._ledger is not None:
+                from poc.k1_poc.events.task import TaskProgressed
+
+                self._ledger.append_sync(
+                    TaskProgressed(
+                        session_id=self._ledger.session_id,
+                        task_id=task_id,
+                        status_message="activated",
+                        actor="back",
+                    )
+                )
             return self._task_state.update_status(task_id, TaskStatus.ACTIVE)
         except (KeyError, ValueError) as exc:
             logger.warning("TaskBridge: activate failed for %s: %s", task_id, exc)
@@ -168,6 +277,7 @@ class TaskBridge:
 
         Called by FSM on task.suspended.v1. Sets pending_hil=True and
         increments hil_suspensions_count.
+        M9 E9.4.1: Ledger write BEFORE in-memory mutation.
 
         Args:
             task_id: Task to suspend.
@@ -176,6 +286,20 @@ class TaskBridge:
             Updated entry, or None if not found.
         """
         try:
+            if self._ledger is not None:
+                from poc.k1_poc.events.hitl import TaskSuspended as TaskSuspendedEvent
+
+                current = self._task_state.get_by_id(task_id)
+                count = (current.hil_suspensions_count + 1) if current else 1
+                self._ledger.append_sync(
+                    TaskSuspendedEvent(
+                        session_id=self._ledger.session_id,
+                        task_id=task_id,
+                        suspension_type="hil",
+                        suspension_count=count,
+                        actor="back",
+                    )
+                )
             # Auto-activate if still DISPATCHED (mirrors complete_task pattern)
             current = self._task_state.get_by_id(task_id)
             if current and current.status == TaskStatus.DISPATCHED:
@@ -186,10 +310,30 @@ class TaskBridge:
             logger.warning("TaskBridge: suspend failed for %s: %s", task_id, exc)
             return None
 
+    def set_pending_hil_data(self, task_id: str, data: dict | None) -> None:
+        """Store serialized HILSubTask on a task entry for crash recovery.
+
+        M6 E6.1.2 / E6.4.1: Persists the full HILSubTask dict alongside
+        the boolean pending_hil flag so scan_for_recovery() can
+        reconstruct HITL state after a crash.
+
+        Args:
+            task_id: Task UUID.
+            data:    Serialized HILSubTask dict, or None to clear.
+        """
+        try:
+            self._task_state.set_pending_hil_data(task_id, data)
+        except KeyError:
+            logger.warning(
+                "TaskBridge: set_pending_hil_data failed for %s (not found)",
+                task_id,
+            )
+
     def resume_task(self, task_id: str) -> TaskStateEntry | None:
         """Resume a suspended task after HITL response.
 
         Called by FSM on task.resume.v1.
+        M9 E9.4.1: Ledger write BEFORE in-memory mutation.
 
         Args:
             task_id: Task to resume.
@@ -198,25 +342,50 @@ class TaskBridge:
             Updated entry, or None if not found.
         """
         try:
+            if self._ledger is not None:
+                from poc.k1_poc.events.hitl import TaskResumed as TaskResumedEvent
+
+                self._ledger.append_sync(
+                    TaskResumedEvent(
+                        session_id=self._ledger.session_id,
+                        task_id=task_id,
+                        actor="fsm",
+                    )
+                )
             return self._task_state.update_status(task_id, TaskStatus.ACTIVE)
         except (KeyError, ValueError) as exc:
             logger.warning("TaskBridge: resume failed for %s: %s", task_id, exc)
             return None
 
-    def complete_task(self, task_id: str) -> TaskStateEntry | None:
+    def complete_task(
+        self, task_id: str, result_data: dict[str, Any] | None = None
+    ) -> TaskStateEntry | None:
         """Mark task as completed.
 
         Called by FSM on task.complete.v1.
         Auto-activates the task first if still in DISPATCHED state
         (the back handler may complete without a separate activate step).
+        M9 E9.4.1: Ledger write BEFORE in-memory mutation.
 
         Args:
             task_id: Task to complete.
+            result_data: Optional structured result payload.
 
         Returns:
             Updated entry, or None if not found.
         """
         try:
+            if self._ledger is not None:
+                from poc.k1_poc.events.task import TaskCompleted as TaskCompletedEvent
+
+                self._ledger.append_sync(
+                    TaskCompletedEvent(
+                        session_id=self._ledger.session_id,
+                        task_id=task_id,
+                        result_data=result_data or {},
+                        actor="back",
+                    )
+                )
             # Auto-activate if still DISPATCHED (back may skip activate)
             current = self._task_state.get_by_id(task_id)
             if current and current.status == TaskStatus.DISPATCHED:
@@ -230,18 +399,31 @@ class TaskBridge:
             logger.warning("TaskBridge: complete failed for %s: %s", task_id, exc)
             return None
 
-    def fail_task(self, task_id: str) -> TaskStateEntry | None:
+    def fail_task(self, task_id: str, reason: str = "error") -> TaskStateEntry | None:
         """Mark task as failed.
 
         Called by FSM on task.failed.v1 (reason=error or timeout).
+        M9 E9.4.1: Ledger write BEFORE in-memory mutation.
 
         Args:
             task_id: Task to fail.
+            reason: Failure reason string.
 
         Returns:
             Updated entry, or None if not found.
         """
         try:
+            if self._ledger is not None:
+                from poc.k1_poc.events.task import TaskFailed as TaskFailedEvent
+
+                self._ledger.append_sync(
+                    TaskFailedEvent(
+                        session_id=self._ledger.session_id,
+                        task_id=task_id,
+                        reason=reason,
+                        actor="back",
+                    )
+                )
             entry = self._task_state.update_status(task_id, TaskStatus.FAILED)
             self._total_failed += 1
             return entry
@@ -249,18 +431,31 @@ class TaskBridge:
             logger.warning("TaskBridge: fail failed for %s: %s", task_id, exc)
             return None
 
-    def cancel_task(self, task_id: str) -> TaskStateEntry | None:
+    def cancel_task(self, task_id: str, reason: str = "user_requested") -> TaskStateEntry | None:
         """Mark task as cancelled.
 
         Called by FSM on task.failed.v1 (reason=cancelled).
+        M9 E9.4.1: Ledger write BEFORE in-memory mutation.
 
         Args:
             task_id: Task to cancel.
+            reason: Cancellation reason string.
 
         Returns:
             Updated entry, or None if not found.
         """
         try:
+            if self._ledger is not None:
+                from poc.k1_poc.events.task import TaskCancelled as TaskCancelledEvent
+
+                self._ledger.append_sync(
+                    TaskCancelledEvent(
+                        session_id=self._ledger.session_id,
+                        task_id=task_id,
+                        reason=reason,
+                        actor="fsm",
+                    )
+                )
             entry = self._task_state.update_status(task_id, TaskStatus.CANCELLED)
             self._total_cancelled += 1
             return entry
@@ -395,6 +590,86 @@ class TaskBridge:
             "artifact_count": len(self._task_artifacts.get_all()),
             "artifact_size": self._task_artifacts.get_size_bytes(),
         }
+
+    # ------------------------------------------------------------------
+    # M9 E9.4.1: Rebuild from ledger projection
+    # ------------------------------------------------------------------
+
+    def rebuild_from_projection(
+        self,
+        projected: dict[str, Any],
+    ) -> int:
+        """Rebuild in-memory task state from a ledger projection.
+
+        M9 E9.4.1: Called by CrashRecoveryOrchestrator during startup.
+        Replaces the current TaskStateSection contents with the
+        projected state derived from ledger events.
+
+        The projection produces hitl_persistence.TaskStateEntry objects
+        which use uppercase enum statuses (DISPATCHED, IN_PROGRESS, etc.).
+        This method maps them to the SS lowercase strings (dispatched, active).
+
+        Args:
+            projected: Dict of task_id -> hitl_persistence.TaskStateEntry
+                       from ``project_task_states(entries)``.
+
+        Returns:
+            Number of tasks restored.
+        """
+        # Map hitl_persistence TaskStatus (uppercase) to SS TaskStatus (lowercase)
+        _STATUS_MAP = {
+            "DISPATCHED": TaskStatus.DISPATCHED,
+            "IN_PROGRESS": TaskStatus.ACTIVE,
+            "SUSPENDED": TaskStatus.SUSPENDED,
+            "COMPLETED": TaskStatus.COMPLETED,
+            "FAILED": TaskStatus.FAILED,
+            "CANCELLED": TaskStatus.CANCELLED,
+        }
+
+        self._task_state.clear()
+        counts = {"dispatched": 0, "completed": 0, "failed": 0, "cancelled": 0}
+
+        for task_id, entry in projected.items():
+            # Convert status from hitl_persistence enum to SS string
+            raw_status = (
+                str(entry.status.value) if hasattr(entry.status, "value") else str(entry.status)
+            )
+            ss_status = _STATUS_MAP.get(raw_status, TaskStatus.DISPATCHED)
+
+            self._task_state.add_task(
+                task_id=entry.task_id,
+                action=entry.action,
+                status=ss_status,
+            )
+            counts["dispatched"] += 1
+            if ss_status == TaskStatus.COMPLETED:
+                counts["completed"] += 1
+            elif ss_status == TaskStatus.FAILED:
+                counts["failed"] += 1
+            elif ss_status == TaskStatus.CANCELLED:
+                counts["cancelled"] += 1
+
+            # Restore HITL persistence fields on the SS entry
+            restored = self._task_state.get_by_id(task_id)
+            if restored is not None:
+                if entry.pending_hil:
+                    restored.pending_hil = True
+                restored.hil_suspensions_count = getattr(entry, "hil_suspensions_count", 0)
+
+        self._total_dispatched = counts["dispatched"]
+        self._total_completed = counts["completed"]
+        self._total_failed = counts["failed"]
+        self._total_cancelled = counts["cancelled"]
+
+        logger.info(
+            "TaskBridge: rebuilt from projection "
+            "(tasks=%d, completed=%d, failed=%d, cancelled=%d)",
+            counts["dispatched"],
+            counts["completed"],
+            counts["failed"],
+            counts["cancelled"],
+        )
+        return len(projected)
 
     def reset(self) -> None:
         """Reset all state. Called on teardown."""

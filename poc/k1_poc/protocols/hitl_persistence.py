@@ -7,16 +7,20 @@ V2 Design Ref: Section 9.6 (Crash Recovery Protocol)
 V2 Design Ref: Section 9.10 (Invariants 3, 4, 6)
 
 Epic 13.6: HITL Limits, Timeouts, and Crash Recovery.
+M6 E6.1.1: HILSubTask -- formal blocking sub-task model.
 
 This module provides:
 
+    HILSubTaskStatus:    Status enum for HITL sub-task lifecycle.
+    HILSubTask:          The formal blocking sub-task model wrapping
+                         HILRequest + react_snapshot + resume_token.
     TaskStateEntry:      The persistence model for task state including
                          HITL-specific fields (pending_hil, hil_suspensions_count).
     HILTimeoutEvent:     Bus event emitted when HITL timeout fires.
     CrashRecoveryReport: Summary of crash recovery scan results.
 
 Persistence contract (V2 Section 5):
-    TaskStateEntry.pending_hil stores the serialized HILRequest for
+    TaskStateEntry.pending_hil stores the serialized HILSubTask for
     crash recovery.  When status=SUSPENDED and pending_hil is not None,
     the FSM can reconstruct the HITL state on restart.
 
@@ -35,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -42,6 +47,315 @@ from typing import Any
 from poc.k1_poc.protocols.hitl import HILRequest
 
 logger = logging.getLogger(__name__)
+
+
+# =========================================================================
+# M6 E6.1.1: HILSubTask -- formal blocking sub-task model
+# =========================================================================
+
+
+class HILSubTaskStatus(str, Enum):
+    """Lifecycle status for a HITL blocking sub-task.
+
+    M6 E6.1.1: Replaces scattered in-memory state with formal lifecycle.
+
+    PENDING:    Awaiting user response. Side-effects blocked at L2.
+    RESOLVED:   User answered. Resume dispatch imminent.
+    TIMED_OUT:  Timeout fired before user answered. Auto-cancel.
+    CANCELLED:  Explicitly cancelled (user cancel, limit exceeded, etc.).
+    """
+
+    PENDING = "PENDING"
+    RESOLVED = "RESOLVED"
+    TIMED_OUT = "TIMED_OUT"
+    CANCELLED = "CANCELLED"
+
+
+@dataclass
+class HILSubTask:
+    """Formal blocking sub-task model for HITL lifecycle.
+
+    M6 E6.1.1: Single source of truth wrapping HILRequest + suspension
+    context + ReAct snapshot into one persist-ready record.
+
+    Replaces the dual-store pattern where SuspensionManager._contexts
+    and FSMTurnState.pending_context stored overlapping state.
+
+    Attributes:
+        pending_hil_id:    Unique identifier for this HITL sub-task (UUID).
+        hil_type:          One of: clarification, approval, selection.
+        parent_task_id:    The task_id that triggered this HITL.
+        question:          The question asked of the user.
+        options:           Structured options (approval/selection).
+        side_effects:      Side effects to present (approval).
+        safety_band:       Effective safety band after escalation.
+        hil_deadline:      Absolute deadline (created_at_ns + timeout_ms * 1e6).
+        timeout_ms:        Configured timeout in milliseconds.
+        resume_token:      UUID4 token for validating resume events.
+        react_snapshot:    Captured ReAct state at suspension point:
+                           - prior_messages: list of message dicts
+                           - tool_history: list of tool call entries
+                           - last_iteration: iteration count at suspension
+        status:            Current lifecycle status (PENDING -> RESOLVED/TIMED_OUT/CANCELLED).
+        created_at_ns:     Monotonic timestamp when sub-task was created.
+        resolved_at_ns:    Monotonic timestamp when sub-task was resolved (0 if not resolved).
+        device_id:         Device that originated the task (M5 tracking).
+        context:           Additional context from HILRequest.
+    """
+
+    pending_hil_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    hil_type: str = "clarification"
+    parent_task_id: str = ""
+    question: str = ""
+    options: list[dict[str, Any]] = field(default_factory=list)
+    side_effects: list[str] = field(default_factory=list)
+    safety_band: str = "GREEN"
+    hil_deadline: int = 0
+    timeout_ms: int = 60_000
+    resume_token: str = field(default_factory=lambda: str(uuid.uuid4()))
+    react_snapshot: dict[str, Any] = field(
+        default_factory=lambda: {
+            "prior_messages": [],
+            "tool_history": [],
+            "last_iteration": 0,
+        }
+    )
+    status: HILSubTaskStatus = HILSubTaskStatus.PENDING
+    created_at_ns: int = field(default_factory=time.monotonic_ns)
+    resolved_at_ns: int = 0
+    device_id: str = ""
+    context: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Compute deadline if not already set."""
+        if self.hil_deadline == 0 and self.timeout_ms > 0:
+            self.hil_deadline = self.created_at_ns + (self.timeout_ms * 1_000_000)
+
+    @classmethod
+    def from_hil_request(
+        cls,
+        request: HILRequest,
+        react_snapshot: dict[str, Any] | None = None,
+        device_id: str = "",
+    ) -> HILSubTask:
+        """Create HILSubTask from an HILRequest and captured ReAct state.
+
+        M6 E6.1.2: Factory method used in _on_task_suspended.
+
+        Args:
+            request:        The HILRequest from Back's submit_result.
+            react_snapshot: Captured ReAct state (prior_messages, tool_history, last_iteration).
+            device_id:      Device that originated the task (M5).
+
+        Returns:
+            New HILSubTask in PENDING status with resume_token generated.
+        """
+        snapshot = react_snapshot or {
+            "prior_messages": [],
+            "tool_history": [],
+            "last_iteration": 0,
+        }
+        return cls(
+            hil_type=request.hil_type,
+            parent_task_id=request.task_id,
+            question=request.question,
+            options=list(request.options),
+            side_effects=list(request.side_effects),
+            safety_band=(
+                request.safety_band.value
+                if hasattr(request.safety_band, "value")
+                else str(request.safety_band)
+            ),
+            timeout_ms=request.timeout_ms,
+            react_snapshot=snapshot,
+            device_id=device_id,
+            context=dict(request.context),
+        )
+
+    def resolve(self, decision_branch: str = "clarified") -> None:
+        """Transition to RESOLVED status.
+
+        M6 E6.3.2: Called when user provides answer.
+
+        Args:
+            decision_branch: One of: clarified, approved, approved_with_mods,
+                           cancelled, selected.
+        """
+        if self.status != HILSubTaskStatus.PENDING:
+            logger.warning(
+                "HILSubTask.resolve: ignoring resolve for %s in status %s",
+                self.pending_hil_id,
+                self.status.value,
+            )
+            return
+        self.status = HILSubTaskStatus.RESOLVED
+        self.resolved_at_ns = time.monotonic_ns()
+        logger.info(
+            "HILSubTask resolved: id=%s type=%s branch=%s",
+            self.pending_hil_id[:8],
+            self.hil_type,
+            decision_branch,
+        )
+
+    def time_out(self) -> None:
+        """Transition to TIMED_OUT status.
+
+        M6 E6.3.3: Called when timeout fires.
+        """
+        if self.status != HILSubTaskStatus.PENDING:
+            logger.warning(
+                "HILSubTask.time_out: ignoring timeout for %s in status %s",
+                self.pending_hil_id,
+                self.status.value,
+            )
+            return
+        self.status = HILSubTaskStatus.TIMED_OUT
+        self.resolved_at_ns = time.monotonic_ns()
+        logger.info(
+            "HILSubTask timed out: id=%s type=%s",
+            self.pending_hil_id[:8],
+            self.hil_type,
+        )
+
+    def cancel(self, reason: str = "user_cancel") -> None:
+        """Transition to CANCELLED status.
+
+        M6 E6.1.5 / E6.3.4: Called on explicit cancel or limit exceeded.
+
+        Args:
+            reason: Cancellation reason for audit trail.
+        """
+        if self.status not in (HILSubTaskStatus.PENDING, HILSubTaskStatus.TIMED_OUT):
+            logger.warning(
+                "HILSubTask.cancel: ignoring cancel for %s in status %s",
+                self.pending_hil_id,
+                self.status.value,
+            )
+            return
+        self.status = HILSubTaskStatus.CANCELLED
+        self.resolved_at_ns = time.monotonic_ns()
+        logger.info(
+            "HILSubTask cancelled: id=%s type=%s reason=%s",
+            self.pending_hil_id[:8],
+            self.hil_type,
+            reason,
+        )
+
+    @property
+    def is_pending(self) -> bool:
+        """Whether this sub-task is still awaiting user response."""
+        return self.status == HILSubTaskStatus.PENDING
+
+    @property
+    def is_terminal(self) -> bool:
+        """Whether this sub-task is in a terminal state."""
+        return self.status in (
+            HILSubTaskStatus.RESOLVED,
+            HILSubTaskStatus.TIMED_OUT,
+            HILSubTaskStatus.CANCELLED,
+        )
+
+    @property
+    def elapsed_ms(self) -> int:
+        """Milliseconds since creation."""
+        return int((time.monotonic_ns() - self.created_at_ns) / 1_000_000)
+
+    @property
+    def remaining_timeout_ms(self) -> int:
+        """Milliseconds remaining before timeout (0 if expired)."""
+        remaining_ns = self.hil_deadline - time.monotonic_ns()
+        return max(0, int(remaining_ns / 1_000_000))
+
+    def to_persistence(self) -> dict[str, Any]:
+        """Serialize for TaskStateEntry.pending_hil crash recovery.
+
+        M6 E6.4.1: Includes react_snapshot for zero-waste resume after crash.
+        Includes suspended_at_ms for timeout checking on recovery.
+        """
+        return {
+            "pending_hil_id": self.pending_hil_id,
+            "hil_type": self.hil_type,
+            "parent_task_id": self.parent_task_id,
+            "question": self.question,
+            "options": self.options,
+            "side_effects": self.side_effects,
+            "safety_band": self.safety_band,
+            "hil_deadline": self.hil_deadline,
+            "timeout_ms": self.timeout_ms,
+            "resume_token": self.resume_token,
+            "react_snapshot": self.react_snapshot,
+            "status": self.status.value,
+            "created_at_ns": self.created_at_ns,
+            "resolved_at_ns": self.resolved_at_ns,
+            "device_id": self.device_id,
+            "context": self.context,
+            "suspended_at_ms": int(self.created_at_ns / 1_000_000),
+        }
+
+    @classmethod
+    def from_persistence(cls, data: dict[str, Any]) -> HILSubTask:
+        """Deserialize from TaskStateEntry.pending_hil.
+
+        M6 E6.4.2: Used by scan_for_recovery to reconstruct HILSubTask
+        from persisted task_state on FSM startup.
+        """
+        status_str = data.get("status", "PENDING")
+        try:
+            status = HILSubTaskStatus(status_str)
+        except ValueError:
+            status = HILSubTaskStatus.PENDING
+
+        snapshot = data.get(
+            "react_snapshot",
+            {
+                "prior_messages": [],
+                "tool_history": [],
+                "last_iteration": 0,
+            },
+        )
+
+        return cls(
+            pending_hil_id=data.get("pending_hil_id", str(uuid.uuid4())),
+            hil_type=data.get("hil_type", "clarification"),
+            parent_task_id=data.get("parent_task_id", ""),
+            question=data.get("question", ""),
+            options=data.get("options", []),
+            side_effects=data.get("side_effects", []),
+            safety_band=data.get("safety_band", "GREEN"),
+            hil_deadline=data.get("hil_deadline", 0),
+            timeout_ms=data.get("timeout_ms", 60_000),
+            resume_token=data.get("resume_token", str(uuid.uuid4())),
+            react_snapshot=snapshot,
+            status=status,
+            created_at_ns=data.get("created_at_ns", time.monotonic_ns()),
+            resolved_at_ns=data.get("resolved_at_ns", 0),
+            device_id=data.get("device_id", ""),
+            context=data.get("context", {}),
+        )
+
+    def to_hil_request(self) -> HILRequest:
+        """Convert back to HILRequest (for recovery re-presentation).
+
+        M6 E6.4.3: Used by _recover_hitl_on_startup to re-present
+        recoverable suspensions via Front HITL_RELAY.
+        """
+        from poc.k1_poc.protocols.hitl import SafetyBand
+
+        try:
+            band = SafetyBand(self.safety_band)
+        except ValueError:
+            band = SafetyBand.GREEN
+
+        return HILRequest(
+            task_id=self.parent_task_id,
+            hil_type=self.hil_type,
+            question=self.question,
+            options=list(self.options),
+            context=dict(self.context),
+            side_effects=list(self.side_effects),
+            safety_band=band,
+            timeout_ms=self.timeout_ms,
+        )
 
 
 class TaskStatus(str, Enum):
@@ -111,13 +425,15 @@ class TaskStateEntry:
     hil_history: list[dict[str, Any]] = field(default_factory=list)
     cancel_reason: str | None = None
 
-    def suspend(self, hil_request: HILRequest) -> None:
+    def suspend(self, hil_request: HILRequest, ledger: Any = None) -> None:
         """Mark task as SUSPENDED with pending HITL.
 
         V2 Design Ref: Section 9.5 (pending_hil persistence)
+        V3 M1 E1.2.3: Optional ledger param for event sourcing.
 
         Args:
             hil_request: The HILRequest to persist for crash recovery.
+            ledger: Optional LedgerWriter for event sourcing.
         """
         self.status = TaskStatus.SUSPENDED
         self.pending_hil = hil_request.to_persistence()
@@ -129,10 +445,11 @@ class TaskStateEntry:
             hil_request.hil_type,
         )
 
-    def resume(self) -> dict[str, Any] | None:
+    def resume(self, ledger: Any = None) -> dict[str, Any] | None:
         """Clear HITL suspension state and return pending_hil for resolution.
 
         V2 Design Ref: Section 9.5 (pending_hil cleared on resume)
+        V3 M1 E1.2.3: Optional ledger param for event sourcing.
 
         Returns:
             The pending_hil dict (for Back resume context), or None.
@@ -143,13 +460,15 @@ class TaskStateEntry:
         logger.info("Task %s: resumed", self.task_id)
         return pending
 
-    def cancel(self, reason: str = "user_cancel") -> None:
+    def cancel(self, reason: str = "user_cancel", ledger: Any = None) -> None:
         """Mark task as CANCELLED.
 
         V2 Design Ref: Section 9.5 (Timeout auto-cancel)
+        V3 M1 E1.2.3: Optional ledger param for event sourcing.
 
         Args:
             reason: Why the task was cancelled.
+            ledger: Optional LedgerWriter for event sourcing.
         """
         self.status = TaskStatus.CANCELLED
         self.pending_hil = None
@@ -157,14 +476,20 @@ class TaskStateEntry:
         self.completed_at_ms = _now_ms()
         logger.info("Task %s: cancelled [reason=%s]", self.task_id, reason)
 
-    def complete(self) -> None:
-        """Mark task as COMPLETED."""
+    def complete(self, ledger: Any = None) -> None:
+        """Mark task as COMPLETED.
+
+        V3 M1 E1.2.3: Optional ledger param for event sourcing.
+        """
         self.status = TaskStatus.COMPLETED
         self.pending_hil = None
         self.completed_at_ms = _now_ms()
 
-    def fail(self, reason: str = "error") -> None:
-        """Mark task as FAILED."""
+    def fail(self, reason: str = "error", ledger: Any = None) -> None:
+        """Mark task as FAILED.
+
+        V3 M1 E1.2.3: Optional ledger param for event sourcing.
+        """
         self.status = TaskStatus.FAILED
         self.pending_hil = None
         self.cancel_reason = reason
@@ -423,7 +748,7 @@ def scan_for_recovery(
         status = entry_dict.get("status", "")
         pending = entry_dict.get("pending_hil")
 
-        if status != "SUSPENDED" or pending is None:
+        if status.upper() != "SUSPENDED" or pending is None:
             report.skipped_task_ids.append(task_id)
             continue
 

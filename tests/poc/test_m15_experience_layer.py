@@ -32,6 +32,7 @@ from poc.k1_poc.experience import (
     NarrativeContext,
     NarrativeWeaver,
     ProactiveAgent,
+    ResponseStyle,
     RhythmController,
     TimingParams,
     ToneAdjustment,
@@ -147,10 +148,10 @@ class TestEpic15_1_PackageStructure:
     # -- 15.1.4 Total export count --
 
     def test_total_export_count(self):
-        """Package exports exactly 13 names: 6 dataclasses + 6 stubs + 1 orchestrator."""
+        """Package exports exactly 14 names: 7 dataclasses + 6 stubs + 1 orchestrator."""
         import poc.k1_poc.experience as exp
 
-        assert len(exp.__all__) == 13
+        assert len(exp.__all__) == 14
 
     # -- 15.1.5 Component inventory table (6 components) --
 
@@ -241,14 +242,31 @@ class TestEpic15_2_EmotionalProcessor:
         assert isinstance(result, EmotionalTrajectory)
 
     def test_process_returns_defaults(self):
-        """Stub returns neutral defaults (confidence=0.0 signals stub)."""
+        """Empty affect_history returns neutral defaults (confidence=0.0)."""
         ep = EmotionalProcessor()
-        result = _run(ep.process("hello world", [{"valence": 0.5}]))
+        result = _run(ep.process("hello world", []))
         assert result.valence == 0.0
         assert result.arousal == 0.5
         assert result.dominance == 0.5
         assert result.trend == "stable"
         assert result.confidence == 0.0
+
+    def test_process_computes_trajectory_from_history(self):
+        """With real affect_history, EP computes smoothed trajectory."""
+        ep = EmotionalProcessor()
+        history = [
+            {"valence": -0.4, "arousal": 0.6, "turn_number": 1},
+            {"valence": -0.2, "arousal": 0.5, "turn_number": 2},
+            {"valence": 0.1, "arousal": 0.4, "turn_number": 3},
+        ]
+        result = _run(ep.process("hello", history))
+        assert isinstance(result, EmotionalTrajectory)
+        # Smoothed valence should be slightly negative (weighted toward recent)
+        assert -0.5 < result.valence < 0.5
+        # Trend should be rising (valence going from -0.4 to 0.1)
+        assert result.trend == "rising"
+        # Confidence > 0 when real data present
+        assert result.confidence > 0.0
 
     def test_process_accepts_typed_arguments(self):
         """Verify process() accepts str and list[dict]."""
@@ -320,13 +338,53 @@ class TestEpic15_3_AffectiveMirror:
         result = _run(am.mirror({}, {}))
         assert isinstance(result, ToneAdjustment)
 
-    def test_mirror_returns_defaults(self):
+    def test_mirror_returns_defaults_for_empty_state(self):
         am = AffectiveMirror()
-        result = _run(am.mirror({"valence": 0.5}, {"name": "concierge"}))
+        result = _run(am.mirror({}, {}))
         assert result.warmth == 0.5
         assert result.formality == 0.5
         assert result.pace == "normal"
         assert result.mirror_intensity == 0.0
+
+    def test_mirror_fulfillment_sad_user(self):
+        """Sad user gets warmer, slightly more casual tone."""
+        am = AffectiveMirror()
+        result = _run(
+            am.mirror(
+                {"valence": -0.5, "arousal": 0.4, "confidence": 0.8},
+                {"personality": {"warmth": 0.5, "formality": 0.5}},
+            )
+        )
+        assert result.warmth > 0.5  # warmer
+        assert result.formality < 0.5  # more casual
+        assert result.mirror_intensity == 0.0  # no mirroring negativity
+        assert result.pace == "slow"
+
+    def test_mirror_fulfillment_excited_user(self):
+        """Excited user gets energy matching -- mirror IS appropriate."""
+        am = AffectiveMirror()
+        result = _run(
+            am.mirror(
+                {"valence": 0.7, "arousal": 0.8, "confidence": 0.9},
+                {"personality": {"warmth": 0.5, "formality": 0.5}},
+            )
+        )
+        assert result.warmth > 0.5
+        assert result.mirror_intensity > 0.5  # energy matching
+        assert result.pace == "fast"
+
+    def test_mirror_fulfillment_crisis(self):
+        """Crisis (high arousal + very negative) gets grounding."""
+        am = AffectiveMirror()
+        result = _run(
+            am.mirror(
+                {"valence": -0.8, "arousal": 0.9, "confidence": 0.9},
+                {"personality": {"warmth": 0.5, "formality": 0.5}},
+            )
+        )
+        assert result.formality >= 0.5  # structured = grounding
+        assert result.mirror_intensity == 0.0  # never mirror panic
+        assert result.pace == "slow"
 
     def test_mirror_signature_parameters(self):
         sig = inspect.signature(AffectiveMirror.mirror)
@@ -688,6 +746,118 @@ class TestEpic15_7_RhythmController:
         assert "self" in params
         assert "current" in params
         assert "feedback" in params
+
+
+class TestResponseStyleAdapter:
+    """ResponseStyleAdapter: learns user communication preferences."""
+
+    def test_response_style_defaults(self):
+        s = ResponseStyle()
+        assert s.response_length_preference == "balanced"
+        assert s.message_style == "single_complete"
+        assert s.verbosity_level == 0.5
+
+    def test_concise_for_short_messages(self):
+        """User sends short messages -> system responds concisely."""
+        rc = RhythmController()
+        history = [
+            {
+                "source": "user",
+                "text": "hi",
+                "turn_number": 1,
+                "entry_type": "user",
+                "timestamp_ms": 1000,
+            },
+            {
+                "source": "user",
+                "text": "order pizza",
+                "turn_number": 2,
+                "entry_type": "user",
+                "timestamp_ms": 2000,
+            },
+            {
+                "source": "user",
+                "text": "pepperoni",
+                "turn_number": 3,
+                "entry_type": "user",
+                "timestamp_ms": 3000,
+            },
+        ]
+        rc.get_pattern(3, {"_conversation_history": history})
+        assert rc.last_response_style.response_length_preference == "concise"
+        assert rc.last_response_style.verbosity_level < 0.4
+
+    def test_detailed_for_long_messages(self):
+        """User sends detailed messages -> system responds with detail."""
+        rc = RhythmController()
+        history = [
+            {
+                "source": "user",
+                "text": "I need help planning a detailed budget for our family vacation to Europe next summer, including flights, hotels, activities, and food estimates for four people over two weeks.",
+                "turn_number": 1,
+                "entry_type": "user",
+                "timestamp_ms": 1000,
+            },
+            {
+                "source": "user",
+                "text": "Also please factor in travel insurance, airport transfers, and any visa requirements for UK citizens traveling to France, Italy, and Spain with detailed cost breakdowns.",
+                "turn_number": 2,
+                "entry_type": "user",
+                "timestamp_ms": 60000,
+            },
+        ]
+        rc.get_pattern(2, {"_conversation_history": history})
+        assert rc.last_response_style.response_length_preference == "detailed"
+        assert rc.last_response_style.verbosity_level > 0.6
+
+    def test_burst_detection(self):
+        """Rapid-fire messages detected as conversational bursts."""
+        rc = RhythmController()
+        history = [
+            {
+                "source": "user",
+                "text": "hey",
+                "turn_number": 1,
+                "entry_type": "user",
+                "timestamp_ms": 1000,
+            },
+            {
+                "source": "user",
+                "text": "whats up",
+                "turn_number": 2,
+                "entry_type": "user",
+                "timestamp_ms": 2000,
+            },
+            {
+                "source": "user",
+                "text": "got a sec?",
+                "turn_number": 3,
+                "entry_type": "user",
+                "timestamp_ms": 3000,
+            },
+        ]
+        cadence = {
+            "avg_gap_ms": 1000,
+            "last_gap_ms": 1000,
+            "sample_count": 2,
+            "_conversation_history": history,
+        }
+        rc.get_pattern(3, cadence)
+        assert rc.last_response_style.message_style == "conversational_bursts"
+
+    def test_empty_history_returns_defaults(self):
+        """No conversation data -> default balanced style."""
+        rc = RhythmController()
+        rc.get_pattern(1, {})
+        assert rc.last_response_style.response_length_preference == "balanced"
+        assert rc.last_response_style.verbosity_level == 0.5
+
+    def test_get_pattern_still_returns_timing_params(self):
+        """RSA logic does not break TimingParams return contract."""
+        rc = RhythmController()
+        result = rc.get_pattern(1, {"_conversation_history": [{"source": "user", "text": "hi"}]})
+        assert isinstance(result, TimingParams)
+        assert result.pre_delay_ms == 0
 
 
 # =========================================================================

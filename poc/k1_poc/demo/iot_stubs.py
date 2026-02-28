@@ -35,9 +35,62 @@ class ScriptedIoTEvent:
 
 
 # The events are keyed to storyline turns in demo_storyline.md.
-# Some turns are "proactive-only" (no user input) -- Turns 11, 13, 15, 17.
+# Early turns (2-4) provide ambient IoT context during short demos.
+# Later turns (11, 13, 15, 17) are "proactive-only" storyline beats.
 
 SCRIPTED_IOT_EVENTS: List[ScriptedIoTEvent] = [
+    # --- Early demo ambient events (turns 2-4) ---
+    ScriptedIoTEvent(
+        turn=2,
+        monitor_type="SECURITY",
+        summary=(
+            "Front door was locked automatically -- everyone's out "
+            "or accounted for. All entry points secure."
+        ),
+        payload={
+            "monitor": "SECURITY",
+            "device": "front_door_lock",
+            "status": "auto_locked",
+            "all_secure": True,
+        },
+        label="door_auto_locked",
+    ),
+    ScriptedIoTEvent(
+        turn=3,
+        monitor_type="PACKAGE",
+        summary=(
+            "Package delivered! Amazon box on the front porch -- "
+            "looks like Riley's new art supplies. Porch camera "
+            "confirmed delivery at 3:12 PM."
+        ),
+        payload={
+            "monitor": "PACKAGE",
+            "device": "porch_camera",
+            "carrier": "Amazon",
+            "item_hint": "Riley's art supplies",
+            "location": "front_porch",
+            "confirmed_time": "15:12",
+        },
+        label="package_delivered",
+    ),
+    ScriptedIoTEvent(
+        turn=4,
+        monitor_type="HEALTH",
+        summary=(
+            "Nana Liz's 3 PM medication reminder sent. She confirmed "
+            "she took her Amlodipine 5mg. All good!"
+        ),
+        payload={
+            "monitor": "HEALTH",
+            "device": "nana_tablet",
+            "member": "Nana Liz",
+            "medication": "Amlodipine 5mg",
+            "status": "confirmed",
+            "scheduled_time": "15:00",
+        },
+        label="nana_meds_confirmed",
+    ),
+    # --- Storyline mid-game events ---
     ScriptedIoTEvent(
         turn=11,
         monitor_type="LAUNDRY",

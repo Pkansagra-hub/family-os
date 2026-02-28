@@ -34,7 +34,9 @@ try:
 except ImportError:
     pass
 
-from poc.k1_poc.actors.back import back_handler  # subscribe_back_events removed: FSM routes all
+from poc.k1_poc.actors.back import (
+    route_back_envelope,  # M3 E3.1.3: topic router replaces direct back_handler
+)
 from poc.k1_poc.actors.front import front_handler, subscribe_front_events
 from poc.k1_poc.bus.builders import (
     build_affect_update,
@@ -68,6 +70,10 @@ class KernelConfig:
     enable_hitl: bool = True
     enable_orchestrator: bool = True
     auto_start_consumer: bool = True
+    # M1 E1.4.1: Create and inject LedgerWriter into FSM at boot
+    enable_ledger: bool = True
+    # M2 E2.5.1: Create DeadLetterConsumer at boot
+    enable_dead_letter_consumer: bool = True
     seed_memories: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -95,6 +101,11 @@ class KernelRuntime:
     front_subscriptions: list[Any] = field(default_factory=list)
     back_subscriptions: list[Any] = field(default_factory=list)
     consumer_task: asyncio.Task | None = None
+    # M1 E1.4.1: Optional LedgerWriter for event sourcing
+    ledger: Any = None
+    ledger_store: Any = None
+    # M2 E2.5.1: DeadLetterConsumer for observability
+    dead_letter_consumer: Any = None
     started: bool = False
 
 
@@ -116,7 +127,44 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
     session_state = _create_session_state(cfg)
     capability_registry = _create_capability_registry()
 
+    # M1 E1.4.1: Create ledger before FSM so it can be injected
+    _ledger_writer = None
+    _ledger_store = None
+    if cfg.enable_ledger:
+        from poc.k1_poc.ledger.store import InMemoryLedgerStore
+        from poc.k1_poc.ledger.writer import LedgerWriter
+
+        _session_id = cfg.session_id or f"k-{uuid.uuid4().hex[:8]}"
+        _ledger_store = InMemoryLedgerStore()
+        _ledger_writer = LedgerWriter(store=_ledger_store, session_id=_session_id)
+        logger.info("Ledger created for session=%s", _session_id)
+
     fsm = ConciergeController(bus=bus, router=router)
+
+    # M10 E10.4.2: Wire Phase 1 pipeline (config-driven)
+    _phase1_cfg = get_config().phase1
+    if _phase1_cfg.pipeline == "ultrabert":
+        from poc.k1_poc.fsm.ultrabert_adapter import K1UltraBERTAdapter
+        from poc.k1_poc.fsm.ultrabert_phase1 import UltraBERTPhase1Pipeline
+
+        _adapter = K1UltraBERTAdapter(warmup=_phase1_cfg.warmup_on_startup)
+        if _adapter.is_available():
+            fsm._phase1_pipeline = UltraBERTPhase1Pipeline(adapter=_adapter)
+            logger.info("Phase 1 pipeline: UltraBERT (K1 adapter, direct import)")
+        else:
+            logger.warning(
+                "Phase 1 pipeline: STUB (familyos_ultrabert unavailable, "
+                "config requested ultrabert)"
+            )
+    else:
+        logger.info(
+            "Phase 1 pipeline: STUB (config: phase1.pipeline=%s)",
+            _phase1_cfg.pipeline,
+        )
+
+    # M1 E1.4.1: Wire ledger into FSM for event recording
+    if _ledger_writer is not None:
+        fsm.set_ledger(_ledger_writer)
 
     # Wire FSM history to SS history_active so front handler gets context
     try:
@@ -129,6 +177,9 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
     # Wire FSM to SessionStateManager for scoreboard/narrative reads
     fsm.set_session_state(session_state)
 
+    # M4 E4.5.3: Extract writer_port from session_state for ToolContext
+    _writer_port = getattr(session_state, "_writer_port", None)
+
     recall_fn = _build_recall_fn(cfg)
 
     front_ctx = ToolContext(
@@ -138,6 +189,7 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         recall_fn=recall_fn,
         capability_fn=_capability_discover(capability_registry),
         invoke_fn=_capability_invoke(capability_registry),
+        writer_port=_writer_port,
     )
     back_ctx = ToolContext(
         session_manager=session_state,
@@ -146,6 +198,7 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         recall_fn=recall_fn,
         capability_fn=_capability_discover(capability_registry),
         invoke_fn=_capability_invoke(capability_registry),
+        writer_port=_writer_port,
     )
 
     front_dispatcher = create_front_dispatcher(tier=cfg.tool_tier, ctx=front_ctx, bus=bus)
@@ -164,6 +217,8 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         fsm=fsm,
         front_dispatcher=front_dispatcher,
         back_dispatcher=back_dispatcher,
+        ledger=_ledger_writer,
+        ledger_store=_ledger_store,
     )
 
     if cfg.enable_experience:
@@ -235,6 +290,31 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         runtime.weave_batcher = WeaveBatcher(flush_fn=_weave_flush)
         runtime.fsm.set_weave_batcher(runtime.weave_batcher)
 
+    # M8 E8.5: Wire WeavePolicy + UserActivityTracker for adaptive delivery
+    if hasattr(runtime.fsm, "set_weave_policy"):
+        from poc.k1_poc.protocols.weave_policy import UserActivityTracker, WeavePolicy
+
+        runtime.weave_policy = WeavePolicy()
+        runtime.fsm.set_weave_policy(runtime.weave_policy)
+        logger.info("WeavePolicy wired into FSM")
+
+    if hasattr(runtime.fsm, "set_activity_tracker"):
+        from poc.k1_poc.protocols.weave_policy import UserActivityTracker
+
+        runtime.activity_tracker = UserActivityTracker()
+        runtime.fsm.set_activity_tracker(runtime.activity_tracker)
+        logger.info("UserActivityTracker wired into FSM")
+
+    # M2 E2.5.1: Wire DeadLetterConsumer into bus at boot
+    if cfg.enable_dead_letter_consumer:
+        from poc.k1_poc.config.loader import get_config as _get_fsm_config
+
+        if _get_fsm_config().fsm.dead_letter_enabled:
+            from poc.k1_poc.fsm.dead_letter_consumer import DeadLetterConsumer
+
+            runtime.dead_letter_consumer = DeadLetterConsumer(bus=bus)
+            logger.info("DeadLetterConsumer attached to bus")
+
     if cfg.enable_orchestrator:
         from poc.k1_poc.orchestrator.stub import OrchestratorStub
 
@@ -288,6 +368,29 @@ async def stop_kernel(runtime: KernelRuntime) -> None:
             await runtime.consumer_task
         except asyncio.CancelledError:
             pass
+
+    # M1 E1.4.1: Flush ledger before other teardown
+    if runtime.ledger is not None:
+        try:
+            # LedgerWriter has no async flush -- store is sync, but guard anyway
+            logger.info(
+                "Ledger shutdown: %d entries",
+                runtime.ledger_store.count() if runtime.ledger_store else 0,
+            )
+        except Exception:
+            logger.debug("Ledger flush failed during shutdown", exc_info=True)
+
+    # M2 E2.5.1: Log dead-letter summary on shutdown
+    if runtime.dead_letter_consumer is not None:
+        try:
+            summary = runtime.dead_letter_consumer.snapshot()
+            total = summary.get("total_dead_letters", 0)
+            if total > 0:
+                logger.warning("Session dead-letter summary: %s", summary)
+            else:
+                logger.info("Session dead-letter summary: 0 dead-letters")
+        except Exception:
+            logger.debug("Dead-letter summary failed during shutdown", exc_info=True)
 
     if runtime.delta_aggregator is not None:
         try:
@@ -368,12 +471,13 @@ async def _mailbox_consumer(runtime: KernelRuntime) -> None:
 
         if back_env is not None:
             did_work = True
-            await back_handler(
+            await route_back_envelope(
                 envelope=back_env,
                 model=runtime.model,
                 ss=runtime.session_state,
                 bus=runtime.bus,
                 tool_dispatcher=runtime.back_dispatcher,
+                fsm_state=getattr(runtime, "fsm", None),
             )
 
         if did_work:
@@ -396,6 +500,28 @@ async def _tick_experience(runtime: KernelRuntime) -> None:
         payload = emotional.__dict__ if hasattr(emotional, "__dict__") else {"value": emotional}
         runtime.bus.publish(build_affect_update(payload=payload))
 
+    tone = outputs.get("tone")
+    if tone is not None:
+        try:
+            tone_dict = tone.__dict__ if hasattr(tone, "__dict__") else {}
+            section = runtime.session_state.get_section("affective_now")
+            if section is not None:
+                section._tone_adjustment = tone_dict
+        except Exception:
+            pass  # Non-critical: tone will apply next turn if write fails
+
+    # Write ResponseStyle from RhythmController to SS for prompt builder
+    try:
+        rc = getattr(layer, "rhythm_controller", None)
+        if rc is not None:
+            style = getattr(rc, "last_response_style", None)
+            if style is not None:
+                section = runtime.session_state.get_section("affective_now")
+                if section is not None:
+                    section._response_style = style.__dict__ if hasattr(style, "__dict__") else {}
+    except Exception:
+        pass  # Non-critical: style applies next turn if write fails
+
     fill = outputs.get("fill")
     if fill is not None:
         payload = fill.__dict__ if hasattr(fill, "__dict__") else {"text": str(fill)}
@@ -403,7 +529,12 @@ async def _tick_experience(runtime: KernelRuntime) -> None:
 
 
 def _build_experience_context(runtime: KernelRuntime) -> dict[str, Any]:
-    """Build safe context snapshot for ExperienceLayer.tick()."""
+    """Build safe context snapshot for ExperienceLayer.tick().
+
+    Reads real data from SessionState sections and FSM history so that
+    ExperienceLayer components receive actual affect trajectory,
+    conversation history, and user cadence information.
+    """
     ss = runtime.session_state
 
     def _section_dict(name: str) -> dict[str, Any]:
@@ -417,22 +548,95 @@ def _build_experience_context(runtime: KernelRuntime) -> dict[str, Any]:
         except Exception:
             return {}
 
+    # --- control / wait duration ---
     control = _section_dict("control")
     wait_ms = 0
     if isinstance(control, dict):
         wait_ms = int(control.get("wait_duration_ms", 0) or 0)
 
+    # --- turn_transcript: last user message from FSM history ---
+    turn_transcript = ""
+    try:
+        for entry in reversed(runtime.fsm.history):
+            if getattr(entry, "entry_type", None) == "user":
+                turn_transcript = entry.text or ""
+                break
+    except Exception:
+        pass
+
+    # --- affect_history from affective_now.recent_emotions ---
+    affect_history: list[dict[str, Any]] = []
+    affect_confidence = 0.0
+    try:
+        aff = ss.get_section("affective_now")
+        if aff is not None:
+            for snap in getattr(aff, "recent_emotions", []):
+                affect_history.append(
+                    {
+                        "turn_number": snap.turn_number,
+                        "emotion": snap.emotion,
+                        "intensity": snap.intensity,
+                        "valence": snap.valence,
+                        "arousal": snap.arousal,
+                        "timestamp_ms": snap.timestamp_ms,
+                    }
+                )
+            # Confidence is meaningful only when source is front or ultrabert
+            src = getattr(aff, "source", "")
+            if src in ("front", "ultrabert"):
+                affect_confidence = getattr(aff, "confidence", 0.0) or 0.0
+    except Exception:
+        pass
+
+    # --- conversation_history from history_active section ---
+    conversation_history: list[dict[str, Any]] = []
+    try:
+        hist = ss.get_section("history_active")
+        if hist is not None and hasattr(hist, "get_typed_entries"):
+            for entry in hist.get_typed_entries(10):
+                conversation_history.append(
+                    {
+                        "turn_number": entry.turn_number,
+                        "entry_type": entry.entry_type,
+                        "text": entry.text,
+                        "timestamp_ms": entry.timestamp_ms,
+                        "source": entry.source,
+                    }
+                )
+    except Exception:
+        pass
+
+    # --- user_cadence: inter-message timing from user entries ---
+    user_cadence: dict[str, Any] = {}
+    try:
+        user_ts = [
+            e["timestamp_ms"]
+            for e in conversation_history
+            if e.get("source") == "user" and e.get("timestamp_ms")
+        ]
+        if len(user_ts) >= 2:
+            gaps = [user_ts[i] - user_ts[i - 1] for i in range(1, len(user_ts))]
+            user_cadence = {
+                "avg_gap_ms": int(sum(gaps) / len(gaps)),
+                "last_gap_ms": gaps[-1],
+                "sample_count": len(gaps),
+            }
+    except Exception:
+        pass
+    # Embed conversation_history for ResponseStyleAdapter in RhythmController
+    user_cadence["_conversation_history"] = conversation_history
+
     return {
-        "turn_transcript": "",
-        "affect_history": [],
-        "front_refine_affect_confidence": 0.0,
-        "conversation_history": [],
+        "turn_transcript": turn_transcript,
+        "affect_history": affect_history,
+        "front_refine_affect_confidence": affect_confidence,
+        "conversation_history": conversation_history,
         "memory_recalls": [],
         "task_state": _section_dict("task_state"),
         "user_patterns": {},
         "wait_duration_ms": wait_ms,
         "persona": _section_dict("persona"),
-        "user_cadence": {},
+        "user_cadence": user_cadence,
     }
 
 

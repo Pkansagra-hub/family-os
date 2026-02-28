@@ -54,7 +54,7 @@ class TestBuildersRegistry:
     """Verify BUILDERS dict covers all topics."""
 
     def test_registry_count(self) -> None:
-        assert len(BUILDERS) == 28
+        assert len(BUILDERS) == 40
 
     def test_registry_keys_match_all_topics(self) -> None:
         assert set(BUILDERS.keys()) == ALL_TOPICS
@@ -122,7 +122,11 @@ class TestBuilderOutput:
     def test_payload_is_json(self) -> None:
         env = build_user_input({"text": "hello"})
         data = json.loads(env.payload)
-        assert data == {"text": "hello"}
+        assert data["text"] == "hello"
+        # M1 E1.4.5: Auto-enriched fields are also present
+        assert "event_id" in data
+        assert "ts_utc" in data
+        assert "payload_schema_version" in data
 
     def test_payload_format_is_json(self) -> None:
         env = build_user_input({"text": "hello"})

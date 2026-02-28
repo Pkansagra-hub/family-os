@@ -94,8 +94,13 @@ VALID_OPERATIONS: frozenset[str] = frozenset(
         "archive_thread",  # Narrative thread archive
         "update_thread",  # Narrative thread update
         "update",  # Modify existing entry
+        "update_confidence",  # Update belief confidence (M4 E4.2.3)
         "register_agent",  # Control section agent registration
         "add_referent",  # Scoreboard referent creation
+        "push_question",  # Scoreboard QUD push (M4 E4.2.3)
+        "pop_question",  # Scoreboard QUD pop (M4 E4.2.3)
+        "push_topic",  # Scoreboard topic shift (M4 E4.2.3)
+        "answer",  # Clarifications answer (M4 E4.2.3)
         "request",  # Clarifications request
         "add_compressed",  # History recent compressed turn
         "add_summarized",  # History recent summarized turn

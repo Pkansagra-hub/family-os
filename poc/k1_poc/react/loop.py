@@ -14,7 +14,9 @@ One implementation for both Front and Back actors. Differences are:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -32,6 +34,7 @@ from poc.k1_poc.llm.types import (
 )
 from poc.k1_poc.llm.types import tool_result_to_message as _tool_result_to_msg
 from poc.k1_poc.llm.validator import LLMOutputValidator, ValidationResult
+from poc.k1_poc.task.parallel_safety import classify_tool_batch
 from poc.k1_poc.tools.dispatcher import ToolDispatcher
 from poc.k1_poc.tools.result_protocol import ToolResult
 
@@ -46,9 +49,23 @@ logger = logging.getLogger(__name__)
 DEFAULT_FRONT_MAX_ITERATIONS: int = 6
 DEFAULT_BACK_MAX_ITERATIONS: int = 10
 
-# NOTE: MODE_MAX_ITERATIONS and CRISIS_MAX_ITERATIONS duplicate the tables
-# in prompt.max_iterations / prompt.crisis_iterations (config/defaults.yaml).
-# New code should use get_config().prompt.max_iterations instead.
+
+# ---- M3 E3.4.4: Config-backed accessors replace hardcoded dicts ----
+# DEPRECATED: Use get_config().prompt.max_iterations instead.
+# These remain importable for backward compatibility but delegate to config.
+def get_mode_max_iterations() -> dict[str, int]:
+    """Return per-mode iteration limits from config (single source of truth)."""
+    return dict(get_config().prompt.max_iterations)
+
+
+def get_crisis_max_iterations() -> dict[str, int]:
+    """Return per-mode crisis iteration limits from config."""
+    return dict(get_config().prompt.crisis_iterations)
+
+
+# Backward-compat aliases -- lazy-evaluated via get_config() at import time.
+# NOTE: These are snapshots taken at import; prefer the functions above.
+# TODO: Remove in M8 when all consumers migrate to get_config().
 MODE_MAX_ITERATIONS: dict[str, int] = {
     "STANDARD": 6,
     "CLARIFY_ASK": 3,
@@ -103,6 +120,9 @@ class ReactResult:
     text: str | None = None  # Front: final response text. Back: None.
     data: dict | None = None  # Back: submit_result() arguments. Front: None.
     dispatched_tasks: list[dict] = field(default_factory=list)  # L3: dispatch_task calls
+    parallel_tool_calls: int = 0  # M3 E3.7.4: count of parallel-executed tool calls
+    sequential_tool_calls: int = 0  # M3 E3.7.4: count of sequential-executed tool calls
+    iteration_durations_ms: list[int] = field(default_factory=list)  # Per-iteration wall-clock ms
 
 
 # =========================================================================
@@ -233,7 +253,20 @@ async def react_loop(
     """
     dispatched_tasks: list[dict] = []
     last_text_with_tools: str | None = None  # Track text from mixed (text+tools) responses
+    # M3 E3.7.4: Parallel safety observability counters
+    _parallel_count = 0
+    _sequential_count = 0
+    _iteration_durations: list[int] = []  # Per-iteration wall-clock ms
     original_tools = tools  # Preserve original list; tools may be cleared on degenerate retry
+    _degenerate_retry_active = False  # Track if we're in a degenerate retry
+
+    # Per-iteration LLM call timeout (prevents hangs from API stalls)
+    _iter_timeout_s: float = get_config().llm.default_timeout_ms / 1000.0
+
+    # Hoist _run_tool outside the loop to avoid re-creating the closure
+    async def _run_tool(tc: Any) -> tuple[Any, ToolResult]:
+        result = await tool_dispatcher.dispatch(tc)
+        return tc, result
 
     logger.info(
         "react_loop START: actor=%s max_iter=%d tools=%d scenario=%s trace=%s",
@@ -245,10 +278,28 @@ async def react_loop(
     )
 
     for iteration in range(max_iterations):
+        _iter_start = time.monotonic()
+
+        # ---- RESTORE TOOLS AFTER DEGENERATE RETRY ----
+        # If the previous iteration was a degenerate retry (tools=[]),
+        # restore the original tool list so the loop can resume normally.
+        if _degenerate_retry_active:
+            tools = original_tools
+            _degenerate_retry_active = False
+            logger.debug(
+                "react_loop: restored %d tools after degenerate retry",
+                len(tools),
+            )
 
         # ---- CANCELLATION CHECK (ITEM #14) ----
         if await cancellation_check():
-            return ReactResult(status="cancelled", dispatched_tasks=dispatched_tasks)
+            return ReactResult(
+                status="cancelled",
+                dispatched_tasks=dispatched_tasks,
+                parallel_tool_calls=_parallel_count,
+                sequential_tool_calls=_sequential_count,
+                iteration_durations_ms=_iteration_durations,
+            )
 
         # ---- BUILD REQUEST ----
         # On the last iteration for Front, strip tools to force text-only
@@ -306,14 +357,37 @@ async def react_loop(
             on_stream is not None and actor == "front" and iteration == 0 and not force_text
         )
 
-        if use_streaming:
-            response = await _streaming_generate(
-                model,
-                request,
-                on_stream,
+        try:
+            if use_streaming:
+                response = await asyncio.wait_for(
+                    _streaming_generate(model, request, on_stream),
+                    timeout=_iter_timeout_s,
+                )
+            else:
+                response = await asyncio.wait_for(
+                    model.generate(request),
+                    timeout=_iter_timeout_s,
+                )
+        except asyncio.TimeoutError:
+            logger.error(
+                "react_loop: LLM call TIMED OUT on iter=%d actor=%s "
+                "(timeout=%.1fs) -- aborting. trace=%s",
+                iteration,
+                actor,
+                _iter_timeout_s,
+                trace_id[:8] if trace_id else "",
             )
-        else:
-            response = await model.generate(request)
+            _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+            _iteration_durations.append(_iter_dur)
+            fallback = get_config().react.front_degenerate_fallback if actor == "front" else ""
+            return ReactResult(
+                status="complete" if actor == "front" else "budget_exhausted",
+                text=fallback if actor == "front" else None,
+                dispatched_tasks=dispatched_tasks,
+                parallel_tool_calls=_parallel_count,
+                sequential_tool_calls=_sequential_count,
+                iteration_durations_ms=_iteration_durations,
+            )
 
         logger.info(
             "react_loop: iter=%d actor=%s has_text=%s has_tools=%s finish=%s "
@@ -340,6 +414,9 @@ async def react_loop(
                 status="complete",
                 text=fallback,
                 dispatched_tasks=dispatched_tasks,
+                parallel_tool_calls=_parallel_count,
+                sequential_tool_calls=_sequential_count,
+                iteration_durations_ms=_iteration_durations,
             )
 
         # ---- VALIDATION (Epic 4.1) ----
@@ -372,6 +449,9 @@ async def react_loop(
                             status="complete",
                             text=get_config().react.front_degenerate_fallback,
                             dispatched_tasks=dispatched_tasks,
+                            parallel_tool_calls=_parallel_count,
+                            sequential_tool_calls=_sequential_count,
+                            iteration_durations_ms=_iteration_durations,
                         )
                     continue
 
@@ -404,6 +484,9 @@ async def react_loop(
                     # Force text-only on the retry by temporarily
                     # clearing tools for the next iteration
                     tools = []
+                    _degenerate_retry_active = True
+                    _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                    _iteration_durations.append(_iter_dur)
                     continue
                 # If we have saved text from a mixed response, use it
                 if last_text_with_tools:
@@ -415,6 +498,9 @@ async def react_loop(
                         status="complete",
                         text=last_text_with_tools,
                         dispatched_tasks=dispatched_tasks,
+                        parallel_tool_calls=_parallel_count,
+                        sequential_tool_calls=_sequential_count,
+                        iteration_durations_ms=_iteration_durations,
                     )
                 fallback = get_config().react.front_degenerate_fallback
                 # Do NOT fire on_text_response here; front_handler
@@ -423,22 +509,34 @@ async def react_loop(
                     status="complete",
                     text=fallback,
                     dispatched_tasks=dispatched_tasks,
+                    parallel_tool_calls=_parallel_count,
+                    sequential_tool_calls=_sequential_count,
+                    iteration_durations_ms=_iteration_durations,
                 )
             # Back degenerate: nudge to submit what it has
             if iteration < max_iterations - 1:
-                messages.append(
-                    ModelMessage(
-                        role="user",
-                        content=(
-                            "Your last response was empty. Call submit_result "
-                            "now with the results gathered so far."
-                        ),
+                # Early iterations: gentle nudge -- Back may still do useful work
+                if iteration < max_iterations // 2:
+                    nudge = (
+                        "Your last response was empty. Continue working on "
+                        "the task -- discover capabilities and invoke them. "
+                        "If you cannot make progress, call submit_result."
                     )
-                )
+                else:
+                    # Late iterations: urgent nudge -- wrap it up
+                    nudge = (
+                        "Your last response was empty. Call submit_result "
+                        "now with the results gathered so far."
+                    )
+                messages.append(ModelMessage(role="user", content=nudge))
                 logger.info(
-                    "react_loop: back degenerate on iter=%d, nudging submit_result",
+                    "react_loop: back degenerate on iter=%d/%d, nudging (%s)",
                     iteration,
+                    max_iterations,
+                    "gentle" if iteration < max_iterations // 2 else "urgent",
                 )
+            _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+            _iteration_durations.append(_iter_dur)
             continue
 
         # ---- TEXT WITHOUT TOOL CALLS ----
@@ -449,13 +547,20 @@ async def react_loop(
                 # emits task dispatches first, THEN response.final,
                 # so the FSM sees DISPATCHING -> COMPANIONING -> ...
                 # before DISPATCHING -> LISTENING.
+                _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                _iteration_durations.append(_iter_dur)
                 return ReactResult(
                     status="complete",
                     text=response.text,
                     dispatched_tasks=dispatched_tasks,
+                    parallel_tool_calls=_parallel_count,
+                    sequential_tool_calls=_sequential_count,
+                    iteration_durations_ms=_iteration_durations,
                 )
             # Back (ITEM #19): text = "thinking aloud", NOT terminal
             messages.append(ModelMessage(role="assistant", content=response.text))
+            _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+            _iteration_durations.append(_iter_dur)
             continue
 
         # ---- PROCESS TOOL CALLS ----
@@ -480,34 +585,107 @@ async def react_loop(
             )
         )
 
+        # E3.4.5: warn if submit_result appears alongside other tools.
+        # submit_result is processed first (early-return below) and the
+        # other tools are skipped, which is correct but indicates LLM
+        # confusion when it happens.
+        _has_submit = any(tc.name == "submit_result" for tc in response.tool_calls)
+        _has_others = any(tc.name != "submit_result" for tc in response.tool_calls)
+        if _has_submit and _has_others:
+            logger.warning(
+                "react_loop: submit_result returned alongside %d other tools "
+                "(LLM confusion?) -- submit_result processed first, others "
+                "skipped. trace=%s",
+                sum(1 for tc in response.tool_calls if tc.name != "submit_result"),
+                trace_id[:8] if trace_id else "",
+            )
+
         for tc in response.tool_calls:
 
             # Back termination (L2): submit_result
             if tc.name == "submit_result":
-                await tool_dispatcher.dispatch(tc)
+                result = await tool_dispatcher.dispatch(tc)
+                if result.status == "error":
+                    # Schema validation or execution failed -- feed
+                    # error back to LLM so it can retry with valid args.
+                    logger.warning(
+                        "react_loop: submit_result dispatch failed "
+                        "(error=%s), feeding back to LLM. trace=%s",
+                        result.error,
+                        trace_id[:8] if trace_id else "",
+                    )
+                    messages.append(
+                        ModelMessage(
+                            role="tool",
+                            content=json.dumps(
+                                {"error": result.error, "hint": "Fix arguments and retry"}
+                            ),
+                            tool_call_id=getattr(tc, "id", None),
+                        )
+                    )
+                    break  # Let LLM retry on next iteration
                 status = (
                     "complete" if tc.arguments.get("result_type") == "complete" else "suspended"
                 )
+                _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                _iteration_durations.append(_iter_dur)
                 return ReactResult(
                     status=status,
                     data=tc.arguments,
                     dispatched_tasks=dispatched_tasks,
+                    parallel_tool_calls=_parallel_count,
+                    sequential_tool_calls=_sequential_count,
+                    iteration_durations_ms=_iteration_durations,
                 )
 
-        # ---- PARALLEL TOOL EXECUTION ----
-        # Execute all non-terminal tool calls concurrently via
-        # asyncio.gather to cut wall-clock time when the model
-        # invokes multiple tools in one turn (e.g. recall_memory
-        # + update_beliefs + update_scoreboard).
+        # ---- CLASSIFIED TOOL EXECUTION (M3 E3.4.2/3.4.3/3.4.5) ----
+        # Split non-terminal tool calls into parallel-safe and sequential
+        # groups using the safety classifier.  A config toggle can force
+        # all tools to run sequentially for debugging.
         non_terminal = [tc for tc in response.tool_calls if tc.name != "submit_result"]
 
-        async def _run_tool(tc: Any) -> tuple[Any, ToolResult]:
-            result = await tool_dispatcher.dispatch(tc)
-            return tc, result
+        parallel_enabled = get_config().react.parallel_tools_enabled
+        parallel_names, sequential_names = classify_tool_batch([tc.name for tc in non_terminal])
 
-        paired_results: list[tuple[Any, ToolResult]] = await asyncio.gather(
-            *[_run_tool(tc) for tc in non_terminal]
+        logger.info(
+            "react_loop: tool_batch_classified  parallel=%s sequential=%s "
+            "parallel_enabled=%s trace=%s",
+            parallel_names,
+            sequential_names,
+            parallel_enabled,
+            trace_id[:8] if trace_id else "",
         )
+
+        # Build lookup: name -> list of tool calls (preserves order for dupes)
+        _tc_by_name: dict[str, list[Any]] = {}
+        for tc in non_terminal:
+            _tc_by_name.setdefault(tc.name, []).append(tc)
+
+        paired_results: list[tuple[Any, ToolResult]] = []
+
+        if parallel_enabled and parallel_names:
+            # Gather parallel-safe tools from the original order
+            parallel_tcs = [tc for tc in non_terminal if tc.name in set(parallel_names)]
+            parallel_results = await asyncio.gather(*[_run_tool(tc) for tc in parallel_tcs])
+            paired_results.extend(parallel_results)
+            _parallel_count += len(parallel_tcs)
+
+        # Sequential tools (always sequential, or ALL tools when toggle off)
+        if parallel_enabled:
+            sequential_tcs = [tc for tc in non_terminal if tc.name in set(sequential_names)]
+        else:
+            sequential_tcs = non_terminal
+
+        for tc in sequential_tcs:
+            result = await tool_dispatcher.dispatch(tc)
+            paired_results.append((tc, result))
+            _sequential_count += 1
+
+        # Re-sort results to match the LLM's original tool call order.
+        # parallel+sequential execution may interleave; the LLM expects
+        # observations in the same order it issued calls.
+        _tc_order = {id(tc): idx for idx, tc in enumerate(non_terminal)}
+        paired_results.sort(key=lambda pair: _tc_order.get(id(pair[0]), 999))
 
         for tc, result in paired_results:
 
@@ -537,6 +715,16 @@ async def react_loop(
             # Append tool result as observation (ReAct pattern)
             messages.append(_tool_result_to_msg(tc, _result_to_dict(result)))
 
+        # Per-iteration timing for the tool-execution branch
+        _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+        _iteration_durations.append(_iter_dur)
+        logger.debug(
+            "react_loop: iter=%d completed in %dms (actor=%s)",
+            iteration,
+            _iter_dur,
+            actor,
+        )
+
     # ---- BUDGET EXHAUSTED ----
     if actor == "front":
         # If we captured text from a mixed (text+tools) response, use it
@@ -550,12 +738,24 @@ async def react_loop(
                 status="complete",
                 text=last_text_with_tools,
                 dispatched_tasks=dispatched_tasks,
+                parallel_tool_calls=_parallel_count,
+                sequential_tool_calls=_sequential_count,
+                iteration_durations_ms=_iteration_durations,
             )
         # Do NOT fire on_text_response here; front_handler handles emission.
         return ReactResult(
             status="budget_exhausted",
             text=get_config().react.front_budget_fallback,
             dispatched_tasks=dispatched_tasks,
+            parallel_tool_calls=_parallel_count,
+            sequential_tool_calls=_sequential_count,
+            iteration_durations_ms=_iteration_durations,
         )
 
-    return ReactResult(status="budget_exhausted", dispatched_tasks=dispatched_tasks)
+    return ReactResult(
+        status="budget_exhausted",
+        dispatched_tasks=dispatched_tasks,
+        parallel_tool_calls=_parallel_count,
+        sequential_tool_calls=_sequential_count,
+        iteration_durations_ms=_iteration_durations,
+    )

@@ -1081,6 +1081,39 @@ class BeliefsActiveSection:
         """Update last_updated_ms timestamp (legacy API)."""
         self._touch()
 
+    def apply(self, operation: str, data: dict) -> Any:
+        """Apply mutation operation dispatched via manager.mutate().
+
+        Supports:
+        - add_fact: Add a new SPO triple
+        - update / update_confidence: Update confidence of existing fact
+        - pin_fact: Pin a fact
+        - unpin_fact: Unpin a fact
+        - clear: Reset all beliefs
+        """
+        if operation == "add_fact":
+            return self.add_fact(
+                subject=data.get("subject", ""),
+                predicate=data.get("predicate", ""),
+                obj=data.get("obj", ""),
+                confidence=data.get("confidence", 1.0),
+                source=data.get("source", ""),
+            )
+        elif operation in ("update", "update_confidence"):
+            return self.update_confidence(
+                fact_id=data.get("id", ""),
+                confidence=data.get("confidence", 1.0),
+            )
+        elif operation == "pin_fact":
+            return self.pin_fact(data.get("id", ""))
+        elif operation == "unpin_fact":
+            return self.unpin_fact(data.get("id", ""))
+        elif operation == "clear":
+            self.clear()
+            return True
+        else:
+            raise ValueError(f"Unknown operation: {operation}")
+
     # =========================================================================
     # Internal Helpers
     # =========================================================================

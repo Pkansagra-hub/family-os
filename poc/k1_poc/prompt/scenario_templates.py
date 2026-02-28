@@ -50,6 +50,8 @@ SCENARIO_DATA_TEMPLATES: dict[PromptMode, str] = {
     ),
     PromptMode.WEAVE: (
         "== ASYNC RESULTS ARRIVED ==\n"
+        "Priority: {urgency_label}\n"
+        "Emotional guidance: {emotional_context}\n"
         "While you were chatting with the user, {result_count} background "
         "task(s) completed:\n"
         "{results_summary}\n"

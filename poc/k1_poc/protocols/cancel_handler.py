@@ -20,9 +20,13 @@ Deduplication (V2 Section 5, FSMTurnState):
 from __future__ import annotations
 
 import logging
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from poc.k1_poc.protocols.cancellation import CancellationToken, CancelReason
+
+if TYPE_CHECKING:
+    from poc.k1_poc.ledger.store import LedgerEntry
+    from poc.k1_poc.ledger.writer import LedgerWriter
 
 logger = logging.getLogger(__name__)
 
@@ -42,19 +46,31 @@ class CancellationHandler:
         _on_cancel_fn:    Callback when cancel is processed.
     """
 
-    __slots__ = ("_tokens", "_cancelled_tasks", "_on_cancel_fn")
+    __slots__ = ("_tokens", "_cancelled_tasks", "_on_cancel_fn", "_ledger")
 
     def __init__(
         self,
         on_cancel_fn: Callable[[str, str], Awaitable[None]] | None = None,
+        ledger: LedgerWriter | None = None,
     ) -> None:
         self._tokens: dict[str, CancellationToken] = {}
         self._cancelled_tasks: set[str] = set()
         self._on_cancel_fn = on_cancel_fn
+        self._ledger: LedgerWriter | None = ledger
         logger.info(
-            "CancellationHandler initialised  has_callback=%s",
+            "CancellationHandler initialised  has_callback=%s ledger=%s",
             on_cancel_fn is not None,
+            "yes" if ledger else "no",
         )
+
+    def set_ledger(self, ledger: LedgerWriter) -> None:
+        """Wire the ledger writer after construction.
+
+        M9 E9.1.1: Allows bootstrap to attach the ledger after
+        the CancellationHandler is created.
+        """
+        self._ledger = ledger
+        logger.info("CancellationHandler: ledger wired (session=%s)", ledger.session_id)
 
     def register_task(self, task_id: str) -> CancellationToken:
         """Create and register a cancellation token for a task.
@@ -70,22 +86,29 @@ class CancellationHandler:
         """
         token = CancellationToken(task_id=task_id)
         self._tokens[task_id] = token
-        logger.debug("Registered cancellation token for task %s", task_id)
+        logger.info(
+            "CancellationHandler: token created for task=%s (total_active=%d)",
+            task_id,
+            len(self._tokens),
+        )
         return token
 
     async def cancel_task(
         self,
         task_id: str,
         reason: CancelReason = CancelReason.USER_REQUESTED,
+        ledger: Any = None,
     ) -> bool:
         """Cancel a task (async version with callback).
 
         Called by FSM when Front emits task.cancel.  Sets the token
         so Back will see it at the next tool boundary check.
+        V3 M1 E1.2.3: Optional ledger param for event sourcing.
 
         Args:
             task_id: The task to cancel.
             reason:  Why it is being cancelled.
+            ledger:  Optional LedgerWriter for event sourcing.
 
         Returns:
             True if the task was active and cancelled.
@@ -98,6 +121,21 @@ class CancellationHandler:
 
         if token.is_cancelled:
             return False  # Already cancelled (idempotent)
+
+        # M9 E9.1.1: Ledger write BEFORE in-memory mutation
+        if self._ledger is not None:
+            from poc.k1_poc.events.task import TaskCancelled as TaskCancelledEvent
+
+            self._ledger.append_sync(
+                TaskCancelledEvent(
+                    session_id=self._ledger.session_id,
+                    task_id=task_id,
+                    reason=reason.value,
+                    cancel_reason=reason.value,
+                    had_token=True,
+                    actor="fsm",
+                )
+            )
 
         token.cancel(reason)
         self._cancelled_tasks.add(task_id)
@@ -112,6 +150,7 @@ class CancellationHandler:
         self,
         task_id: str,
         reason: CancelReason = CancelReason.USER_REQUESTED,
+        ledger: Any = None,
     ) -> bool:
         """Cancel a task (sync version for FSM controller).
 
@@ -121,10 +160,12 @@ class CancellationHandler:
 
         If the task has no registered token, one is created on the fly
         so the cancellation is still tracked for dedup.
+        V3 M1 E1.2.3: Optional ledger param for event sourcing.
 
         Args:
             task_id: The task to cancel.
             reason:  Why it is being cancelled.
+            ledger:  Optional LedgerWriter for event sourcing.
 
         Returns:
             True if cancellation was newly recorded.
@@ -136,6 +177,21 @@ class CancellationHandler:
 
         if token.is_cancelled:
             return False
+
+        # M9 E9.1.1: Ledger write BEFORE in-memory mutation
+        if self._ledger is not None:
+            from poc.k1_poc.events.task import TaskCancelled as TaskCancelledEvent
+
+            self._ledger.append_sync(
+                TaskCancelledEvent(
+                    session_id=self._ledger.session_id,
+                    task_id=task_id,
+                    reason=reason.value,
+                    cancel_reason=reason.value,
+                    had_token=True,
+                    actor="fsm",
+                )
+            )
 
         token.cancel(reason)
         self._cancelled_tasks.add(task_id)
@@ -223,6 +279,51 @@ class CancellationHandler:
         self._tokens.pop(task_id, None)
         self._cancelled_tasks.discard(task_id)
         logger.debug("CancellationHandler: cleaned up task %s", task_id)
+
+    # ------------------------------------------------------------------
+    # M9 E9.1.3: Rebuild from ledger events
+    # ------------------------------------------------------------------
+
+    def rebuild_from_events(self, entries: list[LedgerEntry]) -> int:
+        """Rebuild cancel state from ledger event replay.
+
+        M9 E9.1.3: Called by CrashRecoveryOrchestrator during startup.
+        Reconstructs _tokens and _cancelled_tasks from task lifecycle
+        events in the ledger.
+
+        Args:
+            entries: Ordered ledger entries for the session.
+
+        Returns:
+            Number of tokens restored.
+        """
+        from poc.k1_poc.ledger.projections import project_cancel_state
+
+        active_ids, cancelled_ids = project_cancel_state(entries)
+
+        # Rebuild tokens for active (non-terminal) tasks
+        for task_id in active_ids:
+            if task_id not in self._tokens:
+                self._tokens[task_id] = CancellationToken(task_id=task_id)
+
+        # Rebuild cancelled set and mark tokens
+        for task_id in cancelled_ids:
+            self._cancelled_tasks.add(task_id)
+            if task_id in self._tokens:
+                if not self._tokens[task_id].is_cancelled:
+                    self._tokens[task_id].cancel(CancelReason.USER_REQUESTED)
+            else:
+                # Token was cleaned up before crash -- recreate cancelled
+                token = CancellationToken(task_id=task_id)
+                token.cancel(CancelReason.USER_REQUESTED)
+                self._tokens[task_id] = token
+
+        logger.info(
+            "CancellationHandler: rebuilt from events " "(active=%d, cancelled=%d)",
+            len(active_ids),
+            len(cancelled_ids),
+        )
+        return len(active_ids) + len(cancelled_ids)
 
     @property
     def active_count(self) -> int:

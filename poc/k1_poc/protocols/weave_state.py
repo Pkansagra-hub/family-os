@@ -54,12 +54,14 @@ class WeaveAction(str, Enum):
     QUEUE_WEAVE: Queue the result, weave after current Front finishes.
     QUEUE:       Just queue, drain later when opportunity arises.
     CHAIN:       Append to current delivery (Front already presenting).
+    DEAD_LETTER: Explicit rejection -- queue at capacity (M2 E2.2.5).
     """
 
     IMMEDIATE = "immediate"
     QUEUE_WEAVE = "queue_weave"
     QUEUE = "queue"
     CHAIN = "chain"
+    DEAD_LETTER = "dead_letter"
 
 
 # V2 Section 4: FSM state table for weave decisions
@@ -140,6 +142,7 @@ class PendingResultsQueue:
     """FIFO queue for pending results awaiting weave.
 
     V2 Design Ref: Section 4 (FSMTurnState -- pending_results lifecycle)
+    M2 E2.2.5: Bounded depth with overflow eviction.
 
     Lifecycle:
         1. FSM pushes results via push().
@@ -148,14 +151,31 @@ class PendingResultsQueue:
         4. After WEAVE response, cycle repeats if more results arrived.
     """
 
-    __slots__ = ("_queue",)
+    __slots__ = ("_queue", "_max_depth")
 
-    def __init__(self) -> None:
+    def __init__(self, max_depth: int = 16) -> None:
         self._queue: list[PendingResult] = []
+        self._max_depth = max_depth
 
-    def push(self, result: PendingResult) -> None:
-        """Add a result to the queue."""
+    def push(self, result: PendingResult) -> PendingResult | None:
+        """Add a result to the queue.
+
+        M2 E2.2.5: If the queue is at max_depth, the oldest result is
+        evicted and returned so the caller can dead-letter it.
+
+        Returns:
+            The evicted PendingResult if overflow occurred, else None.
+        """
+        evicted: PendingResult | None = None
+        if len(self._queue) >= self._max_depth:
+            evicted = self._queue.pop(0)
+            logger.warning(
+                "PendingResultsQueue: overflow at max_depth=%d, " "evicting task=%s",
+                self._max_depth,
+                evicted.task_id,
+            )
         self._queue.append(result)
+        return evicted
 
     def drain(self) -> list[PendingResult]:
         """Drain all pending results.

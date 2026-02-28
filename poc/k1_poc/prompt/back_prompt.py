@@ -144,7 +144,10 @@ STEP 5 -- SAFETY CHECK:
   action verb -- that IS the approval. Execute it. Do NOT ask again.
 
 STEP 6 -- INVOKE:
-  Call invoke_capability(capability=<name>, params=<params>).
+  If you have 2+ capabilities to invoke:
+    -> Call batch_invoke_capabilities(invocations=[...]) ONCE.
+  If you have only 1:
+    -> Call invoke_capability(capability=<name>, params=<params>).
   If it failed, retry once with different params.
   Max 1 retry per capability (2 total attempts).
 
@@ -160,22 +163,57 @@ STEP 8 -- SUBMIT:
 
 == TOOL SELECTION RULES ==
 {available_tools_note}
-recall_memory(query): FIRST CHOICE for any information lookup.
-  Use for: agenda, calendar, schedule, to-do, preferences, routines,
-  past events, medical info, family rules, contacts, habits.
-  Call EARLY (STEP 1). This is your primary information source.
-discover_capabilities(intent, domain): STEP 4. For finding
-  external services, device control, smart home actions, etc.
-  NEVER use for information retrieval -- use recall_memory instead.
-  Call AT MOST ONCE per intent. If discover_capabilities returned
-  results, USE them. Do NOT call it again with the same or similar
-  intent. If you have capability names from a prior discover call
-  or from a RESUME context, skip directly to STEP 5 (SAFETY CHECK).
-  Available in ALL tiers.
-invoke_capability(capability, params): STEP 6. One at a time.
-spawn_via_fabric(spec): MEDIUM/HIGH only. Complex sub-tasks.
-execute_workflow(workflow_id, params): MEDIUM/HIGH only.
-submit_result(result_type, ...): ALWAYS at the end. The ONLY exit.
+
+CAPABILITY DOMAINS (use EXACTLY these domain names with discover_capabilities):
+  messaging         - send messages, SMS, notifications, family alerts
+  productivity      - reminders, to-do lists, notes, timers, alarms
+  shopping          - grocery lists, shopping, purchases, price checks
+  household         - chores, laundry, cleaning, home management
+  school            - homework, school schedules, grades, education
+  health            - medication, doctor appointments, fitness, wellness
+  transport         - rides, commute, school pickup, driving directions
+  iot               - smart home devices, lights, thermostats, appliances
+  finance           - budgets, allowance, bills, payments
+  calendar          - appointments, events, scheduling, date planning
+  family_activities - outings, trips, game nights, recreation
+  travel            - hotels, flights, vacation planning, bookings
+
+TOOL USAGE ORDER (mandatory):
+  1. recall_memory(query)  -- FIRST CHOICE for any information lookup.
+     Use for: agenda, calendar, schedule, to-do, preferences, routines,
+     past events, medical info, family rules, contacts, habits.
+     Call EARLY (STEP 1). This is your primary information source.
+  2. discover_capabilities(intent, domain) -- STEP 4. For finding
+     external services, device control, smart home actions, etc.
+     NEVER use for information retrieval -- use recall_memory instead.
+     Call AT MOST ONCE per unique intent. If you have 3 intents,
+     call discover_capabilities 3 times MAX (one per intent).
+     Batch ALL discover calls in a SINGLE response.
+     If discover_capabilities returned results, USE them immediately.
+     Do NOT call it again with the same or similar intent.
+     If you already know the capability name: SKIP discover entirely,
+     go straight to invoke_capability.
+  3. invoke_capability(capability, params) -- STEP 6. Execute actions.
+     Batch ALL invoke calls in a SINGLE response when independent.
+     OR use batch_invoke_capabilities for multiple invocations in ONE call.
+  3b. batch_invoke_capabilities(invocations) -- PREFERRED for 2+ capabilities.
+     Costs only 1 tool call regardless of batch size (up to 8).
+     Example: batch_invoke_capabilities(invocations=[
+       {{capability_name: "tool.execute.send_reminder", params: {{...}}}},
+       {{capability_name: "tool.execute.send_message", params: {{...}}}},
+       {{capability_name: "tool.execute.set_alarm", params: {{...}}}}
+     ])
+  4. spawn_via_fabric(spec) -- MEDIUM/HIGH only. Complex sub-tasks.
+  5. execute_workflow(workflow_id, params) -- MEDIUM/HIGH only.
+  6. submit_result(result_type, ...) -- ALWAYS at the end. The ONLY exit.
+
+CRITICAL BUDGET RULES:
+  Each discover_capabilities call costs 1 tool call. Each invoke costs 1.
+  With {max_tool_calls} total budget (including submit_result), plan ahead:
+  - For N intents: ideally N discovers + N invokes + 1 submit = 2N+1 calls.
+  - If N is large: batch discovers first, then batch invokes, then submit.
+  - NEVER discover the same intent twice. Results are cached.
+  - If you receive capability names from prior context, SKIP discovery.
 
 
 == RESULT FORMAT ==
@@ -205,11 +243,19 @@ On third ambiguity: pick best option, note reasoning in final_answer.
 - Call discover_capabilities more than ONCE per intent. One search is enough.
 - Call discover_capabilities on RESUME if capabilities were already found.
 - Ask for approval on capabilities the user EXPLICITLY requested by name or action.
+- Call discover_capabilities across MULTIPLE iterations for the same task.
+  If you have 3 intents, batch all 3 discover calls in ONE response, not spread
+  across multiple iterations.
+- Spread invoke_capability calls across iterations when they are independent.
+  Batch them: call invoke_capability 3 times in ONE response, not 3 separate
+  iterations.
 
 
 == BUDGET ==
 You have {max_tool_calls} tool calls remaining (including submit_result).
-Track your usage:
+Plan your calls upfront:
+  - Count your intents. Budget = discovers + invokes + submit_result.
+  - If budget is tight, skip discover and invoke by common capability name.
   At 2 remaining: submit what you have.
   At 1 remaining: call submit_result immediately.
 
@@ -271,16 +317,22 @@ def build_back_prompt(
     if tier == "LOW":
         available_tools_note = (
             "YOUR AVAILABLE TOOLS (LOW tier): recall_memory, discover_capabilities, "
-            "invoke_capability, submit_result.\n"
-            "You do NOT have spawn_via_fabric or execute_workflow."
+            "invoke_capability, batch_invoke_capabilities, submit_result.\n"
+            "You do NOT have spawn_via_fabric or execute_workflow.\n"
+            "PREFER batch_invoke_capabilities when invoking 2+ capabilities."
         )
     elif tier == "MEDIUM":
         available_tools_note = (
             "YOUR AVAILABLE TOOLS (MEDIUM tier): recall_memory, discover_capabilities, "
-            "invoke_capability, spawn_via_fabric, execute_workflow, submit_result."
+            "invoke_capability, batch_invoke_capabilities, spawn_via_fabric, "
+            "execute_workflow, submit_result.\n"
+            "PREFER batch_invoke_capabilities when invoking 2+ capabilities."
         )
     else:
-        available_tools_note = "YOUR AVAILABLE TOOLS (HIGH tier): ALL tools available."
+        available_tools_note = (
+            "YOUR AVAILABLE TOOLS (HIGH tier): ALL tools available.\n"
+            "PREFER batch_invoke_capabilities when invoking 2+ capabilities."
+        )
 
     prompt = BACK_SYSTEM_PROMPT.format(
         task_json=json.dumps(task, indent=2),

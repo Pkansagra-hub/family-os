@@ -124,6 +124,16 @@ class K1DemoCoordinator:
         self.delta_aggregator: Any = None
         self.hitl_coordinator: Any = None
         self.orchestrator: Any = None
+        # M1 E1.4.6: Ledger reference from kernel
+        self.ledger: Any = None
+        self.ledger_store: Any = None
+        # M2 E2.5.5: Dead-letter consumer reference from kernel
+        self.dead_letter_consumer: Any = None
+
+        # M7 E7.1.3: BackPool for parallel Back task execution
+        self.back_pool: Any = None
+        # M7 E7.4.1: ReadyQueue for dependency-ordered dispatch
+        self.ready_queue: Any = None
 
         # Demo-only slots
         self.iot_stubs: Any = None
@@ -131,6 +141,8 @@ class K1DemoCoordinator:
         self._preloaded_memories: List[Dict[str, Any]] = []
         self._consumer_task: Any = None
         self._pending_back_tasks: list[asyncio.Task] = []
+        # M7 E7.1.3: Overflow queue for envelopes when pool is exhausted
+        # is managed by BackPool.enqueue_overflow / dequeue_overflow
 
     # -----------------------------------------------------------------
     # Timeline API (for UI teams)
@@ -387,6 +399,30 @@ class K1DemoCoordinator:
             self.delta_aggregator = self._kernel.delta_aggregator
             self.hitl_coordinator = self._kernel.hitl_coordinator
             self.orchestrator = self._kernel.orchestrator
+            # M1 E1.4.6: Copy ledger reference for health check and debug API
+            self.ledger = self._kernel.ledger
+            self.ledger_store = self._kernel.ledger_store
+            # M2 E2.5.5: Copy dead-letter consumer reference
+            self.dead_letter_consumer = self._kernel.dead_letter_consumer
+
+            # M7 E7.1.3: Create BackPool for parallel Back task execution
+            from poc.k1_poc.actors.back_pool import BackPool, BackPoolConfig
+
+            self.back_pool = BackPool(
+                BackPoolConfig(),
+                on_worker_acquired=self._on_pool_worker_acquired,
+                on_worker_released=self._on_pool_worker_released,
+            )
+
+            # M7 E7.3.1: Create BackTopicRouter for topic-based dispatch
+            from poc.k1_poc.actors.back_router import BackTopicRouter
+
+            self.back_topic_router = BackTopicRouter(back_pool=self.back_pool)
+
+            # M7 E7.4.1: Create ReadyQueue for dependency-ordered dispatch
+            from poc.k1_poc.actors.ready_queue import ReadyQueue
+
+            self.ready_queue = ReadyQueue()
 
             adapter_name = type(self.model).__name__
             bus_ordered = config.ordered_bus
@@ -625,7 +661,7 @@ class K1DemoCoordinator:
 
     async def _mailbox_consumer(self) -> None:
         """Poll front_half and back_half mailboxes, dispatch to handlers."""
-        from poc.k1_poc.actors.back import back_handler
+        from poc.k1_poc.actors.back import route_back_envelope
         from poc.k1_poc.actors.front import front_handler
         from poc.k1_poc.tools.schemas_front import FRONT_TOOL_SCHEMAS
 
@@ -722,6 +758,9 @@ class K1DemoCoordinator:
                         )
                         self._dump_state("POST_FRONT_HANDLER")
 
+                        # Experience Layer tick: compute tone/style for next prompt
+                        await self._tick_experience_layer()
+
                     except RecursionError:
                         logger.error(
                             "CONSUMER: RECURSION ERROR in front_handler! "
@@ -756,6 +795,14 @@ class K1DemoCoordinator:
 
             # --- back mailbox (non-blocking: runs as background task) ---
             try:
+                # M7 E7.1.3: Try to dispatch overflow queue first (FIFO)
+                if self.back_pool and self.back_pool.overflow_depth > 0:
+                    await self._dispatch_overflow_queue(route_back_envelope)
+
+                # M7 E7.4.2: Drain ready queue (dependency-released envelopes)
+                if self.ready_queue and self.ready_queue.ready_count > 0:
+                    await self._dispatch_ready_queue(route_back_envelope)
+
                 back_pending = self.back_mailbox.pending() if self.back_mailbox else 0
                 if back_pending > 0:
                     logger.info(
@@ -790,13 +837,8 @@ class K1DemoCoordinator:
 
                     self._dump_state("PRE_BACK_HANDLER")
 
-                    # Run back_handler as background task so front remains
-                    # available for new user input while back processes.
-                    task = asyncio.create_task(
-                        self._run_back_handler(env, back_handler),
-                    )
-                    self._pending_back_tasks.append(task)
-                    task.add_done_callback(self._on_back_task_done)
+                    # M7 E7.1.3: Dispatch via BackPool (acquire worker slot)
+                    await self._dispatch_to_back_pool(env, route_back_envelope)
 
             except Exception as poll_exc:
                 logger.error("CONSUMER: back mailbox poll error: %s", poll_exc, exc_info=True)
@@ -812,18 +854,59 @@ class K1DemoCoordinator:
     # =====================================================================
 
     def _on_back_task_done(self, task: asyncio.Task) -> None:
-        """Callback when a back handler task finishes."""
+        """Callback when a back handler task finishes.
+
+        M7 E7.1.3: Also releases the pool worker slot if BackPool is
+        active. Falls back to legacy list tracking for backward compat.
+
+        M7 E7.4.2: Notifies the ReadyQueue so dependent tasks can be
+        released. Released envelopes are picked up by the consumer loop.
+        """
+        # Legacy list cleanup
         try:
             self._pending_back_tasks.remove(task)
         except ValueError:
             pass
 
+        # M7 E7.1.3: Release pool worker via task_id stored in task name
+        if self.back_pool is not None:
+            task_id = getattr(task, "_pool_task_id", None)
+            if task_id and self.back_pool.has_worker(task_id):
+                # Determine release reason from task result
+                if task.cancelled():
+                    reason = "cancelled"
+                elif task.exception() is not None:
+                    reason = "error"
+                else:
+                    reason = "completed"
+                self.back_pool.release_worker(task_id, reason=reason)
+
+                # M7 E7.4.2: Notify ReadyQueue so dependents can be released
+                if self.ready_queue is not None and task_id:
+                    released, failed_ids = self.ready_queue.notify_completed(
+                        task_id,
+                        status=reason,
+                    )
+                    # Fail dependents if predecessor failed/cancelled
+                    if failed_ids:
+                        self._emit_dependency_failed(
+                            task_id,
+                            task_id,
+                            failed_ids,
+                        )
+
     def has_pending_back_tasks(self) -> bool:
         """Return True if any back handler tasks are still running
         or if the FSM has active tasks not yet picked up by back.
+
+        M7 E7.1.3: Checks BackPool active workers in addition to
+        legacy _pending_back_tasks list.
         """
         self._pending_back_tasks = [t for t in self._pending_back_tasks if not t.done()]
         has_running = len(self._pending_back_tasks) > 0
+        # M7 E7.1.3: Check BackPool active workers
+        if self.back_pool is not None:
+            has_running = has_running or self.back_pool.active_count > 0
         # Also check FSM active_task_ids -- these are set synchronously
         # when front publishes task_dispatch, before the back consumer
         # loop has a chance to create the asyncio.Task.
@@ -835,6 +918,7 @@ class K1DemoCoordinator:
 
         Waits for both:
         1. asyncio.Task objects from back_handler invocations
+           (legacy list + BackPool worker tasks)
         2. FSM active_task_ids to clear (tasks not yet picked up by consumer)
 
         The caller should also wait for the resulting response.final
@@ -847,6 +931,11 @@ class K1DemoCoordinator:
 
         # Phase 1: wait for back handler tasks that have been created
         tasks = [t for t in self._pending_back_tasks if not t.done()]
+        # M7 E7.1.3: Also collect async_tasks from BackPool workers
+        if self.back_pool is not None:
+            for worker in self.back_pool.get_active_workers():
+                if worker.async_task is not None and not worker.async_task.done():
+                    tasks.append(worker.async_task)
         if tasks:
             remaining = max(0.1, deadline - _time.monotonic())
             logger.info(
@@ -870,29 +959,335 @@ class K1DemoCoordinator:
             await asyncio.sleep(0.2)
             # Check if new back tasks appeared and wait for them too
             new_tasks = [t for t in self._pending_back_tasks if not t.done()]
+            if self.back_pool is not None:
+                for worker in self.back_pool.get_active_workers():
+                    if worker.async_task is not None and not worker.async_task.done():
+                        new_tasks.append(worker.async_task)
             if new_tasks:
                 remaining = max(0.1, deadline - _time.monotonic())
                 await asyncio.wait(new_tasks, timeout=remaining)
 
     # =====================================================================
+    # M7 E7.1.3: BackPool dispatch helpers
+    # =====================================================================
+
+    async def _dispatch_to_back_pool(self, env: Any, back_handler: Any) -> None:
+        """Dispatch a Back envelope via BackPool worker acquisition.
+
+        M7 E7.1.3: Replaces the old asyncio.create_task pattern with
+        pool-managed worker slots. If the pool is exhausted, the
+        envelope is pushed to the overflow queue for retry.
+
+        M7 E7.3.2: Uses BackTopicRouter for topic-based dispatch.
+        Cancel envelopes bypass the pool (synchronous). Late-arriving
+        envelopes for completed/cancelled tasks are discarded.
+
+        Args:
+            env: The envelope to dispatch.
+            back_handler: The handler function (route_back_envelope, fallback).
+        """
+        from poc.k1_poc.actors.back_pool import BackPoolExhausted
+
+        if self.back_pool is None:
+            # Fallback: no pool, use legacy path
+            task = asyncio.create_task(
+                self._run_back_handler(env, back_handler),
+            )
+            self._pending_back_tasks.append(task)
+            task.add_done_callback(self._on_back_task_done)
+            return
+
+        # Extract task_id and session_id from envelope
+        try:
+            import json as _json
+
+            payload = _json.loads(env.payload) if env.payload else {}
+        except Exception:
+            payload = {}
+        task_id = payload.get("task_id", f"unknown-{env.envelope_id}")
+        session_id = payload.get("session_id")
+
+        # M7 E7.3.1: Use BackTopicRouter to determine handler
+        router = getattr(self, "back_topic_router", None)
+        if router is not None:
+            handler_fn = router.route(env)
+            if handler_fn is None:
+                # E7.3.4: Late envelope or unknown topic -- discarded
+                logger.info(
+                    "CONSUMER: BackTopicRouter discarded envelope "
+                    "envelope_id=%d topic=%s task_id=%s",
+                    env.envelope_id,
+                    env.topic,
+                    task_id,
+                )
+                return
+
+            # E7.3.2: Cancel bypasses pool -- synchronous dispatch
+            if router.is_cancel_topic(env.topic):
+                logger.info(
+                    "CONSUMER: cancel envelope dispatched synchronously "
+                    "envelope_id=%d task_id=%s (no pool worker needed)",
+                    env.envelope_id,
+                    task_id,
+                )
+                # E7.3.3: Extract CancellationToken from lease
+                cancel_token = router.get_cancel_token_for_task(task_id)
+                handler_fn(
+                    envelope=env,
+                    fsm_state=getattr(self, "fsm", None),
+                    cancel_token=cancel_token,
+                )
+                return
+
+        try:
+            # M7 E7.5.3: Pass FSM cancel token so lease binds to same token
+            fsm_cancel_token = None
+            fsm = getattr(self, "fsm", None)
+            if fsm is not None and hasattr(fsm, "get_cancel_token"):
+                fsm_cancel_token = fsm.get_cancel_token(task_id)
+            worker_slot = self.back_pool.acquire_worker(
+                task_id,
+                session_id=session_id,
+                cancellation_token=fsm_cancel_token,
+            )
+        except BackPoolExhausted:
+            logger.info(
+                "CONSUMER: BackPool exhausted -- queueing envelope "
+                "envelope_id=%d task_id=%s for retry",
+                env.envelope_id,
+                task_id,
+            )
+            self.back_pool.enqueue_overflow(env)
+            return
+
+        # M7 E7.4.1: Check depends_on and use ReadyQueue if needed
+        depends_on = payload.get("depends_on") or payload.get(
+            "_dispatch",
+            {},
+        ).get("depends_on")
+        if depends_on and self.ready_queue is not None:
+            # Register this task_id as known
+            self.ready_queue.register_task(task_id)
+            status, failed_ids = self.ready_queue.enqueue(env, depends_on=depends_on)
+
+            if status == "waiting":
+                # Release the worker -- envelope is queued, not dispatched yet
+                self.back_pool.release_worker(task_id, reason="suspended")
+                logger.info(
+                    "CONSUMER: task=%s waiting for dependency=%s "
+                    "(released worker, queued in ReadyQueue)",
+                    task_id,
+                    depends_on,
+                )
+                return
+
+            if status == "dep_failed":
+                # Predecessor failed -- release worker and emit task.failed
+                self.back_pool.release_worker(task_id, reason="error")
+                self._emit_dependency_failed(task_id, depends_on, failed_ids)
+                return
+
+            if status == "circular":
+                # Cycle detected -- release worker and fail all participants
+                self.back_pool.release_worker(task_id, reason="error")
+                self._emit_dependency_failed(task_id, depends_on, failed_ids)
+                return
+
+            # "immediate" or "unknown_dep" -- fall through to dispatch
+
+        # E7.3.3: Extract CancellationToken from lease for handler injection
+        cancel_token = None
+        if worker_slot.lease is not None:
+            cancel_token = worker_slot.lease.cancellation_token
+
+        # Create asyncio.Task with the acquired worker slot
+        task = asyncio.create_task(
+            self._run_back_handler(env, back_handler, cancel_token=cancel_token),
+        )
+        # Tag the task with task_id for release_worker in done callback
+        task._pool_task_id = task_id  # type: ignore[attr-defined]
+        worker_slot.bind_task(task)
+        self._pending_back_tasks.append(task)
+        task.add_done_callback(self._on_back_task_done)
+
+        logger.info(
+            "CONSUMER: dispatched to BackPool worker_id=%s task_id=%s "
+            "pool=%d/%d cancel_token=%s",
+            worker_slot.worker_id,
+            task_id,
+            self.back_pool.active_count,
+            self.back_pool.config.pool_size,
+            "attached" if cancel_token else "none",
+        )
+
+    async def _dispatch_overflow_queue(self, back_handler: Any) -> None:
+        """Try to dispatch envelopes from the overflow queue.
+
+        M7 E7.1.3: Called each poll cycle before checking the back
+        mailbox. Drains as many overflow envelopes as the pool can
+        accept.
+
+        Args:
+            back_handler: The handler function (route_back_envelope).
+        """
+        if self.back_pool is None:
+            return
+
+        while self.back_pool.overflow_depth > 0 and self.back_pool.pool_available > 0:
+            env = self.back_pool.dequeue_overflow()
+            if env is None:
+                break
+            logger.info(
+                "CONSUMER: retrying overflow envelope envelope_id=%d",
+                env.envelope_id,
+            )
+            await self._dispatch_to_back_pool(env, back_handler)
+
+    async def _dispatch_ready_queue(self, back_handler: Any) -> None:
+        """Dispatch dependency-released envelopes from the ReadyQueue.
+
+        M7 E7.4.2: Called each poll cycle. Drains all ready envelopes
+        and dispatches them through the normal BackPool path.
+
+        Args:
+            back_handler: The handler function (route_back_envelope).
+        """
+        if self.ready_queue is None:
+            return
+
+        ready_envelopes = self.ready_queue.dequeue_ready()
+        for env in ready_envelopes:
+            logger.info(
+                "CONSUMER: dispatching dependency-released envelope " "envelope_id=%d topic=%s",
+                env.envelope_id,
+                env.topic,
+            )
+            await self._dispatch_to_back_pool(env, back_handler)
+
+    def _emit_dependency_failed(
+        self,
+        task_id: str,
+        depends_on: str,
+        failed_task_ids: list[str],
+    ) -> None:
+        """Emit task.failed events for dependency failures.
+
+        M7 E7.4.2: Called when a predecessor fails/is cancelled or
+        when circular dependencies are detected.
+
+        Args:
+            task_id: The task that triggered the failure.
+            depends_on: The dependency that caused the failure.
+            failed_task_ids: All task_ids that should be failed.
+        """
+        for fid in failed_task_ids:
+            logger.warning(
+                "CONSUMER: task=%s failed -- dependency=%s " "(reason=dependency_failed)",
+                fid,
+                depends_on,
+            )
+            if self.bus is not None:
+                try:
+                    from poc.k1_poc.bus.builders import build_task_failed
+
+                    env = build_task_failed(
+                        payload={
+                            "task_id": fid,
+                            "reason": "dependency_failed",
+                            "depends_on": depends_on,
+                        }
+                    )
+                    self.bus.publish(env)
+                except Exception:
+                    logger.debug(
+                        "CONSUMER: failed to emit task.failed for " "dependency failure task=%s",
+                        fid,
+                        exc_info=True,
+                    )
+
+    def _on_pool_worker_acquired(self, slot: Any) -> None:
+        """M7 E7.1.4 + E7.2.4: Observability callback when a pool worker is acquired."""
+        if self.bus is not None:
+            from poc.k1_poc.bus.builders import build_backpool_worker_acquired, build_task_leased
+
+            try:
+                env = build_backpool_worker_acquired(
+                    payload={
+                        "worker_id": slot.worker_id,
+                        "task_id": slot.task_id,
+                        "pool_size": self.back_pool.config.pool_size if self.back_pool else 0,
+                        "active_workers": self.back_pool.active_count if self.back_pool else 0,
+                        "session_id": slot.session_id,
+                    }
+                )
+                self.bus.publish(env)
+            except Exception:
+                logger.debug("BackPool: failed to emit worker.acquired event", exc_info=True)
+
+            # M7 E7.2.4: Emit task.leased.v1 for ownership tracking
+            if slot.lease is not None:
+                try:
+                    leased_env = build_task_leased(payload=slot.lease.to_payload())
+                    self.bus.publish(leased_env)
+                except Exception:
+                    logger.debug("BackPool: failed to emit task.leased event", exc_info=True)
+
+    def _on_pool_worker_released(self, slot: Any, reason: str) -> None:
+        """M7 E7.1.4: Observability callback when a pool worker is released."""
+        if self.bus is not None:
+            from poc.k1_poc.bus.builders import build_backpool_worker_released
+
+            try:
+                env = build_backpool_worker_released(
+                    payload={
+                        "worker_id": slot.worker_id,
+                        "task_id": slot.task_id,
+                        "pool_size": self.back_pool.config.pool_size if self.back_pool else 0,
+                        "active_workers": self.back_pool.active_count if self.back_pool else 0,
+                        "release_reason": reason,
+                    }
+                )
+                self.bus.publish(env)
+            except Exception:
+                logger.debug("BackPool: failed to emit worker.released event", exc_info=True)
+
+    # =====================================================================
     # Background back_handler wrapper
     # =====================================================================
 
-    async def _run_back_handler(self, env: Any, back_handler: Any) -> None:
+    async def _run_back_handler(
+        self,
+        env: Any,
+        back_handler: Any,
+        cancel_token: Any = None,
+    ) -> None:
         """Run back_handler as a background task with error handling.
 
         This allows the consumer loop to remain free for front_mailbox
         polling, so the front actor can accept new user input while
         the back actor processes dispatched tasks.
+
+        M3 E3.1.2: Now delegates to route_back_envelope which routes
+        by envelope.topic to the correct handler (dispatch/resume/cancel).
+
+        M7 E7.3.3: Accepts cancel_token from TaskLease and passes it
+        to the handler. This ensures _build_cancellation_check returns
+        a real check instead of _never_cancel.
         """
         try:
-            result = await back_handler(
-                envelope=env,
-                model=self.model,
-                ss=self.session_state,
-                bus=self.bus,
-                tool_dispatcher=self.back_dispatcher,
-            )
+            # M7 E7.3.3: Pass cancel_token from lease to handler
+            call_kwargs: dict[str, Any] = {
+                "envelope": env,
+                "model": self.model,
+                "ss": self.session_state,
+                "bus": self.bus,
+                "tool_dispatcher": self.back_dispatcher,
+                "fsm_state": getattr(self, "fsm", None),
+            }
+            if cancel_token is not None:
+                call_kwargs["cancel_token"] = cancel_token
+
+            result = await back_handler(**call_kwargs)
             logger.info(
                 "CONSUMER: back_handler RETURNED (background) -- " "status=%s envelope_id=%d",
                 getattr(result, "status", "?"),
@@ -1009,6 +1404,147 @@ class K1DemoCoordinator:
             "Bus ordered: OK (TimingChain enabled via kernel bootstrap)",
         )
 
+        # M1 E1.4.6: Check ledger operational status
+        if self.ledger is not None:
+            ledger_count = self.ledger_store.count() if self.ledger_store else 0
+            checks["ledger_alive"] = True
+            self._record(
+                "phase5",
+                "health",
+                "check.ledger",
+                f"Ledger: OK ({ledger_count} entries, store={type(self.ledger_store).__name__})",
+            )
+        else:
+            checks["ledger_alive"] = True  # Ledger is optional, absence is not a failure
+            self._record(
+                "phase5",
+                "health",
+                "check.ledger",
+                "Ledger: disabled (optional)",
+            )
+
+        # M2 E2.5.5: Check dead-letter consumer operational status
+        if self.dead_letter_consumer is not None:
+            dl_total = self.dead_letter_consumer.total_dead_letters
+            checks["dead_letter_alive"] = True
+            self._record(
+                "phase5",
+                "health",
+                "check.dead_letter",
+                f"DeadLetterConsumer: OK (count={dl_total})",
+            )
+        else:
+            checks["dead_letter_alive"] = True  # Optional, absence is not a failure
+            self._record(
+                "phase5",
+                "health",
+                "check.dead_letter",
+                "DeadLetterConsumer: disabled (optional)",
+            )
+
+        # M3 E3.7.4: Check parallel tools configuration
+        try:
+            from poc.k1_poc.config.loader import get_config
+
+            pt_enabled = get_config().react.parallel_tools_enabled
+            checks["parallel_tools_configured"] = True
+            self._record(
+                "phase5",
+                "health",
+                "check.parallel_tools",
+                f"Parallel tools: {'enabled' if pt_enabled else 'disabled'}",
+            )
+        except Exception:
+            checks["parallel_tools_configured"] = True  # Config not loaded is not fatal
+            self._record(
+                "phase5",
+                "health",
+                "check.parallel_tools",
+                "Parallel tools: config unavailable (non-fatal)",
+            )
+
+        # M4 E4.5.2: Check control section overlay (SB2 fix verification)
+        if self.session_state is not None:
+            try:
+                from poc.k1_poc.actors.shared import safe_get_section as _safe_get
+
+                control = _safe_get(self.session_state, "control")
+                if control is not None and hasattr(control, "fsm_overlay"):
+                    overlay = control.fsm_overlay
+                    has_overlay = overlay is not None
+                    checks["control_overlay_bound"] = has_overlay
+                    self._record(
+                        "phase5",
+                        "health",
+                        "check.control_overlay",
+                        f"Control overlay: {'bound' if has_overlay else 'NOT bound'} "
+                        f"(SB2 fix {'active' if has_overlay else 'MISSING'})",
+                    )
+                else:
+                    checks["control_overlay_bound"] = False
+                    self._record(
+                        "phase5",
+                        "health",
+                        "check.control_overlay",
+                        "Control section: no fsm_overlay property (M4 not active)",
+                    )
+            except Exception:
+                checks["control_overlay_bound"] = True  # Non-fatal
+                self._record(
+                    "phase5",
+                    "health",
+                    "check.control_overlay",
+                    "Control overlay: check failed (non-fatal)",
+                )
+        else:
+            checks["control_overlay_bound"] = True  # No SS = skip check
+            self._record(
+                "phase5",
+                "health",
+                "check.control_overlay",
+                "Control overlay: no session state (skipped)",
+            )
+
+        # M4 E4.5.3: Check writer_port wired into session state
+        if self.session_state is not None:
+            wp = getattr(self.session_state, "_writer_port", None)
+            checks["writer_port_wired"] = wp is not None
+            self._record(
+                "phase5",
+                "health",
+                "check.writer_port",
+                f"Writer port: {'wired' if wp else 'NOT wired'}",
+            )
+        else:
+            checks["writer_port_wired"] = True  # No SS = skip check
+            self._record(
+                "phase5",
+                "health",
+                "check.writer_port",
+                "Writer port: no session state (skipped)",
+            )
+
+        # M7 E7.1.4: Check BackPool operational status
+        if self.back_pool is not None:
+            pool_state = self.back_pool.get_pool_state()
+            checks["backpool_wired"] = True
+            self._record(
+                "phase5",
+                "health",
+                "check.backpool",
+                f"BackPool: OK (pool_size={pool_state['size']}, "
+                f"active={pool_state['active']}, "
+                f"overflow={pool_state['overflow']})",
+            )
+        else:
+            checks["backpool_wired"] = True  # Optional, absence is not failure
+            self._record(
+                "phase5",
+                "health",
+                "check.backpool",
+                "BackPool: disabled (optional)",
+            )
+
         # Aggregate
         all_ok = all(checks.values())
         duration = time.time() - phase_start
@@ -1087,6 +1623,22 @@ class K1DemoCoordinator:
         if self.experience_layer is None:
             raise RuntimeError("Experience layer not initialized (kernel not started)")
         return self.experience_layer
+
+    async def _tick_experience_layer(self) -> None:
+        """Invoke ExperienceLayer tick after front_handler completes.
+
+        Delegates to bootstrap._tick_experience using the KernelRuntime
+        so tone adjustment and response style are written to SS before
+        the next prompt build.
+        """
+        if self._kernel is None:
+            return
+        try:
+            from poc.k1_poc.kernel.bootstrap import _tick_experience
+
+            await _tick_experience(self._kernel)
+        except Exception as exc:
+            logger.warning("Experience tick failed (non-critical): %s", exc)
 
     def get_orchestrator(self) -> Any:
         if self.orchestrator is None:

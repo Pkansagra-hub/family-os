@@ -193,7 +193,19 @@ def build_resume_context(
     ]
 
     # Compute remaining budget
-    remaining = max(1, total_budget - last_iteration)
+    # M6 E6.2.5: min-2 floor guarantees at least one tool call + one
+    # submit_result on resume (was max(1, ...) which could leave only
+    # submit_result with no tool call).
+    remaining = max(2, total_budget - last_iteration)
+    if remaining < 3:
+        logger.warning(
+            "build_resume_context: tight remaining_budget=%d for task_id=%s "
+            "(total=%d, last_iter=%d)",
+            remaining,
+            task_id,
+            total_budget,
+            last_iteration,
+        )
 
     # Get type-specific resume instruction
     instruction = RESUME_INSTRUCTIONS.get(hil_type, RESUME_INSTRUCTIONS["clarification"])
@@ -430,5 +442,94 @@ def validate_hitl_wiring() -> list[str]:
     for hil_type in ("clarification", "approval", "selection"):
         if hil_type not in RESUME_INSTRUCTIONS:
             issues.append(f"Missing resume instruction for hil_type='{hil_type}'")
+
+    # ---- Canonical event schema checks (M1 E1.3) ----
+    # Verify that all HITL canonical event types are registered in the
+    # schema registry and that their schemas are structurally valid
+    # (roundtrip: construct -> to_payload -> validate_event).
+    try:
+        from poc.k1_poc.events.hitl import HILRequested, HILResolved, TaskResumed, TaskSuspended
+        from poc.k1_poc.events.validator import EVENT_SCHEMA_REGISTRY, validate_event
+
+        hitl_event_types = {
+            "hil.requested": HILRequested,
+            "hil.resolved": HILResolved,
+            "task.suspended": TaskSuspended,
+            "task.resumed": TaskResumed,
+        }
+        for event_type, cls in hitl_event_types.items():
+            if event_type not in EVENT_SCHEMA_REGISTRY:
+                issues.append(f"HITL event_type '{event_type}' not in EVENT_SCHEMA_REGISTRY")
+            elif EVENT_SCHEMA_REGISTRY[event_type] is not cls:
+                issues.append(
+                    f"EVENT_SCHEMA_REGISTRY['{event_type}'] maps to "
+                    f"{EVENT_SCHEMA_REGISTRY[event_type].__name__}, "
+                    f"expected {cls.__name__}"
+                )
+
+            # Structural roundtrip: default-construct -> to_payload -> validate
+            instance = cls(
+                session_id="test",
+                correlation_id="test",
+                actor="test",
+            )
+            payload = instance.to_payload()
+            ok, val_errors = validate_event(payload)
+            if not ok:
+                issues.append(
+                    f"HITL event '{event_type}' fails schema validation: " + "; ".join(val_errors)
+                )
+    except ImportError:
+        # events.validator not yet available (pre-M1 E1.3) -- skip
+        pass
+
+    # ---- M5 E5.4.4: Multi-device HITL checks ----
+
+    # Check 15: Arbiter has resolve_device_conflict method
+    try:
+        from poc.k1_poc.fsm.arbiter import ConversationArbiter
+
+        arbiter = ConversationArbiter()
+        if not hasattr(arbiter, "resolve_device_conflict"):
+            issues.append(
+                "ConversationArbiter missing resolve_device_conflict() "
+                "for multi-device HITL conflict resolution"
+            )
+        if not hasattr(arbiter, "detect_high_impact_conflict"):
+            issues.append(
+                "ConversationArbiter missing detect_high_impact_conflict() "
+                "for multi-device high-impact action confirmation"
+            )
+    except ImportError:
+        issues.append("Cannot import ConversationArbiter for multi-device checks")
+
+    # Check 16: MetaSection has device tracking methods
+    try:
+        from poc.k1_poc.sessionstate.sections.meta import MetaSection
+
+        meta = MetaSection()
+        if not hasattr(meta, "set_active_device"):
+            issues.append("MetaSection missing set_active_device() for device tracking")
+        if not hasattr(meta, "get_active_devices"):
+            issues.append("MetaSection missing get_active_devices() for device tracking")
+    except ImportError:
+        issues.append("Cannot import MetaSection for device tracking checks")
+
+    # Check 17: InflightContext has active_device_id field
+    try:
+        from poc.k1_poc.fsm.arbiter import InflightContext
+
+        ctx = InflightContext(
+            tasks=[],
+            pending_results=0,
+            cancelled_task_ids=set(),
+            fsm_state="LISTENING",
+            current_turn=0,
+            active_device_id="test_device",
+        )
+        if ctx.active_device_id != "test_device":
+            issues.append("InflightContext.active_device_id not stored correctly")
+    except (ImportError, TypeError) as e:
+        issues.append(f"InflightContext device_id check failed: {e}")
 
     return issues

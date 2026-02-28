@@ -36,7 +36,9 @@ from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     AgentLeaseStart,
     AgentLeaseStartCapabilitiesVector,
 )
-from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import ControlSection as FBControlSection
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
+    ControlSection as FBControlSection,
+)
 from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     ControlSectionAddAgentLeases,
     ControlSectionAddDomains,
@@ -354,6 +356,13 @@ class ControlSection:
         self._intents = IntentClassification()
         self._domains = DomainContext()
         self._safety = SafetyContext()
+
+        # FSM overlay (M4 E4.1.2) -- mirrors ConciergeControlExtension
+        self._fsm_overlay: Dict[str, Any] = {
+            "fsm_state": "",
+            "active_task_ids": [],
+            "complexity_tier": "",
+        }
 
         # Turn tracking
         self._current_turn_id = str(uuid.uuid4())
@@ -750,6 +759,11 @@ class ControlSection:
         self._intents = IntentClassification()
         self._domains = DomainContext()
         self._safety = SafetyContext()
+        self._fsm_overlay = {
+            "fsm_state": "",
+            "active_task_ids": [],
+            "complexity_tier": "",
+        }
         self._current_turn_id = str(uuid.uuid4())
         self._turn_count = 0
         self._last_updated_ms = now_ms
@@ -758,7 +772,7 @@ class ControlSection:
 
     def get_metadata(self) -> Dict[str, Any]:
         """Get section metadata for telemetry/debugging."""
-        return {
+        meta: Dict[str, Any] = {
             "name": self.name,
             "tier": self.tier,
             "budget_bytes": self.budget_bytes,
@@ -775,6 +789,44 @@ class ControlSection:
             "safety_band": self._safety.band.name,
             "last_updated_ms": self._last_updated_ms,
         }
+        # M4 E4.1.2: include FSM overlay when populated
+        if self._fsm_overlay.get("fsm_state"):
+            meta["fsm_state"] = self._fsm_overlay["fsm_state"]
+            meta["active_task_ids"] = list(self._fsm_overlay["active_task_ids"])
+            meta["complexity_tier"] = self._fsm_overlay["complexity_tier"]
+        return meta
+
+    def set_fsm_overlay(
+        self,
+        fsm_state: str,
+        active_task_ids: List[str],
+        complexity_tier: str,
+    ) -> None:
+        """Set FSM overlay fields mirrored from ConciergeControlExtension.
+
+        Called by the control extension after every FSM state mutation
+        so that actors reading ControlSection from SessionState see
+        the current FSM state, active task list, and complexity tier.
+
+        M4 E4.1.2 -- avoids FlatBuffer schema churn by storing in a
+        metadata sub-dict rather than adding schema-level fields.
+
+        Args:
+            fsm_state:       Current ConciergeState name.
+            active_task_ids: Currently active task ID list.
+            complexity_tier: "LOW", "MEDIUM", or "HIGH".
+        """
+        self._fsm_overlay = {
+            "fsm_state": fsm_state,
+            "active_task_ids": list(active_task_ids),
+            "complexity_tier": complexity_tier,
+        }
+        self._touch()
+
+    @property
+    def fsm_overlay(self) -> Dict[str, Any]:
+        """Read-only access to the FSM overlay dict."""
+        return dict(self._fsm_overlay)
 
     # =========================================================================
     # Agent Lease Management
@@ -1121,6 +1173,40 @@ class ControlSection:
         self._touch()
 
     # =========================================================================
+    # Intent Management (M10 E10.2.1)
+    # =========================================================================
+
+    def set_intent(self, intent: IntentClassification) -> None:
+        """Set classified intent from Phase 1.
+
+        Args:
+            intent: IntentClassification with primary, all_intents, scores, classifier.
+        """
+        self._intents = intent
+        self._touch()
+
+    def get_intents(self) -> IntentClassification:
+        """Get current intent classification."""
+        return self._intents
+
+    # =========================================================================
+    # Complexity Tier (M10 E10.2.1)
+    # =========================================================================
+
+    def set_complexity_tier(self, tier: str) -> None:
+        """Set complexity tier in FSM overlay.
+
+        Args:
+            tier: "LOW", "MEDIUM", or "HIGH".
+        """
+        self._fsm_overlay["complexity_tier"] = tier
+        self._touch()
+
+    def get_complexity_tier(self) -> str:
+        """Get complexity tier from FSM overlay."""
+        return self._fsm_overlay.get("complexity_tier", "")
+
+    # =========================================================================
     # Session Properties
     # =========================================================================
 
@@ -1232,6 +1318,12 @@ class ControlSection:
             )
         elif operation == "release_lock":
             return self.release_lock(data["holder"])
+        elif operation == "set_fsm_overlay":
+            return self.set_fsm_overlay(
+                data["fsm_state"],
+                data["active_task_ids"],
+                data["complexity_tier"],
+            )
         else:
             raise ValueError(f"Unknown operation: {operation}")
 

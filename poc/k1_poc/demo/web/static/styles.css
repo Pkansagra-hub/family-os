@@ -693,6 +693,90 @@ html, body {
 }
 
 /* ================================================================
+   TOOL EXECUTION CHIPS (in-chat indicators)
+   ================================================================ */
+
+.message.tool-chip {
+    align-self: flex-start;
+    max-width: 90%;
+    margin-left: 42px;
+    animation: msg-enter 0.35s var(--ease-out-expo) both;
+}
+
+.tool-chip-content {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 14px;
+    border-radius: var(--r-full);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.1px;
+    background: rgba(10, 132, 255, 0.06);
+    border: 1px solid rgba(10, 132, 255, 0.12);
+    color: rgba(255, 255, 255, 0.55);
+    transition: all 0.35s var(--ease-out-expo);
+}
+
+.tool-chip.done .tool-chip-content {
+    background: rgba(48, 209, 88, 0.06);
+    border-color: rgba(48, 209, 88, 0.15);
+    color: rgba(48, 209, 88, 0.75);
+}
+
+.tool-chip.failed .tool-chip-content {
+    background: rgba(255, 69, 58, 0.06);
+    border-color: rgba(255, 69, 58, 0.15);
+    color: rgba(255, 69, 58, 0.75);
+}
+
+.tool-chip-icon {
+    font-size: 13px;
+    line-height: 1;
+}
+
+.tool-chip-label {
+    white-space: nowrap;
+}
+
+.tool-chip-spinner {
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid rgba(255, 255, 255, 0.1);
+    border-top-color: rgba(10, 132, 255, 0.5);
+    border-radius: 50%;
+    animation: tool-spin 0.7s linear infinite;
+}
+
+.tool-chip.done .tool-chip-spinner,
+.tool-chip.failed .tool-chip-spinner {
+    animation: none;
+    border: none;
+    width: auto;
+    height: auto;
+}
+
+.tool-chip-status {
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.tool-chip-status.ok { color: rgba(48, 209, 88, 0.75); }
+.tool-chip-status.err { color: rgba(255, 69, 58, 0.75); }
+
+.tool-chip-dur {
+    font-size: 10px;
+    color: var(--text-quaternary);
+    font-weight: 400;
+    opacity: 0.6;
+}
+
+@keyframes tool-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ================================================================
    STREAMING
    ================================================================ */
 

@@ -89,7 +89,8 @@ INVOKE_CAPABILITY_SCHEMA = ToolSchema(
         "Invoke a known K0 capability by name with parameters. "
         "Use after discover_capabilities identifies the right service, "
         "or when you already know the capability name from prior tasks. "
-        "Available at all tiers."
+        "Available at all tiers. For invoking MULTIPLE independent "
+        "capabilities, prefer batch_invoke_capabilities to save budget."
     ),
     parameters={
         "type": "object",
@@ -121,6 +122,71 @@ INVOKE_CAPABILITY_SCHEMA = ToolSchema(
                 "type": "string",
                 "enum": ["success", "partial", "error"],
             },
+        },
+    },
+    actor="back",
+    category="action",
+    side_effects=True,
+)
+
+BATCH_INVOKE_CAPABILITIES_SCHEMA = ToolSchema(
+    name="batch_invoke_capabilities",
+    description=(
+        "Invoke MULTIPLE capabilities in a single tool call. Each invocation "
+        "in the batch runs independently. Use when you need to execute 2+ "
+        "capabilities (e.g. set_reminder + send_message + set_alarm) to save "
+        "tool budget. Costs only 1 tool call regardless of batch size. "
+        "Available at all tiers."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "invocations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "capability_name": {
+                            "type": "string",
+                            "description": "Exact name of the capability to invoke",
+                        },
+                        "params": {
+                            "type": "object",
+                            "description": "Parameters for the capability",
+                        },
+                    },
+                    "required": ["capability_name", "params"],
+                },
+                "description": (
+                    "Array of capability invocations to execute. "
+                    "Each has capability_name and params."
+                ),
+                "minItems": 1,
+                "maxItems": 8,
+            },
+        },
+        "required": ["invocations"],
+    },
+    returns={
+        "type": "object",
+        "properties": {
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "capability_name": {"type": "string"},
+                        "result": {"type": "object"},
+                        "status": {
+                            "type": "string",
+                            "enum": ["success", "error"],
+                        },
+                    },
+                },
+            },
+            "total": {"type": "integer"},
+            "succeeded": {"type": "integer"},
+            "failed": {"type": "integer"},
         },
     },
     actor="back",
@@ -263,7 +329,7 @@ SUBMIT_RESULT_SCHEMA = ToolSchema(
             # -- Fields for result_type="needs_human" --
             "hil_type": {
                 "type": "string",
-                "enum": ["confirm", "choose", "provide_info", "escalate"],
+                "enum": ["confirm", "choose", "provide_info", "clarification", "escalate"],
                 "description": "Type of human-in-the-loop needed (for needs_human)",
             },
             "question": {
@@ -304,6 +370,7 @@ BACK_TOOL_SCHEMAS: list[ToolSchema] = [
     DISCOVER_CAPABILITIES_SCHEMA,
     # Action
     INVOKE_CAPABILITY_SCHEMA,
+    BATCH_INVOKE_CAPABILITIES_SCHEMA,
     SPAWN_VIA_FABRIC_SCHEMA,
     EXECUTE_WORKFLOW_SCHEMA,
     # Control
@@ -319,12 +386,14 @@ BACK_TIER_ALLOWLISTS: dict[str, list[str]] = {
         "recall_memory",
         "discover_capabilities",
         "invoke_capability",
+        "batch_invoke_capabilities",
         "submit_result",
     ],
     "MEDIUM": [
         "recall_memory",
         "discover_capabilities",
         "invoke_capability",
+        "batch_invoke_capabilities",
         "spawn_via_fabric",
         "execute_workflow",
         "submit_result",
@@ -333,6 +402,7 @@ BACK_TIER_ALLOWLISTS: dict[str, list[str]] = {
         "recall_memory",
         "discover_capabilities",
         "invoke_capability",
+        "batch_invoke_capabilities",
         "spawn_via_fabric",
         "execute_workflow",
         "submit_result",
