@@ -1,7 +1,7 @@
 """
 P03 LRU embedding cache with K0 metrics.
 
-Caches embeddings to reduce FAISS query load.
+Caches embeddings to reduce pgvector query load.
 Reports hit/miss/eviction metrics to K0.
 
 Dossier Reference: Section 15.6.2 Embedding Caching with K0 Metrics

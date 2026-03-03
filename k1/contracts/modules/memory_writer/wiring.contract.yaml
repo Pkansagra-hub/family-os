@@ -1,0 +1,330 @@
+# ---------------------------------------------------------------------------
+# Memory Writer v2 Wiring Contract
+# Follows Orchestrator pattern: k1/contracts/modules/orchestrator/wiring.contract.yaml
+# Reference: MASTER_IMPLEMENTATION_SKELETON.md Epic 1.2
+# Source of truth: docs/pipelines/p03/stage5_proposal_corrections.md
+# ---------------------------------------------------------------------------
+$schema: "k1://schemas/wiring/wiring.contract.schema.yaml"
+
+metadata:
+  module_id: "memory_writer"
+  owner: "platform-team"
+  band: "GREEN"
+
+contract_version: 1
+impl_version: "2.0.0"
+
+# ---------------------------------------------------------------------------
+# Code ownership boundaries
+# ---------------------------------------------------------------------------
+code:
+  roots:
+    - "k1/memory_writer"
+  required_files:
+    # --- Package root ---
+    - path: "k1/memory_writer/__init__.py"
+    - path: "k1/memory_writer/types.py"
+      description: "MemoryAtom, ExtractionContext, all domain types and enums"
+    - path: "k1/memory_writer/events.py"
+      description: "Event topic definitions + payloads"
+    - path: "k1/memory_writer/config.py"
+      description: "MWConfig dataclass (replaces inline constants)"
+    - path: "k1/memory_writer/invariants.py"
+      description: "MW-01 through MW-11 runtime assertion helpers"
+
+    # --- Ports (Protocol stubs -- hexagonal boundary) ---
+    - path: "k1/memory_writer/ports/__init__.py"
+    - path: "k1/memory_writer/ports/session_read_port.py"
+      description: "ISessionReadPort (multi-reader, lock-free)"
+    - path: "k1/memory_writer/ports/bridge_command_port.py"
+      description: "IBridgeCommandPort (fire-and-forget to K0)"
+    - path: "k1/memory_writer/ports/event_subscription_port.py"
+      description: "IEventSubscriptionPort (turn.complete.v1)"
+    - path: "k1/memory_writer/ports/model_hub_port.py"
+      description: "IModelHubPort (LLM extraction call)"
+    - path: "k1/memory_writer/ports/health_port.py"
+      description: "IHealthPort (readiness, liveness)"
+
+    # --- Pipeline (orchestration of 5 stages) ---
+    - path: "k1/memory_writer/pipeline/__init__.py"
+    - path: "k1/memory_writer/pipeline/pipeline.py"
+      description: "MemoryWriterPipeline (wires 5 stages)"
+    - path: "k1/memory_writer/pipeline/turn_dispatcher.py"
+      description: "TurnDispatcher (K1 Bus subscription, dedup)"
+
+    # --- Filter (stage 1: rule-based relevance) ---
+    - path: "k1/memory_writer/filter/__init__.py"
+    - path: "k1/memory_writer/filter/relevance_filter.py"
+      description: "RelevanceFilter (5 skip rules, MW-07: no LLM)"
+    - path: "k1/memory_writer/filter/rules.py"
+      description: "Individual rule implementations (R1-R5)"
+
+    # --- Context (stage 2: SessionState read + context assembly) ---
+    - path: "k1/memory_writer/context/__init__.py"
+    - path: "k1/memory_writer/context/session_reader.py"
+      description: "MWSessionReader (15-section reader, token budget)"
+    - path: "k1/memory_writer/context/context_builder.py"
+      description: "ContextBuilder (assembles ExtractionContext)"
+    - path: "k1/memory_writer/context/person_resolver.py"
+      description: "PersonResolver (name -> person_id)"
+
+    # --- Extraction (stage 3: LLM extraction + validation) ---
+    - path: "k1/memory_writer/extraction/__init__.py"
+    - path: "k1/memory_writer/extraction/writer_agent.py"
+      description: "MemoryWriterAgent (LLM extraction, 2000 tokens)"
+    - path: "k1/memory_writer/extraction/extraction_validator.py"
+      description: "ExtractionValidator (post-LLM checks)"
+    - path: "k1/memory_writer/extraction/prompts/memory_writer_persona.md"
+      description: "System prompt for Writer Agent"
+
+    # --- Envelope (stage 4: atom -> envelope mapping) ---
+    - path: "k1/memory_writer/envelope/__init__.py"
+    - path: "k1/memory_writer/envelope/envelope_builder.py"
+      description: "EnvelopeBuilder (MemoryAtom -> CommandEnvelope body)"
+    - path: "k1/memory_writer/envelope/field_mapper.py"
+      description: "Field mapping rules (34 fields -> K0 body)"
+    - path: "k1/memory_writer/envelope/privacy_enforcer.py"
+      description: "PrivacyEnforcer (band-based field stripping)"
+
+    # --- Batch (stage 5: aggregation + emission) ---
+    - path: "k1/memory_writer/batch/__init__.py"
+    - path: "k1/memory_writer/batch/delta_aggregator.py"
+      description: "DeltaAggregator (250ms window, dedup, merge)"
+    - path: "k1/memory_writer/batch/batch_emitter.py"
+      description: "BatchEmitter (IBridgeCommandPort.submit)"
+
+    # --- Health (circuit breaker + probes) ---
+    - path: "k1/memory_writer/health/__init__.py"
+    - path: "k1/memory_writer/health/circuit_breaker.py"
+      description: "LLM circuit breaker config"
+
+    # --- Adapters (concrete port implementations) ---
+    - path: "k1/memory_writer/adapters/__init__.py"
+    - path: "k1/memory_writer/adapters/session_read_adapter.py"
+      description: "Concrete ISessionReadPort implementation"
+    - path: "k1/memory_writer/adapters/bridge_command_adapter.py"
+      description: "Concrete IBridgeCommandPort implementation"
+    - path: "k1/memory_writer/adapters/event_subscription_adapter.py"
+      description: "Concrete IEventSubscriptionPort implementation"
+    - path: "k1/memory_writer/adapters/model_hub_adapter.py"
+      description: "Concrete IModelHubPort implementation"
+    - path: "k1/memory_writer/adapters/health_adapter.py"
+      description: "Concrete IHealthPort implementation"
+    - path: "k1/memory_writer/adapters/test_adapters.py"
+      description: "All mock/test adapters for integration tests"
+
+  forbidden_patterns: ["*.pyc", "__pycache__"]
+
+# ---------------------------------------------------------------------------
+# Import wiring: what Memory Writer imports from other modules
+# ---------------------------------------------------------------------------
+wiring:
+  imports:
+    required_modules: ["bus", "sessionstate"]
+    optional_modules: ["bridge", "model_hub"]
+    required_symbols:
+      - from: "sessionstate"
+        import: "SessionSnapshot"
+        used_in_files: ["k1/memory_writer/adapters/session_read_adapter.py"]
+      - from: "bus"
+        import: "IEventPort"
+        used_in_files: ["k1/memory_writer/adapters/event_subscription_adapter.py"]
+    forbidden:
+      - "direct_db_access"
+      - "external_http_without_adapter"
+      - "sessionstate_writer"
+      - "ultrabert_import"
+
+# ---------------------------------------------------------------------------
+# Port interfaces (hexagonal architecture) -- 5 ports
+# ---------------------------------------------------------------------------
+capabilities:
+  provides:
+    # --- Memory Writer pipeline entry point ---
+    - name: "memory_writer:process:v1"
+      interface:
+        methods:
+          - name: "process_turn"
+            parameters:
+              - name: "turn_payload"
+                type: "dict"
+            returns: "list[MWEnvelope]"
+      version: "2.0.0"
+      qos: "BACKGROUND"
+      timeout_ms: 1000
+
+    # --- Health/readiness probes ---
+    - name: "memory_writer:health:v1"
+      interface:
+        methods:
+          - name: "health_check"
+            returns: "HealthStatus"
+          - name: "is_ready"
+            returns: "bool"
+      version: "2.0.0"
+      qos: "BACKGROUND"
+      timeout_ms: 5000
+
+  consumes:
+    # --- SessionState read-only (MW-01: NO writes) ---
+    - name: "session:read:v1"
+      interface:
+        methods:
+          - name: "snapshot"
+            parameters:
+              - name: "sections"
+                type: "list[str]"
+            returns: "dict"
+          - name: "read_section"
+            parameters:
+              - name: "name"
+                type: "str"
+            returns: "SectionData"
+      version: "1.0.0"
+
+    # --- Bridge command (fire-and-forget to K0) ---
+    - name: "bridge:command:v1"
+      interface:
+        methods:
+          - name: "submit"
+            parameters:
+              - name: "topic"
+                type: "str"
+              - name: "schema_uri"
+                type: "str"
+              - name: "body"
+                type: "dict"
+            returns: "None"
+          - name: "submit_batch"
+            parameters:
+              - name: "envelopes"
+                type: "list[MWEnvelope]"
+            returns: "None"
+      version: "1.0.0"
+
+    # --- Event bus subscription ---
+    - name: "bus:subscribe:v1"
+      interface:
+        methods:
+          - name: "subscribe"
+            parameters:
+              - name: "topic"
+                type: "str"
+              - name: "handler"
+                type: "Callable"
+            returns: "Subscription"
+          - name: "unsubscribe"
+            parameters:
+              - name: "sub_id"
+                type: "str"
+            returns: "None"
+      version: "1.0.0"
+
+    # --- Model Hub LLM call (circuit breaker protected) ---
+    - name: "model_hub:chat:v1"
+      interface:
+        methods:
+          - name: "chat"
+            parameters:
+              - name: "messages"
+                type: "list[dict]"
+              - name: "budget_tokens"
+                type: "int"
+              - name: "model_hint"
+                type: "str"
+            returns: "ChatResponse"
+      version: "1.0.0"
+      required: false
+
+# ---------------------------------------------------------------------------
+# Events emitted (5) -- observability telemetry
+# ---------------------------------------------------------------------------
+events:
+  emits:
+    - topic: "k1.mw.filter.decision.v1"
+      schema: "k1/contracts/schemas/memory_writer/events/emitted/filter_decision.v1.json"
+    - topic: "k1.mw.extraction.complete.v1"
+      schema: "k1/contracts/schemas/memory_writer/events/emitted/extraction_complete.v1.json"
+    - topic: "k1.mw.batch.submitted.v1"
+      schema: "k1/contracts/schemas/memory_writer/events/emitted/batch_submitted.v1.json"
+    - topic: "k1.mw.pipeline.error.v1"
+      schema: "k1/contracts/schemas/memory_writer/events/emitted/pipeline_error.v1.json"
+    - topic: "k1.mw.circuit.open.v1"
+      schema: "k1/contracts/schemas/memory_writer/events/emitted/circuit_open.v1.json"
+
+  # ---------------------------------------------------------------------------
+  # Events consumed (1) -- MW listens for turn completion only
+  # ---------------------------------------------------------------------------
+  subscribes:
+    - topic: "turn.complete.v1"
+      schema: "k1/contracts/schemas/memory_writer/events/consumed/turn_complete.v1.json"
+      handler: "k1.memory_writer.pipeline.turn_dispatcher:TurnDispatcher.on_turn_complete"
+
+# ---------------------------------------------------------------------------
+# State: Memory Writer NEVER writes SessionState (MW-01)
+# Reads SessionState for context, no local storage
+# ---------------------------------------------------------------------------
+state:
+  reads:
+    - path: "session_data.beliefs_active"
+      access: "SHARED"
+    - path: "session_data.beliefs_history"
+      access: "SHARED"
+    - path: "session_data.history_active"
+      access: "SHARED"
+    - path: "session_data.history_recent"
+      access: "SHARED"
+    - path: "session_data.affective_now"
+      access: "SHARED"
+    - path: "session_data.affective_baseline"
+      access: "SHARED"
+    - path: "session_data.narrative_active"
+      access: "SHARED"
+    - path: "session_data.scoreboard"
+      access: "SHARED"
+    - path: "session_data.control"
+      access: "SHARED"
+    - path: "session_data.persona"
+      access: "SHARED"
+    - path: "session_data.task_state"
+      access: "SHARED"
+    - path: "session_data.ifl"
+      access: "SHARED"
+    - path: "session_data.meta"
+      access: "SHARED"
+  writes: []
+  local_storage: []
+
+# ---------------------------------------------------------------------------
+# Runtime assertions for contract compliance
+# ---------------------------------------------------------------------------
+runtime_assertions:
+  on_load:
+    - condition: "All port Protocols defined"
+      test: "from k1.memory_writer import ISessionReadPort, IBridgeCommandPort, IEventSubscriptionPort, IModelHubPort, IHealthPort"
+    - condition: "All core types available"
+      test: "from k1.memory_writer import MemoryAtom, ExtractionContext, CompressedTurn, MWEnvelope, MWConfig, FilterDecision"
+    - condition: "Event catalog importable"
+      test: "from k1.memory_writer.events import ALL_EMITTED, ALL_CONSUMED"
+  invariants:
+    - condition: "MW-01: Memory Writer never writes SessionState"
+      test: "assert 'IStateWritePort' not in dir(k1.memory_writer)"
+    - condition: "MW-11: No UltraBERT import in memory_writer"
+      test: "assert 'ultrabert' not in str(k1.memory_writer.__file__)"
+
+# ---------------------------------------------------------------------------
+# Validation rules (11 MW invariants)
+# ---------------------------------------------------------------------------
+validation:
+  rules:
+    - "mw_01_no_sessionstate_write"
+    - "mw_02_lock_free_read_1ms"
+    - "mw_03_all_writes_via_bridge"
+    - "mw_04_text_max_50_words"
+    - "mw_05_max_6_atoms_per_turn"
+    - "mw_06_llm_budget_2000_tokens"
+    - "mw_07_filter_no_llm"
+    - "mw_08_batch_window_250ms"
+    - "mw_09_offline_safe_outbox"
+    - "mw_10_trace_id_on_all_envelopes"
+    - "mw_11_no_ultrabert_in_k1"

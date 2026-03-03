@@ -68,7 +68,7 @@ class TestModuleContractFabricFields:
     def test_module_contract_fabric_context_policy_synthetic(self):
         """ModuleContract with SYNTHETIC context policy."""
         contract = ModuleContract(
-            module_id="retrieval.faiss",
+            module_id="retrieval.pgvector",
             version="v1",
             latency_budget_ms=100,
             fabric_callable=True,
@@ -136,12 +136,12 @@ class TestPipelineSpecTriggerFields:
             dag=[
                 StageSpec(
                     id="stage_10_index",
-                    module="faiss.index:v1",
+                    module="pgvector.index:v1",
                 ),
             ],
             triggers=[
                 TriggerSpec(
-                    id="faiss_indexer_interval",
+                    id="embedding_indexer_interval",
                     type=TriggerType.INTERVAL,
                     interval_seconds=300,
                     batch_size=100,
@@ -149,7 +149,7 @@ class TestPipelineSpecTriggerFields:
             ],
         )
         assert len(spec.triggers) == 1
-        assert spec.triggers[0].id == "faiss_indexer_interval"
+        assert spec.triggers[0].id == "embedding_indexer_interval"
         assert spec.triggers[0].type == TriggerType.INTERVAL
         assert spec.triggers[0].interval_seconds == 300
 
@@ -161,12 +161,12 @@ class TestPipelineSpecTriggerFields:
             dag=[
                 StageSpec(
                     id="stage_10_index",
-                    module="faiss.index:v1",
+                    module="pgvector.index:v1",
                 ),
             ],
             triggers=[
                 TriggerSpec(
-                    id="faiss_indexer_threshold",
+                    id="embedding_indexer_threshold",
                     type=TriggerType.THRESHOLD,
                     table="st_vec",
                     condition="status = 'READY'",
@@ -187,23 +187,23 @@ class TestPipelineSpecTriggerFields:
             dag=[
                 StageSpec(
                     id="stage_10_index",
-                    module="faiss.index:v1",
+                    module="pgvector.index:v1",
                 ),
             ],
             triggers=[
                 TriggerSpec(
-                    id="faiss_indexer_interval",
+                    id="embedding_indexer_interval",
                     type=TriggerType.INTERVAL,
                     interval_seconds=300,
                 ),
                 TriggerSpec(
-                    id="faiss_indexer_threshold",
+                    id="embedding_indexer_threshold",
                     type=TriggerType.THRESHOLD,
                     table="st_vec",
                     threshold_count=50,
                 ),
                 TriggerSpec(
-                    id="faiss_indexer_manual",
+                    id="embedding_indexer_manual",
                     type=TriggerType.MANUAL,
                 ),
             ],
@@ -265,7 +265,7 @@ class TestPipelineSpecTriggerFields:
                 dag=[
                     StageSpec(
                         id="stage_10_index",
-                        module="faiss.index:v1",
+                        module="pgvector.index:v1",
                     ),
                 ],
                 triggers=[

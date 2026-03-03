@@ -194,12 +194,41 @@ class P03EventState:
     # Used by R4 for relationship type inference
     extracted_relations_json: str = "[]"
 
+    # === MW v2 COGNITIVE SIGNALS (R0 - M5A) ===
+    # M3 (0073) narrative context
+    narrative_thread_id: str = ""
+    narrative_arc_position: str = ""
+    narrative_is_goal_event: bool = False
+    # M3 (0073) cognitive dimensions
+    intent_type: str = ""
+    goal_context: str = ""
+    source_type: str = ""
+    novelty: str = ""  # Categorical: ROUTINE/EXPECTED/NOVEL/SURPRISING
+    elaboration_depth: str = ""  # MENTION/DISCUSSED/ELABORATED/DEEPLY_PROCESSED
+    identity_domains_json: str = "[]"
+    entity_salience_json: str = "{}"
+    k1_signal_version: str = "2.0"
+    affect_dominance: float = 0.0
+    temporal_mentioned_time: str = ""
+    temporal_resolved_epoch_ms: float = 0.0
+    temporal_orientation: str = ""
+    participant_relationships_json: str = "[]"
+    cognitive_trace_id: str = ""
+    # M5A (0074) new signals
+    surprise_level: float = 0.0
+    identity_relevance: float = 0.0
+    source_reliability: float = 1.0
+    memory_tier: str = "routine"
+    temporal_anchor_json: str = "{}"
+
     # === IMPORTANCE SCORING (R1) ===
     importance_score: float = 0.0
     recency_factor: float = 0.0
     affect_factor: float = 0.0
     social_factor: float = 0.0
     novelty_factor: float = 0.0
+    surprise_factor: float = 0.0
+    identity_factor: float = 0.0
     importance_computed: bool = False
 
     # === HEBBIAN UPDATES (R1) ===
@@ -296,6 +325,8 @@ class P03EventState:
         affect: float,
         social: float,
         novelty: float,
+        surprise: float = 0.0,
+        identity: float = 0.0,
     ) -> None:
         """
         Set importance score and contributing factors (R1).
@@ -306,12 +337,16 @@ class P03EventState:
             affect: Emotional intensity contribution
             social: Social relevance contribution
             novelty: Information novelty contribution
+            surprise: Cognitive surprise contribution
+            identity: Self-referential identity contribution
         """
         self.importance_score = score
         self.recency_factor = recency
         self.affect_factor = affect
         self.social_factor = social
         self.novelty_factor = novelty
+        self.surprise_factor = surprise
+        self.identity_factor = identity
         self.importance_computed = True
 
     def add_hebbian_update(

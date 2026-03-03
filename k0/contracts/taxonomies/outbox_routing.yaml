@@ -1,0 +1,158 @@
+# K0 Outbox Routing Table
+#
+# Maps command topics to outbox drivers, internal bus topics, and target pipelines.
+# This contract replaces the hardcoded DEFAULT_OUTBOX_DRIVER = "st_epi" in command.py.
+#
+# Resolution: exact match first, then glob pattern match, then reject.
+# Priority: used for offline queue drain ordering (LocalOutbox in Bridge).
+#
+# Contract: k0/contracts/taxonomies/outbox_routing.yaml
+# Milestone: M2 Epic 2.3
+# Related: k0/contracts/taxonomies/command_topics.yaml (topic definitions)
+# Related: k0/ports/command.py (consumer of this routing table)
+
+outbox_routing:
+  version: "1.0.0"
+  last_updated: "2026-03-01"
+
+  # Default inline body limit for all routes (bytes).
+  # Individual routes can override this.
+  default_inline_body_limit: 4096
+
+  # ===========================================================================
+  # Route Definitions
+  # ===========================================================================
+  routes:
+
+    # -------------------------------------------------------------------------
+    # memory.write -> P02 Write Pipeline
+    # -------------------------------------------------------------------------
+    - pattern: "memory.write"
+      match_type: "exact"
+      outbox_driver: "st_epi"
+      bus_topic: "cognitive.memory.write.committed.v1"
+      pipeline: "P02"
+      priority: "NORMAL"
+      inline_body_limit: 4096
+
+    # -------------------------------------------------------------------------
+    # session.snapshot -> Archive (no pipeline)
+    # -------------------------------------------------------------------------
+    - pattern: "session.snapshot"
+      match_type: "exact"
+      outbox_driver: "st_session"
+      bus_topic: "session.snapshot.committed.v1"
+      pipeline: null
+      priority: "HIGH"
+      inline_body_limit: 8192
+
+    # -------------------------------------------------------------------------
+    # beliefs.archive -> Archive (no pipeline)
+    # -------------------------------------------------------------------------
+    - pattern: "beliefs.archive"
+      match_type: "exact"
+      outbox_driver: "st_beliefs"
+      bus_topic: "beliefs.archive.committed.v1"
+      pipeline: null
+      priority: "NORMAL"
+      inline_body_limit: 4096
+
+    # -------------------------------------------------------------------------
+    # history.archive -> Archive (no pipeline)
+    # -------------------------------------------------------------------------
+    - pattern: "history.archive"
+      match_type: "exact"
+      outbox_driver: "st_history"
+      bus_topic: "history.archive.committed.v1"
+      pipeline: null
+      priority: "NORMAL"
+      inline_body_limit: 4096
+
+    # -------------------------------------------------------------------------
+    # plan.committed -> P02 Write Pipeline
+    # -------------------------------------------------------------------------
+    - pattern: "plan.committed"
+      match_type: "exact"
+      outbox_driver: "st_epi"
+      bus_topic: "cognitive.plan.committed.v1"
+      pipeline: "P02"
+      priority: "NORMAL"
+      inline_body_limit: 4096
+
+    # -------------------------------------------------------------------------
+    # ifl.* -> P02 Write Pipeline (glob match)
+    # -------------------------------------------------------------------------
+    - pattern: "ifl.*"
+      match_type: "glob"
+      outbox_driver: "st_epi"
+      bus_topic: "cognitive.ifl.event.committed.v1"
+      pipeline: "P02"
+      priority: "NORMAL"
+      inline_body_limit: 4096
+
+    # -------------------------------------------------------------------------
+    # sync.delta -> P07 CRDT Merge Pipeline
+    # -------------------------------------------------------------------------
+    - pattern: "sync.delta"
+      match_type: "exact"
+      outbox_driver: "st_sync"
+      bus_topic: "sync.delta.committed.v1"
+      pipeline: "P07"
+      priority: "HIGH"
+      inline_body_limit: 8192
+
+  # ===========================================================================
+  # Resolution Rules
+  # ===========================================================================
+  resolution:
+    order:
+      - "exact"
+      - "glob"
+    unknown_action: "REJECT"
+    unknown_error_code: 400
+    description: >
+      1. Try exact match on pattern field.
+      2. If no exact match, try glob patterns (fnmatch style).
+      3. If no match, reject with 400 (unknown topic).
+
+  # ===========================================================================
+  # Priority Levels
+  # ===========================================================================
+  priority_levels:
+    CRITICAL:
+      description: "Safety-critical operations. Processed first in offline drain."
+      numeric: 0
+    HIGH:
+      description: "Session and sync operations. Processed before NORMAL."
+      numeric: 1
+    NORMAL:
+      description: "Standard memory writes. Default priority."
+      numeric: 2
+    LOW:
+      description: "Background or bulk operations. Processed last."
+      numeric: 3
+
+  # ===========================================================================
+  # Outbox Drivers (informational -- implementations are in k0/storage/)
+  # ===========================================================================
+  drivers:
+    st_epi:
+      description: "Episodic memory outbox (st_hipp_events target)"
+      storage_table: "st_hipp_events"
+      status: "PRODUCTION"
+    st_session:
+      description: "Session snapshot outbox"
+      storage_table: "st_session_snapshots"
+      status: "PLANNING"
+    st_beliefs:
+      description: "Belief archive outbox"
+      storage_table: "st_beliefs_archive"
+      status: "PLANNING"
+    st_history:
+      description: "Turn history archive outbox"
+      storage_table: "st_history_archive"
+      status: "PLANNING"
+    st_sync:
+      description: "CRDT sync delta outbox"
+      storage_table: "st_sync_deltas"
+      status: "PLANNING"

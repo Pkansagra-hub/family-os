@@ -2755,7 +2755,7 @@ PHASE 5: Testing
 
 # References
 
-- [temporal_fix.md](./temporal_fix.md) - Holistic context flow design
+- [temporal_fix.md](../plans_completed_donotrefer/temporal_fix.md) - Holistic context flow design
 - [GAP_007_ALGORITHM_MATH_TUNING_SKELETON.md](../TEMP_EXECUTION_DOCS/GAP_007_ALGORITHM_MATH_TUNING_SKELETON.md) - Algorithm math
 - [GAP_007_WIRING_EXECUTION_SKELETON.md](../TEMP_EXECUTION_DOCS/GAP_007_WIRING_EXECUTION_SKELETON.md) - Wiring spec
 - [P03_consolidation_dossier_v2.md](../pipelines/P03_consolidation_dossier_v2.md) - P03 pipeline spec

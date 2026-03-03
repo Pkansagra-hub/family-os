@@ -92,12 +92,12 @@ class TriggerSpec(BaseModel):
 
     Examples:
         # Interval trigger (every 5 minutes)
-        - id: faiss_indexer_interval
+        - id: embedding_indexer_interval
           type: interval
           interval_seconds: 300
 
         # Threshold trigger (when 50+ records pending)
-        - id: faiss_indexer_threshold
+        - id: embedding_indexer_threshold
           type: threshold
           table: st_vec
           condition: "status = 'READY'"

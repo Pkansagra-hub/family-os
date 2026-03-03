@@ -1,0 +1,112 @@
+# K0 Query Selector Catalog
+#
+# Defines ALL query selector types K1 can use via POST /k0/query.recall.
+# Each selector specifies topic filtering, search method, and intended use case.
+#
+# Contract: k0/contracts/taxonomies/query_selectors.yaml
+# Milestone: M2 Epic 2.7
+# Related: k0/contracts/jsonschema/query.recall.request.json (request schema)
+# Related: k0/contracts/jsonschema/query.recall.response.json (response schema)
+
+query_selectors:
+  version: "1.0.0"
+  last_updated: "2026-03-01"
+
+  # ===========================================================================
+  # Selector Definitions
+  # ===========================================================================
+  selectors:
+
+    # -------------------------------------------------------------------------
+    # episodic -- WAL position-based episodic recall
+    # -------------------------------------------------------------------------
+    - type: "episodic"
+      description: "Recall recent episodic memories by WAL position"
+      topic_filter: "memory.write"
+      search_method: "wal_position_recall"
+      default_limit: 10
+      max_limit: 100
+      use_case: "Memory Writer recent memory retrieval, Concierge context building"
+      supported_filters:
+        - "session_id"
+        - "actor"
+        - "time_range"
+        - "activity_type"
+
+    # -------------------------------------------------------------------------
+    # semantic -- pgvector similarity search
+    # -------------------------------------------------------------------------
+    - type: "semantic"
+      description: "Free-text semantic similarity search across all memories"
+      topic_filter: null
+      search_method: "pgvector_similarity"
+      default_limit: 5
+      max_limit: 50
+      use_case: "Concierge context recall, Planner goal-relevant memory lookup"
+      supported_filters:
+        - "query_text"
+        - "min_similarity"
+        - "time_range"
+        - "band"
+        - "activity_type"
+
+    # -------------------------------------------------------------------------
+    # session -- Session state lookup
+    # -------------------------------------------------------------------------
+    - type: "session"
+      description: "Retrieve archived session state by session ID"
+      topic_filter: "session.*"
+      search_method: "session_id_lookup"
+      default_limit: 1
+      max_limit: 10
+      use_case: "SessionState COLD tier restore, session replay"
+      supported_filters:
+        - "session_id"
+        - "time_range"
+
+    # -------------------------------------------------------------------------
+    # device -- IFL adapter event history
+    # -------------------------------------------------------------------------
+    - type: "device"
+      description: "Retrieve device event history from IFL adapters"
+      topic_filter: "ifl.*"
+      search_method: "device_event_lookup"
+      default_limit: 20
+      max_limit: 200
+      use_case: "IFL adapter recall, device state reconstruction"
+      supported_filters:
+        - "device_id"
+        - "adapter_id"
+        - "category"
+        - "time_range"
+
+    # -------------------------------------------------------------------------
+    # belief -- Archived belief lookup
+    # -------------------------------------------------------------------------
+    - type: "belief"
+      description: "Retrieve archived beliefs from Planner eviction store"
+      topic_filter: "beliefs.*"
+      search_method: "belief_id_lookup"
+      default_limit: 10
+      max_limit: 50
+      use_case: "Planner belief reconstruction, long-term belief tracking"
+      supported_filters:
+        - "belief_id"
+        - "confidence_min"
+        - "time_range"
+
+    # -------------------------------------------------------------------------
+    # graph -- Knowledge graph traversal
+    # -------------------------------------------------------------------------
+    - type: "graph"
+      description: "Traverse knowledge graph edges (st_kg_edges)"
+      topic_filter: null
+      search_method: "kg_edge_traversal"
+      default_limit: 20
+      max_limit: 100
+      use_case: "Relationship queries, entity co-occurrence, social graph"
+      supported_filters:
+        - "source_entity"
+        - "target_entity"
+        - "edge_type"
+        - "min_weight"

@@ -51,7 +51,7 @@
 
 Memory Writer is K1's episodic memory formation system. It converts conversation turns into short, factual K0 command envelopes that flow through the Bridge Command Port to K0's P02 pipeline, where they are enriched and stored permanently in `st_hipp_events`.
 
-**One-sentence definition**: Memory Writer observes every completed conversation turn, determines if it contains memorable facts, extracts 0-3 short factual statements via LLM, builds K0-compatible command envelopes, and submits them through the Bridge for permanent storage.
+**One-sentence definition**: Memory Writer observes every completed conversation turn, determines if it contains memorable facts, extracts 0-6 short factual statements via LLM (2000-token budget, 12 cognitive dimensions), builds K0-compatible 34-field command envelopes, and submits them through the Bridge for permanent storage.
 
 **The core insight**: K1 thinks in conversations. K0 thinks in events. Memory Writer is the TRANSLATOR between these two cognitive models.
 
@@ -162,8 +162,8 @@ These are hard constraints. Violation of any invariant is a bug.
 | MW-02 | Memory Writer reads SessionState lock-free (<1ms). Snapshot isolation per read. | SessionState multi-reader interface. |
 | MW-03 | All K0 writes go through Bridge Command Port. K1 and K0 do NOT communicate directly. | IKernelCommandPort.submit() is the only output path. |
 | MW-04 | Envelope body text MUST be <= 50 words (short factual statement). UltraBERT optimized for <=512 tokens. | Extraction Validator post-LLM check. Truncate if over. |
-| MW-05 | Per turn: 0-3 memory extractions max. 0 = not worth remembering. 3 = rich multi-fact turn. | LLM prompt constraint + Validator cap. |
-| MW-06 | LLM budget: 500 tokens total (input context + output). Uses cheapest model (GPT-4o-mini or equivalent). | Agent contract llm_budget_tokens. Model Hub routing. |
+| MW-05 | Per turn: 0-6 memory extractions max. 0 = not worth remembering. 6 = rich multi-fact turn. | LLM prompt constraint + Validator cap. |
+| MW-06 | LLM budget: 2000 tokens total (input context + output). Uses cheapest model (GPT-4o-mini or equivalent). | Agent contract llm_budget_tokens. Model Hub routing. |
 | MW-07 | Relevance filter is rule-based (no LLM cost for skip decisions). | Filter Engine runs BEFORE any LLM call. |
 | MW-08 | Batch window: 250ms aggregation before Bridge submit. | Delta Aggregator timer. |
 | MW-09 | Offline-safe: queued in LocalOutbox when K0 unavailable. No data loss. | Bridge LocalOutbox + K0HealthChecker. |
@@ -187,15 +187,17 @@ turn.complete.v1 (from DeltaBus)
   |
   v
 [Stage 2] Context Assembly (SessionState Read, <1ms)
-  |  Read: history_active, beliefs_active, affective_now, scoreboard, meta
-  |  Build ExtractionContext (~150-200 tokens)
+  |  Read: 15 SessionState sections (13 read, 2 skipped: telemetry, artifacts_warm)
+  |  10 hot sections + 3 warm sections via ISessionReadPort.snapshot()
+  |  Build ExtractionContext (token-budgeted for 2000 token LLM window)
   |  Resolve natural names to person_ids
   |
   v
 [Stage 3] LLM Memory Extraction (200-500ms)
-  |  Writer Agent: "Extract 1-3 discrete factual memories"
-  |  Budget: 500 tokens total
-  |  Output: MemoryExtraction[] (validated)
+  |  Writer Agent: "Extract 0-6 discrete factual memories"
+  |  Budget: 2000 tokens total
+  |  12 cognitive dimensions per atom (34 fields)
+  |  Output: MemoryAtom[] (validated)
   |
   v
 [Stage 4] Envelope Builder (Deterministic, <2ms)
@@ -219,7 +221,7 @@ Bridge signs (Ed25519) -> POST /k0/command.submit -> K0 Gate -> WAL -> P02 -> st
 |---|---|---|---|---|
 | 1. Relevance Filter | Rule evaluation | None | None | 2ms |
 | 2. Context Assembly | Field reads | None | SessionState read | 1ms |
-| 3. LLM Extraction | LLM inference | ~500 tokens (cheapest model) | Model Hub call | 500ms |
+| 3. LLM Extraction | LLM inference | ~2000 tokens (cheapest model) | Model Hub call | 500ms |
 | 4. Envelope Builder | Field mapping | None | None | 2ms |
 | 5. Batch + Submit | Timer + HTTP | None | Bridge POST | 310ms |
 | **TOTAL** | | | | **815ms P95** |
@@ -372,15 +374,39 @@ After the filter passes a turn, Memory Writer needs context to produce accurate 
 
 ### What Memory Writer Reads
 
+Memory Writer reads 13 of 15 SessionState sections (skipping telemetry and artifacts_warm).
+
+**Hot sections** (10 -- always read):
+
 | SessionState Section | What MW Takes | Why Needed | Size |
 |---|---|---|---|
-| `history_active` | Last 2-3 turns (compressed) | Contextual understanding for extraction | ~50-80 tokens |
 | `beliefs_active` | Current facts and entity list | Entity resolution, known person_ids | ~30-50 tokens |
-| `affective_now` | Current emotional state | Sentiment/emotion tag accuracy | ~5-10 tokens |
+| `beliefs_history` | Historical beliefs (evicted) | Context for known-fact dedup | ~20-30 tokens |
+| `history_active` | Last 2-3 turns (compressed) | Contextual understanding for extraction | ~50-80 tokens |
+| `history_recent` | Recent turn summaries | Broader conversation arc | ~20-30 tokens |
+| `affective_now` | Current emotional state (VAD triple) | Sentiment/emotion tag accuracy | ~10-15 tokens |
+| `affective_baseline` | User baseline affect | Novelty detection vs baseline | ~5-10 tokens |
+| `narrative_active` | Active story arcs | Arc position tagging | ~15-20 tokens |
 | `scoreboard` | Active referents, topics, salience | Topic tag accuracy | ~20-30 tokens |
+| `control` | Intents, active tool calls | Intent classification | ~10-15 tokens |
+| `persona` | User persona traits | Identity domain tagging | ~10-15 tokens |
+
+**Warm sections** (3 -- read for enrichment):
+
+| SessionState Section | What MW Takes | Why Needed | Size |
+|---|---|---|---|
+| `task_state` | Active task context | Activity type classification | ~10-20 tokens |
+| `ifl` | Device/IFL sensor data | Location, device context | ~5-10 tokens |
 | `meta` | session_id, user_id, band, device_id | Envelope header fields | ~10 tokens |
 
-**Total context size**: ~150-200 tokens (well within the 500 token budget for input + output).
+**Skipped sections** (2 -- not relevant for memory extraction):
+
+| SessionState Section | Why Skipped |
+|---|---|
+| `telemetry` | System metrics, not relevant to episodic memory |
+| `artifacts_warm` | Temporary artifacts, not memory-worthy |
+
+**Total context from 13 sections**: ~215-345 tokens (well within the 2000 token budget for input + output).
 
 ### ExtractionContext Schema
 
@@ -446,7 +472,10 @@ class MWSessionStateReader:
         - Memory Writer never writes (MW-01)
         """
         snapshot = self.sessionstate.snapshot(
-            sections=["history_active", "beliefs_active", "affective_now", "scoreboard", "meta"]
+            sections=["beliefs_active", "beliefs_history", "history_active",
+                      "history_recent", "affective_now", "affective_baseline",
+                      "narrative_active", "scoreboard", "control", "persona",
+                      "task_state", "ifl", "meta"]
         )
         return self._build_context(snapshot)
 ```
@@ -464,8 +493,8 @@ This is the only stage that uses an LLM. The Memory Writer Agent receives the Ex
 | Property | Value | Rationale |
 |---|---|---|
 | Model | GPT-4o-mini (or cheapest available) | Memory extraction is simple; no need for expensive models |
-| Token budget | 500 total (input + output) | Context ~200 tokens + output ~200 tokens + headroom |
-| Max tool calls | 3 | One tool call per extraction (max 3 per turn) |
+| Token budget | 2000 total (input + output) | Context ~350 tokens + output ~500 tokens + headroom |
+| Max tool calls | 6 | One tool call per extraction (max 6 per turn) |
 | Max execution time | 5000ms | Hard timeout; abort if exceeded |
 | Prompt template | `memory_writer_persona.md` | Stable persona with extraction instructions |
 | Lifecycle | Spawned per session by Fabric | Reused across turns within the same session (IDLE pool) |
@@ -476,15 +505,20 @@ This is the only stage that uses an LLM. The Memory Writer Agent receives the Ex
 +----------------------------+--------+
 | Component                  | Tokens |
 +----------------------------+--------+
-| System prompt (persona)    | ~80    |
-| ExtractionContext           | ~200   |
-| Turn payload (user + asst) | ~100   |
-| Output (1-3 extractions)   | ~100   |
-| Headroom                   | ~20    |
+| System prompt (persona)    | ~150   |
+| ExtractionContext (13 secs)| ~350   |
+| Turn payload (user + asst) | ~200   |
+| Output (0-6 atoms, 34fld)  | ~800   |
+| Headroom                   | ~500   |
 +----------------------------+--------+
-| TOTAL                      | ~500   |
+| TOTAL                      | ~2000  |
 +----------------------------+--------+
 ```
+
+**12 cognitive dimensions** extracted per atom:
+sentiment, affect (VAD triple), novelty, elaboration depth, temporal orientation,
+source type, arc position, social intimacy, social context, identity domains,
+activity type, and intent type.
 
 ### Extraction Validator (Post-LLM)
 
@@ -525,8 +559,8 @@ class ExtractionValidator:
 
             validated.append(ext)
 
-        # Cap at 3 extractions max (MW-05)
-        return validated[:3]
+        # Cap at 6 extractions max (MW-05)
+        return validated[:6]
 ```
 
 ---
@@ -678,52 +712,103 @@ class BatchEmitter:
 
 ## 11. K0 Envelope Body Contract
 
-This is the exact JSON body that Memory Writer sends to K0. It must conform to the P02 write dossier schema.
+This is the exact JSON body that Memory Writer v2 sends to K0. It must conform to the 34-field MemoryAtom v2 schema defined in `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json`.
 
 ```json
 {
-  "operation": "UPSERT",
   "text": "Had dinner with Mom at Olive Garden for Emma's birthday",
-  "event_time_utc": "2026-02-06T19:00:00Z",
-  "participants": ["person_mom", "person_emma"],
-  "location_name": "Olive Garden",
-  "activity_type": "MEAL",
   "topics": ["family", "dining", "celebration"],
   "sentiment_label": "positive",
-  "emotion_tags": ["joy", "contentment"],
-  "categories": ["social", "meal"],
+  "affect": {
+    "valence": 0.8,
+    "arousal": 0.5,
+    "dominance": 0.6
+  },
+  "source_type": "user_stated",
+  "novelty": "NOVEL",
+  "elaboration_depth": "DISCUSSED",
+  "temporal_orientation": "PAST",
+  "confidence": 0.95,
   "session_id": "session-abc123",
   "conversation_turn": 5,
-  "language": "en"
+  "language": "en",
+  "person_id": "person_user_001",
+  "event_time_utc": "2026-02-06T19:00:00Z",
+  "participants": ["person_mom", "person_emma"],
+  "participant_relationships": [
+    {"type": "PARENT_OF", "target": "person_emma", "confidence": 0.9}
+  ],
+  "location_name": "Olive Garden",
+  "location_type": "restaurant",
+  "activity_type": "MEAL",
+  "emotion_tags": ["joy", "contentment"],
+  "categories": ["social", "meal"],
+  "narrative": {
+    "arc_label": "family_celebrations",
+    "arc_position": "RISING_ACTION",
+    "arc_salience": 0.7
+  },
+  "temporal": {
+    "day_of_week": "Thursday",
+    "time_of_day": "evening",
+    "is_recurring": false
+  },
+  "social_context": "nuclear_family",
+  "social_intimacy": "HIGH",
+  "intent_type": "log_memory",
+  "identity_domains": ["parent", "social_self"],
+  "cognitive_trace_id": "trace-uuid-abc",
+  "embedding_text": null,
+  "operation": "UPSERT"
 }
 ```
 
-### Field Reference
+### Field Reference (34 fields -- v2 MemoryAtom)
 
-| Field | Type | Required | Constraints | Source |
-|---|---|---|---|---|
-| `operation` | string | YES | Always `"UPSERT"` | Constant |
-| `text` | string | YES | 1-50 words, factual statement | LLM extraction |
-| `event_time_utc` | string (ISO 8601) | YES | UTC timestamp | `now_utc()` |
-| `participants` | string[] | NO | person_ids (`person_*` format) | LLM + Person Resolver |
-| `location_name` | string | NO | Place name (stripped in RED band) | LLM extraction |
-| `activity_type` | string | NO | `MEAL`, `TASK`, `TRAVEL`, `HEALTH`, `SOCIAL`, `WORK`, etc. | LLM extraction |
-| `topics` | string[] | YES | 1-3 topic tags | LLM extraction |
-| `sentiment_label` | string | YES | 5-class: `very_negative`, `negative`, `neutral`, `positive`, `very_positive` | LLM extraction |
-| `emotion_tags` | string[] | NO | From 44-class emotion set (matches UltraBERT emotions head) | LLM extraction |
-| `categories` | string[] | NO | Activity categories: `social`, `meal`, `health`, `travel`, etc. | LLM extraction |
-| `session_id` | string | YES | Originating session | Context.session_id |
-| `conversation_turn` | int | YES | Turn ordinal within session | Turn event payload |
-| `language` | string | YES | ISO 639-1 code | Default `"en"` |
+| # | Field | Type | Required | Constraints | Source |
+|---|---|---|---|---|---|
+| 1 | `text` | string | YES | 1-50 words, factual statement | LLM extraction |
+| 2 | `topics` | string[] | YES | 1-5 topic tags | LLM extraction |
+| 3 | `sentiment_label` | enum | YES | 5-class: very_negative..very_positive | LLM extraction |
+| 4 | `affect` | object | YES | {valence: -1..1, arousal: 0..1, dominance: 0..1} | LLM from affective_now |
+| 5 | `source_type` | enum | YES | user_stated, user_implied, device_observed, system_inferred | LLM + context |
+| 6 | `novelty` | enum | YES | ROUTINE, EXPECTED, NOVEL, SURPRISING | LLM vs beliefs |
+| 7 | `elaboration_depth` | enum | YES | MENTION, DISCUSSED, ELABORATED, DEEPLY_PROCESSED | LLM + turn count |
+| 8 | `temporal_orientation` | enum | YES | PAST, ONGOING, FUTURE_COMMITMENT | LLM extraction |
+| 9 | `confidence` | float | YES | 0.0-1.0, floor 0.30 | Agent self-score |
+| 10 | `session_id` | string | YES | Originating session | Context.session_id |
+| 11 | `conversation_turn` | int | YES | Turn ordinal (>=1) | Turn event payload |
+| 12 | `language` | string | YES | ISO 639-1 code | Default "en" |
+| 13 | `person_id` | string | YES | Pattern: ^person_[a-z0-9_]+$ | Person Resolver |
+| 14 | `event_time_utc` | string | YES | ISO 8601 UTC | now_utc() or resolved |
+| 15 | `participants` | string[] | NO | person_ids, max 10 | LLM + Person Resolver |
+| 16 | `participant_relationships` | object[] | NO | {type, target, confidence} | LLM + context |
+| 17 | `location_name` | string | NO | Place name (stripped in RED band) | LLM extraction |
+| 18 | `location_type` | enum | NO | 12 values: home, restaurant, hospital, etc. | LLM extraction |
+| 19 | `activity_type` | enum | NO | 20 values: MEAL, TASK, TRAVEL, etc. | LLM extraction |
+| 20 | `emotion_tags` | string[] | NO | From 44-class emotion set | LLM extraction |
+| 21 | `categories` | string[] | NO | Activity categories | LLM extraction |
+| 22 | `narrative` | object | NO | {arc_label, arc_position, arc_salience} | From narrative_active |
+| 23 | `temporal` | object | NO | {day_of_week, time_of_day, is_recurring} | LLM + temporal analysis |
+| 24 | `social_context` | enum | NO | solo, friends, colleagues, nuclear_family, etc. | LLM + relationships |
+| 25 | `social_intimacy` | enum | NO | LOW, MEDIUM, HIGH | Derived from relationships |
+| 26 | `intent_type` | enum | NO | 8 values: log_memory, query_memory, etc. | From control.intents |
+| 27 | `identity_domains` | string[] | NO | 9 domains: parent, spouse, professional, etc. | LLM + persona |
+| 28 | `cognitive_trace_id` | string | NO | UUID from originating turn | MW-10 enforcement |
+| 29 | `embedding_text` | string | NO | Null in v2 (K0 computes embeddings) | Always null |
+| 30 | `operation` | string | NO | Default "UPSERT" | Constant |
 
-### Constraints Summary
+### Constraints Summary (v2)
 
-- `text` is the PRIMARY field. Everything else is metadata/tags.
-- `text` must be self-contained (readable without context).
-- `text` must not contain system prompts, chain-of-thought, or meta-commentary.
+- `text` is the PRIMARY field. All other fields are cognitive dimensions or metadata.
+- `text` must be self-contained (readable without context) and max 50 words (MW-04).
 - `participants` must use resolved `person_*` IDs, not natural names.
-- `topics` must be 1-3 items (no more, no fewer).
+- `topics` must be 1-5 items.
 - `sentiment_label` is 5-class (not binary, not 3-class).
+- `affect` triple is ALWAYS required -- sourced from affective_now VAD dimensions.
+- 12 cognitive dimensions provide rich metadata for K0 P02 enrichment and P03 consolidation.
+- `embedding_text` is always null -- K0 P02 computes embeddings, not K1.
+- Authoritative schema: `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json`
 
 ---
 
@@ -763,12 +848,13 @@ This separation ensures K1 code never touches private keys, signing algorithms, 
 
 ## 13. Extraction Output Schema (LLM -> Validator)
 
-The LLM produces structured output matching this schema. The Extraction Validator then validates and cleans it.
+The LLM produces structured output matching the 34-field MemoryAtom v2 schema. The Extraction Validator then validates and cleans it. The authoritative schema is `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json` and the Python types are in `k1/memory_writer/types.py`.
 
-### MemoryExtraction Schema
+### MemoryAtom v2 Schema (34 fields, 12 cognitive dimensions)
 
 ```yaml
-MemoryExtraction:
+MemoryAtom:
+  # --- Required fields (14) ---
   text:
     type: string
     required: true
@@ -777,92 +863,181 @@ MemoryExtraction:
       - Must be self-contained (readable without conversation context)
       - Must be factual (no opinions, no speculation, no chain-of-thought)
       - Must be in past tense or present tense (not future-conditional)
-    examples:
-      - "Had dinner with Mom at Olive Garden to celebrate Emma's birthday"
-      - "Need to call dentist tomorrow for a checkup"
-      - "Mom prefers Italian food over Chinese"
-
-  participants:
-    type: array[string]
-    required: false
-    description: "Person IDs of people mentioned. Resolved by Person Resolver."
-    format: "person_<name>" (e.g., "person_mom", "person_emma", "person_panda")
-    source: "LLM produces natural names -> Person Resolver converts to IDs"
-
-  location_name:
-    type: string | null
-    required: false
-    description: "Name of place if location is relevant to the memory"
-    examples: ["Olive Garden", "Stanford Hospital", "Home"]
-
-  activity_type:
-    type: string | null
-    required: false
-    description: "Type of activity described"
-    enum: ["MEAL", "TASK", "TRAVEL", "HEALTH", "SOCIAL", "WORK", "EDUCATION",
-           "EXERCISE", "SHOPPING", "ENTERTAINMENT", "CELEBRATION", "APPOINTMENT"]
 
   topics:
     type: array[string]
     required: true
-    description: "1-3 topic tags describing the memory's domain"
-    constraints: Minimum 1, Maximum 3
-    examples: [["family", "dining", "celebration"], ["health", "appointment"]]
+    description: "1-5 topic tags describing the memory's domain"
 
   sentiment_label:
     type: string
     required: true
-    description: "5-class sentiment of the memory"
     enum: ["very_negative", "negative", "neutral", "positive", "very_positive"]
 
-  emotion_tags:
-    type: array[string]
-    required: false
-    description: "Emotion tags from the 44-class set (matches UltraBERT emotions head)"
-    examples: [["joy", "contentment"], ["anxiety", "concern"], ["neutral"]]
+  affect:
+    type: object {valence: float, arousal: float, dominance: float}
+    required: true
+    description: "VAD triple from affective_now dimensions"
 
-  categories:
-    type: array[string]
-    required: false
-    description: "Activity categories for classification"
-    examples: [["social", "meal"], ["health"], ["travel", "planning"]]
+  source_type:
+    type: string
+    required: true
+    enum: ["user_stated", "user_implied", "device_observed", "system_inferred"]
+
+  novelty:
+    type: string
+    required: true
+    enum: ["ROUTINE", "EXPECTED", "NOVEL", "SURPRISING"]
+
+  elaboration_depth:
+    type: string
+    required: true
+    enum: ["MENTION", "DISCUSSED", "ELABORATED", "DEEPLY_PROCESSED"]
+
+  temporal_orientation:
+    type: string
+    required: true
+    enum: ["PAST", "ONGOING", "FUTURE_COMMITMENT"]
 
   confidence:
     type: float
     required: true
-    description: "Agent's self-scored confidence in this extraction (0.0-1.0)"
-    constraints: Extractions with confidence < 0.3 are dropped by Validator
+    description: "Agent self-score (0.0-1.0). Floor: 0.30."
+
+  session_id:
+    type: string
+    required: true
+
+  conversation_turn:
+    type: integer
+    required: true
+    minimum: 1
+
+  language:
+    type: string
+    required: true
+    description: "ISO 639-1 code"
+
+  person_id:
+    type: string
+    required: true
+    pattern: "^person_[a-z0-9_]+$"
+
+  event_time_utc:
+    type: string (ISO 8601)
+    required: true
+
+  # --- Optional fields (16) ---
+  participants:
+    type: array[string]
+    description: "Person IDs (resolved by Person Resolver)"
+
+  participant_relationships:
+    type: array[{type, target, confidence}]
+    description: "Typed relationships between participants"
+
+  location_name:
+    type: string | null
+    description: "Place name (stripped in RED band)"
+
+  location_type:
+    type: string | null
+    enum: ["home", "restaurant", "hospital", "school", "office", "gym",
+           "store", "park", "church", "airport", "hotel", "other"]
+
+  activity_type:
+    type: string | null
+    enum: 20 values (MEAL, TASK, TRAVEL, HEALTH, SOCIAL, WORK, etc.)
+
+  emotion_tags:
+    type: array[string]
+    description: "From 44-class emotion set (matches UltraBERT)"
+
+  categories:
+    type: array[string]
+    description: "Activity categories"
+
+  narrative:
+    type: object {arc_label, arc_position, arc_salience}
+    description: "Story arc context from narrative_active"
+
+  temporal:
+    type: object {day_of_week, time_of_day, is_recurring}
+    description: "Temporal patterns"
+
+  social_context:
+    type: string
+    enum: ["solo", "friends", "colleagues", "nuclear_family", "extended_family", "community"]
+
+  social_intimacy:
+    type: string
+    enum: ["LOW", "MEDIUM", "HIGH"]
+
+  intent_type:
+    type: string
+    enum: ["log_memory", "query_memory", "set_reminder", "express_feeling",
+           "seek_advice", "share_news", "reflect", "other"]
+
+  identity_domains:
+    type: array[string]
+    description: "9 identity domains activated by this memory"
+
+  cognitive_trace_id:
+    type: string
+    description: "UUID from originating turn (MW-10)"
+
+  embedding_text:
+    type: string | null
+    description: "Always null in v2 (K0 computes embeddings)"
+
+  operation:
+    type: string
+    description: "Default UPSERT"
 ```
 
-### Multi-Extraction Example
+### Multi-Extraction Example (v2 format)
 
-A single turn can produce multiple extractions when it contains multiple discrete facts:
+A single turn can produce 0-6 extractions. Each extraction is a full 34-field MemoryAtom:
 
 ```
 User: "Had dinner with Mom at Olive Garden yesterday, and she mentioned she
        needs to see Dr. Smith about her knee next week"
 
-Extraction 1:
+Extraction 1 (MemoryAtom):
   text: "Had dinner with Mom at Olive Garden"
   participants: ["person_mom"]
   location_name: "Olive Garden"
+  location_type: "restaurant"
   activity_type: "MEAL"
   topics: ["family", "dining"]
   sentiment_label: "positive"
+  affect: {valence: 0.7, arousal: 0.4, dominance: 0.6}
+  source_type: "user_stated"
+  novelty: "NOVEL"
+  elaboration_depth: "MENTION"
+  temporal_orientation: "PAST"
   emotion_tags: ["contentment"]
   categories: ["social", "meal"]
   confidence: 0.95
+  social_context: "nuclear_family"
+  social_intimacy: "HIGH"
 
-Extraction 2:
+Extraction 2 (MemoryAtom):
   text: "Mom needs to see Dr. Smith about her knee next week"
   participants: ["person_mom"]
   location_name: null
   activity_type: "HEALTH"
   topics: ["health", "family"]
   sentiment_label: "neutral"
+  affect: {valence: -0.2, arousal: 0.3, dominance: 0.4}
+  source_type: "user_stated"
+  novelty: "NOVEL"
+  elaboration_depth: "MENTION"
+  temporal_orientation: "FUTURE_COMMITMENT"
   emotion_tags: ["concern"]
   categories: ["health", "appointment"]
   confidence: 0.88
+  intent_type: "log_memory"
 ```
 
 ---
@@ -927,7 +1102,7 @@ This is the complete path from Memory Writer's `BATCH_EMITTER` to K0's `st_hipp_
 ```
 K1: Memory Writer
   |
-  |  BatchEmitter flushes N envelopes (N = 1-3)
+  |  BatchEmitter flushes N envelopes (N = 1-6)
   |  For each envelope:
   |    IKernelCommandPort.submit(topic="memory.delta", schema_uri="schema://memory.delta", body={...})
   |
@@ -1092,7 +1267,7 @@ agent_contract:
     - "tag_memory_metadata"
     - "resolve_participants"
   limitations:
-    - "Max 3 extractions per turn"
+    - "Max 6 extractions per turn"
     - "Max 50 words per extraction"
     - "Does not handle eviction/archival (separate concern)"
 
@@ -1117,8 +1292,8 @@ agent_contract:
   prompt_template: "memory_writer_persona"
   tools_granted:
     - "memory.delta"                             # Only tool: emit K0 memory envelope
-  llm_budget_tokens: 500
-  max_tool_calls: 3                              # One per extraction (max 3)
+  llm_budget_tokens: 2000
+  max_tool_calls: 6                              # One per extraction (max 6)
   max_execution_time_ms: 5000
 
   # ---- Output Schema ----
@@ -1543,7 +1718,7 @@ User input -> Concierge (trace_id=X) -> turn.complete.v1 (trace_id=X)
 | `k1.mw.turns.total` | Counter | session_id | Total turns received |
 | `k1.mw.turns.skipped` | Counter | skip_reason (R1-R5) | Turns skipped by filter |
 | `k1.mw.turns.extracted` | Counter | session_id | Turns with successful extractions |
-| `k1.mw.extractions.count` | Histogram | session_id | Extractions per turn (0-3) |
+| `k1.mw.extractions.count` | Histogram | session_id | Extractions per turn (0-6) |
 | `k1.mw.extractions.avg_words` | Histogram | -- | Average word count per extraction |
 | `k1.mw.extractions.confidence` | Histogram | -- | Confidence distribution |
 | `k1.mw.llm.tokens_used` | Histogram | -- | Tokens consumed per extraction call |
@@ -1620,11 +1795,11 @@ The 815ms budget is generous because there is no user waiting.
 
 | Resource | Budget | Notes |
 |---|---|---|
-| Memory (per session) | ~2KB | ExtractionContext + batch buffer + dedup ring |
-| LLM tokens (per turn) | 500 | Cheapest model (GPT-4o-mini: ~$0.001/turn) |
-| LLM cost (per 1000 turns) | ~$1.00 | At 500 tokens/turn, $0.15/1M input + $0.60/1M output |
+| Memory (per session) | ~4KB | ExtractionContext (13 sections) + batch buffer + dedup ring |
+| LLM tokens (per turn) | 2000 | Cheapest model (GPT-4o-mini: ~$0.002/turn) |
+| LLM cost (per 1000 turns) | ~$2.00 | At 2000 tokens/turn, $0.15/1M input + $0.60/1M output |
 | Bridge HTTP (per batch) | 1 POST | Batch window reduces HTTP overhead |
-| SessionState reads (per turn) | 1 snapshot | Lock-free, <1ms |
+| SessionState reads (per turn) | 1 snapshot (13 sections) | Lock-free, <1ms |
 
 ---
 
@@ -1770,14 +1945,25 @@ Memory Writer integrates with 6 other K1/Bridge/K0 components. Each integration 
 ```
 k1/memory_writer/
   __init__.py
-  memory_writer.mmd                  # Architecture diagram (434 lines)
+  types.py                           # Domain types: 14 enums, 11 frozen dataclasses (34-field MemoryAtom)
+  config.py                          # MWConfig frozen dataclass (all tunable parameters)
+  invariants.py                      # MW-01..MW-11 machine-checkable assertion helpers
+  events.py                          # Event topic constants + frozen payload dataclasses
+  memory_writer.mmd                  # Architecture diagram
   memory_writer_architecture.md      # This document
+
+  ports/                             # Hexagonal port protocols (5 ports)
+    __init__.py                      # Re-exports all 5 ports
+    session_read_port.py             # ISessionReadPort (read-only, MW-01, MW-02)
+    bridge_command_port.py           # IBridgeCommandPort (fire-and-forget, MW-03, MW-09)
+    event_subscription_port.py       # IEventSubscriptionPort (bus subscribe/publish)
+    model_hub_port.py                # IModelHubPort (LLM chat, MW-06, MW-07)
+    health_port.py                   # IHealthPort (readiness + health check)
 
   pipeline/
     __init__.py
     pipeline.py                      # MemoryWriterPipeline (wires 5 stages)
-    turn_dispatcher.py               # TurnDispatcher (DeltaBus subscription, dedup)
-    types.py                         # ExtractionContext, CompressedTurn, MemoryExtraction, etc.
+    turn_dispatcher.py               # TurnDispatcher (Bus subscription, dedup)
 
   filter/
     __init__.py
@@ -1786,35 +1972,40 @@ k1/memory_writer/
 
   context/
     __init__.py
-    session_reader.py                # MWSessionStateReader (multi-reader, snapshot)
+    session_reader.py                # MWSessionReader (multi-reader, 13-section snapshot)
     context_builder.py               # ContextBuilder (assembles ExtractionContext)
     person_resolver.py               # PersonResolver (name -> person_id)
 
   extraction/
     __init__.py
-    writer_agent.py                  # MemoryWriterAgent (LLM extraction)
-    extraction_validator.py          # ExtractionValidator (post-LLM validation)
+    writer_agent.py                  # MemoryWriterAgent (LLM extraction, 2000 token budget)
+    extraction_validator.py          # ExtractionValidator (post-LLM validation, 34-field)
     prompts/
       memory_writer_persona.md       # System prompt for Writer Agent
 
   envelope/
     __init__.py
-    envelope_builder.py              # EnvelopeBuilder (MemoryExtraction -> CommandEnvelope)
-    field_mapper.py                  # Field mapping rules (extraction -> K0 body)
+    envelope_builder.py              # EnvelopeBuilder (MemoryAtom -> MWEnvelope)
+    field_mapper.py                  # Field mapping rules (34-field atom -> K0 body)
     privacy_enforcer.py              # PrivacyEnforcer (band-based field stripping)
 
   batch/
     __init__.py
-    delta_aggregator.py              # DeltaAggregator (250ms window, dedup, merge)
+    delta_aggregator.py              # DeltaAggregator (250ms window, dedup)
     batch_emitter.py                 # BatchEmitter (Bridge submit)
-
-  events/
-    __init__.py
-    mw_events.py                     # Event topic definitions + payloads
 
   health/
     __init__.py
-    circuit_breaker.py               # LLM circuit breaker config
+    circuit_breaker.py               # MWCircuitBreaker (3 failures/min, 30s recovery)
+
+  adapters/                          # Infrastructure bindings (hexagonal adapters)
+    __init__.py
+    session_read_adapter.py          # Binds ISessionReadPort to K1 SessionState
+    bridge_command_adapter.py        # Binds IBridgeCommandPort to Bridge IKernelCommandPort
+    event_subscription_adapter.py    # Binds IEventSubscriptionPort to K1 Bus
+    model_hub_adapter.py             # Binds IModelHubPort to K1 Model Hub
+    health_adapter.py                # Binds IHealthPort to Fabric health system
+    test_adapters.py                 # All 5 in-memory mock adapters for testing
 ```
 
 ---
@@ -1954,13 +2145,50 @@ These items require decisions before implementation:
 | 3 | **Model Hub Integration**: How Writer Agent calls LLM via Model Hub (not yet designed). Routing, fallback, budget enforcement. | BLOCKED ON MODEL HUB | LLM extraction |
 | 4 | **Extraction Quality Metrics**: How to measure extraction quality over time. Recall vs precision tradeoff. User feedback loop. | NEEDS DESIGN | Quality improvement |
 | 5 | **Duplicate Detection Across Sessions**: Current R3 dedup is within-session only. Cross-session dedup happens in K0 P02 (M01 DG pattern). Is that sufficient? | NEEDS ANALYSIS | Dedup accuracy |
-| 6 | **Event Time vs Turn Time**: Should `event_time_utc` be the actual event time (from conversation context) or the turn submission time? "Had dinner yesterday" = yesterday 7pm or now()? | NEEDS DECISION | Temporal accuracy |
+| 6 | **Event Time vs Turn Time**: Should `event_time_utc` be the actual event time (from conversation context) or the turn submission time? | RESOLVED (v2): `event_time_utc` defaults to `now_utc()` at extraction time. The `temporal` object carries resolved `day_of_week` and `time_of_day` for contextual time. K0 P02 M08 (Temporal Profiling) does further resolution. | N/A |
 | 7 | **Filter Rule Tuning**: Skip rule thresholds (word count, entity detection sensitivity) need empirical tuning. Need a test corpus. | NEEDS DATA | Filter accuracy |
-| 8 | **Confidence Threshold**: Is 0.3 the right confidence floor for dropping extractions? Need empirical data. | NEEDS DATA | Extraction quality |
+| 8 | **Confidence Threshold**: Is 0.3 the right confidence floor for dropping extractions? | RESOLVED (v2): `confidence_floor: 0.30` set in `policies.contract.yaml` and `MWConfig`. Empirically derived from LLM extraction experiments. Configurable at runtime. | N/A |
 | 9 | **Batch Window Tuning**: Is 250ms optimal? Tradeoff between latency (smaller window) and efficiency (larger window). | NEEDS BENCHMARKS | Performance |
 | 10 | **AMBER Location Generalization**: The category lookup table for location generalization needs to be comprehensive. Can we use UltraBERT's ner_general LOC type for this? | NEEDS ANALYSIS | Privacy enforcement |
 | 11 | **Multi-Language Support**: Current default is `"en"`. How to detect language from conversation context? SessionState.meta.locale? | NEEDS DESIGN | i18n |
 
 ---
 
-*This document is the single design reference for Memory Writer within the K1 Cognitive Kernel. All implementation must comply with the invariants, schemas, and flows described here. For the broader K1 architecture context, see `k1_cognitive_architecture_skeleton.mmd`. For the K0 receiving pipeline, see `docs/pipelines/P02_write_dossier.md`. For Bridge transport details, see `architecture_diagrams/bridge/bridge_architecture.mmd`.*
+## 33. v2 Cross-Reference (stage5_proposal_corrections.md)
+
+Memory Writer v2 design is grounded in `docs/pipelines/p03/stage5_proposal_corrections.md`, which defines three layers:
+
+### LAYER 1 -- Pipeline Architecture
+
+- MW sits on the K1 side of the signal chain: K1 SessionState -> K1 MW v2 -> Bridge -> K0 P02 -> st_hipp_events -> K0 P03 Consolidation
+- MW reads 15 SessionState sections (13 hot+warm, 2 skipped)
+- 2000-token LLM budget (up from 500 in v1)
+- 0-6 atoms per turn (up from 0-3 in v1)
+
+### LAYER 2 -- 34-Field MemoryAtom Schema
+
+The authoritative field reference for MW v2 output. All 34 fields, their types, enums, and required status are defined in:
+- JSON Schema: `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json`
+- Python types: `k1/memory_writer/types.py`
+
+12 cognitive dimensions:
+1. Sentiment (5-class)
+2. Affect (VAD triple)
+3. Novelty (4-level)
+4. Elaboration Depth (4-level)
+5. Temporal Orientation (3-class)
+6. Source Type (4-class)
+7. Arc Position (4-class)
+8. Social Intimacy (3-level)
+9. Social Context (6-class)
+10. Intent Type (8-class)
+11. Activity Type (20-class)
+12. Identity Domains (9-class, multi-select)
+
+### LAYER 3 -- K0 P03 Consolidation Contract
+
+MW v2 output must be compatible with K0 P03 consolidation. The 34-field atom maps to `st_hipp_events` columns. K0 P02 enriches MW output before storage. P03 reads from `st_hipp_events` for consolidation into long-term memory.
+
+---
+
+*This document is the single design reference for Memory Writer within the K1 Cognitive Kernel. All implementation must comply with the invariants, schemas, and flows described here. For the broader K1 architecture context, see `k1_cognitive_architecture_skeleton.mmd`. For the K0 receiving pipeline, see `docs/pipelines/P02_write_dossier.md`. For Bridge transport details, see `architecture_diagrams/bridge/bridge_architecture.mmd`. For v2 field definitions, see `docs/pipelines/p03/stage5_proposal_corrections.md`.*

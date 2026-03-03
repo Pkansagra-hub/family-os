@@ -32,6 +32,8 @@ from k0.modules.builders.hipp_events_row import (
     map_hippocampus_group,
     map_identity_group,
     map_integrity_group,
+    map_mw_v2_signal_group,
+    map_mw_v2a_signal_group,
     map_policy_group,
     map_semantic_activity_group,
     map_social_group,
@@ -1010,3 +1012,662 @@ async def test_edge_case_missing_geohash(base_envelope, complete_module_outputs)
     assert row["geohash_6"] is None
     assert row["geo_masking_reason"] == "band_policy"
     assert row["geo_masking_reason"] == "band_policy"
+
+
+# =============================================================================
+# Epic 3.15 -- Group 12: MW v2 Signal Mapping (11 columns)
+# =============================================================================
+
+
+class TestMapMwV2SignalGroup:
+    """Tests for map_mw_v2_signal_group() -- Group 12 (11 columns)"""
+
+    def test_full_mw_v2_signal_extraction(self):
+        """All 11 columns extracted from a fully-populated envelope"""
+        envelope = {
+            "body": {
+                "narrative": {
+                    "thread_id": "thread-abc-123",
+                    "arc_position": "RISING_ACTION",
+                    "is_goal_event": True,
+                },
+                "intent_type": "log_memory",
+                "goal_context": "record family dinner",
+                "source_type": "user_stated",
+                "novelty": "NOVEL",
+                "elaboration_depth": "DISCUSSED",
+                "identity_domains": ["parent", "professional"],
+                "entity_salience": {"person_mom": 0.9, "Olive_Garden": 0.7},
+                "k1_signal_version": "2.1",
+            }
+        }
+        result = map_mw_v2_signal_group(envelope)
+
+        assert result["narrative_thread_id"] == "thread-abc-123"
+        assert result["narrative_arc_position"] == "RISING_ACTION"
+        assert result["narrative_is_goal_event"] is True
+        assert result["intent_type"] == "log_memory"
+        assert result["goal_context"] == "record family dinner"
+        assert result["source_type"] == "user_stated"
+        assert result["novelty"] == "NOVEL"
+        assert result["elaboration_depth"] == "DISCUSSED"
+        assert result["k1_signal_version"] == "2.1"
+
+        # JSON fields
+        import json
+
+        identity_domains = json.loads(result["identity_domains_json"])
+        assert identity_domains == ["parent", "professional"]
+
+        entity_salience = json.loads(result["entity_salience_json"])
+        assert entity_salience == {"person_mom": 0.9, "Olive_Garden": 0.7}
+
+    def test_returns_exactly_11_columns(self):
+        """Function returns exactly 11 keys"""
+        envelope = {"body": {}}
+        result = map_mw_v2_signal_group(envelope)
+        assert len(result) == 11
+
+    def test_column_names_match_migration(self):
+        """All 11 column names match expected migration 0066 column names"""
+        expected_columns = {
+            "narrative_thread_id",
+            "narrative_arc_position",
+            "narrative_is_goal_event",
+            "intent_type",
+            "goal_context",
+            "source_type",
+            "novelty",
+            "elaboration_depth",
+            "identity_domains_json",
+            "entity_salience_json",
+            "k1_signal_version",
+        }
+        envelope = {"body": {}}
+        result = map_mw_v2_signal_group(envelope)
+        assert set(result.keys()) == expected_columns
+
+    def test_defaults_when_body_empty(self):
+        """Default values when body has no MW v2 fields"""
+        envelope = {"body": {}}
+        result = map_mw_v2_signal_group(envelope)
+
+        # None for missing optional fields
+        assert result["narrative_thread_id"] is None
+        assert result["narrative_arc_position"] is None
+        assert result["intent_type"] is None
+        assert result["goal_context"] is None
+        assert result["source_type"] is None
+        assert result["novelty"] is None
+        assert result["elaboration_depth"] is None
+
+        # Explicit defaults
+        assert result["narrative_is_goal_event"] is False
+        assert result["k1_signal_version"] == "2.0"
+
+        # Empty JSON defaults for serialized fields
+        assert result["identity_domains_json"] == "[]"
+        assert result["entity_salience_json"] == "{}"
+
+    def test_defaults_when_envelope_has_no_body(self):
+        """Graceful handling when envelope has no body key"""
+        envelope = {}
+        result = map_mw_v2_signal_group(envelope)
+
+        assert result["narrative_is_goal_event"] is False
+        assert result["k1_signal_version"] == "2.0"
+        assert result["identity_domains_json"] == "[]"
+        assert result["entity_salience_json"] == "{}"
+        assert len(result) == 11
+
+    def test_narrative_nested_extraction(self):
+        """Narrative fields extracted from nested body.narrative{} object"""
+        envelope = {
+            "body": {
+                "narrative": {
+                    "thread_id": "tid-999",
+                    "arc_position": "CLIMAX",
+                    "is_goal_event": False,
+                }
+            }
+        }
+        result = map_mw_v2_signal_group(envelope)
+        assert result["narrative_thread_id"] == "tid-999"
+        assert result["narrative_arc_position"] == "CLIMAX"
+        assert result["narrative_is_goal_event"] is False
+
+    def test_narrative_is_goal_event_default_false(self):
+        """narrative_is_goal_event defaults to False when absent"""
+        envelope = {"body": {"narrative": {"thread_id": "t1"}}}
+        result = map_mw_v2_signal_group(envelope)
+        assert result["narrative_is_goal_event"] is False
+
+    def test_identity_domains_json_serialization(self):
+        """identity_domains serialized via serialize_to_json()"""
+        import json
+
+        envelope = {
+            "body": {
+                "identity_domains": ["parent", "partner", "employee"],
+            }
+        }
+        result = map_mw_v2_signal_group(envelope)
+        parsed = json.loads(result["identity_domains_json"])
+        assert parsed == ["parent", "partner", "employee"]
+
+    def test_entity_salience_json_serialization(self):
+        """entity_salience serialized via serialize_to_json()"""
+        import json
+
+        envelope = {
+            "body": {
+                "entity_salience": {"person_dad": 1.0, "person_mom": 0.8},
+            }
+        }
+        result = map_mw_v2_signal_group(envelope)
+        parsed = json.loads(result["entity_salience_json"])
+        assert parsed == {"person_dad": 1.0, "person_mom": 0.8}
+
+    def test_k1_signal_version_default(self):
+        """k1_signal_version defaults to '2.0' when absent"""
+        envelope = {"body": {}}
+        result = map_mw_v2_signal_group(envelope)
+        assert result["k1_signal_version"] == "2.0"
+
+    def test_k1_signal_version_custom(self):
+        """k1_signal_version preserves custom value"""
+        envelope = {"body": {"k1_signal_version": "3.0-beta"}}
+        result = map_mw_v2_signal_group(envelope)
+        assert result["k1_signal_version"] == "3.0-beta"
+
+    def test_cognitive_dimensions_passthrough(self):
+        """All 6 cognitive dimension columns pass through body values"""
+        envelope = {
+            "body": {
+                "intent_type": "express_feeling",
+                "goal_context": "share gratitude",
+                "source_type": "user_implied",
+                "novelty": "SURPRISING",
+                "elaboration_depth": "DEEPLY_PROCESSED",
+                "identity_domains": ["partner"],
+            }
+        }
+        result = map_mw_v2_signal_group(envelope)
+        assert result["intent_type"] == "express_feeling"
+        assert result["goal_context"] == "share gratitude"
+        assert result["source_type"] == "user_implied"
+        assert result["novelty"] == "SURPRISING"
+        assert result["elaboration_depth"] == "DEEPLY_PROCESSED"
+
+
+@pytest.mark.asyncio
+async def test_mw_v2_signals_in_row_assembly(base_envelope, complete_module_outputs):
+    """Group 12 columns appear in full row assembly via run()"""
+    reset_metrics()
+    # Add MW v2 signal fields to envelope body
+    base_envelope["body"]["narrative"] = {
+        "thread_id": "thread-int-001",
+        "arc_position": "EXPOSITION",
+        "is_goal_event": False,
+    }
+    base_envelope["body"]["intent_type"] = "log_memory"
+    base_envelope["body"]["goal_context"] = "record dinner"
+    base_envelope["body"]["source_type"] = "user_stated"
+    base_envelope["body"]["novelty"] = "ROUTINE"
+    base_envelope["body"]["elaboration_depth"] = "MENTION"
+    base_envelope["body"]["identity_domains"] = ["parent"]
+    base_envelope["body"]["entity_salience"] = {"Olive_Garden": 0.6}
+    base_envelope["body"]["k1_signal_version"] = "2.0"
+
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
+
+    # Verify all 11 Group 12 columns present in assembled row
+    assert row["narrative_thread_id"] == "thread-int-001"
+    assert row["narrative_arc_position"] == "EXPOSITION"
+    assert row["narrative_is_goal_event"] is False
+    assert row["intent_type"] == "log_memory"
+    assert row["goal_context"] == "record dinner"
+    assert row["source_type"] == "user_stated"
+    assert row["novelty"] == "ROUTINE"
+    assert row["elaboration_depth"] == "MENTION"
+    assert row["k1_signal_version"] == "2.0"
+
+    import json
+
+    assert json.loads(row["identity_domains_json"]) == ["parent"]
+    assert json.loads(row["entity_salience_json"]) == {"Olive_Garden": 0.6}
+
+
+@pytest.mark.asyncio
+async def test_mw_v2_signals_defaults_in_row_assembly(base_envelope, complete_module_outputs):
+    """Group 12 columns use defaults when MW v2 fields absent from body"""
+    reset_metrics()
+    # No MW v2 fields in body - should get defaults
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
+
+    assert row["narrative_is_goal_event"] is False
+    assert row["k1_signal_version"] == "2.0"
+    assert row["identity_domains_json"] == "[]"
+    assert row["entity_salience_json"] == "{}"
+
+
+@pytest.mark.asyncio
+async def test_mw_v2_signals_metrics_tracking(base_envelope, complete_module_outputs):
+    """Group 12 registered in metrics column_group_counts"""
+    reset_metrics()
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
+    await run(message, context, **config)
+
+    metrics = get_metrics()
+    assert "mw_v2_signals" in metrics["column_group_counts"]
+    assert metrics["column_group_counts"]["mw_v2_signals"] == 1
+
+
+# =============================================================================
+# Epic 3.16 -- Existing Group Updates (Social +1, Temporal +3, Affect +1)
+# =============================================================================
+
+
+class TestEpic316SocialGroupUpdate:
+    """Tests for map_social_group() +1 column: participant_relationships_json"""
+
+    def test_social_group_returns_8_columns(self):
+        """map_social_group returns 8 columns (was 7)"""
+        envelope = {"body": {"participants": ["person_dad"]}}
+        social_output = {}
+        result = map_social_group(envelope, social_output)
+        # Original 7 + participant_relationships_json = 8
+        assert "participant_relationships_json" in result
+        # Count unique social keys
+        social_keys = {
+            "participants_json",
+            "num_participants",
+            "has_partner_present",
+            "has_parent_present",
+            "is_solo_event",
+            "participant_roles_json",
+            "social_context",
+            "social_intimacy",
+            "participant_relationships_json",
+        }
+        assert social_keys.issubset(set(result.keys()))
+
+    def test_participant_relationships_json_passthrough(self):
+        """participant_relationships_json passes through from M07 output"""
+        import json
+
+        relationships = json.dumps(
+            [{"person": "Mom", "relationship_type": "PARENT_OF", "confidence": 0.95}]
+        )
+        envelope = {"body": {"participants": ["person_dad", "person_mom"]}}
+        social_output = {"participant_relationships_json": relationships}
+        result = map_social_group(envelope, social_output)
+        assert result["participant_relationships_json"] == relationships
+
+    def test_participant_relationships_json_default_empty(self):
+        """participant_relationships_json defaults to '[]' when absent"""
+        envelope = {"body": {}}
+        social_output = {}
+        result = map_social_group(envelope, social_output)
+        assert result["participant_relationships_json"] == "[]"
+
+
+class TestEpic316TemporalGroupUpdate:
+    """Tests for map_temporal_group() +3 columns: temporal MW v2 signals"""
+
+    def test_temporal_group_returns_14_keys(self):
+        """map_temporal_group returns 14 keys (was 12 including created_at/updated_at)"""
+        temporal_output = {
+            "event_time_utc": 1700000000,
+            "write_time_utc": 1700000100,
+        }
+        result = map_temporal_group(temporal_output)
+        # Must include the 3 new temporal columns
+        assert "temporal_mentioned_time" in result
+        assert "temporal_resolved_epoch_ms" in result
+        assert "temporal_orientation" in result
+
+    def test_temporal_mentioned_time_passthrough(self):
+        """temporal_mentioned_time passes through from M08 output"""
+        temporal_output = {"temporal_mentioned_time": "yesterday evening"}
+        result = map_temporal_group(temporal_output)
+        assert result["temporal_mentioned_time"] == "yesterday evening"
+
+    def test_temporal_resolved_epoch_ms_passthrough(self):
+        """temporal_resolved_epoch_ms passes through from M08 output"""
+        temporal_output = {"temporal_resolved_epoch_ms": 1704067200000}
+        result = map_temporal_group(temporal_output)
+        assert result["temporal_resolved_epoch_ms"] == 1704067200000
+
+    def test_temporal_orientation_passthrough(self):
+        """temporal_orientation passes through from M08 output"""
+        temporal_output = {"temporal_orientation": "PAST"}
+        result = map_temporal_group(temporal_output)
+        assert result["temporal_orientation"] == "PAST"
+
+    def test_temporal_new_columns_default_none(self):
+        """New temporal columns default to None when absent"""
+        temporal_output = {}
+        result = map_temporal_group(temporal_output)
+        assert result["temporal_mentioned_time"] is None
+        assert result["temporal_resolved_epoch_ms"] is None
+        assert result["temporal_orientation"] is None
+
+
+class TestEpic316AffectSalienceGroupUpdate:
+    """Tests for map_affect_salience_group() +1 column: affect_dominance"""
+
+    def test_affect_salience_group_returns_10_columns(self):
+        """map_affect_salience_group returns 10 columns (was 9)"""
+        affect_output = {"valence": 0.7, "arousal": 0.5, "dominance": 0.6}
+        salience_output = {"salience_score": 0.8, "salience_band": "HIGH"}
+        result = map_affect_salience_group(affect_output, salience_output)
+        assert "affect_dominance" in result
+        assert len(result) == 10
+
+    def test_affect_dominance_passthrough(self):
+        """affect_dominance extracted from affect_output.dominance"""
+        affect_output = {"dominance": 0.65}
+        salience_output = {"salience_score": 0.5}
+        result = map_affect_salience_group(affect_output, salience_output)
+        assert result["affect_dominance"] == 0.65
+
+    def test_affect_dominance_none_when_absent(self):
+        """affect_dominance is None when not provided"""
+        affect_output = {}
+        salience_output = {"salience_score": 0.5}
+        result = map_affect_salience_group(affect_output, salience_output)
+        assert result["affect_dominance"] is None
+
+    def test_affect_dominance_validation_valid(self):
+        """affect_dominance passes validation when in [0.0, 1.0]"""
+        row = {"affect_dominance": 0.7}
+        # Should not raise
+        validate_value_ranges(row)
+
+    def test_affect_dominance_validation_out_of_range(self):
+        """affect_dominance fails validation when out of [0.0, 1.0]"""
+        row = {"affect_dominance": 1.5}
+        with pytest.raises(ValueError, match="affect_dominance out of range"):
+            validate_value_ranges(row)
+
+    def test_affect_dominance_validation_negative(self):
+        """affect_dominance fails validation when negative"""
+        row = {"affect_dominance": -0.1}
+        with pytest.raises(ValueError, match="affect_dominance out of range"):
+            validate_value_ranges(row)
+
+
+class TestEpic316EnumValidation:
+    """Tests for new MW v2 enum validations added in Epic 3.16"""
+
+    @pytest.mark.parametrize("value", ["EXPOSITION", "RISING_ACTION", "CLIMAX", "RESOLUTION"])
+    def test_narrative_arc_position_valid(self, value):
+        """Valid narrative_arc_position values pass validation"""
+        row = {"narrative_arc_position": value}
+        validate_enum_values(row)
+
+    def test_narrative_arc_position_invalid(self):
+        """Invalid narrative_arc_position fails validation"""
+        row = {"narrative_arc_position": "UNKNOWN"}
+        with pytest.raises(ValueError, match="Invalid narrative_arc_position"):
+            validate_enum_values(row)
+
+    @pytest.mark.parametrize(
+        "value", ["user_stated", "user_implied", "device_observed", "system_inferred"]
+    )
+    def test_source_type_valid(self, value):
+        """Valid source_type values pass validation"""
+        row = {"source_type": value}
+        validate_enum_values(row)
+
+    def test_source_type_invalid(self):
+        """Invalid source_type fails validation"""
+        row = {"source_type": "auto_generated"}
+        with pytest.raises(ValueError, match="Invalid source_type"):
+            validate_enum_values(row)
+
+    @pytest.mark.parametrize("value", ["ROUTINE", "EXPECTED", "NOVEL", "SURPRISING"])
+    def test_novelty_valid(self, value):
+        """Valid novelty values pass validation"""
+        row = {"novelty": value}
+        validate_enum_values(row)
+
+    def test_novelty_invalid(self):
+        """Invalid novelty fails validation"""
+        row = {"novelty": "BORING"}
+        with pytest.raises(ValueError, match="Invalid novelty"):
+            validate_enum_values(row)
+
+    @pytest.mark.parametrize("value", ["MENTION", "DISCUSSED", "ELABORATED", "DEEPLY_PROCESSED"])
+    def test_elaboration_depth_valid(self, value):
+        """Valid elaboration_depth values pass validation"""
+        row = {"elaboration_depth": value}
+        validate_enum_values(row)
+
+    def test_elaboration_depth_invalid(self):
+        """Invalid elaboration_depth fails validation"""
+        row = {"elaboration_depth": "SKIMMED"}
+        with pytest.raises(ValueError, match="Invalid elaboration_depth"):
+            validate_enum_values(row)
+
+    @pytest.mark.parametrize("value", ["PAST", "ONGOING", "FUTURE_COMMITMENT"])
+    def test_temporal_orientation_valid(self, value):
+        """Valid temporal_orientation values pass validation"""
+        row = {"temporal_orientation": value}
+        validate_enum_values(row)
+
+    def test_temporal_orientation_invalid(self):
+        """Invalid temporal_orientation fails validation"""
+        row = {"temporal_orientation": "FUTURE"}
+        with pytest.raises(ValueError, match="Invalid temporal_orientation"):
+            validate_enum_values(row)
+
+    def test_null_enum_values_skip_validation(self):
+        """None/null enum values skip validation (allowed)"""
+        row = {
+            "narrative_arc_position": None,
+            "source_type": None,
+            "novelty": None,
+            "elaboration_depth": None,
+            "temporal_orientation": None,
+        }
+        # Should not raise
+        validate_enum_values(row)
+
+
+@pytest.mark.asyncio
+async def test_epic316_full_row_assembly(base_envelope, complete_module_outputs):
+    """Epic 3.16: All 5 new columns appear in full row assembly"""
+    reset_metrics()
+    # Add Epic 3.16 fields to module outputs
+    complete_module_outputs["participant_relationships_json"] = (
+        '[{"person":"Mom","type":"PARENT_OF"}]'
+    )
+    complete_module_outputs["affect_dominance"] = 0.7
+    complete_module_outputs["temporal_mentioned_time"] = "yesterday evening"
+    complete_module_outputs["temporal_resolved_epoch_ms"] = 1704067200000
+    complete_module_outputs["temporal_orientation"] = "PAST"
+
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
+
+    # Social: participant_relationships_json
+    assert row["participant_relationships_json"] == '[{"person":"Mom","type":"PARENT_OF"}]'
+    # Affect: affect_dominance
+    assert row["affect_dominance"] == 0.7
+    # Temporal: 3 new columns
+    assert row["temporal_mentioned_time"] == "yesterday evening"
+    assert row["temporal_resolved_epoch_ms"] == 1704067200000
+    assert row["temporal_orientation"] == "PAST"
+
+
+@pytest.mark.asyncio
+async def test_epic316_defaults_in_row_assembly(base_envelope, complete_module_outputs):
+    """Epic 3.16: New columns use defaults when absent"""
+    reset_metrics()
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
+
+    # Defaults when MW v2 fields not present
+    assert row["participant_relationships_json"] == "[]"
+    assert row["affect_dominance"] is None
+    assert row["temporal_mentioned_time"] is None
+    assert row["temporal_resolved_epoch_ms"] is None
+    assert row["temporal_orientation"] is None
+
+
+# =============================================================================
+# Epic 5A.1 -- Group 13: MW v2a Signal Mapping (5 columns, M5A)
+# =============================================================================
+
+
+class TestMwV2aSignalGroup:
+    """Tests for map_mw_v2a_signal_group() -- Group 13 (5 columns)"""
+
+    def test_full_m5a_signal_extraction(self):
+        """All 5 M5A signals extracted from envelope.body"""
+        envelope = {
+            "body": {
+                "text": "Sharvi won a spelling bee!",
+                "affect": {"surprise_level": 0.85},
+                "identity_relevance": 0.92,
+                "source_reliability": 0.95,
+                "memory_tier": "significant",
+                "temporal_anchor": {
+                    "resolved_epoch_ms": 1700000000000,
+                    "label": "this afternoon",
+                    "orientation": "PAST",
+                },
+            }
+        }
+        result = map_mw_v2a_signal_group(envelope)
+
+        assert result["surprise_level"] == 0.85
+        assert result["identity_relevance"] == 0.92
+        assert result["source_reliability"] == 0.95
+        assert result["memory_tier"] == "significant"
+        anchor = json.loads(result["temporal_anchor_json"])
+        assert anchor["resolved_epoch_ms"] == 1700000000000
+        assert anchor["orientation"] == "PAST"
+
+    def test_defaults_when_body_empty(self):
+        """Defaults applied when body has no M5A signals"""
+        envelope = {"body": {}}
+        result = map_mw_v2a_signal_group(envelope)
+
+        assert result["surprise_level"] == 0.0
+        assert result["identity_relevance"] == 0.0
+        assert result["source_reliability"] == 1.0
+        assert result["memory_tier"] == "routine"
+        assert result["temporal_anchor_json"] == "{}"
+
+    def test_defaults_when_no_body(self):
+        """Defaults applied when envelope has no body"""
+        envelope = {}
+        result = map_mw_v2a_signal_group(envelope)
+
+        assert result["surprise_level"] == 0.0
+        assert result["identity_relevance"] == 0.0
+        assert result["source_reliability"] == 1.0
+        assert result["memory_tier"] == "routine"
+        assert result["temporal_anchor_json"] == "{}"
+
+    def test_surprise_level_from_affect_nested(self):
+        """surprise_level lives under body.affect, not body directly"""
+        envelope = {"body": {"affect": {"surprise_level": 0.7}}}
+        result = map_mw_v2a_signal_group(envelope)
+        assert result["surprise_level"] == 0.7
+
+    def test_surprise_level_none_coerced_to_zero(self):
+        """None surprise_level coerced to 0.0"""
+        envelope = {"body": {"affect": {"surprise_level": None}}}
+        result = map_mw_v2a_signal_group(envelope)
+        assert result["surprise_level"] == 0.0
+
+    def test_memory_tier_values(self):
+        """memory_tier accepts all valid tiers"""
+        for tier in ("routine", "notable", "significant", "landmark"):
+            envelope = {"body": {"memory_tier": tier}}
+            result = map_mw_v2a_signal_group(envelope)
+            assert result["memory_tier"] == tier
+
+    def test_temporal_anchor_complex_object(self):
+        """temporal_anchor_json serializes complex nested object"""
+        anchor = {
+            "resolved_epoch_ms": 1700000000000,
+            "label": "last Tuesday",
+            "orientation": "PAST",
+            "confidence": 0.9,
+            "source": "NER",
+        }
+        envelope = {"body": {"temporal_anchor": anchor}}
+        result = map_mw_v2a_signal_group(envelope)
+        parsed = json.loads(result["temporal_anchor_json"])
+        assert parsed == anchor
+
+    def test_column_count(self):
+        """Group 13 produces exactly 5 columns"""
+        envelope = {"body": {}}
+        result = map_mw_v2a_signal_group(envelope)
+        assert len(result) == 5
+
+
+@pytest.mark.asyncio
+async def test_mw_v2a_signals_in_row_assembly(base_envelope, complete_module_outputs):
+    """Group 13 M5A columns appear in full row assembly via run()"""
+    reset_metrics()
+    # Add M5A signals to envelope body
+    base_envelope["body"]["affect"] = {"surprise_level": 0.75}
+    base_envelope["body"]["identity_relevance"] = 0.88
+    base_envelope["body"]["source_reliability"] = 0.92
+    base_envelope["body"]["memory_tier"] = "notable"
+    base_envelope["body"]["temporal_anchor"] = {
+        "resolved_epoch_ms": 1700000000000,
+        "label": "today",
+    }
+
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
+
+    # Verify all 5 Group 13 columns present
+    assert row["surprise_level"] == 0.75
+    assert row["identity_relevance"] == 0.88
+    assert row["source_reliability"] == 0.92
+    assert row["memory_tier"] == "notable"
+    anchor = json.loads(row["temporal_anchor_json"])
+    assert anchor["resolved_epoch_ms"] == 1700000000000
+
+    # Verify metrics tracked
+    metrics = get_metrics()
+    assert metrics["column_group_counts"]["mw_v2a_signals"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_mw_v2a_signals_defaults_in_row_assembly(base_envelope, complete_module_outputs):
+    """Group 13 M5A columns use safe defaults when absent"""
+    reset_metrics()
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
+
+    # Defaults when M5A fields not in envelope
+    assert row["surprise_level"] == 0.0
+    assert row["identity_relevance"] == 0.0
+    assert row["source_reliability"] == 1.0
+    assert row["memory_tier"] == "routine"
+    assert row["temporal_anchor_json"] == "{}"

@@ -1,0 +1,259 @@
+# =============================================================================
+# P08 Embedding Lifecycle Management -- Pipeline Contract v3.0.0
+# =============================================================================
+#
+# Single source of truth for the P08 pipeline after pgvector migration.
+#
+# History:
+#   v1.0.0: Original FAISS-based embedding indexing pipeline
+#   v2.0.0: Post-ADR-K003 maintenance mode (aspirational pgvector claims)
+#   v3.0.0: pgvector migration complete -- FAISS eliminated, 3-stage DAG
+#
+# Supersedes: k0/contracts/pipelines/p08_embedding_management.v2.yaml
+#
+# ADR References:
+#   ADR-K003 v1.2: Inline Embedding via UltraBERT (moved primary gen to P02)
+#   ADR-K003 v2.0: pgvector Migration Decision (Epic 4.8)
+#
+# Milestone: M4 Epic 4.2
+# =============================================================================
+
+pipeline_id: P08_EMBEDDING
+name: "P08 Embedding Lifecycle Management"
+version: v3
+status: active
+runner_type: "custom"
+runner_class: "k0.pipelines.p08.runner:P08Runner"
+
+description: |
+  Background embedding lifecycle management pipeline.
+
+  Primary embedding generation is handled inline by P02 (M22 extract_from_cache
+  + M16 hipp_events_writer). P08 handles maintenance operations that cannot run
+  inline: backfill, cleanup, integrity checks.
+
+  M4 changes from v2:
+  - FAISS indexing REMOVED entirely (was M24). pgvector HNSW auto-indexes on INSERT.
+  - Pipeline status changed from 'maintenance_mode' to 'active' (it does real work).
+  - 3-stage DAG replaces single-stage (was backfill-only).
+  - All vector I/O uses pgvector VECTOR(768) native type (not struct.pack bytes).
+  - EmbeddingQueueDriver integration REMOVED (deprecated async queue pattern).
+
+# =============================================================================
+# Responsibilities
+# =============================================================================
+responsibilities:
+  active:
+    - "M25 Backfill: Recompute embeddings for events with embedding_status=PENDING (M22 cache miss or P02 inline failure)"
+    - "M27 Cleanup: Delete orphaned st_vec rows where event_id has no matching st_hipp_events row"
+    - "M28 Integrity: Validate vector dimensions, model_id consistency, detect orphans and missing vectors"
+
+  removed:
+    - description: "M24 FAISS index building"
+      reason: "pgvector HNSW auto-indexes on INSERT -- no manual indexing step needed"
+      removed_in: "v3.0.0"
+    - description: "EmbeddingQueueDriver async queue processing"
+      reason: "P02 inline embedding (ADR-K003) replaced async queue pattern"
+      removed_in: "v3.0.0"
+    - description: "MiniLM 384-dim embedding generation"
+      reason: "UltraBERT 768-dim is the only active model"
+      removed_in: "v3.0.0"
+
+# =============================================================================
+# Entry/Exit Topics
+# =============================================================================
+# P08 is scheduler-driven, not event-driven.
+# entry_topic retained for schema compliance (scheduler ignores it).
+entry_topic: scheduled.p08.maintenance.v1
+exit_topic: embedding.maintenance.completed.v1
+
+# =============================================================================
+# Declarative Triggers (PipelineScheduler)
+# =============================================================================
+triggers:
+
+  - id: backfill_interval
+    type: interval
+    interval_seconds: 300
+    batch_size: 100
+    catch_up_enabled: true
+    description: "Every 5 minutes: check for PENDING embeddings to backfill"
+
+  - id: backfill_threshold
+    type: threshold
+    table: st_hipp_events
+    condition: "embedding_status = 'PENDING'"
+    threshold_count: 50
+    check_interval_seconds: 60
+    batch_size: 50
+    description: "Trigger backfill when PENDING count exceeds 50"
+
+  - id: maintenance_manual
+    type: manual
+    admin_only: true
+    description: "Admin-initiated maintenance via CLI or API"
+
+# =============================================================================
+# 3-Stage DAG
+# =============================================================================
+# Execution: sequential (10 -> 20 -> 30)
+# Stage failure does NOT block subsequent stages (independent operations).
+dag:
+
+  - id: stage_10_backfill
+    module: "embedding.backfill:v2"
+    after: []
+    description: |
+      Backfill PENDING embeddings for events where M22 inline extraction failed.
+      Queries st_hipp_events WHERE embedding_status='PENDING'.
+      Generates 768-dim embedding via UltraBERT, writes to st_vec as VECTOR(768).
+      pgvector HNSW auto-indexes on INSERT -- no separate indexing step.
+    latency_budget_ms: 5000
+    config:
+      batch_size: 100
+      use_syscalls: true
+      emit_completion_event: false
+
+  - id: stage_20_cleanup
+    module: "embedding.cleanup:v2"
+    after: []
+    description: |
+      Remove orphaned st_vec rows where event_id has no matching st_hipp_events row.
+      Pure SQL DELETE -- no FAISS index manipulation.
+      Runs after backfill to avoid cleaning up rows that were just backfilled.
+    latency_budget_ms: 2000
+    config:
+      batch_size: 500
+      dry_run: false
+
+  - id: stage_30_integrity
+    module: "embedding.integrity_check:v1"
+    after: []
+    description: |
+      Validate embedding data health after backfill and cleanup:
+      1. Dimension validation (all vectors must be 768-dim)
+      2. Model consistency (detect mixed model versions)
+      3. Orphan detection (st_vec without parent st_hipp_events)
+      4. Missing vectors (st_hipp_events READY but no st_vec row)
+      Auto-corrects: sets embedding_status=PENDING for missing vectors.
+    latency_budget_ms: 1000
+    config:
+      auto_correct_missing: true
+
+# =============================================================================
+# Concurrency & Queue
+# =============================================================================
+concurrency: 1
+max_queue: 1000
+
+# =============================================================================
+# Required Capabilities
+# =============================================================================
+required_capabilities:
+  - st_vec.read
+  - st_vec.write
+  - st_vec.delete
+  - st_hipp_events.read
+  - st_hipp_events.write
+  - ultrabert.embed
+
+# =============================================================================
+# Performance Targets
+# =============================================================================
+performance:
+  backfill:
+    batch_duration_p95: "5s"
+    per_event_latency_p95: "100ms"
+    throughput: "~10 events/sec (GPU-limited)"
+  cleanup:
+    batch_duration_p95: "2s"
+    batch_size: 500
+    throughput: "~2000 deletes/sec"
+  integrity:
+    check_duration_p95: "1s"
+    queries: 4
+
+# =============================================================================
+# Observability
+# =============================================================================
+observability:
+  metrics:
+    # M25 Backfill
+    - name: m25.embeddings_backfilled
+      type: counter
+      description: "Embeddings successfully backfilled"
+    - name: m25.backfill_failures
+      type: counter
+      description: "Backfill failures (UltraBERT unavailable, text missing)"
+    - name: m25.batch_duration_ms
+      type: histogram
+      description: "Duration of backfill batch processing"
+    # M27 Cleanup
+    - name: m27.embeddings_cleaned
+      type: counter
+      description: "Orphaned embeddings deleted"
+    - name: m27.cleanup_failures
+      type: counter
+      description: "Cleanup query failures"
+    # M28 Integrity
+    - name: m28.integrity_status
+      type: gauge
+      labels: [status]
+      description: "Current integrity status (HEALTHY=0, DEGRADED=1, CRITICAL=2)"
+    - name: m28.dimension_mismatches
+      type: gauge
+      description: "Count of vectors with wrong dimension"
+    - name: m28.orphaned_vectors
+      type: gauge
+      description: "Count of orphaned st_vec rows"
+    - name: m28.missing_vectors
+      type: gauge
+      description: "Count of READY events without st_vec row"
+
+  tracing:
+    - "All modules emit cognitive_trace_id in structured logs"
+    - "Pipeline run_id links all 3 stages for end-to-end tracing"
+    - "Stage timing recorded for performance monitoring"
+
+# =============================================================================
+# Schema Dependencies
+# =============================================================================
+schema_dependencies:
+  - contract: "k0/contracts/schemas/st_vec_v2.columns.yaml"
+    version: "2.0.0"
+    usage: "All stages read/write st_vec"
+  - contract: "k0/contracts/schemas/st_hipp_events_v2.columns.yaml"
+    version: "2.0.0"
+    usage: "Backfill reads text, integrity checks embedding_status"
+
+# =============================================================================
+# Module Contracts
+# =============================================================================
+module_contracts:
+  - contract: "k0/contracts/modules/embedding.backfill.v2.yaml"
+    module_id: M25
+    stage: stage_10_backfill
+  - contract: "k0/contracts/modules/embedding.cleanup.v2.yaml"
+    module_id: M27
+    stage: stage_20_cleanup
+  - contract: "k0/contracts/modules/embedding.integrity_check.v1.yaml"
+    module_id: M28
+    stage: stage_30_integrity
+
+# =============================================================================
+# Architecture References
+# =============================================================================
+related_adrs:
+  - id: ADR-K003
+    version: "v1.2"
+    title: "Inline Embedding via UltraBERT Single-Pass Cache"
+    relevance: "Moved primary embedding generation to P02 inline"
+  - id: ADR-K003
+    version: "v2.0"
+    title: "pgvector Migration Decision"
+    relevance: "FAISS elimination, VECTOR(768) native storage, deprecated code deletion"
+
+related_pipelines:
+  - id: P02
+    name: "P02 Write Pipeline"
+    relationship: "P02 M22/M16 produce embeddings inline; P08 handles failures and maintenance"

@@ -7,7 +7,7 @@ Provides P03-specific wrappers around K0 QoS infrastructure:
 - P03AdaptiveBatchSizer: K0-aware batch size optimization
 - P03PhaseMetrics: Phase latency tracking with SLO validation
 - P03ThroughputTracker: Throughput SLO tracking
-- P03ResourceMetrics: Resource utilization tracking (memory/CPU/DB/FAISS)
+- P03ResourceMetrics: Resource utilization tracking (memory/CPU/DB/vector queries)
 - P03QueryMetrics: Database query optimization metrics
 - P03LearningBudget: Learning compute budget tracking (<5% cycle time)
 

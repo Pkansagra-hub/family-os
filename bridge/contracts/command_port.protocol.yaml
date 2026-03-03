@@ -1,0 +1,229 @@
+# Bridge IKernelCommandPort Protocol Contract
+#
+# Formalizes the Bridge command port protocol for K1 -> K0 envelope transport.
+# Bridge README Section 3.1 / 5.2 describes this informally; this is the machine-readable contract.
+#
+# Contract: bridge/contracts/command_port.protocol.yaml
+# Milestone: M2 Epic 2.6
+# Related: k0/contracts/taxonomies/command_topics.yaml (valid topics)
+# Related: k0/contracts/taxonomies/outbox_routing.yaml (routing rules)
+# Related: bridge/contracts/schemas/command_envelope.json (envelope schema)
+# Related: k0/ports/command.py (K0 endpoint)
+
+command_port_protocol:
+  version: "1.0.0"
+  last_updated: "2026-03-01"
+
+  # ===========================================================================
+  # Interface Definition
+  # ===========================================================================
+  interface:
+    name: "IKernelCommandPort"
+    description: >
+      Protocol interface for submitting command envelopes from K1 to K0.
+      Bridge implements this interface; K1 modules depend on the protocol only.
+
+    methods:
+
+      # -----------------------------------------------------------------------
+      # submit -- Single envelope fire-and-forget
+      # -----------------------------------------------------------------------
+      - name: "submit"
+        description: "Submit a single command envelope to K0. Fire-and-forget semantics."
+        parameters:
+          - name: "topic"
+            type: "str"
+            required: true
+            description: "Command topic from command_topics.yaml (e.g. memory.write)."
+          - name: "body"
+            type: "dict[str, Any]"
+            required: true
+            description: "Domain payload matching the per-topic body schema."
+          - name: "schema_uri"
+            type: "str | None"
+            required: false
+            description: "Explicit schema URI. If omitted, derived from topic: schema://k0/topics/{topic_base}.body.json"
+          - name: "band"
+            type: "str | None"
+            required: false
+            description: "Privacy band override. If omitted, uses current session band."
+          - name: "trace_id"
+            type: "str | None"
+            required: false
+            description: "Cognitive trace ID. If omitted, propagated from K1 session or generated (UUID v7)."
+        returns:
+          type: "None"
+          description: "Fire-and-forget. No return value on success."
+        raises:
+          - error: "ContractViolationError"
+            condition: "400 from K0 Gate -- caller bug, invalid envelope"
+          - error: "PolicyDeniedError"
+            condition: "403 from K0 PEP -- policy denied this topic/band combination"
+
+      # -----------------------------------------------------------------------
+      # submit_batch -- Multiple envelopes
+      # -----------------------------------------------------------------------
+      - name: "submit_batch"
+        description: "Submit multiple command envelopes. Each processed individually with per-envelope error handling."
+        parameters:
+          - name: "envelopes"
+            type: "list[CommandEnvelope]"
+            required: true
+            description: "List of pre-built CommandEnvelope objects."
+        returns:
+          type: "None"
+          description: "Fire-and-forget. Individual failures handled per-envelope."
+        raises:
+          - error: "ContractViolationError"
+            condition: "Any envelope rejected by Gate (400/403)"
+        constraints:
+          max_batch_size: 50
+          max_concurrency: 3
+          description: "Bounded concurrency: max 3 envelopes in-flight simultaneously."
+
+  # ===========================================================================
+  # Envelope Building Rules
+  # ===========================================================================
+  envelope_building:
+    description: >
+      Bridge is responsible for constructing the full K0 envelope from
+      the minimal fields provided by K1 callers.
+
+    k1_provides:
+      - field: "topic"
+        description: "Command topic (e.g. memory.write)"
+      - field: "body"
+        description: "Domain payload matching per-topic body schema"
+      - field: "schema_uri"
+        description: "Optional. Derived from topic if omitted."
+      - field: "band"
+        description: "Optional. Current session privacy band if omitted."
+      - field: "trace_id"
+        description: "Optional. K1 session trace_id if available."
+
+    bridge_adds:
+      - field: "cognitive_trace_id"
+        source: "K1 trace_id or generated UUID v7"
+      - field: "tenant_id"
+        source: "Bridge config (family tenant)"
+      - field: "space_id"
+        source: "Bridge config (family space)"
+      - field: "actor"
+        source: "Authenticated K1 module identity"
+      - field: "device_id"
+        source: "Bridge device registry"
+      - field: "band"
+        source: "K1 session band or default GREEN"
+      - field: "ts"
+        source: "UTC ISO-8601 timestamp at build time"
+      - field: "policy_version"
+        source: "Current policy version from Bridge config"
+      - field: "schema_uri"
+        source: "Derived from topic if not provided: schema://k0/topics/{topic_base}.body.json"
+      - field: "schema_version"
+        source: "Resolved from body schema $id"
+
+    bridge_computes:
+      - field: "idem_key"
+        algorithm: "BLAKE3(topic + canonical_json(body) + device_id)"
+        description: "Deterministic idempotency key. Same input always produces same key."
+      - field: "envelope_sha256"
+        algorithm: "SHA-256 of full canonical envelope JSON (excluding sig, sig_alg, sig_kid)"
+        description: "Envelope integrity hash."
+      - field: "payload_sha256"
+        algorithm: "SHA-256 of canonical_json(body)"
+        description: "Body-only integrity hash."
+      - field: "sig"
+        algorithm: "Sign(envelope_sha256) using configured signing backend"
+        description: "Envelope signature."
+      - field: "sig_alg"
+        source: "Signing backend algorithm identifier"
+      - field: "sig_kid"
+        source: "Signing key identifier (did:device:device-name#rotation-ts)"
+
+  # ===========================================================================
+  # Transport
+  # ===========================================================================
+  transport:
+    protocol: "HTTP/1.1"
+    endpoint: "POST {k0_base_url}/k0/command.submit"
+    content_type: "application/json"
+    timeout:
+      connect_ms: 5000
+      read_ms: 30000
+    tls:
+      required_in_production: true
+      optional_in_dev: true
+    retry:
+      count: 0
+      description: "No retries. Offline queue handles persistence on failure."
+    connection_pooling: true
+
+  # ===========================================================================
+  # Error Contract
+  # ===========================================================================
+  errors:
+    - code: 200
+      meaning: "Envelope accepted and committed"
+      action: "Return silently (fire-and-forget success)"
+    - code: 400
+      meaning: "Envelope rejected by Gate (structure, body schema, or topic validation)"
+      action: "Log error, raise ContractViolationError (caller bug)"
+    - code: 403
+      meaning: "Policy denied (PEP rejected topic/band combination)"
+      action: "Log error, raise PolicyDeniedError (caller bug or policy change)"
+    - code: 409
+      meaning: "Idempotent duplicate (idem_key already committed)"
+      action: "Log info, return silently (safe to ignore)"
+    - code: 429
+      meaning: "QoS budget exhausted"
+      action: "Log warning, enqueue to LocalOutbox"
+    - code: "5xx"
+      meaning: "K0 unavailable"
+      action: "Enqueue to LocalOutbox, start offline polling"
+
+  # ===========================================================================
+  # Offline Behavior
+  # ===========================================================================
+  offline:
+    description: >
+      When K0 is unreachable (5xx or connection timeout), Bridge enqueues
+      envelopes to LocalOutbox (SQLite on device). When K0 recovers,
+      LocalOutbox drains in priority + FIFO order.
+
+    local_outbox:
+      storage: "SQLite (one DB per device)"
+      table: "outbox_queue"
+      max_queue_depth: 10000
+      max_attempts: 10
+      failed_action: "Mark FAILED, emit bridge.outbox.dead_letter event"
+
+    connectivity_detection:
+      health_endpoint: "GET {k0_base_url}/k0/health"
+      poll_interval_online_ms: 0
+      poll_interval_offline_ms: 10000
+      backoff_max_ms: 60000
+      backoff_strategy: "exponential"
+
+    drain:
+      order: "priority DESC, created_at ASC"
+      max_concurrent: 5
+      description: >
+        Drain highest-priority envelopes first. Within same priority, FIFO.
+        Bounded to 5 concurrent drain submissions.
+
+  # ===========================================================================
+  # Schema URI Convention
+  # ===========================================================================
+  schema_uri_convention:
+    format: "schema://k0/topics/{topic_base}.body.json"
+    examples:
+      - topic: "memory.write"
+        schema_uri: "schema://k0/topics/memory_write.body.json"
+      - topic: "session.snapshot"
+        schema_uri: "schema://k0/topics/session_snapshot.body.json"
+      - topic: "ifl.health.fitbit.heart_rate"
+        schema_uri: "schema://k0/topics/ifl_event.body.json"
+    derivation: >
+      Replace dots with underscores in the topic base (first segment or registered topic_id).
+      For ifl.* glob topics, always use ifl_event as the base.

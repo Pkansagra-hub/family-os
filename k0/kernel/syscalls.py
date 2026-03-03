@@ -740,9 +740,6 @@ class Syscalls:
             ...     print(f"{result['event_id']}: {result['score']:.3f}")
 
         TODO:
-            - Implement vector storage table (FAISS, pgvector, or sqlite-vss)
-            - Add cosine similarity search
-            - Add ANN index for large-scale retrieval
             - Wire into P01 recall pipeline
             - Add privacy band filtering
 
@@ -1300,7 +1297,7 @@ class Syscalls:
         event_id: str,
         tenant_id: str,
         space_id: str,
-        vector: bytes,
+        vector: list[float],
         vector_dim: int = 768,
         model_id: str = "ultrabert_v2.1.0",
         status: str = "READY",
@@ -1309,21 +1306,20 @@ class Syscalls:
         """
         Write embedding vector to st_vec table (requires st_vec.write cap).
 
-        Used by M23 (builders.embedding_write) to store 768-dim UltraBERT embeddings
-        inline during P02 processing. Replaces async P08 queue pattern (ADR-K003).
+        Used by M16 (hipp_events_writer) to store 768-dim UltraBERT embeddings
+        inline during P02 processing. Uses pgvector VECTOR(768) native type.
 
         Capability Required: "st_vec.write"
 
-        Storage Table: st_vec
+        Storage Table: st_vec (v2 -- pgvector native, migration 0071)
         - Purpose: Primary storage for 768-dim embeddings (inline with P02)
         - Lifecycle: Permanent (tied to st_hipp_events via FK)
-        - Primary Key: embedding_id (unique, idempotent)
-        - Foreign Key: event_id → st_hipp_events.event_id (ON DELETE CASCADE)
-        - Indexes: 4 (event_id, tenant_space, model_id, status_created)
+        - Primary Key: embedding_id (UUID, idempotent)
+        - Foreign Key: event_id -> st_hipp_events.event_id (ON DELETE CASCADE)
+        - Indexes: 5 B-tree + 1 HNSW (vector_cosine_ops, m=16, ef_construction=64)
 
         Status Values:
-        - READY: Embedding stored, available for use
-        - INDEXED: Also added to FAISS search index (P08 M24)
+        - READY: Embedding stored, available for HNSW similarity search
         - FAILED: Generation failed
 
         Args:
@@ -1331,7 +1327,7 @@ class Syscalls:
             event_id: Source event identifier (FK to st_hipp_events)
             tenant_id: Tenant isolation boundary
             space_id: Memory space identifier
-            vector: 768-dim float32 embedding as bytes (3072 bytes)
+            vector: 768-dim float list for pgvector VECTOR(768)
             vector_dim: Dimensionality of vector (default: 768)
             model_id: Embedding model identifier (default: "ultrabert_v2.1.0")
             status: Embedding status (default: "READY")
@@ -1348,15 +1344,13 @@ class Syscalls:
             ValueError: If required fields missing or invalid
 
         Example:
-            >>> import struct
             >>> embedding = [0.1] * 768  # 768-dim vector
-            >>> vector_bytes = struct.pack('768f', *embedding)
             >>> result = await syscalls.vec_write(
             ...     embedding_id="emb_uuid_abc123",
             ...     event_id="evt_123",
             ...     tenant_id="tenant_abc",
             ...     space_id="space_xyz",
-            ...     vector=vector_bytes,
+            ...     vector=embedding,
             ...     vector_dim=768,
             ...     model_id="ultrabert_v2.1.0",
             ...     status="READY"
@@ -1365,15 +1359,15 @@ class Syscalls:
             True
 
         Performance:
-            - Target: <5ms P95 (single INSERT with 3KB blob + 4 indexes)
+            - Target: <5ms P95 (single INSERT with VECTOR(768) + 6 indexes)
             - Uses INSERT ... ON CONFLICT DO NOTHING for idempotency
             - Connection pooling via UnitOfWork
 
         Related:
-            - M23 (builders.embedding_write): Primary user of this syscall
+            - M16 (core.hipp_events_writer): Primary user of this syscall
             - M22 (embedding.extract_from_cache): Extracts vector from UltraBERT cache
-            - ADR-K003: Inline embedding architecture decision
-            - Migration 0026: st_vec table definition
+            - ADR-K003 v2.0: pgvector migration decision
+            - Migration 0071: st_vec pgvector native table
         """
         self._require_cap("st_vec.write")
 
@@ -1388,12 +1382,12 @@ class Syscalls:
             raise ValueError("space_id required for vec_write")
         if not vector:
             raise ValueError("vector required for vec_write")
-        if status not in ("READY", "INDEXED", "FAILED"):
-            raise ValueError(f"Invalid status: {status} (expected READY/INDEXED/FAILED)")
+        if status not in ("READY", "FAILED"):
+            raise ValueError(f"Invalid status: {status} (expected READY/FAILED)")
         if vector_dim != 768:
             raise ValueError(f"Invalid vector_dim: {vector_dim} (expected 768)")
-        if len(vector) != 3072:  # 768 floats * 4 bytes
-            raise ValueError(f"Invalid vector size: {len(vector)} bytes (expected 3072)")
+        if len(vector) != 768:
+            raise ValueError(f"Invalid vector length: {len(vector)} (expected 768)")
 
         # Audit: Log storage operation
         start_time = time.perf_counter()
@@ -1419,24 +1413,27 @@ class Syscalls:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
             try:
+                # Format vector as pgvector text representation: '[0.1, 0.2, ...]'
+                vector_str = "[" + ",".join(str(v) for v in vector) + "]"
+
                 # Use INSERT with ON CONFLICT for idempotency
-                # Use EXTRACT(EPOCH ...) for BIGINT timestamp columns
+                # VECTOR(768) column accepts text format, cast via ::vector
+                # TIMESTAMPTZ columns use NOW() directly
                 result = await conn.execute(
                     """
                     INSERT INTO st_vec (
                         embedding_id, event_id, tenant_id, space_id,
                         vector, vector_dim, model_id, status,
                         created_at, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-                              EXTRACT(EPOCH FROM NOW())::BIGINT,
-                              EXTRACT(EPOCH FROM NOW())::BIGINT)
+                    ) VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8,
+                              NOW(), NOW())
                     ON CONFLICT (embedding_id) DO NOTHING
                     """,
                     embedding_id,
                     event_id,
                     tenant_id,
                     space_id,
-                    vector,
+                    vector_str,
                     vector_dim,
                     model_id,
                     status,
@@ -1488,8 +1485,8 @@ class Syscalls:
         """
         Query st_vec table for embeddings by status (requires st_vec.read cap).
 
-        Used by P08 M24 (faiss_indexer) to find READY embeddings for indexing.
-        Replaces event-driven model with query-based batch processing (ADR-K003 v1.2).
+        Used by P08 to find READY embeddings for pgvector indexing.
+        Replaces event-driven model with query-based batch processing (ADR-K003 v2.0).
 
         Capability Required: "st_vec.read"
 
@@ -1526,9 +1523,8 @@ class Syscalls:
             - Limit+offset pagination for batch control
 
         Related:
-            - M24 (embedding.faiss_indexer): Primary user of this syscall
-            - P08 scheduled mode: Uses this instead of event subscription
-            - ADR-K003 v1.2: Query-based P08 architecture
+            - P08 scheduled mode: Uses this for batch processing
+            - ADR-K003 v2.0: pgvector native architecture
         """
         self._require_cap("st_vec.read")
 
@@ -1650,14 +1646,14 @@ class Syscalls:
         """
         Update st_vec status (requires st_vec.write cap).
 
-        Used by P08 M24 after adding to FAISS index to mark embedding as INDEXED.
+        Used by P08 after indexing in pgvector to mark embedding as INDEXED.
         Also used for error handling (marking FAILED status).
 
         Capability Required: "st_vec.write"
 
         Status Transitions:
-        - READY → INDEXED: After successful FAISS indexing
-        - READY → FAILED: If FAISS indexing fails
+        - READY → INDEXED: After successful pgvector indexing
+        - READY → FAILED: If indexing fails
         - FAILED → READY: For retry (via backfill)
 
         Args:
@@ -1687,9 +1683,8 @@ class Syscalls:
             - Uses embedding_id primary key for fast lookup
 
         Related:
-            - M24 (embedding.faiss_indexer): Primary user of this syscall
             - vec_query: Finds READY embeddings to index
-            - ADR-K003 v1.2: P08 scheduled architecture
+            - ADR-K003 v2.0: pgvector native architecture
         """
         self._require_cap("st_vec.write")
 
@@ -1766,677 +1761,262 @@ class Syscalls:
                 )
                 raise
 
-    async def faiss_add(
-        self,
-        embedding_id: str,
-        vector: list[float],
-        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
-    ) -> dict[str, Any]:
-        """
-        Add single vector to FAISS similarity search index (requires faiss.write cap).
-
-        Used by P08 M24 (embedding.faiss_indexer) to add 768-dim embeddings to
-        FAISS IVF256,PQ64 index for semantic search.
-
-        Capability Required: "faiss.write"
-
-        FAISS Index Configuration:
-        - Index Type: IVF256,PQ64 (Inverted File with Product Quantization)
-        - Vector Dimension: 768
-        - Compression Ratio: 8:1 (768 * 4 bytes → 384 bytes)
-        - Search Parameter: nprobe=16 (cells to probe)
-        - Distance Metric: L2 (Euclidean distance)
-
-        Args:
-            embedding_id: Unique embedding identifier (used as FAISS ID)
-            vector: 768-dim float32 embedding
-            index_id: FAISS index identifier (default: ultrabert_v2.1.0_ivf256_pq64)
-
-        Returns:
-            Dictionary with:
-            - added: bool (True if added successfully)
-            - embedding_id: str
-            - index_id: str
-            - total_vectors: int (total vectors in index after addition)
-
-        Raises:
-            PermissionError: If pipeline lacks "faiss.write" capability
-            ValueError: If vector dimension invalid
-            NotImplementedError: FAISS integration not yet implemented
-
-        Example:
-            >>> embedding = [0.1] * 768  # 768-dim vector
-            >>> result = await syscalls.faiss_add(
-            ...     embedding_id="emb_uuid_abc123",
-            ...     vector=embedding,
-            ...     index_id="ultrabert_v2.1.0_ivf256_pq64"
-            ... )
-            >>> result["added"]
-            True
-
-        Performance:
-            - Target: <50ms P95 (single vector addition)
-            - Batch operations preferred (use faiss_add_batch)
-
-        Related:
-            - M24 (embedding.faiss_indexer): Primary user of this syscall
-            - ADR-K003: FAISS indexing for P08 v2
-        """
-        self._require_cap("faiss.write")
-
-        # Validation
-        if not embedding_id:
-            raise ValueError("embedding_id required for faiss_add")
-        if not vector:
-            raise ValueError("vector required for faiss_add")
-        if len(vector) != 768:
-            raise ValueError(f"Invalid vector dimension: {len(vector)} (expected 768)")
-
-        # Get FAISS manager instance
-        from k0.runtime.faiss_manager import FaissIndexManager
-
-        faiss_mgr = FaissIndexManager.get_instance()
-
-        # Add vector to FAISS index
-        try:
-            result = await faiss_mgr.add(embedding_id, vector, index_id)
-
-            logger.info(
-                "faiss_add completed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "embedding_id": embedding_id,
-                    "index_id": index_id,
-                    "total_vectors": result["total_vectors"],
-                },
-            )
-
-            return result
-
-        except ValueError as e:
-            logger.error(
-                "faiss_add validation failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "embedding_id": embedding_id,
-                    "error": str(e),
-                },
-            )
-            raise
-
-        except Exception as e:
-            logger.error(
-                "faiss_add failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "embedding_id": embedding_id,
-                    "error": str(e),
-                },
-            )
-            raise RuntimeError(f"Failed to add vector to FAISS: {e}") from e
-
-    async def faiss_add_batch(
-        self,
-        records: list[dict[str, Any]],
-        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
-    ) -> dict[str, Any]:
-        """
-        Add batch of vectors to FAISS index (requires faiss.write cap).
-
-        Batch addition is ~5-10x faster than individual adds due to reduced
-        index update overhead.
-
-        Capability Required: "faiss.write"
-
-        Args:
-            records: List of dicts with:
-                - embedding_id: str (unique identifier)
-                - vector: list[float] (768-dim embedding)
-            index_id: FAISS index identifier
-
-        Returns:
-            Dictionary with:
-            - added_count: int (number of vectors added)
-            - batch_size: int (size of input batch)
-            - index_id: str
-            - total_vectors: int (total vectors in index after addition)
-
-        Raises:
-            PermissionError: If pipeline lacks "faiss.write" capability
-            ValueError: If records invalid
-            NotImplementedError: FAISS integration not yet implemented
-
-        Example:
-            >>> records = [
-            ...     {"embedding_id": "emb_1", "vector": [0.1] * 768},
-            ...     {"embedding_id": "emb_2", "vector": [0.2] * 768},
-            ... ]
-            >>> result = await syscalls.faiss_add_batch(
-            ...     records=records,
-            ...     index_id="ultrabert_v2.1.0_ivf256_pq64"
-            ... )
-            >>> result["added_count"]
-            2
-
-        Performance:
-            - Target: 200 vectors/sec (5ms per vector in batch)
-            - Prefer batches of 50-200 vectors for optimal performance
-
-        Related:
-            - M24 (embedding.faiss_indexer): Uses this for batch indexing
-            - ADR-K003: FAISS batch indexing strategy
-        """
-        self._require_cap("faiss.write")
-
-        # Validation
-        if not records:
-            raise ValueError("records required for faiss_add_batch (empty list)")
-        for i, record in enumerate(records):
-            if "embedding_id" not in record:
-                raise ValueError(f"Record {i} missing embedding_id")
-            if "vector" not in record:
-                raise ValueError(f"Record {i} missing vector")
-            if len(record["vector"]) != 768:
-                raise ValueError(
-                    f"Record {i} invalid vector dimension: {len(record['vector'])} (expected 768)"
-                )
-
-        # Get FAISS manager instance
-        from k0.runtime.faiss_manager import FaissIndexManager
-
-        faiss_mgr = FaissIndexManager.get_instance()
-
-        # Convert records to (embedding_id, vector) tuples
-        embeddings = [(rec["embedding_id"], rec["vector"]) for rec in records]
-
-        # Batch add to FAISS index
-        try:
-            result = await faiss_mgr.add_batch(embeddings, index_id)
-
-            logger.info(
-                "faiss_add_batch completed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "batch_size": len(records),
-                    "added_count": result["added"],
-                    "index_id": index_id,
-                    "total_vectors": result["total_vectors"],
-                },
-            )
-
-            return {
-                "added_count": result["added"],
-                "batch_size": len(records),
-                "index_id": result["index_id"],
-                "total_vectors": result["total_vectors"],
-            }
-
-        except ValueError as e:
-            logger.error(
-                "faiss_add_batch validation failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "batch_size": len(records),
-                    "error": str(e),
-                },
-            )
-            raise
-
-        except Exception as e:
-            logger.error(
-                "faiss_add_batch failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "batch_size": len(records),
-                    "error": str(e),
-                },
-            )
-            raise RuntimeError(f"Failed to batch add vectors to FAISS: {e}") from e
-
-    async def faiss_search(
-        self,
-        query_vector: list[float],
-        k: int = 10,
-        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
-        nprobe: int = 16,
-    ) -> dict[str, Any]:
-        """
-        Search FAISS index for k nearest neighbors (requires faiss.read cap).
-
-        Returns top-k most similar embeddings based on L2 distance.
-
-        Capability Required: "faiss.read"
-
-        Args:
-            query_vector: 768-dim query embedding
-            k: Number of nearest neighbors to return (default: 10)
-            index_id: FAISS index identifier
-            nprobe: Number of IVF cells to probe (default: 16)
-
-        Returns:
-            Dictionary with:
-            - embedding_ids: list[str] (k nearest neighbor IDs)
-            - distances: list[float] (L2 distances)
-            - k: int (number of results)
-
-        Raises:
-            PermissionError: If pipeline lacks "faiss.read" capability
-            ValueError: If query_vector invalid
-            NotImplementedError: FAISS integration not yet implemented
-
-        Example:
-            >>> query = [0.1] * 768  # 768-dim query vector
-            >>> result = await syscalls.faiss_search(
-            ...     query_vector=query,
-            ...     k=10,
-            ...     nprobe=16
-            ... )
-            >>> result["embedding_ids"]
-            ['emb_1', 'emb_2', ...]
-
-        Performance:
-            - Target: <50ms P95 for k=10, nprobe=16
-            - Higher nprobe = better recall but slower search
-
-        Related:
-            - P03 consolidation: Uses this for similarity search
-            - ADR-K003: FAISS search configuration
-        """
-        self._require_cap("faiss.read")
-
-        # Validation
-        if not query_vector:
-            raise ValueError("query_vector required for faiss_search")
-        if len(query_vector) != 768:
-            raise ValueError(f"Invalid query_vector dimension: {len(query_vector)} (expected 768)")
-        if k < 1:
-            raise ValueError(f"Invalid k: {k} (must be >= 1)")
-        if nprobe < 1 or nprobe > 256:
-            raise ValueError(f"Invalid nprobe: {nprobe} (expected 1-256)")
-
-        # Get FAISS manager instance
-        from k0.runtime.faiss_manager import FaissIndexManager
-
-        faiss_mgr = FaissIndexManager.get_instance()
-
-        # Search FAISS index
-        try:
-            results = await faiss_mgr.search(query_vector, k, index_id)
-
-            # Extract IDs and distances for return format
-            embedding_ids = [r["embedding_id"] for r in results]
-            distances = [r["distance"] for r in results]
-
-            logger.info(
-                "faiss_search completed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "k": k,
-                    "nprobe": nprobe,
-                    "results_found": len(results),
-                    "index_id": index_id,
-                },
-            )
-
-            return {
-                "embedding_ids": embedding_ids,
-                "distances": distances,
-                "k": len(results),
-            }
-
-        except ValueError as e:
-            logger.error(
-                "faiss_search validation failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "k": k,
-                    "error": str(e),
-                },
-            )
-            raise
-
-        except Exception as e:
-            logger.error(
-                "faiss_search failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "k": k,
-                    "error": str(e),
-                },
-            )
-            raise RuntimeError(f"Failed to search FAISS index: {e}") from e
-
-    async def faiss_remove_batch(
-        self,
-        embedding_ids: list[str],
-        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
-    ) -> dict[str, Any]:
-        """
-        Remove batch of vectors from FAISS index (requires faiss.write cap).
-
-        Used by P08 M27 (embedding.cleanup) to remove orphaned embeddings.
-
-        Capability Required: "faiss.write"
-
-        Args:
-            embedding_ids: List of embedding IDs to remove
-            index_id: FAISS index identifier
-
-        Returns:
-            Dictionary with:
-            - removed_count: int (number of vectors removed)
-            - batch_size: int (size of input batch)
-            - index_id: str
-            - total_vectors: int (remaining vectors in index)
-
-        Raises:
-            PermissionError: If pipeline lacks "faiss.write" capability
-            ValueError: If embedding_ids invalid
-            NotImplementedError: FAISS integration not yet implemented
-
-        Example:
-            >>> ids = ["emb_1", "emb_2", "emb_3"]
-            >>> result = await syscalls.faiss_remove_batch(
-            ...     embedding_ids=ids,
-            ...     index_id="ultrabert_v2.1.0_ivf256_pq64"
-            ... )
-            >>> result["removed_count"]
-            3
-
-        Performance:
-            - Target: 2000 embeddings/sec (0.5ms per embedding in batch)
-            - Batch operations preferred for bulk cleanup
-
-        Related:
-            - M27 (embedding.cleanup): Uses this for orphan removal
-            - ADR-K003: FAISS cleanup strategy
-        """
-        self._require_cap("faiss.write")
-
-        # Validation
-        if not embedding_ids:
-            raise ValueError("embedding_ids required for faiss_remove_batch (empty list)")
-
-        # Get FAISS manager instance
-        from k0.runtime.faiss_manager import FaissIndexManager
-
-        faiss_mgr = FaissIndexManager.get_instance()
-
-        # Remove from FAISS index
-        try:
-            result = await faiss_mgr.remove_batch(embedding_ids)
-
-            logger.info(
-                "faiss_remove_batch completed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "batch_size": len(embedding_ids),
-                    "removed_count": result["removed"],
-                    "index_id": index_id,
-                    "note": result.get("note"),
-                },
-            )
-
-            return {
-                "removed_count": result["removed"],
-                "batch_size": len(embedding_ids),
-                "index_id": index_id,
-                "total_vectors": result["total_vectors"],
-            }
-
-        except Exception as e:
-            logger.error(
-                "faiss_remove_batch failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "batch_size": len(embedding_ids),
-                    "error": str(e),
-                },
-            )
-            raise RuntimeError(f"Failed to remove vectors from FAISS: {e}") from e
-
     # =========================================================================
-    # GAP-001 Milestone 4: Union Index Syscalls
+    # M28 Integrity Check: vec_* diagnostic syscalls (Epic 4.19)
     # =========================================================================
 
-    async def union_index_search(
+    async def vec_count(
         self,
-        query_vector: list[float],
-        k: int = 20,
-        layer_filter: list[str] | None = None,
         tenant_id: str | None = None,
         space_id: str | None = None,
     ) -> dict[str, Any]:
         """
-        Search FAISS union index across all truth layers (requires faiss.read cap).
+        Count total st_vec rows (requires st_vec.read cap).
 
-        Returns top-k most similar records from all 6 truth layers:
-        st_epi, st_sem, st_procedural, st_social, st_prospective, st_kg_dom.
+        Used by M28 integrity check to report total vector count.
 
-        Capability Required: "faiss.read"
-
-        GAP Reference: GAP_001 Section 6 (Query Flow)
+        Capability Required: "st_vec.read"
 
         Args:
-            query_vector: 768-dim query embedding
-            k: Number of results to return (default: 20)
-            layer_filter: Optional list of layers to search (e.g., ["st_epi", "st_sem"])
-            tenant_id: Optional tenant filter
-            space_id: Optional space filter
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
 
         Returns:
-            Dictionary with:
-            - results: list[dict] with layer, record_id, score, tenant_id, space_id
-            - count: int (number of results)
-
-        Raises:
-            PermissionError: If pipeline lacks "faiss.read" capability
-            ValueError: If query_vector invalid
-
-        Example:
-            >>> query = [0.1] * 768  # 768-dim query vector
-            >>> result = await syscalls.union_index_search(
-            ...     query_vector=query,
-            ...     k=10,
-            ...     layer_filter=["st_epi", "st_sem"]
-            ... )
-            >>> for r in result["results"]:
-            ...     print(f"{r['layer']}:{r['record_id']} = {r['score']:.3f}")
-
-        Performance:
-            - Target: <20ms P95 for k=20
-            - Inner product on normalized vectors (cosine similarity)
+            Dictionary with count: int
         """
-        self._require_cap("faiss.read")
+        self._require_cap("st_vec.read")
 
-        # Validation
-        if not query_vector:
-            raise ValueError("query_vector required for union_index_search")
-        if len(query_vector) != 768:
-            raise ValueError(f"Invalid query_vector dimension: {len(query_vector)} (expected 768)")
-        if k < 1:
-            raise ValueError(f"Invalid k: {k} (must be >= 1)")
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
 
-        try:
-            from k0.modules.embedding.union_index_rebuild_job import search
+            sql = "SELECT COUNT(*) FROM st_vec"
+            params: list[Any] = []
+            conditions: list[str] = []
 
-            result = await search(
-                query_vector=query_vector,
-                k=k,
-                layer_filter=layer_filter,
-                tenant_id=tenant_id,
-                space_id=space_id,
-            )
+            if tenant_id:
+                conditions.append(f"tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"space_id = ${len(params) + 1}")
+                params.append(space_id)
 
-            logger.info(
-                "union_index_search completed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "k": k,
-                    "layer_filter": layer_filter,
-                    "results_count": result.get("count", 0),
-                },
-            )
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
 
-            return result
+            row = await conn.fetchrow(sql, *params)
+            return {"count": row[0] if row else 0}
 
-        except Exception as e:
-            logger.error(
-                "union_index_search failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "k": k,
-                    "error": str(e),
-                },
-            )
-            raise RuntimeError(f"Failed to search union index: {e}") from e
-
-    async def union_index_rebuild(
+    async def vec_count_dimension_mismatches(
         self,
-        force: bool = False,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+        expected_dim: int = 768,
     ) -> dict[str, Any]:
         """
-        Trigger union index rebuild (requires faiss.write cap).
+        Count st_vec rows where vector_dim != expected dimension (requires st_vec.read cap).
 
-        Rebuilds FAISS union index from all 6 truth layers. Normally runs
-        automatically every 6 hours, but can be triggered manually with force=True.
+        Used by M28 integrity check (dimension_validation).
 
-        Capability Required: "faiss.write"
-
-        GAP Reference: GAP_001 Section 7 (P08 Update)
+        Capability Required: "st_vec.read"
 
         Args:
-            force: Force rebuild regardless of index age (default: False)
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
+            expected_dim: Expected vector dimension (default: 768)
 
         Returns:
-            Dictionary with:
-            - action: "rebuilt", "skipped", or "failed"
-            - total_vectors: int (if rebuilt)
-            - layer_counts: dict (if rebuilt)
-            - reason: str (why action was taken)
-
-        Raises:
-            PermissionError: If pipeline lacks "faiss.write" capability
-            RuntimeError: If rebuild fails
-
-        Example:
-            >>> result = await syscalls.union_index_rebuild(force=True)
-            >>> if result["action"] == "rebuilt":
-            ...     print(f"Indexed {result['total_vectors']} vectors")
-
-        Performance:
-            - Build time: ~1-5 seconds for 10k vectors
-            - Should be run during low-traffic periods
+            Dictionary with count: int
         """
-        self._require_cap("faiss.write")
+        self._require_cap("st_vec.read")
 
-        try:
-            import os
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
 
-            from k0.modules.embedding.union_index_manager import UnionIndexManager
+            conditions = [f"vector_dim != ${1}"]
+            params: list[Any] = [expected_dim]
 
-            index_dir = os.environ.get("FAISS_UNION_INDEX_DIR", "/data/faiss_union")
-            manager = UnionIndexManager(index_dir)
+            if tenant_id:
+                conditions.append(f"tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"space_id = ${len(params) + 1}")
+                params.append(space_id)
 
-            # Check if rebuild needed
-            if not force and not manager.needs_rebuild:
-                logger.info(
-                    "union_index_rebuild skipped (fresh)",
-                    extra={
-                        "pipeline_id": self._pipeline_id,
-                        "age_hours": manager.index_age_hours,
-                    },
-                )
-                return {
-                    "action": "skipped",
-                    "reason": "index_fresh",
-                    "age_hours": manager.index_age_hours,
-                }
+            sql = "SELECT COUNT(*) FROM st_vec WHERE " + " AND ".join(conditions)
+            row = await conn.fetchrow(sql, *params)
+            return {"count": row[0] if row else 0}
 
-            # Get database connection
-            async with self._uow_factory() as uow:
-                conn = uow.session.connection()
-
-                searcher = await manager.build_and_save(conn)
-
-                logger.info(
-                    "union_index_rebuild completed",
-                    extra={
-                        "pipeline_id": self._pipeline_id,
-                        "total_vectors": searcher.total_vectors,
-                        "layer_counts": searcher.layer_counts,
-                    },
-                )
-
-                return {
-                    "action": "rebuilt",
-                    "total_vectors": searcher.total_vectors,
-                    "layer_counts": searcher.layer_counts,
-                }
-
-        except Exception as e:
-            logger.error(
-                "union_index_rebuild failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "error": str(e),
-                },
-            )
-            raise RuntimeError(f"Failed to rebuild union index: {e}") from e
-
-    async def union_index_stats(self) -> dict[str, Any]:
+    async def vec_distinct_models(
+        self,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+    ) -> dict[str, Any]:
         """
-        Get union index statistics (requires faiss.read cap).
+        Get distinct model_id values from st_vec (requires st_vec.read cap).
 
-        Returns statistics about the current union index including
-        total vectors, per-layer counts, build timestamp, and age.
+        Used by M28 integrity check (model_consistency).
 
-        Capability Required: "faiss.read"
+        Capability Required: "st_vec.read"
+
+        Args:
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
 
         Returns:
-            Dictionary with:
-            - total_vectors: int
-            - layer_counts: dict
-            - build_timestamp: int (Unix ms)
-            - age_hours: float
-            - model_version: str
-            - is_loaded: bool
-            - needs_rebuild: bool
-
-        Raises:
-            PermissionError: If pipeline lacks "faiss.read" capability
-
-        Example:
-            >>> stats = await syscalls.union_index_stats()
-            >>> print(f"Index has {stats['total_vectors']} vectors")
-            >>> print(f"Age: {stats['age_hours']:.1f} hours")
+            Dictionary with models: list[str]
         """
-        self._require_cap("faiss.read")
+        self._require_cap("st_vec.read")
 
-        try:
-            from k0.modules.embedding.union_index_rebuild_job import get_stats
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
 
-            result = get_stats()
+            sql = "SELECT DISTINCT model_id FROM st_vec"
+            params: list[Any] = []
+            conditions: list[str] = []
 
-            logger.debug(
-                "union_index_stats retrieved",
+            if tenant_id:
+                conditions.append(f"tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"space_id = ${len(params) + 1}")
+                params.append(space_id)
+
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
+
+            rows = await conn.fetch(sql, *params)
+            return {"models": [row[0] for row in rows]}
+
+    async def vec_orphan_count(
+        self,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Count orphaned st_vec rows without parent st_hipp_events (requires st_vec.read cap).
+
+        Used by M28 integrity check (orphan_detection) and M27 cleanup.
+
+        Capability Required: "st_vec.read"
+
+        Args:
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
+
+        Returns:
+            Dictionary with count: int
+        """
+        self._require_cap("st_vec.read")
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            conditions: list[str] = [
+                "NOT EXISTS (SELECT 1 FROM st_hipp_events h WHERE h.event_id = v.event_id)"
+            ]
+            params: list[Any] = []
+
+            if tenant_id:
+                conditions.append(f"v.tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"v.space_id = ${len(params) + 1}")
+                params.append(space_id)
+
+            sql = "SELECT COUNT(*) FROM st_vec v WHERE " + " AND ".join(conditions)
+            row = await conn.fetchrow(sql, *params)
+            return {"count": row[0] if row else 0}
+
+    async def vec_delete_orphans(
+        self,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """
+        Batch DELETE orphaned st_vec rows (requires st_vec.write cap).
+
+        Used by M27 cleanup module. Pure SQL DELETE with NOT EXISTS + LIMIT.
+
+        Capability Required: "st_vec.write"
+
+        Args:
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
+            limit: Max rows to delete per batch (default: 500)
+
+        Returns:
+            Dictionary with deleted_count: int
+        """
+        self._require_cap("st_vec.write")
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            conditions: list[str] = [
+                "NOT EXISTS (SELECT 1 FROM st_hipp_events h WHERE h.event_id = v.event_id)"
+            ]
+            params: list[Any] = []
+
+            if tenant_id:
+                conditions.append(f"v.tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"v.space_id = ${len(params) + 1}")
+                params.append(space_id)
+
+            # Use ctid subquery for batch-safe LIMIT DELETE
+            where_clause = " AND ".join(conditions)
+            sql = f"""
+                DELETE FROM st_vec v
+                WHERE v.ctid IN (
+                    SELECT v2.ctid FROM st_vec v2
+                    WHERE {where_clause.replace('v.', 'v2.')}
+                    LIMIT ${len(params) + 1}
+                )
+            """
+            params.append(limit)
+
+            result = await conn.execute(sql, *params)
+            # Parse "DELETE N" result string
+            deleted_count = 0
+            if result and result.startswith("DELETE"):
+                parts = result.split()
+                if len(parts) == 2:
+                    deleted_count = int(parts[1])
+
+            logger.info(
+                "vec_delete_orphans completed",
                 extra={
                     "pipeline_id": self._pipeline_id,
-                    "total_vectors": result.get("total_vectors"),
+                    "deleted_count": deleted_count,
+                    "limit": limit,
+                    "tenant_id": tenant_id,
                 },
             )
 
-            return result
+            return {"deleted_count": deleted_count}
 
-        except Exception as e:
-            logger.error(
-                "union_index_stats failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "error": str(e),
-                },
-            )
-            return {"error": str(e)}
+
+    # ===========================================================================
+    # DEPRECATED (M4 ADR-K003 -- FAISS eliminated, pgvector native)
+    # ===========================================================================
+    # The following FAISS syscalls were removed (M4 cleanup):
+    #   - faiss_add, faiss_add_batch, faiss_search, faiss_remove_batch
+    #   - union_index_search, union_index_rebuild, union_index_stats
+    # All vector similarity search now uses pgvector HNSW natively via
+    # vec_query syscall and PostgreSQL pgvector extension.
+    # ===========================================================================
 
     # =========================================================================
     # GAP-001 Milestone 5: Context Expander Syscalls
@@ -2454,7 +2034,7 @@ class Syscalls:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """
-        Expand context for a query via entity graph traversal (requires faiss.read + context.expand caps).
+        Expand context for a query via entity graph traversal (requires st_vec.read + context.expand caps).
 
         Orchestrates the full context expansion flow:
         1. Vector search across union index (direct matches)
@@ -2465,7 +2045,7 @@ class Syscalls:
         This syscall provides rich LLM context by combining semantic search
         with knowledge graph traversal.
 
-        Capability Required: "faiss.read" AND "context.expand"
+        Capability Required: "st_vec.read" AND "context.expand"
 
         GAP Reference: GAP_001 Section 6 (Rich LLM Context)
         Milestone Reference: GAP_001_MILESTONE_5_CONTEXT_EXPANDER
@@ -2518,7 +2098,7 @@ class Syscalls:
             - Graph expansion: <30ms
             - Context fetch: <50ms
         """
-        self._require_cap("faiss.read")
+        self._require_cap("st_vec.read")
         self._require_cap("context.expand")
 
         # Validation
@@ -2878,6 +2458,119 @@ class Syscalls:
                     },
                 )
                 raise
+
+    # =========================================================================
+    # M28 Integrity Check: hipp_events_* diagnostic syscalls (Epic 4.19)
+    # =========================================================================
+
+    async def hipp_events_missing_vectors(
+        self,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Count st_hipp_events rows with embedding_status=READY but no st_vec row.
+
+        Used by M28 integrity check (missing_vectors).
+
+        Capability Required: "st_hipp_events.read"
+
+        Args:
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
+
+        Returns:
+            Dictionary with count: int
+        """
+        self._require_cap("st_hipp_events.read")
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            conditions: list[str] = [
+                "h.embedding_status = 'READY'",
+                "NOT EXISTS (SELECT 1 FROM st_vec v WHERE v.event_id = h.event_id)",
+            ]
+            params: list[Any] = []
+
+            if tenant_id:
+                conditions.append(f"h.tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"h.space_id = ${len(params) + 1}")
+                params.append(space_id)
+
+            sql = "SELECT COUNT(*) FROM st_hipp_events h WHERE " + " AND ".join(conditions)
+            row = await conn.fetchrow(sql, *params)
+            return {"count": row[0] if row else 0}
+
+    async def hipp_events_reset_missing_embedding_status(
+        self,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Reset embedding_status to PENDING for events claiming READY but missing st_vec row.
+
+        Used by M28 integrity check auto-correction. Sets PENDING so M25 backfill
+        picks them up on next P08 cycle.
+
+        Capability Required: "st_hipp_events.write"
+
+        Args:
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
+
+        Returns:
+            Dictionary with updated_count: int
+        """
+        self._require_cap("st_hipp_events.write")
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            conditions: list[str] = [
+                "h.embedding_status = 'READY'",
+                "NOT EXISTS (SELECT 1 FROM st_vec v WHERE v.event_id = h.event_id)",
+            ]
+            params: list[Any] = []
+
+            if tenant_id:
+                conditions.append(f"h.tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"h.space_id = ${len(params) + 1}")
+                params.append(space_id)
+
+            where_clause = " AND ".join(conditions)
+            sql = f"""
+                UPDATE st_hipp_events h
+                SET embedding_status = 'PENDING',
+                    updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+                WHERE {where_clause}
+            """
+
+            result = await conn.execute(sql, *params)
+            updated_count = 0
+            if result and result.startswith("UPDATE"):
+                parts = result.split()
+                if len(parts) == 2:
+                    updated_count = int(parts[1])
+
+            logger.info(
+                "hipp_events_reset_missing_embedding_status completed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "updated_count": updated_count,
+                    "tenant_id": tenant_id,
+                },
+            )
+
+            return {"updated_count": updated_count}
 
     # =========================================================================
     # Issue 3.1.0: Generic Query Count (for PipelineScheduler threshold triggers)

@@ -1,0 +1,218 @@
+# =============================================================================
+# M27 Embedding Cleanup Module Contract v2.0.0
+# =============================================================================
+#
+# Removes orphaned st_vec rows where event_id has no matching st_hipp_events row.
+# Pure database-level cleanup -- no FAISS index manipulation.
+#
+# History:
+#   v1.0.0: Orphan detection + FAISS index entry removal + faiss_id column updates
+#   v2.0.0: Pure SQL DELETE orphan cleanup, all FAISS references removed
+#
+# Changes from v1:
+#   - Removed: FAISS index entry removal (faiss.remove_batch syscall)
+#   - Removed: faiss_id column references
+#   - Removed: FAISS_REMOVE_FAILED failure mode
+#   - Removed: faiss.remove_batch from syscall dependencies
+#   - Removed: faiss_removed from output schema
+#   - Removed: remove_from_faiss config option
+#   - Simplified: cleanup is pure SQL DELETE with NOT EXISTS subquery
+#
+# Supersedes: k0/contracts/modules/embedding.cleanup.v1.yaml
+#
+# Pipeline: P08 stage_20_cleanup
+# ADR: ADR-K003 v2.0
+# Schema: st_vec_v2.columns.yaml
+# Milestone: M4 Epic 4.4
+# =============================================================================
+
+module_id: embedding.cleanup
+name: "embedding.cleanup"
+version: v2
+
+# =============================================================================
+# Event Types
+# =============================================================================
+input_event_types:
+  - cognitive.embedding.cleanup.requested.v1
+
+output_event_types:
+  - cognitive.embedding.cleaned.v1
+
+# =============================================================================
+# Module Characteristics
+# =============================================================================
+latency_budget_ms: 50
+idempotent: true
+
+side_effects:
+  - write:st_vec
+  - read:st_vec
+  - read:st_hipp_events
+
+# =============================================================================
+# Description
+# =============================================================================
+description: |
+  M27: Embedding Cleanup Module (pgvector-only)
+
+  Removes orphaned or expired embeddings from st_vec to reclaim storage
+  and maintain data consistency. Pure database operation -- no FAISS.
+
+  P08 v3 Role: stage_20_cleanup
+  - Triggered by: P08 scheduler after backfill (stage_10) completes
+  - Detects orphaned embeddings: st_vec.event_id NOT IN st_hipp_events
+  - Detects expired embeddings: events past retention window
+  - Batch DELETE from st_vec
+  - Emits cognitive.embedding.cleaned.v1 with cleanup stats
+
+  v2 changes from v1:
+  - No FAISS: removed faiss.remove_batch, faiss_id references, FAISS_REMOVE_FAILED
+  - Pure SQL: single DELETE with NOT EXISTS subquery
+  - Batch safety: LIMIT clause prevents unbounded DELETE
+
+  Orphan Detection Query:
+    DELETE FROM st_vec v
+    WHERE NOT EXISTS (
+      SELECT 1 FROM st_hipp_events h WHERE h.event_id = v.event_id
+    )
+
+  Cleanup Types:
+  - orphans: st_vec rows without parent st_hipp_events (FK violation survivors)
+  - expired: st_vec rows for events past retention window
+  - failed: st_vec rows with status=FAILED (permanent failures)
+
+  Performance:
+  - Per batch (500 deletes): ~50ms
+  - Throughput: ~2000 embeddings/sec
+
+# =============================================================================
+# Failure Modes
+# =============================================================================
+failure_modes:
+  - code: VECTOR_DELETE_FAILED
+    description: "DELETE query failed (connection error, lock contention)"
+    policy: retry
+    max_retries: 3
+
+  - code: ORPHAN_DETECTION_FAILED
+    description: "NOT EXISTS subquery failed (query timeout, connection error)"
+    policy: skip
+    max_retries: 0
+
+# =============================================================================
+# Configuration Schema
+# =============================================================================
+config_schema:
+  type: object
+  properties:
+    batch_size:
+      type: integer
+      default: 500
+      description: "Maximum number of orphaned rows to delete per batch"
+    max_age_days:
+      type: integer
+      default: 90
+      description: "Delete embeddings for events older than N days (expired cleanup)"
+    cleanup_types:
+      type: array
+      items:
+        type: string
+        enum: ["orphans", "expired", "failed"]
+      default: ["orphans", "expired"]
+      description: "Types of cleanup to perform"
+    dry_run:
+      type: boolean
+      default: false
+      description: "Preview cleanup counts without executing deletes"
+    audit_log_deletes:
+      type: boolean
+      default: true
+      description: "Log deleted embedding_ids for audit trail"
+
+# =============================================================================
+# Input Schema
+# =============================================================================
+input_schema:
+  type: object
+  properties:
+    cleanup_type:
+      type: string
+      enum: ["orphans", "expired", "failed", "all"]
+      default: "orphans"
+      description: "Type of cleanup to perform"
+    max_age_days:
+      type: integer
+      description: "Override default max_age_days from config"
+    batch_size:
+      type: integer
+      description: "Override default batch_size from config"
+    dry_run:
+      type: boolean
+      default: false
+      description: "Preview cleanup without deletes"
+    tenant_id:
+      type: string
+      description: "Scope cleanup to specific tenant (optional)"
+    space_id:
+      type: string
+      description: "Scope cleanup to specific space (optional)"
+
+# =============================================================================
+# Output Schema
+# =============================================================================
+output_schema:
+  type: object
+  required:
+    - cleaned
+    - embeddings_deleted
+  properties:
+    cleaned:
+      type: boolean
+      description: "True if cleanup completed successfully"
+    embeddings_deleted:
+      type: integer
+      description: "Count of st_vec rows deleted"
+    storage_reclaimed_bytes:
+      type: integer
+      description: "Approximate storage reclaimed (~3KB per embedding: 768 floats x 4 bytes + metadata)"
+    cleaned_at:
+      type: string
+      format: date-time
+      description: "TIMESTAMPTZ when cleanup completed"
+    dry_run:
+      type: boolean
+      description: "True if this was a dry run (no actual deletes)"
+    breakdown:
+      type: object
+      properties:
+        orphans_deleted:
+          type: integer
+          description: "st_vec rows without parent st_hipp_events"
+        expired_deleted:
+          type: integer
+          description: "st_vec rows past retention window"
+        failed_deleted:
+          type: integer
+          description: "st_vec rows with status=FAILED"
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+dependencies:
+  syscalls:
+    - name: st_vec.read
+      description: "Count orphaned/expired/failed rows before deletion"
+    - name: st_vec.delete
+      description: "DELETE orphaned st_vec rows"
+    - name: st_hipp_events.read
+      description: "NOT EXISTS subquery to detect orphans"
+
+# =============================================================================
+# Performance
+# =============================================================================
+performance:
+  p50_latency_ms: 20
+  p95_latency_ms: 50
+  p99_latency_ms: 100
+  batch_throughput_embeddings_per_sec: 2000

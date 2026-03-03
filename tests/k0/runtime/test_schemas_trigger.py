@@ -34,11 +34,11 @@ class TestTriggerSpecInterval:
     def test_trigger_spec_interval_valid(self):
         """Valid interval trigger with all required fields."""
         trigger = TriggerSpec(
-            id="faiss_indexer_interval",
+            id="embedding_indexer_interval",
             type=TriggerType.INTERVAL,
             interval_seconds=300,
         )
-        assert trigger.id == "faiss_indexer_interval"
+        assert trigger.id == "embedding_indexer_interval"
         assert trigger.type == TriggerType.INTERVAL
         assert trigger.interval_seconds == 300
         assert trigger.catch_up_enabled is True  # default
@@ -88,7 +88,7 @@ class TestTriggerSpecThreshold:
     def test_trigger_spec_threshold_valid(self):
         """Valid threshold trigger with all required fields."""
         trigger = TriggerSpec(
-            id="faiss_indexer_threshold",
+            id="embedding_indexer_threshold",
             type=TriggerType.THRESHOLD,
             table="st_vec",
             condition="status = 'READY'",

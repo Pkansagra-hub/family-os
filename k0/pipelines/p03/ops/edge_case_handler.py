@@ -30,7 +30,7 @@ class EdgeCaseType(Enum):
     PARTIAL_WRITE_FAILURE = "PARTIAL_WRITE_FAILURE"
     BACKLOG_OVERFLOW = "BACKLOG_OVERFLOW"
     P08_CIRCUIT_OPEN = "P08_CIRCUIT_OPEN"
-    FAISS_UNAVAILABLE = "FAISS_UNAVAILABLE"
+    VECTOR_INDEX_UNAVAILABLE = "VECTOR_INDEX_UNAVAILABLE"
     DUPLICATE_TRIGGER = "DUPLICATE_TRIGGER"
     MEMORY_PRESSURE = "MEMORY_PRESSURE"
     KG_EXPLOSION = "KG_EXPLOSION"
@@ -57,7 +57,7 @@ class EdgeCaseResult:
             EdgeCaseType.BACKLOG_OVERFLOW,
             EdgeCaseType.IDLE_CYCLE,
             EdgeCaseType.P08_CIRCUIT_OPEN,
-            EdgeCaseType.FAISS_UNAVAILABLE,
+            EdgeCaseType.VECTOR_INDEX_UNAVAILABLE,
         }
         if self.edge_case_type in critical_types:
             return "critical"
@@ -81,7 +81,7 @@ class P03EdgeCaseHandler:
     | Partial R7 failure | Rollback exception | COMMIT_PARTIAL | DLQ requeue | p03_partial_write_failures_total |
     | Backlog > 10K | Batch overflow | Adaptive batching | Alert ops | p03_backlog_overflow_total |
     | P08 circuit > 5min | Circuit duration | Queue locally | Auto on half-open | p03_p08_circuit_open_seconds |
-    | FAISS unavailable | Load failure | Brute-force fallback | Index rebuild | p03_faiss_fallback_total |
+    | FAISS unavailable | Load failure | Brute-force fallback | Index rebuild | p03_vector_index_fallback_total |
     | Duplicate trigger | batch_hash match | Idempotent skip | None | p03_duplicate_triggers_total |
     | Memory pressure | Heap > 80% | Skip R5 | Automatic | p03_r5_memory_skipped_total |
     | KG explosion (>1M) | Node threshold | Partition KG | Enable sharding | p03_kg_partition_events_total |

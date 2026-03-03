@@ -28,19 +28,23 @@
 %%   - /k0/sse.subscribe   - GET  - Real-time event stream (K0 -> K1 STREAMING)
 %%   - /k0/obs.emit        - POST - Telemetry + Feedback (ONE-WAY)
 %% COMMAND TOPICS (What K1 writes to K0):
-%%   memory.delta        → P02 (Episodic memory from conversations)
-%%   session.checkpoint  → P02 (SessionState snapshots)
-%%   beliefs.archive     → P02 (Evicted beliefs from SessionState)
-%%   history.archive     → P02 (Evicted turn history from SessionState)
-%%   plan.committed      → P02 (Planner Stage 4 committed plans)
-%%   device.event.*      → P02 (IFL inbound: ifl.{category}.{adapter}.{event})
-%%   learning.feedback   → P06 (K1 feedback signals)
-%%   sync.delta          → P07 (CRDT device sync)
+%%   Canonical registry: k0/contracts/taxonomies/command_topics.yaml
+%%   memory.write        → st_epi   → P02 (Episodic memory from conversations)
+%%   session.snapshot    → st_session → Archive (SessionState COLD tier)
+%%   beliefs.archive     → st_beliefs → Archive (Evicted beliefs from Planner)
+%%   history.archive     → st_history → Archive (Evicted turn history from Concierge)
+%%   plan.committed      → st_epi   → P02 (Planner Stage 4 committed plans)
+%%   ifl.*               → st_epi   → P02 (IFL inbound: ifl.{category}.{adapter}.{event})
+%%   sync.delta          → st_sync  → P07 (CRDT device sync)
+%%   NOTE: Feedback flows through obs port (kind=feedback), NOT command topics
 %% QUERY SELECTORS (RecallSelector types):
-%%   type: episodic  - topic: memory.delta   - WAL position recall
-%%   type: semantic  - query: free-text      - pgvector similarity
-%%   type: session   - topic: session.*      - SessionState history
+%%   Canonical catalog: k0/contracts/taxonomies/query_selectors.yaml
+%%   type: episodic  - topic: memory.write  - WAL position recall
+%%   type: semantic  - query: free-text     - pgvector similarity
+%%   type: session   - topic: session.*     - SessionState history
 %%   type: device    - topic: ifl.*         - IFL adapter event history
+%%   type: belief    - topic: beliefs.*     - Archived belief lookup
+%%   type: graph     - topic: any           - KG edge traversal
 %% SSE EVENTS (K0 → K1):
 %%   SSETraceEvent: cursor, topic, wal_pos, commit_ts, policy_stamp
 %%   memory.formed.v1         - Memory consolidation complete
@@ -57,7 +61,7 @@
 %%   SYSTEM 1: GAP RESOLUTION (Active Learning Loop)
 %%     Purpose: Add NEW FACTS to memory by asking users
 %%     Flow: P03 gap → st_learning_queue → P06 → P05 Attention → curiosity.intent.v1 (SSE)
-%%           → K1 Curiosity Agent → User answers → Command Port (memory.delta + gap_id)
+%%           → K1 Curiosity Agent → User answers → Command Port (memory.write + gap_id)
 %%           → P02 → st_hipp_events → P03 resolves gap
 %%     Port: Command Port (user answer IS new content)
 %%   SYSTEM 2: MODEL REFINEMENT (Algorithm Tuning)
@@ -105,9 +109,9 @@ graph LR
 
         subgraph K1_SESSIONSTATE["SessionState (L5)"]
             SS_LOCAL_COLD["LOCAL COLD Tier<br/>K1 SQLite archive<br/>OFFLINE SAFE"]:::k1_local
-            SS_CLOUD_SYNC["Cloud Sync<br/>Backup to K0 (optional)<br/>topic: session.checkpoint"]:::k1_caller
+            SS_CLOUD_SYNC["Cloud Sync<br/>Backup to K0 (optional)<br/>topic: session.snapshot"]:::k1_caller
             SS_RESTORE["Session Restore<br/>Local first, then K0<br/>query: type=session"]:::k1_caller
-            SS_CHECKPOINT["Checkpointing<br/>Periodic snapshots<br/>topic: session.checkpoint"]:::k1_caller
+            SS_CHECKPOINT["Checkpointing<br/>Periodic snapshots<br/>topic: session.snapshot"]:::k1_caller
             SS_BELIEFS_EVICT["Beliefs Eviction<br/>topic: beliefs.archive"]:::k1_caller
             SS_HISTORY_EVICT["History Eviction<br/>topic: history.archive"]:::k1_caller
         end
@@ -123,9 +127,9 @@ graph LR
         end
 
         subgraph K1_MEMORY_WRITERS["Memory Writers (L4)"]
-            MW_EPISODIC["Memory Writer Agent<br/>topic: memory.delta<br/>LLM conversation → memory"]:::k1_caller
+            MW_EPISODIC["Memory Writer Agent<br/>topic: memory.write<br/>LLM conversation → memory"]:::k1_caller
             MW_PLAN["Plan Committer<br/>topic: plan.committed<br/>Planner Stage 4 output"]:::k1_caller
-            MW_GAP_ANSWER["Gap Answer Writer<br/>topic: memory.delta<br/>body.correlation.gap_id"]:::k1_caller
+            MW_GAP_ANSWER["Gap Answer Writer<br/>topic: memory.write<br/>body.correlation.gap_id"]:::k1_caller
         end
 
         subgraph K1_TOOLS["IFL-Connected Tools (Auto-Registered from Manifests)"]
@@ -183,7 +187,7 @@ graph LR
             end
 
             subgraph TRANSPORT_QUERY_TYPES["Query Selector Types"]
-                QRY_EPISODIC["type: episodic<br/>topic: memory.delta<br/>WAL recall by position"]:::bridge_envelope
+                QRY_EPISODIC["type: episodic<br/>topic: memory.write<br/>WAL recall by position"]:::bridge_envelope
                 QRY_SEMANTIC["type: semantic<br/>query: free-text<br/>pgvector similarity"]:::bridge_envelope
                 QRY_SESSION["type: session<br/>topic: session.*<br/>SessionState history"]:::bridge_envelope
                 QRY_DEVICE["type: device<br/>topic: ifl.*<br/>IFL adapter event history"]:::bridge_envelope
@@ -195,15 +199,14 @@ graph LR
                 CMD_BUILDER["CommandBuilder<br/>FlatBuffer/JSON"]:::bridge_internal
             end
 
-            subgraph TRANSPORT_COMMAND_TOPICS["Command Topics (What K1 Writes)"]
-                CMD_MEMORY["memory.delta<br/>schema://memory.delta<br/>Episodic memories"]:::bridge_envelope
-                CMD_SESSION["session.checkpoint<br/>schema://session.checkpoint<br/>SessionState snapshots"]:::bridge_envelope
-                CMD_BELIEFS["beliefs.archive<br/>schema://beliefs.archive<br/>Archived facts"]:::bridge_envelope
-                CMD_HISTORY["history.archive<br/>schema://history.archive<br/>Turn history"]:::bridge_envelope
-                CMD_PLAN["plan.committed<br/>schema://plan.committed<br/>Planner Stage 4"]:::bridge_envelope
-                CMD_DEVICE["ifl.*<br/>schema://ifl.{category}.{adapter}.{event}<br/>IFL inbound: all external services"]:::bridge_envelope
-                CMD_LEARNING["learning.feedback<br/>schema://learning.feedback<br/>K1 feedback to K0 P06"]:::bridge_envelope
-                CMD_SYNC["sync.delta<br/>schema://sync.delta<br/>CRDT sync to K0 P07"]:::bridge_envelope
+            subgraph TRANSPORT_COMMAND_TOPICS["Command Topics (k0/contracts/taxonomies/command_topics.yaml)"]
+                CMD_MEMORY["memory.write<br/>→ st_epi → P02<br/>Episodic memories"]:::bridge_envelope
+                CMD_SESSION["session.snapshot<br/>→ st_session → Archive<br/>SessionState snapshots"]:::bridge_envelope
+                CMD_BELIEFS["beliefs.archive<br/>→ st_beliefs → Archive<br/>Archived beliefs"]:::bridge_envelope
+                CMD_HISTORY["history.archive<br/>→ st_history → Archive<br/>Turn history"]:::bridge_envelope
+                CMD_PLAN["plan.committed<br/>→ st_epi → P02<br/>Planner Stage 4"]:::bridge_envelope
+                CMD_DEVICE["ifl.*<br/>→ st_epi → P02<br/>IFL device events"]:::bridge_envelope
+                CMD_SYNC["sync.delta<br/>→ st_sync → P07<br/>CRDT device sync"]:::bridge_envelope
             end
 
             subgraph TRANSPORT_SSE["SSE Path (K0 → K1) ONE-WAY STREAMING"]
@@ -570,9 +573,9 @@ graph LR
     SS_HISTORY_EVICT -->|"history.archive"| CMD_PORT
 
     %% Memory Writers → Bridge (Memory formation)
-    MW_EPISODIC -->|"memory.delta"| CMD_PORT
+    MW_EPISODIC -->|"memory.write"| CMD_PORT
     MW_PLAN -->|"plan.committed"| CMD_PORT
-    MW_GAP_ANSWER -->|"memory.delta + gap_id"| CMD_PORT
+    MW_GAP_ANSWER -->|"memory.write + gap_id"| CMD_PORT
 
     %% Concierge → Bridge (Memory operations)
     CON_RECALL -->|"recall(query)"| QUERY_PORT
@@ -631,7 +634,6 @@ graph LR
     CMD_ENVELOPE -->|"topic routing"| CMD_BELIEFS
     CMD_ENVELOPE -->|"topic routing"| CMD_HISTORY
     CMD_ENVELOPE -->|"topic routing"| CMD_DEVICE
-    CMD_ENVELOPE -->|"topic routing"| CMD_LEARNING
     CMD_ENVELOPE -->|"topic routing"| CMD_SYNC
 
     %% Query types routing
@@ -748,7 +750,7 @@ graph LR
 
     %% Gap Answer Return Flow (System 1 completion)
     %% User answers gap question → Curiosity Agent → Memory Writer → Command Port → P02 resolves gap
-    CMD_PORT -->|"memory.delta + gap_id correlation"| HTTP_ADAPTER
+    CMD_PORT -->|"memory.write + gap_id correlation"| HTTP_ADAPTER
     HTTP_ADAPTER -->|"POST /command"| K0_PORT_CMD
     K0_P02 -->|"gap_id resolved"| K0_P03
 

@@ -1,0 +1,236 @@
+# =============================================================================
+# st_vec v2.0.0 -- pgvector-Native Vector Embeddings Schema Contract
+# =============================================================================
+#
+# Single source of truth for every column in st_vec after pgvector migration.
+# Migration 0071 implements this schema (drop + recreate from v1).
+#
+# History:
+#   v1.0.0 (0025): 13 columns -- LargeBinary vector, FAISS columns, Unix epoch timestamps
+#   v2.0.0 (0071): 11 columns -- pgvector VECTOR(768) native, FAISS removed, TIMESTAMPTZ
+#
+# Changes from v1:
+#   REMOVED: faiss_id (INTEGER)       -- FAISS deprecated, pgvector HNSW replaces it
+#   REMOVED: indexed_at (BIGINTEGER)  -- HNSW auto-indexes on INSERT, no manual tracking
+#   CHANGED: vector (LargeBinary -> VECTOR(768)) -- pgvector native for HNSW indexing
+#   CHANGED: status CHECK drops 'INDEXED' -- only READY/FAILED (HNSW auto-indexes)
+#   CHANGED: created_at (BigInteger -> TIMESTAMPTZ) -- PostgreSQL idiom
+#   CHANGED: updated_at (BigInteger -> TIMESTAMPTZ) -- PostgreSQL idiom
+#   KEPT: embedding_id (Text) -- stores UUID strings, matches existing TEXT patterns
+#   KEPT: event_id (Text) -- must match st_hipp_events.event_id TEXT type for FK
+#
+# Column count: 11
+# Indexes: 6 (5 B-tree + 1 HNSW)
+# Engine: pgvector
+#
+# ADR References:
+#   ADR-K003 v1.2: Inline Embedding via UltraBERT Single-Pass Cache
+#   ADR-K003 v2.0: pgvector Migration Decision (Epic 4.8)
+#
+# Milestone: M4 Epic 4.1
+# =============================================================================
+
+schema: st_vec
+version: "2.0.0"
+migration: "0071"
+column_count: 11
+engine: pgvector
+
+columns:
+
+  # ---------------------------------------------------------------------------
+  # Identity
+  # ---------------------------------------------------------------------------
+  embedding_id:
+    type: TEXT
+    nullable: false
+    primary_key: true
+    description: "Unique identifier for this embedding vector (UUID string in TEXT column)"
+
+  # ---------------------------------------------------------------------------
+  # Linkage to Event
+  # ---------------------------------------------------------------------------
+  event_id:
+    type: TEXT
+    nullable: false
+    foreign_key:
+      table: st_hipp_events
+      column: event_id
+      on_delete: CASCADE
+    description: "FK to st_hipp_events.event_id (TEXT) -- CASCADE ensures cleanup on event deletion"
+
+  # ---------------------------------------------------------------------------
+  # Tenant/Space Context
+  # ---------------------------------------------------------------------------
+  tenant_id:
+    type: "VARCHAR(64)"
+    nullable: false
+    description: "Tenant identifier for multi-tenant isolation"
+
+  space_id:
+    type: "VARCHAR(64)"
+    nullable: false
+    description: "Space identifier within tenant"
+
+  # ---------------------------------------------------------------------------
+  # Vector Data -- pgvector native
+  # ---------------------------------------------------------------------------
+  vector:
+    type: "VECTOR(768)"
+    nullable: false
+    description: >
+      768-dimensional embedding vector from UltraBERT v2.1.0.
+      pgvector native type enables HNSW indexing and cosine similarity search.
+      Replaces v1 LargeBinary (struct.pack'd 3072-byte blob).
+      Consumers pass list[float] via vec_write syscall; driver handles VECTOR cast.
+
+  vector_dim:
+    type: INTEGER
+    nullable: false
+    default: 768
+    description: "Embedding dimension. Always 768 for UltraBERT v2.1.0"
+
+  # ---------------------------------------------------------------------------
+  # Model Metadata
+  # ---------------------------------------------------------------------------
+  model_id:
+    type: "VARCHAR(64)"
+    nullable: false
+    default: "ultrabert_v2.1.0"
+    description: >
+      Model version that produced this embedding.
+      Used by M26 (recompute) to detect stale embeddings after model upgrade.
+      Legacy values: 'embed-mini-001' (MiniLM 384-dim) -- these should not exist
+      after migration since v1 table is dropped and recreated.
+
+  # ---------------------------------------------------------------------------
+  # Status Tracking
+  # ---------------------------------------------------------------------------
+  status:
+    type: "VARCHAR(16)"
+    nullable: false
+    default: "READY"
+    check: "status IN ('READY', 'FAILED')"
+    description: >
+      Embedding lifecycle status.
+      READY: Vector is valid and queryable (HNSW auto-indexes on INSERT).
+      FAILED: Embedding generation failed permanently (M25 backfill retries exhausted).
+      Removed from v1: 'INDEXED' -- pgvector HNSW auto-indexes, no manual tracking needed.
+
+  # ---------------------------------------------------------------------------
+  # Tracing
+  # ---------------------------------------------------------------------------
+  cognitive_trace_id:
+    type: "VARCHAR(128)"
+    nullable: true
+    description: "End-to-end trace ID from K1 turn through P02 to storage"
+
+  # ---------------------------------------------------------------------------
+  # Timestamps -- TIMESTAMPTZ (PostgreSQL idiom, replaces v1 BigInteger Unix epoch)
+  # ---------------------------------------------------------------------------
+  created_at:
+    type: TIMESTAMPTZ
+    nullable: false
+    default: "NOW()"
+    description: "When this embedding was created"
+
+  updated_at:
+    type: TIMESTAMPTZ
+    nullable: true
+    description: "When this embedding was last updated (M26 recompute sets this)"
+
+# =============================================================================
+# Indexes
+# =============================================================================
+indexes:
+
+  ix_st_vec_event:
+    columns: [event_id]
+    type: btree
+    description: "Lookup by event_id for M27 orphan detection and M16 upsert checks"
+
+  ix_st_vec_tenant:
+    columns: [tenant_id, space_id]
+    type: btree
+    description: "Tenant+space scoped queries for batch operations"
+
+  ix_st_vec_model:
+    columns: [model_id]
+    type: btree
+    description: "M26 recompute: find embeddings by model version for bulk upgrade"
+
+  ix_st_vec_status:
+    columns: [status]
+    type: btree
+    description: "M25 backfill: find FAILED embeddings. M28 integrity: count by status"
+
+  ix_st_vec_created:
+    columns: [created_at]
+    type: btree
+    description: "Time-range queries for maintenance and cleanup"
+
+  ix_st_vec_hnsw:
+    column: vector
+    type: hnsw
+    ops: vector_cosine_ops
+    params:
+      m: 16
+      ef_construction: 64
+    description: >
+      pgvector HNSW index for cosine similarity search.
+      Auto-maintained on INSERT/UPDATE -- no manual indexing step needed.
+      Replaces FAISS IVF256,PQ64 index entirely.
+      Search parameters: ef_search defaults to 40 (configurable at query time).
+      Expected recall at ef_search=40: ~0.95 for top-10 neighbors.
+
+# =============================================================================
+# Removed from v1 (documented for traceability)
+# =============================================================================
+removed_columns:
+  faiss_id:
+    was_type: INTEGER
+    was_nullable: true
+    reason: "FAISS deprecated. pgvector HNSW replaces FAISS for similarity search."
+  indexed_at:
+    was_type: BIGINTEGER
+    was_nullable: true
+    reason: "HNSW auto-indexes on INSERT. No manual index tracking needed."
+
+removed_indexes:
+  idx_vec_faiss_id:
+    was_columns: [faiss_id]
+    reason: "faiss_id column removed"
+  idx_vec_status_created:
+    replaced_by: "ix_st_vec_status + ix_st_vec_created (separate indexes, more flexible)"
+
+# =============================================================================
+# Constraints
+# =============================================================================
+constraints:
+  pk_st_vec:
+    type: primary_key
+    column: embedding_id
+  fk_st_vec_event:
+    type: foreign_key
+    column: event_id
+    references: st_hipp_events.event_id
+    on_delete: CASCADE
+  ck_st_vec_status:
+    type: check
+    expression: "status IN ('READY', 'FAILED')"
+
+# =============================================================================
+# Consumers
+# =============================================================================
+consumers:
+  writers:
+    - "M16 (hipp_events_writer): 3-table atomic write -- st_hipp_events + st_vec + st_pipeline_processed"
+    - "M25 (embedding.backfill): Backfill PENDING embeddings via vec_write syscall"
+    - "M26 (embedding.recompute): Update vector + model_id on model upgrade"
+  readers:
+    - "M27 (embedding.cleanup): Orphan detection -- st_vec.event_id NOT IN st_hipp_events"
+    - "M28 (embedding.integrity_check): Dimension validation, model consistency, health report"
+    - "P03 R5 (future): Vector similarity search via HNSW index for consolidation"
+  deleters:
+    - "M27 (embedding.cleanup): DELETE orphaned rows"
+    - "CASCADE from st_hipp_events: DELETE propagates via FK"

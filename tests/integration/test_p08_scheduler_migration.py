@@ -6,7 +6,7 @@ with declarative triggers instead of hardcoded scheduler.
 
 Migration (M5):
 - Removed: _p08_faiss_indexer_loop() in k0/kernel/app.py
-- Added: Declarative triggers in p08_embedding_management.v2.yaml
+- Added: Declarative triggers in p08_embedding_management.v3.yaml
 - P08 now activates via PipelineScheduler
 
 Tests verify:
@@ -58,24 +58,24 @@ def p08_spec_with_triggers() -> PipelineSpec:
     from k0.runtime.schemas import StageSpec
 
     return PipelineSpec(
-        pipeline_id="P08_EMBEDDING_MANAGEMENT",
+        pipeline_id="P08_EMBEDDING",
         version="v3",
-        description="Background embedding lifecycle management - MAINTENANCE MODE.",
+        description="Background embedding lifecycle management.",
         entry_topic="scheduled.p08.maintenance.v1",
         exit_topic="embedding.maintenance.completed.v1",
         triggers=[
             TriggerSpec(
-                id="maintenance_interval",
+                id="backfill_interval",
                 type=TriggerType.INTERVAL,
                 interval_seconds=300,
                 batch_size=100,
                 catch_up_enabled=True,
             ),
             TriggerSpec(
-                id="maintenance_threshold",
+                id="backfill_threshold",
                 type=TriggerType.THRESHOLD,
-                table="st_vec",
-                condition="status = 'PENDING'",
+                table="st_hipp_events",
+                condition="embedding_status = 'PENDING'",
                 threshold_count=50,
                 check_interval_seconds=60,
                 batch_size=50,
@@ -87,7 +87,7 @@ def p08_spec_with_triggers() -> PipelineSpec:
         ],
         concurrency=1,
         max_queue=1000,
-        dag=[StageSpec(id="stage_10_faiss_indexer", module="embedding.faiss_indexer:v1", after=[])],
+        dag=[StageSpec(id="stage_10_backfill", module="embedding.backfill:v2", after=[])],
     )
 
 
@@ -116,14 +116,14 @@ class TestP08ContractTriggers:
 
     def test_p08_contract_exists(self) -> None:
         """Verify P08 contract file exists."""
-        contract_path = Path("k0/contracts/pipelines/p08_embedding_management.v2.yaml")
+        contract_path = Path("k0/contracts/pipelines/p08_embedding_management.v3.yaml")
         assert contract_path.exists(), "P08 contract file not found"
 
     def test_p08_contract_has_triggers_field(self) -> None:
         """Verify P08 contract has triggers field."""
         import yaml
 
-        contract_path = Path("k0/contracts/pipelines/p08_embedding_management.v2.yaml")
+        contract_path = Path("k0/contracts/pipelines/p08_embedding_management.v3.yaml")
         with open(contract_path) as f:
             contract = yaml.safe_load(f)
 
@@ -135,14 +135,14 @@ class TestP08ContractTriggers:
         """Verify P08 interval trigger is properly configured."""
         import yaml
 
-        contract_path = Path("k0/contracts/pipelines/p08_embedding_management.v2.yaml")
+        contract_path = Path("k0/contracts/pipelines/p08_embedding_management.v3.yaml")
         with open(contract_path) as f:
             contract = yaml.safe_load(f)
 
         interval_trigger = next((t for t in contract["triggers"] if t["type"] == "interval"), None)
 
         assert interval_trigger is not None, "P08 missing interval trigger"
-        assert interval_trigger["id"] == "maintenance_interval"
+        assert interval_trigger["id"] == "backfill_interval"
         assert interval_trigger["interval_seconds"] == 300
         assert interval_trigger["batch_size"] == 100
 
@@ -150,7 +150,7 @@ class TestP08ContractTriggers:
         """Verify P08 threshold trigger is properly configured."""
         import yaml
 
-        contract_path = Path("k0/contracts/pipelines/p08_embedding_management.v2.yaml")
+        contract_path = Path("k0/contracts/pipelines/p08_embedding_management.v3.yaml")
         with open(contract_path) as f:
             contract = yaml.safe_load(f)
 
@@ -159,16 +159,16 @@ class TestP08ContractTriggers:
         )
 
         assert threshold_trigger is not None, "P08 missing threshold trigger"
-        assert threshold_trigger["id"] == "maintenance_threshold"
-        assert threshold_trigger["table"] == "st_vec"
-        assert threshold_trigger["condition"] == "status = 'PENDING'"
+        assert threshold_trigger["id"] == "backfill_threshold"
+        assert threshold_trigger["table"] == "st_hipp_events"
+        assert threshold_trigger["condition"] == "embedding_status = 'PENDING'"
         assert threshold_trigger["threshold_count"] == 50
 
     def test_p08_manual_trigger_valid(self) -> None:
         """Verify P08 manual trigger is properly configured."""
         import yaml
 
-        contract_path = Path("k0/contracts/pipelines/p08_embedding_management.v2.yaml")
+        contract_path = Path("k0/contracts/pipelines/p08_embedding_management.v3.yaml")
         with open(contract_path) as f:
             contract = yaml.safe_load(f)
 
@@ -179,8 +179,6 @@ class TestP08ContractTriggers:
 
     def test_p08_triggers_validate_schema(self, p08_spec_with_triggers: PipelineSpec) -> None:
         """Verify P08 triggers validate against TriggerSpec schema."""
-        # If we got here, the spec was created successfully which means
-        # the triggers validated against the schema
         assert len(p08_spec_with_triggers.triggers) == 3
 
         interval = p08_spec_with_triggers.triggers[0]
@@ -189,7 +187,7 @@ class TestP08ContractTriggers:
 
         threshold = p08_spec_with_triggers.triggers[1]
         assert threshold.type == TriggerType.THRESHOLD
-        assert threshold.table == "st_vec"
+        assert threshold.table == "st_hipp_events"
 
         manual = p08_spec_with_triggers.triggers[2]
         assert manual.type == TriggerType.MANUAL
@@ -263,9 +261,9 @@ class TestP08SchedulerMigration:
         """Verify P08 is registered with scheduler."""
         pipelines = scheduler_with_p08.pipelines
 
-        assert "P08_EMBEDDING_MANAGEMENT" in pipelines
-        scheduled = pipelines["P08_EMBEDDING_MANAGEMENT"]
-        assert scheduled.pipeline_id == "P08_EMBEDDING_MANAGEMENT"
+        assert "P08_EMBEDDING" in pipelines
+        scheduled = pipelines["P08_EMBEDDING"]
+        assert scheduled.pipeline_id == "P08_EMBEDDING"
 
     @pytest.mark.asyncio
     async def test_p08_has_three_trigger_engines(
@@ -273,7 +271,7 @@ class TestP08SchedulerMigration:
         scheduler_with_p08: PipelineScheduler,
     ) -> None:
         """Verify P08 has 3 trigger engines registered."""
-        scheduled = scheduler_with_p08.pipelines["P08_EMBEDDING_MANAGEMENT"]
+        scheduled = scheduler_with_p08.pipelines["P08_EMBEDDING"]
 
         assert len(scheduled.triggers) == 3
 
@@ -301,7 +299,7 @@ class TestP08SchedulerMigration:
         await scheduler_with_p08.start()
 
         # Get interval trigger and fire manually (simulates timer firing)
-        scheduled = scheduler_with_p08.pipelines["P08_EMBEDDING_MANAGEMENT"]
+        scheduled = scheduler_with_p08.pipelines["P08_EMBEDDING"]
         interval_trigger = next(
             t for t in scheduled.triggers if t.spec.type == TriggerType.INTERVAL
         )
@@ -313,7 +311,7 @@ class TestP08SchedulerMigration:
 
         event = TriggerEvent(
             trigger_id=interval_trigger.spec.id,
-            pipeline_id="P08_EMBEDDING_MANAGEMENT",
+            pipeline_id="P08_EMBEDDING",
             fired_at=time.monotonic(),
             context={"batch_size": 100},
         )
@@ -325,7 +323,7 @@ class TestP08SchedulerMigration:
         await asyncio.sleep(0.1)
 
         assert len(executed) == 1
-        assert executed[0][0] == "P08_EMBEDDING_MANAGEMENT"
+        assert executed[0][0] == "P08_EMBEDDING"
 
     @pytest.mark.asyncio
     async def test_p08_manual_trigger_fires(
@@ -346,7 +344,7 @@ class TestP08SchedulerMigration:
 
         # Fire manual trigger
         result = scheduler_with_p08.fire_manual_trigger(
-            "P08_EMBEDDING_MANAGEMENT",
+            "P08_EMBEDDING",
             "maintenance_manual",
         )
 
@@ -355,7 +353,7 @@ class TestP08SchedulerMigration:
 
         assert result is True
         assert len(executed) == 1
-        assert executed[0][0] == "P08_EMBEDDING_MANAGEMENT"
+        assert executed[0][0] == "P08_EMBEDDING"
 
     @pytest.mark.asyncio
     async def test_p08_stats_tracked(
@@ -367,7 +365,7 @@ class TestP08SchedulerMigration:
 
         # Fire a trigger
         scheduler_with_p08.fire_manual_trigger(
-            "P08_EMBEDDING_MANAGEMENT",
+            "P08_EMBEDDING",
             "maintenance_manual",
         )
 
@@ -389,15 +387,15 @@ class TestP08SchedulerMigration:
         mock_syscalls: MagicMock,
     ) -> None:
         """Verify threshold trigger is registered and can check count."""
-        scheduled = scheduler_with_p08.pipelines["P08_EMBEDDING_MANAGEMENT"]
+        scheduled = scheduler_with_p08.pipelines["P08_EMBEDDING"]
 
         threshold_trigger = next(
             t for t in scheduled.triggers if t.spec.type == TriggerType.THRESHOLD
         )
 
-        assert threshold_trigger.spec.table == "st_vec"
+        assert threshold_trigger.spec.table == "st_hipp_events"
         assert threshold_trigger.spec.threshold_count == 50
-        assert threshold_trigger.spec.condition == "status = 'PENDING'"
+        assert threshold_trigger.spec.condition == "embedding_status = 'PENDING'"
 
 
 # ============================================================================
@@ -420,14 +418,14 @@ class TestP08EndToEndMigration:
 
         # Register
         scheduler.register_pipeline(p08_spec_with_triggers)
-        assert "P08_EMBEDDING_MANAGEMENT" in scheduler.pipelines
+        assert "P08_EMBEDDING" in scheduler.pipelines
 
         # Start
         await scheduler.start()
         assert scheduler.is_running
 
         # Verify triggers are running
-        scheduled = scheduler.pipelines["P08_EMBEDDING_MANAGEMENT"]
+        scheduled = scheduler.pipelines["P08_EMBEDDING"]
         assert all(t.is_running for t in scheduled.triggers)
 
         # Stop
@@ -472,7 +470,7 @@ class TestP08EndToEndMigration:
 
         # Both should be registered
         assert len(scheduler.pipelines) == 2
-        assert "P08_EMBEDDING_MANAGEMENT" in scheduler.pipelines
+        assert "P08_EMBEDDING" in scheduler.pipelines
         assert "P02_WRITE" in scheduler.pipelines
 
         # Start and stop

@@ -214,6 +214,17 @@ from k0.modules.consolidation.algorithms.importance_weight_learner import (
     WeightPersistenceProtocol,
 )
 
+# R5 MCTS Shadow Validation (Epic 4.5)
+from k0.modules.consolidation.algorithms.mcts_shadow import (
+    CycleShadowTracker,
+    PromotionAnalysis,
+    PromotionRecommendation,
+    ShadowDecisionRecord,
+    ShadowDecisionType,
+    ShadowOutcomeTracker,
+    ShadowValidationStats,
+)
+
 # R4 Merge Threshold Learner (Epic 4.4.6)
 from k0.modules.consolidation.algorithms.merge_threshold_learner import (
     AdaptiveMergeThresholds,
@@ -522,4 +533,12 @@ __all__ = [
     "ReconciliationDecision",
     # Observation Context (Issue 7.2)
     "ObservationContext",
+    # R5 MCTS Shadow Validation (Epic 4.5)
+    "ShadowDecisionType",
+    "PromotionRecommendation",
+    "ShadowDecisionRecord",
+    "ShadowValidationStats",
+    "PromotionAnalysis",
+    "ShadowOutcomeTracker",
+    "CycleShadowTracker",
 ]

@@ -575,7 +575,31 @@ class R0BatchSelector:
                 day_of_week,
                 ingress_channel,
                 ingress_source,
-                device_kind
+                device_kind,
+                -- M3 (0073): MW v2 cognitive signal columns
+                narrative_thread_id,
+                narrative_arc_position,
+                narrative_is_goal_event,
+                intent_type,
+                goal_context,
+                source_type,
+                novelty,
+                elaboration_depth,
+                identity_domains_json,
+                entity_salience_json,
+                k1_signal_version,
+                affect_dominance,
+                temporal_mentioned_time,
+                temporal_resolved_epoch_ms,
+                temporal_orientation,
+                participant_relationships_json,
+                cognitive_trace_id,
+                -- M5A (0074): New cognitive signal columns
+                surprise_level,
+                identity_relevance,
+                source_reliability,
+                memory_tier,
+                temporal_anchor_json
             FROM st_hipp_events
             WHERE {where_clause}
             ORDER BY wal_pos ASC
@@ -692,6 +716,30 @@ class R0BatchSelector:
             ingress_channel=row.get("ingress_channel") or "",
             ingress_source=row.get("ingress_source") or "",
             device_kind=row.get("device_kind") or "",
+            # M3 (0073): MW v2 cognitive signal columns
+            narrative_thread_id=row.get("narrative_thread_id") or "",
+            narrative_arc_position=row.get("narrative_arc_position") or "",
+            narrative_is_goal_event=bool(row.get("narrative_is_goal_event") or False),
+            intent_type=row.get("intent_type") or "",
+            goal_context=row.get("goal_context") or "",
+            source_type=row.get("source_type") or "",
+            novelty=row.get("novelty") or "",
+            elaboration_depth=row.get("elaboration_depth") or "",
+            identity_domains_json=row.get("identity_domains_json") or "[]",
+            entity_salience_json=row.get("entity_salience_json") or "{}",
+            k1_signal_version=row.get("k1_signal_version") or "2.0",
+            affect_dominance=float(row.get("affect_dominance") or 0.0),
+            temporal_mentioned_time=row.get("temporal_mentioned_time") or "",
+            temporal_resolved_epoch_ms=float(row.get("temporal_resolved_epoch_ms") or 0.0),
+            temporal_orientation=row.get("temporal_orientation") or "",
+            participant_relationships_json=row.get("participant_relationships_json") or "[]",
+            cognitive_trace_id=row.get("cognitive_trace_id") or "",
+            # M5A (0074): New cognitive signal columns
+            surprise_level=float(row.get("surprise_level") or 0.0),
+            identity_relevance=float(row.get("identity_relevance") or 0.0),
+            source_reliability=float(row.get("source_reliability") or 1.0),
+            memory_tier=row.get("memory_tier") or "routine",
+            temporal_anchor_json=row.get("temporal_anchor_json") or "{}",
             # Store wal_pos for offset tracking
             # Note: P03EventState doesn't have wal_pos field directly,
             # but we track via hipp_event_id and context.event_ids

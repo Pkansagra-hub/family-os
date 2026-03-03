@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k0://contracts/jsonschema/topics/session_snapshot.body.json",
+  "title": "session.snapshot Body Schema",
+  "description": "Body schema for session.snapshot command topic. Carries a SessionState COLD tier snapshot for archival to K0 storage.",
+  "type": "object",
+  "required": [
+    "session_id",
+    "snapshot_ts",
+    "sections",
+    "ttl_hint"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Session UUID from meta.identity.session_id."
+    },
+    "snapshot_ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601 timestamp when snapshot was captured."
+    },
+    "sections": {
+      "type": "object",
+      "description": "Map of section_name to section_data. Each section is a serialized SessionState tier (e.g. beliefs_active, history_active, scoreboard).",
+      "additionalProperties": {
+        "type": "object",
+        "description": "Serialized section data. Schema varies per section."
+      },
+      "minProperties": 1
+    },
+    "ttl_hint": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Suggested TTL in seconds for K0 storage retention. 0 = indefinite."
+    },
+    "actor": {
+      "type": "string",
+      "description": "Actor who owns this session."
+    },
+    "turn_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of conversation turns at snapshot time."
+    },
+    "compressed": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether section data is gzip-compressed."
+    },
+    "compression_algo": {
+      "type": "string",
+      "enum": ["none", "gzip", "zstd"],
+      "default": "none",
+      "description": "Compression algorithm used on section data."
+    }
+  },
+  "additionalProperties": false
+}

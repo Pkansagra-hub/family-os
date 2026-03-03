@@ -1,3 +1,9 @@
+# DEPRECATED: Superseded by embedding.extract_from_cache.v2.yaml (M4 Epic 4.7)
+# Reason: v1 output format unspecified, v2 specifies list[float] 768-dim for pgvector
+# See: ADR-K003 v2.0, k0/contracts/modules/embedding.extract_from_cache.v2.yaml
+deprecated: true
+superseded_by: embedding.extract_from_cache.v2.yaml
+
 module_id: embedding.extract_from_cache
 version: v1
 

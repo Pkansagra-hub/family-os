@@ -101,7 +101,7 @@ Memory and storage communication between the kernels.
 | Port | Direction | Purpose | Example |
 | ---- | --------- | ------- | ------- |
 | PORT_QRY | K1 → K0 → K1 | Query memory, recall | "Retrieve last 10 conversations" |
-| PORT_CMD | K1 → K0 | Write/ingest memory | "Store this new episode" |
+| PORT_CMD | K1 → K0 | Write/ingest memory | topic=`memory.write` body={atom} |
 | PORT_SSE | K0 → K1 | Real-time event stream | "Memory consolidation complete" |
 | PORT_OBS | K1 → K0 | Telemetry/observability | "Session latency metrics" |
 
@@ -387,6 +387,9 @@ class IKernelQueryPort(Protocol):
 
 ### 5.2 Kernel Command Port
 
+> **Formal contract**: [`bridge/contracts/command_port.protocol.yaml`](contracts/command_port.protocol.yaml)
+> **Topic registry**: [`k0/contracts/taxonomies/command_topics.yaml`](../k0/contracts/taxonomies/command_topics.yaml)
+
 ```python
 class IKernelCommandPort(Protocol):
     """Send write commands to K0."""
@@ -482,16 +485,20 @@ class QueryEnvelope:
 
 ### 6.2 Command Envelope
 
+Topic-based envelope routed by `command_topics.yaml` → `outbox_routing.yaml`.
+See also: [`bridge/contracts/schemas/command_envelope.json`](contracts/schemas/command_envelope.json).
+
 ```python
 @dataclass
 class CommandEnvelope:
     envelope_id: str              # UUID
     trace_id: str                 # Cognitive trace ID
-    command_type: str             # "write", "archive", "delete"
-    target_pipeline: str          # "P02", "P03", etc.
-    payload: bytes                # FlatBuffer or JSON
+    topic: str                    # e.g. "memory.write", "session.snapshot"
+    body: dict                    # Per-topic payload (validated by topic body schema)
     band: PrivacyBand
+    priority: Priority            # REALTIME, INTERACTIVE, BACKGROUND
     requested_at: datetime
+    sig: str                      # HMAC-SHA256 signature
 ```
 
 ### 6.3 Connector Request
@@ -529,9 +536,8 @@ class K0BridgeStorageAdapter(IStoragePort):
 
     async def archive(self, session_id: str, data: bytes) -> ArchiveReceipt:
         envelope = CommandEnvelope(
-            command_type="archive",
-            target_pipeline="P02",
-            payload=data,
+            topic="session.snapshot",
+            body={"session_id": session_id, "sections": [...], "snapshot_ts": "...", "ttl_hint": 2592000},
             band=PrivacyBand.AMBER
         )
         return await self.bridge.command(envelope, self.token)
@@ -692,6 +698,7 @@ bridge/
 │
 ├── contracts/                   # Bridge contracts
 │   ├── bridge.contract.yaml     # Module contract
+│   ├── command_port.protocol.yaml  # IKernelCommandPort formal protocol
 │   └── schemas/                 # JSON/FlatBuffer schemas
 │       ├── query_envelope.json
 │       ├── command_envelope.json
@@ -716,10 +723,13 @@ bridge/
 | -------- | ------- |
 | [k0/docs/ifl.md](../k0/docs/ifl.md) | Interkernel Fabric Language (IFL) details |
 | [k1/sessionstate/README.md](../k1/sessionstate/README.md) | SessionState source of truth |
-| [docs/plans/sessionstate-implementation-plan.md](../docs/plans/sessionstate-implementation-plan.md) | Implementation roadmap |
+| [docs/plans/sessionstate-implementation-plan.md](../docs/plans_completed_donotrefer/sessionstate-implementation-plan.md) | Implementation roadmap |
 | [architecture_diagrams/k0/k0_with_interkernel_fabric.mmd](../architecture_diagrams/k0/k0_with_interkernel_fabric.mmd) | IFL architecture diagram |
 | [architecture_diagrams/k0/k0_source_of_truth_postgresql.mmd](../architecture_diagrams/k0/k0_source_of_truth_postgresql.mmd) | K0 P07 Sync/CRDT pipeline |
 | [governance/k0/k0_architecture_master.md](../governance/k0/k0_architecture_master.md) | K0 architecture master |
+| [architecture_diagrams/bridge/bridge_architecture.mmd](../architecture_diagrams/bridge/bridge_architecture.mmd) | Bridge architecture diagram (M2 topic names) |
+| [k0/contracts/taxonomies/command_topics.yaml](../k0/contracts/taxonomies/command_topics.yaml) | Canonical command topic registry |
+| [k0/contracts/taxonomies/outbox_routing.yaml](../k0/contracts/taxonomies/outbox_routing.yaml) | Topic → outbox driver routing table |
 | [docs/architecture/decisions/0050c-multi-device-family-sync-strategy.md](../docs/architecture/decisions/0050c-multi-device-family-sync-strategy.md) | Multi-device sync ADR |
 
 ---
@@ -743,6 +753,7 @@ bridge/
 | Component | Status | Notes |
 | --------- | ------ | ----- |
 | README.md | Done | This document |
+| M2 Command-Port Contracts | Done | command_topics.yaml, outbox_routing.yaml, gate_topic_validation.yaml, 7 body schemas, command_port.protocol.yaml, command_envelope.json, sse_events.yaml, query_selectors.yaml |
 | core/bridge.py | Planned | Main orchestrator |
 | kernel/query_port.py | Planned | K0 query transport |
 | kernel/command_port.py | Planned | K0 command transport |

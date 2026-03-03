@@ -17,17 +17,32 @@ Phase 2 (M4-M5): P2P Internet Sync
 All sync operations route through K0 P07 Sync/CRDT pipeline.
 """
 
-from .certificates import CertificateManager
-from .crdt import CRDTMerge
-from .discovery import DeviceDiscovery
-from .e2ee import E2EEncryption
-from .sync_port import ISyncPort, SyncPortImpl
+from __future__ import annotations
+
+from .local_outbox import LocalOutbox, OutboxQueueEntry
+
+# Phase 1 sync components (planned -- not yet implemented)
+try:
+    from .certificates import CertificateManager
+    from .crdt import CRDTMerge
+    from .discovery import DeviceDiscovery
+    from .e2ee import E2EEncryption
+    from .sync_port import ISyncPort, SyncPortImpl
+except ImportError:
+    CertificateManager = None  # type: ignore[assignment,misc]
+    CRDTMerge = None  # type: ignore[assignment,misc]
+    DeviceDiscovery = None  # type: ignore[assignment,misc]
+    E2EEncryption = None  # type: ignore[assignment,misc]
+    ISyncPort = None  # type: ignore[assignment,misc]
+    SyncPortImpl = None  # type: ignore[assignment,misc]
 
 __all__ = [
-    "DeviceDiscovery",
     "CRDTMerge",
-    "E2EEncryption",
     "CertificateManager",
+    "DeviceDiscovery",
+    "E2EEncryption",
     "ISyncPort",
+    "LocalOutbox",
+    "OutboxQueueEntry",
     "SyncPortImpl",
 ]

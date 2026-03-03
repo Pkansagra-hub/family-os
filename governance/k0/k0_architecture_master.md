@@ -792,6 +792,12 @@ P03 Pipeline (k0/pipelines/p03/)
 | `p02.embedding.enqueued.v1` | - | P02 (M14) | 🟢 GREEN | 3 days | v1 | ✅ Active |
 | `p02.enrichment.complete.v1` | - | P02 (M17) | 🟡 AMBER | 7 days | v1 | ✅ Active |
 | `p02.hipp_events.written.v1` | - | P02 (M13) | 🟡 AMBER | 7 days | v1 | ✅ Active |
+| `p02.affect.analyzed.v2` | - | P02 (M04) | 🟡 AMBER | 7 days | v2 | ✅ Active |
+| `p02.builders.hipp_row_built.v2` | - | P02 (M13) | 🟡 AMBER | 7 days | v2 | ✅ Active |
+| `p02.context.temporal_profiled.v2` | - | P02 (M08) | 🟡 AMBER | 7 days | v2 | ✅ Active |
+| `p02.hippocampus.semantic_projected.v2` | - | P02 (M02) | 🟡 AMBER | 7 days | v2 | ✅ Active |
+| `p02.salience.scored.v2` | - | P02 (M06) | 🟡 AMBER | 7 days | v2 | ✅ Active |
+| `p02.social.family_resolved.v2` | - | P02 (M07) | 🟡 AMBER | 7 days | v2 | ✅ Active |
 
 ### Vector/Embedding Events
 
@@ -805,6 +811,8 @@ P03 Pipeline (k0/pipelines/p03/)
 | `cognitive.embedding.backfilled.v1` | `k0/contracts/schemas/cognitive_embedding_backfilled.json` | P08 (M25) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
 | `cognitive.embedding.recomputed.v1` | `k0/contracts/schemas/cognitive_embedding_recomputed.json` | P08 (M26) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
 | `cognitive.embedding.cleaned.v1` | `k0/contracts/schemas/cognitive_embedding_cleaned.json` | P08 (M27) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `cognitive.embedding.integrity_check.requested.v1` | - | P08 Scheduler | 🟢 GREEN | 3 days | v1 | ✅ Active |
+| `cognitive.embedding.integrity_check.completed.v1` | - | P08 (M28) | 🟢 GREEN | 3 days | v1 | ✅ Active |
 
 ### Fanout Events (M17 Event Emitter)
 
@@ -1046,10 +1054,11 @@ graph LR
 | `core.event_emitter` | M17 | `k0/contracts/modules/core.event_emitter.v1.yaml` | v1 | ✅ Active | 2025-11-17 |
 | `embedding.extract_from_cache` | M22 | `k0/contracts/modules/embedding.extract_from_cache.v1.yaml` | v1 | ✅ Active | 2025-12-13 |
 | `builders.embedding_write` | M23 | `k0/contracts/modules/builders.embedding_write.v1.yaml` | v1 | ❌ Deprecated | 2025-12-13 |
-| `embedding.faiss_indexer` | M24 | `k0/contracts/modules/embedding.faiss_indexer.v1.yaml` | v1 | ✅ Active | 2025-12-13 |
+| ~~embedding.faiss_indexer~~ | M24 | `k0/contracts/modules/embedding.faiss_indexer.v1.yaml` | v1 | ❌ Deleted | 2026-03-01 |
 | `embedding.backfill` | M25 | `k0/contracts/modules/embedding.backfill.v1.yaml` | v1 | 🎯 Planning | 2025-12-13 |
 | `embedding.recompute` | M26 | `k0/contracts/modules/embedding.recompute.v1.yaml` | v1 | 🎯 Planning | 2025-12-13 |
 | `embedding.cleanup` | M27 | `k0/contracts/modules/embedding.cleanup.v1.yaml` | v1 | 🎯 Planning | 2025-12-13 |
+| `embedding.integrity_check` | M28 | `k0/contracts/modules/embedding.integrity_check.v1.yaml` | v1 | ✅ Active | 2026-03-01 |
 | `feedback.ingest` | M28 | `k0/contracts/modules/feedback.ingest.v1.yaml` | v1 | 🎯 Planning | 2025-12-25 |
 | `consolidation.batch_selector` | M37 | `k0/contracts/modules/consolidation.batch_selector.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
 | `consolidation.importance_scorer` | M38 | `k0/contracts/modules/consolidation.importance_scorer.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
@@ -1080,10 +1089,12 @@ graph LR
 | Contract Name | Pipeline | Path | Version | Status | Last Updated |
 |---------------|----------|------|---------|--------|--------------|
 | `p02_write` | P02 | `k0/contracts/pipelines/p02_write.v1.yaml` | v1 | ✅ Active | 2025-12-13 |
+| `p02_write` | P02 | `k0/contracts/pipelines/p02_write.v2.yaml` | v2 | ✅ Active | 2026-03-01 |
 | `p03_consolidation` | P03 | `k0/contracts/pipelines/p03_consolidation.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
-| `p08_embedding_management` | P08 | `k0/contracts/pipelines/p08_embedding_management.v2.yaml` | v3 | ✅ Active | 2025-12-24 |
+| `p08_embedding_management` | P08 | `k0/contracts/pipelines/p08_embedding_management.v3.yaml` | v3 | ✅ Active | 2026-03-01 |
+| `_deprecated_p08_embedding_management` | P08 | `k0/contracts/pipelines/_deprecated_p08_embedding_management.v2.yaml` | v2 | ❌ Deprecated | 2026-03-01 |
 
-> **Pipeline Contract Summary**: 3 contracts (2 Active, 1 Planning)
+> **Pipeline Contract Summary**: 5 contracts (3 Active, 1 Planning, 1 Deprecated)
 > **Note**: P08 version is v3 (Maintenance Mode after PostgreSQL/pgvector migration)
 
 ## 5.3 Event Schema Registry
@@ -1444,10 +1455,13 @@ graph LR
 | 0066 | `0066_st_kg_dom_inline_vectors.py` | - | idx_kg_dom_* | Add inline vectors to st_kg_dom | ❌ No |
 | 0067 | `0067_st_observations.py` | st_observations | idx_obs_* (13) | Holistic observation log for truth layers | ❌ No |
 | 0068 | `0068_st_observations_allow_kg_edges_layer.py` | - | - | Allow st_kg_edges layer in st_observations CHECK constraint | ❌ No |
+| 0069 | `0069_st_kg_edges_source_algorithm.py` | - | idx_kg_edges_source_algorithm | Add source_algorithm column to st_kg_edges | ❌ No |
+| 0070 | `0070_st_kg_edges_evidence.py` | - | - | Add evidence columns to st_kg_edges (evidence_event_ids, evidence_episode_ids, algorithm_params_json, inference_chain_json) | ❌ No |
+| 0071 | `0071_st_vec_pgvector_native.py` | st_vec (recreate) | idx_vec_* (5 BTREE) | Drop and recreate st_vec with pgvector VECTOR(768), BTREE indexes, remove FAISS columns | ❌ No |
 
 > **Migration Tool**: Alembic (SQLAlchemy)
 > **Location**: `k0/db/alembic/versions/`
-> **Total Migrations**: 26 (25 applied, 1 planned)
+> **Total Migrations**: 71 (25 applied, 46 planned)
 > **PostgreSQL Version**: 15+ (required for pgvector)
 
 ## 6.3 Index Registry
@@ -1487,7 +1501,7 @@ graph LR
 | `idx_vec_tenant_space` | tenant_id, space_id | BTREE | Tenant/space isolation |
 | `idx_vec_model_id` | model_id | BTREE | Model version filtering |
 | `idx_vec_status_created` | status, created_at | BTREE | Backfill queries (partial: READY) |
-| `idx_vec_faiss_id` | faiss_id | BTREE | FAISS index mapping |
+| `idx_vec_faiss_id` | faiss_id | BTREE | Legacy FAISS ID lookup |
 
 ### st_outbox Indexes (3)
 
@@ -1728,6 +1742,7 @@ graph LR
 | `idx_obs_weekend` | st_observations | tenant_id, is_weekend, observed_at DESC | BTREE/partial | Weekend/weekday analysis |
 | `idx_obs_source_event` | st_observations | source_event_id | BTREE/partial | Source event lookup |
 | `idx_obs_layer_tenant_time` | st_observations | layer, tenant_id, observed_at DESC | BTREE | Layer-specific tenant queries |
+| `idx_kg_edges_source_algorithm` | st_kg_edges | source_algorithm | BTREE | Source algorithm filtering |
 
 #### Entity Resolution/Merge Indexes (ix_ prefix)
 
@@ -1856,9 +1871,20 @@ graph LR
 | `embedding_vectors_batch_query()` | `st_vec.read` | st_vec | SELECT | ✅ Yes | <50ms | ✅ Active |
 | `observations_write()` | `st_observations.write` | st_observations | INSERT | ✅ Yes | <10ms | ✅ Active |
 | `observations_write_batch()` | `st_observations.write` | st_observations | INSERT | ✅ Yes | <50ms | ✅ Active |
+| `vec_count()` | `st_vec.read` | st_vec | COUNT | ✅ Yes | <5ms | ✅ Active |
+| `vec_count_dimension_mismatches()` | `st_vec.read` | st_vec | COUNT | ✅ Yes | <5ms | ✅ Active |
+| `vec_distinct_models()` | `st_vec.read` | st_vec | SELECT | ✅ Yes | <5ms | ✅ Active |
+| `vec_orphan_count()` | `st_vec.read, st_hipp_events.read` | st_vec, st_hipp_events | COUNT | ✅ Yes | <10ms | ✅ Active |
+| `vec_delete_orphans()` | `st_vec.write` | st_vec | DELETE | ✅ Yes | <50ms | ✅ Active |
+| `hipp_events_missing_vectors()` | `st_hipp_events.read, st_vec.read` | st_hipp_events, st_vec | COUNT | ✅ Yes | <10ms | ✅ Active |
+| `hipp_events_reset_missing_embedding_status()` | `st_hipp_events.write` | st_hipp_events | UPDATE | ✅ Yes | <10ms | ✅ Active |
+| `episodes_query()` | `st_epi.read` | st_epi | SELECT | ✅ Yes | <20ms | ✅ Active |
+| `semantic_schema_query()` | `st_sem.read` | st_sem | SELECT | ✅ Yes | <20ms | ✅ Active |
+| `procedural_memory_query()` | `st_procedural.read` | st_procedural | SELECT | ✅ Yes | <20ms | ✅ Active |
+| `embeddings_by_event_ids()` | `st_vec.read` | st_vec | SELECT | ✅ Yes | <50ms | ✅ Active |
 <!-- AUTOGEN:SYSCALL_TABLE:END -->
 
-> **Source**: `k0/kernel/syscalls.py` (34 syscall methods, 4450 lines)
+> **Source**: `k0/kernel/syscalls.py` (45 async syscall methods + 3 sync accessors, 5400 lines)
 > **Capability Check**: `_require_cap()` method at line 2565
 > **Architecture**: Dennis & Van Horn (1966) capability-based security
 > **Audit**: All syscalls include structured logging with `pipeline_id`, `operation`, `latency_ms`
@@ -1920,6 +1946,9 @@ graph LR
 | `st_anchor_observations.write` | Storage | 🎯 Planned | P03, P06 |
 | `st_observations.write` | Storage | ✅ Active | P03 |
 | `st_observations.read` | Storage | 🎯 Planned | P01 |
+| `st_epi.read` | Storage | ✅ Active | P03 |
+| `st_sem.read` | Storage | ✅ Active | P03 |
+| `st_procedural.read` | Storage | ✅ Active | P03 |
 | `st_consolidation_audit.write` | Storage | 🎯 Planned | P03 |
 | `st_embedding_queue.write` | Storage | ❌ Deprecated | - |
 | `working_memory.write` | Storage | 🎯 Planned | - |
@@ -2727,22 +2756,17 @@ K{NNN}[.{sub}] - {Title}
 
 | Key | Type | Default | Description | Used By | Required? |
 |-----|------|---------|-------------|---------|-----------|
-| `default_backend` | string | `sentence-transformers` | Embedding backend selection | Embedding Worker | Yes |
-| `backends.sentence-transformers.model` | string | `all-mpnet-base-v2` | HuggingFace model (768 dims) | Embedding Worker | Yes |
-| `backends.sentence-transformers.device` | string | `cpu` | Device (cpu/cuda) | Embedding Worker | Yes |
-| `backends.sentence-transformers.batch_size` | int | `32` | Batch size for efficiency | Embedding Worker | Yes |
-| `backends.sentence-transformers.normalize_embeddings` | bool | `true` | Normalize to unit vectors | Embedding Worker | No |
-| `backends.openai.model` | string | `text-embedding-3-small` | OpenAI model (1536 dims) | Embedding Worker | No |
-| `backends.openai.rate_limit_rpm` | int | `3000` | Rate limit requests/minute | Embedding Worker | No |
-| `backends.openai.rate_limit_tpm` | int | `1000000` | Rate limit tokens/minute | Embedding Worker | No |
-| `backends.openai.timeout_sec` | int | `30` | Request timeout in seconds | Embedding Worker | No |
-| `backends.openai.retry_max_attempts` | int | `3` | Max retry attempts on failure | Embedding Worker | No |
-| `backends.openai.retry_exponential_base` | int | `2` | Exponential backoff base | Embedding Worker | No |
-| `backends.ollama.url` | string | `http://localhost:11434` | Ollama server URL | Embedding Worker | No |
-| `backends.ollama.model` | string | `llama2` | Ollama model name | Embedding Worker | No |
-| `backends.ollama.timeout_sec` | int | `30` | Request timeout in seconds | Embedding Worker | No |
-| `backends.fake.dimension` | int | `384` | Fake embedding dimension (test) | Testing | No |
-| `backends.fake.model` | string | `fake-minilm-l6` | Fake model identifier (test) | Testing | No |
+| `version` | string | `2.0` | Embedding config version | Config | Yes |
+| `default_backend` | string | `ultrabert` | Embedding backend selection | Embedding | Yes |
+| `backends.ultrabert.model` | string | `ultrabert_v2.1.0` | UltraBERT model (768 dims) | Embedding | Yes |
+| `backends.ultrabert.dimension` | int | `768` | UltraBERT vector dimension | Embedding | Yes |
+| `backends.ultrabert.device` | string | `cpu` | Device (cpu/cuda) | Embedding | Yes |
+| `backends.ultrabert.batch_size` | int | `32` | Batch size for efficiency | Embedding | Yes |
+| `backends.ultrabert.normalize_embeddings` | bool | `true` | Normalize to unit vectors | Embedding | No |
+| `backends.fake.model` | string | `fake-768` | Fake model identifier (test) | Testing | No |
+| `backends.fake.dimension` | int | `768` | Fake embedding dimension (test) | Testing | No |
+| `backends.fake.description` | string | `Test-only fake embeddings` | Description | Testing | No |
+| `worker.enabled` | bool | `false` | Legacy worker disabled (P02 inline) | Embedding | Yes |
 | `worker.batch_size` | int | `10` | Outbox entries per run_once() | Embedding Worker | Yes |
 | `worker.poll_interval_sec` | float | `1.0` | Outbox poll interval | Embedding Worker | Yes |
 | `worker.max_retries` | int | `3` | Max retry attempts | Embedding Worker | Yes |
@@ -3078,27 +3102,27 @@ K{NNN}[.{sub}] - {Title}
 |------|-----------------|--------------|-------|
 | `kernel.yaml` | `0.0.0-dev` | 2025-12-31 | Development version |
 | `models.yaml` | `2.0.0` | 2025-12-31 | UltraBERT v2.0.3 integration |
+| `embeddings.yml` | `2.0` | 2026-03-01 | UltraBERT-only, removed legacy backends |
 | `feature_flags.yaml` | `1.0.0` | 2025-12-31 | ML tier flags stable |
 | `logging.yaml` | `1` | 2025-12-31 | Python logging dictConfig |
 
 ### 13.5.2 Contract Artifact Versions
 
 > **Source**: `k0/contracts/VERSION` v1.1.0 - Frozen contract artifacts with checksums
-> **Coverage**: 70 total artifacts across all categories
+> **Coverage**: 71 total artifacts across all categories
 
 | Category | Count | Description |
 |----------|-------|-------------|
 | Root-level | 2 | OpenAPI, AsyncAPI specs |
 | Modules | 22 | Module contract definitions |
-| Pipelines | 2 | Pipeline contract definitions |
+| Pipelines | 4 | Pipeline contract definitions |
 | Capabilities | 1 | Core capability schema |
 | Policy | 1 | PEP policy schema |
 | Schemas | 5 | Event payload schemas |
-| Table Schemas | 1 | P02 table definitions |
 | Taxonomies | 1 | Activity taxonomy |
 | JSON Schema | 16 | Core JSON schemas |
 | JSON Schema Examples | 19 | Validation test fixtures |
-| **TOTAL** | **70** | **All tracked with SHA256** |
+| **TOTAL** | **71** | **All tracked with SHA256** |
 
 **Root-Level API Specs:**
 
@@ -3123,23 +3147,25 @@ K{NNN}[.{sub}] - {Title}
 | `context.temporal_profile.v1` | v1 | `d2e58f18d0853e2b` |
 | `core.event_emitter.v1` | v1 | `c774d8c3c4478dde` |
 | `core.hipp_events_writer.v1` | v1 | `33636a470996f955` |
-| `embedding.backfill.v1` | v1 | `2ef8c99d1ab00fc0` |
-| `embedding.cleanup.v1` | v1 | `2bf327929d5a33b7` |
-| `embedding.extract_from_cache.v1` | v1 | `7d2b436a09e89d48` |
-| `embedding.faiss_indexer.v1` | v1 | `ff98c4f2584d3419` |
-| `embedding.recompute.v1` | v1 | `373715dc15692ea1` |
+| `embedding.backfill.v1` | v1 | `d5dedfe40d327cbb` |
+| `embedding.cleanup.v1` | v1 | `db8ed89d57402cc2` |
+| `embedding.extract_from_cache.v1` | v1 | `5e410432b2578fc1` |
+| `embedding.integrity_check.v1` | v1 | `18b4af7a02e6f025` |
+| `embedding.recompute.v1` | v1 | `6fcb73e25e8bb971` |
 | `hippocampus.pattern_separate.v1` | v1 | `b5079e49f7b61556` |
 | `hippocampus.semantic_project.v1` | v1 | `8149dbf1a289d648` |
 | `salience.score.v1` | v1 | `89c59c218d268825` |
 | `social.family_graph_resolve.v1` | v1 | `181840479b2c2b5f` |
 | `space.resolve_visibility.v1` | v1 | `dd62f9473aef657a` |
 
-**Pipeline Contracts (2):**
+**Pipeline Contracts (4):**
 
 | Pipeline | Version | SHA256 (first 16) |
 |----------|---------|-------------------|
-| `p02_write.v1` | v1 | `3d3ee3acb03ab7c5` |
-| `p08_embedding_management.v2` | v3 | `24cbcd38daa16d4b` |
+| `p02_write.v1` | v1 | `6c59721a87ab311d` |
+| `p02_write.v2` | v2 | `2d9ff1b989e27877` |
+| `_deprecated_p08_embedding_management.v2` | v2 | `7167d68d2df7e33a` |
+| `p08_embedding_management.v3` | v3 | `fa28f84b27f946fb` |
 
 ### 13.5.3 JSON Schema Artifacts (16 schemas + 19 examples)
 
@@ -3151,7 +3177,7 @@ K{NNN}[.{sub}] - {Title}
 | `crdt_merge_log.schema.json` | CRDT merge log | `74566aded4448748` |
 | `driver.handshake.request.json` | Driver handshake req | `0d0867ac14135470` |
 | `driver.handshake.response.json` | Driver handshake resp | `0034743d370e031e` |
-| `envelope.schema.json` | Event envelope | `31bd48f212b32929` |
+| `envelope.schema.json` | Event envelope | `7387c187ed0b0f55` |
 | `error.schema.json` | Error response | `674fbed68d52f417` |
 | `infra.snapshot.event.json` | Snapshot event | `78607e085f426268` |
 | `offset.cursor.schema.json` | Offset cursor | `d5c5e4fdd064ad07` |

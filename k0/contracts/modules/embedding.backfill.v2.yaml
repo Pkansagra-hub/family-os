@@ -1,0 +1,214 @@
+# =============================================================================
+# M25 Embedding Backfill Module Contract v2.0.0
+# =============================================================================
+#
+# Backfills embeddings for events with embedding_status=PENDING.
+# These are events where M22 inline extraction failed (UltraBERT cache miss
+# and direct call failure) or pre-ADR-K003 legacy events.
+#
+# History:
+#   v1.0.0: Original backfill with struct.pack bytes, FAISS trigger on completion
+#   v2.0.0: pgvector VECTOR(768) native writes, no FAISS trigger, simplified output
+#
+# Changes from v1:
+#   - Output format: struct.pack bytes -> pgvector VECTOR(768) via vec_write syscall
+#   - Removed: cognitive.vector.stored.v1 event emission (no FAISS to trigger)
+#   - Removed: emit_stored_event config option
+#   - Removed: events.emit from syscall dependencies
+#   - Status: writes READY only (not INDEXED -- pgvector HNSW auto-indexes)
+#
+# Supersedes: k0/contracts/modules/embedding.backfill.v1.yaml
+#
+# Pipeline: P08 stage_10_backfill
+# ADR: ADR-K003 v2.0
+# Schema: st_vec_v2.columns.yaml
+# Milestone: M4 Epic 4.3
+# =============================================================================
+
+module_id: embedding.backfill
+name: "embedding.backfill"
+version: v2
+
+# =============================================================================
+# Event Types
+# =============================================================================
+input_event_types:
+  - cognitive.embedding.backfill.requested.v1
+
+output_event_types:
+  - cognitive.embedding.backfilled.v1
+
+# =============================================================================
+# Module Characteristics
+# =============================================================================
+latency_budget_ms: 100
+idempotent: true
+
+side_effects:
+  - write:st_vec
+  - write:st_hipp_events
+  - read:st_hipp_events
+
+# =============================================================================
+# Description
+# =============================================================================
+description: |
+  M25: Embedding Backfill Module (pgvector-native)
+
+  Backfills embeddings for events with embedding_status=PENDING.
+  These are events where P02 M22 inline extraction failed (UltraBERT cache
+  miss and direct call failure) or historical events ingested before ADR-K003.
+
+  P08 v3 Role: stage_10_backfill
+  - Triggered by: P08 scheduler (interval/threshold) or manual trigger
+  - Queries st_hipp_events WHERE embedding_status='PENDING' LIMIT batch_size
+  - Generates 768-dim embeddings using UltraBERT v2.1.0
+  - Writes to st_vec as pgvector VECTOR(768) via vec_write syscall
+  - Updates st_hipp_events.embedding_status = 'READY'
+
+  v2 changes from v1:
+  - Vector format: pgvector VECTOR(768) native (was struct.pack 3072-byte blob)
+  - No FAISS trigger: removed cognitive.vector.stored.v1 emission
+  - Status: READY only (INDEXED removed -- HNSW auto-indexes)
+  - Model: UltraBERT v2.1.0 only (MiniLM removed)
+
+  Operations:
+  1. Query: SELECT event_id, text, embedding_id FROM st_hipp_events
+            WHERE embedding_status='PENDING' LIMIT 100
+  2. Generate: ultrabert.get_embedding(text) -> list[float] (768 dims)
+  3. Validate: assert len(embedding) == 768
+  4. Write st_vec: INSERT via vec_write syscall (pgvector VECTOR(768))
+  5. Update st_hipp_events: SET embedding_status='READY'
+
+  Performance:
+  - Per event: ~100ms (UltraBERT inference dominated)
+  - Batch (100): ~10 events/sec (GPU throughput limited)
+
+# =============================================================================
+# Failure Modes
+# =============================================================================
+failure_modes:
+  - code: TEXT_NOT_FOUND
+    description: "Event has no text content (deleted or empty)"
+    policy: skip
+    max_retries: 0
+
+  - code: ULTRABERT_UNAVAILABLE
+    description: "UltraBERT service is down or unreachable"
+    policy: retry
+    max_retries: 3
+
+  - code: EMBEDDING_GENERATION_FAILED
+    description: "UltraBERT returned error for this text"
+    policy: mark_failed
+    max_retries: 0
+
+  - code: VECTOR_WRITE_FAILED
+    description: "st_vec INSERT failed (constraint violation, connection error)"
+    policy: retry
+    max_retries: 3
+
+  - code: DIMENSION_MISMATCH
+    description: "Generated embedding is not 768-dim (model misconfiguration)"
+    policy: skip
+    max_retries: 0
+
+# =============================================================================
+# Configuration Schema
+# =============================================================================
+config_schema:
+  type: object
+  properties:
+    batch_size:
+      type: integer
+      default: 100
+      description: "Number of PENDING events to backfill per invocation"
+    model_id:
+      type: string
+      default: "ultrabert_v2.1.0"
+      description: "UltraBERT model version for embedding generation"
+    max_age_days:
+      type: integer
+      default: 90
+      description: "Only backfill events within this age window"
+    expected_vector_dim:
+      type: integer
+      default: 768
+      description: "Expected embedding dimension (validation check)"
+
+# =============================================================================
+# Input Schema
+# =============================================================================
+input_schema:
+  type: object
+  required:
+    - event_id
+    - tenant_id
+    - space_id
+  properties:
+    event_id:
+      type: string
+      format: uuid
+      description: "FK to st_hipp_events.event_id"
+    tenant_id:
+      type: string
+    space_id:
+      type: string
+    priority:
+      type: string
+      enum: ["HIGH", "NORMAL", "LOW"]
+      default: "NORMAL"
+      description: "Backfill priority (affects processing order in batch)"
+
+# =============================================================================
+# Output Schema
+# =============================================================================
+output_schema:
+  type: object
+  required:
+    - backfilled
+    - embedding_id
+    - event_id
+  properties:
+    backfilled:
+      type: boolean
+      description: "True if backfill succeeded"
+    embedding_id:
+      type: string
+      format: uuid
+    event_id:
+      type: string
+      format: uuid
+    vector_dim:
+      type: integer
+      enum: [768]
+    model_id:
+      type: string
+      enum: ["ultrabert_v2.1.0"]
+    backfilled_at:
+      type: string
+      format: date-time
+      description: "TIMESTAMPTZ when backfilled (was Unix epoch in v1)"
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+dependencies:
+  syscalls:
+    - name: st_hipp_events.read
+      description: "Query PENDING events for backfill"
+    - name: st_vec.write
+      description: "INSERT embedding as pgvector VECTOR(768)"
+    - name: st_hipp_events.update
+      description: "Set embedding_status=READY after successful backfill"
+  runtime:
+    - k0.runtime.ultrabert_adapter
+
+# =============================================================================
+# Performance
+# =============================================================================
+performance:
+  p50_latency_ms: 50
+  p95_latency_ms: 100
+  p99_latency_ms: 200
+  batch_throughput_events_per_sec: 10

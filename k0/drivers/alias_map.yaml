@@ -5,8 +5,8 @@ aliases:
   st_sem: postgres
   st_ws: postgres
   st_fts: fts5
-  st_vector: faiss
-  st_emb: embedding_queue
+  st_vector: postgres  # pgvector (ADR-K003 v2.0: FAISS replaced by pgvector HNSW)
+  st_emb: postgres  # pgvector (ADR-K003 v2.0: embedding_queue deprecated, st_vec via pgvector)
   st_kg_dom: postgres  # PostgreSQL graph storage (ADR-K022: replaces neo4j_driver)
   st_kg_edges: postgres  # PostgreSQL graph edges (ADR-K022)
   st_blob: blob_localfs

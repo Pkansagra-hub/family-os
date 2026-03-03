@@ -1,9 +1,9 @@
-version: 1.0.0
-generated_at: '2026-01-24T13:04:44.704806'
+version: 1.1.0
+generated_at: '2026-03-01T22:51:44.923518'
 generator: p03_version_manager.py v1.0.0
 directory: k0\pipelines\p03
-file_count: 78
-total_size_bytes: 1471124
+file_count: 79
+total_size_bytes: 1536609
 files:
 - path: api\quarantine_review.py
   sha256: fb61435e0755aafaff4b205c1ab56caa26ee3f5d9abf14fc7955e74086fc0da1
@@ -38,9 +38,9 @@ files:
   size: 23185
   modified: '2026-01-01T12:42:12.818816'
 - path: event_state.py
-  sha256: fbdb0e0a7d99367ab7a5e50fd7a027a45f3ec6b3147ac2f880bc7bbe855b4380
-  size: 22002
-  modified: '2026-01-18T22:01:02.525282'
+  sha256: 9b5117343d97f9c44a372521b4848256d6dd4cdd4a448844005d55c7aa3a9242
+  size: 22148
+  modified: '2026-01-24T13:54:10.149360'
 - path: explainability.py
   sha256: be09a3eb54f66034335ac9d7d89c2b45bfda82d4d658a4f281316409d14a1066
   size: 10373
@@ -190,41 +190,45 @@ files:
   size: 22055
   modified: '2026-01-04T16:17:20.817343'
 - path: phase_outputs.py
-  sha256: 07d1cf9e9da10d22ae04f6c1eee0d597400efbccf0f2e81cc5481ddf3f5fa7da
-  size: 26915
-  modified: '2026-01-18T22:01:02.085018'
+  sha256: b1e99cf0053ef72f07de8afab30f2654bfedb03810cf8dcf868e331a975f39a0
+  size: 31714
+  modified: '2026-01-26T15:03:28.261008'
 - path: phases\r0_batch_selector.py
-  sha256: cd68f34756352100b25c025f6de6e2a53439377dd6fb601d70814baa636e01d3
-  size: 32278
-  modified: '2026-01-18T21:13:17.568515'
+  sha256: c1751349134acdc03f600e7690cd5ee515b5eefd6f8cbdfdf166bfa96ac87b04
+  size: 32632
+  modified: '2026-01-24T13:54:10.398742'
 - path: phases\r1_importance_scorer.py
   sha256: a479bff8f0af14e0d6d7cbaff29cb288ab1ba772c1d36acaf7c2a7ea2a254dd3
   size: 12367
   modified: '2026-01-02T15:45:34.408010'
 - path: phases\r2_episodic_integrator.py
-  sha256: 8667f79d322b2e931d48a37e2c5bd9ba2248e2250a55b9882d19ef16d29a0a22
-  size: 69004
-  modified: '2026-01-18T22:01:02.412306'
+  sha256: 54d259cfe2469298d336bcb2e81bce08a7637ef4a520d46426e997bf03272748
+  size: 75567
+  modified: '2026-01-25T21:26:21.400056'
 - path: phases\r3_dedup_decay.py
   sha256: a4da87c320aca15869c768766540e647a7e658bf6ca1a80f52296ac1631e3ff1
   size: 55112
   modified: '2026-01-18T22:10:24.214983'
+- path: phases\r4_config.py
+  sha256: cf233339c40056777a2ed58f7c87d8e16052ab9f78eda889e69bf4f4443ebc2e
+  size: 8170
+  modified: '2026-01-27T18:42:17.808487'
 - path: phases\r4_kg_consolidator.py
-  sha256: 2a365c6c4bed14862b3f03a3ef65cd18632d7b9418e65919cb7cb6e7977254c5
-  size: 123947
-  modified: '2026-01-24T02:38:02.634240'
+  sha256: 3013d5792280535ae320ba2da05be1b25a2e96f2ad9216ba5e07cec856a840f4
+  size: 155274
+  modified: '2026-01-27T21:25:46.968240'
 - path: phases\r5_dream_explorer.py
-  sha256: 72837f0ea1472ed190c0d4476e702f5d41d029100a7bbbb8a8a5679d8cdc61b3
-  size: 28200
-  modified: '2026-01-16T13:49:35.889587'
+  sha256: 1ac17b41c0ba848b0cd6c670a9d7e65799b4d1dd8e1089c65d884e7c8dbc5a8d
+  size: 40895
+  modified: '2026-01-26T15:03:29.167307'
 - path: phases\r6_staging.py
   sha256: 6dee977a89e17bad3e7ba6423ead83205b20915d097cdd8408275d977f82aa52
   size: 21607
   modified: '2026-01-18T22:01:02.478412'
 - path: phases\r7_truth_writer.py
-  sha256: 68898725dfc7a6628b3970de23d0acf8f29550f1374a6c7d38c80978cd5c8e5d
-  size: 45558
-  modified: '2026-01-18T22:16:21.360136'
+  sha256: 83eebe2094f52f511041eeb3d53e6c83ac90bd1026ededa932bf4b2069eefaa1
+  size: 45931
+  modified: '2026-01-26T15:21:29.172176'
 - path: phases\r8_event_emitter.py
   sha256: db5befeaededb2f31e26536881b45d8f441902aff59f230a3f0a9a8f0834845c
   size: 25354
@@ -262,9 +266,9 @@ files:
   size: 13620
   modified: '2026-01-05T10:06:18.477125'
 - path: r5_config.py
-  sha256: 54a1cdd7c8ecb547fd9513c31deb719e9e0f74b39ac2ab326ba805de06776ed8
-  size: 10198
-  modified: '2026-01-15T11:03:27.065406'
+  sha256: 91ad35a0c7a55e939066a406ad0627f34a65493d1f13478791662fdce76a35df
+  size: 10512
+  modified: '2026-01-25T20:27:31.848811'
 - path: retention.py
   sha256: 318d748750753930433a1edf74b9eaf5b726b14f18ba3230038c04bfe94fc7db
   size: 15673
@@ -314,6 +318,6 @@ files:
   size: 28696
   modified: '2026-01-01T01:57:54.575752'
 - path: staged_writes.py
-  sha256: 8c3c6856e08dbd54f29048ed48de1ae97d0d8e5082c87f676139a71c755d34c0
-  size: 20903
-  modified: '2026-01-17T22:53:46.406503'
+  sha256: 1322227739a28bdf3848ecee928c42a10e8092072b4fb7cb3adfbbd7be3a93ee
+  size: 21647
+  modified: '2026-01-26T15:35:32.049017'

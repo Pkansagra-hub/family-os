@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k0://contracts/jsonschema/topics/history_archive.body.json",
+  "title": "history.archive Body Schema",
+  "description": "Body schema for history.archive command topic. Carries compressed turn history evicted from Concierge HOT tier for archival to K0 storage.",
+  "type": "object",
+  "required": [
+    "turn_ids",
+    "session_id",
+    "turn_range",
+    "compressed_summary",
+    "evicted_reason"
+  ],
+  "properties": {
+    "turn_ids": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "minItems": 1,
+      "description": "Ordered list of turn ordinals being archived."
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Session UUID these turns belong to."
+    },
+    "turn_range": {
+      "type": "object",
+      "required": ["first", "last"],
+      "properties": {
+        "first": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "First turn ordinal in this archive batch."
+        },
+        "last": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Last turn ordinal in this archive batch."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Contiguous turn range (first..last inclusive)."
+    },
+    "compressed_summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "LLM-generated summary of archived turns. Used for context reconstruction."
+    },
+    "evicted_reason": {
+      "type": "string",
+      "enum": [
+        "capacity_limit",
+        "ttl_expired",
+        "session_ended",
+        "manual_eviction"
+      ],
+      "description": "Reason turns were evicted from HOT tier."
+    },
+    "actor": {
+      "type": "string",
+      "description": "Actor who owned the conversation."
+    },
+    "turn_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of turns in this archive batch."
+    },
+    "compressed": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether raw turn data is gzip-compressed."
+    },
+    "raw_turns": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object"
+      },
+      "description": "Optional raw turn objects. May be null if only summary is archived."
+    }
+  },
+  "additionalProperties": false
+}

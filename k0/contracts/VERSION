@@ -5,14 +5,13 @@
 # Categories:
 #   root: 2 files
 #   modules: 22 files
-#   pipelines: 2 files
+#   pipelines: 4 files
 #   capabilities: 1 file
 #   policy: 1 file
 #   schemas: 5 files
-#   table_schemas: 1 file
 #   taxonomies: 1 file
 #   jsonschema: 35 files
-#   TOTAL: 70 files
+#   TOTAL: 71 files
 
 version: 1.1.0
 release_date: '2025-01-07'
@@ -68,19 +67,19 @@ artifacts:
       sha256: 33636a470996f95547262bc8b4c3187b91ce4d0c3c0adbd1043801160a6ec926
     - file: modules/embedding.backfill.v1.yaml
       version: v1
-      sha256: 2ef8c99d1ab00fc094f5bf37517de7855f74df36f8f97dcee452531d46dc2e78
+      sha256: d5dedfe40d327cbb533e59dbc3e1a1361ca2650bf3c1fdffc45b0a7b6b1bbb31
     - file: modules/embedding.cleanup.v1.yaml
       version: v1
-      sha256: 2bf327929d5a33b7aa593d1e8bf0642e2c98793f476f82cf1dd1e66030a70725
+      sha256: db8ed89d57402cc24b03be38f43c9a8dc45ea057902494180d51e3e713e9ca30
     - file: modules/embedding.extract_from_cache.v1.yaml
       version: v1
-      sha256: 7d2b436a09e89d489f7569f0b8b7e8bfc10fd36b6d2b839e88155ba5b2743536
-    - file: modules/embedding.faiss_indexer.v1.yaml
+      sha256: 5e410432b2578fc16848c14d3a39d96910514a9dfa3be3109f5d45708e298199
+    - file: modules/embedding.integrity_check.v1.yaml
       version: v1
-      sha256: ff98c4f2584d34193401c838c340756b044cd6f514e9f15adbdf1ea7349ce1f6
+      sha256: 18b4af7a02e6f0253b0894d03b72f1249e6283d946cff5739e057ff906c0ace0
     - file: modules/embedding.recompute.v1.yaml
       version: v1
-      sha256: 373715dc15692ea16511b05676b35a0c7c8cc4c338b9968fafa10220f1677f1c
+      sha256: 6fcb73e25e8bb971e5c300e06ad8989bed824d261fee793d4f9ac2e813c5f578
     - file: modules/hippocampus.pattern_separate.v1.yaml
       version: v1
       sha256: b5079e49f7b615566b2fa795bd6fa99e14ca9c9482cba990c3e181a4787eea54
@@ -97,14 +96,21 @@ artifacts:
       version: v1
       sha256: dd62f9473aef657a16610d25ff12e8a1ccb7f057d730c1ec55aad549f2ddc6aa
 
-  # === PIPELINE CONTRACTS (2) ===
+  # === PIPELINE CONTRACTS (4) ===
   pipelines:
     - file: pipelines/p02_write.v1.yaml
       version: v1
       sha256: 6c59721a87ab311de348ae45160a04c034f63b64dbbe16dc48d20f052888ec6b
-    - file: pipelines/p08_embedding_management.v2.yaml
+    - file: pipelines/p02_write.v2.yaml
+      version: v2
+      sha256: 2d9ff1b989e278771169362f67c347c79f981bc42f6f08ac96cddb45cf8b4d5a
+    - file: pipelines/_deprecated_p08_embedding_management.v2.yaml
+      version: v2
+      status: deprecated
+      sha256: 7167d68d2df7e33a16562bf0e674d1f9133b9386dffcaeb1770c6c5cc0fa4710
+    - file: pipelines/p08_embedding_management.v3.yaml
       version: v3
-      sha256: 24cbcd38daa16d4b40d85e0a891c80d10f5bbad98e425991eb19b35441193290
+      sha256: fa28f84b27f946fbc0017fb3bdaf957cc9fef1d521f4e4636609e2f4821d133e
 
   # === CAPABILITY CONTRACTS (1) ===
   capabilities:
@@ -130,11 +136,6 @@ artifacts:
     - file: schemas/cognitive_vector_stored.json
       sha256: fb8c92c68e21650bc55aafd64d8b52804c2bbea4faa136275cf589d98ec72d21
 
-  # === TABLE SCHEMAS (1) ===
-  table_schemas:
-    - file: table_schemas/P02_tables_schema.yaml
-      sha256: c1b6b7f8679bcc4049fb0e60a9b3fa168a8d65318cf5fb882f6020b34cf75f1c
-
   # === TAXONOMIES (1) ===
   taxonomies:
     - file: taxonomies/activity_taxonomy.yaml
@@ -155,7 +156,7 @@ artifacts:
     - file: jsonschema/driver.handshake.response.json
       sha256: 0034743d370e031e511f6f7c8059bb88ebcad3aba18433ad05d2515e2880365b
     - file: jsonschema/envelope.schema.json
-      sha256: 31bd48f212b32929b58f48af0e7221768440eb0ccb2b0b54467e20fdefc6ea17
+      sha256: 7387c187ed0b0f558537baa70527d4801a8cd00acd802bbabb880c9c704e5311
     - file: jsonschema/error.schema.json
       sha256: 674fbed68d52f417208c049fc52d670489b3bbb3e4714416a480c17ef35e9c84
     - file: jsonschema/infra.snapshot.event.json

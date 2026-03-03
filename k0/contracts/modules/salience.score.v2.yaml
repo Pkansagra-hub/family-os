@@ -1,0 +1,233 @@
+# =============================================================================
+# M06 salience.score v2.0.0 -- Corrected Inputs Contract
+# =============================================================================
+#
+# The salience FORMULA is unchanged: 0.50 x social + 0.40 x affect + 0.10 x recency.
+# The FIX is correct INPUTS, not a new formula.
+#
+# v1 problem: social_context was always "friends" (score 0.5) because M07 queried
+# empty st_kg_edges. affect came from UltraBERT on 8-token text (context-poor).
+# Result: 60% of rows stuck at salience 0.41, ALL rows MED band, zero discrimination.
+#
+# v2 fix: M07 now produces correct social_context from MW relationships.
+# M04 now passes through MW per-extraction affect (context-rich).
+# Same formula, correct inputs -> proper salience distribution (HIGH/MED/LOW).
+#
+# New: MW entity_salience cross-validation for observability.
+#
+# ADRs: TBD (M3 trust-then-fill architecture)
+# Epic: 3.4
+# =============================================================================
+
+module_id: salience.score
+version: "v2"
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+  - p02.affect.analyzed.v2
+  - p02.social.family_resolved.v2
+  - p02.context.temporal_profiled.v2
+
+output_event_types:
+  - p02.salience.scored.v2
+
+latency_budget_ms: 5   # Unchanged: pure computation, no I/O
+
+side_effects: []
+
+idempotent: true
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+inputs:
+  from_m07:
+    - field: social_context
+      type: TEXT
+      enum: [nuclear_family, extended_family, friends, solo, colleagues, community, unknown]
+      description: "Now derived from MW participant_relationships (not empty st_kg_edges)"
+
+    - field: social_source
+      type: TEXT
+      enum: [mw_v2, kg_edges, ner_heuristic, default]
+      description: "Provenance of social_context (for observability logging)"
+
+  from_m04:
+    - field: affect_valence
+      type: FLOAT
+      range: [0.0, 1.0]
+      description: "Now passthrough from MW per-extraction affect (not UltraBERT on 8-token text)"
+
+    - field: affect_arousal
+      type: FLOAT
+      range: [0.0, 1.0]
+      description: "Now passthrough from MW per-extraction affect"
+
+    - field: affect_source
+      type: TEXT
+      enum: [mw_v2, ultrabert, vader, default]
+      description: "Provenance of affect values (for observability logging)"
+
+  from_m08:
+    - field: event_time_utc
+      type: INTEGER
+      description: "Event timestamp for recency computation"
+
+  from_mw_body:
+    - field: body.entity_salience
+      type: OBJECT
+      format: "{entity_name: score, ...}"
+      nullable: true
+      description: |
+        Per-entity salience map from MW v2 for cross-validation.
+        Log discrepancy if M06 per-event salience differs from MW
+        per-entity salience mean by more than 0.3.
+
+# ---------------------------------------------------------------------------
+# Social Importance Scores (Expanded)
+# ---------------------------------------------------------------------------
+social_importance_scores:
+  nuclear_family: 1.0     # was "family" -> 1.0, now explicit nuclear_family
+  extended_family: 0.7
+  close_friends: 0.6
+  friends: 0.5
+  colleagues: 0.4         # NEW: from expanded social_context enum
+  community: 0.3          # NEW: from expanded social_context enum
+  acquaintance: 0.3
+  solo: 0.2
+  unknown: 0.4
+
+# ---------------------------------------------------------------------------
+# Formula (Unchanged)
+# ---------------------------------------------------------------------------
+formula:
+  social_score: "social_importance_scores[social_context]"
+  affect_score: "non_linear_amplify(valence, arousal)"
+  recency_score: "decay(event_age_hours)"
+  salience: "0.50 * social_score + 0.40 * affect_score + 0.10 * recency_score"
+  weights:
+    social: 0.50
+    affect: 0.40
+    recency: 0.10
+  note: "Unchanged from v1. The fix is correct INPUTS, not a new formula."
+
+salience_bands:
+  HIGH:
+    threshold: 0.7
+    description: "Critical memories, prioritize for quick recall"
+  MED:
+    min: 0.4
+    max: 0.7
+    description: "Important but not urgent"
+  LOW:
+    threshold: 0.4
+    description: "Routine events, background retention"
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+outputs:
+  - name: salience_score
+    type: FLOAT
+    range: [0.0, 1.0]
+    description: "Weighted sum from formula"
+
+  - name: salience_band
+    type: TEXT
+    enum: [HIGH, MED, LOW]
+    description: "Band classification from score thresholds"
+
+  - name: salience_reasons
+    type: LIST[TEXT]
+    description: "Human-readable reasons for score (e.g., 'social_nuclear_family', 'positive_affect')"
+
+  - name: component_scores
+    type: OBJECT
+    format: "{social: FLOAT, affect: FLOAT, recency: FLOAT}"
+    description: "Individual component scores before weighting"
+
+  - name: entity_salience_discrepancy
+    type: FLOAT
+    nullable: true
+    description: |
+      NEW: Absolute delta between M06 per-event salience and mean of MW per-entity
+      salience scores. Logged as observability metric. If > 0.3, indicates MW and
+      P02 disagree significantly about importance.
+
+# ---------------------------------------------------------------------------
+# Failure Modes
+# ---------------------------------------------------------------------------
+failure_modes:
+  - code: SALIENCE_COMPUTATION_FAILED
+    policy: use_default
+    max_retries: 0
+    description: "Unexpected error in formula computation"
+
+  - code: MISSING_AFFECT_DATA
+    policy: use_default
+    max_retries: 0
+    description: "M04 output unavailable (use default affect_score)"
+
+  - code: MISSING_SOCIAL_DATA
+    policy: use_default
+    max_retries: 0
+    description: "M07 output unavailable (use default social_score)"
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+config_schema:
+  type: object
+  properties:
+    weight_social:
+      type: number
+      default: 0.5
+      description: "Weight for social importance component"
+    weight_affect:
+      type: number
+      default: 0.4
+      description: "Weight for affect intensity component"
+    weight_recency:
+      type: number
+      default: 0.1
+      description: "Weight for recency bonus component"
+    high_band_threshold:
+      type: number
+      default: 0.7
+      description: "Minimum score for HIGH salience band"
+    med_band_threshold:
+      type: number
+      default: 0.4
+      description: "Minimum score for MED salience band"
+    default_salience_on_failure:
+      type: number
+      default: 0.5
+      description: "Default salience score if computation fails"
+    entity_salience_discrepancy_threshold:
+      type: number
+      default: 0.3
+      description: "Threshold for logging MW cross-validation discrepancy"
+
+description: |
+  Salience Scoring Module (Attention Network) -- Corrected Inputs v2
+
+  THE PROBLEM WAS NOT THE FORMULA. The formula (0.50*social + 0.40*affect + 0.10*recency)
+  is sound. The problem was broken inputs:
+
+  v1 reality (from 1348 live rows):
+    - social_context always "friends" (68%) or "solo" (32%) -> social_score 0.5 or 0.2
+    - affect from UltraBERT on 8-token text -> context-poor valence
+    - Result: 60% of rows at salience 0.41, ALL rows MED band, zero discrimination
+
+  v2 fix (trust-then-fill upstream):
+    - social_context from MW relationships -> "nuclear_family"=1.0 for family events
+    - affect from MW per-extraction -> context-rich valence from full conversation
+    - Result: proper HIGH/MED/LOW distribution (family events HIGH, routine LOW)
+
+  Example improvement:
+    "Had birthday dinner with Mom and Emma at Olive Garden"
+    v1: social="friends"(0.5) + affect=0.5 -> salience=0.45 MED
+    v2: social="nuclear_family"(1.0) + affect=0.82 -> salience=0.83 HIGH
+
+  New: entity_salience from MW body used for cross-validation.
+  Logs discrepancy when M06 per-event score vs MW per-entity mean differs by > 0.3.

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k0://contracts/jsonschema/topics/ifl_event.body.json",
+  "title": "ifl.event Body Schema",
+  "description": "Body schema for ifl.* command topics. Carries a device or service event from an IFL adapter routed through Bridge. Pattern topic: ifl.{category}.{adapter}.{event}.",
+  "type": "object",
+  "required": [
+    "adapter_id",
+    "category",
+    "event_type",
+    "device_id",
+    "payload",
+    "timestamp",
+    "adapter_signature"
+  ],
+  "properties": {
+    "adapter_id": {
+      "type": "string",
+      "description": "IFL adapter identifier (e.g. fitbit, hue, nest, tesla)."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "health",
+        "home",
+        "transport",
+        "media",
+        "security",
+        "energy",
+        "communication",
+        "other"
+      ],
+      "description": "Device category from IFL adapter registry."
+    },
+    "event_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Adapter-specific event type (e.g. heart_rate, brightness, lock_state)."
+    },
+    "device_id": {
+      "type": "string",
+      "description": "Physical device identifier from IFL device registry."
+    },
+    "payload": {
+      "type": "object",
+      "description": "Adapter-specific event payload. Schema varies per adapter and event_type.",
+      "additionalProperties": true
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601 timestamp of the device event (device-reported time)."
+    },
+    "adapter_signature": {
+      "type": "string",
+      "description": "HMAC signature from the IFL adapter proving event authenticity."
+    },
+    "device_name": {
+      "type": "string",
+      "description": "Human-readable device name."
+    },
+    "location": {
+      "type": ["string", "null"],
+      "description": "Device location within household (e.g. living_room, bedroom)."
+    },
+    "battery_pct": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Device battery percentage if applicable."
+    },
+    "firmware_version": {
+      "type": ["string", "null"],
+      "description": "Device firmware version for compatibility tracking."
+    }
+  },
+  "additionalProperties": false
+}

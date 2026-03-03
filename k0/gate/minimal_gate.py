@@ -37,6 +37,7 @@ class GateOutcome:
     idem_key: str | None = None
     key_version: str | None = None
     key_state: str | None = None
+    violations: tuple[Any, ...] = ()
 
 
 DEFAULT_MAX_ENVELOPE_BYTES = 64_000
@@ -81,6 +82,7 @@ class MinimalGate:
         max_clock_skew_seconds: int | None = None,  # Gap 7: Configurable clock skew
         metrics: MetricsExporter | None = None,
         observability: ObservabilityEmitter | None = None,
+        topic_body_validator: Any | None = None,  # M2 Epic 2.10: TopicBodyValidator
     ) -> None:
         self._registry = registry or SchemaRegistry()
         self._provisioning = provisioning or ProvisioningLedger()
@@ -99,6 +101,7 @@ class MinimalGate:
         )
         self._metrics = metrics
         self._observability = observability
+        self._topic_body_validator = topic_body_validator
 
         # Step 2: Gate Caching (The "Fast Reflexes")
         # Simple in-memory cache for provisioning and schema lookups
@@ -162,6 +165,33 @@ class MinimalGate:
                 tenant_id = self._extract_identifier(envelope, "tenant_id") or "unknown"
                 self._metrics.emit("gate_rejections_total", reason=LIMIT_EXCEEDED, tenant=tenant_id)
             return GateOutcome(False, f"{LIMIT_EXCEEDED}:body")
+
+        # M2 Epic 2.10: Per-topic body validation (topic-aware schema + band + size)
+        if self._topic_body_validator is not None:
+            topic_raw = self._extract_optional(envelope, "topic")
+            band_raw = self._extract_optional(envelope, "band")
+            body_dict = envelope.get("body") if isinstance(envelope.get("body"), dict) else None
+
+            if topic_raw is not None and isinstance(topic_raw, str):
+                topic_result = self._topic_body_validator.validate_topic_body(
+                    topic=topic_raw,
+                    body=body_dict,
+                    band=str(band_raw) if band_raw else "GREEN",
+                    body_bytes_len=len(normalized_body) if normalized_body else 0,
+                )
+                if not topic_result.valid:
+                    tenant_tag = self._extract_identifier(envelope, "tenant_id") or "unknown"
+                    if self._metrics is not None:
+                        self._metrics.emit(
+                            "gate_rejections_total",
+                            reason=topic_result.reason or "TOPIC_VALIDATION",
+                            tenant=tenant_tag,
+                        )
+                    return GateOutcome(
+                        False,
+                        topic_result.reason,
+                        violations=topic_result.violations,
+                    )
 
         tenant_id = self._extract_identifier(envelope, "tenant_id")
         space_id = self._extract_identifier(envelope, "space_id")

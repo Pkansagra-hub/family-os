@@ -24,7 +24,7 @@ class TestResourceTargets:
 
     def test_all_targets_defined(self) -> None:
         """All expected targets are defined."""
-        expected = ["memory_mb", "cpu_cores", "db_connections", "faiss_queries"]
+        expected = ["memory_mb", "cpu_cores", "db_connections", "vector_queries"]
         for target in expected:
             assert target in P03_RESOURCE_TARGETS
 
@@ -47,9 +47,9 @@ class TestResourceTargets:
         assert target.target_value == 10.0
         assert target.alert_threshold == 8.0  # 80%
 
-    def test_faiss_queries_target(self) -> None:
-        """FAISS queries target matches dossier."""
-        target = P03_RESOURCE_TARGETS["faiss_queries"]
+    def test_vector_queries_target(self) -> None:
+        """Vector queries target matches dossier."""
+        target = P03_RESOURCE_TARGETS["vector_queries"]
         assert target.target_value == 100.0
 
 
@@ -92,19 +92,19 @@ class TestP03ResourceMetrics:
         resource_metrics.record_memory_usage("R3", 256.0)
         assert resource_metrics._current_memory_mb == 256.0
 
-    def test_record_faiss_query(self, resource_metrics: P03ResourceMetrics) -> None:
-        """Record FAISS query."""
-        resource_metrics.record_faiss_query("search", 5)
-        assert resource_metrics._faiss_query_count == 5
+    def test_record_vector_query(self, resource_metrics: P03ResourceMetrics) -> None:
+        """Record vector query."""
+        resource_metrics.record_vector_query("search", 5)
+        assert resource_metrics._vector_query_count == 5
 
-        resource_metrics.record_faiss_query("add", 3)
-        assert resource_metrics._faiss_query_count == 8
+        resource_metrics.record_vector_query("add", 3)
+        assert resource_metrics._vector_query_count == 8
 
     def test_reset_cycle_metrics(self, resource_metrics: P03ResourceMetrics) -> None:
         """Reset clears per-cycle metrics."""
-        resource_metrics.record_faiss_query("search", 10)
+        resource_metrics.record_vector_query("search", 10)
         resource_metrics.reset_cycle_metrics()
-        assert resource_metrics._faiss_query_count == 0
+        assert resource_metrics._vector_query_count == 0
 
 
 class TestMemoryPressure:
@@ -186,13 +186,13 @@ class TestResourceSnapshot:
     def test_get_snapshot(self, resource_metrics: P03ResourceMetrics) -> None:
         """Get resource snapshot."""
         resource_metrics.record_memory_usage("R0", 256.0)
-        resource_metrics.record_faiss_query("search", 10)
+        resource_metrics.record_vector_query("search", 10)
 
         snapshot = resource_metrics.get_snapshot()
 
         assert isinstance(snapshot, ResourceSnapshot)
         assert snapshot.memory_mb == 256.0
-        assert snapshot.faiss_queries == 10
+        assert snapshot.vector_queries == 10
         assert snapshot.memory_pressure == MemoryPressureLevel.WARNING
 
     def test_snapshot_should_throttle(self) -> None:
@@ -202,7 +202,7 @@ class TestResourceSnapshot:
             cpu_utilization=0.5,
             db_active=5,
             db_pool_size=10,
-            faiss_queries=50,
+            vector_queries=50,
             memory_pressure=MemoryPressureLevel.OK,
         )
         assert not snapshot_ok.should_throttle
@@ -212,7 +212,7 @@ class TestResourceSnapshot:
             cpu_utilization=0.9,
             db_active=10,
             db_pool_size=10,
-            faiss_queries=100,
+            vector_queries=100,
             memory_pressure=MemoryPressureLevel.CRITICAL,
         )
         assert snapshot_critical.should_throttle
@@ -242,14 +242,14 @@ class TestWithMetricsExporter:
 
         mock_gauge.labels.return_value.set.assert_called()
 
-    def test_record_faiss_updates_counter(self) -> None:
-        """FAISS recording updates Prometheus counter."""
+    def test_record_vector_query_updates_counter(self) -> None:
+        """Vector query recording updates Prometheus counter."""
         mock_exporter = MagicMock()
         mock_counter = MagicMock()
         mock_exporter.counter.return_value = mock_counter
 
         metrics = P03ResourceMetrics(mock_exporter)
-        metrics.record_faiss_query("search", 5)
+        metrics.record_vector_query("search", 5)
 
         mock_counter.labels.return_value.inc.assert_called_with(5)
 

@@ -23,9 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 if TYPE_CHECKING:
     from k0.modules.consolidation.algorithms.duplicate_detector import DuplicationResult
     from k0.modules.consolidation.algorithms.mcts import MCTSScenario
-    from k0.modules.consolidation.algorithms.observation_context import (
-        ObservationContext,
-    )
+    from k0.modules.consolidation.algorithms.observation_context import ObservationContext
     from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
     from k0.modules.consolidation.dream.intent_signals import IntentSignal
     from k0.modules.consolidation.staging.r6_output import R6Output
@@ -42,6 +40,7 @@ class ScoredEvent:
     Event with computed importance score (R1 output).
 
     Used for batch-level importance statistics and downstream prioritization.
+    6 factor fields + priority tier (CONFIG_B, POC validated).
     """
 
     event_id: str
@@ -50,6 +49,9 @@ class ScoredEvent:
     affect_factor: float
     social_factor: float
     novelty_factor: float
+    surprise_factor: float = 0.0
+    identity_factor: float = 0.0
+    priority_tier: str = "LOW"
 
 
 @dataclass

@@ -1,0 +1,142 @@
+# K0 SSE Event Catalog
+#
+# Defines ALL Server-Sent Events that K0 pushes to K1 via GET /k0/sse.subscribe.
+# These are K0-originated notifications that K1 components consume reactively.
+#
+# Contract: k0/contracts/taxonomies/sse_events.yaml
+# Milestone: M2 Epic 2.7
+# Related: k0/contracts/asyncapi.events.yaml (schema definitions)
+
+sse_events:
+  version: "1.0.0"
+  last_updated: "2026-03-01"
+
+  # ===========================================================================
+  # Event Definitions
+  # ===========================================================================
+  events:
+
+    # -------------------------------------------------------------------------
+    # memory.formed.v1 -- Episodic memory formed after P02
+    # -------------------------------------------------------------------------
+    - event_type: "memory.formed.v1"
+      description: "Episodic memory successfully formed and stored"
+      producer_pipeline: "P02"
+      payload_fields:
+        - name: "event_id"
+          type: "string"
+          description: "Hippocampal event ID (st_hipp_events PK)"
+        - name: "wal_pos"
+          type: "integer"
+          description: "WAL position of committed write"
+        - name: "topic"
+          type: "string"
+          description: "Original command topic that produced this memory"
+        - name: "summary"
+          type: "string"
+          description: "Short text summary of stored memory"
+      consumers:
+        - "k1.concierge"
+        - "k1.memory_writer"
+
+    # -------------------------------------------------------------------------
+    # k0.learning.advisory.v1 -- Learning loop advisory
+    # -------------------------------------------------------------------------
+    - event_type: "k0.learning.advisory.v1"
+      description: "Learning loop advisory signal for K1 algorithm tuning"
+      producer_pipeline: "P21"
+      payload_fields:
+        - name: "advisory_id"
+          type: "string"
+          description: "Unique advisory identifier"
+        - name: "pipeline_id"
+          type: "string"
+          description: "Pipeline that generated the advisory"
+        - name: "signal_class"
+          type: "string"
+          description: "Class of learning signal (drift, regression, improvement)"
+        - name: "details"
+          type: "object"
+          description: "Advisory-specific detail payload"
+      consumers:
+        - "k1.planner"
+        - "k1.orchestrator"
+
+    # -------------------------------------------------------------------------
+    # k0.proactive.signal.v1 -- Proactive intelligence trigger
+    # -------------------------------------------------------------------------
+    - event_type: "k0.proactive.signal.v1"
+      description: "Proactive intelligence signal for unprompted engagement"
+      producer_pipeline: "P05"
+      payload_fields:
+        - name: "trigger_type"
+          type: "string"
+          description: "Type of proactive trigger (reminder, suggestion, nudge)"
+        - name: "context"
+          type: "object"
+          description: "Contextual data for the proactive signal"
+        - name: "priority"
+          type: "string"
+          description: "Signal priority (HIGH, NORMAL, LOW)"
+      consumers:
+        - "k1.concierge"
+
+    # -------------------------------------------------------------------------
+    # curiosity.intent.v1 -- P06 curiosity question
+    # -------------------------------------------------------------------------
+    - event_type: "curiosity.intent.v1"
+      description: "Curiosity-driven question to fill knowledge gaps"
+      producer_pipeline: "P06"
+      payload_fields:
+        - name: "gap_id"
+          type: "string"
+          description: "Knowledge gap identifier for correlation"
+        - name: "question_text"
+          type: "string"
+          description: "Natural language question to present to user"
+        - name: "budget_remaining"
+          type: "integer"
+          description: "Remaining curiosity budget for this session"
+      consumers:
+        - "k1.concierge"
+
+    # -------------------------------------------------------------------------
+    # k0.sync.complete.v1 -- Device sync completed
+    # -------------------------------------------------------------------------
+    - event_type: "k0.sync.complete.v1"
+      description: "Multi-device CRDT sync cycle completed"
+      producer_pipeline: "P07"
+      payload_fields:
+        - name: "device_id"
+          type: "string"
+          description: "Device that completed sync"
+        - name: "delta_count"
+          type: "integer"
+          description: "Number of deltas merged in this cycle"
+        - name: "conflict_count"
+          type: "integer"
+          description: "Number of LWW conflicts resolved"
+      consumers:
+        - "bridge.device_sync"
+
+    # -------------------------------------------------------------------------
+    # cognitive.vector.stored.v1 -- Embedding vector stored
+    # -------------------------------------------------------------------------
+    - event_type: "cognitive.vector.stored.v1"
+      description: "Embedding vector stored in st_vec, triggers P08 FAISS indexing"
+      producer_pipeline: "P02"
+      payload_fields:
+        - name: "event_id"
+          type: "string"
+          description: "Hippocampal event ID the embedding belongs to"
+        - name: "embedding_id"
+          type: "string"
+          description: "Embedding record ID in st_vec"
+        - name: "model_id"
+          type: "string"
+          description: "Embedding model used (e.g. ultrabert_v2.1.0)"
+        - name: "vector_dim"
+          type: "integer"
+          description: "Embedding dimensionality (768)"
+      consumers:
+        - "k0.pipeline.P08"

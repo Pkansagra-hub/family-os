@@ -78,7 +78,6 @@ collect_ignore_glob = [
     "tests/k0/integration/test_outbox_exponential_backoff.py",
     "tests/k0/integration/test_retention_policies.py",
     "tests/k0/integration/test_schema_cache_thread_safety.py",
-    "tests/k0/modules/builders/test_embedding_queue_write.py",
     "tests/k0/modules/builders/test_hipp_events_row.py",
     "tests/k0/modules/context/test_ingress_classify.py",
     "tests/k0/modules/context/test_spatial_minimal.py",

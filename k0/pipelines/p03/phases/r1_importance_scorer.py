@@ -59,7 +59,7 @@ class R1Config:
         importance_weights: Optional custom weights (uses defaults if None).
     """
 
-    audit_sample_rate: float = 1.0  # 100% for debug; 0.1 for production
+    audit_sample_rate: float = 0.10  # 10% for production (was 1.0 debug)
     enable_hebbian: bool = False  # Not yet implemented (Issue 4.1.3)
     min_samples_for_learned_weights: int = 500
     importance_weights: Optional[ImportanceWeights] = None
@@ -225,11 +225,15 @@ class R1ImportanceScorer:
                 self.config.audit_sample_rate,
             )
 
+            # Capture batch timestamp for consistent recency computation
+            now_ms = int(time.time() * 1000)
+
             # Score all events with audit logging
             scored_results = await scorer.score_batch_with_audit(
                 events=envelope.events,
                 audit_logger=audit_logger,
                 sample_rate=sample_rate,
+                now_ms=now_ms,
             )
 
             # Collect scored events into phase outputs
@@ -243,6 +247,9 @@ class R1ImportanceScorer:
                         affect_factor=result["affect_factor"],
                         social_factor=result["social_factor"],
                         novelty_factor=result["novelty_factor"],
+                        surprise_factor=result.get("surprise_factor", 0.0),
+                        identity_factor=result.get("identity_factor", 0.0),
+                        priority_tier=result.get("priority_tier", "LOW"),
                     )
                 )
 
@@ -258,11 +265,13 @@ class R1ImportanceScorer:
             max_score = max(scores) if scores else 0.0
             min_score = min(scores) if scores else 0.0
 
-            # Count priority tiers
+            # Count priority tiers (6-tier, POC validated)
             critical_count = sum(1 for s in scores if s >= 0.80)
-            high_count = sum(1 for s in scores if 0.50 <= s < 0.80)
-            medium_count = sum(1 for s in scores if 0.30 <= s < 0.50)
-            low_count = sum(1 for s in scores if s < 0.30)
+            high_count = sum(1 for s in scores if 0.60 <= s < 0.80)
+            medium_high_count = sum(1 for s in scores if 0.45 <= s < 0.60)
+            medium_count = sum(1 for s in scores if 0.30 <= s < 0.45)
+            low_medium_count = sum(1 for s in scores if 0.15 <= s < 0.30)
+            low_count = sum(1 for s in scores if s < 0.15)
 
             duration_ms = int(time.time() * 1000) - start_ms
 
@@ -277,7 +286,9 @@ class R1ImportanceScorer:
                     "min_score": round(min_score, 3),
                     "critical_count": critical_count,
                     "high_count": high_count,
+                    "medium_high_count": medium_high_count,
                     "medium_count": medium_count,
+                    "low_medium_count": low_medium_count,
                     "low_count": low_count,
                     "weights_source": scorer._weights_source,
                     "duration_ms": duration_ms,
@@ -293,6 +304,7 @@ class R1ImportanceScorer:
                     "avg_importance": round(avg_score, 3),
                     "critical_count": critical_count,
                     "high_count": high_count,
+                    "medium_high_count": medium_high_count,
                     "weights_source": scorer._weights_source,
                 },
                 idempotency_key=self.idempotency_key(envelope),

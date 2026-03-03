@@ -3,35 +3,38 @@ M04: affect.analyze (Amygdala/Affect System)
 
 Phase 2 Declarative Module - Emotional content and risk level analysis
 
-Architecture:
-- Primary: UltraBERT unified model (sentiment, emotions, safety in one model)
-- Fallback: Two-tier latency strategy - Tier-0 (VADER, <2ms) and Tier-1 (GoEmotions, <100ms)
-- UltraBERT provides: sentiment, emotions, safety_familyos, safety_generic
-- Valence/arousal mapping from model outputs
-- Affect band classification (GREEN/AMBER/RED) for risk assessment
+Architecture (v2 trust-then-fill):
+- Tier 0: MW v2 per-extraction affect passthrough + safety heads only (~85%, <10ms)
+- Tier 1: Full UltraBERT inference when MW absent/malformed (~10%, <70ms)
+- Tier 2: VADER fallback when UltraBERT fails (~5%, <20ms)
+- Tier 3: Safe defaults when all fail (<1%)
+- Safety heads (clinical_safety_risk, safety_familyos_band) ALWAYS run on body.text
+
+UltraBERT is DEMOTED from primary to fallback. MW v2 provides per-extraction
+affect from full conversation context (~2000 tokens). UltraBERT sees only
+body.text (~15-30 tokens). MW affect is higher quality when present.
 
 Performance:
-- UltraBERT: <30ms P95 (primary path)
-- Tier-0 (VADER): <2ms P99 (fallback if UltraBERT unavailable)
-- Tier-1 (GoEmotions): <100ms P95 (deprecated)
-- Safety accuracy: 96.2% (UltraBERT), vs ~70% (keyword-based)
+- MW fast path: <10ms P95 (safety heads only)
+- UltraBERT fallback: <70ms P95 (full inference)
+- VADER fallback: <20ms P95
+- Safety accuracy: 96.2% (UltraBERT safety heads)
 
-Contract: k0/contracts/modules/affect.analyze.v1.yaml
+Contract: k0/contracts/modules/affect.analyze.v2.yaml
 ADR: docs/architecture/decisions-K0/modules/k004.1-tier0-fast-affect.md
      docs/architecture/decisions-K0/modules/k004.2-transformer-affect.md
 
 Related Modules:
-- M02 (semantic_project): Parallel module
+- M02 (semantic_project): Parallel module, NER fallback source
 - M06 (salience.score): Downstream consumer of affect data
 
 Input: cognitive.memory.write.committed.v1 event
-Output: p02.affect.analyzed.v1 event
+Output: p02.affect.analyzed.v2 event
 Side Effects: None (pure computation)
 
-Issue: 3.1.1 - Upgrade to Transformer-Based Emotion Detection
-Issue: UltraBERT Migration - Single Unified Model
+Epic: 3.10 - M04 Trust-Then-Fill Mode Implementation
 Author: K0 Architecture Team
-Date: 2025-11-17
+Date: 2025-11-17 (v1), 2026-03-01 (v2 trust-then-fill)
 """
 
 from __future__ import annotations
@@ -154,6 +157,9 @@ _metrics = {
     "band_red": 0,
     "safety_keyword_detections": 0,
     "truncated_inputs": 0,
+    "mw_v2_passthrough": 0,
+    "mw_v2_malformed": 0,
+    "safe_defaults_used": 0,
 }
 
 
@@ -216,6 +222,9 @@ class AffectAnnotation:
     raw_pos: float | None = None  # VADER positive proportion
     raw_neg: float | None = None  # VADER negative proportion
     raw_neu: float | None = None  # VADER neutral proportion
+    # v2 trust-then-fill additions
+    dominance: float | None = None  # 0-1 3rd VAD dimension (null from VADER)
+    affect_source: str = "default"  # mw_v2 | ultrabert | vader | default
 
 
 # ============================================================================
@@ -1032,50 +1041,200 @@ def ultrabert_classify(text: str) -> AffectAnnotation | None:
 # ============================================================================
 
 
+# ============================================================================
+# v2 Trust-Then-Fill: MW Affect Extraction
+# ============================================================================
+
+
+def _extract_mw_affect(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract and validate MW v2 affect values from envelope body.
+
+    Validates that body.affect is present and body.affect.valence is a
+    valid float in [0.0, 1.0]. If valid, returns a dict with MW affect
+    values. If invalid or missing, returns None (triggers fallback).
+
+    Args:
+        body: Envelope body dict (may contain body.affect from MW v2).
+
+    Returns:
+        Dict with validated MW affect values, or None if absent/malformed.
+    """
+    affect = body.get("affect")
+    if affect is None or not isinstance(affect, dict):
+        return None
+
+    # Validate valence (required for MW passthrough)
+    valence = affect.get("valence")
+    if valence is None:
+        return None
+    try:
+        valence = float(valence)
+    except (TypeError, ValueError):
+        logger.warning(
+            "MW affect.valence is not a valid float, falling back to UltraBERT",
+            extra={"valence_raw": repr(affect.get("valence"))},
+        )
+        return None
+    if not (0.0 <= valence <= 1.0):
+        logger.warning(
+            "MW affect.valence out of range [0.0, 1.0], falling back to UltraBERT",
+            extra={"valence": valence},
+        )
+        return None
+
+    # Extract arousal (optional, default 0.5)
+    arousal = affect.get("arousal")
+    if arousal is not None:
+        try:
+            arousal = float(arousal)
+            arousal = max(0.0, min(1.0, arousal))
+        except (TypeError, ValueError):
+            arousal = 0.5
+    else:
+        arousal = 0.5
+
+    # Extract dominance (optional, new in v2)
+    dominance = affect.get("dominance")
+    if dominance is not None:
+        try:
+            dominance = float(dominance)
+            dominance = max(0.0, min(1.0, dominance))
+        except (TypeError, ValueError):
+            dominance = None
+
+    # Extract dominant_emotions (optional)
+    dominant_emotions = affect.get("dominant_emotions")
+    if dominant_emotions and isinstance(dominant_emotions, list):
+        dominant_emotions = tuple(str(e) for e in dominant_emotions[:5])
+    else:
+        dominant_emotions = map_circumplex_to_emotions(valence, arousal)
+
+    return {
+        "valence": valence,
+        "arousal": arousal,
+        "dominance": dominance,
+        "dominant_emotions": dominant_emotions,
+    }
+
+
+def _run_safety_heads_only(text: str) -> tuple[bool, str | None, str | None, str, float]:
+    """Run UltraBERT safety heads on text (without full sentiment/emotion inference).
+
+    Safety classification is a safety-critical validation that must ALWAYS run
+    on body.text regardless of whether MW affect is trusted. Never trust LLM
+    alone for safety classification.
+
+    Uses the UltraBERT check_safety() function which leverages the single-pass
+    cache (if enabled) or runs safety_familyos capability only.
+
+    Args:
+        text: Input text to assess for safety.
+
+    Returns:
+        Tuple of (risk_detected, severity, summary, safety_band, confidence).
+    """
+    _metrics["clinical_safety_calls"] += 1
+
+    # Try UltraBERT safety heads first
+    try:
+        from k0.runtime.ultrabert_adapter import check_safety as ultrabert_check_safety
+
+        is_concern, safety_level, summary = ultrabert_check_safety(text)
+
+        severity_map = {
+            "GREEN": "NONE",
+            "AMBER": "LOW",
+            "RED": "MEDIUM",
+            "CRISIS": "CRITICAL",
+        }
+        severity = severity_map.get(safety_level, "NONE")
+
+        if is_concern:
+            _metrics["clinical_safety_detections"] += 1
+
+        return is_concern, severity, summary, safety_level, 0.9
+
+    except ImportError:
+        logger.debug("ultrabert_adapter not available for safety heads")
+
+    except Exception as e:
+        logger.warning(f"UltraBERT safety heads failed: {e}")
+
+    # Fallback to clinical_safety module
+    try:
+        from k0.modules.affect.clinical_safety import assess_safety
+
+        assessment = assess_safety(text)
+        if assessment.risk_detected:
+            _metrics["clinical_safety_detections"] += 1
+        return (
+            assessment.risk_detected,
+            assessment.severity.value if assessment.severity else None,
+            assessment.indicator_summary,
+            "RED" if assessment.risk_detected else "GREEN",
+            0.8,
+        )
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.warning(f"Clinical safety assessment failed: {e}")
+
+    # Keyword-based safety as last resort
+    text_lower = text.lower()
+    if check_safety_keywords(text_lower):
+        _metrics["safety_keyword_detections"] += 1
+        return True, "HIGH", "Safety keyword detected", "RED", 1.0
+
+    return False, "NONE", None, "GREEN", 0.5
+
+
+# ============================================================================
+# Module Entry Point (Phase 2 Signature -- v2 Trust-Then-Fill)
+# ============================================================================
+
+
 async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     """
-    M04 affect.analyze module entry point (Phase 2).
+    M04 affect.analyze module entry point (Phase 2, v2 trust-then-fill).
 
     Process:
-    1. Extract text from cognitive.memory.write.committed.v1 event
-    2. Primary: UltraBERT classification (sentiment, emotions, safety in one model)
-    3. Fallback: Tier-1 GoEmotions or Tier-0 VADER if UltraBERT unavailable
-    4. Emit p02.affect.analyzed.v1 event with rich output
+    1. Extract text AND body.affect from envelope
+    2. Tier 0 (MW present): Passthrough MW affect + safety heads only (~10ms)
+    3. Tier 1 (MW absent): Full UltraBERT inference (~70ms)
+    4. Tier 2 (UltraBERT fails): VADER fallback (~20ms)
+    5. Tier 3 (all fail): Safe defaults
+    6. Safety heads ALWAYS run on body.text
+    7. Emit p02.affect.analyzed.v2 event with rich output
 
-    Optimizations:
-    - Single UltraBERT model replaces 9 separate models
-    - Conditional logging to avoid string formatting overhead
-    - Preserve raw scores for downstream learning
-    - Metrics counters for observability
-
-    Contract: k0/contracts/modules/affect.analyze.v1.yaml
+    Contract: k0/contracts/modules/affect.analyze.v2.yaml
 
     Args:
         message: BusMessage with .payload, .trace_id, .offset
         context: PipelineContext with .syscalls, .logger, .config
         **config: Stage-specific configuration:
-            - confidence_threshold (float): Minimum confidence for classification (default: 0.8)
+            - confidence_threshold (float): Minimum confidence (default: 0.8)
+            - affect_divergence_log_threshold (float): Log MW vs UltraBERT delta (default: 0.3)
 
     Returns:
         Enriched envelope dict with affect analysis fields:
-            - affect_valence: float (-1.0 to 1.0)
+            - affect_valence: float (0.0 to 1.0)
             - affect_arousal: float (0.0 to 1.0)
+            - affect_dominance: float | null (0.0 to 1.0, 3rd VAD dimension)
             - dominant_emotions: list of emotion labels
             - affect_band: str (GREEN/AMBER/RED)
             - band_reasons: list of reasoning codes
             - model_version: str (model identifier)
             - confidence: float (0.0 to 1.0)
+            - affect_source: str (mw_v2 | ultrabert | vader | default)
 
     Raises:
         ValueError: Invalid input format
-        RuntimeError: Classification failed
     """
     # Use enriched envelope from pipeline_runner, with fallback to message.payload
     import json
 
     envelope = config.get("envelope")
     if envelope is None:
-        # Fallback: parse from message.payload (only for first stage or if enrichment fails)
         envelope = (
             json.loads(message.payload)
             if isinstance(message.payload, (str, bytes))
@@ -1084,23 +1243,24 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
 
     # Extract configuration
     confidence_threshold = config.get("confidence_threshold", 0.8)
+    divergence_threshold = config.get("affect_divergence_log_threshold", 0.3)
 
     # Get preloaded models from context (if available from kernel startup)
     preloaded_models = getattr(context, "preloaded_models", None)
 
     # Log module start
     context.logger.debug(
-        "M04 affect.analyze starting",
+        "M04 affect.analyze v2 starting",
         extra={
             "module_id": "affect.analyze",
             "trace_id": message.trace_id,
             "event_id": envelope.get("event_id"),
-            "confidence_threshold": confidence_threshold,
         },
     )
 
-    # Extract text from envelope body
-    text = envelope.get("body", {}).get("text", "")
+    # Extract body and text
+    body = envelope.get("body", {})
+    text = body.get("text", "")
 
     if not text or not isinstance(text, str):
         context.logger.error(
@@ -1113,97 +1273,168 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         )
         raise ValueError(f"Missing or invalid 'text' field in payload (got: {type(text).__name__})")
 
-    context.logger.debug(
-        f"Analyzing affect for text (len={len(text)})",
-        extra={
-            "module_id": "affect.analyze",
-            "trace_id": message.trace_id,
-            "text_length": len(text),
-        },
+    # ====================================================================
+    # SAFETY HEADS -- ALWAYS RUN on body.text regardless of tier
+    # Content-level safety classification is safety-critical validation.
+    # Never trust LLM alone for safety.
+    # ====================================================================
+    safety_risk, safety_severity, safety_summary, safety_band, safety_conf = _run_safety_heads_only(
+        text
     )
 
-    # PRIMARY: Try UltraBERT unified model (sentiment, emotions, safety in one model)
-    annotation = ultrabert_classify(text)
+    # ====================================================================
+    # TRUST-THEN-FILL WATERFALL
+    # ====================================================================
+    annotation: AffectAnnotation | None = None
 
-    if annotation is None:
-        # UltraBERT not available, try legacy Tier-1 transformer (GoEmotions)
+    # ------------------------------------------------------------------
+    # TIER 0: MW v2 affect passthrough (~85% of envelopes, <10ms)
+    # ------------------------------------------------------------------
+    mw_affect = _extract_mw_affect(body)
+    if mw_affect is not None:
+        _metrics["tier0_calls"] += 1
         context.logger.debug(
-            "UltraBERT unavailable, trying Tier-1 GoEmotions",
+            "Tier 0: MW v2 affect passthrough (fast path)",
+            extra={
+                "module_id": "affect.analyze",
+                "trace_id": message.trace_id,
+                "mw_valence": mw_affect["valence"],
+            },
+        )
+
+        # Compute affect band from MW valence
+        affect_band, band_reasons = classify_affect_band(mw_affect["valence"], mw_affect["arousal"])
+
+        annotation = AffectAnnotation(
+            valence=mw_affect["valence"],
+            arousal=mw_affect["arousal"],
+            dominant_emotions=mw_affect["dominant_emotions"],
+            affect_band=affect_band,
+            band_reasons=band_reasons,
+            model_version="mw_v2_passthrough",
+            tier="MW_V2",
+            confidence=0.9,  # High confidence in MW (full conversation context)
+            dominance=mw_affect["dominance"],
+            affect_source="mw_v2",
+        )
+
+    # ------------------------------------------------------------------
+    # TIER 1: Full UltraBERT inference (~10% of envelopes, <70ms)
+    # ------------------------------------------------------------------
+    if annotation is None:
+        context.logger.debug(
+            "Tier 1: MW affect absent/malformed, trying full UltraBERT",
             extra={
                 "module_id": "affect.analyze",
                 "trace_id": message.trace_id,
             },
         )
-        annotation = tier1_classify(text, preloaded_models=preloaded_models)
+        _metrics["ultrabert_calls"] += 1
 
+        ub_result = ultrabert_classify(text)
+        if ub_result is not None:
+            annotation = AffectAnnotation(
+                valence=ub_result.valence,
+                arousal=ub_result.arousal,
+                dominant_emotions=ub_result.dominant_emotions,
+                affect_band=ub_result.affect_band,
+                band_reasons=ub_result.band_reasons,
+                model_version=ub_result.model_version,
+                tier=ub_result.tier,
+                confidence=ub_result.confidence,
+                raw_compound=ub_result.raw_compound,
+                raw_pos=ub_result.raw_pos,
+                raw_neg=ub_result.raw_neg,
+                raw_neu=ub_result.raw_neu,
+                dominance=None,  # UltraBERT does not produce dominance
+                affect_source="ultrabert",
+            )
+
+    # ------------------------------------------------------------------
+    # TIER 2: VADER fallback (~5% of envelopes, <20ms)
+    # ------------------------------------------------------------------
     if annotation is None:
-        # Tier-1 not available, use Tier-0 VADER
         context.logger.debug(
-            "Tier-1 transformer unavailable, using Tier-0 VADER",
+            "Tier 2: UltraBERT unavailable, trying VADER",
             extra={
                 "module_id": "affect.analyze",
                 "trace_id": message.trace_id,
             },
         )
-        annotation = tier0_classify(
+
+        vader_result = tier0_classify(
             text, allow_low_confidence=True, preloaded_models=preloaded_models
         )
-
-        if annotation is None:
-            # Ultimate fallback (should never happen unless VADER fails)
-            context.logger.warning(
-                "All classifiers failed, using defaults",
-                extra={
-                    "module_id": "affect.analyze",
-                    "trace_id": message.trace_id,
-                },
-            )
+        if vader_result is not None:
             annotation = AffectAnnotation(
-                valence=DEFAULT_VALENCE,  # Neutral (default from contract)
-                arousal=DEFAULT_AROUSAL,  # Low-moderate (default from contract)
-                dominant_emotions=("neutral",),
-                affect_band="GREEN",
-                band_reasons=("all_classifiers_unavailable_fallback",),
-                model_version="fallback_v1.0",
-                tier="FALLBACK",
-                confidence=0.2,  # Very low confidence
-                raw_compound=None,
-                raw_pos=None,
-                raw_neg=None,
-                raw_neu=None,
+                valence=vader_result.valence,
+                arousal=vader_result.arousal,
+                dominant_emotions=vader_result.dominant_emotions,
+                affect_band=vader_result.affect_band,
+                band_reasons=vader_result.band_reasons,
+                model_version=vader_result.model_version,
+                tier=vader_result.tier,
+                confidence=vader_result.confidence,
+                raw_compound=vader_result.raw_compound,
+                raw_pos=vader_result.raw_pos,
+                raw_neg=vader_result.raw_neg,
+                raw_neu=vader_result.raw_neu,
+                dominance=None,  # VADER does not produce dominance
+                affect_source="vader",
             )
 
-    # Run clinical safety assessment (Issue 3.1.2)
-    # Results are used to override affect_band and boost salience
-    safety_risk, safety_severity, safety_summary = check_clinical_safety(text)
+    # ------------------------------------------------------------------
+    # TIER 3: Safe defaults (<1% of envelopes)
+    # ------------------------------------------------------------------
+    if annotation is None:
+        context.logger.warning(
+            "Tier 3: All classifiers failed, using safe defaults",
+            extra={
+                "module_id": "affect.analyze",
+                "trace_id": message.trace_id,
+            },
+        )
+        annotation = AffectAnnotation(
+            valence=DEFAULT_VALENCE,
+            arousal=DEFAULT_AROUSAL,
+            dominant_emotions=("neutral",),
+            affect_band="GREEN",
+            band_reasons=("all_classifiers_unavailable_fallback",),
+            model_version="safe_defaults_v2.0",
+            tier="FALLBACK",
+            confidence=0.2,
+            dominance=None,
+            affect_source="default",
+        )
 
-    # Override affect_band based on clinical safety severity
+    # ====================================================================
+    # SAFETY OVERRIDE -- apply safety band to affect band
+    # ====================================================================
     final_affect_band = annotation.affect_band
     final_band_reasons = list(annotation.band_reasons)
 
     if safety_risk and safety_severity:
-        # Map clinical safety severity to affect_band
-        # CRITICAL/HIGH → RED, MEDIUM → AMBER, LOW → keep existing
         if safety_severity in ("CRITICAL", "HIGH"):
             final_affect_band = "RED"
             final_band_reasons.append(f"clinical_safety_{safety_severity.lower()}")
         elif safety_severity == "MEDIUM":
-            # Only upgrade to AMBER if currently GREEN
             if final_affect_band == "GREEN":
                 final_affect_band = "AMBER"
             final_band_reasons.append("clinical_safety_medium")
 
-    # Return enriched envelope with nested enrichments structure
+    # ====================================================================
+    # BUILD ENRICHED ENVELOPE
+    # ====================================================================
     enriched_envelope = {
         **envelope,
         # BACKWARD COMPAT: Keep flat fields during migration (Phase 2)
         "affect_valence": annotation.valence,
         "affect_arousal": annotation.arousal,
-        "dominant_emotions": list(annotation.dominant_emotions),  # Convert tuple → list
+        "dominant_emotions": list(annotation.dominant_emotions),
         "affect_band": final_affect_band,
         "band_reasons": final_band_reasons,
         "model_version": annotation.model_version,
-        "affect_tier": annotation.tier,  # TIER_0, TIER_0_LOW_CONF, or TIER_1
+        "affect_tier": annotation.tier,
         "confidence": annotation.confidence,
         # Raw VADER scores for downstream learning/calibration
         "raw_vader_compound": annotation.raw_compound,
@@ -1214,18 +1445,23 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         "clinical_safety_risk": safety_risk,
         "clinical_safety_severity": safety_severity,
         "clinical_safety_summary": safety_summary,
-        # NEW: Nested enrichments structure (Phase 2)
+        # v2 additions
+        "affect_dominance": annotation.dominance,
+        "affect_source": annotation.affect_source,
+        # Nested enrichments structure (Phase 2)
         "enrichments": {
             **envelope.get("enrichments", {}),
             "affect_analyzer": {
                 "valence": annotation.valence,
                 "arousal": annotation.arousal,
+                "dominance": annotation.dominance,
                 "dominant_emotions": list(annotation.dominant_emotions),
                 "band": final_affect_band,
                 "band_reasons": final_band_reasons,
                 "model_version": annotation.model_version,
                 "tier": annotation.tier,
                 "confidence": annotation.confidence,
+                "affect_source": annotation.affect_source,
                 "raw_vader_compound": annotation.raw_compound,
                 "raw_vader_pos": annotation.raw_pos,
                 "raw_vader_neg": annotation.raw_neg,
@@ -1233,7 +1469,7 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
                 "clinical_safety_risk": safety_risk,
                 "clinical_safety_severity": safety_severity,
                 "clinical_safety_summary": safety_summary,
-                "module_version": "v1",
+                "module_version": "v2",
                 "execution_time_ms": 0.0,  # Set by PipelineRunner
             },
         },
@@ -1241,16 +1477,17 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
 
     # Log module completion
     context.logger.debug(
-        "M04 affect.analyze completed",
+        "M04 affect.analyze v2 completed",
         extra={
             "module_id": "affect.analyze",
             "trace_id": message.trace_id,
             "valence": annotation.valence,
             "arousal": annotation.arousal,
+            "dominance": annotation.dominance,
             "affect_band": final_affect_band,
+            "affect_source": annotation.affect_source,
             "confidence": annotation.confidence,
             "clinical_safety_risk": safety_risk,
-            "clinical_safety_severity": safety_severity,
         },
     )
 

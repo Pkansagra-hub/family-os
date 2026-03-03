@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/command_envelope.json",
+  "title": "Bridge Command Envelope",
+  "description": "Bridge-side envelope schema. All fields Bridge must populate before sending to K0 command port. Mirrors k0 envelope.schema.json but with Bridge-specific constraints (idem_key required, sig computed).",
+  "type": "object",
+  "required": [
+    "cognitive_trace_id",
+    "tenant_id",
+    "space_id",
+    "topic",
+    "schema_uri",
+    "schema_version",
+    "actor",
+    "device_id",
+    "band",
+    "policy_version",
+    "ts",
+    "sig",
+    "sig_alg",
+    "sig_kid",
+    "envelope_sha256",
+    "idem_key",
+    "payload_sha256",
+    "body"
+  ],
+  "properties": {
+    "cognitive_trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Trace correlation ID. Propagated from K1 session or generated (UUID v7)."
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Family tenant ID from Bridge config."
+    },
+    "space_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Family space ID from Bridge config."
+    },
+    "topic": {
+      "type": "string",
+      "pattern": "^(memory|session|beliefs|history|plan|ifl|sync)\\..+",
+      "description": "Command topic. Must be registered in command_topics.yaml."
+    },
+    "schema_uri": {
+      "type": "string",
+      "pattern": "^schema://k0/topics/.+\\.body\\.json$",
+      "description": "Per-topic body schema URI. Format: schema://k0/topics/{topic_base}.body.json"
+    },
+    "schema_version": {
+      "type": "string",
+      "description": "Body schema version resolved from the schema $id."
+    },
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Authenticated K1 module identity (e.g. k1.memory_writer)."
+    },
+    "device_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Device ID from Bridge device registry."
+    },
+    "band": {
+      "type": "string",
+      "enum": ["GREEN", "AMBER", "RED"],
+      "description": "Privacy band. Must be in allowed_bands for the topic."
+    },
+    "policy_version": {
+      "type": "string",
+      "description": "Current policy version from Bridge config."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601 timestamp at envelope build time."
+    },
+    "sig": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Envelope signature computed by Bridge signing backend."
+    },
+    "sig_alg": {
+      "type": "string",
+      "enum": ["ECDSA_P256_SHA256", "Ed25519SHA512", "RSA4096SHA256", "HMAC_SHA256"],
+      "description": "Signature algorithm. HMAC_SHA256 for dev, Ed25519SHA512 for production."
+    },
+    "sig_kid": {
+      "type": "string",
+      "pattern": "^did:device:.+#.+$",
+      "description": "Key ID in DID format: did:device:device-name#rotation-timestamp."
+    },
+    "envelope_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of full canonical envelope JSON (excluding sig fields)."
+    },
+    "idem_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "BLAKE3(topic + canonical_json(body) + device_id). Deterministic idempotency key. REQUIRED on Bridge side."
+    },
+    "payload_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of canonical_json(body). REQUIRED on Bridge side."
+    },
+    "body": {
+      "type": "object",
+      "description": "Domain payload. Must match the per-topic body schema referenced by schema_uri."
+    }
+  },
+  "additionalProperties": false
+}

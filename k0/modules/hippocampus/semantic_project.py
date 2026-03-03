@@ -10,6 +10,15 @@ Architecture:
 - Template-based KG triple generation (subject-predicate-object)
 - Allocates embedding_id for P08 vector generation (deferred to async pipeline)
 
+v2 Enhancements (Epic 3.14):
+- Exposes structured NER outputs for downstream fallback consumption:
+    ner_temporal_entities -> M08 temporal fallback
+    ner_loc_entities -> M08/spatial fallback
+    ner_per_entities -> M07 social fallback
+- Enhances KG triples with MW participant_relationships when present
+    (PARENT_OF, SPOUSE_OF instead of MENTIONED_WITH)
+- M02 ALWAYS runs full NER + embedding (never skipped)
+
 Performance:
 - ULTRABERT: ~30ms P95 (primary, replaces all NER models)
 - RULE_BASED: ~5ms P95 (family terms only, 70% accuracy)
@@ -22,7 +31,7 @@ Feature Flags:
 - Automatic fallback on model failures
 - Metrics collection for A/B comparison
 
-Contract: k0/contracts/modules/hippocampus.semantic_project.v1.yaml
+Contract: k0/contracts/modules/hippocampus.semantic_project.v2.yaml
 ADR: docs/architecture/decisions-K0/modules/k003.2-ca1-semantic-bridge.md
 
 Related Modules:
@@ -852,6 +861,129 @@ def _activity_type_to_predicate(activity_type: str | None, object_type: str) -> 
 
 
 # ============================================================================
+# v2: NER Output Categorization for Downstream Fallback
+# ============================================================================
+
+# Label mappings for categorizing NER entities
+_TEMPORAL_LABELS = {"DATE", "TIME", "DATE_REL", "DATE_ABS", "TIME_REL", "DURATION"}
+_LOCATION_LABELS = {"GPE", "LOC", "FAC", "FACILITY"}
+_PERSON_LABELS = {"PERSON", "PER", "KINSHIP", "FAM", "FAMILY"}
+
+
+def _categorize_ner_entities(
+    entities: list[Entity],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """
+    Categorize extracted NER entities into temporal, location, and person buckets.
+
+    These outputs are consumed by downstream modules as fallback:
+    - ner_temporal_entities -> M08 temporal fallback chain
+    - ner_loc_entities -> M08/M13 spatial fallback chain
+    - ner_per_entities -> M07 social fallback chain
+
+    Args:
+        entities: Raw Entity objects from NER extraction
+
+    Returns:
+        (ner_temporal, ner_loc, ner_per) - each a list of dicts with
+        {text, type, confidence, start, end, source}
+    """
+    ner_temporal: list[dict] = []
+    ner_loc: list[dict] = []
+    ner_per: list[dict] = []
+
+    for ent in entities:
+        entry = {
+            "text": ent.text,
+            "type": ent.label,
+            "confidence": ent.confidence,
+            "start": ent.start,
+            "end": ent.end,
+            "source": ent.source,
+        }
+
+        if ent.label in _TEMPORAL_LABELS:
+            entry["type"] = "TEMPORAL"
+            ner_temporal.append(entry)
+        elif ent.label in _LOCATION_LABELS:
+            entry["type"] = "LOC"
+            ner_loc.append(entry)
+        elif ent.label in _PERSON_LABELS:
+            entry["type"] = "PER"
+            ner_per.append(entry)
+
+    return ner_temporal, ner_loc, ner_per
+
+
+# ============================================================================
+# v2: MW Participant Relationship KG Enhancement
+# ============================================================================
+
+
+def _enhance_kg_triples_with_mw_relationships(
+    kg_triples: list[list[str]],
+    mw_relationships: list[dict[str, Any]],
+) -> list[list[str]]:
+    """
+    Enhance KG triples with typed predicates from MW participant_relationships.
+
+    When MW provides typed relationships (PARENT_OF, SPOUSE_OF, etc.),
+    replace generic MENTIONED_WITH predicates with MW-provided types.
+    Unmatched triples retain their original predicate.
+
+    Args:
+        kg_triples: KG triples as [[subject, predicate, object], ...]
+        mw_relationships: MW participant_relationships list of dicts:
+            [{person: str, relationship_type: str, confidence: float}, ...]
+
+    Returns:
+        Enhanced KG triples with typed predicates where matched.
+    """
+    if not mw_relationships:
+        return kg_triples
+
+    # Build lookup: normalized person name -> relationship_type
+    rel_lookup: dict[str, str] = {}
+    for rel in mw_relationships:
+        person = rel.get("person", "")
+        rel_type = rel.get("relationship_type", "")
+        if person and rel_type:
+            rel_lookup[person.lower().strip()] = rel_type
+
+    if not rel_lookup:
+        return kg_triples
+
+    enhanced: list[list[str]] = []
+    for triple in kg_triples:
+        if len(triple) < 3:
+            enhanced.append(triple)
+            continue
+
+        subject, predicate, obj = triple[0], triple[1], triple[2]
+
+        # Check if subject or object matches a MW person
+        subj_key = subject.replace("person_", "").lower().strip()
+        obj_key = obj.replace("person_", "").lower().strip()
+
+        if subj_key in rel_lookup and predicate in (
+            "mentioned_with",
+            "interacted_with",
+            "mentions",
+        ):
+            enhanced.append([subject, rel_lookup[subj_key], obj])
+        elif obj_key in rel_lookup and predicate in (
+            "mentioned_with",
+            "interacted_with",
+            "mentions",
+        ):
+            enhanced.append([subject, rel_lookup[obj_key], obj])
+        else:
+            enhanced.append(triple)
+
+    return enhanced
+
+
+# ============================================================================
 # Main Entry Point (Phase 2 Declarative Module)
 # ============================================================================
 
@@ -887,7 +1019,7 @@ async def run(
     Side Effects:
         - Prepares payload for st_embedding_queue (via M14 outbox.enqueue_embedding)
 
-    Contract: k0/contracts/modules/hippocampus.semantic_project.v1.yaml
+    Contract: k0/contracts/modules/hippocampus.semantic_project.v2.yaml
     """
     # Get trace_id from message, envelope should be passed as kwarg by pipeline_runner
     trace_id = message.trace_id or "unknown"
@@ -934,20 +1066,37 @@ async def run(
             extra={"trace_id": trace_id, "event_id": event_id},
         )
         # Return enriched envelope with minimal output for empty text
+        _empty_embedding_id = str(uuid.uuid4())
+        _empty_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         return {
             **envelope,
-            "embedding_id": str(uuid.uuid4()),
+            "embedding_id": _empty_embedding_id,
             "entities_json": "[]",
             "kg_triples_json": "[]",
-            "semantic_projected_at_utc": datetime.now(timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z"),
+            "semantic_projected_at_utc": _empty_ts,
             # P03 R4 fields - empty for empty text (Issue 4.4.1)
             "ner_entities_json": json.dumps({"ner_family": [], "ner_general": []}),
             "temporal_json": json.dumps({"temporal": []}),
             "intent_category": None,
             "ingress_category": None,
             "ultrabert_version": None,
+            # v2: Structured NER outputs (empty for empty text)
+            "ner_temporal_entities": [],
+            "ner_loc_entities": [],
+            "ner_per_entities": [],
+            "enrichments": {
+                **envelope.get("enrichments", {}),
+                "semantic_projector": {
+                    "embedding_id": _empty_embedding_id,
+                    "entities_json": "[]",
+                    "kg_triples_json": "[]",
+                    "semantic_projected_at_utc": _empty_ts,
+                    "module_version": "v2",
+                    "ner_temporal_entities": [],
+                    "ner_loc_entities": [],
+                    "ner_per_entities": [],
+                },
+            },
         }
 
     # Phase 1: Entity extraction (spaCy NER) - with preloaded models
@@ -960,6 +1109,9 @@ async def run(
     # Phase 1b: Get RAW UltraBERT NER output for P03 (Issue 4.4.1)
     # This stores the 3-head output that UltraBERTEntityExtractor expects
     ner_storage_data = _extract_ner_for_p03_storage(text)
+
+    # Phase 1c (v2): Categorize NER entities for downstream fallback consumption
+    ner_temporal_entities, ner_loc_entities, ner_per_entities = _categorize_ner_entities(entities)
 
     # Phase 2: Entity resolution (canonical IDs)
     participants = envelope.get("participants", [])
@@ -976,6 +1128,23 @@ async def run(
         max_triples=max_triples,
     )
 
+    # Phase 3b (v2): Enhance KG triples with MW participant_relationships when present
+    body = envelope.get("body", {})
+    mw_relationships = body.get("participant_relationships", []) if isinstance(body, dict) else []
+    if mw_relationships:
+        try:
+            kg_triples = _enhance_kg_triples_with_mw_relationships(kg_triples, mw_relationships)
+            logger.debug(
+                "KG triples enhanced with MW relationships",
+                extra={"trace_id": trace_id, "relationship_count": len(mw_relationships)},
+            )
+        except Exception as e:
+            # MW_RELATIONSHIPS_MALFORMED: ignore enhancement, keep original triples
+            logger.warning(
+                f"MW relationship enhancement failed, using original triples: {e}",
+                extra={"trace_id": trace_id},
+            )
+
     # Phase 4: Allocate embedding_id (UUID for P08 processing)
     embedding_id = str(uuid.uuid4())
 
@@ -991,8 +1160,14 @@ async def run(
             "embedding_id": embedding_id,
             "entity_count": len(resolved_entities),
             "triple_count": len(kg_triples),
+            "ner_temporal_count": len(ner_temporal_entities),
+            "ner_loc_count": len(ner_loc_entities),
+            "ner_per_count": len(ner_per_entities),
+            "mw_enhanced": bool(mw_relationships),
         },
     )
+
+    _now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     # Return enriched envelope (preserve all original fields + add semantic projection)
     return {
@@ -1001,7 +1176,7 @@ async def run(
         "embedding_id": embedding_id,
         "entities_json": entities_json,
         "kg_triples_json": kg_triples_json,
-        "semantic_projected_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "semantic_projected_at_utc": _now_iso,
         # NEW P03 R4 FIELDS (Issue 4.4.1): Raw UltraBERT NER for entity extraction
         "ner_entities_json": ner_storage_data["ner_entities_json"],
         "temporal_json": ner_storage_data["temporal_json"],
@@ -1015,17 +1190,20 @@ async def run(
         "nli_label": ner_storage_data.get("nli_label"),
         "nli_confidence": ner_storage_data.get("nli_confidence"),
         "sentiment_confidence": ner_storage_data.get("sentiment_confidence"),
+        # v2: Structured NER outputs for downstream fallback consumption
+        "ner_temporal_entities": ner_temporal_entities,
+        "ner_loc_entities": ner_loc_entities,
+        "ner_per_entities": ner_per_entities,
         # NEW: Nested enrichments structure (Phase 4)
         "enrichments": {
             **envelope.get("enrichments", {}),
-            "hippocampus_semantic_project": {
+            # v2: Use "semantic_projector" key (matches M08/M07 downstream lookups)
+            "semantic_projector": {
                 "embedding_id": embedding_id,
                 "entities_json": entities_json,
                 "kg_triples_json": kg_triples_json,
-                "semantic_projected_at_utc": datetime.now(timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z"),
-                "module_version": "v1",
+                "semantic_projected_at_utc": _now_iso,
+                "module_version": "v2",
                 "execution_time_ms": 0.0,  # Set by PipelineRunner
                 # P03 R4 NER fields included for downstream consumption
                 "ner_entities_json": ner_storage_data["ner_entities_json"],
@@ -1037,6 +1215,10 @@ async def run(
                 "nli_label": ner_storage_data.get("nli_label"),
                 "nli_confidence": ner_storage_data.get("nli_confidence"),
                 "sentiment_confidence": ner_storage_data.get("sentiment_confidence"),
+                # v2: Structured NER fallback outputs
+                "ner_temporal_entities": ner_temporal_entities,
+                "ner_loc_entities": ner_loc_entities,
+                "ner_per_entities": ner_per_entities,
             },
         },
     }

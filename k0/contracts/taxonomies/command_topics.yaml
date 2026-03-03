@@ -1,0 +1,171 @@
+# K0 Command Topic Registry
+#
+# Defines ALL valid command topics K1 can send to K0 via Bridge PORT_CMD.
+# Each topic maps to a body schema, outbox driver, internal bus topic, and target pipeline.
+#
+# Pattern: DNS-style topic_id (no version suffix). Versioning via schema_uri.
+# Follows activity_taxonomy.yaml conventions (versioned, flat per-entry metadata).
+#
+# Contract: k0/contracts/taxonomies/command_topics.yaml
+# Milestone: M2 Epic 2.1
+# ADR: ADR-K004 Capability Mesh, Bridge README Section 3.1
+
+command_topics:
+  version: "1.0.0"
+  last_updated: "2026-03-01"
+
+  # ===========================================================================
+  # Topic Definitions
+  # ===========================================================================
+  topics:
+
+    # -------------------------------------------------------------------------
+    # memory.write -- Episodic memory formation
+    # -------------------------------------------------------------------------
+    - topic_id: "memory.write"
+      description: "Episodic memory write from Memory Writer v2"
+      producer: "k1.memory_writer"
+      body_schema_ref: "k0/contracts/jsonschema/topics/memory_write.body.json"
+      outbox_driver: "st_epi"
+      bus_topic: "cognitive.memory.write.committed.v1"
+      target_pipeline: "P02"
+      required_band:
+        - "GREEN"
+        - "AMBER"
+        - "RED"
+      max_payload_bytes: 8192
+      notes: >
+        Primary write path. Body is a MemoryAtom v2 (34 fields).
+        Gap answers (P06 curiosity responses) also use this topic with gap_id in body.
+
+    # -------------------------------------------------------------------------
+    # session.snapshot -- Session state archival
+    # -------------------------------------------------------------------------
+    - topic_id: "session.snapshot"
+      description: "Session state snapshot for COLD tier archival"
+      producer: "k1.concierge"
+      body_schema_ref: "k0/contracts/jsonschema/topics/session_snapshot.body.json"
+      outbox_driver: "st_session"
+      bus_topic: "session.snapshot.committed.v1"
+      target_pipeline: null
+      required_band:
+        - "GREEN"
+        - "AMBER"
+      max_payload_bytes: 65536
+      notes: >
+        Archive-only path. No pipeline processing.
+        Triggered by SessionState COLD tier eviction.
+
+    # -------------------------------------------------------------------------
+    # beliefs.archive -- Planner belief eviction
+    # -------------------------------------------------------------------------
+    - topic_id: "beliefs.archive"
+      description: "Archived belief from Planner belief store eviction"
+      producer: "k1.planner"
+      body_schema_ref: "k0/contracts/jsonschema/topics/beliefs_archive.body.json"
+      outbox_driver: "st_beliefs"
+      bus_topic: "beliefs.archive.committed.v1"
+      target_pipeline: null
+      required_band:
+        - "GREEN"
+        - "AMBER"
+      max_payload_bytes: 16384
+      notes: >
+        Archive-only path. No pipeline processing.
+        Triggered when Planner evicts low-confidence beliefs.
+
+    # -------------------------------------------------------------------------
+    # history.archive -- Turn history eviction
+    # -------------------------------------------------------------------------
+    - topic_id: "history.archive"
+      description: "Compressed turn history archive from Concierge"
+      producer: "k1.concierge"
+      body_schema_ref: "k0/contracts/jsonschema/topics/history_archive.body.json"
+      outbox_driver: "st_history"
+      bus_topic: "history.archive.committed.v1"
+      target_pipeline: null
+      required_band:
+        - "GREEN"
+        - "AMBER"
+      max_payload_bytes: 32768
+      notes: >
+        Archive-only path. No pipeline processing.
+        Triggered by history HOT->COLD eviction in Concierge.
+
+    # -------------------------------------------------------------------------
+    # plan.committed -- Planner Stage 4 committed plan
+    # -------------------------------------------------------------------------
+    - topic_id: "plan.committed"
+      description: "Committed execution plan from Planner Stage 4"
+      producer: "k1.planner"
+      body_schema_ref: "k0/contracts/jsonschema/topics/plan_committed.body.json"
+      outbox_driver: "st_epi"
+      bus_topic: "cognitive.plan.committed.v1"
+      target_pipeline: "P02"
+      required_band:
+        - "GREEN"
+        - "AMBER"
+      max_payload_bytes: 16384
+      notes: >
+        Enters P02 write pipeline for episodic storage.
+        Planner commits final plan after Stage 4 verification.
+
+    # -------------------------------------------------------------------------
+    # ifl.event -- IFL adapter device/service events
+    # -------------------------------------------------------------------------
+    - topic_id: "ifl.event"
+      description: "Device or service event from IFL adapter via Bridge"
+      producer: "bridge.ifl"
+      body_schema_ref: "k0/contracts/jsonschema/topics/ifl_event.body.json"
+      outbox_driver: "st_epi"
+      bus_topic: "cognitive.ifl.event.committed.v1"
+      target_pipeline: "P02"
+      required_band:
+        - "GREEN"
+        - "AMBER"
+        - "RED"
+      max_payload_bytes: 8192
+      glob_pattern: "ifl.*"
+      notes: >
+        Pattern topic: ifl.{category}.{adapter}.{event}
+        Examples: ifl.health.fitbit.heart_rate, ifl.home.hue.brightness
+        Glob matcher "ifl.*" routes all IFL subtopics to this entry.
+
+    # -------------------------------------------------------------------------
+    # sync.delta -- Multi-device CRDT sync
+    # -------------------------------------------------------------------------
+    - topic_id: "sync.delta"
+      description: "CRDT sync delta from device sync subsystem"
+      producer: "bridge.device_sync"
+      body_schema_ref: "k0/contracts/jsonschema/topics/sync_delta.body.json"
+      outbox_driver: "st_sync"
+      bus_topic: "sync.delta.committed.v1"
+      target_pipeline: "P07"
+      required_band:
+        - "GREEN"
+      max_payload_bytes: 65536
+      notes: >
+        GREEN-band only (device sync is infrastructure, not user-content).
+        Enters P07 CRDT merge pipeline.
+
+  # ===========================================================================
+  # Routing Resolution Rules
+  # ===========================================================================
+  resolution:
+    strategy: "exact_then_glob"
+    description: >
+      1. Exact match on topic_id first.
+      2. If no exact match, try glob_pattern fields (e.g. ifl.* matches ifl.health.fitbit.heart_rate).
+      3. If no match, reject with 400 (unknown topic).
+    unknown_topic_action: "REJECT"
+    unknown_topic_error_code: 400
+
+  # ===========================================================================
+  # Feedback Path (informational -- NOT a command topic)
+  # ===========================================================================
+  feedback_note: >
+    Algorithm tuning feedback (learning signals from K1) does NOT use command topics.
+    Feedback flows through the obs port: POST /k0/obs.emit with kind=feedback.
+    Gap answers (user responses to P06 curiosity questions) DO use memory.write
+    with gap_id set in the body correlation field. This dual-path is intentional:
+    feedback tunes algorithms, gap answers produce new episodic memories.

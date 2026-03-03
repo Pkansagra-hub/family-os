@@ -1,0 +1,315 @@
+# =============================================================================
+# M08 context.temporal_profile v2.0.0 -- MW Temporal + Spatial Fallback Chains
+# =============================================================================
+#
+# Extends v1 11-dimensional output to 14 dimensions with MW v2 temporal signals.
+# Defines the TEMPORAL FALLBACK CHAIN and SPATIAL FALLBACK CHAIN that are
+# critical paths -- without correct timestamps everything downstream collapses.
+#
+# New signals from MW v2:
+#   - temporal_mentioned_time: raw temporal reference ("yesterday evening")
+#   - temporal_resolved_epoch_ms: K1-resolved epoch for mentioned_time
+#   - temporal_orientation: PAST/ONGOING/FUTURE_COMMITMENT
+#
+# M08 is the SINGLE SOURCE OF TRUTH for all temporal dimensions in st_hipp_events.
+# No other P02 stage should recompute or mutate these fields.
+#
+# ADRs: TBD (M3 trust-then-fill architecture)
+# Epic: 3.5
+# =============================================================================
+
+module_id: context.temporal_profile
+version: "v2"
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.context.temporal_profiled.v2
+
+output_dimensions: 14   # was 11, +3 new MW temporal signals
+
+# P95 latency budget (worst-case ner_lookup path)
+# Breakdown: fast_path ~4ms, ner_lookup ~6ms
+latency_budget_ms: 6
+
+side_effects:
+  - read:tenant_config
+
+idempotent: true
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+inputs:
+  existing:
+    - field: body.event_time
+      type: TEXT
+      format: "ISO 8601 or Unix timestamp"
+      description: "MW set event time (may be envelope creation time)"
+
+    - field: envelope.ts
+      type: INTEGER
+      description: "Bridge timestamp. ALWAYS PRESENT -- hard backstop."
+
+  new_from_mw:
+    - field: body.temporal.resolved_epoch_ms
+      type: BIGINT
+      description: |
+        K1-resolved epoch milliseconds for mentioned_time.
+        When user says "yesterday evening", K1 resolves to specific epoch.
+        Takes HIGHEST priority for event_time_utc when present.
+
+    - field: body.temporal.mentioned_time
+      type: TEXT
+      description: "Raw temporal reference string ('yesterday evening', 'last Tuesday')"
+
+    - field: body.temporal.orientation
+      type: TEXT
+      enum: [PAST, ONGOING, FUTURE_COMMITMENT]
+      description: "Temporal orientation of the memory atom. Only LLM can determine this."
+
+  from_m02_ner:
+    - field: m02_ner_temporal
+      type: LIST[OBJECT]
+      description: |
+        UltraBERT NER temporal expressions from M02.
+        Used as FALLBACK when MW body.temporal.resolved_epoch_ms is missing.
+        M02 extracts raw strings; M08 attempts basic regex resolution
+        ("yesterday" = now-24h, "last Tuesday" = prev Tuesday).
+
+    - field: m02_ner_loc
+      type: LIST[OBJECT]
+      description: |
+        UltraBERT NER location entities from M02.
+        Used as FALLBACK for spatial chain when MW body.location_name is missing.
+
+# ---------------------------------------------------------------------------
+# Temporal Fallback Chain (CRITICAL PATH)
+# ---------------------------------------------------------------------------
+# event_time_utc is NEVER null. This chain guarantees a timestamp.
+temporal_fallback_chain:
+  - priority: 1
+    source: body.temporal.resolved_epoch_ms
+    description: "K1 resolved 'yesterday evening' to epoch. Highest fidelity."
+    temporal_source_tag: "mw_resolved"
+
+  - priority: 2
+    source: m02_ner_temporal
+    description: |
+      NER detects temporal expressions in text.
+      Basic regex resolution: "yesterday" = now-24h, "last Tuesday" = prev Tuesday.
+      Lower fidelity than K1 resolution but better than nothing.
+    temporal_source_tag: "ner_temporal"
+
+  - priority: 3
+    source: body.event_time
+    description: "MW set event time. May be envelope creation time, not actual event time."
+    temporal_source_tag: "event_time"
+
+  - priority: 4
+    source: envelope.ts
+    description: "Bridge timestamp. ALWAYS PRESENT -- hard backstop. The conversation happened NOW at minimum."
+    temporal_source_tag: "envelope_ts"
+
+  - priority: 5
+    source: current_time()
+    description: "P02 processing time. Ultimate fallback. Should never be reached if envelope.ts present."
+    temporal_source_tag: "now"
+
+# ---------------------------------------------------------------------------
+# Spatial Fallback Chain
+# ---------------------------------------------------------------------------
+# location_name and location_type are nullable. No location is acceptable.
+spatial_fallback_chain:
+  - priority: 1
+    source: body.location_name + body.location_type
+    description: "MW LLM extracted from conversation context. Highest fidelity."
+    location_source_tag: "mw_location"
+
+  - priority: 2
+    source: m02_ner_loc
+    description: "UltraBERT NER LOC entities ('Olive Garden' as LOC type)."
+    location_source_tag: "ner_location"
+
+  - priority: 3
+    source: body.text
+    description: "Heuristic extraction from text. Regex for 'at [Place]' patterns."
+    location_source_tag: "text_heuristic"
+
+  - priority: 4
+    source: null
+    description: "No location detected. Geo fields remain empty. Acceptable."
+    location_source_tag: "none"
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+outputs:
+  existing_11:
+    - name: event_time_utc
+      type: INTEGER
+      nullable: false
+      description: "Canonical event timestamp (Unix seconds). NEVER null per fallback chain."
+
+    - name: write_time_utc
+      type: INTEGER
+      nullable: false
+      description: "Database commit timestamp (Unix seconds)"
+
+    - name: write_lag_ms
+      type: INTEGER
+      nullable: false
+      description: "Write latency: write_time - event_time (milliseconds)"
+
+    - name: local_date
+      type: TEXT
+      format: "YYYY-MM-DD"
+      description: "Event date in tenant timezone"
+
+    - name: local_time
+      type: TEXT
+      format: "HH:MM:SS"
+      description: "Event time in tenant timezone"
+
+    - name: day_of_week
+      type: TEXT
+      enum: [Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday]
+      description: "Day name from local_date"
+
+    - name: is_weekend
+      type: BOOLEAN
+      description: "Saturday/Sunday flag"
+
+    - name: time_of_day_bucket
+      type: TEXT
+      enum: [morning, afternoon, evening, night]
+      description: "Time bucket from local_time"
+
+    - name: circadian_slot
+      type: TEXT
+      enum: [breakfast_window, lunch_window, dinner_window, sleep_window]
+      nullable: true
+      description: "Named time window. null if outside defined slots."
+
+    - name: is_backdated
+      type: BOOLEAN
+      description: "True if write_lag_ms > backdate_threshold_hours"
+
+    - name: created_at
+      type: INTEGER
+      description: "Row creation timestamp (always = write_time_utc)"
+
+  new_3:
+    - name: temporal_mentioned_time
+      type: TEXT
+      nullable: true
+      passthrough: true
+      description: "Raw temporal reference from MW body.temporal.mentioned_time"
+
+    - name: temporal_resolved_epoch_ms
+      type: BIGINT
+      nullable: true
+      passthrough: true
+      description: "K1-resolved epoch from MW body.temporal.resolved_epoch_ms"
+
+    - name: temporal_orientation
+      type: TEXT
+      nullable: true
+      enum: [PAST, ONGOING, FUTURE_COMMITMENT]
+      description: "Temporal orientation from MW. Only LLM can determine this -- no fallback."
+
+  provenance:
+    - name: temporal_source
+      type: TEXT
+      enum: [mw_resolved, ner_temporal, event_time, envelope_ts, now]
+      description: "Which fallback chain priority produced event_time_utc"
+
+    - name: location_source
+      type: TEXT
+      enum: [mw_location, ner_location, text_heuristic, none]
+      nullable: true
+      description: "Which spatial chain priority produced location_name"
+
+# ---------------------------------------------------------------------------
+# Failure Modes
+# ---------------------------------------------------------------------------
+failure_modes:
+  - code: TIMEZONE_LOOKUP_FAILED
+    policy: use_default
+    max_retries: 1
+    description: "Tenant timezone config unavailable. Use default_timezone."
+
+  - code: TIMESTAMP_PARSE_FAILED
+    policy: fallback_next_priority
+    description: "Current priority timestamp cannot be parsed. Try next in chain."
+
+  - code: INVALID_EVENT_TIME
+    policy: fallback_next_priority
+    description: "Parsed timestamp is invalid (negative, future, etc.). Try next in chain."
+
+  - code: NER_TEMPORAL_RESOLUTION_FAILED
+    policy: fallback_next_priority
+    description: "NER temporal expression cannot be resolved to epoch. Try body.event_time."
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+config_schema:
+  type: object
+  properties:
+    default_timezone:
+      type: string
+      default: "America/Los_Angeles"
+      description: "Fallback timezone if tenant config lookup fails"
+    backdate_threshold_hours:
+      type: integer
+      default: 24
+      description: "Write lag threshold for is_backdated flag"
+    circadian_slots:
+      type: object
+      description: "Named time windows for circadian rhythm tracking"
+      default:
+        breakfast_window: ["06:00", "09:00"]
+        lunch_window: ["11:30", "13:30"]
+        dinner_window: ["17:30", "20:30"]
+        sleep_window: ["22:00", "06:00"]
+    ner_temporal_resolution_enabled:
+      type: boolean
+      default: true
+      description: "Whether to attempt regex resolution of M02 NER temporal expressions"
+    spatial_heuristic_enabled:
+      type: boolean
+      default: true
+      description: "Whether to attempt 'at [Place]' regex extraction from body.text"
+
+description: |
+  Temporal and Circadian Profiler Module (Circadian Clock System) -- v2
+
+  SCHEMA AUTHORITY: M08 is the SINGLE SOURCE OF TRUTH for all 14 temporal dimensions
+  in st_hipp_events. No other P02 stage should recompute or mutate these fields.
+
+  v2 additions:
+    - 3 new output dimensions (14 total, was 11)
+    - Temporal fallback chain: MW resolved -> NER temporal -> event_time -> envelope.ts -> now()
+    - Spatial fallback chain: MW location -> NER LOC -> text heuristic -> null
+    - Provenance tracking: temporal_source and location_source fields
+
+  TEMPORAL FALLBACK CHAIN is the critical path:
+    event_time_utc is NEVER null. When user says "yesterday evening":
+    1. K1 resolves to epoch via body.temporal.resolved_epoch_ms (best)
+    2. M02 NER detects "yesterday" and M08 resolves via regex (decent)
+    3. body.event_time from MW (may be creation time, not event time)
+    4. envelope.ts from Bridge (ALWAYS present -- hard backstop)
+    5. current_time() (ultimate fallback)
+
+  SPATIAL FALLBACK CHAIN allows null:
+    location_name is nullable. No location is acceptable.
+    1. MW body.location_name + body.location_type (LLM extracted)
+    2. M02 NER LOC entities ("Olive Garden" as LOC)
+    3. Regex "at [Place]" patterns from body.text
+    4. null (geo fields empty)
+
+  temporal_orientation has NO FALLBACK: only LLM can determine if a memory
+  is about the PAST, ONGOING, or a FUTURE_COMMITMENT. If MW doesn't provide it,
+  it's null. UltraBERT and heuristics cannot determine temporal orientation.
