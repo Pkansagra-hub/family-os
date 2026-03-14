@@ -235,11 +235,13 @@ class TestImportanceBreakdown:
         assert d["goal_boost"] == 1.15
         assert d["type_multiplier"] == 1.2
         assert d["intent_boost"] == 1.0
+        assert d["relationship_boost"] == 1.0  # ADR-K026 default
+        assert d["max_edge_weight"] == 0.0  # ADR-K026 default
         assert d["tier_multiplier"] == 1.0
         assert d["reliability"] == 0.95
         assert d["final_score"] == 0.60
         assert d["weights_source"] == "static"
-        assert len(d) == 17
+        assert len(d) == 19  # 17 original + 2 KG boost fields (ADR-K026)
 
 
 # =============================================================================

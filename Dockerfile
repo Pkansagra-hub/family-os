@@ -24,15 +24,15 @@ RUN apt-get update && \
 # Set working directory
 WORKDIR /app
 
-# Copy UltraBERT wheel v4.0.0 (GlobalPointer NER - no more garbage!)
-# Download from: https://github.com/Pkansagra-hub/Family_osModernBERT/releases/tag/v4.0.0
-COPY wheels/familyos_ultrabert-4.0.0-py3-none-any.whl ./wheels/
+# Copy UltraBERT wheel v4.0.2
+# Download from: https://github.com/Pkansagra-hub/Family_osModernBERT/releases/tag/v4.0.2
+COPY wheels/familyos_ultrabert-4.0.2-py3-none-any.whl ./wheels/
 
 # Copy minimal kernel requirements (no ML/NLP libraries)
 # Note: requirements.kernel.txt includes -r requirements.base.txt, so both files needed
 COPY k0/deploy/requirements.base.txt k0/deploy/requirements.kernel.txt ./
 RUN pip install --no-cache-dir -r requirements.kernel.txt && \
-    pip install --no-cache-dir wheels/familyos_ultrabert-4.0.0-py3-none-any.whl && \
+    pip install --no-cache-dir wheels/familyos_ultrabert-4.0.2-py3-none-any.whl && \
     python -m spacy download en_core_web_sm
 
 # Copy application code
@@ -54,6 +54,10 @@ EXPOSE 8080
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=30s \
     CMD curl -f http://localhost:8080/healthz || exit 1
+
+# HuggingFace token for UltraBERT weight downloads at runtime
+ARG HF_TOKEN
+ENV HF_TOKEN=${HF_TOKEN}
 
 # Environment defaults
 ENV K0_LOG_LEVEL=INFO \

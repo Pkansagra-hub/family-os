@@ -12,7 +12,7 @@ Design decisions:
   - All dataclasses are frozen (immutable after creation)
   - All enums inherit from (str, Enum) for JSON serialization
   - Single types.py module -- do NOT split into per-service files
-  - MemoryAtom has exactly 34 fields matching the JSON schema
+  - MemoryAtom has exactly 37 fields matching the JSON schema
   - ExtractionContext assembled from 15 SessionState sections
 
 Anti-hallucination rules:
@@ -77,6 +77,22 @@ class TemporalOrientation(str, Enum):
     PAST = "PAST"
     ONGOING = "ONGOING"
     FUTURE_COMMITMENT = "FUTURE_COMMITMENT"
+
+
+class TemporalLinkType(str, Enum):
+    """Classification of how a memory atom references a time.
+
+    Per-link type (one atom may have multiple links with different types).
+    Replaces the binary is_backdated: bool which could only distinguish
+    past vs not-past.
+    """
+
+    RETROSPECTIVE = "RETROSPECTIVE"  # Past reference ("yesterday", "last week")
+    PROSPECTIVE = "PROSPECTIVE"  # Future reference ("next Friday", "tomorrow")
+    CONCURRENT = "CONCURRENT"  # Happening now ("right now", "currently")
+    HABITUAL = "HABITUAL"  # Recurring pattern ("every Sunday", "usually")
+    CONTEXTUAL = "CONTEXTUAL"  # Life period ("in college", "when I was young")
+    CONDITIONAL = "CONDITIONAL"  # Contingent ("if it rains", "when I get home")
 
 
 class SourceType(str, Enum):
@@ -269,6 +285,30 @@ class Temporal:
     is_backdated: bool
 
 
+@dataclass(frozen=True)
+class TemporalLink:
+    """One temporal reference from a memory atom.
+
+    A single atom may carry 0-5 temporal links. Example:
+    "Yesterday we planned next Friday's party and Mom reminded me about Christmas"
+    -> 3 TemporalLinks: yesterday (RETROSPECTIVE), next Friday (PROSPECTIVE),
+       Christmas (PROSPECTIVE).
+
+    Fields:
+      mentioned_time: Raw text from conversation ("yesterday evening")
+      resolved_epoch_ms: Best-guess absolute time (Unix ms)
+      uncertainty_window_ms: Precision window (60_000 for "7:15pm", 14_400_000 for "yesterday evening")
+      link_type: Classification (RETROSPECTIVE, PROSPECTIVE, HABITUAL, etc.)
+      confidence: LLM resolution confidence [0.0, 1.0]
+    """
+
+    mentioned_time: str
+    resolved_epoch_ms: int = 0
+    uncertainty_window_ms: int = 0
+    link_type: str = "CONCURRENT"  # TemporalLinkType value
+    confidence: float = 1.0
+
+
 # ===========================================================================
 # Core domain types
 # ===========================================================================
@@ -276,9 +316,9 @@ class Temporal:
 
 @dataclass(frozen=True)
 class MemoryAtom:
-    """The 34-field output per LLM extraction. Maps 1:1 to memory_atom.v2.schema.json.
+    """The memory atom output per LLM extraction. Maps 1:1 to memory_atom.v2.schema.json.
 
-    All 34 fields are the canonical schema. No v1/v2 distinction.
+    All 37 fields are the canonical schema. No v1/v2 distinction.
     Required fields (14): schema_version, operation, text, topics,
       sentiment_label, affect, source_type, novelty, elaboration_depth,
       temporal_orientation, confidence, session_id, conversation_turn, language
@@ -303,6 +343,14 @@ class MemoryAtom:
     # --- Location (WHERE) ---
     location_name: Optional[str] = None
     location_type: Optional[LocationType] = None
+    place_id: Optional[str] = None  # Stable place identity from PlaceResolver (GAP-002 Epic 3.1)
+    location_hierarchy: tuple = ()  # Most specific -> most general: ("kitchen", "home", "Seattle")
+    transition_from_place: Optional[str] = (
+        None  # Origin place name/id: "restaurant", "place_olive_garden"
+    )
+    transition_mode: Optional[str] = (
+        None  # Movement mode: walked/drove/flew/took_bus/took_train/biked/other
+    )
 
     # --- Emotion (EMOTION) ---
     sentiment_label: SentimentLabel = SentimentLabel.NEUTRAL
@@ -317,6 +365,7 @@ class MemoryAtom:
 
     # --- Temporal (WHEN) ---
     temporal: Optional[Temporal] = None
+    temporal_links: tuple = ()  # Tuple[TemporalLink, ...] -- 0-5 temporal references per atom
 
     # --- Intent (WHY) ---
     intent_type: Optional[IntentType] = None
@@ -330,10 +379,25 @@ class MemoryAtom:
     identity_domains: List[str] = field(default_factory=list)
     temporal_orientation: TemporalOrientation = TemporalOrientation.PAST
 
+    # --- Conversation anchor (GAP-002 Epic 1.1) ---
+    conversation_anchor_ms: int = (
+        0  # K1 Concierge turn timestamp (unix ms). NEVER overwritten by K0.
+    )
+
+    # --- K1 correction signals (R2 Epic 7.2) ---
+    # K1 LLM detects corrections/contradictions in conversation and flags them here.
+    # P03 R3 reconciliation reads these to route EVOLVE/CONTRADICT without cosine search.
+    correction_signal: bool = False
+    contradiction_signal: bool = False
+    supersedes_concept: Optional[str] = None  # e.g. "cuisine_preference:thai"
+    correction_source: Optional[str] = None  # "user_explicit", "user_implicit", "context_change"
+    session_context_id: Optional[str] = None  # Session UUID for audit trail
+
     # --- Meta ---
     confidence: float = 0.0
     session_id: str = ""
     conversation_turn: int = 0
+    extraction_sequence: int = 0  # 0-based ordinal within a turn's extraction batch
     language: str = "en"
 
 
@@ -404,6 +468,24 @@ class ExtractionContext:
     # Session identity
     session_id: str = ""
     conversation_turn: int = 0
+
+    # Gold-standard conversation time from turn.complete.v1.timestamp_ms (GAP-002 Epic 1.1)
+    turn_timestamp_ms: int = 0
+
+    # Temporal/spatial context from TurnCompletePayload (GAP-002 Epic 1.3)
+    # Payload-first, SessionState fallback -- eliminates race condition T7
+    # (beliefs_active.start_new_turn() may clear these before MW reads)
+    mentioned_time_raw: str = ""
+    mentioned_time_resolved_ms: int = 0
+    mentioned_time_confidence: float = 0.0
+    mentioned_time_is_relative: bool = True
+    mentioned_location_raw: str = ""
+    mentioned_location_type: str = ""
+    mentioned_location_entity_id: str = ""
+    mentioned_location_confidence: float = 0.0
+
+    # Stable place identity from PlaceResolver (GAP-002 Epic 3.1)
+    place_id: Optional[str] = None
 
 
 @dataclass(frozen=True)

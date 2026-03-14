@@ -34,7 +34,7 @@
 20. [Privacy Enforcer (Band-Based)](#20-privacy-enforcer-band-based)
 21. [Eviction Writes (NOT Memory Writer)](#21-eviction-writes-not-memory-writer)
 22. [Memory Writer vs Learning Extractor](#22-memory-writer-vs-learning-extractor)
-23. [Trigger Mechanism (turn.complete.v1)](#23-trigger-mechanism-turncomplete-v1)
+23. [Trigger Mechanism (turn.complete.v1)](#23-trigger-mechanism-turncompletev1)
 24. [Error Handling and Failure Modes](#24-error-handling-and-failure-modes)
 25. [Observability and Metrics](#25-observability-and-metrics)
 26. [Performance Budget](#26-performance-budget)
@@ -44,6 +44,9 @@
 30. [Directory Structure (Target)](#30-directory-structure-target)
 31. [Worked Examples (End-to-End)](#31-worked-examples-end-to-end)
 32. [Open Design Questions](#32-open-design-questions)
+33. [v2 Cross-Reference (stage5_proposal_corrections.md)](#33-v2-cross-reference-stage5_proposal_correctionsmd)
+34. [Implementation Sync Addendum (GAP-002, 2026-03-05)](#34-implementation-sync-addendum-gap-002-2026-03-05)
+35. [K1 Correction Signal Fields (R2 Epic 7.2)](#35-k1-correction-signal-fields-r2-epic-72)
 
 ---
 
@@ -51,7 +54,7 @@
 
 Memory Writer is K1's episodic memory formation system. It converts conversation turns into short, factual K0 command envelopes that flow through the Bridge Command Port to K0's P02 pipeline, where they are enriched and stored permanently in `st_hipp_events`.
 
-**One-sentence definition**: Memory Writer observes every completed conversation turn, determines if it contains memorable facts, extracts 0-6 short factual statements via LLM (2000-token budget, 12 cognitive dimensions), builds K0-compatible 34-field command envelopes, and submits them through the Bridge for permanent storage.
+**One-sentence definition**: Memory Writer observes every completed conversation turn, determines if it contains memorable facts, extracts 0-6 short factual statements via LLM (2000-token budget, 12 cognitive dimensions), builds K0-compatible 37-field command envelopes, and submits them through the Bridge for permanent storage.
 
 **The core insight**: K1 thinks in conversations. K0 thinks in events. Memory Writer is the TRANSLATOR between these two cognitive models.
 
@@ -71,7 +74,8 @@ Memory Writer is K1's episodic memory formation system. It converts conversation
 
 K1 is a layered cognitive kernel. Memory Writer is a background agent at L4, spawned by Fabric, triggered by turn completion events from Concierge.
 
-```
+```text
+
 L0  External Interfaces (Web, Mobile, Voice) -- detached, TBD
 L1  Concierge (FSM, UltraBERT, Single Writer) -- user-facing intelligence
 L2  Orchestrator (Blind DAG Executor, NO LLM)
@@ -84,11 +88,13 @@ L4  Spawned Sub-Agents (created by Fabric)
        |-- invitation_sender, etc.      (task agents, in fabric.mmd)
 L5  SessionState (12-section, Single Writer, Multi-Reader)
 L6  Cross-Kernel Bridge (K0 communication gateway)
+
 ```
 
 ### Position in the Turn Lifecycle
 
-```
+```text
+
 User says something
   -> L1 Concierge LISTENING -> ACKING -> DISPATCHING
        |
@@ -109,6 +115,7 @@ User says something
        |
        v
   -> Bridge signs and POSTs to K0 -> K0 Gate -> WAL -> P02 -> st_hipp_events
+
 ```
 
 Memory Writer runs AFTER the user has already received their response. It is invisible to the user.
@@ -118,7 +125,7 @@ Memory Writer runs AFTER the user has already received their response. It is inv
 In `k1_cognitive_architecture_skeleton.mmd`, Memory Writer is the subgraph `MEMORY_WRITER_SYSTEM` containing:
 
 | Node | Maps To (in memory_writer.mmd) |
-|---|---|
+| --- | --- |
 | `MEMORY_WRITER_AGENTS` | `WRITER_AGENT` (the LLM extraction agent) |
 | `STATE_DELTA_EMITTER` | `BATCH_EMITTER` (flushes batch to Bridge) |
 | `DELTA_AGGREGATOR` | `DELTA_AGG` (250ms time-window batching) |
@@ -131,7 +138,7 @@ In `k1_cognitive_architecture_skeleton.mmd`, Memory Writer is the subgraph `MEMO
 K1 and K0 have fundamentally different data models:
 
 | Aspect | K1 (Conversation) | K0 (Events) |
-|---|---|---|
+| --- | --- | --- |
 | **Data shape** | Turns (user said X, assistant said Y) | Envelopes (event with metadata tags) |
 | **Lifespan** | Ephemeral (single session) | Permanent (st_hipp_events) |
 | **Granularity** | Full conversation with chain of thought | Discrete factual statements (1-2 sentences) |
@@ -157,7 +164,7 @@ Memory Writer must bridge ALL of these gaps in a single pipeline:
 These are hard constraints. Violation of any invariant is a bug.
 
 | ID | Invariant | Enforcement Point |
-|---|---|---|
+| --- | --- | --- |
 | MW-01 | Memory Writer NEVER writes to SessionState. Single writer = Concierge only (ADR-0017). | No IStateWritePort dependency. Multi-reader only. |
 | MW-02 | Memory Writer reads SessionState lock-free (<1ms). Snapshot isolation per read. | SessionState multi-reader interface. |
 | MW-03 | All K0 writes go through Bridge Command Port. K1 and K0 do NOT communicate directly. | IKernelCommandPort.submit() is the only output path. |
@@ -176,7 +183,8 @@ These are hard constraints. Violation of any invariant is a bug.
 
 Memory Writer runs a simple linear pipeline per turn. No DAG, no branching, no parallelism within a single turn.
 
-```
+```text
+
 turn.complete.v1 (from DeltaBus)
   |
   v
@@ -213,12 +221,13 @@ turn.complete.v1 (from DeltaBus)
   |
   v
 Bridge signs (Ed25519) -> POST /k0/command.submit -> K0 Gate -> WAL -> P02 -> st_hipp_events
+
 ```
 
 ### Stage Cost Summary
 
 | Stage | Compute | LLM Cost | I/O | Total Budget |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | 1. Relevance Filter | Rule evaluation | None | None | 2ms |
 | 2. Context Assembly | Field reads | None | SessionState read | 1ms |
 | 3. LLM Extraction | LLM inference | ~2000 tokens (cheapest model) | Model Hub call | 500ms |
@@ -230,7 +239,7 @@ Bridge signs (Ed25519) -> POST /k0/command.submit -> K0 Gate -> WAL -> P02 -> st
 
 ## 6. Stage 1: Relevance Filter (Rule-Based)
 
-### Purpose
+### Purpose: Context Assembly
 
 Determine if a turn is worth remembering BEFORE spending LLM tokens. The filter is entirely rule-based -- zero LLM cost for skip decisions. This means if 40% of turns are trivial (greetings, confirmations, clarifications), we save 40% of Memory Writer LLM budget.
 
@@ -238,18 +247,21 @@ Determine if a turn is worth remembering BEFORE spending LLM tokens. The filter 
 
 Every turn is checked against all 5 rules. If ANY rule matches, the turn is SKIPPED. Rules are evaluated in order (cheapest first).
 
-```
+```text
+
 Rule evaluation order:
   R4 (Empty/Trivial)     -> cheapest: word count + regex
   R5 (Pure continuation)  -> pattern match against continuation phrases
   R1 (Clarification)      -> check both user + assistant for repair patterns
   R2 (System/Meta talk)   -> classify: about the system, not about life
   R3 (Recent duplicate)   -> most expensive: entity+topic hash lookup
+
 ```
 
 ### Rule R1: Pure Clarification
 
-```
+```text
+
 Pattern: No new facts, just conversational repair.
 
 Matches when:
@@ -268,11 +280,13 @@ Examples (SKIP):
 Counter-example (PASS -- new fact in clarification):
   User: "You mean the dentist on Oak Street?"     <-- LOC entity = new fact
   Assistant: "Yes, Dr. Smith on Oak Street."       <-- PERSON + LOC entities
+
 ```
 
 ### Rule R2: System/Meta Talk
 
-```
+```text
+
 Pattern: Conversation about the system itself, not about the user's life.
 
 Matches when:
@@ -287,11 +301,13 @@ Examples (SKIP):
 
 Counter-example (PASS):
   User: "Can you help me schedule Mom's dentist appointment?"  <-- PERSON + TASK
+
 ```
 
 ### Rule R3: Recent Duplicate
 
-```
+```text
+
 Pattern: Same entities + same topic within the last 5 minutes.
 
 Implementation:
@@ -305,11 +321,13 @@ mentions it in turn 3 and references it again in turn 5.
 
 Window storage: In-memory ring buffer (bounded, ~100 entries max).
 Cleared on session end.
+
 ```
 
 ### Rule R4: Empty/Trivial
 
-```
+```text
+
 Pattern: Too short to contain meaningful information.
 
 Matches when:
@@ -327,11 +345,13 @@ Examples (SKIP):
 Counter-example (PASS -- entity in short message):
   User: "yes, Mom"          <-- PERSON entity
   User: "ok, Tuesday"       <-- DATE entity
+
 ```
 
 ### Rule R5: Pure Continuation
 
-```
+```text
+
 Pattern: User is prompting the system to continue, no new information.
 
 Matches when:
@@ -348,6 +368,7 @@ Examples (SKIP):
 
 Counter-example (PASS):
   User: "tell me more about Mom's recipe"  <-- PERSON entity + topic
+
 ```
 
 ### Filter Decision Event
@@ -355,6 +376,7 @@ Counter-example (PASS):
 Every filter decision emits a lightweight event (no LLM cost):
 
 ```yaml
+
 k1.mw.filter.decision.v1:
   turn_id: "uuid"
   session_id: "uuid"
@@ -362,13 +384,14 @@ k1.mw.filter.decision.v1:
   skip_reason: "R1" | "R2" | "R3" | "R4" | "R5" | null
   rule_eval_time_ms: 0.8
   cognitive_trace_id: "uuid"
+
 ```
 
 ---
 
 ## 7. Stage 2: Context Assembly (SessionState Reader)
 
-### Purpose
+### Purpose: LLM Extraction
 
 After the filter passes a turn, Memory Writer needs context to produce accurate extractions. This stage reads from SessionState (lock-free, multi-reader) and assembles a compact `ExtractionContext` for the LLM.
 
@@ -379,7 +402,7 @@ Memory Writer reads 13 of 15 SessionState sections (skipping telemetry and artif
 **Hot sections** (10 -- always read):
 
 | SessionState Section | What MW Takes | Why Needed | Size |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `beliefs_active` | Current facts and entity list | Entity resolution, known person_ids | ~30-50 tokens |
 | `beliefs_history` | Historical beliefs (evicted) | Context for known-fact dedup | ~20-30 tokens |
 | `history_active` | Last 2-3 turns (compressed) | Contextual understanding for extraction | ~50-80 tokens |
@@ -394,7 +417,7 @@ Memory Writer reads 13 of 15 SessionState sections (skipping telemetry and artif
 **Warm sections** (3 -- read for enrichment):
 
 | SessionState Section | What MW Takes | Why Needed | Size |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `task_state` | Active task context | Activity type classification | ~10-20 tokens |
 | `ifl` | Device/IFL sensor data | Location, device context | ~5-10 tokens |
 | `meta` | session_id, user_id, band, device_id | Envelope header fields | ~10 tokens |
@@ -402,7 +425,7 @@ Memory Writer reads 13 of 15 SessionState sections (skipping telemetry and artif
 **Skipped sections** (2 -- not relevant for memory extraction):
 
 | SessionState Section | Why Skipped |
-|---|---|
+| --- | --- |
 | `telemetry` | System metrics, not relevant to episodic memory |
 | `artifacts_warm` | Temporary artifacts, not memory-worthy |
 
@@ -411,6 +434,7 @@ Memory Writer reads 13 of 15 SessionState sections (skipping telemetry and artif
 ### ExtractionContext Schema
 
 ```python
+
 @dataclass
 class ExtractionContext:
     """Assembled from SessionState, passed to LLM Writer Agent."""
@@ -436,11 +460,13 @@ class ExtractionContext:
     space_id: str                         # Space ID (for envelope headers)
     device_id: str                        # Device ID (for envelope headers)
     session_id: str                       # Session ID
+
 ```
 
 ### CompressedTurn Schema
 
 ```python
+
 @dataclass
 class CompressedTurn:
     """Minimal turn representation for extraction context."""
@@ -448,11 +474,13 @@ class CompressedTurn:
     text: str           # Original message text (truncated to 100 words max)
     turn_number: int    # Ordinal within session
     timestamp_ms: int   # Epoch milliseconds
+
 ```
 
 ### SessionState Reader Implementation
 
 ```python
+
 class MWSessionStateReader:
     """
     Lock-free multi-reader for Memory Writer.
@@ -478,20 +506,21 @@ class MWSessionStateReader:
                       "task_state", "ifl", "meta"]
         )
         return self._build_context(snapshot)
+
 ```
 
 ---
 
 ## 8. Stage 3: LLM Memory Extraction
 
-### Purpose
+### Purpose: Envelope Building
 
 This is the only stage that uses an LLM. The Memory Writer Agent receives the ExtractionContext and produces 1-3 discrete factual `MemoryExtraction` objects.
 
 ### Writer Agent Characteristics
 
 | Property | Value | Rationale |
-|---|---|---|
+| --- | --- | --- |
 | Model | GPT-4o-mini (or cheapest available) | Memory extraction is simple; no need for expensive models |
 | Token budget | 2000 total (input + output) | Context ~350 tokens + output ~500 tokens + headroom |
 | Max tool calls | 6 | One tool call per extraction (max 6 per turn) |
@@ -501,7 +530,8 @@ This is the only stage that uses an LLM. The Memory Writer Agent receives the Ex
 
 ### LLM Token Budget Breakdown
 
-```
+```text
+
 +----------------------------+--------+
 | Component                  | Tokens |
 +----------------------------+--------+
@@ -513,6 +543,7 @@ This is the only stage that uses an LLM. The Memory Writer Agent receives the Ex
 +----------------------------+--------+
 | TOTAL                      | ~2000  |
 +----------------------------+--------+
+
 ```
 
 **12 cognitive dimensions** extracted per atom:
@@ -525,6 +556,7 @@ activity type, and intent type.
 After the LLM produces raw extractions, the Extraction Validator applies deterministic checks:
 
 ```python
+
 class ExtractionValidator:
     """
     Post-LLM validation. Deterministic, no LLM cost.
@@ -561,20 +593,21 @@ class ExtractionValidator:
 
         # Cap at 6 extractions max (MW-05)
         return validated[:6]
+
 ```
 
 ---
 
 ## 9. Stage 4: Envelope Builder (Deterministic)
 
-### Purpose
+### Purpose: Batch Submit
 
 Convert validated `MemoryExtraction` objects into K0-compatible `CommandEnvelope` bodies. This stage is entirely deterministic -- no LLM, no UltraBERT, no external calls. Pure field mapping and header injection.
 
 ### Field Mapping Table
 
 | Source (MemoryExtraction) | Target (K0 Envelope Body) | Transformation |
-|---|---|---|
+| --- | --- | --- |
 | `extraction.text` | `body.text` | Direct copy (already validated <= 50 words) |
 | `"UPSERT"` (constant) | `body.operation` | Always UPSERT for new memories |
 | `extraction.participants` | `body.participants` | Already resolved to person_ids |
@@ -584,7 +617,8 @@ Convert validated `MemoryExtraction` objects into K0-compatible `CommandEnvelope
 | `extraction.sentiment_label` | `body.sentiment_label` | Direct copy (5-class) |
 | `extraction.emotion_tags` | `body.emotion_tags` | Direct copy (from 44-class) |
 | `extraction.categories` | `body.categories` | Direct copy |
-| `now_utc()` | `body.event_time_utc` | Current UTC timestamp (ISO 8601) |
+| `ctx.turn_timestamp_ms` | `body.event_time_utc` | K1 Concierge turn timestamp (unix ms). Fallback: `now_utc()` if 0. GAP-002 Epic 1.1 |
+| `ctx.turn_timestamp_ms` | `body.conversation_anchor_ms` | Gold-standard conversation anchor. NEVER overwritten by K0 M08. GAP-002 Epic 1.1 |
 | `context.session_id` | `body.session_id` | From ExtractionContext |
 | Turn ordinal | `body.conversation_turn` | From turn event payload |
 | `"en"` (constant) | `body.language` | Default; future: detect from SessionState |
@@ -592,7 +626,7 @@ Convert validated `MemoryExtraction` objects into K0-compatible `CommandEnvelope
 ### Header Injection Table
 
 | Source | Target (Envelope Header) | Notes |
-|---|---|---|
+| --- | --- | --- |
 | Turn event | `cognitive_trace_id` | Unifies causality across the entire request |
 | SessionState.meta | `tenant_id` | Multi-tenant identifier |
 | SessionState.meta | `space_id` | Space/family identifier |
@@ -617,13 +651,14 @@ K1 NEVER handles cryptographic signing. That is the Bridge's job.
 
 ## 10. Stage 5: Batch Aggregation and Bridge Submit
 
-### Purpose
+### Purpose: Person Resolution
 
 Collect all envelopes from a turn (1-3) into a single batch, then submit to the Bridge in one HTTP call. The 250ms batch window also catches stragglers from overlapping processing.
 
 ### Delta Aggregator
 
 ```python
+
 class DeltaAggregator:
     """
     Time-window batching for K0 command envelopes.
@@ -661,11 +696,13 @@ class DeltaAggregator:
         parts = sorted(envelope.body.get("participants", []))
         topics = sorted(envelope.body.get("topics", []))
         return hashlib.sha256(f"{parts}:{topics}".encode()).hexdigest()[:16]
+
 ```
 
 ### Batch Emitter (State Delta Emitter)
 
 ```python
+
 class BatchEmitter:
     """
     Flushes batched envelopes to Bridge Command Port.
@@ -696,12 +733,13 @@ class BatchEmitter:
 
         emit_metric("k1.mw.bridge.submit_count", len(batch))
         emit_metric("k1.mw.bridge.batch_size", len(batch))
+
 ```
 
 ### Why 250ms Batch Window?
 
 | Consideration | Impact |
-|---|---|
+| --- | --- |
 | LLM extraction takes 200-500ms | Most extractions complete within one window |
 | Bridge HTTP overhead | One POST vs 3 POSTs saves ~40ms in overhead |
 | K0 Gate throughput | K0 prefers batch-sized work from the outbox |
@@ -712,9 +750,10 @@ class BatchEmitter:
 
 ## 11. K0 Envelope Body Contract
 
-This is the exact JSON body that Memory Writer v2 sends to K0. It must conform to the 34-field MemoryAtom v2 schema defined in `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json`.
+This is the exact JSON body that Memory Writer v2 sends to K0. It must conform to the 37-field MemoryAtom v2.2 schema defined in `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json`.
 
 ```json
+
 {
   "text": "Had dinner with Mom at Olive Garden for Emma's birthday",
   "topics": ["family", "dining", "celebration"],
@@ -761,12 +800,13 @@ This is the exact JSON body that Memory Writer v2 sends to K0. It must conform t
   "embedding_text": null,
   "operation": "UPSERT"
 }
+
 ```
 
 ### Field Reference (34 fields -- v2 MemoryAtom)
 
 | # | Field | Type | Required | Constraints | Source |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | 1 | `text` | string | YES | 1-50 words, factual statement | LLM extraction |
 | 2 | `topics` | string[] | YES | 1-5 topic tags | LLM extraction |
 | 3 | `sentiment_label` | enum | YES | 5-class: very_negative..very_positive | LLM extraction |
@@ -819,7 +859,7 @@ Headers are NOT part of the body. They wrap the body in the command envelope. So
 ### Headers Set by Memory Writer
 
 | Header | Value | Source |
-|---|---|---|
+| --- | --- | --- |
 | `cognitive_trace_id` | UUID | From turn.complete.v1 event payload |
 | `tenant_id` | string | From SessionState.meta |
 | `space_id` | string | From SessionState.meta |
@@ -835,7 +875,7 @@ Headers are NOT part of the body. They wrap the body in the command envelope. So
 These are NEVER set by K1 code. The Bridge handles all cryptographic operations:
 
 | Header | Value | How Computed |
-|---|---|---|
+| --- | --- | --- |
 | `sig_alg` | `"Ed25519SHA512"` | Constant (Bridge signing algorithm) |
 | `sig_kid` | string | Device key ID from Bridge key store |
 | `envelope_sha256` | hex string | SHA-256 of canonical JSON body |
@@ -848,11 +888,12 @@ This separation ensures K1 code never touches private keys, signing algorithms, 
 
 ## 13. Extraction Output Schema (LLM -> Validator)
 
-The LLM produces structured output matching the 34-field MemoryAtom v2 schema. The Extraction Validator then validates and cleans it. The authoritative schema is `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json` and the Python types are in `k1/memory_writer/types.py`.
+The LLM produces structured output matching the 37-field MemoryAtom v2.2 schema. The Extraction Validator then validates and cleans it. The authoritative schema is `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json` and the Python types are in `k1/memory_writer/types.py`.
 
 ### MemoryAtom v2 Schema (34 fields, 12 cognitive dimensions)
 
 ```yaml
+
 MemoryAtom:
   # --- Required fields (14) ---
   text:
@@ -993,13 +1034,15 @@ MemoryAtom:
   operation:
     type: string
     description: "Default UPSERT"
+
 ```
 
 ### Multi-Extraction Example (v2 format)
 
 A single turn can produce 0-6 extractions. Each extraction is a full 34-field MemoryAtom:
 
-```
+```text
+
 User: "Had dinner with Mom at Olive Garden yesterday, and she mentioned she
        needs to see Dr. Smith about her knee next week"
 
@@ -1038,6 +1081,7 @@ Extraction 2 (MemoryAtom):
   categories: ["health", "appointment"]
   confidence: 0.88
   intent_type: "log_memory"
+
 ```
 
 ---
@@ -1048,7 +1092,8 @@ UltraBERT does NOT run in K1. It runs exclusively in K0's P02 pipeline AFTER rec
 
 ### Architecture Boundary
 
-```
+```text
+
 K1 (Memory Writer LLM):
   Produces: text, sentiment_label, emotion_tags, participants, topics,
             activity_type, location_name, categories
@@ -1062,12 +1107,13 @@ K0 (P02 Pipeline, Module M04: Affect Analysis):
   Runs: UltraBERT (familyos-ultrabert v4.0.1, max_length=512 tokens)
   Role: VALIDATION safety net
   On MW body text (~15-30 tokens): well within UltraBERT sweet spot
+
 ```
 
 ### UltraBERT Validation Matrix
 
 | Field | LLM Writer Produces | UltraBERT Validates | If Mismatch |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `sentiment_label` | `"positive"` | Sentiment head confirms or corrects | UltraBERT value wins |
 | `emotion_tags` | `["joy"]` | Emotions 44-class enriches (may add missing) | Union of both |
 | `participants` | `["person_mom", "person_emma"]` | ner_family KINSHIP check | Flag unresolved |
@@ -1099,7 +1145,8 @@ K0 (P02 Pipeline, Module M04: Affect Analysis):
 
 This is the complete path from Memory Writer's `BATCH_EMITTER` to K0's `st_hipp_events`. Every hop is documented.
 
-```
+```text
+
 K1: Memory Writer
   |
   |  BatchEmitter flushes N envelopes (N = 1-6)
@@ -1173,13 +1220,15 @@ K0: P02 Background Pipeline (50-100ms)
   |
   v
 K0: st_hipp_events (PERMANENT EPISODIC MEMORY)
+
 ```
 
 ### Offline Path
 
 When K0 is unavailable:
 
-```
+```text
+
 K1: BatchEmitter -> Bridge: IKernelCommandPort.submit()
   |
   v
@@ -1199,6 +1248,7 @@ Bridge: LocalOutbox Drain
   |
   v
 (Normal path continues from CommandBuilder -> K0)
+
 ```
 
 ---
@@ -1212,7 +1262,7 @@ From Memory Writer's perspective, K0 processing is a black box. But understandin
 After K0's hot path commits the envelope to `st_wal` and queues it in `st_outbox`, P02 processes it:
 
 | Stage | Module | What It Does | MW Field Used |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | M01 | DG Pattern Separation | Computes fingerprints for dedup | `text` |
 | M02 | Semantic Projection | Extracts entities, KG triples | `text`, `participants` |
 | M04 | Affect Analysis (UltraBERT) | Validates sentiment, emotions, safety | `text`, `sentiment_label`, `emotion_tags` |
@@ -1224,7 +1274,7 @@ After K0's hot path commits the envelope to `st_wal` and queues it in `st_outbox
 ### P02 Performance (Background, NOT Hot Path)
 
 | Metric | P50 | P95 |
-|---|---|---|
+| --- | --- | --- |
 | Total P02 pipeline | ~50ms | ~100ms |
 | UltraBERT inference | ~20ms | ~40ms |
 | Atomic write | ~10ms | ~20ms |
@@ -1233,7 +1283,8 @@ P02 adds ~50-100ms AFTER the hot path's 93ms. Total K0 time from receipt to perm
 
 ### Total End-to-End: Turn to Permanent Memory
 
-```
+```text
+
 Turn delivery (user sees response)
   + MW background pipeline:   ~815ms (P95)
   + Bridge transport:         ~50ms
@@ -1243,6 +1294,7 @@ Turn delivery (user sees response)
   = ~1058ms from turn delivery to st_hipp_events
 
 Memory is permanently stored within ~1 second of the user receiving their response.
+
 ```
 
 ---
@@ -1252,6 +1304,7 @@ Memory is permanently stored within ~1 second of the user receiving their respon
 The Memory Writer Agent is defined as a standard K1 agent contract, stored in `k1/contracts/agents/memory_writer.yaml`.
 
 ```yaml
+
 agent_contract:
   # ---- Identity ----
   name: "agent.execute.memory_writer"
@@ -1333,13 +1386,15 @@ agent_contract:
   last_updated: "2026-02-06T00:00:00Z"
   success_rate_30d: null                         # New agent, no data yet
   total_invocations_30d: 0
+
 ```
 
 ### Lifecycle: Session-Bound Agent
 
 Unlike task agents (invitation_sender, etc.) that are one-shot, Memory Writer Agent is session-bound:
 
-```
+```text
+
 Session starts
   -> Fabric spawns MemoryWriterAgent (PENDING -> WARMING -> ACTIVE)
   -> Turn 1 completes -> MW processes -> ACTIVE -> IDLE (pool)
@@ -1347,6 +1402,7 @@ Session starts
   -> Turn 3 completes -> MW reactivated from pool -> IDLE
   -> ...
   -> Session ends -> MW drained (IDLE -> DRAINING -> TERMINATED)
+
 ```
 
 The agent stays warm for the entire session. No cold-start overhead after the first turn.
@@ -1357,7 +1413,8 @@ The agent stays warm for the entire session. No cold-start overhead after the fi
 
 ### System Prompt
 
-```
+```text
+
 You are KO's Memory Writer. Your job is to extract discrete, factual memories
 from conversation turns.
 
@@ -1385,11 +1442,52 @@ RULES:
 6. Use natural names for people ("Mom", "Emma", "Dr. Smith"). The system will
    resolve them to person_ids.
 7. Keep text in past tense or present tense. No future-conditional.
+8. TEMPORAL REFERENCES:
+   For each memory atom, identify ALL temporal references mentioned or implied.
+   Return them in "temporal_links" (array, max 5 per atom).
+
+   Each temporal_link has:
+     mentioned_time: Raw text from conversation (e.g. "yesterday evening")
+     link_type: One of RETROSPECTIVE, PROSPECTIVE, CONCURRENT, HABITUAL, CONTEXTUAL, CONDITIONAL
+     uncertainty_window_ms: Precision estimate in milliseconds
+     confidence: Your confidence in this temporal reference (0.0-1.0)
+
+   Link types:
+     RETROSPECTIVE: Past reference ("yesterday", "last week", "when I was young")
+     PROSPECTIVE: Future reference ("tomorrow", "next month", "someday")
+     CONCURRENT: Happening now ("right now", "at the moment") -- usually implicit
+     HABITUAL: Recurring pattern ("every Sunday", "usually", "always")
+     CONTEXTUAL: Life period ("in college", "during my 20s", "back then")
+     CONDITIONAL: Contingent ("if it rains", "when we get home")
+
+   Uncertainty window examples:
+     "at 7:15pm" -> 60000 (1 minute)
+     "yesterday evening" -> 14400000 (4 hours)
+     "last week" -> 604800000 (7 days)
+     "last summer" -> 7776000000 (90 days)
+
+   Examples:
+     "Yesterday we planned next Friday's party and Mom mentioned Christmas"
+     -> 3 temporal_links:
+       { mentioned_time: "yesterday", link_type: "RETROSPECTIVE", uncertainty_window_ms: 86400000, confidence: 0.95 }
+       { mentioned_time: "next Friday", link_type: "PROSPECTIVE", uncertainty_window_ms: 86400000, confidence: 0.90 }
+       { mentioned_time: "Christmas", link_type: "PROSPECTIVE", uncertainty_window_ms: 86400000, confidence: 0.85 }
+
+     "We go to Olive Garden every Friday"
+     -> 1 temporal_link:
+       { mentioned_time: "every Friday", link_type: "HABITUAL", uncertainty_window_ms: 0, confidence: 0.95 }
+
+     "I feel happy right now"
+     -> 0 temporal_links (no explicit temporal reference, CONCURRENT is implicit)
+
+   If no temporal expression is mentioned, temporal_links should be an empty array [].
+
 ```
 
 ### User Prompt Template
 
-```
+```text
+
 CONTEXT:
   Recent turns: {recent_turns}
   Known entities: {active_entities}
@@ -1403,11 +1501,13 @@ CURRENT TURN:
   Turn #: {conversation_turn}
 
 Extract 0-3 factual memories from this turn. Return as JSON array.
+
 ```
 
 ### Output Format
 
 ```json
+
 [
   {
     "text": "Had dinner with Mom at Olive Garden to celebrate Emma's birthday",
@@ -1418,22 +1518,32 @@ Extract 0-3 factual memories from this turn. Return as JSON array.
     "sentiment_label": "positive",
     "emotion_tags": ["joy", "contentment"],
     "categories": ["social", "meal"],
-    "confidence": 0.95
+    "confidence": 0.95,
+    "temporal_links": [
+      {
+        "mentioned_time": "yesterday",
+        "link_type": "RETROSPECTIVE",
+        "uncertainty_window_ms": 86400000,
+        "confidence": 0.95
+      }
+    ]
   }
 ]
+
 ```
 
 ---
 
 ## 19. Person Resolver
 
-### Purpose
+### Purpose: Privacy Enforcement
 
 Convert natural names (as produced by the LLM) to stable `person_*` identifiers (as required by K0).
 
 ### Resolution Process
 
 ```python
+
 class PersonResolver:
     """
     Resolves natural names to person_ids.
@@ -1482,6 +1592,7 @@ class PersonResolver:
                 seen.add(pid)
                 resolved.append(pid)
         return resolved
+
 ```
 
 ### Why Not Do This in K0?
@@ -1499,7 +1610,7 @@ Strip or generalize sensitive fields BEFORE the envelope reaches the Bridge. Def
 ### Band Rules
 
 | Band | Action | Fields Affected |
-|---|---|---|
+| --- | --- | --- |
 | `GREEN` | All fields pass through | None stripped |
 | `AMBER` | Location generalized | `location_name`: "Olive Garden" -> "Restaurant" |
 | `RED` | Location stripped, participants masked | `location_name`: null, `participants`: ["person_redacted_1", ...] |
@@ -1507,6 +1618,7 @@ Strip or generalize sensitive fields BEFORE the envelope reaches the Bridge. Def
 ### Privacy Enforcer Implementation
 
 ```python
+
 class PrivacyEnforcer:
     """
     Pre-submit field stripping based on privacy band.
@@ -1554,6 +1666,7 @@ class PrivacyEnforcer:
             if any(kw in location.lower() for kw in keywords):
                 return category.title()
         return "Location"  # Generic fallback
+
 ```
 
 ---
@@ -1566,10 +1679,10 @@ This section exists to prevent confusion. Eviction writes and Memory Writer writ
 
 When SessionState's WARM tier sections (beliefs_history, history_recent, etc.) exceed their budget, the EvictionEngine archives them to K0. This is SessionState's own housekeeping, NOT Memory Writer.
 
-### Comparison Table
+### Comparison Table: Eviction vs Memory Writer
 
 | Property | Memory Writer | Eviction Writes |
-|---|---|---|
+| --- | --- | --- |
 | **Trigger** | turn.complete.v1 (every turn) | k1.sessionstate.eviction.v1 (budget exceeded) |
 | **Source data** | Current turn conversation | WARM tier sections being evicted |
 | **Bridge topic** | `memory.delta` | `beliefs.archive`, `history.archive` |
@@ -1589,10 +1702,10 @@ Memory Writer uses topic `memory.delta` ONLY. Eviction uses `beliefs.archive` an
 
 Both agents observe conversation turns. Both run after turn.complete.v1. But they have completely different purposes.
 
-### Comparison Table
+### Comparison Table: Memory Writer vs Learning Extractor
 
 | Property | Memory Writer Agent | Learning Extractor Agent |
-|---|---|---|
+| --- | --- | --- |
 | **System** | Memory Writer (k1/memory_writer/) | Learning Loop (k1/learning/) |
 | **Diagram** | memory_writer.mmd | learning.mmd |
 | **Purpose** | Extract FACTS from conversations | Extract META-SIGNALS for system improvement |
@@ -1623,6 +1736,7 @@ Concierge emits `turn.complete.v1` on the DeltaBus immediately after the DELIVER
 ### Event Payload
 
 ```yaml
+
 turn.complete.v1:
   turn_id: "uuid"                                # Unique turn identifier
   session_id: "uuid"                             # Session this turn belongs to
@@ -1632,6 +1746,7 @@ turn.complete.v1:
   timestamp_ms: 1738857600000                    # Epoch milliseconds
   turn_number: 5                                 # Ordinal within session (1-based)
   tier: "LOW"                                    # Complexity tier that processed this turn
+
 ```
 
 ### Turn Dispatcher (Idempotency)
@@ -1639,6 +1754,7 @@ turn.complete.v1:
 The Turn Dispatcher sits between the DeltaBus subscription and the pipeline:
 
 ```python
+
 class TurnDispatcher:
     """
     Routes turn.complete.v1 events to Memory Writer pipeline.
@@ -1655,6 +1771,7 @@ class TurnDispatcher:
 
         self.processed_turn_ids.add(event.turn_id)
         await self.pipeline.process(event)
+
 ```
 
 ---
@@ -1664,7 +1781,7 @@ class TurnDispatcher:
 ### Error Categories
 
 | Error | Source | Handling | Impact |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `context_read_failed` | SessionState reader | Retry once, then skip turn | Turn not extracted |
 | `llm_timeout` | Model Hub (>5000ms) | Abort extraction, log, skip turn | Turn not extracted |
 | `llm_error` | Model Hub (API error) | Retry once, then skip turn | Turn not extracted |
@@ -1686,6 +1803,7 @@ Memory Writer is a **best-effort** system. If extraction fails for a turn, the t
 ### Circuit Breaker
 
 ```yaml
+
 circuit_breaker:
   name: "CB: Memory Writer LLM"
   timeout_ms: 5000                               # 5 seconds per LLM call
@@ -1693,6 +1811,7 @@ circuit_breaker:
   failure_window_ms: 60000                       # 1 minute sliding window
   half_open_after_ms: 60000                      # Try one request after 1 minute
   fallback: "skip_turn"                          # Skip extraction, log
+
 ```
 
 When the LLM circuit breaker is open, Memory Writer silently skips extraction for all turns until the breaker enters half-open state. No impact on the user.
@@ -1705,16 +1824,18 @@ When the LLM circuit breaker is open, Memory Writer silently skips extraction fo
 
 Every Memory Writer operation carries the `cognitive_trace_id` from the originating turn. This unifies causality across the entire chain:
 
-```
+```text
+
 User input -> Concierge (trace_id=X) -> turn.complete.v1 (trace_id=X)
   -> Memory Writer (trace_id=X) -> Bridge submit (trace_id=X)
   -> K0 Gate (trace_id=X) -> K0 P02 (trace_id=X) -> st_hipp_events (trace_id=X)
+
 ```
 
 ### Metrics Emitted
 
 | Metric | Type | Labels | Purpose |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `k1.mw.turns.total` | Counter | session_id | Total turns received |
 | `k1.mw.turns.skipped` | Counter | skip_reason (R1-R5) | Turns skipped by filter |
 | `k1.mw.turns.extracted` | Counter | session_id | Turns with successful extractions |
@@ -1733,6 +1854,7 @@ User input -> Concierge (trace_id=X) -> turn.complete.v1 (trace_id=X)
 Every stage logs a structured entry:
 
 ```json
+
 {
   "timestamp": "2026-02-06T19:00:00.123Z",
   "level": "INFO",
@@ -1746,6 +1868,7 @@ Every stage logs a structured entry:
   "latency_ms": 285,
   "success": true
 }
+
 ```
 
 Phases logged: `filter`, `context_read`, `llm_extraction`, `validation`, `envelope_build`, `batch_submit`.
@@ -1756,7 +1879,8 @@ Phases logged: `filter`, `context_read`, `llm_extraction`, `validation`, `envelo
 
 ### End-to-End Latency Breakdown
 
-```
+```text
+
 +-----------------------------+----------+----------+---------+
 | Stage                       | P50      | P95      | Budget  |
 +-----------------------------+----------+----------+---------+
@@ -1779,6 +1903,7 @@ Phases logged: `filter`, `context_read`, `llm_extraction`, `validation`, `envelo
 +-----------------------------+----------+----------+---------+
 | TOTAL (Turn -> st_hipp)     |          | ~1008ms  |         |
 +-----------------------------+----------+----------+---------+
+
 ```
 
 ### Critical Performance Note
@@ -1794,7 +1919,7 @@ The 815ms budget is generous because there is no user waiting.
 ### Memory and Resource Budget
 
 | Resource | Budget | Notes |
-|---|---|---|
+| --- | --- | --- |
 | Memory (per session) | ~4KB | ExtractionContext (13 sections) + batch buffer + dedup ring |
 | LLM tokens (per turn) | 2000 | Cheapest model (GPT-4o-mini: ~$0.002/turn) |
 | LLM cost (per 1000 turns) | ~$2.00 | At 2000 tokens/turn, $0.15/1M input + $0.60/1M output |
@@ -1808,7 +1933,7 @@ The 815ms budget is generous because there is no user waiting.
 ### Events Emitted by Memory Writer
 
 | Event Topic | When | Payload |
-|---|---|---|
+| --- | --- | --- |
 | `k1.mw.filter.decision.v1` | After relevance filter runs | turn_id, decision (PASS/SKIP), skip_reason, trace_id |
 | `k1.mw.extraction.completed.v1` | After successful extraction + validation | turn_id, extraction_count, tokens_used, latency_ms, trace_id |
 | `k1.mw.extraction.failed.v1` | After extraction failure | turn_id, error_code, error_message, trace_id |
@@ -1818,7 +1943,7 @@ The 815ms budget is generous because there is no user waiting.
 ### Events Consumed by Memory Writer
 
 | Event Topic | From | Action |
-|---|---|---|
+| --- | --- | --- |
 | `turn.complete.v1` | Concierge (via DeltaBus) | Trigger MW pipeline for the turn |
 | `k1.sessionstate.eviction.v1` | SessionState Eviction Engine | NOT consumed by MW (separate concern, logged for clarity) |
 
@@ -1831,7 +1956,7 @@ Memory Writer integrates with 6 other K1/Bridge/K0 components. Each integration 
 ### Concierge (concierge.mmd)
 
 | Direction | What | Notes |
-|---|---|---|
+| --- | --- | --- |
 | Concierge -> MW | `turn.complete.v1` event on DeltaBus | Trigger for MW pipeline |
 | Concierge -> SessionState | Single writer (ADR-0017) | MW reads what Concierge writes |
 | MW -> Concierge | Nothing | MW never sends data to Concierge |
@@ -1839,7 +1964,7 @@ Memory Writer integrates with 6 other K1/Bridge/K0 components. Each integration 
 ### Fabric (fabric.mmd)
 
 | Direction | What | Notes |
-|---|---|---|
+| --- | --- | --- |
 | Fabric -> MW | Agent Factory spawns MemoryWriterAgent | Per-session lifecycle |
 | Fabric -> MW | Agent Registry holds memory_writer.yaml | Contract for agent configuration |
 | MW -> Fabric | Nothing directly | MW uses Model Hub (via Fabric Agent runtime) |
@@ -1847,21 +1972,21 @@ Memory Writer integrates with 6 other K1/Bridge/K0 components. Each integration 
 ### SessionState (sessionstate diagram)
 
 | Direction | What | Notes |
-|---|---|---|
+| --- | --- | --- |
 | SS -> MW | Multi-reader access (lock-free) | MW reads 5 sections |
 | MW -> SS | Nothing. Ever. | MW-01 invariant |
 
 ### Model Hub (not yet designed)
 
 | Direction | What | Notes |
-|---|---|---|
+| --- | --- | --- |
 | MW -> Hub | LLM extraction calls | 500 token budget, cheapest model |
 | Hub -> MW | MemoryExtraction[] (structured output) | JSON array from LLM |
 
 ### Bridge (bridge_architecture.mmd)
 
 | Direction | What | Notes |
-|---|---|---|
+| --- | --- | --- |
 | MW -> Bridge | IKernelCommandPort.submit(topic, schema_uri, body) | Fire-and-forget |
 | Bridge -> K0 | POST /k0/command.submit (signed envelope) | ONE-WAY |
 | Bridge -> LocalOutbox | Queue when K0 offline | MW-09 |
@@ -1869,7 +1994,7 @@ Memory Writer integrates with 6 other K1/Bridge/K0 components. Each integration 
 ### K0 (k0_source_of_truth_v2.mmd)
 
 | Direction | What | Notes |
-|---|---|---|
+| --- | --- | --- |
 | K0 receives | Signed envelope via Bridge | MW never talks to K0 directly (MW-03) |
 | K0 processes | P02 pipeline (DG + UltraBERT + Social + Embed) | UltraBERT validates MW output (MW-11) |
 | K0 stores | st_hipp_events (permanent memory) | End destination for MW output |
@@ -1880,7 +2005,8 @@ Memory Writer integrates with 6 other K1/Bridge/K0 components. Each integration 
 
 ### Internal Component Dependencies
 
-```
+```text
+
 [1] ExtractionContext + CompressedTurn types
     (data structures for context assembly)
          |
@@ -1911,12 +2037,13 @@ Memory Writer integrates with 6 other K1/Bridge/K0 components. Each integration 
          v
 [8] Turn Dispatcher + Pipeline Orchestrator
     (wires all stages together, subscribes to DeltaBus)
+
 ```
 
 ### External Dependencies
 
 | Dependency | Component | What MW Uses |
-|---|---|---|
+| --- | --- | --- |
 | DeltaBus | K1 Coordination | Subscription to turn.complete.v1 |
 | SessionState | K1 SessionState Store | Multi-reader access (lock-free) |
 | Fabric Agent Factory | K1 Fabric | Spawns MemoryWriterAgent per session |
@@ -1927,7 +2054,7 @@ Memory Writer integrates with 6 other K1/Bridge/K0 components. Each integration 
 ### Recommended Build Order
 
 | Phase | What | Why First |
-|---|---|---|
+| --- | --- | --- |
 | Phase 1 | Types: ExtractionContext, CompressedTurn, MemoryExtraction | Everything reads these |
 | Phase 2 | Relevance Filter | No external deps, testable in isolation |
 | Phase 3 | SessionState Reader + Person Resolver | Depends on SS interface only |
@@ -1942,7 +2069,8 @@ Memory Writer integrates with 6 other K1/Bridge/K0 components. Each integration 
 
 ## 30. Directory Structure (Target)
 
-```
+```text
+
 k1/memory_writer/
   __init__.py
   types.py                           # Domain types: 14 enums, 11 frozen dataclasses (34-field MemoryAtom)
@@ -2006,6 +2134,7 @@ k1/memory_writer/
     model_hub_adapter.py             # Binds IModelHubPort to K1 Model Hub
     health_adapter.py                # Binds IHealthPort to Fabric health system
     test_adapters.py                 # All 5 in-memory mock adapters for testing
+
 ```
 
 ---
@@ -2014,7 +2143,8 @@ k1/memory_writer/
 
 ### Example 1: Simple Meal Memory
 
-```
+```text
+
 Turn: User says "Had dinner with Mom at Olive Garden yesterday"
 Session: session-abc123, Turn #5, Band: GREEN
 
@@ -2067,11 +2197,13 @@ Stage 5 -- Batch Submit:
   Bridge: IKernelCommandPort.submit() -> CommandBuilder signs -> POST /k0/command.submit
   K0: Gate ALLOW -> WAL + idem + outbox + receipt (93ms) -> 202 Accepted
   K0: P02 -> UltraBERT confirms sentiment=positive, adds emotion=contentment (match) -> st_hipp_events
+
 ```
 
 ### Example 2: Multi-Fact Turn
 
-```
+```text
+
 Turn: User says "Need to call dentist tomorrow and also check SEVIS appointment"
 Session: session-abc123, Turn #8, Band: GREEN
 
@@ -2093,11 +2225,13 @@ Stage 3 -- LLM Extraction:
     confidence: 0.85
 
 Stage 5 -- Batch Submit: 2 envelopes in single batch -> 1 Bridge POST
+
 ```
 
 ### Example 3: Turn Skipped by Filter
 
-```
+```text
+
 Turn: User says "ok thanks"
 Session: session-abc123, Turn #6, Band: GREEN
 
@@ -2107,11 +2241,13 @@ Stage 1 -- Filter:
   Event: k1.mw.filter.decision.v1 {decision: "SKIP", skip_reason: "R4"}
 
 Pipeline exits. No LLM cost. No Bridge submit.
+
 ```
 
 ### Example 4: RED Band Privacy
 
-```
+```text
+
 Turn: User says "Mom is at Stanford Hospital for a checkup"
 Session: session-xyz, Turn #3, Band: RED
 
@@ -2130,6 +2266,7 @@ Stage 4 -- Envelope Build + Privacy Enforcer:
     {"text": "Family member at hospital for a checkup",
      "participants": ["person_redacted_0"], "location_name": null,
      "activity_type": "HEALTH", ...}
+
 ```
 
 ---
@@ -2139,13 +2276,13 @@ Stage 4 -- Envelope Build + Privacy Enforcer:
 These items require decisions before implementation:
 
 | # | Topic | Status | Blocks |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1 | **Prompt Engineering**: Exact memory_writer_persona.md content, few-shot examples, output format enforcement | DRAFT EXISTS (Section 18) | Writer Agent quality |
 | 2 | **Person Resolver Accuracy**: How to handle ambiguous names ("Alex" could be multiple people), conflict resolution strategy | NEEDS DESIGN | Participant resolution |
 | 3 | **Model Hub Integration**: How Writer Agent calls LLM via Model Hub (not yet designed). Routing, fallback, budget enforcement. | BLOCKED ON MODEL HUB | LLM extraction |
 | 4 | **Extraction Quality Metrics**: How to measure extraction quality over time. Recall vs precision tradeoff. User feedback loop. | NEEDS DESIGN | Quality improvement |
 | 5 | **Duplicate Detection Across Sessions**: Current R3 dedup is within-session only. Cross-session dedup happens in K0 P02 (M01 DG pattern). Is that sufficient? | NEEDS ANALYSIS | Dedup accuracy |
-| 6 | **Event Time vs Turn Time**: Should `event_time_utc` be the actual event time (from conversation context) or the turn submission time? | RESOLVED (v2): `event_time_utc` defaults to `now_utc()` at extraction time. The `temporal` object carries resolved `day_of_week` and `time_of_day` for contextual time. K0 P02 M08 (Temporal Profiling) does further resolution. | N/A |
+| 6 | **Event Time vs Turn Time**: Should `event_time_utc` be the actual event time (from conversation context) or the turn submission time? | SUPERSEDED by GAP-002 (2026-03-05): preserve conversation anchor separately (`conversation_anchor_ms`) and propagate turn timestamp through MW -> Bridge. `event_time_utc` in K0 must represent conversation time, while referred time is stored separately (`temporal_resolved_epoch_ms` / `temporal_links`). | N/A |
 | 7 | **Filter Rule Tuning**: Skip rule thresholds (word count, entity detection sensitivity) need empirical tuning. Need a test corpus. | NEEDS DATA | Filter accuracy |
 | 8 | **Confidence Threshold**: Is 0.3 the right confidence floor for dropping extractions? | RESOLVED (v2): `confidence_floor: 0.30` set in `policies.contract.yaml` and `MWConfig`. Empirically derived from LLM extraction experiments. Configurable at runtime. | N/A |
 | 9 | **Batch Window Tuning**: Is 250ms optimal? Tradeoff between latency (smaller window) and efficiency (larger window). | NEEDS BENCHMARKS | Performance |
@@ -2168,10 +2305,12 @@ Memory Writer v2 design is grounded in `docs/pipelines/p03/stage5_proposal_corre
 ### LAYER 2 -- 34-Field MemoryAtom Schema
 
 The authoritative field reference for MW v2 output. All 34 fields, their types, enums, and required status are defined in:
+
 - JSON Schema: `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json`
 - Python types: `k1/memory_writer/types.py`
 
 12 cognitive dimensions:
+
 1. Sentiment (5-class)
 2. Affect (VAD triple)
 3. Novelty (4-level)
@@ -2188,6 +2327,161 @@ The authoritative field reference for MW v2 output. All 34 fields, their types, 
 ### LAYER 3 -- K0 P03 Consolidation Contract
 
 MW v2 output must be compatible with K0 P03 consolidation. The 34-field atom maps to `st_hipp_events` columns. K0 P02 enriches MW output before storage. P03 reads from `st_hipp_events` for consolidation into long-term memory.
+
+---
+
+## 34. Implementation Sync Addendum (GAP-002, 2026-03-05)
+
+This section is the coding-time delta from v2 design to current target behavior.
+Use it as the implementation checklist when modifying Memory Writer.
+
+### 34.1 Authoritative Temporal Semantics
+
+1. Conversation anchor and referred time are different signals and MUST NOT be conflated.
+2. `conversation_anchor_ms` means "when this turn happened" (from `turn.complete.v1.timestamp_ms`).
+3. Referred time(s) mean "what time the content talks about" and belong in `temporal_links` (or legacy `temporal`).
+4. K0 `event_time_utc` must represent conversation time. Referred time goes to `temporal_resolved_epoch_ms` / `temporal_links_json`.
+
+### 34.2 Required MW/Bridge Coding Updates
+
+| ID | File | Required Update |
+| --- | --- | --- |
+| MW-A1 | `k1/memory_writer/types.py` | Ensure ExtractionContext carries turn timestamp from trigger (`current_turn.timestamp_ms` path remains authoritative). |
+| MW-A2 | `k1/memory_writer/pipeline/envelope_stage.py` | Add `turn_timestamp_ms` in envelope body for every extracted atom (including cases where legacy `temporal` is null). |
+| MW-A3 | `bridge/core/envelope_builder.py` | Add optional `event_time_ms` input to `EnvelopeBuilder.build(...)`; if set, derive `envelope.ts` from it; otherwise fallback to `now_utc()`. |
+| MW-A4 | Bridge caller path | Pass turn timestamp into `EnvelopeBuilder.build(event_time_ms=...)` from MW batch submission path. |
+| MW-B1 | `k1/memory_writer/types.py` | Add `TemporalLinkType` enum (Part V taxonomy: CONVERSATION_TIME, MENTIONED_TIME, INFERRED_TIME, DEADLINE). |
+| MW-B2 | `k1/memory_writer/types.py` | Add frozen `TemporalLink` dataclass (link_type, epoch_ms, text_mention, precision, is_backdated). |
+| MW-B3 | `k1/memory_writer/types.py` | Add `temporal_links: List[TemporalLink]` on MemoryAtom; keep legacy `temporal` during migration window. |
+| MW-B5 | `k1/memory_writer/pipeline/writer_agent.py` | Update prompt to extract multiple temporal references per atom, not a single temporal value. |
+| MW-B6 | `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json` | Add schema for `temporal_links`; keep backward compatibility for legacy payloads. |
+| MW-B7 | `k1/memory_writer/invariants.py` | Validate temporal_links bounds and enums; cap links per atom. |
+
+### 34.3 Deprecation Timeline (Implementation)
+
+1. Phase 2: populate both `temporal_links` and legacy `temporal`.
+2. Phase 2 + 1 release: stop populating `temporal` for new atoms (field still accepted).
+3. Phase 2 + 2 releases: remove legacy `temporal`/`temporal_orientation` generation path and update schema compatibility plan.
+
+### 34.4 Do/Do Not Guidance for Contributors
+
+1. Do use `turn.complete.v1.timestamp_ms` as the conversation-time source of truth.
+2. Do keep MW extraction per-atom and avoid cross-atom linking logic in MW.
+3. Do not overwrite conversation-time semantics with resolved/referred temporal values.
+4. Do not remove UltraBERT fallback assumptions from downstream K0 design notes.
+
+### 34.5 Verification Checklist for MW Changes
+
+1. Envelope body always includes `turn_timestamp_ms`.
+2. Bridge `envelope.ts` equals turn time when `event_time_ms` is provided.
+3. Multi-temporal utterances produce 2+ `temporal_links` entries.
+4. Legacy envelopes without `temporal_links` still validate and flow.
+
+---
+
+## 35. K1 Correction Signal Fields (R2 Epic 7.2)
+
+### Background: Why K1 Must Signal Corrections
+
+R2 research (Phase 9 diagnostic) proved that K0 P03 cannot detect EVOLVE/CONTRADICT through embedding cosine distance. UltraBERT family-diary data has a similarity floor of ~0.92, making old-vs-corrected facts indistinguishable from genuinely similar facts. The architectural decision: EVOLVE and CONTRADICT are conversational signals that only K1's LLM can detect. P03 becomes the signal processor, not the signal detector.
+
+See:
+
+- `docs/pipelines/P03_consolidation_dossier_v2.md` Section 1.3.1 (Signal Detection Boundary)
+- `poc/r2_phase_research/docs/R2_RESEARCH_FINAL.md` Section 15 (EVOLVE/CONTRADICT K1 Signal Delegation)
+- `poc/r2_phase_research/docs/R2_EPISODIC_INTEGRATION_EPIC_PLAN.md` Milestone 7 / Epic 7.2
+
+### Signal Detection Tiers
+
+| Tier | Signals | Detector | Where |
+| --- | --- | --- | --- |
+| Tier 1 (Embedding) | REINFORCE, EXTEND, CREATE | K0 P03 cosine distance | R3 reconciliation |
+| Tier 2 (Conversational) | EVOLVE, CONTRADICT | K1 LLM (Stage 3) | Memory Writer extraction |
+| Tier 3 (Temporal) | PRUNE | K0 timer/decay | Retention policy |
+
+### Fields Added to MemoryAtom (v2.2)
+
+Five new optional fields on `MemoryAtom` carry correction metadata from K1 to K0:
+
+| # | Field | Type | Default | Description |
+| --- | --- | --- | --- | --- |
+| 1 | `correction_signal` | bool | `false` | K1 LLM detected this atom corrects a previously stored fact. Flags atom as EVOLVE candidate for P03 R3 reconciliation. |
+| 2 | `contradiction_signal` | bool | `false` | K1 LLM detected this atom contradicts stored knowledge with no clear resolution. Flags atom as CONTRADICT candidate. |
+| 3 | `supersedes_concept` | string or null | `null` | Namespaced concept key being replaced. Format: `"domain:value"` (e.g. `"cuisine_preference:thai"`, `"school:riverdale"`, `"job:google"`). Gives P03 a targeted truth lookup key instead of brute-force embedding search. |
+| 4 | `correction_source` | string or null | `null` | How the correction was detected. One of: `"user_explicit"` (user directly states change: "Actually, I prefer Thai now"), `"user_implicit"` (inferred from context shift: user orders Thai repeatedly), `"context_change"` (environmental change: "We moved to Portland"). |
+| 5 | `session_context_id` | string or null | `null` | Session UUID where correction was detected. Enables P03 to build an audit trail for EVOLVE/CONTRADICT decisions. |
+
+All fields have defaults, so v2.0/v2.1 atoms validate against v2.2 without changes.
+
+### Signal Flow
+
+```text
+User says: "Actually, we prefer Thai food now, not Italian"
+  |
+  v
+[K1 Stage 3: LLM Extraction]
+  LLM detects correction in conversation context
+  Produces MemoryAtom with:
+    text: "Family now prefers Thai food"
+    correction_signal: true
+    supersedes_concept: "cuisine_preference:italian"
+    correction_source: "user_explicit"
+    session_context_id: "session-abc123"
+  |
+  v
+[K1 Stage 4: Envelope Builder]
+  Fields pass through as envelope body fields (no transformation)
+  |
+  v
+[Bridge -> K0 Gate -> P02]
+  P02 stores fields in st_hipp_events columns (passthrough)
+  |
+  v
+[K0 P03 R3 Reconciliation]
+  Reads correction_signal = true
+  Routes directly to EVOLVE handler
+  Uses supersedes_concept for targeted truth lookup
+  Skips cosine-distance comparison entirely
+```
+
+### Detection Logic (Stage 3 LLM Responsibility)
+
+The Writer Agent LLM prompt will include instructions to detect corrections:
+
+1. **Explicit correction**: User directly contradicts prior knowledge ("Actually X is now Y", "I changed my mind about X", "That's not right, it's Y")
+2. **Implicit correction**: User behavior implies a change (ordering Thai food 5 times after previously stating Italian preference)
+3. **Context change**: Life event triggers knowledge update ("We moved to Portland", "I started a new job at Google")
+
+The LLM sets `correction_signal: true` when it detects any of these patterns. It sets `contradiction_signal: true` when the user states something that conflicts with context but does not clearly resolve the conflict.
+
+The LLM sets `supersedes_concept` using a `"domain:value"` key format. The domain is a category (cuisine_preference, school, job, home_city, etc.) and the value is the OLD fact being replaced. This gives P03 a precise lookup key.
+
+### Invariant: No False Signal is Worse Than Missing One
+
+- A **missed** correction signal (false negative) means P03 falls back to cosine distance, which already fails for EVOLVE. Result: the correction is stored as a new CREATE instead of an EVOLVE. This is the current behavior and acceptable as a degraded mode.
+- A **false** correction signal (false positive) means P03 would incorrectly EVOLVE an existing truth. This is actively harmful.
+
+Therefore: the LLM should err on the side of NOT flagging corrections. `confidence` on the atom already provides a secondary gate. P03 can ignore correction signals below a confidence threshold.
+
+### Schema and Code Locations
+
+| Artifact | Path | Change |
+| --- | --- | --- |
+| JSON Schema | `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json` | 5 fields added, version bumped to v2.2 |
+| Python types | `k1/memory_writer/types.py` | 5 fields added to `MemoryAtom` dataclass |
+| Architecture doc | `k1/memory_writer/memory_writer_architecture.md` | This section (35) |
+
+### Downstream Dependencies (Not Yet Implemented)
+
+These are tracked in R2 Epic Plan Milestones 7 and 9:
+
+| Component | Required Change | Epic |
+| --- | --- | --- |
+| Writer Agent prompt | Add correction detection instructions | 7.2.1-7.2.3 |
+| Envelope Builder stage | Pass through 5 new fields (no transform needed) | 7.2.4 |
+| Bridge passthrough | No change needed (body is opaque JSON) | -- |
+| K0 P02 st_hipp_events | Add 5 columns to migration | 7.2.0 |
+| K0 P03 R3 reconciliation | Read correction_signal, route to EVOLVE/CONTRADICT | 9.x |
 
 ---
 

@@ -48,22 +48,26 @@ class TestWeightLearnerConfig:
         assert config.rollback_threshold == 3
 
     def test_get_priors(self) -> None:
-        """get_priors returns correct static priors."""
+        """get_priors returns correct CONFIG_B static priors (ADR-K024)."""
         config = WeightLearnerConfig()
         priors = config.get_priors()
 
-        assert priors["emotional"] == 0.35
-        assert priors["recency"] == 0.25
-        assert priors["access"] == 0.20
-        assert priors["social"] == 0.20
+        assert priors["sentiment"] == 0.10
+        assert priors["affect"] == 0.12
+        assert priors["arousal"] == 0.08
+        assert priors["surprise"] == 0.15
+        assert priors["novelty"] == 0.15
+        assert priors["social"] == 0.15
+        assert priors["identity"] == 0.10
+        assert priors["recency"] == 0.15
         assert abs(sum(priors.values()) - 1.0) < 1e-6
 
     def test_get_priors_list(self) -> None:
-        """get_priors_list returns correct order."""
+        """get_priors_list returns correct order matching COMPONENTS."""
         config = WeightLearnerConfig()
         priors = config.get_priors_list()
 
-        assert priors == [0.35, 0.25, 0.20, 0.20]
+        assert priors == [0.10, 0.12, 0.08, 0.15, 0.15, 0.15, 0.10, 0.15]
 
     def test_validate_learning_rate_bounds(self) -> None:
         """Validation rejects invalid learning rate."""
@@ -104,25 +108,33 @@ class TestTrainingSample:
     """Test TrainingSample operations."""
 
     def test_to_features(self) -> None:
-        """to_features returns correct order."""
+        """to_features returns correct 8-component order (ADR-K024)."""
         sample = TrainingSample(
-            emotional_score=0.8,
-            recency_score=0.5,
-            access_score=0.3,
-            social_score=0.2,
+            sentiment_score=0.8,
+            affect_score=0.7,
+            arousal_score=0.6,
+            surprise_score=0.5,
+            novelty_score=0.4,
+            social_score=0.3,
+            identity_score=0.2,
+            recency_score=0.1,
             was_grounded=True,
         )
 
         features = sample.to_features()
-        assert features == [0.8, 0.5, 0.3, 0.2]
+        assert features == [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
 
     def test_to_label_grounded(self) -> None:
         """to_label returns 1.0 for grounded events."""
         sample = TrainingSample(
-            emotional_score=0.5,
-            recency_score=0.5,
-            access_score=0.5,
+            sentiment_score=0.5,
+            affect_score=0.5,
+            arousal_score=0.5,
+            surprise_score=0.5,
+            novelty_score=0.5,
             social_score=0.5,
+            identity_score=0.5,
+            recency_score=0.5,
             was_grounded=True,
         )
         assert sample.to_label() == 1.0
@@ -130,10 +142,14 @@ class TestTrainingSample:
     def test_to_label_not_grounded(self) -> None:
         """to_label returns 0.0 for non-grounded events."""
         sample = TrainingSample(
-            emotional_score=0.5,
-            recency_score=0.5,
-            access_score=0.5,
+            sentiment_score=0.5,
+            affect_score=0.5,
+            arousal_score=0.5,
+            surprise_score=0.5,
+            novelty_score=0.5,
             social_score=0.5,
+            identity_score=0.5,
+            recency_score=0.5,
             was_grounded=False,
         )
         assert sample.to_label() == 0.0
@@ -141,10 +157,14 @@ class TestTrainingSample:
     def test_compute_sample_weight_recent(self) -> None:
         """Recent samples have weight ~1.0."""
         sample = TrainingSample(
-            emotional_score=0.5,
-            recency_score=0.5,
-            access_score=0.5,
+            sentiment_score=0.5,
+            affect_score=0.5,
+            arousal_score=0.5,
+            surprise_score=0.5,
+            novelty_score=0.5,
             social_score=0.5,
+            identity_score=0.5,
+            recency_score=0.5,
             was_grounded=True,
             days_ago=0.0,
         )
@@ -153,14 +173,18 @@ class TestTrainingSample:
     def test_compute_sample_weight_decay(self) -> None:
         """Older samples have exponentially decayed weight."""
         sample = TrainingSample(
-            emotional_score=0.5,
-            recency_score=0.5,
-            access_score=0.5,
+            sentiment_score=0.5,
+            affect_score=0.5,
+            arousal_score=0.5,
+            surprise_score=0.5,
+            novelty_score=0.5,
             social_score=0.5,
+            identity_score=0.5,
+            recency_score=0.5,
             was_grounded=True,
             days_ago=10.0,
         )
-        # exp(-0.1 * 10) = exp(-1) ≈ 0.368
+        # exp(-0.1 * 10) = exp(-1) ~ 0.368
         weight = sample.compute_sample_weight(decay_rate=0.1)
         assert 0.36 < weight < 0.38
 
@@ -174,44 +198,44 @@ class TestTrainingBatch:
     """Test TrainingBatch operations."""
 
     def test_empty_batch(self) -> None:
-        """Empty batch returns zero arrays."""
+        """Empty batch returns zero arrays with 8 features."""
         batch = TrainingBatch(samples=[])
         features, labels, weights = batch.to_arrays()
 
-        assert features.shape == (0, 4)
+        assert features.shape == (0, 8)
         assert labels.shape == (0,)
         assert weights.shape == (0,)
 
     def test_batch_len(self) -> None:
         """__len__ returns correct count."""
-        samples = [TrainingSample(0.5, 0.5, 0.5, 0.5, True) for _ in range(5)]
+        samples = [TrainingSample(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, True) for _ in range(5)]
         batch = TrainingBatch(samples=samples)
         assert len(batch) == 5
 
     def test_to_arrays_shape(self) -> None:
-        """to_arrays returns correct shapes."""
+        """to_arrays returns correct 8-feature shapes."""
         samples = [
-            TrainingSample(0.8, 0.6, 0.4, 0.2, True),
-            TrainingSample(0.3, 0.4, 0.5, 0.6, False),
-            TrainingSample(0.5, 0.5, 0.5, 0.5, True),
+            TrainingSample(0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, True),
+            TrainingSample(0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.2, False),
+            TrainingSample(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, True),
         ]
         batch = TrainingBatch(samples=samples)
         features, labels, weights = batch.to_arrays()
 
-        assert features.shape == (3, 4)
+        assert features.shape == (3, 8)
         assert labels.shape == (3,)
         assert weights.shape == (3,)
 
     def test_to_arrays_values(self) -> None:
-        """to_arrays returns correct values."""
+        """to_arrays returns correct values for 8 components."""
         samples = [
-            TrainingSample(0.8, 0.6, 0.4, 0.2, True, days_ago=0.0),
-            TrainingSample(0.3, 0.4, 0.5, 0.6, False, days_ago=0.0),
+            TrainingSample(0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, True, days_ago=0.0),
+            TrainingSample(0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.2, False, days_ago=0.0),
         ]
         batch = TrainingBatch(samples=samples)
         features, labels, weights = batch.to_arrays()
 
-        np.testing.assert_array_almost_equal(features[0], [0.8, 0.6, 0.4, 0.2])
+        np.testing.assert_array_almost_equal(features[0], [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1])
         np.testing.assert_array_almost_equal(labels, [1.0, 0.0])
         np.testing.assert_array_almost_equal(weights, [1.0, 1.0])
 
@@ -225,14 +249,19 @@ class TestImportanceWeightLearner:
     """Test ImportanceWeightLearner training and operations."""
 
     def test_init_with_defaults(self) -> None:
-        """Learner initializes with static priors."""
+        """Learner initializes with 8 CONFIG_B static priors (ADR-K024)."""
         learner = ImportanceWeightLearner(space_id="sp_test")
 
         weights = learner.get_weights()
-        assert "emotional" in weights
-        assert "recency" in weights
-        assert "access" in weights
+        assert "sentiment" in weights
+        assert "affect" in weights
+        assert "arousal" in weights
+        assert "surprise" in weights
+        assert "novelty" in weights
         assert "social" in weights
+        assert "identity" in weights
+        assert "recency" in weights
+        assert len(weights) == 8
 
         # All weights should be positive and sum to ~1
         assert all(w > 0 for w in weights.values())
@@ -276,31 +305,40 @@ class TestImportanceWeightLearner:
             assert w <= learner.config.weight_max + 0.01
 
     def test_get_weights_list_order(self) -> None:
-        """get_weights_list returns correct order."""
+        """get_weights_list returns correct 8-component order."""
         learner = ImportanceWeightLearner(space_id="sp_test")
         weights_dict = learner.get_weights()
         weights_list = learner.get_weights_list()
 
-        assert weights_list[0] == weights_dict["emotional"]
-        assert weights_list[1] == weights_dict["recency"]
-        assert weights_list[2] == weights_dict["access"]
-        assert weights_list[3] == weights_dict["social"]
+        assert len(weights_list) == 8
+        assert weights_list[0] == weights_dict["sentiment"]
+        assert weights_list[1] == weights_dict["affect"]
+        assert weights_list[2] == weights_dict["arousal"]
+        assert weights_list[3] == weights_dict["surprise"]
+        assert weights_list[4] == weights_dict["novelty"]
+        assert weights_list[5] == weights_dict["social"]
+        assert weights_list[6] == weights_dict["identity"]
+        assert weights_list[7] == weights_dict["recency"]
 
     def test_set_weights(self) -> None:
         """set_weights updates internal weights."""
         learner = ImportanceWeightLearner(space_id="sp_test")
 
         new_weights = {
-            "emotional": 0.40,
-            "recency": 0.30,
-            "access": 0.15,
-            "social": 0.15,
+            "sentiment": 0.20,
+            "affect": 0.15,
+            "arousal": 0.10,
+            "surprise": 0.10,
+            "novelty": 0.10,
+            "social": 0.10,
+            "identity": 0.10,
+            "recency": 0.15,
         }
         learner.set_weights(new_weights)
 
         weights = learner.get_weights()
         # After clamping and normalization, values may shift slightly
-        assert weights["emotional"] > weights["social"]
+        assert weights["sentiment"] > weights["arousal"]
 
     def test_train_step_empty_batch(self) -> None:
         """Training with empty batch returns zero loss."""
@@ -319,7 +357,7 @@ class TestImportanceWeightLearner:
         learner = ImportanceWeightLearner(space_id="sp_test")
 
         # Create batch with 30 samples (< 50 min_batch_size)
-        samples = [TrainingSample(0.5, 0.5, 0.5, 0.5, True) for _ in range(30)]
+        samples = [TrainingSample(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, True) for _ in range(30)]
         batch = TrainingBatch(samples=samples)
 
         result = learner.train_step(batch)
@@ -335,7 +373,8 @@ class TestImportanceWeightLearner:
 
         # Issue 4: min_batch_size=50, so use 60 samples
         samples = [
-            TrainingSample(0.9, 0.1, 0.1, 0.1, True if i % 2 == 0 else False) for i in range(60)
+            TrainingSample(0.9, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, True if i % 2 == 0 else False)
+            for i in range(60)
         ]
         batch = TrainingBatch(samples=samples)
 
@@ -351,13 +390,13 @@ class TestImportanceWeightLearner:
         """Multiple training steps should reduce loss."""
         learner = ImportanceWeightLearner(space_id="sp_test")
 
-        # Create consistent training data
+        # Create consistent training data (high sentiment -> grounded)
         samples = []
         for _ in range(100):
-            # High emotional → grounded
-            samples.append(TrainingSample(0.9, 0.2, 0.2, 0.2, True))
-            # Low emotional → not grounded
-            samples.append(TrainingSample(0.1, 0.2, 0.2, 0.2, False))
+            # High sentiment -> grounded
+            samples.append(TrainingSample(0.9, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, True))
+            # Low sentiment -> not grounded
+            samples.append(TrainingSample(0.1, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, False))
 
         batch = TrainingBatch(samples=samples)
 
@@ -377,7 +416,8 @@ class TestImportanceWeightLearner:
 
         # Issue 4: min_batch_size=50, so use 60 samples
         samples = [
-            TrainingSample(0.9, 0.1, 0.1, 0.1, True if i % 2 == 0 else False) for i in range(60)
+            TrainingSample(0.9, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, True if i % 2 == 0 else False)
+            for i in range(60)
         ]
         batch = TrainingBatch(samples=samples)
 
@@ -423,7 +463,7 @@ class TestWeightLearnerRollback:
         learner = ImportanceWeightLearner(space_id="sp_test")
 
         # Train to change weights (Issue 4: min_batch_size=50)
-        samples = [TrainingSample(0.9, 0.1, 0.1, 0.1, True) for _ in range(60)]
+        samples = [TrainingSample(0.9, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, True) for _ in range(60)]
         batch = TrainingBatch(samples=samples)
         learner.train_step(batch)
 
@@ -501,16 +541,25 @@ class TestTrainingResult:
     """Test TrainingResult dataclass."""
 
     def test_training_result_fields(self) -> None:
-        """TrainingResult has expected fields."""
+        """TrainingResult has expected fields (8 CONFIG_B components)."""
         result = TrainingResult(
             loss=0.25,
-            weights={"emotional": 0.35, "recency": 0.25, "access": 0.20, "social": 0.20},
+            weights={
+                "sentiment": 0.10,
+                "affect": 0.12,
+                "arousal": 0.08,
+                "surprise": 0.15,
+                "novelty": 0.15,
+                "social": 0.15,
+                "identity": 0.10,
+                "recency": 0.15,
+            },
             sample_count=100,
             converged=False,
         )
 
         assert result.loss == 0.25
-        assert len(result.weights) == 4
+        assert len(result.weights) == 8
         assert result.sample_count == 100
         assert not result.converged
 
@@ -518,7 +567,16 @@ class TestTrainingResult:
         """TrainingResult marks convergence at low loss."""
         result = TrainingResult(
             loss=0.05,
-            weights={"emotional": 0.35, "recency": 0.25, "access": 0.20, "social": 0.20},
+            weights={
+                "sentiment": 0.10,
+                "affect": 0.12,
+                "arousal": 0.08,
+                "surprise": 0.15,
+                "novelty": 0.15,
+                "social": 0.15,
+                "identity": 0.10,
+                "recency": 0.15,
+            },
             sample_count=1000,
             converged=True,
         )

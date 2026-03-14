@@ -75,6 +75,15 @@ class TurnCompletePayload:
     assistant_response: str
     timestamp_ms: int
     turn_number: int
+    # Temporal/spatial context from beliefs_active (GAP-002 Epic 1.1, eliminates race condition T7)
+    mentioned_time_raw: str = ""
+    mentioned_time_resolved_ms: int = 0
+    mentioned_time_confidence: float = 0.0
+    mentioned_time_is_relative: bool = True
+    mentioned_location_raw: str = ""
+    mentioned_location_type: str = ""
+    mentioned_location_entity_id: str = ""
+    mentioned_location_confidence: float = 0.0
 
 
 # ===========================================================================

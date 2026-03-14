@@ -2007,7 +2007,6 @@ class Syscalls:
 
             return {"deleted_count": deleted_count}
 
-
     # ===========================================================================
     # DEPRECATED (M4 ADR-K003 -- FAISS eliminated, pgvector native)
     # ===========================================================================
@@ -3399,7 +3398,6 @@ class Syscalls:
                     e.source_event_count,
                     e.primary_location,
                     e.participants_json,
-                    e.activity_tags_json,
                     COALESCE(o.sentiment_score, 0.0) as sentiment_score,
                     COALESCE(o.salience_score, 0.5) as salience_score
                 FROM st_epi e
@@ -3432,7 +3430,6 @@ class Syscalls:
                     "source_event_count": row["source_event_count"],
                     "primary_location": row["primary_location"],
                     "participants_json": row["participants_json"],
-                    "activity_tags_json": row["activity_tags_json"],
                     "sentiment_score": (
                         float(row["sentiment_score"]) if row["sentiment_score"] else 0.0
                     ),
@@ -3542,7 +3539,7 @@ class Syscalls:
                     action_sequence_json,
                     source_episodes_json,
                     source_episode_count,
-                    lifecycle_state
+                    archival_status
                 FROM st_procedural
                 WHERE tenant_id = $1
                   AND space_id = $2
@@ -3570,7 +3567,7 @@ class Syscalls:
                     "action_sequence_json": row["action_sequence_json"],
                     "source_episodes_json": row["source_episodes_json"],
                     "source_episode_count": row["source_episode_count"],
-                    "lifecycle_state": row["lifecycle_state"],
+                    "lifecycle_state": row["archival_status"],
                 }
                 routines.append(routine_dict)
 
@@ -4668,6 +4665,272 @@ class Syscalls:
                 },
             )
             raise RuntimeError(f"Failed to write observations batch: {e}") from e
+
+    # ------------------------------------------------------------------
+    # st_learned_weights: Adaptive parameter storage
+    # ------------------------------------------------------------------
+
+    async def learned_weights_query(
+        self,
+        space_id: str,
+        param_prefix: str,
+    ) -> dict[str, Any]:
+        """
+        Query st_learned_weights by space and key prefix (requires st_learned_weights.read).
+
+        Returns all rows matching space_id + param_key LIKE prefix%. Callers
+        interpret keys according to their own namespace conventions.
+
+        Capability Required: "st_learned_weights.read"
+
+        Storage Table: st_learned_weights (migration 0040)
+
+        Args:
+            space_id: Space/family isolation ID
+            param_prefix: Key prefix filter (e.g., "importance_", "novelty_bonus_")
+
+        Returns:
+            Dictionary with:
+            - rows: list[dict] with {param_key, current_value, sample_count, updated_at, confidence, version}
+            - count: int
+
+        Raises:
+            PermissionError: If pipeline lacks "st_learned_weights.read" capability
+
+        Performance:
+            - Target: <10ms P95 (uses idx_learned_weights_space_key)
+            - Typically returns 4-8 rows per prefix
+
+        Related:
+            - Migration 0040: st_learned_weights schema
+            - Migration 0041: st_learned_weights_history (version tracking)
+        """
+        self._require_cap("st_learned_weights.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"learned_weights_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "space_id": space_id,
+                "param_prefix": param_prefix,
+                "operation": "learned_weights_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            raw_rows = await conn.fetch(
+                """
+                SELECT param_key, current_value, sample_count,
+                       updated_at, confidence, version
+                FROM st_learned_weights
+                WHERE space_id = $1
+                  AND param_key LIKE $2
+                  AND param_scope = 'space'
+                ORDER BY param_key
+                """,
+                space_id,
+                f"{param_prefix}%",
+            )
+
+            rows = [dict(r) for r in raw_rows]
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"learned_weights_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "space_id": space_id,
+                    "param_prefix": param_prefix,
+                    "count": len(rows),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "learned_weights_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "rows": rows,
+                "count": len(rows),
+            }
+
+    async def learned_weights_get(
+        self,
+        space_id: str,
+        param_key: str,
+    ) -> dict[str, Any] | None:
+        """
+        Fetch a single learned weight by exact key (requires st_learned_weights.read).
+
+        Capability Required: "st_learned_weights.read"
+
+        Storage Table: st_learned_weights (migration 0040)
+
+        Args:
+            space_id: Space/family isolation ID
+            param_key: Exact param key (e.g., "novelty_bonus_first_occurrence")
+
+        Returns:
+            Dict with {param_key, current_value, sample_count, updated_at, confidence, version},
+            or None if not found.
+
+        Raises:
+            PermissionError: If pipeline lacks "st_learned_weights.read" capability
+        """
+        self._require_cap("st_learned_weights.read")
+
+        start_time = time.perf_counter()
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            row = await conn.fetchrow(
+                """
+                SELECT param_key, current_value, sample_count,
+                       updated_at, confidence, version
+                FROM st_learned_weights
+                WHERE space_id = $1
+                  AND param_key = $2
+                  AND param_scope = 'space'
+                """,
+                space_id,
+                param_key,
+            )
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"learned_weights_get completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "space_id": space_id,
+                    "param_key": param_key,
+                    "found": row is not None,
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "learned_weights_get",
+                },
+            )
+
+            return dict(row) if row is not None else None
+
+    async def learned_weights_upsert(
+        self,
+        space_id: str,
+        param_key: str,
+        value: float,
+        prior_value: float,
+    ) -> dict[str, Any]:
+        """
+        Insert or update a learned weight (requires st_learned_weights.write).
+
+        Uses UPSERT pattern. Increments version and sample_count on conflict.
+        History trigger (migration 0041) auto-creates version snapshot.
+
+        Capability Required: "st_learned_weights.write"
+
+        Storage Table: st_learned_weights (migration 0040)
+
+        Args:
+            space_id: Space/family isolation ID
+            param_key: Full param key (e.g., "importance_sentiment", "novelty_bonus_first_occurrence")
+            value: New weight value
+            prior_value: Default/prior value (for rollback reference)
+
+        Returns:
+            Dictionary with:
+            - param_key: str
+            - value: float
+            - status: str ("INSERTED" or "UPDATED")
+
+        Raises:
+            PermissionError: If pipeline lacks "st_learned_weights.write" capability
+
+        Performance:
+            - Target: <15ms P95 (single UPSERT with 3 indexes)
+            - Uses ON CONFLICT on uq_learned_weights constraint
+
+        Related:
+            - Migration 0040: st_learned_weights schema
+            - Migration 0041: History trigger auto-prunes to 10 versions
+        """
+        self._require_cap("st_learned_weights.write")
+
+        start_time = time.perf_counter()
+        now_ms = int(time.time() * 1000)
+
+        logger.debug(
+            f"learned_weights_upsert: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "space_id": space_id,
+                "param_key": param_key,
+                "value": value,
+                "operation": "learned_weights_upsert",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            result = await conn.execute(
+                """
+                INSERT INTO st_learned_weights (
+                    param_id, param_key, param_scope, scope_id,
+                    space_id, current_value, prior_value,
+                    confidence, sample_count,
+                    last_updated_at, version, previous_value,
+                    created_at, updated_at
+                ) VALUES (
+                    gen_random_uuid()::text, $1, 'space', $2,
+                    $2, $3, $4,
+                    0.0, 1,
+                    $5, 1, NULL,
+                    $5, $5
+                )
+                ON CONFLICT ON CONSTRAINT uq_learned_weights DO UPDATE SET
+                    current_value = $3,
+                    previous_value = st_learned_weights.current_value,
+                    sample_count = st_learned_weights.sample_count + 1,
+                    version = st_learned_weights.version + 1,
+                    last_updated_at = $5,
+                    updated_at = $5
+                """,
+                param_key,  # $1
+                space_id,  # $2 (scope_id = space_id for space scope)
+                value,  # $3
+                prior_value,  # $4
+                now_ms,  # $5
+            )
+
+            inserted = result != "INSERT 0 0"
+            status = "INSERTED" if "INSERT 0 1" in str(result) else "UPDATED"
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"learned_weights_upsert completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "space_id": space_id,
+                    "param_key": param_key,
+                    "value": value,
+                    "status": status,
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "learned_weights_upsert",
+                },
+            )
+
+            return {
+                "param_key": param_key,
+                "value": value,
+                "status": status,
+            }
 
     def _require_cap(self, capability: str) -> None:
         """

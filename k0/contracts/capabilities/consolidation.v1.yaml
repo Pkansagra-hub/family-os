@@ -55,7 +55,7 @@ capabilities:
   # ============================================================================
 
   cluster_episodes:
-    description: "Cluster events into episodes using DBSCAN on 768-dim embeddings"
+    description: "Cluster events into episodes using HDBSCAN on precomputed composite distance matrices (semantic + temporal)"
     providers:
       - type: module
         module_id: consolidation.episodic_clusterer

@@ -97,7 +97,7 @@ flowchart TB
 
         subgraph R2_PHASE["R2: Episodic Integration"]
             R2_EPISODIC["r2_episodic_integrator.py<br/>R2EpisodicIntegrator<br/>R2Config"]
-            R2_STEPS["Steps:<br/>1. Split events into sequences<br/>2. Cluster via DBSCAN<br/>3. Compute centroids<br/>4. Track quality metrics<br/>5. Adaptive eps/min_samples"]
+            R2_STEPS["Steps:<br/>1. Split events into sequences<br/>2. Cluster via HDBSCAN<br/>3. Compute centroids<br/>4. Track quality metrics<br/>5. Adaptive eps/min_samples"]
         end
 
         subgraph R3_PHASE["R3: Dedup & Decay"]
@@ -224,12 +224,12 @@ flowchart TB
 
         subgraph R2_ALGORITHMS["R2 Uses"]
             ALG_EPISODE_SPLITTER["episode_splitter.py<br/>─────────────<br/>EpisodeSplitter<br/>SplitConfig<br/>─────────────<br/>Splits by: time gaps,<br/>geohash, entity bounds"]
-            ALG_EPISODIC_DBSCAN["episodic_dbscan.py<br/>─────────────<br/>EpisodicDBSCAN<br/>DBSCANParams<br/>─────────────<br/>Composite distance:<br/>semantic + temporal"]
+            ALG_EPISODIC_HDBSCAN["episodic_hdbscan.py<br/>─────────────<br/>EpisodicHDBSCAN<br/>HDBSCANParams<br/>─────────────<br/>Composite distance:<br/>semantic + temporal<br/>+ noise rescue"]
             ALG_CENTROID["centroid_calculator.py<br/>─────────────<br/>CentroidCalculator<br/>CentroidResult<br/>WeightingStrategy"]
             ALG_CLUSTER_QUALITY["cluster_quality.py<br/>─────────────<br/>ClusterQualityTracker<br/>ClusterQualityMetrics<br/>Silhouette score"]
             ALG_EPS_ADJUSTER["eps_adjuster.py<br/>─────────────<br/>EpsAdjuster<br/>EpsAdjustmentConfig<br/>Adaptive learning"]
             ALG_MIN_SAMPLES["min_samples_adjuster.py<br/>─────────────<br/>MinSamplesAdjuster<br/>MinSamplesConfig"]
-            ALG_COMPOSITE_DIST["composite_distance.py<br/>─────────────<br/>CompositeDistance<br/>DBSCANParams<br/>─────────────<br/>Formula:<br/>(1-w)×cosine + w×temporal<br/>temporal_weight: 0.3<br/>max_gap: 4 hours"]
+            ALG_COMPOSITE_DIST["composite_distance.py<br/>─────────────<br/>CompositeDistance<br/>ClusteringDistanceParams<br/>─────────────<br/>Formula:<br/>(1-w)×cosine + w×temporal<br/>temporal_weight: 0.3<br/>max_gap: 4 hours"]
         end
 
         subgraph R3_ALGORITHMS["R3 Uses"]
@@ -573,7 +573,7 @@ flowchart TB
 
     %% R2 uses algorithms
     R2_EPISODIC ==>|"uses"| ALG_EPISODE_SPLITTER
-    R2_EPISODIC ==>|"uses"| ALG_EPISODIC_DBSCAN
+    R2_EPISODIC ==>|"uses"| ALG_EPISODIC_HDBSCAN
     R2_EPISODIC ==>|"uses"| ALG_CENTROID
     R2_EPISODIC ==>|"uses"| ALG_CLUSTER_QUALITY
     R2_EPISODIC -.->|"adaptive"| ALG_EPS_ADJUSTER
@@ -1128,7 +1128,7 @@ flowchart TB
     QOS_LEARNING_BUDGET --> QOS_PHASE_METRICS
     ALG_HEBBIAN -.->|"track budget"| QOS_LEARNING_BUDGET
     ALG_IMPORTANCE_LEARNER -.->|"track budget"| QOS_LEARNING_BUDGET
-    ALG_EPISODIC_DBSCAN -.->|"track budget"| QOS_LEARNING_BUDGET
+    ALG_EPISODIC_HDBSCAN -.->|"track budget"| QOS_LEARNING_BUDGET
 
     %% Phase Latency Metrics
     QOS_PHASE_METRICS --> K0_METRICS
@@ -1171,7 +1171,7 @@ flowchart TB
 
     %% Composite Distance Algorithm
     ALG_COMPOSITE_DIST --> K0_METRICS
-    ALG_EPISODIC_DBSCAN --> ALG_COMPOSITE_DIST
+    ALG_EPISODIC_HDBSCAN --> ALG_COMPOSITE_DIST
     R2_EPISODIC ==>|"uses"| ALG_COMPOSITE_DIST
 
     %% ===========================================================================
@@ -1206,7 +1206,7 @@ flowchart TB
     class ST_EPI,ST_SEM,ST_KG_DOM,ST_OUTBOX,ST_LEARNING_QUEUE database
     class ST_PROCEDURAL,ST_SOCIAL,ST_PROSPECTIVE,ST_VEC_WRITE,ST_OUTBOX_EMIT database
     class ALG_IMPORTANCE_SCORER,ALG_IMPORTANCE_LEARNER,ALG_ENTITY algorithm
-    class ALG_EPISODE_SPLITTER,ALG_EPISODIC_DBSCAN,ALG_CENTROID,ALG_CLUSTER_QUALITY,ALG_EPS_ADJUSTER,ALG_MIN_SAMPLES algorithm
+    class ALG_EPISODE_SPLITTER,ALG_EPISODIC_HDBSCAN,ALG_CENTROID,ALG_CLUSTER_QUALITY,ALG_EPS_ADJUSTER,ALG_MIN_SAMPLES algorithm
     class ALG_SIMHASH,ALG_TWO_STAGE,ALG_DECAY,ALG_DUPLICATE,ALG_IMMUNITY,ALG_RETENTION,ALG_NOVELTY,ALG_PRUNE_AUDIT,ALG_REGRET,ALG_ACCESS,ALG_MINHASH algorithm
     class ALG_ENTITY_EXTRACTOR,ALG_ENTITY_DISAMBIG,ALG_AMBIG_RESOLVER,ALG_CONFIDENCE,ALG_MERGE_THRESHOLD,ALG_ENTITY_MERGER,ALG_HEBBIAN,ALG_GRANGER,ALG_CAUSALITY_THRESH,ALG_EDGE_DEMOTION algorithm
     class ALG_CPN,ALG_MCTS,ALG_MCTS_ADAPTIVE,ALG_BGT_SM,ALG_SPC_UQ,ALG_TDL_HCO,ALG_MCTS_SHADOW algorithm

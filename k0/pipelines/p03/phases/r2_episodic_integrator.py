@@ -1,11 +1,11 @@
 """
-R2 Phase - Episodic Integration (DBSCAN Clustering).
+R2 Phase - Episodic Integration (HDBSCAN Clustering).
 
 M4 Epic 4.2: Implement R2 Phase for Episodic Clustering with Composite Distance.
 
 This phase performs episodic clustering on events from R1:
 1. Split events into sequences by time gaps / geohash / entity boundaries (Issue 4.2.2)
-2. Cluster each sequence using EpisodicDBSCAN with composite distance (Issues 4.2.1, 4.2.3)
+2. Cluster each sequence using EpisodicHDBSCAN with composite distance (Issues 4.2.1, 4.2.3)
 3. Compute centroids for each cluster (Issue 4.2.4)
 4. Track cluster quality metrics (Issue 4.2.7)
 5. Adaptive eps/min_samples learning (Issues 4.2.5, 4.2.6)
@@ -24,20 +24,20 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
+from sklearn.metrics import silhouette_score as sklearn_silhouette_score
 
 from k0.modules.consolidation.algorithms import (
     CentroidCalculator,
     CentroidResult,
-    ClusteringResult,
     ClusterQualityMetrics,
     ClusterQualityTracker,
-    DBSCANParams,
+    EnsembleDistanceConfig,
     EpisodeCandidate,
     EpisodeSplitter,
-    EpisodicDBSCAN,
+    EpisodicCoherenceScorer,
     EpisodicHDBSCAN,
     EpsAdjuster,
     EpsAdjustmentConfig,
@@ -45,9 +45,24 @@ from k0.modules.consolidation.algorithms import (
     HDBSCANParams,
     MinSamplesAdjuster,
     MinSamplesConfig,
+    SecondaryCentroidSelector,
     SplitConfig,
     WeightingStrategy,
+    compute_batch_coherence,
 )
+from k0.modules.consolidation.algorithms.cross_batch_extend import (
+    CrossBatchExtendConfig,
+    CrossBatchExtendMatcher,
+)
+from k0.modules.consolidation.algorithms.hebbian_boost import (
+    HebbinaBoostConfig,
+    build_cooccurrence_graph,
+)
+from k0.modules.consolidation.algorithms.same_thread_merge import (
+    SameThreadMergeConfig,
+    SameThreadMerger,
+)
+from k0.modules.consolidation.algorithms.thread_purity import ThreadPurityCorrector
 from k0.pipelines.p03.event_state import ReconciliationAction
 from k0.pipelines.p03.observability import P03Error
 from k0.pipelines.p03.phase_interface import P03PhaseResult
@@ -74,8 +89,8 @@ class R2Config:
 
     Attributes:
         min_batch_size: Minimum events required for clustering (skip if less)
-        eps: DBSCAN eps parameter (0.0 = use adaptive learning)
-        min_samples: DBSCAN min_samples parameter (0 = use adaptive learning)
+        eps: Clustering eps parameter (0.0 = use adaptive learning)
+        min_samples: Clustering min_samples parameter (0 = use adaptive learning)
         semantic_weight: Weight for semantic (embedding) distance [0,1]
         temporal_weight: Weight for temporal distance [0,1]
         enable_splitting: Whether to split events before clustering
@@ -84,7 +99,6 @@ class R2Config:
         enable_adaptive_min_samples: Whether to use adaptive min_samples learning
         enable_quality_tracking: Whether to track cluster quality metrics
         weighting_strategy: Strategy for centroid weighting
-        use_hdbscan: Use HDBSCAN instead of DBSCAN for better noise handling
         noise_rescue_threshold: Outlier score below which noise is rescued (HDBSCAN)
         cluster_selection_method: HDBSCAN cluster selection ('eom' or 'leaf')
     """
@@ -95,16 +109,34 @@ class R2Config:
     semantic_weight: float = 0.7
     temporal_weight: float = 0.3
     enable_splitting: bool = True
-    time_gap_minutes: int = 60
+    time_gap_minutes: int = 360  # 6 hours: groups events within same half-day
     enable_adaptive_eps: bool = True
     enable_adaptive_min_samples: bool = True
     enable_quality_tracking: bool = True
     weighting_strategy: WeightingStrategy = WeightingStrategy.IMPORTANCE
-    use_hdbscan: bool = True  # Use HDBSCAN by default for noise rescue
     noise_rescue_threshold: float = 0.5  # Rescue noise with outlier_score < this
     cluster_selection_method: str = "leaf"  # 'leaf' preserves small clusters
     enable_canonicalization: bool = False  # Disabled: HDBSCAN clusters are already good
     canonicalization_time_bucket_hours: int = 1  # Time bucket for signature grouping (if enabled)
+
+    # === Epic 6.1: Ensemble distance (3D: semantic 0.45, temporal 0.25, narrative 0.30) ===
+    enable_ensemble_distance: bool = True
+    ensemble_distance_config: Optional[EnsembleDistanceConfig] = None  # None = proven defaults
+
+    # === Epic 6.2: Thread purity correction ===
+    enable_thread_purity_correction: bool = True
+
+    # === Epic 6.3: Same-thread merge (post-purity correction) ===
+    enable_same_thread_merge: bool = True
+    same_thread_merge_config: Optional[SameThreadMergeConfig] = None  # None = proven defaults
+
+    # === Epic 6.4: Cross-batch episode extension ===
+    enable_cross_batch_extend: bool = True
+    cross_batch_extend_config: Optional[CrossBatchExtendConfig] = None  # None = proven defaults
+
+    # === Epic 5.1: Hebbian co-occurrence distance boost ===
+    enable_hebbian_boost: bool = True
+    hebbian_boost_config: Optional[HebbinaBoostConfig] = None  # None = use defaults
 
     # === ISSUE 2 FIX: Episode Matching ===
     # Query st_epi for existing episodes before clustering to avoid duplicates
@@ -132,6 +164,31 @@ class EventAdapter:
         - ner_entities: Optional[List[str]]
         - importance_score: Optional[float]
 
+    Epic 1.1 additions (signal activation):
+        - geohash_6: Optional[str]           (1.1.1 -- EpisodeSplitter Signal 1)
+        - activity_type: Optional[str]       (1.1.2 -- EpisodeSplitter Signal 2)
+        - activity_type_ultrabert: Optional[str] (1.1.2 -- 12-type INGRESS)
+        - social_context: Optional[str]      (1.1.3 -- Epic 3.1 social distance)
+        - social_intimacy: Optional[str]     (1.1.3 -- Epic 3.3 boundary scoring)
+        - participants_json: Optional[str]   (1.1.3 -- Epic 3.1 Jaccard similarity)
+        - narrative_thread_id: Optional[str] (1.1.4 -- Epic 3.1 narrative distance)
+        - narrative_arc_position: Optional[str] (1.1.4 -- Epic 3.3 boundary scoring)
+        - affect_valence: float              (1.1.5 -- Epic 3.1 affective distance)
+        - affect_arousal: float              (1.1.5 -- Epic 3.1 affective distance)
+        - affect_dominance: float            (1.1.5 -- MW v2 affective signal)
+        - sentiment_score: float             (1.1.5 -- ClusterableEvent protocol)
+        - salience_score: float              (1.1.5 -- Epic 4.1 centroid weighting)
+        - temporal_orientation: Optional[str] (1.1.6 -- future temporal enhancements)
+        - temporal_resolved_epoch_ms: float  (1.1.6 -- Epic 1.2 timestamp chain)
+        - temporal_anchor_json: Optional[str] (1.1.6 -- MW v2 temporal context)
+
+    Epic 3.6 additions (temporal context binding):
+        - temporal_links_json: Optional[str]  (3.6.0 -- MW v2 temporal links)
+        - time_of_day_bucket: Optional[str]   (3.6.0 -- circadian context)
+        - circadian_slot: Optional[str]       (3.6.0 -- circadian phase)
+        - is_weekend: Optional[bool]          (3.6.0 -- day type context)
+        - extraction_sequence: int            (3.6.0 -- same-turn ordering)
+
     P03EventState has these fields directly, but we wrap for safety.
     """
 
@@ -151,9 +208,16 @@ class EventAdapter:
 
     @property
     def geohash(self) -> Optional[str]:
-        # Extract from event if available (may be in content or metadata)
-        # For now, return None - location handling is phase-specific
-        return None
+        # Issue 1.1.1: Was hardcoded None. Now returns geohash_6 from P03EventState.
+        return self.event.geohash_6 or None
+
+    @property
+    def geohash_6(self) -> Optional[str]:
+        """Expose geohash_6 for EpisodeSplitter._detect_break Signal 1.
+
+        EpisodeSplitter uses getattr(prev, "geohash_6", None) at episode_splitter.py L340.
+        """
+        return self.event.geohash_6 or None
 
     @property
     def ner_entities(self) -> Optional[List[str]]:
@@ -170,6 +234,175 @@ class EventAdapter:
     def importance_score(self) -> Optional[float]:
         return self.event.importance_score if self.event.importance_computed else None
 
+    # --- Issue 1.1.2: Activity signals (EpisodeSplitter Signal 2) ---
+
+    @property
+    def activity_type(self) -> Optional[str]:
+        """Legacy 7-type activity classification.
+
+        Used by EpisodeSplitter._detect_break Signal 2 (episode_splitter.py L354).
+        Types: meal/conversation/routine/milestone/social/work/unknown
+        """
+        return self.event.activity_type or None
+
+    @property
+    def activity_type_ultrabert(self) -> Optional[str]:
+        """UltraBERT 12-type INGRESS classification.
+
+        Preferred over legacy activity_type for finer granularity.
+        Types: DIARY/TASK/HEALTH/FINANCE/RELATIONSHIP/WORK/META/MEMORY/
+               PLANNING/CELEBRATION/CONCERN/GRATITUDE
+        """
+        return self.event.activity_type_ultrabert or None
+
+    # --- Issue 1.1.3: Social context signals (Epic 3.1 social distance) ---
+
+    @property
+    def social_context(self) -> Optional[str]:
+        """Social context type (nuclear_family/solo/work/friends/extended_family).
+
+        Used by Epic 3.1 social distance dimension and Epic 3.3 boundary scoring.
+        """
+        return self.event.social_context or None
+
+    @property
+    def social_intimacy(self) -> Optional[str]:
+        """Social intimacy level (HIGH/LOW)."""
+        return self.event.social_intimacy or None
+
+    @property
+    def participants_json(self) -> Optional[str]:
+        """JSON array of participant IDs for Jaccard similarity (Epic 3.1)."""
+        return self.event.participants_json if self.event.participants_json != "[]" else None
+
+    # --- Issue 1.1.4: Narrative signals (Epic 3.1 narrative distance) ---
+
+    @property
+    def narrative_thread_id(self) -> Optional[str]:
+        """MW v2 narrative thread ID.
+
+        Used by Epic 3.1 narrative distance dimension.
+        Used by Epic 3.3 boundary scoring (highest-weight signal).
+        """
+        return self.event.narrative_thread_id or None
+
+    @property
+    def narrative_arc_position(self) -> Optional[str]:
+        """Position within narrative arc (BEGINNING/MIDDLE/END/CLIMAX)."""
+        return self.event.narrative_arc_position or None
+
+    # --- Epic 3.3: Additional signals for accumulated boundary scoring ---
+
+    @property
+    def place_id(self) -> Optional[str]:
+        """Stable place identity from K1 PlaceResolver.
+
+        Used by Epic 3.3 spatial channel (place_change_penalty)
+        and Tier 1 hard_context_jump detection.
+        """
+        return self.event.place_id or None
+
+    @property
+    def goal_context(self) -> Optional[str]:
+        """Goal/intent context for same_goal_bonus in Epic 3.3 boundary scoring."""
+        return self.event.goal_context or None
+
+    # --- Issue 1.1.5: Affective signals (Epic 3.1 affective distance) ---
+
+    @property
+    def affect_valence(self) -> float:
+        """Emotional valence [-1, 1]. From P02 UltraBERT."""
+        return self.event.affect_valence
+
+    @property
+    def affect_arousal(self) -> float:
+        """Emotional arousal [0, 1]. From P02 UltraBERT."""
+        return self.event.affect_arousal
+
+    @property
+    def affect_dominance(self) -> float:
+        """Emotional dominance [0, 1]. From MW v2."""
+        return self.event.affect_dominance
+
+    @property
+    def sentiment_score(self) -> float:
+        """Sentiment score [-1, 1].
+
+        Required by ClusterableEvent protocol (episodic_hdbscan.py L155).
+        """
+        return self.event.sentiment_score
+
+    @property
+    def salience_score(self) -> float:
+        """P02 computed salience [0, 1]."""
+        return self.event.salience_score
+
+    # --- Issue 1.1.6: Temporal signals (Epic 1.2 timestamp chain) ---
+
+    @property
+    def temporal_orientation(self) -> Optional[str]:
+        """Temporal orientation: PAST/PRESENT/FUTURE."""
+        return self.event.temporal_orientation or None
+
+    @property
+    def temporal_resolved_epoch_ms(self) -> float:
+        """MW v2 resolved epoch timestamp in ms.
+
+        Preferred over event.timestamp for accuracy. Used by Epic 1.2 timestamp chain.
+        """
+        return self.event.temporal_resolved_epoch_ms
+
+    @property
+    def temporal_anchor_json(self) -> Optional[str]:
+        """JSON temporal anchor context from MW v2."""
+        return self.event.temporal_anchor_json if self.event.temporal_anchor_json != "{}" else None
+
+    # --- Epic 3.2.2: Temporal quality provenance ---
+
+    @property
+    def temporal_source(self) -> Optional[str]:
+        """Timestamp provenance for temporal confidence attenuation.
+
+        Returns the source of the event's primary timestamp:
+            mw_resolved, conversation_anchor_ms, event_time_utc,
+            created_at, envelope_ts, now, or None if unknown.
+
+        Used by _cd_temporal() to attenuate temporal dimension confidence
+        when timestamps are low-quality.
+        """
+        return self.event.temporal_source or None
+
+    # --- Epic 3.6.0: Remaining temporal support fields ---
+
+    @property
+    def temporal_links_json(self) -> Optional[str]:
+        """JSON array of TemporalLink dicts from MW v2 multi-link model.
+
+        Returns None when empty/default ("[]" or "").
+        """
+        v = self.event.temporal_links_json
+        return v if v and v != "[]" else None
+
+    @property
+    def time_of_day_bucket(self) -> Optional[str]:
+        """Coarse time-of-day: MORNING/AFTERNOON/EVENING/NIGHT."""
+        return self.event.time_of_day_bucket or None
+
+    @property
+    def circadian_slot(self) -> Optional[str]:
+        """Circadian phase: WAKE/ACTIVE/WIND_DOWN/SLEEP."""
+        return self.event.circadian_slot or None
+
+    @property
+    def is_weekend(self) -> Optional[bool]:
+        """True if event occurred on weekend, False for weekday, None if unknown."""
+        return self.event.is_weekend
+
+    @property
+    def extraction_sequence(self) -> int:
+        """Position within same-turn multi-event extraction (0 = default/only)."""
+        return self.event.extraction_sequence
+
 
 # =============================================================================
 # R2 EPISODIC INTEGRATOR PHASE
@@ -178,12 +411,12 @@ class EventAdapter:
 
 class R2EpisodicIntegrator:
     """
-    R2 Phase: Episodic Integration (DBSCAN Clustering).
+    R2 Phase: Episodic Integration (HDBSCAN Clustering).
 
     Responsibilities:
         1. Check if batch size >= min_batch_size (skip otherwise)
         2. Split events into sequences (by time gap, location, entity)
-        3. Cluster each sequence using EpisodicDBSCAN
+        3. Cluster each sequence using EpisodicHDBSCAN
         4. Compute centroids for each cluster
         5. Update P03EventState with cluster assignments
         6. Populate envelope.phases.r2_* fields
@@ -211,7 +444,7 @@ class R2EpisodicIntegrator:
 
         # Initialize algorithm components
         self._splitter: Optional[EpisodeSplitter] = None
-        self._clusterer: Optional[Union[EpisodicDBSCAN, EpisodicHDBSCAN]] = None
+        self._clusterer: Optional[EpisodicHDBSCAN] = None
         self._centroid_calculator: Optional[CentroidCalculator] = None
         self._quality_tracker: Optional[ClusterQualityTracker] = None
         self._eps_adjuster: Optional[EpsAdjuster] = None
@@ -267,7 +500,7 @@ class R2EpisodicIntegrator:
             1. Check skip conditions (batch size, embeddings)
             2. Get clustering parameters (adaptive or configured)
             3. Split events into sequences
-            4. Cluster each sequence with DBSCAN
+            4. Cluster each sequence with HDBSCAN
             5. Compute centroids for clusters
             6. Update event states with cluster assignments
             7. Populate envelope.phases.r2_* outputs
@@ -319,7 +552,7 @@ class R2EpisodicIntegrator:
             self._initialize_components(ctx)
 
             # Get clustering parameters (from config or adaptive learning)
-            dbscan_params = await self._get_dbscan_params(ctx, space_id)
+            distance_params = await self._get_distance_params(ctx, space_id)
 
             # Filter to events that have embeddings (required for clustering)
             events_with_embeddings = [e for e in envelope.events if e.embedding_768 is not None]
@@ -378,11 +611,67 @@ class R2EpisodicIntegrator:
             # Adapt events to EventLike protocol
             adapted_events = [EventAdapter(e) for e in novel_events]
 
+            # =================================================================
+            # Issue 1.2.4: Timestamp quality observability
+            # =================================================================
+            ts_quality: Dict[str, int] = {
+                "mw_resolved": 0,
+                "ner_temporal": 0,
+                "event_time": 0,
+                "envelope_ts": 0,
+                "now": 0,
+                "unknown": 0,
+            }
+            for _evt in novel_events:
+                _src = getattr(_evt, "temporal_source", "") or "unknown"
+                ts_quality[_src] = ts_quality.get(_src, 0) + 1
+
+            _total = len(novel_events) or 1
+            _degraded = (
+                ts_quality["event_time"]
+                + ts_quality["envelope_ts"]
+                + ts_quality["now"]
+                + ts_quality["unknown"]
+            )
+            _degraded_ratio = _degraded / _total
+
+            logger.info(
+                "R2: Timestamp quality stats",
+                extra={
+                    "cycle_id": cycle_id,
+                    "ts_quality": ts_quality,
+                    "degraded_ratio": round(_degraded_ratio, 3),
+                    "total_events": len(novel_events),
+                },
+            )
+            if _degraded_ratio > 0.5:
+                logger.warning(
+                    "R2: >50%% events have degraded timestamps "
+                    "-- episode boundaries may be unreliable",
+                    extra={
+                        "cycle_id": cycle_id,
+                        "degraded_ratio": round(_degraded_ratio, 3),
+                    },
+                )
+
             # Step 1: Split events into sequences
             sequences = self._split_events(adapted_events)
 
+            # Step 1b: Build co-occurrence graph from batch events (Epic 5.1)
+            cooccurrence_graph = None
+            if self.config.enable_hebbian_boost:
+                cooccurrence_graph = build_cooccurrence_graph(adapted_events)
+                if cooccurrence_graph:
+                    logger.info(
+                        "R2: Built co-occurrence graph",
+                        extra={
+                            "cycle_id": cycle_id,
+                            "edge_count": len(cooccurrence_graph),
+                        },
+                    )
+
             # Step 2: Cluster each sequence
-            all_results: List[Union[ClusteringResult, HDBSCANClusteringResult]] = []
+            all_results: List[HDBSCANClusteringResult] = []
             all_noise_ids: List[str] = []
 
             for sequence in sequences:
@@ -391,14 +680,51 @@ class R2EpisodicIntegrator:
                     all_noise_ids.extend(e.event_id for e in sequence)
                     continue
 
-                # Params already set in _initialize_components via EpisodicDBSCAN(params=...)
-                clustering_result = self._clusterer.cluster(sequence)
+                # Params already set in _initialize_components via EpisodicHDBSCAN(params=...)
+                clustering_result = self._clusterer.cluster(
+                    sequence, cooccurrence_graph=cooccurrence_graph
+                )
                 all_results.append(clustering_result)
 
-                # Extract noise event IDs (label=-1 in DBSCAN)
+                # Extract noise event IDs (label=-1)
                 for idx, label in enumerate(clustering_result.labels):
                     if label == -1:
                         all_noise_ids.append(sequence[idx].event_id)
+
+            # Step 2.5: Thread purity correction (Epic 6.2)
+            if self.config.enable_thread_purity_correction:
+                event_lookup_purity = {e.event_id: e for e in adapted_events}
+                corrector = ThreadPurityCorrector()
+                for cr in all_results:
+                    cr.clusters, purity_stats = corrector.correct(cr.clusters, event_lookup_purity)
+                    cr.cluster_count = sum(1 for c in cr.clusters if len(c.member_event_ids) > 1)
+                if purity_stats.clusters_split > 0:
+                    logger.info(
+                        "R2: Thread purity correction applied",
+                        extra={
+                            "cycle_id": cycle_id,
+                            **purity_stats.to_dict(),
+                        },
+                    )
+
+            # Step 2.6: Same-thread merge (Epic 6.3)
+            if self.config.enable_same_thread_merge:
+                if not self.config.enable_thread_purity_correction:
+                    event_lookup_purity = {e.event_id: e for e in adapted_events}
+                merger = SameThreadMerger(
+                    config=self.config.same_thread_merge_config or SameThreadMergeConfig(),
+                )
+                for cr in all_results:
+                    cr.clusters, merge_stats = merger.merge(cr.clusters, event_lookup_purity)
+                    cr.cluster_count = sum(1 for c in cr.clusters if len(c.member_event_ids) > 1)
+                if merge_stats.clusters_merged > 0:
+                    logger.info(
+                        "R2: Same-thread merge applied",
+                        extra={
+                            "cycle_id": cycle_id,
+                            **merge_stats.to_dict(),
+                        },
+                    )
 
             # Step 3: Compute centroids and build episode candidates
             episode_candidates: List[EpisodeCandidate] = []
@@ -408,7 +734,7 @@ class R2EpisodicIntegrator:
             event_lookup = {e.event_id: e for e in adapted_events}
 
             for clustering_result in all_results:
-                # clusters is List[EpisodeCluster] from DBSCAN
+                # clusters is List[EpisodeCluster] from HDBSCAN
                 for cluster in clustering_result.clusters:
                     # Skip noise clusters (single events with label -1)
                     member_ids = cluster.member_event_ids
@@ -457,7 +783,36 @@ class R2EpisodicIntegrator:
                     )
                     episode_clusters.append(episode_cluster)
 
-            # Step 3.5: Canonicalize episodes (merge by signature)
+            # Step 3.5: Cross-batch extend matching (Epic 6.4)
+            if self.config.enable_cross_batch_extend and existing_episodes and episode_candidates:
+                if (
+                    not self.config.enable_thread_purity_correction
+                    and not self.config.enable_same_thread_merge
+                ):
+                    event_lookup_purity = {e.event_id: e for e in adapted_events}
+                extend_matcher = CrossBatchExtendMatcher(
+                    config=self.config.cross_batch_extend_config or CrossBatchExtendConfig(),
+                )
+                extend_matches, extend_stats = extend_matcher.match(
+                    episode_candidates,
+                    existing_episodes,
+                    event_lookup_purity,
+                )
+                for cand, ext_match in zip(episode_candidates, extend_matches):
+                    if ext_match is not None:
+                        cand.reconciliation_action = "EXTEND"
+                        cand.extend_target_episode_id = ext_match.target_episode_id
+                        cand.extend_similarity = ext_match.similarity
+                if extend_stats.candidates_extended > 0:
+                    logger.info(
+                        "R2: Cross-batch extend matching applied",
+                        extra={
+                            "cycle_id": cycle_id,
+                            **extend_stats.to_dict(),
+                        },
+                    )
+
+            # Step 3.6: Canonicalize episodes (merge by signature)
             if self.config.enable_canonicalization and len(episode_clusters) > 1:
                 episode_clusters, merge_count = self._canonicalize_episodes(episode_clusters)
                 if merge_count > 0:
@@ -482,8 +837,8 @@ class R2EpisodicIntegrator:
                 else 0.0
             )
             envelope.phases.r2_clustering_params = {
-                "eps": dbscan_params.eps,
-                "min_samples": dbscan_params.min_samples,
+                "eps": distance_params.cluster_selection_epsilon,
+                "min_samples": distance_params.min_samples,
                 "semantic_weight": self.config.semantic_weight,
                 "temporal_weight": self.config.temporal_weight,
                 "episode_matching_enabled": self.config.enable_episode_matching,
@@ -494,7 +849,13 @@ class R2EpisodicIntegrator:
             quality_metrics = None
             if self.config.enable_quality_tracking and episode_candidates:
                 quality_metrics = await self._track_quality_and_adapt(
-                    ctx, space_id, episode_candidates, all_noise_ids, dbscan_params
+                    ctx,
+                    space_id,
+                    episode_candidates,
+                    all_noise_ids,
+                    distance_params,
+                    all_results,
+                    episode_clusters=episode_clusters,
                 )
 
             duration_ms = int(time.time() * 1000) - start_ms
@@ -507,8 +868,8 @@ class R2EpisodicIntegrator:
                     "matched_to_existing": matched_event_count,  # Issue 2 fix
                     "noise_events": len(all_noise_ids),
                     "avg_cluster_size": envelope.phases.r2_avg_cluster_size,
-                    "eps": dbscan_params.eps,
-                    "min_samples": dbscan_params.min_samples,
+                    "eps": distance_params.cluster_selection_epsilon,
+                    "min_samples": distance_params.min_samples,
                     "silhouette": quality_metrics.silhouette_score if quality_metrics else None,
                     "duration_ms": duration_ms,
                 },
@@ -522,11 +883,14 @@ class R2EpisodicIntegrator:
                     "matched_to_existing": matched_event_count,  # Issue 2 fix
                     "noise_events": len(all_noise_ids),
                     "avg_cluster_size": round(envelope.phases.r2_avg_cluster_size, 2),
-                    "eps": dbscan_params.eps,
-                    "min_samples": dbscan_params.min_samples,
+                    "eps": distance_params.cluster_selection_epsilon,
+                    "min_samples": distance_params.min_samples,
                     "silhouette": (
                         round(quality_metrics.silhouette_score, 3) if quality_metrics else None
                     ),
+                    # Issue 1.2.4: Timestamp quality in phase result
+                    "ts_quality": ts_quality,
+                    "ts_degraded_ratio": round(_degraded_ratio, 3),
                 },
                 idempotency_key=self.idempotency_key(envelope),
             )
@@ -572,44 +936,44 @@ class R2EpisodicIntegrator:
 
     def _initialize_components(self, ctx: "P03RunnerContext") -> None:
         """Initialize algorithm components."""
-        # Splitter - only using time_gap_minutes (geohash/entity split not implemented)
+        # Splitter - accumulated boundary scoring (Epic 3.3)
         split_config = SplitConfig(
-            time_gap_minutes=self.config.time_gap_minutes,
+            hard_time_gap_minutes=self.config.time_gap_minutes,
         )
         self._splitter = EpisodeSplitter(config=split_config)
 
         # Choose clustering algorithm based on config
-        if self.config.use_hdbscan:
-            # HDBSCAN with noise rescue capability
-            hdbscan_params = HDBSCANParams(
-                min_cluster_size=2,  # Smallest episode size
-                min_samples=1,  # Allow more inclusive clustering
-                cluster_selection_epsilon=self.config.eps if self.config.eps > 0 else 0.0,
-                noise_rescue_threshold=self.config.noise_rescue_threshold,
-                temporal_weight=self.config.temporal_weight,
-                cluster_selection_method=self.config.cluster_selection_method,
-            )
-            self._clusterer = EpisodicHDBSCAN(params=hdbscan_params)
-            logger.info(
-                "R2 using HDBSCAN with noise_rescue_threshold=%.2f, cluster_selection=%s",
-                self.config.noise_rescue_threshold,
-                self.config.cluster_selection_method,
-            )
-        else:
-            # Legacy DBSCAN (includes temporal_weight, eps, min_samples)
-            dbscan_params = DBSCANParams(
-                eps=(
-                    self.config.eps if self.config.eps > 0 else 0.07
-                ),  # 0.07 for tight UltraBERT clustering (was 0.10)
-                min_samples=self.config.min_samples if self.config.min_samples > 0 else 2,
-                temporal_weight=self.config.temporal_weight,
-            )
-            self._clusterer = EpisodicDBSCAN(params=dbscan_params)
-            logger.info(
-                "R2 using DBSCAN with eps=%.2f, min_samples=%d",
-                dbscan_params.eps,
-                dbscan_params.min_samples,
-            )
+        # HDBSCAN with noise rescue capability
+        hdbscan_params = HDBSCANParams(
+            min_cluster_size=2,  # Smallest episode size
+            min_samples=1,  # Allow more inclusive clustering
+            cluster_selection_epsilon=self.config.eps if self.config.eps > 0 else 0.0,
+            noise_rescue_threshold=self.config.noise_rescue_threshold,
+            temporal_weight=self.config.temporal_weight,
+            cluster_selection_method=self.config.cluster_selection_method,
+        )
+        # Resolve ensemble distance config (Epic 6.1)
+        ensemble_config = None
+        if self.config.enable_ensemble_distance:
+            ensemble_config = self.config.ensemble_distance_config or EnsembleDistanceConfig()
+
+        # Resolve Hebbian boost config
+        hebbian_config = None
+        if self.config.enable_hebbian_boost:
+            hebbian_config = self.config.hebbian_boost_config or HebbinaBoostConfig()
+
+        self._clusterer = EpisodicHDBSCAN(
+            params=hdbscan_params,
+            ensemble_config=ensemble_config,
+            hebbian_config=hebbian_config,
+        )
+        logger.info(
+            "R2 using HDBSCAN with noise_rescue=%.2f, selection=%s, ensemble=%s, hebbian=%s",
+            self.config.noise_rescue_threshold,
+            self.config.cluster_selection_method,
+            self.config.enable_ensemble_distance,
+            self.config.enable_hebbian_boost,
+        )
 
         # Centroid calculator
         self._centroid_calculator = CentroidCalculator()
@@ -625,16 +989,16 @@ class R2EpisodicIntegrator:
         if self.config.enable_adaptive_min_samples:
             self._min_samples_adjuster = MinSamplesAdjuster(config=MinSamplesConfig())
 
-    async def _get_dbscan_params(self, ctx: "P03RunnerContext", space_id: str) -> DBSCANParams:
+    async def _get_distance_params(self, ctx: "P03RunnerContext", space_id: str) -> HDBSCANParams:
         """
-        Get DBSCAN parameters from config or adaptive learning.
+        Get clustering distance parameters from config or adaptive learning.
 
         Args:
             ctx: Runner context with syscalls
             space_id: Space ID for per-space params
 
         Returns:
-            DBSCANParams with eps and min_samples
+            HDBSCANParams with learned or default values
         """
         # Start with config values or defaults (0.07 eps for tight UltraBERT clustering)
         eps = self.config.eps if self.config.eps > 0 else 0.07
@@ -643,15 +1007,24 @@ class R2EpisodicIntegrator:
         # Try to get learned params from syscalls (st_learned_weights)
         try:
             if hasattr(ctx.syscalls, "get_learned_param"):
+                # Try new key first, fall back to legacy key for backward compatibility
                 learned_eps = await ctx.syscalls.get_learned_param(
-                    space_id=space_id, param_key="dbscan_eps"
+                    space_id=space_id, param_key="clustering_eps"
                 )
+                if learned_eps is None:
+                    learned_eps = await ctx.syscalls.get_learned_param(
+                        space_id=space_id, param_key="dbscan_eps"
+                    )
                 if learned_eps is not None:
                     eps = learned_eps
 
                 learned_min_samples = await ctx.syscalls.get_learned_param(
-                    space_id=space_id, param_key="dbscan_min_samples"
+                    space_id=space_id, param_key="clustering_min_samples"
                 )
+                if learned_min_samples is None:
+                    learned_min_samples = await ctx.syscalls.get_learned_param(
+                        space_id=space_id, param_key="dbscan_min_samples"
+                    )
                 if learned_min_samples is not None:
                     min_samples = int(learned_min_samples)
         except Exception as e:
@@ -660,7 +1033,14 @@ class R2EpisodicIntegrator:
                 extra={"error": str(e)},
             )
 
-        return DBSCANParams(eps=eps, min_samples=min_samples)
+        return HDBSCANParams(
+            min_cluster_size=2,
+            min_samples=min_samples,
+            cluster_selection_epsilon=eps,
+            noise_rescue_threshold=self.config.noise_rescue_threshold,
+            temporal_weight=self.config.temporal_weight,
+            cluster_selection_method=self.config.cluster_selection_method,
+        )
 
     def _split_events(self, events: List[EventAdapter]) -> List[List[EventAdapter]]:
         """
@@ -1208,6 +1588,19 @@ class R2EpisodicIntegrator:
             cluster_events=cluster_events,
         )
 
+        # M4-RSCH-02: Select secondary centroids (best_of_all MRR=0.9627)
+        centroid_metadata = None
+        if len(cluster_events) >= 2:
+            selector = SecondaryCentroidSelector()
+            secondary = selector.select_all(cluster_events)
+            if secondary:
+                centroid_metadata = {
+                    "version": 1,
+                    "centroids": {
+                        role: {"event_id": data["event_id"]} for role, data in secondary.items()
+                    },
+                }
+
         return EpisodeCluster(
             cluster_id=cluster_id,
             member_event_ids=list(member_ids),
@@ -1215,6 +1608,7 @@ class R2EpisodicIntegrator:
             entity_ids=list(entity_ids),  # M0-E2-I3: Extracted from NER data
             ambiguity_score=ambiguity_score,  # M0-E2-I5: Uncertainty quantification
             centroid_embedding_id=None,  # Will be set by R6/R7 when persisted
+            centroid_metadata=centroid_metadata,  # M4-RSCH-02: secondary centroids
             dominant_sentiment=dominant_sentiment,
             dominant_emotion=dominant_emotion,
             aggregated_sentiment=aggregated_sentiment,
@@ -1376,7 +1770,7 @@ class R2EpisodicIntegrator:
     def _update_event_states(
         self,
         events: List["P03EventState"],
-        clustering_results: List[Union[ClusteringResult, HDBSCANClusteringResult]],
+        clustering_results: List[HDBSCANClusteringResult],
         noise_ids: List[str],
     ) -> None:
         """
@@ -1384,7 +1778,7 @@ class R2EpisodicIntegrator:
 
         Args:
             events: Original event states to update
-            clustering_results: Results from DBSCAN or HDBSCAN
+            clustering_results: Results from HDBSCAN
             noise_ids: Event IDs marked as noise
         """
         # Build lookup: event_id -> (cluster_id, label)
@@ -1416,13 +1810,77 @@ class R2EpisodicIntegrator:
                 event.is_noise = True
             # Events not in any result keep default values
 
+    def _compute_batch_silhouette(
+        self,
+        clustering_results: Optional[List[HDBSCANClusteringResult]],
+    ) -> Optional[float]:
+        """
+        Compute true silhouette score from HDBSCAN clustering results.
+
+        Uses sklearn.metrics.silhouette_score on the precomputed distance
+        matrix and label assignment from clustering. Returns None when
+        silhouette is mathematically undefined (fewer than 2 distinct
+        non-noise labels, or no distance matrix available).
+
+        Args:
+            clustering_results: HDBSCAN results with distance_matrix and labels
+
+        Returns:
+            True silhouette score in [-1, 1], or None if undefined
+        """
+        if not clustering_results:
+            return None
+
+        # Aggregate silhouette across all sequences (weighted by event count)
+        total_weight = 0
+        weighted_sum = 0.0
+
+        for result in clustering_results:
+            if result.distance_matrix is None:
+                continue
+
+            labels_array = np.array(result.labels)
+
+            # Need at least 2 distinct non-noise labels for silhouette
+            non_noise_labels = set(labels_array[labels_array >= 0].tolist())
+            if len(non_noise_labels) < 2:
+                continue
+
+            # Filter to non-noise events only (silhouette is undefined for noise)
+            non_noise_mask = labels_array >= 0
+            if non_noise_mask.sum() < 2:
+                continue
+
+            non_noise_indices = np.where(non_noise_mask)[0]
+            dm_subset = result.distance_matrix[np.ix_(non_noise_indices, non_noise_indices)]
+            labels_subset = labels_array[non_noise_indices]
+
+            try:
+                sil = sklearn_silhouette_score(dm_subset, labels_subset, metric="precomputed")
+                n_events = len(labels_subset)
+                weighted_sum += sil * n_events
+                total_weight += n_events
+            except Exception as e:
+                logger.debug(
+                    "R2: Silhouette computation failed for sequence",
+                    extra={"error": str(e)},
+                )
+                continue
+
+        if total_weight == 0:
+            return None
+
+        return weighted_sum / total_weight
+
     async def _track_quality_and_adapt(
         self,
         ctx: "P03RunnerContext",
         space_id: str,
         candidates: List[EpisodeCandidate],
         noise_ids: List[str],
-        params: DBSCANParams,
+        params: HDBSCANParams,
+        clustering_results: Optional[List[HDBSCANClusteringResult]] = None,
+        episode_clusters: Optional[List] = None,
     ) -> Optional[ClusterQualityMetrics]:
         """
         Track cluster quality and trigger adaptive parameter learning.
@@ -1432,7 +1890,9 @@ class R2EpisodicIntegrator:
             space_id: Space ID for per-space learning
             candidates: Episode candidates from clustering
             noise_ids: Event IDs marked as noise
-            params: Current DBSCAN parameters
+            params: Current clustering parameters
+            clustering_results: HDBSCAN results carrying distance matrices and labels
+            episode_clusters: EpisodeCluster list with member_contexts for coherence
 
         Returns:
             ClusterQualityMetrics if computed, None otherwise
@@ -1446,33 +1906,49 @@ class R2EpisodicIntegrator:
         cluster_count = len(candidates)
         noise_count = len(noise_ids)
 
-        # Calculate batch silhouette score (average of cohesion scores as approximation)
-        batch_silhouette = (
-            sum(c.cohesion_score for c in candidates) / cluster_count if cluster_count > 0 else 0.0
-        )
+        # Compute true silhouette from precomputed distance matrices and labels
+        batch_silhouette = self._compute_batch_silhouette(clustering_results)
 
         # Create a simple object that matches R2OutputProtocol
         class R2OutputSimple:
-            def __init__(self, sil: float, clusters: int, noise: int):
+            def __init__(self, sil: float, clusters: int, noise: int, sil_valid: bool):
                 self.batch_silhouette_score = sil
                 self.cluster_count = clusters
                 self.noise_count = noise
+                self.silhouette_valid = sil_valid
 
-        r2_output = R2OutputSimple(batch_silhouette, cluster_count, noise_count)
+        silhouette_valid = batch_silhouette is not None
+        sil_value = batch_silhouette if silhouette_valid else 0.0
+        r2_output = R2OutputSimple(sil_value, cluster_count, noise_count, silhouette_valid)
         metrics = self._quality_tracker.compute_from_r2_output(
             space_id=space_id,
             r2_output=r2_output,
         )
+
+        # M4-RSCH-04: Compute batch coherence from episode member contexts
+        if episode_clusters:
+            scorer = EpisodicCoherenceScorer()
+            episode_results = [
+                scorer.compute(ep.member_contexts)
+                for ep in episode_clusters
+                if ep.member_contexts and len(ep.member_contexts) >= 2
+            ]
+            if episode_results:
+                batch_coh = compute_batch_coherence(episode_results)
+                metrics.coherence_score = batch_coh.mean_coherence
+                metrics.coherence_valid = batch_coh.episode_count > 0
+                metrics.compute_composite()
 
         # Compute avg_cluster_size from candidates (not in ClusterQualityMetrics)
         avg_cluster_size = (
             sum(len(c.event_ids) for c in candidates) / cluster_count if cluster_count > 0 else 0.0
         )
 
-        # Trigger adaptive eps learning
-        if self._eps_adjuster and self.config.enable_adaptive_eps:
+        # Trigger adaptive eps learning (skip when silhouette is invalid —
+        # a score of 0.0 from fewer than 2 clusters would cause false adjustments)
+        if self._eps_adjuster and self.config.enable_adaptive_eps and silhouette_valid:
             eps_result = self._eps_adjuster.adjust(
-                current_eps=params.eps,
+                current_eps=params.cluster_selection_epsilon,
                 silhouette_score=metrics.silhouette_score,
                 avg_cluster_size=avg_cluster_size,
                 singleton_rate=metrics.singleton_rate,
@@ -1483,14 +1959,14 @@ class R2EpisodicIntegrator:
                 try:
                     await ctx.syscalls.set_learned_param(
                         space_id=space_id,
-                        param_key="dbscan_eps",
+                        param_key="clustering_eps",
                         param_value=eps_result.new_eps,
                     )
                     logger.info(
                         "R2: Adjusted eps",
                         extra={
                             "space_id": space_id,
-                            "old_eps": params.eps,
+                            "old_eps": params.cluster_selection_epsilon,
                             "new_eps": eps_result.new_eps,
                             "reason": eps_result.reason,
                         },
@@ -1512,7 +1988,7 @@ class R2EpisodicIntegrator:
                 try:
                     await ctx.syscalls.set_learned_param(
                         space_id=space_id,
-                        param_key="dbscan_min_samples",
+                        param_key="clustering_min_samples",
                         param_value=min_samples_result.new_min_samples,
                     )
                     logger.info(
@@ -1571,6 +2047,7 @@ class R2EpisodicIntegrator:
                 e.episode_type,
                 e.primary_location,
                 e.location_type,
+                e.narrative_thread_id,
                 e.start_time_utc,
                 e.end_time_utc,
                 e.source_event_count,
@@ -1606,6 +2083,7 @@ class R2EpisodicIntegrator:
                         "episode_type": row.get("episode_type", ""),
                         "primary_location": row.get("primary_location"),
                         "location_type": row.get("location_type"),
+                        "narrative_thread_id": row.get("narrative_thread_id"),
                         "start_time_utc": row.get("start_time_utc", 0),
                         "end_time_utc": row.get("end_time_utc", 0),
                         "source_event_count": row.get("source_event_count", 0),
@@ -1829,3 +2307,128 @@ def create_r2_phase(config: Optional[R2Config] = None) -> R2EpisodicIntegrator:
         Configured R2EpisodicIntegrator instance
     """
     return R2EpisodicIntegrator(config=config)
+
+
+# =============================================================================
+# CROSS-EPISODE THREAD MATCHING (Epic 5.1, Issue 5.1.3)
+# =============================================================================
+
+
+def detect_arc_completion(
+    current_arc_position: str,
+    prior_episodes: List[dict],
+) -> bool:
+    """Detect if this episode completes a narrative goal arc.
+
+    A thread is complete when the current episode reaches CLIMAX or RESOLUTION
+    and at least one prior episode had EXPOSITION or RISING_ACTION (buildup).
+
+    Args:
+        current_arc_position: Arc position of current episode.
+        prior_episodes: Prior episodes from find_thread_continuations.
+
+    Returns:
+        True if the narrative goal arc is complete.
+    """
+    if not prior_episodes:
+        return False
+    if current_arc_position not in ("CLIMAX", "RESOLUTION"):
+        return False
+    prior_arcs = {ep.get("narrative_arc_position") for ep in prior_episodes}
+    return bool(prior_arcs & {"EXPOSITION", "RISING_ACTION"})
+
+
+def log_thread_completion(
+    thread_id: str,
+    tenant_id: str,
+    completed_episode_id: str,
+    current_arc_position: str,
+    current_start_time: int,
+    prior_episodes: List[dict],
+) -> None:
+    """Emit structured observability event for narrative thread completion.
+
+    Args:
+        thread_id: Completed narrative thread_id.
+        tenant_id: Tenant isolation.
+        completed_episode_id: Episode that completed the arc.
+        current_arc_position: CLIMAX or RESOLUTION.
+        current_start_time: Start time of completing episode (ms).
+        prior_episodes: Prior episodes in the thread chain.
+    """
+    sorted_chain = sorted(prior_episodes, key=lambda e: e.get("start_time_utc", 0))
+    episode_chain = [
+        {
+            "episode_id": ep["episode_id"],
+            "arc_position": ep.get("narrative_arc_position"),
+            "start_time_utc": ep.get("start_time_utc"),
+        }
+        for ep in sorted_chain
+    ] + [
+        {
+            "episode_id": completed_episode_id,
+            "arc_position": current_arc_position,
+            "start_time_utc": current_start_time,
+        },
+    ]
+
+    first_start = sorted_chain[0].get("start_time_utc", 0) if sorted_chain else current_start_time
+    span_ms = current_start_time - first_start if first_start else 0
+    span_days = span_ms / 86_400_000 if span_ms > 0 else 0
+
+    logger.info(
+        "NARRATIVE_THREAD_COMPLETED",
+        extra={
+            "topic": "narrative.thread.completed.v1",
+            "thread_id": thread_id,
+            "tenant_id": tenant_id,
+            "completed_episode_id": completed_episode_id,
+            "episode_chain": episode_chain,
+            "total_episodes": len(episode_chain),
+            "span_days": round(span_days, 1),
+            "completed_at_utc": int(time.time()),
+        },
+    )
+
+
+async def find_thread_continuations(
+    conn,
+    tenant_id: str,
+    thread_id: str,
+    exclude_episode_id: str,
+) -> List[dict]:
+    """
+    Find existing episodes sharing the same narrative thread.
+
+    Queries st_epi for ACTIVE episodes with matching narrative_thread_id,
+    excluding the current episode. Uses ix_st_epi_narrative_thread partial index.
+
+    Args:
+        conn: asyncpg connection
+        tenant_id: Tenant isolation
+        thread_id: Narrative thread_id to match
+        exclude_episode_id: Episode to exclude (self)
+
+    Returns:
+        List of dicts with episode_id, narrative_arc_position, start_time_utc,
+        end_time_utc, episode_summary. Ordered most-recent first.
+    """
+    if not thread_id:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT episode_id, narrative_arc_position, start_time_utc, end_time_utc,
+               episode_summary
+        FROM st_epi
+        WHERE tenant_id = $1
+          AND narrative_thread_id = $2
+          AND episode_id != $3
+          AND archival_status = 'ACTIVE'
+        ORDER BY start_time_utc DESC
+        LIMIT 10
+        """,
+        tenant_id,
+        thread_id,
+        exclude_episode_id,
+    )
+    return [dict(r) for r in rows]

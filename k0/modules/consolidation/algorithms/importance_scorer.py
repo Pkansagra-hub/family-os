@@ -15,7 +15,7 @@ Spec Reference:
 Formula (CONFIG_B, POC validated -- 562K events, 120/120 scenarios):
     base = emotional + surprise + novelty + social + identity + recency
     importance = clamp(base * elab * goal * arc * temporal
-                       * type * intent * tier * reliability, 0, 1)
+                       * type * intent * relationship * tier * reliability, 0, 1)
 
 Where (6 additive, 8 weights summing to 1.0):
     - emotional = sent_w*|sent| + affect_w*|val| + arousal_w*arousal
@@ -25,8 +25,12 @@ Where (6 additive, 8 weights summing to 1.0):
     - identity  = identity_w * identity_signal
     - recency   = recency_w * exp(-0.005 * hours_since_event)
 
-7 multiplicative modulators:
-    elab, goal, arc, temporal, type, intent, tier, reliability
+8 multiplicative modulators:
+    elab, goal, arc, temporal, type, intent, relationship, tier, reliability
+
+KG Relationship Boost (ADR-K026):
+    relationship = 1.0 + boost_scale * max_edge_weight_in_event
+    Disabled by default (enable_kg_boost=False -> relationship=1.0)
 
 TIMESTAMP CONVENTION: All timestamps use MILLISECONDS since Unix epoch.
 """
@@ -111,7 +115,7 @@ class ImportanceBreakdown:
     This provides full transparency into how the final score was computed,
     enabling debugging, explainability, and learning feedback loops.
 
-    6 additive components + base_score + 7 multiplicative modulators + final.
+    6 additive components + base_score + 8 multiplicative modulators + final.
     """
 
     # 6 additive components
@@ -123,13 +127,15 @@ class ImportanceBreakdown:
     recency_component: float = 0.0  # Temporal freshness contribution
     # Base score (sum of 6 components, before modulators)
     base_score: float = 0.0
-    # 7 multiplicative modulators
+    # 8 multiplicative modulators (ADR-K026: added relationship_boost)
     elab_boost: float = 1.0  # Elaboration depth multiplier
     goal_boost: float = 1.0  # Narrative goal event multiplier
     arc_boost: float = 1.0  # Narrative arc position multiplier
     temporal_boost: float = 1.0  # Temporal orientation multiplier
     type_multiplier: float = 1.0  # Event type multiplier
     intent_boost: float = 1.0  # Intent classification multiplier
+    relationship_boost: float = 1.0  # KG relationship strength (ADR-K026)
+    max_edge_weight: float = 0.0  # Raw max edge weight for audit (ADR-K026)
     tier_multiplier: float = 1.0  # Memory tier multiplier
     reliability: float = 1.0  # Source reliability (floored)
     # Final
@@ -152,6 +158,8 @@ class ImportanceBreakdown:
             "temporal_boost": self.temporal_boost,
             "type_multiplier": self.type_multiplier,
             "intent_boost": self.intent_boost,
+            "relationship_boost": self.relationship_boost,
+            "max_edge_weight": self.max_edge_weight,
             "tier_multiplier": self.tier_multiplier,
             "reliability": self.reliability,
             "final_score": self.final_score,
@@ -196,7 +204,7 @@ class ImportanceScorer:
     Scoring Formula (CONFIG_B -- POC validated 120/120 scenarios):
         base = emotional + surprise + novelty + social + identity + recency
         importance = clamp(base * elab * goal * arc * temporal
-                          * type * intent * tier * reliability, 0, 1)
+                          * type * intent * relationship * tier * reliability, 0, 1)
 
         Where (6 additive components, 8 weights summing to 1.0):
         - emotional = sent_w*|sent| + affect_w*|val| + arousal_w*arousal
@@ -335,6 +343,9 @@ class ImportanceScorer:
         self,
         space_id: str,
         weight_store: Optional[WeightStoreProtocol] = None,
+        static_weights: Optional[ImportanceWeights] = None,
+        kg_boost_config: Optional["KGBoostConfig"] = None,
+        kg_edge_cache: Optional["KGEdgeCache"] = None,
     ):
         """
         Initialize ImportanceScorer for a space.
@@ -343,12 +354,23 @@ class ImportanceScorer:
             space_id: User/family space ID for weight lookup
             weight_store: Optional backend for learned weights.
                          If None, always uses static defaults.
+            static_weights: Optional explicit CONFIG_B-compatible override.
+                           When provided, this takes precedence over learned
+                           weight lookup and cold-start blending.
+            kg_boost_config: Optional KG relationship boost config (ADR-K026).
+                            If None, KG boost is disabled.
+            kg_edge_cache: Optional pre-loaded KG edge cache (ADR-K026).
+                          If None, relationship_boost is always 1.0.
         """
         self.space_id = space_id
         self.weight_store = weight_store
+        self._static_weights_override = static_weights
         self._cached_weights: Optional[ImportanceWeights] = None
         self._weights_source: str = "static"
         self._cached_sample_count: int = 0
+        # ADR-K026: KG relationship boost
+        self._kg_boost_config = kg_boost_config
+        self._kg_edge_cache = kg_edge_cache
 
     @staticmethod
     def _weights_from_dict(
@@ -389,10 +411,17 @@ class ImportanceScorer:
 
         Priority:
             1. Cached weights (if already loaded)
-            2. Learned weights (if sample_count >= 500)
-            3. Static defaults
+            2. Explicit override weights (if provided by phase config)
+            3. Learned weights (if sample_count >= 500)
+            4. Static defaults
         """
         if self._cached_weights is not None:
+            return self._cached_weights
+
+        if self._static_weights_override is not None:
+            self._cached_weights = self._static_weights_override
+            self._weights_source = "config-override"
+            self._cached_sample_count = 0
             return self._cached_weights
 
         # Try to load learned weights if store is available
@@ -465,6 +494,12 @@ class ImportanceScorer:
                 - str: Source description ("per-space", "global-blend", "static")
                 - int: Sample count used for blending
         """
+        if self._static_weights_override is not None:
+            self._cached_weights = self._static_weights_override
+            self._weights_source = "config-override"
+            self._cached_sample_count = 0
+            return self._cached_weights, self._weights_source, self._cached_sample_count
+
         # Check cache first
         if self._cached_weights is not None:
             # Extract sample count from source if available
@@ -878,7 +913,7 @@ class ImportanceScorer:
         CONFIG_B Formula (POC validated -- 562K events, 120/120 scenarios):
             base = emotional + surprise + novelty + social + identity + recency
             importance = clamp(base * elab * goal * arc * temporal
-                              * type * intent * tier * reliability, 0, 1)
+                              * type * intent * relationship * tier * reliability, 0, 1)
 
         Args:
             event: P03EventState or object with required attributes
@@ -972,13 +1007,35 @@ class ImportanceScorer:
         temporal = self.TEMPORAL_MAP.get(temporal_orientation, 1.0)
         type_mult = self.EVENT_TYPE_MULTIPLIERS.get(activity_type.lower().strip(), 1.0)
         intent_boost_val = self.INTENT_BOOST_MULTIPLIERS.get(intent_label, 1.0)
+
+        # ADR-K026: KG relationship boost
+        relationship_boost_val = 1.0
+        max_edge_weight_val = 0.0
+        if (
+            self._kg_boost_config is not None
+            and self._kg_boost_config.enabled
+            and self._kg_edge_cache is not None
+        ):
+            from k0.modules.consolidation.algorithms.kg_relationship_boost import (
+                compute_relationship_boost,
+                extract_entity_ids,
+            )
+
+            ner_json = getattr(event, "ner_entities_json", "[]") or "[]"
+            entity_ids = extract_entity_ids(ner_json)
+            relationship_boost_val, max_edge_weight_val = compute_relationship_boost(
+                entity_ids=entity_ids,
+                edge_cache=self._kg_edge_cache,
+                config=self._kg_boost_config,
+            )
+
         tier = self.MEMORY_TIER_MAP.get(memory_tier, 1.0)
         reliability_val = self.derive_source_reliability(
             source_reliability=source_reliability_val,
             source_type=source_type,
         )
 
-        # Apply all modulators
+        # Apply all modulators (8 multiplicative, ADR-K026 added relationship)
         raw_score = (
             base
             * elab
@@ -987,6 +1044,7 @@ class ImportanceScorer:
             * temporal
             * type_mult
             * intent_boost_val
+            * relationship_boost_val
             * tier
             * reliability_val
         )
@@ -1006,6 +1064,8 @@ class ImportanceScorer:
             temporal_boost=temporal,
             type_multiplier=type_mult,
             intent_boost=intent_boost_val,
+            relationship_boost=relationship_boost_val,
+            max_edge_weight=max_edge_weight_val,
             tier_multiplier=tier,
             reliability=reliability_val,
             final_score=final_score,
@@ -1037,7 +1097,7 @@ class ImportanceScorer:
         if now_ms is None:
             now_ms = int(_time.time() * 1000)
 
-        weights = await self.get_weights()
+        weights, _, _ = await self.get_weights_with_cold_start()
         scored: List[Dict[str, Any]] = []
 
         for event in events:
@@ -1159,7 +1219,7 @@ class ImportanceScorer:
         if now_ms is None:
             now_ms = int(_time.time() * 1000)
 
-        weights = await self.get_weights()
+        weights, _, _ = await self.get_weights_with_cold_start()
         scored: List[Dict[str, Any]] = []
 
         for event in events:

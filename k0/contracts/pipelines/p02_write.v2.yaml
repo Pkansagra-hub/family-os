@@ -47,6 +47,7 @@ max_queue_depth: 512
 # Required Storage Capabilities
 # ---------------------------------------------------------------------------
 required_capabilities:
+  - st_hipp_events.read
   - st_hipp_events.write
   - st_vec.write
   - st_pipeline_processed.write

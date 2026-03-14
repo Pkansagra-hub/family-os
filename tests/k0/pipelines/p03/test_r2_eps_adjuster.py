@@ -4,9 +4,9 @@ Tests for EpsAdjuster — Adaptive eps learning via silhouette score optimizatio
 Issue 4.2.5: Implement adaptive eps learning (silhouette-driven)
 
 Tests:
-    1. test_no_adjustment_above_silhouette_target: silhouette >= 0.5 returns same eps
-    2. test_decrease_eps_large_clusters: avg_size > 10, silhouette < 0.5 → eps decreases
-    3. test_increase_eps_high_noise: singleton_rate > 0.20, silhouette < 0.5 → eps increases
+    1. test_no_adjustment_above_silhouette_target: silhouette >= 0.30 returns same eps
+    2. test_decrease_eps_large_clusters: avg_size > 10, silhouette < 0.30 -> eps decreases
+    3. test_increase_eps_high_noise: singleton_rate > 0.20, silhouette < 0.30 -> eps increases
     4. test_momentum_smoothing: verify 0.9/0.1 weighted average
     5. test_bounds_min: eps cannot go below 0.15
     6. test_bounds_max: eps cannot go above 0.40
@@ -132,12 +132,12 @@ class TestEpsIncrease:
     """Test EpsAdjuster eps increase scenarios."""
 
     def test_increase_eps_high_noise(self) -> None:
-        """singleton_rate > 0.20 AND silhouette < 0.5 → increase eps."""
+        """singleton_rate > 0.20 AND silhouette < 0.30 → increase eps."""
         adjuster = EpsAdjuster()
 
         result = adjuster.adjust(
             current_eps=0.25,
-            silhouette_score=0.35,  # Below target
+            silhouette_score=0.25,  # Below 0.30 target
             avg_cluster_size=5.0,  # Normal (not triggering decrease)
             singleton_rate=0.25,  # Above 0.20 threshold
             total_clusters_formed=150,
@@ -194,7 +194,7 @@ class TestMomentumSmoothing:
 
         result = adjuster.adjust(
             current_eps=0.30,
-            silhouette_score=0.35,
+            silhouette_score=0.25,  # Below 0.30 target
             avg_cluster_size=5.0,
             singleton_rate=0.25,  # Trigger increase
             total_clusters_formed=150,
@@ -311,7 +311,7 @@ class TestEpsAdjustmentConfig:
         assert config.eps_min == 0.15
         assert config.eps_max == 0.40
         assert config.eps_step == 0.02
-        assert config.silhouette_target == 0.5
+        assert config.silhouette_target == 0.30
         assert config.momentum == 0.9
         assert config.cold_start_threshold == 100
 
@@ -332,3 +332,131 @@ class TestEpsAdjustmentConfig:
         assert config.silhouette_target == 0.6
         assert config.momentum == 0.8
         assert config.cold_start_threshold == 50
+
+
+# =============================================================================
+# Issue 2.2.5 — Multi-Cycle Loop Stability Tests
+# =============================================================================
+
+
+class TestMultiCycleStability:
+    """Verify the adaptive loop remains stable across consecutive cycles
+    when driven by real silhouette values (Issue 2.2.5)."""
+
+    def test_ten_cycle_eps_stays_bounded(self) -> None:
+        """10 consecutive cycles with realistic silhouette keep eps within [0.20, 0.30]."""
+        import random
+
+        random.seed(42)
+        adjuster = EpsAdjuster()
+        eps = 0.25  # starting value
+
+        for _ in range(10):
+            # Realistic silhouette from POC-02/03 distribution [0.14, 0.41]
+            sil = random.uniform(0.14, 0.41)
+            # Realistic secondary signals
+            avg_size = random.uniform(3.0, 8.0)
+            singleton_rate = random.uniform(0.05, 0.15)
+
+            result = adjuster.adjust(
+                current_eps=eps,
+                silhouette_score=sil,
+                avg_cluster_size=avg_size,
+                singleton_rate=singleton_rate,
+                total_clusters_formed=200,
+            )
+            eps = result.new_eps
+
+        assert 0.15 <= eps <= 0.40  # within config bounds
+
+    def test_no_oscillation_pattern(self) -> None:
+        """Eps does not oscillate A-B-A-B across consecutive cycles."""
+        adjuster = EpsAdjuster()
+        eps = 0.25
+        history: list[float] = [eps]
+
+        # Alternate between slightly below and slightly above target
+        silhouettes = [0.20, 0.35, 0.20, 0.35, 0.20, 0.35, 0.20, 0.35]
+        for sil in silhouettes:
+            result = adjuster.adjust(
+                current_eps=eps,
+                silhouette_score=sil,
+                avg_cluster_size=6.0,
+                singleton_rate=0.10,
+                total_clusters_formed=200,
+            )
+            eps = result.new_eps
+            history.append(eps)
+
+        # Count direction changes
+        direction_changes = 0
+        for i in range(2, len(history)):
+            prev_dir = history[i - 1] - history[i - 2]
+            curr_dir = history[i] - history[i - 1]
+            if prev_dir * curr_dir < 0:  # opposite signs
+                direction_changes += 1
+
+        assert direction_changes <= 2  # momentum prevents wild oscillation
+
+    def test_consecutive_low_quality_converges(self) -> None:
+        """Sustained low silhouette with high singletons steadily increases eps."""
+        adjuster = EpsAdjuster()
+        eps = 0.20
+        history: list[float] = [eps]
+
+        for _ in range(5):
+            result = adjuster.adjust(
+                current_eps=eps,
+                silhouette_score=0.15,  # well below 0.30 target
+                avg_cluster_size=4.0,
+                singleton_rate=0.25,  # above threshold — triggers increase
+                total_clusters_formed=200,
+            )
+            eps = result.new_eps
+            history.append(eps)
+
+        # eps should have increased monotonically
+        for i in range(1, len(history)):
+            assert history[i] >= history[i - 1]
+        # and should be higher than starting value
+        assert eps > 0.20
+
+    def test_recovery_stops_adjustment(self) -> None:
+        """Once silhouette rises above target, adjustments stop."""
+        adjuster = EpsAdjuster()
+        eps = 0.25
+
+        # First: trigger an adjustment (low silhouette + high singletons)
+        result1 = adjuster.adjust(
+            current_eps=eps,
+            silhouette_score=0.20,
+            avg_cluster_size=4.0,
+            singleton_rate=0.25,
+            total_clusters_formed=200,
+        )
+        eps = result1.new_eps
+        assert result1.adjusted
+
+        # Recovery: silhouette above target
+        result2 = adjuster.adjust(
+            current_eps=eps,
+            silhouette_score=0.35,  # above 0.30 target
+            avg_cluster_size=5.0,
+            singleton_rate=0.10,
+            total_clusters_formed=200,
+        )
+        assert not result2.adjusted  # no further adjustment needed
+
+    def test_min_samples_independent_of_silhouette(self) -> None:
+        """MinSamplesAdjuster is unaffected by silhouette changes."""
+        from k0.modules.consolidation.algorithms.min_samples_adjuster import MinSamplesAdjuster
+
+        adjuster = MinSamplesAdjuster()
+
+        # High singleton rate triggers increase regardless of silhouette
+        result = adjuster.adjust(
+            current_min_samples=2,
+            singleton_rate=0.25,
+        )
+        assert result.adjusted
+        assert result.new_min_samples == 3

@@ -333,7 +333,7 @@ async def test_temporal_group_assembly(complete_module_outputs):
 
 @pytest.mark.asyncio
 async def test_spatial_group_assembly(complete_module_outputs):
-    """Test spatial & place column group (5 columns)"""
+    """Test spatial & place column group (8 columns)."""
     # Extract spatial fields from flat envelope
     geo_output = {
         "geo_precision_external": complete_module_outputs.get("geo_precision_external"),
@@ -346,13 +346,27 @@ async def test_spatial_group_assembly(complete_module_outputs):
         "geohash_6": complete_module_outputs.get("geohash_6"),
         "location_name": complete_module_outputs.get("location_name"),
         "location_type": complete_module_outputs.get("location_type"),
+        "spatial_familiarity": "OCCASIONAL",
     }
 
-    result = map_spatial_group(geo_output, spatial_output)
+    envelope = {
+        "body": {
+            "place_id": "place_olive_garden_market_st",
+            "location_hierarchy": ["restaurant", "Market St", "Seattle"],
+            "transition_from_place": "home",
+            "transition_mode": "drove",
+        },
+    }
+    result = map_spatial_group(geo_output, spatial_output, envelope=envelope)
 
     assert result["location_name"] == "Olive Garden, Market St"
     assert result["location_type"] == "restaurant"
     assert result["geohash_6"] == "9q8yy9"
+    assert result["place_id"] == "place_olive_garden_market_st"
+    assert result["location_hierarchy_json"] == '["restaurant","Market St","Seattle"]'
+    assert '"transition_from_place":"home"' in result["spatial_context_json"]
+    assert '"transition_mode":"drove"' in result["spatial_context_json"]
+    assert result["spatial_familiarity"] == "OCCASIONAL"
     assert result["geo_precision_external"] == "full"
     assert result["geo_masking_reason"] == "none"
 
@@ -1015,15 +1029,15 @@ async def test_edge_case_missing_geohash(base_envelope, complete_module_outputs)
 
 
 # =============================================================================
-# Epic 3.15 -- Group 12: MW v2 Signal Mapping (11 columns)
+# Epic 4.1 -- Group 12: MW v2 Signal Mapping (12 columns)
 # =============================================================================
 
 
 class TestMapMwV2SignalGroup:
-    """Tests for map_mw_v2_signal_group() -- Group 12 (11 columns)"""
+    """Tests for map_mw_v2_signal_group() -- Group 12 (12 columns)"""
 
     def test_full_mw_v2_signal_extraction(self):
-        """All 11 columns extracted from a fully-populated envelope"""
+        """All 12 columns extracted from a fully-populated envelope"""
         envelope = {
             "body": {
                 "narrative": {
@@ -1039,6 +1053,7 @@ class TestMapMwV2SignalGroup:
                 "identity_domains": ["parent", "professional"],
                 "entity_salience": {"person_mom": 0.9, "Olive_Garden": 0.7},
                 "k1_signal_version": "2.1",
+                "extraction_sequence": 2,
             }
         }
         result = map_mw_v2_signal_group(envelope)
@@ -1052,6 +1067,7 @@ class TestMapMwV2SignalGroup:
         assert result["novelty"] == "NOVEL"
         assert result["elaboration_depth"] == "DISCUSSED"
         assert result["k1_signal_version"] == "2.1"
+        assert result["extraction_sequence"] == 2
 
         # JSON fields
         import json
@@ -1062,14 +1078,14 @@ class TestMapMwV2SignalGroup:
         entity_salience = json.loads(result["entity_salience_json"])
         assert entity_salience == {"person_mom": 0.9, "Olive_Garden": 0.7}
 
-    def test_returns_exactly_11_columns(self):
-        """Function returns exactly 11 keys"""
+    def test_returns_exactly_12_columns(self):
+        """Function returns exactly 12 keys"""
         envelope = {"body": {}}
         result = map_mw_v2_signal_group(envelope)
-        assert len(result) == 11
+        assert len(result) == 12
 
     def test_column_names_match_migration(self):
-        """All 11 column names match expected migration 0066 column names"""
+        """All 12 column names include extraction_sequence for intra-turn ordering."""
         expected_columns = {
             "narrative_thread_id",
             "narrative_arc_position",
@@ -1082,6 +1098,7 @@ class TestMapMwV2SignalGroup:
             "identity_domains_json",
             "entity_salience_json",
             "k1_signal_version",
+            "extraction_sequence",
         }
         envelope = {"body": {}}
         result = map_mw_v2_signal_group(envelope)
@@ -1104,6 +1121,7 @@ class TestMapMwV2SignalGroup:
         # Explicit defaults
         assert result["narrative_is_goal_event"] is False
         assert result["k1_signal_version"] == "2.0"
+        assert result["extraction_sequence"] == 0
 
         # Empty JSON defaults for serialized fields
         assert result["identity_domains_json"] == "[]"
@@ -1116,9 +1134,20 @@ class TestMapMwV2SignalGroup:
 
         assert result["narrative_is_goal_event"] is False
         assert result["k1_signal_version"] == "2.0"
+        assert result["extraction_sequence"] == 0
         assert result["identity_domains_json"] == "[]"
         assert result["entity_salience_json"] == "{}"
-        assert len(result) == 11
+        assert len(result) == 12
+
+    def test_extraction_sequence_clamped_to_bounds(self):
+        """extraction_sequence is normalized to schema bounds [0, 5]."""
+        high = map_mw_v2_signal_group({"body": {"extraction_sequence": 99}})
+        low = map_mw_v2_signal_group({"body": {"extraction_sequence": -2}})
+        bad = map_mw_v2_signal_group({"body": {"extraction_sequence": "not-an-int"}})
+
+        assert high["extraction_sequence"] == 5
+        assert low["extraction_sequence"] == 0
+        assert bad["extraction_sequence"] == 0
 
     def test_narrative_nested_extraction(self):
         """Narrative fields extracted from nested body.narrative{} object"""

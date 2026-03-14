@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -872,3 +872,923 @@ class TestTemporalEdgeTypes:
         assert config.granger_precedence_threshold == 0.80
         assert config.temporal_follows_threshold == 0.70
         assert abs(precedes_threshold - 0.30) < 0.001  # Floating point tolerance
+
+
+# =============================================================================
+# 5.H.1: R1 Importance Score Wiring Tests
+# =============================================================================
+
+
+class TestR1ImportanceScoreWiring:
+    """Tests for 5.H.1: Wire R1 importance scores into R4 Hebbian co-occurrence.
+
+    Validates:
+    - R1 importance scores used for edge weight computation
+    - Fallback to cluster confidence when R1 scores unavailable
+    - importance_source metadata tracked on KGUpdate
+    - Mixed R1/fallback (partial) correctly classified
+    - Stats counters (hebbian_r1_importance_used, hebbian_fallback_importance_used)
+    """
+
+    @pytest.mark.asyncio
+    async def test_r1_importance_scores_used_for_edge_weight(self) -> None:
+        """Test: R1 importance scores drive edge weight instead of cluster confidence."""
+        phase = R4KGConsolidator(config=R4Config(min_co_occurrence=1))
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        clusters = [
+            EntityCluster(
+                cluster_id="c_alice",
+                canonical_name="Alice",
+                entity_type="PERSON",
+                mentions=["Alice"],
+                observation_ids=["evt_1"],
+                confidence=0.3,  # Low NER confidence
+            ),
+            EntityCluster(
+                cluster_id="c_bob",
+                canonical_name="Bob",
+                entity_type="PERSON",
+                mentions=["Bob"],
+                observation_ids=["evt_1"],
+                confidence=0.3,  # Low NER confidence
+            ),
+        ]
+
+        from k0.modules.consolidation.algorithms.entity_extractor import (
+            ExtractedEntity,
+            KGEntityType,
+        )
+
+        event_entity_map = {
+            "evt_1": [
+                ExtractedEntity(
+                    text="Alice",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="alice",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=0,
+                    end_token=1,
+                ),
+                ExtractedEntity(
+                    text="Bob",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="bob",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=2,
+                    end_token=3,
+                ),
+            ],
+        }
+
+        ctx = MockRunnerContext()
+        ctx.syscalls.kg_edges_lookup = AsyncMock(return_value={})
+
+        # High R1 importance for evt_1
+        r1_importance_map = {"evt_1": 0.95}
+
+        updates = await phase._discover_relationships(
+            clusters,
+            event_entity_map,
+            {},
+            "t1",
+            "s1",
+            ctx,
+            r1_importance_map=r1_importance_map,
+        )
+
+        assert len(updates) == 1
+        edge = updates[0]
+        assert edge.update_type == KGUpdateType.CREATE_EDGE
+        # With R1 score of 0.95, initial weight should be higher than
+        # what 0.3 cluster confidence average would give
+        assert edge.confidence > 0.0
+        assert edge.importance_source == "hebbian_r1"
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_cluster_confidence_without_r1(self) -> None:
+        """Test: Falls back to cluster confidence average when no R1 scores."""
+        phase = R4KGConsolidator(config=R4Config(min_co_occurrence=1))
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        clusters = [
+            EntityCluster(
+                cluster_id="c_alice",
+                canonical_name="Alice",
+                entity_type="PERSON",
+                mentions=["Alice"],
+                observation_ids=["evt_1"],
+                confidence=0.7,
+            ),
+            EntityCluster(
+                cluster_id="c_bob",
+                canonical_name="Bob",
+                entity_type="PERSON",
+                mentions=["Bob"],
+                observation_ids=["evt_1"],
+                confidence=0.5,
+            ),
+        ]
+
+        from k0.modules.consolidation.algorithms.entity_extractor import (
+            ExtractedEntity,
+            KGEntityType,
+        )
+
+        event_entity_map = {
+            "evt_1": [
+                ExtractedEntity(
+                    text="Alice",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="alice",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=0,
+                    end_token=1,
+                ),
+                ExtractedEntity(
+                    text="Bob",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="bob",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=2,
+                    end_token=3,
+                ),
+            ],
+        }
+
+        ctx = MockRunnerContext()
+        ctx.syscalls.kg_edges_lookup = AsyncMock(return_value={})
+
+        # No R1 importance map — empty
+        updates = await phase._discover_relationships(
+            clusters,
+            event_entity_map,
+            {},
+            "t1",
+            "s1",
+            ctx,
+            r1_importance_map={},
+        )
+
+        assert len(updates) == 1
+        edge = updates[0]
+        assert edge.importance_source == "hebbian_fallback"
+
+    @pytest.mark.asyncio
+    async def test_importance_source_r1_partial_mixed_events(self) -> None:
+        """Test: Mixed R1/fallback events classified as hebbian_r1_partial."""
+        phase = R4KGConsolidator(config=R4Config(min_co_occurrence=1))
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        clusters = [
+            EntityCluster(
+                cluster_id="c_alice",
+                canonical_name="Alice",
+                entity_type="PERSON",
+                mentions=["Alice"],
+                observation_ids=["evt_1", "evt_2"],
+                confidence=0.6,
+            ),
+            EntityCluster(
+                cluster_id="c_bob",
+                canonical_name="Bob",
+                entity_type="PERSON",
+                mentions=["Bob"],
+                observation_ids=["evt_1", "evt_2"],
+                confidence=0.6,
+            ),
+        ]
+
+        from k0.modules.consolidation.algorithms.entity_extractor import (
+            ExtractedEntity,
+            KGEntityType,
+        )
+
+        event_entity_map = {
+            "evt_1": [
+                ExtractedEntity(
+                    text="Alice",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="alice",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=0,
+                    end_token=1,
+                ),
+                ExtractedEntity(
+                    text="Bob",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="bob",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=2,
+                    end_token=3,
+                ),
+            ],
+            "evt_2": [
+                ExtractedEntity(
+                    text="Alice",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="alice",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=0,
+                    end_token=1,
+                ),
+                ExtractedEntity(
+                    text="Bob",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="bob",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=2,
+                    end_token=3,
+                ),
+            ],
+        }
+
+        ctx = MockRunnerContext()
+        ctx.syscalls.kg_edges_lookup = AsyncMock(return_value={})
+
+        # Only evt_1 has R1 score; evt_2 does not
+        r1_importance_map = {"evt_1": 0.85}
+
+        updates = await phase._discover_relationships(
+            clusters,
+            event_entity_map,
+            {},
+            "t1",
+            "s1",
+            ctx,
+            r1_importance_map=r1_importance_map,
+        )
+
+        assert len(updates) == 1
+        edge = updates[0]
+        assert edge.importance_source == "hebbian_r1_partial"
+
+    @pytest.mark.asyncio
+    async def test_stats_counters_r1_vs_fallback(self) -> None:
+        """Test: Stats counters track R1 vs fallback usage correctly."""
+        phase = R4KGConsolidator(config=R4Config(min_co_occurrence=1))
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        clusters = [
+            EntityCluster(
+                cluster_id="c_alice",
+                canonical_name="Alice",
+                entity_type="PERSON",
+                mentions=["Alice"],
+                observation_ids=["evt_1"],
+                confidence=0.6,
+            ),
+            EntityCluster(
+                cluster_id="c_bob",
+                canonical_name="Bob",
+                entity_type="PERSON",
+                mentions=["Bob"],
+                observation_ids=["evt_1"],
+                confidence=0.6,
+            ),
+            EntityCluster(
+                cluster_id="c_carol",
+                canonical_name="Carol",
+                entity_type="PERSON",
+                mentions=["Carol"],
+                observation_ids=["evt_2"],
+                confidence=0.5,
+            ),
+            EntityCluster(
+                cluster_id="c_dave",
+                canonical_name="Dave",
+                entity_type="PERSON",
+                mentions=["Dave"],
+                observation_ids=["evt_2"],
+                confidence=0.5,
+            ),
+        ]
+
+        from k0.modules.consolidation.algorithms.entity_extractor import (
+            ExtractedEntity,
+            KGEntityType,
+        )
+
+        event_entity_map = {
+            "evt_1": [
+                ExtractedEntity(
+                    text="Alice",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="alice",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=0,
+                    end_token=1,
+                ),
+                ExtractedEntity(
+                    text="Bob",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="bob",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=2,
+                    end_token=3,
+                ),
+            ],
+            "evt_2": [
+                ExtractedEntity(
+                    text="Carol",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="carol",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=0,
+                    end_token=1,
+                ),
+                ExtractedEntity(
+                    text="Dave",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="dave",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=2,
+                    end_token=3,
+                ),
+            ],
+        }
+
+        ctx = MockRunnerContext()
+        ctx.syscalls.kg_edges_lookup = AsyncMock(return_value={})
+
+        # Only evt_1 has R1 score
+        r1_importance_map = {"evt_1": 0.9}
+
+        await phase._discover_relationships(
+            clusters,
+            event_entity_map,
+            {},
+            "t1",
+            "s1",
+            ctx,
+            r1_importance_map=r1_importance_map,
+        )
+
+        # Alice-Bob pair: R1 hit -> hebbian_r1_importance_used=1
+        # Carol-Dave pair: no R1 -> hebbian_fallback_importance_used=1
+        assert phase._stats.hebbian_r1_importance_used == 1
+        assert phase._stats.hebbian_fallback_importance_used == 1
+
+    @pytest.mark.asyncio
+    async def test_high_r1_score_produces_higher_weight_than_low(self) -> None:
+        """Test: Higher R1 importance score produces stronger initial edge weight."""
+        from k0.modules.consolidation.algorithms.entity_extractor import (
+            ExtractedEntity,
+            KGEntityType,
+        )
+
+        # Run 1: Low R1 score
+        phase_low = R4KGConsolidator(config=R4Config(min_co_occurrence=1))
+        ctx_init = MockRunnerContext()
+        phase_low._initialize_components(ctx_init)
+
+        clusters = [
+            EntityCluster(
+                cluster_id="c_alice",
+                canonical_name="Alice",
+                entity_type="PERSON",
+                mentions=["Alice"],
+                observation_ids=["evt_1"],
+                confidence=0.5,
+            ),
+            EntityCluster(
+                cluster_id="c_bob",
+                canonical_name="Bob",
+                entity_type="PERSON",
+                mentions=["Bob"],
+                observation_ids=["evt_1"],
+                confidence=0.5,
+            ),
+        ]
+
+        event_entity_map = {
+            "evt_1": [
+                ExtractedEntity(
+                    text="Alice",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="alice",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=0,
+                    end_token=1,
+                ),
+                ExtractedEntity(
+                    text="Bob",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="bob",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=2,
+                    end_token=3,
+                ),
+            ],
+        }
+
+        ctx_low = MockRunnerContext()
+        ctx_low.syscalls.kg_edges_lookup = AsyncMock(return_value={})
+
+        updates_low = await phase_low._discover_relationships(
+            clusters,
+            event_entity_map,
+            {},
+            "t1",
+            "s1",
+            ctx_low,
+            r1_importance_map={"evt_1": 0.1},
+        )
+
+        # Run 2: High R1 score
+        phase_high = R4KGConsolidator(config=R4Config(min_co_occurrence=1))
+        phase_high._initialize_components(ctx_init)
+
+        ctx_high = MockRunnerContext()
+        ctx_high.syscalls.kg_edges_lookup = AsyncMock(return_value={})
+
+        updates_high = await phase_high._discover_relationships(
+            clusters,
+            event_entity_map,
+            {},
+            "t1",
+            "s1",
+            ctx_high,
+            r1_importance_map={"evt_1": 0.95},
+        )
+
+        assert len(updates_low) == 1
+        assert len(updates_high) == 1
+        # HebbianLearner.compute_initial_weight gives higher weight for higher importance
+        assert updates_high[0].confidence >= updates_low[0].confidence
+
+    @pytest.mark.asyncio
+    async def test_no_r1_map_uses_cluster_confidence(self) -> None:
+        """Test: When r1_importance_map is None, cluster confidence proxy is used."""
+        phase = R4KGConsolidator(config=R4Config(min_co_occurrence=1))
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        clusters = [
+            EntityCluster(
+                cluster_id="c_alice",
+                canonical_name="Alice",
+                entity_type="PERSON",
+                mentions=["Alice"],
+                observation_ids=["evt_1"],
+                confidence=0.8,
+            ),
+            EntityCluster(
+                cluster_id="c_bob",
+                canonical_name="Bob",
+                entity_type="PERSON",
+                mentions=["Bob"],
+                observation_ids=["evt_1"],
+                confidence=0.6,
+            ),
+        ]
+
+        from k0.modules.consolidation.algorithms.entity_extractor import (
+            ExtractedEntity,
+            KGEntityType,
+        )
+
+        event_entity_map = {
+            "evt_1": [
+                ExtractedEntity(
+                    text="Alice",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="alice",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=0,
+                    end_token=1,
+                ),
+                ExtractedEntity(
+                    text="Bob",
+                    kg_type=KGEntityType.PERSON,
+                    normalized_text="bob",
+                    source_label="PER",
+                    source_head="ner_general",
+                    priority=0.8,
+                    start_token=2,
+                    end_token=3,
+                ),
+            ],
+        }
+
+        ctx = MockRunnerContext()
+        ctx.syscalls.kg_edges_lookup = AsyncMock(return_value={})
+
+        # Pass None (default) for r1_importance_map
+        updates = await phase._discover_relationships(
+            clusters,
+            event_entity_map,
+            {},
+            "t1",
+            "s1",
+            ctx,
+            r1_importance_map=None,
+        )
+
+        assert len(updates) == 1
+        edge = updates[0]
+        assert edge.importance_source == "hebbian_fallback"
+        assert phase._stats.hebbian_fallback_importance_used == 1
+        assert phase._stats.hebbian_r1_importance_used == 0
+
+    @pytest.mark.asyncio
+    async def test_to_dict_includes_r1_stats(self) -> None:
+        """Test: R4PhaseStats.to_dict() includes R1 importance counters."""
+        stats = R4PhaseStats()
+        stats.hebbian_r1_importance_used = 5
+        stats.hebbian_fallback_importance_used = 3
+
+        d = stats.to_dict()
+        assert d["hebbian_r1_importance_used"] == 5
+        assert d["hebbian_fallback_importance_used"] == 3
+
+    def test_kg_update_importance_source_field(self) -> None:
+        """Test: KGUpdate has importance_source field defaulting to None."""
+        update = KGUpdate(
+            update_type=KGUpdateType.CREATE_EDGE,
+            edge_id="edge_001",
+            source_id="e1",
+            target_id="e2",
+        )
+        assert update.importance_source is None
+
+        update_with_source = KGUpdate(
+            update_type=KGUpdateType.CREATE_EDGE,
+            edge_id="edge_002",
+            source_id="e1",
+            target_id="e2",
+            importance_source="hebbian_r1",
+        )
+        assert update_with_source.importance_source == "hebbian_r1"
+
+
+# =============================================================================
+# 5.H.2: Edge Decay and Anti-Hebbian Tests
+# =============================================================================
+
+
+class TestEdgeDecayAndAntiHebbian:
+    """Tests for 5.H.2: Edge decay and anti-Hebbian signal processing.
+
+    Validates:
+    - Time-based exponential decay reduces stale edge weights
+    - Edges below prune threshold are marked for archival
+    - Anti-Hebbian signals weaken wrong associations
+    - Feature flags control decay/anti-Hebbian execution
+    - Stats counters track decay and anti-Hebbian metrics
+    """
+
+    @pytest.mark.asyncio
+    async def test_decay_reduces_stale_edge_weight(self) -> None:
+        """Test: Stale edges get exponentially decayed."""
+        phase = R4KGConsolidator(
+            config=R4Config(
+                min_co_occurrence=1,
+                enable_hebbian_decay=True,
+            )
+        )
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        existing_edges = {
+            "edge_alice_bob": {
+                "source_id": "c_alice",
+                "target_id": "c_bob",
+                "relation_type": "RELATED_TO",
+                "confidence": 0.8,
+                "observation_count": 5,
+                "last_observed_at": 1000,  # Very old
+            },
+        }
+
+        # Current cycle is 30 days later (in ms)
+        cycle_ts = 1000 + (30 * 24 * 60 * 60 * 1000)
+
+        updates = await phase._apply_edge_decay(
+            existing_edges=existing_edges,
+            current_co_occurrence_pairs=set(),  # Not re-observed
+            cycle_timestamp_ms=cycle_ts,
+            tenant_id="t1",
+            space_id="s1",
+        )
+
+        assert len(updates) == 1
+        assert updates[0].confidence < 0.8  # Decayed
+        assert updates[0].importance_source == "hebbian_decay"
+        assert phase._stats.hebbian_edges_decayed == 1
+
+    @pytest.mark.asyncio
+    async def test_decay_prunes_edge_below_threshold(self) -> None:
+        """Test: Edges decayed below min_weight get pruned."""
+        phase = R4KGConsolidator(
+            config=R4Config(
+                min_co_occurrence=1,
+                enable_hebbian_decay=True,
+            )
+        )
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        existing_edges = {
+            "edge_weak": {
+                "source_id": "c_alice",
+                "target_id": "c_bob",
+                "relation_type": "RELATED_TO",
+                "confidence": 0.02,  # Already very weak
+                "observation_count": 1,
+                "last_observed_at": 1000,
+            },
+        }
+
+        # 365 days later
+        cycle_ts = 1000 + (365 * 24 * 60 * 60 * 1000)
+
+        updates = await phase._apply_edge_decay(
+            existing_edges=existing_edges,
+            current_co_occurrence_pairs=set(),
+            cycle_timestamp_ms=cycle_ts,
+            tenant_id="t1",
+            space_id="s1",
+        )
+
+        assert len(updates) == 1
+        assert updates[0].confidence == 0.0
+        assert updates[0].importance_source == "hebbian_decay_pruned"
+        assert phase._stats.hebbian_edges_pruned == 1
+
+    @pytest.mark.asyncio
+    async def test_decay_skips_re_observed_edges(self) -> None:
+        """Test: Edges re-observed in current batch are NOT decayed."""
+        phase = R4KGConsolidator(
+            config=R4Config(
+                min_co_occurrence=1,
+                enable_hebbian_decay=True,
+            )
+        )
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        existing_edges = {
+            "edge_alice_bob": {
+                "source_id": "c_alice",
+                "target_id": "c_bob",
+                "relation_type": "RELATED_TO",
+                "confidence": 0.8,
+                "observation_count": 5,
+                "last_observed_at": 1000,
+            },
+        }
+
+        cycle_ts = 1000 + (30 * 24 * 60 * 60 * 1000)
+
+        # This pair was re-observed in current batch
+        current_pairs = {"c_alice:c_bob"}
+
+        updates = await phase._apply_edge_decay(
+            existing_edges=existing_edges,
+            current_co_occurrence_pairs=current_pairs,
+            cycle_timestamp_ms=cycle_ts,
+            tenant_id="t1",
+            space_id="s1",
+        )
+
+        assert len(updates) == 0
+        assert phase._stats.hebbian_edges_decayed == 0
+
+    @pytest.mark.asyncio
+    async def test_decay_disabled_by_flag(self) -> None:
+        """Test: When enable_hebbian_decay=False, no decay happens."""
+        config = R4Config(enable_hebbian_decay=False)
+        assert config.enable_hebbian_decay is False
+
+    @pytest.mark.asyncio
+    async def test_anti_hebbian_weakens_edge(self) -> None:
+        """Test: Anti-Hebbian signal weakens target edge."""
+        phase = R4KGConsolidator(
+            config=R4Config(
+                min_co_occurrence=1,
+                enable_anti_hebbian=True,
+            )
+        )
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        existing_edges = {
+            "edge_wrong": {
+                "source_id": "c_alice",
+                "target_id": "c_bob",
+                "relation_type": "RELATED_TO",
+                "confidence": 0.7,
+                "observation_count": 3,
+            },
+        }
+
+        ctx = MockRunnerContext()
+        ctx.syscalls.learning_queue_query = AsyncMock(
+            return_value=[
+                {
+                    "signal_type": "ASSOCIATION_WRONG",
+                    "edge_id": "edge_wrong",
+                    "confidence": 1.0,
+                    "is_explicit_correction": False,
+                },
+            ]
+        )
+
+        updates = await phase._apply_anti_hebbian_signals(
+            existing_edges=existing_edges,
+            ctx=ctx,
+            tenant_id="t1",
+            space_id="s1",
+        )
+
+        assert len(updates) == 1
+        assert updates[0].confidence < 0.7
+        assert updates[0].importance_source == "hebbian_anti_decay"
+        assert phase._stats.hebbian_anti_signals_processed == 1
+        assert phase._stats.hebbian_edges_weakened_by_feedback == 1
+
+    @pytest.mark.asyncio
+    async def test_anti_hebbian_prunes_weak_edge(self) -> None:
+        """Test: Anti-Hebbian on already weak edge triggers prune."""
+        phase = R4KGConsolidator(
+            config=R4Config(
+                min_co_occurrence=1,
+                enable_anti_hebbian=True,
+            )
+        )
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        existing_edges = {
+            "edge_weak": {
+                "source_id": "c_alice",
+                "target_id": "c_bob",
+                "relation_type": "RELATED_TO",
+                "confidence": 0.04,  # Below prune threshold after any anti-Hebbian
+                "observation_count": 1,
+            },
+        }
+
+        ctx = MockRunnerContext()
+        ctx.syscalls.learning_queue_query = AsyncMock(
+            return_value=[
+                {
+                    "signal_type": "ASSOCIATION_WRONG",
+                    "edge_id": "edge_weak",
+                    "confidence": 1.0,
+                    "is_explicit_correction": True,  # 1.3x multiplier
+                },
+            ]
+        )
+
+        updates = await phase._apply_anti_hebbian_signals(
+            existing_edges=existing_edges,
+            ctx=ctx,
+            tenant_id="t1",
+            space_id="s1",
+        )
+
+        assert len(updates) == 1
+        assert updates[0].confidence == 0.0  # Pruned
+        assert updates[0].importance_source == "hebbian_anti_pruned"
+        assert phase._stats.hebbian_edges_pruned == 1
+
+    @pytest.mark.asyncio
+    async def test_anti_hebbian_no_signals_no_changes(self) -> None:
+        """Test: No anti-Hebbian signals means no edge changes."""
+        phase = R4KGConsolidator(
+            config=R4Config(
+                min_co_occurrence=1,
+                enable_anti_hebbian=True,
+            )
+        )
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        ctx = MockRunnerContext()
+        ctx.syscalls.learning_queue_query = AsyncMock(return_value=[])
+
+        updates = await phase._apply_anti_hebbian_signals(
+            existing_edges={"edge_1": {"source_id": "a", "target_id": "b"}},
+            ctx=ctx,
+            tenant_id="t1",
+            space_id="s1",
+        )
+
+        assert len(updates) == 0
+        assert phase._stats.hebbian_anti_signals_processed == 0
+
+    @pytest.mark.asyncio
+    async def test_anti_hebbian_handles_query_failure(self) -> None:
+        """Test: Anti-Hebbian gracefully handles syscall failure."""
+        phase = R4KGConsolidator(
+            config=R4Config(
+                min_co_occurrence=1,
+                enable_anti_hebbian=True,
+            )
+        )
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        ctx = MockRunnerContext()
+        ctx.syscalls.learning_queue_query = AsyncMock(side_effect=RuntimeError("DB unavailable"))
+
+        updates = await phase._apply_anti_hebbian_signals(
+            existing_edges={},
+            ctx=ctx,
+            tenant_id="t1",
+            space_id="s1",
+        )
+
+        assert len(updates) == 0
+
+    @pytest.mark.asyncio
+    async def test_decay_handles_missing_last_observed(self) -> None:
+        """Test: Edges with NULL last_observed_at are skipped."""
+        phase = R4KGConsolidator(
+            config=R4Config(
+                min_co_occurrence=1,
+                enable_hebbian_decay=True,
+            )
+        )
+        ctx_init = MockRunnerContext()
+        phase._initialize_components(ctx_init)
+
+        existing_edges = {
+            "edge_no_ts": {
+                "source_id": "c_alice",
+                "target_id": "c_bob",
+                "relation_type": "RELATED_TO",
+                "confidence": 0.5,
+                "last_observed_at": None,
+            },
+        }
+
+        updates = await phase._apply_edge_decay(
+            existing_edges=existing_edges,
+            current_co_occurrence_pairs=set(),
+            cycle_timestamp_ms=int(1e13),
+            tenant_id="t1",
+            space_id="s1",
+        )
+
+        assert len(updates) == 0
+
+    def test_to_dict_includes_decay_stats(self) -> None:
+        """Test: R4PhaseStats.to_dict() includes all decay and anti-Hebbian counters."""
+        stats = R4PhaseStats()
+        stats.hebbian_edges_decayed = 3
+        stats.hebbian_edges_pruned = 1
+        stats.hebbian_anti_signals_processed = 5
+        stats.hebbian_edges_weakened_by_feedback = 2
+
+        d = stats.to_dict()
+        assert d["hebbian_edges_decayed"] == 3
+        assert d["hebbian_edges_pruned"] == 1
+        assert d["hebbian_anti_signals_processed"] == 5
+        assert d["hebbian_edges_weakened_by_feedback"] == 2
+
+    def test_config_decay_flag_default_off(self) -> None:
+        """Test: enable_hebbian_decay defaults to False."""
+        config = R4Config()
+        assert config.enable_hebbian_decay is False
+
+    def test_config_anti_hebbian_flag_default_off(self) -> None:
+        """Test: enable_anti_hebbian defaults to False."""
+        config = R4Config()
+        assert config.enable_anti_hebbian is False

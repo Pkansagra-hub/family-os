@@ -5,11 +5,11 @@ Issue 4.2.5: Implement adaptive eps learning (silhouette-driven)
 
 Spec Reference:
     - Dossier §4.3.1.1 (Adaptive Eps Learning) — lines 3247-3293
-    - st_learned_weights migration 0040 — storage for dbscan_eps
+    - st_learned_weights migration 0040 — storage for clustering_eps
 
 Algorithm:
     1. After each P03 cycle: Compute silhouette score for generated clusters.
-    2. If silhouette < 0.5:
+    2. If silhouette < 0.30:
        - If avg_cluster_size > 10 → decrease eps by 0.02 (too loose)
        - If singleton_rate > 0.20 → increase eps by 0.02 (too tight)
     3. Momentum smoothing: eps_new = 0.9 × eps_old + 0.1 × eps_adjusted
@@ -20,9 +20,9 @@ Cold Start:
     - Then switch to per-space learning.
 
 Storage Pattern (in st_learned_weights):
-    | param_key   | param_scope | Default | Range        | Target Metric   |
-    |-------------|-------------|---------|--------------|-----------------|
-    | dbscan_eps  | space       | 0.25    | [0.15, 0.40] | silhouette > 0.5|
+    | param_key      | param_scope | Default | Range        | Target Metric    |
+    |----------------|-------------|---------|--------------|------------------|
+    | clustering_eps | space       | 0.25    | [0.15, 0.40] | silhouette > 0.30|
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ class EpsAdjustmentConfig:
         eps_min: Lower bound for eps (0.15 — tightest clustering)
         eps_max: Upper bound for eps (0.40 — loosest clustering)
         eps_step: Adjustment increment per cycle (0.02)
-        silhouette_target: Quality threshold (0.5 — acceptable clustering)
+        silhouette_target: Quality threshold (0.30 — real silhouette p75)
         momentum: Smoothing factor (0.9 = 90% old value, 10% new)
         cold_start_threshold: Clusters needed before learning starts (100)
     """
@@ -58,7 +58,7 @@ class EpsAdjustmentConfig:
     eps_min: float = 0.15
     eps_max: float = 0.40
     eps_step: float = 0.02
-    silhouette_target: float = 0.5
+    silhouette_target: float = 0.30
     momentum: float = 0.9
     cold_start_threshold: int = 100
 
@@ -166,7 +166,7 @@ class EpsAdjuster:
 
     Algorithm:
         1. Skip if in cold start phase (< 100 clusters)
-        2. Skip if silhouette >= 0.5 (quality is acceptable)
+        2. Skip if silhouette >= 0.30 (quality is acceptable)
         3. If avg_cluster_size > 10: decrease eps (clusters too loose)
         4. If singleton_rate > 0.20: increase eps (too much noise)
         5. Apply momentum smoothing to prevent wild swings
@@ -335,7 +335,7 @@ class EpsAdjuster:
             row = await db_conn.fetchrow(
                 """
                 SELECT current_value FROM st_learned_weights
-                WHERE space_id = $1 AND param_key = 'dbscan_eps' AND param_scope = 'space'
+                WHERE space_id = $1 AND param_key = 'clustering_eps' AND param_scope = 'space'
                 """,
                 space_id,
             )
@@ -371,7 +371,7 @@ class EpsAdjuster:
                     param_id, param_key, param_scope, scope_id, space_id,
                     current_value, prior_value, confidence, sample_count, last_updated_at
                 ) VALUES (
-                    gen_random_uuid(), 'dbscan_eps', 'space', $1, $1,
+                    gen_random_uuid(), 'clustering_eps', 'space', $1, $1,
                     $2, 0.25, $3, 1, (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
                 )
                 ON CONFLICT (space_id, param_key, param_scope, scope_id)

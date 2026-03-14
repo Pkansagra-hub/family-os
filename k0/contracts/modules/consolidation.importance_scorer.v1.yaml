@@ -9,13 +9,13 @@ version: v1
 input_event_types:
   - p03.batch.selected.v1
 
-output_event_types:
-  - p03.importance.scored.v1
+output_event_types: []  # Removed: p03.importance.scored.v1 was never emitted (Decision D-R1-002)
 
 latency_budget_ms: 30
 
 side_effects:
   - read:st_learned_weights
+  - read:st_kg_edges  # ADR-K026: KG relationship boost (optional, gated by enable_kg_boost)
 
 idempotent: true
 
@@ -29,6 +29,9 @@ failure_modes:
   - code: INVALID_SCORE
     policy: clamp
     description: Clamp score to [0, 1] range
+  - code: KG_EDGES_UNAVAILABLE
+    policy: fallback_default
+    description: If KG edge cache fails to load, relationship_boost=1.0 (no effect)
 
 formula_version: "2.0.0"
 
@@ -65,11 +68,16 @@ description: |
     identity  = identity_w * identity_signal
     recency   = recency_w * exp(-0.005 * hours_since_event)
 
-  7 multiplicative modulators:
-    elaboration, goal, arc, temporal, type, intent, tier, reliability
+  8 multiplicative modulators:
+    elaboration, goal, arc, temporal, type, intent, relationship, tier, reliability
+
+  KG Relationship Boost (ADR-K026, disabled by default):
+    relationship = 1.0 + boost_scale * max_edge_weight
+    Requires enable_kg_boost=True and read:st_kg_edges capability.
+    Edges loaded once per cycle; per-event lookup is O(1).
 
   Final: importance = clamp(base * elab * goal * arc * temporal
-                            * type * intent * tier * reliability, 0, 1)
+                            * type * intent * relationship * tier * reliability, 0, 1)
 
   Weight Sources:
   - Default weights: CONFIG_B hard-coded baseline (8 weights sum to 1.0)

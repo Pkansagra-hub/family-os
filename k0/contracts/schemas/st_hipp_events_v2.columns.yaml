@@ -14,15 +14,16 @@
 #   v1.5.0 (0053): +7 UltraBERT full capability columns
 #   v1.6.0 (0060): +4 UltraBERT activity/intent columns
 #   v2.0.0 (0066): +16 M3 trust-then-fill columns
+#   v2.2.0 (0085): +5 K1 correction signal columns (R2 Epic 7.2)
 #
-# Column count: 136 (120 existing + 16 new)
-# Groups: 15
+# Column count: 143 (138 existing + 5 new)
+# Groups: 16
 # =============================================================================
 
 schema: st_hipp_events
-version: "2.0.0"
-migration: "0066"
-column_count: 136
+version: "2.2.0"
+migration: "0085"
+column_count: 143
 
 groups:
 
@@ -323,11 +324,11 @@ groups:
         migration: "0022"
 
   # =========================================================================
-  # Group 5: Temporal (14 columns: 11 existing + 3 new)
-  # Migrations: 0022, 0066
+  # Group 5: Temporal (16 columns: 11 existing + 3 MW v2 + 2 Epic 1.2)
+  # Migrations: 0022, 0066, 0076
   # =========================================================================
   temporal:
-    count: 14
+    count: 16
     columns:
 
       event_time_utc:
@@ -448,12 +449,51 @@ groups:
         added_in: "v2.0.0"
         migration: "0066"
 
+      # Epic 1.2 (GAP-002): Conversation anchor + provenance tracking
+      conversation_anchor_ms:
+        type: BIGINT
+        nullable: true
+        source: body.conversation_anchor_ms
+        description: "K1 MW turn timestamp (ms). The actual moment the user chatted. Drives R2 episode formation when present."
+        used_by: [M08, M13, R0, R2]
+        added_in: "v3.0.0"
+        migration: "0076"
+
+      temporal_source:
+        type: TEXT
+        nullable: true
+        source: M08.normalize_timestamp.conv_source
+        description: "Chain A provenance tag: conversation_anchor/event_time/envelope_ts/now."
+        used_by: [M08, M13, R0]
+        added_in: "v3.0.0"
+        migration: "0076"
+
+      # Epic 2.4 (GAP-002): Multi-link temporal model
+      temporal_links_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: M08.parse_temporal_links
+        description: "JSON array of TemporalLink objects {mentioned_time, resolved_epoch_ms, uncertainty_window_ms, link_type, confidence}. Max 5 per atom."
+        used_by: [M08, M13, R0, R2]
+        added_in: "v2.1.0"
+        migration: "0077"
+
+      extraction_sequence:
+        type: INTEGER
+        nullable: true
+        source: envelope.body.extraction_sequence
+        description: "0-based ordinal of this atom within the K1 turn extraction batch."
+        used_by: [M13, R0, R2]
+        added_in: "v3.1.0"
+        migration: "0080"
+
   # =========================================================================
-  # Group 6: Spatial & Place (5 columns)
+  # Group 6: Spatial & Place (7 columns)
   # Migration: 0022
   # =========================================================================
   spatial_place:
-    count: 5
+    count: 7
     columns:
 
       location_name:
@@ -479,6 +519,39 @@ groups:
         description: "6-character geohash for spatial proximity queries (~1.2km precision)."
         used_by: [M13, M12, M15, P03_R5_spatial]
         migration: "0022"
+
+      place_id:
+        type: TEXT
+        nullable: true
+        source: envelope.body.place_id
+        description: "Stable place identity from K1 PlaceResolver. Pattern: place_<slug>."
+        used_by: [M13, P03_R0, P03_R2]
+        migration: "0078"
+
+      location_hierarchy_json:
+        type: TEXT
+        nullable: true
+        source: envelope.body.location_hierarchy
+        description: "JSON array of spatial hierarchy levels, most specific to most general. Max 5 levels."
+        used_by: [M13, P03_R0]
+        migration: "0081"
+
+      spatial_context_json:
+        type: TEXT
+        nullable: true
+        source: envelope.body.transition_from_place + envelope.body.transition_mode
+        description: "Bundled spatial transition context JSON: {transition_from_place, transition_mode}."
+        used_by: [M13, P03_R0, P03_R2]
+        migration: "0082"
+
+      spatial_familiarity:
+        type: TEXT
+        nullable: true
+        enum: [FIRST_VISIT, OCCASIONAL, REGULAR, DAILY]
+        source: M15.spatial_familiarity
+        description: "K0 familiarity band computed from historical visit count by (tenant_id, place_id)."
+        used_by: [M15, M13, P03_R2]
+        migration: "0079"
 
       geo_precision_external:
         type: TEXT
@@ -1350,6 +1423,62 @@ groups:
         used_by: [M13, R5_SRE]
         migration: "0066"
 
+  # =========================================================================
+  # Group 16: K1 Correction Signals (5 new columns)
+  # Migration: 0085 (R2 Epic 7.2)
+  # Note: Pure passthrough from envelope.body. K1 LLM detects corrections/
+  #       contradictions in conversation and flags them here. P03 R3 reads
+  #       these to route EVOLVE/CONTRADICT without cosine comparison.
+  # =========================================================================
+  k1_correction_signals:
+    count: 5
+    added_in: "v2.2.0"
+    columns:
+
+      correction_signal:
+        type: BOOLEAN
+        nullable: false
+        default: "false"
+        source: body.correction_signal
+        description: "K1 LLM detected this atom corrects a previously stored fact. EVOLVE candidate for P03 R3."
+        used_by: [M13, P03_R3_reconcile]
+        migration: "0085"
+
+      contradiction_signal:
+        type: BOOLEAN
+        nullable: false
+        default: "false"
+        source: body.contradiction_signal
+        description: "K1 LLM detected this atom contradicts stored knowledge. CONTRADICT candidate for P03 R3."
+        used_by: [M13, P03_R3_reconcile]
+        migration: "0085"
+
+      supersedes_concept:
+        type: TEXT
+        nullable: true
+        source: body.supersedes_concept
+        description: "Namespaced concept key being replaced (e.g. 'cuisine_preference:thai'). Targeted truth lookup for P03."
+        used_by: [M13, P03_R3_reconcile]
+        migration: "0085"
+
+      correction_source:
+        type: TEXT
+        nullable: true
+        enum: [user_explicit, user_implicit, context_change]
+        check: "correction_source IS NULL OR correction_source IN ('user_explicit', 'user_implicit', 'context_change')"
+        source: body.correction_source
+        description: "How the correction was detected: user_explicit, user_implicit, context_change."
+        used_by: [M13, P03_R3_reconcile]
+        migration: "0085"
+
+      session_context_id:
+        type: TEXT
+        nullable: true
+        source: body.session_context_id
+        description: "Session UUID where correction was detected. P03 audit trail for EVOLVE/CONTRADICT."
+        used_by: [M13, P03_R3_reconcile]
+        migration: "0085"
+
 
 # =============================================================================
 # Indexes
@@ -1456,6 +1585,20 @@ indexes:
     migration: "0066"
     rationale: "Quick filter for signal version during development iterations."
 
+  # -- K1 correction signal indexes (migration 0085) --
+
+  idx_hipp_events_correction_signal:
+    columns: ["event_time_utc DESC"]
+    where: "correction_signal = true"
+    migration: "0085"
+    rationale: "P03 R3 finds correction-flagged events for EVOLVE routing."
+
+  idx_hipp_events_contradiction_signal:
+    columns: ["event_time_utc DESC"]
+    where: "contradiction_signal = true"
+    migration: "0085"
+    rationale: "P03 R3 finds contradiction-flagged events for CONTRADICT routing."
+
 
 # =============================================================================
 # CHECK Constraints
@@ -1542,6 +1685,12 @@ check_constraints:
     expression: "elaboration_depth IS NULL OR elaboration_depth IN ('MENTION','DISCUSSED','ELABORATED','DEEPLY_PROCESSED')"
     migration: "0066"
 
+  # -- K1 correction signal constraints (migration 0085) --
+
+  ck_hipp_correction_source:
+    expression: "correction_source IS NULL OR correction_source IN ('user_explicit','user_implicit','context_change')"
+    migration: "0085"
+
 
 # =============================================================================
 # Column Count Verification
@@ -1551,8 +1700,8 @@ column_count_verification:
   group_2_integrity_audit: 6
   group_3_policy_visibility: 10
   group_4_actor_device: 6
-  group_5_temporal: 14          # 11 existing + 3 new
-  group_6_spatial_place: 5
+  group_5_temporal: 15          # 11 existing + 3 new + extraction_sequence
+  group_6_spatial_place: 9
   group_7_social_relationships: 9  # 8 existing + 1 new
   group_8_semantic_activity: 14    # 10 from 0022 + 4 from 0060
   group_9_hippocampus_pattern: 8
@@ -1562,7 +1711,8 @@ column_count_verification:
   group_13_metadata_versioning: 5  # 4 existing + 1 new
   group_14_narrative_context: 3    # all new
   group_15_cognitive_dimensions: 6 # all new
-  total: 136                       # 120 existing + 16 new
+  group_16_k1_correction_signals: 5 # all new (R2 Epic 7.2)
+  total: 143                       # 138 existing + 5 new
 
 new_column_summary:
   count: 16

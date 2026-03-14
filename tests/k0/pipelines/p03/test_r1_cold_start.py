@@ -102,10 +102,15 @@ class TestColdStartFallback:
 
         assert source == "static"
         assert sample_count == 0
-        assert abs(weights.sentiment_weight - 0.25) < 0.01
-        assert abs(weights.affect_weight - 0.30) < 0.01
-        assert abs(weights.novelty_weight - 0.25) < 0.01
-        assert abs(weights.social_weight - 0.20) < 0.01
+        # CONFIG_B static priors
+        assert abs(weights.sentiment_weight - 0.10) < 0.01
+        assert abs(weights.affect_weight - 0.12) < 0.01
+        assert abs(weights.arousal_weight - 0.08) < 0.01
+        assert abs(weights.surprise_weight - 0.15) < 0.01
+        assert abs(weights.novelty_weight - 0.15) < 0.01
+        assert abs(weights.social_weight - 0.15) < 0.01
+        assert abs(weights.identity_weight - 0.10) < 0.01
+        assert abs(weights.recency_weight - 0.15) < 0.01
 
     @pytest.mark.asyncio
     async def test_fallback_to_static_no_weights(self) -> None:
@@ -123,7 +128,16 @@ class TestColdStartFallback:
         """Falls back to global weights when space has no weights."""
         store = MockWeightStore()
         store.set_global_weights(
-            weights={"sentiment": 0.30, "affect": 0.25, "novelty": 0.25, "social": 0.20},
+            weights={
+                "sentiment": 0.20,
+                "affect": 0.15,
+                "arousal": 0.10,
+                "surprise": 0.10,
+                "novelty": 0.15,
+                "social": 0.10,
+                "identity": 0.05,
+                "recency": 0.15,
+            },
             sample_count=600,
         )
 
@@ -139,11 +153,29 @@ class TestColdStartFallback:
         store = MockWeightStore()
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.30, "affect": 0.30, "novelty": 0.20, "social": 0.20},
+            weights={
+                "sentiment": 0.20,
+                "affect": 0.15,
+                "arousal": 0.10,
+                "surprise": 0.10,
+                "novelty": 0.10,
+                "social": 0.15,
+                "identity": 0.10,
+                "recency": 0.10,
+            },
             sample_count=500,
         )
         store.set_global_weights(
-            weights={"sentiment": 0.20, "affect": 0.20, "novelty": 0.30, "social": 0.30},
+            weights={
+                "sentiment": 0.10,
+                "affect": 0.10,
+                "arousal": 0.10,
+                "surprise": 0.15,
+                "novelty": 0.20,
+                "social": 0.15,
+                "identity": 0.10,
+                "recency": 0.10,
+            },
             sample_count=1000,
         )
 
@@ -168,7 +200,16 @@ class TestProgressiveBlending:
         store = MockWeightStore()
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.50, "affect": 0.20, "novelty": 0.15, "social": 0.15},
+            weights={
+                "sentiment": 0.40,
+                "affect": 0.10,
+                "arousal": 0.05,
+                "surprise": 0.10,
+                "novelty": 0.10,
+                "social": 0.10,
+                "identity": 0.05,
+                "recency": 0.10,
+            },
             sample_count=0,
         )
 
@@ -184,7 +225,16 @@ class TestProgressiveBlending:
         store = MockWeightStore()
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.50, "affect": 0.20, "novelty": 0.15, "social": 0.15},
+            weights={
+                "sentiment": 0.40,
+                "affect": 0.10,
+                "arousal": 0.05,
+                "surprise": 0.10,
+                "novelty": 0.10,
+                "social": 0.10,
+                "identity": 0.05,
+                "recency": 0.10,
+            },
             sample_count=50,
         )
 
@@ -201,7 +251,16 @@ class TestProgressiveBlending:
         store.set_space_weights(
             space_id="sp_test",
             # Extreme learned weights to see blending effect
-            weights={"sentiment": 0.60, "affect": 0.15, "novelty": 0.15, "social": 0.10},
+            weights={
+                "sentiment": 0.50,
+                "affect": 0.10,
+                "arousal": 0.05,
+                "surprise": 0.10,
+                "novelty": 0.05,
+                "social": 0.05,
+                "identity": 0.05,
+                "recency": 0.10,
+            },
             sample_count=100,
         )
 
@@ -212,10 +271,10 @@ class TestProgressiveBlending:
         assert sample_count == 100
 
         # With α=0.2: blended = 0.2*learned + 0.8*static
-        # sentiment: 0.2*0.60 + 0.8*0.25 = 0.12 + 0.20 = 0.32
-        # After normalization, should be close to 0.32
-        # But normalization changes things, so just check it's between static and learned
-        assert 0.25 < weights.sentiment_weight < 0.60
+        # sentiment: 0.2*0.50 + 0.8*0.10 = 0.18
+        # Both dicts sum to 1.0, so blended sums to 1.0 (no normalization shift)
+        # Should be between static (0.10) and learned (0.50)
+        assert 0.10 < weights.sentiment_weight < 0.50
 
     @pytest.mark.asyncio
     async def test_250_samples_half_blend(self) -> None:
@@ -223,7 +282,16 @@ class TestProgressiveBlending:
         store = MockWeightStore()
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.40, "affect": 0.25, "novelty": 0.20, "social": 0.15},
+            weights={
+                "sentiment": 0.30,
+                "affect": 0.15,
+                "arousal": 0.05,
+                "surprise": 0.10,
+                "novelty": 0.15,
+                "social": 0.10,
+                "identity": 0.05,
+                "recency": 0.10,
+            },
             sample_count=250,
         )
 
@@ -234,9 +302,8 @@ class TestProgressiveBlending:
         assert sample_count == 250
 
         # α=0.5: halfway between learned and static
-        # sentiment: 0.5*0.40 + 0.5*0.25 = 0.325
-        # After normalization
-        assert 0.25 < weights.sentiment_weight < 0.40
+        # sentiment: 0.5*0.30 + 0.5*0.10 = 0.20
+        assert 0.10 < weights.sentiment_weight < 0.30
 
     @pytest.mark.asyncio
     async def test_499_samples_nearly_full(self) -> None:
@@ -244,7 +311,16 @@ class TestProgressiveBlending:
         store = MockWeightStore()
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.40, "affect": 0.30, "novelty": 0.15, "social": 0.15},
+            weights={
+                "sentiment": 0.25,
+                "affect": 0.15,
+                "arousal": 0.10,
+                "surprise": 0.10,
+                "novelty": 0.10,
+                "social": 0.15,
+                "identity": 0.05,
+                "recency": 0.10,
+            },
             sample_count=499,
         )
 
@@ -255,7 +331,7 @@ class TestProgressiveBlending:
         assert sample_count == 499
 
         # α≈1: almost purely learned
-        assert 0.35 < weights.sentiment_weight < 0.45
+        assert 0.20 < weights.sentiment_weight < 0.30
 
     @pytest.mark.asyncio
     async def test_500_samples_pure_learned(self) -> None:
@@ -263,7 +339,16 @@ class TestProgressiveBlending:
         store = MockWeightStore()
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.40, "affect": 0.30, "novelty": 0.15, "social": 0.15},
+            weights={
+                "sentiment": 0.25,
+                "affect": 0.15,
+                "arousal": 0.10,
+                "surprise": 0.10,
+                "novelty": 0.10,
+                "social": 0.15,
+                "identity": 0.05,
+                "recency": 0.10,
+            },
             sample_count=500,
         )
 
@@ -274,7 +359,7 @@ class TestProgressiveBlending:
         assert sample_count == 500
 
         # Pure learned weights (may be normalized)
-        assert abs(weights.sentiment_weight - 0.40) < 0.05
+        assert abs(weights.sentiment_weight - 0.25) < 0.05
 
 
 # =============================================================================
@@ -291,7 +376,16 @@ class TestBlendedWeightNormalization:
         store = MockWeightStore()
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.35, "affect": 0.30, "novelty": 0.20, "social": 0.15},
+            weights={
+                "sentiment": 0.20,
+                "affect": 0.15,
+                "arousal": 0.10,
+                "surprise": 0.15,
+                "novelty": 0.10,
+                "social": 0.15,
+                "identity": 0.05,
+                "recency": 0.10,
+            },
             sample_count=300,
         )
 
@@ -301,8 +395,12 @@ class TestBlendedWeightNormalization:
         total = (
             weights.sentiment_weight
             + weights.affect_weight
+            + weights.arousal_weight
+            + weights.surprise_weight
             + weights.novelty_weight
             + weights.social_weight
+            + weights.identity_weight
+            + weights.recency_weight
         )
         assert abs(total - 1.0) < 0.01
 
@@ -312,7 +410,16 @@ class TestBlendedWeightNormalization:
         store = MockWeightStore()
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.35, "affect": 0.30, "novelty": 0.20, "social": 0.15},
+            weights={
+                "sentiment": 0.20,
+                "affect": 0.15,
+                "arousal": 0.10,
+                "surprise": 0.15,
+                "novelty": 0.10,
+                "social": 0.15,
+                "identity": 0.05,
+                "recency": 0.10,
+            },
             sample_count=600,
         )
 
@@ -322,8 +429,12 @@ class TestBlendedWeightNormalization:
         total = (
             weights.sentiment_weight
             + weights.affect_weight
+            + weights.arousal_weight
+            + weights.surprise_weight
             + weights.novelty_weight
             + weights.social_weight
+            + weights.identity_weight
+            + weights.recency_weight
         )
         assert abs(total - 1.0) < 0.01
 
@@ -342,11 +453,29 @@ class TestGlobalBlending:
         store = MockWeightStore()
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.50, "affect": 0.20, "novelty": 0.15, "social": 0.15},
+            weights={
+                "sentiment": 0.40,
+                "affect": 0.10,
+                "arousal": 0.05,
+                "surprise": 0.10,
+                "novelty": 0.10,
+                "social": 0.10,
+                "identity": 0.05,
+                "recency": 0.10,
+            },
             sample_count=50,  # Too few for blending
         )
         store.set_global_weights(
-            weights={"sentiment": 0.30, "affect": 0.30, "novelty": 0.20, "social": 0.20},
+            weights={
+                "sentiment": 0.20,
+                "affect": 0.15,
+                "arousal": 0.10,
+                "surprise": 0.10,
+                "novelty": 0.15,
+                "social": 0.10,
+                "identity": 0.10,
+                "recency": 0.10,
+            },
             sample_count=300,  # Enough for blending
         )
 
@@ -361,7 +490,16 @@ class TestGlobalBlending:
         """Uses full global weights at 1000+ samples."""
         store = MockWeightStore()
         store.set_global_weights(
-            weights={"sentiment": 0.35, "affect": 0.25, "novelty": 0.25, "social": 0.15},
+            weights={
+                "sentiment": 0.20,
+                "affect": 0.15,
+                "arousal": 0.10,
+                "surprise": 0.15,
+                "novelty": 0.10,
+                "social": 0.10,
+                "identity": 0.10,
+                "recency": 0.10,
+            },
             sample_count=1000,
         )
 
@@ -384,47 +522,119 @@ class TestBlendWeightsHelper:
         """α=0 → pure static."""
         scorer = ImportanceScorer(space_id="sp_test", weight_store=None)
 
-        learned = {"sentiment": 0.50, "affect": 0.20, "novelty": 0.15, "social": 0.15}
-        static = {"sentiment": 0.25, "affect": 0.30, "novelty": 0.25, "social": 0.20}
+        learned = {
+            "sentiment": 0.40,
+            "affect": 0.10,
+            "arousal": 0.05,
+            "surprise": 0.10,
+            "novelty": 0.10,
+            "social": 0.10,
+            "identity": 0.05,
+            "recency": 0.10,
+        }
+        static = {
+            "sentiment": 0.10,
+            "affect": 0.12,
+            "arousal": 0.08,
+            "surprise": 0.15,
+            "novelty": 0.15,
+            "social": 0.15,
+            "identity": 0.10,
+            "recency": 0.15,
+        }
 
         blended = scorer._blend_weights(learned, static, alpha=0.0)
 
         # Pure static
-        assert abs(blended["sentiment"] - 0.25) < 0.01
-        assert abs(blended["affect"] - 0.30) < 0.01
+        assert abs(blended["sentiment"] - 0.10) < 0.01
+        assert abs(blended["affect"] - 0.12) < 0.01
 
     def test_blend_with_alpha_one(self) -> None:
         """α=1 → pure learned."""
         scorer = ImportanceScorer(space_id="sp_test", weight_store=None)
 
-        learned = {"sentiment": 0.50, "affect": 0.20, "novelty": 0.15, "social": 0.15}
-        static = {"sentiment": 0.25, "affect": 0.30, "novelty": 0.25, "social": 0.20}
+        learned = {
+            "sentiment": 0.40,
+            "affect": 0.10,
+            "arousal": 0.05,
+            "surprise": 0.10,
+            "novelty": 0.10,
+            "social": 0.10,
+            "identity": 0.05,
+            "recency": 0.10,
+        }
+        static = {
+            "sentiment": 0.10,
+            "affect": 0.12,
+            "arousal": 0.08,
+            "surprise": 0.15,
+            "novelty": 0.15,
+            "social": 0.15,
+            "identity": 0.10,
+            "recency": 0.15,
+        }
 
         blended = scorer._blend_weights(learned, static, alpha=1.0)
 
         # Pure learned
-        assert abs(blended["sentiment"] - 0.50) < 0.01
-        assert abs(blended["affect"] - 0.20) < 0.01
+        assert abs(blended["sentiment"] - 0.40) < 0.01
+        assert abs(blended["affect"] - 0.10) < 0.01
 
     def test_blend_with_alpha_half(self) -> None:
         """α=0.5 → halfway blend."""
         scorer = ImportanceScorer(space_id="sp_test", weight_store=None)
 
-        learned = {"sentiment": 0.40, "affect": 0.20, "novelty": 0.20, "social": 0.20}
-        static = {"sentiment": 0.20, "affect": 0.40, "novelty": 0.20, "social": 0.20}
+        learned = {
+            "sentiment": 0.30,
+            "affect": 0.10,
+            "arousal": 0.08,
+            "surprise": 0.15,
+            "novelty": 0.12,
+            "social": 0.10,
+            "identity": 0.05,
+            "recency": 0.10,
+        }
+        static = {
+            "sentiment": 0.10,
+            "affect": 0.30,
+            "arousal": 0.08,
+            "surprise": 0.15,
+            "novelty": 0.12,
+            "social": 0.10,
+            "identity": 0.05,
+            "recency": 0.10,
+        }
 
         blended = scorer._blend_weights(learned, static, alpha=0.5)
 
-        # Halfway: (0.40+0.20)/2 = 0.30, (0.20+0.40)/2 = 0.30
-        assert abs(blended["sentiment"] - 0.30) < 0.01
-        assert abs(blended["affect"] - 0.30) < 0.01
+        # Halfway: (0.30+0.10)/2 = 0.20, (0.10+0.30)/2 = 0.20
+        assert abs(blended["sentiment"] - 0.20) < 0.01
+        assert abs(blended["affect"] - 0.20) < 0.01
 
     def test_blend_normalizes_to_one(self) -> None:
         """Blended weights are normalized to sum to 1."""
         scorer = ImportanceScorer(space_id="sp_test", weight_store=None)
 
-        learned = {"sentiment": 0.35, "affect": 0.30, "novelty": 0.20, "social": 0.15}
-        static = {"sentiment": 0.25, "affect": 0.30, "novelty": 0.25, "social": 0.20}
+        learned = {
+            "sentiment": 0.20,
+            "affect": 0.15,
+            "arousal": 0.10,
+            "surprise": 0.15,
+            "novelty": 0.10,
+            "social": 0.15,
+            "identity": 0.05,
+            "recency": 0.10,
+        }
+        static = {
+            "sentiment": 0.10,
+            "affect": 0.12,
+            "arousal": 0.08,
+            "surprise": 0.15,
+            "novelty": 0.15,
+            "social": 0.15,
+            "identity": 0.10,
+            "recency": 0.15,
+        }
 
         blended = scorer._blend_weights(learned, static, alpha=0.7)
 
@@ -446,7 +656,16 @@ class TestCacheWithColdStart:
         store = MockWeightStore()
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.30, "affect": 0.30, "novelty": 0.20, "social": 0.20},
+            weights={
+                "sentiment": 0.20,
+                "affect": 0.15,
+                "arousal": 0.10,
+                "surprise": 0.10,
+                "novelty": 0.15,
+                "social": 0.10,
+                "identity": 0.10,
+                "recency": 0.10,
+            },
             sample_count=600,
         )
 
@@ -458,7 +677,16 @@ class TestCacheWithColdStart:
         # Modify store
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.50, "affect": 0.20, "novelty": 0.15, "social": 0.15},
+            weights={
+                "sentiment": 0.40,
+                "affect": 0.10,
+                "arousal": 0.05,
+                "surprise": 0.10,
+                "novelty": 0.10,
+                "social": 0.10,
+                "identity": 0.05,
+                "recency": 0.10,
+            },
             sample_count=700,
         )
 
@@ -474,7 +702,16 @@ class TestCacheWithColdStart:
         store = MockWeightStore()
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.30, "affect": 0.30, "novelty": 0.20, "social": 0.20},
+            weights={
+                "sentiment": 0.20,
+                "affect": 0.15,
+                "arousal": 0.10,
+                "surprise": 0.10,
+                "novelty": 0.15,
+                "social": 0.10,
+                "identity": 0.10,
+                "recency": 0.10,
+            },
             sample_count=600,
         )
 
@@ -486,7 +723,16 @@ class TestCacheWithColdStart:
         # Modify store
         store.set_space_weights(
             space_id="sp_test",
-            weights={"sentiment": 0.50, "affect": 0.20, "novelty": 0.15, "social": 0.15},
+            weights={
+                "sentiment": 0.40,
+                "affect": 0.10,
+                "arousal": 0.05,
+                "surprise": 0.10,
+                "novelty": 0.10,
+                "social": 0.10,
+                "identity": 0.05,
+                "recency": 0.10,
+            },
             sample_count=700,
         )
 
@@ -496,4 +742,4 @@ class TestCacheWithColdStart:
         # Second call should get new weights
         weights2, _, _ = await scorer.get_weights_with_cold_start()
 
-        assert abs(weights2.sentiment_weight - 0.50) < 0.05
+        assert abs(weights2.sentiment_weight - 0.40) < 0.05

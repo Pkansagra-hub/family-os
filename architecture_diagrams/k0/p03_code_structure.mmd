@@ -148,13 +148,13 @@ graph TB
             end
 
             subgraph R2_DISTANCE["CompositeDistance — composite_distance.py"]
-                R2_DIST_CFG["DBSCANParams<br/>━━━━━━━━━━━━━━━━━<br/>eps: 0.3 (adaptive)<br/>min_samples: 2 (adaptive)<br/>semantic_weight: 0.7<br/>temporal_weight: 0.3"]:::data
+                R2_DIST_CFG["ClusteringDistanceParams<br/>━━━━━━━━━━━━━━━━━<br/>eps: 0.15 (adaptive)<br/>min_samples: 2 (adaptive)<br/>semantic_weight: 0.7<br/>temporal_weight: 0.3"]:::data
                 R2_DIST_FORMULA["━━━━ COMPOSITE DISTANCE ━━━━<br/>d_semantic = 1 - cosine(emb_a, emb_b)<br/>d_temporal = |t_a - t_b| / max_gap<br/>━━━━━━━━━━━━━━━━━━━━<br/>d_composite = 0.7×d_semantic<br/>           + 0.3×d_temporal"]:::formula
             end
 
-            subgraph R2_DBSCAN_BOX["EpisodicDBSCAN — episodic_dbscan.py"]
-                R2_DBSCAN_ALG["sklearn.cluster.DBSCAN<br/>with precomputed distance matrix<br/>━━━━━━━━━━━━━━━━━━<br/>Labels: -1 = noise (singleton)<br/>0+ = cluster ID"]:::algo
-                R2_CLUSTER_OUT["ClusteringResult<br/>━━━━━━━━━━━━━━━━━<br/>clusters: EpisodeCluster[]<br/>total_events, cluster_count<br/>noise_count, labels[]"]:::data
+            subgraph R2_HDBSCAN_BOX["EpisodicHDBSCAN — episodic_hdbscan.py"]
+                R2_HDBSCAN_ALG["hdbscan.HDBSCAN<br/>with precomputed distance matrix<br/>━━━━━━━━━━━━━━━━━━<br/>Labels: -1 = noise (singleton)<br/>0+ = cluster ID<br/>+ probabilities + outlier_scores"]:::algo
+                R2_CLUSTER_OUT["HDBSCANClusteringResult<br/>━━━━━━━━━━━━━━━━━<br/>clusters: EpisodeCluster[]<br/>total_events, cluster_count<br/>noise_count, rescued_count<br/>labels[], probabilities[]<br/>outlier_scores[]"]:::data
             end
 
             subgraph R2_CENTROID["CentroidCalculator — centroid_calculator.py"]
@@ -176,7 +176,7 @@ graph TB
             R2_E1["1. EventAdapter wraps P03EventState<br/>→ implements ClusterableEvent protocol"]:::step
             R2_E2["2. EpisodeSplitter.split(events)<br/>→ List[List[EventLike]] sequences"]:::step
             R2_E3["3. For each sequence:<br/>   CompositeDistance.matrix(events)<br/>   → n×n distance matrix"]:::step
-            R2_E4["4. DBSCAN.fit_predict(matrix)<br/>→ labels array"]:::step
+            R2_E4["4. HDBSCAN.fit(matrix)<br/>→ labels, probabilities, outlier_scores"]:::step
             R2_E5["5. CentroidCalculator.compute()<br/>→ centroid_embedding per cluster"]:::step
             R2_E6["6. Build EpisodeCluster[]<br/>   cluster_id = ULID<br/>   member_event_ids, centroid<br/>   temporal_start/end, cohesion"]:::step
             R2_E7["7. Update P03EventState:<br/>   event.cluster_id = cluster.id<br/>   event.cluster_label = label"]:::step
@@ -186,7 +186,7 @@ graph TB
 
         R2_SPLIT_CFG --> R2_SPLIT_LOGIC
         R2_DIST_CFG --> R2_DIST_FORMULA
-        R2_DBSCAN_ALG --> R2_CLUSTER_OUT
+        R2_HDBSCAN_ALG --> R2_CLUSTER_OUT
         R2_E1 --> R2_E2 --> R2_E3 --> R2_E4 --> R2_E5 --> R2_E6 --> R2_E7 --> R2_E8 --> R2_E9
         R2_SPLIT_LOGIC --> R2_E2
         R2_DIST_FORMULA --> R2_E3

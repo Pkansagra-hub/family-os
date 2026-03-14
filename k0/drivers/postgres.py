@@ -593,15 +593,19 @@ class PostgresDriver:
             # Import BusMessage here to avoid circular imports
             from k0.bus.core import BusMessage
 
-            # Create bus message with proper topic routing
-            # Map entry topic to P02's expected topic
-            topic = envelope.get("topic", "memory.delta")
-            if topic == "memory.delta":
-                # Transform to P02's expected topic
-                topic = "cognitive.memory.write.committed.v1"
+            # Use bus_topic from outbox payload (set by TopicRouter in command.py)
+            # Falls back to legacy mapping for backward compatibility
+            bus_topic = envelope.get("bus_topic")
+            if not bus_topic:
+                # Legacy fallback: map command topic to pipeline bus topic
+                raw_topic = envelope.get("topic", "memory.delta")
+                if raw_topic in ("memory.delta", "memory.write"):
+                    bus_topic = "cognitive.memory.write.committed.v1"
+                else:
+                    bus_topic = raw_topic
 
             bus_message = BusMessage(
-                topic=topic,
+                topic=bus_topic,
                 payload=json.dumps(envelope).encode("utf-8"),
                 offset=entry.wal_pos,
                 trace_id=envelope.get("cognitive_trace_id"),
@@ -620,7 +624,8 @@ class PostgresDriver:
                 "Published envelope to bus for P02 processing",
                 extra={
                     "wal_pos": entry.wal_pos,
-                    "topic": topic,
+                    "bus_topic": bus_topic,
+                    "command_topic": envelope.get("topic"),
                     "cognitive_trace_id": envelope.get("cognitive_trace_id"),
                 },
             )

@@ -295,7 +295,7 @@ def _ensure_epoch_int(ts_value: "int | datetime | None") -> int | None:
 
 def map_temporal_group(temporal_output: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Temporal columns (14 columns)
+    Temporal columns (16 columns)
 
     From: M08 temporal_profile
 
@@ -303,6 +303,7 @@ def map_temporal_group(temporal_output: Dict[str, Any]) -> Dict[str, Any]:
 
     Epic 3.16: +3 columns (temporal_mentioned_time, temporal_resolved_epoch_ms,
     temporal_orientation from M08 v2)
+    Epic 1.2 (GAP-002): +2 columns (conversation_anchor_ms, temporal_source)
     """
     import time
 
@@ -327,21 +328,59 @@ def map_temporal_group(temporal_output: Dict[str, Any]) -> Dict[str, Any]:
         "temporal_mentioned_time": temporal_output.get("temporal_mentioned_time"),
         "temporal_resolved_epoch_ms": temporal_output.get("temporal_resolved_epoch_ms"),
         "temporal_orientation": temporal_output.get("temporal_orientation"),
+        # Epic 1.2 (GAP-002): Conversation anchor + provenance
+        "conversation_anchor_ms": temporal_output.get("conversation_anchor_ms"),
+        "temporal_source": temporal_output.get("temporal_source"),
+        # Epic 2.4 (GAP-002): Multi-link temporal model
+        "temporal_links_json": temporal_output.get("temporal_links_json"),
         "created_at": now,
         "updated_at": now,
     }
 
 
-def map_spatial_group(geo_output: Dict[str, Any], spatial_output: Dict[str, Any]) -> Dict[str, Any]:
+def map_spatial_group(
+    geo_output: Dict[str, Any],
+    spatial_output: Dict[str, Any],
+    envelope: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """
-    Spatial & Place columns (5 columns)
+    Spatial & Place columns (9 columns)
 
-    From: M12 geo_metadata + M15 spatial_minimal
+    From: M12 geo_metadata + M15 spatial_minimal + envelope body
     """
+    body = envelope.get("body", {}) if envelope else {}
+
+    hierarchy = body.get("location_hierarchy", [])
+    if not isinstance(hierarchy, list):
+        hierarchy = []
+    # Clamp to schema max of 5 levels
+    hierarchy = hierarchy[:5]
+
+    # Bundle transition fields into spatial_context_json (GAP-002 Epic 4.3)
+    spatial_ext: Dict[str, Any] = {}
+    transition_from = body.get("transition_from_place")
+    if transition_from:
+        spatial_ext["transition_from_place"] = str(transition_from)
+    transition_mode = body.get("transition_mode")
+    if transition_mode:
+        spatial_ext["transition_mode"] = str(transition_mode)
+
     return {
         "location_name": spatial_output.get("location_name") or geo_output.get("location_name"),
         "location_type": spatial_output.get("location_type") or geo_output.get("location_type"),
         "geohash_6": spatial_output.get("geohash_6") or geo_output.get("geohash_6"),
+        # K1 MW passthrough identity (not enriched by M12/M15)
+        "place_id": body.get("place_id"),
+        # K1 MW spatial hierarchy (most specific -> most general)
+        "location_hierarchy_json": (
+            serialize_to_json(hierarchy, "location_hierarchy_json") if hierarchy else None
+        ),
+        # Bundled spatial transition context (GAP-002 Epic 4.3)
+        "spatial_context_json": (
+            serialize_to_json(spatial_ext, "spatial_context_json") if spatial_ext else None
+        ),
+        # K0 P02 enrichment from historical visit count.
+        "spatial_familiarity": spatial_output.get("spatial_familiarity"),
         "geo_precision_external": geo_output.get("geo_precision_external"),
         "geo_masking_reason": geo_output.get("geo_masking_reason"),
     }
@@ -613,7 +652,7 @@ def map_affect_salience_group(
 
 def map_mw_v2_signal_group(envelope: Dict[str, Any]) -> Dict[str, Any]:
     """
-    MW v2 Signal columns (11 columns) -- Group 12
+    MW v2 Signal columns (12 columns) -- Group 12
 
     Pure passthrough from envelope.body (no enrichment module processes these).
     These columns store MW v2 cognitive dimensions for downstream R5 consumption.
@@ -630,9 +669,18 @@ def map_mw_v2_signal_group(envelope: Dict[str, Any]) -> Dict[str, Any]:
         identity_domains_json: Identity domains this atom touches (JSON array)
         entity_salience_json: Per-entity salience map from MW scoreboard (JSON object)
         k1_signal_version: MW version that produced this atom (default "2.0")
+        extraction_sequence: 0-based ordinal within a turn's extraction batch
     """
     body = envelope.get("body", {})
     narrative = body.get("narrative", {})
+
+    raw_sequence = body.get("extraction_sequence", 0)
+    try:
+        extraction_sequence = int(raw_sequence)
+    except (TypeError, ValueError):
+        extraction_sequence = 0
+    # Keep row data aligned with MemoryAtom schema bounds.
+    extraction_sequence = max(0, min(5, extraction_sequence))
 
     return {
         # Narrative context (3 columns)
@@ -654,6 +702,8 @@ def map_mw_v2_signal_group(envelope: Dict[str, Any]) -> Dict[str, Any]:
         ),
         # Signal version (1 column)
         "k1_signal_version": body.get("k1_signal_version", "2.0"),
+        # Intra-turn extraction ordering (1 column)
+        "extraction_sequence": extraction_sequence,
     }
 
 
@@ -683,6 +733,33 @@ def map_mw_v2a_signal_group(envelope: Dict[str, Any]) -> Dict[str, Any]:
         "temporal_anchor_json": serialize_to_json(
             body.get("temporal_anchor", {}), "temporal_anchor_json"
         ),
+    }
+
+
+def map_k1_correction_signal_group(envelope: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    K1 Correction Signal columns (5 columns) -- Group 16 (R2 Epic 7.2)
+
+    Pure passthrough from envelope.body (no enrichment module processes these).
+    K1 LLM detects corrections/contradictions in conversation and flags them
+    here. P03 R3 reconciliation reads these to route EVOLVE/CONTRADICT without
+    cosine-based detection (which fails at similarity floor ~0.92).
+
+    Columns:
+        correction_signal: bool -- atom corrects a previously stored fact
+        contradiction_signal: bool -- atom contradicts stored knowledge
+        supersedes_concept: str|null -- namespaced concept key being replaced
+        correction_source: str|null -- how correction detected
+        session_context_id: str|null -- session UUID for audit trail
+    """
+    body = envelope.get("body", {})
+
+    return {
+        "correction_signal": bool(body.get("correction_signal", False)),
+        "contradiction_signal": bool(body.get("contradiction_signal", False)),
+        "supersedes_concept": body.get("supersedes_concept"),
+        "correction_source": body.get("correction_source"),
+        "session_context_id": body.get("session_context_id"),
     }
 
 
@@ -812,6 +889,12 @@ def validate_enum_values(row: Dict[str, Any]) -> None:
     if row.get("temporal_orientation") and row["temporal_orientation"] not in orient_values:
         _metrics.validation_failures += 1
         raise ValueError(f"Invalid temporal_orientation: {row['temporal_orientation']}")
+
+    # R2 Epic 7.2: K1 correction signal enum validation
+    correction_source_values = {"user_explicit", "user_implicit", "context_change"}
+    if row.get("correction_source") and row["correction_source"] not in correction_source_values:
+        _metrics.validation_failures += 1
+        raise ValueError(f"Invalid correction_source: {row['correction_source']}")
 
 
 # =============================================================================
@@ -1053,6 +1136,14 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         or envelope.get("temporal_resolved_epoch_ms"),
         "temporal_orientation": temporal_enrichment.get("temporal_orientation")
         or envelope.get("temporal_orientation"),
+        # Epic 1.2 (GAP-002): Conversation anchor + provenance
+        "conversation_anchor_ms": temporal_enrichment.get("conversation_anchor_ms")
+        or envelope.get("conversation_anchor_ms"),
+        "temporal_source": temporal_enrichment.get("temporal_source")
+        or envelope.get("temporal_source"),
+        # Epic 2.4 (GAP-002): Multi-link temporal model
+        "temporal_links_json": temporal_enrichment.get("temporal_links_json")
+        or envelope.get("temporal_links_json"),
     }
 
     # M09 device_profile - Phase 4: prefer nested, fallback to flat
@@ -1109,6 +1200,9 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     spatial_output = {
         "geohash_6": spatial_enrichment.get("geohash_6") or envelope.get("geohash_6"),
         "location_name": spatial_enrichment.get("location_name") or envelope.get("location_name"),
+        "location_type": spatial_enrichment.get("location_type") or envelope.get("location_type"),
+        "spatial_familiarity": spatial_enrichment.get("spatial_familiarity")
+        or envelope.get("spatial_familiarity"),
     }
 
     # Assemble row by column groups (12 groups)
@@ -1136,8 +1230,8 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     row.update(map_temporal_group(temporal_output))
     _metrics.column_group_counts["temporal"] = _metrics.column_group_counts.get("temporal", 0) + 1
 
-    # Group 6: Spatial & Place (5 columns)
-    row.update(map_spatial_group(geo_output, spatial_output))
+    # Group 6: Spatial & Place (7 columns)
+    row.update(map_spatial_group(geo_output, spatial_output, envelope=envelope))
     _metrics.column_group_counts["spatial"] = _metrics.column_group_counts.get("spatial", 0) + 1
 
     # Group 7: Social & Relationships (8 columns)
@@ -1168,7 +1262,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         _metrics.column_group_counts.get("affect_salience", 0) + 1
     )
 
-    # Group 12: MW v2 Signals (11 columns)
+    # Group 12: MW v2 Signals (12 columns)
     row.update(map_mw_v2_signal_group(envelope))
     _metrics.column_group_counts["mw_v2_signals"] = (
         _metrics.column_group_counts.get("mw_v2_signals", 0) + 1
@@ -1178,6 +1272,12 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     row.update(map_mw_v2a_signal_group(envelope))
     _metrics.column_group_counts["mw_v2a_signals"] = (
         _metrics.column_group_counts.get("mw_v2a_signals", 0) + 1
+    )
+
+    # Group 16: K1 Correction Signals (5 columns) -- R2 Epic 7.2
+    row.update(map_k1_correction_signal_group(envelope))
+    _metrics.column_group_counts["k1_correction_signals"] = (
+        _metrics.column_group_counts.get("k1_correction_signals", 0) + 1
     )
 
     # Safety arbitration (Issue 0053): Compute effective_safety_band

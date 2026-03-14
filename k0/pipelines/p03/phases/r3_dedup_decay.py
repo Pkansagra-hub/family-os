@@ -130,6 +130,9 @@ from k0.modules.consolidation.staging.truth_query_service import TruthQueryServi
 # P03 Phase Interface
 from k0.pipelines.p03.phase_interface import P03PhaseId, P03PhaseResult
 
+# Syscall-backed store adapters for production wiring
+from k0.pipelines.p03.stores import SyscallLearnedWeightsStore
+
 logger = logging.getLogger(__name__)
 
 
@@ -335,6 +338,16 @@ class R3Stores:
             audit_store=InMemoryAuditStore(),
         )
 
+    @classmethod
+    def create_production(cls, syscalls: Any) -> "R3Stores":
+        """Create stores with syscall-backed learned weights for production."""
+        return cls(
+            access_store=InMemoryAccessStore(),
+            pruned_entity_store=InMemoryPrunedEntityStore(),
+            learned_weights_store=SyscallLearnedWeightsStore(syscalls=syscalls),
+            audit_store=InMemoryAuditStore(),
+        )
+
 
 # =============================================================================
 # R3DedupDecay Phase Orchestrator
@@ -518,8 +531,8 @@ class R3DedupDecay:
                 skip_reason="No events or clusters to process",
             )
 
-        # Create in-memory stores for this cycle
-        stores = R3Stores.create_in_memory()
+        # Create production stores with syscall-backed learned weights
+        stores = R3Stores.create_production(syscalls=ctx.syscalls)
 
         # Lazy initialization of TruthQueryService for reconciliation (Issue 4.3.13)
         if self.config.enable_reconciliation and self._truth_query_service is None:

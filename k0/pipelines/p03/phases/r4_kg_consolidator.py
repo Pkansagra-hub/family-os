@@ -88,6 +88,7 @@ from k0.modules.consolidation.algorithms.granger_causality import (
     GrangerCausalityInference,
 )
 from k0.modules.consolidation.algorithms.hebbian_learner import HebbianConfig, HebbianLearner
+from k0.modules.consolidation.algorithms.hebbian_learner import KGEdge as HebbianKGEdge
 from k0.modules.consolidation.algorithms.merge_threshold_learner import AdaptiveMergeThresholds
 from k0.modules.consolidation.algorithms.subtype_classifier import get_subtype_classifier
 from k0.pipelines.p03.observability import P03Error
@@ -151,6 +152,8 @@ class R4Config:
     enable_adaptive_thresholds: bool = True  # 4.4.6 - merge thresholds
     emit_gaps_on_low_confidence: bool = True
     enable_hebbian_adaptive_rates: bool = True  # 4.4.8 - adaptive Hebbian
+    enable_hebbian_decay: bool = False  # 5.H.2.4: Edge decay (off until validated)
+    enable_anti_hebbian: bool = False  # 5.H.2.5: Anti-Hebbian signals (off until validated)
     enable_causality_thresholds: bool = True  # 4.4.10 - per-category thresholds
     enable_edge_feedback: bool = True  # 4.4.11 - edge demotion
     granger_min_observations: int = 1  # Lowered for testing CAUSES edge generation
@@ -222,6 +225,12 @@ class R4PhaseStats:
     existing_edges_updated: int = 0
     hebbian_edges_strengthened: int = 0
     hebbian_edges_weakened: int = 0
+    hebbian_r1_importance_used: int = 0  # 5.H.1: Pairs using real R1 scores
+    hebbian_fallback_importance_used: int = 0  # 5.H.1: Pairs using cluster confidence fallback
+    hebbian_edges_decayed: int = 0  # 5.H.2: Edges decayed by time
+    hebbian_edges_pruned: int = 0  # 5.H.2: Edges pruned below threshold
+    hebbian_anti_signals_processed: int = 0  # 5.H.2: Anti-Hebbian signals processed
+    hebbian_edges_weakened_by_feedback: int = 0  # 5.H.2: Edges weakened by anti-Hebbian
 
     # Causal inference stats (4.4.9, 4.4.10)
     causal_pairs_analyzed: int = 0
@@ -283,6 +292,12 @@ class R4PhaseStats:
             "social_relationships_by_type": self.social_relationships_by_type,
             "total_duration_ms": self.total_duration_ms,
             "social_extraction_duration_ms": self.social_extraction_duration_ms,
+            "hebbian_r1_importance_used": self.hebbian_r1_importance_used,
+            "hebbian_fallback_importance_used": self.hebbian_fallback_importance_used,
+            "hebbian_edges_decayed": self.hebbian_edges_decayed,
+            "hebbian_edges_pruned": self.hebbian_edges_pruned,
+            "hebbian_anti_signals_processed": self.hebbian_anti_signals_processed,
+            "hebbian_edges_weakened_by_feedback": self.hebbian_edges_weakened_by_feedback,
         }
 
 
@@ -333,6 +348,7 @@ class KGUpdate:
     relation_subtype: Optional[str] = None
     observation_count: int = 0
     last_observed_at: Optional[int] = None
+    importance_source: Optional[str] = None  # 5.H.1.3: "hebbian_r1" or "hebbian_fallback"
 
 
 @dataclass
@@ -787,6 +803,12 @@ class R4KGConsolidator:
                     if event.event_id and event.timestamp:
                         event_timestamp_map[event.event_id] = event.timestamp
 
+            # 5.H.1.1: Build event_id -> importance_score map from R1 scored events
+            r1_importance_map: Dict[str, float] = {}
+            if envelope.phases.r1_scored_events:
+                for scored in envelope.phases.r1_scored_events:
+                    r1_importance_map[scored.event_id] = scored.importance_score
+
             # Step 5: Discover relationships via Hebbian co-occurrence
             # M10.3: Pass event_relations_map for edge type inference
             edge_start = int(time.time() * 1000)
@@ -798,8 +820,45 @@ class R4KGConsolidator:
                 space_id,
                 ctx,
                 event_timestamp_map=event_timestamp_map,
+                r1_importance_map=r1_importance_map,
             )
             self._stats.edge_discovery_duration_ms = int(time.time() * 1000) - edge_start
+
+            # 5.H.2: Apply edge decay and anti-Hebbian signals
+            if self.config.enable_hebbian_decay and self._hebbian_learner:
+                try:
+                    decay_edges = await ctx.syscalls.kg_edges_lookup(tenant_id, space_id)
+                    # Build set of pairs observed in current batch
+                    current_pairs: set = set()
+                    for upd in edge_updates:
+                        if upd.source_id and upd.target_id:
+                            pair_ids = sorted([upd.source_id, upd.target_id])
+                            current_pairs.add(f"{pair_ids[0]}:{pair_ids[1]}")
+
+                    cycle_ts = int(time.time() * 1000)
+                    decay_updates = await self._apply_edge_decay(
+                        decay_edges,
+                        current_pairs,
+                        cycle_ts,
+                        tenant_id,
+                        space_id,
+                    )
+                    edge_updates.extend(decay_updates)
+                except Exception as exc:
+                    logger.warning("R4: edge decay failed: %s", exc)
+
+            if self.config.enable_anti_hebbian and self._hebbian_learner:
+                try:
+                    anti_edges = await ctx.syscalls.kg_edges_lookup(tenant_id, space_id)
+                    anti_updates = await self._apply_anti_hebbian_signals(
+                        anti_edges,
+                        ctx,
+                        tenant_id,
+                        space_id,
+                    )
+                    edge_updates.extend(anti_updates)
+                except Exception as exc:
+                    logger.warning("R4: anti-Hebbian processing failed: %s", exc)
 
             # GAP-007: Edge enrichment
             enrichment_start = int(time.time() * 1000)
@@ -1942,6 +2001,7 @@ class R4KGConsolidator:
         space_id: str,
         ctx: "P03RunnerContext",
         event_timestamp_map: Optional[Dict[str, int]] = None,
+        r1_importance_map: Optional[Dict[str, float]] = None,
     ) -> List[KGUpdate]:
         """
         Discover relationships via Hebbian co-occurrence.
@@ -1949,6 +2009,7 @@ class R4KGConsolidator:
         Spec: Dossier §4.5.2, Issues 4.1.3, 4.1.4, 4.4.8
         GAP-001 M9: Load existing edges and increment observation_count
         GAP-001 M10.3: Use ULTRABERT relation types for edge classification
+        5.H.1: Use real R1 importance scores instead of cluster confidence proxy
 
         Algorithm:
         1. Load existing edges from st_kg_edges (GAP-001 M9)
@@ -1966,6 +2027,7 @@ class R4KGConsolidator:
             tenant_id: Tenant identifier
             space_id: Space identifier
             ctx: Runner context with syscalls
+            r1_importance_map: Map of event_id -> R1 importance_score (5.H.1)
 
         Returns:
             List of KGUpdate edge operations
@@ -2030,9 +2092,18 @@ class R4KGConsolidator:
 
                     co_occurrences[pair_key]["count"] += 1
                     co_occurrences[pair_key]["event_ids"].append(event_id)  # M10.3
-                    # Use average cluster confidence as importance proxy
-                    avg_importance = (cluster_a.confidence + cluster_b.confidence) / 2
-                    co_occurrences[pair_key]["importance_sum"] += avg_importance
+                    # 5.H.1.2: Use real R1 importance_score if available,
+                    # fallback to cluster confidence average
+                    imp_map = r1_importance_map or {}
+                    if event_id in imp_map:
+                        event_importance = imp_map[event_id]
+                        co_occurrences[pair_key].setdefault("r1_hits", 0)
+                        co_occurrences[pair_key]["r1_hits"] += 1
+                    else:
+                        event_importance = (cluster_a.confidence + cluster_b.confidence) / 2
+                        co_occurrences[pair_key].setdefault("fallback_hits", 0)
+                        co_occurrences[pair_key]["fallback_hits"] += 1
+                    co_occurrences[pair_key]["importance_sum"] += event_importance
 
         self._stats.co_occurrence_pairs = len(co_occurrences)
 
@@ -2051,6 +2122,19 @@ class R4KGConsolidator:
                 continue
 
             avg_importance = pair_data["importance_sum"] / count if count > 0 else 0.5
+
+            # 5.H.1.3: Determine importance source for edge provenance
+            r1_hits = pair_data.get("r1_hits", 0)
+            fallback_hits = pair_data.get("fallback_hits", 0)
+            if r1_hits > 0 and fallback_hits == 0:
+                importance_source = "hebbian_r1"
+                self._stats.hebbian_r1_importance_used += 1
+            elif r1_hits > 0:
+                importance_source = "hebbian_r1_partial"
+                self._stats.hebbian_r1_importance_used += 1
+            else:
+                importance_source = "hebbian_fallback"
+                self._stats.hebbian_fallback_importance_used += 1
 
             # Calculate confidence using HebbianLearner if available (4.4.8)
             if self._hebbian_learner and self.config.enable_hebbian_adaptive_rates:
@@ -2118,6 +2202,7 @@ class R4KGConsolidator:
                         observation_count=new_observation_count,
                         source_event_ids=list(event_ids or []),
                         last_observed_at=last_observed_at,
+                        importance_source=importance_source,
                     )
                 )
                 logger.debug(
@@ -2150,6 +2235,208 @@ class R4KGConsolidator:
                         observation_count=count,
                         source_event_ids=list(event_ids or []),
                         last_observed_at=last_observed_at,
+                        importance_source=importance_source,
+                    )
+                )
+
+        return updates
+
+    async def _apply_edge_decay(
+        self,
+        existing_edges: Dict[str, Dict[str, Any]],
+        current_co_occurrence_pairs: set,
+        cycle_timestamp_ms: int,
+        tenant_id: str,
+        space_id: str,
+    ) -> List[KGUpdate]:
+        """
+        5.H.2.1-2.2: Apply time-based exponential decay to stale edges.
+
+        For edges NOT re-observed in the current batch, compute days since
+        last observation and apply HebbianLearner.apply_decay(). Edges below
+        prune_threshold are marked for archival.
+
+        Args:
+            existing_edges: Loaded edges from st_kg_edges keyed by edge_id
+            current_co_occurrence_pairs: Set of pair keys observed in current batch
+            cycle_timestamp_ms: Current cycle timestamp in milliseconds
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of KGUpdate operations (UPDATE_EDGE for decayed, ARCHIVE_EDGE for pruned)
+        """
+        if not self._hebbian_learner:
+            return []
+
+        updates: List[KGUpdate] = []
+
+        for edge_id, edge_data in existing_edges.items():
+            # Skip edges that were re-observed this cycle
+            source_id = edge_data.get("source_id", "")
+            target_id = edge_data.get("target_id", "")
+            pair_ids = sorted([source_id, target_id])
+            pair_key = f"{pair_ids[0]}:{pair_ids[1]}"
+
+            if pair_key in current_co_occurrence_pairs:
+                continue
+
+            # 5.H.2.1: Compute days since last observed
+            last_observed = edge_data.get("last_observed_at")
+            if last_observed is None or cycle_timestamp_ms <= 0:
+                continue
+
+            days_elapsed = (cycle_timestamp_ms - last_observed) / (1000 * 60 * 60 * 24)
+            if days_elapsed <= 0:
+                continue
+
+            # Build KGEdge for HebbianLearner
+            kg_edge = HebbianKGEdge(
+                edge_id=edge_id,
+                source_id=source_id,
+                target_id=target_id,
+                relation_type=edge_data.get("relation_type", "RELATED_TO"),
+                weight=edge_data.get("confidence", 0.5),
+                co_occurrence_count=edge_data.get("observation_count", 1),
+                last_updated_at=last_observed or 0,
+                space_id=space_id,
+                tenant_id=tenant_id,
+            )
+
+            # 5.H.2.2: Apply exponential decay
+            surviving, pruned_ids = self._hebbian_learner.apply_decay([kg_edge], int(days_elapsed))
+
+            if pruned_ids:
+                self._stats.hebbian_edges_pruned += 1
+                updates.append(
+                    KGUpdate(
+                        update_type=KGUpdateType.UPDATE_EDGE,
+                        edge_id=edge_id,
+                        source_id=source_id,
+                        target_id=target_id,
+                        confidence=0.0,
+                        importance_source="hebbian_decay_pruned",
+                    )
+                )
+            elif surviving:
+                decayed_edge = surviving[0]
+                if decayed_edge.weight < edge_data.get("confidence", 0.5):
+                    self._stats.hebbian_edges_decayed += 1
+                    updates.append(
+                        KGUpdate(
+                            update_type=KGUpdateType.UPDATE_EDGE,
+                            edge_id=edge_id,
+                            source_id=source_id,
+                            target_id=target_id,
+                            confidence=decayed_edge.weight,
+                            importance_source="hebbian_decay",
+                        )
+                    )
+
+        return updates
+
+    async def _apply_anti_hebbian_signals(
+        self,
+        existing_edges: Dict[str, Dict[str, Any]],
+        ctx: "P03RunnerContext",
+        tenant_id: str,
+        space_id: str,
+    ) -> List[KGUpdate]:
+        """
+        5.H.2.5-2.6: Process anti-Hebbian signals to weaken wrong associations.
+
+        Reads anti-Hebbian signals from st_learning_queue (via syscalls), maps
+        them to edge pairs, and applies HebbianLearner.apply_anti_decay().
+
+        Signal types: ENTITY_MERGE_REJECTED, ASSOCIATION_WRONG,
+                     MUTUAL_EXCLUSION, CONTRADICTION
+
+        Args:
+            existing_edges: Loaded edges from st_kg_edges
+            ctx: Runner context with syscalls
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of KGUpdate operations for weakened/pruned edges
+        """
+        if not self._hebbian_learner:
+            return []
+
+        updates: List[KGUpdate] = []
+
+        # Query anti-Hebbian signals from learning queue
+        try:
+            signals = await ctx.syscalls.learning_queue_query(
+                tenant_id,
+                space_id,
+                signal_types=[
+                    "ENTITY_MERGE_REJECTED",
+                    "ASSOCIATION_WRONG",
+                    "MUTUAL_EXCLUSION",
+                    "CONTRADICTION",
+                ],
+            )
+        except Exception as e:
+            logger.warning(f"R4: Failed to query anti-Hebbian signals: {e}")
+            return []
+
+        if not signals:
+            return []
+
+        for signal in signals:
+            signal_type = signal.get("signal_type", "")
+            edge_id = signal.get("edge_id", "")
+            confidence = signal.get("confidence", 1.0)
+            is_explicit = signal.get("is_explicit_correction", False)
+
+            if not edge_id or edge_id not in existing_edges:
+                continue
+
+            edge_data = existing_edges[edge_id]
+
+            kg_edge = HebbianKGEdge(
+                edge_id=edge_id,
+                source_id=edge_data.get("source_id", ""),
+                target_id=edge_data.get("target_id", ""),
+                relation_type=edge_data.get("relation_type", "RELATED_TO"),
+                weight=edge_data.get("confidence", 0.5),
+                co_occurrence_count=edge_data.get("observation_count", 1),
+                space_id=space_id,
+                tenant_id=tenant_id,
+            )
+
+            new_weight, should_prune = self._hebbian_learner.apply_anti_decay(
+                edge=kg_edge,
+                signal_type=signal_type,
+                confidence=confidence,
+                is_explicit_correction=is_explicit,
+            )
+
+            self._stats.hebbian_anti_signals_processed += 1
+
+            if should_prune:
+                self._stats.hebbian_edges_pruned += 1
+                updates.append(
+                    KGUpdate(
+                        update_type=KGUpdateType.UPDATE_EDGE,
+                        edge_id=edge_id,
+                        source_id=kg_edge.source_id,
+                        target_id=kg_edge.target_id,
+                        confidence=0.0,
+                        importance_source="hebbian_anti_pruned",
+                    )
+                )
+            elif new_weight < kg_edge.weight:
+                self._stats.hebbian_edges_weakened_by_feedback += 1
+                updates.append(
+                    KGUpdate(
+                        update_type=KGUpdateType.UPDATE_EDGE,
+                        edge_id=edge_id,
+                        source_id=kg_edge.source_id,
+                        target_id=kg_edge.target_id,
+                        confidence=new_weight,
+                        importance_source="hebbian_anti_decay",
                     )
                 )
 

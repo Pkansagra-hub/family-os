@@ -386,7 +386,7 @@ class TruthWriteAssembler:
         Returns:
             List of StagedWrite for st_epi updates (one per unique episode)
         """
-        from collections import defaultdict
+        from collections import Counter, defaultdict
 
         # Group events by matched episode_id
         episode_events: Dict[str, List[P03EventState]] = defaultdict(list)
@@ -433,6 +433,14 @@ class TruthWriteAssembler:
                 "updated_at": now_ms,
             }
 
+            # Epic 5.1: Collect narrative thread_ids from reinforcing events
+            reinforce_threads = [e.narrative_thread_id for e in events if e.narrative_thread_id]
+            if reinforce_threads:
+                update_data["narrative_thread_ids_json"] = json.dumps(
+                    sorted(set(reinforce_threads))
+                )
+                update_data["narrative_thread_id"] = Counter(reinforce_threads).most_common(1)[0][0]
+
             # Generate idempotency key
             idem_key = self.idempotency.for_truth_write(
                 LAYER_ST_EPI,
@@ -470,8 +478,12 @@ class TruthWriteAssembler:
             episode_type, start_time_utc, end_time_utc, primary_location,
             location_type, participants_json, participant_count,
             embedding_id, cluster_id, cluster_confidence, source_events_json,
-            source_event_count, archival_status, created_at, updated_at, valid_from
+            source_event_count, archival_status, created_at, updated_at, valid_from,
+            narrative_thread_id, narrative_thread_ids_json, narrative_arc_position,
+            continuation_of_episode_id
         """
+        from collections import Counter
+
         now_ms = _now_ms()
         member_ids = list(cluster.member_event_ids)
 
@@ -512,6 +524,21 @@ class TruthWriteAssembler:
             if first_event:
                 embedding_id = first_event.embedding_id
 
+        # Epic 5.1: Compute narrative columns from source events
+        thread_ids = [
+            event_states[eid].narrative_thread_id
+            for eid in member_ids
+            if eid in event_states and event_states[eid].narrative_thread_id
+        ]
+        dominant_thread_id = Counter(thread_ids).most_common(1)[0][0] if thread_ids else None
+        all_thread_ids_json = json.dumps(sorted(set(thread_ids))) if thread_ids else None
+        arc_positions = [
+            event_states[eid].narrative_arc_position
+            for eid in member_ids
+            if eid in event_states and event_states[eid].narrative_arc_position
+        ]
+        dominant_arc = Counter(arc_positions).most_common(1)[0][0] if arc_positions else None
+
         return {
             "episode_id": cluster.cluster_id,
             "tenant_id": self.tenant_id,
@@ -541,6 +568,27 @@ class TruthWriteAssembler:
             "created_at": now_ms,
             "updated_at": now_ms,
             "valid_from": now_ms,
+            # Epic 5.1: Narrative thread columns
+            "narrative_thread_id": dominant_thread_id,
+            "narrative_thread_ids_json": all_thread_ids_json,
+            "narrative_arc_position": dominant_arc,
+            "continuation_of_episode_id": None,  # Set by R2 thread matching
+            # Epic 5.2: Goal completion
+            "narrative_thread_completed": False,  # Set by R2 detect_arc_completion
+            # === Epic 6.5: Metadata Preservation ===
+            "centroid_metadata_json": (
+                json.dumps(cluster.centroid_metadata) if cluster.centroid_metadata else None
+            ),
+            "ambiguity_score": cluster.ambiguity_score or None,
+            "entity_ids_json": (
+                json.dumps(sorted(cluster.entity_ids)) if cluster.entity_ids else None
+            ),
+            "dominant_sentiment": cluster.dominant_sentiment or None,
+            "dominant_emotion": cluster.dominant_emotion or None,
+            "aggregated_sentiment": cluster.aggregated_sentiment,
+            "aggregated_salience": cluster.aggregated_salience,
+            "dominant_social_context": cluster.dominant_social_context,
+            "activity_type_ultrabert": cluster.activity_type_ultrabert or None,
         }
 
     def _derive_temporal_fields(
@@ -721,9 +769,7 @@ class TruthWriteAssembler:
         """
         import json
 
-        from k0.modules.consolidation.algorithms.subtype_classifier import (
-            get_subtype_classifier,
-        )
+        from k0.modules.consolidation.algorithms.subtype_classifier import get_subtype_classifier
 
         # Pattern ID comes from event being promoted to pattern
         pattern_id = f"sem_{event_id}"

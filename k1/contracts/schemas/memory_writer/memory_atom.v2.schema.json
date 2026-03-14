@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "k1://contracts/schemas/memory_writer/memory_atom.v2.schema.json",
-  "title": "Memory Atom v2",
-  "description": "Authoritative JSON Schema for MW v2 memory atom -- the 34-field envelope body. Source of truth: docs/pipelines/p03/stage5_proposal_corrections.md LAYER 2 Field Reference.",
+  "title": "Memory Atom v2.2",
+  "description": "Authoritative JSON Schema for MW v2.2 memory atom. Additive over v2.1: K1 correction signal fields (correction_signal, contradiction_signal, supersedes_concept, correction_source, session_context_id) for EVOLVE/CONTRADICT delegation. All v2.1 atoms validate against v2.2 (new fields have defaults). R2 Epic 7.2.",
   "type": "object",
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "2.0",
-      "description": "Schema version constant. Always '2.0' for MW v2."
+      "enum": ["2.0", "2.1", "2.2"],
+      "description": "Schema version. '2.0' for MW v2, '2.1' for multi-temporal links, '2.2' for K1 correction signals."
     },
     "operation": {
       "type": "string",
@@ -56,6 +56,27 @@
         "other"
       ],
       "description": "Location category. Stripped in AMBER/RED privacy band."
+    },
+    "place_id": {
+      "type": ["string", "null"],
+      "pattern": "^place_[a-z0-9_]+$",
+      "description": "Stable place identity from PlaceResolver. Pattern: place_<slug>. GAP-002 Epic 3.1."
+    },
+    "location_hierarchy": {
+      "type": "array",
+      "items": {"type": "string"},
+      "default": [],
+      "maxItems": 5,
+      "description": "Spatial hierarchy from most specific to most general. Example: ['kitchen', 'home', 'Capitol Hill', 'Seattle']. GAP-002 Epic 4.2."
+    },
+    "transition_from_place": {
+      "type": ["string", "null"],
+      "description": "Origin place for spatial transition. Raw place name or resolved place_id. GAP-002 Epic 4.3."
+    },
+    "transition_mode": {
+      "type": ["string", "null"],
+      "enum": [null, "walked", "drove", "flew", "took_bus", "took_train", "biked", "other"],
+      "description": "Mode of movement from transition_from_place to current location. GAP-002 Epic 4.3."
     },
     "activity_type": {
       "type": "string",
@@ -253,11 +274,57 @@
       "minimum": 0,
       "description": "Turn ordinal from meta.lifecycle.turn_count."
     },
+    "extraction_sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5,
+      "default": 0,
+      "description": "0-based ordinal of this atom within the turn extraction batch."
+    },
     "language": {
       "type": "string",
       "minLength": 2,
       "maxLength": 5,
       "description": "ISO 639-1 language code. Default 'en'."
+    },
+    "conversation_anchor_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "K1 Concierge conversation timestamp (unix ms). Authoritative for R2 episode formation. NEVER overwritten by K0 M08. GAP-002 Epic 1.1.",
+      "default": 0
+    },
+    "temporal_links": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TemporalLink" },
+      "maxItems": 5,
+      "default": [],
+      "description": "0-5 temporal references per atom. Replaces single Temporal object. GAP-002 Epic 2.2."
+    },
+    "correction_signal": {
+      "type": "boolean",
+      "default": false,
+      "description": "K1 LLM detected this atom corrects a previously stored fact. Flags atom as EVOLVE candidate for P03 R3 reconciliation. R2 Epic 7.2."
+    },
+    "contradiction_signal": {
+      "type": "boolean",
+      "default": false,
+      "description": "K1 LLM detected this atom contradicts stored knowledge with no clear resolution. Flags atom as CONTRADICT candidate for P03 R3 reconciliation. R2 Epic 7.2."
+    },
+    "supersedes_concept": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Namespaced concept key being replaced (e.g. 'cuisine_preference:thai', 'school:riverdale'). Gives P03 a targeted truth lookup instead of brute-force embedding search. R2 Epic 7.2."
+    },
+    "correction_source": {
+      "type": ["string", "null"],
+      "enum": [null, "user_explicit", "user_implicit", "context_change"],
+      "default": null,
+      "description": "How the correction was detected: user_explicit (direct statement), user_implicit (inferred from context shift), context_change (environmental change). R2 Epic 7.2."
+    },
+    "session_context_id": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Session UUID where correction was detected. Enables P03 audit trail for EVOLVE/CONTRADICT decisions. R2 Epic 7.2."
     }
   },
   "required": [
@@ -377,6 +444,42 @@
         }
       },
       "required": ["mentioned_time", "resolved_epoch_ms", "is_backdated"],
+      "additionalProperties": false
+    },
+    "TemporalLink": {
+      "type": "object",
+      "properties": {
+        "mentioned_time": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Raw temporal text from conversation (e.g. 'yesterday evening')."
+        },
+        "resolved_epoch_ms": {
+          "type": "integer",
+          "default": 0,
+          "description": "Best-guess absolute time (Unix ms)."
+        },
+        "uncertainty_window_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Precision window in ms (60000 for '7:15pm', 86400000 for 'yesterday')."
+        },
+        "link_type": {
+          "type": "string",
+          "enum": ["RETROSPECTIVE", "PROSPECTIVE", "CONCURRENT", "HABITUAL", "CONTEXTUAL", "CONDITIONAL"],
+          "default": "CONCURRENT",
+          "description": "Temporal link classification."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 1.0,
+          "description": "LLM resolution confidence."
+        }
+      },
+      "required": ["mentioned_time"],
       "additionalProperties": false
     }
   }

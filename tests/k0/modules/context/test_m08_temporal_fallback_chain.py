@@ -1,16 +1,22 @@
 """
-Epic 3.18 -- M08 context.temporal_profile Temporal Fallback Chain Tests
+Epic 3.18 / Epic 1.2 (GAP-002) -- M08 context.temporal_profile Temporal Fallback Chain Tests
 
 These tests call the REAL M08 run() with real envelopes.
 Only transport (MockMessage, MockContext) is mocked.
 
-Validates the 5-priority temporal chain:
-- PRIORITY 1: body.temporal.resolved_epoch_ms -> temporal_source="mw_resolved"
-- PRIORITY 2: M02 ner_temporal has "yesterday" -> temporal_source="ner_temporal"
-- PRIORITY 3: body.event_time present -> temporal_source="event_time"
-- PRIORITY 4: envelope.ts present -> temporal_source="envelope_ts"
-- PRIORITY 5: now() -> temporal_source="now"
+v3 (Epic 1.2): normalize_timestamp split into Chain A + Chain B:
+
+Chain A -- CONVERSATION TIME (event_time_utc):
+- PRIORITY 1: body.conversation_anchor_ms -> temporal_source="conversation_anchor"
+- PRIORITY 2: body.event_time present -> temporal_source="event_time"
+- PRIORITY 3: envelope.ts present -> temporal_source="envelope_ts"
+- PRIORITY 4: now() -> temporal_source="now"
 - CRITICAL: event_time_utc is NEVER null
+
+Chain B -- REFERRED TIME (temporal_resolved_epoch_ms):
+- PRIORITY 1: body.temporal.resolved_epoch_ms -> ref_source="mw_resolved"
+- PRIORITY 2: M02 NER temporal -> ref_source="ner_temporal"
+- PRIORITY 3: None -> ref_source="none"
 
 Spatial chain:
 - body.location_name -> location_source="mw_location"
@@ -87,13 +93,18 @@ def _base_envelope(**overrides) -> dict[str, Any]:
 
 
 # ============================================================================
-# PRIORITY 1: body.temporal.resolved_epoch_ms -> mw_resolved
+# CHAIN B: body.temporal.resolved_epoch_ms -> mw_resolved (referred time)
 # ============================================================================
 
 
 @pytest.mark.asyncio
-async def test_priority1_mw_resolved_epoch():
-    """MW body.temporal.resolved_epoch_ms present -> temporal_source='mw_resolved'."""
+async def test_chain_b_mw_resolved_epoch():
+    """MW body.temporal.resolved_epoch_ms -> Chain B feeds temporal_resolved_epoch_ms.
+
+    Epic 1.2 (GAP-002): MW resolved_epoch_ms NO LONGER overwrites event_time_utc.
+    It goes to temporal_resolved_epoch_ms via Chain B. event_time_utc comes from
+    Chain A (envelope.ts in this case).
+    """
     resolved_ms = 1704067200000  # 2024-01-01 00:00:00 UTC in ms
     envelope = _base_envelope()
     envelope["body"]["temporal"] = {
@@ -106,14 +117,17 @@ async def test_priority1_mw_resolved_epoch():
 
     result = await m08_run(msg, ctx, envelope=envelope)
 
-    assert result["temporal_source"] == "mw_resolved"
-    assert result["event_time_utc"] == resolved_ms // 1000  # Converted to seconds
+    # Chain A: no conversation_anchor_ms, no body.event_time -> falls to envelope.ts
+    assert result["temporal_source"] == "envelope_ts"
+    assert result["event_time_utc"] == envelope["ts"]
+    # Chain B: MW resolved_epoch_ms -> temporal_resolved_epoch_ms (passthrough)
+    assert result["temporal_resolved_epoch_ms"] == resolved_ms
     assert result["event_time_utc"] is not None
 
 
 @pytest.mark.asyncio
-async def test_priority1_mw_temporal_passthrough():
-    """MW temporal fields passthrough: mentioned_time, orientation."""
+async def test_chain_b_mw_temporal_passthrough():
+    """MW temporal fields passthrough: mentioned_time, orientation, resolved_epoch_ms."""
     envelope = _base_envelope()
     envelope["body"]["temporal"] = {
         "resolved_epoch_ms": 1704067200000,
@@ -127,6 +141,7 @@ async def test_priority1_mw_temporal_passthrough():
 
     assert result["temporal_mentioned_time"] == "yesterday evening"
     assert result["temporal_orientation"] == "PAST"
+    # Chain B: resolved_epoch_ms passes through to temporal_resolved_epoch_ms
     assert result["temporal_resolved_epoch_ms"] == 1704067200000
 
 
@@ -180,13 +195,17 @@ async def test_priority1_invalid_orientation_nullified():
 
 
 # ============================================================================
-# PRIORITY 2: M02 ner_temporal entities -> ner_temporal
+# CHAIN B: M02 ner_temporal entities -> ner_temporal (referred time)
 # ============================================================================
 
 
 @pytest.mark.asyncio
-async def test_priority2_ner_temporal_fallback():
-    """MW temporal MISSING + M02 NER has temporal -> temporal_source='ner_temporal'."""
+async def test_chain_b_ner_temporal_fallback():
+    """MW temporal MISSING + M02 NER has temporal -> Chain B ref_source='ner_temporal'.
+
+    Epic 1.2: NER temporal goes to Chain B (temporal_resolved_epoch_ms),
+    NOT to event_time_utc. Chain A falls to envelope.ts.
+    """
     envelope = _base_envelope()
     # No body.temporal -> MW absent
     # Simulate M02 output in enrichments
@@ -200,13 +219,16 @@ async def test_priority2_ner_temporal_fallback():
 
     result = await m08_run(msg, ctx, envelope=envelope)
 
-    assert result["temporal_source"] == "ner_temporal"
-    assert result["event_time_utc"] is not None
+    # Chain A: no conversation_anchor_ms, no event_time -> envelope.ts
+    assert result["temporal_source"] == "envelope_ts"
+    assert result["event_time_utc"] == envelope["ts"]
+    # Chain B: NER temporal resolved -> temporal_resolved_epoch_ms
+    assert result["temporal_resolved_epoch_ms"] is not None
 
 
 @pytest.mark.asyncio
-async def test_priority2_ner_temporal_yesterday():
-    """NER detects 'yesterday' -> resolves to approximate timestamp."""
+async def test_chain_b_ner_temporal_yesterday():
+    """NER detects 'yesterday' -> Chain B resolves to approximate epoch ms."""
     envelope = _base_envelope()
     envelope["enrichments"]["semantic_projector"] = {
         "ner_temporal_entities": [{"text": "yesterday evening", "label": "DATE"}],
@@ -216,14 +238,17 @@ async def test_priority2_ner_temporal_yesterday():
 
     result = await m08_run(msg, ctx, envelope=envelope)
 
-    # Should resolve "yesterday" to ~24h ago
-    if result["temporal_source"] == "ner_temporal":
-        now_ts = int(time.time())
-        assert abs(result["event_time_utc"] - (now_ts - 86400)) < 86400  # Within a day
+    # Chain A: envelope.ts (no MW anchor, no body.event_time)
+    assert result["temporal_source"] == "envelope_ts"
+    # Chain B: NER temporal -> temporal_resolved_epoch_ms (ms)
+    if result["temporal_resolved_epoch_ms"] is not None:
+        now_ms = int(time.time()) * 1000
+        # Should resolve "yesterday" to ~24h ago (in ms)
+        assert abs(result["temporal_resolved_epoch_ms"] - (now_ms - 86400_000)) < 86400_000
 
 
 # ============================================================================
-# PRIORITY 3: body.event_time -> event_time
+# CHAIN A PRIORITY 2: body.event_time -> event_time (conversation time)
 # ============================================================================
 
 
@@ -260,7 +285,7 @@ async def test_priority3_unix_timestamp_event_time():
 
 
 # ============================================================================
-# PRIORITY 4: envelope.ts -> envelope_ts
+# CHAIN A PRIORITY 3: envelope.ts -> envelope_ts (conversation time)
 # ============================================================================
 
 
@@ -282,7 +307,7 @@ async def test_priority4_envelope_ts_fallback():
 
 
 # ============================================================================
-# PRIORITY 5: now() -> ultimate fallback
+# CHAIN A PRIORITY 4: now() -> ultimate fallback
 # ============================================================================
 
 

@@ -10,7 +10,7 @@ R1 Algorithms (Epic 4.1):
 R2 Algorithms (Epic 4.2 — Episodic Clustering):
     - CompositeDistance: Semantic + temporal distance metric (Issue 4.2.1)
     - EpisodeSplitter: Pre-clustering sequence splitting (Issue 4.2.2)
-    - EpisodicDBSCAN: DBSCAN with composite distance (Issue 4.2.3)
+    - EpisodicHDBSCAN: HDBSCAN with composite distance and noise rescue (Issue 4.2.3)
     - CentroidCalculator: Weighted centroid computation (Issue 4.2.4)
     - EpsAdjuster: Adaptive eps learning (Issue 4.2.5)
     - MinSamplesAdjuster: Adaptive min_samples learning (Issue 4.2.6)
@@ -72,7 +72,7 @@ from k0.modules.consolidation.algorithms.centroid_calculator import (
     CentroidCalculator,
     CentroidResult,
     EpisodeCandidate,
-    R2StagedOutput,
+    SecondaryCentroidSelector,
     WeightingStrategy,
 )
 
@@ -83,7 +83,14 @@ from k0.modules.consolidation.algorithms.cluster_quality import (
 )
 
 # R2 Episodic Clustering (Epic 4.2)
-from k0.modules.consolidation.algorithms.composite_distance import CompositeDistance, DBSCANParams
+from k0.modules.consolidation.algorithms.composite_distance import (
+    ClusteringDistanceParams,
+    CompositeDistance,
+    DBSCANParams,
+    EnsembleDistance,
+    EnsembleDistanceConfig,
+    FallbackPolicy,
+)
 
 # R4 Confidence Router (Epic 4.4.5)
 from k0.modules.consolidation.algorithms.confidence_router import (
@@ -98,6 +105,14 @@ from k0.modules.consolidation.algorithms.confidence_router import (
     RoutingResult,
     get_confidence_router,
     quick_band,
+)
+
+# R2 Cross-Batch Extend (Epic 6.4)
+from k0.modules.consolidation.algorithms.cross_batch_extend import (
+    CrossBatchExtendConfig,
+    CrossBatchExtendMatcher,
+    CrossBatchExtendStats,
+    ExtendMatch,
 )
 
 # R3 Decay Engine (Epic 4.3.3)
@@ -145,16 +160,24 @@ from k0.modules.consolidation.algorithms.entity_merger import (
     get_entity_merger,
 )
 from k0.modules.consolidation.algorithms.episode_splitter import (
+    BoundaryDecision,
     EpisodeSplitter,
     SplitConfig,
     SplitReason,
     SplitResult,
+    WeakBoundary,
 )
 
-# R2 Episodic DBSCAN Clustering (Epic 4.2.3)
-from k0.modules.consolidation.algorithms.episodic_dbscan import ClusteringResult, EpisodicDBSCAN
+# R2 Episodic Coherence (M4-RSCH-04: replaces silhouette as primary quality signal)
+from k0.modules.consolidation.algorithms.episodic_coherence import (
+    BatchCoherenceSummary,
+    CoherenceDimensions,
+    EpisodicCoherenceResult,
+    EpisodicCoherenceScorer,
+    compute_batch_coherence,
+)
 
-# R2 Episodic HDBSCAN Clustering with Noise Rescue (Epic 4.2.3 Extension)
+# R2 Episodic HDBSCAN Clustering with Noise Rescue (Epic 4.2.3)
 from k0.modules.consolidation.algorithms.episodic_hdbscan import (
     EpisodicHDBSCAN,
     HDBSCANClusteringResult,
@@ -168,6 +191,15 @@ from k0.modules.consolidation.algorithms.eps_adjuster import (
     EpsAdjuster,
     EpsAdjustmentConfig,
     EpsAdjustmentResult,
+)
+
+# R2 Hebbian Co-occurrence Distance Boost (Epic 5.1)
+from k0.modules.consolidation.algorithms.hebbian_boost import (
+    CoOccurrenceEdge,
+    HebbinaBoostConfig,
+    apply_hebbian_boost,
+    build_cooccurrence_graph,
+    compute_pairwise_affinity,
 )
 
 # R1 Hebbian Learning (Epic 4.1)
@@ -324,8 +356,21 @@ from k0.modules.consolidation.algorithms.retention_enforcer import (
     RetentionResult,
 )
 
+# R2 Same-Thread Merge (Epic 6.3)
+from k0.modules.consolidation.algorithms.same_thread_merge import (
+    SameThreadMergeConfig,
+    SameThreadMerger,
+    SameThreadMergeStats,
+)
+
 # R3 Dedup + Decay (Epic 4.3)
 from k0.modules.consolidation.algorithms.simhasher import SimHasher
+
+# R2 Thread Purity Correction (Epic 6.2)
+from k0.modules.consolidation.algorithms.thread_purity import (
+    PurityCorrectionStats,
+    ThreadPurityCorrector,
+)
 from k0.modules.consolidation.algorithms.two_stage_dedup import (
     DuplicateDecision,
     DuplicateMatch,
@@ -360,17 +405,21 @@ __all__ = [
     "AntiHebbianSignal",
     # R2 Episodic Clustering
     "CompositeDistance",
+    "EnsembleDistance",
+    "EnsembleDistanceConfig",
+    "FallbackPolicy",
+    "ClusteringDistanceParams",
     "DBSCANParams",
     "EpisodeSplitter",
     "SplitConfig",
     "SplitReason",
     "SplitResult",
-    "EpisodicDBSCAN",
-    "ClusteringResult",
+    "BoundaryDecision",
+    "WeakBoundary",
     "CentroidCalculator",
     "CentroidResult",
     "EpisodeCandidate",
-    "R2StagedOutput",
+    "SecondaryCentroidSelector",
     "WeightingStrategy",
     # R2 Adaptive Learning
     "EpsAdjuster",
@@ -382,6 +431,24 @@ __all__ = [
     # R2 Cluster Quality
     "ClusterQualityMetrics",
     "ClusterQualityTracker",
+    # R2 Episodic Coherence
+    "BatchCoherenceSummary",
+    "CoherenceDimensions",
+    "EpisodicCoherenceResult",
+    "EpisodicCoherenceScorer",
+    "compute_batch_coherence",
+    # R2 Thread Purity Correction (Epic 6.2)
+    "ThreadPurityCorrector",
+    "PurityCorrectionStats",
+    # R2 Same-Thread Merge (Epic 6.3)
+    "SameThreadMerger",
+    "SameThreadMergeConfig",
+    "SameThreadMergeStats",
+    # R2 Cross-Batch Extend (Epic 6.4)
+    "CrossBatchExtendMatcher",
+    "CrossBatchExtendConfig",
+    "CrossBatchExtendStats",
+    "ExtendMatch",
     # R3 SimHash + Dedup
     "SimHasher",
     "TwoStageDeduplicator",

@@ -265,12 +265,20 @@ class EpisodicLayerWriter:
                 source_texts_json, embedding_text, embedding_vector, embedding_model,
                 episode_summary, episode_type, primary_location, location_type,
                 participants_json, participant_count, embedding_id,
-                cluster_confidence, consolidation_cycle_id, last_observed_at
+                cluster_confidence, consolidation_cycle_id, last_observed_at,
+                narrative_thread_id, narrative_thread_ids_json, narrative_arc_position,
+                continuation_of_episode_id, narrative_thread_completed,
+                centroid_metadata_json, ambiguity_score, entity_ids_json,
+                dominant_sentiment, dominant_emotion,
+                aggregated_sentiment, aggregated_salience,
+                dominant_social_context, activity_type_ultrabert
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
                       $16, $16, $16, 1,
                       'ACTIVE', $17, $18, $19, $20,
                       $21, $22, $23, $24, $25, $26, $27,
-                      $28, $29, $30)
+                      $28, $29, $30,
+                      $31, $32, $33, $34, $35,
+                      $36, $37, $38, $39, $40, $41, $42, $43, $44)
             ON CONFLICT (episode_id) DO NOTHING
             """,
             data["episode_id"],
@@ -305,6 +313,23 @@ class EpisodicLayerWriter:
             data.get("cluster_confidence"),
             data.get("consolidation_cycle_id"),
             data.get("last_observed_at"),
+            # Epic 5.1: Narrative thread columns
+            data.get("narrative_thread_id"),
+            data.get("narrative_thread_ids_json"),
+            data.get("narrative_arc_position"),
+            data.get("continuation_of_episode_id"),
+            # Epic 5.2: Goal completion
+            data.get("narrative_thread_completed", False),
+            # Epic 6.5: Metadata preservation
+            data.get("centroid_metadata_json"),
+            data.get("ambiguity_score"),
+            data.get("entity_ids_json"),
+            data.get("dominant_sentiment"),
+            data.get("dominant_emotion"),
+            data.get("aggregated_sentiment"),
+            data.get("aggregated_salience"),
+            data.get("dominant_social_context"),
+            data.get("activity_type_ultrabert"),
         )
 
         # Issue 7.5: Record observation with FIRST_SEEN type
@@ -421,6 +446,10 @@ class EpisodicLayerWriter:
         # Convert event IDs to JSON array for PostgreSQL
         additional_json = json.dumps(additional_event_ids)
 
+        # Epic 5.1: Narrative thread_ids from new events for merging
+        new_thread_ids_json = data.get("narrative_thread_ids_json")
+        new_dominant_thread = data.get("narrative_thread_id")
+
         # Use PostgreSQL array concatenation to append event IDs
         # and MIN/MAX for temporal bounds
         sql = """
@@ -450,6 +479,19 @@ class EpisodicLayerWriter:
                 is_recurring = COALESCE($8, is_recurring),
                 recurrence_pattern = COALESCE($9, recurrence_pattern),
                 consolidation_cycle_id = COALESCE($10, consolidation_cycle_id),
+                narrative_thread_ids_json = CASE
+                    WHEN $11::text IS NOT NULL AND narrative_thread_ids_json IS NOT NULL THEN (
+                        SELECT json_agg(DISTINCT elem)::text
+                        FROM (
+                            SELECT jsonb_array_elements_text(narrative_thread_ids_json::jsonb) AS elem
+                            UNION
+                            SELECT jsonb_array_elements_text($11::jsonb) AS elem
+                        ) AS merged
+                    )
+                    WHEN $11::text IS NOT NULL THEN $11
+                    ELSE narrative_thread_ids_json
+                END,
+                narrative_thread_id = COALESCE($12, narrative_thread_id),
                 updated_at = $5,
                 version = version + 1
             WHERE episode_id = $6
@@ -468,6 +510,8 @@ class EpisodicLayerWriter:
             is_recurring,
             recurrence_pattern,
             consolidation_cycle_id,
+            new_thread_ids_json,
+            new_dominant_thread,
         )
 
         # Check for version conflict

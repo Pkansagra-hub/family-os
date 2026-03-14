@@ -28,7 +28,6 @@ from k0.modules.consolidation.algorithms.centroid_calculator import (
     CentroidCalculator,
     CentroidResult,
     EpisodeCandidate,
-    R2StagedOutput,
 )
 
 # =============================================================================
@@ -345,102 +344,101 @@ class TestEpisodeCandidate:
 
 
 # =============================================================================
-# R2StagedOutput Tests
+# Recency Exponential Strategy Tests (M4-RSCH-01 winner)
 # =============================================================================
 
 
-class TestR2StagedOutput:
-    """Test R2StagedOutput container."""
+class TestRecencyExpStrategy:
+    """Test recency_exp weighting strategy (M4-RSCH-01: MRR=0.9006)."""
 
-    def test_add_candidate(self) -> None:
-        """add_candidate updates metadata."""
-        output = R2StagedOutput()
+    def test_recency_exp_recent_events_weighted_higher(self) -> None:
+        """Most recent event gets highest weight with exponential decay."""
+        events = [
+            MockEvent("e1", 1000, make_embedding(1)),  # Oldest
+            MockEvent("e2", 2000, make_embedding(2)),
+            MockEvent("e3", 3000, make_embedding(3)),  # Most recent
+        ]
 
-        candidate1 = EpisodeCandidate(
-            cluster_id="c1",
-            space_id="s1",
-            event_count=3,
-            is_noise=False,
-        )
-        candidate2 = EpisodeCandidate(
-            cluster_id="noise-1",
-            space_id="s1",
-            event_count=1,
-            is_noise=True,
-        )
+        calc = CentroidCalculator()
+        weights = calc.compute_weights(events, strategy="recency_exp")
 
-        output.add_candidate(candidate1)
-        output.add_candidate(candidate2)
+        assert weights[2] > weights[1] > weights[0]
+        assert weights.sum() == pytest.approx(1.0)
 
-        assert output.cluster_count == 1
-        assert output.noise_count == 1
-        assert output.total_events_processed == 4
+    def test_recency_exp_equal_timestamps_uniform(self) -> None:
+        """Equal timestamps produce uniform weights."""
+        events = [
+            MockEvent("e1", 1000, make_embedding(1)),
+            MockEvent("e2", 1000, make_embedding(2)),
+            MockEvent("e3", 1000, make_embedding(3)),
+        ]
 
-    def test_finalize_computes_aggregates(self) -> None:
-        """finalize() computes avg_cluster_size and cohesion_avg."""
-        output = R2StagedOutput()
+        calc = CentroidCalculator()
+        weights = calc.compute_weights(events, strategy="recency_exp")
 
-        # Add two non-noise clusters
-        output.add_candidate(
-            EpisodeCandidate(
-                cluster_id="c1",
-                space_id="s1",
-                event_count=4,
-                cohesion_score=0.8,
-                is_noise=False,
-            )
-        )
-        output.add_candidate(
-            EpisodeCandidate(
-                cluster_id="c2",
-                space_id="s1",
-                event_count=2,
-                cohesion_score=0.6,
-                is_noise=False,
-            )
-        )
+        expected = np.ones(3) / 3
+        np.testing.assert_array_almost_equal(weights, expected)
 
-        output.finalize()
+    def test_recency_exp_bounded_ratio(self) -> None:
+        """Weight ratio between newest and oldest is bounded by e (~2.718)."""
+        events = [
+            MockEvent("e1", 1000, make_embedding(1)),  # Oldest
+            MockEvent("e2", 5000, make_embedding(2)),  # Most recent
+        ]
 
-        # Average cluster size: (4 + 2) / 2 = 3.0
-        assert output.avg_cluster_size == 3.0
-        # Average cohesion: (0.8 + 0.6) / 2 = 0.7
-        assert output.batch_cohesion_avg == pytest.approx(0.7)
+        calc = CentroidCalculator()
+        weights = calc.compute_weights(events, strategy="recency_exp")
 
-    def test_singleton_rate(self) -> None:
-        """singleton_rate computed correctly."""
-        output = R2StagedOutput()
+        # exp(0)=1, exp(1)=e, ratio = e/1 = 2.718
+        ratio = weights[1] / weights[0]
+        assert ratio == pytest.approx(np.e, rel=0.01)
 
-        # 2 noise, 3 total events
-        output.add_candidate(
-            EpisodeCandidate(cluster_id="noise-1", space_id="s1", event_count=1, is_noise=True)
-        )
-        output.add_candidate(
-            EpisodeCandidate(cluster_id="noise-2", space_id="s1", event_count=1, is_noise=True)
-        )
-        output.add_candidate(
-            EpisodeCandidate(cluster_id="c1", space_id="s1", event_count=1, is_noise=False)
-        )
+    def test_recency_exp_does_not_collapse_like_linear(self) -> None:
+        """Oldest event still has meaningful weight (unlike linear collapse)."""
+        events = [
+            MockEvent("e1", 1000, make_embedding(1)),  # Very old
+            MockEvent("e2", 50000, make_embedding(2)),
+            MockEvent("e3", 100000, make_embedding(3)),  # Very recent
+        ]
 
-        # 2 noise / 3 total = 0.666...
-        assert output.singleton_rate == pytest.approx(2 / 3, abs=0.01)
+        calc = CentroidCalculator()
+        weights = calc.compute_weights(events, strategy="recency_exp")
 
-    def test_to_dict(self) -> None:
-        """to_dict returns serializable dictionary."""
-        output = R2StagedOutput()
-        output.add_candidate(
-            EpisodeCandidate(cluster_id="c1", space_id="s1", event_count=2, is_noise=False)
-        )
-        output.finalize()
+        # Oldest event should still have > 5% weight (not collapsed)
+        assert weights[0] > 0.05
+        assert weights.sum() == pytest.approx(1.0)
 
-        data = output.to_dict()
+    def test_recency_exp_compute_full_result(self) -> None:
+        """recency_exp works through the full compute() path."""
+        events = [
+            MockEvent("e1", 1000, make_embedding(1)),
+            MockEvent("e2", 2000, make_embedding(2)),
+            MockEvent("e3", 3000, make_embedding(3)),
+        ]
 
-        assert "cluster_count" in data
-        assert "noise_count" in data
-        assert "avg_cluster_size" in data
-        assert "total_events_processed" in data
-        assert "batch_silhouette_score" in data
-        assert "singleton_rate" in data
+        calc = CentroidCalculator(default_strategy="recency_exp")
+        result = calc.compute(events)
+
+        assert isinstance(result, CentroidResult)
+        assert result.strategy == "recency_exp"
+        assert result.event_count == 3
+        assert len(result.centroid) == 768
+        assert np.linalg.norm(result.centroid) == pytest.approx(1.0, abs=1e-6)
+
+    def test_recency_exp_via_enum(self) -> None:
+        """Strategy works when passed as WeightingStrategy enum."""
+        from k0.modules.consolidation.algorithms.centroid_calculator import WeightingStrategy
+
+        events = [
+            MockEvent("e1", 1000, make_embedding(1)),
+            MockEvent("e2", 3000, make_embedding(2)),
+        ]
+
+        calc = CentroidCalculator()
+        weights = calc.compute_weights(events, strategy=WeightingStrategy.RECENCY_EXP)
+
+        assert weights[1] > weights[0]
+        assert weights.sum() == pytest.approx(1.0)
 
 
 # =============================================================================
@@ -476,3 +474,263 @@ class TestEventUpdate:
         # Since embeddings are similar to centroid, distance should be low
         for event in events:
             assert 0.0 <= event.centroid_distance <= 1.0
+
+
+# =============================================================================
+# Secondary Centroid Selector Tests (M4-RSCH-02: best_of_all MRR=0.9627)
+# =============================================================================
+
+
+@dataclass
+class RichMockEvent:
+    """Mock event with affect and narrative fields for secondary centroid selection."""
+
+    event_id: str
+    timestamp: int
+    embedding_768: Optional[List[float]]
+    importance_score: float = 0.5
+    sentiment_score: float = 0.5
+    affect_valence: Optional[float] = None
+    affect_arousal: Optional[float] = None
+    narrative_thread_id: Optional[str] = None
+
+
+class TestSecondaryCentroidSelector:
+    """Test SecondaryCentroidSelector for multi-centroid episode representation."""
+
+    def test_select_start_picks_earliest(self) -> None:
+        """Start centroid is the event with earliest timestamp."""
+        from k0.modules.consolidation.algorithms.centroid_calculator import (
+            SecondaryCentroidSelector,
+        )
+
+        events = [
+            RichMockEvent("e2", 2000, make_embedding(2)),
+            RichMockEvent("e1", 1000, make_embedding(1)),
+            RichMockEvent("e3", 3000, make_embedding(3)),
+        ]
+
+        selector = SecondaryCentroidSelector()
+        result = selector._select_start(events)
+
+        assert result is not None
+        assert result["event_id"] == "e1"
+
+    def test_select_end_picks_latest(self) -> None:
+        """End centroid is the event with latest timestamp."""
+        from k0.modules.consolidation.algorithms.centroid_calculator import (
+            SecondaryCentroidSelector,
+        )
+
+        events = [
+            RichMockEvent("e2", 2000, make_embedding(2)),
+            RichMockEvent("e3", 3000, make_embedding(3)),
+            RichMockEvent("e1", 1000, make_embedding(1)),
+        ]
+
+        selector = SecondaryCentroidSelector()
+        result = selector._select_end(events)
+
+        assert result is not None
+        assert result["event_id"] == "e3"
+
+    def test_emotional_peak_uses_affect_intensity(self) -> None:
+        """Emotional peak selects event with highest abs(valence) + arousal."""
+        from k0.modules.consolidation.algorithms.centroid_calculator import (
+            SecondaryCentroidSelector,
+        )
+
+        events = [
+            RichMockEvent("calm", 1000, make_embedding(1), affect_valence=0.1, affect_arousal=0.2),
+            RichMockEvent(
+                "intense", 2000, make_embedding(2), affect_valence=-0.9, affect_arousal=0.8
+            ),
+            RichMockEvent("mild", 3000, make_embedding(3), affect_valence=0.3, affect_arousal=0.1),
+        ]
+
+        selector = SecondaryCentroidSelector()
+        result = selector._select_emotional_peak(events)
+
+        assert result is not None
+        assert result["event_id"] == "intense"
+
+    def test_emotional_peak_falls_back_to_sentiment(self) -> None:
+        """When affect fields missing, use sentiment distance from neutral."""
+        from k0.modules.consolidation.algorithms.centroid_calculator import (
+            SecondaryCentroidSelector,
+        )
+
+        events = [
+            RichMockEvent("neutral", 1000, make_embedding(1), sentiment_score=0.5),
+            RichMockEvent("sad", 2000, make_embedding(2), sentiment_score=0.05),
+            RichMockEvent("mild", 3000, make_embedding(3), sentiment_score=0.6),
+        ]
+
+        selector = SecondaryCentroidSelector()
+        result = selector._select_emotional_peak(events)
+
+        assert result is not None
+        assert result["event_id"] == "sad"  # Most distant from 0.5 neutral
+
+    def test_narrative_anchor_picks_dominant_thread(self) -> None:
+        """Narrative anchor picks event from most common thread."""
+        from k0.modules.consolidation.algorithms.centroid_calculator import (
+            SecondaryCentroidSelector,
+        )
+
+        events = [
+            RichMockEvent(
+                "e1", 1000, make_embedding(1), narrative_thread_id="thread-A", importance_score=0.3
+            ),
+            RichMockEvent(
+                "e2", 2000, make_embedding(2), narrative_thread_id="thread-A", importance_score=0.9
+            ),
+            RichMockEvent(
+                "e3", 3000, make_embedding(3), narrative_thread_id="thread-B", importance_score=0.8
+            ),
+        ]
+
+        selector = SecondaryCentroidSelector()
+        result = selector._select_narrative_anchor(events)
+
+        assert result is not None
+        assert result["event_id"] == "e2"  # thread-A dominant, highest importance
+
+    def test_narrative_anchor_none_without_threads(self) -> None:
+        """Narrative anchor is None when no events have thread IDs."""
+        from k0.modules.consolidation.algorithms.centroid_calculator import (
+            SecondaryCentroidSelector,
+        )
+
+        events = [
+            RichMockEvent("e1", 1000, make_embedding(1)),
+            RichMockEvent("e2", 2000, make_embedding(2)),
+        ]
+
+        selector = SecondaryCentroidSelector()
+        result = selector._select_narrative_anchor(events)
+
+        assert result is None
+
+    def test_select_all_returns_all_roles(self) -> None:
+        """select_all returns start, end, emotional_peak, narrative_anchor."""
+        from k0.modules.consolidation.algorithms.centroid_calculator import (
+            SecondaryCentroidSelector,
+        )
+
+        events = [
+            RichMockEvent(
+                "e1",
+                1000,
+                make_embedding(1),
+                affect_valence=-0.9,
+                affect_arousal=0.8,
+                narrative_thread_id="t1",
+            ),
+            RichMockEvent(
+                "e2",
+                2000,
+                make_embedding(2),
+                affect_valence=0.1,
+                affect_arousal=0.1,
+                narrative_thread_id="t1",
+            ),
+            RichMockEvent(
+                "e3",
+                3000,
+                make_embedding(3),
+                affect_valence=0.2,
+                affect_arousal=0.2,
+                narrative_thread_id="t2",
+            ),
+        ]
+
+        selector = SecondaryCentroidSelector()
+        result = selector.select_all(events)
+
+        assert "start" in result
+        assert "end" in result
+        assert "emotional_peak" in result
+        assert "narrative_anchor" in result
+        assert result["start"]["event_id"] == "e1"
+        assert result["end"]["event_id"] == "e3"
+        assert result["emotional_peak"]["event_id"] == "e1"  # highest intensity
+        assert result["narrative_anchor"]["event_id"] in ("e1", "e2")  # thread t1 dominant
+
+    def test_select_all_skips_no_embedding_events(self) -> None:
+        """Events without embeddings are excluded from all selectors."""
+        from k0.modules.consolidation.algorithms.centroid_calculator import (
+            SecondaryCentroidSelector,
+        )
+
+        events = [
+            RichMockEvent("no_emb", 500, None, affect_valence=1.0, affect_arousal=1.0),
+            RichMockEvent("has_emb", 1000, make_embedding(1)),
+        ]
+
+        selector = SecondaryCentroidSelector()
+        result = selector.select_all(events)
+
+        assert result["start"]["event_id"] == "has_emb"
+        assert result["end"]["event_id"] == "has_emb"
+
+    def test_candidate_centroid_metadata_populated(self) -> None:
+        """create_episode_candidate populates centroid_metadata for multi-event clusters."""
+        events = [
+            RichMockEvent("e1", 1000, make_embedding(1), affect_valence=-0.8, affect_arousal=0.9),
+            RichMockEvent("e2", 2000, make_embedding(2), affect_valence=0.1, affect_arousal=0.1),
+            RichMockEvent("e3", 3000, make_embedding(3), affect_valence=0.2, affect_arousal=0.2),
+        ]
+
+        calc = CentroidCalculator()
+        candidate = calc.create_episode_candidate(
+            cluster_id="c1",
+            space_id="s1",
+            events=events,
+            cohesion_score=0.8,
+            temporal_start=1000,
+            temporal_end=3000,
+        )
+
+        assert candidate.centroid_metadata is not None
+        assert candidate.centroid_metadata["version"] == 1
+        centroids = candidate.centroid_metadata["centroids"]
+        assert "start" in centroids
+        assert "end" in centroids
+        assert "emotional_peak" in centroids
+        assert centroids["start"]["event_id"] == "e1"
+        assert centroids["end"]["event_id"] == "e3"
+        assert centroids["emotional_peak"]["event_id"] == "e1"
+
+    def test_candidate_noise_has_no_centroid_metadata(self) -> None:
+        """Noise/singleton candidates do not have centroid_metadata."""
+        events = [RichMockEvent("e1", 1000, make_embedding(1))]
+
+        calc = CentroidCalculator()
+        candidate = calc.create_episode_candidate(
+            cluster_id="noise-1",
+            space_id="s1",
+            events=events,
+            cohesion_score=0.0,
+            temporal_start=1000,
+            temporal_end=1000,
+            is_noise=True,
+        )
+
+        assert candidate.centroid_metadata is None
+
+    def test_candidate_single_event_no_centroid_metadata(self) -> None:
+        """Single-event clusters (< 2 events) do not get centroid_metadata."""
+        events = [RichMockEvent("e1", 1000, make_embedding(1))]
+
+        calc = CentroidCalculator()
+        candidate = calc.create_episode_candidate(
+            cluster_id="c1",
+            space_id="s1",
+            events=events,
+            cohesion_score=0.5,
+            temporal_start=1000,
+            temporal_end=1000,
+        )
+
+        assert candidate.centroid_metadata is None

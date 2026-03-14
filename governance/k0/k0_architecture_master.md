@@ -429,9 +429,8 @@ P03 Pipeline Phases (k0/pipelines/p03/phases/)
 | `entity_extractor.py` | NER | Extracts entities from text | r1 |
 | `entity_merger.py` | NER | Merges duplicate entities | r1, r4 |
 | `episode_splitter.py` | Episodic | Splits memories into episodes | r2 |
-| `episodic_dbscan.py` | Clustering | DBSCAN for episodic clustering | r2 |
 | `episodic_hdbscan.py` | Clustering | HDBSCAN for episodic clustering | r2 |
-| `eps_adjuster.py` | Clustering | Adjusts DBSCAN epsilon | r2 |
+| `eps_adjuster.py` | Clustering | Adjusts HDBSCAN cluster_selection_epsilon | r2 |
 | `granger_causality.py` | Analytics | Granger causality detection | r3 |
 | `hebbian_learner.py` | Learning | Hebbian learning updates | r5 |
 | `immunity_checker.py` | Retention | Checks memory immunity status | r5, r8 |
@@ -442,7 +441,7 @@ P03 Pipeline Phases (k0/pipelines/p03/phases/)
 | `mcts_shadow.py` | Search | Shadow MCTS for exploration | r3, dream |
 | `merge_threshold_learner.py` | Learning | Learns merge thresholds | r4, r5 |
 | `minhash_lsh.py` | Dedup | MinHash LSH for near-duplicates | r1, r4 |
-| `min_samples_adjuster.py` | Clustering | Adjusts DBSCAN min_samples | r2 |
+| `min_samples_adjuster.py` | Clustering | Adjusts HDBSCAN min_samples | r2 |
 | `novelty_bonus_learner.py` | Learning | Learns novelty bonuses | r5 |
 | `observation_context.py` | Context | Carries holistic observation context through pipeline | r0, r6 |
 | `prune_audit_logger.py` | Audit | Logs pruning decisions | r8 |
@@ -1848,10 +1847,10 @@ graph LR
 | `vec_write()` | `st_vec.write` | st_vec | INSERT | ✅ Yes | <5ms | ✅ Active |
 | `vec_query()` | `st_vec.read` | st_vec | SELECT | ✅ Yes | <20ms | ✅ Active |
 | `vec_update_status()` | `st_vec.write` | st_vec | UPDATE | ✅ Yes | <5ms | ✅ Active |
-| `faiss_add()` | `faiss.write` | FAISS index | ADD | ✅ Yes | <50ms | ⚠️ pgvector replaces |
-| `faiss_add_batch()` | `faiss.write` | FAISS index | ADD | ✅ Yes | 5ms/vec | ⚠️ pgvector replaces |
-| `faiss_search()` | `faiss.read` | FAISS index | SEARCH | ✅ Yes | <50ms | ⚠️ pgvector replaces |
-| `faiss_remove_batch()` | `faiss.write` | FAISS index | REMOVE | ✅ Yes | 0.5ms/vec | ⚠️ pgvector replaces |
+| `faiss_add()` | `faiss.write` | FAISS index | ADD | ✅ Yes | <50ms | ❌ Removed (ADR-K003) |
+| `faiss_add_batch()` | `faiss.write` | FAISS index | ADD | ✅ Yes | 5ms/vec | ❌ Removed (ADR-K003) |
+| `faiss_search()` | `faiss.read` | FAISS index | SEARCH | ✅ Yes | <50ms | ❌ Removed (ADR-K003) |
+| `faiss_remove_batch()` | `faiss.write` | FAISS index | REMOVE | ✅ Yes | 0.5ms/vec | ❌ Removed (ADR-K003) |
 | `hipp_events_query()` | `st_hipp_events.read` | st_hipp_events | SELECT | ✅ Yes | <20ms | ✅ Active |
 | `hipp_events_update_embedding_status()` | `st_hipp_events.write` | st_hipp_events | UPDATE | ✅ Yes | <5ms | ✅ Active |
 | `query_count()` | `{table}.read` | various | COUNT | ✅ Yes | <5ms | ✅ Active |
@@ -1859,9 +1858,9 @@ graph LR
 | `lock_acquire()` | `advisory_lock.acquire` | pg_advisory_lock | LOCK | ✅ Yes | <5ms | ✅ Active |
 | `lock_release()` | `advisory_lock.release` | pg_advisory_lock | UNLOCK | ✅ Yes | <5ms | ✅ Active |
 | `lock_is_held()` | `advisory_lock.read` | pg_locks | SELECT | ✅ Yes | <5ms | ✅ Active |
-| `union_index_search()` | `faiss.read` | FAISS union index | SEARCH | ✅ Yes | <20ms | ✅ Active |
-| `union_index_rebuild()` | `faiss.write` | FAISS union index | REBUILD | ✅ Yes | <5s | ✅ Active |
-| `union_index_stats()` | `faiss.read` | FAISS union index | STATS | ✅ Yes | <5ms | ✅ Active |
+| `union_index_search()` | `faiss.read` | FAISS union index | SEARCH | ✅ Yes | <20ms | ❌ Removed (ADR-K003) |
+| `union_index_rebuild()` | `faiss.write` | FAISS union index | REBUILD | ✅ Yes | <5s | ❌ Removed (ADR-K003) |
+| `union_index_stats()` | `faiss.read` | FAISS union index | STATS | ✅ Yes | <5ms | ❌ Removed (ADR-K003) |
 | `context_expand()` | `faiss.read, context.expand` | st_vec, st_kg_dom, st_kg_edges | SELECT | ✅ Yes | <100ms | ✅ Active |
 | `kg_entities_query()` | `st_kg_dom.read` | st_kg_dom | SELECT | ✅ Yes | <100ms | ✅ Active |
 | `kg_edges_query()` | `st_kg_edges.read` | st_kg_edges | SELECT | ✅ Yes | <100ms | ✅ Active |
@@ -1882,6 +1881,9 @@ graph LR
 | `semantic_schema_query()` | `st_sem.read` | st_sem | SELECT | ✅ Yes | <20ms | ✅ Active |
 | `procedural_memory_query()` | `st_procedural.read` | st_procedural | SELECT | ✅ Yes | <20ms | ✅ Active |
 | `embeddings_by_event_ids()` | `st_vec.read` | st_vec | SELECT | ✅ Yes | <50ms | ✅ Active |
+| `learned_weights_query()` | `st_learned_weights.read` | st_learned_weights | SELECT | ✅ Yes | <10ms | ✅ Active |
+| `learned_weights_get()` | `st_learned_weights.read` | st_learned_weights | SELECT | ✅ Yes | <5ms | ✅ Active |
+| `learned_weights_upsert()` | `st_learned_weights.write` | st_learned_weights | UPSERT | ✅ Yes | <15ms | ✅ Active |
 <!-- AUTOGEN:SYSCALL_TABLE:END -->
 
 > **Source**: `k0/kernel/syscalls.py` (45 async syscall methods + 3 sync accessors, 5400 lines)
@@ -1896,7 +1898,7 @@ graph LR
 | Component | Type | Capabilities Granted | ADR | Notes |
 |-----------|------|----------------------|-----|-------|
 | P02 (Write) | Pipeline | `st_hipp_events.write, st_vec.write, st_pipeline_processed.write, st_outbox.write, st_kg_edges.read` | ADR-P02-001 | `st_embedding_queue.write` deprecated (inline embedding) |
-| P03 (Consolidation) | Pipeline | `st_hipp_events.read, st_epi.write, st_sem.write, st_procedural.write, st_social.write, st_prospective.write, st_kg_dom.write, st_kg_edges.write, st_vec.read, st_learning_queue.write, st_anchors.write, st_anchor_observations.write, st_observations.write, st_consolidation_audit.write, st_outbox.write` | K021 (Planning) | P03 has broad read access to st_hipp_events, write to 9 memory layers + observations |
+| P03 (Consolidation) | Pipeline | `st_hipp_events.read, st_epi.write, st_sem.write, st_procedural.write, st_social.write, st_prospective.write, st_kg_dom.write, st_kg_edges.write, st_vec.read, st_learning_queue.write, st_anchors.write, st_anchor_observations.write, st_observations.write, st_consolidation_audit.write, st_outbox.write, st_learned_weights.read, st_learned_weights.write` | K021 (Planning) | P03 has broad read access to st_hipp_events, write to 9 memory layers + observations + learned weights |
 | P06 (Learning) | Pipeline | `st_learning_queue.read, st_learning_queue.write, st_anchors.read, st_anchors.write, st_anchor_observations.write, st_learned_weights.write, st_golden_dataset_pairs.write, st_validation_results.write` | (Planning) | Active learning loop capabilities |
 | P08 (Embedding Mgmt) | Pipeline | `st_vec.read, st_vec.write, st_hipp_events.read, st_hipp_events.write, ultrabert.embed` | ADR-P08-001 | `faiss.read, faiss.write` removed (pgvector replaces) |
 | Kernel (Observe Port) | Kernel | `st_feedback_signals.write` | K020 | Persist feedback signals emitted via observe port |
@@ -1950,13 +1952,15 @@ graph LR
 | `st_sem.read` | Storage | ✅ Active | P03 |
 | `st_procedural.read` | Storage | ✅ Active | P03 |
 | `st_consolidation_audit.write` | Storage | 🎯 Planned | P03 |
+| `st_learned_weights.read` | Storage | ✅ Active | P03, P06 |
+| `st_learned_weights.write` | Storage | ✅ Active | P03, P06 |
 | `st_embedding_queue.write` | Storage | ❌ Deprecated | - |
 | `working_memory.write` | Storage | 🎯 Planned | - |
 | `embeddings.read` | Storage | 🎯 Planned | - |
 | `ultrabert.embed` | API | ✅ Active | P08, M22, M25 |
 | `context.expand` | API | ✅ Active | P03 |
-| `faiss.read` | Index | ✅ Active | P03, P08 |
-| `faiss.write` | Index | ✅ Active | P08 |
+| `faiss.read` | Index | ❌ Removed (ADR-K003) | - |
+| `faiss.write` | Index | ❌ Removed (ADR-K003) | - |
 | `st_hipp_store.write` | Storage | ❌ Deprecated | - |
 
 > **Principle**: Least-privilege (Saltzer & Schroeder 1975) - grant only what's needed

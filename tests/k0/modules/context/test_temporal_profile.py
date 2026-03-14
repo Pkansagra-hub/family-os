@@ -252,7 +252,7 @@ class TestTimestampNormalization:
             "body": {"event_time": "2025-11-10T18:00:00Z"},
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         expected = int(datetime(2025, 11, 10, 18, 0, 0, tzinfo=timezone.utc).timestamp())
         assert result == expected
@@ -264,7 +264,7 @@ class TestTimestampNormalization:
             "body": {"event_time": "2025-11-10T18:00:00+00:00"},
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         expected = int(datetime(2025, 11, 10, 18, 0, 0, tzinfo=timezone.utc).timestamp())
         assert result == expected
@@ -276,7 +276,7 @@ class TestTimestampNormalization:
             "body": {"event_time": "2025-11-10T18:00:00"},
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         expected = int(datetime(2025, 11, 10, 18, 0, 0, tzinfo=timezone.utc).timestamp())
         assert result == expected
@@ -289,7 +289,7 @@ class TestTimestampNormalization:
             "body": {"event_time": timestamp},
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         assert result == timestamp
         assert source == "event_time"
@@ -301,7 +301,7 @@ class TestTimestampNormalization:
             "body": {"event_time": timestamp_ms},
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         expected = timestamp_ms // 1000
         assert result == expected
@@ -316,7 +316,7 @@ class TestTimestampNormalization:
             "body": {"event_time": timestamp_us},
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         expected = timestamp_us // 1_000_000
         assert result == expected
@@ -328,7 +328,7 @@ class TestTimestampNormalization:
             "ts": "2025-11-10T18:00:00Z",
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         expected = int(datetime(2025, 11, 10, 18, 0, 0, tzinfo=timezone.utc).timestamp())
         assert result == expected
@@ -342,7 +342,9 @@ class TestTimestampNormalization:
             "body": {"event_time": future_ts_within},
             "tenant_id": "test",
         }
-        result_within, source_within = tp.normalize_timestamp(envelope_within, now_ts=now_timestamp)
+        result_within, source_within, *_ = tp.normalize_timestamp(
+            envelope_within, now_ts=now_timestamp
+        )
         assert result_within == future_ts_within  # NOT clamped (within 24h tolerance)
         assert source_within == "event_time"
 
@@ -352,7 +354,9 @@ class TestTimestampNormalization:
             "body": {"event_time": future_ts_beyond},
             "tenant_id": "test",
         }
-        result_beyond, source_beyond = tp.normalize_timestamp(envelope_beyond, now_ts=now_timestamp)
+        result_beyond, source_beyond, *_ = tp.normalize_timestamp(
+            envelope_beyond, now_ts=now_timestamp
+        )
         assert result_beyond == now_timestamp  # clamped
         assert source_beyond == "event_time"
         metrics = tp.get_metrics()
@@ -365,7 +369,7 @@ class TestTimestampNormalization:
             "body": {"event_time": year_2150},
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         assert result == now_timestamp
         assert source == "event_time"
@@ -375,7 +379,7 @@ class TestTimestampNormalization:
     def test_missing_all_timestamps(self, now_timestamp):
         """No timestamps → Use current time."""
         envelope = {"tenant_id": "test"}
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         assert result == now_timestamp
         assert source == "now"
@@ -848,25 +852,32 @@ class TestContractCompliance:
 class TestV2TemporalFallbackChain:
     """v2 tests for the temporal fallback chain (Epic 3.13)."""
 
-    def test_priority_1_mw_resolved_epoch(self, now_timestamp):
-        """MW body.temporal.resolved_epoch_ms takes highest priority."""
+    def test_chain_b_mw_resolved_epoch(self, now_timestamp):
+        """Chain B: body.temporal.resolved_epoch_ms -> referred_epoch_ms."""
         # 2024-01-01 00:00:00 UTC in milliseconds
         resolved_ms = 1704067200000
         envelope = {
             "body": {
                 "temporal": {"resolved_epoch_ms": resolved_ms},
-                "event_time": "2025-11-10T18:00:00Z",  # should be IGNORED
+                "event_time": "2025-11-10T18:00:00Z",
             },
             "ts": now_timestamp,
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        event_time, conv_source, referred_ms, ref_source = tp.normalize_timestamp(
+            envelope, now_ts=now_timestamp
+        )
 
-        assert result == 1704067200  # ms -> seconds
-        assert source == "mw_resolved"
+        # Chain A: event_time_utc comes from body.event_time (not MW resolved)
+        expected_event = int(datetime(2025, 11, 10, 18, 0, 0, tzinfo=timezone.utc).timestamp())
+        assert event_time == expected_event
+        assert conv_source == "event_time"
+        # Chain B: referred_epoch_ms from MW resolved
+        assert referred_ms == 1704067200000
+        assert ref_source == "mw_resolved"
 
-    def test_priority_2_ner_temporal_yesterday(self, now_timestamp):
-        """NER temporal 'yesterday' resolves to ~24h ago."""
+    def test_chain_b_ner_temporal_yesterday(self, now_timestamp):
+        """Chain B: NER temporal 'yesterday' -> referred_epoch_ms ~24h ago."""
         m02_output = {
             "ner_temporal_entities": [{"text": "yesterday", "type": "TEMPORAL"}],
         }
@@ -875,17 +886,18 @@ class TestV2TemporalFallbackChain:
             "ts": now_timestamp,
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(
+        event_time, conv_source, referred_ms, ref_source = tp.normalize_timestamp(
             envelope, now_ts=now_timestamp, m02_output=m02_output
         )
 
-        # Should be approximately 24h ago
-        expected_approx = now_timestamp - 86400
-        assert abs(result - expected_approx) < 60  # within 1 minute
-        assert source == "ner_temporal"
+        # Chain A: falls through to envelope.ts
+        assert conv_source == "envelope_ts"
+        # Chain B: NER temporal resolves 'yesterday'
+        assert ref_source == "ner_temporal"
+        assert referred_ms is not None
 
-    def test_priority_2_ner_temporal_yesterday_evening(self, now_timestamp):
-        """NER temporal 'yesterday evening' resolves to ~24h ago + 19:00."""
+    def test_chain_b_ner_temporal_yesterday_evening(self, now_timestamp):
+        """Chain B: NER temporal 'yesterday evening' -> referred_epoch_ms."""
         m02_output = {
             "ner_temporal_entities": [{"text": "yesterday evening", "type": "TEMPORAL"}],
         }
@@ -893,13 +905,15 @@ class TestV2TemporalFallbackChain:
             "body": {},
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(
+        event_time, conv_source, referred_ms, ref_source = tp.normalize_timestamp(
             envelope, now_ts=now_timestamp, m02_output=m02_output
         )
 
-        assert source == "ner_temporal"
-        # Should be yesterday at ~19:00 UTC
-        assert result < now_timestamp
+        # Chain A: no event_time, no envelope.ts -> now()
+        assert conv_source == "now"
+        # Chain B: NER temporal resolves 'yesterday evening'
+        assert ref_source == "ner_temporal"
+        assert referred_ms is not None
 
     def test_priority_3_body_event_time(self, now_timestamp):
         """body.event_time used when MW temporal and NER both absent."""
@@ -907,7 +921,7 @@ class TestV2TemporalFallbackChain:
             "body": {"event_time": "2025-11-10T18:00:00Z"},
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         expected = int(datetime(2025, 11, 10, 18, 0, 0, tzinfo=timezone.utc).timestamp())
         assert result == expected
@@ -920,7 +934,7 @@ class TestV2TemporalFallbackChain:
             "ts": "2025-11-10T18:00:00Z",
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         expected = int(datetime(2025, 11, 10, 18, 0, 0, tzinfo=timezone.utc).timestamp())
         assert result == expected
@@ -929,13 +943,13 @@ class TestV2TemporalFallbackChain:
     def test_priority_5_now_fallback(self, now_timestamp):
         """now() used when everything is missing."""
         envelope = {"tenant_id": "test"}
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         assert result == now_timestamp
         assert source == "now"
 
-    def test_mw_resolved_overrides_event_time_and_ts(self, now_timestamp):
-        """MW resolved epoch takes priority over both event_time and envelope.ts."""
+    def test_chain_a_b_independent(self, now_timestamp):
+        """Chain A and Chain B are independent -- MW resolved does NOT affect event_time_utc."""
         resolved_ms = 1704067200000
         envelope = {
             "body": {
@@ -945,13 +959,19 @@ class TestV2TemporalFallbackChain:
             "ts": now_timestamp,
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        event_time, conv_source, referred_ms, ref_source = tp.normalize_timestamp(
+            envelope, now_ts=now_timestamp
+        )
 
-        assert result == 1704067200
-        assert source == "mw_resolved"
+        # Chain A: event_time_utc from body.event_time
+        assert event_time == now_timestamp
+        assert conv_source == "event_time"
+        # Chain B: referred from MW resolved
+        assert referred_ms == 1704067200000
+        assert ref_source == "mw_resolved"
 
-    def test_ner_temporal_overrides_event_time(self, now_timestamp):
-        """NER temporal takes priority over body.event_time."""
+    def test_ner_chain_b_event_time_chain_a(self, now_timestamp):
+        """NER temporal is Chain B, event_time is Chain A -- independent chains."""
         m02_output = {
             "ner_temporal_entities": [{"text": "yesterday", "type": "TEMPORAL"}],
         }
@@ -959,11 +979,15 @@ class TestV2TemporalFallbackChain:
             "body": {"event_time": "2025-11-10T18:00:00Z"},
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(
+        event_time, conv_source, referred_ms, ref_source = tp.normalize_timestamp(
             envelope, now_ts=now_timestamp, m02_output=m02_output
         )
 
-        assert source == "ner_temporal"
+        # Chain A: body.event_time
+        assert conv_source == "event_time"
+        # Chain B: NER temporal
+        assert ref_source == "ner_temporal"
+        assert referred_ms is not None
 
     def test_invalid_resolved_epoch_ignored(self, now_timestamp):
         """Invalid resolved_epoch_ms (negative/zero) falls through to next priority."""
@@ -974,7 +998,7 @@ class TestV2TemporalFallbackChain:
             },
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
+        result, source, *_ = tp.normalize_timestamp(envelope, now_ts=now_timestamp)
 
         assert source == "event_time"
 
@@ -985,7 +1009,7 @@ class TestV2TemporalFallbackChain:
             "body": {"event_time": "2025-11-10T18:00:00Z"},
             "tenant_id": "test",
         }
-        result, source = tp.normalize_timestamp(
+        result, source, *_ = tp.normalize_timestamp(
             envelope, now_ts=now_timestamp, m02_output=m02_output
         )
 
@@ -1129,8 +1153,8 @@ class TestV2AsyncIntegration:
     """v2 async run() tests with temporal + spatial fallback chains."""
 
     @pytest.mark.asyncio
-    async def test_mw_resolved_epoch_produces_backdated_event(self):
-        """MW resolved_epoch_ms = 2024-01-01 -> is_backdated=True, temporal_source=mw_resolved."""
+    async def test_mw_resolved_epoch_produces_referred_time(self):
+        """MW resolved_epoch_ms -> referred time (Chain B), NOT event_time_utc (Chain A)."""
         now_ts = int(datetime.now(timezone.utc).timestamp())
         envelope = {
             "body": {
@@ -1146,14 +1170,13 @@ class TestV2AsyncIntegration:
         message, context, config = make_test_call(envelope, write_time_utc=now_ts)
         result = await tp.run(message, context, **config)
 
-        assert result["event_time_utc"] == 1704067200
-        assert result["temporal_source"] == "mw_resolved"
-        assert result["is_backdated"] is True
-        # Check local_date reflects 2024-01-01
-        assert "2024-01-01" in result["local_date"] or "2023-12-31" in result["local_date"]
+        # Chain A: no event_time, no envelope.ts -> now()
+        assert result["temporal_source"] == "now"
+        assert abs(result["event_time_utc"] - now_ts) < 5
+        # Chain B passthrough: referred time from MW resolved
+        assert result["temporal_resolved_epoch_ms"] == 1704067200000
         # v2 passthrough fields
         assert result["temporal_mentioned_time"] == "yesterday evening"
-        assert result["temporal_resolved_epoch_ms"] == 1704067200000
         assert result["temporal_orientation"] == "PAST"
 
     @pytest.mark.asyncio
@@ -1299,7 +1322,7 @@ class TestV2AsyncIntegration:
         tp_enrichment = result["enrichments"]["temporal_profiler"]
         assert tp_enrichment["temporal_mentioned_time"] == "last night"
         assert tp_enrichment["temporal_orientation"] == "PAST"
-        assert tp_enrichment["temporal_source"] == "mw_resolved"
+        assert tp_enrichment["temporal_source"] == "event_time"
         assert tp_enrichment["location_name"] == "Home"
         assert tp_enrichment["location_source"] == "mw_location"
 
@@ -1322,7 +1345,7 @@ class TestV2AsyncIntegration:
 
     @pytest.mark.asyncio
     async def test_ner_temporal_fallback_via_enrichments(self):
-        """M02 NER temporal from enrichments should be used as fallback."""
+        """M02 NER temporal from enrichments -> Chain B referred time, Chain A from envelope.ts."""
         now_ts = int(datetime.now(timezone.utc).timestamp())
         envelope = {
             "body": {},  # No MW temporal, no event_time
@@ -1338,10 +1361,11 @@ class TestV2AsyncIntegration:
         message, context, config = make_test_call(envelope, write_time_utc=now_ts)
         result = await tp.run(message, context, **config)
 
-        assert result["temporal_source"] == "ner_temporal"
-        # Should be approximately 24h ago
-        expected_approx = now_ts - 86400
-        assert abs(result["event_time_utc"] - expected_approx) < 120
+        # Chain A: no event_time -> envelope.ts
+        assert result["temporal_source"] == "envelope_ts"
+        assert result["event_time_utc"] == now_ts
+        # Chain B: NER temporal resolves referred time (via temporal_resolved_epoch_ms)
+        assert result["temporal_resolved_epoch_ms"] is not None
 
     @pytest.mark.asyncio
     async def test_flat_and_enrichment_fields_match(self):

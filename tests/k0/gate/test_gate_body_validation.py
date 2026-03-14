@@ -296,8 +296,8 @@ class TestSchemaValidationFailures:
         assert result.valid is False
         assert TOPIC_BODY_VALIDATION_FAILED in (result.reason or "")
 
-    def test_schema_version_must_be_2_0(self, validator: TopicBodyValidator) -> None:
-        """schema_version is const: '2.0'."""
+    def test_schema_version_rejects_unknown(self, validator: TopicBodyValidator) -> None:
+        """schema_version must be '2.0' or '2.1', not '1.0'."""
         body = _valid_memory_write_body()
         body["schema_version"] = "1.0"
         body_bytes = len(json.dumps(body).encode("utf-8"))
@@ -426,3 +426,159 @@ class TestResultProperties:
         assert isinstance(result, TopicValidationResult)
         assert result.valid is False
         assert result.reason is not None
+
+
+# ===========================================================================
+# Schema v2.1: temporal_links + schema_version enum (GAP-002 Epic 2.2)
+# ===========================================================================
+
+
+class TestSchemaV21TemporalLinks:
+    """Verify v2.1 additive changes: schema_version enum, temporal_links array."""
+
+    def test_v20_body_still_valid(self, validator: TopicBodyValidator) -> None:
+        """Existing v2.0 bodies must validate against v2.1 schema (backward compat)."""
+        body = _valid_memory_write_body()
+        assert body["schema_version"] == "2.0"
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is True
+
+    def test_v21_schema_version_accepted(self, validator: TopicBodyValidator) -> None:
+        """schema_version '2.1' is accepted."""
+        body = _valid_memory_write_body()
+        body["schema_version"] = "2.1"
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is True
+
+    def test_v30_schema_version_rejected(self, validator: TopicBodyValidator) -> None:
+        """schema_version '3.0' is not accepted."""
+        body = _valid_memory_write_body()
+        body["schema_version"] = "3.0"
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is False
+
+    def test_empty_temporal_links_valid(self, validator: TopicBodyValidator) -> None:
+        """temporal_links: [] is valid (default)."""
+        body = _valid_memory_write_body()
+        body["schema_version"] = "2.1"
+        body["temporal_links"] = []
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is True
+
+    def test_single_temporal_link_valid(self, validator: TopicBodyValidator) -> None:
+        body = _valid_memory_write_body()
+        body["schema_version"] = "2.1"
+        body["temporal_links"] = [{"mentioned_time": "yesterday evening"}]
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is True
+
+    def test_full_temporal_link_valid(self, validator: TopicBodyValidator) -> None:
+        body = _valid_memory_write_body()
+        body["schema_version"] = "2.1"
+        body["temporal_links"] = [
+            {
+                "mentioned_time": "yesterday evening",
+                "resolved_epoch_ms": 1700000000000,
+                "uncertainty_window_ms": 14400000,
+                "link_type": "RETROSPECTIVE",
+                "confidence": 0.95,
+            }
+        ]
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is True
+
+    def test_three_temporal_links_valid(self, validator: TopicBodyValidator) -> None:
+        """Multi-temporal: yesterday + next Friday + Christmas."""
+        body = _valid_memory_write_body()
+        body["schema_version"] = "2.1"
+        body["temporal_links"] = [
+            {"mentioned_time": "yesterday", "link_type": "RETROSPECTIVE"},
+            {"mentioned_time": "next Friday", "link_type": "PROSPECTIVE"},
+            {"mentioned_time": "Christmas", "link_type": "PROSPECTIVE"},
+        ]
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is True
+
+    def test_five_temporal_links_at_max(self, validator: TopicBodyValidator) -> None:
+        body = _valid_memory_write_body()
+        body["schema_version"] = "2.1"
+        body["temporal_links"] = [{"mentioned_time": f"time_{i}"} for i in range(5)]
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is True
+
+    def test_six_temporal_links_rejected(self, validator: TopicBodyValidator) -> None:
+        """maxItems: 5 -- 6 links must fail."""
+        body = _valid_memory_write_body()
+        body["schema_version"] = "2.1"
+        body["temporal_links"] = [{"mentioned_time": f"time_{i}"} for i in range(6)]
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is False
+        assert TOPIC_BODY_VALIDATION_FAILED in (result.reason or "")
+
+    def test_temporal_link_missing_mentioned_time_rejected(
+        self, validator: TopicBodyValidator
+    ) -> None:
+        """mentioned_time is required on TemporalLink."""
+        body = _valid_memory_write_body()
+        body["schema_version"] = "2.1"
+        body["temporal_links"] = [{"link_type": "RETROSPECTIVE", "confidence": 0.9}]
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is False
+        assert TOPIC_BODY_VALIDATION_FAILED in (result.reason or "")
+
+    def test_temporal_link_invalid_link_type_rejected(self, validator: TopicBodyValidator) -> None:
+        body = _valid_memory_write_body()
+        body["schema_version"] = "2.1"
+        body["temporal_links"] = [{"mentioned_time": "yesterday", "link_type": "INVALID_TYPE"}]
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is False
+        assert TOPIC_BODY_VALIDATION_FAILED in (result.reason or "")
+
+    def test_temporal_link_confidence_out_of_range(self, validator: TopicBodyValidator) -> None:
+        body = _valid_memory_write_body()
+        body["schema_version"] = "2.1"
+        body["temporal_links"] = [{"mentioned_time": "yesterday", "confidence": 1.5}]
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is False
+        assert TOPIC_BODY_VALIDATION_FAILED in (result.reason or "")
+
+    def test_temporal_link_empty_mentioned_time_rejected(
+        self, validator: TopicBodyValidator
+    ) -> None:
+        """mentioned_time has minLength: 1."""
+        body = _valid_memory_write_body()
+        body["schema_version"] = "2.1"
+        body["temporal_links"] = [{"mentioned_time": ""}]
+        body_bytes = len(json.dumps(body).encode("utf-8"))
+        result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+        assert result.valid is False
+        assert TOPIC_BODY_VALIDATION_FAILED in (result.reason or "")
+
+    def test_all_six_link_types_accepted(self, validator: TopicBodyValidator) -> None:
+        """Each of the 6 TemporalLinkType enum values must be accepted."""
+        for link_type in (
+            "RETROSPECTIVE",
+            "PROSPECTIVE",
+            "CONCURRENT",
+            "HABITUAL",
+            "CONTEXTUAL",
+            "CONDITIONAL",
+        ):
+            body = _valid_memory_write_body()
+            body["schema_version"] = "2.1"
+            body["temporal_links"] = [{"mentioned_time": "test", "link_type": link_type}]
+            body_bytes = len(json.dumps(body).encode("utf-8"))
+            result = validator.validate_topic_body("memory.write", body, "GREEN", body_bytes)
+            assert result.valid is True, f"link_type={link_type} should be valid"

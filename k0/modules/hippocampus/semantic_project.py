@@ -922,7 +922,7 @@ def _categorize_ner_entities(
 
 def _enhance_kg_triples_with_mw_relationships(
     kg_triples: list[list[str]],
-    mw_relationships: list[dict[str, Any]],
+    mw_relationships: dict[str, Any] | list[dict[str, Any]],
 ) -> list[list[str]]:
     """
     Enhance KG triples with typed predicates from MW participant_relationships.
@@ -933,8 +933,9 @@ def _enhance_kg_triples_with_mw_relationships(
 
     Args:
         kg_triples: KG triples as [[subject, predicate, object], ...]
-        mw_relationships: MW participant_relationships list of dicts:
-            [{person: str, relationship_type: str, confidence: float}, ...]
+        mw_relationships: MW participant_relationships -- either:
+            v2.1 dict: {person_id: {type: str, target: str, confidence: float}}
+            legacy list: [{person: str, relationship_type: str, confidence: float}, ...]
 
     Returns:
         Enhanced KG triples with typed predicates where matched.
@@ -944,11 +945,24 @@ def _enhance_kg_triples_with_mw_relationships(
 
     # Build lookup: normalized person name -> relationship_type
     rel_lookup: dict[str, str] = {}
-    for rel in mw_relationships:
-        person = rel.get("person", "")
-        rel_type = rel.get("relationship_type", "")
-        if person and rel_type:
-            rel_lookup[person.lower().strip()] = rel_type
+    if isinstance(mw_relationships, dict):
+        # v2.1 schema format: {person_id: {type, target, confidence}}
+        for person_id, rel_obj in mw_relationships.items():
+            if not isinstance(rel_obj, dict):
+                continue
+            rel_type = rel_obj.get("type", "")
+            person = person_id.replace("person_", "")
+            if person and rel_type:
+                rel_lookup[person.lower().strip()] = rel_type
+    else:
+        # Legacy list format: [{person, relationship_type, confidence}]
+        for rel in mw_relationships:
+            if not isinstance(rel, dict):
+                continue
+            person = rel.get("person", "")
+            rel_type = rel.get("relationship_type", "")
+            if person and rel_type:
+                rel_lookup[person.lower().strip()] = rel_type
 
     if not rel_lookup:
         return kg_triples

@@ -213,7 +213,28 @@ function Ensure-Image {
     $imagePresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch $imageName)
     if ($Rebuild -or -not $imagePresent) {
         Write-Info "Building image $imageName"
-        docker build -t $imageName -f $dockerFile $RepoRoot | Write-Host
+
+        # Load HF_TOKEN from env file so it gets baked into image for weight downloads
+        $hfToken = $env:HF_TOKEN
+        if (-not $hfToken) {
+            $envFile = Join-Path $EnvDir "k0.env"
+            if (Test-Path $envFile) {
+                Get-Content $envFile | ForEach-Object {
+                    if ($_ -match '^HF_TOKEN=(.+)$') { $hfToken = $matches[1].Trim() }
+                }
+            }
+        }
+
+        $buildArgs = @()
+        if ($hfToken) {
+            $buildArgs += "--build-arg", "HF_TOKEN=$hfToken"
+            Write-Info "Passing HF_TOKEN as build arg for UltraBERT weight download"
+        }
+        else {
+            Write-Warn "HF_TOKEN not found in env/k0.env or environment. UltraBERT may fail to download weights."
+        }
+
+        docker build -t $imageName -f $dockerFile @buildArgs $RepoRoot | Write-Host
     }
 }
 

@@ -64,7 +64,7 @@ asyncpg>=0.30.0
 
 # ==================== EMBEDDING WORKER CONTAINER ====================
 # NLP & Embeddings - UltraBERT replaces most of these
-# Install UltraBERT from wheel: pip install wheels/familyos_ultrabert-4.0.0-py3-none-any.whl
+# Install UltraBERT from wheel: pip install wheels/familyos_ultrabert-4.0.2-py3-none-any.whl
 nltk>=3.8.1
 
 # DEPRECATED - Replaced by UltraBERT

@@ -118,6 +118,9 @@ class TemporalProfile:
     write_time_utc: int  # Unix timestamp (seconds) - DB commit time
     write_lag_ms: int  # Milliseconds (write_time - event_time)
 
+    # v3 (Epic 1.2): Conversation anchor (K1 turn timestamp, ms)
+    conversation_anchor_ms: Optional[int]  # K1 MW turn timestamp (ms) or None
+
     # Local time dimensions (3 dimensions)
     local_date: str  # ISO date (YYYY-MM-DD) in tenant timezone
     local_time: str  # ISO time (HH:MM:SS) in tenant timezone
@@ -143,10 +146,90 @@ class TemporalProfile:
     # v2: Provenance tracking
     temporal_source: str  # mw_resolved/ner_temporal/event_time/envelope_ts/now
 
+    # v2.1 (Epic 2.4): Multi-link temporal model
+    temporal_links_json: Optional[str]  # JSON array of TemporalLink dicts, max 5
+
     # v2: Spatial resolution
     location_name: Optional[str]  # Resolved location name
     location_type: Optional[str]  # restaurant/park/school/home/etc.
     location_source: Optional[str]  # mw_location/ner_location/text_heuristic/none
+
+
+_VALID_LINK_TYPES = frozenset(
+    {
+        "RETROSPECTIVE",
+        "PROSPECTIVE",
+        "CONCURRENT",
+        "HABITUAL",
+        "CONTEXTUAL",
+        "CONDITIONAL",
+    }
+)
+
+_TEMPORAL_LINK_FIELDS = frozenset(
+    {
+        "mentioned_time",
+        "resolved_epoch_ms",
+        "uncertainty_window_ms",
+        "link_type",
+        "confidence",
+    }
+)
+
+
+def parse_temporal_links(body: dict) -> Optional[str]:
+    """Parse body.temporal_links (v2.1) or synthesize from body.temporal (v2.0).
+
+    Returns a compact JSON string for st_hipp_events.temporal_links_json,
+    or None if no temporal links exist.
+
+    v2.1 path: body.temporal_links is a list of dicts -- validate and serialize.
+    v2.0 backward compat: body.temporal exists but no temporal_links --
+        synthesize a single-element list from the legacy temporal object.
+    """
+    import json
+
+    raw_links = body.get("temporal_links")
+
+    if raw_links is not None and isinstance(raw_links, list):
+        # v2.1 path: validate and pass through (max 5)
+        validated = []
+        for link in raw_links[:5]:
+            if not isinstance(link, dict):
+                continue
+            mt = link.get("mentioned_time")
+            if not mt or not isinstance(mt, str) or not mt.strip():
+                continue
+            lt = link.get("link_type", "CONCURRENT")
+            if lt not in _VALID_LINK_TYPES:
+                lt = "CONCURRENT"
+            validated.append(
+                {
+                    "mentioned_time": mt,
+                    "resolved_epoch_ms": int(link.get("resolved_epoch_ms") or 0),
+                    "uncertainty_window_ms": max(0, int(link.get("uncertainty_window_ms") or 0)),
+                    "link_type": lt,
+                    "confidence": max(0.0, min(1.0, float(link.get("confidence", 1.0)))),
+                }
+            )
+        if not validated:
+            return None
+        return json.dumps(validated, ensure_ascii=False, separators=(",", ":"))
+
+    # v2.0 backward compat: synthesize from body.temporal
+    temporal = body.get("temporal")
+    if isinstance(temporal, dict) and temporal.get("mentioned_time"):
+        is_backdated = temporal.get("is_backdated", False)
+        link = {
+            "mentioned_time": temporal["mentioned_time"],
+            "resolved_epoch_ms": int(temporal.get("resolved_epoch_ms") or 0),
+            "uncertainty_window_ms": 0,
+            "link_type": "RETROSPECTIVE" if is_backdated else "CONCURRENT",
+            "confidence": 1.0,
+        }
+        return json.dumps([link], ensure_ascii=False, separators=(",", ":"))
+
+    return None
 
 
 def load_tenant_timezone_from_store(tenant_id: str) -> str:
@@ -208,9 +291,7 @@ def _parse_raw_timestamp(event_time: Any, now_ts: int) -> Optional[int]:
                 dt = dt.astimezone(timezone.utc)
             return int(dt.timestamp())
         except (ValueError, AttributeError) as e:
-            logger.warning(
-                f"Timestamp parse failed for event_time={event_time}: {e}"
-            )
+            logger.warning(f"Timestamp parse failed for event_time={event_time}: {e}")
             return None
     elif isinstance(event_time, (int, float)):
         timestamp = int(event_time)
@@ -244,17 +325,77 @@ def _clamp_future_timestamp(timestamp: int, now_ts: int) -> int:
 
 # Regex patterns for basic temporal expression resolution
 _TEMPORAL_PATTERNS = [
-    (re.compile(r"\byesterday\s*evening\b", re.IGNORECASE), lambda now: now - timedelta(hours=24) + timedelta(hours=19)),
-    (re.compile(r"\byesterday\s*morning\b", re.IGNORECASE), lambda now: now - timedelta(hours=24) + timedelta(hours=9)),
-    (re.compile(r"\byesterday\s*afternoon\b", re.IGNORECASE), lambda now: now - timedelta(hours=24) + timedelta(hours=14)),
-    (re.compile(r"\byesterday\s*night\b", re.IGNORECASE), lambda now: now - timedelta(hours=24) + timedelta(hours=21)),
+    (
+        re.compile(r"\byesterday\s*evening\b", re.IGNORECASE),
+        lambda now: now - timedelta(hours=24) + timedelta(hours=19),
+    ),
+    (
+        re.compile(r"\byesterday\s*morning\b", re.IGNORECASE),
+        lambda now: now - timedelta(hours=24) + timedelta(hours=9),
+    ),
+    (
+        re.compile(r"\byesterday\s*afternoon\b", re.IGNORECASE),
+        lambda now: now - timedelta(hours=24) + timedelta(hours=14),
+    ),
+    (
+        re.compile(r"\byesterday\s*night\b", re.IGNORECASE),
+        lambda now: now - timedelta(hours=24) + timedelta(hours=21),
+    ),
     (re.compile(r"\byesterday\b", re.IGNORECASE), lambda now: now - timedelta(hours=24)),
     (re.compile(r"\blast\s*week\b", re.IGNORECASE), lambda now: now - timedelta(days=7)),
     (re.compile(r"\btwo\s*days?\s*ago\b", re.IGNORECASE), lambda now: now - timedelta(days=2)),
     (re.compile(r"\bthree\s*days?\s*ago\b", re.IGNORECASE), lambda now: now - timedelta(days=3)),
     (re.compile(r"\blast\s*night\b", re.IGNORECASE), lambda now: now - timedelta(hours=12)),
-    (re.compile(r"\bthis\s*morning\b", re.IGNORECASE), lambda now: now.replace(hour=9, minute=0, second=0, microsecond=0)),
+    (
+        re.compile(r"\bthis\s*morning\b", re.IGNORECASE),
+        lambda now: now.replace(hour=9, minute=0, second=0, microsecond=0),
+    ),
     (re.compile(r"\bearlier\s*today\b", re.IGNORECASE), lambda now: now - timedelta(hours=4)),
+    # Issue 1.2.5: Additional patterns for improved Priority 2 coverage
+    (
+        re.compile(r"\ba\s*few\s*hours?\s*ago\b", re.IGNORECASE),
+        lambda now: now - timedelta(hours=3),
+    ),
+    (
+        re.compile(r"\ban?\s*hour\s*ago\b", re.IGNORECASE),
+        lambda now: now - timedelta(hours=1),
+    ),
+    (
+        re.compile(r"\ba\s*couple\s*(?:of\s*)?days?\s*ago\b", re.IGNORECASE),
+        lambda now: now - timedelta(days=2),
+    ),
+    (
+        re.compile(r"\bfew\s*days?\s*(?:ago|back)\b", re.IGNORECASE),
+        lambda now: now - timedelta(days=3),
+    ),
+    (
+        re.compile(r"\blast\s*month\b", re.IGNORECASE),
+        lambda now: now - timedelta(days=30),
+    ),
+    (
+        re.compile(r"\blast\s*year\b", re.IGNORECASE),
+        lambda now: now - timedelta(days=365),
+    ),
+    (
+        re.compile(r"\bover\s*the\s*weekend\b", re.IGNORECASE),
+        lambda now: now - timedelta(days=(now.weekday() + 2) % 7),
+    ),
+    (
+        re.compile(r"\bthis\s*afternoon\b", re.IGNORECASE),
+        lambda now: now.replace(hour=14, minute=0, second=0, microsecond=0),
+    ),
+    (
+        re.compile(r"\bthis\s*evening\b", re.IGNORECASE),
+        lambda now: now.replace(hour=19, minute=0, second=0, microsecond=0),
+    ),
+    (
+        re.compile(r"\btoday\b", re.IGNORECASE),
+        lambda now: now.replace(hour=0, minute=0, second=0, microsecond=0),
+    ),
+    (
+        re.compile(r"\b(?:around\s*)?noon\b", re.IGNORECASE),
+        lambda now: now.replace(hour=12, minute=0, second=0, microsecond=0),
+    ),
 ]
 
 
@@ -287,12 +428,18 @@ def _resolve_temporal_expression(raw_text: str, now_ts: int) -> Optional[int]:
 
 # Location type classification patterns
 _LOCATION_TYPE_PATTERNS = [
-    (re.compile(r"\b(restaurant|cafe|diner|bistro|pizzeria|grill|bar)\b", re.IGNORECASE), "restaurant"),
+    (
+        re.compile(r"\b(restaurant|cafe|diner|bistro|pizzeria|grill|bar)\b", re.IGNORECASE),
+        "restaurant",
+    ),
     (re.compile(r"\b(park|garden|trail|beach|lake|forest|playground)\b", re.IGNORECASE), "park"),
     (re.compile(r"\b(school|university|college|academy|campus)\b", re.IGNORECASE), "school"),
     (re.compile(r"\b(hospital|clinic|doctor|medical|pharmacy)\b", re.IGNORECASE), "medical"),
     (re.compile(r"\b(church|temple|mosque|synagogue)\b", re.IGNORECASE), "worship"),
-    (re.compile(r"\b(store|mall|shop|market|grocery|walmart|target|costco)\b", re.IGNORECASE), "retail"),
+    (
+        re.compile(r"\b(store|mall|shop|market|grocery|walmart|target|costco)\b", re.IGNORECASE),
+        "retail",
+    ),
     (re.compile(r"\b(office|workplace|headquarters|studio)\b", re.IGNORECASE), "workplace"),
     (re.compile(r"\b(home|house|apartment|condo)\b", re.IGNORECASE), "home"),
     (re.compile(r"\b(gym|fitness|pool|stadium|arena)\b", re.IGNORECASE), "fitness"),
@@ -329,10 +476,33 @@ def _extract_location_heuristic(text: str) -> Optional[str]:
     if match:
         candidate = match.group(1).strip()
         # Filter out common false positives (pronouns, temporal words, etc.)
-        false_positives = {"I", "We", "He", "She", "They", "It", "Monday", "Tuesday",
-                           "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
-                           "January", "February", "March", "April", "May", "June",
-                           "July", "August", "September", "October", "November", "December"}
+        false_positives = {
+            "I",
+            "We",
+            "He",
+            "She",
+            "They",
+            "It",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        }
         if candidate in false_positives:
             return None
         return candidate
@@ -369,7 +539,9 @@ def resolve_location(
         ner_locs = m02_output.get("ner_loc_entities")
         if ner_locs and isinstance(ner_locs, list) and len(ner_locs) > 0:
             loc_entity = ner_locs[0]
-            loc_text = loc_entity.get("text", "") if isinstance(loc_entity, dict) else str(loc_entity)
+            loc_text = (
+                loc_entity.get("text", "") if isinstance(loc_entity, dict) else str(loc_entity)
+            )
             if loc_text:
                 loc_type = _classify_location_type(loc_text)
                 return loc_text, loc_type, "ner_location"
@@ -385,61 +557,31 @@ def resolve_location(
     return None, None, "none"
 
 
-def normalize_timestamp(
-    envelope: dict, now_ts: Optional[int] = None, m02_output: Optional[dict] = None
-) -> tuple[int, str]:
+def _resolve_conversation_time(body: dict, envelope: dict, now_ts: int) -> tuple[int, str]:
     """
-    Extract and normalize event timestamp via the TEMPORAL FALLBACK CHAIN (v2).
+    Chain A: Resolve CONVERSATION TIME (when the user actually chatted).
 
-    The temporal fallback chain is the MOST CRITICAL chain in P02.
-    Without a correct timestamp, everything downstream collapses.
-    event_time_utc is NEVER null -- this chain guarantees a value.
+    This timestamp drives R2 episode formation and temporal clustering.
+    It must reflect the moment of interaction, NOT what date the event
+    refers to (that is Chain B's job).
 
     Priority:
-    1. body.temporal.resolved_epoch_ms (K1 resolved -- highest fidelity)
-    2. M02 NER temporal expression + regex resolution (heuristic)
-    3. body.event_time (ISO 8601 or Unix timestamp)
-    4. envelope.ts (Bridge timestamp -- ALWAYS PRESENT, hard backstop)
-    5. Current time (ultimate fallback -- should never reach here)
-
-    Handles all timestamp formats (ISO 8601, Unix seconds/ms/us).
-    Clamps future timestamps beyond tolerance window.
-
-    Args:
-        envelope: Event envelope dict.
-        now_ts: Current timestamp (Unix seconds), for testing. If None, computed once.
-        m02_output: M02 enrichment output with ner_temporal_entities (optional).
+    1. body.conversation_anchor_ms (K1 MW turn timestamp, highest fidelity)
+    2. body.event_time (ISO 8601 or Unix -- MW now_utc() at extraction)
+    3. envelope.ts (Bridge timestamp -- ALWAYS PRESENT, hard backstop)
+    4. now() (ultimate fallback)
 
     Returns:
-        (event_time_utc, temporal_source): Unix seconds and provenance tag.
+        (event_time_utc_seconds, source_tag)
     """
-    body = envelope.get("body", {})
-
-    # Capture current time ONCE (deterministic)
-    if now_ts is None:
-        now_ts = int(datetime.now(timezone.utc).timestamp())
-
-    # Priority 1: MW resolved epoch (K1 resolved "yesterday evening" to epoch)
-    temporal = body.get("temporal", {}) if isinstance(body.get("temporal"), dict) else {}
-    resolved_ms = temporal.get("resolved_epoch_ms")
-    if resolved_ms and isinstance(resolved_ms, (int, float)) and resolved_ms > 0:
-        timestamp = int(resolved_ms) // 1000 if resolved_ms >= 1_000_000_000_000 else int(resolved_ms)
+    # Priority 1: K1 MW conversation_anchor_ms (set from turn_timestamp_ms in Epic 1.1)
+    anchor_ms = body.get("conversation_anchor_ms")
+    if anchor_ms and isinstance(anchor_ms, (int, float)) and anchor_ms > 0:
+        timestamp = int(anchor_ms) // 1000 if anchor_ms >= 1_000_000_000_000 else int(anchor_ms)
         timestamp = _clamp_future_timestamp(timestamp, now_ts)
-        return timestamp, "mw_resolved"
+        return timestamp, "conversation_anchor"
 
-    # Priority 2: M02 NER temporal entities (regex resolution)
-    if m02_output and isinstance(m02_output, dict):
-        ner_temporal = m02_output.get("ner_temporal_entities")
-        if ner_temporal and isinstance(ner_temporal, list) and len(ner_temporal) > 0:
-            first_entity = ner_temporal[0]
-            raw_text = first_entity.get("text", "") if isinstance(first_entity, dict) else str(first_entity)
-            if raw_text:
-                resolved = _resolve_temporal_expression(raw_text, now_ts)
-                if resolved is not None:
-                    resolved = _clamp_future_timestamp(resolved, now_ts)
-                    return resolved, "ner_temporal"
-
-    # Priority 3: body.event_time
+    # Priority 2: body.event_time (MW now_utc at extraction time)
     event_time = body.get("event_time")
     if event_time:
         parsed = _parse_raw_timestamp(event_time, now_ts)
@@ -447,7 +589,7 @@ def normalize_timestamp(
             parsed = _clamp_future_timestamp(parsed, now_ts)
             return parsed, "event_time"
 
-    # Priority 4: envelope.ts (Bridge timestamp -- hard backstop)
+    # Priority 3: envelope.ts (Bridge timestamp -- hard backstop)
     envelope_ts = envelope.get("ts")
     if envelope_ts:
         parsed = _parse_raw_timestamp(envelope_ts, now_ts)
@@ -455,8 +597,105 @@ def normalize_timestamp(
             parsed = _clamp_future_timestamp(parsed, now_ts)
             return parsed, "envelope_ts"
 
-    # Priority 5: now() (ultimate fallback -- should never reach here if envelope.ts present)
+    # Priority 4: now() (should never reach here if envelope.ts present)
     return now_ts, "now"
+
+
+def _resolve_referred_time(
+    body: dict, m02_output: Optional[dict], now_ts: int
+) -> tuple[Optional[int], str]:
+    """
+    Chain B: Resolve REFERRED TIME (what date/time the event talks about).
+
+    This is the temporal expression the user mentioned ("yesterday evening",
+    "last Tuesday"). It does NOT affect event_time_utc or R2 episodes.
+    It feeds temporal_resolved_epoch_ms for temporal queries and R5 CTD.
+
+    Priority:
+    1. body.temporal.resolved_epoch_ms (K1 LLM resolved -- highest fidelity)
+    2. M02 NER temporal expression + regex resolution (heuristic)
+    3. None (no temporal reference detected)
+
+    Returns:
+        (referred_epoch_ms_or_None, source_tag)
+    """
+    # Priority 1: MW resolved epoch (K1 resolved "yesterday evening" to epoch)
+    temporal = body.get("temporal", {}) if isinstance(body.get("temporal"), dict) else {}
+    resolved_ms = temporal.get("resolved_epoch_ms")
+    if resolved_ms and isinstance(resolved_ms, (int, float)) and resolved_ms > 0:
+        # Keep in milliseconds (matches column contract: temporal_resolved_epoch_ms BIGINT ms)
+        return int(resolved_ms), "mw_resolved"
+
+    # Priority 2: M02 NER temporal entities (regex resolution)
+    if m02_output and isinstance(m02_output, dict):
+        ner_temporal = m02_output.get("ner_temporal_entities")
+        if ner_temporal and isinstance(ner_temporal, list) and len(ner_temporal) > 0:
+            first_entity = ner_temporal[0]
+            raw_text = (
+                first_entity.get("text", "")
+                if isinstance(first_entity, dict)
+                else str(first_entity)
+            )
+            if raw_text:
+                resolved_seconds = _resolve_temporal_expression(raw_text, now_ts)
+                if resolved_seconds is not None:
+                    resolved_seconds = _clamp_future_timestamp(resolved_seconds, now_ts)
+                    # Convert to ms for consistency with MW resolved_epoch_ms
+                    return resolved_seconds * 1000, "ner_temporal"
+
+    # Priority 3: No temporal reference
+    return None, "none"
+
+
+def normalize_timestamp(
+    envelope: dict, now_ts: Optional[int] = None, m02_output: Optional[dict] = None
+) -> tuple[int, str, Optional[int], str]:
+    """
+    Extract and normalize event timestamps via dual TEMPORAL FALLBACK CHAINS (v3).
+
+    The temporal fallback chain is the MOST CRITICAL chain in P02.
+    Without a correct timestamp, everything downstream collapses.
+
+    Split into two independent chains (Epic 1.2 / GAP-002):
+
+    Chain A -- CONVERSATION TIME (event_time_utc):
+      When the user actually chatted. Drives R2 episode formation.
+      1. body.conversation_anchor_ms (K1 MW turn timestamp)
+      2. body.event_time (MW now_utc at extraction)
+      3. envelope.ts (Bridge timestamp -- hard backstop)
+      4. now() (ultimate fallback)
+
+    Chain B -- REFERRED TIME (temporal_resolved_epoch_ms):
+      What date/time the event talks about. For temporal queries only.
+      1. body.temporal.resolved_epoch_ms (K1 LLM resolved)
+      2. M02 NER temporal expression (heuristic)
+      3. None (no temporal reference)
+
+    Args:
+        envelope: Event envelope dict.
+        now_ts: Current timestamp (Unix seconds), for testing. If None, computed once.
+        m02_output: M02 enrichment output with ner_temporal_entities (optional).
+
+    Returns:
+        (event_time_utc, conv_source, referred_epoch_ms, ref_source):
+        - event_time_utc: Unix seconds (conversation time, NEVER null)
+        - conv_source: Chain A provenance tag
+        - referred_epoch_ms: Milliseconds or None (referred time)
+        - ref_source: Chain B provenance tag
+    """
+    body = envelope.get("body", {})
+
+    # Capture current time ONCE (deterministic)
+    if now_ts is None:
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+
+    # Chain A: conversation time (for R2 episodes)
+    event_time_utc, conv_source = _resolve_conversation_time(body, envelope, now_ts)
+
+    # Chain B: referred time (for temporal queries)
+    referred_epoch_ms, ref_source = _resolve_referred_time(body, m02_output, now_ts)
+
+    return event_time_utc, conv_source, referred_epoch_ms, ref_source
 
 
 def convert_to_local_timezone(timestamp_utc: int, tenant_id: str) -> tuple[datetime, str]:
@@ -645,6 +884,8 @@ def profile_temporal(
     location_name: Optional[str] = None,
     location_type: Optional[str] = None,
     location_source: Optional[str] = "none",
+    conversation_anchor_ms: Optional[int] = None,
+    temporal_links_json: Optional[str] = None,
 ) -> TemporalProfile:
     """
     Generate complete temporal profile for an event (14 dimensions, v2).
@@ -701,6 +942,7 @@ def profile_temporal(
         event_time_utc=event_time_utc,
         write_time_utc=write_time_utc,
         write_lag_ms=lag_ms,
+        conversation_anchor_ms=conversation_anchor_ms,
         local_date=local_date,
         local_time=local_time,
         timezone_used=tz_name,
@@ -714,6 +956,7 @@ def profile_temporal(
         temporal_resolved_epoch_ms=temporal_resolved_epoch_ms,
         temporal_orientation=temporal_orientation,
         temporal_source=temporal_source,
+        temporal_links_json=temporal_links_json,
         location_name=location_name,
         location_type=location_type,
         location_source=location_source,
@@ -809,7 +1052,8 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     m02_output = enrichments.get("semantic_projector") or enrichments.get("m02")
 
     # v2: Normalize event timestamp via TEMPORAL FALLBACK CHAIN (returns provenance)
-    event_time_utc, temporal_source = normalize_timestamp(
+    # v3 (Epic 1.2): Split into Chain A (conversation time) + Chain B (referred time)
+    event_time_utc, temporal_source, referred_epoch_ms, referred_source = normalize_timestamp(
         envelope, now_ts=now_ts, m02_output=m02_output
     )
 
@@ -817,15 +1061,12 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     body = envelope.get("body", {})
     temporal_section = body.get("temporal", {}) if isinstance(body.get("temporal"), dict) else {}
     temporal_mentioned_time = temporal_section.get("mentioned_time")
-    temporal_resolved_epoch_ms_raw = temporal_section.get("resolved_epoch_ms")
-    temporal_resolved_epoch_ms = (
-        int(temporal_resolved_epoch_ms_raw)
-        if temporal_resolved_epoch_ms_raw is not None
-        and isinstance(temporal_resolved_epoch_ms_raw, (int, float))
-        and temporal_resolved_epoch_ms_raw > 0
-        else None
-    )
-    temporal_orientation = temporal_section.get("orientation")
+    # v3 (Epic 1.2): Use Chain B result for temporal_resolved_epoch_ms
+    # instead of re-reading from body (Chain B also includes NER resolution)
+    temporal_resolved_epoch_ms = referred_epoch_ms
+    # MW v2 schema: temporal_orientation is top-level body field
+    # Legacy fallback: body.temporal.orientation (nested dict)
+    temporal_orientation = body.get("temporal_orientation") or temporal_section.get("orientation")
     # Validate orientation enum
     if temporal_orientation not in (None, "PAST", "ONGOING", "FUTURE_COMMITMENT"):
         context.logger.warning(
@@ -839,6 +1080,9 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
 
     # v2: Resolve location via SPATIAL FALLBACK CHAIN
     location_name, location_type, location_source = resolve_location(body, m02_output)
+
+    # v2.1 (Epic 2.4): Parse temporal_links from v2.1 atom or synthesize from v2.0 body.temporal
+    temporal_links_json = parse_temporal_links(body)
 
     # Capture write time (P02 UnitOfWork commit timestamp)
     if write_time_utc_override is None:
@@ -860,6 +1104,16 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         _metrics["invariant_violations"] += 1
 
     # Generate temporal profile (14 dimensions, v2)
+    # v3 (Epic 1.2): Propagate conversation_anchor_ms from K1 MW
+    raw_anchor_ms = body.get("conversation_anchor_ms")
+    conversation_anchor_ms = (
+        int(raw_anchor_ms)
+        if raw_anchor_ms is not None
+        and isinstance(raw_anchor_ms, (int, float))
+        and raw_anchor_ms > 0
+        else None
+    )
+
     profile = profile_temporal(
         event_time_utc=event_time_utc,
         write_time_utc=write_time_utc,
@@ -871,6 +1125,8 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         location_name=location_name,
         location_type=location_type,
         location_source=location_source,
+        conversation_anchor_ms=conversation_anchor_ms,
+        temporal_links_json=temporal_links_json,
     )
 
     # Log module completion
@@ -908,6 +1164,10 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         "temporal_resolved_epoch_ms": profile.temporal_resolved_epoch_ms,
         "temporal_orientation": profile.temporal_orientation,
         "temporal_source": profile.temporal_source,
+        # v3 (Epic 1.2): conversation_anchor_ms for st_hipp_events
+        "conversation_anchor_ms": profile.conversation_anchor_ms,
+        # v2.1 (Epic 2.4): temporal_links_json for st_hipp_events
+        "temporal_links_json": profile.temporal_links_json,
         "location_name": profile.location_name,
         "location_type": profile.location_type,
         "location_source": profile.location_source,
@@ -931,6 +1191,8 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
                 "temporal_resolved_epoch_ms": profile.temporal_resolved_epoch_ms,
                 "temporal_orientation": profile.temporal_orientation,
                 "temporal_source": profile.temporal_source,
+                "conversation_anchor_ms": profile.conversation_anchor_ms,
+                "temporal_links_json": profile.temporal_links_json,
                 "location_name": profile.location_name,
                 "location_type": profile.location_type,
                 "location_source": profile.location_source,

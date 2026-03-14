@@ -128,7 +128,7 @@ class P03EventState:
     # === CONTENT (R0 - from P02 pre-computation) ===
     content_text: str = ""
     content_type: str = ""
-    content_hash: str = ""
+    content_hash: str = ""  # Not loaded by R0; reserved for future exact-dedup
     simhash_hex: str = ""
     timestamp: int = 0
     channel_id: str = ""
@@ -151,7 +151,8 @@ class P03EventState:
         0.0  # P02 computed salience [0, 1] (0.50×social + 0.40×affect + 0.10×recency)
     )
     salience_band: str = ""  # HIGH, MED, LOW
-    novelty_score: float = 0.0
+    # NOTE: novelty_score is defined once in DEDUPLICATION section below.
+    # R0 loads the P02 salience-novelty value; R3 overwrites with dedup novelty.
 
     # === SOCIAL CONTEXT (R0 - from st_hipp_events) ===
     # Used by R4 for social relationship extraction
@@ -163,6 +164,9 @@ class P03EventState:
     location_name: str = ""
     location_type: str = ""
     geohash_6: str = ""
+    place_id: str = ""  # Stable place identity from K1 PlaceResolver
+    location_hierarchy_json: str = "[]"  # JSON array: most specific -> most general
+    spatial_context_json: str = "{}"  # Bundled transition: {transition_from_place, transition_mode}
     activity_type: str = (
         ""  # Legacy 7-type (meal/conversation/routine/milestone/social/work/unknown)
     )
@@ -199,6 +203,8 @@ class P03EventState:
     narrative_thread_id: str = ""
     narrative_arc_position: str = ""
     narrative_is_goal_event: bool = False
+    # Epic 5.2: True if this episode completes a narrative goal arc
+    narrative_thread_completed: bool = False
     # M3 (0073) cognitive dimensions
     intent_type: str = ""
     goal_context: str = ""
@@ -211,7 +217,12 @@ class P03EventState:
     affect_dominance: float = 0.0
     temporal_mentioned_time: str = ""
     temporal_resolved_epoch_ms: float = 0.0
+    # Issue 1.2.3: Provenance of timestamp -- mw_resolved/ner_temporal/event_time/envelope_ts/now
+    temporal_source: str = ""
     temporal_orientation: str = ""
+    # Epic 2.4 (GAP-002): Multi-link temporal model -- JSON array of TemporalLink dicts
+    temporal_links_json: str = "[]"
+    extraction_sequence: int = 0
     participant_relationships_json: str = "[]"
     cognitive_trace_id: str = ""
     # M5A (0074) new signals
@@ -220,6 +231,15 @@ class P03EventState:
     source_reliability: float = 1.0
     memory_tier: str = "routine"
     temporal_anchor_json: str = "{}"
+
+    # === K1 CORRECTION SIGNALS (R0 - 0085) ===
+    # Epic 7.2: K1 LLM-detected correction/contradiction signals
+    # R3 reads these to route EVOLVE/CONTRADICT without cosine similarity
+    correction_signal: bool = False
+    contradiction_signal: bool = False
+    supersedes_concept: str = ""  # What concept this corrects
+    correction_source: str = ""  # user_explicit / user_implicit / context_change
+    session_context_id: str = ""  # K1 session that produced the correction
 
     # === IMPORTANCE SCORING (R1) ===
     importance_score: float = 0.0
@@ -259,7 +279,9 @@ class P03EventState:
     is_duplicate: bool = False
     duplicate_of_id: Optional[str] = None
     hamming_distance: int = 64  # Max = 64 (no match)
-    novelty_score: float = 1.0  # Computed novelty [0, 1], 1.0 = fully novel
+    # Dual-purpose: R0 loads P02 salience novelty (default 0.0 from st_hipp_events),
+    # R1 reads it for importance scoring, then R3 overwrites with dedup novelty [0,1].
+    novelty_score: float = 0.0
     near_duplicates_json: str = "[]"  # JSON array of near-duplicate event_ids
 
     # === DECAY (R3) ===

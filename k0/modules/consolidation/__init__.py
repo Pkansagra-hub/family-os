@@ -25,7 +25,7 @@ Spec Reference:
 #     # R2 Episodic Clustering (Epic 4.2)
 #     CompositeDistance,     # 4.2.1
 #     EpisodeSplitter,       # 4.2.2
-#     EpisodicDBSCAN,        # 4.2.3
+#     EpisodicHDBSCAN,      # 4.2.3
 #     CentroidCalculator,    # 4.2.4
 #     EpsAdjuster,           # 4.2.5
 #     MinSamplesAdjuster,    # 4.2.6
@@ -42,7 +42,7 @@ __all__ = [
     # Uncomment as algorithms are implemented
     # "CompositeDistance",
     # "EpisodeSplitter",
-    # "EpisodicDBSCAN",
+    # "EpisodicHDBSCAN",
     # "CentroidCalculator",
     # "EpsAdjuster",
     # "MinSamplesAdjuster",

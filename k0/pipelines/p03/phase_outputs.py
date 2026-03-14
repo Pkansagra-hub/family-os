@@ -93,6 +93,8 @@ class EpisodeCluster:
     )  # CPN causal chain entities, BGT-SM seed selection
     ambiguity_score: float = 0.0  # SPC-UQ uncertainty quantification
     centroid_embedding_id: Optional[str] = None
+    # M4-RSCH-02: Secondary centroid metadata (best_of_all MRR=0.9627)
+    centroid_metadata: Optional[Dict[str, Any]] = None
     dominant_sentiment: float = 0.0
     dominant_emotion: str = ""
     aggregated_sentiment: Optional[float] = None
@@ -718,6 +720,7 @@ class P03PhaseOutputs:
     r1_max_importance: float = 0.0
     r1_min_importance: float = 0.0
     r1_importance_histogram: Dict[str, int] = field(default_factory=dict)
+    r1_metrics: Any = None  # R1PhaseMetrics (5.O.1 observability)
 
     # =========================================================================
     # R2 OUTPUTS (Episode Clustering)

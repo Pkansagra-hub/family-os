@@ -21,7 +21,8 @@ Import graph:
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Optional, Sequence
 
 from k1.memory_writer.config import MWConfig
 
@@ -331,6 +332,119 @@ def assert_mw11_no_ultrabert_import() -> None:
                         f"UltraBERT reference found in {mod_name}.{attr_name}. "
                         "UltraBERT validation belongs in K0 P02, not K1.",
                     )
+
+
+# ---------------------------------------------------------------------------
+# MW-12: temporal_links validation (0-5 TemporalLinks per atom)
+# Enforcement: runtime assertion in ExtractionValidator.
+# ---------------------------------------------------------------------------
+
+_VALID_LINK_TYPES = frozenset(
+    {
+        "RETROSPECTIVE",
+        "PROSPECTIVE",
+        "CONCURRENT",
+        "HABITUAL",
+        "CONTEXTUAL",
+        "CONDITIONAL",
+    }
+)
+
+
+def assert_mw12_temporal_links(
+    temporal_links: Sequence,
+    config: Optional[MWConfig] = None,
+) -> None:
+    """MW-12: Assert temporal_links conform to TemporalLink contract.
+
+    Validation rules:
+      1. Must be a list or tuple.
+      2. Maximum items = config.max_temporal_links_per_atom (default 5).
+      3. Each link must have a non-empty ``mentioned_time``.
+      4. Each link must have a valid ``link_type`` (one of 6 enum values).
+      5. ``confidence`` must be in [0.0, 1.0].
+      6. ``uncertainty_window_ms`` must be >= 0.
+
+    Args:
+        temporal_links: The temporal_links sequence from a MemoryAtom.
+        config: MWConfig for max_temporal_links_per_atom.
+
+    Raises:
+        InvariantViolation: On first violation found.
+    """
+    if not isinstance(temporal_links, (list, tuple)):
+        raise InvariantViolation(
+            "MW-12",
+            f"temporal_links must be list or tuple, got {type(temporal_links).__name__}.",
+        )
+
+    max_links = config.max_temporal_links_per_atom if config else 5
+    if len(temporal_links) > max_links:
+        raise InvariantViolation(
+            "MW-12",
+            f"temporal_links has {len(temporal_links)} items, exceeding limit of {max_links}.",
+        )
+
+    for i, link in enumerate(temporal_links):
+        # mentioned_time: non-empty string
+        mt = getattr(link, "mentioned_time", None)
+        if not mt or not isinstance(mt, str) or not mt.strip():
+            raise InvariantViolation(
+                "MW-12",
+                f"temporal_links[{i}].mentioned_time is missing or empty.",
+            )
+
+        # link_type: valid enum value
+        lt = getattr(link, "link_type", None)
+        if lt not in _VALID_LINK_TYPES:
+            raise InvariantViolation(
+                "MW-12",
+                f"temporal_links[{i}].link_type '{lt}' is not a valid TemporalLinkType.",
+            )
+
+        # confidence: [0.0, 1.0]
+        conf = getattr(link, "confidence", None)
+        if conf is None or not isinstance(conf, (int, float)) or conf < 0.0 or conf > 1.0:
+            raise InvariantViolation(
+                "MW-12",
+                f"temporal_links[{i}].confidence={conf} is not in [0.0, 1.0].",
+            )
+
+        # uncertainty_window_ms: >= 0
+        uw = getattr(link, "uncertainty_window_ms", None)
+        if uw is None or not isinstance(uw, (int, float)) or uw < 0:
+            raise InvariantViolation(
+                "MW-12",
+                f"temporal_links[{i}].uncertainty_window_ms={uw} is negative or missing.",
+            )
+
+
+_PLACE_ID_RE = re.compile(r"^place_[a-z0-9_]+$")
+
+
+def assert_mw13_place_id(place_id: Optional[str]) -> None:
+    """MW-13: place_id must be None or match pattern place_<slug>.
+
+    Rules:
+      - None is valid (location not resolved)
+      - Non-empty string must match ^place_[a-z0-9_]+$
+      - Empty string is invalid (use None instead)
+
+    Raises:
+        InvariantViolation: If place_id is malformed.
+    """
+    if place_id is None:
+        return
+    if not isinstance(place_id, str) or not place_id:
+        raise InvariantViolation(
+            "MW-13",
+            f"place_id must be None or a non-empty string, got {type(place_id).__name__}={place_id!r}.",
+        )
+    if not _PLACE_ID_RE.match(place_id):
+        raise InvariantViolation(
+            "MW-13",
+            f"place_id '{place_id}' does not match pattern ^place_[a-z0-9_]+$.",
+        )
 
 
 # ---------------------------------------------------------------------------

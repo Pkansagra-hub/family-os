@@ -454,8 +454,11 @@ def _extract_mw_relationships(body: Dict[str, Any]) -> Optional[List[Dict[str, A
     """
     Extract and validate MW v2 participant_relationships from envelope body.
 
-    Validates that the field is a non-empty list with valid structure.
-    Each entry must have at least 'person' and 'relationship_type' keys.
+    Supports two formats per MW v2 schema evolution:
+    1. Object map (schema canonical): {person_id: {type, target, confidence}}
+    2. List format (legacy): [{person, relationship_type, confidence}]
+
+    Normalizes both to list of {person, relationship_type, confidence} dicts.
 
     Args:
         body: Envelope body dict
@@ -466,9 +469,28 @@ def _extract_mw_relationships(body: Dict[str, Any]) -> Optional[List[Dict[str, A
     rels = body.get("participant_relationships")
     if not rels:
         return None
-    if not isinstance(rels, list):
-        return None
-    if len(rels) == 0:
+
+    # MW v2 schema canonical format: object map {person_id: {type, target, confidence}}
+    if isinstance(rels, dict):
+        validated = []
+        for person_id, descriptor in rels.items():
+            if not isinstance(descriptor, dict):
+                continue
+            rel_type = descriptor.get("type")
+            if not person_id or not rel_type:
+                continue
+            validated.append(
+                {
+                    "person": person_id,
+                    "relationship_type": rel_type,
+                    "confidence": descriptor.get("confidence", 1.0),
+                    "target": descriptor.get("target", person_id),
+                }
+            )
+        return validated if validated else None
+
+    # Legacy list format: [{person, relationship_type, confidence}]
+    if not isinstance(rels, list) or len(rels) == 0:
         return None
 
     # Validate structure: each entry must have person + relationship_type
@@ -531,7 +553,8 @@ def _derive_family_flags(
         rel_type = rel.get("relationship_type", "")
         if rel_type == "SPOUSE_OF":
             has_partner = True
-        if rel_type == "PARENT_OF":
+        # PARENT_OF = user is the parent; CHILD_OF = parent is present
+        if rel_type in ("PARENT_OF", "CHILD_OF"):
             has_parent = True
 
     return has_partner, has_parent

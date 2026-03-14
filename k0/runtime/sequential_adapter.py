@@ -23,6 +23,7 @@ Related:
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Type
 
 if TYPE_CHECKING:
@@ -32,6 +33,9 @@ if TYPE_CHECKING:
     from k0.runtime.schemas import PipelineSpec
 
 logger = logging.getLogger(__name__)
+
+
+P03_SOURCE_SCOPE_TABLE = "st_hipp_events"
 
 
 class SequentialRunnerAdapter:
@@ -287,12 +291,14 @@ class SequentialRunnerAdapter:
 
     async def _execute_cycle(self, runner_ctx: Any) -> Any:
         """
-        Execute a consolidation cycle.
+        Execute consolidation cycles until all pending events are drained.
 
-        This method handles the full R0→R8 execution flow.
+        This method handles the full R0->R8 execution flow in a drain loop.
         For sequential runners (like P03), R0 is responsible for creating
-        the actual envelope. We create a minimal "seed" envelope that R0
-        will populate with events from the database.
+        the actual envelope. Each cycle processes one batch of events.
+        The loop continues creating fresh seed envelopes and running cycles
+        until R0 reports no more eligible events (SKIP), ensuring all
+        pending events in st_hipp_events are processed in a single trigger.
         """
         pipeline_id = self._spec.pipeline_id
         pipeline_prefix = pipeline_id.split("_")[0].lower()
@@ -317,53 +323,207 @@ class SequentialRunnerAdapter:
             if envelope_class is None:
                 envelope_class = getattr(envelope_module, "P03BatchEnvelope", None)
 
-            if context_class is not None and envelope_class is not None:
-                # Create a minimal seed context for R0
-                # R0 will replace this with the actual context after fetching events
-                # Extract tenant/space from trigger_context.options (admin trigger)
-                # or fall back to top-level config (legacy/direct)
-                trigger_context_cfg = runner_ctx.get_config("trigger_context", {})
-                trigger_options = trigger_context_cfg.get("options", {})
-                seed_context = context_class.create(
-                    tenant_id=trigger_options.get(
-                        "tenant_id", runner_ctx.get_config("tenant_id", "default")
-                    ),
-                    space_id=trigger_options.get(
-                        "space_id", runner_ctx.get_config("space_id", "default")
-                    ),
-                    event_ids=[],  # Empty - R0 will populate
-                    trigger_type="MANUAL",
-                    trigger_reason=trigger_context_cfg.get("reason", "Sequential runner triggered"),
-                )
-                # Create envelope with seed context
-                envelope = envelope_class.create(seed_context)
-            else:
-                logger.warning(
-                    f"Could not create seed envelope for {pipeline_id}",
-                    extra={"pipeline_id": pipeline_id},
-                )
-                envelope = None
-
         except ImportError as e:
             logger.debug(
                 f"Cannot import envelope/context for {pipeline_id}: {e}",
                 extra={"pipeline_id": pipeline_id},
             )
-            envelope = None
+            context_class = None
+            envelope_class = None
 
-        # Run the cycle
-        if hasattr(self._runner, "run"):
-            # P03SequentialRunner.run(envelope, ctx) -> P03CycleResult
-            result = await self._runner.run(envelope, runner_ctx)
-        elif hasattr(self._runner, "run_cycle"):
-            # Alternative interface
-            result = await self._runner.run_cycle(envelope, runner_ctx)
-        else:
-            raise RuntimeError(
-                f"Sequential runner for {pipeline_id} has no run() or run_cycle() method"
+        if context_class is None or envelope_class is None:
+            logger.warning(
+                f"Could not resolve envelope/context classes for {pipeline_id}",
+                extra={"pipeline_id": pipeline_id},
+            )
+            return SimpleNamespace(success=True, skipped=True, reason="NO_ENVELOPE_CLASSES")
+
+        # Drain loop: keep running cycles until R0 finds no more events
+        results: list[Any] = []
+        batch_number = 0
+
+        while True:
+            batch_number += 1
+
+            # Build fresh seed envelopes each iteration (offset advances after each cycle)
+            seed_envelopes = await self._build_seed_envelopes(
+                pipeline_prefix=pipeline_prefix,
+                runner_ctx=runner_ctx,
+                context_class=context_class,
+                envelope_class=envelope_class,
             )
 
-        return result
+            if not seed_envelopes:
+                logger.info(
+                    "No execution scopes resolved for sequential runner",
+                    extra={"pipeline_id": pipeline_id, "batch_number": batch_number},
+                )
+                break
+
+            drained_all_scopes = True
+
+            for envelope in seed_envelopes:
+                if hasattr(self._runner, "run"):
+                    result = await self._runner.run(envelope, runner_ctx)
+                elif hasattr(self._runner, "run_cycle"):
+                    result = await self._runner.run_cycle(envelope, runner_ctx)
+                else:
+                    raise RuntimeError(
+                        f"Sequential runner for {pipeline_id} has no run() or run_cycle() method"
+                    )
+
+                results.append(result)
+
+                # Check if R0 was skipped (no events found) — signals drain complete
+                r0_skipped = self._is_r0_skipped(result)
+
+                # If cycle failed, stop draining this scope
+                cycle_failed = hasattr(result, "is_failed") and result.is_failed
+
+                if cycle_failed:
+                    logger.warning(
+                        "P03 drain loop: cycle failed, stopping",
+                        extra={
+                            "pipeline_id": pipeline_id,
+                            "batch_number": batch_number,
+                            "dlq_reason": getattr(result, "dlq_reason", None),
+                        },
+                    )
+                    drained_all_scopes = False
+                    break
+
+                if not r0_skipped:
+                    # R0 found events and processed them — more may remain
+                    drained_all_scopes = False
+
+            logger.info(
+                "P03 drain loop: batch complete",
+                extra={
+                    "pipeline_id": pipeline_id,
+                    "batch_number": batch_number,
+                    "drained_all_scopes": drained_all_scopes,
+                    "total_cycles": len(results),
+                },
+            )
+
+            if drained_all_scopes:
+                # All scopes reported R0 SKIP — no more events anywhere
+                break
+
+            # Safety: if a cycle failed, stop the drain loop
+            last = results[-1]
+            if hasattr(last, "is_failed") and last.is_failed:
+                break
+
+        if results:
+            return results[-1]
+
+        return SimpleNamespace(success=True, skipped=True, reason="NO_EXECUTION_SCOPES")
+
+    def _is_r0_skipped(self, result: Any) -> bool:
+        """Check whether R0 was skipped (no eligible events) in a cycle result."""
+        # P03CycleResult exposes phase_results dict keyed by P03PhaseId
+        phase_results = getattr(result, "phase_results", None)
+        if phase_results is None:
+            return False
+        for phase_id, phase_result in phase_results.items():
+            phase_value = getattr(phase_id, "value", str(phase_id))
+            if phase_value == "R0":
+                return getattr(phase_result, "is_skipped", False)
+        return False
+
+    async def _build_seed_envelopes(
+        self,
+        *,
+        pipeline_prefix: str,
+        runner_ctx: Any,
+        context_class: type[Any],
+        envelope_class: type[Any],
+    ) -> list[Any]:
+        """Create one or more seed envelopes for the upcoming execution."""
+        trigger_context_cfg = runner_ctx.get_config("trigger_context", {})
+        trigger_options = trigger_context_cfg.get("options", {})
+        trigger_reason = trigger_context_cfg.get("reason", "Sequential runner triggered")
+
+        scopes = await self._resolve_execution_scopes(
+            pipeline_prefix=pipeline_prefix,
+            runner_ctx=runner_ctx,
+            trigger_options=trigger_options,
+        )
+        if not scopes:
+            return []
+
+        return [
+            envelope_class.create(
+                context_class.create(
+                    tenant_id=tenant_id,
+                    space_id=space_id,
+                    event_ids=[],
+                    trigger_type="MANUAL",
+                    trigger_reason=trigger_reason,
+                )
+            )
+            for tenant_id, space_id in scopes
+        ]
+
+    async def _resolve_execution_scopes(
+        self,
+        *,
+        pipeline_prefix: str,
+        runner_ctx: Any,
+        trigger_options: dict[str, Any],
+    ) -> list[tuple[str, str]]:
+        """Resolve tenant/space scopes for a sequential pipeline execution."""
+        explicit_tenant_id = trigger_options.get("tenant_id")
+        explicit_space_id = trigger_options.get("space_id")
+
+        if explicit_tenant_id and explicit_space_id:
+            return [(explicit_tenant_id, explicit_space_id)]
+
+        legacy_tenant_id = runner_ctx.get_config("tenant_id")
+        legacy_space_id = runner_ctx.get_config("space_id")
+        if legacy_tenant_id and legacy_space_id:
+            return [(legacy_tenant_id, legacy_space_id)]
+
+        if pipeline_prefix != "p03":
+            return []
+
+        return await self._discover_p03_scopes(
+            runner_ctx=runner_ctx,
+            tenant_id=explicit_tenant_id or legacy_tenant_id,
+            space_id=explicit_space_id or legacy_space_id,
+        )
+
+    async def _discover_p03_scopes(
+        self,
+        *,
+        runner_ctx: Any,
+        tenant_id: str | None,
+        space_id: str | None,
+    ) -> list[tuple[str, str]]:
+        """Discover concrete P03 tenant/space scopes from st_hipp_events."""
+        async with runner_ctx.syscalls.unit_of_work() as uow:
+            conn = getattr(uow, "_connection", None)
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            rows = await conn.fetch(
+                f"""
+                SELECT DISTINCT tenant_id, space_id
+                FROM {P03_SOURCE_SCOPE_TABLE}
+                WHERE tenant_id IS NOT NULL
+                  AND tenant_id <> ''
+                  AND space_id IS NOT NULL
+                  AND space_id <> ''
+                  AND ($1::text IS NULL OR tenant_id = $1)
+                  AND ($2::text IS NULL OR space_id = $2)
+                ORDER BY tenant_id ASC, space_id ASC
+                """,
+                tenant_id,
+                space_id,
+            )
+
+        return [(row["tenant_id"], row["space_id"]) for row in rows]
 
     def _discover_phases(self, phases_module: Any) -> dict[Any, Any]:
         """Discover phase classes from a module and build a registry dict."""

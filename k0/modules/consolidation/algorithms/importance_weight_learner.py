@@ -8,12 +8,16 @@ Spec Reference:
     - Dossier Appendix C.2.1.1: Adaptive Weight Learning
     - Dossier Appendix C.2.1.2: Stability Controls
     - M4_EXECUTION.md Issue 4.1.5
+    - ADR-K024: Weight Learner Component Alignment
 
 Learning Method:
-    - Online gradient descent with momentum (β=0.9)
+    - Online gradient descent with momentum (beta=0.9)
     - Binary cross-entropy loss predicting "will event be grounded?"
     - Nightly batch training during P03 consolidation cycle
     - Minimum 500 samples before learning begins
+
+Weight Components (8, matching CONFIG_B scorer -- ADR-K024):
+    sentiment, affect, arousal, surprise, novelty, social, identity, recency
 
 Weight Constraints:
     - All weights normalized via softmax (sum to 1.0)
@@ -88,28 +92,40 @@ class WeightLearnerConfig:
     small_batch_lr_factor: float = 10.0
     drift_threshold: float = 0.15
 
-    # Static priors (from Dossier §4.2.2)
-    prior_emotional: float = 0.35
-    prior_recency: float = 0.25
-    prior_access: float = 0.20
-    prior_social: float = 0.20
+    # Static priors (CONFIG_B defaults, POC validated 120/120 -- ADR-K024)
+    prior_sentiment: float = 0.10
+    prior_affect: float = 0.12
+    prior_arousal: float = 0.08
+    prior_surprise: float = 0.15
+    prior_novelty: float = 0.15
+    prior_social: float = 0.15
+    prior_identity: float = 0.10
+    prior_recency: float = 0.15
 
     def get_priors(self) -> Dict[str, float]:
-        """Get static prior weights as dict."""
+        """Get static prior weights as dict (8 CONFIG_B components)."""
         return {
-            "emotional": self.prior_emotional,
-            "recency": self.prior_recency,
-            "access": self.prior_access,
+            "sentiment": self.prior_sentiment,
+            "affect": self.prior_affect,
+            "arousal": self.prior_arousal,
+            "surprise": self.prior_surprise,
+            "novelty": self.prior_novelty,
             "social": self.prior_social,
+            "identity": self.prior_identity,
+            "recency": self.prior_recency,
         }
 
     def get_priors_list(self) -> List[float]:
-        """Get static prior weights as list."""
+        """Get static prior weights as ordered list (matches COMPONENTS order)."""
         return [
-            self.prior_emotional,
-            self.prior_recency,
-            self.prior_access,
+            self.prior_sentiment,
+            self.prior_affect,
+            self.prior_arousal,
+            self.prior_surprise,
+            self.prior_novelty,
             self.prior_social,
+            self.prior_identity,
+            self.prior_recency,
         ]
 
     def validate(self) -> None:
@@ -135,22 +151,31 @@ class TrainingSample:
     Single training sample for weight learning.
 
     Represents one event with its component scores and grounding outcome.
+    8 features matching CONFIG_B scorer components (ADR-K024).
     """
 
-    emotional_score: float
-    recency_score: float
-    access_score: float
-    social_score: float
+    sentiment_score: float  # abs(sentiment_score) from P03EventState
+    affect_score: float  # abs(affect_valence) from P03EventState
+    arousal_score: float  # affect_arousal [0,1] from P03EventState
+    surprise_score: float  # surprise_level [0,1] from P03EventState
+    novelty_score: float  # NOVELTY_MAP[novelty] from P03EventState
+    social_score: float  # log2(participants)/3.32 * intimacy from P03EventState
+    identity_score: float  # identity_relevance [0,1] from P03EventState
+    recency_score: float  # exp(-0.005 * hours) from P03EventState
     was_grounded: bool  # Ground truth label
     days_ago: float = 0.0  # For sample weighting
 
     def to_features(self) -> List[float]:
-        """Convert to feature vector [emotional, recency, access, social]."""
+        """Convert to feature vector (8 CONFIG_B components)."""
         return [
-            self.emotional_score,
-            self.recency_score,
-            self.access_score,
+            self.sentiment_score,
+            self.affect_score,
+            self.arousal_score,
+            self.surprise_score,
+            self.novelty_score,
             self.social_score,
+            self.identity_score,
+            self.recency_score,
         ]
 
     def to_label(self) -> float:
@@ -182,11 +207,12 @@ class TrainingBatch:
         Convert to numpy arrays for training.
 
         Returns:
-            Tuple of (features, labels, sample_weights) arrays
+            Tuple of (features, labels, sample_weights) arrays.
+            Features shape: (N, 8) for 8 CONFIG_B components.
         """
         if not self.samples:
             return (
-                np.zeros((0, 4), dtype=np.float32),
+                np.zeros((0, 8), dtype=np.float32),
                 np.zeros(0, dtype=np.float32),
                 np.zeros(0, dtype=np.float32),
             )
@@ -251,11 +277,15 @@ class ImportanceWeightLearner:
     personalization. Each space learns weights that reflect actual
     usage patterns, improving recall precision over time.
 
-    Weight Components:
-        - emotional: Emotional salience contribution
-        - recency: Time decay contribution
-        - access: Access frequency contribution
+    Weight Components (CONFIG_B aligned, ADR-K024):
+        - sentiment: Sentiment polarity contribution
+        - affect: Emotional valence contribution
+        - arousal: Emotional arousal contribution
+        - surprise: Cognitive surprise contribution
+        - novelty: Information novelty contribution
         - social: Social context contribution
+        - identity: Self-referential identity contribution
+        - recency: Time decay contribution
 
     Usage:
         learner = ImportanceWeightLearner(space_id="sp_123")
@@ -273,8 +303,18 @@ class ImportanceWeightLearner:
         await learner.persist_weights(db_conn)
     """
 
-    # Component names in order
-    COMPONENTS = ["emotional", "recency", "access", "social"]
+    # Component names matching CONFIG_B scorer (ADR-K024)
+    COMPONENTS = [
+        "sentiment",
+        "affect",
+        "arousal",
+        "surprise",
+        "novelty",
+        "social",
+        "identity",
+        "recency",
+    ]
+    NUM_COMPONENTS = 8
 
     def __init__(
         self,
@@ -315,12 +355,12 @@ class ImportanceWeightLearner:
 
         self._weights_tensor = torch.tensor(priors, dtype=torch.float32, requires_grad=True)
         self._optimizer = torch.optim.Adam([self._weights_tensor], lr=self.config.learning_rate)
-        self._velocity_tensor = torch.zeros(4)
+        self._velocity_tensor = torch.zeros(self.NUM_COMPONENTS)
 
     def _init_numpy(self, priors: List[float]) -> None:
         """Initialize NumPy arrays."""
         self._weights_np = np.array(priors, dtype=np.float32)
-        self._velocity_np = np.zeros(4, dtype=np.float32)
+        self._velocity_np = np.zeros(self.NUM_COMPONENTS, dtype=np.float32)
 
     # =========================================================================
     # Training
@@ -554,7 +594,8 @@ class ImportanceWeightLearner:
         Weights are softmax-normalized and clamped to [weight_min, weight_max].
 
         Returns:
-            Dict with keys: emotional, recency, access, social
+            Dict with 8 CONFIG_B keys: sentiment, affect, arousal, surprise,
+            novelty, social, identity, recency
         """
         if self._backend == "torch":
             import torch
@@ -574,7 +615,7 @@ class ImportanceWeightLearner:
         return {self.COMPONENTS[i]: float(values[i]) for i in range(len(self.COMPONENTS))}
 
     def get_weights_list(self) -> List[float]:
-        """Get current weights as list [emotional, recency, access, social]."""
+        """Get current weights as ordered list (matches COMPONENTS order)."""
         weights = self.get_weights()
         return [weights[c] for c in self.COMPONENTS]
 
@@ -640,7 +681,7 @@ class ImportanceWeightLearner:
                 self._velocity_tensor.zero_()
         else:
             self._weights_np = np.array(priors, dtype=np.float32)
-            self._velocity_np = np.zeros(4, dtype=np.float32)
+            self._velocity_np = np.zeros(self.NUM_COMPONENTS, dtype=np.float32)
 
         self.is_learning_enabled = False
         self.loss_history.clear()

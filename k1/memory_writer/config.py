@@ -66,10 +66,11 @@ class MWConfig:
     # --- 1. LLM Extraction (MW-06) ---
     llm_token_budget: int = 2000
 
-    # --- 2. Atom Validation (MW-04, MW-05) ---
+    # --- 2. Atom Validation (MW-04, MW-05, MW-12) ---
     max_atoms_per_turn: int = 6
     max_text_words: int = 50
     confidence_floor: float = 0.30
+    max_temporal_links_per_atom: int = 5
 
     # --- 3. Batch Configuration (MW-08) ---
     batch_window_ms: int = 250

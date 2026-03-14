@@ -50,7 +50,16 @@ def populated_metrics() -> R1PhaseMetrics:
     metrics.record_importance_scores([0.1, 0.3, 0.5, 0.7, 0.9])
     # Set weight info
     metrics.set_weight_info(
-        weights={"emotional": 0.35, "recency": 0.25, "access": 0.20, "social": 0.20},
+        weights={
+            "sentiment": 0.10,
+            "affect": 0.12,
+            "arousal": 0.08,
+            "surprise": 0.15,
+            "novelty": 0.15,
+            "social": 0.15,
+            "identity": 0.10,
+            "recency": 0.15,
+        },
         sample_count=500,
         source="space",
     )
@@ -173,7 +182,16 @@ class TestWeightInfoTracking:
 
     def test_set_weight_info(self, empty_metrics: R1PhaseMetrics):
         """set_weight_info correctly sets all weight fields."""
-        weights = {"emotional": 0.40, "recency": 0.30, "access": 0.15, "social": 0.15}
+        weights = {
+            "sentiment": 0.20,
+            "affect": 0.15,
+            "arousal": 0.10,
+            "surprise": 0.10,
+            "novelty": 0.10,
+            "social": 0.10,
+            "identity": 0.10,
+            "recency": 0.15,
+        }
         empty_metrics.set_weight_info(weights, sample_count=250, source="blended")
 
         assert empty_metrics.importance_weight_values == weights
@@ -182,12 +200,12 @@ class TestWeightInfoTracking:
 
     def test_set_weight_info_copies_dict(self, empty_metrics: R1PhaseMetrics):
         """set_weight_info copies the weights dict (no mutation)."""
-        weights = {"emotional": 0.35}
+        weights = {"sentiment": 0.10}
         empty_metrics.set_weight_info(weights, sample_count=100, source="space")
 
         # Modify original - should not affect stored value
-        weights["emotional"] = 0.99
-        assert empty_metrics.importance_weight_values["emotional"] == 0.35
+        weights["sentiment"] = 0.99
+        assert empty_metrics.importance_weight_values["sentiment"] == 0.10
 
     def test_weight_source_values(self, empty_metrics: R1PhaseMetrics):
         """Weight source can be any of the valid values."""
@@ -313,12 +331,16 @@ class TestPrometheusExport:
         assert dist["buckets"] == IMPORTANCE_SCORE_BUCKETS
 
     def test_importance_weight_gauges(self, populated_metrics: R1PhaseMetrics):
-        """p03_importance_weight_{factor} gauges are present."""
+        """p03_importance_weight_{component} gauges are present (8 CONFIG_B components)."""
         result = populated_metrics.to_prometheus_metrics()
-        assert result["p03_importance_weight_emotional"] == 0.35
-        assert result["p03_importance_weight_recency"] == 0.25
-        assert result["p03_importance_weight_access"] == 0.20
-        assert result["p03_importance_weight_social"] == 0.20
+        assert result["p03_importance_weight_sentiment"] == 0.10
+        assert result["p03_importance_weight_affect"] == 0.12
+        assert result["p03_importance_weight_arousal"] == 0.08
+        assert result["p03_importance_weight_surprise"] == 0.15
+        assert result["p03_importance_weight_novelty"] == 0.15
+        assert result["p03_importance_weight_social"] == 0.15
+        assert result["p03_importance_weight_identity"] == 0.10
+        assert result["p03_importance_weight_recency"] == 0.15
 
     def test_importance_weight_sample_count_metric(self, populated_metrics: R1PhaseMetrics):
         """p03_importance_weight_sample_count gauge is present."""
@@ -370,7 +392,7 @@ class TestPrometheusExport:
         """Empty metrics export correctly with default values."""
         result = empty_metrics.to_prometheus_metrics()
         assert result["p03_importance_score_distribution"]["values"] == []
-        assert result["p03_importance_weight_emotional"] == 0.0
+        assert result["p03_importance_weight_sentiment"] == 0.0
         assert result["p03_importance_weight_sample_count"] == 0
         assert result["p03_importance_weight_source"] == "static"
         assert result["p03_hebbian_edges_created"] == 0
@@ -407,6 +429,10 @@ class TestToDictSerialization:
             "importance_scoring_ms",
             "hebbian_update_ms",
             "performance_status",
+            "tier_counts",
+            "events_scored",
+            "audit_records_generated",
+            "component_distribution",
         }
         assert set(result.keys()) == expected_keys
 

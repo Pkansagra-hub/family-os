@@ -5,7 +5,7 @@ Issue 4.2.6: Implement adaptive min_samples learning
 
 Spec Reference:
     - Dossier Appendix C.3.1.2 (Adaptive min_samples) — lines 21480-21560
-    - st_learned_weights migration 0040 — storage for dbscan_min_samples
+    - st_learned_weights migration 0040 — storage for clustering_min_samples
 
 Problem Statement:
     Fixed `min_samples=2` creates issues:
@@ -293,7 +293,7 @@ class MinSamplesAdjuster:
             row = await db_conn.fetchrow(
                 """
                 SELECT current_value FROM st_learned_weights
-                WHERE space_id = $1 AND param_key = 'dbscan_min_samples' AND param_scope = 'space'
+                WHERE space_id = $1 AND param_key = 'clustering_min_samples' AND param_scope = 'space'
                 """,
                 space_id,
             )
@@ -333,7 +333,7 @@ class MinSamplesAdjuster:
                     param_id, param_key, param_scope, scope_id, space_id,
                     current_value, prior_value, confidence, sample_count, last_updated_at
                 ) VALUES (
-                    gen_random_uuid(), 'dbscan_min_samples', 'space', $1, $1,
+                    gen_random_uuid(), 'clustering_min_samples', 'space', $1, $1,
                     $2, 2.0, $3, 1, (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
                 )
                 ON CONFLICT (space_id, param_key, param_scope, scope_id)

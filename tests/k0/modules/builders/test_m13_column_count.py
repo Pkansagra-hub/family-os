@@ -5,8 +5,8 @@ These tests call the REAL M13 run() with a complete envelope.
 Only transport (MockMessage, MockContext) is mocked.
 
 Validates:
-- Complete envelope -> M13 run() -> correct column count (119)
-- All 16 new v2 column keys present
+- Complete envelope -> M13 run() -> correct column count (130)
+- All 17 new v2+ column keys present
 - No None for NOT NULL columns with defaults
 - Validation passes for well-formed envelopes
 """
@@ -138,6 +138,9 @@ def _complete_envelope() -> dict[str, Any]:
             # MW v2 location
             "location_name": "Olive Garden",
             "location_type": "restaurant",
+            "location_hierarchy": ["restaurant", "Market St", "Seattle"],
+            "transition_from_place": "home",
+            "transition_mode": "drove",
             # MW v2 cognitive dimensions
             "intent_type": "log_memory",
             "goal_context": "family bonding",
@@ -147,6 +150,7 @@ def _complete_envelope() -> dict[str, Any]:
             "identity_domains": ["family", "food"],
             "entity_salience": {"Mom": 0.9, "Olive Garden": 0.7},
             "k1_signal_version": "2.0",
+            "extraction_sequence": 2,
         },
         # M02 outputs (semantic projection)
         "embedding_id": "emb-uuid-001",
@@ -282,7 +286,7 @@ def _complete_envelope() -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_complete_envelope_column_count():
-    """Complete envelope -> M13 produces 119 columns."""
+    """Complete envelope -> M13 produces 130 columns."""
     envelope = _complete_envelope()
     msg = MockMessage(envelope)
     ctx = MockContext()
@@ -290,7 +294,7 @@ async def test_complete_envelope_column_count():
     result = await m13_run(msg, ctx, envelope=envelope, validate_required_fields=False)
 
     row = result["hipp_events_row"]
-    assert len(row) == 119, f"Expected 119 columns, got {len(row)}: {sorted(row.keys())}"
+    assert len(row) == 132, f"Expected 132 columns, got {len(row)}: {sorted(row.keys())}"
 
 
 # ============================================================================
@@ -299,7 +303,7 @@ async def test_complete_envelope_column_count():
 
 
 V2_NEW_COLUMNS = [
-    # Epic 3.15: Group 12 MW v2 signals (11)
+    # Epic 3.15/4.1: Group 12 MW v2 signals (12)
     "narrative_thread_id",
     "narrative_arc_position",
     "narrative_is_goal_event",
@@ -311,6 +315,11 @@ V2_NEW_COLUMNS = [
     "identity_domains_json",
     "entity_salience_json",
     "k1_signal_version",
+    "extraction_sequence",
+    # Epic 4.2: Spatial hierarchy (1)
+    "location_hierarchy_json",
+    # Epic 4.3: Spatial transition context (1)
+    "spatial_context_json",
     # Epic 3.16: Existing group updates (5)
     "affect_dominance",
     "participant_relationships_json",
@@ -322,7 +331,7 @@ V2_NEW_COLUMNS = [
 
 @pytest.mark.asyncio
 async def test_all_v2_column_keys_present():
-    """All 16 new v2 column keys are present in row."""
+    """All 17 new v2+ column keys are present in row."""
     envelope = _complete_envelope()
     msg = MockMessage(envelope)
     ctx = MockContext()

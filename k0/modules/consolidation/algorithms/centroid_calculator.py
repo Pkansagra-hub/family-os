@@ -54,6 +54,7 @@ class WeightingStrategy(str, Enum):
     IMPORTANCE = "importance"
     RECENCY = "recency"
     HYBRID = "hybrid"
+    RECENCY_EXP = "recency_exp"
 
 
 # =============================================================================
@@ -204,6 +205,24 @@ class EpisodeCandidate:
     confidence_score: float = 0.0
     """Confidence in episode quality."""
 
+    # === Epic 6.4: Cross-batch extension matching ===
+    reconciliation_action: str = "CREATE"
+    """Reconciliation action: CREATE (default) or EXTEND."""
+
+    extend_target_episode_id: Optional[str] = None
+    """Target episode_id when reconciliation_action is EXTEND."""
+
+    extend_similarity: float = 0.0
+    """Cosine similarity to the extend target episode."""
+
+    # M4-RSCH-02: Secondary centroid metadata (json_blob storage)
+    centroid_metadata: Optional[Dict[str, Any]] = None
+    """Secondary centroid references: emotional_peak, narrative_anchor, start, end.
+
+    Structure: {"version": 1, "centroids": {"emotional_peak": {"event_id": str}, ...}}
+    Each secondary centroid references an existing event embedding (no new vectors).
+    """
+
     @property
     def duration_ms(self) -> int:
         """Duration of episode in milliseconds."""
@@ -211,80 +230,147 @@ class EpisodeCandidate:
 
 
 # =============================================================================
-# R2 Staged Output Container
+# Secondary Centroid Selector (M4-RSCH-02: best_of_all MRR=0.9627)
 # =============================================================================
 
 
-@dataclass
-class R2StagedOutput:
+class SecondaryCentroidSelector:
     """
-    Complete R2 output for staging.
+    Selects secondary centroid events from a cluster.
 
-    Contains all episode candidates and batch metadata.
-    NO database writes — passed to R6/R7 for commit.
+    Secondary centroids are existing event embeddings that capture
+    retrieval-relevant perspectives beyond the weighted mean centroid:
+    - emotional_peak: event with strongest affective intensity
+    - narrative_anchor: event from the dominant narrative thread
+    - start: earliest event (temporal boundary)
+    - end: latest event (temporal boundary)
 
-    Spec: M4_EXECUTION.md Issue 4.2.4
+    Research: M4-RSCH-02 best_of_all (5-way) MRR=0.9627 (+4.9% vs primary-only).
     """
 
-    # Episode candidates
-    episode_candidates: List[EpisodeCandidate] = field(default_factory=list)
-    """All episode candidates from this R2 run."""
+    def select_all(
+        self,
+        events: Sequence[Any],
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Select all secondary centroids from cluster events.
 
-    # Batch metadata
-    cluster_count: int = 0
-    """Number of non-noise clusters formed."""
+        Args:
+            events: Cluster events with event_id, timestamp, embedding_768,
+                     and optionally affect_valence, affect_arousal,
+                     narrative_thread_id.
 
-    noise_count: int = 0
-    """Number of noise/singleton events."""
+        Returns:
+            Dict mapping centroid role to {event_id, embedding_768}.
+            Roles with no valid candidate are omitted.
+        """
+        result: Dict[str, Dict[str, Any]] = {}
 
-    avg_cluster_size: float = 0.0
-    """Average cluster size (non-noise only)."""
+        start = self._select_start(events)
+        if start is not None:
+            result["start"] = start
 
-    total_events_processed: int = 0
-    """Total events processed."""
+        end = self._select_end(events)
+        if end is not None:
+            result["end"] = end
 
-    # Quality metrics
-    batch_silhouette_score: float = 0.0
-    """Batch-level silhouette score [−1, 1]."""
+        peak = self._select_emotional_peak(events)
+        if peak is not None:
+            result["emotional_peak"] = peak
 
-    batch_cohesion_avg: float = 0.0
-    """Average cohesion across clusters."""
+        anchor = self._select_narrative_anchor(events)
+        if anchor is not None:
+            result["narrative_anchor"] = anchor
 
-    def add_candidate(self, candidate: EpisodeCandidate) -> None:
-        """Add episode candidate and update metadata."""
-        self.episode_candidates.append(candidate)
-        if candidate.is_noise:
-            self.noise_count += 1
-        else:
-            self.cluster_count += 1
-        self.total_events_processed += candidate.event_count
+        return result
 
-    def finalize(self) -> None:
-        """Compute final aggregate metrics."""
-        non_noise = [c for c in self.episode_candidates if not c.is_noise]
-        if non_noise:
-            self.avg_cluster_size = sum(c.event_count for c in non_noise) / len(non_noise)
-            self.batch_cohesion_avg = sum(c.cohesion_score for c in non_noise) / len(non_noise)
+    def _select_start(
+        self,
+        events: Sequence[Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Select event with earliest timestamp."""
+        valid = [e for e in events if getattr(e, "embedding_768", None) is not None]
+        if not valid:
+            return None
+        earliest = min(valid, key=lambda e: e.timestamp)
+        return {"event_id": earliest.event_id, "embedding_768": earliest.embedding_768}
 
-    @property
-    def singleton_rate(self) -> float:
-        """Ratio of noise events to total events."""
-        if self.total_events_processed == 0:
-            return 0.0
-        return self.noise_count / self.total_events_processed
+    def _select_end(
+        self,
+        events: Sequence[Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Select event with latest timestamp."""
+        valid = [e for e in events if getattr(e, "embedding_768", None) is not None]
+        if not valid:
+            return None
+        latest = max(valid, key=lambda e: e.timestamp)
+        return {"event_id": latest.event_id, "embedding_768": latest.embedding_768}
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "cluster_count": self.cluster_count,
-            "noise_count": self.noise_count,
-            "avg_cluster_size": self.avg_cluster_size,
-            "total_events_processed": self.total_events_processed,
-            "batch_silhouette_score": self.batch_silhouette_score,
-            "batch_cohesion_avg": self.batch_cohesion_avg,
-            "singleton_rate": self.singleton_rate,
-            "episode_count": len(self.episode_candidates),
-        }
+    def _select_emotional_peak(
+        self,
+        events: Sequence[Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Select event with strongest affective intensity.
+
+        Intensity = abs(affect_valence) + affect_arousal.
+        Falls back to abs(sentiment_score - 0.5) if affect fields are missing.
+        """
+        best_event = None
+        best_score = -1.0
+
+        for e in events:
+            if getattr(e, "embedding_768", None) is None:
+                continue
+
+            valence = getattr(e, "affect_valence", None)
+            arousal = getattr(e, "affect_arousal", None)
+
+            if valence is not None and arousal is not None:
+                score = abs(float(valence)) + float(arousal)
+            else:
+                sentiment = getattr(e, "sentiment_score", None)
+                if sentiment is not None:
+                    score = abs(float(sentiment) - 0.5) * 2.0
+                else:
+                    continue
+
+            if score > best_score:
+                best_score = score
+                best_event = e
+
+        if best_event is None:
+            return None
+        return {"event_id": best_event.event_id, "embedding_768": best_event.embedding_768}
+
+    def _select_narrative_anchor(
+        self,
+        events: Sequence[Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Select event from the dominant narrative thread.
+
+        Picks the event whose narrative_thread_id matches the most common
+        thread in the cluster. Among matching events, picks the one
+        with the highest importance_score.
+        """
+        thread_counts: Dict[str, int] = {}
+        thread_events: Dict[str, list] = {}
+
+        for e in events:
+            if getattr(e, "embedding_768", None) is None:
+                continue
+            thread_id = getattr(e, "narrative_thread_id", None)
+            if not thread_id:
+                continue
+            thread_counts[thread_id] = thread_counts.get(thread_id, 0) + 1
+            thread_events.setdefault(thread_id, []).append(e)
+
+        if not thread_counts:
+            return None
+
+        dominant_thread = max(thread_counts, key=thread_counts.get)  # type: ignore[arg-type]
+        candidates = thread_events[dominant_thread]
+        best = max(candidates, key=lambda e: getattr(e, "importance_score", 0.0))
+        return {"event_id": best.event_id, "embedding_768": best.embedding_768}
 
 
 # =============================================================================
@@ -395,6 +481,19 @@ class CentroidCalculator:
             # Hybrid: 70% importance, 30% recency
             weights = 0.7 * importance + 0.3 * recency
             weights = weights + MIN_WEIGHT
+            return weights / weights.sum()
+
+        elif strategy == WeightingStrategy.RECENCY_EXP or strategy == "recency_exp":
+            # M4-RSCH-01 winner: exponential recency decay (MRR=0.9006)
+            # Formula: w_i = exp((t_i - t_min) / span)
+            # Softer than linear, avoids MRR collapse (linear=0.5990)
+            timestamps = np.array([e.timestamp for e in events], dtype=np.float64)
+            t_min, t_max = timestamps.min(), timestamps.max()
+            span = t_max - t_min
+            if span > 0:
+                weights = np.exp((timestamps - t_min) / span).astype(np.float32)
+            else:
+                return np.ones(n, dtype=np.float32) / n
             return weights / weights.sum()
 
         else:
@@ -574,7 +673,7 @@ class CentroidCalculator:
         """
         Create episode candidate from cluster data.
 
-        Computes centroid and variance, packages for R6/R7 staging.
+        Computes centroid, variance, and secondary centroids, packages for R6/R7 staging.
 
         Args:
             cluster_id: Cluster ID from DBSCAN
@@ -597,6 +696,19 @@ class CentroidCalculator:
         ]
         dominant_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0.0
 
+        # M4-RSCH-02: Compute secondary centroids (best_of_all MRR=0.9627)
+        centroid_metadata = None
+        if not is_noise and len(events) >= 2:
+            selector = SecondaryCentroidSelector()
+            secondary = selector.select_all(events)
+            if secondary:
+                centroid_metadata = {
+                    "version": 1,
+                    "centroids": {
+                        role: {"event_id": data["event_id"]} for role, data in secondary.items()
+                    },
+                }
+
         return EpisodeCandidate(
             cluster_id=cluster_id,
             space_id=space_id,
@@ -610,4 +722,5 @@ class CentroidCalculator:
             is_noise=is_noise,
             dominant_sentiment=dominant_sentiment,
             confidence_score=cohesion_score,  # Use cohesion as confidence proxy
+            centroid_metadata=centroid_metadata,
         )
