@@ -1,0 +1,157 @@
+# k0/contracts/modules/reconciliation.write_router.v1.yaml
+module_id: reconciliation.write_router
+version: v1
+status: active
+
+latency_budget_ms: 20
+
+input_event_types:
+  - p03.reconciliation.result.v1
+
+output_event_types:
+  - p03.staged_write.created.v1
+
+side_effects: []
+
+idempotent: true
+
+description: >
+  Data-driven mapping layer that converts ReconciliationResult (M9.4) into
+  one or more StagedWrite objects ready for R7 execution.  Reads merge rules
+  from TruthLayerSpec (M9.1).  Zero layer-specific branching.
+
+dependencies:
+  - module: reconciliation.framework
+    version: v1
+    provides: ReconciliationResult
+  - module: reconciliation.truth_layer_registry
+    version: v1
+    provides: TruthLayerSpec, MergeRule, ColumnSpec
+  - module: reconciliation.types
+    version: v1
+    provides: ReconciliationCandidate
+
+input:
+  primary:
+    type: ReconciliationResult
+    source: ReconciliationFramework.decide()
+    required_fields:
+      - action
+      - match_id
+      - match_layer
+      - similarity
+      - confidence
+      - reason
+      - candidate_id
+      - layer
+      - cycle_id
+      - hooks_required
+      - contradiction_details
+  candidate:
+    type: ReconciliationCandidate
+    required_fields:
+      - candidate_id
+      - layer
+      - source_phase
+      - metadata
+      - source_event_ids
+      - tenant_id
+      - space_id
+  spec:
+    type: TruthLayerSpec
+    source: TruthLayerRegistry.get()
+
+output:
+  type: list[StagedWrite]
+  consumed_by:
+    - P03StagedWrites container (R6)
+    - R7 TransactionCoordinator
+  write_counts_per_action:
+    SKIP: 0
+    CREATE: 1
+    REINFORCE: 1
+    EXTEND: 1
+    EVOLVE: 2
+    CONTRADICT: 1
+    PRUNE: 1
+
+action_to_operation_mapping:
+  CREATE:
+    operation: INSERT
+    target_layer: spec.layer_name
+    record_id: generated ULID or candidate PK
+  REINFORCE:
+    operation: UPDATE
+    target_layer: spec.layer_name
+    record_id: result.match_id
+    confidence_boost: spec.confidence_boost_strategy
+  EXTEND:
+    operation: UPDATE
+    target_layer: spec.layer_name
+    record_id: result.match_id
+    merge_rules: spec.columns[*].merge
+  EVOLVE:
+    writes:
+      - operation: UPDATE
+        purpose: archive old to SUPERSEDED
+        record_id: result.match_id
+      - operation: INSERT
+        purpose: new canonical with supersedes link
+        record_id: generated ULID
+  CONTRADICT:
+    operation: INSERT
+    target_layer: st_learning_queue
+    record_id: generated ULID
+  PRUNE:
+    operation: ARCHIVE or TOMBSTONE
+    target_layer: spec.layer_name
+    record_id: result.match_id
+
+idempotency:
+  prefix: "p03:reconcile"
+  format: "p03:reconcile:{cycle_id}:{layer}:{record_id}:{action_suffix}"
+  suffixes:
+    - create
+    - reinforce
+    - extend
+    - evolve_archive
+    - evolve_create
+    - contradict
+    - prune
+
+merge_rules_supported:
+  - IMMUTABLE
+  - COUNTER
+  - REPLACED
+  - COALESCE
+  - APPENDABLE_DISTINCT
+  - APPENDABLE_ALL
+  - APPENDABLE_CAPPED
+  - ADDITIVE_MERGE
+  - SHALLOW_MERGE
+  - TEMPORAL_MIN
+  - TEMPORAL_MAX
+  - EMA
+  - TREND
+  - DERIVED
+  - PG_ARRAY_CONCAT
+  - STATUS
+
+components:
+  - class: WriteDecisionRouter
+    file: k0/modules/consolidation/reconciliation/router.py
+    method: build (static)
+  - class: MergeEngine
+    file: k0/modules/consolidation/reconciliation/merge_engine.py
+    method: build_extend_data (static)
+  - class: EvolveHandler
+    file: k0/modules/consolidation/reconciliation/evolve_handler.py
+    method: build_evolve_pair (static)
+  - class: ContradictHandler
+    file: k0/modules/consolidation/reconciliation/contradict_handler.py
+    method: build_learning_queue_entry (static)
+  - class: RouterIdempotencyKey
+    file: k0/modules/consolidation/reconciliation/idem.py
+    methods:
+      - for_write (static)
+      - for_batch (static)

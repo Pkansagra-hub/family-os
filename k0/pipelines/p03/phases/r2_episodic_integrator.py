@@ -54,6 +54,12 @@ from k0.modules.consolidation.algorithms.cross_batch_extend import (
     CrossBatchExtendConfig,
     CrossBatchExtendMatcher,
 )
+
+# === M9.10: Scene segmentation imports ===
+from k0.modules.consolidation.algorithms.fragment_absorber import (
+    FragmentAbsorptionConfig,
+    absorb_fragments,
+)
 from k0.modules.consolidation.algorithms.hebbian_boost import (
     HebbinaBoostConfig,
     build_cooccurrence_graph,
@@ -61,8 +67,22 @@ from k0.modules.consolidation.algorithms.hebbian_boost import (
 from k0.modules.consolidation.algorithms.same_thread_merge import (
     SameThreadMergeConfig,
     SameThreadMerger,
+    SameThreadMergeStats,
 )
-from k0.modules.consolidation.algorithms.thread_purity import ThreadPurityCorrector
+from k0.modules.consolidation.algorithms.scene_segmenter import (
+    SceneSegmentationConfig,
+    segment_episodes,
+)
+from k0.modules.consolidation.algorithms.thread_purity import (
+    PurityCorrectionStats,
+    ThreadPurityCorrector,
+)
+
+# === M9.8: Engine reconciliation imports ===
+from k0.modules.consolidation.identity.episodic import EpisodicIdentity
+from k0.modules.consolidation.reconciliation.adapters.r2_adapter import R2Adapter
+from k0.modules.consolidation.reconciliation.engine import ReconciliationFramework
+from k0.modules.consolidation.truth_layer_registry import TruthLayerRegistry
 from k0.pipelines.p03.event_state import ReconciliationAction
 from k0.pipelines.p03.observability import P03Error
 from k0.pipelines.p03.phase_interface import P03PhaseResult
@@ -75,6 +95,22 @@ if TYPE_CHECKING:
     from k0.pipelines.p03.phase_interface import P03RunnerContext
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# HELPERS
+# =============================================================================
+
+
+def _vote_winner(items: List[str], default: str = "") -> str:
+    """Return the most frequent non-empty value, or default."""
+    counts: Dict[str, int] = {}
+    for item in items:
+        if item:
+            counts[item] = counts.get(item, 0) + 1
+    if not counts:
+        return default
+    return max(counts, key=lambda k: counts[k])
 
 
 # =============================================================================
@@ -116,8 +152,6 @@ class R2Config:
     weighting_strategy: WeightingStrategy = WeightingStrategy.IMPORTANCE
     noise_rescue_threshold: float = 0.5  # Rescue noise with outlier_score < this
     cluster_selection_method: str = "leaf"  # 'leaf' preserves small clusters
-    enable_canonicalization: bool = False  # Disabled: HDBSCAN clusters are already good
-    canonicalization_time_bucket_hours: int = 1  # Time bucket for signature grouping (if enabled)
 
     # === Epic 6.1: Ensemble distance (3D: semantic 0.45, temporal 0.25, narrative 0.30) ===
     enable_ensemble_distance: bool = True
@@ -144,6 +178,18 @@ class R2Config:
     episode_reinforce_threshold: float = 0.85  # Cosine similarity threshold for REINFORCE
     episode_extend_threshold: float = 0.60  # Threshold for EXTEND (future use)
     episode_query_limit: int = 50  # Max episodes to query per batch
+
+    # === M9.8: Engine Reconciliation (Phase Migration) ===
+    enable_engine_reinforce: bool = False  # Seam 1: use engine for pre-clustering REINFORCE
+    enable_engine_extend: bool = False  # Seam 2: use engine for post-clustering EXTEND
+    engine_dual_path_enabled: bool = False  # Run both legacy + engine, compare
+    engine_dual_path_log_divergences: bool = True  # Log divergences in dual-path mode
+
+    # === M9.10: Scene Segmentation (Mega-Episode Splitting) ===
+    enable_scene_segmentation: bool = False  # Split mega-episodes into human-scale scenes
+    scene_segmentation_config: Optional[SceneSegmentationConfig] = None  # None = POC defaults
+    enable_fragment_absorption: bool = False  # Absorb micro-fragments into nearby scenes
+    fragment_absorption_config: Optional[FragmentAbsorptionConfig] = None  # None = POC defaults
 
 
 # =============================================================================
@@ -450,6 +496,10 @@ class R2EpisodicIntegrator:
         self._eps_adjuster: Optional[EpsAdjuster] = None
         self._min_samples_adjuster: Optional[MinSamplesAdjuster] = None
 
+        # M9.8: Engine components (lazy-initialized on first engine-path call)
+        self._engine_registry: Optional[TruthLayerRegistry] = None
+        self._engine_identity: Optional[EpisodicIdentity] = None
+
     @property
     def phase_id(self) -> P03PhaseId:
         """Return the phase identifier."""
@@ -554,6 +604,9 @@ class R2EpisodicIntegrator:
             # Get clustering parameters (from config or adaptive learning)
             distance_params = await self._get_distance_params(ctx, space_id)
 
+            # B1 FIX: Apply learned params back to the clusterer
+            self._clusterer.params = distance_params
+
             # Filter to events that have embeddings (required for clustering)
             events_with_embeddings = [e for e in envelope.events if e.embedding_768 is not None]
             events_without_embeddings = len(envelope.events) - len(events_with_embeddings)
@@ -580,9 +633,11 @@ class R2EpisodicIntegrator:
 
             # =================================================================
             # ISSUE 2 FIX: Match events to existing episodes BEFORE clustering
+            # M9.8: Engine path via DualPathRunner when enabled
             # =================================================================
             matched_events: List["P03EventState"] = []
             novel_events = events_with_embeddings  # Default: all events are novel
+            existing_episodes: List[Dict] = []
 
             if self.config.enable_episode_matching:
                 # Query existing episodes from st_epi
@@ -598,11 +653,56 @@ class R2EpisodicIntegrator:
                 )
 
                 if existing_episodes:
-                    # Match events to existing episodes
-                    matched_events, novel_events = self._match_events_to_existing_episodes(
-                        events=events_with_embeddings,
-                        existing_episodes=existing_episodes,
-                    )
+                    use_engine = self.config.enable_engine_reinforce
+                    dual_path = self.config.engine_dual_path_enabled
+
+                    if use_engine and not dual_path:
+                        # Engine-only path
+                        matched_events, novel_events = self._engine_match_events(
+                            events=events_with_embeddings,
+                            existing_episodes=existing_episodes,
+                            cycle_id=cycle_id,
+                            space_id=space_id,
+                            tenant_id=tenant_id,
+                        )
+                    elif dual_path:
+                        # Dual-path: run both, use legacy as authoritative
+                        legacy_matched, legacy_novel = self._match_events_to_existing_episodes(
+                            events=events_with_embeddings,
+                            existing_episodes=existing_episodes,
+                        )
+                        engine_matched, _ = self._engine_match_events(
+                            events=events_with_embeddings,
+                            existing_episodes=existing_episodes,
+                            cycle_id=cycle_id,
+                            space_id=space_id,
+                            tenant_id=tenant_id,
+                        )
+                        # Log divergences
+                        legacy_ids = {e.event_id for e in legacy_matched}
+                        engine_ids = {e.event_id for e in engine_matched}
+                        if (
+                            legacy_ids != engine_ids
+                            and self.config.engine_dual_path_log_divergences
+                        ):
+                            logger.warning(
+                                "R2: REINFORCE dual-path divergence",
+                                extra={
+                                    "cycle_id": cycle_id,
+                                    "legacy_matched": len(legacy_ids),
+                                    "engine_matched": len(engine_ids),
+                                    "only_legacy": list(legacy_ids - engine_ids)[:5],
+                                    "only_engine": list(engine_ids - legacy_ids)[:5],
+                                },
+                            )
+                        # Legacy is authoritative in dual-path
+                        matched_events, novel_events = legacy_matched, legacy_novel
+                    else:
+                        # Legacy-only path (default)
+                        matched_events, novel_events = self._match_events_to_existing_episodes(
+                            events=events_with_embeddings,
+                            existing_episodes=existing_episodes,
+                        )
 
             # Track matched events count for output
             matched_event_count = len(matched_events)
@@ -614,45 +714,7 @@ class R2EpisodicIntegrator:
             # =================================================================
             # Issue 1.2.4: Timestamp quality observability
             # =================================================================
-            ts_quality: Dict[str, int] = {
-                "mw_resolved": 0,
-                "ner_temporal": 0,
-                "event_time": 0,
-                "envelope_ts": 0,
-                "now": 0,
-                "unknown": 0,
-            }
-            for _evt in novel_events:
-                _src = getattr(_evt, "temporal_source", "") or "unknown"
-                ts_quality[_src] = ts_quality.get(_src, 0) + 1
-
-            _total = len(novel_events) or 1
-            _degraded = (
-                ts_quality["event_time"]
-                + ts_quality["envelope_ts"]
-                + ts_quality["now"]
-                + ts_quality["unknown"]
-            )
-            _degraded_ratio = _degraded / _total
-
-            logger.info(
-                "R2: Timestamp quality stats",
-                extra={
-                    "cycle_id": cycle_id,
-                    "ts_quality": ts_quality,
-                    "degraded_ratio": round(_degraded_ratio, 3),
-                    "total_events": len(novel_events),
-                },
-            )
-            if _degraded_ratio > 0.5:
-                logger.warning(
-                    "R2: >50%% events have degraded timestamps "
-                    "-- episode boundaries may be unreliable",
-                    extra={
-                        "cycle_id": cycle_id,
-                        "degraded_ratio": round(_degraded_ratio, 3),
-                    },
-                )
+            ts_quality, _degraded_ratio = self._compute_timestamp_quality(novel_events, cycle_id)
 
             # Step 1: Split events into sequences
             sequences = self._split_events(adapted_events)
@@ -671,30 +733,13 @@ class R2EpisodicIntegrator:
                     )
 
             # Step 2: Cluster each sequence
-            all_results: List[HDBSCANClusteringResult] = []
-            all_noise_ids: List[str] = []
-
-            for sequence in sequences:
-                if len(sequence) < self.config.min_batch_size:
-                    # Too small to cluster - mark as noise
-                    all_noise_ids.extend(e.event_id for e in sequence)
-                    continue
-
-                # Params already set in _initialize_components via EpisodicHDBSCAN(params=...)
-                clustering_result = self._clusterer.cluster(
-                    sequence, cooccurrence_graph=cooccurrence_graph
-                )
-                all_results.append(clustering_result)
-
-                # Extract noise event IDs (label=-1)
-                for idx, label in enumerate(clustering_result.labels):
-                    if label == -1:
-                        all_noise_ids.append(sequence[idx].event_id)
+            all_results, all_noise_ids = self._cluster_sequences(sequences, cooccurrence_graph)
 
             # Step 2.5: Thread purity correction (Epic 6.2)
             if self.config.enable_thread_purity_correction:
                 event_lookup_purity = {e.event_id: e for e in adapted_events}
                 corrector = ThreadPurityCorrector()
+                purity_stats = PurityCorrectionStats()
                 for cr in all_results:
                     cr.clusters, purity_stats = corrector.correct(cr.clusters, event_lookup_purity)
                     cr.cluster_count = sum(1 for c in cr.clusters if len(c.member_event_ids) > 1)
@@ -714,6 +759,7 @@ class R2EpisodicIntegrator:
                 merger = SameThreadMerger(
                     config=self.config.same_thread_merge_config or SameThreadMergeConfig(),
                 )
+                merge_stats = SameThreadMergeStats()
                 for cr in all_results:
                     cr.clusters, merge_stats = merger.merge(cr.clusters, event_lookup_purity)
                     cr.cluster_count = sum(1 for c in cr.clusters if len(c.member_event_ids) > 1)
@@ -727,102 +773,146 @@ class R2EpisodicIntegrator:
                     )
 
             # Step 3: Compute centroids and build episode candidates
-            episode_candidates: List[EpisodeCandidate] = []
-            episode_clusters: List[EpisodeCluster] = []
-
-            # Build event lookup for centroid calculation
-            event_lookup = {e.event_id: e for e in adapted_events}
-
-            for clustering_result in all_results:
-                # clusters is List[EpisodeCluster] from HDBSCAN
-                for cluster in clustering_result.clusters:
-                    # Skip noise clusters (single events with label -1)
-                    member_ids = cluster.member_event_ids
-                    if not member_ids:
-                        continue
-
-                    # Skip single-member clusters (likely noise)
-                    # HDBSCAN already handles noise rescue, so single-member clusters
-                    # that made it here are legitimate small clusters
-                    if len(member_ids) == 1:
-                        # Single events are not episodes - skip them
-                        continue
-
-                    # Get events for this cluster
-                    cluster_events = [
-                        event_lookup[eid] for eid in member_ids if eid in event_lookup
-                    ]
-
-                    if not cluster_events:
-                        continue
-
-                    # Compute centroid
-                    centroid_result = self._centroid_calculator.compute(
-                        cluster_events, strategy=self.config.weighting_strategy
-                    )
-
-                    # Build episode candidate
-                    # Cohesion = 1/(1+variance) - lower variance means higher cohesion
-                    cohesion = 1.0 / (1.0 + centroid_result.variance)
-                    candidate = EpisodeCandidate(
-                        cluster_id=cluster.cluster_id,
-                        space_id=envelope.context.space_id,
-                        event_ids=member_ids,
-                        event_count=len(member_ids),
-                        centroid_embedding=centroid_result.centroid,
-                        temporal_start=min(e.timestamp for e in cluster_events),
-                        temporal_end=max(e.timestamp for e in cluster_events),
-                        cohesion_score=cohesion,
-                        variance=centroid_result.variance,
-                    )
-                    episode_candidates.append(candidate)
-
-                    # Build EpisodeCluster for envelope outputs
-                    episode_cluster = self._build_episode_cluster(
-                        cluster.cluster_id, member_ids, cluster_events, centroid_result
-                    )
-                    episode_clusters.append(episode_cluster)
+            episode_candidates, episode_clusters = self._build_episodes_from_clusters(
+                all_results, adapted_events, envelope.context.space_id
+            )
 
             # Step 3.5: Cross-batch extend matching (Epic 6.4)
+            # M9.8: Engine path via feature flag when enabled
             if self.config.enable_cross_batch_extend and existing_episodes and episode_candidates:
                 if (
                     not self.config.enable_thread_purity_correction
                     and not self.config.enable_same_thread_merge
                 ):
                     event_lookup_purity = {e.event_id: e for e in adapted_events}
-                extend_matcher = CrossBatchExtendMatcher(
-                    config=self.config.cross_batch_extend_config or CrossBatchExtendConfig(),
-                )
-                extend_matches, extend_stats = extend_matcher.match(
-                    episode_candidates,
-                    existing_episodes,
-                    event_lookup_purity,
-                )
-                for cand, ext_match in zip(episode_candidates, extend_matches):
-                    if ext_match is not None:
-                        cand.reconciliation_action = "EXTEND"
-                        cand.extend_target_episode_id = ext_match.target_episode_id
-                        cand.extend_similarity = ext_match.similarity
-                if extend_stats.candidates_extended > 0:
-                    logger.info(
-                        "R2: Cross-batch extend matching applied",
-                        extra={
-                            "cycle_id": cycle_id,
-                            **extend_stats.to_dict(),
-                        },
-                    )
 
-            # Step 3.6: Canonicalize episodes (merge by signature)
-            if self.config.enable_canonicalization and len(episode_clusters) > 1:
-                episode_clusters, merge_count = self._canonicalize_episodes(episode_clusters)
-                if merge_count > 0:
-                    logger.info(
-                        "R2: Canonicalized episodes",
-                        extra={
-                            "merged_count": merge_count,
-                            "canonical_count": len(episode_clusters),
-                        },
+                use_engine_ext = self.config.enable_engine_extend
+                dual_path_ext = self.config.engine_dual_path_enabled
+
+                if use_engine_ext and not dual_path_ext:
+                    # Engine-only EXTEND path
+                    # Build event lookup from P03EventState for metadata extraction
+                    p03_event_lookup = {e.event_id: e for e in novel_events}
+                    self._engine_extend_episodes(
+                        episode_candidates=episode_candidates,
+                        existing_episodes=existing_episodes,
+                        event_lookup=p03_event_lookup,
+                        cycle_id=cycle_id,
+                        space_id=space_id,
+                        tenant_id=tenant_id,
                     )
+                elif dual_path_ext:
+                    # Dual-path: run both, legacy is authoritative
+                    extend_matcher = CrossBatchExtendMatcher(
+                        config=self.config.cross_batch_extend_config or CrossBatchExtendConfig(),
+                    )
+                    extend_matches, extend_stats = extend_matcher.match(
+                        episode_candidates,
+                        existing_episodes,
+                        event_lookup_purity,
+                    )
+                    # Apply legacy results
+                    legacy_extended = set()
+                    for cand, ext_match in zip(episode_candidates, extend_matches):
+                        if ext_match is not None:
+                            cand.reconciliation_action = "EXTEND"
+                            cand.extend_target_episode_id = ext_match.target_episode_id
+                            cand.extend_similarity = ext_match.similarity
+                            legacy_extended.add(cand.cluster_id)
+
+                    # Run engine for comparison logging only
+                    p03_event_lookup = {e.event_id: e for e in novel_events}
+                    # Use copies to avoid clobbering legacy annotations
+                    engine_ext_count = self._engine_extend_episodes(
+                        episode_candidates=episode_candidates,
+                        existing_episodes=existing_episodes,
+                        event_lookup=p03_event_lookup,
+                        cycle_id=cycle_id,
+                        space_id=space_id,
+                        tenant_id=tenant_id,
+                    )
+                    if self.config.engine_dual_path_log_divergences:
+                        logger.info(
+                            "R2: EXTEND dual-path comparison",
+                            extra={
+                                "cycle_id": cycle_id,
+                                "legacy_extended": len(legacy_extended),
+                                "engine_extended": engine_ext_count,
+                            },
+                        )
+                    if extend_stats.candidates_extended > 0:
+                        logger.info(
+                            "R2: Cross-batch extend matching applied",
+                            extra={
+                                "cycle_id": cycle_id,
+                                **extend_stats.to_dict(),
+                            },
+                        )
+                else:
+                    # Legacy-only EXTEND path (default)
+                    extend_matcher = CrossBatchExtendMatcher(
+                        config=self.config.cross_batch_extend_config or CrossBatchExtendConfig(),
+                    )
+                    extend_matches, extend_stats = extend_matcher.match(
+                        episode_candidates,
+                        existing_episodes,
+                        event_lookup_purity,
+                    )
+                    for cand, ext_match in zip(episode_candidates, extend_matches):
+                        if ext_match is not None:
+                            cand.reconciliation_action = "EXTEND"
+                            cand.extend_target_episode_id = ext_match.target_episode_id
+                            cand.extend_similarity = ext_match.similarity
+                    if extend_stats.candidates_extended > 0:
+                        logger.info(
+                            "R2: Cross-batch extend matching applied",
+                            extra={
+                                "cycle_id": cycle_id,
+                                **extend_stats.to_dict(),
+                            },
+                        )
+
+            # Step 3b: Scene segmentation (M9.10)
+            # Splits mega-episodes (> max_scene_events) into human-scale scenes.
+            # Fragment absorption merges micro-fragments (<= absorb_max_events)
+            # into nearby compatible scenes.
+            scene_seg_stats = None
+            frag_abs_stats = None
+            if self.config.enable_scene_segmentation and episode_candidates:
+                seg_config = self.config.scene_segmentation_config or SceneSegmentationConfig()
+                episode_candidates, episode_clusters, scene_seg_stats = segment_episodes(
+                    episode_candidates,
+                    episode_clusters,
+                    event_lookup_purity,
+                    seg_config,
+                )
+                logger.info(
+                    "R2: Scene segmentation applied",
+                    extra={
+                        "cycle_id": cycle_id,
+                        **scene_seg_stats.to_dict(),
+                    },
+                )
+
+                # Fragment absorption runs only after scene segmentation
+                if self.config.enable_fragment_absorption:
+                    abs_config = (
+                        self.config.fragment_absorption_config or FragmentAbsorptionConfig()
+                    )
+                    episode_candidates, episode_clusters, frag_abs_stats = absorb_fragments(
+                        episode_candidates,
+                        episode_clusters,
+                        event_lookup_purity,
+                        abs_config,
+                    )
+                    if frag_abs_stats.fragments_absorbed > 0:
+                        logger.info(
+                            "R2: Fragment absorption applied",
+                            extra={
+                                "cycle_id": cycle_id,
+                                **frag_abs_stats.to_dict(),
+                            },
+                        )
 
             # Step 4: Update event states with cluster assignments
             self._update_event_states(envelope.events, all_results, all_noise_ids)
@@ -844,6 +934,14 @@ class R2EpisodicIntegrator:
                 "episode_matching_enabled": self.config.enable_episode_matching,
                 "matched_to_existing": matched_event_count,  # Issue 2 fix
             }
+            if scene_seg_stats is not None:
+                envelope.phases.r2_clustering_params["scene_segmentation"] = (
+                    scene_seg_stats.to_dict()
+                )
+            if frag_abs_stats is not None:
+                envelope.phases.r2_clustering_params["fragment_absorption"] = (
+                    frag_abs_stats.to_dict()
+                )
 
             # Step 6: Track quality metrics and adaptive learning
             quality_metrics = None
@@ -872,6 +970,10 @@ class R2EpisodicIntegrator:
                     "min_samples": distance_params.min_samples,
                     "silhouette": quality_metrics.silhouette_score if quality_metrics else None,
                     "duration_ms": duration_ms,
+                    "scenes_split": scene_seg_stats.episodes_split if scene_seg_stats else 0,
+                    "fragments_absorbed": (
+                        frag_abs_stats.fragments_absorbed if frag_abs_stats else 0
+                    ),
                 },
             )
 
@@ -1058,331 +1160,123 @@ class R2EpisodicIntegrator:
         split_result = self._splitter.split(events)
         return split_result.episodes
 
-    def _canonicalize_episodes(
-        self, episodes: List[EpisodeCluster]
-    ) -> tuple[List[EpisodeCluster], int]:
-        """
-        Merge episodes with the same signature into canonical episodes.
+    def _compute_timestamp_quality(
+        self,
+        events: List["P03EventState"],
+        cycle_id: str,
+    ) -> Tuple[Dict[str, int], float]:
+        """Compute timestamp quality stats and degraded ratio."""
+        ts_quality: Dict[str, int] = {
+            "mw_resolved": 0,
+            "ner_temporal": 0,
+            "event_time": 0,
+            "envelope_ts": 0,
+            "now": 0,
+            "unknown": 0,
+        }
+        for evt in events:
+            src = getattr(evt, "temporal_source", "") or "unknown"
+            ts_quality[src] = ts_quality.get(src, 0) + 1
 
-        Signature = (episode_type, primary_location, time_bucket)
-        Episodes with the same signature are merged:
-        - member_event_ids: union
-        - participants: union
-        - temporal bounds: min/max
-        - sentiment/emotion: weighted average
-        - cohesion: recomputed as average
-        - summary: regenerated
+        total = len(events) or 1
+        degraded = (
+            ts_quality["event_time"]
+            + ts_quality["envelope_ts"]
+            + ts_quality["now"]
+            + ts_quality["unknown"]
+        )
+        degraded_ratio = degraded / total
 
-        Args:
-            episodes: List of episode clusters to canonicalize
-
-        Returns:
-            Tuple of (canonical_episodes, merge_count)
-        """
-        from collections import defaultdict
-
-        bucket_hours = self.config.canonicalization_time_bucket_hours
-        bucket_ms = bucket_hours * 3600 * 1000
-
-        # Group by signature
-        signature_groups: Dict[tuple, List[EpisodeCluster]] = defaultdict(list)
-        for ep in episodes:
-            # Compute time bucket from temporal_start
-            time_bucket = ep.temporal_start // bucket_ms if ep.temporal_start > 0 else 0
-            # Normalize activity_type to episode_type mapping
-            episode_type = self._infer_episode_type(ep)
-            # Fix 2: More specific signature includes participant count and event count bucket
-            participant_count = len(ep.participants_json.split(",")) if ep.participants_json else 0
-            event_count_bucket = ep.event_count // 3  # Group by event count (0-2, 3-5, 6-8, etc.)
-            # Semantic hash from first few event IDs to prevent unrelated merging
-            semantic_hint = ep.member_event_ids[0][:8] if ep.member_event_ids else ""
-            signature = (
-                episode_type,
-                ep.location_hint or "",
-                time_bucket,
-                participant_count,
-                event_count_bucket,
-                semantic_hint,
+        logger.info(
+            "R2: Timestamp quality stats",
+            extra={
+                "cycle_id": cycle_id,
+                "ts_quality": ts_quality,
+                "degraded_ratio": round(degraded_ratio, 3),
+                "total_events": len(events),
+            },
+        )
+        if degraded_ratio > 0.5:
+            logger.warning(
+                "R2: >50%% events have degraded timestamps "
+                "-- episode boundaries may be unreliable",
+                extra={
+                    "cycle_id": cycle_id,
+                    "degraded_ratio": round(degraded_ratio, 3),
+                },
             )
-            signature_groups[signature].append(ep)
+        return ts_quality, degraded_ratio
 
-        # Merge groups with more than 1 episode
-        canonical: List[EpisodeCluster] = []
-        merge_count = 0
+    def _cluster_sequences(
+        self,
+        sequences: List[List["EventAdapter"]],
+        cooccurrence_graph: Optional[Dict] = None,
+    ) -> Tuple[List["HDBSCANClusteringResult"], List[str]]:
+        """Cluster each event sequence via HDBSCAN, returning results and noise IDs."""
+        all_results: List[HDBSCANClusteringResult] = []
+        all_noise_ids: List[str] = []
 
-        for signature, group in signature_groups.items():
-            if len(group) == 1:
-                # No merge needed - compute better confidence
-                ep = group[0]
-                ep = self._recompute_confidence(ep)
-                canonical.append(ep)
-            else:
-                # Merge multiple episodes into one canonical
-                merged = self._merge_episodes(group, signature)
-                canonical.append(merged)
-                merge_count += len(group) - 1  # Count how many were merged away
+        for sequence in sequences:
+            if len(sequence) < self.config.min_batch_size:
+                all_noise_ids.extend(e.event_id for e in sequence)
+                continue
 
-        return canonical, merge_count
+            clustering_result = self._clusterer.cluster(
+                sequence, cooccurrence_graph=cooccurrence_graph
+            )
+            all_results.append(clustering_result)
 
-    def _infer_episode_type(self, ep: EpisodeCluster) -> str:
-        """Infer episode type from activity_type_ultrabert or activity_type or location.
+            for idx, label in enumerate(clustering_result.labels):
+                if label == -1:
+                    all_noise_ids.append(sequence[idx].event_id)
 
-        Priority order (Issue 0060):
-        1. activity_type_ultrabert (UltraBERT 12-type INGRESS) - most granular
-        2. activity_type (legacy 7-type) - backward compatibility
-        3. Location-based inference - fallback
-        """
-        # Priority 1: UltraBERT 12-type INGRESS classification (Issue 0060)
-        # These map directly to episode types with full granularity
-        ultrabert_type = ep.activity_type_ultrabert.upper() if ep.activity_type_ultrabert else ""
-        ultrabert_mapping = {
-            "DIARY": "reflection",  # Personal journaling/logging
-            "TASK": "task",  # To-do items, action items
-            "HEALTH": "health",  # Medical, exercise, wellness
-            "FINANCE": "financial",  # Money, budget, transactions
-            "RELATIONSHIP": "social",  # Interpersonal connections
-            "WORK": "work",  # Professional activities
-            "META": "system",  # System/meta operations
-            "MEMORY": "memory",  # Memory recall/queries
-            "PLANNING": "planning",  # Future planning
-            "CELEBRATION": "milestone",  # Celebrations, achievements
-            "CONCERN": "concern",  # Worries, problems
-            "GRATITUDE": "gratitude",  # Thankfulness, appreciation
-        }
-        if ultrabert_type in ultrabert_mapping:
-            return ultrabert_mapping[ultrabert_type]
+        return all_results, all_noise_ids
 
-        # Priority 2: Legacy activity_type (backward compatibility)
-        activity = ep.activity_type.lower() if ep.activity_type else ""
-        location = (ep.location_hint or "").lower()
+    def _build_episodes_from_clusters(
+        self,
+        all_results: List["HDBSCANClusteringResult"],
+        adapted_events: List["EventAdapter"],
+        space_id: str,
+    ) -> Tuple[List["EpisodeCandidate"], List["EpisodeCluster"]]:
+        """Build episode candidates and clusters from HDBSCAN results."""
+        episode_candidates: List[EpisodeCandidate] = []
+        episode_clusters: List[EpisodeCluster] = []
+        event_lookup = {e.event_id: e for e in adapted_events}
 
-        # Fix 3: Direct mapping for uppercase activity types from input data
-        # These come from submit_diverse_events.py activity_type field
-        activity_upper = ep.activity_type.upper() if ep.activity_type else ""
-        direct_mapping = {
-            "FAMILY": "family",
-            "WORK": "work",
-            "HEALTH": "health",
-            "SOCIAL": "social",
-            "LEARNING": "learning",
-            "MILESTONE": "milestone",
-            "TRAVEL": "travel",
-            "FINANCIAL": "financial",
-            "REMINDER": "reminder",
-            "DECISION": "decision",
-            "REFLECTION": "reflection",
-            "EMOTIONAL": "emotional",
-            "NEWS": "news",
-            "QUERY": "query",
-        }
-        if activity_upper in direct_mapping:
-            return direct_mapping[activity_upper]
+        for clustering_result in all_results:
+            for cluster in clustering_result.clusters:
+                member_ids = cluster.member_event_ids
+                if not member_ids or len(member_ids) == 1:
+                    continue
 
-        # Map activity types to episode types (pattern matching)
-        if any(w in activity for w in ["work", "meeting", "standup", "review", "presentation"]):
-            return "work"
-        if any(w in activity for w in ["family", "dinner", "birthday", "party"]):
-            return "family"
-        if any(w in activity for w in ["coffee", "lunch", "social", "movie"]):
-            return "social"
-        if any(w in activity for w in ["exercise", "run", "yoga", "gym", "health"]):
-            return "health"
-        if any(w in activity for w in ["travel", "flight", "trip", "visit"]):
-            return "travel"
-        if any(w in activity for w in ["learn", "read", "course", "webinar", "study"]):
-            return "learning"
-        if any(w in activity for w in ["remind", "reminder", "forget"]):
-            return "reminder"
-        if any(w in activity for w in ["decide", "decision", "advice", "should"]):
-            return "decision"
-        if any(w in activity for w in ["reflect", "realize", "learn", "insight"]):
-            return "reflection"
-        if any(w in activity for w in ["feel", "emotion", "anxious", "happy", "sad"]):
-            return "emotional"
+                cluster_events = [event_lookup[eid] for eid in member_ids if eid in event_lookup]
+                if not cluster_events:
+                    continue
 
-        # Priority 3: Fallback to location-based inference
-        if any(w in location for w in ["office", "conference", "boardroom"]):
-            return "work"
-        if any(w in location for w in ["starbucks", "cafe", "restaurant", "chipotle"]):
-            return "social"
-        if any(w in location for w in ["park", "gym", "yoga", "clinic", "medical", "dental"]):
-            return "health"
-        if any(w in location for w in ["school", "elementary", "university"]):
-            return "education"
-        if any(w in location for w in ["airport", "hotel", "bridge", "trail"]):
-            return "travel"
-        # Home is last fallback - don't use it as primary signal
-        if any(w in location for w in ["home", "apartment"]):
-            return "home"  # Changed from 'routine' to be more specific
-
-        return "miscellaneous"  # Changed from 'unknown' for clarity
-
-    def _merge_episodes(self, episodes: List[EpisodeCluster], signature: tuple) -> EpisodeCluster:
-        """Merge multiple episodes into one canonical episode."""
-        import json
-        import uuid
-
-        # Collect all member events
-        all_member_ids: List[str] = []
-        for ep in episodes:
-            all_member_ids.extend(ep.member_event_ids)
-        all_member_ids = list(set(all_member_ids))  # Dedupe
-
-        # Aggregate participants
-        all_participants: set = set()
-        for ep in episodes:
-            try:
-                participants = json.loads(ep.participants_json or "[]")
-                all_participants.update(participants)
-            except json.JSONDecodeError:
-                pass
-
-        # Temporal bounds - min/max across all episodes
-        temporal_start = min(ep.temporal_start for ep in episodes)
-        temporal_end = max(ep.temporal_end for ep in episodes)
-
-        # Weighted average sentiment (by event count)
-        total_events = sum(ep.event_count for ep in episodes)
-        avg_sentiment = (
-            sum(ep.dominant_sentiment * ep.event_count for ep in episodes) / total_events
-            if total_events > 0
-            else 0.0
-        )
-
-        # Most common emotion
-        emotion_counts: Dict[str, int] = {}
-        for ep in episodes:
-            if ep.dominant_emotion:
-                emotion_counts[ep.dominant_emotion] = (
-                    emotion_counts.get(ep.dominant_emotion, 0) + ep.event_count
+                centroid_result = self._centroid_calculator.compute(
+                    cluster_events, strategy=self.config.weighting_strategy
                 )
-        dominant_emotion = max(emotion_counts, key=emotion_counts.get) if emotion_counts else ""
 
-        # Average cohesion
-        avg_cohesion = sum(ep.cohesion_score for ep in episodes) / len(episodes)
-
-        # Use signature for type/location
-        episode_type, location, _ = signature
-
-        # Generate merged title
-        title = f"{episode_type.title()} at {location}" if location else episode_type.title()
-
-        # Generate merged summary
-        summaries = [ep.summary for ep in episodes if ep.summary]
-        summary = " | ".join(summaries[:3])
-        if len(summaries) > 3:
-            summary += f" ... ({len(summaries)} episodes merged)"
-
-        # Compute confidence score
-        confidence = self._compute_confidence(
-            event_count=len(all_member_ids),
-            temporal_start=temporal_start,
-            temporal_end=temporal_end,
-            participant_count=len(all_participants),
-            cohesion=avg_cohesion,
-            location_purity=1.0,  # All same location by signature
-        )
-
-        # Aggregate UltraBERT activity types from merged episodes (Issue 0060)
-        ultrabert_counts: Dict[str, int] = {}
-        for ep in episodes:
-            if ep.activity_type_ultrabert:
-                ultrabert_counts[ep.activity_type_ultrabert] = (
-                    ultrabert_counts.get(ep.activity_type_ultrabert, 0) + ep.event_count
+                cohesion = 1.0 / (1.0 + centroid_result.variance)
+                candidate = EpisodeCandidate(
+                    cluster_id=cluster.cluster_id,
+                    space_id=space_id,
+                    event_ids=member_ids,
+                    event_count=len(member_ids),
+                    centroid_embedding=centroid_result.centroid,
+                    temporal_start=min(e.timestamp for e in cluster_events),
+                    temporal_end=max(e.timestamp for e in cluster_events),
+                    cohesion_score=cohesion,
+                    variance=centroid_result.variance,
                 )
-        activity_type_ultrabert = (
-            max(ultrabert_counts, key=ultrabert_counts.get) if ultrabert_counts else ""
-        )
+                episode_candidates.append(candidate)
 
-        # GAP-002: Aggregate location_type from merged episodes
-        location_type_counts: Dict[str, int] = {}
-        for ep in episodes:
-            if ep.location_type:
-                location_type_counts[ep.location_type] = (
-                    location_type_counts.get(ep.location_type, 0) + ep.event_count
+                episode_cluster = self._build_episode_cluster(
+                    cluster.cluster_id, member_ids, cluster_events, centroid_result
                 )
-        merged_location_type = (
-            max(location_type_counts, key=location_type_counts.get)
-            if location_type_counts
-            else None
-        )
+                episode_clusters.append(episode_cluster)
 
-        # Issue 7.6: Aggregate member_contexts from merged episodes
-        all_member_contexts = []
-        for ep in episodes:
-            all_member_contexts.extend(ep.member_contexts)
-
-        (
-            aggregated_sentiment,
-            aggregated_salience,
-            dominant_location,
-            dominant_social_context,
-        ) = self._aggregate_context_fields(all_member_contexts)
-
-        return EpisodeCluster(
-            cluster_id=f"canonical-{uuid.uuid4().hex[:16]}",
-            member_event_ids=all_member_ids,
-            member_contexts=all_member_contexts,  # Issue 7.6
-            centroid_embedding_id=None,
-            dominant_sentiment=avg_sentiment,
-            dominant_emotion=dominant_emotion,
-            aggregated_sentiment=aggregated_sentiment,
-            aggregated_salience=aggregated_salience,
-            dominant_location=dominant_location,
-            dominant_social_context=dominant_social_context,
-            temporal_start=temporal_start,
-            temporal_end=temporal_end,
-            location_hint=location or None,
-            location_type=merged_location_type,  # GAP-002: location category
-            participants_json=json.dumps(sorted(all_participants)),
-            activity_type=episode_type,
-            activity_type_ultrabert=activity_type_ultrabert,  # Issue 0060
-            cohesion_score=confidence,  # Use confidence as cohesion display
-            title=title,
-            summary=summary,
-        )
-
-    def _recompute_confidence(self, ep: EpisodeCluster) -> EpisodeCluster:
-        """Recompute confidence score for a single episode."""
-        import json
-
-        try:
-            participants = json.loads(ep.participants_json or "[]")
-            participant_count = len(participants)
-        except json.JSONDecodeError:
-            participant_count = 0
-
-        confidence = self._compute_confidence(
-            event_count=ep.event_count,
-            temporal_start=ep.temporal_start,
-            temporal_end=ep.temporal_end,
-            participant_count=participant_count,
-            cohesion=ep.cohesion_score,
-            location_purity=1.0 if ep.location_hint else 0.5,
-        )
-
-        # Update cohesion_score to reflect confidence
-        return EpisodeCluster(
-            cluster_id=ep.cluster_id,
-            member_event_ids=ep.member_event_ids,
-            member_contexts=ep.member_contexts,  # Issue 7.6: preserve contexts
-            centroid_embedding_id=ep.centroid_embedding_id,
-            dominant_sentiment=ep.dominant_sentiment,
-            dominant_emotion=ep.dominant_emotion,
-            aggregated_sentiment=ep.aggregated_sentiment,
-            aggregated_salience=ep.aggregated_salience,
-            dominant_location=ep.dominant_location,
-            dominant_social_context=ep.dominant_social_context,
-            temporal_start=ep.temporal_start,
-            temporal_end=ep.temporal_end,
-            location_hint=ep.location_hint,
-            location_type=ep.location_type,  # GAP-002: preserve location category
-            participants_json=ep.participants_json,
-            activity_type=ep.activity_type,
-            cohesion_score=confidence,
-            title=ep.title,
-            summary=ep.summary,
-        )
+        return episode_candidates, episode_clusters
 
     def _compute_confidence(
         self,
@@ -1468,40 +1362,26 @@ class R2EpisodicIntegrator:
         dominant_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0.0
 
         # Extract dominant emotion from most common across events
-        emotion_counts: Dict[str, int] = {}
+        emotion_labels: List[str] = []
         for e in cluster_events:
             try:
                 emotions = json.loads(e.event.emotions_json or "[]")
                 for emotion in emotions:
                     if isinstance(emotion, str):
-                        emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
+                        emotion_labels.append(emotion)
                     elif isinstance(emotion, dict):
                         label = emotion.get("label", emotion.get("emotion", ""))
                         if label:
-                            emotion_counts[label] = emotion_counts.get(label, 0) + 1
+                            emotion_labels.append(label)
             except (json.JSONDecodeError, TypeError):
                 pass
-        dominant_emotion = max(emotion_counts, key=emotion_counts.get) if emotion_counts else ""
+        dominant_emotion = _vote_winner(emotion_labels)
 
         # Extract most common location
-        location_counts: Dict[str, int] = {}
-        for e in cluster_events:
-            loc = e.event.location_name
-            if loc:
-                location_counts[loc] = location_counts.get(loc, 0) + 1
-        location_hint = max(location_counts, key=location_counts.get) if location_counts else None
+        location_hint = _vote_winner([e.event.location_name for e in cluster_events]) or None
 
         # GAP-002: Extract most common location type
-        location_type_counts: Dict[str, int] = {}
-        for e in cluster_events:
-            loc_type = e.event.location_type
-            if loc_type:
-                location_type_counts[loc_type] = location_type_counts.get(loc_type, 0) + 1
-        location_type = (
-            max(location_type_counts, key=location_type_counts.get)
-            if location_type_counts
-            else None
-        )
+        location_type = _vote_winner([e.event.location_type for e in cluster_events]) or None
 
         # Aggregate participants across all events
         all_participants: set = set()
@@ -1538,22 +1418,11 @@ class R2EpisodicIntegrator:
                 pass
 
         # Extract most common activity type
-        activity_counts: Dict[str, int] = {}
-        for e in cluster_events:
-            act = e.event.activity_type
-            if act:
-                activity_counts[act] = activity_counts.get(act, 0) + 1
-        activity_type = max(activity_counts, key=activity_counts.get) if activity_counts else ""
+        activity_type = _vote_winner([e.event.activity_type for e in cluster_events])
 
         # Extract most common UltraBERT activity type (Issue 0060)
-        # This gives us better granularity (12 types vs 7 legacy types)
-        ultrabert_counts: Dict[str, int] = {}
-        for e in cluster_events:
-            act_ultra = e.event.activity_type_ultrabert
-            if act_ultra:
-                ultrabert_counts[act_ultra] = ultrabert_counts.get(act_ultra, 0) + 1
-        activity_type_ultrabert = (
-            max(ultrabert_counts, key=ultrabert_counts.get) if ultrabert_counts else ""
+        activity_type_ultrabert = _vote_winner(
+            [e.event.activity_type_ultrabert for e in cluster_events]
         )
 
         # Generate a basic title from location + activity or first event text
@@ -1748,22 +1617,11 @@ class R2EpisodicIntegrator:
         saliences = [c.salience_score for c in contexts if c.salience_score is not None]
         aggregated_salience = max(saliences) if saliences else None
 
-        location_counts: Dict[str, int] = {}
-        for c in contexts:
-            loc = c.location_type or c.location_name
-            if loc:
-                location_counts[loc] = location_counts.get(loc, 0) + 1
         dominant_location = (
-            max(location_counts, key=location_counts.get) if location_counts else None
+            _vote_winner([c.location_type or c.location_name for c in contexts]) or None
         )
 
-        social_counts: Dict[str, int] = {}
-        for c in contexts:
-            if c.social_context:
-                social_counts[c.social_context] = social_counts.get(c.social_context, 0) + 1
-        dominant_social_context = (
-            max(social_counts, key=social_counts.get) if social_counts else None
-        )
+        dominant_social_context = _vote_winner([c.social_context for c in contexts]) or None
 
         return aggregated_sentiment, aggregated_salience, dominant_location, dominant_social_context
 
@@ -2207,6 +2065,176 @@ class R2EpisodicIntegrator:
             )
 
         return matched_events, novel_events
+
+    # =========================================================================
+    # M9.8: ENGINE-BASED RECONCILIATION
+    # =========================================================================
+
+    def _ensure_engine_components(self) -> None:
+        """Lazy-initialize engine components on first use."""
+        if self._engine_registry is None:
+            self._engine_registry = TruthLayerRegistry.from_contracts()
+        if self._engine_identity is None:
+            self._engine_identity = EpisodicIdentity()
+
+    def _engine_match_events(
+        self,
+        events: List["P03EventState"],
+        existing_episodes: List[Dict],
+        cycle_id: str,
+        space_id: str,
+        tenant_id: str,
+    ) -> Tuple[List["P03EventState"], List["P03EventState"]]:
+        """Engine-based pre-clustering REINFORCE matching (Seam 1).
+
+        Replaces _match_events_to_existing_episodes when
+        enable_engine_reinforce=True.
+
+        For each event, converts to ReconciliationCandidate, runs
+        framework.decide() against TruthRecords built from existing
+        episodes.  Events where action=REINFORCE are matched; others
+        go to the clustering pool.
+        """
+        self._ensure_engine_components()
+
+        if not existing_episodes:
+            return [], events
+
+        # Convert existing episodes to TruthRecords (once for the batch)
+        truth_records = [R2Adapter.existing_to_truth_record(ep) for ep in existing_episodes]
+
+        matched: List["P03EventState"] = []
+        novel: List["P03EventState"] = []
+
+        for event in events:
+            if event.embedding_768 is None:
+                novel.append(event)
+                continue
+
+            candidate = R2Adapter.event_to_candidate(
+                event,
+                cycle_id,
+                space_id,
+                tenant_id,
+            )
+
+            result = ReconciliationFramework.decide(
+                candidate=candidate,
+                layer="st_epi",
+                registry=self._engine_registry,
+                existing_records=truth_records,
+                # identity_strategy=None: existing episodes from st_epi lack
+                # structural metadata (topics, participants, focal) needed
+                # by EpisodicIdentity.  Pure cosine-sim + thresholds suffices
+                # for R2 pre-clustering matching.
+                identity_strategy=None,
+            )
+
+            if result.action == ReconciliationAction.REINFORCE and result.match_id:
+                # Find the version from the matching episode
+                match_version = 1
+                for ep in existing_episodes:
+                    if ep["episode_id"] == result.match_id:
+                        match_version = ep.get("version", 1)
+                        break
+
+                event.episode_match_id = result.match_id
+                event.episode_match_similarity = result.similarity
+                event.episode_match_version = match_version
+                event.reconciliation_action = ReconciliationAction.REINFORCE
+                event.reconciliation_reason = result.reason
+                matched.append(event)
+            else:
+                novel.append(event)
+
+        if matched:
+            logger.info(
+                "R2: Engine matched events to existing episodes",
+                extra={
+                    "matched_count": len(matched),
+                    "novel_count": len(novel),
+                    "path": "engine",
+                },
+            )
+
+        return matched, novel
+
+    def _engine_extend_episodes(
+        self,
+        episode_candidates: List,
+        existing_episodes: List[Dict],
+        event_lookup: Dict,
+        cycle_id: str,
+        space_id: str,
+        tenant_id: str,
+    ) -> int:
+        """Engine-based post-clustering EXTEND matching (Seam 2).
+
+        Replaces CrossBatchExtendMatcher when enable_engine_extend=True.
+
+        For each EpisodeCandidate, converts to ReconciliationCandidate,
+        runs framework.decide() against TruthRecords. If action=EXTEND,
+        annotates the candidate.
+
+        Returns the count of extended candidates.
+        """
+        self._ensure_engine_components()
+
+        if not existing_episodes or not episode_candidates:
+            return 0
+
+        truth_records = [R2Adapter.existing_to_truth_record(ep) for ep in existing_episodes]
+
+        extended_count = 0
+
+        for cand in episode_candidates:
+            if cand.centroid_embedding is None:
+                continue
+
+            rc = R2Adapter.episode_to_candidate(
+                cand,
+                cycle_id,
+                space_id,
+                tenant_id,
+                event_lookup,
+            )
+
+            result = ReconciliationFramework.decide(
+                candidate=rc,
+                layer="st_epi",
+                registry=self._engine_registry,
+                existing_records=truth_records,
+                # identity_strategy=None: same rationale as Seam 1 —
+                # st_epi rows have no structural metadata for the identity
+                # model. Cosine-sim thresholds are sufficient for cross-batch
+                # episode extension.
+                identity_strategy=None,
+            )
+
+            if (
+                result.action
+                in (
+                    ReconciliationAction.EXTEND,
+                    ReconciliationAction.REINFORCE,
+                )
+                and result.match_id
+            ):
+                cand.reconciliation_action = "EXTEND"
+                cand.extend_target_episode_id = result.match_id
+                cand.extend_similarity = result.similarity
+                extended_count += 1
+
+        if extended_count > 0:
+            logger.info(
+                "R2: Engine cross-batch extend applied",
+                extra={
+                    "candidates_extended": extended_count,
+                    "candidates_total": len(episode_candidates),
+                    "path": "engine",
+                },
+            )
+
+        return extended_count
 
     def _compute_ambiguity_score(
         self,

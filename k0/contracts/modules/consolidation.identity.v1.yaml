@@ -1,0 +1,107 @@
+---
+# M9.2 -- Identity Strategy Protocol & Episodic Scorer Contract
+# k0/contracts/modules/consolidation.identity.v1.yaml
+
+module_id: consolidation.identity
+version: v1
+milestone: "M9.2"
+status: active
+
+latency_budget_ms: 10
+
+input_event_types:
+  - p03.reconciliation.candidate.v1
+
+output_event_types:
+  - p03.reconciliation.identity_result.v1
+
+side_effects: []
+
+idempotent: true
+
+description: >
+  Defines the IdentityStrategy protocol and the EpisodicIdentity
+  implementation for the st_epi truth layer. Uses an 11-feature
+  frozen logistic regression model (no sklearn at runtime).
+
+protocol:
+  name: IdentityStrategy
+  file: k0/modules/consolidation/identity/__init__.py
+  runtime_checkable: true
+  methods:
+    - name: score_identity
+      args: [candidate, existing, cosine_sim]
+      returns: IdentityResult
+    - name: match_key
+      args: [candidate, existing]
+      returns: "bool | None"
+  properties:
+    - name: layer_name
+      type: str
+
+implementations:
+  - name: EpisodicIdentity
+    file: k0/modules/consolidation/identity/episodic.py
+    layer: st_epi
+    match_key_returns: null
+    model:
+      type: multinomial_logistic_regression
+      weights_file: k0/modules/consolidation/identity/weights/episodic_v1.json
+      feature_count: 11
+      classes: [CREATE, EXTEND, REINFORCE]
+      optimal_threshold: 0.35
+      training_metric: "CV macro-F1 = 0.7264"
+      runtime_dependency: numpy  # no sklearn
+
+features:
+  file: k0/modules/consolidation/identity/features.py
+  count: 11
+  names:
+    - cosine_sim
+    - topic_overlap
+    - participant_overlap
+    - focus_match
+    - social_context_match
+    - location_match
+    - source_type_match
+    - sim_x_focus_match
+    - sim_x_participant_overlap
+    - correction_signal_any
+    - contradiction_signal_any
+  locked: true  # No additions without retraining
+
+types:
+  file: k0/modules/consolidation/types.py
+  classes:
+    - name: K1SignalBundle
+      frozen: true
+    - name: ReconciliationCandidate
+      frozen: true
+    - name: TruthRecord
+      frozen: true
+    - name: IdentityResult
+      frozen: true
+
+validation_gates:
+  - id: V1
+    description: "EpisodicIdentity satisfies IdentityStrategy protocol"
+  - id: V2
+    description: "11 features computed correctly"
+  - id: V3
+    description: "Frozen weights loaded: coef (3,11), intercept (3,)"
+  - id: V4
+    description: "Softmax output sums to 1.0"
+  - id: V5
+    description: "Golden set regression: macro F1 >= 0.72"
+  - id: V6
+    description: "K1 signals NOT checked by strategy"
+  - id: V7
+    description: "match_key() returns None for episodes"
+  - id: V8
+    description: "No sklearn import in production code"
+  - id: V9
+    description: "Threshold 0.35 regression"
+  - id: V10
+    description: "ReconciliationCandidate is frozen"
+  - id: V11
+    description: "IdentityResult.features contains all 11 feature names"

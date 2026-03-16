@@ -86,6 +86,8 @@ required_capabilities:
   # Truth layer - Prospective
   - st_prospective.read
   - st_prospective.write
+  # M9.3 -- Unified truth candidate query for reconciliation
+  - truth.reconcile.read
   # Support tables
   - st_learning_queue.read    # R0 gap auto-resolution reads pending gaps
   - st_learning_queue.write   # P06 gap records

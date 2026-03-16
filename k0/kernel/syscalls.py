@@ -4065,6 +4065,136 @@ class Syscalls:
 
             return candidates
 
+    # ------------------------------------------------------------------
+    # M9.3 -- Unified Truth Candidates Query
+    # ------------------------------------------------------------------
+
+    async def truth_candidates_query(
+        self,
+        request: Any,
+    ) -> Any:
+        """
+        Unified truth layer candidate query for reconciliation engine.
+
+        Replaces TruthQueryService.find_candidates() and 8+ bespoke query
+        paths with a single capability-gated, pgvector-accelerated syscall.
+
+        Supports three query modes:
+        - EMBEDDING: pgvector cosine ANN (ORDER BY <=> with HNSW index)
+        - KEY: Exact/fuzzy WHERE clause match (for st_kg_edges, etc.)
+        - HYBRID: Key pre-filter + embedding re-rank (for st_kg_dom)
+
+        Capability Required: "truth.reconcile.read"
+
+        Args:
+            request: TruthCandidateRequest with layers, embedding, key_filters
+
+        Returns:
+            TruthCandidateResponse with candidates per layer + query metadata
+
+        Raises:
+            PermissionError: If pipeline lacks "truth.reconcile.read" capability
+            ValueError: If request.layers contains unregistered layer
+            asyncio.TimeoutError: If query exceeds request.timeout_ms
+        """
+        import asyncio
+        import uuid
+
+        from k0.modules.consolidation.query import (
+            TruthCandidateRequest,
+            TruthCandidateResponse,
+            resolve_query_mode,
+        )
+        from k0.modules.consolidation.query.builder import TruthCandidateQueryBuilder
+        from k0.modules.consolidation.query.mapper import TruthCandidateMapper
+        from k0.modules.consolidation.truth_layer_registry import TruthLayerRegistry
+
+        self._require_cap("truth.reconcile.read")
+
+        req: TruthCandidateRequest = request
+        query_id = str(uuid.uuid4())
+        start_time = time.perf_counter()
+
+        logger.debug(
+            f"truth_candidates_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": req.tenant_id,
+                "space_id": req.space_id,
+                "layers": list(req.layers),
+                "top_k": req.top_k,
+                "query_id": query_id,
+                "operation": "truth_candidates_query",
+            },
+        )
+
+        registry = TruthLayerRegistry.from_contracts()
+        builder = TruthCandidateQueryBuilder(registry)
+        mapper = TruthCandidateMapper(registry)
+
+        all_candidates: dict[str, list[Any]] = {}
+        modes_used: dict[str, str] = {}
+        errors: dict[str, str] = {}
+        total = 0
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            for layer in req.layers:
+                try:
+                    spec = registry.get(layer)
+                    mode = resolve_query_mode(
+                        spec.supports_embedding_match,
+                        spec.supports_key_match,
+                        req.mode,
+                    )
+                    modes_used[layer] = mode.value
+
+                    sql, params = builder.build(layer, mode, req)
+                    rows = await asyncio.wait_for(
+                        conn.fetch(sql, *params),
+                        timeout=req.timeout_ms / 1000.0,
+                    )
+
+                    records = [mapper.map_row(row, layer) for row in rows]
+                    all_candidates[layer] = records
+                    total += len(records)
+                except KeyError as exc:
+                    errors[layer] = str(exc)
+                except asyncio.TimeoutError:
+                    errors[layer] = f"Query timed out after {req.timeout_ms}ms"
+                except Exception as exc:
+                    errors[layer] = f"{type(exc).__name__}: {exc}"
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+        logger.debug(
+            f"truth_candidates_query completed: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "query_id": query_id,
+                "layers_queried": list(req.layers),
+                "modes_used": modes_used,
+                "total_candidates": total,
+                "errors": errors,
+                "elapsed_ms": elapsed_ms,
+                "operation": "truth_candidates_query",
+                "status": "success" if not errors else "partial",
+            },
+        )
+
+        return TruthCandidateResponse(
+            candidates=all_candidates,
+            total_count=total,
+            layers_queried=req.layers,
+            modes_used=modes_used,
+            elapsed_ms=elapsed_ms,
+            query_id=query_id,
+            errors=errors,
+        )
+
     async def embedding_vectors_batch_query(
         self,
         embedding_ids: list[str],

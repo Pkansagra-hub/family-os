@@ -1,0 +1,342 @@
+# =============================================================================
+# st_epi v1.0.0 -- Truth Layer Column Contract
+# =============================================================================
+#
+# Single source of truth for every column in st_epi (Episodic Memory).
+# Used by TruthLayerRegistry to build TruthLayerSpec.
+#
+# Migrations: 0027_st_epi, 0061, 0083, 0084, 0086
+# Writer: k0/modules/consolidation/truth_writer/layers/episodic.py
+# =============================================================================
+
+schema: st_epi
+version: "1.0.0"
+migrations:
+  - "0027"
+  - "0061"
+  - "0083"
+  - "0084"
+  - "0086"
+column_count: 52
+
+# ---------------------------------------------------------------------------
+# Layer Metadata (read by TruthLayerRegistry to build TruthLayerSpec)
+# ---------------------------------------------------------------------------
+layer_metadata:
+  pk: episode_id
+  version_column: version
+  supersedes_column: supersedes_id
+  canonical_column: is_canonical
+  observation_count_column: observation_count
+  confidence_column: confidence_score
+  confidence_boost_strategy: none
+  archival_status_column: archival_status
+  active_status_value: ACTIVE
+  decay_lambda: 0.005
+
+  embedding_fk_column: embedding_id
+  supports_embedding_match: true
+  supports_key_match: false
+  identity_columns: [narrative_thread_id]
+
+  write_order: 4
+
+  temporal:
+    start: start_time_utc
+    end: end_time_utc
+    last_observed: last_observed_at
+    first_observed: null
+
+  thresholds:
+    reinforce: 0.85
+    extend: 0.60
+    evolve: 0.40
+
+# ---------------------------------------------------------------------------
+# Columns
+# ---------------------------------------------------------------------------
+columns:
+
+  # --- Identity (migration 0027) ---
+  episode_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+    description: "Primary key"
+
+  tenant_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  space_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  # --- Versioning (0027) ---
+  version:
+    type: INTEGER
+    nullable: false
+    merge: counter
+    description: "Optimistic lock counter"
+
+  supersedes_id:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  is_canonical:
+    type: BOOLEAN
+    nullable: false
+    merge: status
+    description: "FALSE when superseded by EVOLVE"
+
+  # --- Episode Content (0027) ---
+  episode_summary:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  episode_type:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+
+  start_time_utc:
+    type: BIGINT
+    nullable: false
+    merge: temporal_min
+    description: "LEAST(existing, new) on EXTEND"
+
+  end_time_utc:
+    type: BIGINT
+    nullable: false
+    merge: temporal_max
+    description: "GREATEST(existing, new) on EXTEND"
+
+  duration_minutes:
+    type: INTEGER
+    nullable: true
+    merge: derived
+    description: "(end_time_utc - start_time_utc) / 60000"
+
+  temporal_bucket:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+
+  day_of_week:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+
+  is_recurring:
+    type: BOOLEAN
+    nullable: true
+    merge: coalesce
+
+  recurrence_pattern:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+
+  # --- Source Events (0027) ---
+  source_events_json:
+    type: TEXT
+    nullable: false
+    merge: appendable_distinct
+    description: "JSON array of event IDs, deduped on REINFORCE"
+
+  source_event_count:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  # --- Location (0027) ---
+  primary_location:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+
+  location_type:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+
+  # --- Participants (0027) ---
+  participants_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_distinct
+
+  participant_count:
+    type: INTEGER
+    nullable: true
+    merge: replaced
+
+  # --- Embedding (0027) ---
+  embedding_id:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+    description: "Legacy FK to st_vec; prefer inline embedding_vector"
+
+  cluster_id:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  cluster_confidence:
+    type: FLOAT
+    nullable: true
+    merge: replaced
+
+  # --- Consolidation (0027) ---
+  consolidation_cycle_id:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  observation_count:
+    type: INTEGER
+    nullable: false
+    merge: counter
+    description: "+= 1 on REINFORCE"
+
+  confidence_score:
+    type: FLOAT
+    nullable: false
+    merge: coalesce
+    description: "No boost on REINFORCE for st_epi"
+
+  last_observed_at:
+    type: BIGINT
+    nullable: true
+    merge: temporal_max
+
+  decay_factor:
+    type: FLOAT
+    nullable: false
+    merge: replaced
+
+  archival_status:
+    type: TEXT
+    nullable: false
+    merge: status
+    description: "ACTIVE -> ARCHIVED -> TOMBSTONE"
+
+  # --- Temporal Validity (0027) ---
+  created_at:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  updated_at:
+    type: BIGINT
+    nullable: false
+    merge: replaced
+
+  valid_from:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  valid_to:
+    type: BIGINT
+    nullable: true
+    merge: replaced
+
+  # --- Inline Vectors & Text (migration 0061) ---
+  source_texts_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_distinct
+
+  embedding_text:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  embedding_vector:
+    type: BYTEA
+    nullable: true
+    merge: replaced
+
+  embedding_model:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  # --- Narrative Thread (migration 0083) ---
+  narrative_thread_id:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+
+  narrative_thread_ids_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_distinct
+
+  narrative_arc_position:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+
+  continuation_of_episode_id:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+
+  # --- Goal Completion (migration 0084) ---
+  narrative_thread_completed:
+    type: BOOLEAN
+    nullable: false
+    merge: replaced
+
+  # --- Metadata Preservation (migration 0086) ---
+  centroid_metadata_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_distinct
+
+  ambiguity_score:
+    type: FLOAT
+    nullable: true
+    merge: replaced
+
+  entity_ids_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_distinct
+
+  dominant_sentiment:
+    type: FLOAT
+    nullable: true
+    merge: replaced
+
+  dominant_emotion:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  aggregated_sentiment:
+    type: FLOAT
+    nullable: true
+    merge: replaced
+
+  aggregated_salience:
+    type: FLOAT
+    nullable: true
+    merge: replaced
+
+  dominant_social_context:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  activity_type_ultrabert:
+    type: TEXT
+    nullable: true
+    merge: replaced

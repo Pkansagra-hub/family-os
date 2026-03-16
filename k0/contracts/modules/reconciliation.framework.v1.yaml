@@ -1,0 +1,120 @@
+# k0/contracts/modules/reconciliation.framework.v1.yaml
+module_id: reconciliation.framework
+version: v1
+status: active
+
+latency_budget_ms: 50
+
+input_event_types:
+  - p03.reconciliation.candidate.v1
+
+output_event_types:
+  - p03.reconciliation.result.v1
+
+side_effects: []
+
+idempotent: true
+
+description: >
+  Stateless 6-stage decision pipeline that produces ReconciliationResult
+  from ReconciliationCandidate + pre-fetched TruthRecords.
+
+dependencies:
+  - module: reconciliation.truth_layer_registry
+    version: v1
+    provides: TruthLayerSpec, ReconciliationThresholds
+  - module: reconciliation.identity_strategy
+    version: v1
+    provides: IdentityStrategy protocol
+  - module: reconciliation.truth_candidates_query
+    version: v1
+    provides: TruthRecord, TruthCandidateResponse
+
+input:
+  type: ReconciliationCandidate
+  source: R2 (st_epi), R3 (st_sem, st_procedural, st_social, st_prospective), R4 (st_kg_dom, st_kg_edges)
+  required_fields:
+    - candidate_id
+    - embedding
+    - k1_signals
+    - metadata
+    - source_phase
+    - source_event_ids
+    - tenant_id
+    - space_id
+    - cycle_id
+
+output:
+  type: ReconciliationResult
+  consumed_by:
+    - WriteDecisionRouter (M9.5)
+    - R6 staging pipeline
+    - ReconciliationRecorder (audit)
+  fields:
+    - action
+    - tier
+    - match_id
+    - match_layer
+    - similarity
+    - identity_match
+    - confidence
+    - reason
+    - candidate_id
+    - layer
+    - cycle_id
+    - hooks_required
+    - contradiction_details
+    - decision_time_ms
+
+pipeline_stages:
+  - stage: 1
+    name: K1 Signal Check
+    tier: 1
+    actions: [EVOLVE, CONTRADICT]
+    short_circuit: true
+  - stage: 2
+    name: Override Check
+    tier: 2
+    actions: [SKIP, PRUNE]
+    short_circuit: true
+  - stage: 3
+    name: Identity Filter
+    tier: 2
+    actions: [CREATE]
+    short_circuit: true
+  - stage: 4
+    name: Similarity Rank
+    tier: 2
+    actions: []
+    short_circuit: false
+  - stage: 5
+    name: Threshold Decision
+    tier: 2
+    actions: [REINFORCE, EXTEND, EVOLVE, CREATE]
+    short_circuit: false
+  - stage: 6
+    name: Result Assembly
+    tier: 2
+    actions: []
+    short_circuit: false
+
+invariants:
+  - "decide() is a pure function: no DB reads, no DB writes, no instance state"
+  - "Tier 1 always fires before Tier 2"
+  - "Identity filtering happens before similarity ranking"
+  - "match_id is None iff action in {CREATE, SKIP}"
+  - "similarity == 0.0 when tier == 1"
+  - "hooks_required is never None"
+  - "ReconciliationAction enum reused from k0.pipelines.p03.event_state (no new enum)"
+
+observability:
+  prometheus_metrics:
+    - reconciliation_decisions_total
+    - reconciliation_decision_confidence
+    - reconciliation_similarity_score
+    - reconciliation_decision_latency_ms
+    - reconciliation_k1_bypass_total
+    - reconciliation_batch_size
+    - reconciliation_identity_filter_ratio
+    - reconciliation_batch_action_count
+  structured_log_event: reconciliation_decision

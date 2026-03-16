@@ -1,0 +1,282 @@
+# =============================================================================
+# st_social v1.0.0 -- Truth Layer Column Contract
+# =============================================================================
+#
+# Single source of truth for every column in st_social (Social Relationships).
+# Used by TruthLayerRegistry to build TruthLayerSpec.
+#
+# Migrations: 0030_st_social, 0054_st_social_m5a_signals, 0064_st_social_inline_embedding
+# Writer: k0/modules/consolidation/truth_writer/layers/social.py
+# =============================================================================
+
+schema: st_social
+version: "1.0.0"
+migrations:
+  - "0030"
+  - "0054"
+  - "0064"
+column_count: 42
+
+# ---------------------------------------------------------------------------
+# Layer Metadata
+# ---------------------------------------------------------------------------
+layer_metadata:
+  pk: relationship_id
+  version_column: version
+  supersedes_column: supersedes_id
+  canonical_column: is_canonical
+  observation_count_column: observation_count
+  confidence_column: confidence_score
+  confidence_boost_strategy: multiplicative_1.1
+  archival_status_column: archival_status
+  active_status_value: ACTIVE
+  decay_lambda: 0.002
+
+  embedding_fk_column: null
+  supports_embedding_match: true
+  supports_key_match: true
+  identity_columns: [actor_a_id, actor_b_id]
+
+  write_order: 7
+
+  temporal:
+    start: null
+    end: null
+    last_observed: last_interaction_at
+    first_observed: first_interaction_at
+
+  thresholds:
+    reinforce: 0.90
+    extend: 0.70
+    evolve: 0.50
+
+# ---------------------------------------------------------------------------
+# Columns (migration 0030 -- base, 27 columns)
+# ---------------------------------------------------------------------------
+columns:
+
+  # --- Identity ---
+  relationship_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  tenant_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  space_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  actor_a_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  actor_b_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  # --- Versioning ---
+  version:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  supersedes_id:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  is_canonical:
+    type: BOOLEAN
+    nullable: false
+    merge: immutable
+
+  # --- Relationship Content ---
+  relationship_type:
+    type: TEXT
+    nullable: false
+    merge: replaced
+
+  relationship_subtype:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  relationship_label:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  interaction_count:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  avg_sentiment:
+    type: FLOAT
+    nullable: true
+    merge: ema
+    ema_alpha: 0.1
+    description: "EMA: old * 0.9 + new * 0.1 on REINFORCE"
+
+  relationship_strength:
+    type: FLOAT
+    nullable: false
+    merge: replaced
+    description: "LEAST(relationship_strength * 1.1, 1.0) on REINFORCE"
+
+  intimacy_level:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  first_interaction_at:
+    type: BIGINT
+    nullable: true
+    merge: coalesce
+    description: "Set once on INSERT, never overwritten"
+
+  last_interaction_at:
+    type: BIGINT
+    nullable: true
+    merge: replaced
+
+  interaction_frequency:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  source_episodes_json:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  observation_count:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  confidence_score:
+    type: FLOAT
+    nullable: false
+    merge: replaced
+
+  decay_factor:
+    type: FLOAT
+    nullable: false
+    merge: replaced
+
+  archival_status:
+    type: TEXT
+    nullable: false
+    merge: status
+
+  created_at:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  updated_at:
+    type: BIGINT
+    nullable: false
+    merge: replaced
+
+  valid_from:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  valid_to:
+    type: BIGINT
+    nullable: true
+    merge: replaced
+
+  # --- UltraBERT enrichment (migration 0054, 11 columns) ---
+  ultrabert_relation_types:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  emotional_role:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  emotional_valence_avg:
+    type: FLOAT
+    nullable: true
+    merge: ema
+    ema_alpha: 0.1
+    description: "EMA: old * 0.9 + new * 0.1 on REINFORCE"
+
+  emotional_valence_trend:
+    type: FLOAT
+    nullable: true
+    merge: trend
+    trend_alpha: 0.3
+    description: "TREND: (new - avg) * 0.3 + old * 0.7 on REINFORCE"
+
+  relationship_phase:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  interaction_modalities_json:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  typical_activities_json:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  sentiment_trajectory_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_capped
+    cap: 20
+    description: "UNION ALL, ORDER BY timestamp DESC LIMIT 20"
+
+  emotions_json:
+    type: TEXT
+    nullable: true
+    merge: additive_merge
+    description: "Per-key integer sum via jsonb_object_agg on REINFORCE"
+
+  dominant_emotion:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  canonical_entity_id:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  # --- Inline Vectors (migration 0064, 4 columns) ---
+  source_texts_json:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  embedding_text:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  embedding_vector:
+    type: BYTEA
+    nullable: true
+    merge: immutable
+
+  embedding_model:
+    type: TEXT
+    nullable: true
+    merge: immutable

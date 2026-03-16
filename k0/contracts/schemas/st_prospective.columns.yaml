@@ -1,0 +1,198 @@
+# =============================================================================
+# st_prospective v1.0.0 -- Truth Layer Column Contract
+# =============================================================================
+#
+# Single source of truth for every column in st_prospective (Goals & Intentions).
+# Used by TruthLayerRegistry to build TruthLayerSpec.
+#
+# Migrations: 0031_st_prospective, 0057 (CHECK only), 0065_st_prospective_inline_embedding
+# Writer: k0/modules/consolidation/truth_writer/layers/prospective.py
+# =============================================================================
+
+schema: st_prospective
+version: "1.0.0"
+migrations:
+  - "0031"
+  - "0057"
+  - "0065"
+column_count: 26
+
+# ---------------------------------------------------------------------------
+# Layer Metadata
+# ---------------------------------------------------------------------------
+layer_metadata:
+  pk: intention_id
+  version_column: version
+  supersedes_column: supersedes_id
+  canonical_column: is_canonical
+  observation_count_column: observation_count
+  confidence_column: confidence_score
+  confidence_boost_strategy: coalesce
+  archival_status_column: archival_status
+  active_status_value: ACTIVE
+  decay_lambda: 0.020
+
+  embedding_fk_column: null
+  supports_embedding_match: true
+  supports_key_match: false
+  identity_columns: []
+
+  write_order: 8
+
+  temporal:
+    start: null
+    end: null
+    last_observed: null
+    first_observed: null
+
+  thresholds:
+    reinforce: 0.90
+    extend: 0.70
+    evolve: 0.50
+
+# ---------------------------------------------------------------------------
+# Columns (migration 0031 -- base, 22 columns)
+# ---------------------------------------------------------------------------
+columns:
+
+  # --- Identity ---
+  intention_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  tenant_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  space_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  actor_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  # --- Versioning ---
+  version:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  supersedes_id:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  is_canonical:
+    type: BOOLEAN
+    nullable: false
+    merge: immutable
+
+  # --- Intention Content ---
+  intention_type:
+    type: TEXT
+    nullable: false
+    merge: immutable
+    description: "CHECK: GOAL, PLAN, REMINDER, COMMITMENT, WISH, DECISION, COUNTERFACTUAL"
+
+  intention_description:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  target_date:
+    type: BIGINT
+    nullable: true
+    merge: immutable
+
+  target_context:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  status:
+    type: TEXT
+    nullable: false
+    merge: status
+    description: "CHECK: ACTIVE, COMPLETED, ABANDONED, DEFERRED"
+
+  inferred_from_json:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  inference_confidence:
+    type: FLOAT
+    nullable: true
+    merge: coalesce
+
+  # --- Observation ---
+  observation_count:
+    type: INTEGER
+    nullable: false
+    merge: immutable
+    description: "server_default=1; writer does NOT increment"
+
+  confidence_score:
+    type: FLOAT
+    nullable: false
+    merge: coalesce
+
+  # --- Decay & Lifecycle ---
+  decay_factor:
+    type: FLOAT
+    nullable: false
+    merge: immutable
+    description: "server_default=1.0; writer does NOT update"
+
+  archival_status:
+    type: TEXT
+    nullable: false
+    merge: status
+
+  created_at:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  updated_at:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+    description: "Set at INSERT, never updated (writer bug)"
+
+  valid_from:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  valid_to:
+    type: BIGINT
+    nullable: true
+    merge: immutable
+    description: "Never written by current writer"
+
+  # --- Inline Vectors (migration 0065, 4 columns) ---
+  source_texts_json:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  embedding_text:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  embedding_vector:
+    type: BYTEA
+    nullable: true
+    merge: immutable
+
+  embedding_model:
+    type: TEXT
+    nullable: true
+    merge: immutable

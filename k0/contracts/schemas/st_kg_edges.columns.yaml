@@ -1,0 +1,229 @@
+# =============================================================================
+# st_kg_edges v1.0.0 -- Truth Layer Column Contract
+# =============================================================================
+#
+# Single source of truth for every column in st_kg_edges (KG Relationships).
+# Used by TruthLayerRegistry to build TruthLayerSpec.
+#
+# Migrations: 0033_st_kg_edges, 0059 (query tracking), 0069 (source_algorithm), 0070 (evidence)
+# Writer: k0/modules/consolidation/truth_writer/layers/kg.py
+# =============================================================================
+
+schema: st_kg_edges
+version: "1.0.0"
+migrations:
+  - "0033"
+  - "0059"
+  - "0069"
+  - "0070"
+column_count: 31
+
+# ---------------------------------------------------------------------------
+# Layer Metadata
+# ---------------------------------------------------------------------------
+layer_metadata:
+  pk: edge_id
+  version_column: version
+  supersedes_column: supersedes_id
+  canonical_column: is_canonical
+  observation_count_column: observation_count
+  confidence_column: confidence_score
+  confidence_boost_strategy: coalesce
+  archival_status_column: archival_status
+  active_status_value: ACTIVE
+  decay_lambda: 0.008
+
+  embedding_fk_column: null
+  supports_embedding_match: false
+  supports_key_match: true
+  identity_columns: [source_entity_id, target_entity_id, relation_type]
+
+  write_order: 3
+
+  temporal:
+    start: null
+    end: null
+    last_observed: last_observed_at
+    first_observed: null
+
+  thresholds:
+    reinforce: 0.90
+    extend: 0.70
+    evolve: 0.50
+
+# ---------------------------------------------------------------------------
+# Columns (migration 0033 -- base, 23 columns)
+# ---------------------------------------------------------------------------
+columns:
+
+  # --- Identity ---
+  edge_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  tenant_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  space_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  source_entity_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  target_entity_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  # --- Versioning ---
+  version:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  supersedes_id:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  is_canonical:
+    type: BOOLEAN
+    nullable: false
+    merge: immutable
+
+  # --- Edge Content ---
+  relation_type:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  relation_subtype:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  properties_json:
+    type: TEXT
+    nullable: true
+    merge: shallow_merge
+    description: "Deep merge (||) jsonb on UPDATE; TOMBSTONE blanks to '{}'"
+
+  edge_weight:
+    type: FLOAT
+    nullable: false
+    merge: replaced
+    description: "Direct replacement on WEIGHT_ABSOLUTE"
+
+  confidence_score:
+    type: FLOAT
+    nullable: false
+    merge: coalesce
+
+  # --- Source Tracking ---
+  source_episodes_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_all
+    description: "Append (||) jsonb on UPDATE"
+
+  co_occurrence_count:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  observation_count:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  last_observed_at:
+    type: BIGINT
+    nullable: true
+    merge: coalesce
+
+  # --- Decay & Lifecycle ---
+  decay_factor:
+    type: FLOAT
+    nullable: false
+    merge: coalesce
+
+  archival_status:
+    type: TEXT
+    nullable: false
+    merge: status
+
+  valid_from:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  valid_to:
+    type: BIGINT
+    nullable: true
+    merge: replaced
+    description: "Set to now on ARCHIVE/TOMBSTONE"
+
+  created_at:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  updated_at:
+    type: BIGINT
+    nullable: false
+    merge: replaced
+
+  # --- Query Tracking (migration 0059, 3 columns) ---
+  query_count:
+    type: INTEGER
+    nullable: false
+    merge: counter
+    description: "QUERY_BOOST: COALESCE(query_count, 0) + increment"
+
+  last_queried_at:
+    type: BIGINT
+    nullable: true
+    merge: replaced
+
+  sentiment_avg:
+    type: FLOAT
+    nullable: true
+    merge: immutable
+    description: "Not written by kg.py; express_feeling intent routing"
+
+  # --- Source Algorithm (migration 0069, 1 column) ---
+  source_algorithm:
+    type: TEXT
+    nullable: true
+    merge: replaced
+    description: "GAP-007 provenance; default 'co_occurrence'"
+
+  # --- Evidence (migration 0070, 4 columns) ---
+  evidence_event_ids:
+    type: "ARRAY(TEXT)"
+    nullable: true
+    merge: pg_array_concat
+    description: "Array concat (||) on UPDATE"
+
+  evidence_episode_ids:
+    type: "ARRAY(TEXT)"
+    nullable: true
+    merge: pg_array_concat
+    description: "Array concat (||) on UPDATE"
+
+  algorithm_params_json:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  inference_chain_json:
+    type: TEXT
+    nullable: true
+    merge: immutable

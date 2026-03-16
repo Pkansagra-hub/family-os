@@ -1,0 +1,204 @@
+# =============================================================================
+# reconciliation.post_hooks v1.0.0 -- Post-Reconciliation Hook Contract
+# =============================================================================
+#
+# Defines the post-R7 content-generation hooks that update summary and
+# embedding columns on truth records after StagedWrites are committed.
+#
+# Owner: M9.6 (Universal Reconciliation Engine)
+# Depends: M9.4 (ReconciliationResult.hooks_required), M9.5 (StagedWrite)
+# =============================================================================
+
+module_id: reconciliation.post_hooks
+version: v1
+status: active
+
+latency_budget_ms: 2000
+
+input_event_types:
+  - p03.reconciliation.result.v1
+
+output_event_types:
+  - p03.post_hooks.completed.v1
+
+side_effects:
+  - read:st_epi
+  - read:st_sem
+  - read:st_procedural
+  - read:st_social
+  - read:st_prospective
+  - read:st_kg_dom
+  - write:st_epi
+  - write:st_sem
+  - write:st_procedural
+  - write:st_social
+  - write:st_prospective
+  - write:st_kg_dom
+  - write:st_vec
+
+idempotent: true
+
+# ---------------------------------------------------------------------------
+# Hook Types
+# ---------------------------------------------------------------------------
+hook_types:
+  regenerate_summary:
+    description: >
+      Rebuild structured summary JSON and embedding_text for a truth record
+      whose content changed (CREATE, EXTEND, EVOLVE).
+    output_columns:
+      - episode_summary    # st_epi only -- structured JSON
+      - embedding_text     # all layers with embeddings
+      - source_texts_json  # refreshed source texts
+      - embedding_model    # model version tag
+    applies_to:
+      - st_epi
+      - st_sem
+      - st_procedural
+      - st_social
+      - st_prospective
+      - st_kg_dom
+
+  recompute_centroid:
+    description: >
+      Recompute the mean centroid embedding (episodic) or re-embed the
+      embedding_text (non-episodic) and write to inline embedding_vector.
+    output_columns:
+      - embedding_vector   # 768-dim float32 as bytes (3072 bytes)
+      - embedding_model    # model version tag
+    applies_to:
+      - st_epi
+      - st_sem
+      - st_procedural
+      - st_social
+      - st_prospective
+      - st_kg_dom
+    not_applicable:
+      - st_kg_edges        # edges have no embedding
+      - st_learning_queue  # CONTRADICT target, no embedding
+
+# ---------------------------------------------------------------------------
+# Action-to-Hook Mapping (from M9.4 ReconciliationResult.hooks_required)
+# ---------------------------------------------------------------------------
+action_hook_mapping:
+  CREATE:
+    hooks: [regenerate_summary, recompute_centroid]
+  REINFORCE:
+    hooks: [recompute_centroid]
+    note: Non-episodic REINFORCE skips centroid (embedding_text unchanged)
+  EXTEND:
+    hooks: [regenerate_summary, recompute_centroid]
+  EVOLVE:
+    hooks: [regenerate_summary, recompute_centroid]
+    note: Hooks run on NEW record only, not superseded
+  CONTRADICT:
+    hooks: []
+  SKIP:
+    hooks: []
+  PRUNE:
+    hooks: []
+
+# ---------------------------------------------------------------------------
+# Execution Contract
+# ---------------------------------------------------------------------------
+execution:
+  timing: after_r7_commit_before_r8_events
+  order:
+    - regenerate_summary   # must run first -- produces embedding_text
+    - recompute_centroid   # may use new embedding_text
+  db_writes: one_update_per_record
+  failure_policy: log_and_continue  # never roll back R7 writes
+  idempotent: true
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+  runner:
+    class: PostReconciliationHookRunner
+    file: k0/modules/consolidation/reconciliation/hooks/runner.py
+    input: "list[tuple[ReconciliationResult, StagedWrite]]"
+    output: HookBatchResult
+
+  summary_regen:
+    class: SummaryRegenerator
+    file: k0/modules/consolidation/reconciliation/hooks/summary_regen.py
+    input: "(layer, record_id, spec, source_event_ids, record_data, conn)"
+    output: SummaryRegenResult
+
+  centroid_recompute:
+    class: CentroidRecomputer
+    file: k0/modules/consolidation/reconciliation/hooks/centroid_recompute.py
+    input: "(layer, record_id, spec, source_event_ids, embedding_text, conn)"
+    output: CentroidResult
+
+  episode_summary:
+    class: StructuredEpisodeSummary
+    file: k0/modules/consolidation/reconciliation/hooks/episode_summary.py
+    schema_version: "1.0"
+    fields:
+      - schema_version
+      - title
+      - event_count
+      - dominant_thread_id
+      - thread_distribution
+      - goal_distribution
+      - temporal_narrative
+      - participants
+      - affect_trajectory
+      - dominant_sentiment
+      - dominant_emotion
+      - location_context
+      - activity_type
+      - event_records
+
+  hook_result:
+    class: HookResult
+    file: k0/modules/consolidation/reconciliation/hooks/result.py
+
+# ---------------------------------------------------------------------------
+# Per-Layer Applicability
+# ---------------------------------------------------------------------------
+layer_applicability:
+  st_epi:
+    has_embedding_text: true
+    has_embedding_vector: true
+    has_episode_summary: true
+    regenerate_summary: structured_json_plus_embedding_text
+    recompute_centroid: weighted_mean_centroid
+  st_sem:
+    has_embedding_text: true
+    has_embedding_vector: true
+    has_episode_summary: false
+    regenerate_summary: embedding_text_only
+    recompute_centroid: text_based_reembed
+  st_procedural:
+    has_embedding_text: true
+    has_embedding_vector: true
+    has_episode_summary: false
+    regenerate_summary: embedding_text_only
+    recompute_centroid: text_based_reembed
+  st_social:
+    has_embedding_text: true
+    has_embedding_vector: true
+    has_episode_summary: false
+    regenerate_summary: embedding_text_only
+    recompute_centroid: text_based_reembed
+  st_prospective:
+    has_embedding_text: true
+    has_embedding_vector: true
+    has_episode_summary: false
+    regenerate_summary: embedding_text_only
+    recompute_centroid: text_based_reembed
+  st_kg_dom:
+    has_embedding_text: true
+    has_embedding_vector: true
+    has_episode_summary: false
+    regenerate_summary: embedding_text_only
+    recompute_centroid: text_based_reembed
+  st_kg_edges:
+    has_embedding_text: false
+    has_embedding_vector: false
+    has_episode_summary: false
+    regenerate_summary: not_applicable
+    recompute_centroid: not_applicable

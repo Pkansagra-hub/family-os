@@ -6700,14 +6700,972 @@ class P03BatchEnvelope:
 
 ### M9.9 -- PRUNE Sweep (Timer-Based Decay)
 
-Build the temporal decay sweep that runs independently of incoming events.
+Close the evaluation-to-write gap in R3 and build an independent timer-based decay sweep. Today R3 has all the brain for decay (UnifiedDecayEngine, RetentionEnforcer, ImmunityChecker, PruneAuditLogger, PruneRegretDetector, AccessTracker, BayesianLambdaEstimator) but no arms: evaluated ARCHIVE/TOMBSTONE decisions are logged to audit and then discarded. M9.9 completes the circuit.
 
-- Configurable decay policies per truth layer
-- PRUNE action: ARCHIVED or TOMBSTONED based on policy
-- Scheduled sweep (not triggered by incoming batch)
-- Observability: prune counts per layer per sweep
+**Status**: READY TO IMPLEMENT (after M9.1, M9.5)
+**Estimated Scope**: 1 new scheduled service + R3 write-gap fix + learned-lambda integration + per-layer policies + 3 missing layers
+**Depends on**: M9.1 (TruthLayerRegistry for layer enumeration), M9.5 (WriteDecisionRouter for PRUNE/ARCHIVE StagedWrite generation)
 
-**Depends on**: M9.1, M9.5
+---
+
+#### M9.9.1 Objective
+
+Seven gaps exist in the current R3 decay machinery. M9.9 closes all of them:
+
+| # | Gap | What M9.9 Does |
+|---|-----|----------------|
+| G1 | Decay evaluation doesn't produce writes | Connect RetentionEnforcer output to WriteDecisionRouter -> StagedWrites -> R7 |
+| G2 | No timer-based sweep | Build PruneSweepService: scheduled, independent of P03 batch processing |
+| G3 | Only st_sem gets ARCHIVE writes | Extend write path to all 7 truth layers (st_epi, st_sem, st_kg_dom, st_kg_edges, st_procedural, st_social, st_prospective) |
+| G4 | 3 layers missing from decay query | Add st_kg_edges, st_prospective, st_hipp_events to TruthQueryService.query_entities_for_decay() |
+| G5 | Learned lambda not consumed | Wire BayesianLambdaEstimator output into UnifiedDecayEngine.compute_effective_lambda() |
+| G6 | PruneDecision field unused | Route P03EventState.prune_decision through WriteDecisionRouter |
+| G7 | Stale contract | Update consolidation.decay_scorer.v1.yaml to match actual UnifiedDecayEngine |
+
+---
+
+#### M9.9.2 Current State: What Works and What Doesn't
+
+**WORKS (keep unchanged)**:
+
+```
+UnifiedDecayEngine.compute_decay_factor()
+  -- Exponential decay: exp(-lambda_eff * days)
+  -- Per-layer base lambda (8 tables):
+       st_hipp_events: 0.100  (half-life ~7d)
+       st_prospective: 0.020  (half-life ~35d)
+       st_procedural:  0.010  (half-life ~69d)
+       st_kg_edges:    0.008  (half-life ~87d)
+       st_epi:         0.005  (half-life ~139d)
+       st_sem:         0.003  (half-life ~231d)
+       st_social:      0.002  (half-life ~347d)
+       st_kg_dom:      0.001  (half-life ~693d)
+  -- Effective lambda: base * space_mod * entity_type_mod
+       * (1 - importance * 0.5) * (1 - confidence * 0.3)
+       * 1/(1 + 0.1 * obs_count)
+
+RetentionEnforcer.evaluate()
+  -- ACTIVE:            decay >= 0.10
+  -- ARCHIVE_CANDIDATE: 0.01 <= decay < 0.10
+  -- PRUNE_CANDIDATE:   decay < 0.01
+  -- Decides: KEEP / ARCHIVE / TOMBSTONE
+
+ImmunityChecker.should_mark_immune()
+  -- Entity-level: FAMILY_MEMBER -> fully immune
+  -- Attribute-level: PERSON.birthday, PLACE.home_address, etc.
+
+PruneAuditLogger.log_decision()
+  -- TOMBSTONE always 100% logged
+  -- Others sampled at 10% (prod) / 100% (debug)
+  -- Writes to st_consolidation_audit
+
+PruneRegretDetector.check_query()
+  -- Tracks pruned entities for 14 days
+  -- Cosine >= 0.85 against incoming queries -> PRUNE_REGRET signal
+
+AccessTracker + BayesianLambdaEstimator
+  -- Tracks access patterns, computes MLE lambda
+  -- Persists to st_learned_weights
+```
+
+**BROKEN (M9.9 fixes)**:
+
+```
+R3.execute() lines 1355-1530:
+  retention_result = retention_enforcer.evaluate_batch(entities_for_decay)
+  # BatchRetentionResult has ARCHIVE/TOMBSTONE decisions...
+  # ...but they are ONLY logged to audit. No StagedWrites produced.
+  # The decisions die here. R7 never sees them.
+
+TruthWriteAssembler._create_sem_archive():
+  # ONLY st_sem gets ARCHIVE writes from ReconciliationAction.PRUNE
+  # Other layers (st_epi, st_kg_dom, st_procedural, st_social) = nothing
+
+TruthQueryService.DECAY_LAYERS:
+  # Only 5 layers: st_epi, st_kg_dom, st_sem, st_procedural, st_social
+  # Missing: st_kg_edges, st_prospective, st_hipp_events
+
+UnifiedDecayEngine.compute_effective_lambda():
+  # Uses ONLY static LAYER_LAMBDAS[table_name]
+  # Never reads learned per-entity lambda from st_learned_weights
+  # BayesianLambdaEstimator output is wasted
+
+P03EventState.prune_decision:
+  # Populated with KEEP/ARCHIVE/TOMBSTONE
+  # Never read by any write path
+```
+
+---
+
+#### M9.9.3 Architecture: Two Execution Paths for Decay
+
+M9.9 creates two complementary paths for decay-driven pruning:
+
+**Path A: Inline (runs inside P03 batch processing)**
+
+This fixes the existing R3 evaluation-to-write gap. When P03 processes a batch, R3 already evaluates existing truth entities for decay. M9.9 connects those decisions to StagedWrites:
+
+```
+R3.execute():
+  retention_result = retention_enforcer.evaluate_batch(entities_for_decay)
+  for result in retention_result.results:
+      if result.decision == ARCHIVE:
+          write = write_router.route_prune(result, PruneAction.ARCHIVE)
+          envelope.append_staged_write(write)
+      elif result.decision == TOMBSTONE:
+          if not immunity_checker.should_mark_immune(result):
+              write = write_router.route_prune(result, PruneAction.TOMBSTONE)
+              envelope.append_staged_write(write)
+              pruned_entity_tracker.track(result)  # for regret detection
+  # StagedWrites flow to R6 -> R7 as normal
+```
+
+**Path B: Scheduled sweep (runs independently of P03)**
+
+A new `PruneSweepService` runs on a timer (default: every 6 hours). It scans ALL truth layers for records that have decayed past thresholds and produces StagedWrites directly to the truth writer, bypassing the P03 pipeline entirely:
+
+```
+PruneSweepService.sweep():
+  for layer in registry.list_layers():
+      policy = get_decay_policy(layer)
+      candidates = query_decay_candidates(layer, policy)
+      for record in candidates:
+          if immunity_checker.should_mark_immune(record):
+              continue
+          decay = decay_engine.compute_and_classify(record)
+          if decay.classification == ARCHIVE_CANDIDATE:
+              produce_archive_write(record, layer)
+          elif decay.classification == PRUNE_CANDIDATE:
+              produce_tombstone_write(record, layer)
+              pruned_entity_tracker.track(record)
+      audit_logger.log_sweep_summary(layer, stats)
+```
+
+**Why two paths?**
+
+| | Path A (Inline) | Path B (Sweep) |
+|---|---|---|
+| Trigger | P03 batch processing | Timer (6h default) |
+| Scope | 100 entities/layer (bounded by P03 timeout) | Unlimited (own budget) |
+| Latency budget | Must fit in R3's 60s phase timeout | Own timeout (30 min default) |
+| Coverage | Only runs when events arrive | Runs even when no events arrive |
+| Layers | 5 layers (current query) -> 7 layers (M9.9) | All 7 layers |
+| Purpose | Keep batches clean (prune while consolidating) | Catch long-dormant records that no batch touches |
+
+Path A handles the common case (prune during regular processing). Path B handles the cold-storage case (nothing has triggered P03 for days, but records are still decaying).
+
+---
+
+#### M9.9.4 PruneSweepService: The Independent Sweep
+
+**File**: `k0/modules/consolidation/prune/sweep_service.py`
+
+```python
+@dataclass
+class SweepConfig:
+    enabled: bool = True
+    interval_hours: float = 6.0          # Run every 6 hours
+    max_records_per_layer: int = 1000    # Scan limit per layer per sweep
+    max_sweep_duration_s: float = 1800   # 30 minute hard timeout
+    batch_size: int = 100                # Process in batches of 100
+    dry_run: bool = False                # Log decisions without writing
+    layers: Optional[List[str]] = None   # Override: sweep only these layers
+
+class PruneSweepService:
+    """Timer-based decay sweep, independent of P03 batch processing."""
+
+    def __init__(
+        self,
+        decay_engine: UnifiedDecayEngine,
+        retention_enforcer: RetentionEnforcer,
+        immunity_checker: ImmunityChecker,
+        write_router: WriteDecisionRouter,  # M9.5
+        audit_logger: PruneAuditLogger,
+        regret_tracker: PrunedEntityTracker,
+        registry: TruthLayerRegistry,       # M9.1
+        config: SweepConfig,
+    ): ...
+
+    async def sweep(self) -> SweepResult:
+        """Execute one full sweep across all configured layers."""
+
+    async def sweep_layer(self, layer_name: str, policy: DecayPolicy) -> LayerSweepResult:
+        """Sweep a single layer. Called by sweep() for each layer."""
+
+    async def _query_candidates(self, layer: str, limit: int) -> List[DecayCandidate]:
+        """Query truth records eligible for decay evaluation."""
+
+    async def _evaluate_and_route(
+        self, candidate: DecayCandidate, layer: str, policy: DecayPolicy
+    ) -> Optional[StagedWrite]:
+        """Evaluate one record: immunity -> decay -> retention -> write."""
+
+    async def _execute_writes(self, writes: List[StagedWrite]) -> WriteResult:
+        """Execute writes directly (not through P03 pipeline)."""
+```
+
+**Scheduling**: The sweep service is registered with K0's existing scheduler (the same one that triggers P03 cycles). It runs independently on its own interval.
+
+```python
+# In k0/scheduler/scheduler.py (EDIT):
+scheduler.register_task(
+    task_id="prune_sweep",
+    callable=prune_sweep_service.sweep,
+    interval=timedelta(hours=config.sweep.interval_hours),
+    enabled=config.sweep.enabled,
+)
+```
+
+---
+
+#### M9.9.5 DecayPolicy: Per-Layer Configuration
+
+Today UnifiedDecayEngine uses global thresholds (archive=0.10, tombstone=0.01) with per-layer lambdas. M9.9 adds per-layer thresholds and behavioral policies:
+
+**File**: `k0/modules/consolidation/prune/decay_policy.py`
+
+```python
+@dataclass
+class DecayPolicy:
+    """Per-layer decay policy. Overrides global defaults."""
+    layer: str
+    base_lambda: float              # From LAYER_LAMBDAS (or override)
+    archive_threshold: float        # Layer-specific (default 0.10)
+    tombstone_threshold: float      # Layer-specific (default 0.01)
+    min_age_days: int               # Don't prune records younger than this
+    min_observation_count: int      # Don't prune records with >= N observations
+    sweep_enabled: bool             # Can disable sweep for specific layers
+    max_records_per_sweep: int      # Limit per layer per sweep
+
+DEFAULT_POLICIES: Dict[str, DecayPolicy] = {
+    "st_epi": DecayPolicy(
+        layer="st_epi",
+        base_lambda=0.005,          # half-life ~139 days
+        archive_threshold=0.10,
+        tombstone_threshold=0.01,
+        min_age_days=30,            # Never archive episodes < 30 days old
+        min_observation_count=5,    # Heavily reinforced episodes protected
+        sweep_enabled=True,
+        max_records_per_sweep=500,
+    ),
+    "st_sem": DecayPolicy(
+        layer="st_sem",
+        base_lambda=0.003,          # half-life ~231 days
+        archive_threshold=0.10,
+        tombstone_threshold=0.01,
+        min_age_days=14,
+        min_observation_count=3,
+        sweep_enabled=True,
+        max_records_per_sweep=1000,
+    ),
+    "st_kg_dom": DecayPolicy(
+        layer="st_kg_dom",
+        base_lambda=0.001,          # half-life ~693 days
+        archive_threshold=0.05,     # Lower: entities are core knowledge
+        tombstone_threshold=0.005,
+        min_age_days=90,            # Entities need 90 days before archive
+        min_observation_count=3,
+        sweep_enabled=True,
+        max_records_per_sweep=500,
+    ),
+    "st_kg_edges": DecayPolicy(
+        layer="st_kg_edges",
+        base_lambda=0.008,          # half-life ~87 days
+        archive_threshold=0.10,
+        tombstone_threshold=0.01,
+        min_age_days=14,
+        min_observation_count=2,
+        sweep_enabled=True,
+        max_records_per_sweep=2000,  # Edges are numerous
+    ),
+    "st_procedural": DecayPolicy(
+        layer="st_procedural",
+        base_lambda=0.010,          # half-life ~69 days
+        archive_threshold=0.10,
+        tombstone_threshold=0.01,
+        min_age_days=14,
+        min_observation_count=3,
+        sweep_enabled=True,
+        max_records_per_sweep=500,
+    ),
+    "st_social": DecayPolicy(
+        layer="st_social",
+        base_lambda=0.002,          # half-life ~347 days
+        archive_threshold=0.08,     # Relationships are slow to decay
+        tombstone_threshold=0.008,
+        min_age_days=60,            # Relationships need 60 days before archive
+        min_observation_count=2,
+        sweep_enabled=True,
+        max_records_per_sweep=500,
+    ),
+    "st_prospective": DecayPolicy(
+        layer="st_prospective",
+        base_lambda=0.020,          # half-life ~35 days
+        archive_threshold=0.15,     # Intentions decay faster
+        tombstone_threshold=0.02,
+        min_age_days=7,             # Intentions can be pruned after 7 days
+        min_observation_count=1,
+        sweep_enabled=True,
+        max_records_per_sweep=500,
+    ),
+}
+```
+
+**Why per-layer policies matter**: A social relationship (st_social) and a prospective intention (st_prospective) should NOT share the same archive threshold. A relationship that hasn't been accessed in 6 months might still be valid ("Uncle Bob lives in Denver"), while an intention not accessed in 6 months is clearly stale ("plan to call dentist next week").
+
+**Policy resolution order**:
+1. Space-level override (config per space) -- if present, wins
+2. DEFAULT_POLICIES[layer] -- layer-specific defaults
+3. Global DecayConfig fallback -- existing behavior
+
+---
+
+#### M9.9.6 Closing Gap G1: Evaluation-to-Write Connection
+
+**File**: `k0/pipelines/p03/phases/r3_dedup_decay.py` (EDIT)
+
+Current code (lines ~1475-1500):
+```python
+# R3.4: Retention evaluation
+retention_result = self._retention_enforcer.evaluate_batch(
+    entities_for_decay, current_time
+)
+# Result is logged to audit but NEVER converted to writes
+stats["archive_candidates"] = retention_result.archive_count
+stats["tombstone_candidates"] = retention_result.tombstone_count
+```
+
+M9.9 adds write generation after evaluation:
+
+```python
+# R3.4: Retention evaluation
+retention_result = self._retention_enforcer.evaluate_batch(
+    entities_for_decay, current_time
+)
+stats["archive_candidates"] = retention_result.archive_count
+stats["tombstone_candidates"] = retention_result.tombstone_count
+
+# M9.9: Convert retention decisions to StagedWrites
+if self._config.enable_decay_writes:
+    for result in retention_result.results:
+        if result.decision == RetentionDecision.KEEP:
+            continue
+        # Immunity check (already done in RetentionEnforcer but double-check)
+        immunity = self._immunity_checker.should_mark_immune(
+            entity_type=result.entity_type,
+            attributes=result.attributes,
+        )
+        if immunity.is_immune:
+            continue
+        # Route through M9.5 WriteDecisionRouter
+        staged_write = self._write_router.route_prune(
+            record_id=result.entity_id,
+            layer=result.table_name,
+            action=PruneAction.ARCHIVE if result.decision == RetentionDecision.ARCHIVE
+                   else PruneAction.TOMBSTONE,
+            decay_factor=result.current_decay,
+            reason=result.reason,
+        )
+        envelope.append_staged_write(staged_write)
+        # Track tombstoned entities for regret detection
+        if result.decision == RetentionDecision.TOMBSTONE:
+            self._pruned_entity_tracker.track_pruned_entity(
+                entity_id=result.entity_id,
+                table_name=result.table_name,
+                embedding=result.embedding,
+                metadata=result.metadata,
+            )
+    stats["decay_writes_produced"] = len(
+        [r for r in retention_result.results if r.decision != RetentionDecision.KEEP]
+    )
+```
+
+**New R3Config field**:
+```python
+@dataclass
+class R3Config:
+    # ... existing fields ...
+    enable_decay_writes: bool = False   # M9.9: feature flag, default OFF
+```
+
+---
+
+#### M9.9.7 Closing Gap G3: All-Layer Write Support
+
+**File**: `k0/modules/consolidation/staging/truth_write_assembler.py` (EDIT)
+
+Current: Only `_create_sem_archive()` exists. The ARCHIVE_ACTIONS check is hardcoded to st_sem.
+
+M9.9: WriteDecisionRouter (M9.5) already handles all layers generically. The fix is:
+1. In the M9.8 engine path: WriteDecisionRouter generates ARCHIVE/TOMBSTONE StagedWrites for ANY layer. No change needed beyond what M9.5 already provides.
+2. In the bespoke fallback path: Add `_create_layer_archive()` that works for any layer (not just st_sem).
+
+```python
+# M9.9: Generic archive/tombstone write for any truth layer
+def _create_layer_archive(
+    self,
+    record_id: str,
+    layer: str,
+    action: PruneAction,
+    reason: str,
+) -> StagedWrite:
+    pk_column = LAYER_PK_COLUMNS[layer]  # from TruthQueryService
+    if action == PruneAction.ARCHIVE:
+        return StagedWrite(
+            layer=layer,
+            operation=WriteOperation.ARCHIVE,
+            record_id=record_id,
+            pk_column=pk_column,
+            record_data={"archived_reason": reason},
+        )
+    elif action == PruneAction.TOMBSTONE:
+        return StagedWrite(
+            layer=layer,
+            operation=WriteOperation.TOMBSTONE,
+            record_id=record_id,
+            pk_column=pk_column,
+            record_data={},
+        )
+```
+
+R7 already handles ARCHIVE and TOMBSTONE operations generically (`_execute_archive()` and `_execute_tombstone()` work with any layer + pk_column). No R7 changes needed.
+
+---
+
+#### M9.9.8 Closing Gap G4: Missing Layers in Decay Query
+
+**File**: `k0/modules/consolidation/staging/truth_query_service.py` (EDIT)
+
+Current DECAY_LAYERS (5 layers):
+```python
+DECAY_LAYERS = {
+    "st_epi": "episode_id",
+    "st_kg_dom": "entity_id",
+    "st_sem": "semantic_id",
+    "st_procedural": "routine_id",
+    "st_social": "relationship_id",
+}
+```
+
+M9.9 expands to 7 layers:
+```python
+DECAY_LAYERS = {
+    "st_epi": "episode_id",
+    "st_kg_dom": "entity_id",
+    "st_kg_edges": "edge_id",           # M9.9: added
+    "st_sem": "semantic_id",
+    "st_procedural": "routine_id",
+    "st_social": "relationship_id",
+    "st_prospective": "intention_id",    # M9.9: added
+}
+```
+
+**st_hipp_events is intentionally excluded**: It is the raw ingestion table, not a truth layer. Its decay is governed by P02 (ingestion cleanup) and P03 consolidation status marking, not by truth-layer decay. The LAYER_LAMBDAS entry for st_hipp_events (0.100, half-life ~7d) exists but is used only for informational queries ("how stale is this event?"), not for prune decisions.
+
+**New columns required for decay query** on the 2 new layers:
+
+| Layer | PK Column | Existing Columns Needed | Status |
+|---|---|---|---|
+| st_kg_edges | edge_id | observation_count, confidence, last_observed_at, archival_status | All exist (migration 0045) |
+| st_prospective | intention_id | importance_score, confidence_score, last_observed_at, archival_status | All exist (migration 0055) |
+
+No new migrations needed -- both tables already have the columns that `query_entities_for_decay()` reads.
+
+---
+
+#### M9.9.9 Closing Gap G5: Consuming Learned Lambdas
+
+**File**: `k0/modules/consolidation/algorithms/decay_engine.py` (EDIT)
+
+Current `compute_effective_lambda()` (lines ~145-200):
+```python
+def compute_effective_lambda(self, table_name, importance, confidence, obs_count, ...):
+    base = LAYER_LAMBDAS.get(table_name, self.config.base_lambda)
+    # ... modifiers ...
+    return base * space_mod * type_mod * importance_factor * confidence_factor * reinforcement_factor
+```
+
+M9.9 adds learned-lambda lookup:
+```python
+def compute_effective_lambda(
+    self,
+    table_name: str,
+    importance_score: float = 0.0,
+    confidence_score: float = 0.0,
+    observation_count: int = 0,
+    space_modifier: float = 1.0,
+    entity_type_modifier: float = 1.0,
+    entity_id: Optional[str] = None,       # M9.9: for learned lookup
+    learned_lambda: Optional[float] = None, # M9.9: pre-fetched learned value
+) -> float:
+    # M9.9: Use learned lambda if available, else static LAYER_LAMBDAS
+    if learned_lambda is not None:
+        base = learned_lambda
+    else:
+        base = LAYER_LAMBDAS.get(table_name, self.config.base_lambda)
+
+    # Rest of formula unchanged
+    importance_factor = 1.0 - (importance_score * self.config.importance_modifier)
+    confidence_factor = 1.0 - (confidence_score * self.config.confidence_modifier)
+    reinforcement_factor = 1.0 / (1.0 + 0.1 * observation_count)
+
+    return base * space_modifier * entity_type_modifier * importance_factor * confidence_factor * reinforcement_factor
+```
+
+**How learned lambdas are pre-fetched**: PruneSweepService (Path B) batch-loads learned lambdas from st_learned_weights at sweep start for all entities being evaluated. R3 (Path A) can optionally pre-fetch for the 100-per-layer entities it queries:
+
+```python
+# In PruneSweepService.sweep_layer():
+learned_lambdas = await self._load_learned_lambdas(layer, entity_ids)
+for candidate in candidates:
+    learned = learned_lambdas.get(candidate.entity_id)
+    decay = self._decay_engine.compute_decay_factor(
+        table_name=layer,
+        learned_lambda=learned.lambda_value if learned else None,
+        ...
+    )
+```
+
+**Blending rule**: When a learned lambda exists, it REPLACES the static LAYER_LAMBDAS base (not blended). The BayesianLambdaEstimator already requires 5+ accesses and 7+ day spread to produce a learned value, so its confidence is high enough to override the static default. The learned value still gets multiplied by the importance/confidence/reinforcement modifiers.
+
+---
+
+#### M9.9.10 Closing Gap G6: PruneDecision Field Usage
+
+**File**: `k0/pipelines/p03/phases/r3_dedup_decay.py` (EDIT)
+
+P03EventState.prune_decision is populated during R3 but never consumed. M9.9 makes it authoritative:
+
+```python
+# In R3 reconcile_batch() or post-reconciliation:
+if event.prune_decision == PruneDecision.ARCHIVE:
+    # Event's best_match should be archived
+    if event.best_match_id and event.best_match_layer:
+        write = write_router.route_prune(
+            record_id=event.best_match_id,
+            layer=event.best_match_layer,
+            action=PruneAction.ARCHIVE,
+            reason=f"Incoming event {event.event_id} triggered PRUNE via reconciliation",
+        )
+        envelope.append_staged_write(write)
+
+elif event.prune_decision == PruneDecision.TOMBSTONE:
+    if event.best_match_id and event.best_match_layer:
+        write = write_router.route_prune(
+            record_id=event.best_match_id,
+            layer=event.best_match_layer,
+            action=PruneAction.TOMBSTONE,
+            reason=f"Incoming event {event.event_id} triggered TOMBSTONE via reconciliation",
+        )
+        envelope.append_staged_write(write)
+        pruned_entity_tracker.track(...)
+```
+
+This gives the reconciliation engine the ability to signal "this existing record should be archived/tombstoned" based on incoming evidence (e.g., user explicitly says "we moved away from Denver" -> Denver home_address record gets ARCHIVE).
+
+---
+
+#### M9.9.11 Closing Gap G7: Contract Update
+
+**File**: `k0/contracts/modules/consolidation.decay_scorer.v1.yaml` (EDIT)
+
+Current (stale):
+```yaml
+lambda: 0.05
+half-life: ~14 days
+rehearsal_boost: 2.0x
+max_age_days: 365
+min_score: 0.01
+```
+
+Updated to match actual implementation:
+```yaml
+module: consolidation.decay_scorer
+version: v2
+engine: UnifiedDecayEngine
+formula: "exp(-lambda_effective * days_since_last_observed)"
+
+per_layer_lambdas:
+  st_hipp_events: 0.100   # half-life ~7 days (informational only)
+  st_prospective: 0.020   # half-life ~35 days
+  st_procedural:  0.010   # half-life ~69 days
+  st_kg_edges:    0.008   # half-life ~87 days
+  st_epi:         0.005   # half-life ~139 days
+  st_sem:         0.003   # half-life ~231 days
+  st_social:      0.002   # half-life ~347 days
+  st_kg_dom:      0.001   # half-life ~693 days
+
+effective_lambda_modifiers:
+  importance_modifier: 0.5
+  confidence_modifier: 0.3
+  reinforcement_formula: "1 / (1 + 0.1 * observation_count)"
+  learned_lambda: "overrides base when available (BayesianLambdaEstimator)"
+
+classification:
+  ACTIVE: "decay_factor >= archive_threshold"
+  ARCHIVE_CANDIDATE: "tombstone_threshold <= decay_factor < archive_threshold"
+  PRUNE_CANDIDATE: "decay_factor < tombstone_threshold"
+
+global_defaults:
+  archive_threshold: 0.10
+  tombstone_threshold: 0.01
+
+per_layer_overrides:
+  st_kg_dom: { archive_threshold: 0.05, tombstone_threshold: 0.005 }
+  st_social: { archive_threshold: 0.08, tombstone_threshold: 0.008 }
+  st_prospective: { archive_threshold: 0.15, tombstone_threshold: 0.02 }
+
+immunity:
+  entity_level: [FAMILY_MEMBER]
+  attribute_level:
+    PERSON: [birthday, name, relationship_to_user]
+    PLACE: [home_address, work_address]
+    EVENT: [wedding_date, birth_date, death_date]
+
+sweep:
+  interval_hours: 6
+  max_records_per_layer: 1000
+  timeout_seconds: 1800
+  dry_run: false
+
+regret_detection:
+  unmatched_retention_days: 14
+  matched_retention_days: 30
+  strong_match_threshold: 0.90
+  likely_match_threshold: 0.85
+
+audit:
+  tombstone_sample_rate: 1.0
+  production_sample_rate: 0.10
+  retention_days: 90
+```
+
+---
+
+#### M9.9.12 Deliverables
+
+| # | Deliverable | File Path | New/Edit | Description |
+|---|-----------|-----------|----------|-------------|
+| D1 | PruneSweepService | `k0/modules/consolidation/prune/sweep_service.py` | NEW | Timer-based independent sweep |
+| D2 | DecayPolicy | `k0/modules/consolidation/prune/decay_policy.py` | NEW | Per-layer policy definitions + defaults |
+| D3 | SweepResult models | `k0/modules/consolidation/prune/models.py` | NEW | SweepResult, LayerSweepResult, DecayCandidate |
+| D4 | R3 write gap fix | `k0/pipelines/p03/phases/r3_dedup_decay.py` | EDIT | Connect retention decisions to StagedWrites |
+| D5 | DECAY_LAYERS expansion | `k0/modules/consolidation/staging/truth_query_service.py` | EDIT | Add st_kg_edges, st_prospective |
+| D6 | Learned lambda integration | `k0/modules/consolidation/algorithms/decay_engine.py` | EDIT | Accept learned_lambda in compute_effective_lambda() |
+| D7 | PruneDecision routing | `k0/pipelines/p03/phases/r3_dedup_decay.py` | EDIT | Route prune_decision to StagedWrites |
+| D8 | Generic layer archive | `k0/modules/consolidation/staging/truth_write_assembler.py` | EDIT | _create_layer_archive() for any layer |
+| D9 | R3Config extension | `k0/pipelines/p03/config.py` | EDIT | Add enable_decay_writes flag |
+| D10 | Scheduler registration | `k0/scheduler/scheduler.py` | EDIT | Register prune_sweep task |
+| D11 | Contract update | `k0/contracts/modules/consolidation.decay_scorer.v1.yaml` | EDIT | Align with actual engine |
+| D12 | Sweep tests | `tests/k0/modules/consolidation/prune/test_sweep_service.py` | NEW | Timer sweep integration tests |
+| D13 | Write gap tests | `tests/k0/pipelines/p03/test_r3_decay_writes.py` | NEW | Retention -> StagedWrite -> R7 path |
+| D14 | Learned lambda tests | `tests/k0/modules/consolidation/test_learned_lambda.py` | NEW | BayesianLambda -> DecayEngine integration |
+
+---
+
+#### M9.9.13 File Location Map
+
+```
+NEW FILES:
+
+  k0/modules/consolidation/prune/
+      __init__.py
+      sweep_service.py              # D1: PruneSweepService
+      decay_policy.py               # D2: DecayPolicy per-layer definitions
+      models.py                     # D3: SweepResult, LayerSweepResult, DecayCandidate
+
+  tests/k0/modules/consolidation/prune/
+      __init__.py
+      test_sweep_service.py         # D12: Sweep tests
+      test_decay_policy.py          # Policy resolution tests
+
+  tests/k0/pipelines/p03/
+      test_r3_decay_writes.py       # D13: Write gap tests
+
+  tests/k0/modules/consolidation/
+      test_learned_lambda.py        # D14: Learned lambda integration
+
+EDITED FILES:
+
+  k0/pipelines/p03/phases/
+      r3_dedup_decay.py             # D4, D7: Write gap + PruneDecision routing
+
+  k0/modules/consolidation/staging/
+      truth_query_service.py        # D5: DECAY_LAYERS expansion
+      truth_write_assembler.py      # D8: Generic archive/tombstone
+
+  k0/modules/consolidation/algorithms/
+      decay_engine.py               # D6: Learned lambda parameter
+
+  k0/pipelines/p03/config.py       # D9: enable_decay_writes flag
+
+  k0/scheduler/scheduler.py        # D10: Register sweep task
+
+  k0/contracts/modules/
+      consolidation.decay_scorer.v1.yaml  # D11: Contract alignment
+```
+
+---
+
+#### M9.9.14 PruneSweepService: Detailed Algorithm
+
+```
+sweep() -> SweepResult:
+    start_time = now()
+    results = []
+
+    layers = self.config.layers or registry.list_truth_layers()
+    for layer_name in layers:
+        if elapsed(start_time) > config.max_sweep_duration_s:
+            log.warning("Sweep timeout after %d layers", len(results))
+            break
+
+        policy = resolve_policy(layer_name)
+        if not policy.sweep_enabled:
+            continue
+
+        layer_result = await sweep_layer(layer_name, policy)
+        results.append(layer_result)
+
+    return SweepResult(
+        sweep_id=generate_sweep_id(),
+        started_at=start_time,
+        completed_at=now(),
+        layer_results=results,
+        total_archived=sum(r.archived for r in results),
+        total_tombstoned=sum(r.tombstoned for r in results),
+        total_skipped_immune=sum(r.skipped_immune for r in results),
+        timed_out=elapsed(start_time) > config.max_sweep_duration_s,
+    )
+
+sweep_layer(layer_name, policy) -> LayerSweepResult:
+    # 1. Query candidates: records with decay_factor < archive_threshold
+    #    AND age > min_age_days AND observation_count < min_observation_count
+    candidates = await _query_candidates(layer_name, policy)
+
+    # 2. Batch-load learned lambdas for all candidate entity_ids
+    learned_lambdas = await _load_learned_lambdas(
+        layer_name, [c.entity_id for c in candidates]
+    )
+
+    # 3. Evaluate each candidate
+    writes = []
+    for candidate in candidates:
+        # Immunity check
+        immunity = immunity_checker.should_mark_immune(
+            entity_type=candidate.entity_type,
+            attributes=candidate.attributes,
+        )
+        if immunity.is_immune:
+            stats.skipped_immune += 1
+            continue
+
+        # Compute decay with learned lambda
+        learned = learned_lambdas.get(candidate.entity_id)
+        decay_factor, classification = decay_engine.compute_and_classify(
+            table_name=layer_name,
+            last_observed_at=candidate.last_observed_at,
+            current_time=now_ms(),
+            importance_score=candidate.importance_score,
+            confidence_score=candidate.confidence_score,
+            observation_count=candidate.observation_count,
+            learned_lambda=learned.lambda_value if learned else None,
+        )
+
+        # Retention decision
+        decision = retention_enforcer._decide(
+            classification, candidate.current_status
+        )
+
+        if decision == RetentionDecision.KEEP:
+            continue
+
+        # Audit
+        action = PruneAction.ARCHIVE if decision == RetentionDecision.ARCHIVE
+                 else PruneAction.TOMBSTONE
+        audit_logger.log_decision(action, build_context(candidate, decay_factor))
+
+        # Generate StagedWrite
+        if not config.dry_run:
+            write = write_router.route_prune(
+                record_id=candidate.entity_id,
+                layer=layer_name,
+                action=action,
+                decay_factor=decay_factor,
+                reason=f"Sweep decay: {classification.name}, factor={decay_factor:.4f}",
+            )
+            writes.append(write)
+
+        # Track for regret
+        if decision == RetentionDecision.TOMBSTONE:
+            regret_tracker.track_pruned_entity(...)
+
+    # 4. Execute writes in batches
+    if writes and not config.dry_run:
+        await _execute_writes_batched(writes, batch_size=config.batch_size)
+
+    return LayerSweepResult(
+        layer=layer_name,
+        candidates_evaluated=len(candidates),
+        archived=count(ARCHIVE),
+        tombstoned=count(TOMBSTONE),
+        skipped_immune=stats.skipped_immune,
+        skipped_keep=stats.skipped_keep,
+    )
+```
+
+**Query for decay candidates** (SQL executed by sweep):
+```sql
+SELECT {pk_column}, entity_type, last_observed_at, importance_score,
+       confidence_score, observation_count, archival_status,
+       embedding_vector, attributes_json
+FROM {layer}
+WHERE archival_status IS NULL OR archival_status = 'ACTIVE'
+  AND last_observed_at < $1                     -- older than min_age_days
+  AND (observation_count < $2 OR $2 = 0)        -- below min_observation_count
+  AND tenant_id = $3 AND space_id = $4
+ORDER BY last_observed_at ASC                   -- oldest first
+LIMIT $5                                        -- max_records_per_layer
+```
+
+---
+
+#### M9.9.15 Sweep vs Inline: Deduplication Safety
+
+Both Path A (inline R3) and Path B (sweep) can produce writes for the same record. Guard against double-archive:
+
+1. **R7 already handles this**: `_execute_archive()` has a WHERE clause `archival_status IS NULL OR archival_status != 'ARCHIVED'`. If both paths try to ARCHIVE the same record, the second write is a no-op (0 rows affected).
+
+2. **R7 TOMBSTONE is also idempotent**: `_execute_tombstone()` uses `WHERE {pk_column} = $2` with no status precondition. Running it twice is harmless (same status written twice).
+
+3. **SweepService queries only ACTIVE records**: The sweep query filters `archival_status IS NULL OR archival_status = 'ACTIVE'`, so records already archived by R3 inline path are excluded from sweep evaluation.
+
+No additional deduplication logic needed.
+
+---
+
+#### M9.9.16 Observability
+
+**Sweep metrics** (emitted after each sweep):
+
+| Metric | Type | Labels |
+|---|---|---|
+| `prune_sweep_duration_seconds` | histogram | -- |
+| `prune_sweep_records_evaluated` | counter | layer |
+| `prune_sweep_archived_total` | counter | layer |
+| `prune_sweep_tombstoned_total` | counter | layer |
+| `prune_sweep_skipped_immune` | counter | layer |
+| `prune_sweep_timeout` | counter | -- |
+| `prune_sweep_errors` | counter | layer, error_type |
+
+**Inline decay metrics** (emitted during R3):
+
+| Metric | Type | Labels |
+|---|---|---|
+| `r3_decay_writes_produced` | counter | layer, action |
+| `r3_decay_evaluation_duration_ms` | histogram | -- |
+| `r3_learned_lambda_used` | counter | layer |
+
+**Structured log events**:
+- `prune_sweep_started`: sweep_id, layers, config
+- `prune_sweep_layer_complete`: sweep_id, layer, stats
+- `prune_sweep_complete`: sweep_id, totals, duration
+- `prune_sweep_timeout`: sweep_id, layers_completed, layers_remaining
+- `prune_regret_tracked`: entity_id, layer, decay_factor
+
+---
+
+#### M9.9.17 Resurrection Integration
+
+When a record is archived/tombstoned by sweep and later accessed by the user, the existing resurrection machinery kicks in:
+
+```
+User query arrives -> K1 retrieval -> hits archived record
+  -> AccessTracker records access
+  -> RetentionEnforcer.evaluate_resurrection(entity_id, trigger=EXPLICIT_ACCESS)
+  -> new_decay = max(0.70, 0.50 + old_decay * 0.50)
+  -> StagedWrite(UPDATE archival_status=ACTIVE, decay_factor=new_decay)
+  -> R7 executes
+```
+
+M9.9 does NOT change the resurrection formula or triggers. The existing resurrection path (RetentionEnforcer lines 342-357) already handles the reversal. M9.9 just ensures there are more records TO resurrect (because the sweep actually archives them now).
+
+**Regret detection** works the same: PrunedEntityTracker stores tombstoned entities, PruneRegretDetector checks incoming queries against them, emits PRUNE_REGRET to P21 if similarity >= 0.85. P21 feedback loop can then adjust decay policy (future: lower lambda for that entity type).
+
+---
+
+#### M9.9.18 Risk Matrix
+
+| # | Risk | Severity | Impact | Mitigation |
+|---|------|----------|--------|-----------|
+| R1 | Sweep archives too aggressively | HIGH | User memories disappear | dry_run mode first; min_age_days guard; per-layer thresholds; immunity checker |
+| R2 | Sweep and R3 inline race condition | LOW | Same record archived twice | R7 write is idempotent; sweep queries only ACTIVE records |
+| R3 | Learned lambda too aggressive | MEDIUM | Entity pruned faster than expected | Learned lambda still gets importance/confidence modifiers; BayesianLambdaEstimator requires 5+ accesses |
+| R4 | Sweep blocks scheduler | LOW | Other scheduled tasks delayed | max_sweep_duration_s = 1800; sweep runs on own thread/coroutine |
+| R5 | Missing columns on new layers | LOW | Query fails for st_kg_edges/st_prospective | Both tables already have required columns (verified in M9.9.8) |
+| R6 | Audit table grows unbounded | LOW | st_consolidation_audit fills disk | Existing 90-day retention + 10% sampling rate |
+| R7 | Regret signal floods P21 | LOW | Too many PRUNE_REGRET signals | Regret detection has 14-day window + cosine threshold 0.85 |
+
+**Rollback procedure**:
+```
+1. Set sweep.enabled = false (stops Path B immediately)
+2. Set enable_decay_writes = false in R3Config (stops Path A)
+3. Records already archived can be resurrected via:
+   UPDATE {layer} SET archival_status = 'ACTIVE' WHERE archival_status = 'ARCHIVED'
+   (bulk resurrection -- use with caution)
+4. Tombstoned records: still exist in DB (soft delete), can be un-tombstoned
+```
+
+---
+
+#### M9.9.19 Performance Budget
+
+| Operation | Target | Hard Limit |
+|----------|--------|-----------|
+| Sweep per layer (1000 records) | < 30s | 60s |
+| Full sweep (7 layers) | < 5 min | 30 min |
+| Learned lambda batch load | < 100ms | 500ms |
+| R3 inline decay writes (100 entities) | < 200ms | 500ms |
+| Immunity check per record | < 1ms | 5ms |
+| Audit log per decision | < 2ms | 10ms |
+
+Sweep query uses `ORDER BY last_observed_at ASC LIMIT N` which benefits from the `idx_{layer}_last_observed` index already present on all truth tables.
+
+---
+
+#### M9.9.20 Validation Criteria (Exit Gates)
+
+| # | Criterion | How to Verify |
+|---|----------|---------------|
+| V1 | Sweep runs independently of P03 batch processing | Start sweep with no pending events; verify it evaluates and writes |
+| V2 | Sweep produces ARCHIVE StagedWrites for all 7 truth layers | Mock 7 layers with decayed records; verify writes per layer |
+| V3 | Sweep produces TOMBSTONE StagedWrites for deeply decayed records | Records with decay < 0.01 get TOMBSTONE writes |
+| V4 | Immune records are never archived or tombstoned | FAMILY_MEMBER entity survives sweep even at decay=0.001 |
+| V5 | R3 inline path produces decay writes (Path A) | enable_decay_writes=true; verify StagedWrites on envelope after R3 |
+| V6 | R7 executes sweep-produced StagedWrites | Verify archival_status column updates in DB |
+| V7 | Learned lambda overrides static base | Entity with learned lambda=0.05 decays faster than static lambda=0.003 |
+| V8 | Per-layer policies respected | st_kg_dom with min_age_days=90 is NOT archived at day 45 |
+| V9 | dry_run mode produces zero writes | All candidates evaluated, zero StagedWrites produced |
+| V10 | Sweep respects max_sweep_duration_s timeout | Set timeout=5s with 10000 records; verify partial completion |
+| V11 | Tombstoned entities tracked for regret detection | After tombstone, verify PrunedEntityTracker has the entity |
+| V12 | Idempotent: double-archive is a no-op | Run sweep twice; verify 0 rows affected on second run |
+| V13 | PruneDecision field routes to writes | Set event.prune_decision=ARCHIVE; verify StagedWrite produced |
+| V14 | Contract matches implementation | Validate decay_scorer.v2.yaml against UnifiedDecayEngine code |
+
+---
+
+#### M9.9.21 What M9.9 Does NOT Do
+
+| Out of Scope | Why | When |
+|-------------|-----|------|
+| Change the decay formula | Exponential decay with modifiers works; no evidence it needs changing | Never (unless POC disproves) |
+| Add new decay curves (polynomial, step) | Single exponential + per-layer lambda is sufficient | Future research |
+| Prune st_hipp_events | Raw ingestion table; governed by P02 and consolidation status, not truth decay | Never via sweep |
+| Automatic lambda learning feedback loop | BayesianLambdaEstimator produces lambdas; P21 can adjust them; M9.9 just consumes them | M9.9 consumes; P21 adjusts (separate) |
+| Physical DELETE of tombstoned records | All operations are soft (status column update); hard delete is DBA-level ops | Ops runbook |
+| Change resurrection formula | Current formula (floor=0.70, base=0.50, carry=0.50) is adequate | Future tuning |
+| Modify PruneRegretDetector thresholds | Current thresholds (strong=0.90, likely=0.85) are tested | Future tuning |
+| Space-level policy overrides | Per-layer defaults cover MVP; space-level override is config extension | Post-M9.9 |
 
 ---
 

@@ -21,7 +21,7 @@
     "resource_type": {
       "type": "string",
       "description": "Type of resource subject to retention",
-      "enum": ["st_epi", "st_sem", "st_proc", "st_hipp_store", "st_ws", "st_social", "st_wal"]
+      "enum": ["st_epi", "st_sem", "st_procedural", "st_hipp_events", "st_social", "st_prospective", "st_kg_dom", "st_kg_edges", "st_wal"]
     },
     "retention_days": {
       "type": "integer",

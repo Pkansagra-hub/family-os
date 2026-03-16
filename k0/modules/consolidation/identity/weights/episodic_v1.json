@@ -1,0 +1,74 @@
+{
+  "model_name": "episodic_v1",
+  "layer": "st_epi",
+  "solver": "lbfgs",
+  "C": 1.0,
+  "class_weight": "balanced",
+  "max_iter": 1000,
+  "classes": [
+    "CREATE",
+    "EXTEND",
+    "REINFORCE"
+  ],
+  "feature_names": [
+    "cosine_sim",
+    "topic_overlap",
+    "participant_overlap",
+    "focus_match",
+    "social_context_match",
+    "location_match",
+    "source_type_match",
+    "sim_x_focus_match",
+    "sim_x_participant_overlap",
+    "correction_signal_any",
+    "contradiction_signal_any"
+  ],
+  "coefficients": [
+    [
+      -0.1944,
+      -4.0228,
+      -1.3286,
+      -0.1306,
+      -0.185,
+      -1.0683,
+      0.409,
+      -0.388,
+      -0.49,
+      0.0,
+      0.0
+    ],
+    [
+      -1.0589,
+      0.4749,
+      1.9483,
+      0.0572,
+      0.0364,
+      0.1981,
+      -0.7741,
+      -0.6255,
+      -0.1182,
+      0.0,
+      0.0
+    ],
+    [
+      1.2533,
+      3.5479,
+      -0.6197,
+      0.0734,
+      0.1486,
+      0.8702,
+      0.365,
+      1.0135,
+      0.6082,
+      0.0,
+      0.0
+    ]
+  ],
+  "intercepts": [
+    2.2423,
+    0.2473,
+    -2.4896
+  ],
+  "optimal_threshold": 0.35,
+  "training_notes": "Frozen from golden_features.npz. CV macro-F1=0.7264, CV accuracy=0.7600, 300 golden pairs."
+}
