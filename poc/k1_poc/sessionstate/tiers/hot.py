@@ -99,7 +99,6 @@ SECTION_BUDGETS: Dict[str, int] = {
     "meta": 2 * 1024,
     "task_state": 4 * 1024,
     "task_artifacts": 4 * 1024,
-    "temporal_context": 512,
 }
 
 # Sections that are ordered for demotion (lower index = demote first)
@@ -132,7 +131,6 @@ HOT_SECTION_NAMES: List[str] = [
     "meta",
     "task_state",
     "task_artifacts",
-    "temporal_context",
 ]
 
 
@@ -280,7 +278,6 @@ SectionType = Union[
     MetaSection,
     TaskStateSection,
     TaskArtifactsSection,
-    TemporalContextSection,
 ]
 
 

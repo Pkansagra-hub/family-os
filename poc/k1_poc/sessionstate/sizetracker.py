@@ -190,13 +190,6 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
         eviction_priority=3,  # Demotes to artifacts_warm
         can_migrate=True,
     ),
-    "temporal_context": SectionBudget(
-        name="temporal_context",
-        tier=Tier.HOT,
-        max_bytes=512,
-        eviction_priority=None,  # NEVER EVICT (computed, tiny)
-        can_migrate=False,
-    ),
     # WARM TIER sections (48KB total)
     "beliefs_history": SectionBudget(
         name="beliefs_history",

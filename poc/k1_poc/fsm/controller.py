@@ -114,6 +114,7 @@ from poc.k1_poc.protocols.weave_policy import (
     sort_results_for_delivery,
 )
 from poc.k1_poc.sessionstate.sections.control import IntentClassification, PrivacyBand
+from poc.k1_poc.sessionstate.sections.temporal_context import compute_temporal_anchor
 from poc.k1_poc.task.complexity import ComplexityTier
 from poc.k1_poc.task.dispatch import TaskDispatch
 from poc.k1_poc.task.intent import TaskIntent
@@ -1659,6 +1660,8 @@ class ConciergeController:
                     reason="phase1_classification",
                 )
                 control.set_complexity_tier(result.complexity_tier)
+                # Temporal Resolution Engine: compute + write anchor (skeleton.mmd -> TIME_RESOLUTION)
+                self._write_temporal_anchor(control)
         except Exception:
             logger.exception("_write_phase1_to_ss: control section write failed")
 
@@ -1709,6 +1712,29 @@ class ConciergeController:
             "_write_phase1_to_ss: 3-section write completed in %.2fms",
             elapsed_ms,
         )
+
+    def _write_temporal_anchor(self, control: Any) -> None:
+        """Compute and write temporal anchor to Control sub-field.
+
+        Architecture ref: skeleton.mmd -> ACKING_CORE -> TIME_RESOLUTION
+          TIMEZONE_CONTEXT reads from Persona preferences (family timezone).
+          TEMPORAL_ANCHOR = {local_time, day, time_of_day, weekend, tz}.
+
+        Reads timezone from Persona section (set by family profile during
+        bootstrap). Falls back to UTC if Persona unavailable.
+        """
+        tz_name = "UTC"
+        if self._ss is not None:
+            try:
+                persona = self._ss.get_section("persona")
+                if persona is not None and hasattr(persona, "get_all_preferences"):
+                    prefs = persona.get_all_preferences()
+                    tz_name = prefs.get("timezone", "UTC") or "UTC"
+            except Exception:
+                pass
+        anchor = compute_temporal_anchor(tz_name)
+        if hasattr(control, "set_temporal_anchor"):
+            control.set_temporal_anchor(anchor.to_dict())
 
     def _run_phase1(self, envelope: Envelope) -> None:
         """Run Phase 1 (deterministic classification) within DISPATCHING.

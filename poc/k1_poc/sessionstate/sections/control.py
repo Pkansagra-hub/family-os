@@ -364,6 +364,11 @@ class ControlSection:
             "complexity_tier": "",
         }
 
+        # Temporal anchor (sub-field per skeleton.mmd NOTE line 834)
+        # Computed by temporal resolution engine, written during Phase 1.
+        # Port path: moves to Multimodal section (Section 5) during port.
+        self._temporal_anchor: Optional[Dict[str, Any]] = None
+
         # Turn tracking
         self._current_turn_id = str(uuid.uuid4())
         self._turn_count = 0
@@ -794,7 +799,29 @@ class ControlSection:
             meta["fsm_state"] = self._fsm_overlay["fsm_state"]
             meta["active_task_ids"] = list(self._fsm_overlay["active_task_ids"])
             meta["complexity_tier"] = self._fsm_overlay["complexity_tier"]
+        # Temporal anchor (sub-field per skeleton.mmd NOTE)
+        if self._temporal_anchor is not None:
+            meta["temporal_anchor"] = self._temporal_anchor
         return meta
+
+    def set_temporal_anchor(self, anchor_dict: Dict[str, Any]) -> None:
+        """Set temporal anchor computed by Temporal Resolution Engine.
+
+        Architecture ref: skeleton.mmd -> ACKING_CORE -> TIME_RESOLUTION
+        Port path: Multimodal section sub-field (Section 5).
+
+        Args:
+            anchor_dict: TemporalAnchor.to_dict() output with keys:
+                local_time_iso, day_of_week, time_of_day, is_weekend,
+                timezone, hour_24
+        """
+        self._temporal_anchor = anchor_dict
+        self._last_updated_ms = int(time.time() * 1000)
+        self._invalidate_cache()
+
+    def get_temporal_anchor(self) -> Optional[Dict[str, Any]]:
+        """Get current temporal anchor, or None if not yet computed."""
+        return self._temporal_anchor
 
     def set_fsm_overlay(
         self,

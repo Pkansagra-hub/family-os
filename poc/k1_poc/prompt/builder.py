@@ -76,6 +76,7 @@ class SSReadConfig:
 
 SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
     PromptMode.STANDARD: [
+        SSReadConfig("temporal_context", "full"),
         SSReadConfig("beliefs_active", "full"),
         SSReadConfig("scoreboard", "full"),
         SSReadConfig("affective_now", "full"),
@@ -88,6 +89,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("task_artifacts", "full"),
     ],
     PromptMode.CLARIFY_ASK: [
+        SSReadConfig("temporal_context", "slim"),
         SSReadConfig("beliefs_active", "slim"),
         SSReadConfig("scoreboard", "slim"),
         SSReadConfig("affective_now", "full"),
@@ -97,6 +99,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("persona", "full"),
     ],
     PromptMode.CLARIFY_RESOLVE: [
+        SSReadConfig("temporal_context", "slim"),
         SSReadConfig("beliefs_active", "full"),
         SSReadConfig("scoreboard", "full"),
         SSReadConfig("affective_now", "full"),
@@ -107,12 +110,14 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("task_state", "slim"),
     ],
     PromptMode.HITL_RELAY: [
+        SSReadConfig("temporal_context", "slim"),
         SSReadConfig("affective_now", "full"),
         SSReadConfig("control", "slim"),
         SSReadConfig("persona", "full"),
         SSReadConfig("task_state", "full"),
     ],
     PromptMode.HITL_RESOLVE: [
+        SSReadConfig("temporal_context", "slim"),
         SSReadConfig("beliefs_active", "slim"),
         SSReadConfig("scoreboard", "slim"),
         SSReadConfig("affective_now", "full"),
@@ -122,6 +127,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("task_state", "full"),
     ],
     PromptMode.PRESENT: [
+        SSReadConfig("temporal_context", "full"),
         SSReadConfig("affective_now", "full"),
         SSReadConfig("narrative_active", "slim"),
         SSReadConfig("control", "slim"),
@@ -132,6 +138,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("beliefs_active", "slim"),
     ],
     PromptMode.WEAVE: [
+        SSReadConfig("temporal_context", "full"),
         SSReadConfig("affective_now", "full"),
         SSReadConfig("narrative_active", "full"),
         SSReadConfig("control", "slim"),
@@ -142,6 +149,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("beliefs_active", "slim"),
     ],
     PromptMode.CANCEL: [
+        SSReadConfig("temporal_context", "slim"),
         SSReadConfig("beliefs_active", "slim"),
         SSReadConfig("affective_now", "full"),
         SSReadConfig("narrative_active", "slim"),
@@ -151,6 +159,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("task_state", "full"),
     ],
     PromptMode.INTERRUPT: [
+        SSReadConfig("temporal_context", "full"),
         SSReadConfig("beliefs_active", "full"),
         SSReadConfig("scoreboard", "full"),
         SSReadConfig("affective_now", "full"),
@@ -163,6 +172,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("task_artifacts", "full"),
     ],
     PromptMode.ERROR: [
+        SSReadConfig("temporal_context", "slim"),
         SSReadConfig("affective_now", "full"),
         SSReadConfig("narrative_active", "slim"),
         SSReadConfig("control", "slim"),
@@ -520,6 +530,62 @@ def _render_persona_slim(section: Any, cfg: SSReadConfig) -> str:
     return ""
 
 
+# =========================================================================
+# Temporal context renderers (reads from Control sub-field)
+# Architecture ref: skeleton.mmd -> TIME_RESOLUTION -> TEMPORAL_ANCHOR
+# Port path: Multimodal section sub-field (Section 5)
+# =========================================================================
+
+
+def _render_temporal_context_full(section: Any, cfg: SSReadConfig) -> str:
+    """Full: multi-line temporal anchor from Control sub-field."""
+    anchor = None
+    if hasattr(section, "get_temporal_anchor"):
+        anchor = section.get_temporal_anchor()
+    if anchor is None:
+        # Lazy fallback: compute from Persona timezone if Phase 1 not run
+        from poc.k1_poc.sessionstate.sections.temporal_context import compute_temporal_anchor
+
+        tz = "UTC"
+        if hasattr(section, "get_all_preferences"):
+            tz = section.get_all_preferences().get("timezone", "UTC")
+        anchor = compute_temporal_anchor(tz).to_dict()
+    if not anchor:
+        return ""
+    lines = [
+        f"Local time: {anchor.get('local_time_iso', '')}",
+        f"Day: {anchor.get('day_of_week', '')}",
+        f"Time of day: {anchor.get('time_of_day', '')}",
+        f"Weekend: {anchor.get('is_weekend', False)}",
+        f"Timezone: {anchor.get('timezone', 'UTC')}",
+    ]
+    return "\n".join(lines)
+
+
+def _render_temporal_context_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Slim: one-liner temporal summary."""
+    anchor = None
+    if hasattr(section, "get_temporal_anchor"):
+        anchor = section.get_temporal_anchor()
+    if anchor is None:
+        from poc.k1_poc.sessionstate.sections.temporal_context import compute_temporal_anchor
+
+        anchor = compute_temporal_anchor("UTC").to_dict()
+    if not anchor:
+        return ""
+    return f"{anchor.get('day_of_week', '')} {anchor.get('time_of_day', '')} ({anchor.get('timezone', 'UTC')})"
+
+
+# =========================================================================
+# Section source map: virtual prompt sections backed by real SS sections
+# Production: temporal_context -> multimodal (Section 5 sub-field)
+# POC: temporal_context -> control (sub-field per skeleton.mmd NOTE line 834)
+# =========================================================================
+SECTION_SOURCE_MAP: dict[str, str] = {
+    "temporal_context": "control",
+}
+
+
 # Dispatch table: section_name -> (full_renderer, slim_renderer)
 SECTION_RENDERERS: dict[str, tuple] = {
     "task_state": (_render_task_state_full, _render_task_state_slim),
@@ -532,6 +598,7 @@ SECTION_RENDERERS: dict[str, tuple] = {
     "affective_now": (_render_affective_now_full, _render_affective_now_slim),
     "control": (_render_control_full, _render_control_slim),
     "persona": (_render_persona_full, _render_persona_slim),
+    "temporal_context": (_render_temporal_context_full, _render_temporal_context_slim),
 }
 
 
@@ -952,8 +1019,9 @@ class DynamicPromptBuilder:
         for cfg in configs:
             if cfg.read_mode == "skip":
                 continue
-            # Get section from SS manager
-            section = _safe_get_ss_section(ss, cfg.section)
+            # Get section from SS manager (resolve virtual names via source map)
+            source_name = SECTION_SOURCE_MAP.get(cfg.section, cfg.section)
+            section = _safe_get_ss_section(ss, source_name)
             if section is None:
                 continue
             renderers = SECTION_RENDERERS.get(cfg.section)
