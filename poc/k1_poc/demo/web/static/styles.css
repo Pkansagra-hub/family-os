@@ -648,6 +648,15 @@ html, body {
     -webkit-backdrop-filter: blur(8px);
 }
 
+.message.streaming-placeholder .msg-content {
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.stream-placeholder-text {
+    opacity: 0.78;
+}
+
 .message.system .msg-content {
     background: var(--bubble-system-bg);
     color: var(--text-tertiary);

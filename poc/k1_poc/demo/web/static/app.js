@@ -26,6 +26,19 @@ const state = {
     welcomeShown: false,
 };
 
+const DEFAULT_STREAMING_LABEL = "Concierge is thinking...";
+
+const STREAMING_TOOL_LABELS = {
+    update_beliefs: "Updating context...",
+    update_scoreboard: "Tracking context...",
+    update_clarifications: "Clarifying the request...",
+    update_narrative: "Organizing context...",
+    promote_belief: "Locking in details...",
+    recall_memory: "Checking memory...",
+    summarize_context: "Summarizing context...",
+    dispatch_task: "Starting task...",
+};
+
 // Member metadata
 const MEMBERS = {
     Alex:       { color: "#6366f1", gradient: "linear-gradient(135deg, #6366f1, #818cf8)", initials: "A", role: "Parent", key: "alex" },
@@ -115,12 +128,14 @@ function connect() {
         setConnectionStatus("disconnected");
         dom.input.disabled = true;
         dom.sendBtn.disabled = true;
+        finishStreaming(true);
         setTimeout(connect, 3000);
     };
 
     state.ws.onerror = () => {
         state.connected = false;
         setConnectionStatus("disconnected");
+        finishStreaming(true);
     };
 
     state.ws.onmessage = (event) => {
@@ -195,6 +210,7 @@ function handleResponse(msg) {
             const affectInfo = AFFECT_MAP[affect] || AFFECT_MAP.neutral;
             const content = el.querySelector(".msg-content");
             const sender = el.querySelector(".msg-sender");
+            el.classList.remove("streaming-placeholder");
             if (content) content.innerHTML = formatMessageText(msg.text);
             if (sender) {
                 sender.innerHTML = `Concierge <span class="msg-affect-tag" style="background:${affectInfo.color}22;color:${affectInfo.color}">${affect}</span>`;
@@ -202,7 +218,7 @@ function handleResponse(msg) {
         }
         state.streamingMsgId = null;
         state.streamBuffer = "";
-        showStreaming(false);
+        showStreaming(false, DEFAULT_STREAMING_LABEL);
         updateAffect(affect, state.currentAffect.valence);
         scrollToBottom();
     } else {
@@ -212,32 +228,37 @@ function handleResponse(msg) {
 }
 
 function handleStreamChunk(msg) {
-    if (!state.streamingMsgId) {
-        state.streamingMsgId = "stream-" + Date.now();
-        state.streamBuffer = "";
-        showStreaming(true);
-        createStreamingMessage(state.streamingMsgId);
+    ensureStreamingMessage();
+
+    if (msg.chunk_type === "thinking") {
+        updateStreamingMessage(state.streamingMsgId, "Thinking...");
+        showStreaming(true, DEFAULT_STREAMING_LABEL);
+        return;
     }
 
-    state.streamBuffer += msg.text;
-    updateStreamingMessage(state.streamingMsgId, state.streamBuffer, msg.chunk_type);
+    updateStreamingMessage(state.streamingMsgId, "Drafting reply...");
+    showStreaming(true, "Concierge is drafting a reply...");
 }
 
-function finishStreaming() {
+function finishStreaming(removePlaceholder = false) {
     if (state.streamingMsgId) {
         const el = document.getElementById(state.streamingMsgId);
         if (el) {
-            const cursor = el.querySelector(".stream-cursor");
-            if (cursor) cursor.remove();
+            if (removePlaceholder) {
+                el.remove();
+            } else {
+                const cursor = el.querySelector(".stream-cursor");
+                if (cursor) cursor.remove();
+            }
         }
         state.streamingMsgId = null;
         state.streamBuffer = "";
     }
-    showStreaming(false);
+    showStreaming(false, DEFAULT_STREAMING_LABEL);
 }
 
 function handleProactive(msg) {
-    finishStreaming();
+    finishStreaming(true);
     addMessage("proactive", "Concierge", msg.text, { label: "proactive" });
     showToast("Notification", msg.text);
     // Pulse the header to draw attention
@@ -245,7 +266,7 @@ function handleProactive(msg) {
 }
 
 function handleWeave(msg) {
-    finishStreaming();
+    finishStreaming(true);
     (msg.texts || []).forEach(text => {
         addMessage("weave", "Concierge", text, { label: "woven update" });
         showToast("Task Complete", text);
@@ -253,6 +274,7 @@ function handleWeave(msg) {
 }
 
 function handleSystem(msg) {
+    finishStreaming(true);
     addSystemMessage(msg.text);
 }
 
@@ -311,6 +333,13 @@ function handleToolEvent(msg) {
         component: msg.actor,
         summary: `${msg.phase}: ${msg.tool_name}`,
     });
+
+    if (msg.actor === "front" && msg.phase === "started" && !EXTERNAL_TOOLS.has(msg.tool_name)) {
+        const label = STREAMING_TOOL_LABELS[msg.tool_name] || "Thinking...";
+        ensureStreamingMessage();
+        updateStreamingMessage(state.streamingMsgId, label);
+        showStreaming(true, label);
+    }
 
     // Show external tool executions as chips in the chat area
     if (EXTERNAL_TOOLS.has(msg.tool_name)) {
@@ -518,13 +547,16 @@ function addSystemMessage(text) {
 function createStreamingMessage(id) {
     removeWelcomeScreen();
     const div = document.createElement("div");
-    div.className = "message concierge";
+    div.className = "message concierge streaming-placeholder";
     div.id = id;
     div.innerHTML = `
         <div class="msg-avatar concierge-avatar">K1</div>
         <div class="msg-body">
             <div class="msg-sender">Concierge</div>
-            <div class="msg-content"><span class="stream-cursor"></span></div>
+            <div class="msg-content">
+                <span class="stream-placeholder-text">Thinking...</span>
+                <span class="stream-cursor"></span>
+            </div>
             <div class="msg-meta"><span>${formatTime()}</span></div>
         </div>
     `;
@@ -532,17 +564,20 @@ function createStreamingMessage(id) {
     scrollToBottom();
 }
 
-function updateStreamingMessage(id, text, chunkType) {
+function updateStreamingMessage(id, label) {
     const el = document.getElementById(id);
     if (!el) return;
 
     const content = el.querySelector(".msg-content");
-    if (chunkType === "thinking") {
-        content.innerHTML = `<span style="opacity:0.45;font-style:italic">${formatMessageText(text)}</span><span class="stream-cursor"></span>`;
-    } else {
-        content.innerHTML = `${formatMessageText(text)}<span class="stream-cursor"></span>`;
-    }
+    content.innerHTML = `<span class="stream-placeholder-text">${escapeHtml(label)}</span><span class="stream-cursor"></span>`;
     scrollToBottom();
+}
+
+function ensureStreamingMessage() {
+    if (state.streamingMsgId) return;
+    state.streamingMsgId = "stream-" + Date.now();
+    state.streamBuffer = "";
+    createStreamingMessage(state.streamingMsgId);
 }
 
 // ================================================================
@@ -726,8 +761,9 @@ function showToast(title, text, duration = 5000) {
 // Streaming indicator
 // ================================================================
 
-function showStreaming(visible) {
+function showStreaming(visible, label = DEFAULT_STREAMING_LABEL) {
     dom.streaming.classList.toggle("hidden", !visible);
+    dom.streamingText.textContent = visible ? label : DEFAULT_STREAMING_LABEL;
 }
 
 // ================================================================
@@ -822,6 +858,7 @@ function sendMessage() {
     }
 
     addUserMessage(text);
+    ensureStreamingMessage();
     send({
         type: "message",
         text: text,
@@ -830,7 +867,8 @@ function sendMessage() {
     });
 
     dom.input.value = "";
-    showStreaming(true);
+    updateStreamingMessage(state.streamingMsgId, "Thinking...");
+    showStreaming(true, DEFAULT_STREAMING_LABEL);
 }
 
 // ================================================================

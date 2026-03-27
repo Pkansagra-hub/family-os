@@ -55,6 +55,96 @@ from poc.k1_poc.tools.dispatcher import ToolDispatcher
 
 logger = logging.getLogger(__name__)
 
+# Reasoning-leak detection patterns.  Flash Lite (and other non-thinking
+# models) sometimes prefix their response text with chain-of-thought
+# reasoning that should never reach the user.  These patterns detect
+# common prefixes so _strip_leaked_reasoning can remove them.
+import re
+
+_REASONING_PREFIXES = re.compile(
+    r"^("
+    # "The user is asking..." / "The user's request..."
+    r"The (?:user|previous turn|current context)\b.+?"
+    # "I will use the X tool..." / "I need to..."
+    r"|I (?:will|need to|should|am going to)\b.+?"
+    # "Based on the memory recall..." / "Based on the results..."
+    r"|Based on\b.+?"
+    # "To proceed,..." / "Therefore,..."
+    r"|(?:To proceed|Therefore|However|First|Let me)\b.+?" r")"
+    # Stop at a clear pivot to user-facing text
+    r"(?=\n[A-Z]|\n\n)",
+    re.DOTALL,
+)
+
+
+def _strip_leaked_reasoning(text: str) -> str:
+    """Remove chain-of-thought reasoning leaked into the response text.
+
+    Models without a dedicated thinking mode (e.g. gemini-2.5-flash-lite)
+    sometimes prefix the user-facing response with internal reasoning.
+    This function detects and strips such prefixes so only the clean
+    user-facing message reaches the renderer.
+
+    Heuristic: If the text contains two or more paragraph breaks, and
+    the early paragraphs match reasoning patterns while the final
+    paragraph(s) look like a direct user response, keep only the final
+    part.  If unsure, returns the original text unchanged.
+    """
+    if not text or "\n" not in text:
+        return text
+
+    # Split into paragraphs (double-newline or single-newline blocks)
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+    if len(paragraphs) < 2:
+        return text
+
+    # Walk paragraphs from the end to find where user-facing text begins.
+    # Reasoning paragraphs typically start with meta-language about the
+    # user, tools, or the model's own process.
+    reasoning_markers = (
+        "The user",
+        "The previous turn",
+        "The current context",
+        "I will use",
+        "I need to",
+        "I should",
+        "I am going to",
+        "Based on",
+        "To proceed",
+        "Therefore,",
+        "However,",
+        "First,",
+        "Let me",
+    )
+
+    # Find the first paragraph that does NOT start with a reasoning marker
+    # scanning from the end (most reliable: last paragraph is the response)
+    first_clean = len(paragraphs)
+    for i in range(len(paragraphs) - 1, -1, -1):
+        p = paragraphs[i]
+        is_reasoning = any(p.startswith(m) for m in reasoning_markers)
+        if is_reasoning:
+            break
+        first_clean = i
+
+    if first_clean == 0:
+        # Nothing detected as reasoning -- return original
+        return text
+    if first_clean >= len(paragraphs):
+        # Everything is reasoning? Return original to be safe
+        return text
+
+    clean = "\n\n".join(paragraphs[first_clean:])
+    if clean:
+        stripped_chars = len(text) - len(clean)
+        if stripped_chars > 0:
+            logger.info(
+                "front_handler: stripped %d chars of leaked reasoning from response",
+                stripped_chars,
+            )
+        return clean
+    return text
+
 
 # =========================================================================
 # _parse_routing_metadata -- M5 E5.3.3
@@ -809,14 +899,15 @@ async def front_handler(
     # 10c. Emit response.final AFTER all dispatches (correct FSM ordering)
     #      For STANDARD/PRESENT modes, emit stream chunks first (Epic 4.2).
     if result.text:
+        clean_text = _strip_leaked_reasoning(result.text)
         if mode in (PromptMode.STANDARD, PromptMode.PRESENT):
             await _emit_streaming_response(
                 bus=bus,
-                text=result.text,
+                text=clean_text,
                 trace_id=trace_id,
                 parent_id=parent_id,
             )
-        await _on_text_response(result.text)
+        await _on_text_response(clean_text)
 
     # 11. Post-loop: auto-emit task.resume after HITL_RESOLVE (Epic 6.4.4)
     if mode == PromptMode.HITL_RESOLVE:

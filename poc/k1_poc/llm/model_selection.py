@@ -28,53 +28,53 @@ MODEL_SELECTION_TABLE: dict[tuple[str, str], str] = {
     (
         "CHAT",
         "front",
-    ): "gemini-2.5-flash-lite",  # fast acks, presentations
+    ): "gemini-2.5-flash",  # fast acks, presentations
     (
         "TOOL_CALL",
         "front",
-    ): "gemini-2.5-flash-lite",  # cognitive tool selection
+    ): "gemini-2.5-flash",  # cognitive tool selection + thinking
     (
         "TOOL_CALL",
         "back",
-    ): "gemini-2.5-flash-lite",  # action tool execution
+    ): "gemini-2.5-flash",  # action tool execution
     (
         "STRUCTURED",
         "front",
-    ): "gemini-2.5-flash-lite",  # dispatch intent parsing
+    ): "gemini-2.5-flash",  # dispatch intent parsing
     (
         "STRUCTURED",
         "back",
-    ): "gemini-2.5-flash-lite",  # final answer formatting
+    ): "gemini-2.5-flash",  # final answer formatting
     (
         "REASON",
         "back",
-    ): "gemini-2.5-flash-lite",  # complex multi-step reasoning
-    ("REASON", "front"): "gemini-2.5-flash-lite",  # complex reasoning
+    ): "gemini-2.5-flash",  # complex multi-step reasoning
+    ("REASON", "front"): "gemini-2.5-flash",  # complex reasoning
     (
         "CHAT",
         "back",
-    ): "gemini-2.5-flash-lite",  # error reports (internal)
+    ): "gemini-2.5-flash",  # error reports (internal)
     (
         "STREAM",
         "front",
-    ): "gemini-2.5-flash-lite",  # streaming ack/response
+    ): "gemini-2.5-flash",  # streaming ack/response
     (
         "TOOL_CALL",
         "planner",
-    ): "gemini-2.5-flash-lite",  # planner reasoning
-    ("CHAT", "planner"): "gemini-2.5-flash-lite",  # planner chat
+    ): "gemini-2.5-flash",  # planner reasoning
+    ("CHAT", "planner"): "gemini-2.5-flash",  # planner chat
 }
 
 MODEL_HINT_OVERRIDES: dict[str, str] = {
-    "fast": "gemini-2.5-flash-lite",
-    "smart": "gemini-2.5-flash-lite",
-    "cheap": "gemini-2.5-flash-lite",
-    "thinking": "gemini-2.5-flash-lite",  # with thinking
-    "pro": "gemini-2.5-flash-lite",
-    "flash": "gemini-2.5-flash-lite",
+    "fast": "gemini-2.5-flash",
+    "smart": "gemini-2.5-flash",
+    "cheap": "gemini-2.5-flash",
+    "thinking": "gemini-2.5-flash",  # with thinking
+    "pro": "gemini-2.5-flash",
+    "flash": "gemini-2.5-flash",
 }
 
-DEFAULT_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_MODEL = "gemini-2.5-flash"
 
 
 def _get_selection_table() -> dict[tuple[str, str], str]:

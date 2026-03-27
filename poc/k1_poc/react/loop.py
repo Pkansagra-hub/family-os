@@ -472,7 +472,8 @@ async def react_loop(
                                 "Now respond directly to the user. Synthesize "
                                 "everything you learned from the tools above "
                                 "into a helpful, natural response. Do NOT call "
-                                "any more tools."
+                                "any more tools. Do NOT include your reasoning "
+                                "or analysis -- output ONLY the user-facing message."
                             ),
                         )
                     )
