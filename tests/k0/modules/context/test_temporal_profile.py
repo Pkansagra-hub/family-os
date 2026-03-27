@@ -455,22 +455,22 @@ class TestTemporalBuckets:
         assert tp.get_time_of_day_bucket(dt) == "morning"
 
     def test_time_of_day_afternoon(self):
-        """12:00-17:00 → afternoon."""
+        """12:00-18:00 → afternoon."""
         dt = datetime(2025, 11, 10, 14, 0, 0, tzinfo=timezone.utc)
         assert tp.get_time_of_day_bucket(dt) == "afternoon"
 
     def test_time_of_day_evening(self):
-        """17:00-22:00 → evening."""
+        """18:00-00:00 → evening."""
         dt = datetime(2025, 11, 10, 19, 0, 0, tzinfo=timezone.utc)
         assert tp.get_time_of_day_bucket(dt) == "evening"
 
     def test_time_of_day_night(self):
-        """22:00-06:00 → night (wraps around midnight)."""
-        dt = datetime(2025, 11, 10, 23, 0, 0, tzinfo=timezone.utc)
+        """00:00-06:00 → night."""
+        dt = datetime(2025, 11, 10, 3, 0, 0, tzinfo=timezone.utc)
         assert tp.get_time_of_day_bucket(dt) == "night"
 
     def test_time_of_day_night_early_morning(self):
-        """02:00 → night (wraps around midnight)."""
+        """02:00 → night (00:00-06:00)."""
         dt = datetime(2025, 11, 10, 2, 0, 0, tzinfo=timezone.utc)
         assert tp.get_time_of_day_bucket(dt) == "night"
 

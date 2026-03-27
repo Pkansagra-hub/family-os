@@ -73,6 +73,9 @@ from k0.modules.consolidation.algorithms.scene_segmenter import (
     SceneSegmentationConfig,
     segment_episodes,
 )
+from k0.modules.consolidation.algorithms.text_generators.episode_summarizer import (
+    generate_episode_summary,
+)
 from k0.modules.consolidation.algorithms.thread_purity import (
     PurityCorrectionStats,
     ThreadPurityCorrector,
@@ -151,6 +154,7 @@ class R2Config:
     enable_quality_tracking: bool = True
     weighting_strategy: WeightingStrategy = WeightingStrategy.IMPORTANCE
     noise_rescue_threshold: float = 0.5  # Rescue noise with outlier_score < this
+    rescue_all_noise: bool = True  # Force-assign ALL remaining noise to nearest cluster
     cluster_selection_method: str = "leaf"  # 'leaf' preserves small clusters
 
     # === Epic 6.1: Ensemble distance (3D: semantic 0.45, temporal 0.25, narrative 0.30) ===
@@ -180,15 +184,15 @@ class R2Config:
     episode_query_limit: int = 50  # Max episodes to query per batch
 
     # === M9.8: Engine Reconciliation (Phase Migration) ===
-    enable_engine_reinforce: bool = False  # Seam 1: use engine for pre-clustering REINFORCE
-    enable_engine_extend: bool = False  # Seam 2: use engine for post-clustering EXTEND
+    enable_engine_reinforce: bool = True  # Seam 1: use engine for pre-clustering REINFORCE
+    enable_engine_extend: bool = True  # Seam 2: use engine for post-clustering EXTEND
     engine_dual_path_enabled: bool = False  # Run both legacy + engine, compare
     engine_dual_path_log_divergences: bool = True  # Log divergences in dual-path mode
 
     # === M9.10: Scene Segmentation (Mega-Episode Splitting) ===
-    enable_scene_segmentation: bool = False  # Split mega-episodes into human-scale scenes
+    enable_scene_segmentation: bool = True  # Split mega-episodes into human-scale scenes
     scene_segmentation_config: Optional[SceneSegmentationConfig] = None  # None = POC defaults
-    enable_fragment_absorption: bool = False  # Absorb micro-fragments into nearby scenes
+    enable_fragment_absorption: bool = True  # Absorb micro-fragments into nearby scenes
     fragment_absorption_config: Optional[FragmentAbsorptionConfig] = None  # None = POC defaults
 
 
@@ -711,6 +715,11 @@ class R2EpisodicIntegrator:
             # Adapt events to EventLike protocol
             adapted_events = [EventAdapter(e) for e in novel_events]
 
+            # Sort by timestamp for EpisodeSplitter ordering invariant.
+            # R0 selects by wal_pos which may not match temporal order,
+            # especially when reset events mix with newer ingestion.
+            adapted_events.sort(key=lambda e: e.timestamp)
+
             # =================================================================
             # Issue 1.2.4: Timestamp quality observability
             # =================================================================
@@ -739,16 +748,27 @@ class R2EpisodicIntegrator:
             if self.config.enable_thread_purity_correction:
                 event_lookup_purity = {e.event_id: e for e in adapted_events}
                 corrector = ThreadPurityCorrector()
-                purity_stats = PurityCorrectionStats()
+                accumulated_purity = PurityCorrectionStats()
                 for cr in all_results:
-                    cr.clusters, purity_stats = corrector.correct(cr.clusters, event_lookup_purity)
+                    cr.clusters, cr_stats = corrector.correct(cr.clusters, event_lookup_purity)
                     cr.cluster_count = sum(1 for c in cr.clusters if len(c.member_event_ids) > 1)
-                if purity_stats.clusters_split > 0:
+                    accumulated_purity.clusters_before += cr_stats.clusters_before
+                    accumulated_purity.clusters_after += cr_stats.clusters_after
+                    accumulated_purity.clusters_split += cr_stats.clusters_split
+                    accumulated_purity.clusters_pure += cr_stats.clusters_pure
+                    accumulated_purity.events_reassigned += cr_stats.events_reassigned
+                    accumulated_purity.noise_clusters_skipped += cr_stats.noise_clusters_skipped
+
+                # Rescue events dropped by purity correction
+                if accumulated_purity.noise_clusters_skipped > 0 and self.config.rescue_all_noise:
+                    self._rescue_purity_orphans(all_results, event_lookup_purity)
+
+                if accumulated_purity.clusters_split > 0:
                     logger.info(
                         "R2: Thread purity correction applied",
                         extra={
                             "cycle_id": cycle_id,
-                            **purity_stats.to_dict(),
+                            **accumulated_purity.to_dict(),
                         },
                     )
 
@@ -915,7 +935,11 @@ class R2EpisodicIntegrator:
                         )
 
             # Step 4: Update event states with cluster assignments
-            self._update_event_states(envelope.events, all_results, all_noise_ids)
+            # Use episode_candidates (post-merge/split/absorb) as authoritative source.
+            # all_results contains pre-merge HDBSCAN IDs that become phantoms in st_epi.
+            self._update_event_states_from_candidates(
+                envelope.events, episode_candidates, all_noise_ids
+            )
 
             # Step 5: Populate envelope outputs
             envelope.phases.r2_clusters = episode_clusters
@@ -1051,6 +1075,7 @@ class R2EpisodicIntegrator:
             min_samples=1,  # Allow more inclusive clustering
             cluster_selection_epsilon=self.config.eps if self.config.eps > 0 else 0.0,
             noise_rescue_threshold=self.config.noise_rescue_threshold,
+            rescue_all_noise=self.config.rescue_all_noise,
             temporal_weight=self.config.temporal_weight,
             cluster_selection_method=self.config.cluster_selection_method,
         )
@@ -1140,6 +1165,7 @@ class R2EpisodicIntegrator:
             min_samples=min_samples,
             cluster_selection_epsilon=eps,
             noise_rescue_threshold=self.config.noise_rescue_threshold,
+            rescue_all_noise=self.config.rescue_all_noise,
             temporal_weight=self.config.temporal_weight,
             cluster_selection_method=self.config.cluster_selection_method,
         )
@@ -1215,10 +1241,12 @@ class R2EpisodicIntegrator:
         """Cluster each event sequence via HDBSCAN, returning results and noise IDs."""
         all_results: List[HDBSCANClusteringResult] = []
         all_noise_ids: List[str] = []
+        sub_batch_events: List["EventAdapter"] = []
 
         for sequence in sequences:
             if len(sequence) < self.config.min_batch_size:
-                all_noise_ids.extend(e.event_id for e in sequence)
+                # Collect sub-batch events for cross-sequence rescue later
+                sub_batch_events.extend(sequence)
                 continue
 
             clustering_result = self._clusterer.cluster(
@@ -1230,7 +1258,176 @@ class R2EpisodicIntegrator:
                 if label == -1:
                     all_noise_ids.append(sequence[idx].event_id)
 
+        # Cross-sequence rescue: assign sub-batch events to nearest cluster
+        if sub_batch_events and self.config.rescue_all_noise and all_results:
+            rescued_ids = self._rescue_sub_batch_events(sub_batch_events, all_results)
+            # Only noise those that couldn't be rescued
+            for evt in sub_batch_events:
+                if evt.event_id not in rescued_ids:
+                    all_noise_ids.append(evt.event_id)
+        elif sub_batch_events:
+            # No clusters to assign to — mark as noise
+            all_noise_ids.extend(e.event_id for e in sub_batch_events)
+
         return all_results, all_noise_ids
+
+    def _rescue_sub_batch_events(
+        self,
+        orphan_events: List["EventAdapter"],
+        clustering_results: List["HDBSCANClusteringResult"],
+    ) -> set:
+        """Assign sub-batch orphan events to the nearest existing cluster.
+
+        Prefers same-thread clusters by temporal proximity, falling back
+        to any cluster when no same-thread match exists.  This reduces
+        cross-thread impurity that purity correction would later discard.
+
+        Returns:
+            Set of event IDs that were successfully rescued.
+        """
+        rescued: set = set()
+        # Build candidate list with thread hint from orphan events
+        candidates: list = []
+        for result in clustering_results:
+            for cluster in result.clusters:
+                if (
+                    cluster.member_event_ids
+                    and len(cluster.member_event_ids) >= 2
+                    and cluster.temporal_start > 0
+                    and not cluster.cluster_id.startswith("noise-")
+                ):
+                    candidates.append(cluster)
+
+        if not candidates:
+            return rescued
+
+        # Build thread lookup from all available events
+        # (orphan_events won't overlap with cluster members, but we have
+        #  no lookup for cluster members here; thread matching happens
+        #  in _rescue_purity_orphans as a safety net)
+        for evt in orphan_events:
+            ts = evt.timestamp
+            evt_thread = getattr(evt, "narrative_thread_id", None)
+
+            best_cluster = None
+            best_dist = float("inf")
+            best_same_thread = None
+            best_same_dist = float("inf")
+
+            for cluster in candidates:
+                mid = (cluster.temporal_start + cluster.temporal_end) / 2
+                dist = abs(ts - mid)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_cluster = cluster
+                # Check if cluster_id hints at thread (after purity split)
+                if evt_thread and evt_thread in cluster.cluster_id and dist < best_same_dist:
+                    best_same_dist = dist
+                    best_same_thread = cluster
+
+            target = best_same_thread if best_same_thread is not None else best_cluster
+            if target is not None:
+                target.member_event_ids.append(evt.event_id)
+                rescued.add(evt.event_id)
+
+        if rescued:
+            logger.info(
+                "R2: Sub-batch rescue assigned %d/%d orphan events to nearest clusters",
+                len(rescued),
+                len(orphan_events),
+            )
+
+        return rescued
+
+    def _rescue_purity_orphans(
+        self,
+        all_results: List["HDBSCANClusteringResult"],
+        event_lookup: Dict[str, "EventAdapter"],
+    ) -> int:
+        """Rescue events dropped by thread purity correction.
+
+        After purity correction splits impure clusters, sub-groups smaller
+        than min_split_size are discarded.  Their events lose cluster
+        membership.  This sweep finds those orphans and assigns each one
+        to the nearest cluster that shares the same narrative thread,
+        falling back to temporal proximity when no same-thread cluster
+        exists.
+
+        Returns:
+            Number of events rescued.
+        """
+        from k0.modules.consolidation.algorithms.thread_purity import _get_thread_group
+
+        # Collect all event_ids currently in clusters
+        clustered_ids: set = set()
+        for result in all_results:
+            for cluster in result.clusters:
+                clustered_ids.update(cluster.member_event_ids)
+
+        # Orphans = events in lookup but not in any cluster
+        orphan_ids = set(event_lookup.keys()) - clustered_ids
+        if not orphan_ids:
+            return 0
+
+        # Build candidate clusters (≥2 members, have temporal bounds)
+        candidate_clusters = []
+        for result in all_results:
+            for cluster in result.clusters:
+                if len(cluster.member_event_ids) >= 2 and cluster.temporal_start > 0:
+                    # Determine dominant thread of this cluster
+                    thread_counts: Dict[str, int] = {}
+                    for eid in cluster.member_event_ids:
+                        ev = event_lookup.get(eid)
+                        if ev:
+                            tg = _get_thread_group(ev)
+                            thread_counts[tg] = thread_counts.get(tg, 0) + 1
+                    dominant = (
+                        max(thread_counts, key=lambda t: thread_counts[t])
+                        if thread_counts
+                        else "__no_thread__"
+                    )
+                    candidate_clusters.append((cluster, dominant))
+
+        if not candidate_clusters:
+            return 0
+
+        rescued = 0
+        for oid in orphan_ids:
+            evt = event_lookup.get(oid)
+            if evt is None:
+                continue
+            evt_thread = _get_thread_group(evt)
+            ts = evt.timestamp
+
+            # Prefer same-thread cluster, fall back to any cluster
+            best_cluster = None
+            best_dist = float("inf")
+            best_same_thread = None
+            best_same_dist = float("inf")
+
+            for cluster, dominant_thread in candidate_clusters:
+                mid = (cluster.temporal_start + cluster.temporal_end) / 2
+                dist = abs(ts - mid)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_cluster = cluster
+                if dominant_thread == evt_thread and dist < best_same_dist:
+                    best_same_dist = dist
+                    best_same_thread = cluster
+
+            target = best_same_thread if best_same_thread is not None else best_cluster
+            if target is not None:
+                target.member_event_ids.append(oid)
+                rescued += 1
+
+        if rescued:
+            logger.info(
+                "R2: Post-purity rescue assigned %d/%d orphan events",
+                rescued,
+                len(orphan_ids),
+            )
+
+        return rescued
 
     def _build_episodes_from_clusters(
         self,
@@ -1361,6 +1558,14 @@ class R2EpisodicIntegrator:
         sentiments = [e.event.sentiment_score for e in cluster_events]
         dominant_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0.0
 
+        # Derive label from score (same thresholds as HDBSCAN + st_hipp_events)
+        if dominant_sentiment > 0.6:
+            dominant_sentiment_label = "positive"
+        elif dominant_sentiment < 0.4:
+            dominant_sentiment_label = "negative"
+        else:
+            dominant_sentiment_label = "neutral"
+
         # Extract dominant emotion from most common across events
         emotion_labels: List[str] = []
         for e in cluster_events:
@@ -1479,6 +1684,7 @@ class R2EpisodicIntegrator:
             centroid_embedding_id=None,  # Will be set by R6/R7 when persisted
             centroid_metadata=centroid_metadata,  # M4-RSCH-02: secondary centroids
             dominant_sentiment=dominant_sentiment,
+            dominant_sentiment_label=dominant_sentiment_label,
             dominant_emotion=dominant_emotion,
             aggregated_sentiment=aggregated_sentiment,
             aggregated_salience=aggregated_salience,
@@ -1584,25 +1790,16 @@ class R2EpisodicIntegrator:
         return f"Episode ({len(cluster_events)} events)"
 
     def _generate_episode_summary(self, cluster_events: List[EventAdapter]) -> str:
-        """Generate a summary from event texts."""
-        # Collect all event texts
-        texts = []
-        for e in cluster_events:
-            text = getattr(e.event, "text", "") or ""
-            if text:
-                texts.append(text.strip())
+        """Generate a structured-semantic summary from event texts.
 
-        if not texts:
-            return ""
-
-        # For now, concatenate first few events (proper LLM summarization TODO)
-        if len(texts) == 1:
-            return texts[0]
-        elif len(texts) <= 3:
-            return " | ".join(texts)
-        else:
-            # Show first 2 and last 1 with count
-            return f"{texts[0]} | {texts[1]} | ... ({len(texts)} events) | {texts[-1]}"
+        Uses WHO -- WHAT at WHERE: MMR-selected detail sentence.
+        Winner of 9-technique benchmark (composite 0.930, semantic 0.810).
+        """
+        return generate_episode_summary(
+            events=[e.event for e in cluster_events],
+            episode_location="",
+            episode_participants_json="[]",
+        )
 
     def _aggregate_context_fields(
         self, contexts: List["ObservationContext"]
@@ -1625,6 +1822,46 @@ class R2EpisodicIntegrator:
 
         return aggregated_sentiment, aggregated_salience, dominant_location, dominant_social_context
 
+    def _update_event_states_from_candidates(
+        self,
+        events: List["P03EventState"],
+        episode_candidates: List[EpisodeCandidate],
+        noise_ids: List[str],
+    ) -> None:
+        """
+        Update P03EventState with FINAL post-merge/split cluster assignments.
+
+        Uses episode_candidates (which reflect thread-purity, same-thread merge,
+        scene segmentation, and fragment absorption) instead of raw HDBSCAN results.
+        This ensures st_hipp_events.episode_cluster_id matches st_epi.episode_id.
+
+        Args:
+            events: Original event states to update
+            episode_candidates: Final episode candidates after all merges/splits
+            noise_ids: Event IDs marked as noise
+        """
+        assignments: Dict[str, tuple] = {}
+
+        for cand in episode_candidates:
+            cluster_id = cand.cluster_id
+            try:
+                label = int(cluster_id.split("_")[-1]) if "_" in cluster_id else 0
+            except ValueError:
+                label = 0
+            for event_id in cand.event_ids:
+                assignments[event_id] = (cluster_id, label)
+
+        for event in events:
+            if event.event_id in assignments:
+                cluster_id, label = assignments[event.event_id]
+                event.cluster_id = cluster_id
+                event.cluster_label = label
+                event.is_noise = False
+            elif event.event_id in noise_ids:
+                event.cluster_id = None
+                event.cluster_label = -1
+                event.is_noise = True
+
     def _update_event_states(
         self,
         events: List["P03EventState"],
@@ -1633,6 +1870,9 @@ class R2EpisodicIntegrator:
     ) -> None:
         """
         Update P03EventState with cluster assignments.
+
+        DEPRECATED: Use _update_event_states_from_candidates instead.
+        Kept for backward compatibility with tests.
 
         Args:
             events: Original event states to update

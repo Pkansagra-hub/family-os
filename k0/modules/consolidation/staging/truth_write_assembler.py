@@ -584,6 +584,7 @@ class TruthWriteAssembler:
                 json.dumps(sorted(cluster.entity_ids)) if cluster.entity_ids else None
             ),
             "dominant_sentiment": cluster.dominant_sentiment or None,
+            "dominant_sentiment_label": cluster.dominant_sentiment_label or None,
             "dominant_emotion": cluster.dominant_emotion or None,
             "aggregated_sentiment": cluster.aggregated_sentiment,
             "aggregated_salience": cluster.aggregated_salience,

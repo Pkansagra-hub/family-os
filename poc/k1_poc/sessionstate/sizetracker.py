@@ -119,7 +119,7 @@ class SectionBudget:
 # Source: k1/sessionstate/README.md Sections 5-6
 
 SECTION_BUDGETS: Dict[str, SectionBudget] = {
-    # HOT CORE sections (48KB total)
+    # HOT CORE sections (52KB total, matches config hot_budget_bytes)
     "control": SectionBudget(
         name="control",
         tier=Tier.HOT,
@@ -165,7 +165,7 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
     "narrative_active": SectionBudget(
         name="narrative_active",
         tier=Tier.HOT,
-        max_bytes=8 * 1024,  # 8KB to reach 48KB HOT total
+        max_bytes=4 * 1024,  # 4KB (config: narrative_active)
         eviction_priority=9,
         can_migrate=True,
     ),
@@ -190,6 +190,13 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
         eviction_priority=3,  # Demotes to artifacts_warm
         can_migrate=True,
     ),
+    "temporal_context": SectionBudget(
+        name="temporal_context",
+        tier=Tier.HOT,
+        max_bytes=512,
+        eviction_priority=None,  # NEVER EVICT (computed, tiny)
+        can_migrate=False,
+    ),
     # WARM TIER sections (48KB total)
     "beliefs_history": SectionBudget(
         name="beliefs_history",
@@ -201,7 +208,7 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
     "history_recent": SectionBudget(
         name="history_recent",
         tier=Tier.WARM,
-        max_bytes=16 * 1024,
+        max_bytes=20 * 1024,  # 20KB (config: history_recent)
         eviction_priority=3,  # Summarize oldest, archive
         can_migrate=True,
     ),
@@ -215,7 +222,7 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
     "telemetry": SectionBudget(
         name="telemetry",
         tier=Tier.WARM,
-        max_bytes=4 * 1024,
+        max_bytes=8 * 1024,  # 8KB (config: telemetry)
         eviction_priority=1,  # FIRST to evict (lowest priority)
         can_migrate=True,
     ),

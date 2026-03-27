@@ -103,6 +103,10 @@ class HDBSCANParams:
     max_temporal_gap_hours: float = 4.0
     allow_single_cluster: bool = False
 
+    # Final sweep: force-assign ALL remaining noise to nearest cluster.
+    # Default False at algorithm level; R2Config enables for production.
+    rescue_all_noise: bool = False
+
     @property
     def max_temporal_gap_ms(self) -> int:
         """Max temporal gap in milliseconds."""
@@ -163,6 +167,7 @@ class HDBSCANParams:
             "rescue_score_threshold": self.rescue_score_threshold,
             "temporal_weight": self.temporal_weight,
             "max_temporal_gap_hours": self.max_temporal_gap_hours,
+            "rescue_all_noise": self.rescue_all_noise,
         }
 
 
@@ -413,6 +418,12 @@ class EpisodicHDBSCAN:
             events, labels, probabilities, outlier_scores, distances
         )
 
+        # Step 3b: Final sweep — force-assign remaining noise to nearest cluster
+        if self.params.rescue_all_noise:
+            labels, rescued_indices = self._rescue_remaining_noise(
+                events, labels, distances, rescued_indices
+            )
+
         # Step 4: Group events by cluster label
         label_to_events: Dict[int, List[Tuple[int, ClusterableEvent]]] = {}
         for idx, label in enumerate(labels):
@@ -614,6 +625,63 @@ class EpisodicHDBSCAN:
 
         return labels, sorted(rescued_indices)
 
+    def _rescue_remaining_noise(
+        self,
+        events: Sequence[ClusterableEvent],
+        labels: List[int],
+        distances: np.ndarray,
+        already_rescued: set[int] | list[int],
+    ) -> Tuple[List[int], set[int]]:
+        """Force-assign any remaining noise to nearest cluster.
+
+        Called after the threshold-gated rescue pass. Events still labeled -1
+        are assigned to their nearest non-noise neighbor's cluster. If no
+        clusters exist at all, a single catch-all cluster is created.
+
+        Returns:
+            Tuple of (updated labels, updated rescued indices set)
+        """
+        labels = list(labels)
+        rescued = (
+            set(already_rescued) if not isinstance(already_rescued, set) else set(already_rescued)
+        )
+        remaining_noise = [i for i in range(len(labels)) if labels[i] == -1]
+
+        if not remaining_noise:
+            return labels, rescued
+
+        # Check if any clusters exist to assign to
+        has_clusters = any(lbl >= 0 for lbl in labels)
+
+        if has_clusters:
+            for idx in remaining_noise:
+                best_cluster = -1
+                best_dist = float("inf")
+                for j in range(len(labels)):
+                    if labels[j] >= 0 and distances[idx, j] < best_dist:
+                        best_dist = distances[idx, j]
+                        best_cluster = labels[j]
+                if best_cluster >= 0:
+                    labels[idx] = best_cluster
+                    rescued.add(idx)
+        else:
+            # No clusters at all: create one catch-all cluster
+            new_id = 0
+            for idx in remaining_noise:
+                labels[idx] = new_id
+                rescued.add(idx)
+
+        final_noise = sum(1 for lbl in labels if lbl == -1)
+        if len(remaining_noise) > 0:
+            logger.info(
+                "Noise final sweep: rescued %d/%d remaining noise events (residual noise=%d)",
+                len(remaining_noise) - final_noise,
+                len(remaining_noise),
+                final_noise,
+            )
+
+        return labels, rescued
+
     # -------------------------------------------------------------------------
     # Context-Aware Rescue Helpers (Epic 3.4.2)
     # -------------------------------------------------------------------------
@@ -794,6 +862,14 @@ class EpisodicHDBSCAN:
             sentiments = [getattr(e, "sentiment_score", 0.0) for e in events]
             dominant_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0.0
 
+        # Derive label from score (same thresholds as st_hipp_events.sentiment_label)
+        if dominant_sentiment > 0.6:
+            dominant_sentiment_label = "positive"
+        elif dominant_sentiment < 0.4:
+            dominant_sentiment_label = "negative"
+        else:
+            dominant_sentiment_label = "neutral"
+
         # Average membership probability (cluster strength indicator)
         avg_probability = sum(probabilities) / len(probabilities) if probabilities else 0.0
 
@@ -804,6 +880,7 @@ class EpisodicHDBSCAN:
             cluster_id=cluster_id,
             member_event_ids=[e.event_id for e in events],
             dominant_sentiment=dominant_sentiment,
+            dominant_sentiment_label=dominant_sentiment_label,
             temporal_start=temporal_start,
             temporal_end=temporal_end,
             cohesion_score=cohesion * avg_probability,  # Weight by membership strength

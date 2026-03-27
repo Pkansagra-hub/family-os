@@ -65,6 +65,9 @@ class SceneSegmentationConfig:
     context_gap_hours: float = 2.0
     """Gap + place change = scene break when gap >= this."""
 
+    max_scene_duration_ms: int = 12 * 3_600_000
+    """Hard duration cap (ms). Episodes exceeding this are segmented even if event count is low."""
+
 
 # ---------------------------------------------------------------------------
 # Internal types
@@ -285,8 +288,12 @@ def segment_episodes(
             new_clusters.append(cluster)
             continue
 
-        # Skip small episodes
-        if len(member_ids) <= config.max_scene_events:
+        # Skip small episodes that are also within duration cap
+        episode_duration_ms = cluster.temporal_end - cluster.temporal_start
+        if (
+            len(member_ids) <= config.max_scene_events
+            and episode_duration_ms <= config.max_scene_duration_ms
+        ):
             new_candidates.append(cand)
             new_clusters.append(cluster)
             continue

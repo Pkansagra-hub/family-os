@@ -1601,9 +1601,16 @@ class ConciergeController:
                 last.metadata.update(result.to_metadata())
         self._turn_lock.release()
 
+        # Enrich envelope with arbiter metadata + interrupt origin marker
+        # so determine_mode() can detect the interrupt even though
+        # INTERRUPT_HANDLING is a transient state (already DISPATCHING by
+        # the time Front reads SS).
+        arbiter_result.routing_metadata["interrupt_origin"] = True
+        enriched = self._enrich_envelope_with_arbiter(envelope, arbiter_result)
+
         # Deliver to Front via FrontLock (Phase 1 done, skip _run_phase1)
-        if self._front_lock.try_deliver(envelope):
-            self._deliver_to_front(envelope)
+        if self._front_lock.try_deliver(enriched):
+            self._deliver_to_front(enriched)
 
     # ------------------------------------------------------------------
     # M10 E10.2: Phase 1 -> SessionState three-section write helper

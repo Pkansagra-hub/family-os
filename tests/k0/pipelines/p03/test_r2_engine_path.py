@@ -471,8 +471,8 @@ class TestR2ConfigEngineFlags:
         from k0.pipelines.p03.phases.r2_episodic_integrator import R2Config
 
         cfg = R2Config()
-        assert cfg.enable_engine_reinforce is False
-        assert cfg.enable_engine_extend is False
+        assert cfg.enable_engine_reinforce is True
+        assert cfg.enable_engine_extend is True
         assert cfg.engine_dual_path_enabled is False
         assert cfg.engine_dual_path_log_divergences is True
 

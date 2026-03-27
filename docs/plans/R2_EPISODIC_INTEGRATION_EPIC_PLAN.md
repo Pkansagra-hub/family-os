@@ -6716,15 +6716,6 @@ counts, and version chain depth.
 
 ---
 
-
-
-
-
-
-
-
-
-
 Created 5 todos
 
 Let me first find the milestone boundaries in the epic plan and read the research document.
@@ -6986,6 +6977,7 @@ run(envelope, ctx)
 ### HOOK 1: Replace `_match_events_to_existing_episodes` (Pre-Clustering REINFORCE)
 
 **Current code** (r2_episodic_integrator.py):
+
 - Iterates every event against every existing episode
 - Direct `_cosine_similarity(event_embedding, ep_embedding)`
 - Hardcoded `episode_reinforce_threshold = 0.85`
@@ -6993,12 +6985,14 @@ run(envelope, ctx)
 - Removes matched events from the clustering pipeline (they skip HDBSCAN)
 
 **Problems with current approach:**
+
 1. Bespoke cosine similarity inline - duplicates logic that lives in ReconciliationEngine
 2. No Tier 1 K1 signal check - ignores `correction_signal` / `contradiction_signal` on P03EventState
 3. Uses `struct.unpack` for vector decoding (r2_episodic_integrator.py) - latent bug since pgvector returns strings
 4. No observability (no ReconciliationDecision audit trail)
 
 **Proposed replacement:**
+
 ```
 universal_engine.decide_episode_match(
     candidate_embedding = event.embedding_768,
@@ -7008,9 +7002,11 @@ universal_engine.decide_episode_match(
     k1_signals = { correction_signal, contradiction_signal }
 )
 ```
+
 The engine returns `ReconciliationDecision` with action = REINFORCE / EXTEND / EVOLVE / CONTRADICT / CREATE. Only REINFORCE events get pulled out of the clustering pipeline. EVOLVE/CONTRADICT events also get pulled (they should NOT cluster with novel events - they need K1-directed handling).
 
 **What changes in the `run()` method:**
+
 - Step 2 calls `universal_engine.decide_batch()` instead of `_match_events_to_existing_episodes()`
 - Events with action in {REINFORCE, EVOLVE, CONTRADICT} are removed from clustering
 - Events with EXTEND stay in pipeline (they need cluster context first)
@@ -7021,18 +7017,21 @@ The engine returns `ReconciliationDecision` with action = REINFORCE / EXTEND / E
 ### HOOK 2: Replace `CrossBatchExtendMatcher.match()` (Post-Clustering EXTEND)
 
 **Current code** (r2_episodic_integrator.py + cross_batch_extend.py):
+
 - Separate matcher class with its own config (`centroid_sim_threshold=0.60`, `require_same_thread=True`, `max_temporal_gap_ms=7 days`)
 - Compares `EpisodeCandidate.centroid_embedding` vs existing episode embedding
 - Sets `cand.reconciliation_action = "EXTEND"` (raw **string**, not enum - inconsistency!)
 - Sets `cand.extend_target_episode_id`, `cand.extend_similarity`
 
 **Problems with current approach:**
+
 1. Type inconsistency: REINFORCE uses `ReconciliationAction` enum, EXTEND uses raw string `"EXTEND"`
 2. Separate threshold config - not governed by a unified layer spec
 3. Thread requirement is hardcoded in matcher, not in identity strategy
 4. No EVOLVE/CONTRADICT path for clusters (only events get K1 routing)
 
 **Proposed replacement:**
+
 ```
 for each EpisodeCandidate:
     decision = universal_engine.decide_episode_match(
@@ -7046,12 +7045,15 @@ for each EpisodeCandidate:
         }
     )
 ```
+
 The EpisodicIdentityStrategy encapsulates:
+
 - Thread match requirement (currently `require_same_thread=True`)
 - Temporal gap check (currently `max_temporal_gap_ms=7 days`)
 - Cosine similarity thresholds (from TruthLayerSpec, not hardcoded)
 
 **What changes:**
+
 - `CrossBatchExtendMatcher` gets replaced by a single engine call per candidate
 - `EpisodeCandidate.reconciliation_action` uses the enum (not string)
 - The engine applies the two-tier model: check K1 signals first, then similarity thresholds
@@ -7061,6 +7063,7 @@ The EpisodicIdentityStrategy encapsulates:
 ### HOOK 3: Bridge R2 Output to R3/R6 (New Reconciliation Summary)
 
 **Current data flow gap:**
+
 - R2 produces `List[EpisodeCluster]` (no reconciliation fields on clusters)
 - R2 stamps `episode_match_id` on P03EventState (for REINFORCE events only)
 - R3's `ReconciliationEngine` independently decides per-event against ALL truth layers (not just st_epi)
@@ -7205,3 +7208,23 @@ That's the complete analysis. The three hook points are:
 3. **Bridge R2 decisions to R3** — eliminate the dual-decision-path conflict where R2 and R3 independently decide against st_epi
 
 The critical logical fix is that today R2 and R3 make **independent, potentially conflicting** st_epi decisions. The universal engine creates a single decision surface where R2 owns st_epi decisions and R3 owns the remaining 4 layers, both through the same engine interface.
+
+
+4 Bugs Found
+BUG 1: dominant_sentiment = raw float, not label
+Where: episodic_hdbscan.py ~L855 averages sentiment_score floats
+Stored: 0.6491875 instead of "positive"
+Fix: Classify averaged score → label (>0.6 = positive, 0.4-0.6 = neutral, <0.4 = negative), or use MODE of event labels
+BUG 2: episode_summary = template garbage
+Where: r2_episodic_integrator.py ~L1780
+Result: "Routine with Dad, Mom, person_dad at Home Office" × 9 copies
+Pattern: {activity_type} with {participants} at {location} — no actual summarization
+Fix: Use TextRank (already exists at consolidation/algorithms/text_generators/textrank.py) or LLM
+BUG 3: No duration cap — episodes span 81 hours
+Where: truth_write_assembler.py ~L513 computes (end - start) / 60000 with no cap
+Config: episode_splitter.py L95 has hard_episode_span_minutes = 1080 (18h) but it's not enforced
+Fix: Enforce the 18h hard split in EpisodeSplitter, cap in TruthWriteAssembler
+BUG 4: NIGHT bucket = 57% of episodes
+Where: temporal_profile.py L85 — NIGHT spans 22:00→06:00 (8 hours vs 5-6 for others)
+Root cause: Unequal bucket sizes + the conversation_anchor_ms timestamps likely use a timezone offset that pushes daytime events into the NIGHT window
+Fix: Rebalance buckets to equal 6h spans, verify timezone handling

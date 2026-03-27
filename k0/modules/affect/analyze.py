@@ -839,173 +839,10 @@ def ultrabert_classify(text: str) -> AffectAnnotation | None:
             _metrics["ultrabert_unavailable"] += 1
             return None
 
-        # ============================================================================
-        # PSYCHOLOGICALLY-GROUNDED VALENCE/AROUSAL CALCULATION FROM EMOTIONS
-        # ============================================================================
-        # Based on Russell's Circumplex Model, affective neuroscience, and emotion research
-        # Maps 44 UltraBERT emotions to continuous valence/arousal dimensions
-
-        # Emotion → Valence mapping (0-1 scale, negative to positive)
-        # Based on psychological valence ratings from Warriner et al. (2013) ANEW, Stevenson et al. (2007)
-        emotion_valence_map = {
-            # Core emotions
-            "joy": 0.85,
-            "sadness": 0.15,
-            "anger": 0.20,
-            "fear": 0.25,
-            "surprise": 0.60,
-            "love": 0.90,
-            "disgust": 0.20,
-            "neutral": 0.50,
-            # Positive emotions (high valence)
-            "admiration": 0.80,
-            "amusement": 0.85,
-            "approval": 0.75,
-            "caring": 0.80,
-            "excitement": 0.85,
-            "gratitude": 0.85,
-            "optimism": 0.80,
-            "pride": 0.85,
-            "relief": 0.75,
-            "contentment": 0.75,
-            "hope": 0.75,
-            "tenderness": 0.80,
-            # Negative emotions (low valence)
-            "annoyance": 0.25,
-            "disappointment": 0.20,
-            "disapproval": 0.25,
-            "embarrassment": 0.30,
-            "grief": 0.10,
-            "nervousness": 0.35,
-            "remorse": 0.20,
-            "frustration": 0.25,
-            "overwhelmed": 0.30,
-            "emptiness": 0.15,
-            # Family-specific emotions (psychologically calibrated)
-            "nostalgia": 0.65,
-            "protectiveness": 0.70,
-            "togetherness": 0.80,
-            "longing": 0.40,
-            "warmth": 0.75,
-            "playfulness": 0.80,
-            "celebration": 0.90,
-            "belonging": 0.75,
-            "parental_pride": 0.90,
-            "parental_guilt": 0.25,
-            "patience": 0.60,
-            "worry": 0.35,
-            "bittersweet": 0.50,
-            "homesickness": 0.30,
-        }
-
-        # Emotion → Arousal mapping (0-1 scale, calm to excited)
-        # Based on Bradley & Lang (1999) IAPS arousal norms, Russell (1980) circumplex
-        emotion_arousal_map = {
-            # Core emotions
-            "joy": 0.75,
-            "sadness": 0.35,
-            "anger": 0.85,
-            "fear": 0.90,
-            "surprise": 0.80,
-            "love": 0.70,
-            "disgust": 0.60,
-            "neutral": 0.20,
-            # High arousal positive
-            "admiration": 0.65,
-            "amusement": 0.75,
-            "approval": 0.55,
-            "caring": 0.60,
-            "excitement": 0.90,
-            "gratitude": 0.65,
-            "optimism": 0.70,
-            "pride": 0.75,
-            "relief": 0.60,
-            # Moderate arousal positive
-            "contentment": 0.40,
-            "hope": 0.55,
-            "tenderness": 0.50,
-            # High arousal negative
-            "annoyance": 0.70,
-            "disappointment": 0.60,
-            "disapproval": 0.65,
-            "embarrassment": 0.75,
-            "grief": 0.55,
-            "nervousness": 0.80,
-            "remorse": 0.60,
-            "frustration": 0.75,
-            "overwhelmed": 0.85,
-            "emptiness": 0.30,
-            # Low arousal negative/family
-            "longing": 0.45,
-            "worry": 0.65,
-            "bittersweet": 0.50,
-            "homesickness": 0.55,
-            # Moderate arousal family
-            "nostalgia": 0.50,
-            "protectiveness": 0.60,
-            "togetherness": 0.55,
-            "warmth": 0.50,
-            "playfulness": 0.70,
-            "celebration": 0.80,
-            "belonging": 0.45,
-            "parental_pride": 0.70,
-            "parental_guilt": 0.60,
-            "patience": 0.35,
-        }
-
-        # Calculate valence and arousal from detected emotions
-        if result.dominant_emotions and len(result.dominant_emotions) > 0:
-            # Weight emotions by their confidence/probability (assume equal if not provided)
-            valence_sum = 0.0
-            arousal_sum = 0.0
-            emotion_count = 0
-
-            for emotion in result.dominant_emotions:
-                emotion_lower = emotion.lower()
-                if emotion_lower in emotion_valence_map:
-                    valence_sum += emotion_valence_map[emotion_lower]
-                    arousal_sum += emotion_arousal_map.get(emotion_lower, 0.5)
-                    emotion_count += 1
-
-            if emotion_count > 0:
-                # Weighted average of emotion valences/arousals
-                valence = valence_sum / emotion_count
-                arousal = arousal_sum / emotion_count
-
-                # Add small variance based on emotion diversity (mixed emotions = moderate values)
-                if emotion_count > 1:
-                    # Calculate emotional variance (psychological complexity indicator)
-                    valence_variance = (
-                        sum(
-                            (emotion_valence_map.get(e.lower(), 0.5) - valence) ** 2
-                            for e in result.dominant_emotions
-                        )
-                        / emotion_count
-                    )
-                    arousal_variance = (
-                        sum(
-                            (emotion_arousal_map.get(e.lower(), 0.5) - arousal) ** 2
-                            for e in result.dominant_emotions
-                        )
-                        / emotion_count
-                    )
-
-                    # High variance (mixed emotions) → moderate valence/arousal
-                    complexity_factor = min(0.3, (valence_variance + arousal_variance) * 0.5)
-                    valence = valence * (1 - complexity_factor) + 0.5 * complexity_factor
-                    arousal = arousal * (1 - complexity_factor) + 0.5 * complexity_factor
-            else:
-                # Fallback to neutral if no recognized emotions
-                valence = 0.5
-                arousal = 0.3
-        else:
-            # No emotions detected, use neutral baseline
-            valence = 0.5
-            arousal = 0.3
-
-        # Clamp to valid ranges
-        valence = max(0.0, min(1.0, valence))
-        arousal = max(0.0, min(1.0, arousal))
+        # Use UltraBERT's direct valence/arousal output (well-calibrated from the model)
+        # instead of lossy recalculation from emotion labels.
+        valence = max(0.0, min(1.0, result.valence))
+        arousal = max(0.0, min(1.0, result.arousal))
 
         # Update band metrics
         if result.affect_band == "GREEN":
@@ -1024,7 +861,7 @@ def ultrabert_classify(text: str) -> AffectAnnotation | None:
             model_version=result.model_version,
             tier="ULTRABERT",
             confidence=result.confidence,
-            raw_compound=None,  # Not applicable for UltraBERT
+            raw_compound=None,
             raw_pos=None,
             raw_neg=None,
             raw_neu=None,
@@ -1283,18 +1120,57 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     )
 
     # ====================================================================
-    # TRUST-THEN-FILL WATERFALL
+    # ULTRABERT-FIRST WATERFALL
+    # UltraBERT is the primary classifier. MW v2 affect is supplementary
+    # (provides dominance, the 3rd VAD dimension UltraBERT lacks).
+    # MW valence/arousal are NOT trusted because LLM-generated affect
+    # has systematic negative bias (~0.30 mean on neutral/positive text).
     # ====================================================================
     annotation: AffectAnnotation | None = None
+    mw_affect = _extract_mw_affect(body)
 
     # ------------------------------------------------------------------
-    # TIER 0: MW v2 affect passthrough (~85% of envelopes, <10ms)
+    # TIER 0: Full UltraBERT inference (primary, <70ms)
     # ------------------------------------------------------------------
-    mw_affect = _extract_mw_affect(body)
-    if mw_affect is not None:
+    _metrics["ultrabert_calls"] += 1
+    ub_result = ultrabert_classify(text)
+    if ub_result is not None:
+        # Use MW dominance if available (UltraBERT does not produce it)
+        mw_dominance = mw_affect["dominance"] if mw_affect else None
+
+        annotation = AffectAnnotation(
+            valence=ub_result.valence,
+            arousal=ub_result.arousal,
+            dominant_emotions=ub_result.dominant_emotions,
+            affect_band=ub_result.affect_band,
+            band_reasons=ub_result.band_reasons,
+            model_version=ub_result.model_version,
+            tier=ub_result.tier,
+            confidence=ub_result.confidence,
+            raw_compound=ub_result.raw_compound,
+            raw_pos=ub_result.raw_pos,
+            raw_neg=ub_result.raw_neg,
+            raw_neu=ub_result.raw_neu,
+            dominance=mw_dominance,
+            affect_source="ultrabert",
+        )
+        context.logger.debug(
+            "Tier 0: UltraBERT primary classification",
+            extra={
+                "module_id": "affect.analyze",
+                "trace_id": message.trace_id,
+                "ub_valence": ub_result.valence,
+                "mw_valence": mw_affect["valence"] if mw_affect else None,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # TIER 1: MW v2 affect fallback (when UltraBERT unavailable)
+    # ------------------------------------------------------------------
+    if annotation is None and mw_affect is not None:
         _metrics["tier0_calls"] += 1
         context.logger.debug(
-            "Tier 0: MW v2 affect passthrough (fast path)",
+            "Tier 1: UltraBERT unavailable, MW v2 affect fallback",
             extra={
                 "module_id": "affect.analyze",
                 "trace_id": message.trace_id,
@@ -1302,7 +1178,6 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
             },
         )
 
-        # Compute affect band from MW valence
         affect_band, band_reasons = classify_affect_band(mw_affect["valence"], mw_affect["arousal"])
 
         annotation = AffectAnnotation(
@@ -1311,47 +1186,15 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
             dominant_emotions=mw_affect["dominant_emotions"],
             affect_band=affect_band,
             band_reasons=band_reasons,
-            model_version="mw_v2_passthrough",
+            model_version="mw_v2_fallback",
             tier="MW_V2",
-            confidence=0.9,  # High confidence in MW (full conversation context)
+            confidence=0.5,  # Lower confidence: MW has known negative bias
             dominance=mw_affect["dominance"],
             affect_source="mw_v2",
         )
 
     # ------------------------------------------------------------------
-    # TIER 1: Full UltraBERT inference (~10% of envelopes, <70ms)
-    # ------------------------------------------------------------------
-    if annotation is None:
-        context.logger.debug(
-            "Tier 1: MW affect absent/malformed, trying full UltraBERT",
-            extra={
-                "module_id": "affect.analyze",
-                "trace_id": message.trace_id,
-            },
-        )
-        _metrics["ultrabert_calls"] += 1
-
-        ub_result = ultrabert_classify(text)
-        if ub_result is not None:
-            annotation = AffectAnnotation(
-                valence=ub_result.valence,
-                arousal=ub_result.arousal,
-                dominant_emotions=ub_result.dominant_emotions,
-                affect_band=ub_result.affect_band,
-                band_reasons=ub_result.band_reasons,
-                model_version=ub_result.model_version,
-                tier=ub_result.tier,
-                confidence=ub_result.confidence,
-                raw_compound=ub_result.raw_compound,
-                raw_pos=ub_result.raw_pos,
-                raw_neg=ub_result.raw_neg,
-                raw_neu=ub_result.raw_neu,
-                dominance=None,  # UltraBERT does not produce dominance
-                affect_source="ultrabert",
-            )
-
-    # ------------------------------------------------------------------
-    # TIER 2: VADER fallback (~5% of envelopes, <20ms)
+    # TIER 2: VADER fallback (when both UltraBERT and MW unavailable)
     # ------------------------------------------------------------------
     if annotation is None:
         context.logger.debug(

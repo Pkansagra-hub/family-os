@@ -96,6 +96,7 @@ class EpisodeCluster:
     # M4-RSCH-02: Secondary centroid metadata (best_of_all MRR=0.9627)
     centroid_metadata: Optional[Dict[str, Any]] = None
     dominant_sentiment: float = 0.0
+    dominant_sentiment_label: str = ""  # "positive" / "negative" / "neutral"
     dominant_emotion: str = ""
     aggregated_sentiment: Optional[float] = None
     aggregated_salience: Optional[float] = None

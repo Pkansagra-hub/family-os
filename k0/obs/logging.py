@@ -181,9 +181,7 @@ class StructuredLogFormatter(logging.Formatter):
                     keys.add(lowered)
         self._sensitive_keys = keys
 
-    def format(
-        self, record: logging.LogRecord
-    ) -> str:  # noqa: D401 - docstring inherited
+    def format(self, record: logging.LogRecord) -> str:  # noqa: D401 - docstring inherited
         timestamp = datetime.now(tz=timezone.utc).isoformat()
         message = record.getMessage()
         payload: dict[str, Any] = {
@@ -197,9 +195,7 @@ class StructuredLogFormatter(logging.Formatter):
         if trace_id:
             payload["cognitive_trace_id"] = str(trace_id)
 
-        span_id = getattr(record, "otelSpanID", None) or getattr(
-            record, "span_id", None
-        )
+        span_id = getattr(record, "otelSpanID", None) or getattr(record, "span_id", None)
         if span_id:
             payload["span_id"] = str(span_id)
 
@@ -290,6 +286,16 @@ def configure_structured_logging(
             logger = logging.getLogger(logger_name)
             logger.handlers.clear()
             logger.propagate = True
+
+        # Completely disable high-volume operational loggers
+        for noisy in (
+            "uvicorn.access",
+            "k0.drivers.sse_outbox_driver",
+            "k0.policy.pep_syscall",
+        ):
+            lg = logging.getLogger(noisy)
+            lg.setLevel(logging.CRITICAL + 1)
+            lg.propagate = False
 
         markdown_logger = logging.getLogger("markdown_it")
         markdown_logger.handlers.clear()

@@ -567,11 +567,24 @@ async def run(message: any, context: any, **config: any) -> dict:
         # Extract inputs from envelope
         event_data = envelope.get("event", {})
 
-        # Social context (may be None if not set)
-        social_context = event_data.get("social_context")
+        # Social context: M07 outputs at envelope top-level, fallback to event.social_context
+        social_context = envelope.get("social_context") or event_data.get("social_context")
 
-        # Affect intensity from M04 (may be None if M04 failed)
-        affect_intensity = envelope.get("affect_intensity")
+        # Affect intensity: Derive from M04 affect_valence + affect_arousal
+        # M04 outputs affect_valence (0-1) and affect_arousal (0-1), not affect_intensity.
+        # Combine them: intensity = distance from neutral valence + arousal contribution
+        # Formula: |valence - 0.5| * 2 gives emotional polarity strength (0-1)
+        #          arousal gives emotional activation (0-1)
+        #          affect_intensity = 0.5 * polarity + 0.5 * arousal
+        affect_valence = envelope.get("affect_valence")
+        affect_arousal = envelope.get("affect_arousal")
+        if affect_valence is not None and affect_arousal is not None:
+            polarity_strength = abs(affect_valence - 0.5) * 2.0  # 0-1
+            affect_intensity = 0.5 * polarity_strength + 0.5 * affect_arousal
+        elif affect_valence is not None:
+            affect_intensity = abs(affect_valence - 0.5) * 2.0
+        else:
+            affect_intensity = envelope.get("affect_intensity")  # Legacy fallback
 
         # Event timestamp (required) - check both event.event_time_utc and top-level event_time_utc
         # (temporal_profile module sets event_time_utc at top level as integer Unix timestamp)

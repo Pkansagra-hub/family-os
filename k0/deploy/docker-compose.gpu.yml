@@ -82,6 +82,10 @@ services:
       - ./secrets:/secrets:ro
       # Mount modeling_studio for PyTorch UltraBERT backend
       - D:/Modeling_studio/src:/app/modeling_studio:ro
+      # UltraBERT pre-cached weights (avoids runtime HuggingFace download)
+      # Host cache: ~/.cache/familyos_ultrabert/encoder/v2/fp32/ (~967MB)
+      # Container runs as root (user: 0:0) so Path.home() = /root
+      - ~/.cache/familyos_ultrabert:/root/.cache/familyos_ultrabert:ro
       # PEP Schema (core policy enforcement schema)
       - type: bind
         source: ../contracts/policy/pep.schema.json

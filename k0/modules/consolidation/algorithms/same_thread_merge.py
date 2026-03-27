@@ -91,6 +91,7 @@ class SameThreadMergeConfig:
     centroid_sim_threshold: float = 0.70
     max_temporal_gap_ms: int = 14_400_000  # 4 hours in milliseconds
     purity_threshold: float = 0.80  # Minimum thread purity to be eligible for merge
+    max_merged_duration_ms: int = 18 * 3_600_000  # 18h cap on merged episode span
 
 
 # =============================================================================
@@ -323,6 +324,12 @@ class SameThreadMerger:
 
                 # Compute temporal bounds for merged cluster
                 ts_start, ts_end = _temporal_bounds(all_event_ids, event_lookup)
+
+                # Duration guard: if merged span exceeds cap, skip merge
+                if (ts_end - ts_start) > self.config.max_merged_duration_ms:
+                    for m in members:
+                        result.append(multi_event[m])
+                    continue
 
                 merged_id = f"merged-{multi_event[root].cluster_id[:20]}-{uuid.uuid4().hex[:6]}"
                 merged_cluster = EpisodeCluster(

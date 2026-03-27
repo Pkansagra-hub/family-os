@@ -68,7 +68,7 @@ def sample_temporal_output() -> dict:
     """Sample temporal head output."""
     return {
         "entities": [
-            {"text": "Sunday", "label": "DATE_REL", "start_token": 11, "end_token": 12},
+            {"text": "last Friday", "label": "DATE_REL", "start_token": 11, "end_token": 12},
             {"text": "8:00 AM", "label": "TIME", "start_token": 14, "end_token": 15},
         ]
     }
@@ -112,7 +112,7 @@ class TestLabelMapping:
         """DATE_REL label maps to TEMPORAL with priority 0.90."""
         temporal = {
             "entities": [
-                {"text": "yesterday", "label": "DATE_REL", "start_token": 0, "end_token": 0}
+                {"text": "last week", "label": "DATE_REL", "start_token": 0, "end_token": 0}
             ]
         }
 
@@ -645,7 +645,7 @@ class TestFullResultExtraction:
             },
             "temporal": {
                 "entities": [
-                    {"text": "yesterday", "label": "DATE_REL", "start_token": 0, "end_token": 0}
+                    {"text": "last week", "label": "DATE_REL", "start_token": 0, "end_token": 0}
                 ]
             },
         }
@@ -673,7 +673,7 @@ class TestFullResultExtraction:
             {"text": "Costco", "label": "ORG", "start_token": 0, "end_token": 0}
         ]
         mock_result.temporal = [
-            {"text": "yesterday", "label": "DATE_REL", "start_token": 0, "end_token": 0}
+            {"text": "last week", "label": "DATE_REL", "start_token": 0, "end_token": 0}
         ]
 
         entities = extractor.extract_from_full_result(mock_result)
@@ -717,8 +717,8 @@ class TestUniversalGarbageFiltering:
             "entities": [
                 # "was" is in GARBAGE_ENTITY_WORDS - should be filtered
                 {"text": "was", "label": "DATE", "start_token": 0, "end_token": 1},
-                # "yesterday" is valid - should pass
-                {"text": "yesterday", "label": "DATE_REL", "start_token": 2, "end_token": 3},
+                # "last week" is valid temporal - should pass
+                {"text": "last week", "label": "DATE_REL", "start_token": 2, "end_token": 3},
                 # "the" is in GARBAGE_ENTITY_WORDS - should be filtered
                 {"text": "the", "label": "TIME", "start_token": 4, "end_token": 5},
             ]
@@ -727,7 +727,7 @@ class TestUniversalGarbageFiltering:
         entities = extractor.extract_from_ultrabert(temporal_output=temporal)
 
         assert len(entities) == 1
-        assert entities[0].text == "yesterday"
+        assert entities[0].text == "last week"
 
     def test_garbage_words_filtered_from_trusted_ner_family(
         self, extractor: UltraBERTEntityExtractor
@@ -739,17 +739,17 @@ class TestUniversalGarbageFiltering:
                 {"text": "mom", "label": "KINSHIP", "start_token": 0, "end_token": 1},
                 # "the" even with KINSHIP label should be filtered (edge case)
                 {"text": "the", "label": "KINSHIP", "start_token": 2, "end_token": 3},
-                # "home" is valid HOME_LOC - should pass
-                {"text": "home", "label": "HOME_LOC", "start_token": 4, "end_token": 5},
+                # "our apartment" is valid HOME_LOC - should pass
+                {"text": "our apartment", "label": "HOME_LOC", "start_token": 4, "end_token": 5},
             ]
         }
 
         entities = extractor.extract_from_ultrabert(ner_family_output=ner_family)
 
-        # "the" should be filtered, "mom" and "home" should pass
+        # "the" should be filtered, "mom" and "our apartment" should pass
         assert len(entities) == 2
         texts = {e.text for e in entities}
-        assert texts == {"mom", "home"}
+        assert texts == {"mom", "our apartment"}
 
     def test_common_verbs_filtered_universally(self, extractor: UltraBERTEntityExtractor) -> None:
         """Common verbs in GARBAGE_ENTITY_WORDS filtered from all heads."""

@@ -153,7 +153,7 @@ class HILRequest:
                 f"Invalid hil_type '{self.hil_type}'. " f"Must be one of: {sorted(VALID_HIL_TYPES)}"
             )
         if self.timeout_ms <= 0:
-            self.timeout_ms = HIL_TIMEOUTS.get(self.hil_type, 60_000)
+            self.timeout_ms = int(_get_hil_timeouts().get(self.hil_type, 60.0) * 1000)
 
     @property
     def timeout_seconds(self) -> float:

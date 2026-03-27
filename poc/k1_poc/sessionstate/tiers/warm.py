@@ -52,12 +52,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional,
 
 from poc.k1_poc.config import get_config
 
-from ..sections import (
-    BeliefsHistorySection,
-    HistoryRecentSection,
-    PersonaSection,
-    TelemetrySection,
-)
+from ..sections import BeliefsHistorySection, HistoryRecentSection, PersonaSection, TelemetrySection
 
 if TYPE_CHECKING:
     from ..local_cold import LocalColdArchive
@@ -78,29 +73,33 @@ SECTION_BUDGETS: Dict[str, int] = {
     "beliefs_history": 12 * 1024,  # 12KB
     "history_recent": 20 * 1024,  # 20KB
     "persona": 8 * 1024,  # 8KB
+    "artifacts_warm": 8 * 1024,  # 8KB (config: artifacts_warm)
 }
 
 # Eviction order (first to evict first, by priority number)
 # Lower priority number = evict first
 EVICTION_ORDER: List[str] = [
     "telemetry",  # Priority 1 - first to evict
-    "beliefs_history",  # Priority 2
-    "history_recent",  # Priority 3
-    "persona",  # Priority 4 - last to evict
+    "artifacts_warm",  # Priority 2 - evict after telemetry
+    "beliefs_history",  # Priority 3
+    "history_recent",  # Priority 4
+    "persona",  # Priority 5 - last to evict
 ]
 
 # Eviction priorities (lower = evict first)
 EVICTION_PRIORITIES: Dict[str, int] = {
     "telemetry": 1,
-    "beliefs_history": 2,
-    "history_recent": 3,
-    "persona": 4,
+    "artifacts_warm": 2,
+    "beliefs_history": 3,
+    "history_recent": 4,
+    "persona": 5,
 }
 
 # Demotion acceptance mapping: HOT section -> WARM section
 DEMOTION_TARGETS: Dict[str, str] = {
     "beliefs_active": "beliefs_history",
     "history_active": "history_recent",
+    "task_artifacts": "artifacts_warm",
 }
 
 # All WARM section names
@@ -109,6 +108,7 @@ WARM_SECTION_NAMES: List[str] = [
     "beliefs_history",
     "history_recent",
     "persona",
+    "artifacts_warm",
 ]
 
 

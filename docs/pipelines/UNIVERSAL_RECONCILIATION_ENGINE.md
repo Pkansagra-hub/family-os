@@ -7014,6 +7014,7 @@ DEFAULT_POLICIES: Dict[str, DecayPolicy] = {
 **Why per-layer policies matter**: A social relationship (st_social) and a prospective intention (st_prospective) should NOT share the same archive threshold. A relationship that hasn't been accessed in 6 months might still be valid ("Uncle Bob lives in Denver"), while an intention not accessed in 6 months is clearly stale ("plan to call dentist next week").
 
 **Policy resolution order**:
+
 1. Space-level override (config per space) -- if present, wins
 2. DEFAULT_POLICIES[layer] -- layer-specific defaults
 3. Global DecayConfig fallback -- existing behavior
@@ -7025,6 +7026,7 @@ DEFAULT_POLICIES: Dict[str, DecayPolicy] = {
 **File**: `k0/pipelines/p03/phases/r3_dedup_decay.py` (EDIT)
 
 Current code (lines ~1475-1500):
+
 ```python
 # R3.4: Retention evaluation
 retention_result = self._retention_enforcer.evaluate_batch(
@@ -7081,6 +7083,7 @@ if self._config.enable_decay_writes:
 ```
 
 **New R3Config field**:
+
 ```python
 @dataclass
 class R3Config:
@@ -7097,6 +7100,7 @@ class R3Config:
 Current: Only `_create_sem_archive()` exists. The ARCHIVE_ACTIONS check is hardcoded to st_sem.
 
 M9.9: WriteDecisionRouter (M9.5) already handles all layers generically. The fix is:
+
 1. In the M9.8 engine path: WriteDecisionRouter generates ARCHIVE/TOMBSTONE StagedWrites for ANY layer. No change needed beyond what M9.5 already provides.
 2. In the bespoke fallback path: Add `_create_layer_archive()` that works for any layer (not just st_sem).
 
@@ -7137,6 +7141,7 @@ R7 already handles ARCHIVE and TOMBSTONE operations generically (`_execute_archi
 **File**: `k0/modules/consolidation/staging/truth_query_service.py` (EDIT)
 
 Current DECAY_LAYERS (5 layers):
+
 ```python
 DECAY_LAYERS = {
     "st_epi": "episode_id",
@@ -7148,6 +7153,7 @@ DECAY_LAYERS = {
 ```
 
 M9.9 expands to 7 layers:
+
 ```python
 DECAY_LAYERS = {
     "st_epi": "episode_id",
@@ -7178,6 +7184,7 @@ No new migrations needed -- both tables already have the columns that `query_ent
 **File**: `k0/modules/consolidation/algorithms/decay_engine.py` (EDIT)
 
 Current `compute_effective_lambda()` (lines ~145-200):
+
 ```python
 def compute_effective_lambda(self, table_name, importance, confidence, obs_count, ...):
     base = LAYER_LAMBDAS.get(table_name, self.config.base_lambda)
@@ -7186,6 +7193,7 @@ def compute_effective_lambda(self, table_name, importance, confidence, obs_count
 ```
 
 M9.9 adds learned-lambda lookup:
+
 ```python
 def compute_effective_lambda(
     self,
@@ -7270,6 +7278,7 @@ This gives the reconciliation engine the ability to signal "this existing record
 **File**: `k0/contracts/modules/consolidation.decay_scorer.v1.yaml` (EDIT)
 
 Current (stale):
+
 ```yaml
 lambda: 0.05
 half-life: ~14 days
@@ -7279,6 +7288,7 @@ min_score: 0.01
 ```
 
 Updated to match actual implementation:
+
 ```yaml
 module: consolidation.decay_scorer
 version: v2
@@ -7515,6 +7525,7 @@ sweep_layer(layer_name, policy) -> LayerSweepResult:
 ```
 
 **Query for decay candidates** (SQL executed by sweep):
+
 ```sql
 SELECT {pk_column}, entity_type, last_observed_at, importance_score,
        confidence_score, observation_count, archival_status,
@@ -7567,6 +7578,7 @@ No additional deduplication logic needed.
 | `r3_learned_lambda_used` | counter | layer |
 
 **Structured log events**:
+
 - `prune_sweep_started`: sweep_id, layers, config
 - `prune_sweep_layer_complete`: sweep_id, layer, stats
 - `prune_sweep_complete`: sweep_id, totals, duration
@@ -7607,6 +7619,7 @@ M9.9 does NOT change the resurrection formula or triggers. The existing resurrec
 | R7 | Regret signal floods P21 | LOW | Too many PRUNE_REGRET signals | Regret detection has 14-day window + cosine threshold 0.85 |
 
 **Rollback procedure**:
+
 ```
 1. Set sweep.enabled = false (stops Path B immediately)
 2. Set enable_decay_writes = false in R3Config (stops Path A)

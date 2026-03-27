@@ -87,6 +87,7 @@ class CrossBatchExtendConfig:
     centroid_sim_threshold: float = 0.60
     require_same_thread: bool = True
     max_temporal_gap_ms: int = 7 * 24 * 3_600_000  # 7 days
+    max_episode_duration_ms: int = 24 * 3_600_000  # 24h hard cap on extended episode span
 
 
 # =============================================================================
@@ -261,6 +262,12 @@ class CrossBatchExtendMatcher:
                     max(candidate.temporal_start, ep_start) - min(candidate.temporal_end, ep_end),
                 )
                 if gap > self.config.max_temporal_gap_ms:
+                    continue
+
+                # Duration cap: reject if extended episode would exceed max duration
+                projected_start = min(candidate.temporal_start, ep_start)
+                projected_end = max(candidate.temporal_end, ep_end)
+                if (projected_end - projected_start) > self.config.max_episode_duration_ms:
                     continue
 
                 # Best match by similarity

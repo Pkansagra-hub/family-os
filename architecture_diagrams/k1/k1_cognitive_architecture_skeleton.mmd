@@ -279,21 +279,125 @@ flowchart TB
         %% For full Concierge internal architecture (Ports, Adapters, 9 Services,
         %% 21 Invariants, Lifecycle, Concurrency, Token Budget, Error Recovery)
         %% see: k1/concierge/concierge.mmd
+        %%
+        %% POC VALIDATED: poc/k1_poc/ (~92 files, full bus-driven dual-LLM architecture)
+        %% Key POC additions integrated below:
+        %%   - Dual-LLM Actor Model (Front Voice + Back Worker)
+        %%   - ReAct Loop Engine (shared react_loop for both actors)
+        %%   - 10 Prompt Modes with DynamicPromptBuilder
+        %%   - FrontLock concurrency gate
+        %%   - Arbiter-based interrupt classification (4 decisions)
+        %%   - Adaptive Weave Policy (M8) for async result delivery
+        %%   - HITL at L1 (3 shapes: clarification, approval, selection)
+        %%   - Task Model (TaskDispatch, TaskIntent, TaskComplete/Failed)
+        %%   - Tier degradation cascade (HIGH->MEDIUM->LOW->canned)
+        %%   - LLM Adapter architecture (IConciergeModelPort)
+        %%   - Idempotency + Dead Letter handling
 
         subgraph CONCIERGE_CORE["Concierge Core (FSM-Driven Conversation Conductor)"]
             direction TB
 
-            CONCIERGE_FSM["Concierge FSM<br/>State Machine Controller"]:::brain
+            CONCIERGE_FSM["Concierge FSM<br/>ConciergeController<br/>Event Router + State Machine<br/>19 bus topic subscriptions<br/>12 sub-component managers"]:::brain
 
-            subgraph FSM_CORE_LOOP["Core Loop States (Every Turn)"]
+            subgraph FSM_CORE_LOOP["Core Loop States (11 States)"]
                 LISTENING["LISTENING<br/>Waiting for User Input"]:::brain
-                ACKING["ACKING (Enhanced)<br/>Intent Classification + Gap Detection + Fast Validation"]:::brain
-                CLARIFYING["CLARIFYING<br/>Progressive Disclosure<br/>Minimal Questions"]:::brain
-                DISPATCHING["DISPATCHING<br/>Route: LOW→Fabric, MED/HIGH→Orchestrator"]:::brain
-                COMPANIONING["COMPANIONING<br/>Keep Conversation Moving"]:::brain
-                PROGRESSING["PROGRESSING<br/>Stream Deltas as Updates"]:::brain
-                DELIVERING["DELIVERING<br/>Final Results + Next Steps"]:::brain
-                INTERRUPT_HANDLING["INTERRUPT_HANDLING<br/>User Changes Topic"]:::brain
+                ACKING["ACKING (Phase 1)<br/>UltraBERT 22ms Classification<br/>+ Arbiter Routing Decision"]:::brain
+                CLARIFYING["CLARIFYING_USER<br/>Progressive Disclosure<br/>Minimal Questions"]:::brain
+                CLARIFYING_WORKER["CLARIFYING_WORKER<br/>Awaiting User HITL Answer<br/>Back Suspended"]:::brain
+                DISPATCHING["DISPATCHING<br/>Route: LOW→Back, MED→Orchestrator, HIGH→Planner"]:::brain
+                COMPANIONING["COMPANIONING<br/>Back Tasks Executing<br/>User Can Still Chat"]:::brain
+                PROGRESSING["PROGRESSING<br/>Tool Call Active on Back<br/>Stream Deltas as Updates"]:::brain
+                DELIVERING["DELIVERING<br/>Presenting Results to User<br/>Front in PRESENT Mode"]:::brain
+                WEAVING["WEAVING<br/>Batching Multiple Async Results<br/>500ms Window via WeaveBatcher"]:::brain
+                CANCELLING["CANCELLING<br/>Tasks Being Cancelled<br/>Arbiter CANCEL Decision"]:::brain
+                INTERRUPT_HANDLING["INTERRUPT_HANDLING<br/>User Changes Topic Mid-Task"]:::brain
+                PROACTIVE_WAKE["PROACTIVE_WAKE<br/>Result Arrived While LISTENING<br/>M8 Adaptive Delivery"]:::brain
+            end
+
+            subgraph DUAL_LLM_ACTORS["Dual-LLM Actor Model (POC Validated)"]
+                direction TB
+                %% CORE DESIGN: Two separate LLM minds, neither knows the other exists.
+                %% Session State is shared memory. Event Bus is communication channel.
+                FRONT_ACTOR["FRONT LLM (Voice)<br/>Warm, Empathetic, Family-Aware<br/>TALKS to User<br/>10 Tools: 1 Signal + 6 Cognitive + 2 Read + 1 Control<br/>Terminates: text WITHOUT tool calls"]:::actor_front
+                BACK_ACTOR["BACK LLM (Worker)<br/>Precise, Tool-Focused, No Personality<br/>EXECUTES Tasks<br/>6 Tools: 2 Read + 3 Action + 1 Control<br/>Terminates: submit_result() tool call"]:::actor_back
+                BACK_POOL["BackPool (M7)<br/>Pool Size: 3 workers<br/>Max Concurrent/Session: 2<br/>Lease TTL: 300s + Renewal<br/>Capacity-Aware Scheduling"]:::actor_back
+            end
+
+            subgraph REACT_LOOP_ENGINE["ReAct Loop Engine (Shared)"]
+                direction TB
+                %% Both Front and Back use identical react_loop() function.
+                %% Differences: termination condition, tool_choice on iter 0, budget.
+                REACT_LOOP["react_loop()<br/>Shared Thought-Action-Observation Engine<br/>Front: terminates on text-only response<br/>Back: terminates on submit_result() call"]:::engine
+                REACT_RESULT["ReactResult<br/>status: complete|suspended|cancelled|budget_exhausted<br/>text (Front) | data (Back)<br/>dispatched_tasks, tool_call_counts, iteration_durations"]:::engine
+                ITERATION_BUDGET["Iteration Budget (by Tier)<br/>LOW: 4-10 | MEDIUM: 8-14 | HIGH: 12-24<br/>Affect modulation: concerned +2, alert +3"]:::engine
+            end
+
+            subgraph PROMPT_MODE_SYSTEM["Prompt Mode Architecture (10 Modes)"]
+                direction TB
+                %% Each mode selects: tools, SS sections, prompt sections, examples, affect
+                DYNAMIC_PROMPT_BUILDER["DynamicPromptBuilder<br/>Mode-Driven Prompt Assembly<br/>Affect-Modulated Tone Blocks"]:::engine
+                MODE_STANDARD["STANDARD<br/>Normal Input"]:::prompt_mode
+                MODE_CLARIFY_ASK["CLARIFY_ASK<br/>Ambiguity Detected"]:::prompt_mode
+                MODE_CLARIFY_RESOLVE["CLARIFY_RESOLVE<br/>User Answered"]:::prompt_mode
+                MODE_HITL_RELAY["HITL_RELAY<br/>Back Suspended"]:::prompt_mode
+                MODE_HITL_RESOLVE["HITL_RESOLVE<br/>User Answered HITL"]:::prompt_mode
+                MODE_PRESENT["PRESENT<br/>Task Results Ready"]:::prompt_mode
+                MODE_WEAVE["WEAVE<br/>Async Results Mid-Conversation"]:::prompt_mode
+                MODE_CANCEL["CANCEL<br/>Confirming Cancellation"]:::prompt_mode
+                MODE_INTERRUPT["INTERRUPT<br/>New Input During Task"]:::prompt_mode
+                MODE_ERROR["ERROR<br/>Task Failed"]:::prompt_mode
+                AFFECT_COMPUTATION["Affect Band Computation<br/>Calm | Attentive | Concerned | Alert<br/>Modulates tone + iterations"]:::engine
+            end
+
+            subgraph CONCURRENCY_GATES["Concurrency & Ordering"]
+                direction TB
+                FRONT_LOCK["FrontLock<br/>Serializes Front LLM Delivery<br/>Max Queue Depth: 8<br/>Prevents Response Interleaving"]:::safety
+                TURN_LOCK["TurnLock<br/>Sequences Phase 1 Writes<br/>Before Front Reads"]:::safety
+                IDEMPOTENCY_LEDGER["Idempotency Ledger (LRU)<br/>Max: 500 Entries<br/>Prevents Cascade Re-Entry"]:::safety
+                DEAD_LETTER_HANDLER["Dead Letter Handler<br/>Invalid State Transitions<br/>Payload Parse Errors<br/>Overflow Events"]:::safety
+            end
+
+            subgraph ARBITER_SYSTEM["Conversation Arbiter (Interrupt Routing)"]
+                direction TB
+                %% When user input arrives during COMPANIONING/PROGRESSING
+                CONVERSATION_ARBITER["ConversationArbiter<br/>Classifies Interrupts Into 4 Decisions"]:::brain
+                ARBITER_CANCEL["CANCEL<br/>Stop Running Task<br/>Set Cancel Flags"]:::brain
+                ARBITER_MODIFY["MODIFY_INFLIGHT<br/>Change Task Parameters<br/>Inject Into Back Messages"]:::brain
+                ARBITER_DEFER["DEFER<br/>Acknowledge But Ignore<br/>No LLM Call"]:::brain
+                ARBITER_PARALLEL["PARALLEL_NEW<br/>Start New Task<br/>Alongside Existing"]:::brain
+            end
+
+            subgraph HITL_PROTOCOL["HITL Protocol at L1 (POC Validated)"]
+                direction TB
+                %% Three HITL shapes with safety bands and timeouts
+                HITL_MANAGER["HITL Manager<br/>Suspension + Resume + Timeout<br/>Crash Recovery on Startup"]:::hil
+                HITL_CLARIFICATION["Clarification Shape<br/>Ask User a Question<br/>Timeout: 60s"]:::hil
+                HITL_APPROVAL["Approval Shape<br/>Confirm Side Effects<br/>Timeout: 120s, Band: AMBER"]:::hil
+                HITL_SELECTION["Selection Shape<br/>Choose From Options<br/>Timeout: 90s"]:::hil
+                HITL_SUBTASK["HILSubTask<br/>Stores react_snapshot<br/>For Zero-Waste Resume"]:::hil
+                HITL_MULTI_DEVICE_DEDUP["Multi-Device Dedup<br/>First Response Wins<br/>Duplicates Dropped"]:::safety
+            end
+
+            subgraph WEAVE_SYSTEM["Adaptive Weave Policy (M8)"]
+                direction TB
+                %% Replaces static state-based routing with adaptive signal-driven decisions
+                WEAVE_POLICY["WeavePolicy<br/>Signal-Driven Decision Engine"]:::engine
+                WEAVE_BATCHER["WeaveBatcher<br/>500ms Batch Window<br/>Collects Multiple Results"]:::engine
+                WEAVE_SIGNAL["WeaveSignal<br/>pool_utilization, user_typing,<br/>user_idle_ms, hitl_pending,<br/>pending_results_count"]:::engine
+                WEAVE_IMMEDIATE["IMMEDIATE<br/>Deliver Now, 0ms"]:::weave_decision
+                WEAVE_BATCH["BATCH<br/>Dynamic Window 50-500ms"]:::weave_decision
+                WEAVE_DEFER["DEFER<br/>Re-Evaluate Next Input"]:::weave_decision
+                WEAVE_DIGEST["DIGEST<br/>Compress Into Summary"]:::weave_decision
+                WEAVE_SUPPRESS["SUPPRESS<br/>Discard Per Policy"]:::weave_decision
+            end
+
+            subgraph TASK_MODEL["Task Orchestration Model"]
+                direction TB
+                TASK_INTENT["TaskIntent<br/>action, params, domain, urgency"]:::engine
+                TASK_DISPATCH["TaskDispatch<br/>intents[], tier, task_id, budget_hint,<br/>reference_context, safety_band"]:::engine
+                TASK_COMPLETE["TaskComplete<br/>final_answer, results[], artifacts[],<br/>tool_calls count"]:::engine
+                TASK_FAILED["TaskFailed<br/>reason, error_code,<br/>partial_results, retries"]:::engine
+                TIER_DEGRADATION["Tier Degradation Cascade<br/>HIGH → MEDIUM → LOW → Canned Response"]:::recovery
             end
 
             subgraph OUTPUT_SYSTEM["System → User Output Channel"]
@@ -301,11 +405,22 @@ flowchart TB
                 OUTPUT_QUEUE["Output Queue<br/>Priority: REALTIME > PROGRESS > BACKGROUND"]:::output
             end
 
-            subgraph FSM_EXPERIENCE_LAYER["Experience Layer States (Every 20-30 Turns)<br/>Long-term patterns, helps LLM understand user"]
-                EMOTIONAL_PROCESSING["EMOTIONAL_PROCESSING<br/>Analyze emotional trajectory"]:::empathy
-                EMOTIONAL_MIRRORING["EMOTIONAL_MIRRORING<br/>Adjust conversational tone"]:::empathy
-                ANTICIPATORY_RESPONSE["ANTICIPATORY_RESPONSE<br/>Predict user needs"]:::empathy
-                NARRATIVE_WEAVING["NARRATIVE_WEAVING<br/>Maintain conversation threads"]:::empathy
+            subgraph FSM_EXPERIENCE_LAYER["Experience Layer (6 Components, Cadence-Based)"]
+                EMOTIONAL_PROCESSING["EmotionalProcessor<br/>Every 25th Turn<br/>Emotional Trajectory Analysis"]:::empathy
+                EMOTIONAL_MIRRORING["AffectiveMirror<br/>After EmotionalProcessor<br/>Conversational Tone Adjustment"]:::empathy
+                ANTICIPATORY_RESPONSE["AnticipatoryResponder<br/>Every 30th Turn<br/>Predict User Needs"]:::empathy
+                NARRATIVE_WEAVING["NarrativeWeaver<br/>Every 20th Turn<br/>Maintain Conversation Threads"]:::empathy
+                PROACTIVE_AGENT["ProactiveAgent<br/>On Wait > 5s<br/>Proactive Suggestions"]:::empathy
+                RHYTHM_CONTROLLER["RhythmController<br/>Every Output<br/>Response Timing/Pacing"]:::empathy
+                LAYER_MANAGER["LayerManager<br/>Orchestrates Cadence-Based Firing"]:::brain
+            end
+
+            subgraph LLM_ADAPTER["LLM Adapter Architecture"]
+                direction TB
+                LLM_PORT["IConciergeModelPort<br/>generate() + generate_stream()<br/>Protocol Interface"]:::engine
+                LLM_ADAPTER_IMPL["GeminiConciergeAdapter<br/>google.genai SDK<br/>Streaming + Structured Output + Tool Calling"]:::engine
+                MODEL_SELECTION["Model Selection Table<br/>Front acks → flash<br/>Front ReAct → pro<br/>Back ReAct → pro"]:::engine
+                LLM_VALIDATOR["LLMOutputValidator<br/>Structural Validation"]:::engine
             end
 
             CONVERSATION_SCHEDULER["Conversation Scheduler<br/>Deterministic Utterance Gating"]:::brain
@@ -357,8 +472,14 @@ flowchart TB
                     end
                 end
 
+                subgraph PHASE1_SS_WRITES["Phase 1 → SessionState Writes (3 Sections)"]
+                    P1_SCOREBOARD["Write: scoreboard<br/>intents[], entities[], salience_scores"]:::phase1_write
+                    P1_AFFECT["Write: affective_now<br/>emotion, valence, arousal"]:::phase1_write
+                    P1_CONTROL["Write: control<br/>intent, domain, safety_band, complexity_tier"]:::phase1_write
+                end
+
                 subgraph SAFETY_GATE["Safety Gate (Hard Stop)"]
-                    CRISIS_DETECTOR["Crisis Detector<br/>CRISIS band = immediate protocol"]:::safety
+                    CRISIS_DETECTOR["Crisis Detector<br/>CRISIS band = immediate protocol<br/>Skip LLM, emit canned response"]:::safety
                     SAFETY_OVERRIDE["Safety Override<br/>Bypasses all routing"]:::safety
                 end
 
@@ -366,10 +487,10 @@ flowchart TB
                     MULTI_INTENT_SCORER["Multi-Intent Scorer<br/>len(intents) + intent_types → complexity"]:::router
                     CROSS_DOMAIN_DETECTOR["Cross-Domain Detector<br/>len(domains) > 1 → complexity bump"]:::router
                     COMPLEXITY_CLASSIFIER["Complexity Classifier<br/>primary_intent + multi_factors → Tier"]:::router
-                    TIER_LOW["LOW Tier<br/>Tool First → LLM Response (~500 tokens)"]:::tier_low
-                    TIER_MEDIUM["MEDIUM Tier<br/>LLM Reasoning + Response (2K tokens)"]:::tier_med
-                    TIER_HIGH["HIGH Tier<br/>LLM Planning + Reasoning + Response (8K tokens)"]:::tier_high
-                    TIER_CRISIS["CRISIS Tier<br/>Safety Protocol"]:::tier_crisis
+                    TIER_LOW["LOW Tier<br/>Front → Back Direct (4-10 iter)<br/>Tool First → LLM Response (~500 tokens)"]:::tier_low
+                    TIER_MEDIUM["MEDIUM Tier<br/>Front → Orchestrator (1-2 Fabric calls)<br/>LLM Reasoning + Response (2K tokens)"]:::tier_med
+                    TIER_HIGH["HIGH Tier<br/>Front → Planner 4-Stage Pipeline<br/>LLM Planning + Reasoning (8K tokens)"]:::tier_high
+                    TIER_CRISIS["CRISIS Tier<br/>Safety Protocol<br/>Skip LLM Entirely"]:::tier_crisis
                 end
 
                 HYPOTHESIS_GENERATOR["Hypothesis Generator<br/>Receives explicit multi-intent from heads"]:::engine
@@ -399,29 +520,66 @@ flowchart TB
             end
         end
 
-        subgraph CONCIERGE_TOOLS["Concierge LLM Tools (Available ALL Complexity Tiers)"]
+        subgraph CONCIERGE_TOOLS["Concierge LLM Tools (Actor-Segregated)"]
             direction TB
 
-            subgraph COGNITIVE_TOOLS["Cognitive Tools (LLM detects what to update)"]
-                TOOL_UPDATE_SCOREBOARD["update_scoreboard()<br/>Referents, QUD, salience, topic shift<br/>LLM detects: pronoun resolution, open Qs, topic changes"]:::tool_cognitive
-                TOOL_UPDATE_BELIEFS["update_beliefs()<br/>New facts, corrections, invalidations<br/>LLM detects: implicit facts, user corrections"]:::tool_cognitive
-                TOOL_UPDATE_CLARIFICATIONS["update_clarifications()<br/>Semantic gaps, resolved gaps<br/>LLM detects: cannot proceed without user info"]:::tool_cognitive
-                TOOL_UPDATE_NARRATIVE["update_narrative()<br/>Thread switch/resume/new/continue<br/>LLM detects: topic shifts, thread resumptions"]:::tool_cognitive
-                TOOL_REFINE_AFFECT["refine_affect()<br/>Override emotion when sarcasm/nuance detected<br/>LLM overrides UltraBERT when confident"]:::tool_cognitive
-                TOOL_PROMOTE_BELIEF["promote_belief()<br/>WARM to HOT fact promotion<br/>LLM detects: user referencing old context"]:::tool_cognitive
+            subgraph FRONT_TOOLS["Front LLM Tools (10 Total)"]
+                subgraph SIGNAL_TOOLS["Signal Tools (UX Sequencing)"]
+                    TOOL_SIGNAL["signal()<br/>UX Sequencing Marker<br/>Forces tool_choice=required on iter 0"]:::tool_signal
+                end
+
+                subgraph COGNITIVE_TOOLS["Cognitive Tools (LLM detects what to update)"]
+                    TOOL_UPDATE_SCOREBOARD["update_scoreboard()<br/>Referents, QUD, salience, topic shift<br/>LLM detects: pronoun resolution, open Qs, topic changes"]:::tool_cognitive
+                    TOOL_UPDATE_BELIEFS["update_beliefs()<br/>New facts, corrections, invalidations<br/>LLM detects: implicit facts, user corrections"]:::tool_cognitive
+                    TOOL_UPDATE_CLARIFICATIONS["update_clarifications()<br/>Semantic gaps, resolved gaps<br/>LLM detects: cannot proceed without user info"]:::tool_cognitive
+                    TOOL_UPDATE_NARRATIVE["update_narrative()<br/>Thread switch/resume/new/continue<br/>LLM detects: topic shifts, thread resumptions"]:::tool_cognitive
+                    TOOL_REFINE_AFFECT["refine_affect()<br/>Override emotion when sarcasm/nuance detected<br/>LLM overrides UltraBERT when confident"]:::tool_cognitive
+                    TOOL_PROMOTE_BELIEF["promote_belief()<br/>WARM to HOT fact promotion<br/>LLM detects: user referencing old context"]:::tool_cognitive
+                end
+
+                subgraph FRONT_READ_TOOLS["Read Tools (Front)"]
+                    TOOL_RECALL_MEMORY["recall_memory()<br/>K0 Long-Term Memory Query"]:::tool
+                    TOOL_DISCOVER_CAPABILITIES["discover_capabilities()<br/>Queries Capability Registry"]:::tool
+                end
+
+                subgraph FRONT_CONTROL_TOOLS["Control Tools (Front)"]
+                    TOOL_DISPATCH_TASK["dispatch_task()<br/>Creates TaskDispatch<br/>Routes to Back/Orchestrator"]:::tool
+                end
             end
 
-            subgraph READ_TOOLS["Read Tools (Context Retrieval)"]
-                TOOL_RECALL_MEMORY["recall_memory()<br/>K0 Long-Term Memory Query"]:::tool
-                TOOL_DISCOVER_CAPABILITIES["discover_capabilities()<br/>Queries Capability Registry"]:::tool
-                TOOL_SUMMARIZE_CONTEXT["summarize_context()<br/>Token Budget Manager"]:::tool
+            subgraph BACK_TOOLS["Back LLM Tools (6 Total)"]
+                subgraph BACK_READ_TOOLS["Read Tools (Back)"]
+                    TOOL_BACK_RECALL["recall_memory()<br/>K0 Long-Term Memory Query"]:::tool
+                    TOOL_BACK_DISCOVER["discover_capabilities()<br/>Queries Capability Registry"]:::tool
+                end
+
+                subgraph ACTION_TOOLS["Action Tools (Execution and Delegation)"]
+                    TOOL_INVOKE_CAPABILITY["invoke_capability()<br/>Direct capability execution via Fabric<br/>LOW tier only (fast path)"]:::tool
+                    TOOL_SPAWN_VIA_FABRIC["spawn_via_fabric()<br/>Capability-based Agent Creation"]:::tool
+                    TOOL_EXECUTE_WORKFLOW["execute_workflow()<br/>Workflow Capability Invocation"]:::tool
+                end
+
+                subgraph BACK_CONTROL_TOOLS["Control Tools (Back)"]
+                    TOOL_SUBMIT_RESULT["submit_result()<br/>Terminates ReAct Loop<br/>status: complete|needs_human"]:::tool
+                end
             end
 
-            subgraph ACTION_TOOLS["Action Tools (Execution and Delegation)"]
-                TOOL_INVOKE_CAPABILITY["invoke_capability()<br/>Direct capability execution via Fabric<br/>LOW tier only (fast path)"]:::tool
-                TOOL_SPAWN_VIA_FABRIC["spawn_via_fabric()<br/>Capability-based Agent Creation"]:::tool
-                TOOL_EXECUTE_WORKFLOW["execute_workflow()<br/>Workflow Capability Invocation"]:::tool
+            subgraph TOOL_DISPATCHER["Tool Dispatcher (6-Step Pipeline)"]
+                TD_ALLOWLIST["1. Allowlist Check<br/>Actor + Tier Permitted?"]:::safety
+                TD_BUDGET["2. Budget Check<br/>Within Iteration Budget?"]:::safety
+                TD_SCHEMA["3. Schema Validate<br/>Args Match JSON Schema?"]:::engine
+                TD_SAFETY["4. Safety Gate<br/>Safety Band Permits?"]:::safety
+                TD_EXECUTE["5. Execute Tool"]:::engine
+                TD_RECORD["6. Record DispatchRecord<br/>Observability"]:::engine
             end
+        end
+
+        subgraph EVENT_BUS_DETAIL["K1 Event Bus (POC: 28 Topics)"]
+            direction TB
+            %% POC validated: LocalBus + TimingChain + MailboxRouter
+            LOCAL_BUS["LocalBus<br/>In-Process Pub/Sub<br/>Topic-Based Routing"]:::bus
+            TIMING_CHAIN["TimingChain<br/>Causal Ordering via parent_id<br/>Replaces ALL Anti-Spin Logic"]:::bus
+            BUS_DELIVERY_MODES["Delivery Modes<br/>STRICT: Causal ordering<br/>RELAXED: Eventual consistency<br/>BEST_EFFORT: Fire-and-forget"]:::bus
         end
     end
     subgraph L1_RHYTHM["🎼 LAYER 1.5: Conversational Rhythm Controller"]
@@ -999,10 +1157,14 @@ flowchart TB
     CONCIERGE_FSM -->|"current_state"| LISTENING
     CONCIERGE_FSM -->|"transition"| ACKING
     CONCIERGE_FSM -->|"transition"| CLARIFYING
+    CONCIERGE_FSM -->|"transition"| CLARIFYING_WORKER
     CONCIERGE_FSM -->|"transition"| DISPATCHING
     CONCIERGE_FSM -->|"transition"| COMPANIONING
     CONCIERGE_FSM -->|"transition"| PROGRESSING
     CONCIERGE_FSM -->|"transition"| DELIVERING
+    CONCIERGE_FSM -->|"transition"| WEAVING
+    CONCIERGE_FSM -->|"transition"| CANCELLING
+    CONCIERGE_FSM -->|"transition"| PROACTIVE_WAKE
     CONCIERGE_FSM -->|"transition"| INTERRUPT_HANDLING
 
     LISTENING -->|"k1.concierge.user_input"| ACKING
@@ -1217,6 +1379,8 @@ flowchart TB
     STEP_CANCELLATION -->|"partial results"| SAGA_RECOVERY
     TOOL_INVOKE_CAPABILITY -->|"Fabric Invocation"| CAPABILITY_FABRIC
     TOOL_DISCOVER_CAPABILITIES -->|"Registry Query"| CAPABILITY_REGISTRY
+    TOOL_BACK_RECALL -->|"K0 Long-Term Query"| CAPABILITY_CONTEXT_BUILDER
+    TOOL_BACK_DISCOVER -->|"Registry Query"| CAPABILITY_REGISTRY
     TOOL_SPAWN_VIA_FABRIC -->|"Agent Spawning"| AGENT_PROVIDERS
 
     %% ======================================================================================
@@ -1231,6 +1395,155 @@ flowchart TB
     TOOL_REFINE_AFFECT -->|"override emotion"| AFFECTIVE_NOW
     TOOL_PROMOTE_BELIEF -->|"promote WARM to HOT"| BELIEFS_ACTIVE
     TOOL_PROMOTE_BELIEF -->|"read from WARM"| BELIEFS_HISTORY
+
+    %% ======================================================================================
+    %% POC-VALIDATED: DUAL-LLM ACTOR ARCHITECTURE EDGES
+    %% Front LLM talks to user. Back LLM executes tasks. Neither knows the other exists.
+    %% ======================================================================================
+    CONCIERGE_FSM -->|"manages lifecycle"| FRONT_ACTOR
+    CONCIERGE_FSM -->|"manages lifecycle"| BACK_ACTOR
+    CONCIERGE_FSM -->|"manages pool"| BACK_POOL
+    FRONT_ACTOR -->|"uses ReAct loop"| REACT_LOOP
+    BACK_ACTOR -->|"uses ReAct loop"| REACT_LOOP
+    REACT_LOOP -->|"returns"| REACT_RESULT
+    ITERATION_BUDGET -->|"constrains"| REACT_LOOP
+
+    %% Front Actor prompt assembly
+    CONCIERGE_FSM -->|"selects mode"| DYNAMIC_PROMPT_BUILDER
+    DYNAMIC_PROMPT_BUILDER -->|"assembled prompt"| FRONT_ACTOR
+    AFFECT_COMPUTATION -->|"tone modulation"| DYNAMIC_PROMPT_BUILDER
+
+    %% Actor tool access (segregated)
+    FRONT_ACTOR -->|"10 tools"| FRONT_TOOLS
+    BACK_ACTOR -->|"6 tools"| BACK_TOOLS
+    TOOL_DISPATCH_TASK -->|"creates TaskDispatch"| TASK_DISPATCH
+    TOOL_SUBMIT_RESULT -->|"terminates Back ReAct"| REACT_RESULT
+
+    %% Tool Dispatcher pipeline (all tool calls pass through)
+    FRONT_TOOLS -->|"tool call"| TOOL_DISPATCHER
+    BACK_TOOLS -->|"tool call"| TOOL_DISPATCHER
+    TD_ALLOWLIST -->|"pass"| TD_BUDGET
+    TD_BUDGET -->|"pass"| TD_SCHEMA
+    TD_SCHEMA -->|"pass"| TD_SAFETY
+    TD_SAFETY -->|"pass"| TD_EXECUTE
+    TD_EXECUTE -->|"done"| TD_RECORD
+
+    %% ======================================================================================
+    %% POC-VALIDATED: FSM NEW STATE TRANSITION EDGES
+    %% ======================================================================================
+    CONCIERGE_FSM -->|"transition"| WEAVING
+    CONCIERGE_FSM -->|"transition"| CANCELLING
+    CONCIERGE_FSM -->|"transition"| PROACTIVE_WAKE
+    CONCIERGE_FSM -->|"transition"| CLARIFYING_WORKER
+    COMPANIONING -->|"multiple results"| WEAVING
+    WEAVING -->|"batch ready"| DELIVERING
+    INTERRUPT_HANDLING -->|"arbiter: CANCEL"| CANCELLING
+    CANCELLING -->|"tasks cancelled"| LISTENING
+    PROACTIVE_WAKE -->|"result arrived while LISTENING"| DELIVERING
+    CLARIFYING_WORKER -->|"user answered HITL"| PROGRESSING
+
+    %% ======================================================================================
+    %% POC-VALIDATED: CONVERSATION ARBITER EDGES (Interrupt Classification)
+    %% ======================================================================================
+    INTERRUPT_HANDLING -->|"classify interrupt"| CONVERSATION_ARBITER
+    CONVERSATION_ARBITER -->|"CANCEL"| ARBITER_CANCEL
+    CONVERSATION_ARBITER -->|"MODIFY_INFLIGHT"| ARBITER_MODIFY
+    CONVERSATION_ARBITER -->|"DEFER"| ARBITER_DEFER
+    CONVERSATION_ARBITER -->|"PARALLEL_NEW"| ARBITER_PARALLEL
+    ARBITER_CANCEL -->|"set cancel flags"| CANCELLING
+    ARBITER_MODIFY -->|"inject into Back"| BACK_ACTOR
+    ARBITER_DEFER -->|"acknowledge only"| COMPANIONING
+    ARBITER_PARALLEL -->|"new task"| DISPATCHING
+
+    %% ======================================================================================
+    %% POC-VALIDATED: CONCURRENCY GATE EDGES
+    %% ======================================================================================
+    FRONT_LOCK -->|"serializes"| FRONT_ACTOR
+    TURN_LOCK -->|"sequences P1 writes"| ACKING
+    IDEMPOTENCY_LEDGER -->|"dedup check"| CONCIERGE_FSM
+    DEAD_LETTER_HANDLER -->|"invalid events"| CONCIERGE_FSM
+
+    %% ======================================================================================
+    %% POC-VALIDATED: HITL AT L1 EDGES
+    %% ======================================================================================
+    BACK_ACTOR -->|"needs_human"| HITL_MANAGER
+    HITL_MANAGER -->|"create subtask"| HITL_SUBTASK
+    HITL_MANAGER -->|"clarification"| HITL_CLARIFICATION
+    HITL_MANAGER -->|"approval"| HITL_APPROVAL
+    HITL_MANAGER -->|"selection"| HITL_SELECTION
+    HITL_CLARIFICATION -->|"relay to Front"| CONCIERGE_FSM
+    HITL_APPROVAL -->|"relay to Front"| CONCIERGE_FSM
+    HITL_SELECTION -->|"relay to Front"| CONCIERGE_FSM
+    HITL_SUBTASK -->|"stores react_snapshot"| HITL_MANAGER
+    HITL_MULTI_DEVICE_DEDUP -->|"first response wins"| HITL_MANAGER
+    CONCIERGE_FSM -->|"HITL_RELAY mode"| CLARIFYING_WORKER
+
+    %% ======================================================================================
+    %% POC-VALIDATED: WEAVE POLICY EDGES (M8 Adaptive Delivery)
+    %% ======================================================================================
+    WEAVE_POLICY -->|"evaluate signals"| WEAVE_SIGNAL
+    WEAVE_POLICY -->|"IMMEDIATE"| WEAVE_IMMEDIATE
+    WEAVE_POLICY -->|"BATCH"| WEAVE_BATCH
+    WEAVE_POLICY -->|"DEFER"| WEAVE_DEFER
+    WEAVE_POLICY -->|"DIGEST"| WEAVE_DIGEST
+    WEAVE_POLICY -->|"SUPPRESS"| WEAVE_SUPPRESS
+    WEAVE_BATCH -->|"collect"| WEAVE_BATCHER
+    WEAVE_BATCHER -->|"batch ready"| WEAVING
+    WEAVE_IMMEDIATE -->|"deliver now"| PROACTIVE_WAKE
+    PROACTIVE_WAKE -->|"result delivery"| FRONT_ACTOR
+
+    %% ======================================================================================
+    %% POC-VALIDATED: TASK MODEL EDGES
+    %% ======================================================================================
+    TASK_INTENT -->|"compose"| TASK_DISPATCH
+    TASK_DISPATCH -->|"LOW tier"| BACK_ACTOR
+    TASK_DISPATCH -->|"MEDIUM tier"| ORCHESTRATOR_MAILBOX
+    TASK_DISPATCH -->|"HIGH tier"| ORCHESTRATOR_MAILBOX
+    BACK_ACTOR -->|"success"| TASK_COMPLETE
+    BACK_ACTOR -->|"failure"| TASK_FAILED
+    TASK_FAILED -->|"retry?"| TIER_DEGRADATION
+    TIER_DEGRADATION -->|"HIGH fail"| TIER_MEDIUM
+    TIER_DEGRADATION -->|"MEDIUM fail"| TIER_LOW
+    TIER_DEGRADATION -->|"LOW fail"| OUTPUT_CHANNEL
+
+    %% ======================================================================================
+    %% POC-VALIDATED: PHASE 1 SS WRITE EDGES
+    %% ======================================================================================
+    ACKING -->|"scoreboard update"| P1_SCOREBOARD
+    ACKING -->|"affect update"| P1_AFFECT
+    ACKING -->|"control update"| P1_CONTROL
+    P1_SCOREBOARD -->|"write"| SCOREBOARD
+    P1_AFFECT -->|"write"| AFFECTIVE_NOW
+    P1_CONTROL -->|"write"| CONTROL
+
+    %% ======================================================================================
+    %% POC-VALIDATED: LLM ADAPTER EDGES
+    %% ======================================================================================
+    LLM_PORT -->|"interface"| LLM_ADAPTER_IMPL
+    LLM_ADAPTER_IMPL -->|"API calls"| LLM_REQUEST_BUS
+    MODEL_SELECTION -->|"tier routing"| LLM_ADAPTER_IMPL
+    LLM_VALIDATOR -->|"validates"| LLM_ADAPTER_IMPL
+    FRONT_ACTOR -->|"generate"| LLM_PORT
+    BACK_ACTOR -->|"generate"| LLM_PORT
+
+    %% ======================================================================================
+    %% POC-VALIDATED: EVENT BUS DETAIL EDGES
+    %% ======================================================================================
+    LOCAL_BUS -->|"causal ordering"| TIMING_CHAIN
+    LOCAL_BUS -->|"topic routing"| CONCIERGE_MAILBOX
+    BUS_DELIVERY_MODES -->|"configure"| LOCAL_BUS
+    CONCIERGE_FSM -->|"subscribes 19 topics"| LOCAL_BUS
+
+    %% ======================================================================================
+    %% POC-VALIDATED: EXPERIENCE LAYER EDGES (Cadence-Based)
+    %% ======================================================================================
+    LAYER_MANAGER -->|"orchestrates"| EMOTIONAL_PROCESSING
+    LAYER_MANAGER -->|"orchestrates"| EMOTIONAL_MIRRORING
+    LAYER_MANAGER -->|"orchestrates"| ANTICIPATORY_RESPONSE
+    LAYER_MANAGER -->|"orchestrates"| NARRATIVE_WEAVING
+    LAYER_MANAGER -->|"orchestrates"| PROACTIVE_AGENT
+    LAYER_MANAGER -->|"orchestrates"| RHYTHM_CONTROLLER
+    CONCIERGE_FSM -->|"turn count"| LAYER_MANAGER
 
     %% Orchestrator invokes capabilities (tools/agents) via Fabric
     ORCHESTRATOR_ACTOR -->|"CapabilityRequest{name, params, context}"| CAPABILITY_FABRIC
@@ -1824,6 +2137,14 @@ flowchart TB
     classDef device fill:#78909c,stroke:#37474f,stroke-width:2px,color:#fff
     classDef family_device fill:#66bb6a,stroke:#2e7d32,stroke-width:3px,color:#fff,font-weight:bold
     classDef limit fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+    %% POC-validated Concierge style classes
+    classDef actor_front fill:#a5d6a7,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+    classDef actor_back fill:#90caf9,stroke:#1565c0,stroke-width:3px,color:#000,font-weight:bold
+    classDef prompt_mode fill:#e1bee7,stroke:#7b1fa2,stroke-width:1px,color:#000
+    classDef weave_decision fill:#b3e5fc,stroke:#0277bd,stroke-width:1px,color:#000
+    classDef phase1_write fill:#ffe082,stroke:#ff8f00,stroke-width:2px,color:#000
+    classDef tool_signal fill:#c8e6c9,stroke:#388e3c,stroke-width:2px,color:#000,font-style:italic
+    classDef bus fill:#b2dfdb,stroke:#00695c,stroke-width:2px,color:#000
     class UI_WEB,UI_MOBILE,UI_VOICE,API_REST,API_WEBSOCKET,API_SSE external
     class PROTOCOL_FB,PROTOCOL_JSON,PROTOCOL_BINARY,PROTOCOL_ROUTING protocol
     class OUTPUT_CHANNEL,OUTPUT_QUEUE output

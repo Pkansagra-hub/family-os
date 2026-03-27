@@ -286,6 +286,14 @@ def determine_mode(
         )
         return PromptMode.INTERRUPT
 
+    # 1b. Detect interrupt via routing_metadata (INTERRUPT_HANDLING is transient,
+    #     FSM has already moved to DISPATCHING by the time Front reads SS)
+    if routing_metadata and routing_metadata.get("interrupt_origin"):
+        logger.info(
+            "determine_mode  routing_metadata.interrupt_origin -> INTERRUPT",
+        )
+        return PromptMode.INTERRUPT
+
     # 2. FSM state + event topic combinations
     if fsm_state == "CLARIFYING_USER":
         if envelope_topic == _TOPIC_USER_INPUT:

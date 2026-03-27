@@ -50,6 +50,9 @@ class FragmentAbsorptionConfig:
     absorb_min_similarity: float = 0.50
     """Cosine similarity threshold for absorption."""
 
+    max_absorbed_duration_ms: int = 18 * 3_600_000
+    """Reject absorption if resulting episode span would exceed this (ms)."""
+
 
 # ---------------------------------------------------------------------------
 # Statistics
@@ -231,6 +234,12 @@ def absorb_fragments(
             # Score
             temporal_bonus = 1.0 - (temporal_gap / max_gap_ms) if max_gap_ms > 0 else 1.0
             score = sim * 0.6 + temporal_bonus * 0.4
+
+            # Duration guard: reject if absorption would exceed cap
+            projected_start = min(frag_cand.temporal_start, sd["t_start"])
+            projected_end = max(frag_cand.temporal_end, sd["t_end"])
+            if (projected_end - projected_start) > config.max_absorbed_duration_ms:
+                continue
 
             if score > best_score:
                 best_score = score

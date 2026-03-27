@@ -81,11 +81,12 @@ WRITE_LAG_BAND_DELAYED_MS = 86_400_000  # <24 hours (1 day)
 # See get_circadian_slot() docstring for rationale
 
 # Time-of-day buckets (frozen tuples) - generalized, works for all users
+# Equal 6-hour spans to avoid classification bias (previous NIGHT=8h caused 57% skew)
 TIME_OF_DAY_BUCKETS = (
-    ("morning", time(6, 0), time(12, 0)),
-    ("afternoon", time(12, 0), time(17, 0)),
-    ("evening", time(17, 0), time(22, 0)),
-    ("night", time(22, 0), time(6, 0)),  # Wraps around midnight
+    ("morning", time(6, 0), time(12, 0)),  # 06:00-12:00 (6h)
+    ("afternoon", time(12, 0), time(18, 0)),  # 12:00-18:00 (6h)
+    ("evening", time(18, 0), time(0, 0)),  # 18:00-00:00 (6h)
+    ("night", time(0, 0), time(6, 0)),  # 00:00-06:00 (6h)
 )
 
 # Module-level metrics (with histogram buckets for P95 tracking)
@@ -755,15 +756,15 @@ def get_time_of_day_bucket(dt: datetime) -> str:
 
     Uses frozen tuple for branch-light comparisons (faster than dict iteration).
 
-    Buckets (default config):
+    Buckets (equal 6h spans):
     - morning: 06:00-12:00
-    - afternoon: 12:00-17:00
-    - evening: 17:00-22:00
-    - night: 22:00-06:00 (wraps around midnight)
+    - afternoon: 12:00-18:00
+    - evening: 18:00-00:00
+    - night: 00:00-06:00
 
     Midnight wrap-around:
-    - night bucket uses (t >= start) OR (t < end) logic
-    - Handles 22:00-23:59 and 00:00-05:59 correctly
+    - Any bucket where end <= start uses (t >= start) OR (t < end) logic
+    - Handles evening 18:00-00:00 correctly
 
     Returns:
         Bucket name (str): "morning" | "afternoon" | "evening" | "night"
@@ -771,8 +772,8 @@ def get_time_of_day_bucket(dt: datetime) -> str:
     t = dt.time()
 
     for bucket_name, start, end in TIME_OF_DAY_BUCKETS:
-        if bucket_name == "night":
-            # Night wraps around midnight (22:00-06:00)
+        if end <= start:
+            # Bucket wraps around midnight (e.g. evening 18:00-00:00)
             if t >= start or t < end:
                 return bucket_name
         else:

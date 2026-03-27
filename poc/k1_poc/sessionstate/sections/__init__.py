@@ -44,6 +44,7 @@ from .scoreboard import ScoreboardSection
 from .task_artifacts import ArtifactType, TaskArtifactEntry, TaskArtifactsSection
 from .task_state import TaskStateEntry, TaskStateSection, TaskStatus
 from .telemetry import TelemetrySection
+from .temporal_context import TemporalContextSection
 
 __all__ = [
     # HOT CORE
@@ -67,4 +68,6 @@ __all__ = [
     "PersonaSection",
     "TelemetrySection",
     "ArtifactsWarmSection",
+    # COMPUTED
+    "TemporalContextSection",
 ]

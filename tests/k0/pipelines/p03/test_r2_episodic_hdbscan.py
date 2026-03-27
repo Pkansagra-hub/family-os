@@ -427,6 +427,29 @@ class TestRescueToCluster:
         result = clusterer.cluster(events)
         assert result.rescued_count == 0
 
+    def test_rescue_all_noise_final_sweep(self):
+        """rescue_all_noise=True force-assigns all remaining noise to nearest cluster."""
+        cluster_events = _make_tight_cluster(5, base_seed=30.0)
+        outlier = _make_outlier(888.0, ts=BASE_TS + 200_000)
+        events = cluster_events + [outlier]
+        params = HDBSCANParams(rescue_all_noise=True)
+        clusterer = EpisodicHDBSCAN(params=params)
+        result = clusterer.cluster(events)
+        assert result.noise_count == 0, "No events should remain as noise"
+        assert result.rescued_count >= 1, "Outlier should be rescued by final sweep"
+
+    def test_rescue_all_noise_creates_catchall_when_no_clusters(self):
+        """rescue_all_noise with no clusters creates a catch-all cluster."""
+        events = [
+            MockEvent(event_id="solo-1", embedding_768=_unit_embedding(seed=1.0)),
+            MockEvent(event_id="solo-2", embedding_768=_unit_embedding(seed=999.0)),
+        ]
+        params = HDBSCANParams(rescue_all_noise=True)
+        clusterer = EpisodicHDBSCAN(params=params)
+        result = clusterer.cluster(events)
+        assert result.noise_count == 0, "All events should be in catch-all cluster"
+        assert result.cluster_count >= 1, "Catch-all cluster should be created"
+
     def test_rescued_count_accuracy(self):
         """rescued_count matches actual number of rescued events."""
         events = _make_tight_cluster(5, base_seed=40.0)
