@@ -30,6 +30,7 @@ from poc.k1_poc.llm.types import (
     FinishReason,
     ModelMessage,
     StreamChunk,
+    ThinkingLevel,
     ToolSchema,
 )
 from poc.k1_poc.llm.types import tool_result_to_message as _tool_result_to_msg
@@ -350,12 +351,11 @@ async def react_loop(
             actor=actor,
             scenario=scenario,
             trace_id=trace_id,
+            thinking=ThinkingLevel.LOW if actor == "front" else None,
         )
 
-        # ---- LLM CALL (streaming on Front iter 0 when on_stream provided) ----
-        use_streaming = (
-            on_stream is not None and actor == "front" and iteration == 0 and not force_text
-        )
+        # ---- LLM CALL (streaming on all Front iterations when on_stream provided) ----
+        use_streaming = on_stream is not None and actor == "front" and not force_text
 
         try:
             if use_streaming:
@@ -454,6 +454,36 @@ async def react_loop(
                             iteration_durations_ms=_iteration_durations,
                         )
                     continue
+
+        # ---- MALFORMED TOOL CALL: model tried a tool call but JSON was invalid ----
+        if response.finish_reason == FinishReason.MALFORMED_TOOL_CALL:
+            logger.warning(
+                "Malformed tool call from %s on iteration %d -- nudging to simplify",
+                actor,
+                iteration,
+            )
+            if iteration < max_iterations - 1:
+                messages.append(
+                    ModelMessage(
+                        role="user",
+                        content=(
+                            "Your function call had invalid JSON and was rejected. "
+                            "Call submit_result now. Keep the results array simple: "
+                            "use plain strings instead of nested objects. "
+                            "Summarize each web result as a single string like "
+                            "'Title - URL - Snippet'."
+                        ),
+                    )
+                )
+                logger.info(
+                    "react_loop: %s malformed_tool_call on iter=%d/%d, nudging to simplify",
+                    actor,
+                    iteration,
+                    max_iterations,
+                )
+            _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+            _iteration_durations.append(_iter_dur)
+            continue
 
         # ---- DEGENERATE: no text AND no tool calls ----
         if not response.has_text and not response.has_tool_calls:
@@ -558,8 +588,49 @@ async def react_loop(
                     sequential_tool_calls=_sequential_count,
                     iteration_durations_ms=_iteration_durations,
                 )
-            # Back (ITEM #19): text = "thinking aloud", NOT terminal
-            messages.append(ModelMessage(role="assistant", content=response.text))
+            # Back (ITEM #19): text without tool calls
+            # Detect pseudo-code pattern: model writes code instead of
+            # making a real tool call (e.g. "tool_code\nprint(...)").
+            _txt = response.text or ""
+            _is_pseudo = any(
+                marker in _txt for marker in ("tool_code", "default_api.", "print(", "```python")
+            )
+            _has_prior_tools = (_parallel_count + _sequential_count) > 0
+            if _is_pseudo:
+                messages.append(
+                    ModelMessage(
+                        role="user",
+                        content=(
+                            "Do NOT write code or pseudo-code. Use the "
+                            "submit_result function call directly. Call "
+                            "submit_result now with result_type='complete'."
+                        ),
+                    )
+                )
+                logger.warning(
+                    "react_loop: back pseudo-code detected on iter=%d, nudging",
+                    iteration,
+                )
+            elif _has_prior_tools:
+                # Back already invoked capabilities but wrote conversational
+                # text instead of calling submit_result -- nudge it.
+                messages.append(
+                    ModelMessage(
+                        role="user",
+                        content=(
+                            "You already invoked capabilities successfully. "
+                            "Now call submit_result to deliver those results. "
+                            "Do NOT write conversational text."
+                        ),
+                    )
+                )
+                logger.info(
+                    "react_loop: back text-only after tools on iter=%d, " "nudging submit_result",
+                    iteration,
+                )
+            else:
+                # Genuine thinking aloud before any tool calls
+                messages.append(ModelMessage(role="assistant", content=response.text))
             _iter_dur = int((time.monotonic() - _iter_start) * 1000)
             _iteration_durations.append(_iter_dur)
             continue

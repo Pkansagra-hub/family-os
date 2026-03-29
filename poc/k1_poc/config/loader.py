@@ -42,7 +42,7 @@ class BackActorConfig:
     """Knobs from actors/back.py."""
 
     max_iterations: dict[str, int] = field(
-        default_factory=lambda: {"LOW": 4, "MEDIUM": 8, "HIGH": 12}
+        default_factory=lambda: {"LOW": 6, "MEDIUM": 10, "HIGH": 14}
     )
     budget_floor: int = 2
     history_window: int = 5
@@ -297,7 +297,9 @@ class ReactConfig:
 class TaskConfig:
     """Knobs from task/complexity.py."""
 
-    tier_budget: dict[str, int] = field(default_factory=lambda: {"LOW": 4, "MEDIUM": 8, "HIGH": 12})
+    tier_budget: dict[str, int] = field(
+        default_factory=lambda: {"LOW": 6, "MEDIUM": 10, "HIGH": 14}
+    )
 
 
 @dataclass
@@ -343,6 +345,11 @@ class ArbiterConfig:
     high_impact_actions: list[str] = field(
         default_factory=lambda: ["booking", "payment", "deletion", "send_message"]
     )
+    # OPP-2: Recency bias decay -- overlap scores decay by this factor per turn
+    recency_decay_per_turn: float = 0.15
+    # OPP-2: Short input heuristic -- inputs with fewer words than this get
+    # reduced overlap confidence (prevents "ok" from matching inflight tasks)
+    short_input_word_threshold: int = 3
     cancel_keywords: list[str] = field(
         default_factory=lambda: [
             "cancel",

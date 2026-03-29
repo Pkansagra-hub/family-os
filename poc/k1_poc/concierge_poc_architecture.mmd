@@ -67,6 +67,26 @@
 %%   IConciergeModelPort protocol. GeminiConciergeAdapter (sole provider).
 %%   MODEL_SELECTION_TABLE: (capability, actor) -> model.
 %%   Front acks -> flash. Back ReAct -> pro.
+
+%% OPP KERNEL PRIMITIVES (7 Generalized Patterns):
+%%   OPP-1 Paced Delivery:     PacingStrategy (STAGGER/GROUP_BY_DOMAIN/PRIORITY_CASCADE)
+%%                              WeaveBatcher.flush_paced() delivers in groups with delays
+%%   OPP-2 Recency Bias Decay: Arbiter applies exponential decay raw*(1-decay)^age
+%%                              Short-input penalty (50% reduction, <3 words)
+%%   OPP-3 Affect Hard Caps:   AffectModifiers enforce max_response_tokens, vocabulary_tier,
+%%                              tool_budget_override per affect band
+%%   OPP-4 Trust Accumulator:  TrustAccumulator tracks approve/reject/cancel/modify/timeout
+%%                              Dynamic auto-approve threshold, adaptive HITL rounds
+%%   OPP-5 Proactive Scheduler: Idle detection, cooldown, session cap, affect suppression
+%%                              Replaces naive 5s-wait stub with kernel-level scheduler
+%%   OPP-6 Episodic Compression: Compress old turns into CompressedEpisode summaries
+%%                              Preserves HITL/safety turns, recent_window=10, episode_size=5
+%%   OPP-7 Dynamic Identity:   Role adaptation (EXPERT/PEER/GUIDE/SUPPORTER/EXECUTOR)
+%%                              Domain expertise tracking, formality drift, emotional attunement
+%%   OPP-8 Natural Flow Delivery: Result classification + conversation flow + delivery mode
+%%                              13-rule decision table, natural pause drain, 5 delivery modes
+%%   OPP Pipeline:              OppPipeline wires all 8 primitives into FSM lifecycle hooks
+%%                              set_opp_pipeline() DI, 9 hooks, per-primitive enable/disable
 %% ======================================================================================
 
 graph TB
@@ -87,6 +107,14 @@ graph TB
     subgraph PHASE1["PHASE 1: DETERMINISTIC PRE-LLM (UltraBERT, 22ms)"]
         direction LR
         ULTRABERT["UltraBERT<br/>Intent Classification<br/>Entity Extraction<br/>Safety Band Assessment<br/>Emotion Classification<br/>Domain Detection"]:::phase1
+
+        subgraph OPP2_RECENCY["OPP-2: Recency Bias Decay"]
+            OPP2_ARBITER["Arbiter.classify()<br/>domain_overlap + entity_overlap<br/>with recency decay"]:::opp
+            OPP2_DECAY["_apply_recency_decay()<br/>raw * (1-decay)^age<br/>decay_per_turn=0.15"]:::opp_detail
+            OPP2_SHORT["is_short_input()<br/>word_count < 3 threshold<br/>50% overlap penalty"]:::opp_detail
+            OPP2_ARBITER --> OPP2_DECAY
+            OPP2_ARBITER --> OPP2_SHORT
+        end
         P1_SCOREBOARD["Write: scoreboard<br/>intents[], entities[],<br/>salience scores"]:::phase1_write
         P1_AFFECT["Write: affective_now<br/>Initial emotion<br/>valence, arousal"]:::phase1_write
         P1_CONTROL["Write: control<br/>Intent classification<br/>Domain context<br/>Safety band"]:::phase1_write
@@ -106,8 +134,7 @@ graph TB
         subgraph FSM_STATES["FSM States (X-Axis)"]
             direction LR
             ST_LISTENING["LISTENING<br/>Idle, awaiting<br/>user input"]:::fsm_state
-            ST_ACKING["ACKING<br/>Phase 1 running<br/>(UltraBERT)"]:::fsm_state
-            ST_DISPATCHING["DISPATCHING<br/>Front LLM:<br/>cognitive + dispatch"]:::fsm_state
+            ST_DISPATCHING["DISPATCHING<br/>Phase 1 + Front LLM:<br/>classify, cognitive,<br/>dispatch"]:::fsm_state
             ST_COMPANIONING["COMPANIONING<br/>Front idle,<br/>Back working.<br/>Can accept<br/>new user input"]:::fsm_state
             ST_PROGRESSING["PROGRESSING<br/>Back executing<br/>tool calls"]:::fsm_state
             ST_DELIVERING["DELIVERING<br/>Front presenting<br/>results to user"]:::fsm_state
@@ -121,6 +148,15 @@ graph TB
             ST_INTERRUPT["INTERRUPT_HANDLING<br/>New user input<br/>during COMPANIONING"]:::fsm_interrupt
             ST_PROACTIVE["PROACTIVE_WAKE<br/>task.complete while<br/>LISTENING"]:::fsm_interrupt
             ST_WEAVING["WEAVING<br/>Drain pending_results<br/>queue"]:::fsm_interrupt
+        end
+
+        subgraph GUARD_MODEL["Guard Model (5 Actions)"]
+            direction LR
+            GA_TRANSITION["TRANSITION<br/>Validate + change state"]:::guard_t
+            GA_PASSTHROUGH["PASSTHROUGH<br/>Forward, no state change"]:::guard_p
+            GA_OBSERVE["OBSERVE<br/>Log only, no routing"]:::guard_o
+            GA_QUEUE["QUEUE<br/>Hold in FrontLock<br/>or pending_results"]:::guard_q
+            GA_DEAD_LETTER["DEAD_LETTER<br/>Reject as invalid"]:::guard_d
         end
 
         subgraph FSM_TURN_STATE["FSMTurnState (Not LLM-visible)"]
@@ -260,8 +296,35 @@ graph TB
         end
 
         subgraph FRONT_REACT["ReAct Loop (Shared Implementation)"]
-            REACT_FRONT["react_loop(actor='front')<br/>Max iterations: 6 (STANDARD)<br/>Tool calls per iteration: 1<br/>Termination: text with NO tool calls<br/>Typical rhythm:<br/>  1. acknowledge()<br/>  2. recall_memory()<br/>  3. update_beliefs()<br/>  4. dispatch_task()<br/>  5. Text response"]:::react
+            REACT_FRONT["react_loop(actor='front')<br/>Max iterations: mode + affect driven<br/>Termination: text with NO tool calls<br/>Typical rhythm:<br/>  1. acknowledge()<br/>  2. recall_memory()<br/>  3. update_beliefs()<br/>  4. dispatch_task()<br/>  5. Text response"]:::react
         end
+    end
+
+    %% ======================================================================================
+    %% REACT LOOP RECOVERY PATTERNS
+    %% ======================================================================================
+    subgraph REACT_RECOVERY["REACT LOOP RECOVERY PATTERNS"]
+        direction TB
+
+        subgraph RECOVERY_ITER_GUARDS["Iteration Guards"]
+            direction LR
+            RG_BUDGET["Budget: max_iterations<br/>per mode/tier"]:::react_guard
+            RG_CANCEL["Cancellation: checked<br/>between iterations"]:::react_guard
+            RG_TIMEOUT["Timeout: per-iteration<br/>LLM call limit"]:::react_guard
+            RG_VALID["Validation: allowlist +<br/>schema + safety check"]:::react_guard
+        end
+
+        subgraph RECOVERY_PATTERNS["Recovery / Nudge Patterns"]
+            direction TB
+            RP_DEGEN["DEGENERATE: Empty response<br/>--> nudge + strip tools (force text)"]:::react_recovery
+            RP_MALFORM["MALFORMED: Invalid tool call JSON<br/>--> nudge to simplify arguments"]:::react_recovery
+            RP_PSEUDO["PSEUDO-CODE: Text mimics tool call<br/>(tool_code, default_api., print())<br/>--> nudge to use real function call"]:::react_recovery
+            RP_TEXT_AFTER["TEXT-AFTER-TOOLS: Back writes text<br/>instead of submit_result after invoke<br/>--> nudge to call submit_result"]:::react_recovery
+            RP_LAST["LAST ITERATION: Back on final iter<br/>--> force submit_result with partials"]:::react_recovery
+        end
+
+        REACT_FRONT -.->|"uses"| RECOVERY_PATTERNS
+        REACT_BACK -.->|"uses"| RECOVERY_PATTERNS
     end
 
     %% ======================================================================================
@@ -334,6 +397,16 @@ graph TB
             SS_CONTROL["control (8KB)<br/>Writers: FSM + Phase1<br/>FlowState, TurnLock,<br/>IntentClassification,<br/>DomainContext, SafetyContext,<br/>active_task_ids, complexity_tier"]:::ss_system
             SS_HISTORY["history_active (8KB)<br/>Writer: FSM<br/>TypedHistoryEntry[]<br/>Types: user, ack, final,<br/>weave, clarification,<br/>hitl_request, hitl_response,<br/>error, proactive<br/>Sliding window: 20 entries"]:::ss_system
             SS_META["meta (2KB)<br/>Writer: FSM<br/>Turn count, latency,<br/>telemetry, token usage"]:::ss_system
+            SS_TEMPORAL["temporal_context<br/>Writer: FSM<br/>Time-based context,<br/>timezone, location"]:::ss_system
+        end
+
+        subgraph SS_MUTATION["Mutation Guard (3-Tier Validation)"]
+            direction LR
+            MG_SECTION["1. Section capacity<br/>Does mutation fit<br/>section budget?"]:::mutation_guard
+            MG_TIER["2. Tier capacity<br/>Does mutation fit<br/>HOT/WARM budget?"]:::mutation_guard
+            MG_TOTAL["3. Total capacity<br/>Does mutation fit<br/>overall limit?"]:::mutation_guard
+            MG_EMERGENCY["Emergency mode:<br/>>95% pressure<br/>ALL writes rejected"]:::mutation_guard
+            MG_SECTION --> MG_TIER --> MG_TOTAL
         end
 
         subgraph SS_TASK["Task Sections (FSM via DeltaAggregator)"]
@@ -381,6 +454,14 @@ graph TB
 
         subgraph PROMPT_COMPONENTS["Composable Prompt Sections (10)"]
             PS_IDENTITY["IDENTITY (~150 tok)"]:::prompt_section
+
+            subgraph OPP7_IDENTITY["OPP-7: Dynamic Identity"]
+                OPP7_CONTEXT["DynamicIdentityContext<br/>compute() per turn<br/>Returns IdentitySnapshot"]:::opp
+                OPP7_ROLE["ConversationalRole<br/>EXPERT | PEER | GUIDE |<br/>SUPPORTER | EXECUTOR<br/>Adapts to user signals"]:::opp_detail
+                OPP7_EXPERTISE["domain_expertise tracking<br/>formality_level drift<br/>emotional_attunement<br/>context_tags[]"]:::opp_detail
+                OPP7_CONTEXT --> OPP7_ROLE
+                OPP7_CONTEXT --> OPP7_EXPERTISE
+            end
             PS_REACT["REACT_RHYTHM (~200 tok)<br/>+ REDUCED variant (~80 tok)"]:::prompt_section
             PS_STATE["STATE_INTERP (~200 tok)<br/>+ CLARIFY / TASK / PRESENT<br/>focused variants (~60 tok)"]:::prompt_section
             PS_COGNITIVE["COGNITIVE_DISCIPLINE<br/>(~150 tok) + REDUCED"]:::prompt_section
@@ -398,6 +479,15 @@ graph TB
             AB_NEUTRAL["NEUTRAL: balanced<br/>(no modifier)"]:::affect_neutral
             AB_POSITIVE["POSITIVE: valence > 0.5, arousal > 0.6<br/>'Match energy. Celebrate.'"]:::affect_positive
             AB_ELEVATED["ELEVATED: abs(valence) > 0.3<br/>'Acknowledge feeling first.'"]:::affect_elevated
+
+            subgraph OPP3_HARD_CAPS["OPP-3: Affect Hard Constraints"]
+                OPP3_ENFORCER["apply_affect_hard_constraints()<br/>Enforces per-band limits<br/>on LLM generation params"]:::opp
+                OPP3_CRISIS_CAP["CRISIS: max_tokens=512<br/>vocab=simple, tools=2"]:::opp_detail
+                OPP3_LOW_CAP["LOW: max_tokens=1024<br/>vocab=simple, tools=3"]:::opp_detail
+                OPP3_NEUTRAL_CAP["NEUTRAL: no cap<br/>vocab=standard"]:::opp_detail
+                OPP3_POS_CAP["POSITIVE: max_tokens=2048<br/>vocab=rich"]:::opp_detail
+                OPP3_ELEV_CAP["ELEVATED: max_tokens=1536<br/>vocab=standard"]:::opp_detail
+            end
         end
 
         subgraph CLARIFY_DEPTH["Clarification Depth Tracking"]
@@ -507,6 +597,14 @@ graph TB
 
         HITL_RULES["Rules:<br/>Max 2 suspensions/task<br/>Approval mandatory for side-effects<br/>Auto-cancel on timeout<br/>ReAct history preserved on suspend<br/>Persisted in task_state.pending_hil"]:::hitl
 
+        subgraph OPP4_TRUST["OPP-4: Trust Accumulator"]
+            OPP4_ACCUM["TrustAccumulator<br/>initial_trust=0.5<br/>Records: APPROVE (+0.05)<br/>REJECT (-0.10), CANCEL (-0.08)<br/>MODIFY (-0.03), TIMEOUT (-0.15)<br/>AUTO_SUCCESS (+0.02)"]:::opp
+            OPP4_AUTO["should_auto_approve()<br/>trust >= 0.85 threshold<br/>AND risk_level <= 0.5<br/>Bypasses HITL for trusted users"]:::opp_detail
+            OPP4_ROUNDS["get_dynamic_max_rounds()<br/>High trust: fewer HITL rounds<br/>Low trust: more rounds<br/>base * (2 - trust_level)"]:::opp_detail
+            OPP4_ACCUM --> OPP4_AUTO
+            OPP4_ACCUM --> OPP4_ROUNDS
+        end
+
         subgraph HITL_L2_ENFORCE["FSM L2 Defense-in-Depth"]
             L2_ENFORCER["FSMHITLEnforcer<br/>Validates BEFORE invoke_capability:<br/>RED -> BLOCK (never execute)<br/>has_side_effects -> BLOCK_NEEDS_APPROVAL<br/>No prior approval -> force suspend<br/>Catches Back LLM judgment errors"]:::hitl
         end
@@ -550,6 +648,34 @@ graph TB
             WR_DISPATCH["DISPATCHING: Queue,<br/>deliver after dispatch"]:::weave_rule
             WR_DELIVER["DELIVERING: Chain,<br/>present sequentially"]:::weave_rule
         end
+
+        subgraph OPP1_PACING["OPP-1: Paced Delivery Protocol"]
+            OPP1_STRATEGY["PacingStrategy<br/>NONE | STAGGER |<br/>GROUP_BY_DOMAIN |<br/>PRIORITY_CASCADE"]:::opp
+            OPP1_PLAN["compute_pacing_plan()<br/>Analyzes batch results<br/>Returns PacingPlan:<br/>strategy, groups[],<br/>inter_group_delay_ms"]:::opp
+            OPP1_FLUSH["flush_paced(plan)<br/>Delivers groups with<br/>configurable delays<br/>between each group"]:::opp
+            OPP1_STRATEGY --> OPP1_PLAN
+            OPP1_PLAN --> OPP1_FLUSH
+        end
+
+        WEAVE_BATCHER -->|"pacing"| OPP1_FLUSH
+
+        subgraph OPP8_DELIVERY["OPP-8: Natural Flow Delivery"]
+            OPP8_CLASSIFY["classify_result()<br/>AWAITED | FOLLOW_UP |<br/>BACKGROUND | TIME_SENSITIVE |<br/>INFORMATIONAL"]:::opp
+            OPP8_FLOW["ConversationFlowSignal<br/>topic_match, depth,<br/>natural_pause, awaiting"]:::opp_detail
+            OPP8_ENGINE["DeliveryStrategyEngine<br/>13-rule decision table<br/>(D1-D13)"]:::opp
+            OPP8_MODE["DeliveryMode:<br/>DIRECT_PRESENT |<br/>CONVERSATIONAL_WEAVE |<br/>CONTEXTUAL_INJECT |<br/>BRIEF_NOTIFY |<br/>DEFERRED_QUEUE"]:::opp_detail
+            OPP8_PAUSE["on_natural_pause()<br/>Re-evaluate deferred<br/>results on topic shift"]:::opp
+            OPP8_CLASSIFY --> OPP8_ENGINE
+            OPP8_FLOW --> OPP8_ENGINE
+            OPP8_ENGINE --> OPP8_MODE
+            OPP8_ENGINE --> OPP8_PAUSE
+        end
+
+        subgraph OPP_PIPELINE["OPP Pipeline (Wiring Layer)"]
+            OPP_PIPE["OppPipeline<br/>Holds all 8 primitives<br/>9 lifecycle hooks<br/>Per-primitive enable/disable"]:::opp
+            OPP_HOOKS["Lifecycle Hooks:<br/>on_classify (OPP-2)<br/>on_pre_prompt_build (OPP-6,7)<br/>on_pre_llm_call (OPP-3)<br/>on_task_complete (OPP-8)<br/>on_hitl_outcome (OPP-4)<br/>on_pre_invoke (OPP-4)<br/>on_idle_tick (OPP-5)<br/>on_weave_flush (OPP-1)<br/>on_natural_pause (OPP-8)"]:::opp_detail
+            OPP_PIPE --> OPP_HOOKS
+        end
     end
 
     %% ======================================================================================
@@ -561,7 +687,7 @@ graph TB
         EXP_MIRROR["AffectiveMirror<br/>After EmotionalProcessor<br/>2ms budget<br/>Writes: tone envelope"]:::exp
         EXP_NARRATIVE["NarrativeWeaver<br/>Every 20th turn<br/>10ms budget<br/>Writes: narrative context"]:::exp
         EXP_ANTICIP["AnticipatoryResponder<br/>Every 30th turn<br/>15ms budget<br/>Writes: anticipation"]:::exp
-        EXP_PROACTIVE["ProactiveAgent<br/>COMPANIONING + 5s wait<br/>50ms budget<br/>Writes: fill message"]:::exp
+        EXP_PROACTIVE["ProactiveScheduler (OPP-5)<br/>Idle detection (5000ms)<br/>Cooldown: 15000ms<br/>Max 10/session<br/>Suppress: crisis, low affect<br/>Triggers: WAIT_STATUS,<br/>PROGRESS_UPDATE,<br/>CONTEXT_TIP, IDLE_CHECK_IN"]:::opp
         EXP_RHYTHM["RhythmController<br/>Every output<br/>1ms budget<br/>Writes: timing params"]:::exp
     end
 
@@ -570,6 +696,14 @@ graph TB
     %% ======================================================================================
     subgraph CONTEXT_ASSEMBLY["CONTEXT ASSEMBLY"]
         direction TB
+
+        subgraph OPP6_COMPRESSION["OPP-6: Episodic Compression"]
+            OPP6_COMPRESSOR["EpisodicCompressor<br/>recent_window=10<br/>episode_size=5<br/>min_turns_to_compress=15"]:::opp
+            OPP6_EPISODE["CompressedEpisode<br/>episode_id, turn_range,<br/>summary, key_facts[],<br/>topic, to_prompt_block()"]:::opp_detail
+            OPP6_RULES["Preservation Rules:<br/>HITL turns: always kept<br/>Safety turns: always kept<br/>Recent window: verbatim"]:::opp_detail
+            OPP6_COMPRESSOR --> OPP6_EPISODE
+            OPP6_COMPRESSOR --> OPP6_RULES
+        end
 
         DYN_PROMPT_BUILDER["DynamicPromptBuilder<br/>Mode-driven assembly<br/>128K context window<br/>80% safety margin<br/>Pre-call compression<br/>if over budget"]:::builder
 
@@ -668,16 +802,16 @@ graph TB
     BACK_HANDLER -.->|"read (lock-free)"| SESSION_STATE
 
     %% FSM state transitions
-    ST_LISTENING -->|"user.input"| ST_ACKING
-    ST_ACKING -->|"Phase1 done"| ST_DISPATCHING
-    ST_DISPATCHING -->|"ack emitted"| ST_COMPANIONING
-    ST_DISPATCHING -->|"task.dispatch"| ST_PROGRESSING
+    ST_LISTENING -->|"user.input"| ST_DISPATCHING
+    ST_DISPATCHING -->|"response.final (no dispatch)"| ST_LISTENING
+    ST_DISPATCHING -->|"task.dispatch"| ST_COMPANIONING
     ST_COMPANIONING -->|"task.complete"| ST_DELIVERING
     ST_DELIVERING -->|"response.final"| ST_LISTENING
     ST_DELIVERING -->|"pending_results?"| ST_WEAVING
     ST_WEAVING -->|"queue drained"| ST_LISTENING
     ST_COMPANIONING -->|"new user.input"| ST_INTERRUPT
     ST_COMPANIONING -->|"cancel intent"| ST_CANCELLING
+    ST_LISTENING -->|"task.complete (idle)"| ST_PROACTIVE
 
     %% Back -> Fabric
     TOOL_INVOKE -->|"execute"| FABRIC_PIPELINE
@@ -738,6 +872,90 @@ graph TB
     SS_HISTORY -->|"evict"| SS_HISTORY_WARM
     SS_TASK_ARTIFACTS -->|"evict"| SS_ARTIFACTS_WARM
     SS_NARRATIVE -->|"evict"| SS_NARRATIVE_WARM
+
+    %% Mutation guard
+    TOOL_BELIEFS -->|"validates"| MG_SECTION
+    TOOL_SCOREBOARD -->|"validates"| MG_SECTION
+    TOOL_NARRATIVE -->|"validates"| MG_SECTION
+
+    %% ======================================================================================
+    %% OPP KERNEL PRIMITIVE DATA FLOWS
+    %% ======================================================================================
+
+    %% OPP-1: Paced Delivery
+    OPP1_FLUSH -->|"grouped delivery"| FRONT_HANDLER
+
+    %% OPP-2: Recency Bias Decay
+    ULTRABERT -->|"classify()"| OPP2_ARBITER
+    OPP2_ARBITER -->|"decayed scores"| CONTROLLER
+
+    %% OPP-3: Affect Hard Constraints
+    AFFECT_MODULATION -->|"band"| OPP3_ENFORCER
+    OPP3_ENFORCER -->|"capped params"| ADAPTER_PORT
+
+    %% OPP-4: Trust Accumulator
+    OPP4_ACCUM -.->|"read outcomes"| SS_TASK_STATE
+    OPP4_AUTO -->|"auto-approve gate"| L2_ENFORCER
+    OPP4_ROUNDS -->|"dynamic max_rounds"| HITL_REQUEST
+
+    %% OPP-5: Proactive Scheduler
+    EXP_PROACTIVE -->|"evaluate triggers"| CONTROLLER
+    EXP_PROACTIVE -.->|"check affect"| SS_AFFECT
+
+    %% OPP-6: Episodic Compression
+    OPP6_COMPRESSOR -->|"compressed context"| DYN_PROMPT_BUILDER
+    OPP6_COMPRESSOR -.->|"read history"| SS_HISTORY
+
+    %% OPP-7: Dynamic Identity
+    OPP7_CONTEXT -->|"identity snapshot"| PS_IDENTITY
+    OPP7_CONTEXT -.->|"read affect"| SS_AFFECT
+    OPP7_CONTEXT -.->|"read beliefs"| SS_BELIEFS
+
+    %% OPP-8: Natural Flow Delivery
+    OPP8_ENGINE -->|"delivery decision"| CONTROLLER
+    OPP8_CLASSIFY -.->|"task result"| CONTROLLER
+    OPP8_PAUSE -->|"re-evaluate deferred"| CONTROLLER
+
+    %% OPP Pipeline: Wiring layer
+    CONTROLLER -->|"set_opp_pipeline()"| OPP_PIPE
+    OPP_PIPE -->|"on_task_complete"| OPP8_ENGINE
+    OPP_PIPE -->|"on_weave_flush"| OPP1_PLAN
+    OPP_PIPE -->|"on_hitl_outcome"| OPP4_ACCUM
+    OPP_PIPE -->|"on_pre_prompt_build"| OPP6_COMPRESSOR
+    OPP_PIPE -->|"on_pre_prompt_build"| OPP7_CONTEXT
+    OPP_PIPE -->|"on_pre_llm_call"| OPP3_ENFORCER
+    OPP_PIPE -->|"on_idle_tick"| EXP_PROACTIVE
+
+    %% ======================================================================================
+    %% OUTPUT CHANNEL & STREAMING ARCHITECTURE
+    %% ======================================================================================
+    subgraph OUTPUT_ARCH["OUTPUT CHANNEL & STREAMING"]
+        direction TB
+
+        subgraph STREAM_FLOW["Streaming Architecture"]
+            direction LR
+            SA_GEN["generate_stream()<br/>LLM yields StreamChunk<br/>(text_delta, tool_call_delta,<br/>thought_delta, done)"]:::output_stream
+            SA_EMIT["Front emits<br/>k1.response.stream.v1<br/>per chunk"]:::output_stream
+            SA_RENDER["OutputChannel subscribes<br/>+ renders live to user"]:::output_stream
+            SA_GEN --> SA_EMIT --> SA_RENDER
+        end
+
+        subgraph DELIVERY_MODES["Delivery Modes (OPP-8)"]
+            direction LR
+            DM_DIRECT["DIRECT_PRESENT<br/>Awaited result,<br/>immediate delivery"]:::delivery_mode
+            DM_WEAVE["CONVERSATIONAL_WEAVE<br/>Async result woven<br/>into conversation"]:::delivery_mode
+            DM_INJECT["CONTEXTUAL_INJECT<br/>Background result<br/>on topic match"]:::delivery_mode
+            DM_NOTIFY["BRIEF_NOTIFY<br/>Time-sensitive,<br/>short notification"]:::delivery_mode
+            DM_DEFER["DEFERRED_QUEUE<br/>Low-priority,<br/>hold for pause"]:::delivery_mode
+        end
+
+        PROACTIVE_DELIVERY["Proactive Delivery<br/>OPP-5 idle detection triggers<br/>PROACTIVE_WAKE state<br/>--> Front generates fill message"]:::output_stream
+    end
+
+    %% Output architecture flows
+    OUTPUT_CHANNEL -.->|"renders"| SA_RENDER
+    OPP8_ENGINE -->|"selects mode"| DELIVERY_MODES
+    EXP_PROACTIVE -->|"idle trigger"| PROACTIVE_DELIVERY
 
     %% ======================================================================================
     %% STYLE DEFINITIONS
@@ -844,3 +1062,25 @@ graph TB
     classDef band_green fill:#a5d6a7,stroke:#2e7d32,stroke-width:2px,color:#000
     classDef band_amber fill:#ffcc80,stroke:#ef6c00,stroke-width:2px,color:#000,font-weight:bold
     classDef band_red fill:#ef5350,stroke:#b71c1c,stroke-width:2px,color:#fff,font-weight:bold
+
+    %% Guard Actions
+    classDef guard_t fill:#a5d6a7,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef guard_p fill:#b3e5fc,stroke:#0288d1,stroke-width:2px,color:#000
+    classDef guard_o fill:#e0e0e0,stroke:#616161,stroke-width:1px,color:#000
+    classDef guard_q fill:#fff59d,stroke:#f9a825,stroke-width:2px,color:#000
+    classDef guard_d fill:#ef9a9a,stroke:#c62828,stroke-width:2px,color:#000
+
+    %% React Recovery
+    classDef react_guard fill:#fff9c4,stroke:#f9a825,stroke-width:1px,color:#000
+    classDef react_recovery fill:#ffccbc,stroke:#e64a19,stroke-width:1px,color:#000
+
+    %% Mutation Guard
+    classDef mutation_guard fill:#ffab91,stroke:#e64a19,stroke-width:1px,color:#000
+
+    %% Output / Streaming
+    classDef output_stream fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
+    classDef delivery_mode fill:#b3e5fc,stroke:#0288d1,stroke-width:1px,color:#000
+
+    %% OPP Kernel Primitives
+    classDef opp fill:#e8eaf6,stroke:#283593,stroke-width:2px,color:#000,font-weight:bold
+    classDef opp_detail fill:#c5cae9,stroke:#3949ab,stroke-width:1px,color:#000

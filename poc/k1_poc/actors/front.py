@@ -246,6 +246,25 @@ def _extract_scenario_data(
                 action = inner.get("action", "") if isinstance(inner, dict) else ""
                 final_answer = inner.get("final_answer", "") if isinstance(inner, dict) else ""
                 summary_lines.append(f"- {action}: {final_answer}")
+
+                # Include structured results data (e.g. web search results)
+                # so Front can present actual names, URLs, snippets to user.
+                inner_results = inner.get("results", []) if isinstance(inner, dict) else []
+                if isinstance(inner_results, list):
+                    for item in inner_results[:10]:
+                        if isinstance(item, dict):
+                            # Web search result: {title, url, snippet}
+                            title = item.get("title") or item.get("name", "")
+                            url = item.get("url") or item.get("href", "")
+                            snippet = item.get("snippet") or item.get("body", "")
+                            if title:
+                                line = f"  * {title}"
+                                if url:
+                                    line += f" -- {url}"
+                                if snippet:
+                                    line += f"\n    {snippet[:120]}"
+                                summary_lines.append(line)
+
             results_summary = "\n".join(summary_lines)
 
         narrative = _safe_get_section(ss, "narrative_active")
@@ -603,6 +622,7 @@ async def front_handler(
     tool_dispatcher: ToolDispatcher,
     all_tool_schemas: list[Any] | None = None,
     fsm_state: str | None = None,
+    opp_pipeline: Any | None = None,
 ) -> ReactResult:
     """Front handler with mode-driven prompt assembly.
 
@@ -620,6 +640,7 @@ async def front_handler(
             produces empty tool list.
         fsm_state: Explicit FSM state override. If None, reads from
             ss.control.flow_state.
+        opp_pipeline: OppPipeline instance for OPP-3/6/7 prompt enrichment.
 
     Returns:
         ReactResult from the ReAct loop execution.
@@ -733,6 +754,35 @@ async def front_handler(
             )
 
     # 8. Assemble prompt via mode-driven builder
+    # OPP-6/OPP-7: Enrich prompt with episodic compression + dynamic identity
+    opp_enrichment = None
+    if opp_pipeline is not None:
+        try:
+            history_active = _get_history_active(ss)
+            turns_for_opp = (
+                [{"role": e.get("role", ""), "text": e.get("text", "")} for e in history_active]
+                if history_active
+                else []
+            )
+            opp_enrichment = opp_pipeline.on_pre_prompt_build(
+                turns=turns_for_opp,
+                affect_band=affect_band,
+                complexity_tier=tier,
+                active_domains=[domain] if domain else [],
+            )
+            if opp_enrichment.compressed_context:
+                scenario_data["compressed_context"] = opp_enrichment.compressed_context
+                logger.info(
+                    "front_handler: OPP-6 compressed %d episodes, %d recent turns kept",
+                    opp_enrichment.episodes_used,
+                    opp_enrichment.recent_turns_kept,
+                )
+            if opp_enrichment.identity_block:
+                scenario_data["identity_block"] = opp_enrichment.identity_block
+                logger.info("front_handler: OPP-7 dynamic identity block injected")
+        except Exception:
+            logger.warning("front_handler: OPP prompt enrichment failed", exc_info=True)
+
     builder = DynamicPromptBuilder()
     context = builder.build(
         mode=mode,
@@ -748,7 +798,35 @@ async def front_handler(
     )
 
     # 9. Run ReAct loop (Section 7)
-    parent_id = envelope.envelope_id
+    # OPP-3: Apply affect hard caps to LLM params before invocation
+    opp_llm_overrides = None
+    if opp_pipeline is not None:
+        try:
+            opp_llm_overrides = opp_pipeline.on_pre_llm_call(
+                affect_band=affect_band,
+            )
+            if opp_llm_overrides.max_response_tokens is not None:
+                logger.info(
+                    "front_handler: OPP-3 affect caps band=%s max_tokens=%d vocab=%s",
+                    opp_llm_overrides.affect_band_applied,
+                    opp_llm_overrides.max_response_tokens,
+                    opp_llm_overrides.vocabulary_tier,
+                )
+        except Exception:
+            logger.warning("front_handler: OPP-3 affect caps failed", exc_info=True)
+
+    # Synthetic envelopes (e.g. weave batch) bypass the bus and are not
+    # tracked by the timing chain's causal buffer.  Using their envelope_id
+    # as parent_id for bus-published events (like response.final) causes the
+    # timing chain to buffer those events indefinitely waiting for a parent
+    # delivery that will never happen.  Fall back to the envelope's own
+    # parent_id which DID go through the bus.
+    from poc.k1_poc.bus.builders import SYNTHETIC_ID_START
+
+    if envelope.envelope_id >= SYNTHETIC_ID_START:
+        parent_id = envelope.parent_id
+    else:
+        parent_id = envelope.envelope_id
 
     logger.info(
         "front_handler: LLM INPUT  prompt_len=%d messages=%d tools=%d max_iter=%d affect=%s",

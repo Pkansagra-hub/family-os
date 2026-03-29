@@ -366,6 +366,122 @@ class WeaveDecisionResult:
 
 
 # =====================================================================
+# OPP-1 -- Paced Delivery Protocol (generalized kernel primitive)
+# =====================================================================
+
+
+class PacingStrategy(IntEnum):
+    """How batched results should be paced to the user.
+
+    Generalized kernel primitive: verticals configure which strategy
+    to apply via policy hooks. The kernel provides the execution.
+
+    Values:
+        NONE           -- Deliver all results in a single envelope (default).
+        STAGGER        -- Deliver one result at a time with inter-group delay.
+        GROUP_BY_DOMAIN -- Group results by domain, deliver each group
+                          with inter-group delay.
+        PRIORITY_CASCADE -- Deliver critical/urgent first, then normal,
+                           then low priority with escalating delays.
+    """
+
+    NONE = 0
+    STAGGER = 1
+    GROUP_BY_DOMAIN = 2
+    PRIORITY_CASCADE = 3
+
+
+@dataclass(frozen=True)
+class PacingPlan:
+    """Execution plan for paced delivery of batched results.
+
+    Produced by compute_pacing_plan(), consumed by WeaveBatcher.flush().
+
+    Attributes:
+        strategy:            The PacingStrategy used.
+        groups:              Ordered list of result groups. Each group is
+                             delivered as a single envelope.
+        inter_group_delay_ms: Delay in ms before delivering each group
+                             (index-aligned with groups; first is always 0).
+    """
+
+    strategy: PacingStrategy = PacingStrategy.NONE
+    groups: list[list[dict[str, Any]]] = field(default_factory=list)
+    inter_group_delay_ms: list[int] = field(default_factory=list)
+
+
+def compute_pacing_plan(
+    results: list[dict[str, Any]],
+    strategy: PacingStrategy = PacingStrategy.NONE,
+    base_delay_ms: int = 800,
+) -> PacingPlan:
+    """Compute a PacingPlan for the given results and strategy.
+
+    Generalized kernel primitive: the strategy is selected by the
+    vertical's weave policy hook. The kernel computes the plan.
+
+    Args:
+        results:       Sorted result dicts from sort_results_for_delivery().
+        strategy:      Pacing strategy to apply.
+        base_delay_ms: Base inter-group delay (scaled by strategy).
+
+    Returns:
+        PacingPlan ready for execution by WeaveBatcher.
+    """
+    if not results or strategy == PacingStrategy.NONE:
+        return PacingPlan(
+            strategy=PacingStrategy.NONE,
+            groups=[results] if results else [],
+            inter_group_delay_ms=[0] if results else [],
+        )
+
+    if strategy == PacingStrategy.STAGGER:
+        groups = [[r] for r in results]
+        delays = [0] + [base_delay_ms] * (len(groups) - 1)
+        return PacingPlan(
+            strategy=strategy,
+            groups=groups,
+            inter_group_delay_ms=delays,
+        )
+
+    if strategy == PacingStrategy.GROUP_BY_DOMAIN:
+        domain_buckets: dict[str, list[dict[str, Any]]] = {}
+        for r in results:
+            domain = _extract_domain(r)
+            domain_buckets.setdefault(domain, []).append(r)
+        groups = list(domain_buckets.values())
+        delays = [0] + [base_delay_ms] * (len(groups) - 1)
+        return PacingPlan(
+            strategy=strategy,
+            groups=groups,
+            inter_group_delay_ms=delays,
+        )
+
+    if strategy == PacingStrategy.PRIORITY_CASCADE:
+        urgency_order = {"critical": 0, "urgent": 0, "normal": 1, "low": 2}
+        buckets: dict[int, list[dict[str, Any]]] = {}
+        for r in results:
+            urg = r.get("urgency", "normal")
+            rank = urgency_order.get(urg, 1)
+            buckets.setdefault(rank, []).append(r)
+        groups = [buckets[k] for k in sorted(buckets)]
+        delays = [0]
+        for i in range(1, len(groups)):
+            delays.append(base_delay_ms * i)
+        return PacingPlan(
+            strategy=strategy,
+            groups=groups,
+            inter_group_delay_ms=delays,
+        )
+
+    return PacingPlan(
+        strategy=PacingStrategy.NONE,
+        groups=[results],
+        inter_group_delay_ms=[0],
+    )
+
+
+# =====================================================================
 # 8.1.1 -- WeaveSignal dataclass
 # =====================================================================
 

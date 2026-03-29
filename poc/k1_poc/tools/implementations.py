@@ -436,19 +436,27 @@ def execute_update_narrative(args: dict, ctx: ToolContext) -> ToolResult:
 
     elif action == "resume":
         existing = narrative.get_thread(thread_id)
-        if not existing:
-            return ToolResult(
-                tool_name="update_narrative",
-                status="error",
-                error=f"Thread '{thread_id}' not found for resume",
+        if existing:
+            req = MutationRequest.create(
+                section="narrative_active",
+                operation="switch_to",
+                data={"thread_id": thread_id},
+                writer_id=writer_id,
+                cognitive_trace_id=ctx.cognitive_trace_id,
             )
-        req = MutationRequest.create(
-            section="narrative_active",
-            operation="switch_to",
-            data={"thread_id": thread_id},
-            writer_id=writer_id,
-            cognitive_trace_id=ctx.cognitive_trace_id,
-        )
+        else:
+            # Thread not yet opened -- auto-create (same as switch)
+            req = MutationRequest.create(
+                section="narrative_active",
+                operation="create_thread",
+                data={
+                    "title": thread_id,
+                    "goal": summary or "",
+                    "auto_switch": True,
+                },
+                writer_id=writer_id,
+                cognitive_trace_id=ctx.cognitive_trace_id,
+            )
         resp = ctx.writer_port.request_mutation(req)
         if not resp.approved:
             return ToolResult(tool_name="update_narrative", status="error", error=resp.reason)
@@ -456,10 +464,18 @@ def execute_update_narrative(args: dict, ctx: ToolContext) -> ToolResult:
     elif action == "close":
         existing = narrative.get_thread(thread_id)
         if not existing:
+            # Idempotent: thread never opened or already closed -- succeed
+            primary = narrative._primary_thread
+            active_thread = primary.title if primary else ""
+            total_threads = len(narrative._thread_index)
             return ToolResult(
                 tool_name="update_narrative",
-                status="error",
-                error=f"Thread '{thread_id}' not found for close",
+                status="ok",
+                data={
+                    "active_thread": active_thread,
+                    "total_threads": total_threads,
+                    "note": "thread already closed or never opened",
+                },
             )
         req = MutationRequest.create(
             section="narrative_active",

@@ -407,6 +407,11 @@ class ConciergeController:
         self._weave_fallback = WeaveFallbackHandler()
         self._digest_flush_task: asyncio.Task[None] | None = None
         self._async_results_context: str = ""  # M8 E8.5.4: deferred results for STANDARD injection
+        self._deferred_proactive_task: asyncio.Task[None] | None = (
+            None  # Proactive delivery timer for same-turn completions
+        )
+        # OPP Pipeline: wires all 8 OPP primitives into lifecycle hooks
+        self._opp_pipeline: Any | None = None
         logger.info(
             "ConciergeController.__init__: assembling sub-components "
             "(FrontLock, CancelHandler, SuspensionManager, ControlExtension, "
@@ -650,6 +655,24 @@ class ConciergeController:
         """
         self._activity_tracker = tracker
         logger.info("ConciergeController.set_activity_tracker: attached")
+
+    def set_opp_pipeline(self, pipeline: Any) -> None:
+        """Attach OppPipeline to wire all 8 OPP primitives into lifecycle hooks.
+
+        The pipeline is called at:
+          - _on_task_complete_adaptive (OPP-8 delivery strategy)
+          - _deliver_weave_immediate (OPP-1 pacing)
+          - on_user_input (OPP-2 classify enrichment)
+          - pre-LLM call (OPP-3 affect hard caps)
+          - HITL resolution (OPP-4 trust accumulator)
+          - idle tick (OPP-5 proactive scheduler)
+          - prompt build (OPP-6 compression, OPP-7 identity)
+        """
+        self._opp_pipeline = pipeline
+        logger.info(
+            "ConciergeController.set_opp_pipeline: attached, status=%s",
+            pipeline.status() if hasattr(pipeline, "status") else "unknown",
+        )
 
     # ------------------------------------------------------------------
     # M8 E8.5.3: HITL pending check for WeaveSignal
@@ -2367,6 +2390,11 @@ class ConciergeController:
                     envelope,
                 )
                 self._finalize_turn(envelope)
+                # BUG-6 FIX: Schedule proactive delivery for deferred results.
+                # Without this, deferred same-turn completions sit silently
+                # until the user sends a new message.  The 2-second delay
+                # gives time for any additional tasks to complete and batch.
+                self._schedule_deferred_proactive_delivery(envelope)
             return
 
         # === Step 3: M7 BackPool release (BEFORE signal collection) ===
@@ -2446,6 +2474,32 @@ class ConciergeController:
 
         # === Step 10: Emit weave.decided.v1 event (8.2.4) ===
         self._emit_weave_decided(decision, envelope, signal, fallback_used=fallback_used)
+
+        # === Step 10b: OPP-8 Delivery Strategy (natural flow) ===
+        delivery_decision = None
+        if self._opp_pipeline is not None:
+            dispatch_turn = self._task_dispatch_turns.get(task_id, 0)
+            delivery_decision = self._opp_pipeline.on_task_complete(
+                result=payload,
+                fsm_state=self._state.name,
+                active_dispatch_task_ids=frozenset(self._active_task_ids),
+                current_turn=self._turn_number,
+                dispatch_turn=dispatch_turn,
+                has_expiry=bool(payload.get("expiry")),
+                is_chained=bool(payload.get("depends_on")),
+                ss=self._ss,
+                result_domain=payload.get("domain", ""),
+                emotional_gate=(
+                    signal.emotional_gate if hasattr(signal, "emotional_gate") else "open"
+                ),
+                weave_decision=decision,
+            )
+            logger.info(
+                "FSM._on_task_complete_adaptive: OPP-8 delivery=%s class=%s reason=%s",
+                delivery_decision.delivery_mode,
+                delivery_decision.result_class,
+                delivery_decision.reasoning[:60] if delivery_decision.reasoning else "",
+            )
 
         # === Step 11: Branch on decision ===
         logger.info(
@@ -3015,6 +3069,21 @@ class ConciergeController:
         if self._hil_coordinator is not None:
             self._hil_coordinator._pending_requests.pop(task_id, None)
 
+        # OPP-4: Record HITL outcome in trust accumulator
+        if self._opp_pipeline is not None:
+            decision_branch = payload.get("decision_branch", "clarified")
+            event_map = {
+                "approved": "approve",
+                "rejected": "reject",
+                "cancelled": "cancel",
+                "modified": "modify",
+                "clarified": "approve",
+            }
+            self._opp_pipeline.on_hitl_outcome(
+                event_type=event_map.get(decision_branch, "approve"),
+                task_id=task_id,
+            )
+
         # Transition to COMPANIONING
         self._transition(
             ConciergeState.COMPANIONING,
@@ -3488,10 +3557,17 @@ class ConciergeController:
         results: list[dict[str, Any]],
         parent_id: int,
     ) -> Envelope:
-        """Build a synthetic weave batch envelope for Front delivery."""
-        from poc.k1_poc.bus.builders import build_weave_batch
+        """Build a synthetic weave batch envelope for Front delivery.
 
-        return build_weave_batch(
+        Assigns a unique negative envelope_id to avoid dedup collisions
+        (synthetic envelopes bypass the bus and would otherwise all have
+        envelope_id=0, causing the coordinator dedup guard to drop them).
+        """
+        from dataclasses import replace as _dc_replace
+
+        from poc.k1_poc.bus.builders import build_weave_batch, next_synthetic_envelope_id
+
+        env = build_weave_batch(
             payload={
                 "results": results,
                 "count": len(results),
@@ -3499,6 +3575,74 @@ class ConciergeController:
             },
             parent_id=parent_id,
         )
+        return _dc_replace(env, envelope_id=next_synthetic_envelope_id())
+
+    # ------------------------------------------------------------------
+    # BUG-6 FIX: Proactive delivery for same-turn deferred results
+    # ------------------------------------------------------------------
+
+    _DEFERRED_PROACTIVE_DELAY_S: float = 2.0
+
+    def _schedule_deferred_proactive_delivery(self, envelope: Envelope) -> None:
+        """Schedule proactive delivery of deferred same-turn results.
+
+        When a task completes in the same turn it was dispatched, results
+        are stored in deferred_results. Without this timer, results sit
+        silently until the user sends a new message -- making the bot
+        appear unresponsive.
+
+        After a short delay (2s for batching), this method transitions
+        to DELIVERING and flushes deferred results via the PRESENT/WEAVE
+        path so results arrive proactively.
+
+        Sync test path (no event loop): delivers immediately.
+        """
+        if self._deferred_proactive_task and not self._deferred_proactive_task.done():
+            return  # Timer already running
+
+        if not self._turn_state.has_deferred_results:
+            return  # Nothing to deliver
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Sync path (tests): deliver immediately
+            self._flush_deferred_proactive(envelope)
+            return
+
+        _saved_envelope = envelope
+
+        async def _delayed_proactive() -> None:
+            await asyncio.sleep(self._DEFERRED_PROACTIVE_DELAY_S)
+            # Only deliver if still LISTENING and deferred results exist.
+            # If the user spoke during the delay, _check_deferred_results_on_input
+            # already handled it and we should not double-deliver.
+            if self._state == ConciergeState.LISTENING and self._turn_state.has_deferred_results:
+                self._flush_deferred_proactive(_saved_envelope)
+
+        self._deferred_proactive_task = loop.create_task(_delayed_proactive())
+
+    def _flush_deferred_proactive(self, envelope: Envelope) -> None:
+        """Proactively deliver deferred results without waiting for user input.
+
+        Moves deferred results into pending_results, then uses the existing
+        weave delivery pipeline (IMMEDIATE path) to push results to Front.
+        """
+        deferred = self._turn_state.drain_deferred()
+        if not deferred:
+            return
+
+        logger.info(
+            "FSM._flush_deferred_proactive: delivering %d deferred results proactively",
+            len(deferred),
+        )
+
+        # Move deferred items into the pending_results queue
+        for item in deferred:
+            self._turn_state.pending_results.append(item)
+
+        # Deliver via the immediate weave path
+        self._deliver_weave_immediate(envelope)
 
     def _schedule_weave_flush(self, parent_envelope: Envelope) -> None:
         """Schedule (or immediately execute) a weave flush for pending results.
@@ -3543,6 +3687,20 @@ class ConciergeController:
             self._publish_dead_letter(stub, "expired")
         if not results:
             return
+
+        # OPP-1: Compute pacing plan for batch delivery
+        if self._opp_pipeline is not None and len(results) > 1:
+            pacing = self._opp_pipeline.on_weave_flush(
+                results=results,
+                batch_count=len(results),
+            )
+            if pacing.use_pacing:
+                logger.info(
+                    "FSM._flush_weave_now: OPP-1 pacing strategy=%s groups=%d",
+                    pacing.strategy,
+                    pacing.group_count,
+                )
+
         weave_envelope = self._build_weave_envelope(results, parent_id)
         if self._front_lock.try_deliver(weave_envelope):
             self._deliver_to_front(weave_envelope)
@@ -3809,6 +3967,9 @@ class ConciergeController:
         If deferred results exist, re-evaluate the policy.  Results
         that are no longer DEFER are formatted as async_results_context
         and injected into the STANDARD prompt.
+
+        OPP-8: Also consults DeliveryStrategyEngine.on_natural_pause()
+        to determine which deferred results should now be surfaced.
         """
         if not self._turn_state.has_deferred_results:
             return
@@ -3816,6 +3977,19 @@ class ConciergeController:
         deferred = self._turn_state.drain_deferred()
         if not deferred:
             return
+
+        # OPP-8: Natural pause delivery strategy for deferred results
+        if self._opp_pipeline is not None:
+            opp_decisions = self._opp_pipeline.on_natural_pause(
+                deferred_results=deferred,
+            )
+            if opp_decisions:
+                logger.info(
+                    "FSM._check_deferred: OPP-8 natural pause re-evaluated %d deferred, "
+                    "%d ready to deliver",
+                    len(deferred),
+                    len(opp_decisions),
+                )
 
         deliver_now: list[dict[str, Any]] = []
         still_deferred: list[dict[str, Any]] = []
@@ -3879,6 +4053,22 @@ class ConciergeController:
                         or result_data.get("description")
                         or f"Task {tid} completed"
                     )
+                    # Include structured results so Front can present actual
+                    # data (search results, names, URLs) to the user.
+                    inner_results = result_data.get("results", [])
+                    if isinstance(inner_results, list) and inner_results:
+                        for ritem in inner_results[:10]:
+                            if isinstance(ritem, dict):
+                                title = ritem.get("title") or ritem.get("name", "")
+                                url = ritem.get("url") or ritem.get("href", "")
+                                snippet = ritem.get("snippet") or ritem.get("body", "")
+                                if title:
+                                    detail = f"  * {title}"
+                                    if url:
+                                        detail += f" -- {url}"
+                                    if snippet:
+                                        detail += f"\n    {snippet[:120]}"
+                                    lines.append(detail)
                 else:
                     summary = str(result_data)[:120] if result_data else f"Task {tid} completed"
                 prefix = "[URGENT] " if urg in ("critical", "urgent") else ""

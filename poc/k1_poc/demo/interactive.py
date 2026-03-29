@@ -195,14 +195,13 @@ class InteractiveDemoLoop:
             text[:80],
         )
 
-        # Check for IoT events BEFORE this turn
-        iot = self._coord.get_iot_stubs()
-        if iot.has_event(self._turn):
-            logger.info("TURN: IoT event at turn %d", self._turn)
-            print_system_message(f"IoT event at turn {self._turn}", "info")
-            iot.check(self._turn)
-            # Give the bus a moment to process the proactive event
-            await asyncio.sleep(0.3)
+        # IoT proactive stubs disabled -- scripted events removed
+        # iot = self._coord.get_iot_stubs()
+        # if iot.has_event(self._turn):
+        #     logger.info("TURN: IoT event at turn %d", self._turn)
+        #     print_system_message(f"IoT event at turn {self._turn}", "info")
+        #     iot.check(self._turn)
+        #     await asyncio.sleep(0.3)
 
         output = self._coord.get_output_channel()
 

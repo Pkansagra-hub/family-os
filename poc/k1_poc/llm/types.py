@@ -44,6 +44,7 @@ class FinishReason(str, Enum):
     ERROR = "error"
     SAFETY = "safety"
     VALIDATION_FALLBACK = "validation_fallback"
+    MALFORMED_TOOL_CALL = "malformed_tool_call"
 
 
 class ThinkingLevel(str, Enum):

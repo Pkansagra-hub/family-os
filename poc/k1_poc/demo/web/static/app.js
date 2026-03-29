@@ -19,6 +19,9 @@ const state = {
     family: null,
     streamingMsgId: null,
     streamBuffer: "",
+    thinkingBuffer: "",
+    thinkingActive: false,
+    _thinkingStartMs: null,
     timelineEntries: [],
     lastActivity: null,
     currentAffect: { emotion: "neutral", valence: 0.5 },
@@ -208,16 +211,43 @@ function handleResponse(msg) {
         const el = document.getElementById(state.streamingMsgId);
         if (el) {
             const affectInfo = AFFECT_MAP[affect] || AFFECT_MAP.neutral;
-            const content = el.querySelector(".msg-content");
             const sender = el.querySelector(".msg-sender");
             el.classList.remove("streaming-placeholder");
-            if (content) content.innerHTML = formatMessageText(msg.text);
+
+            // Collapse thinking block if present
+            const thinkBlock = el.querySelector(".thinking-block");
+            if (thinkBlock) {
+                thinkBlock.classList.add("collapsed");
+                thinkBlock.classList.remove("active");
+                const toggle = thinkBlock.querySelector(".thinking-toggle");
+                if (toggle) {
+                    const dur = _thinkingDuration();
+                    toggle.innerHTML = `<span class="thinking-chevron"></span> Thought for ${dur}`;
+                }
+            }
+
+            // Build response content (below thinking block)
+            let contentArea = el.querySelector(".msg-response-text");
+            if (!contentArea) {
+                contentArea = document.createElement("div");
+                contentArea.className = "msg-response-text";
+                const body = el.querySelector(".msg-content");
+                if (body) body.appendChild(contentArea);
+            }
+            contentArea.innerHTML = formatMessageText(msg.text);
+
+            // Remove cursor
+            const cursor = el.querySelector(".stream-cursor");
+            if (cursor) cursor.remove();
+
             if (sender) {
                 sender.innerHTML = `Concierge <span class="msg-affect-tag" style="background:${affectInfo.color}22;color:${affectInfo.color}">${affect}</span>`;
             }
         }
         state.streamingMsgId = null;
         state.streamBuffer = "";
+        state.thinkingBuffer = "";
+        state.thinkingActive = false;
         showStreaming(false, DEFAULT_STREAMING_LABEL);
         updateAffect(affect, state.currentAffect.valence);
         scrollToBottom();
@@ -229,15 +259,80 @@ function handleResponse(msg) {
 
 function handleStreamChunk(msg) {
     ensureStreamingMessage();
+    const el = document.getElementById(state.streamingMsgId);
+    if (!el) return;
 
     if (msg.chunk_type === "thinking") {
-        updateStreamingMessage(state.streamingMsgId, "Thinking...");
+        // Live thinking text -- render inside collapsible thinking block
+        state.thinkingActive = true;
+        state.thinkingBuffer += (msg.text || "");
+
+        let thinkBlock = el.querySelector(".thinking-block");
+        if (!thinkBlock) {
+            // Create thinking block on first thinking chunk
+            state._thinkingStartMs = Date.now();
+            const content = el.querySelector(".msg-content");
+            // Clear placeholder
+            content.innerHTML = "";
+            thinkBlock = document.createElement("div");
+            thinkBlock.className = "thinking-block active";
+            thinkBlock.innerHTML = `
+                <div class="thinking-toggle">
+                    <span class="thinking-chevron"></span>
+                    <span class="thinking-dots"><span></span><span></span><span></span></span>
+                    Thinking...
+                </div>
+                <div class="thinking-content"></div>
+            `;
+            content.appendChild(thinkBlock);
+
+            // Toggle collapse on click
+            thinkBlock.querySelector(".thinking-toggle").addEventListener("click", () => {
+                thinkBlock.classList.toggle("collapsed");
+            });
+        }
+
+        // Stream thinking text
+        const thinkContent = thinkBlock.querySelector(".thinking-content");
+        if (thinkContent) {
+            thinkContent.innerHTML = formatThinkingText(state.thinkingBuffer);
+            scrollToBottom();
+        }
+
         showStreaming(true, DEFAULT_STREAMING_LABEL);
         return;
     }
 
-    updateStreamingMessage(state.streamingMsgId, "Drafting reply...");
+    // Text chunk -- show in response area below thinking block
+    if (msg.chunk_type === "text") {
+        state.streamBuffer += (msg.text || "");
+        let contentArea = el.querySelector(".msg-response-text");
+        if (!contentArea) {
+            contentArea = document.createElement("div");
+            contentArea.className = "msg-response-text";
+            const content = el.querySelector(".msg-content");
+            content.appendChild(contentArea);
+        }
+        contentArea.innerHTML = formatMessageText(state.streamBuffer) +
+            '<span class="stream-cursor"></span>';
+        scrollToBottom();
+    }
+
     showStreaming(true, "Concierge is drafting a reply...");
+}
+
+function _thinkingDuration() {
+    if (!state._thinkingStartMs) return "a moment";
+    const sec = Math.round((Date.now() - state._thinkingStartMs) / 1000);
+    if (sec < 1) return "< 1s";
+    return `${sec}s`;
+}
+
+function formatThinkingText(text) {
+    // Minimal formatting for thinking: escape HTML, preserve newlines
+    let html = escapeHtml(text);
+    html = html.replace(/\n/g, "<br>");
+    return html;
 }
 
 function finishStreaming(removePlaceholder = false) {
@@ -253,6 +348,9 @@ function finishStreaming(removePlaceholder = false) {
         }
         state.streamingMsgId = null;
         state.streamBuffer = "";
+        state.thinkingBuffer = "";
+        state.thinkingActive = false;
+        state._thinkingStartMs = null;
     }
     showStreaming(false, DEFAULT_STREAMING_LABEL);
 }
@@ -337,7 +435,14 @@ function handleToolEvent(msg) {
     if (msg.actor === "front" && msg.phase === "started" && !EXTERNAL_TOOLS.has(msg.tool_name)) {
         const label = STREAMING_TOOL_LABELS[msg.tool_name] || "Thinking...";
         ensureStreamingMessage();
-        updateStreamingMessage(state.streamingMsgId, label);
+        // Update the placeholder text if no thinking block is active yet
+        const el = document.getElementById(state.streamingMsgId);
+        if (el && !el.querySelector(".thinking-block")) {
+            const content = el.querySelector(".msg-content");
+            if (content) {
+                content.innerHTML = `<span class="stream-placeholder-text">${escapeHtml(label)}</span>`;
+            }
+        }
         showStreaming(true, label);
     }
 
@@ -555,7 +660,6 @@ function createStreamingMessage(id) {
             <div class="msg-sender">Concierge</div>
             <div class="msg-content">
                 <span class="stream-placeholder-text">Thinking...</span>
-                <span class="stream-cursor"></span>
             </div>
             <div class="msg-meta"><span>${formatTime()}</span></div>
         </div>
@@ -564,19 +668,13 @@ function createStreamingMessage(id) {
     scrollToBottom();
 }
 
-function updateStreamingMessage(id, label) {
-    const el = document.getElementById(id);
-    if (!el) return;
-
-    const content = el.querySelector(".msg-content");
-    content.innerHTML = `<span class="stream-placeholder-text">${escapeHtml(label)}</span><span class="stream-cursor"></span>`;
-    scrollToBottom();
-}
-
 function ensureStreamingMessage() {
     if (state.streamingMsgId) return;
     state.streamingMsgId = "stream-" + Date.now();
     state.streamBuffer = "";
+    state.thinkingBuffer = "";
+    state.thinkingActive = false;
+    state._thinkingStartMs = null;
     createStreamingMessage(state.streamingMsgId);
 }
 
@@ -867,7 +965,6 @@ function sendMessage() {
     });
 
     dom.input.value = "";
-    updateStreamingMessage(state.streamingMsgId, "Thinking...");
     showStreaming(true, DEFAULT_STREAMING_LABEL);
 }
 

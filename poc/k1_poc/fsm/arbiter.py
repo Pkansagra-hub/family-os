@@ -291,10 +291,75 @@ _RELATED_DOMAINS: dict[str, set[str]] = {
 }
 
 
+# =========================================================================
+# OPP-2 -- Recency Bias Decay (generalized kernel primitive)
+# =========================================================================
+
+
+def _apply_recency_decay(
+    raw_score: float,
+    dispatch_turn: int,
+    current_turn: int,
+    decay_per_turn: float | None = None,
+) -> float:
+    """Apply recency decay to an overlap score.
+
+    Older inflight tasks produce weaker overlap signals. This prevents
+    the arbiter from treating a 10-turn-old task the same as one
+    dispatched last turn.
+
+    Args:
+        raw_score:      Undecayed overlap score (0.0 - 1.0).
+        dispatch_turn:  Turn when the task was dispatched.
+        current_turn:   Current conversation turn.
+        decay_per_turn: Decay factor per turn. None = read from config.
+
+    Returns:
+        Decayed score, clamped to [0.0, 1.0].
+    """
+    if decay_per_turn is None:
+        try:
+            decay_per_turn = get_config().arbiter.recency_decay_per_turn
+        except Exception:
+            decay_per_turn = 0.15
+
+    age = max(0, current_turn - dispatch_turn)
+    if age == 0:
+        return raw_score
+
+    decayed = raw_score * (1.0 - decay_per_turn) ** age
+    return max(0.0, min(1.0, decayed))
+
+
+def is_short_input(text: str, threshold: int | None = None) -> bool:
+    """Check if user input is too short for reliable overlap scoring.
+
+    Short inputs like "ok", "yes", "sure" should not trigger
+    MODIFY_INFLIGHT because they lack semantic content for reliable
+    domain/entity matching.
+
+    Args:
+        text:      Raw user input.
+        threshold: Word count threshold. None = read from config.
+
+    Returns:
+        True if input has fewer words than threshold.
+    """
+    if threshold is None:
+        try:
+            threshold = get_config().arbiter.short_input_word_threshold
+        except Exception:
+            threshold = 3
+
+    words = text.strip().split()
+    return len(words) < threshold
+
+
 def domain_overlap(phase1: Phase1Result, inflight: InflightContext) -> float:
     """Score [0.0, 1.0] how much the new input's domain matches inflight tasks.
 
     POC: exact string match = 1.0, related domain = 0.5, else 0.0.
+    OPP-2: Recency decay -- older tasks get lower overlap scores.
     Production: cosine similarity on UltraBERT domain embeddings.
     """
     if not inflight.tasks:
@@ -312,16 +377,19 @@ def domain_overlap(phase1: Phase1Result, inflight: InflightContext) -> float:
         if not task_domain or task_domain == "general":
             continue
 
+        raw_score = 0.0
         if input_domain == task_domain:
-            return 1.0  # Exact match -- maximum overlap
+            raw_score = 1.0
+        elif task_domain in related:
+            raw_score = 0.5
+        else:
+            task_related = _RELATED_DOMAINS.get(task_domain, set())
+            if input_domain in task_related:
+                raw_score = 0.5
 
-        if task_domain in related:
-            best = max(best, 0.5)
-
-        # Check reverse: task domain's related set contains input domain
-        task_related = _RELATED_DOMAINS.get(task_domain, set())
-        if input_domain in task_related:
-            best = max(best, 0.5)
+        if raw_score > 0.0:
+            decayed = _apply_recency_decay(raw_score, task.dispatch_turn, inflight.current_turn)
+            best = max(best, decayed)
 
     return best
 
@@ -330,6 +398,7 @@ def entity_overlap(phase1: Phase1Result, inflight: InflightContext) -> float:
     """Score [0.0, 1.0] how much the new input's entities match inflight tasks.
 
     POC: Jaccard coefficient on entity text sets.
+    OPP-2: Per-task Jaccard with recency decay, take best score.
     Production: entity-linking via NER model.
     """
     if not inflight.tasks:
@@ -350,21 +419,25 @@ def entity_overlap(phase1: Phase1Result, inflight: InflightContext) -> float:
     if not input_entities:
         return 0.0
 
-    # Collect all inflight task entities
-    inflight_entities: set[str] = set()
+    best = 0.0
     for task in inflight.tasks:
+        task_entities: set[str] = set()
         for ent_text in task.entities:
             if ent_text:
-                inflight_entities.add(ent_text.lower().strip())
+                task_entities.add(ent_text.lower().strip())
 
-    if not inflight_entities:
-        return 0.0
+        if not task_entities:
+            continue
 
-    # Jaccard coefficient
-    intersection = input_entities & inflight_entities
-    union = input_entities | inflight_entities
+        intersection = input_entities & task_entities
+        union = input_entities | task_entities
+        raw_jaccard = len(intersection) / len(union) if union else 0.0
 
-    return len(intersection) / len(union) if union else 0.0
+        if raw_jaccard > 0.0:
+            decayed = _apply_recency_decay(raw_jaccard, task.dispatch_turn, inflight.current_turn)
+            best = max(best, decayed)
+
+    return best
 
 
 # =========================================================================
@@ -491,6 +564,13 @@ class ConversationArbiter:
         # Compute metadata once for all paths
         d_overlap = domain_overlap(phase1, inflight) if has_inflight else 0.0
         e_overlap = entity_overlap(phase1, inflight) if has_inflight else 0.0
+
+        # OPP-2: Short input penalty -- reduce confidence of overlap-based
+        # decisions when input is too short for reliable matching
+        short_input = is_short_input(text)
+        if short_input and has_inflight:
+            d_overlap *= 0.5
+            e_overlap *= 0.5
 
         routing_metadata = {
             "intent_class": phase1.intent_classification,

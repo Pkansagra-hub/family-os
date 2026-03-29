@@ -469,8 +469,8 @@ async def mock_send_group_message(params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def mock_send_reminder(params: dict[str, Any]) -> dict[str, Any]:
-    recipient = params.get("recipient", "unknown")
-    text = params.get("reminder_text", "")
+    recipient = params.get("recipient") or params.get("recipients", "unknown")
+    text = params.get("reminder_text") or params.get("text") or params.get("message", "")
     reminder_id = _deterministic_id("REM", f"{recipient}-{text[:20]}")
     return {
         "success": True,

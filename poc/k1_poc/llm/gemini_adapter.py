@@ -164,7 +164,7 @@ class GeminiConciergeAdapter:
         model = self._select_model(request)
         contents = self._to_gemini_contents(request.messages)
         gemini_tools = self._to_gemini_tools(request.tools) if request.tools else None
-        config = self._build_config(request, gemini_tools, types)
+        config = self._build_config(request, gemini_tools, types, model)
 
         start_ms = _now_ms()
         try:
@@ -259,7 +259,7 @@ class GeminiConciergeAdapter:
         model = self._select_model(request)
         contents = self._to_gemini_contents(request.messages)
         gemini_tools = self._to_gemini_tools(request.tools) if request.tools else None
-        config = self._build_config(request, gemini_tools, types)
+        config = self._build_config(request, gemini_tools, types, model)
 
         start_ms = _now_ms()
         accumulated_text = ""
@@ -462,7 +462,14 @@ class GeminiConciergeAdapter:
     # Internal: build Gemini config
     # ------------------------------------------------------------------
 
-    def _build_config(self, request: ConciergeModelRequest, gemini_tools, types):
+    # Thinking budget mapping for Gemini 2.5 models (0-24576 for Flash)
+    _THINKING_BUDGET_MAP = {
+        ThinkingLevel.LOW: 1024,
+        ThinkingLevel.MEDIUM: 8192,
+        ThinkingLevel.HIGH: 24576,
+    }
+
+    def _build_config(self, request: ConciergeModelRequest, gemini_tools, types, model: str = ""):
         """Build GenerateContentConfig from request."""
         config_kwargs: dict[str, Any] = {}
 
@@ -494,11 +501,18 @@ class GeminiConciergeAdapter:
             if request.response_schema:
                 config_kwargs["response_json_schema"] = request.response_schema
 
-        # Thinking config
+        # Thinking config -- 2.5 uses thinking_budget, 3.x uses thinking_level
         if request.thinking is not None and request.thinking != ThinkingLevel.NONE:
-            config_kwargs["thinking_config"] = types.ThinkingConfig(
-                thinking_level=request.thinking.value,
-            )
+            if "2.5" in model:
+                budget = self._THINKING_BUDGET_MAP.get(request.thinking, 1024)
+                config_kwargs["thinking_config"] = types.ThinkingConfig(
+                    thinking_budget=budget,
+                    include_thoughts=True,
+                )
+            else:
+                config_kwargs["thinking_config"] = types.ThinkingConfig(
+                    thinking_level=request.thinking.value,
+                )
 
         return types.GenerateContentConfig(**config_kwargs)
 
@@ -697,7 +711,9 @@ class GeminiConciergeAdapter:
             fr = getattr(candidate, "finish_reason", None)
             if fr is not None:
                 fr_str = str(fr).upper()
-                if "STOP" in fr_str:
+                if "MALFORMED_FUNCTION_CALL" in fr_str:
+                    finish_reason = FinishReason.MALFORMED_TOOL_CALL
+                elif "STOP" in fr_str:
                     finish_reason = FinishReason.STOP
                 elif "MAX_TOKENS" in fr_str or "LENGTH" in fr_str:
                     finish_reason = FinishReason.LENGTH

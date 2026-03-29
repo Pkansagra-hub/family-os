@@ -32,7 +32,7 @@ from poc.k1_poc.prompt.mode import PromptMode
 SCENARIO_DATA_TEMPLATES: dict[PromptMode, str] = {
     PromptMode.STANDARD: (
         "== YOUR FAMILY ==\n"
-        "You are speaking to: {active_member}\n"
+        "You are talking to: {active_member}\n"
         "{family_context}\n"
         "{async_results_context}"
     ),
@@ -103,7 +103,7 @@ SCENARIO_DATA_TEMPLATES: dict[PromptMode, str] = {
     # User's answer is in messages array. SS clarifications shows what was asked.
     PromptMode.INTERRUPT: (
         "== YOUR FAMILY ==\n"
-        "You are speaking to: {active_member}\n"
+        "You are talking to: {active_member}\n"
         "{family_context}\n"
         "{async_results_context}"
     ),

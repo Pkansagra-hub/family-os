@@ -139,6 +139,14 @@ class AffectModifiers:
         response_length_hint: Advisory hint injected into prompt text.
         skip_refine_affect: If True, remove refine_affect from tool
             allowlist (already in crisis/low, don't re-assess).
+        max_response_tokens: Hard cap on response token count. None = no cap.
+            OPP-3: Enforced at LLM call boundary, not advisory.
+        vocabulary_tier: Controls vocabulary complexity. "simple" = avoid
+            jargon, short sentences. "standard" = normal. "rich" = allow
+            complex language. OPP-3: Generalized kernel constraint.
+        tool_budget_override: Hard override for max tool calls this turn.
+            None = use default from complexity tier. OPP-3: Prevents
+            runaway tool usage during crisis/low states.
     """
 
     max_iterations_delta: int = 0
@@ -147,6 +155,9 @@ class AffectModifiers:
     tone_prefix: str = ""
     response_length_hint: str = ""
     skip_refine_affect: bool = False
+    max_response_tokens: int | None = None
+    vocabulary_tier: str = "standard"
+    tool_budget_override: int | None = None
 
 
 # Pre-computed modifier sets per band (V2 Design Doc Section 6.1 table)
@@ -158,6 +169,9 @@ AFFECT_MODIFIERS: dict[str, AffectModifiers] = {
         tone_prefix=AFFECT_TONE_BLOCKS["crisis"],
         response_length_hint="Short, numbered options",
         skip_refine_affect=True,
+        max_response_tokens=512,
+        vocabulary_tier="simple",
+        tool_budget_override=2,
     ),
     "low": AffectModifiers(
         max_iterations_delta=0,
@@ -166,6 +180,9 @@ AFFECT_MODIFIERS: dict[str, AffectModifiers] = {
         tone_prefix=AFFECT_TONE_BLOCKS["low"],
         response_length_hint="Brief, practical",
         skip_refine_affect=True,
+        max_response_tokens=1024,
+        vocabulary_tier="simple",
+        tool_budget_override=3,
     ),
     "neutral": AffectModifiers(
         tone_prefix=AFFECT_TONE_BLOCKS["neutral"],
@@ -174,11 +191,15 @@ AFFECT_MODIFIERS: dict[str, AffectModifiers] = {
         max_iterations_delta=0,
         tone_prefix=AFFECT_TONE_BLOCKS["positive"],
         response_length_hint="Enthusiastic, can be longer",
+        max_response_tokens=2048,
+        vocabulary_tier="rich",
     ),
     "elevated": AffectModifiers(
         max_iterations_delta=0,
         tone_prefix=AFFECT_TONE_BLOCKS["elevated"],
         response_length_hint="Empathetic, then action",
+        max_response_tokens=1536,
+        vocabulary_tier="standard",
     ),
 }
 
@@ -195,6 +216,44 @@ def compute_affect_modifiers(band: AffectBand) -> AffectModifiers:
         AffectModifiers for the band. Falls back to neutral if unknown.
     """
     return AFFECT_MODIFIERS.get(band.band, AFFECT_MODIFIERS["neutral"])
+
+
+# =========================================================================
+# OPP-3 -- Affect Hard Constraints (generalized kernel primitive)
+# =========================================================================
+
+
+def apply_affect_hard_constraints(
+    modifiers: AffectModifiers,
+    llm_params: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply hard constraints from AffectModifiers to LLM call params.
+
+    Generalized kernel primitive: enforces affect-driven limits at the
+    LLM call boundary. Verticals define the modifier bands; the kernel
+    enforces the caps.
+
+    Args:
+        modifiers: AffectModifiers for the current band.
+        llm_params: Mutable dict of LLM call parameters
+                    (max_tokens, temperature, etc.).
+
+    Returns:
+        The mutated llm_params dict with hard constraints applied.
+    """
+    if modifiers.max_response_tokens is not None:
+        current_max = llm_params.get("max_tokens", 4096)
+        llm_params["max_tokens"] = min(current_max, modifiers.max_response_tokens)
+
+    if modifiers.tool_budget_override is not None:
+        llm_params["max_tool_calls"] = modifiers.tool_budget_override
+
+    if modifiers.vocabulary_tier == "simple":
+        llm_params["vocabulary_constraint"] = "simple"
+    elif modifiers.vocabulary_tier == "rich":
+        llm_params["vocabulary_constraint"] = "rich"
+
+    return llm_params
 
 
 # =========================================================================

@@ -27,6 +27,8 @@ class WebSocketRenderer:
     Proactive/weave messages are delivered immediately.
     """
 
+    supports_immediate_proactive: bool = True
+
     def __init__(self) -> None:
         self._connections: list[Any] = []  # list of WebSocket objects
         self._lock = asyncio.Lock()

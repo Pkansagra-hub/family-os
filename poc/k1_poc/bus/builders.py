@@ -32,6 +32,7 @@ Causal chain rules (from V2 Section 3):
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import uuid as _uuid
@@ -39,6 +40,20 @@ from datetime import datetime, timezone
 from typing import Any, NamedTuple
 
 from k1.bus.envelope import Envelope, PayloadFormat, Priority
+
+# Thread-safe counter for synthetic envelope IDs (envelopes that bypass the
+# bus and are delivered directly to a mailbox).  Uses high positive values
+# (starting at 1_000_000_000) to avoid collisions with bus-stamped IDs
+# which start from 1 and count upward.
+SYNTHETIC_ID_START = 1_000_000_000
+_synthetic_id_counter = itertools.count(start=SYNTHETIC_ID_START)
+
+
+def next_synthetic_envelope_id() -> int:
+    """Return a unique envelope_id for synthetic envelopes."""
+    return next(_synthetic_id_counter)
+
+
 from poc.k1_poc.bus.topics import (
     TOPIC_AFFECT_UPDATE,
     TOPIC_ARTIFACT_CREATED,

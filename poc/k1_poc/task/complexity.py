@@ -47,16 +47,16 @@ class ComplexityTier(str, Enum):
 # ---------------------------------------------------------------------------
 
 TIER_BUDGET: dict[ComplexityTier, int] = {
-    ComplexityTier.LOW: 4,
-    ComplexityTier.MEDIUM: 8,
-    ComplexityTier.HIGH: 12,
+    ComplexityTier.LOW: 6,
+    ComplexityTier.MEDIUM: 10,
+    ComplexityTier.HIGH: 14,
 }
 """Max tool-call iterations per complexity tier.
 
 Budget prevents runaway ReAct loops:
-    LOW=4   -- single-capability lookups (weather, time)
-    MEDIUM=8  -- multi-intent bundles (hotel + restaurant)
-    HIGH=12 -- chained workflows with intermediate lookups
+    LOW=6   -- discover + invoke + 2 fetches + submit (web search flow)
+    MEDIUM=10 -- multi-intent bundles (hotel + restaurant + fetch pages)
+    HIGH=14 -- chained workflows with intermediate lookups
 """
 
 

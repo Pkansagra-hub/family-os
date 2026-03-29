@@ -116,6 +116,8 @@ AFFECT_INDICATORS = {
 class ConsoleRenderer:
     """Render responses to stdout in anniversary demo style."""
 
+    supports_immediate_proactive: bool = False
+
     def __init__(self, *, animated: bool = False) -> None:
         self.animated = animated
 
@@ -505,7 +507,18 @@ class OutputChannel:
         # input prompt), buffer this response instead of printing it.
         # This prevents stdout writes from corrupting their typing.
         # The interactive loop will flush it at the next turn start.
+        #
+        # EXCEPTION: WebSocket renderers deliver immediately because the
+        # browser separates the input field from the message area --
+        # no corruption risk.
         if is_proactive:
+            if getattr(self._renderer, "supports_immediate_proactive", False):
+                self._renderer.render_response(text, self._current_member, affect)
+                logger.info(
+                    "OUTPUT: immediate proactive delivery (%d chars)",
+                    len(text),
+                )
+                return
             self._pending_weave_texts.append(text)
             logger.info(
                 "OUTPUT: buffered proactive response (%d chars, buffer=%d)",
@@ -542,13 +555,21 @@ class OutputChannel:
         if texts:
             # If user is NOT in an active turn, buffer instead of
             # printing (avoids corrupting their typing at the prompt).
+            # EXCEPTION: WebSocket renderers deliver immediately.
             if not self._turn_active:
-                self._pending_weave_texts.extend(texts)
-                logger.info(
-                    "OUTPUT: buffered weave batch (%d items, buffer=%d)",
-                    len(texts),
-                    len(self._pending_weave_texts),
-                )
+                if getattr(self._renderer, "supports_immediate_proactive", False):
+                    self._renderer.render_weave(texts)
+                    logger.info(
+                        "OUTPUT: immediate weave delivery (%d items)",
+                        len(texts),
+                    )
+                else:
+                    self._pending_weave_texts.extend(texts)
+                    logger.info(
+                        "OUTPUT: buffered weave batch (%d items, buffer=%d)",
+                        len(texts),
+                        len(self._pending_weave_texts),
+                    )
                 return
 
             total_chars = sum(len(t) for t in texts)

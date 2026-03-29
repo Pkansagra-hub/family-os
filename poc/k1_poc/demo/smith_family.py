@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 
 SMITH_FAMILY_PROFILE: Dict[str, Any] = {
     "family_name": "Smith",
-    "location": "Portland, Oregon",
+    "location": "Denton, Texas",
     "members": [
         {
             "name": "Alex",
@@ -71,8 +71,8 @@ SMITH_FAMILY_PROFILE: Dict[str, Any] = {
     "dietary_restrictions": ["shellfish allergy (Jordan)"],
     "accessibility_needs": ["simplified interface (Nana Liz)"],
     "preferred_language": "en",
-    "timezone": "America/Los_Angeles",
-    "grocery_store": "New Seasons Market",
+    "timezone": "America/Chicago",
+    "grocery_store": "Tom Thumb",
     "grocery_deadline": "10:00",
     "grocery_delivery_window": "16:00-18:00",
     "dinner_dnd_window": "18:00-19:00",

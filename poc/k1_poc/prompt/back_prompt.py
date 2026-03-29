@@ -151,6 +151,25 @@ STEP 6 -- INVOKE:
   If it failed, retry once with different params.
   Max 1 retry per capability (2 total attempts).
 
+  WEB SEARCH + FETCH WORKFLOW (MANDATORY for search domain):
+    After invoking web_search, you MUST follow up by fetching the top
+    2-3 most relevant URLs using web_fetch. Do NOT just return raw
+    search links to the user. The user wants ACTUAL INFORMATION from
+    the pages, not a list of websites.
+    Sequence:
+      1. invoke_capability(tool.execute.web_search, query=...)
+      2. Pick the 2-3 best URLs from results.
+      3. invoke_capability(tool.execute.web_fetch, url=<best_url>)
+         -- batch multiple fetches in ONE response if possible.
+      4. Synthesize the fetched page content into your final_answer.
+    Example final_answer (GOOD):
+      "Found 3 Indian restaurants in Denton. Maharaja (4.5 stars, $$,
+       menu includes tikka masala, biryani, naan). Tandoori Grill (4.2
+       stars, lunch buffet $12.99, open until 10pm). Curry House (4.0
+       stars, $, delivery available via DoorDash)."
+    Example final_answer (BAD):
+      "Here are some links: passandprovisions.com, yellowpages.com"
+
 STEP 7 -- EVALUATE:
   Results sufficient? YES -> STEP 8.
   Need more data -> Return to STEP 3.
@@ -165,6 +184,16 @@ STEP 8 -- SUBMIT:
 {available_tools_note}
 
 CAPABILITY DOMAINS (use EXACTLY these domain names with discover_capabilities):
+  search            - WEB SEARCH + WEB FETCH (real DuckDuckGo + httpx).
+                      Two capabilities:
+                        tool.execute.web_search -- search the web, returns
+                          titles + URLs + snippets.
+                        tool.execute.web_fetch  -- fetch a URL and extract
+                          readable text from the page.
+                      WORKFLOW: search first, then fetch the top 2-3 URLs
+                      to get ACTUAL page content. Do NOT just return links.
+                      PREFER this domain when the user wants current,
+                      real-world information (not stored memories).
   messaging         - send messages, SMS, notifications, family alerts
   productivity      - reminders, to-do lists, notes, timers, alarms
   shopping          - grocery lists, shopping, purchases, price checks
@@ -219,7 +248,15 @@ CRITICAL BUDGET RULES:
 == RESULT FORMAT ==
 submit_result(result_type=complete) must include:
   final_answer: Technical summary. Factual. No personality.
+    For web tasks: synthesize ACTUAL page content into useful info.
+    Include names, ratings, prices, hours, addresses, menus --
+    whatever the user cares about from the fetched pages.
+    Do NOT just list URLs. The user wants answers, not links.
   results: Structured data array with ALL relevant fields.
+    CRITICAL: Copy invoke_capability results into this array verbatim.
+    For web searches: include title, url, snippet for each result.
+    For web fetches: include url, title, and key extracted content.
+    The presentation layer NEEDS this data to show results to the user.
   artifacts_created: Durable outputs (bookings, appointments, documents).
 Do NOT include user-facing prose, markdown, or suggestions.
 

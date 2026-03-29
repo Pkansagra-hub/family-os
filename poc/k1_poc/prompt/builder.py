@@ -552,12 +552,23 @@ def _render_temporal_context_full(section: Any, cfg: SSReadConfig) -> str:
         anchor = compute_temporal_anchor(tz).to_dict()
     if not anchor:
         return ""
+    # Parse ISO to produce a clear human-readable time
+    iso = anchor.get("local_time_iso", "")
+    human_time = iso
+    try:
+        from datetime import datetime as _dt
+
+        parsed = _dt.fromisoformat(iso)
+        human_time = parsed.strftime("%I:%M %p on %A, %B %d, %Y")
+    except Exception:
+        pass
     lines = [
-        f"Local time: {anchor.get('local_time_iso', '')}",
+        f"CURRENT TIME: {human_time}",
         f"Day: {anchor.get('day_of_week', '')}",
         f"Time of day: {anchor.get('time_of_day', '')}",
         f"Weekend: {anchor.get('is_weekend', False)}",
         f"Timezone: {anchor.get('timezone', 'UTC')}",
+        "Location: Denton, Texas",
     ]
     return "\n".join(lines)
 
@@ -573,7 +584,16 @@ def _render_temporal_context_slim(section: Any, cfg: SSReadConfig) -> str:
         anchor = compute_temporal_anchor("UTC").to_dict()
     if not anchor:
         return ""
-    return f"{anchor.get('day_of_week', '')} {anchor.get('time_of_day', '')} ({anchor.get('timezone', 'UTC')})"
+    iso = anchor.get("local_time_iso", "")
+    human_time = iso
+    try:
+        from datetime import datetime as _dt
+
+        parsed = _dt.fromisoformat(iso)
+        human_time = parsed.strftime("%I:%M %p %Z")
+    except Exception:
+        pass
+    return f"CURRENT TIME: {human_time} -- {anchor.get('day_of_week', '')} {anchor.get('time_of_day', '')}"
 
 
 # =========================================================================

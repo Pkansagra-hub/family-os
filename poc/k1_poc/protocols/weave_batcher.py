@@ -224,6 +224,77 @@ class WeaveBatcher:
         await self._flush_fn(results)
         return results
 
+    async def flush_paced(
+        self,
+        pacing_plan: Any = None,
+    ) -> list[WeaveResult] | None:
+        """Flush pending results with paced delivery.
+
+        OPP-1 Paced Delivery: Instead of sending all results at once,
+        delivers them in groups with inter-group delays according to
+        the provided PacingPlan.
+
+        If no pacing_plan is provided or strategy is NONE, falls back
+        to standard flush() behavior.
+
+        Args:
+            pacing_plan: A PacingPlan instance from compute_pacing_plan().
+
+        Returns:
+            All flushed results, or None if nothing to flush.
+        """
+        if pacing_plan is None or getattr(pacing_plan, "strategy", 0) == 0:
+            return await self.flush()
+
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+
+        if not self._pending:
+            return None
+
+        results = list(self._pending)
+        self._pending.clear()
+        self._batch_count += 1
+
+        logger.info(
+            "WeaveBatcher: paced flush %d results in %d groups (batch %d)",
+            len(results),
+            len(pacing_plan.groups),
+            self._batch_count,
+        )
+
+        all_flushed: list[WeaveResult] = []
+        for i, group in enumerate(pacing_plan.groups):
+            delay_ms = (
+                pacing_plan.inter_group_delay_ms[i]
+                if i < len(pacing_plan.inter_group_delay_ms)
+                else 0
+            )
+            if delay_ms > 0:
+                await asyncio.sleep(delay_ms / 1000)
+
+            group_results = [
+                r
+                for r in results
+                if any(
+                    (
+                        r.task_id == g.get("task_id", g)
+                        if isinstance(g, dict)
+                        else r.task_id == getattr(g, "task_id", "")
+                    )
+                    for g in group
+                )
+            ]
+            if not group_results:
+                group_results = results[i : i + 1] if i < len(results) else []
+
+            if group_results:
+                await self._flush_fn(group_results)
+                all_flushed.extend(group_results)
+
+        return all_flushed if all_flushed else None
+
     async def flush_for_user_input(self) -> list[WeaveResult] | None:
         """Flush immediately because user sent new input.
 

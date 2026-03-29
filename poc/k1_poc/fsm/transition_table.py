@@ -405,8 +405,8 @@ FULL_GUARD_TABLE: dict[
         TOPIC_ARTIFACT_CREATED: (_O, None),
         TOPIC_AFFECT_UPDATE: (_O, None),
         TOPIC_PROACTIVE_FILL: (_O, None),
-        TOPIC_TOOL_STARTED: (_D, None),
-        TOPIC_TOOL_COMPLETED: (_D, None),
+        TOPIC_TOOL_STARTED: (_O, None),  # WEAVE runs tools during DELIVERING
+        TOPIC_TOOL_COMPLETED: (_O, None),  # WEAVE runs tools during DELIVERING
         TOPIC_WEAVE_BATCH: (_P, None),
         TOPIC_INTENT_ARBITRATED: (_O, None),  # M5 5.5.1: arbiter event, informational
         TOPIC_TASK_MODIFY: (_O, None),  # M5 5.5.1: modify-inflight event, informational

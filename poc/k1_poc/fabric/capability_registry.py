@@ -93,6 +93,21 @@ DOMAIN_ALIASES: dict[str, str] = {
     "groceries": "shopping",
     "grocery": "shopping",
     "purchases": "shopping",
+    # search / web aliases
+    "web": "search",
+    "web_search": "search",
+    "internet": "search",
+    "research": "search",
+    "lookup": "search",
+    "google": "search",
+    "browse": "search",
+    "restaurants": "search",
+    "restaurant": "search",
+    "food": "search",
+    "dining": "search",
+    "news": "search",
+    "weather": "search",
+    "recipes": "search",
 }
 
 
@@ -231,19 +246,33 @@ class CapabilityRegistry:
 
         return result
 
+    # Capabilities that bypass domain filtering -- they match on intent alone
+    # because they can satisfy queries across ALL domains (e.g. web search
+    # can find restaurants, health info, travel deals, etc.).
+    UNIVERSAL_CAPABILITIES: set[str] = {"tool.execute.web_search", "tool.execute.web_fetch"}
+
     def _fuzzy_match(
         self,
         intent: str,
         domain: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Core fuzzy matching: intent word overlap + optional domain filter."""
+        """Core fuzzy matching: intent word overlap + optional domain filter.
+
+        Universal capabilities (e.g. web_search) are always included when
+        they match the intent, regardless of domain filter. This ensures
+        real web search is available as a fallback for any domain.
+        """
         matches: list[dict[str, Any]] = []
         intent_lower = intent.lower()
-        intent_words = intent_lower.split()
+        # Split on whitespace AND underscores so "search_restaurants" becomes
+        # ["search", "restaurants"] -- matching individual words in descriptions.
+        intent_words = [w for w in intent_lower.replace("_", " ").split() if w]
 
         for name, cap in self._capabilities.items():
-            # Domain filter (already resolved by caller)
-            if domain and cap.get("domain", "").lower() != domain.lower():
+            is_universal = name in self.UNIVERSAL_CAPABILITIES
+
+            # Domain filter: skip non-matching domain, UNLESS universal
+            if domain and not is_universal and cap.get("domain", "").lower() != domain.lower():
                 continue
 
             # Fuzzy match: any intent word in name or description
@@ -326,10 +355,16 @@ def create_demo_registry() -> CapabilityRegistry:
     # Load comprehensive family capabilities (messaging, todo, chores, etc.)
     family_count = register_family_capabilities(registry)
 
+    # Load real web search capability (DuckDuckGo)
+    from poc.k1_poc.fabric.web_capabilities import register_web_capabilities
+
+    web_count = register_web_capabilities(registry)
+
     logger.info(
-        "create_demo_registry: loaded %d demo + %d family = %d total capabilities",
+        "create_demo_registry: loaded %d demo + %d family + %d web = %d total capabilities",
         demo_count,
         family_count,
+        web_count,
         registry.count,
     )
     return registry

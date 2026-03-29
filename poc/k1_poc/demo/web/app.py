@@ -277,12 +277,12 @@ async def _handle_user_message(coord: Any, ws: WebSocket, msg: dict) -> None:
     except Exception:
         pass
 
-    # Check IoT events
-    iot = coord.get_iot_stubs()
-    if iot.has_event(turn):
-        _renderer.render_system(f"IoT event at turn {turn}")
-        iot.check(turn)
-        await asyncio.sleep(0.3)
+    # IoT proactive stubs disabled -- scripted events removed
+    # iot = coord.get_iot_stubs()
+    # if iot.has_event(turn):
+    #     _renderer.render_system(f"IoT event at turn {turn}")
+    #     iot.check(turn)
+    #     await asyncio.sleep(0.3)
 
     # Update output channel
     output = coord.get_output_channel()
