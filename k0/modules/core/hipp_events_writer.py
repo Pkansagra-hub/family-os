@@ -9,16 +9,16 @@ Performs 3-table atomic transaction (st_hipp_events + st_vec + st_pipeline_proce
 **Performance**: <30ms P95 (3-table INSERT with B-tree indexes)
 
 **Contract**: k0/contracts/modules/core.hipp_events_writer.v1.yaml
-**ADR**: docs/architecture/decisions-K0/modules/k010.1-hipp-events-writer.md
+**ADR**: docs/architecture/decisions-K0/adr-k003-v2-pgvector-migration.md
 **Schema**: docs/pipelines/P02_data_schema.md (lines 96-185, 511-569)
 
 **Inputs**:
 - M02 (semantic_project): embedding_id
 - M11 (affect_analyze): valence, arousal
 - M13 (hipp_events_row): event_id, wal_pos, text, text_hash
-- M22 (extract_from_cache): embedding vector (768-dim)
+- M22 (extract_from_cache): embedding vector (768-dim float list)
 
-**Output**: st_hipp_events + st_vec + st_pipeline_processed tracking
+**Output**: st_hipp_events + st_vec (pgvector VECTOR(768)) + st_pipeline_processed tracking
 
 **Transaction Boundary (ADR-K003 v1.2 Fix)**:
 - 3-table transaction: st_hipp_events -> st_vec -> st_pipeline_processed
@@ -30,11 +30,10 @@ Performs 3-table atomic transaction (st_hipp_events + st_vec + st_pipeline_proce
 **Idempotency**: Uses event_id as PRIMARY KEY with INSERT OR IGNORE.
 Checks st_pipeline_processed before writing (skip if already processed).
 
-**Version**: 1.2.0
-**Last Updated**: 2025-12-13 (ADR-K003 v1.2 - merged M23 into M16)
+**Version**: 2.0.0
+**Last Updated**: 2026-03-01 (M4 Epic 4.10 - pgvector VECTOR(768) native)
 """
 
-import struct
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -227,15 +226,13 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         vec_written = False
         if embedding and embedding_id_from_m22:
             try:
-                # Convert 768-dim float list to 3072-byte blob
-                vector_bytes = struct.pack("768f", *embedding)
-
+                # Pass 768-dim float list directly to pgvector VECTOR(768)
                 await context.syscalls.vec_write(
                     embedding_id=embedding_id_from_m22,
                     event_id=hipp_events_record["event_id"],
                     tenant_id=hipp_events_record.get("tenant_id", "default"),
                     space_id=hipp_events_record.get("space_id", "unknown"),
-                    vector=vector_bytes,
+                    vector=embedding,
                     vector_dim=768,
                     model_id=embedding_data.get("model_id", "ultrabert_v2.1.0"),
                     status="READY",

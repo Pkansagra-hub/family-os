@@ -20,6 +20,7 @@ Related:
 from __future__ import annotations
 
 import logging
+import struct
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -739,9 +740,6 @@ class Syscalls:
             ...     print(f"{result['event_id']}: {result['score']:.3f}")
 
         TODO:
-            - Implement vector storage table (FAISS, pgvector, or sqlite-vss)
-            - Add cosine similarity search
-            - Add ANN index for large-scale retrieval
             - Wire into P01 recall pipeline
             - Add privacy band filtering
 
@@ -1299,7 +1297,7 @@ class Syscalls:
         event_id: str,
         tenant_id: str,
         space_id: str,
-        vector: bytes,
+        vector: list[float],
         vector_dim: int = 768,
         model_id: str = "ultrabert_v2.1.0",
         status: str = "READY",
@@ -1308,21 +1306,20 @@ class Syscalls:
         """
         Write embedding vector to st_vec table (requires st_vec.write cap).
 
-        Used by M23 (builders.embedding_write) to store 768-dim UltraBERT embeddings
-        inline during P02 processing. Replaces async P08 queue pattern (ADR-K003).
+        Used by M16 (hipp_events_writer) to store 768-dim UltraBERT embeddings
+        inline during P02 processing. Uses pgvector VECTOR(768) native type.
 
         Capability Required: "st_vec.write"
 
-        Storage Table: st_vec
+        Storage Table: st_vec (v2 -- pgvector native, migration 0071)
         - Purpose: Primary storage for 768-dim embeddings (inline with P02)
         - Lifecycle: Permanent (tied to st_hipp_events via FK)
-        - Primary Key: embedding_id (unique, idempotent)
-        - Foreign Key: event_id → st_hipp_events.event_id (ON DELETE CASCADE)
-        - Indexes: 4 (event_id, tenant_space, model_id, status_created)
+        - Primary Key: embedding_id (UUID, idempotent)
+        - Foreign Key: event_id -> st_hipp_events.event_id (ON DELETE CASCADE)
+        - Indexes: 5 B-tree + 1 HNSW (vector_cosine_ops, m=16, ef_construction=64)
 
         Status Values:
-        - READY: Embedding stored, available for use
-        - INDEXED: Also added to FAISS search index (P08 M24)
+        - READY: Embedding stored, available for HNSW similarity search
         - FAILED: Generation failed
 
         Args:
@@ -1330,7 +1327,7 @@ class Syscalls:
             event_id: Source event identifier (FK to st_hipp_events)
             tenant_id: Tenant isolation boundary
             space_id: Memory space identifier
-            vector: 768-dim float32 embedding as bytes (3072 bytes)
+            vector: 768-dim float list for pgvector VECTOR(768)
             vector_dim: Dimensionality of vector (default: 768)
             model_id: Embedding model identifier (default: "ultrabert_v2.1.0")
             status: Embedding status (default: "READY")
@@ -1347,15 +1344,13 @@ class Syscalls:
             ValueError: If required fields missing or invalid
 
         Example:
-            >>> import struct
             >>> embedding = [0.1] * 768  # 768-dim vector
-            >>> vector_bytes = struct.pack('768f', *embedding)
             >>> result = await syscalls.vec_write(
             ...     embedding_id="emb_uuid_abc123",
             ...     event_id="evt_123",
             ...     tenant_id="tenant_abc",
             ...     space_id="space_xyz",
-            ...     vector=vector_bytes,
+            ...     vector=embedding,
             ...     vector_dim=768,
             ...     model_id="ultrabert_v2.1.0",
             ...     status="READY"
@@ -1364,15 +1359,15 @@ class Syscalls:
             True
 
         Performance:
-            - Target: <5ms P95 (single INSERT with 3KB blob + 4 indexes)
+            - Target: <5ms P95 (single INSERT with VECTOR(768) + 6 indexes)
             - Uses INSERT ... ON CONFLICT DO NOTHING for idempotency
             - Connection pooling via UnitOfWork
 
         Related:
-            - M23 (builders.embedding_write): Primary user of this syscall
+            - M16 (core.hipp_events_writer): Primary user of this syscall
             - M22 (embedding.extract_from_cache): Extracts vector from UltraBERT cache
-            - ADR-K003: Inline embedding architecture decision
-            - Migration 0026: st_vec table definition
+            - ADR-K003 v2.0: pgvector migration decision
+            - Migration 0071: st_vec pgvector native table
         """
         self._require_cap("st_vec.write")
 
@@ -1387,12 +1382,12 @@ class Syscalls:
             raise ValueError("space_id required for vec_write")
         if not vector:
             raise ValueError("vector required for vec_write")
-        if status not in ("READY", "INDEXED", "FAILED"):
-            raise ValueError(f"Invalid status: {status} (expected READY/INDEXED/FAILED)")
+        if status not in ("READY", "FAILED"):
+            raise ValueError(f"Invalid status: {status} (expected READY/FAILED)")
         if vector_dim != 768:
             raise ValueError(f"Invalid vector_dim: {vector_dim} (expected 768)")
-        if len(vector) != 3072:  # 768 floats * 4 bytes
-            raise ValueError(f"Invalid vector size: {len(vector)} bytes (expected 3072)")
+        if len(vector) != 768:
+            raise ValueError(f"Invalid vector length: {len(vector)} (expected 768)")
 
         # Audit: Log storage operation
         start_time = time.perf_counter()
@@ -1418,24 +1413,27 @@ class Syscalls:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
             try:
+                # Format vector as pgvector text representation: '[0.1, 0.2, ...]'
+                vector_str = "[" + ",".join(str(v) for v in vector) + "]"
+
                 # Use INSERT with ON CONFLICT for idempotency
-                # Use EXTRACT(EPOCH ...) for BIGINT timestamp columns
+                # VECTOR(768) column accepts text format, cast via ::vector
+                # TIMESTAMPTZ columns use NOW() directly
                 result = await conn.execute(
                     """
                     INSERT INTO st_vec (
                         embedding_id, event_id, tenant_id, space_id,
                         vector, vector_dim, model_id, status,
                         created_at, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-                              EXTRACT(EPOCH FROM NOW())::BIGINT,
-                              EXTRACT(EPOCH FROM NOW())::BIGINT)
+                    ) VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8,
+                              NOW(), NOW())
                     ON CONFLICT (embedding_id) DO NOTHING
                     """,
                     embedding_id,
                     event_id,
                     tenant_id,
                     space_id,
-                    vector,
+                    vector_str,
                     vector_dim,
                     model_id,
                     status,
@@ -1487,8 +1485,8 @@ class Syscalls:
         """
         Query st_vec table for embeddings by status (requires st_vec.read cap).
 
-        Used by P08 M24 (faiss_indexer) to find READY embeddings for indexing.
-        Replaces event-driven model with query-based batch processing (ADR-K003 v1.2).
+        Used by P08 to find READY embeddings for pgvector indexing.
+        Replaces event-driven model with query-based batch processing (ADR-K003 v2.0).
 
         Capability Required: "st_vec.read"
 
@@ -1525,9 +1523,8 @@ class Syscalls:
             - Limit+offset pagination for batch control
 
         Related:
-            - M24 (embedding.faiss_indexer): Primary user of this syscall
-            - P08 scheduled mode: Uses this instead of event subscription
-            - ADR-K003 v1.2: Query-based P08 architecture
+            - P08 scheduled mode: Uses this for batch processing
+            - ADR-K003 v2.0: pgvector native architecture
         """
         self._require_cap("st_vec.read")
 
@@ -1649,14 +1646,14 @@ class Syscalls:
         """
         Update st_vec status (requires st_vec.write cap).
 
-        Used by P08 M24 after adding to FAISS index to mark embedding as INDEXED.
+        Used by P08 after indexing in pgvector to mark embedding as INDEXED.
         Also used for error handling (marking FAILED status).
 
         Capability Required: "st_vec.write"
 
         Status Transitions:
-        - READY → INDEXED: After successful FAISS indexing
-        - READY → FAILED: If FAISS indexing fails
+        - READY → INDEXED: After successful pgvector indexing
+        - READY → FAILED: If indexing fails
         - FAILED → READY: For retry (via backfill)
 
         Args:
@@ -1686,9 +1683,8 @@ class Syscalls:
             - Uses embedding_id primary key for fast lookup
 
         Related:
-            - M24 (embedding.faiss_indexer): Primary user of this syscall
             - vec_query: Finds READY embeddings to index
-            - ADR-K003 v1.2: P08 scheduled architecture
+            - ADR-K003 v2.0: pgvector native architecture
         """
         self._require_cap("st_vec.write")
 
@@ -1765,434 +1761,410 @@ class Syscalls:
                 )
                 raise
 
-    async def faiss_add(
+    # =========================================================================
+    # M28 Integrity Check: vec_* diagnostic syscalls (Epic 4.19)
+    # =========================================================================
+
+    async def vec_count(
         self,
-        embedding_id: str,
-        vector: list[float],
-        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
+        tenant_id: str | None = None,
+        space_id: str | None = None,
     ) -> dict[str, Any]:
         """
-        Add single vector to FAISS similarity search index (requires faiss.write cap).
+        Count total st_vec rows (requires st_vec.read cap).
 
-        Used by P08 M24 (embedding.faiss_indexer) to add 768-dim embeddings to
-        FAISS IVF256,PQ64 index for semantic search.
+        Used by M28 integrity check to report total vector count.
 
-        Capability Required: "faiss.write"
-
-        FAISS Index Configuration:
-        - Index Type: IVF256,PQ64 (Inverted File with Product Quantization)
-        - Vector Dimension: 768
-        - Compression Ratio: 8:1 (768 * 4 bytes → 384 bytes)
-        - Search Parameter: nprobe=16 (cells to probe)
-        - Distance Metric: L2 (Euclidean distance)
+        Capability Required: "st_vec.read"
 
         Args:
-            embedding_id: Unique embedding identifier (used as FAISS ID)
-            vector: 768-dim float32 embedding
-            index_id: FAISS index identifier (default: ultrabert_v2.1.0_ivf256_pq64)
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
 
         Returns:
-            Dictionary with:
-            - added: bool (True if added successfully)
-            - embedding_id: str
-            - index_id: str
-            - total_vectors: int (total vectors in index after addition)
-
-        Raises:
-            PermissionError: If pipeline lacks "faiss.write" capability
-            ValueError: If vector dimension invalid
-            NotImplementedError: FAISS integration not yet implemented
-
-        Example:
-            >>> embedding = [0.1] * 768  # 768-dim vector
-            >>> result = await syscalls.faiss_add(
-            ...     embedding_id="emb_uuid_abc123",
-            ...     vector=embedding,
-            ...     index_id="ultrabert_v2.1.0_ivf256_pq64"
-            ... )
-            >>> result["added"]
-            True
-
-        Performance:
-            - Target: <50ms P95 (single vector addition)
-            - Batch operations preferred (use faiss_add_batch)
-
-        Related:
-            - M24 (embedding.faiss_indexer): Primary user of this syscall
-            - ADR-K003: FAISS indexing for P08 v2
+            Dictionary with count: int
         """
-        self._require_cap("faiss.write")
+        self._require_cap("st_vec.read")
 
-        # Validation
-        if not embedding_id:
-            raise ValueError("embedding_id required for faiss_add")
-        if not vector:
-            raise ValueError("vector required for faiss_add")
-        if len(vector) != 768:
-            raise ValueError(f"Invalid vector dimension: {len(vector)} (expected 768)")
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
 
-        # Get FAISS manager instance
-        from k0.runtime.faiss_manager import FaissIndexManager
+            sql = "SELECT COUNT(*) FROM st_vec"
+            params: list[Any] = []
+            conditions: list[str] = []
 
-        faiss_mgr = FaissIndexManager.get_instance()
+            if tenant_id:
+                conditions.append(f"tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"space_id = ${len(params) + 1}")
+                params.append(space_id)
 
-        # Add vector to FAISS index
-        try:
-            result = await faiss_mgr.add(embedding_id, vector, index_id)
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
 
-            logger.info(
-                "faiss_add completed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "embedding_id": embedding_id,
-                    "index_id": index_id,
-                    "total_vectors": result["total_vectors"],
-                },
-            )
+            row = await conn.fetchrow(sql, *params)
+            return {"count": row[0] if row else 0}
 
-            return result
-
-        except ValueError as e:
-            logger.error(
-                "faiss_add validation failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "embedding_id": embedding_id,
-                    "error": str(e),
-                },
-            )
-            raise
-
-        except Exception as e:
-            logger.error(
-                "faiss_add failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "embedding_id": embedding_id,
-                    "error": str(e),
-                },
-            )
-            raise RuntimeError(f"Failed to add vector to FAISS: {e}") from e
-
-    async def faiss_add_batch(
+    async def vec_count_dimension_mismatches(
         self,
-        records: list[dict[str, Any]],
-        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+        expected_dim: int = 768,
     ) -> dict[str, Any]:
         """
-        Add batch of vectors to FAISS index (requires faiss.write cap).
+        Count st_vec rows where vector_dim != expected dimension (requires st_vec.read cap).
 
-        Batch addition is ~5-10x faster than individual adds due to reduced
-        index update overhead.
+        Used by M28 integrity check (dimension_validation).
 
-        Capability Required: "faiss.write"
+        Capability Required: "st_vec.read"
 
         Args:
-            records: List of dicts with:
-                - embedding_id: str (unique identifier)
-                - vector: list[float] (768-dim embedding)
-            index_id: FAISS index identifier
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
+            expected_dim: Expected vector dimension (default: 768)
 
         Returns:
-            Dictionary with:
-            - added_count: int (number of vectors added)
-            - batch_size: int (size of input batch)
-            - index_id: str
-            - total_vectors: int (total vectors in index after addition)
-
-        Raises:
-            PermissionError: If pipeline lacks "faiss.write" capability
-            ValueError: If records invalid
-            NotImplementedError: FAISS integration not yet implemented
-
-        Example:
-            >>> records = [
-            ...     {"embedding_id": "emb_1", "vector": [0.1] * 768},
-            ...     {"embedding_id": "emb_2", "vector": [0.2] * 768},
-            ... ]
-            >>> result = await syscalls.faiss_add_batch(
-            ...     records=records,
-            ...     index_id="ultrabert_v2.1.0_ivf256_pq64"
-            ... )
-            >>> result["added_count"]
-            2
-
-        Performance:
-            - Target: 200 vectors/sec (5ms per vector in batch)
-            - Prefer batches of 50-200 vectors for optimal performance
-
-        Related:
-            - M24 (embedding.faiss_indexer): Uses this for batch indexing
-            - ADR-K003: FAISS batch indexing strategy
+            Dictionary with count: int
         """
-        self._require_cap("faiss.write")
+        self._require_cap("st_vec.read")
 
-        # Validation
-        if not records:
-            raise ValueError("records required for faiss_add_batch (empty list)")
-        for i, record in enumerate(records):
-            if "embedding_id" not in record:
-                raise ValueError(f"Record {i} missing embedding_id")
-            if "vector" not in record:
-                raise ValueError(f"Record {i} missing vector")
-            if len(record["vector"]) != 768:
-                raise ValueError(
-                    f"Record {i} invalid vector dimension: {len(record['vector'])} (expected 768)"
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            conditions = [f"vector_dim != ${1}"]
+            params: list[Any] = [expected_dim]
+
+            if tenant_id:
+                conditions.append(f"tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"space_id = ${len(params) + 1}")
+                params.append(space_id)
+
+            sql = "SELECT COUNT(*) FROM st_vec WHERE " + " AND ".join(conditions)
+            row = await conn.fetchrow(sql, *params)
+            return {"count": row[0] if row else 0}
+
+    async def vec_distinct_models(
+        self,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Get distinct model_id values from st_vec (requires st_vec.read cap).
+
+        Used by M28 integrity check (model_consistency).
+
+        Capability Required: "st_vec.read"
+
+        Args:
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
+
+        Returns:
+            Dictionary with models: list[str]
+        """
+        self._require_cap("st_vec.read")
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            sql = "SELECT DISTINCT model_id FROM st_vec"
+            params: list[Any] = []
+            conditions: list[str] = []
+
+            if tenant_id:
+                conditions.append(f"tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"space_id = ${len(params) + 1}")
+                params.append(space_id)
+
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
+
+            rows = await conn.fetch(sql, *params)
+            return {"models": [row[0] for row in rows]}
+
+    async def vec_orphan_count(
+        self,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Count orphaned st_vec rows without parent st_hipp_events (requires st_vec.read cap).
+
+        Used by M28 integrity check (orphan_detection) and M27 cleanup.
+
+        Capability Required: "st_vec.read"
+
+        Args:
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
+
+        Returns:
+            Dictionary with count: int
+        """
+        self._require_cap("st_vec.read")
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            conditions: list[str] = [
+                "NOT EXISTS (SELECT 1 FROM st_hipp_events h WHERE h.event_id = v.event_id)"
+            ]
+            params: list[Any] = []
+
+            if tenant_id:
+                conditions.append(f"v.tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"v.space_id = ${len(params) + 1}")
+                params.append(space_id)
+
+            sql = "SELECT COUNT(*) FROM st_vec v WHERE " + " AND ".join(conditions)
+            row = await conn.fetchrow(sql, *params)
+            return {"count": row[0] if row else 0}
+
+    async def vec_delete_orphans(
+        self,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """
+        Batch DELETE orphaned st_vec rows (requires st_vec.write cap).
+
+        Used by M27 cleanup module. Pure SQL DELETE with NOT EXISTS + LIMIT.
+
+        Capability Required: "st_vec.write"
+
+        Args:
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
+            limit: Max rows to delete per batch (default: 500)
+
+        Returns:
+            Dictionary with deleted_count: int
+        """
+        self._require_cap("st_vec.write")
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            conditions: list[str] = [
+                "NOT EXISTS (SELECT 1 FROM st_hipp_events h WHERE h.event_id = v.event_id)"
+            ]
+            params: list[Any] = []
+
+            if tenant_id:
+                conditions.append(f"v.tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"v.space_id = ${len(params) + 1}")
+                params.append(space_id)
+
+            # Use ctid subquery for batch-safe LIMIT DELETE
+            where_clause = " AND ".join(conditions)
+            sql = f"""
+                DELETE FROM st_vec v
+                WHERE v.ctid IN (
+                    SELECT v2.ctid FROM st_vec v2
+                    WHERE {where_clause.replace('v.', 'v2.')}
+                    LIMIT ${len(params) + 1}
                 )
+            """
+            params.append(limit)
 
-        # Get FAISS manager instance
-        from k0.runtime.faiss_manager import FaissIndexManager
-
-        faiss_mgr = FaissIndexManager.get_instance()
-
-        # Convert records to (embedding_id, vector) tuples
-        embeddings = [(rec["embedding_id"], rec["vector"]) for rec in records]
-
-        # Batch add to FAISS index
-        try:
-            result = await faiss_mgr.add_batch(embeddings, index_id)
+            result = await conn.execute(sql, *params)
+            # Parse "DELETE N" result string
+            deleted_count = 0
+            if result and result.startswith("DELETE"):
+                parts = result.split()
+                if len(parts) == 2:
+                    deleted_count = int(parts[1])
 
             logger.info(
-                "faiss_add_batch completed",
+                "vec_delete_orphans completed",
                 extra={
                     "pipeline_id": self._pipeline_id,
-                    "batch_size": len(records),
-                    "added_count": result["added"],
-                    "index_id": index_id,
-                    "total_vectors": result["total_vectors"],
+                    "deleted_count": deleted_count,
+                    "limit": limit,
+                    "tenant_id": tenant_id,
                 },
             )
 
-            return {
-                "added_count": result["added"],
-                "batch_size": len(records),
-                "index_id": result["index_id"],
-                "total_vectors": result["total_vectors"],
-            }
+            return {"deleted_count": deleted_count}
 
-        except ValueError as e:
-            logger.error(
-                "faiss_add_batch validation failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "batch_size": len(records),
-                    "error": str(e),
-                },
-            )
-            raise
+    # ===========================================================================
+    # DEPRECATED (M4 ADR-K003 -- FAISS eliminated, pgvector native)
+    # ===========================================================================
+    # The following FAISS syscalls were removed (M4 cleanup):
+    #   - faiss_add, faiss_add_batch, faiss_search, faiss_remove_batch
+    #   - union_index_search, union_index_rebuild, union_index_stats
+    # All vector similarity search now uses pgvector HNSW natively via
+    # vec_query syscall and PostgreSQL pgvector extension.
+    # ===========================================================================
 
-        except Exception as e:
-            logger.error(
-                "faiss_add_batch failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "batch_size": len(records),
-                    "error": str(e),
-                },
-            )
-            raise RuntimeError(f"Failed to batch add vectors to FAISS: {e}") from e
+    # =========================================================================
+    # GAP-001 Milestone 5: Context Expander Syscalls
+    # =========================================================================
 
-    async def faiss_search(
+    async def context_expand(
         self,
+        query: str,
         query_vector: list[float],
-        k: int = 10,
-        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
-        nprobe: int = 16,
+        top_k: int = 10,
+        max_hops: int = 1,
+        min_edge_weight: float = 0.5,
+        max_per_layer: int = 10,
+        layer_filter: list[str] | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """
-        Search FAISS index for k nearest neighbors (requires faiss.read cap).
+        Expand context for a query via entity graph traversal (requires st_vec.read + context.expand caps).
 
-        Returns top-k most similar embeddings based on L2 distance.
+        Orchestrates the full context expansion flow:
+        1. Vector search across union index (direct matches)
+        2. Entity extraction from search results
+        3. Graph expansion to find related entities
+        4. Related context fetch from all truth layers
 
-        Capability Required: "faiss.read"
+        This syscall provides rich LLM context by combining semantic search
+        with knowledge graph traversal.
+
+        Capability Required: "st_vec.read" AND "context.expand"
+
+        GAP Reference: GAP_001 Section 6 (Rich LLM Context)
+        Milestone Reference: GAP_001_MILESTONE_5_CONTEXT_EXPANDER
 
         Args:
-            query_vector: 768-dim query embedding
-            k: Number of nearest neighbors to return (default: 10)
-            index_id: FAISS index identifier
-            nprobe: Number of IVF cells to probe (default: 16)
+            query: Query text for logging/context
+            query_vector: 768-dim query embedding for vector search
+            top_k: Number of direct vector search results (default: 10)
+            max_hops: Graph traversal depth (default: 1)
+            min_edge_weight: Minimum edge weight for graph traversal (default: 0.5)
+            max_per_layer: Maximum related records per layer (default: 10)
+            layer_filter: Optional list of layers to search (e.g., ["st_epi", "st_sem"])
+            tenant_id: Optional tenant filter
 
         Returns:
             Dictionary with:
-            - embedding_ids: list[str] (k nearest neighbor IDs)
-            - distances: list[float] (L2 distances)
-            - k: int (number of results)
+            - query: str (original query)
+            - direct_matches: list[dict] with layer, record_id, score, metadata
+            - match_count: int (number of direct matches)
+            - expanded_entities: list[str] (entities found via graph traversal)
+            - related_episodes: list[dict] (related episodic memories)
+            - actor_patterns: list[dict] (semantic patterns for actors)
+            - routines: list[dict] (procedural routines)
+            - relationships: list[dict] (social relationships)
+            - active_intentions: list[dict] (active goals/intentions)
+            - related_count: int (total related records)
+            - timing_ms: dict (timing breakdown by phase)
 
         Raises:
-            PermissionError: If pipeline lacks "faiss.read" capability
+            PermissionError: If pipeline lacks required capabilities
             ValueError: If query_vector invalid
-            NotImplementedError: FAISS integration not yet implemented
+            RuntimeError: If expansion fails
 
         Example:
-            >>> query = [0.1] * 768  # 768-dim query vector
-            >>> result = await syscalls.faiss_search(
-            ...     query_vector=query,
-            ...     k=10,
-            ...     nprobe=16
+            >>> query = "Where did Mom and Dad go yesterday?"
+            >>> embedding = await get_embedding(query)
+            >>> result = await syscalls.context_expand(
+            ...     query=query,
+            ...     query_vector=embedding,
+            ...     top_k=5,
+            ...     max_hops=1,
             ... )
-            >>> result["embedding_ids"]
-            ['emb_1', 'emb_2', ...]
+            >>> # Use result for LLM prompt injection
+            >>> context = result["related_episodes"][:3]
 
         Performance:
-            - Target: <50ms P95 for k=10, nprobe=16
-            - Higher nprobe = better recall but slower search
-
-        Related:
-            - P03 consolidation: Uses this for similarity search
-            - ADR-K003: FAISS search configuration
+            - Target: <100ms P95 for full expansion
+            - Vector search: <20ms
+            - Entity extraction: <5ms
+            - Graph expansion: <30ms
+            - Context fetch: <50ms
         """
-        self._require_cap("faiss.read")
+        self._require_cap("st_vec.read")
+        self._require_cap("context.expand")
 
         # Validation
         if not query_vector:
-            raise ValueError("query_vector required for faiss_search")
+            raise ValueError("query_vector required for context_expand")
         if len(query_vector) != 768:
             raise ValueError(f"Invalid query_vector dimension: {len(query_vector)} (expected 768)")
-        if k < 1:
-            raise ValueError(f"Invalid k: {k} (must be >= 1)")
-        if nprobe < 1 or nprobe > 256:
-            raise ValueError(f"Invalid nprobe: {nprobe} (expected 1-256)")
+        if top_k < 1:
+            raise ValueError(f"Invalid top_k: {top_k} (must be >= 1)")
+        if max_hops < 0:
+            raise ValueError(f"Invalid max_hops: {max_hops} (must be >= 0)")
 
-        # Get FAISS manager instance
-        from k0.runtime.faiss_manager import FaissIndexManager
-
-        faiss_mgr = FaissIndexManager.get_instance()
-
-        # Search FAISS index
         try:
-            results = await faiss_mgr.search(query_vector, k, index_id)
+            from k0.modules.recall.context_expander import ContextExpander
 
-            # Extract IDs and distances for return format
-            embedding_ids = [r["embedding_id"] for r in results]
-            distances = [r["distance"] for r in results]
-
-            logger.info(
-                "faiss_search completed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "k": k,
-                    "nprobe": nprobe,
-                    "results_found": len(results),
-                    "index_id": index_id,
-                },
+            expander = ContextExpander(
+                top_k=top_k,
+                max_hops=max_hops,
+                min_edge_weight=min_edge_weight,
+                max_per_layer=max_per_layer,
             )
 
-            return {
-                "embedding_ids": embedding_ids,
-                "distances": distances,
-                "k": len(results),
-            }
+            async with self._uow_factory() as uow:
+                conn = uow.session.connection()
 
-        except ValueError as e:
-            logger.error(
-                "faiss_search validation failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "k": k,
-                    "error": str(e),
-                },
-            )
+                expanded = await expander.expand(
+                    query=query,
+                    embedding=query_vector,
+                    conn=conn,
+                    tenant_id=tenant_id,
+                    layers=layer_filter,
+                )
+
+                result = expanded.to_llm_context()
+                result["expanded_entities"] = list(expanded.expanded_entities)
+                result["timing_ms"] = expanded.timing_ms
+
+                logger.info(
+                    "context_expand completed",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "query_len": len(query),
+                        "direct_matches": len(expanded.direct_results),
+                        "expanded_entities": len(expanded.expanded_entities),
+                        "related_count": (
+                            expanded.related_context.total_records
+                            if expanded.related_context
+                            else 0
+                        ),
+                        "total_ms": expanded.timing_ms.get("total_ms", 0),
+                    },
+                )
+
+                return result
+
+        except PermissionError:
             raise
-
         except Exception as e:
             logger.error(
-                "faiss_search failed",
+                "context_expand failed",
                 extra={
                     "pipeline_id": self._pipeline_id,
-                    "k": k,
+                    "query": query[:50],
                     "error": str(e),
                 },
             )
-            raise RuntimeError(f"Failed to search FAISS index: {e}") from e
-
-    async def faiss_remove_batch(
-        self,
-        embedding_ids: list[str],
-        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
-    ) -> dict[str, Any]:
-        """
-        Remove batch of vectors from FAISS index (requires faiss.write cap).
-
-        Used by P08 M27 (embedding.cleanup) to remove orphaned embeddings.
-
-        Capability Required: "faiss.write"
-
-        Args:
-            embedding_ids: List of embedding IDs to remove
-            index_id: FAISS index identifier
-
-        Returns:
-            Dictionary with:
-            - removed_count: int (number of vectors removed)
-            - batch_size: int (size of input batch)
-            - index_id: str
-            - total_vectors: int (remaining vectors in index)
-
-        Raises:
-            PermissionError: If pipeline lacks "faiss.write" capability
-            ValueError: If embedding_ids invalid
-            NotImplementedError: FAISS integration not yet implemented
-
-        Example:
-            >>> ids = ["emb_1", "emb_2", "emb_3"]
-            >>> result = await syscalls.faiss_remove_batch(
-            ...     embedding_ids=ids,
-            ...     index_id="ultrabert_v2.1.0_ivf256_pq64"
-            ... )
-            >>> result["removed_count"]
-            3
-
-        Performance:
-            - Target: 2000 embeddings/sec (0.5ms per embedding in batch)
-            - Batch operations preferred for bulk cleanup
-
-        Related:
-            - M27 (embedding.cleanup): Uses this for orphan removal
-            - ADR-K003: FAISS cleanup strategy
-        """
-        self._require_cap("faiss.write")
-
-        # Validation
-        if not embedding_ids:
-            raise ValueError("embedding_ids required for faiss_remove_batch (empty list)")
-
-        # Get FAISS manager instance
-        from k0.runtime.faiss_manager import FaissIndexManager
-
-        faiss_mgr = FaissIndexManager.get_instance()
-
-        # Remove from FAISS index
-        try:
-            result = await faiss_mgr.remove_batch(embedding_ids)
-
-            logger.info(
-                "faiss_remove_batch completed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "batch_size": len(embedding_ids),
-                    "removed_count": result["removed"],
-                    "index_id": index_id,
-                    "note": result.get("note"),
-                },
-            )
-
-            return {
-                "removed_count": result["removed"],
-                "batch_size": len(embedding_ids),
-                "index_id": index_id,
-                "total_vectors": result["total_vectors"],
-            }
-
-        except Exception as e:
-            logger.error(
-                "faiss_remove_batch failed",
-                extra={
-                    "pipeline_id": self._pipeline_id,
-                    "batch_size": len(embedding_ids),
-                    "error": str(e),
-                },
-            )
-            raise RuntimeError(f"Failed to remove vectors from FAISS: {e}") from e
+            raise RuntimeError(f"Failed to expand context: {e}") from e
 
     # =========================================================================
     # Phase 3: Backfill Syscalls (ADR-K003 v1.2)
@@ -2485,6 +2457,119 @@ class Syscalls:
                     },
                 )
                 raise
+
+    # =========================================================================
+    # M28 Integrity Check: hipp_events_* diagnostic syscalls (Epic 4.19)
+    # =========================================================================
+
+    async def hipp_events_missing_vectors(
+        self,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Count st_hipp_events rows with embedding_status=READY but no st_vec row.
+
+        Used by M28 integrity check (missing_vectors).
+
+        Capability Required: "st_hipp_events.read"
+
+        Args:
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
+
+        Returns:
+            Dictionary with count: int
+        """
+        self._require_cap("st_hipp_events.read")
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            conditions: list[str] = [
+                "h.embedding_status = 'READY'",
+                "NOT EXISTS (SELECT 1 FROM st_vec v WHERE v.event_id = h.event_id)",
+            ]
+            params: list[Any] = []
+
+            if tenant_id:
+                conditions.append(f"h.tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"h.space_id = ${len(params) + 1}")
+                params.append(space_id)
+
+            sql = "SELECT COUNT(*) FROM st_hipp_events h WHERE " + " AND ".join(conditions)
+            row = await conn.fetchrow(sql, *params)
+            return {"count": row[0] if row else 0}
+
+    async def hipp_events_reset_missing_embedding_status(
+        self,
+        tenant_id: str | None = None,
+        space_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Reset embedding_status to PENDING for events claiming READY but missing st_vec row.
+
+        Used by M28 integrity check auto-correction. Sets PENDING so M25 backfill
+        picks them up on next P08 cycle.
+
+        Capability Required: "st_hipp_events.write"
+
+        Args:
+            tenant_id: Optional tenant scope
+            space_id: Optional space scope
+
+        Returns:
+            Dictionary with updated_count: int
+        """
+        self._require_cap("st_hipp_events.write")
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            conditions: list[str] = [
+                "h.embedding_status = 'READY'",
+                "NOT EXISTS (SELECT 1 FROM st_vec v WHERE v.event_id = h.event_id)",
+            ]
+            params: list[Any] = []
+
+            if tenant_id:
+                conditions.append(f"h.tenant_id = ${len(params) + 1}")
+                params.append(tenant_id)
+            if space_id:
+                conditions.append(f"h.space_id = ${len(params) + 1}")
+                params.append(space_id)
+
+            where_clause = " AND ".join(conditions)
+            sql = f"""
+                UPDATE st_hipp_events h
+                SET embedding_status = 'PENDING',
+                    updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+                WHERE {where_clause}
+            """
+
+            result = await conn.execute(sql, *params)
+            updated_count = 0
+            if result and result.startswith("UPDATE"):
+                parts = result.split()
+                if len(parts) == 2:
+                    updated_count = int(parts[1])
+
+            logger.info(
+                "hipp_events_reset_missing_embedding_status completed",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "updated_count": updated_count,
+                    "tenant_id": tenant_id,
+                },
+            )
+
+            return {"updated_count": updated_count}
 
     # =========================================================================
     # Issue 3.1.0: Generic Query Count (for PipelineScheduler threshold triggers)
@@ -2938,6 +3023,2044 @@ class Syscalls:
             "is_held": is_held,
             "lock_key": lock_key,
         }
+
+    # =========================================================================
+    # Knowledge Graph Queries (GAP-001 M9.2)
+    # =========================================================================
+
+    async def kg_entities_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        limit: int = 1000,
+        entity_types: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Query st_kg_dom for accumulated KG entities (requires st_kg_dom.read cap).
+
+        GAP-001 M9.2: Load accumulated KG entities for R5 dream exploration.
+        BGT-SM algorithm needs access to the entire knowledge graph to find
+        meaningful bisociative connections, not just batch-new entities.
+
+        Capability Required: "st_kg_dom.read"
+
+        Storage Table: st_kg_dom
+        - Purpose: Knowledge graph domain entities
+        - Query returns active entities ordered by observation_count DESC
+        - Includes embedding_id for R5 semantic distance calculation
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            limit: Max entities to return (default: 1000)
+            entity_types: Optional filter by entity types (PERSON, LOCATION, etc.)
+
+        Returns:
+            Dictionary with:
+            - entities: list[dict] with entity fields
+            - count: int (number of records returned)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_kg_dom.read" capability
+
+        Example:
+            >>> result = await syscalls.kg_entities_query(
+            ...     tenant_id="tenant_1",
+            ...     space_id="space_1",
+            ...     limit=1000
+            ... )
+            >>> entities = result["entities"]
+
+        Performance:
+            - Target: <100ms P95 for 1000 entities
+            - Uses tenant_id, space_id index
+
+        Related:
+            - GAP-001 M9.2: Pass accumulated KG to R5
+            - R5 DreamExplorer: Uses entities for BGT-SM insight generation
+        """
+        self._require_cap("st_kg_dom.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"kg_entities_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "limit": limit,
+                "entity_types": entity_types,
+                "operation": "kg_entities_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Build query with optional entity type filter
+            if entity_types:
+                placeholders = ", ".join(f"${i+3}" for i in range(len(entity_types)))
+                query = f"""
+                    SELECT
+                        entity_id, canonical_name, entity_type, aliases_json,
+                        confidence_score, embedding_id, observation_count,
+                        embedding_vector
+                    FROM st_kg_dom
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND archival_status = 'ACTIVE'
+                      AND entity_type IN ({placeholders})
+                    ORDER BY observation_count DESC
+                    LIMIT ${len(entity_types) + 3}
+                """
+                params = [tenant_id, space_id, *entity_types, limit]
+            else:
+                query = """
+                    SELECT
+                        entity_id, canonical_name, entity_type, aliases_json,
+                        confidence_score, embedding_id, observation_count,
+                        embedding_vector
+                    FROM st_kg_dom
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND archival_status = 'ACTIVE'
+                    ORDER BY observation_count DESC
+                    LIMIT $3
+                """
+                params = [tenant_id, space_id, limit]
+
+            rows = await conn.fetch(query, *params)
+
+            entities = []
+            for row in rows:
+                entity_dict = {
+                    "entity_id": row["entity_id"],
+                    "canonical_name": row["canonical_name"],
+                    "entity_type": row["entity_type"],
+                    "aliases_json": row["aliases_json"],
+                    "confidence": (
+                        float(row["confidence_score"]) if row["confidence_score"] else 0.0
+                    ),
+                    "embedding_id": row["embedding_id"],
+                }
+
+                # GAP-007: Decode inline embedding_vector if present
+                embedding_bytes = row["embedding_vector"]
+                if embedding_bytes:
+                    # 768-dim float32 = 3072 bytes
+                    if len(embedding_bytes) == 768 * 4:
+                        embedding = list(struct.unpack(f"{768}f", embedding_bytes))
+                        entity_dict["embedding"] = embedding
+
+                entities.append(entity_dict)
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"kg_entities_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "entity_count": len(entities),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "kg_entities_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "entities": entities,
+                "count": len(entities),
+            }
+
+    async def kg_edges_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        limit: int = 5000,
+        relationship_types: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Query st_kg_edges for accumulated KG edges (requires st_kg_edges.read cap).
+
+        GAP-001 M9.2: Load accumulated KG edges for R5 dream exploration.
+        BGT-SM random walks need the full graph structure to traverse and
+        discover bisociative connections between remote concepts.
+
+        Capability Required: "st_kg_edges.read"
+
+        Storage Table: st_kg_edges
+        - Purpose: Knowledge graph edges with typed relationships
+        - Query returns active edges ordered by weight DESC
+        - Used for graph traversal in BGT-SM random walks
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            limit: Max edges to return (default: 5000)
+            relationship_types: Optional filter by relation types
+
+        Returns:
+            Dictionary with:
+            - edges: list[dict] with edge fields
+            - count: int (number of records returned)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_kg_edges.read" capability
+
+        Example:
+            >>> result = await syscalls.kg_edges_query(
+            ...     tenant_id="tenant_1",
+            ...     space_id="space_1",
+            ...     limit=5000
+            ... )
+            >>> edges = result["edges"]
+
+        Performance:
+            - Target: <100ms P95 for 5000 edges
+            - Uses tenant_id, space_id index
+
+        Related:
+            - GAP-001 M9.2: Pass accumulated KG to R5
+            - R5 DreamExplorer: Uses edges for BGT-SM graph traversal
+        """
+        self._require_cap("st_kg_edges.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"kg_edges_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "limit": limit,
+                "relationship_types": relationship_types,
+                "operation": "kg_edges_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Build query with optional relationship type filter
+            if relationship_types:
+                placeholders = ", ".join(f"${i+3}" for i in range(len(relationship_types)))
+                query = f"""
+                    SELECT
+                        edge_id, source_entity_id, target_entity_id,
+                        relation_type, edge_weight, confidence_score
+                    FROM st_kg_edges
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND archival_status = 'ACTIVE'
+                      AND relation_type IN ({placeholders})
+                    ORDER BY edge_weight DESC
+                    LIMIT ${len(relationship_types) + 3}
+                """
+                params = [tenant_id, space_id, *relationship_types, limit]
+            else:
+                query = """
+                    SELECT
+                        edge_id, source_entity_id, target_entity_id,
+                        relation_type, edge_weight, confidence_score
+                    FROM st_kg_edges
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND archival_status = 'ACTIVE'
+                    ORDER BY edge_weight DESC
+                    LIMIT $3
+                """
+                params = [tenant_id, space_id, limit]
+
+            rows = await conn.fetch(query, *params)
+
+            edges = [
+                {
+                    "edge_id": row["edge_id"],
+                    "source_entity_id": row["source_entity_id"],
+                    "target_entity_id": row["target_entity_id"],
+                    "relationship_type": row["relation_type"],
+                    "weight": float(row["edge_weight"]) if row["edge_weight"] else 0.5,
+                    "confidence": (
+                        float(row["confidence_score"]) if row["confidence_score"] else 0.0
+                    ),
+                }
+                for row in rows
+            ]
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"kg_edges_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "edge_count": len(edges),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "kg_edges_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "edges": edges,
+                "count": len(edges),
+            }
+
+    # =========================================================================
+    # Episode Queries (R5 Parity Resolution)
+    # =========================================================================
+
+    async def episodes_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        limit: int = 100,
+        order_by: str = "start_time_utc DESC",
+    ) -> dict[str, Any]:
+        """
+        Query st_epi for accumulated episodes (requires st_epi.read cap).
+
+        R5 Parity Resolution: Load accumulated episodes from prior cycles
+        for RoutineDetector, CPN, TDL-HCO, and SPC-UQ algorithms.
+        These algorithms need historical episode context to detect patterns.
+
+        Capability Required: "st_epi.read"
+
+        Storage Table: st_epi
+        - Purpose: Episodic memory (clustered episodes)
+        - Query returns recent episodes ordered by start_time DESC
+        - Includes observation-derived sentiment/salience from st_observations
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            limit: Max episodes to return (default: 100)
+            order_by: Order clause (default: start_time_utc DESC)
+
+        Returns:
+            Dictionary with:
+            - episodes: list[dict] with episode fields
+            - count: int (number of records returned)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_epi.read" capability
+
+        Example:
+            >>> result = await syscalls.episodes_query(
+            ...     tenant_id="tenant_1",
+            ...     space_id="space_1",
+            ...     limit=100
+            ... )
+            >>> episodes = result["episodes"]
+
+        Performance:
+            - Target: <50ms P95 for 100 episodes
+            - Uses tenant_id, space_id, start_time_utc index
+
+        Related:
+            - R5 Parity Resolution: Merge historical + current-cycle episodes
+            - RoutineDetector: Needs episode history for pattern detection
+            - CPN: Needs episode context for counterfactual generation
+        """
+        self._require_cap("st_epi.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"episodes_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "limit": limit,
+                "operation": "episodes_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Query episodes with observation-derived sentiment/salience
+            query = """
+                SELECT
+                    e.episode_id,
+                    e.episode_summary,
+                    e.episode_type,
+                    e.start_time_utc,
+                    e.end_time_utc,
+                    e.source_events_json,
+                    e.source_event_count,
+                    e.primary_location,
+                    e.participants_json,
+                    COALESCE(o.sentiment_score, 0.0) as sentiment_score,
+                    COALESCE(o.salience_score, 0.5) as salience_score
+                FROM st_epi e
+                LEFT JOIN LATERAL (
+                    SELECT AVG(obs.sentiment_score) as sentiment_score,
+                           AVG(obs.salience_score) as salience_score
+                    FROM st_observations obs
+                    WHERE obs.record_id = e.episode_id
+                      AND obs.layer = 'st_epi'
+                ) o ON TRUE
+                WHERE e.tenant_id = $1
+                  AND e.space_id = $2
+                  AND e.archival_status = 'ACTIVE'
+                ORDER BY e.start_time_utc DESC
+                LIMIT $3
+            """
+            params = [tenant_id, space_id, limit]
+
+            rows = await conn.fetch(query, *params)
+
+            episodes = []
+            for row in rows:
+                episode_dict = {
+                    "episode_id": row["episode_id"],
+                    "episode_summary": row["episode_summary"],
+                    "episode_type": row["episode_type"],
+                    "start_time_utc": row["start_time_utc"],
+                    "end_time_utc": row["end_time_utc"],
+                    "source_events_json": row["source_events_json"],
+                    "source_event_count": row["source_event_count"],
+                    "primary_location": row["primary_location"],
+                    "participants_json": row["participants_json"],
+                    "sentiment_score": (
+                        float(row["sentiment_score"]) if row["sentiment_score"] else 0.0
+                    ),
+                    "salience_score": (
+                        float(row["salience_score"]) if row["salience_score"] else 0.5
+                    ),
+                }
+                episodes.append(episode_dict)
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"episodes_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "episode_count": len(episodes),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "episodes_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "episodes": episodes,
+                "count": len(episodes),
+            }
+
+    async def procedural_memory_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Query st_procedural for accumulated routines (requires st_procedural.read cap).
+
+        R5 Parity Resolution: Load accumulated routines from prior cycles
+        for TDL-HCO algorithm. TDL-HCO needs existing routines to optimize
+        using temporal difference learning.
+
+        Capability Required: "st_procedural.read"
+
+        Storage Table: st_procedural
+        - Purpose: Procedural memory (habits/routines)
+        - Query returns routines ordered by regularity_score DESC
+        - Includes action sequence for TD learning
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            limit: Max routines to return (default: 50)
+
+        Returns:
+            Dictionary with:
+            - routines: list[dict] with routine fields
+            - count: int (number of records returned)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_procedural.read" capability
+
+        Example:
+            >>> result = await syscalls.procedural_memory_query(
+            ...     tenant_id="tenant_1",
+            ...     space_id="space_1",
+            ...     limit=50
+            ... )
+            >>> routines = result["routines"]
+
+        Performance:
+            - Target: <30ms P95 for 50 routines
+            - Uses tenant_id, space_id index
+
+        Related:
+            - R5 Parity Resolution: Load historical routines for TDL-HCO
+            - TDL-HCO: Needs existing routines to detect bottlenecks
+        """
+        self._require_cap("st_procedural.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"procedural_memory_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "limit": limit,
+                "operation": "procedural_memory_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            query = """
+                SELECT
+                    routine_id,
+                    actor_id,
+                    routine_name,
+                    routine_category,
+                    temporal_anchor,
+                    day_pattern,
+                    frequency,
+                    regularity_score,
+                    action_sequence_json,
+                    source_episodes_json,
+                    source_episode_count,
+                    archival_status
+                FROM st_procedural
+                WHERE tenant_id = $1
+                  AND space_id = $2
+                  AND archival_status = 'ACTIVE'
+                ORDER BY regularity_score DESC
+                LIMIT $3
+            """
+            params = [tenant_id, space_id, limit]
+
+            rows = await conn.fetch(query, *params)
+
+            routines = []
+            for row in rows:
+                routine_dict = {
+                    "routine_id": row["routine_id"],
+                    "actor_id": row["actor_id"],
+                    "routine_name": row["routine_name"],
+                    "routine_category": row["routine_category"],
+                    "temporal_anchor": row["temporal_anchor"],
+                    "day_pattern": row["day_pattern"],
+                    "frequency": row["frequency"],
+                    "regularity_score": (
+                        float(row["regularity_score"]) if row["regularity_score"] else 0.0
+                    ),
+                    "action_sequence_json": row["action_sequence_json"],
+                    "source_episodes_json": row["source_episodes_json"],
+                    "source_episode_count": row["source_episode_count"],
+                    "lifecycle_state": row["archival_status"],
+                }
+                routines.append(routine_dict)
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"procedural_memory_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "routine_count": len(routines),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "procedural_memory_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "routines": routines,
+                "count": len(routines),
+            }
+
+    async def semantic_schema_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        pattern_types: list[str] | None = None,
+        min_confidence: float = 0.5,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """
+        Query st_sem for semantic schemas/patterns (requires st_sem.read cap).
+
+        M4-E2: Load schemas from st_sem for SPC-UQ reconstruction guidance.
+        SPC-UQ uses these patterns to fill gaps in ambiguous episodes
+        by sampling from learned attribute distributions.
+
+        Capability Required: "st_sem.read"
+
+        Storage Table: st_sem
+        - Purpose: Semantic memory (patterns, schemas, insights)
+        - Query returns patterns ordered by confidence_score DESC
+        - Includes pattern_attributes_json for attribute distributions
+
+        Args:
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+            pattern_types: Optional filter by pattern type (ACTIVITY, LOCATION, etc.)
+            min_confidence: Minimum confidence threshold (default: 0.5)
+            limit: Max patterns to return (default: 100)
+
+        Returns:
+            Dictionary with:
+            - schemas: list[dict] with pattern fields
+            - count: int (number of records returned)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_sem.read" capability
+
+        Example:
+            >>> result = await syscalls.semantic_schema_query(
+            ...     tenant_id="tenant_1",
+            ...     space_id="space_1",
+            ...     pattern_types=["ACTIVITY", "LOCATION"],
+            ...     min_confidence=0.5,
+            ...     limit=50
+            ... )
+            >>> schemas = result["schemas"]
+
+        Performance:
+            - Target: <50ms P95 for 100 patterns
+            - Uses tenant_id, space_id index
+
+        Related:
+            - M4-E2: Schema Population for SPC-UQ
+            - SPC-UQ: Uses schemas for gap reconstruction
+        """
+        self._require_cap("st_sem.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"semantic_schema_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "pattern_types": pattern_types,
+                "min_confidence": min_confidence,
+                "limit": limit,
+                "operation": "semantic_schema_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Build query with optional pattern type filter
+            if pattern_types:
+                placeholders = ", ".join(f"${i+4}" for i in range(len(pattern_types)))
+                query = f"""
+                    SELECT
+                        pattern_id,
+                        pattern_type,
+                        pattern_name,
+                        pattern_description,
+                        confidence_score,
+                        pattern_attributes_json,
+                        temporal_regularity
+                    FROM st_sem
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND confidence_score >= $3
+                      AND archival_status = 'ACTIVE'
+                      AND pattern_type IN ({placeholders})
+                    ORDER BY confidence_score DESC
+                    LIMIT ${len(pattern_types) + 4}
+                """
+                params = [tenant_id, space_id, min_confidence, *pattern_types, limit]
+            else:
+                query = """
+                    SELECT
+                        pattern_id,
+                        pattern_type,
+                        pattern_name,
+                        pattern_description,
+                        confidence_score,
+                        pattern_attributes_json,
+                        temporal_regularity
+                    FROM st_sem
+                    WHERE tenant_id = $1
+                      AND space_id = $2
+                      AND confidence_score >= $3
+                      AND archival_status = 'ACTIVE'
+                    ORDER BY confidence_score DESC
+                    LIMIT $4
+                """
+                params = [tenant_id, space_id, min_confidence, limit]
+
+            rows = await conn.fetch(query, *params)
+
+            schemas = []
+            for row in rows:
+                schema_dict = {
+                    "pattern_id": row["pattern_id"],
+                    "activity_type": row["pattern_type"],  # Map to SemanticPattern protocol
+                    "pattern_name": row["pattern_name"],
+                    "description": row["pattern_description"],
+                    "confidence": (
+                        float(row["confidence_score"]) if row["confidence_score"] else 0.5
+                    ),
+                    "pattern_attributes_json": row["pattern_attributes_json"],
+                    "temporal_regularity": (
+                        float(row["temporal_regularity"]) if row["temporal_regularity"] else 0.0
+                    ),
+                }
+                schemas.append(schema_dict)
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"semantic_schema_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "schema_count": len(schemas),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "semantic_schema_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "schemas": schemas,
+                "count": len(schemas),
+            }
+
+    async def kg_edges_lookup(
+        self,
+        tenant_id: str,
+        space_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Lookup all existing KG edges indexed by (source, target) pair for R4.
+
+        GAP-001 M9: Enables R4 to check if an edge already exists between
+        two entities before deciding to CREATE or UPDATE. This allows
+        observation_count to accumulate across consolidation batches,
+        which is required for Granger causality to trigger (needs 5+ observations).
+
+        Capability Required: "st_kg_edges.read"
+
+        Storage Table: st_kg_edges
+
+        Returns:
+            Dictionary keyed by "source_id:target_id" with edge data including:
+            - edge_id
+            - observation_count
+            - co_occurrence_count
+            - confidence_score
+            - relation_type
+            - version (for optimistic locking)
+
+        Example:
+            >>> edges = await syscalls.kg_edges_lookup(tenant_id, space_id)
+            >>> key = f"{source_id}:{target_id}"
+            >>> if key in edges:
+            ...     existing = edges[key]
+            ...     # Use UPDATE_EDGE with incremented observation_count
+            ... else:
+            ...     # Use CREATE_EDGE
+        """
+        self._require_cap("st_kg_edges.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"kg_edges_lookup: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "operation": "kg_edges_lookup",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            query = """
+                SELECT
+                    edge_id, source_entity_id, target_entity_id,
+                    relation_type, observation_count, co_occurrence_count,
+                    confidence_score, version
+                FROM st_kg_edges
+                WHERE tenant_id = $1
+                  AND space_id = $2
+                  AND archival_status = 'ACTIVE'
+            """
+            rows = await conn.fetch(query, tenant_id, space_id)
+
+            # Build lookup by both directions (source:target and target:source)
+            edges_lookup: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                source = row["source_entity_id"]
+                target = row["target_entity_id"]
+                edge_data = {
+                    "edge_id": row["edge_id"],
+                    "source_entity_id": source,
+                    "target_entity_id": target,
+                    "relation_type": row["relation_type"],
+                    "observation_count": row["observation_count"] or 1,
+                    "co_occurrence_count": row["co_occurrence_count"] or 1,
+                    "confidence_score": (
+                        float(row["confidence_score"]) if row["confidence_score"] else 0.5
+                    ),
+                    "version": row["version"] or 1,
+                }
+                # Key by canonical order (sorted) to match R4's pair_key logic
+                pair_ids = sorted([source, target])
+                key = f"{pair_ids[0]}:{pair_ids[1]}"
+                edges_lookup[key] = edge_data
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"kg_edges_lookup completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "edge_count": len(edges_lookup),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "kg_edges_lookup",
+                    "status": "success",
+                },
+            )
+
+            return edges_lookup
+
+    async def kg_entities_lookup(
+        self,
+        tenant_id: str,
+        space_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Lookup all existing KG entities indexed by (type:name) for R4.
+
+        Issue 3 Fix: Enables R4 to check if an entity already exists before
+        deciding to CREATE or UPDATE. This allows observation_count to
+        accumulate across consolidation batches, preventing duplicate entities
+        like "PANDA IS MY WIFE" x7.
+
+        Capability Required: "st_kg_dom.read"
+
+        Storage Table: st_kg_dom
+
+        Returns:
+            Dictionary keyed by "{entity_type}:{canonical_name_lower}" with:
+            - entity_id
+            - canonical_name
+            - entity_type
+            - aliases_json
+            - observation_count
+            - confidence_score
+            - version (for optimistic locking)
+
+        Example:
+            >>> entities = await syscalls.kg_entities_lookup(tenant_id, space_id)
+            >>> key = f"{entity_type}:{canonical_name.lower()}"
+            >>> if key in entities:
+            ...     existing = entities[key]
+            ...     # Use UPDATE_ENTITY with incremented observation_count
+            ... else:
+            ...     # Use CREATE_ENTITY
+        """
+        self._require_cap("st_kg_dom.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"kg_entities_lookup: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "operation": "kg_entities_lookup",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            query = """
+                SELECT
+                    entity_id, canonical_name, entity_type, aliases_json,
+                    observation_count, confidence_score, version
+                FROM st_kg_dom
+                WHERE tenant_id = $1
+                  AND space_id = $2
+                  AND archival_status = 'ACTIVE'
+            """
+            rows = await conn.fetch(query, tenant_id, space_id)
+
+            # Build lookup by type:name for O(1) matching
+            entities_lookup: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                entity_type = row["entity_type"] or ""
+                canonical_name = row["canonical_name"] or ""
+                # Key: "PERSON:jeel" (lowercase for case-insensitive match)
+                key = f"{entity_type}:{canonical_name.lower()}"
+                entities_lookup[key] = {
+                    "entity_id": row["entity_id"],
+                    "canonical_name": canonical_name,
+                    "entity_type": entity_type,
+                    "aliases_json": row["aliases_json"],
+                    "observation_count": row["observation_count"] or 1,
+                    "confidence_score": (
+                        float(row["confidence_score"]) if row["confidence_score"] else 0.5
+                    ),
+                    "version": row["version"] or 1,
+                }
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"kg_entities_lookup completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "entity_count": len(entities_lookup),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "kg_entities_lookup",
+                    "status": "success",
+                },
+            )
+
+            return entities_lookup
+
+    async def kg_candidates_fuzzy_query(
+        self,
+        tenant_id: str,
+        space_id: str,
+        entity_type: str,
+        name_pattern: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """
+        Query KG entity candidates by fuzzy name/alias match for disambiguation.
+
+        Issue 6 Fix: Enables R4 to find candidate entities for multi-signal
+        disambiguation before deciding whether to CREATE, MATCH, or emit GAP.
+
+        The query finds entities where:
+        - canonical_name matches the pattern (ILIKE)
+        - OR aliases_json contains the pattern
+
+        Capability Required: "st_kg_dom.read"
+
+        Storage Table: st_kg_dom
+
+        Args:
+            tenant_id: Tenant isolation key
+            space_id: Space isolation key
+            entity_type: Entity type to filter (PERSON, ORGANIZATION, etc.)
+            name_pattern: Name pattern to fuzzy match (will be wrapped with %)
+            limit: Maximum candidates to return (default 10)
+
+        Returns:
+            List of candidate entity dicts with:
+            - entity_id
+            - canonical_name
+            - entity_type
+            - aliases_json
+            - observation_count (frequency)
+            - last_observed_at (last_seen_ms)
+            - embedding_id
+            - confidence_score
+        """
+        self._require_cap("st_kg_dom.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"kg_candidates_fuzzy_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": tenant_id,
+                "space_id": space_id,
+                "entity_type": entity_type,
+                "name_pattern": name_pattern,
+                "operation": "kg_candidates_fuzzy_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Fuzzy match on canonical_name or aliases
+            # Use ILIKE for case-insensitive pattern matching
+            pattern = f"%{name_pattern.lower()}%"
+            query = """
+                SELECT
+                    entity_id, canonical_name, entity_type, aliases_json,
+                    observation_count, last_observed_at, embedding_id, confidence_score
+                FROM st_kg_dom
+                WHERE tenant_id = $1
+                  AND space_id = $2
+                  AND entity_type = $3
+                  AND archival_status = 'ACTIVE'
+                  AND (
+                      LOWER(canonical_name) LIKE $4
+                      OR LOWER(aliases_json::text) LIKE $4
+                  )
+                ORDER BY observation_count DESC, last_observed_at DESC
+                LIMIT $5
+            """
+            rows = await conn.fetch(query, tenant_id, space_id, entity_type, pattern, limit)
+
+            candidates: list[dict[str, Any]] = []
+            for row in rows:
+                candidates.append(
+                    {
+                        "entity_id": row["entity_id"],
+                        "canonical_name": row["canonical_name"],
+                        "entity_type": row["entity_type"],
+                        "aliases_json": row["aliases_json"],
+                        "observation_count": row["observation_count"] or 1,
+                        "last_observed_at": row["last_observed_at"] or 0,
+                        "embedding_id": row["embedding_id"],
+                        "confidence_score": (
+                            float(row["confidence_score"]) if row["confidence_score"] else 0.5
+                        ),
+                    }
+                )
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"kg_candidates_fuzzy_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "entity_type": entity_type,
+                    "name_pattern": name_pattern,
+                    "candidate_count": len(candidates),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "kg_candidates_fuzzy_query",
+                    "status": "success",
+                },
+            )
+
+            return candidates
+
+    # ------------------------------------------------------------------
+    # M9.3 -- Unified Truth Candidates Query
+    # ------------------------------------------------------------------
+
+    async def truth_candidates_query(
+        self,
+        request: Any,
+    ) -> Any:
+        """
+        Unified truth layer candidate query for reconciliation engine.
+
+        Replaces TruthQueryService.find_candidates() and 8+ bespoke query
+        paths with a single capability-gated, pgvector-accelerated syscall.
+
+        Supports three query modes:
+        - EMBEDDING: pgvector cosine ANN (ORDER BY <=> with HNSW index)
+        - KEY: Exact/fuzzy WHERE clause match (for st_kg_edges, etc.)
+        - HYBRID: Key pre-filter + embedding re-rank (for st_kg_dom)
+
+        Capability Required: "truth.reconcile.read"
+
+        Args:
+            request: TruthCandidateRequest with layers, embedding, key_filters
+
+        Returns:
+            TruthCandidateResponse with candidates per layer + query metadata
+
+        Raises:
+            PermissionError: If pipeline lacks "truth.reconcile.read" capability
+            ValueError: If request.layers contains unregistered layer
+            asyncio.TimeoutError: If query exceeds request.timeout_ms
+        """
+        import asyncio
+        import uuid
+
+        from k0.modules.consolidation.query import (
+            TruthCandidateRequest,
+            TruthCandidateResponse,
+            resolve_query_mode,
+        )
+        from k0.modules.consolidation.query.builder import TruthCandidateQueryBuilder
+        from k0.modules.consolidation.query.mapper import TruthCandidateMapper
+        from k0.modules.consolidation.truth_layer_registry import TruthLayerRegistry
+
+        self._require_cap("truth.reconcile.read")
+
+        req: TruthCandidateRequest = request
+        query_id = str(uuid.uuid4())
+        start_time = time.perf_counter()
+
+        logger.debug(
+            f"truth_candidates_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "tenant_id": req.tenant_id,
+                "space_id": req.space_id,
+                "layers": list(req.layers),
+                "top_k": req.top_k,
+                "query_id": query_id,
+                "operation": "truth_candidates_query",
+            },
+        )
+
+        registry = TruthLayerRegistry.from_contracts()
+        builder = TruthCandidateQueryBuilder(registry)
+        mapper = TruthCandidateMapper(registry)
+
+        all_candidates: dict[str, list[Any]] = {}
+        modes_used: dict[str, str] = {}
+        errors: dict[str, str] = {}
+        total = 0
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            for layer in req.layers:
+                try:
+                    spec = registry.get(layer)
+                    mode = resolve_query_mode(
+                        spec.supports_embedding_match,
+                        spec.supports_key_match,
+                        req.mode,
+                    )
+                    modes_used[layer] = mode.value
+
+                    sql, params = builder.build(layer, mode, req)
+                    rows = await asyncio.wait_for(
+                        conn.fetch(sql, *params),
+                        timeout=req.timeout_ms / 1000.0,
+                    )
+
+                    records = [mapper.map_row(row, layer) for row in rows]
+                    all_candidates[layer] = records
+                    total += len(records)
+                except KeyError as exc:
+                    errors[layer] = str(exc)
+                except asyncio.TimeoutError:
+                    errors[layer] = f"Query timed out after {req.timeout_ms}ms"
+                except Exception as exc:
+                    errors[layer] = f"{type(exc).__name__}: {exc}"
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+        logger.debug(
+            f"truth_candidates_query completed: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "query_id": query_id,
+                "layers_queried": list(req.layers),
+                "modes_used": modes_used,
+                "total_candidates": total,
+                "errors": errors,
+                "elapsed_ms": elapsed_ms,
+                "operation": "truth_candidates_query",
+                "status": "success" if not errors else "partial",
+            },
+        )
+
+        return TruthCandidateResponse(
+            candidates=all_candidates,
+            total_count=total,
+            layers_queried=req.layers,
+            modes_used=modes_used,
+            elapsed_ms=elapsed_ms,
+            query_id=query_id,
+            errors=errors,
+        )
+
+    async def embedding_vectors_batch_query(
+        self,
+        embedding_ids: list[str],
+    ) -> dict[str, Any]:
+        """
+        Batch query st_vec for embedding vectors by IDs (requires st_vec.read cap).
+
+        GAP-001 M9.4: Load embedding vectors for KG entities to enable
+        BGT-SM semantic distance calculations in R5 dream exploration.
+
+        Capability Required: "st_vec.read"
+
+        Storage Table: st_vec
+        - Batch query by embedding_id list
+        - Returns vector data for each found embedding
+
+        Args:
+            embedding_ids: List of embedding IDs to fetch
+
+        Returns:
+            Dictionary with:
+            - vectors: dict[embedding_id -> list[float]] for found embeddings
+            - count: int (number of vectors found)
+            - missing: list[str] (embedding_ids not found)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_vec.read" capability
+
+        Example:
+            >>> result = await syscalls.embedding_vectors_batch_query(
+            ...     embedding_ids=["emb_1", "emb_2", "emb_3"]
+            ... )
+            >>> vectors = result["vectors"]  # {"emb_1": [0.1, 0.2, ...], ...}
+
+        Performance:
+            - Target: <50ms P95 for 100 embeddings
+            - Uses IN clause with embedding_id index
+
+        Related:
+            - GAP-001 M9.4: Add entity embeddings to R5 input
+            - R5 DreamExplorer: Uses embeddings for BGT-SM semantic distance
+        """
+        self._require_cap("st_vec.read")
+
+        if not embedding_ids:
+            return {"vectors": {}, "count": 0, "missing": []}
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"embedding_vectors_batch_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "embedding_count": len(embedding_ids),
+                "operation": "embedding_vectors_batch_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Build IN clause with parameter placeholders
+            placeholders = ", ".join(f"${i+1}" for i in range(len(embedding_ids)))
+            query = f"""
+                SELECT embedding_id, vector, vector_dim
+                FROM st_vec
+                WHERE embedding_id IN ({placeholders})
+                  AND status = 'INDEXED'
+            """
+
+            rows = await conn.fetch(query, *embedding_ids)
+
+            # Convert binary vectors to float lists
+            import struct
+
+            vectors: dict[str, list[float]] = {}
+            found_ids: set[str] = set()
+
+            for row in rows:
+                emb_id = row["embedding_id"]
+                vector_bytes = row["vector"]
+                vector_dim = row["vector_dim"]
+                found_ids.add(emb_id)
+
+                if vector_bytes and vector_dim:
+                    # Unpack bytes to floats (4 bytes per float32)
+                    try:
+                        float_count = len(vector_bytes) // 4
+                        floats = list(struct.unpack(f"{float_count}f", vector_bytes))
+                        vectors[emb_id] = floats
+                    except struct.error:
+                        logger.warning(
+                            f"Failed to unpack vector for {emb_id}",
+                            extra={"embedding_id": emb_id, "vector_dim": vector_dim},
+                        )
+
+            missing = [eid for eid in embedding_ids if eid not in found_ids]
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"embedding_vectors_batch_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "requested": len(embedding_ids),
+                    "found": len(vectors),
+                    "missing": len(missing),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "embedding_vectors_batch_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "vectors": vectors,
+                "count": len(vectors),
+                "missing": missing,
+            }
+
+    async def embeddings_by_event_ids(
+        self,
+        event_ids: list[str],
+    ) -> dict[str, Any]:
+        """
+        Batch query st_vec for embeddings by event IDs (requires st_vec.read cap).
+
+        GAP-007: Semantic similarity enricher needs embeddings for new entities.
+        Entities have source_event_ids from P02, use those to get embeddings.
+
+        Capability Required: "st_vec.read"
+
+        Storage Table: st_vec
+        - Query by event_id (from P02 write)
+        - Returns first embedding for each event
+
+        Args:
+            event_ids: List of event IDs to fetch embeddings for
+
+        Returns:
+            Dictionary with:
+            - embeddings: dict[event_id -> list[float]] for found embeddings
+            - count: int (number found)
+
+        Raises:
+            PermissionError: If pipeline lacks "st_vec.read" capability
+        """
+        self._require_cap("st_vec.read")
+
+        if not event_ids:
+            return {"embeddings": {}, "count": 0}
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"embeddings_by_event_ids: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "event_count": len(event_ids),
+                "operation": "embeddings_by_event_ids",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Query by event_id - get first embedding per event
+            placeholders = ", ".join(f"${i+1}" for i in range(len(event_ids)))
+            query = f"""
+                SELECT DISTINCT ON (event_id) event_id, vector, vector_dim
+                FROM st_vec
+                WHERE event_id IN ({placeholders})
+                ORDER BY event_id, created_at DESC
+            """
+
+            rows = await conn.fetch(query, *event_ids)
+
+            embeddings: dict[str, list[float]] = {}
+            for row in rows:
+                event_id = row["event_id"]
+                vector_bytes = row["vector"]
+                vector_dim = row["vector_dim"]
+
+                if vector_bytes and vector_dim:
+                    try:
+                        float_count = len(vector_bytes) // 4
+                        floats = list(struct.unpack(f"{float_count}f", vector_bytes))
+                        embeddings[event_id] = floats
+                    except struct.error:
+                        logger.warning(
+                            f"Failed to unpack vector for event {event_id}",
+                            extra={"event_id": event_id},
+                        )
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"embeddings_by_event_ids completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "requested": len(event_ids),
+                    "found": len(embeddings),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "embeddings_by_event_ids",
+                },
+            )
+
+            return {
+                "embeddings": embeddings,
+                "count": len(embeddings),
+            }
+
+    # =========================================================================
+    # Observation Recording (Issue 7.4)
+    # =========================================================================
+
+    async def observations_write(
+        self,
+        observation_id: str,
+        tenant_id: str,
+        layer: str,
+        record_id: str,
+        observed_at: int,
+        observation_type: str,
+        source_event_id: str | None = None,
+        observation_weight: float = 1.0,
+        sentiment_score: float | None = None,
+        sentiment_label: str | None = None,
+        affect_valence: float | None = None,
+        affect_arousal: float | None = None,
+        dominant_emotion: str | None = None,
+        salience_score: float | None = None,
+        novelty_score: float | None = None,
+        salience_band: str | None = None,
+        ingress_channel: str | None = None,
+        ingress_source: str | None = None,
+        device_kind: str | None = None,
+        location_name: str | None = None,
+        location_type: str | None = None,
+        geohash_6: str | None = None,
+        social_context: str | None = None,
+        social_intimacy: float | None = None,
+        is_solo_event: bool | None = None,
+        num_participants: int | None = None,
+        time_of_day_bucket: str | None = None,
+        circadian_slot: str | None = None,
+        is_weekend: bool | None = None,
+        day_of_week: int | None = None,
+        anchor_time_utc: int | None = None,
+        original_temporal_expr: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Write observation with holistic context to st_observations (requires st_observations.write cap).
+
+        Issue 7.4: Every INSERT or MERGE to a truth layer should record an observation
+        to preserve the full context of WHEN and WITH WHAT CONTEXT each observation happened.
+
+        Capability Required: "st_observations.write"
+
+        Storage Table: st_observations
+        - Purpose: Per-observation holistic context (temporal, emotional, location, social)
+        - Called by ObservationRecorder after each truth layer INSERT/MERGE
+        - Links to truth layer record via (layer, record_id)
+
+        Args:
+            observation_id: ULID for this observation
+            tenant_id: Tenant identifier
+            layer: Truth layer ('st_epi', 'st_sem', 'st_kg_dom', 'st_social', 'st_prospective')
+            record_id: Primary key of the truth layer record
+            observed_at: When observation occurred (milliseconds since epoch)
+            observation_type: 'FIRST_SEEN' or 'REINFORCEMENT'
+            source_event_id: Optional source hipp event ID
+            observation_weight: Confidence/weight [0.0, 1.0]
+            sentiment_score: Sentiment score [-1.0, 1.0]
+            sentiment_label: 'positive', 'negative', 'neutral'
+            affect_valence: Valence dimension of affect [-1.0, 1.0]
+            affect_arousal: Arousal dimension of affect [0.0, 1.0]
+            dominant_emotion: Primary emotion label
+            salience_score: How salient/important [0.0, 1.0]
+            novelty_score: How novel [0.0, 1.0]
+            salience_band: 'HIGH', 'MEDIUM', 'LOW'
+            ingress_channel: 'whatsapp', 'sms', 'voice', etc.
+            ingress_source: Device or app source
+            device_kind: 'mobile', 'desktop', 'tablet'
+            location_name: Human-readable location name
+            location_type: 'home', 'work', 'school', etc.
+            geohash_6: 6-character geohash
+            social_context: 'solo', 'family', 'friends', 'work'
+            social_intimacy: Relationship closeness [0.0, 1.0]
+            is_solo_event: True if user was alone
+            num_participants: Number of people involved
+            time_of_day_bucket: 'morning', 'afternoon', 'evening', 'night'
+            circadian_slot: 'early_morning', 'morning', 'midday', etc.
+            is_weekend: True if weekend
+            day_of_week: 0=Monday, 6=Sunday
+            anchor_time_utc: UTC anchor time (milliseconds)
+            original_temporal_expr: Original temporal expression from text
+
+        Returns:
+            Dictionary with:
+            - observation_id: str
+            - layer: str
+            - record_id: str
+            - success: bool
+
+        Raises:
+            PermissionError: If pipeline lacks "st_observations.write" capability
+            ValueError: If required parameters missing or invalid
+
+        Example:
+            >>> await syscalls.observations_write(
+            ...     observation_id="01HQXYZ...",
+            ...     tenant_id="tenant_1",
+            ...     layer="st_epi",
+            ...     record_id="episode_abc123",
+            ...     observed_at=1705600000000,
+            ...     observation_type="FIRST_SEEN",
+            ...     sentiment_score=0.8,
+            ...     dominant_emotion="joy",
+            ... )
+
+        Performance:
+            - Target: <10ms P95 (single INSERT)
+            - Uses observation_id primary key
+
+        Related:
+            - Issue 7.4: Per-observation context preservation
+            - ObservationRecorder: Module that calls this syscall
+            - Truth layer writers: Call recorder after INSERT/MERGE
+        """
+        self._require_cap("st_observations.write")
+
+        # Validation
+        valid_layers = {"st_epi", "st_sem", "st_kg_dom", "st_social", "st_prospective"}
+        if not observation_id:
+            raise ValueError("observation_id required for observations_write")
+        if not tenant_id:
+            raise ValueError("tenant_id required for observations_write")
+        if layer not in valid_layers:
+            raise ValueError(f"Invalid layer: {layer}. Must be one of {valid_layers}")
+        if not record_id:
+            raise ValueError("record_id required for observations_write")
+        if observation_type not in ("FIRST_SEEN", "REINFORCEMENT"):
+            raise ValueError(f"Invalid observation_type: {observation_type}")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"observations_write: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "observation_id": observation_id,
+                "layer": layer,
+                "record_id": record_id,
+                "observation_type": observation_type,
+                "operation": "observations_write",
+            },
+        )
+
+        try:
+            async with self._uow_factory() as uow:
+                conn = uow._connection
+                if conn is None:
+                    raise RuntimeError("UnitOfWork connection not initialized")
+
+                await conn.execute(
+                    """
+                    INSERT INTO st_observations (
+                        observation_id, tenant_id, layer, record_id,
+                        observed_at, observation_type, source_event_id,
+                        observation_weight, sentiment_score, sentiment_label,
+                        affect_valence, affect_arousal, dominant_emotion,
+                        salience_score, novelty_score, salience_band,
+                        ingress_channel, ingress_source, device_kind,
+                        location_name, location_type, geohash_6,
+                        social_context, social_intimacy, is_solo_event,
+                        num_participants, time_of_day_bucket, circadian_slot,
+                        is_weekend, day_of_week, anchor_time_utc,
+                        original_temporal_expr
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                        $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                        $31, $32
+                    )
+                    """,
+                    observation_id,
+                    tenant_id,
+                    layer,
+                    record_id,
+                    observed_at,
+                    observation_type,
+                    source_event_id,
+                    observation_weight,
+                    sentiment_score,
+                    sentiment_label,
+                    affect_valence,
+                    affect_arousal,
+                    dominant_emotion,
+                    salience_score,
+                    novelty_score,
+                    salience_band,
+                    ingress_channel,
+                    ingress_source,
+                    device_kind,
+                    location_name,
+                    location_type,
+                    geohash_6,
+                    social_context,
+                    social_intimacy,
+                    is_solo_event,
+                    num_participants,
+                    time_of_day_bucket,
+                    circadian_slot,
+                    is_weekend,
+                    day_of_week,
+                    anchor_time_utc,
+                    original_temporal_expr,
+                )
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"observations_write completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "observation_id": observation_id,
+                    "layer": layer,
+                    "record_id": record_id,
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "observations_write",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "observation_id": observation_id,
+                "layer": layer,
+                "record_id": record_id,
+                "success": True,
+            }
+
+        except Exception as e:
+            logger.error(
+                f"observations_write failed: {self._pipeline_id}",
+                exc_info=True,
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "observation_id": observation_id,
+                    "layer": layer,
+                    "error": str(e),
+                    "operation": "observations_write",
+                },
+            )
+            raise RuntimeError(f"Failed to write observation: {e}") from e
+
+    async def observations_write_batch(
+        self,
+        observations: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """
+        Write multiple observations efficiently (requires st_observations.write cap).
+
+        Batch version of observations_write for efficiency when recording
+        multiple observations in a single transaction.
+
+        Capability Required: "st_observations.write"
+
+        Args:
+            observations: List of observation dicts, each with same fields as
+                         observations_write (observation_id, tenant_id, layer, etc.)
+
+        Returns:
+            Dictionary with:
+            - count: int (number of observations written)
+            - observation_ids: list[str]
+            - success: bool
+
+        Raises:
+            PermissionError: If pipeline lacks "st_observations.write" capability
+            ValueError: If any observation is invalid
+
+        Performance:
+            - Target: <50ms P95 for 10 observations
+            - Uses executemany for batch efficiency
+        """
+        self._require_cap("st_observations.write")
+
+        if not observations:
+            return {"count": 0, "observation_ids": [], "success": True}
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"observations_write_batch: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "batch_size": len(observations),
+                "operation": "observations_write_batch",
+            },
+        )
+
+        observation_ids: list[str] = []
+
+        try:
+            async with self._uow_factory() as uow:
+                conn = uow._connection
+                if conn is None:
+                    raise RuntimeError("UnitOfWork connection not initialized")
+
+                for obs in observations:
+                    # Validate each observation
+                    valid_layers = {"st_epi", "st_sem", "st_kg_dom", "st_social", "st_prospective"}
+                    if obs.get("layer") not in valid_layers:
+                        raise ValueError(f"Invalid layer: {obs.get('layer')}")
+                    if obs.get("observation_type") not in ("FIRST_SEEN", "REINFORCEMENT"):
+                        raise ValueError(f"Invalid observation_type: {obs.get('observation_type')}")
+
+                    await conn.execute(
+                        """
+                        INSERT INTO st_observations (
+                            observation_id, tenant_id, layer, record_id,
+                            observed_at, observation_type, source_event_id,
+                            observation_weight, sentiment_score, sentiment_label,
+                            affect_valence, affect_arousal, dominant_emotion,
+                            salience_score, novelty_score, salience_band,
+                            ingress_channel, ingress_source, device_kind,
+                            location_name, location_type, geohash_6,
+                            social_context, social_intimacy, is_solo_event,
+                            num_participants, time_of_day_bucket, circadian_slot,
+                            is_weekend, day_of_week, anchor_time_utc,
+                            original_temporal_expr
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                            $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                            $31, $32
+                        )
+                        """,
+                        obs.get("observation_id"),
+                        obs.get("tenant_id"),
+                        obs.get("layer"),
+                        obs.get("record_id"),
+                        obs.get("observed_at"),
+                        obs.get("observation_type"),
+                        obs.get("source_event_id"),
+                        obs.get("observation_weight", 1.0),
+                        obs.get("sentiment_score"),
+                        obs.get("sentiment_label"),
+                        obs.get("affect_valence"),
+                        obs.get("affect_arousal"),
+                        obs.get("dominant_emotion"),
+                        obs.get("salience_score"),
+                        obs.get("novelty_score"),
+                        obs.get("salience_band"),
+                        obs.get("ingress_channel"),
+                        obs.get("ingress_source"),
+                        obs.get("device_kind"),
+                        obs.get("location_name"),
+                        obs.get("location_type"),
+                        obs.get("geohash_6"),
+                        obs.get("social_context"),
+                        obs.get("social_intimacy"),
+                        obs.get("is_solo_event"),
+                        obs.get("num_participants"),
+                        obs.get("time_of_day_bucket"),
+                        obs.get("circadian_slot"),
+                        obs.get("is_weekend"),
+                        obs.get("day_of_week"),
+                        obs.get("anchor_time_utc"),
+                        obs.get("original_temporal_expr"),
+                    )
+                    observation_ids.append(obs.get("observation_id", ""))
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"observations_write_batch completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "batch_size": len(observations),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "observations_write_batch",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "count": len(observation_ids),
+                "observation_ids": observation_ids,
+                "success": True,
+            }
+
+        except Exception as e:
+            logger.error(
+                f"observations_write_batch failed: {self._pipeline_id}",
+                exc_info=True,
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "batch_size": len(observations),
+                    "error": str(e),
+                    "operation": "observations_write_batch",
+                },
+            )
+            raise RuntimeError(f"Failed to write observations batch: {e}") from e
+
+    # ------------------------------------------------------------------
+    # st_learned_weights: Adaptive parameter storage
+    # ------------------------------------------------------------------
+
+    async def learned_weights_query(
+        self,
+        space_id: str,
+        param_prefix: str,
+    ) -> dict[str, Any]:
+        """
+        Query st_learned_weights by space and key prefix (requires st_learned_weights.read).
+
+        Returns all rows matching space_id + param_key LIKE prefix%. Callers
+        interpret keys according to their own namespace conventions.
+
+        Capability Required: "st_learned_weights.read"
+
+        Storage Table: st_learned_weights (migration 0040)
+
+        Args:
+            space_id: Space/family isolation ID
+            param_prefix: Key prefix filter (e.g., "importance_", "novelty_bonus_")
+
+        Returns:
+            Dictionary with:
+            - rows: list[dict] with {param_key, current_value, sample_count, updated_at, confidence, version}
+            - count: int
+
+        Raises:
+            PermissionError: If pipeline lacks "st_learned_weights.read" capability
+
+        Performance:
+            - Target: <10ms P95 (uses idx_learned_weights_space_key)
+            - Typically returns 4-8 rows per prefix
+
+        Related:
+            - Migration 0040: st_learned_weights schema
+            - Migration 0041: st_learned_weights_history (version tracking)
+        """
+        self._require_cap("st_learned_weights.read")
+
+        start_time = time.perf_counter()
+        logger.debug(
+            f"learned_weights_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "space_id": space_id,
+                "param_prefix": param_prefix,
+                "operation": "learned_weights_query",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            raw_rows = await conn.fetch(
+                """
+                SELECT param_key, current_value, sample_count,
+                       updated_at, confidence, version
+                FROM st_learned_weights
+                WHERE space_id = $1
+                  AND param_key LIKE $2
+                  AND param_scope = 'space'
+                ORDER BY param_key
+                """,
+                space_id,
+                f"{param_prefix}%",
+            )
+
+            rows = [dict(r) for r in raw_rows]
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"learned_weights_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "space_id": space_id,
+                    "param_prefix": param_prefix,
+                    "count": len(rows),
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "learned_weights_query",
+                    "status": "success",
+                },
+            )
+
+            return {
+                "rows": rows,
+                "count": len(rows),
+            }
+
+    async def learned_weights_get(
+        self,
+        space_id: str,
+        param_key: str,
+    ) -> dict[str, Any] | None:
+        """
+        Fetch a single learned weight by exact key (requires st_learned_weights.read).
+
+        Capability Required: "st_learned_weights.read"
+
+        Storage Table: st_learned_weights (migration 0040)
+
+        Args:
+            space_id: Space/family isolation ID
+            param_key: Exact param key (e.g., "novelty_bonus_first_occurrence")
+
+        Returns:
+            Dict with {param_key, current_value, sample_count, updated_at, confidence, version},
+            or None if not found.
+
+        Raises:
+            PermissionError: If pipeline lacks "st_learned_weights.read" capability
+        """
+        self._require_cap("st_learned_weights.read")
+
+        start_time = time.perf_counter()
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            row = await conn.fetchrow(
+                """
+                SELECT param_key, current_value, sample_count,
+                       updated_at, confidence, version
+                FROM st_learned_weights
+                WHERE space_id = $1
+                  AND param_key = $2
+                  AND param_scope = 'space'
+                """,
+                space_id,
+                param_key,
+            )
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"learned_weights_get completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "space_id": space_id,
+                    "param_key": param_key,
+                    "found": row is not None,
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "learned_weights_get",
+                },
+            )
+
+            return dict(row) if row is not None else None
+
+    async def learned_weights_upsert(
+        self,
+        space_id: str,
+        param_key: str,
+        value: float,
+        prior_value: float,
+    ) -> dict[str, Any]:
+        """
+        Insert or update a learned weight (requires st_learned_weights.write).
+
+        Uses UPSERT pattern. Increments version and sample_count on conflict.
+        History trigger (migration 0041) auto-creates version snapshot.
+
+        Capability Required: "st_learned_weights.write"
+
+        Storage Table: st_learned_weights (migration 0040)
+
+        Args:
+            space_id: Space/family isolation ID
+            param_key: Full param key (e.g., "importance_sentiment", "novelty_bonus_first_occurrence")
+            value: New weight value
+            prior_value: Default/prior value (for rollback reference)
+
+        Returns:
+            Dictionary with:
+            - param_key: str
+            - value: float
+            - status: str ("INSERTED" or "UPDATED")
+
+        Raises:
+            PermissionError: If pipeline lacks "st_learned_weights.write" capability
+
+        Performance:
+            - Target: <15ms P95 (single UPSERT with 3 indexes)
+            - Uses ON CONFLICT on uq_learned_weights constraint
+
+        Related:
+            - Migration 0040: st_learned_weights schema
+            - Migration 0041: History trigger auto-prunes to 10 versions
+        """
+        self._require_cap("st_learned_weights.write")
+
+        start_time = time.perf_counter()
+        now_ms = int(time.time() * 1000)
+
+        logger.debug(
+            f"learned_weights_upsert: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "space_id": space_id,
+                "param_key": param_key,
+                "value": value,
+                "operation": "learned_weights_upsert",
+            },
+        )
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            result = await conn.execute(
+                """
+                INSERT INTO st_learned_weights (
+                    param_id, param_key, param_scope, scope_id,
+                    space_id, current_value, prior_value,
+                    confidence, sample_count,
+                    last_updated_at, version, previous_value,
+                    created_at, updated_at
+                ) VALUES (
+                    gen_random_uuid()::text, $1, 'space', $2,
+                    $2, $3, $4,
+                    0.0, 1,
+                    $5, 1, NULL,
+                    $5, $5
+                )
+                ON CONFLICT ON CONSTRAINT uq_learned_weights DO UPDATE SET
+                    current_value = $3,
+                    previous_value = st_learned_weights.current_value,
+                    sample_count = st_learned_weights.sample_count + 1,
+                    version = st_learned_weights.version + 1,
+                    last_updated_at = $5,
+                    updated_at = $5
+                """,
+                param_key,  # $1
+                space_id,  # $2 (scope_id = space_id for space scope)
+                value,  # $3
+                prior_value,  # $4
+                now_ms,  # $5
+            )
+
+            inserted = result != "INSERT 0 0"
+            status = "INSERTED" if "INSERT 0 1" in str(result) else "UPDATED"
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"learned_weights_upsert completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "space_id": space_id,
+                    "param_key": param_key,
+                    "value": value,
+                    "status": status,
+                    "elapsed_ms": elapsed_ms,
+                    "operation": "learned_weights_upsert",
+                },
+            )
+
+            return {
+                "param_key": param_key,
+                "value": value,
+                "status": status,
+            }
 
     def _require_cap(self, capability: str) -> None:
         """

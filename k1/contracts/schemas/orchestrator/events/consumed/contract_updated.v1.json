@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/consumed/contract_updated.v1.json",
+  "title": "contract.updated.v1",
+  "description": "Consumed from Fabric when a capability contract changes (registration, unregistration, schema update, health change).",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.fabric.contract.updated.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "fabric"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["capability_name"],
+      "properties": {
+        "capability_name": {
+          "type": "string",
+          "description": "Capability whose contract changed."
+        },
+        "change_type": {
+          "type": "string",
+          "enum": ["REGISTERED", "UNREGISTERED", "SCHEMA_UPDATED", "HEALTH_CHANGED"],
+          "description": "Type of contract change."
+        },
+        "provider_type": {
+          "type": "string",
+          "description": "Provider type (for REGISTERED events)."
+        },
+        "version": {
+          "type": ["string", "null"],
+          "description": "Capability version (for REGISTERED events)."
+        },
+        "old_status": {
+          "type": "string",
+          "enum": ["ONLINE", "DEGRADED", "OFFLINE"],
+          "description": "Previous health status (for HEALTH_CHANGED events)."
+        },
+        "new_status": {
+          "type": "string",
+          "enum": ["ONLINE", "DEGRADED", "OFFLINE"],
+          "description": "New health status (for HEALTH_CHANGED events)."
+        },
+        "error": {
+          "type": "string",
+          "description": "Validation error detail (for SCHEMA_UPDATED failure events)."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

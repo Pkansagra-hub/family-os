@@ -8,12 +8,16 @@ Spec Reference:
     - Dossier Appendix C.2.1.1: Adaptive Weight Learning
     - Dossier Appendix C.2.1.2: Stability Controls
     - M4_EXECUTION.md Issue 4.1.5
+    - ADR-K024: Weight Learner Component Alignment
 
 Learning Method:
-    - Online gradient descent with momentum (β=0.9)
+    - Online gradient descent with momentum (beta=0.9)
     - Binary cross-entropy loss predicting "will event be grounded?"
     - Nightly batch training during P03 consolidation cycle
     - Minimum 500 samples before learning begins
+
+Weight Components (8, matching CONFIG_B scorer -- ADR-K024):
+    sentiment, affect, arousal, surprise, novelty, social, identity, recency
 
 Weight Constraints:
     - All weights normalized via softmax (sum to 1.0)
@@ -68,6 +72,11 @@ class WeightLearnerConfig:
         - weight_max: 0.60 (per-weight ceiling)
         - sliding_window_days: 30 (training data window)
         - rollback_threshold: 3 (consecutive increasing loss nights)
+
+    Batch Protection (Issue 4 fix):
+        - min_batch_size: 50 (minimum samples to proceed with training)
+        - small_batch_lr_factor: 10.0 (learning rate scaling for small batches)
+        - drift_threshold: 0.15 (maximum allowed weight change per step)
     """
 
     learning_rate: float = 0.01
@@ -78,28 +87,45 @@ class WeightLearnerConfig:
     sliding_window_days: int = 30
     rollback_threshold: int = 3
 
-    # Static priors (from Dossier §4.2.2)
-    prior_emotional: float = 0.35
-    prior_recency: float = 0.25
-    prior_access: float = 0.20
-    prior_social: float = 0.20
+    # Batch protection (Issue 4)
+    min_batch_size: int = 50
+    small_batch_lr_factor: float = 10.0
+    drift_threshold: float = 0.15
+
+    # Static priors (CONFIG_B defaults, POC validated 120/120 -- ADR-K024)
+    prior_sentiment: float = 0.10
+    prior_affect: float = 0.12
+    prior_arousal: float = 0.08
+    prior_surprise: float = 0.15
+    prior_novelty: float = 0.15
+    prior_social: float = 0.15
+    prior_identity: float = 0.10
+    prior_recency: float = 0.15
 
     def get_priors(self) -> Dict[str, float]:
-        """Get static prior weights as dict."""
+        """Get static prior weights as dict (8 CONFIG_B components)."""
         return {
-            "emotional": self.prior_emotional,
-            "recency": self.prior_recency,
-            "access": self.prior_access,
+            "sentiment": self.prior_sentiment,
+            "affect": self.prior_affect,
+            "arousal": self.prior_arousal,
+            "surprise": self.prior_surprise,
+            "novelty": self.prior_novelty,
             "social": self.prior_social,
+            "identity": self.prior_identity,
+            "recency": self.prior_recency,
         }
 
     def get_priors_list(self) -> List[float]:
-        """Get static prior weights as list."""
+        """Get static prior weights as ordered list (matches COMPONENTS order)."""
         return [
-            self.prior_emotional,
-            self.prior_recency,
-            self.prior_access,
+            self.prior_sentiment,
+            self.prior_affect,
+            self.prior_arousal,
+            self.prior_surprise,
+            self.prior_novelty,
             self.prior_social,
+            self.prior_identity,
+            self.prior_recency,
         ]
 
     def validate(self) -> None:
@@ -125,22 +151,31 @@ class TrainingSample:
     Single training sample for weight learning.
 
     Represents one event with its component scores and grounding outcome.
+    8 features matching CONFIG_B scorer components (ADR-K024).
     """
 
-    emotional_score: float
-    recency_score: float
-    access_score: float
-    social_score: float
+    sentiment_score: float  # abs(sentiment_score) from P03EventState
+    affect_score: float  # abs(affect_valence) from P03EventState
+    arousal_score: float  # affect_arousal [0,1] from P03EventState
+    surprise_score: float  # surprise_level [0,1] from P03EventState
+    novelty_score: float  # NOVELTY_MAP[novelty] from P03EventState
+    social_score: float  # log2(participants)/3.32 * intimacy from P03EventState
+    identity_score: float  # identity_relevance [0,1] from P03EventState
+    recency_score: float  # exp(-0.005 * hours) from P03EventState
     was_grounded: bool  # Ground truth label
     days_ago: float = 0.0  # For sample weighting
 
     def to_features(self) -> List[float]:
-        """Convert to feature vector [emotional, recency, access, social]."""
+        """Convert to feature vector (8 CONFIG_B components)."""
         return [
-            self.emotional_score,
-            self.recency_score,
-            self.access_score,
+            self.sentiment_score,
+            self.affect_score,
+            self.arousal_score,
+            self.surprise_score,
+            self.novelty_score,
             self.social_score,
+            self.identity_score,
+            self.recency_score,
         ]
 
     def to_label(self) -> float:
@@ -172,11 +207,12 @@ class TrainingBatch:
         Convert to numpy arrays for training.
 
         Returns:
-            Tuple of (features, labels, sample_weights) arrays
+            Tuple of (features, labels, sample_weights) arrays.
+            Features shape: (N, 8) for 8 CONFIG_B components.
         """
         if not self.samples:
             return (
-                np.zeros((0, 4), dtype=np.float32),
+                np.zeros((0, 8), dtype=np.float32),
                 np.zeros(0, dtype=np.float32),
                 np.zeros(0, dtype=np.float32),
             )
@@ -196,6 +232,9 @@ class TrainingResult:
     weights: Dict[str, float]
     sample_count: int
     converged: bool = False
+    skipped: bool = False
+    reason: Optional[str] = None
+    drift: Optional[float] = None
 
 
 # =============================================================================
@@ -238,11 +277,15 @@ class ImportanceWeightLearner:
     personalization. Each space learns weights that reflect actual
     usage patterns, improving recall precision over time.
 
-    Weight Components:
-        - emotional: Emotional salience contribution
-        - recency: Time decay contribution
-        - access: Access frequency contribution
+    Weight Components (CONFIG_B aligned, ADR-K024):
+        - sentiment: Sentiment polarity contribution
+        - affect: Emotional valence contribution
+        - arousal: Emotional arousal contribution
+        - surprise: Cognitive surprise contribution
+        - novelty: Information novelty contribution
         - social: Social context contribution
+        - identity: Self-referential identity contribution
+        - recency: Time decay contribution
 
     Usage:
         learner = ImportanceWeightLearner(space_id="sp_123")
@@ -260,8 +303,18 @@ class ImportanceWeightLearner:
         await learner.persist_weights(db_conn)
     """
 
-    # Component names in order
-    COMPONENTS = ["emotional", "recency", "access", "social"]
+    # Component names matching CONFIG_B scorer (ADR-K024)
+    COMPONENTS = [
+        "sentiment",
+        "affect",
+        "arousal",
+        "surprise",
+        "novelty",
+        "social",
+        "identity",
+        "recency",
+    ]
+    NUM_COMPONENTS = 8
 
     def __init__(
         self,
@@ -302,12 +355,12 @@ class ImportanceWeightLearner:
 
         self._weights_tensor = torch.tensor(priors, dtype=torch.float32, requires_grad=True)
         self._optimizer = torch.optim.Adam([self._weights_tensor], lr=self.config.learning_rate)
-        self._velocity_tensor = torch.zeros(4)
+        self._velocity_tensor = torch.zeros(self.NUM_COMPONENTS)
 
     def _init_numpy(self, priors: List[float]) -> None:
         """Initialize NumPy arrays."""
         self._weights_np = np.array(priors, dtype=np.float32)
-        self._velocity_np = np.zeros(4, dtype=np.float32)
+        self._velocity_np = np.zeros(self.NUM_COMPONENTS, dtype=np.float32)
 
     # =========================================================================
     # Training
@@ -315,7 +368,13 @@ class ImportanceWeightLearner:
 
     def train_step(self, batch: TrainingBatch) -> TrainingResult:
         """
-        One gradient descent step with momentum.
+        One gradient descent step with momentum and batch protection.
+
+        Issue 4 Fix: Implements 4 protections against noisy small batches:
+        1. Minimum batch size (skip if too small)
+        2. Sample ratio check (reduce learning rate for small relative batches)
+        3. Weight snapshot for potential rollback
+        4. Drift detection with warning
 
         Args:
             batch: Training batch with features, labels, sample weights
@@ -323,39 +382,104 @@ class ImportanceWeightLearner:
         Returns:
             TrainingResult with loss and updated weights
         """
+        # Empty batch - no-op
         if len(batch) == 0:
             return TrainingResult(
                 loss=0.0,
                 weights=self.get_weights(),
                 sample_count=self.sample_count,
                 converged=False,
+                skipped=True,
+                reason="BATCH_EMPTY",
             )
+
+        # Protection 1: Minimum batch size
+        if len(batch) < self.config.min_batch_size:
+            logger.debug(
+                f"Skipping train_step: batch size {len(batch)} < min {self.config.min_batch_size}"
+            )
+            return TrainingResult(
+                loss=0.0,
+                weights=self.get_weights(),
+                sample_count=self.sample_count,
+                converged=False,
+                skipped=True,
+                reason="BATCH_TOO_SMALL",
+            )
+
+        # Protection 2: Sample ratio check - reduce learning rate for small batches
+        effective_lr = self.config.learning_rate
+        if self.sample_count > self.config.min_samples:
+            ratio = len(batch) / self.sample_count
+            if ratio < 0.05:
+                # Small batch relative to existing samples - reduce learning rate
+                effective_lr = self.config.learning_rate * ratio * self.config.small_batch_lr_factor
+                logger.debug(
+                    f"Reduced learning rate: {self.config.learning_rate} -> {effective_lr:.6f} "
+                    f"(batch ratio {ratio:.3f})"
+                )
+
+        # Protection 3: Snapshot weights for drift detection
+        weights_before = self.get_weights().copy()
 
         features, labels, sample_weights = batch.to_arrays()
 
+        # Execute training step with potentially reduced learning rate
         if self._backend == "torch":
-            loss = self._train_step_torch(features, labels, sample_weights)
+            loss = self._train_step_torch(features, labels, sample_weights, effective_lr)
         else:
-            loss = self._train_step_numpy(features, labels, sample_weights)
+            loss = self._train_step_numpy(features, labels, sample_weights, effective_lr)
 
         self.sample_count += len(batch)
         self.last_loss = loss
         self.loss_history.append(loss)
 
+        # Protection 4: Drift detection
+        weights_after = self.get_weights()
+        drift = self._compute_weight_drift(weights_before, weights_after)
+
+        if drift > self.config.drift_threshold:
+            logger.warning(
+                f"Weight drift {drift:.2%} exceeds threshold {self.config.drift_threshold:.2%}. "
+                f"Batch size: {len(batch)}, sample_count: {self.sample_count}"
+            )
+            # Emit warning but don't block - monitoring will catch systemic issues
+
         return TrainingResult(
             loss=loss,
-            weights=self.get_weights(),
+            weights=weights_after,
             sample_count=self.sample_count,
             converged=loss < 0.1,
+            skipped=False,
+            drift=drift,
         )
+
+    def _compute_weight_drift(self, before: Dict[str, float], after: Dict[str, float]) -> float:
+        """
+        Compute maximum percentage change in weights.
+
+        Args:
+            before: Weights before training step
+            after: Weights after training step
+
+        Returns:
+            Maximum absolute percentage change across all weights
+        """
+        max_drift = 0.0
+        for key in before:
+            if before[key] > 0:
+                change = abs(after[key] - before[key]) / before[key]
+                max_drift = max(max_drift, change)
+        return max_drift
 
     def _train_step_torch(
         self,
         features: np.ndarray,
         labels: np.ndarray,
         sample_weights: np.ndarray,
+        effective_lr: float,
     ) -> float:
-        """PyTorch training step."""
+        """PyTorch training step with dynamic learning rate."""
         import torch
         import torch.nn.functional as F
 
@@ -363,6 +487,10 @@ class ImportanceWeightLearner:
         features_t = torch.tensor(features, dtype=torch.float32)
         labels_t = torch.tensor(labels, dtype=torch.float32)
         sample_weights_t = torch.tensor(sample_weights, dtype=torch.float32)
+
+        # Update optimizer learning rate if different from config
+        for param_group in self._optimizer.param_groups:
+            param_group["lr"] = effective_lr
 
         self._optimizer.zero_grad()
 
@@ -407,8 +535,9 @@ class ImportanceWeightLearner:
         features: np.ndarray,
         labels: np.ndarray,
         sample_weights: np.ndarray,
+        effective_lr: float,
     ) -> float:
-        """NumPy fallback training step."""
+        """NumPy fallback training step with dynamic learning rate."""
         # Softmax normalization
         w = self._softmax_numpy(self._weights_np)
 
@@ -433,8 +562,8 @@ class ImportanceWeightLearner:
         # Momentum update
         self._velocity_np = self.config.momentum * self._velocity_np + gradient
 
-        # Update weights
-        self._weights_np = self._weights_np - self.config.learning_rate * self._velocity_np
+        # Update weights using effective learning rate (may be reduced for small batches)
+        self._weights_np = self._weights_np - effective_lr * self._velocity_np
 
         # Clamp weights
         self._weights_np = self._clamp_weights_numpy(self._weights_np)
@@ -465,7 +594,8 @@ class ImportanceWeightLearner:
         Weights are softmax-normalized and clamped to [weight_min, weight_max].
 
         Returns:
-            Dict with keys: emotional, recency, access, social
+            Dict with 8 CONFIG_B keys: sentiment, affect, arousal, surprise,
+            novelty, social, identity, recency
         """
         if self._backend == "torch":
             import torch
@@ -485,7 +615,7 @@ class ImportanceWeightLearner:
         return {self.COMPONENTS[i]: float(values[i]) for i in range(len(self.COMPONENTS))}
 
     def get_weights_list(self) -> List[float]:
-        """Get current weights as list [emotional, recency, access, social]."""
+        """Get current weights as ordered list (matches COMPONENTS order)."""
         weights = self.get_weights()
         return [weights[c] for c in self.COMPONENTS]
 
@@ -551,7 +681,7 @@ class ImportanceWeightLearner:
                 self._velocity_tensor.zero_()
         else:
             self._weights_np = np.array(priors, dtype=np.float32)
-            self._velocity_np = np.zeros(4, dtype=np.float32)
+            self._velocity_np = np.zeros(self.NUM_COMPONENTS, dtype=np.float32)
 
         self.is_learning_enabled = False
         self.loss_history.clear()

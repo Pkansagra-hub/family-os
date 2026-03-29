@@ -1,0 +1,125 @@
+// ============================================================================
+// history_recent_section.fbs - History Recent Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/history_recent_section.fbs
+// Purpose: Turns 11-40 with lossy compression (WARM tier, evictable)
+// Size Budget: 20KB max
+// Tier: WARM TIER
+// ADR: ADR-0017 (SessionState Design), Section 6.2
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// COMPRESSED TURN (Turns 11-30)
+// ============================================================================
+
+/// Compressed turn - structural compression, no full text
+/// Used for turns 11-30 (entities + intents + key phrases only)
+table CompressedTurn {
+    turn_id: string (required);
+    turn_number: uint16;
+
+    // Structural extraction (no full text)
+    entities: [string];               // Entity IDs/names mentioned
+    intents: [string];                // Classified intents
+    key_phrases: [string];            // Important phrases extracted
+
+    // Metadata
+    timestamp_ms: int64;
+    emotion: string;
+    user_tokens: uint16;              // Original token count
+    response_tokens: uint16;          // Original token count
+
+    // Pointers for reconstruction
+    archived_to_local_cold: bool = false;
+    archive_id: string;               // ID in LOCAL COLD if archived
+}
+
+// ============================================================================
+// SUMMARIZED TURN (Turns 31-40)
+// ============================================================================
+
+/// Summarized turn - LLM-generated single sentence
+/// Used for turns 31-40 (most compressed, near eviction)
+table SummarizedTurn {
+    turn_id: string (required);
+    turn_number: uint16;
+
+    // Single-sentence summary (LLM-generated)
+    summary: string (required);       // ~100 chars max
+
+    // Minimal metadata
+    timestamp_ms: int64;
+    primary_intent: string;
+    primary_entity: string;
+
+    // Pointers for reconstruction
+    archived_to_local_cold: bool = false;
+    archive_id: string;
+}
+
+// ============================================================================
+// HISTORY RECENT SECTION ROOT
+// ============================================================================
+
+/// History Recent Section - turns 11-40, lossy compression
+/// Two-stage compression: structural (11-30) and summarized (31-40)
+table HistoryRecentSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Compressed turns (11-30): entities + intents + key phrases
+    compressed_turns: [CompressedTurn]; // Max 20 turns
+
+    // Summarized turns (31-40): single sentence each
+    summarized_turns: [SummarizedTurn]; // Max 10 turns
+
+    // Session summary (1-line, for context beyond turn 40)
+    session_summary: string;          // ~200 chars max
+
+    // Archive pointers for turns beyond 40
+    archived_turn_ids: [string];      // Turn IDs in K0/LOCAL COLD
+
+    // Statistics
+    total_turns_archived: uint32;
+    oldest_compressed_turn: uint16;
+    newest_compressed_turn: uint16;
+    oldest_summarized_turn: uint16;
+    newest_summarized_turn: uint16;
+
+    // Eviction tracking
+    eviction_priority: uint8 = 3;     // 1=highest (evict first), 5=lowest
+    last_eviction_ms: int64;
+    bytes_evicted_total: uint32;
+}
+
+root_type HistoryRecentSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 20KB max
+//
+// Compressed turns (11-30):
+// - 20 turns x ~700 bytes = 14KB
+// - Per turn: entities ~200b, intents ~100b, key_phrases ~300b, metadata ~100b
+//
+// Summarized turns (31-40):
+// - 10 turns x ~200 bytes = 2KB
+// - Per turn: summary ~100b, metadata ~100b
+//
+// Session summary + metadata: ~1KB
+// Archive pointers: ~1KB
+// Header + stats: ~500 bytes
+//
+// Total: ~18.5KB typical, 20KB max
+//
+// EVICTION STRATEGY:
+// When WARM pressure rises:
+// 1. Summarized turns (31-40) evicted first → archived to LOCAL COLD
+// 2. Compressed turns (11-30) evicted second → archived to LOCAL COLD
+// 3. Session summary preserved as long as possible
+// ============================================================================

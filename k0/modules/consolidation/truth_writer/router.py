@@ -229,6 +229,19 @@ class DecisionRouter:
         Returns:
             LayerWriteResult with outcomes
         """
+        # Skip layers that are handled externally (e.g., st_hipp_events is updated
+        # directly in R7 via _update_event_consolidation_status)
+        EXTERNALLY_HANDLED_LAYERS = {"st_hipp_events"}
+        if layer in EXTERNALLY_HANDLED_LAYERS:
+            return LayerWriteResult(
+                layer=layer,
+                writes_attempted=len(writes),
+                writes_succeeded=len(writes),  # Pretend success - handled elsewhere
+                writes_failed=0,
+                failed_ids=[],
+                error_message=None,
+            )
+
         writer = self._writers.get(layer)
         if writer is None:
             if self._mode == WriteMode.ATOMIC:

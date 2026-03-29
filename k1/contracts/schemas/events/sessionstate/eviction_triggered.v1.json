@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sessionstate.eviction.triggered.v1.json",
+  "title": "SessionState Eviction Triggered",
+  "description": "Emitted when eviction process starts due to memory pressure",
+  "type": "object",
+  "required": ["session_id", "trigger_reason", "target_sections", "pressure_level", "timestamp_ms"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Session undergoing eviction"
+    },
+    "trigger_reason": {
+      "type": "string",
+      "enum": ["TIER_PRESSURE", "TOTAL_PRESSURE", "EMERGENCY_MODE", "SCHEDULED"],
+      "description": "Why eviction was triggered"
+    },
+    "target_sections": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "beliefs_history",
+          "history_recent",
+          "persona",
+          "telemetry"
+        ]
+      },
+      "description": "Sections targeted for eviction (WARM tier only)"
+    },
+    "pressure_level": {
+      "type": "string",
+      "enum": ["WARNING", "CRITICAL", "EMERGENCY"],
+      "description": "Current memory pressure level"
+    },
+    "current_size_kb": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Current total size in KB"
+    },
+    "target_size_kb": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Target size after eviction in KB"
+    },
+    "eviction_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this eviction operation"
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds"
+    }
+  },
+  "examples": [
+    {
+      "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "trigger_reason": "TIER_PRESSURE",
+      "target_sections": ["telemetry", "beliefs_history"],
+      "pressure_level": "WARNING",
+      "current_size_kb": 88.5,
+      "target_size_kb": 76.8,
+      "eviction_id": "770e8400-e29b-41d4-a716-446655440002",
+      "timestamp_ms": 1699012300000
+    }
+  ]
+}

@@ -116,7 +116,11 @@ from k0.modules.consolidation.staging.summary_generator import (
 )
 
 # Issue 4.3.13 exports (TruthQueryService - for ReconciliationEngine)
-from k0.modules.consolidation.staging.truth_query_service import TruthCandidate, TruthQueryService
+from k0.modules.consolidation.staging.truth_query_service import (
+    DecayCandidate,
+    TruthCandidate,
+    TruthQueryService,
+)
 
 # Issue 5.1.6 exports (TruthWriteAssembler)
 from k0.modules.consolidation.staging.truth_write_assembler import (
@@ -193,4 +197,5 @@ __all__ = [
     # Issue 4.3.13 (TruthQueryService)
     "TruthQueryService",
     "TruthCandidate",
+    "DecayCandidate",
 ]

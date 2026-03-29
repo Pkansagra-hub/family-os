@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k0://contracts/jsonschema/topics/plan_committed.body.json",
+  "title": "plan.committed Body Schema",
+  "description": "Body schema for plan.committed command topic. Carries a committed execution plan from Planner Stage 4 for episodic storage via P02.",
+  "type": "object",
+  "required": [
+    "plan_id",
+    "goal_text",
+    "steps",
+    "status",
+    "committed_at",
+    "session_id"
+  ],
+  "properties": {
+    "plan_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique plan identifier from Planner."
+    },
+    "goal_text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable goal statement the plan addresses."
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PlanStep"
+      },
+      "minItems": 1,
+      "description": "Ordered list of execution steps."
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "committed",
+        "in_progress",
+        "completed",
+        "cancelled"
+      ],
+      "description": "Plan lifecycle status at commit time."
+    },
+    "committed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601 timestamp when plan was committed."
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Session UUID where plan was created."
+    },
+    "actor": {
+      "type": "string",
+      "description": "Actor who requested the plan."
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["HIGH", "NORMAL", "LOW"],
+      "default": "NORMAL",
+      "description": "Plan priority for scheduling."
+    },
+    "estimated_duration_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Estimated total execution time in milliseconds."
+    },
+    "parent_plan_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Parent plan ID if this is a sub-plan."
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Classification tags for the plan."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "PlanStep": {
+      "type": "object",
+      "required": ["step_id", "action", "order"],
+      "properties": {
+        "step_id": {
+          "type": "string",
+          "description": "Unique step identifier within this plan."
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Action description or tool invocation."
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Execution order (0-based)."
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Step IDs this step depends on."
+        },
+        "tool_id": {
+          "type": ["string", "null"],
+          "description": "Tool identifier if step requires tool execution."
+        },
+        "estimated_ms": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Estimated step execution time."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

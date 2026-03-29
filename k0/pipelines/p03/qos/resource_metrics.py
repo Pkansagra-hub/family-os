@@ -1,7 +1,7 @@
 """
 P03 Resource Utilization Metrics.
 
-Tracks memory, CPU, database connections, and FAISS queries
+Tracks memory, CPU, database connections, and vector queries
 per dossier Section 15.3.3 Resource Utilization Targets.
 
 Dossier Reference: Section 15.3.3 Resource Utilization Targets
@@ -78,12 +78,12 @@ P03_RESOURCE_TARGETS: dict[str, ResourceTarget] = {
         unit="connections",
         description="DB connection pool",
     ),
-    "faiss_queries": ResourceTarget(
-        name="faiss_queries",
+    "vector_queries": ResourceTarget(
+        name="vector_queries",
         target_value=100.0,
         alert_threshold=100.0,  # No alert threshold
         unit="queries",
-        description="FAISS queries per cycle",
+        description="pgvector similarity queries per cycle",
     ),
 }
 
@@ -105,7 +105,7 @@ class ResourceSnapshot:
         cpu_utilization: CPU utilization (0.0-1.0)
         db_active: Active database connections
         db_pool_size: Total pool size
-        faiss_queries: FAISS queries this cycle
+        vector_queries: pgvector similarity queries this cycle
         memory_pressure: Current pressure level
     """
 
@@ -113,7 +113,7 @@ class ResourceSnapshot:
     cpu_utilization: float
     db_active: int
     db_pool_size: int
-    faiss_queries: int
+    vector_queries: int
     memory_pressure: MemoryPressureLevel
 
     @property
@@ -129,7 +129,7 @@ class P03ResourceMetrics:
     """
     P03 resource utilization metrics.
 
-    Tracks memory, CPU, database connections, and FAISS queries
+    Tracks memory, CPU, database connections, and vector queries
     using K0 MetricsExporter.
 
     K0 References:
@@ -162,7 +162,7 @@ class P03ResourceMetrics:
         self._pipeline_id = pipeline_id
 
         # Internal tracking
-        self._faiss_query_count: int = 0
+        self._vector_query_count: int = 0
         self._current_memory_mb: float = 0.0
 
         # Prometheus metrics
@@ -170,7 +170,7 @@ class P03ResourceMetrics:
         self._cpu_gauge: Gauge | None = None
         self._db_active_gauge: Gauge | None = None
         self._db_pool_gauge: Gauge | None = None
-        self._faiss_counter: Counter | None = None
+        self._vector_counter: Counter | None = None
         self._memory_pressure_gauge: Gauge | None = None
 
         if metrics_exporter is not None:
@@ -202,9 +202,9 @@ class P03ResourceMetrics:
             labelnames=["pipeline_id"],
         )
 
-        self._faiss_counter = metrics_exporter.counter(
-            name="p03_faiss_queries_total",
-            description="Total FAISS queries executed",
+        self._vector_counter = metrics_exporter.counter(
+            name="p03_vector_queries_total",
+            description="Total pgvector similarity queries executed",
             labelnames=["operation", "pipeline_id"],
         )
 
@@ -290,22 +290,22 @@ class P03ResourceMetrics:
                 pipeline_id=self._pipeline_id,
             ).set(pool_size)
 
-    def record_faiss_query(
+    def record_vector_query(
         self,
         operation: str = "search",
         count: int = 1,
     ) -> None:
         """
-        Record FAISS query execution.
+        Record pgvector similarity query execution.
 
         Args:
             operation: Query type (search, add, etc.)
             count: Number of queries
         """
-        self._faiss_query_count += count
+        self._vector_query_count += count
 
-        if self._faiss_counter is not None:
-            self._faiss_counter.labels(
+        if self._vector_counter is not None:
+            self._vector_counter.labels(
                 operation=operation,
                 pipeline_id=self._pipeline_id,
             ).inc(count)
@@ -381,13 +381,13 @@ class P03ResourceMetrics:
             cpu_utilization=0.0,  # Would need psutil for real value
             db_active=0,
             db_pool_size=0,
-            faiss_queries=self._faiss_query_count,
+            vector_queries=self._vector_query_count,
             memory_pressure=pressure,
         )
 
     def reset_cycle_metrics(self) -> None:
         """Reset per-cycle metrics."""
-        self._faiss_query_count = 0
+        self._vector_query_count = 0
 
     def _get_process_memory_mb(self) -> float:
         """Get current process memory in MB."""

@@ -24,6 +24,7 @@ Test Categories:
 
 from __future__ import annotations
 
+import struct
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -49,6 +50,18 @@ from k0.pipelines.p03.phases.r0_batch_selector import R0BatchSelector
 from k0.pipelines.p03.phases.r8_event_emitter import R8EventEmitter
 from k0.storage.offsets import Offset
 
+
+def create_mock_st_vec_row(event_id: str) -> Dict[str, Any]:
+    """Create a mock st_vec row with embedding vector."""
+    mock_vector = [0.1] * 768
+    vector_bytes = struct.pack(f"{768}f", *mock_vector)
+    return {
+        "event_id": event_id,
+        "vector": vector_bytes,
+        "vector_dim": 768,
+    }
+
+
 # =============================================================================
 # MOCK INFRASTRUCTURE
 # =============================================================================
@@ -59,12 +72,15 @@ class MockConnection:
     """Mock asyncpg connection for cross-pipeline tests."""
 
     rows: List[Dict[str, Any]] = field(default_factory=list)
+    st_vec_rows: List[Dict[str, Any]] = field(default_factory=list)
     executed_queries: List[tuple[str, tuple]] = field(default_factory=list)
     inserted_learning_queue: List[Dict[str, Any]] = field(default_factory=list)
     updated_hipp_events: List[Dict[str, Any]] = field(default_factory=list)
 
     async def fetch(self, query: str, *params: Any) -> List[Dict[str, Any]]:
         self.executed_queries.append((query, params))
+        if "st_vec" in query:
+            return self.st_vec_rows
         return self.rows
 
     async def execute(self, query: str, *args: Any) -> str:
@@ -83,6 +99,15 @@ class MockConnection:
         if "st_learning_queue" in query:
             return None  # No duplicates
         return {"version": 1}
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        """Fetch single value."""
+        self.executed_queries.append((query, args))
+        if "COUNT" in query:
+            return 0
+        if "version" in query.lower():
+            return 1
+        return None
 
 
 @dataclass
@@ -293,6 +318,16 @@ def p02_hipp_event_rows() -> List[Dict[str, Any]]:
 
 
 @pytest.fixture
+def p02_st_vec_rows() -> List[Dict[str, Any]]:
+    """Create mock st_vec rows with embeddings for the p02 events."""
+    return [
+        create_mock_st_vec_row("evt-p02-001"),
+        create_mock_st_vec_row("evt-p02-002"),
+        create_mock_st_vec_row("evt-p02-003"),
+    ]
+
+
+@pytest.fixture
 def envelope_with_gaps() -> P03BatchEnvelope:
     """Create envelope with gaps for P06 emission testing."""
     context = P03CycleContext.create(
@@ -378,6 +413,7 @@ class TestP02ToP03Handoff:
         mock_connection: MockConnection,
         mock_runner_context: P03RunnerContext,
         p02_hipp_event_rows: List[Dict[str, Any]],
+        p02_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """
         Given: P02 has written events to st_hipp_events with embedding_status='READY'
@@ -385,6 +421,7 @@ class TestP02ToP03Handoff:
         Then: P03 ingests all ready events with consolidation_status IS NULL
         """
         mock_connection.rows = p02_hipp_event_rows
+        mock_connection.st_vec_rows = p02_st_vec_rows
 
         r0 = R0BatchSelector()
         envelope, result = await r0.run("tenant-cross", "space-cross", mock_runner_context)
@@ -411,8 +448,11 @@ class TestP02ToP03Handoff:
         """
         # Mark one event as not ready
         p02_hipp_event_rows[1]["embedding_status"] = "PENDING"
-        mock_connection.rows = [
-            row for row in p02_hipp_event_rows if row["embedding_status"] == "READY"
+        ready_rows = [row for row in p02_hipp_event_rows if row["embedding_status"] == "READY"]
+        mock_connection.rows = ready_rows
+        # Provide st_vec rows for the ready events
+        mock_connection.st_vec_rows = [
+            create_mock_st_vec_row(row["event_id"]) for row in ready_rows
         ]
 
         r0 = R0BatchSelector()
@@ -436,8 +476,10 @@ class TestP02ToP03Handoff:
         """
         # Mark one event as already consolidated
         p02_hipp_event_rows[0]["consolidation_status"] = "CONSOLIDATED"
-        mock_connection.rows = [
-            row for row in p02_hipp_event_rows if row["consolidation_status"] is None
+        included_rows = [row for row in p02_hipp_event_rows if row["consolidation_status"] is None]
+        mock_connection.rows = included_rows
+        mock_connection.st_vec_rows = [
+            create_mock_st_vec_row(row["event_id"]) for row in included_rows
         ]
 
         r0 = R0BatchSelector()
@@ -465,6 +507,7 @@ class TestP02ToP03Handoff:
         mock_connection: MockConnection,
         mock_runner_context: P03RunnerContext,
         p02_hipp_event_rows: List[Dict[str, Any]],
+        p02_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """
         Given: P02 wrote events with NLP enrichment metadata
@@ -472,6 +515,7 @@ class TestP02ToP03Handoff:
         Then: All P02 metadata is preserved in P03EventState
         """
         mock_connection.rows = p02_hipp_event_rows
+        mock_connection.st_vec_rows = p02_st_vec_rows
 
         r0 = R0BatchSelector()
         envelope, result = await r0.run("tenant-cross", "space-cross", mock_runner_context)
@@ -809,6 +853,7 @@ class TestCrossPipelineDataFlow:
         mock_uow: MockUnitOfWork,
         mock_runner_context: P03RunnerContext,
         p02_hipp_event_rows: List[Dict[str, Any]],
+        p02_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """
         Given: P02 wrote events to st_hipp_events
@@ -817,6 +862,7 @@ class TestCrossPipelineDataFlow:
         """
         # Step 1: P02 → P03 handoff
         mock_connection.rows = p02_hipp_event_rows
+        mock_connection.st_vec_rows = p02_st_vec_rows
 
         r0 = R0BatchSelector()
         envelope, r0_result = await r0.run("tenant-cross", "space-cross", mock_runner_context)

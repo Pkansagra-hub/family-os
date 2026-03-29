@@ -13,17 +13,19 @@ Architecture:
 - Applies priority-based deduplication (KINSHIP beats PERSON for same text)
 - Normalizes entity names with nickname handling
 
-HYBRID NER MODE (P03 only):
-- UltraBERT v2-checkpoint-18000 has trained ner_family but ner_general was only
-  used for replay/distillation (produces garbage like "Drove", "Fur", "authentication")
-- When use_bert_ner=True, we ignore UltraBERT ner_general and instead run
-  dslim/bert-base-NER on the source text during P03 consolidation
-- This adds ~3.8ms/event but P03 is nightly batch, not hot path
-- Edge device friendly: no model inference during active user hours
+NER Architecture (2025-01-18):
+UltraBERT 3.0.3 provides all NER capabilities via 3 heads:
+- ner_family: KINSHIP entities (Mom, Dad, wife, kids) -> FAMILY_MEMBER (p=0.95)
+- ner_general: Standard NER (PER, ORG, LOC) -> PERSON/ORGANIZATION/LOCATION (p=0.80-0.85)
+- temporal: Time expressions (DATE_REL, TIME) -> TEMPORAL (p=0.90)
+
+UltraBERT NER quality testing (vs dslim/bert-base-NER):
+- General entity recall: 92.9% (equal)
+- Family entity recall: 100% vs 54% - UltraBERT wins decisively
+- BERT-NER was removed from codebase as UltraBERT is sufficient
 
 Performance:
 - Processing latency: <5ms per event (pure Python, no model inference)
-- With BERT-NER: +3.8ms per event (or ~1.5ms/event in batch mode)
 - Memory: O(n) where n = entity count
 
 Input: UltraBERT analyze() output with ner_family, ner_general, temporal heads
@@ -31,13 +33,12 @@ Output: List of ExtractedEntity with kg_type, priority, normalized_text
 
 Related:
 - k0/runtime/ultrabert_adapter.py: UltraBERT client singleton
-- k0/modules/consolidation/algorithms/bert_ner_adapter.py: BERT-NER for general NER
 - k0/modules/hippocampus/semantic_project.py: P02 entity extraction
 - k0/db/alembic/versions/0022_st_hipp_events.py: entities_json column
 
 Author: K0 Architecture Team
 Date: 2025-06-10
-Updated: 2025-01-09 - Added hybrid NER mode with BERT-NER
+Updated: 2025-01-18 - Removed BERT-NER, UltraBERT 3.0.3 NER is sufficient
 """
 
 from __future__ import annotations
@@ -152,7 +153,7 @@ class UltraBERTEntityExtractor:
     # Based on empirical testing of UltraBERT v3.0.2 ner_family head
     # See: k0/deploy/test_ner_outputs.py for test results
 
-    # Labels to accept without question (family-specific, BERT-NER can't provide)
+    # Labels to accept without question (family-specific)
     TRUSTED_NER_FAMILY: frozenset[str] = frozenset(
         {
             "KINSHIP",  # Mom, Dad, wife, kids - reliable
@@ -162,10 +163,13 @@ class UltraBERTEntityExtractor:
         }
     )
 
-    # Labels to reject entirely from ner_family (BERT-NER provides better coverage)
+    # Labels to reject entirely from ner_family (ner_general provides better coverage)
+    # NOTE: PERSON was removed from this list because UltraBERT 3.0.4's confidence
+    # threshold now filters garbage entities. ner_family PERSON entities with
+    # high confidence (0.80+) are legitimate names like Emma, John, Sarah.
     REJECTED_NER_FAMILY: frozenset[str] = frozenset(
         {
-            "PERSON",  # Tags "Microsoft", "authentication" - use BERT-NER PER instead
+            # Empty for now - all labels pass through with confidence filtering
         }
     )
 
@@ -177,72 +181,6 @@ class UltraBERTEntityExtractor:
             "HEIRLOOM",  # Tags "old", "to", "in"
             "PET",  # Tags "the" in "Fur the cat"
             "ROUTINE",  # Generally ok but validate
-        }
-    )
-
-    # Words that BERT-NER misclassifies as PERSON - filter these out
-    # These are common nouns/verbs that get capitalized in sentences
-    BERT_NER_PERSON_STOPWORDS: frozenset[str] = frozenset(
-        {
-            # Programming/tech terms often capitalized
-            "code",
-            "module",
-            "switch",
-            "team",
-            "api",
-            "app",
-            "data",
-            "web",
-            "git",
-            "repo",
-            # Common verbs/adverbs mistagged
-            "got",
-            "went",
-            "came",
-            "took",
-            "made",
-            "met",
-            "saw",
-            "put",
-            "said",
-            "told",
-            "asked",
-            "called",
-            # Temporal words
-            "when",
-            "next",
-            "last",
-            "first",
-            "today",
-            "tomorrow",
-            "yesterday",
-            # Other common mistagged words
-            "dr",  # Often tags "Dr." without name
-            "mr",
-            "mrs",
-            "ms",
-            "authentication",
-            "authorization",
-        }
-    )
-
-    # Words that BERT-NER misclassifies as LOC (location) - filter these out
-    BERT_NER_LOC_STOPWORDS: frozenset[str] = frozenset(
-        {
-            # Temporal words often capitalized
-            "when",
-            "next",
-            "last",
-            "first",
-            "now",
-            "then",
-            "here",
-            "there",
-            # Common mistagged words
-            "the",
-            "a",
-            "an",
-            "it",
         }
     )
 
@@ -325,6 +263,136 @@ class UltraBERTEntityExtractor:
             "wore",
             "found",
             "passed",
+            # Additional verbs commonly mistagged by ner_general
+            "asked",
+            "said",
+            "told",
+            "want",
+            "take",
+            "thinking",
+            "listening",
+            "setting",
+            "expanding",
+            "submit",
+            "celebrate",
+            "promoted",
+            "arrived",
+            "left",
+            "finished",
+            "started",
+            "stopped",
+            "kept",
+            "apologized",
+            "cooked",
+            "ate",
+            "slept",
+            "woke",
+            "dropped",
+            "picked",
+            "watched",
+            "texted",
+            "reviewed",
+            "pitched",
+            "scheduled",
+            # Adjectives/past participles mistagged
+            "impressed",
+            "loved",
+            "excited",
+            "happy",
+            "happier",
+            "proud",
+            "compromised",
+            "conflicted",
+            "fixed",
+            "anxious",
+            "grateful",
+            "frustrated",
+            "stressed",
+            "tired",
+            "grumpy",
+            "nostalgic",
+            "relieved",
+            "exciting",
+            "amazing",
+            "deep",
+            "early",
+            "late",
+            "quick",
+            "huge",
+            "strong",
+            "solid",
+            "actually",
+            "really",
+            # Common nouns that are NOT entities
+            "afternoon",
+            "morning",
+            "evening",
+            "night",
+            "day",
+            "week",
+            "month",
+            "year",
+            "time",
+            "today",
+            "tomorrow",
+            "yesterday",
+            # Day-of-week names (mistagged as PERSON when capitalized)
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+            # Number words (mistagged as PERSON when capitalized at sentence start)
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            # Common nouns mistagged as ORG
+            "trust",
+            "target",
+            "here",
+            "there",
+            "home",
+            "work",
+            "bed",
+            "dinner",
+            "lunch",
+            "breakfast",
+            "coffee",
+            "email",
+            "meeting",
+            "meetings",
+            "schedule",
+            "presentation",
+            "dashboard",
+            "questions",
+            "slides",
+            "news",
+            "career",
+            "job",
+            "role",
+            "position",
+            "opportunity",
+            "insight",
+            "boundaries",
+            "path",
+            "best",
+            "team",
+            "friend",
+            "friends",
+            "manager",
+            "stocks",
+            "motherhood",
+            "huge",
+            "current",
             # Common adjectives mistagged by MILESTONE/HEIRLOOM
             "new",
             "old",
@@ -332,6 +400,12 @@ class UltraBERTEntityExtractor:
             "last",
             "next",
             "other",
+            # Partial words and fragments from composite entities
+            "feeling",
+            "golden",
+            "fur",
+            "bella",  # From "Bella Notte"
+            "notte",  # From "Bella Notte"
             # Short fragments (tokenization artifacts)
             "s",
             "'s",
@@ -397,6 +471,17 @@ class UltraBERTEntityExtractor:
         "ma": "mother",
     }
 
+    # ==========================================================================
+    # REGEX PATTERNS FOR ENTITY FILTERING (compiled once, reused)
+    # EFC-003: Moved from R4 inline patterns
+    # ==========================================================================
+
+    # Matches time fragments like "10am", "3pm", "12PM"
+    TIME_FRAGMENT_PATTERN: re.Pattern = re.compile(r"^\d{1,2}(?:am|pm|AM|PM)$")
+
+    # Matches verb-form words like "learned", "working", "organized"
+    VERB_SUFFIX_PATTERN: re.Pattern = re.compile(r"^[a-z]+(?:ed|ing|ized|ised)$")
+
     def __init__(self) -> None:
         """Initialize the entity extractor."""
         self._metrics = EntityExtractionMetrics()
@@ -409,6 +494,200 @@ class UltraBERTEntityExtractor:
     def reset_metrics(self) -> None:
         """Reset extraction metrics."""
         self._metrics = EntityExtractionMetrics()
+
+    # ==========================================================================
+    # EFC-001/002: CONSOLIDATED ENTITY FILTERING API
+    # All filtering logic lives here - R4 calls filter_and_normalize()
+    # ==========================================================================
+
+    def filter_and_normalize(
+        self,
+        raw_entities: list[dict],
+        source_text: str,
+        source_head: str,
+        min_confidence: float = 0.5,
+    ) -> list[ExtractedEntity]:
+        """
+        Apply all entity filters and return validated entities.
+
+        This is the SINGLE entry point for entity filtering. R4 phase calls
+        this method instead of implementing inline filters.
+
+        Filters applied in order (early rejection for performance):
+        1. Empty text check
+        2. Text normalization
+        3. Confidence threshold (from NER model)
+        4. Short entity rejection (< 2 chars)
+        5. Garbage word rejection
+        6. Lowercase single-word rejection (not proper nouns)
+        7. Time fragment rejection
+        8. Verb suffix rejection
+        9. Word boundary validation
+        10. Type reclassification (ORG -> LOCATION)
+        11. NER family keyword validation (for VALIDATED_NER_FAMILY labels)
+
+        Args:
+            raw_entities: List of raw entity dicts from UltraBERT NER
+                Format: [{"text": "...", "label": "...", "confidence": 0.9, ...}]
+            source_text: Original event text for word boundary validation
+            source_head: Which NER head produced these ('ner_family', 'ner_general', 'temporal')
+            min_confidence: Minimum confidence threshold (default 0.5)
+
+        Returns:
+            Filtered, normalized list of ExtractedEntity objects
+        """
+        filtered_entities: list[ExtractedEntity] = []
+
+        for ent_data in raw_entities:
+            if not isinstance(ent_data, dict):
+                continue
+
+            entity = self._filter_single_entity(
+                ent_data=ent_data,
+                source_text=source_text,
+                source_head=source_head,
+                min_confidence=min_confidence,
+            )
+
+            if entity is not None:
+                filtered_entities.append(entity)
+
+        return filtered_entities
+
+    def _filter_single_entity(
+        self,
+        ent_data: dict,
+        source_text: str,
+        source_head: str,
+        min_confidence: float,
+    ) -> ExtractedEntity | None:
+        """
+        Apply all filters to a single entity.
+
+        Returns ExtractedEntity if passes all filters, None if rejected.
+        """
+        label = ent_data.get("label", "UNKNOWN")
+        text = ent_data.get("text", "")
+
+        # 1. Empty text check
+        if not text:
+            return None
+
+        # 2. Text normalization
+        normalized = self.normalize_name(text)
+        if not normalized:
+            return None  # Cleaned to empty (just punctuation)
+
+        normalized_lower = normalized.lower()
+
+        # 3. Get confidence and priority from label mapping
+        mapping = self.LABEL_MAPPING.get(label)
+        if mapping:
+            kg_type, priority = mapping
+        else:
+            kg_type = KGEntityType.CONCEPT
+            priority = 0.5
+
+        # Use actual NER confidence if available, fall back to label priority
+        ner_confidence = float(ent_data.get("confidence", priority))
+
+        # Confidence threshold filter
+        if ner_confidence < min_confidence:
+            logger.debug(
+                f"Filtered low-confidence: {text!r} ({label}, "
+                f"confidence={ner_confidence:.2f} < {min_confidence})"
+            )
+            return None
+
+        # 4. Short entity filter (< 2 chars)
+        if self._is_short_entity(normalized):
+            logger.debug(f"Filtered short entity: {normalized!r}")
+            return None
+
+        # 5. Garbage word filter
+        if self._is_garbage_word(normalized_lower):
+            logger.debug(f"Filtered garbage word: {normalized!r}")
+            return None
+
+        # 6. Lowercase single-word filter (not proper nouns)
+        if self._is_lowercase_single_word(text):
+            logger.debug(f"Filtered lowercase single-word: {text!r}")
+            return None
+
+        # 7. Time fragment filter
+        if self._is_time_fragment(normalized):
+            logger.debug(f"Filtered time fragment: {normalized!r}")
+            return None
+
+        # 8. Verb suffix filter
+        if self._is_verb_form(normalized_lower):
+            logger.debug(f"Filtered verb-form: {normalized!r}")
+            return None
+
+        # 9. Word boundary validation
+        if source_text and not self.is_complete_word(normalized, source_text):
+            logger.debug(f"Filtered sub-word fragment: {normalized!r}")
+            return None
+
+        # 10. Type reclassification (ORG -> LOCATION)
+        if kg_type == KGEntityType.ORGANIZATION and self._has_location_affordance(normalized):
+            kg_type = KGEntityType.LOCATION
+            logger.debug(f"Reclassified ORG->LOCATION: {normalized}")
+
+        # 11. NER family keyword validation
+        if source_head == "ner_family":
+            # REJECTED labels
+            if label in self.REJECTED_NER_FAMILY:
+                logger.debug(f"Rejected ner_family {label}: {text!r}")
+                return None
+
+            # VALIDATED labels need keyword validation
+            if label in self.VALIDATED_NER_FAMILY:
+                if not self._is_valid_ner_family_entity(label, text, normalized):
+                    return None
+
+        # All filters passed - create entity
+        return ExtractedEntity(
+            text=text,
+            kg_type=kg_type,
+            normalized_text=normalized,
+            source_label=label,
+            source_head=source_head,
+            priority=ner_confidence,
+            start_token=int(ent_data.get("start_token", 0)),
+            end_token=int(ent_data.get("end_token", 0)),
+        )
+
+    # ==========================================================================
+    # PRIVATE FILTER METHODS (EFC-002)
+    # Each returns bool: True = reject, False = keep
+    # ==========================================================================
+
+    def _is_short_entity(self, normalized: str) -> bool:
+        """Reject entities with 1 or fewer characters."""
+        return len(normalized) <= 1
+
+    def _is_garbage_word(self, normalized_lower: str) -> bool:
+        """Reject common English words that aren't entities."""
+        return normalized_lower in self.GARBAGE_ENTITY_WORDS
+
+    def _is_lowercase_single_word(self, text: str) -> bool:
+        """Reject single words starting lowercase (not proper nouns)."""
+        return " " not in text and text[0].islower()
+
+    def _is_time_fragment(self, normalized: str) -> bool:
+        """Reject time fragments like '10am', '3pm'."""
+        return bool(self.TIME_FRAGMENT_PATTERN.match(normalized))
+
+    def _is_verb_form(self, normalized_lower: str) -> bool:
+        """Reject verb-form words like 'learned', 'working'."""
+        if " " in normalized_lower:
+            return False  # Multi-word phrases are OK
+        return bool(self.VERB_SUFFIX_PATTERN.match(normalized_lower))
+
+    # ==========================================================================
+    # ORIGINAL METHODS (kept for backward compatibility)
+    # ==========================================================================
 
     def extract_from_ultrabert(
         self,
@@ -507,164 +786,6 @@ class UltraBERTEntityExtractor:
             ner_general_output=ner_general,
             temporal_output=temporal,
         )
-
-    def extract_hybrid(
-        self,
-        source_text: str,
-        ner_family_output: dict[str, Any] | None = None,
-        temporal_output: dict[str, Any] | None = None,
-    ) -> list[ExtractedEntity]:
-        """
-        Extract entities using hybrid approach: UltraBERT for family + BERT-NER for general.
-
-        This method is designed for P03 consolidation where we can afford the extra
-        latency of running BERT-NER. It bypasses UltraBERT's broken ner_general head.
-
-        Architecture:
-        - ner_family: From UltraBERT (stored in st_hipp_events from P02)
-        - temporal: From UltraBERT (stored in st_hipp_events from P02)
-        - ner_general: From dslim/bert-base-NER (run fresh on source_text)
-
-        This adds ~3.8ms latency per event but produces correct general NER.
-
-        Args:
-            source_text: Original event text to run BERT-NER on
-            ner_family_output: UltraBERT ner_family output from P02
-            temporal_output: UltraBERT temporal output from P02
-
-        Returns:
-            Merged, deduplicated list of ExtractedEntity objects
-        """
-        from k0.modules.consolidation.algorithms.bert_ner_adapter import get_bert_ner
-
-        start_time = time.perf_counter()
-        all_entities: list[ExtractedEntity] = []
-
-        # Process ner_family from UltraBERT (this head is properly trained)
-        if ner_family_output:
-            for entity in ner_family_output.get("entities", []):
-                mapped = self._map_entity(entity, "ner_family")
-                if mapped:
-                    all_entities.append(mapped)
-                    self._track_entity(mapped)
-
-        # Process temporal from UltraBERT (this head is properly trained)
-        if temporal_output:
-            for entity in temporal_output.get("entities", []):
-                mapped = self._map_entity(entity, "temporal")
-                if mapped:
-                    all_entities.append(mapped)
-                    self._track_entity(mapped)
-
-        # Get general NER from BERT-NER instead of UltraBERT ner_general
-        if source_text and source_text.strip():
-            bert_ner = get_bert_ner()
-            bert_results = bert_ner.extract(source_text)
-            ner_general_output = bert_ner.to_ultrabert_format(bert_results)
-
-            for entity in ner_general_output.get("entities", []):
-                mapped = self._map_entity(entity, "bert_ner")  # Track source
-                if mapped:
-                    all_entities.append(mapped)
-                    self._track_entity(mapped)
-
-        # Deduplicate, keeping highest priority
-        before_dedup = len(all_entities)
-        entities = self._deduplicate_entities(all_entities)
-        self._metrics.duplicates_removed = before_dedup - len(entities)
-        self._metrics.entities_extracted = len(entities)
-        self._metrics.processing_time_ms = (time.perf_counter() - start_time) * 1000
-
-        logger.debug(
-            "Hybrid entity extraction complete",
-            extra={
-                "entities_extracted": len(entities),
-                "duplicates_removed": self._metrics.duplicates_removed,
-                "processing_time_ms": round(self._metrics.processing_time_ms, 2),
-                "mode": "hybrid",
-            },
-        )
-
-        return entities
-
-    def extract_hybrid_batch(
-        self,
-        events: list[tuple[str, dict[str, Any] | None, dict[str, Any] | None]],
-    ) -> list[list[ExtractedEntity]]:
-        """
-        Batch hybrid extraction for multiple events.
-
-        More efficient than calling extract_hybrid() in a loop because BERT-NER
-        can process texts in batch (~1.5ms/event vs ~3.8ms/event).
-
-        Args:
-            events: List of (source_text, ner_family_output, temporal_output) tuples
-
-        Returns:
-            List of entity lists, one per input event
-        """
-        from k0.modules.consolidation.algorithms.bert_ner_adapter import get_bert_ner
-
-        if not events:
-            return []
-
-        start_time = time.perf_counter()
-
-        # Collect source texts for batch BERT-NER
-        source_texts = [e[0] for e in events]
-
-        # Run BERT-NER in batch
-        bert_ner = get_bert_ner()
-        batch_bert_results = bert_ner.extract_batch(source_texts)
-
-        # Process each event
-        results: list[list[ExtractedEntity]] = []
-
-        for i, (source_text, ner_family_output, temporal_output) in enumerate(events):
-            all_entities: list[ExtractedEntity] = []
-
-            # Process ner_family from UltraBERT
-            if ner_family_output:
-                for entity in ner_family_output.get("entities", []):
-                    mapped = self._map_entity(entity, "ner_family")
-                    if mapped:
-                        all_entities.append(mapped)
-                        self._track_entity(mapped)
-
-            # Process temporal from UltraBERT
-            if temporal_output:
-                for entity in temporal_output.get("entities", []):
-                    mapped = self._map_entity(entity, "temporal")
-                    if mapped:
-                        all_entities.append(mapped)
-                        self._track_entity(mapped)
-
-            # Add BERT-NER results for this event
-            bert_results = batch_bert_results[i]
-            ner_general_output = bert_ner.to_ultrabert_format(bert_results)
-
-            for entity in ner_general_output.get("entities", []):
-                mapped = self._map_entity(entity, "bert_ner")
-                if mapped:
-                    all_entities.append(mapped)
-                    self._track_entity(mapped)
-
-            # Deduplicate per event
-            entities = self._deduplicate_entities(all_entities)
-            results.append(entities)
-
-        total_ms = (time.perf_counter() - start_time) * 1000
-        logger.debug(
-            "Hybrid batch extraction complete",
-            extra={
-                "events_processed": len(events),
-                "total_time_ms": round(total_ms, 2),
-                "avg_time_ms": round(total_ms / len(events), 2) if events else 0,
-                "mode": "hybrid_batch",
-            },
-        )
-
-        return results
 
     # Location affordance keywords - phrases that indicate physical places
     # Used to reclassify ORGANIZATION -> LOCATION when appropriate
@@ -777,32 +898,25 @@ class UltraBERTEntityExtractor:
 
     def _is_valid_ner_family_entity(self, label: str, text: str, normalized: str) -> bool:
         """
-        Validate ner_family entities that need text-based filtering.
+        Validate VALIDATED_NER_FAMILY entities with domain-specific rules.
 
-        Called for labels in VALIDATED_NER_FAMILY to filter garbage extractions
-        while keeping legitimate family-related entities.
+        Called AFTER universal filtering for labels: MILESTONE, FAMILY_EVENT,
+        HEIRLOOM, PET, ROUTINE. These labels need keyword validation to filter
+        UltraBERT false positives.
 
         Args:
             label: The ner_family label (MILESTONE, FAMILY_EVENT, etc.)
             text: Original entity text
-            normalized: Normalized entity text
+            normalized: Pre-normalized entity text (already passed universal filter)
 
         Returns:
-            True if entity should be kept, False if it's garbage
+            True if entity passes domain validation, False otherwise
         """
-        # Check against garbage words
-        if normalized.lower() in self.GARBAGE_ENTITY_WORDS:
-            logger.debug(f"Filtered garbage entity: '{text}' ({label}) - in garbage list")
-            return False
-
-        # Filter single-character entities (tokenization artifacts)
-        if len(normalized) <= 1:
-            logger.debug(f"Filtered short entity: '{text}' ({label}) - too short")
-            return False
+        # NOTE: Garbage words and short entities already filtered in _map_entity()
 
         # Filter purely numeric entities ("10th", "2024")
         if normalized.replace(" ", "").isdigit():
-            logger.debug(f"Filtered numeric entity: '{text}' ({label}) - purely numeric")
+            logger.debug(f"Filtered numeric: '{text}' ({label})")
             return False
 
         # Label-specific validation
@@ -917,19 +1031,23 @@ class UltraBERTEntityExtractor:
         source_head: str,
     ) -> ExtractedEntity | None:
         """
-        Map UltraBERT entity to KG entity type.
+        Map raw NER entity to KG entity type.
 
-        Applies NER label filtering for ner_family head:
-        - TRUSTED labels: Accept without question
-        - REJECTED labels: Skip entirely (use BERT-NER instead)
-        - VALIDATED labels: Apply text-based filtering
+        Handles UltraBERT 3-head output:
+        - ner_family: KINSHIP, HOME_LOC, FAMILY_EVENT, etc.
+        - ner_general: PER, ORG, LOC, MISC
+        - temporal: DATE_REL, TIME, DURATION
+
+        Filtering layers (in order):
+        1. Universal: Garbage words, short entities (all heads)
+        2. UltraBERT ner_family: TRUSTED/REJECTED/VALIDATED label tiers
 
         Args:
-            raw: Raw entity dict from UltraBERT
-            source_head: Which NER head produced this entity
+            raw: Raw entity dict {text, label, start_token, end_token}
+            source_head: 'ner_family', 'ner_general', or 'temporal'
 
         Returns:
-            ExtractedEntity or None if invalid/empty after normalization
+            ExtractedEntity or None if filtered out
         """
         label = raw.get("label", "")
         text = raw.get("text", "")
@@ -937,59 +1055,54 @@ class UltraBERTEntityExtractor:
         if not label or not text:
             return None
 
-        # === NER_FAMILY LABEL FILTERING ===
-        # Only apply to ner_family head (not bert_ner or temporal)
-        if source_head == "ner_family":
-            # REJECTED: Skip entirely - BERT-NER provides better coverage
-            if label in self.REJECTED_NER_FAMILY:
-                logger.debug(f"Rejected ner_family PERSON: '{text}' - use BERT-NER instead")
-                return None
-
-            # VALIDATED: Check text quality before accepting
-            if label in self.VALIDATED_NER_FAMILY:
-                normalized_check = self.normalize_name(text)
-                if not self._is_valid_ner_family_entity(label, text, normalized_check):
-                    return None
-
-            # TRUSTED: Accept without additional validation
-            # (KINSHIP, NICKNAME, TRADITION, HOME_LOC fall through to normal processing)
-
-        # === BERT-NER PERSON FILTERING ===
-        # Filter common words that BERT-NER misclassifies as PERSON
-        if source_head == "bert_ner" and label == "PERSON":
-            normalized_check = self.normalize_name(text)
-            if normalized_check.lower() in self.BERT_NER_PERSON_STOPWORDS:
-                logger.debug(f"Filtered BERT-NER PERSON stopword: '{text}'")
-                return None
-            # Also filter single-character entities
-            if len(normalized_check) <= 2:
-                logger.debug(f"Filtered short BERT-NER PERSON: '{text}'")
-                return None
-
-        # === BERT-NER LOC FILTERING ===
-        # Filter common words that BERT-NER misclassifies as LOC
-        if source_head == "bert_ner" and label == "LOC":
-            normalized_check = self.normalize_name(text)
-            if normalized_check.lower() in self.BERT_NER_LOC_STOPWORDS:
-                logger.debug(f"Filtered BERT-NER LOC stopword: '{text}'")
-                return None
-            # Also filter single-character entities
-            if len(normalized_check) <= 2:
-                logger.debug(f"Filtered short BERT-NER LOC: '{text}'")
-                return None
-
-        # Normalize first to catch empty results
+        # Normalize ONCE - reuse throughout this method
         normalized = self.normalize_name(text)
         if not normalized:
-            return None  # Cleaned to empty string (e.g., just punctuation)
+            return None  # Cleaned to empty string (just punctuation)
 
-        # Look up mapping
+        normalized_lower = normalized.lower()
+
+        # =====================================================================
+        # LAYER 1: UNIVERSAL FILTERING (applies to ALL heads)
+        # =====================================================================
+
+        # M10.2: Garbage words filtered universally
+        if normalized_lower in self.GARBAGE_ENTITY_WORDS:
+            logger.debug(f"Filtered garbage: '{text}' ({label}) from {source_head}")
+            return None
+
+        # Short entities are tokenization artifacts
+        if len(normalized) <= 1:
+            logger.debug(f"Filtered short: '{text}' ({label}) from {source_head}")
+            return None
+
+        # =====================================================================
+        # LAYER 2: ULTRABERT NER_FAMILY FILTERING
+        # =====================================================================
+
+        if source_head == "ner_family":
+            # REJECTED labels: Skip entirely, ner_general provides better coverage
+            if label in self.REJECTED_NER_FAMILY:
+                logger.debug(f"Rejected ner_family {label}: '{text}' - use ner_general")
+                return None
+
+            # VALIDATED labels: Require keyword/pattern validation
+            if label in self.VALIDATED_NER_FAMILY:
+                if not self._is_valid_ner_family_entity(label, text, normalized):
+                    return None
+
+            # TRUSTED labels: KINSHIP, NICKNAME, TRADITION, HOME_LOC pass through
+
+        # =====================================================================
+        # MAP TO KG TYPE
+        # =====================================================================
+
         mapping = self.LABEL_MAPPING.get(label)
         if not mapping:
             # Unknown label, default to CONCEPT with low priority
             mapping = (KGEntityType.CONCEPT, 0.50)
             self._metrics.unknown_labels += 1
-            logger.debug(f"Unknown UltraBERT label: {label}")
+            logger.debug(f"Unknown label: {label}")
 
         kg_type, priority = mapping
 

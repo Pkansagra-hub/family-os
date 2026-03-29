@@ -1,6 +1,7 @@
 {
   "$id": "envelope.schema.json",
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "K0 Command Envelope Schema. Validates envelope structure and conditionally validates body per command topic. M2 Epic 2.4: expanded topic regex, added per-topic body validation via if/then.",
   "type": "object",
   "required": [
     "cognitive_trace_id",
@@ -32,7 +33,7 @@
     },
     "topic": {
       "type": "string",
-      "pattern": "^(memory|events|ui|policy|infra\\.sanitized|privacy|intelligence\\.advisory)\\..+"
+      "pattern": "^(memory|events|ui|policy|infra\\.sanitized|privacy|intelligence\\.advisory|session|beliefs|history|plan|ifl|sync)\\..+"
     },
     "schema_uri": {
       "type": "string",
@@ -163,9 +164,95 @@
       "pattern": "^fts-"
     },
     "body": {
-      "description": "Domain payload matching schema_uri/schema_version",
+      "description": "Domain payload matching schema_uri/schema_version. Validated per-topic via allOf conditionals below.",
       "type": ["object", "array", "string", "number", "boolean", "null"]
     }
   },
-  "additionalProperties": true
+  "additionalProperties": true,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "topic": { "pattern": "^memory\\.write$" } },
+        "required": ["topic"]
+      },
+      "then": {
+        "properties": {
+          "body": { "$ref": "topics/memory_write.body.json" }
+        },
+        "required": ["body"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "topic": { "pattern": "^session\\.snapshot$" } },
+        "required": ["topic"]
+      },
+      "then": {
+        "properties": {
+          "body": { "$ref": "topics/session_snapshot.body.json" }
+        },
+        "required": ["body"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "topic": { "pattern": "^beliefs\\.archive$" } },
+        "required": ["topic"]
+      },
+      "then": {
+        "properties": {
+          "body": { "$ref": "topics/beliefs_archive.body.json" }
+        },
+        "required": ["body"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "topic": { "pattern": "^history\\.archive$" } },
+        "required": ["topic"]
+      },
+      "then": {
+        "properties": {
+          "body": { "$ref": "topics/history_archive.body.json" }
+        },
+        "required": ["body"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "topic": { "pattern": "^plan\\.committed$" } },
+        "required": ["topic"]
+      },
+      "then": {
+        "properties": {
+          "body": { "$ref": "topics/plan_committed.body.json" }
+        },
+        "required": ["body"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "topic": { "pattern": "^ifl\\." } },
+        "required": ["topic"]
+      },
+      "then": {
+        "properties": {
+          "body": { "$ref": "topics/ifl_event.body.json" }
+        },
+        "required": ["body"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "topic": { "pattern": "^sync\\.delta$" } },
+        "required": ["topic"]
+      },
+      "then": {
+        "properties": {
+          "body": { "$ref": "topics/sync_delta.body.json" }
+        },
+        "required": ["body"]
+      }
+    }
+  ]
 }

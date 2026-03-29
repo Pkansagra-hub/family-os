@@ -1,0 +1,474 @@
+%% ======================================================================================
+%% MEMORY WRITER (K1) -- ARCHITECTURE DIAGRAM
+%% ======================================================================================
+%% Created: 2026-02-19 | Updated: 2026-03-01
+%% Purpose: Architecture diagram for K1 Memory Writer module
+%% Design Ref: k1/memory_writer/memory_writer_architecture.md
+%% Contracts: k1/contracts/modules/memory_writer/
+%% Types: k1/memory_writer/types.py (34-field MemoryAtom v2)
+%% Schema: k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json
+%% ROLE:
+%%   Convert K1 conversation context (SessionState) into K0 long-term memory.
+%%   K1 thinks in conversations. K0 thinks in events. MW is the TRANSLATOR.
+%% POSITION IN K1 STACK:
+%%   L0 Rhythm -> L1 Concierge -> L4 MEMORY_WRITER (background per-turn agent)
+%%   Runs: After each turn completes (turn.complete.v1)
+%%   Reads SessionState (lock-free, 13 of 15 sections)
+%%   Emits to: Bridge Command Port only (K0 bound, fire-and-forget)
+%% INVARIANTS (MW-01 through MW-11):
+%%   MW-01: NEVER writes SessionState (Single Writer = Concierge)
+%%   MW-02: Reads SessionState lock-free (<1ms)
+%%   MW-03: All K0 writes through Bridge Command Port
+%%   MW-04: Body text <= 50 words
+%%   MW-05: Per turn: 0-6 atoms max
+%%   MW-06: LLM budget: 2000 tokens total
+%%   MW-07: Relevance filter is rule-based (no LLM)
+%%   MW-08: Batch window: 250ms
+%%   MW-09: Offline-safe: queued in LocalOutbox
+%%   MW-10: All envelopes carry cognitive_trace_id
+%%   MW-11: UltraBERT in K0 P02 validates MW output
+%% PERFORMANCE BUDGET:
+%%   | Stage                       | P50      | P95      | Budget  |
+%%   | Relevance Filter            | <1ms     | <2ms     | 2ms     |
+%%   | SessionState Read (13 secs) | <1ms     | <1ms     | 1ms     |
+%%   | LLM Extraction (2000 tok)   | ~200ms   | ~500ms   | 500ms   |
+%%   | Envelope Build              | <1ms     | <2ms     | 2ms     |
+%%   | Delta Aggregation (250ms)   | 250ms    | 260ms    | 260ms   |
+%%   | Bridge Submit               | ~20ms    | ~50ms    | 50ms    |
+%%   | TOTAL (end-to-end)          | ~475ms   | ~815ms   | 815ms   |
+%% ENVELOPE BODY: 34-field MemoryAtom v2
+%%   Schema: k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json
+%%   Python: k1/memory_writer/types.py (MemoryAtom frozen dataclass)
+%%   14 required, 16 optional, 12 cognitive dimensions
+%% ULTRABERT: Runs in K0 P02 as VALIDATION safety net (not primary tagger)
+%%   max_length=512 tokens, MW body ~15-30 tokens = sweet spot
+%% CROSS-DIAGRAM INTEGRATION POINTS:
+%%   concierge.mmd: Concierge emits turn.complete.v1, single writer to SS
+%%   fabric.mmd: Agent Factory spawns MW per session, registry holds contract
+%%   learning.mmd: LearningExtractor is SEPARATE (meta-signals, not facts)
+%%   bridge_architecture.mmd: IKernelCommandPort, Ed25519, LocalOutbox
+%%   k0_source_of_truth_v2.mmd: BRIDGE_CMD_PORT -> Gate -> WAL + P02
+%% ======================================================================================
+
+graph TB
+
+  subgraph MEMORY_WRITER["MEMORY WRITER (Conversation -> K0 Long-Term Memory)"]
+    direction TB
+
+    %% ==================================================================================
+    %% TRIGGER
+    %% ==================================================================================
+    subgraph TRIGGER["TRIGGER (turn.complete.v1)"]
+      direction LR
+      TURN_EVENT["turn.complete.v1<br/>From: Concierge DELIVERING<br/>turn_id, session_id,<br/>cognitive_trace_id,<br/>user_msg, assistant_rsp"]:::event
+
+      DISPATCHER["TurnDispatcher<br/>Dedup by turn_id<br/>Routes to pipeline"]:::routing
+    end
+
+    %% ==================================================================================
+    %% STAGE 1: RELEVANCE FILTER
+    %% ==================================================================================
+    subgraph STAGE_1["STAGE 1: RELEVANCE FILTER (Rule-Based, <2ms)"]
+      direction TB
+
+      FILTER["RelevanceFilter<br/>PASS or SKIP (no LLM, MW-07)<br/>5 skip rules below"]:::gate
+
+      subgraph SKIP_RULES["Skip Rules (Any = SKIP)"]
+        direction LR
+        R1["R1: Clarification<br/>No new facts"]:::validator
+        R2["R2: System/Meta<br/>About the system"]:::validator
+        R3["R3: Duplicate<br/>entity+topic <5min"]:::validator
+        R4["R4: Trivial<br/><5 words"]:::validator
+        R5["R5: Continuation<br/>'go on'"]:::validator
+      end
+
+      FILTER_METRIC["Filter Metrics<br/>skip/pass count<br/>Emits: mw.filter.decision.v1"]:::service
+    end
+
+    %% ==================================================================================
+    %% STAGE 2: CONTEXT ASSEMBLY
+    %% ==================================================================================
+    subgraph STAGE_2["STAGE 2: CONTEXT ASSEMBLY (SS Read, <1ms)"]
+      direction TB
+
+      SS_READER["SessionState Reader<br/>Lock-free, snapshot isolation<br/>13 of 15 sections (MW-01)"]:::memory
+
+      subgraph SS_SECTIONS["Sections Read"]
+        direction LR
+        SS_HOT["HOT (10):<br/>beliefs_active, beliefs_history,<br/>history_active, history_recent,<br/>affective_now, affective_baseline,<br/>narrative_active, scoreboard,<br/>control, persona"]:::memory
+        SS_WARM["WARM (3):<br/>task_state, ifl, meta"]:::memory
+        SS_SKIP["SKIP (2):<br/>telemetry,<br/>artifacts_warm"]:::memory
+      end
+
+      CTX_BUILDER["Context Builder<br/>13 sections -> ExtractionContext<br/>Token-budgeted for 2000"]:::service
+
+      PERSON_RESOLVER["Person Resolver<br/>'Mom' -> person_mom<br/>Source: beliefs + scoreboard"]:::service
+    end
+
+    %% ==================================================================================
+    %% STAGE 3: LLM EXTRACTION
+    %% ==================================================================================
+    subgraph STAGE_3["STAGE 3: LLM EXTRACTION (200-500ms)"]
+      direction TB
+
+      WRITER_AGENT["MW Agent (LLM)<br/>Model: cheapest (GPT-4o-mini)<br/>Budget: 2000 tok (MW-06)<br/>Max calls: 6, Time: 5s<br/>Output: 0-6 MemoryAtom[]<br/>12 cognitive dimensions"]:::agent
+
+      subgraph EXTRACTION_SCHEMA["MemoryAtom v2 (34-field)"]
+        direction LR
+        FIELDS_REQ["REQUIRED (14):<br/>text, topics, sentiment_label,<br/>affect, source_type, novelty,<br/>elaboration_depth,<br/>temporal_orientation,<br/>confidence, session_id,<br/>conversation_turn, language,<br/>person_id, event_time_utc"]:::contract
+        FIELDS_OPT["OPTIONAL (16):<br/>participants, relationships,<br/>location, activity_type,<br/>emotion_tags, categories,<br/>narrative, temporal,<br/>social_context, intimacy,<br/>intent_type, identity_domains,<br/>trace_id, embedding_text,<br/>operation"]:::contract
+      end
+
+      subgraph EXAMPLES["Extraction Examples"]
+        direction LR
+        EX_1["'Dinner with Mom at<br/>Olive Garden for Emma bday'<br/>-> 1 atom: MEAL, positive"]:::contract
+        EX_2["'Call dentist + check SEVIS'<br/>-> 2 atoms: health/TASK,<br/>immigration/TASK"]:::contract
+      end
+
+      EXT_VALIDATOR["Extraction Validator<br/>text <= 50 words?<br/>required fields? conf > 0.3?<br/>privacy band? Drop invalid"]:::validator
+    end
+
+    %% ==================================================================================
+    %% STAGE 4: ENVELOPE BUILD
+    %% ==================================================================================
+    subgraph STAGE_4["STAGE 4: ENVELOPE BUILD (Deterministic, <2ms)"]
+      direction TB
+
+      ENV_BUILDER["Envelope Builder<br/>MemoryAtom -> MWEnvelope<br/>34-field map (no LLM)"]:::service
+
+      subgraph FIELD_MAP["Field Mapping"]
+        direction LR
+        MAP_BODY["Body: 1:1 field map<br/>operation: UPSERT"]:::contract
+        MAP_HEADERS["Headers: trace_id, tenant,<br/>space, topic: memory.delta,<br/>schema, actor, device, band<br/>Signing by Bridge only"]:::contract
+      end
+
+      PRIVACY["Privacy Enforcer<br/>GREEN: pass all<br/>AMBER: generalize location<br/>RED: strip + mask"]:::safety
+    end
+
+    %% ==================================================================================
+    %% STAGE 5: BATCH AND SUBMIT
+    %% ==================================================================================
+    subgraph STAGE_5["STAGE 5: BATCH + SUBMIT"]
+      direction TB
+
+      DELTA_AGG["Delta Aggregator<br/>250ms window (MW-08)<br/>Dedup + causal order"]:::service
+
+      BATCH_EMIT["Batch Emitter<br/>One Bridge call per batch"]:::service
+
+      subgraph BRIDGE_PATH["Bridge (ONE-WAY, Fire-and-Forget)"]
+        direction LR
+        BRIDGE_CMD["IBridgeCommandPort<br/>Ed25519 sign, idem_key<br/>POST /k0/command.submit"]:::bridge_out
+        OFFLINE_Q["LocalOutbox<br/>Queue if K0 offline<br/>Drain on reconnect"]:::memory
+      end
+
+      subgraph K0_PATH["K0 Receives (Via Bridge)"]
+        direction LR
+        K0_GATE["K0 Gate<br/>PEP + sig verify"]:::k0
+        K0_HOT["Hot Path (93ms)<br/>WAL + idem + outbox"]:::k0
+        K0_P02["P02 Pipeline<br/>UltraBERT safety net<br/>-> st_hipp_events"]:::k0
+      end
+    end
+
+    %% ==================================================================================
+    %% AGENT CONTRACT
+    %% ==================================================================================
+    subgraph MW_CONTRACT["AGENT CONTRACT"]
+      direction LR
+      CONTRACT["memory_writer.yaml<br/>budget: 2000 tok, calls: 6<br/>time: 5s, band: GREEN<br/>lifecycle: session-bound<br/>v2: 34-field MemoryAtom"]:::contract
+    end
+
+    %% ==================================================================================
+    %% EVICTION
+    %% ==================================================================================
+    subgraph EVICTION["EVICTION WRITES (Not MW)"]
+      direction LR
+      EVICT_LISTENER["Eviction Listener<br/>k1.session.eviction.v1<br/>beliefs.archive, history.archive<br/>MW topic: memory.delta only"]:::service
+    end
+
+    %% ==================================================================================
+    %% METRICS
+    %% ==================================================================================
+    subgraph METRICS["METRICS"]
+      direction LR
+      M_TURNS["Turns<br/>total, skipped,<br/>extracted"]:::service
+      M_EXTRACT["Extractions<br/>count (0-6),<br/>avg_words, conf"]:::service
+      M_LLM["LLM<br/>tokens (<2000),<br/>latency, errors"]:::service
+      M_BRIDGE["Bridge<br/>submits, batch_size,<br/>offline_queued"]:::service
+    end
+
+    %% ==================================================================================
+    %% PORTS (5 Hexagonal Boundaries)
+    %% ==================================================================================
+    subgraph PORTS["PORTS (5 Hexagonal -- No SS Write Port)"]
+      direction LR
+
+      P_EVENT["IEventPort<br/>subscribe + publish<br/>Sub: turn.complete.v1<br/>Pub: filter, batch"]:::port
+
+      P_STATE["IStateReadPort<br/>read(sections[])<br/>Lock-free, 13 of 15"]:::port
+
+      P_LLM["ILLMPort<br/>execute(HubRequest)<br/>2000 tok, BACKGROUND"]:::port
+
+      P_BRIDGE["IBridgeCommandPort<br/>submit(topic, schema, body)<br/>memory.delta, ONE-WAY"]:::port
+
+      P_FABRIC["IFabricPort<br/>on_spawn / on_terminate<br/>Session-bound"]:::port
+    end
+
+    %% ==================================================================================
+    %% ADAPTERS
+    %% ==================================================================================
+    subgraph ADAPTERS["ADAPTERS"]
+      direction TB
+
+      subgraph PROD["Production (5)"]
+        direction LR
+        A_EVENT["EventBusAdapter<br/>K1 Bus sub"]:::adapter
+        A_STATE["SSReadAdapter<br/>Lock-free, CB"]:::adapter
+        A_LLM["LLMGatewayAdapter<br/>Model Hub route"]:::adapter
+        A_BRIDGE["BridgeCommandAdapter<br/>Fire-and-forget"]:::adapter
+        A_FABRIC["FabricLifecycleAdapter<br/>spawn/terminate"]:::adapter
+      end
+
+      subgraph TEST_ADAPTERS["Test (5 -- In-Memory)"]
+        direction LR
+        T_EVENT["TestEventAdapter"]:::adapter_test
+        T_STATE["TestStateAdapter"]:::adapter_test
+        T_LLM["TestLLMAdapter"]:::adapter_test
+        T_BRIDGE["TestBridgeAdapter"]:::adapter_test
+        T_FABRIC["TestFabricAdapter"]:::adapter_test
+      end
+    end
+
+    %% ==================================================================================
+    %% INVARIANTS
+    %% ==================================================================================
+    subgraph INVARIANTS["INVARIANTS (MW-01 .. MW-11)"]
+      direction LR
+      INV_OWN["OWNERSHIP (01-03)<br/>Never write SS<br/>Read <1ms<br/>All K0 via Bridge"]:::invariant
+      INV_CONTENT["CONTENT (04-06)<br/>Body <= 50 words<br/>0-6 atoms/turn<br/>2000 tokens total"]:::invariant
+      INV_OPS["OPS (07-10)<br/>Filter = no LLM<br/>250ms batch<br/>Offline-safe, trace_id"]:::invariant
+      INV_VAL["VALIDATE (11)<br/>UltraBERT in P02"]:::invariant
+    end
+
+    %% ==================================================================================
+    %% PERFORMANCE
+    %% ==================================================================================
+    subgraph PERF["PERFORMANCE"]
+      direction LR
+      PERF_SYS["System (P95)<br/>Filter <2ms, SS <1ms<br/>Context <2ms, Env <2ms<br/>Agg 250ms, Bridge <50ms<br/>Total ~258ms"]:::perf
+      PERF_LLM["LLM Budget<br/>2000 tok, 5s timeout<br/>Cheapest model<br/>Fallback: skip turn"]:::perf
+      PERF_E2E["End-to-End<br/>P50: ~475ms<br/>P95: ~815ms<br/>Background (0 TTFT)"]:::perf
+    end
+
+    %% ==================================================================================
+    %% SERVICES
+    %% ==================================================================================
+    subgraph SERVICES["SERVICES (6, ~240 Tests)"]
+      direction TB
+      SVC_DISPATCH["TurnDispatcherService<br/>dispatch(), dedup<br/>Uses: IEventPort (~25t)"]:::service
+      SVC_FILTER["RelevanceFilterService<br/>evaluate() -> FilterDecision<br/>5 rules, no ports (~45t)"]:::service
+      SVC_CONTEXT["ContextAssemblyService<br/>assemble() -> ExtractionContext<br/>13 SS, PersonResolver (~40t)"]:::service
+      SVC_EXTRACT["ExtractionService<br/>extract() -> MemoryAtom[]<br/>LLM + validate 34f (~55t)"]:::service
+      SVC_ENVELOPE["EnvelopeBuildService<br/>build() -> MWEnvelope[]<br/>34f map + privacy (~35t)"]:::service
+      SVC_BATCH["BatchSubmitService<br/>aggregate + flush<br/>250ms, dedup (~40t)"]:::service
+    end
+
+    %% ==================================================================================
+    %% LIFECYCLE
+    %% ==================================================================================
+    subgraph LIFECYCLE["LIFECYCLE (Session-Bound)"]
+      direction TB
+      LC_INIT["init(session_id)<br/>6 services, 5 ports<br/>Subscribe, start timer"]:::lifecycle
+      LC_TURN["turn_process(TurnEvent)<br/>Filter -> Context -> Extract<br/>-> Envelope -> Batch"]:::lifecycle
+      LC_FLUSH["flush()<br/>Submit 250ms batch"]:::lifecycle
+      LC_SHUTDOWN["shutdown()<br/>Force flush, unsub, LIFO"]:::lifecycle
+      LC_CRASH["crash_recovery()<br/>Bootstrap, flush partial<br/>Max loss: 1 turn"]:::lifecycle
+    end
+
+    %% ==================================================================================
+    %% CONCURRENCY
+    %% ==================================================================================
+    subgraph CONCURRENCY["CONCURRENCY"]
+      direction LR
+      CONC_MODEL["Single-Threaded Async<br/>One turn at a time<br/>Queue max 2"]:::concurrency
+      CONC_ORDER["Turn Ordering<br/>By sequence number<br/>Reorder buf max 3"]:::concurrency
+    end
+
+  end
+
+  %% ======================================================================================
+  %% EXTERNAL K1 SYSTEMS
+  %% ======================================================================================
+  subgraph EXT_K1["External K1 Systems"]
+    direction TB
+    TP_CONCIERGE["Concierge<br/>Emits turn.complete.v1<br/>Single SS writer"]:::external
+    TP_FABRIC["Capability Fabric<br/>Spawns MW per session<br/>Holds contract"]:::external
+    TP_SS["SessionState<br/>MW reads 13 sections<br/>Never writes (MW-01)"]:::external
+    TP_MODEL["Model Hub<br/>LLM calls, BACKGROUND<br/>2000 tok/turn"]:::external
+    TP_LEARNING["Learning Loop<br/>Separate agent<br/>Meta-signals only"]:::external
+    TP_BUS["K1 Bus<br/>turn.complete.v1<br/>MW subscribes"]:::external
+  end
+
+  %% ======================================================================================
+  %% BRIDGE
+  %% ======================================================================================
+  subgraph EXT_BRIDGE["Bridge (Cross-Kernel Gateway)"]
+    direction LR
+    BR_PORT["IKernelCommandPort<br/>submit() ONE-WAY"]:::bridge_out
+    BR_BUILDER["CommandBuilder<br/>Ed25519, idem_key"]:::bridge_out
+    BR_OUTBOX["LocalOutbox<br/>Offline queue"]:::bridge_out
+  end
+
+  %% ======================================================================================
+  %% K0
+  %% ======================================================================================
+  subgraph EXT_K0["K0 (Via Bridge Only)"]
+    direction LR
+    K0_SUBMIT["POST /k0/command.submit<br/>202 Accepted"]:::k0
+    K0_PIPE["P02 Pipeline<br/>UltraBERT + enrich<br/>-> st_hipp_events"]:::k0
+  end
+
+  %% ======================================================================================
+  %% FLOW EDGES -- MAIN PIPELINE
+  %% ======================================================================================
+
+  %% Trigger
+  TP_CONCIERGE -->|"turn.complete.v1"| TURN_EVENT
+  TURN_EVENT -->|"dispatch"| DISPATCHER
+  DISPATCHER -->|"turn payload"| FILTER
+
+  %% Stage 1: Filter
+  FILTER -->|"check"| R1
+  FILTER -->|"check"| R2
+  FILTER -->|"check"| R3
+  FILTER -->|"check"| R4
+  FILTER -->|"check"| R5
+  FILTER -->|"PASS"| SS_READER
+  FILTER -.->|"SKIP"| FILTER_METRIC
+
+  %% Stage 2: Context
+  SS_READER -->|"read"| TP_SS
+  TP_SS -.->|"snapshot"| SS_READER
+  SS_READER -->|"raw sections"| CTX_BUILDER
+  CTX_BUILDER -->|"ExtractionContext"| PERSON_RESOLVER
+  PERSON_RESOLVER -->|"+ person_ids"| WRITER_AGENT
+
+  %% Stage 3: LLM
+  WRITER_AGENT -->|"LLM (2000 tok)"| TP_MODEL
+  TP_MODEL -.->|"MemoryAtom[]"| WRITER_AGENT
+  WRITER_AGENT -->|"raw atoms"| EXT_VALIDATOR
+  EXT_VALIDATOR -->|"valid atoms"| ENV_BUILDER
+
+  %% Stage 4: Envelope
+  ENV_BUILDER -->|"map fields"| MAP_BODY
+  ENV_BUILDER -->|"headers"| MAP_HEADERS
+  ENV_BUILDER -->|"MWEnvelope[]"| PRIVACY
+  PRIVACY -->|"band-safe"| DELTA_AGG
+
+  %% Stage 5: Batch
+  DELTA_AGG -->|"250ms batch"| BATCH_EMIT
+  BATCH_EMIT -->|"envelopes"| BRIDGE_CMD
+
+  %% Bridge
+  BRIDGE_CMD -->|"submit()"| BR_PORT
+  BR_PORT -->|"sign"| BR_BUILDER
+  BR_BUILDER -->|"POST"| K0_SUBMIT
+  BRIDGE_CMD -.->|"offline?"| OFFLINE_Q
+  OFFLINE_Q -.->|"queue"| BR_OUTBOX
+
+  %% K0
+  K0_SUBMIT -->|"gate"| K0_GATE
+  K0_GATE -->|"ALLOW"| K0_HOT
+  K0_HOT -->|"P02"| K0_P02
+  K0_P02 -->|"permanent"| K0_PIPE
+
+  %% Fabric
+  TP_FABRIC -.->|"spawn"| WRITER_AGENT
+  CONTRACT -.->|"registered"| TP_FABRIC
+
+  %% Eviction
+  TP_SS -.->|"eviction.v1"| EVICT_LISTENER
+
+  %% ======================================================================================
+  %% PORT -> ADAPTER BINDINGS
+  %% ======================================================================================
+
+  P_EVENT --> A_EVENT
+  P_EVENT --> T_EVENT
+  P_STATE --> A_STATE
+  P_STATE --> T_STATE
+  P_LLM --> A_LLM
+  P_LLM --> T_LLM
+  P_BRIDGE --> A_BRIDGE
+  P_BRIDGE --> T_BRIDGE
+  P_FABRIC --> A_FABRIC
+  P_FABRIC --> T_FABRIC
+
+  %% ======================================================================================
+  %% SERVICE -> PORT
+  %% ======================================================================================
+
+  SVC_DISPATCH -.->|"subscribe"| P_EVENT
+  SVC_CONTEXT -.->|"read SS"| P_STATE
+  SVC_EXTRACT -.->|"LLM"| P_LLM
+  SVC_BATCH -.->|"submit"| P_BRIDGE
+  SVC_DISPATCH -.->|"publish"| P_EVENT
+
+  %% ======================================================================================
+  %% LIFECYCLE -> SERVICE
+  %% ======================================================================================
+
+  LC_INIT -->|"wire"| SVC_DISPATCH
+  LC_INIT -->|"create"| SVC_FILTER
+  LC_INIT -->|"create"| SVC_CONTEXT
+  LC_INIT -->|"create"| SVC_EXTRACT
+  LC_INIT -->|"create"| SVC_ENVELOPE
+  LC_INIT -->|"create"| SVC_BATCH
+
+  LC_TURN -->|"dedup"| SVC_DISPATCH
+  LC_TURN -->|"evaluate"| SVC_FILTER
+  LC_TURN -->|"assemble"| SVC_CONTEXT
+  LC_TURN -->|"extract"| SVC_EXTRACT
+  LC_TURN -->|"build"| SVC_ENVELOPE
+  LC_TURN -->|"aggregate"| SVC_BATCH
+
+  LC_SHUTDOWN -->|"flush"| SVC_BATCH
+  LC_SHUTDOWN -.->|"unsub"| P_EVENT
+  LC_SHUTDOWN -.->|"disconnect"| P_BRIDGE
+
+  LC_CRASH -->|"bootstrap"| SVC_DISPATCH
+  LC_CRASH -->|"flush"| SVC_BATCH
+  LC_CRASH -.->|"resub"| P_EVENT
+
+  %% ======================================================================================
+  %% INVARIANT ENFORCEMENT
+  %% ======================================================================================
+
+  SVC_FILTER -.->|"MW-07"| INV_OPS
+  SVC_EXTRACT -.->|"MW-04,05,06"| INV_CONTENT
+  SVC_ENVELOPE -.->|"MW-10"| INV_OPS
+  SVC_BATCH -.->|"MW-08,09"| INV_OPS
+  SVC_CONTEXT -.->|"MW-01,02"| INV_OWN
+
+  %% ======================================================================================
+  %% STYLES
+  %% ======================================================================================
+
+  classDef event fill:#F5F5F5,stroke:#757575,stroke-width:1px,color:#1a1a2e
+  classDef routing fill:#D1ECF1,stroke:#0C5460,stroke-width:2px,color:#1a1a2e
+  classDef gate fill:#FFE0B2,stroke:#E65100,stroke-width:2px,color:#1a1a2e
+  classDef validator fill:#F8D7DA,stroke:#721C24,stroke-width:1px,color:#1a1a2e
+  classDef service fill:#E3F2FD,stroke:#1565C0,stroke-width:1px,color:#1a1a2e
+  classDef memory fill:#B3E5FC,stroke:#01579B,stroke-width:2px,color:#1a1a2e
+  classDef agent fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px,color:#1a1a2e
+  classDef safety fill:#FFCDD2,stroke:#B71C1C,stroke-width:2px,color:#1a1a2e
+  classDef bridge_out fill:#DCEDC8,stroke:#33691E,stroke-width:2px,color:#1a1a2e
+  classDef contract fill:#E0E0E0,stroke:#424242,stroke-width:1px,color:#1a1a2e
+  classDef external fill:#BBDEFB,stroke:#1976D2,stroke-width:1px,color:#1a1a2e
+  classDef k0 fill:#FCE4EC,stroke:#AD1457,stroke-width:1px,color:#1a1a2e
+  classDef port fill:#e3f2fd,stroke:#1565c0,stroke-width:3px,color:#1a1a2e,font-weight:bold
+  classDef adapter fill:#e8eaf6,stroke:#283593,stroke-width:2px,color:#1a1a2e
+  classDef adapter_test fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,color:#1a1a2e,font-style:italic
+  classDef invariant fill:#fce4ec,stroke:#880e4f,stroke-width:3px,color:#1a1a2e,font-weight:bold
+  classDef perf fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:#1a1a2e,font-weight:bold
+  classDef lifecycle fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#1a1a2e,font-weight:bold
+  classDef concurrency fill:#e0f7fa,stroke:#00697c,stroke-width:2px,color:#1a1a2e

@@ -1,0 +1,1736 @@
+# =============================================================================
+# st_hipp_events v2.0.0 -- Comprehensive Column Contract
+# =============================================================================
+#
+# Single source of truth for every column in st_hipp_events.
+# Migration 0066 implements this, M13 maps to it, P03/R7 snapshots from it.
+#
+# History:
+#   v1.0.0 (0022): 90 columns -- original table creation
+#   v1.1.0 (0034): +6 P03 consolidation columns
+#   v1.2.0 (0046): +5 P02 NER columns
+#   v1.3.0 (0051): +1 archival_status column
+#   v1.4.0 (0052): +7 P03 R6/R7 columns
+#   v1.5.0 (0053): +7 UltraBERT full capability columns
+#   v1.6.0 (0060): +4 UltraBERT activity/intent columns
+#   v2.0.0 (0066): +16 M3 trust-then-fill columns
+#   v2.2.0 (0085): +5 K1 correction signal columns (R2 Epic 7.2)
+#
+# Column count: 143 (138 existing + 5 new)
+# Groups: 16
+# =============================================================================
+
+schema: st_hipp_events
+version: "2.2.0"
+migration: "0085"
+column_count: 143
+
+groups:
+
+  # =========================================================================
+  # Group 1: Identity & Trace (9 columns)
+  # Migration: 0022
+  # =========================================================================
+  identity_trace:
+    count: 9
+    columns:
+
+      event_id:
+        type: TEXT
+        nullable: false
+        primary_key: true
+        source: envelope.cognitive_trace_id
+        description: "Primary key. Set to cognitive_trace_id per P02 dossier."
+        used_by: [M13, P02_writer, P03_all_phases]
+        migration: "0022"
+
+      wal_pos:
+        type: BIGINT
+        nullable: false
+        unique: true
+        source: envelope.wal_pos
+        description: "Write-ahead log position for ordering and replay."
+        used_by: [M13, P02_writer, P03_R0_batch_select]
+        migration: "0022"
+
+      cognitive_trace_id:
+        type: TEXT
+        nullable: false
+        source: envelope.cognitive_trace_id
+        description: "Unique trace identifier from K1 envelope."
+        used_by: [M13, P02_writer, observability]
+        migration: "0022"
+
+      tenant_id:
+        type: TEXT
+        nullable: false
+        source: envelope.tenant_id
+        description: "Multi-tenant isolation key."
+        used_by: [M13, P02_writer, P03_all_phases, query_layer]
+        migration: "0022"
+
+      space_id:
+        type: TEXT
+        nullable: false
+        source: envelope.space_id
+        description: "Logical space within tenant."
+        used_by: [M13, M05, P02_writer, query_layer]
+        migration: "0022"
+
+      effective_space_id:
+        type: TEXT
+        nullable: true
+        source: M05.effective_space_id
+        description: "Resolved space after M05 space resolution."
+        used_by: [M13, query_layer]
+        migration: "0022"
+
+      topic:
+        type: TEXT
+        nullable: false
+        source: envelope.topic
+        description: "Bus topic that routed this envelope."
+        used_by: [M13, P02_writer]
+        migration: "0022"
+
+      uow_id:
+        type: TEXT
+        nullable: true
+        source: envelope.uow_id
+        description: "Unit of work identifier for transactional grouping."
+        used_by: [M13, P02_writer, uow_layer]
+        migration: "0022"
+
+      schema_version:
+        type: TEXT
+        nullable: false
+        default: "'1.0.0'"
+        source: envelope.schema_version
+        description: "Envelope schema version for forward compatibility."
+        used_by: [M13, P02_writer]
+        migration: "0022"
+
+  # =========================================================================
+  # Group 2: Integrity & Audit (6 columns)
+  # Migration: 0022
+  # =========================================================================
+  integrity_audit:
+    count: 6
+    columns:
+
+      envelope_sha256:
+        type: TEXT
+        nullable: false
+        source: envelope.envelope_sha256
+        description: "SHA-256 hash of the raw envelope for integrity verification."
+        used_by: [M13, P02_writer, audit_trail]
+        migration: "0022"
+
+      sig_alg:
+        type: TEXT
+        nullable: false
+        source: envelope.sig_alg
+        description: "Signature algorithm used (e.g., NONE, ED25519)."
+        used_by: [M13, P02_writer]
+        migration: "0022"
+
+      sig_kid:
+        type: TEXT
+        nullable: false
+        source: envelope.sig_kid
+        description: "Key identifier for signature verification."
+        used_by: [M13, P02_writer]
+        migration: "0022"
+
+      idem_key:
+        type: TEXT
+        nullable: false
+        source: envelope.idem_key
+        description: "Idempotency key to prevent duplicate processing."
+        used_by: [M13, P02_writer, idem_layer]
+        migration: "0022"
+
+      ingested_at:
+        type: BIGINT
+        nullable: false
+        source: envelope.ingested_at
+        description: "Unix epoch seconds when envelope was ingested by K0."
+        used_by: [M13, P02_writer, observability]
+        migration: "0022"
+
+      clock_skew_ms:
+        type: INTEGER
+        nullable: true
+        source: envelope.clock_skew_ms
+        description: "Detected clock skew between client and server in milliseconds."
+        used_by: [M13, M08]
+        migration: "0022"
+
+  # =========================================================================
+  # Group 3: Policy & Visibility (10 columns)
+  # Migration: 0022
+  # =========================================================================
+  policy_visibility:
+    count: 10
+    columns:
+
+      policy_decision:
+        type: TEXT
+        nullable: false
+        enum: [ALLOW, DENY]
+        check: "policy_decision IN ('ALLOW', 'DENY')"
+        source: envelope.policy_stamp.decision
+        description: "K1 policy gate decision for this envelope."
+        used_by: [M13, M03, P02_writer]
+        migration: "0022"
+
+      policy_band:
+        type: TEXT
+        nullable: false
+        enum: [GREEN, AMBER, RED]
+        check: "policy_band IN ('GREEN', 'AMBER', 'RED')"
+        source: envelope.band
+        description: "K1 envelope-level safety/policy band."
+        used_by: [M13, M03, P02_writer, safety_arbitration]
+        migration: "0022"
+
+      policy_version:
+        type: TEXT
+        nullable: false
+        source: envelope.policy_stamp.version
+        description: "Version of policy rules that produced this decision."
+        used_by: [M13, M03]
+        migration: "0022"
+
+      obligations_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: M03.obligations
+        description: "Policy obligations attached to this event (JSON array)."
+        used_by: [M13, M03, policy_enforcer]
+        migration: "0022"
+
+      visible_to_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: M05.visible_to_json
+        description: "List of actor IDs who can see this event."
+        used_by: [M13, M05, query_layer]
+        migration: "0022"
+
+      visibility_scope:
+        type: TEXT
+        nullable: true
+        enum: [OWNER_ONLY, SPACE_DEFAULT, HOUSEHOLD_ALL, CUSTOM_SUBSET, EXTERNAL_SHARE]
+        check: "visibility_scope IN ('OWNER_ONLY', 'SPACE_DEFAULT', 'HOUSEHOLD_ALL', 'CUSTOM_SUBSET', 'EXTERNAL_SHARE')"
+        source: M05.visibility_scope
+        description: "Visibility scope classification from M05 space resolver."
+        used_by: [M13, M05, query_layer]
+        migration: "0022"
+
+      owner_id:
+        type: TEXT
+        nullable: false
+        source: M05.owner_id
+        description: "Primary owner of this event (actor who created it)."
+        used_by: [M13, M05, query_layer, retention]
+        migration: "0022"
+
+      co_owners_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: M05.co_owners_json
+        description: "Co-owners with shared ownership rights (JSON array of actor IDs)."
+        used_by: [M13, M05, query_layer]
+        migration: "0022"
+
+      retention_policy_id:
+        type: TEXT
+        nullable: false
+        source: M11.retention_policy_id
+        description: "Retention policy governing this event lifecycle."
+        used_by: [M13, M11, retention_engine]
+        migration: "0022"
+
+      retention_bucket:
+        type: TEXT
+        nullable: false
+        enum: [STANDARD, SENSITIVE, EPHEMERAL]
+        check: "retention_bucket IN ('STANDARD', 'SENSITIVE', 'EPHEMERAL')"
+        source: M11.retention_bucket
+        description: "Retention classification for lifecycle management."
+        used_by: [M13, M11, retention_engine]
+        migration: "0022"
+
+  # =========================================================================
+  # Group 4: Actor & Device (6 columns)
+  # Migration: 0022
+  # =========================================================================
+  actor_device:
+    count: 6
+    columns:
+
+      actor_id:
+        type: TEXT
+        nullable: false
+        source: envelope.actor
+        description: "Identity of the actor who produced this event."
+        used_by: [M13, P02_writer, query_layer]
+        migration: "0022"
+
+      actor_role:
+        type: TEXT
+        nullable: true
+        enum: [SELF, AGENT, SYSTEM, DELEGATE]
+        check: "actor_role IN ('SELF', 'AGENT', 'SYSTEM', 'DELEGATE')"
+        source: envelope.actor_role
+        description: "Role of the actor producing this event."
+        used_by: [M13, P02_writer]
+        migration: "0022"
+
+      device_id:
+        type: TEXT
+        nullable: false
+        source: envelope.device_id
+        description: "Device identifier that generated this event."
+        used_by: [M13, M09, P02_writer]
+        migration: "0022"
+
+      device_kind:
+        type: TEXT
+        nullable: false
+        source: M09.device_kind
+        description: "Device type classification (phone, tablet, desktop, etc.)."
+        used_by: [M13, M09]
+        migration: "0022"
+
+      device_os:
+        type: TEXT
+        nullable: true
+        source: M09.device_os
+        description: "Device operating system (iOS, Android, etc.)."
+        used_by: [M13, M09]
+        migration: "0022"
+
+      ingress_channel:
+        type: TEXT
+        nullable: true
+        source: M10.ingress_topic
+        description: "Ingress channel through which this event entered (write, import, etc.)."
+        used_by: [M13, M10]
+        migration: "0022"
+
+  # =========================================================================
+  # Group 5: Temporal (16 columns: 11 existing + 3 MW v2 + 2 Epic 1.2)
+  # Migrations: 0022, 0066, 0076
+  # =========================================================================
+  temporal:
+    count: 16
+    columns:
+
+      event_time_utc:
+        type: BIGINT
+        nullable: false
+        source: M08.event_time_utc
+        description: "When the event occurred, Unix epoch seconds."
+        used_by: [M13, M08, P02_writer, P03_R0, query_layer]
+        migration: "0022"
+
+      write_time_utc:
+        type: BIGINT
+        nullable: false
+        source: M08.write_time_utc
+        description: "When the event was written to K0, Unix epoch seconds."
+        used_by: [M13, M08, P02_writer]
+        migration: "0022"
+
+      write_lag_ms:
+        type: INTEGER
+        nullable: true
+        source: M08.write_lag_ms
+        description: "Delay between event_time_utc and write_time_utc in milliseconds."
+        used_by: [M13, M08, observability]
+        migration: "0022"
+
+      local_date:
+        type: TEXT
+        nullable: true
+        source: M08.local_date
+        description: "Local date string (YYYY-MM-DD) in the actor timezone."
+        used_by: [M13, M08, query_layer]
+        migration: "0022"
+
+      local_time:
+        type: TEXT
+        nullable: true
+        source: M08.local_time
+        description: "Local time string (HH:MM:SS) in the actor timezone."
+        used_by: [M13, M08]
+        migration: "0022"
+
+      day_of_week:
+        type: TEXT
+        nullable: true
+        source: M08.day_of_week
+        description: "Day of week name (Monday, Tuesday, etc.)."
+        used_by: [M13, M08, P03_R5_pattern]
+        migration: "0022"
+
+      is_weekend:
+        type: BOOLEAN
+        nullable: true
+        source: M08.is_weekend
+        description: "Whether event occurred on Saturday or Sunday."
+        used_by: [M13, M08, P03_R5_pattern]
+        migration: "0022"
+
+      time_of_day_bucket:
+        type: TEXT
+        nullable: true
+        source: M08.time_of_day_bucket
+        description: "Coarse time bucket (MORNING, AFTERNOON, EVENING, NIGHT)."
+        used_by: [M13, M08, P03_R5_pattern]
+        migration: "0022"
+
+      circadian_slot:
+        type: TEXT
+        nullable: true
+        source: M08.circadian_slot
+        description: "Fine-grained circadian slot for pattern analysis."
+        used_by: [M13, M08, P03_R5_pattern]
+        migration: "0022"
+
+      is_backdated:
+        type: BOOLEAN
+        nullable: true
+        source: M08.is_backdated
+        description: "Whether the event was backdated (event_time significantly before write_time)."
+        used_by: [M13, M08]
+        migration: "0022"
+
+      created_at:
+        type: BIGINT
+        nullable: false
+        source: system.time
+        description: "Row creation timestamp, Unix epoch seconds."
+        used_by: [M13, P02_writer]
+        migration: "0022"
+
+      # -- M3 v2.0.0 Temporal Extensions (3 new columns) --
+
+      temporal_mentioned_time:
+        type: TEXT
+        nullable: true
+        source: body.temporal.mentioned_time
+        description: "Raw temporal reference from user text ('yesterday evening', 'last Tuesday')."
+        used_by: [M13, R5_NTD]
+        added_in: "v2.0.0"
+        migration: "0066"
+
+      temporal_resolved_epoch_ms:
+        type: BIGINT
+        nullable: true
+        source: body.temporal.resolved_epoch_ms
+        description: "K1-resolved epoch milliseconds for mentioned_time. Used by M08 for backdating."
+        used_by: [M08, M13, R5_CTD]
+        added_in: "v2.0.0"
+        migration: "0066"
+
+      temporal_orientation:
+        type: TEXT
+        nullable: true
+        enum: [PAST, ONGOING, FUTURE_COMMITMENT]
+        source: body.temporal.orientation
+        description: "Temporal orientation of the memory atom."
+        used_by: [M08, M13, R5_SPC_UQ, R5_ASU]
+        added_in: "v2.0.0"
+        migration: "0066"
+
+      # Epic 1.2 (GAP-002): Conversation anchor + provenance tracking
+      conversation_anchor_ms:
+        type: BIGINT
+        nullable: true
+        source: body.conversation_anchor_ms
+        description: "K1 MW turn timestamp (ms). The actual moment the user chatted. Drives R2 episode formation when present."
+        used_by: [M08, M13, R0, R2]
+        added_in: "v3.0.0"
+        migration: "0076"
+
+      temporal_source:
+        type: TEXT
+        nullable: true
+        source: M08.normalize_timestamp.conv_source
+        description: "Chain A provenance tag: conversation_anchor/event_time/envelope_ts/now."
+        used_by: [M08, M13, R0]
+        added_in: "v3.0.0"
+        migration: "0076"
+
+      # Epic 2.4 (GAP-002): Multi-link temporal model
+      temporal_links_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: M08.parse_temporal_links
+        description: "JSON array of TemporalLink objects {mentioned_time, resolved_epoch_ms, uncertainty_window_ms, link_type, confidence}. Max 5 per atom."
+        used_by: [M08, M13, R0, R2]
+        added_in: "v2.1.0"
+        migration: "0077"
+
+      extraction_sequence:
+        type: INTEGER
+        nullable: true
+        source: envelope.body.extraction_sequence
+        description: "0-based ordinal of this atom within the K1 turn extraction batch."
+        used_by: [M13, R0, R2]
+        added_in: "v3.1.0"
+        migration: "0080"
+
+  # =========================================================================
+  # Group 6: Spatial & Place (7 columns)
+  # Migration: 0022
+  # =========================================================================
+  spatial_place:
+    count: 7
+    columns:
+
+      location_name:
+        type: TEXT
+        nullable: true
+        source: M15.location_name | M12.location_name
+        description: "Human-readable location name."
+        used_by: [M13, M12, M15, query_layer]
+        migration: "0022"
+
+      location_type:
+        type: TEXT
+        nullable: true
+        source: M15.location_type | M12.location_type
+        description: "Location category (home, work, park, restaurant, etc.)."
+        used_by: [M13, M12, M15]
+        migration: "0022"
+
+      geohash_6:
+        type: TEXT
+        nullable: true
+        source: M15.geohash_6 | M12.geohash_6
+        description: "6-character geohash for spatial proximity queries (~1.2km precision)."
+        used_by: [M13, M12, M15, P03_R5_spatial]
+        migration: "0022"
+
+      place_id:
+        type: TEXT
+        nullable: true
+        source: envelope.body.place_id
+        description: "Stable place identity from K1 PlaceResolver. Pattern: place_<slug>."
+        used_by: [M13, P03_R0, P03_R2]
+        migration: "0078"
+
+      location_hierarchy_json:
+        type: TEXT
+        nullable: true
+        source: envelope.body.location_hierarchy
+        description: "JSON array of spatial hierarchy levels, most specific to most general. Max 5 levels."
+        used_by: [M13, P03_R0]
+        migration: "0081"
+
+      spatial_context_json:
+        type: TEXT
+        nullable: true
+        source: envelope.body.transition_from_place + envelope.body.transition_mode
+        description: "Bundled spatial transition context JSON: {transition_from_place, transition_mode}."
+        used_by: [M13, P03_R0, P03_R2]
+        migration: "0082"
+
+      spatial_familiarity:
+        type: TEXT
+        nullable: true
+        enum: [FIRST_VISIT, OCCASIONAL, REGULAR, DAILY]
+        source: M15.spatial_familiarity
+        description: "K0 familiarity band computed from historical visit count by (tenant_id, place_id)."
+        used_by: [M15, M13, P03_R2]
+        migration: "0079"
+
+      geo_precision_external:
+        type: TEXT
+        nullable: true
+        source: M12.geo_precision_external
+        description: "Precision level of external geolocation source."
+        used_by: [M13, M12]
+        migration: "0022"
+
+      geo_masking_reason:
+        type: TEXT
+        nullable: true
+        source: M12.geo_masking_reason
+        description: "Reason geo data was masked or omitted (privacy, no_gps, etc.)."
+        used_by: [M13, M12]
+        migration: "0022"
+
+  # =========================================================================
+  # Group 7: Social & Relationships (9 columns: 8 existing + 1 new)
+  # Migrations: 0022, 0066
+  # =========================================================================
+  social_relationships:
+    count: 9
+    columns:
+
+      participants_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: body.participants | M07.participants_json
+        description: "List of participant identifiers in this event."
+        used_by: [M13, M07, P03_R5_social]
+        migration: "0022"
+
+      num_participants:
+        type: INTEGER
+        nullable: true
+        source: M07.num_participants
+        description: "Count of participants in this event."
+        used_by: [M13, M07]
+        migration: "0022"
+
+      has_partner_present:
+        type: BOOLEAN
+        nullable: true
+        source: M07.has_partner_present
+        description: "Whether the user's partner/spouse was a participant."
+        used_by: [M13, M07, P03_R5_social]
+        migration: "0022"
+
+      has_parent_present:
+        type: BOOLEAN
+        nullable: true
+        source: M07.has_parent_present
+        description: "Whether a parent was a participant."
+        used_by: [M13, M07, P03_R5_social]
+        migration: "0022"
+
+      is_solo_event:
+        type: BOOLEAN
+        nullable: true
+        source: M07.is_solo_event
+        description: "Whether this event involved only the actor (no other participants)."
+        used_by: [M13, M07, P03_R5_social]
+        migration: "0022"
+
+      participant_roles_json:
+        type: TEXT
+        nullable: true
+        format: json_object
+        source: M07.participant_roles_json
+        description: "Map of participant IDs to their roles in this event."
+        used_by: [M13, M07]
+        migration: "0022"
+
+      social_context:
+        type: TEXT
+        nullable: true
+        source: M07.social_context
+        description: "Social context classification (solo, family, friends, work, etc.)."
+        used_by: [M13, M07, P03_R5_social]
+        migration: "0022"
+
+      social_intimacy:
+        type: TEXT
+        nullable: true
+        source: M07.social_intimacy
+        description: "Intimacy level of the social interaction (LOW, MED, HIGH)."
+        used_by: [M13, M07]
+        migration: "0022"
+
+      # -- M3 v2.0.0 Signal Provenance (1 new column) --
+
+      participant_relationships_json:
+        type: TEXT
+        nullable: false
+        default: "'[]'"
+        format: json_array
+        source: body.participant_relationships
+        description: "Typed relationships from MW v2 ({person, relationship_type, confidence})."
+        used_by: [M07, M13, R5_SRE, R5_EWR]
+        added_in: "v2.0.0"
+        migration: "0066"
+
+  # =========================================================================
+  # Group 8: Semantic & Activity (14 columns: 10 from 0022 + 4 from 0060)
+  # Migrations: 0022, 0060
+  # =========================================================================
+  semantic_activity:
+    count: 14
+    columns:
+
+      text:
+        type: TEXT
+        nullable: true
+        source: body.text
+        description: "Raw text content of the memory atom."
+        used_by: [M13, M01, M02, M04, P02_writer]
+        migration: "0022"
+
+      text_normalized:
+        type: TEXT
+        nullable: true
+        source: computed(body.text.lower().strip())
+        description: "Lowercased, stripped text for deduplication comparison."
+        used_by: [M13, M01]
+        migration: "0022"
+
+      char_count:
+        type: INTEGER
+        nullable: true
+        source: computed(len(body.text))
+        description: "Character count of raw text."
+        used_by: [M13, observability]
+        migration: "0022"
+
+      token_count:
+        type: INTEGER
+        nullable: true
+        source: computed(len(body.text.split()))
+        description: "Whitespace-delimited token count of raw text."
+        used_by: [M13, observability]
+        migration: "0022"
+
+      language:
+        type: TEXT
+        nullable: true
+        source: body.language
+        description: "ISO 639-1 language code (en, es, etc.)."
+        used_by: [M13, M02, M04]
+        migration: "0022"
+
+      activity_type:
+        type: TEXT
+        nullable: true
+        source: M10.activity_type
+        description: "Legacy 7-type activity classification (meal, conversation, routine, milestone, social, work, unknown)."
+        used_by: [M13, M10, P03_R5_pattern]
+        migration: "0022"
+
+      activity_category:
+        type: TEXT
+        nullable: true
+        source: M10.activity_category
+        description: "High-level content category (episodic, procedural, semantic)."
+        used_by: [M13, M10]
+        migration: "0022"
+
+      is_meal:
+        type: BOOLEAN
+        nullable: true
+        source: body.is_meal
+        description: "Whether this event involves a meal."
+        used_by: [M13, P03_R5_pattern]
+        migration: "0022"
+
+      is_outing:
+        type: BOOLEAN
+        nullable: true
+        source: body.is_outing
+        description: "Whether this event involves an outing/excursion."
+        used_by: [M13, P03_R5_pattern]
+        migration: "0022"
+
+      ingress_source:
+        type: TEXT
+        nullable: true
+        source: M10.ingress_source
+        description: "Source application or interface (mobile_app, web, voice, import)."
+        used_by: [M13, M10]
+        migration: "0022"
+
+      activity_type_ultrabert:
+        type: TEXT
+        nullable: true
+        enum: [DIARY, TASK, HEALTH, FINANCE, RELATIONSHIP, WORK, META, MEMORY, PLANNING, CELEBRATION, CONCERN, GRATITUDE]
+        check: "activity_type_ultrabert IN ('DIARY','TASK','HEALTH','FINANCE','RELATIONSHIP','WORK','META','MEMORY','PLANNING','CELEBRATION','CONCERN','GRATITUDE')"
+        source: M10.activity_type_ultrabert
+        description: "UltraBERT INGRESS head 12-type classification. Richer than legacy 7-type."
+        used_by: [M13, M10, P03_R5_pattern]
+        migration: "0060"
+
+      activity_type_confidence:
+        type: FLOAT
+        nullable: true
+        check: "0.0 <= activity_type_confidence AND activity_type_confidence <= 1.0"
+        source: M10.activity_type_confidence
+        description: "Confidence score for UltraBERT activity classification."
+        used_by: [M13, M10]
+        migration: "0060"
+
+      intent_ultrabert:
+        type: TEXT
+        nullable: true
+        enum: [log_memory, query_memory, set_reminder, express_feeling, seek_advice, share_news, reflect, other]
+        check: "intent_ultrabert IN ('log_memory','query_memory','set_reminder','express_feeling','seek_advice','share_news','reflect','other')"
+        source: M10.intent_ultrabert
+        description: "UltraBERT INTENT head 8-type classification."
+        used_by: [M13, M10, P03_R5]
+        migration: "0060"
+
+      intent_confidence:
+        type: FLOAT
+        nullable: true
+        check: "0.0 <= intent_confidence AND intent_confidence <= 1.0"
+        source: M10.intent_confidence
+        description: "Confidence score for UltraBERT intent classification."
+        used_by: [M13, M10]
+        migration: "0060"
+
+  # =========================================================================
+  # Group 9: Hippocampus -- Pattern Separation & Novelty (8 columns)
+  # Migration: 0022
+  # Note: novelty_score through clustering_version are P03 CA3 deferred columns.
+  #       Set to NULL in P02, populated by P03 consolidation.
+  # =========================================================================
+  hippocampus_pattern:
+    count: 8
+    columns:
+
+      simhash_hex:
+        type: TEXT
+        nullable: false
+        source: M01.simhash_hex
+        description: "SimHash fingerprint (hex) for near-duplicate detection."
+        used_by: [M13, M01, P03_R1_dedup]
+        migration: "0022"
+
+      minhash32:
+        type: TEXT
+        nullable: false
+        source: M01.minhash32
+        description: "MinHash signature (JSON array of 32 ints) for LSH similarity."
+        used_by: [M13, M01, P03_R1_dedup]
+        migration: "0022"
+
+      novelty_score:
+        type: FLOAT
+        nullable: true
+        source: P03_CA3.novelty_score
+        description: "Continuous novelty score [0.0-1.0] computed by P03 CA3 phase."
+        used_by: [P03_R2, query_layer]
+        migration: "0022"
+        p02_default: null
+
+      near_duplicates_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: P03_CA3.near_duplicates
+        description: "List of near-duplicate event IDs found by P03."
+        used_by: [P03_R1_dedup]
+        migration: "0022"
+        p02_default: null
+
+      is_near_duplicate:
+        type: BOOLEAN
+        nullable: true
+        source: P03_CA3.is_near_duplicate
+        description: "Whether this event was flagged as near-duplicate by P03."
+        used_by: [P03_R1_dedup, query_layer]
+        migration: "0022"
+        p02_default: null
+
+      episode_cluster_id:
+        type: TEXT
+        nullable: true
+        source: P03_CA3.episode_cluster_id
+        description: "Episode cluster assignment from P03 clustering."
+        used_by: [P03_R2, query_layer]
+        migration: "0022"
+        p02_default: null
+
+      cluster_confidence:
+        type: FLOAT
+        nullable: true
+        source: P03_CA3.cluster_confidence
+        description: "Confidence of cluster assignment [0.0-1.0]."
+        used_by: [P03_R2]
+        migration: "0022"
+        p02_default: null
+
+      clustering_version:
+        type: TEXT
+        nullable: true
+        source: P03_CA3.clustering_version
+        description: "Version of clustering algorithm that produced the assignment."
+        used_by: [P03_R2]
+        migration: "0022"
+        p02_default: null
+
+  # =========================================================================
+  # Group 10: Embeddings & Knowledge Graph (16 columns)
+  # Migrations: 0022 (4), 0046 (5), 0053 (7)
+  # =========================================================================
+  embeddings_kg:
+    count: 16
+    columns:
+
+      embedding_id:
+        type: TEXT
+        nullable: false
+        unique: true
+        source: M22.embedding_id | M02.embedding_id
+        description: "Unique identifier for the vector embedding (ADR-K003)."
+        used_by: [M13, M22, M02, P03_R2_cluster]
+        migration: "0022"
+
+      embedding_status:
+        type: TEXT
+        nullable: false
+        default: "'PENDING'"
+        enum: [PENDING, IN_PROGRESS, READY, FAILED]
+        check: "embedding_status IN ('PENDING', 'IN_PROGRESS', 'READY', 'FAILED')"
+        source: computed(M22.embedding != null -> READY else PENDING)
+        description: "Embedding generation status. READY when M22 returns embedding."
+        used_by: [M13, M22, P03_R2_cluster]
+        migration: "0022"
+
+      entities_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: M02.entities_json
+        description: "Resolved/processed entities in KG format (JSON array)."
+        used_by: [M13, M02, P03_R4_entity]
+        migration: "0022"
+
+      kg_triples_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: M02.kg_triples_json
+        description: "Knowledge graph triples extracted from text (JSON array)."
+        used_by: [M13, M02, P03_R4_kg]
+        migration: "0022"
+
+      ner_entities_json:
+        type: TEXT
+        nullable: true
+        format: json_object
+        source: M02.ner_entities_json
+        description: "Raw UltraBERT 3-head NER output ({ner_family: [], ner_general: []})."
+        used_by: [M13, M02, P03_R4_UltraBERTEntityExtractor]
+        migration: "0046"
+
+      temporal_json:
+        type: TEXT
+        nullable: true
+        format: json_object
+        source: M02.temporal_json
+        description: "Raw temporal expressions from UltraBERT temporal head ({temporal: []})."
+        used_by: [M13, M02, P03_R4]
+        migration: "0046"
+
+      intent_category:
+        type: TEXT
+        nullable: true
+        source: M02.intent_category
+        description: "User intent from UltraBERT intent head (log_memory, share_news, etc.)."
+        used_by: [M13, M02]
+        migration: "0046"
+
+      ingress_category:
+        type: TEXT
+        nullable: true
+        source: M02.ingress_category
+        description: "UltraBERT ingress routing category (CELEBRATION, MEAL, ROUTINE, etc.)."
+        used_by: [M13, M02]
+        migration: "0046"
+
+      ultrabert_version:
+        type: TEXT
+        nullable: true
+        source: M02.ultrabert_version
+        description: "UltraBERT model version used for NER extraction."
+        used_by: [M13, M02, observability]
+        migration: "0046"
+
+      extracted_relations_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: M02.extracted_relations_json
+        description: "Relationship types from UltraBERT relations head (['parent_of'], etc.)."
+        used_by: [M13, M02, P03_R4_social]
+        migration: "0053"
+
+      safety_familyos_band:
+        type: TEXT
+        nullable: true
+        enum: [GREEN, AMBER, RED, CRISIS]
+        check: "safety_familyos_band IN ('GREEN', 'AMBER', 'RED', 'CRISIS')"
+        source: M02.safety_familyos_band
+        description: "UltraBERT 4-band safety classification. Distinct from K1 policy_band."
+        used_by: [M13, M02, safety_arbitration]
+        migration: "0053"
+
+      safety_familyos_subcategory:
+        type: TEXT
+        nullable: true
+        source: M02.safety_familyos_subcategory
+        description: "Detailed safety subcategory (none, stress, self_harm_ideation, etc.)."
+        used_by: [M13, M02, safety_arbitration]
+        migration: "0053"
+
+      effective_safety_band:
+        type: TEXT
+        nullable: true
+        enum: [GREEN, AMBER, RED, CRISIS]
+        check: "effective_safety_band IN ('GREEN', 'AMBER', 'RED', 'CRISIS')"
+        source: computed(arbitrate(policy_band, safety_familyos_band))
+        description: "Arbitrated safety band. Most restrictive of K1 policy_band vs UltraBERT safety_familyos_band."
+        used_by: [M13, safety_arbitration, query_layer]
+        migration: "0053"
+
+      nli_label:
+        type: TEXT
+        nullable: true
+        enum: [entailment, neutral, contradiction]
+        source: M02.nli_label
+        description: "Natural language inference result from UltraBERT NLI head."
+        used_by: [M13, M02, P03_R3_contradiction]
+        migration: "0053"
+
+      nli_confidence:
+        type: FLOAT
+        nullable: true
+        check: "0.0 <= nli_confidence AND nli_confidence <= 1.0"
+        source: M02.nli_confidence
+        description: "Confidence score for NLI classification."
+        used_by: [M13, M02]
+        migration: "0053"
+
+      sentiment_confidence:
+        type: FLOAT
+        nullable: true
+        check: "0.0 <= sentiment_confidence AND sentiment_confidence <= 1.0"
+        source: M02.sentiment_confidence
+        description: "Confidence score for UltraBERT sentiment analysis."
+        used_by: [M13, M02]
+        migration: "0053"
+
+  # =========================================================================
+  # Group 11: Affect & Salience (11 columns: 9 existing + 2 new)
+  # Migrations: 0022, 0066
+  # =========================================================================
+  affect_salience:
+    count: 11
+    columns:
+
+      sentiment_score:
+        type: FLOAT
+        nullable: true
+        check: "-1.0 <= sentiment_score AND sentiment_score <= 1.0"
+        source: M04.valence
+        description: "Sentiment score mapped from affect valence. -1.0 (negative) to 1.0 (positive)."
+        used_by: [M13, M04, query_layer]
+        migration: "0022"
+
+      sentiment_label:
+        type: TEXT
+        nullable: true
+        enum: [positive, neutral, negative]
+        source: computed(valence >= 0.6 -> positive, <= 0.4 -> negative, else neutral)
+        description: "Categorical sentiment derived from valence score."
+        used_by: [M13, query_layer]
+        migration: "0022"
+
+      dominant_emotions_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: M04.dominant_emotions
+        description: "Dominant emotions detected (JSON array of emotion strings)."
+        used_by: [M13, M04, P03_R5_affect]
+        migration: "0022"
+
+      affect_valence:
+        type: FLOAT
+        nullable: true
+        check: "-1.0 <= affect_valence AND affect_valence <= 1.0"
+        source: M04.valence
+        description: "Valence dimension of affect (pleasantness). Trust-then-fill: MW v2 -> UltraBERT -> VADER."
+        used_by: [M13, M04, P03_R5_affect]
+        migration: "0022"
+
+      affect_arousal:
+        type: FLOAT
+        nullable: true
+        check: "0.0 <= affect_arousal AND affect_arousal <= 1.0"
+        source: M04.arousal
+        description: "Arousal dimension of affect (activation). Trust-then-fill: MW v2 -> UltraBERT -> VADER."
+        used_by: [M13, M04, P03_R5_affect]
+        migration: "0022"
+
+      affect_band:
+        type: TEXT
+        nullable: true
+        enum: [GREEN, AMBER, RED]
+        check: "affect_band IN ('GREEN', 'AMBER', 'RED')"
+        source: M04.affect_band
+        description: "Clinical affect safety band. Overridden to RED/AMBER if clinical risk detected."
+        used_by: [M13, M04, safety_arbitration]
+        migration: "0022"
+
+      salience_score:
+        type: FLOAT
+        nullable: false
+        default: "0.0"
+        check: "0.0 <= salience_score AND salience_score <= 1.0"
+        source: M06.salience_score
+        description: "Importance score [0.0-1.0]. Boosted for clinical safety content."
+        used_by: [M13, M06, P03_R5, query_layer]
+        migration: "0022"
+
+      salience_reasons_json:
+        type: TEXT
+        nullable: true
+        format: json_array
+        source: M06.salience_reasons
+        description: "Reasons for salience score (JSON array of reason strings)."
+        used_by: [M13, M06]
+        migration: "0022"
+
+      salience_band:
+        type: TEXT
+        nullable: true
+        enum: [HIGH, MED, LOW]
+        check: "salience_band IN ('HIGH', 'MED', 'LOW')"
+        source: M06.salience_band
+        description: "Categorical salience band derived from score."
+        used_by: [M13, M06, query_layer]
+        migration: "0022"
+
+      # -- M3 v2.0.0 Affect Extension (1 new column) --
+
+      affect_dominance:
+        type: FLOAT
+        nullable: true
+        check: "0.0 <= affect_dominance AND affect_dominance <= 1.0"
+        source: body.affect.dominance
+        description: "3rd VAD dimension (dominance/control). Trust-then-fill: MW v2 -> UltraBERT -> null."
+        used_by: [M13, R5_SRE]
+        added_in: "v2.0.0"
+        migration: "0066"
+
+      # -- M3 v2.0.0 Entity Salience (1 new column) --
+
+      entity_salience_json:
+        type: TEXT
+        nullable: false
+        default: "'{}'"
+        format: json_object
+        source: body.entity_salience
+        description: "Per-entity salience map from MW v2 ({entity_name: score, ...})."
+        used_by: [M13, M06_cross_validate, R5_SPG]
+        added_in: "v2.0.0"
+        migration: "0066"
+
+  # =========================================================================
+  # Group 12: P03 Consolidation Lifecycle (14 columns)
+  # Migrations: 0034 (6), 0051 (1), 0052 (7)
+  # Note: All columns are P03-deferred. Set to NULL in P02, populated by P03.
+  # =========================================================================
+  consolidation_lifecycle:
+    count: 14
+    columns:
+
+      consolidation_status:
+        type: TEXT
+        nullable: true
+        enum: [PENDING, IN_PROGRESS, CONSOLIDATED, DUPLICATE, PRUNED, PENDING_REVIEW]
+        check: "consolidation_status IN ('PENDING','IN_PROGRESS','CONSOLIDATED','DUPLICATE','PRUNED','PENDING_REVIEW')"
+        source: P03.R0_batch_select
+        description: "Consolidation pipeline processing status."
+        used_by: [P03_R0, P03_all_phases]
+        migration: "0034"
+        p02_default: null
+
+      consolidation_cycle_id:
+        type: TEXT
+        nullable: true
+        source: P03.R0_batch_select
+        description: "ID of the consolidation cycle processing this event."
+        used_by: [P03_R0, P03_all_phases]
+        migration: "0034"
+        p02_default: null
+
+      consolidated_at:
+        type: BIGINT
+        nullable: true
+        source: P03.R8_finalize
+        description: "Timestamp when consolidation completed, Unix epoch seconds."
+        used_by: [P03_R8, query_layer]
+        migration: "0034"
+        p02_default: null
+
+      reconciliation_decision:
+        type: TEXT
+        nullable: true
+        source: P03.R3_reconcile
+        description: "High-level reconciliation decision from P03 R3."
+        used_by: [P03_R3, P03_R4]
+        migration: "0034"
+        p02_default: null
+
+      truth_match_id:
+        type: TEXT
+        nullable: true
+        source: P03.R3_reconcile
+        description: "ID of matched truth record in reconciliation."
+        used_by: [P03_R3, P03_R4]
+        migration: "0034"
+        p02_default: null
+
+      truth_match_similarity:
+        type: FLOAT
+        nullable: true
+        source: P03.R3_reconcile
+        description: "Cosine similarity score of truth match."
+        used_by: [P03_R3]
+        migration: "0034"
+        p02_default: null
+
+      archival_status:
+        type: TEXT
+        nullable: true
+        source: P03.lifecycle
+        description: "Archival status for filtering archived events from consolidation."
+        used_by: [P03_R0_batch_select]
+        migration: "0051"
+        p02_default: null
+
+      reconciliation_action:
+        type: TEXT
+        nullable: true
+        enum: [REINFORCE, EXTEND, CREATE, EVOLVE, SKIP, PRUNE, CONTRADICT, PENDING]
+        source: P03.R3_R4_reconcile
+        description: "Specific action type from R3/R4 reconciliation."
+        used_by: [P03_R3, P03_R4, P03_R6, P03_R7]
+        migration: "0052"
+        p02_default: null
+
+      best_match_id:
+        type: TEXT
+        nullable: true
+        source: P03.R3_reconcile
+        description: "ID of best-matched truth record (episodic/semantic)."
+        used_by: [P03_R3, P03_R4]
+        migration: "0052"
+        p02_default: null
+
+      best_match_layer:
+        type: TEXT
+        nullable: true
+        enum: [st_epi, st_sem, st_kg]
+        source: P03.R3_reconcile
+        description: "Which truth table the best match resides in."
+        used_by: [P03_R3, P03_R4]
+        migration: "0052"
+        p02_default: null
+
+      similarity_score:
+        type: FLOAT
+        nullable: true
+        check: "0.0 <= similarity_score AND similarity_score <= 1.0"
+        source: P03.R3_reconcile
+        description: "Cosine similarity to best match [0.0-1.0]."
+        used_by: [P03_R3]
+        migration: "0052"
+        p02_default: null
+
+      confidence:
+        type: FLOAT
+        nullable: true
+        check: "0.0 <= confidence AND confidence <= 1.0"
+        source: P03.R3_reconcile
+        description: "Overall decision confidence [0.0-1.0]."
+        used_by: [P03_R3, P03_R4]
+        migration: "0052"
+        p02_default: null
+
+      reconciliation_reason:
+        type: TEXT
+        nullable: true
+        source: P03.R3_reconcile
+        description: "Human-readable explanation of reconciliation decision."
+        used_by: [P03_R3, audit_trail]
+        migration: "0052"
+        p02_default: null
+
+      consolidated_at_ms:
+        type: BIGINT
+        nullable: true
+        source: P03.R8_finalize
+        description: "Timestamp when consolidation completed, milliseconds precision."
+        used_by: [P03_R8]
+        migration: "0052"
+        p02_default: null
+
+  # =========================================================================
+  # Group 13: Metadata & Versioning (5 columns: 4 existing + 1 new)
+  # Migrations: 0022, 0066
+  # =========================================================================
+  metadata_versioning:
+    count: 5
+    columns:
+
+      hippocampus_api_version:
+        type: TEXT
+        nullable: true
+        source: system.api_version
+        description: "Hippocampus API version that processed this event."
+        used_by: [M13, observability]
+        migration: "0022"
+
+      space_resolver_version:
+        type: TEXT
+        nullable: true
+        source: M05.version
+        description: "Space resolver module version."
+        used_by: [M13, M05, observability]
+        migration: "0022"
+
+      schema_uri:
+        type: TEXT
+        nullable: true
+        source: system.schema_uri
+        description: "URI reference to the schema version for this row."
+        used_by: [M13, observability]
+        migration: "0022"
+
+      updated_at:
+        type: BIGINT
+        nullable: false
+        source: system.time
+        description: "Row last-updated timestamp, Unix epoch seconds."
+        used_by: [M13, P02_writer, P03_all_phases]
+        migration: "0022"
+
+      # -- M3 v2.0.0 Signal Provenance (1 new column) --
+
+      k1_signal_version:
+        type: TEXT
+        nullable: false
+        default: "'2.0'"
+        source: body.k1_signal_version
+        description: "MW version that produced this atom. '2.0' for M3 trust-then-fill atoms."
+        used_by: [M13]
+        added_in: "v2.0.0"
+        migration: "0066"
+
+  # =========================================================================
+  # Group 14: Narrative Context (3 new columns)
+  # Migration: 0066 (M3 v2.0.0)
+  # =========================================================================
+  narrative_context:
+    count: 3
+    added_in: "v2.0.0"
+    columns:
+
+      narrative_thread_id:
+        type: TEXT
+        nullable: true
+        format: uuid
+        source: body.narrative.thread_id
+        description: "Conversation thread UUID from MW v2 narrative_active section."
+        used_by: [M13, R7_ObservationRecorder, R5_NTD]
+        migration: "0066"
+
+      narrative_arc_position:
+        type: TEXT
+        nullable: true
+        enum: [EXPOSITION, RISING_ACTION, CLIMAX, RESOLUTION]
+        source: body.narrative.arc_position
+        description: "Position within narrative arc from MW v2."
+        used_by: [M13, R5_NTD]
+        migration: "0066"
+
+      narrative_is_goal_event:
+        type: BOOLEAN
+        nullable: false
+        default: "false"
+        source: body.narrative.is_goal_event
+        description: "Whether this atom represents a goal event in its narrative thread."
+        used_by: [M13, R5_NTD, R5_SPC_UQ]
+        migration: "0066"
+
+  # =========================================================================
+  # Group 15: Cognitive Dimensions (6 new columns)
+  # Migration: 0066 (M3 v2.0.0)
+  # =========================================================================
+  cognitive_dimensions:
+    count: 6
+    added_in: "v2.0.0"
+    columns:
+
+      intent_type:
+        type: TEXT
+        nullable: true
+        source: body.intent_type
+        description: "K1 primary intent classification (distinct from UltraBERT intent_ultrabert)."
+        used_by: [M13, R5_SPC_UQ]
+        migration: "0066"
+
+      goal_context:
+        type: TEXT
+        nullable: true
+        source: body.goal_context
+        description: "Goal/intention context from MW v2."
+        used_by: [M13, R5_SPC_UQ]
+        migration: "0066"
+
+      source_type:
+        type: TEXT
+        nullable: true
+        enum: [user_stated, user_implied, device_observed, system_inferred]
+        source: body.source_type
+        description: "Provenance of the information in this atom."
+        used_by: [M13, R5_SPR]
+        migration: "0066"
+
+      novelty:
+        type: TEXT
+        nullable: true
+        enum: [ROUTINE, EXPECTED, NOVEL, SURPRISING]
+        source: body.novelty
+        description: "Categorical novelty from MW (distinct from novelty_score FLOAT set by P03 CA3)."
+        used_by: [M13, R5_EST]
+        migration: "0066"
+
+      elaboration_depth:
+        type: TEXT
+        nullable: true
+        enum: [MENTION, DISCUSSED, ELABORATED, DEEPLY_PROCESSED]
+        source: body.elaboration_depth
+        description: "How deeply the user engaged with this topic."
+        used_by: [M13, R5_MTP]
+        migration: "0066"
+
+      identity_domains_json:
+        type: TEXT
+        nullable: false
+        default: "'[]'"
+        format: json_array
+        source: body.identity_domains
+        description: "Identity domains this atom touches (['parent', 'professional', 'health_self'])."
+        used_by: [M13, R5_SRE]
+        migration: "0066"
+
+  # =========================================================================
+  # Group 16: K1 Correction Signals (5 new columns)
+  # Migration: 0085 (R2 Epic 7.2)
+  # Note: Pure passthrough from envelope.body. K1 LLM detects corrections/
+  #       contradictions in conversation and flags them here. P03 R3 reads
+  #       these to route EVOLVE/CONTRADICT without cosine comparison.
+  # =========================================================================
+  k1_correction_signals:
+    count: 5
+    added_in: "v2.2.0"
+    columns:
+
+      correction_signal:
+        type: BOOLEAN
+        nullable: false
+        default: "false"
+        source: body.correction_signal
+        description: "K1 LLM detected this atom corrects a previously stored fact. EVOLVE candidate for P03 R3."
+        used_by: [M13, P03_R3_reconcile]
+        migration: "0085"
+
+      contradiction_signal:
+        type: BOOLEAN
+        nullable: false
+        default: "false"
+        source: body.contradiction_signal
+        description: "K1 LLM detected this atom contradicts stored knowledge. CONTRADICT candidate for P03 R3."
+        used_by: [M13, P03_R3_reconcile]
+        migration: "0085"
+
+      supersedes_concept:
+        type: TEXT
+        nullable: true
+        source: body.supersedes_concept
+        description: "Namespaced concept key being replaced (e.g. 'cuisine_preference:thai'). Targeted truth lookup for P03."
+        used_by: [M13, P03_R3_reconcile]
+        migration: "0085"
+
+      correction_source:
+        type: TEXT
+        nullable: true
+        enum: [user_explicit, user_implicit, context_change]
+        check: "correction_source IS NULL OR correction_source IN ('user_explicit', 'user_implicit', 'context_change')"
+        source: body.correction_source
+        description: "How the correction was detected: user_explicit, user_implicit, context_change."
+        used_by: [M13, P03_R3_reconcile]
+        migration: "0085"
+
+      session_context_id:
+        type: TEXT
+        nullable: true
+        source: body.session_context_id
+        description: "Session UUID where correction was detected. P03 audit trail for EVOLVE/CONTRADICT."
+        used_by: [M13, P03_R3_reconcile]
+        migration: "0085"
+
+
+# =============================================================================
+# Indexes
+# =============================================================================
+indexes:
+
+  # -- Existing indexes (migrations 0022-0060) --
+
+  idx_hipp_events_tenant_time:
+    columns: [tenant_id, "event_time_utc DESC"]
+    migration: "0022"
+    rationale: "Primary query pattern: tenant + time range."
+
+  idx_hipp_events_space_time:
+    columns: [space_id, "event_time_utc DESC"]
+    migration: "0022"
+    rationale: "Space-scoped queries by time."
+
+  idx_hipp_events_simhash:
+    columns: [simhash_hex]
+    migration: "0022"
+    rationale: "Near-duplicate detection by SimHash."
+
+  idx_hipp_events_embedding_id:
+    columns: [embedding_id]
+    migration: "0022"
+    rationale: "Embedding lookup for vector retrieval."
+
+  idx_hipp_events_band_time:
+    columns: [policy_band, "event_time_utc DESC"]
+    migration: "0022"
+    rationale: "Safety band filtered queries."
+
+  idx_hipp_events_cluster_id:
+    columns: [episode_cluster_id]
+    where: "episode_cluster_id IS NOT NULL"
+    migration: "0022"
+    rationale: "Episode cluster lookup (partial, P03 populated)."
+
+  idx_hipp_events_consolidation:
+    columns: [consolidation_status, "event_time_utc DESC"]
+    where: "consolidation_status IS NULL OR consolidation_status = 'PENDING'"
+    migration: "0034"
+    rationale: "P03 R0 pending batch selector."
+
+  idx_hipp_events_ner_pending:
+    columns: ["event_time_utc DESC"]
+    where: "ner_entities_json IS NULL"
+    migration: "0046"
+    rationale: "Find events with pending NER processing."
+
+  idx_hipp_events_best_match_id:
+    columns: [best_match_id]
+    where: "best_match_id IS NOT NULL"
+    migration: "0052"
+    rationale: "P03 truth match lookup."
+
+  idx_hipp_events_safety_concern:
+    columns: ["event_time_utc DESC"]
+    where: "safety_familyos_band IN ('AMBER', 'RED', 'CRISIS')"
+    migration: "0053"
+    rationale: "Find events with safety concerns."
+
+  idx_hipp_events_has_relations:
+    columns: ["event_time_utc DESC"]
+    where: "extracted_relations_json IS NOT NULL AND extracted_relations_json != '[]'"
+    migration: "0053"
+    rationale: "Find events with relationships for st_social population."
+
+  idx_hipp_events_activity_health:
+    columns: ["event_time_utc DESC"]
+    where: "activity_type_ultrabert = 'HEALTH'"
+    migration: "0060"
+    rationale: "Find health-related events."
+
+  idx_hipp_events_activity_concern:
+    columns: ["event_time_utc DESC"]
+    where: "activity_type_ultrabert IN ('CONCERN', 'GRATITUDE')"
+    migration: "0060"
+    rationale: "Find concern/emotional events."
+
+  idx_hipp_events_intent_query:
+    columns: ["event_time_utc DESC"]
+    where: "intent_ultrabert = 'query_memory'"
+    migration: "0060"
+    rationale: "Find memory retrieval pattern events."
+
+  # -- New M3 indexes (migration 0066) --
+
+  idx_hipp_narrative_thread:
+    columns: [narrative_thread_id]
+    where: "narrative_thread_id IS NOT NULL"
+    migration: "0066"
+    rationale: "R5 NTD groups observations by thread_id."
+
+  idx_hipp_temporal_orientation:
+    columns: [temporal_orientation]
+    where: "temporal_orientation = 'FUTURE_COMMITMENT'"
+    migration: "0066"
+    rationale: "R5 SPC-UQ finds prospective memory candidates."
+
+  idx_hipp_k1_signal_version:
+    columns: [k1_signal_version]
+    migration: "0066"
+    rationale: "Quick filter for signal version during development iterations."
+
+  # -- K1 correction signal indexes (migration 0085) --
+
+  idx_hipp_events_correction_signal:
+    columns: ["event_time_utc DESC"]
+    where: "correction_signal = true"
+    migration: "0085"
+    rationale: "P03 R3 finds correction-flagged events for EVOLVE routing."
+
+  idx_hipp_events_contradiction_signal:
+    columns: ["event_time_utc DESC"]
+    where: "contradiction_signal = true"
+    migration: "0085"
+    rationale: "P03 R3 finds contradiction-flagged events for CONTRADICT routing."
+
+
+# =============================================================================
+# CHECK Constraints
+# =============================================================================
+check_constraints:
+
+  # -- Existing constraints (migrations 0022-0060) --
+
+  ck_hipp_policy_decision:
+    expression: "policy_decision IN ('ALLOW', 'DENY')"
+    migration: "0022"
+
+  ck_hipp_policy_band:
+    expression: "policy_band IN ('GREEN', 'AMBER', 'RED')"
+    migration: "0022"
+
+  ck_hipp_visibility_scope:
+    expression: "visibility_scope IN ('OWNER_ONLY', 'SPACE_DEFAULT', 'HOUSEHOLD_ALL', 'CUSTOM_SUBSET', 'EXTERNAL_SHARE')"
+    migration: "0022"
+
+  ck_hipp_retention_bucket:
+    expression: "retention_bucket IN ('STANDARD', 'SENSITIVE', 'EPHEMERAL')"
+    migration: "0022"
+
+  ck_hipp_actor_role:
+    expression: "actor_role IN ('SELF', 'AGENT', 'SYSTEM', 'DELEGATE')"
+    migration: "0022"
+
+  ck_hipp_affect_band:
+    expression: "affect_band IN ('GREEN', 'AMBER', 'RED')"
+    migration: "0022"
+
+  ck_hipp_salience_band:
+    expression: "salience_band IN ('HIGH', 'MED', 'LOW')"
+    migration: "0022"
+
+  ck_hipp_embedding_status:
+    expression: "embedding_status IN ('PENDING', 'IN_PROGRESS', 'READY', 'FAILED')"
+    migration: "0022"
+
+  ck_hipp_consolidation_status:
+    expression: "consolidation_status IN ('PENDING', 'IN_PROGRESS', 'CONSOLIDATED', 'DUPLICATE', 'PRUNED', 'PENDING_REVIEW') OR consolidation_status IS NULL"
+    migration: "0034"
+
+  ck_hipp_safety_familyos_band:
+    expression: "safety_familyos_band IS NULL OR safety_familyos_band IN ('GREEN', 'AMBER', 'RED', 'CRISIS')"
+    migration: "0053"
+
+  ck_hipp_effective_safety_band:
+    expression: "effective_safety_band IS NULL OR effective_safety_band IN ('GREEN', 'AMBER', 'RED', 'CRISIS')"
+    migration: "0053"
+
+  ck_hipp_activity_type_ultrabert:
+    expression: "activity_type_ultrabert IS NULL OR activity_type_ultrabert IN ('DIARY','TASK','HEALTH','FINANCE','RELATIONSHIP','WORK','META','MEMORY','PLANNING','CELEBRATION','CONCERN','GRATITUDE')"
+    migration: "0060"
+
+  ck_hipp_intent_ultrabert:
+    expression: "intent_ultrabert IS NULL OR intent_ultrabert IN ('log_memory','query_memory','set_reminder','express_feeling','seek_advice','share_news','reflect','other')"
+    migration: "0060"
+
+  # -- New M3 constraints (migration 0066) --
+
+  ck_hipp_affect_dominance:
+    expression: "affect_dominance IS NULL OR (affect_dominance >= 0.0 AND affect_dominance <= 1.0)"
+    migration: "0066"
+
+  ck_hipp_narrative_arc_position:
+    expression: "narrative_arc_position IS NULL OR narrative_arc_position IN ('EXPOSITION','RISING_ACTION','CLIMAX','RESOLUTION')"
+    migration: "0066"
+
+  ck_hipp_temporal_orientation:
+    expression: "temporal_orientation IS NULL OR temporal_orientation IN ('PAST','ONGOING','FUTURE_COMMITMENT')"
+    migration: "0066"
+
+  ck_hipp_source_type:
+    expression: "source_type IS NULL OR source_type IN ('user_stated','user_implied','device_observed','system_inferred')"
+    migration: "0066"
+
+  ck_hipp_novelty:
+    expression: "novelty IS NULL OR novelty IN ('ROUTINE','EXPECTED','NOVEL','SURPRISING')"
+    migration: "0066"
+
+  ck_hipp_elaboration_depth:
+    expression: "elaboration_depth IS NULL OR elaboration_depth IN ('MENTION','DISCUSSED','ELABORATED','DEEPLY_PROCESSED')"
+    migration: "0066"
+
+  # -- K1 correction signal constraints (migration 0085) --
+
+  ck_hipp_correction_source:
+    expression: "correction_source IS NULL OR correction_source IN ('user_explicit','user_implicit','context_change')"
+    migration: "0085"
+
+
+# =============================================================================
+# Column Count Verification
+# =============================================================================
+column_count_verification:
+  group_1_identity_trace: 9
+  group_2_integrity_audit: 6
+  group_3_policy_visibility: 10
+  group_4_actor_device: 6
+  group_5_temporal: 15          # 11 existing + 3 new + extraction_sequence
+  group_6_spatial_place: 9
+  group_7_social_relationships: 9  # 8 existing + 1 new
+  group_8_semantic_activity: 14    # 10 from 0022 + 4 from 0060
+  group_9_hippocampus_pattern: 8
+  group_10_embeddings_kg: 16       # 4 from 0022 + 5 from 0046 + 7 from 0053
+  group_11_affect_salience: 11     # 9 existing + 2 new
+  group_12_consolidation_lifecycle: 14  # 6 from 0034 + 1 from 0051 + 7 from 0052
+  group_13_metadata_versioning: 5  # 4 existing + 1 new
+  group_14_narrative_context: 3    # all new
+  group_15_cognitive_dimensions: 6 # all new
+  group_16_k1_correction_signals: 5 # all new (R2 Epic 7.2)
+  total: 143                       # 138 existing + 5 new
+
+new_column_summary:
+  count: 16
+  migration: "0066"
+  columns:
+    - participant_relationships_json  # Group 7: Social
+    - affect_dominance                # Group 11: Affect
+    - entity_salience_json            # Group 11: Affect
+    - narrative_thread_id             # Group 14: Narrative
+    - narrative_arc_position          # Group 14: Narrative
+    - narrative_is_goal_event         # Group 14: Narrative
+    - temporal_mentioned_time         # Group 5: Temporal
+    - temporal_resolved_epoch_ms      # Group 5: Temporal
+    - temporal_orientation            # Group 5: Temporal
+    - intent_type                     # Group 15: Cognitive
+    - goal_context                    # Group 15: Cognitive
+    - source_type                     # Group 15: Cognitive
+    - novelty                         # Group 15: Cognitive
+    - elaboration_depth               # Group 15: Cognitive
+    - identity_domains_json           # Group 15: Cognitive
+    - k1_signal_version               # Group 13: Metadata

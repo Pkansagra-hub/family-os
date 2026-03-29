@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/step_started.v1.json",
+  "title": "step.started.v1",
+  "description": "Emitted when a DAG step begins execution via Fabric.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.step.started.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["dag_id", "step_id", "capability", "wave_index"],
+      "properties": {
+        "dag_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Parent DAG execution identifier."
+        },
+        "step_id": {
+          "type": "string",
+          "description": "Unique step identifier within the DAG."
+        },
+        "capability": {
+          "type": "string",
+          "description": "Capability name dispatched to Fabric."
+        },
+        "wave_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based wave (parallel batch) index."
+        },
+        "params": {
+          "type": "object",
+          "description": "Step parameters forwarded to the capability."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

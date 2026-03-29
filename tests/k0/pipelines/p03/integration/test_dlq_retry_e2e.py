@@ -64,6 +64,14 @@ class MockConnection:
         self.executed.append((query, args))
         return "UPDATE 1"
 
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        """Fetch single value."""
+        if "COUNT" in query:
+            return 0
+        if "version" in query.lower():
+            return 1
+        return None
+
 
 # ============================================================================
 # Error Classification E2E Tests
@@ -75,7 +83,10 @@ class TestErrorClassificationE2E:
 
     def test_transient_error_classified_correctly(self) -> None:
         """Test transient errors are classified for retry."""
-        from k0.pipelines.p03.ops.error_classifier import ErrorClassifier, P03ErrorCategory
+        from k0.pipelines.p03.ops.error_classifier import (
+            ErrorClassifier,
+            P03ErrorCategory,
+        )
 
         classifier = ErrorClassifier()
 
@@ -89,7 +100,10 @@ class TestErrorClassificationE2E:
 
     def test_validation_error_classified_correctly(self) -> None:
         """Test validation errors are classified for DLQ."""
-        from k0.pipelines.p03.ops.error_classifier import ErrorClassifier, P03ErrorCategory
+        from k0.pipelines.p03.ops.error_classifier import (
+            ErrorClassifier,
+            P03ErrorCategory,
+        )
 
         classifier = ErrorClassifier()
 
@@ -103,7 +117,10 @@ class TestErrorClassificationE2E:
 
     def test_fatal_error_classified_correctly(self) -> None:
         """Test fatal errors trigger circuit breaker."""
-        from k0.pipelines.p03.ops.error_classifier import ErrorClassifier, P03ErrorCategory
+        from k0.pipelines.p03.ops.error_classifier import (
+            ErrorClassifier,
+            P03ErrorCategory,
+        )
 
         classifier = ErrorClassifier()
 
@@ -113,7 +130,10 @@ class TestErrorClassificationE2E:
 
     def test_unknown_error_defaults_to_logic(self) -> None:
         """Test unknown errors default to LOGIC category."""
-        from k0.pipelines.p03.ops.error_classifier import ErrorClassifier, P03ErrorCategory
+        from k0.pipelines.p03.ops.error_classifier import (
+            ErrorClassifier,
+            P03ErrorCategory,
+        )
 
         classifier = ErrorClassifier()
 
@@ -157,7 +177,10 @@ class TestCircuitBreakerE2E:
 
     def test_circuit_allows_request_when_closed(self) -> None:
         """Test circuit allows requests when closed."""
-        from k0.pipelines.p03.ops.circuit_breaker import P03CircuitBreaker, P03CircuitBreakerConfig
+        from k0.pipelines.p03.ops.circuit_breaker import (
+            P03CircuitBreaker,
+            P03CircuitBreakerConfig,
+        )
 
         config = P03CircuitBreakerConfig()
         breaker = P03CircuitBreaker(name="test", config=config)
@@ -166,7 +189,10 @@ class TestCircuitBreakerE2E:
 
     def test_circuit_rejects_request_when_open(self) -> None:
         """Test circuit rejects requests when open."""
-        from k0.pipelines.p03.ops.circuit_breaker import P03CircuitBreaker, P03CircuitBreakerConfig
+        from k0.pipelines.p03.ops.circuit_breaker import (
+            P03CircuitBreaker,
+            P03CircuitBreakerConfig,
+        )
 
         config = P03CircuitBreakerConfig(failure_threshold=2)
         breaker = P03CircuitBreaker(name="test", config=config)
@@ -214,7 +240,10 @@ class TestRetryConfigE2E:
 
     def test_phase_specific_config(self) -> None:
         """Test phase-specific retry configurations."""
-        from k0.pipelines.p03.ops.retry_config import PHASE_RETRY_OVERRIDES, P03RetryConfig
+        from k0.pipelines.p03.ops.retry_config import (
+            PHASE_RETRY_OVERRIDES,
+            P03RetryConfig,
+        )
 
         # R7 should have more retries (version conflicts)
         config = P03RetryConfig()
@@ -373,7 +402,9 @@ class TestAutoReleaseE2E:
     @pytest.mark.asyncio
     async def test_auto_release_job_releases_signals(self) -> None:
         """Test auto-release job releases expired signals."""
-        from k0.pipelines.p03.maintenance.quarantine_cleanup import QuarantineAutoReleaseJob
+        from k0.pipelines.p03.maintenance.quarantine_cleanup import (
+            QuarantineAutoReleaseJob,
+        )
 
         job = QuarantineAutoReleaseJob(batch_size=10)
         conn = MockConnection()
@@ -406,7 +437,10 @@ class TestEdgeCaseHandlingE2E:
     @pytest.mark.asyncio
     async def test_idle_cycle_detection(self) -> None:
         """Test idle cycle is detected and handled."""
-        from k0.pipelines.p03.ops.edge_case_handler import EdgeCaseType, P03EdgeCaseHandler
+        from k0.pipelines.p03.ops.edge_case_handler import (
+            EdgeCaseType,
+            P03EdgeCaseHandler,
+        )
 
         handler = P03EdgeCaseHandler(idle_threshold_hours=24)
         conn = MockConnection()
@@ -419,7 +453,10 @@ class TestEdgeCaseHandlingE2E:
 
     def test_corrupted_embedding_detection(self) -> None:
         """Test corrupted embedding is detected."""
-        from k0.pipelines.p03.ops.edge_case_handler import EdgeCaseType, P03EdgeCaseHandler
+        from k0.pipelines.p03.ops.edge_case_handler import (
+            EdgeCaseType,
+            P03EdgeCaseHandler,
+        )
 
         handler = P03EdgeCaseHandler(embedding_dimension=1536)
 
@@ -434,7 +471,10 @@ class TestEdgeCaseHandlingE2E:
 
     def test_duplicate_trigger_idempotency(self) -> None:
         """Test duplicate triggers are idempotently skipped."""
-        from k0.pipelines.p03.ops.edge_case_handler import EdgeCaseType, P03EdgeCaseHandler
+        from k0.pipelines.p03.ops.edge_case_handler import (
+            EdgeCaseType,
+            P03EdgeCaseHandler,
+        )
 
         handler = P03EdgeCaseHandler()
 
@@ -460,8 +500,14 @@ class TestCompleteErrorRecoveryE2E:
     @pytest.mark.asyncio
     async def test_transient_error_retry_success(self) -> None:
         """Test transient error retries and succeeds."""
-        from k0.pipelines.p03.ops.circuit_breaker import P03CircuitBreaker, P03CircuitBreakerConfig
-        from k0.pipelines.p03.ops.error_classifier import ErrorClassifier, P03ErrorCategory
+        from k0.pipelines.p03.ops.circuit_breaker import (
+            P03CircuitBreaker,
+            P03CircuitBreakerConfig,
+        )
+        from k0.pipelines.p03.ops.error_classifier import (
+            ErrorClassifier,
+            P03ErrorCategory,
+        )
 
         classifier = ErrorClassifier()
         config = P03CircuitBreakerConfig(failure_threshold=5)
@@ -487,7 +533,10 @@ class TestCompleteErrorRecoveryE2E:
             P03CircuitBreakerConfig,
             P03CircuitBreakerState,
         )
-        from k0.pipelines.p03.ops.error_classifier import ErrorClassifier, P03ErrorCategory
+        from k0.pipelines.p03.ops.error_classifier import (
+            ErrorClassifier,
+            P03ErrorCategory,
+        )
 
         classifier = ErrorClassifier()
         config = P03CircuitBreakerConfig(failure_threshold=5)
@@ -514,7 +563,10 @@ class TestHealthCheckE2E:
     @pytest.mark.asyncio
     async def test_health_check_runs_all_checks(self) -> None:
         """Test health check runs all edge case checks."""
-        from k0.pipelines.p03.ops.edge_case_handler import P03EdgeCaseHandler, P03HealthCheck
+        from k0.pipelines.p03.ops.edge_case_handler import (
+            P03EdgeCaseHandler,
+            P03HealthCheck,
+        )
 
         handler = P03EdgeCaseHandler()
         health_check = P03HealthCheck(handler)
@@ -540,7 +592,10 @@ class TestHealthCheckE2E:
     @pytest.mark.asyncio
     async def test_health_summary_aggregates_status(self) -> None:
         """Test health summary correctly aggregates status."""
-        from k0.pipelines.p03.ops.edge_case_handler import P03EdgeCaseHandler, P03HealthCheck
+        from k0.pipelines.p03.ops.edge_case_handler import (
+            P03EdgeCaseHandler,
+            P03HealthCheck,
+        )
 
         handler = P03EdgeCaseHandler(
             kg_node_threshold=100,  # Low threshold for test

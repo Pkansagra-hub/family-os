@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sessionstate.emergency.activated.v1.json",
+  "title": "SessionState Emergency Activated",
+  "description": "Emitted when emergency mode is activated due to >95% capacity",
+  "type": "object",
+  "required": ["session_id", "emergency_mode", "trigger_threshold", "current_usage_percent", "timestamp_ms"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Session entering emergency mode"
+    },
+    "emergency_mode": {
+      "type": "string",
+      "enum": ["SUMMARIZATION", "READONLY", "SHEDDING"],
+      "description": "Type of emergency mode activated"
+    },
+    "trigger_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Threshold percentage that triggered emergency"
+    },
+    "current_usage_percent": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Current capacity usage percentage"
+    },
+    "current_size_kb": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Current total size in KB"
+    },
+    "max_size_kb": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Maximum allowed size in KB (96KB)"
+    },
+    "tier_breakdown": {
+      "type": "object",
+      "properties": {
+        "hot_kb": {
+          "type": "number",
+          "description": "HOT tier size in KB"
+        },
+        "warm_kb": {
+          "type": "number",
+          "description": "WARM tier size in KB"
+        }
+      },
+      "description": "Size breakdown by tier"
+    },
+    "emergency_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this emergency"
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds"
+    }
+  },
+  "examples": [
+    {
+      "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "emergency_mode": "SUMMARIZATION",
+      "trigger_threshold": 95,
+      "current_usage_percent": 96.5,
+      "current_size_kb": 92.64,
+      "max_size_kb": 96,
+      "tier_breakdown": {
+        "hot_kb": 46.5,
+        "warm_kb": 46.14
+      },
+      "emergency_id": "880e8400-e29b-41d4-a716-446655440003",
+      "timestamp_ms": 1699012400000
+    }
+  ]
+}

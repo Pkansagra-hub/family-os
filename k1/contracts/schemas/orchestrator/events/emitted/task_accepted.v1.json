@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/task_accepted.v1.json",
+  "title": "task.accepted.v1",
+  "description": "Emitted when Orchestrator accepts a TaskEnvelope for processing.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.task.accepted.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["envelope_id", "intent", "tier"],
+      "properties": {
+        "envelope_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "TaskEnvelope.envelope_id accepted for processing."
+        },
+        "intent": {
+          "type": "string",
+          "description": "User intent extracted by Concierge."
+        },
+        "tier": {
+          "type": "string",
+          "enum": ["MEDIUM", "HIGH"],
+          "description": "Routing tier assigned to the task."
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Pre-resolved capability names, if any."
+        },
+        "accepted_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the task was accepted."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

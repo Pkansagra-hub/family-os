@@ -1,3 +1,9 @@
+# DEPRECATED: Superseded by embedding.recompute.v2.yaml (M4 Epic 4.5)
+# Reason: v1 uses old schema types, v2 uses pgvector VECTOR(768)
+# See: ADR-K003 v2.0, k0/contracts/modules/embedding.recompute.v2.yaml
+deprecated: true
+superseded_by: embedding.recompute.v2.yaml
+
 module_id: embedding.recompute
 version: v1
 

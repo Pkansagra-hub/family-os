@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "k1://schemas/orchestrator/micro_replan_request.v1.json",
+  "title": "MicroReplanRequest",
+  "description": "DAGExecutor -> Planner mid-execution replan request. SYNCHRONOUS (10s timeout).",
+  "type": "object",
+  "required": ["request_id", "original_plan_id", "remaining_steps", "trace_id"],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "original_plan_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The plan currently being executed."
+    },
+    "completed_results": {
+      "type": "object",
+      "description": "Map of step_id -> StepResult.to_dict() for already-completed steps. Planner uses this to understand current state.",
+      "additionalProperties": { "type": "object" }
+    },
+    "discoveries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "value", "source_step_id"],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "What was discovered (e.g. 'restaurant_has_event_room')"
+          },
+          "value": {
+            "description": "The discovered value"
+          },
+          "source_step_id": {
+            "type": "string",
+            "description": "Which step made the discovery"
+          }
+        }
+      },
+      "description": "New information found during execution that may change the plan."
+    },
+    "remaining_steps": {
+      "type": "array",
+      "items": { "type": "object" },
+      "minItems": 1,
+      "description": "Steps from original plan that have NOT yet executed. Planner may modify, add, or remove these."
+    },
+    "failure_context": {
+      "type": ["object", "null"],
+      "properties": {
+        "step_id": { "type": "string" },
+        "error_code": { "type": "string" },
+        "error_message": { "type": "string" },
+        "partial_result": { "type": ["object", "null"] }
+      },
+      "description": "If replan was triggered by step failure, includes failure details. Null if triggered by discovery."
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

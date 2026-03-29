@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from .alias_map import AliasMap
-from .faiss import PgvectorDriver
 from .fts5 import FTSDriver
 from .pgvector import PgvectorSearchClient
+from .pgvector_outbox import PgvectorDriver
 from .postgres import PostgresDriver
 
 __all__ = [

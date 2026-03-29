@@ -21,11 +21,7 @@ from k0.modules.consolidation.staging.truth_write_assembler import (
     summarize_assembly,
 )
 from k0.pipelines.p03.event_state import P03EventState, ReconciliationAction
-from k0.pipelines.p03.phase_outputs import (
-    EpisodeCluster,
-    GapCandidate,
-    ProspectiveMemory,
-)
+from k0.pipelines.p03.phase_outputs import EpisodeCluster, GapCandidate, ProspectiveMemory
 from k0.pipelines.p03.staged_writes import (
     LAYER_ST_EPI,
     LAYER_ST_LEARNING_QUEUE,
@@ -177,14 +173,13 @@ class TestAssembleEpiWrites:
 
         data = writes[0].record_data
         assert data["episode_id"] == "epi_001"
-        assert data["title"] == "Family Dinner"
-        assert data["summary"] == "Had dinner with family"
-        assert data["start_ts"] == 1700000000000
-        assert data["end_ts"] == 1700003600000
-        assert data["location_hint"] == "home"
-        assert data["dominant_emotion"] == "joy"
-        assert data["cohesion_score"] == 0.85
-        assert "member_event_ids_json" in data
+        # episode_summary uses summary or title as fallback
+        assert data["episode_summary"] == "Had dinner with family"
+        assert data["start_time_utc"] == 1700000000000
+        assert data["end_time_utc"] == 1700003600000
+        assert data["primary_location"] == "home"
+        assert data["cluster_confidence"] == 0.85
+        assert data["source_events_json"] == '["evt_001"]'
 
     def test_cluster_idempotency_key_format(self, assembler: TruthWriteAssembler):
         """Cluster write has correct idempotency key."""
@@ -468,3 +463,121 @@ class TestUtilityFunctions:
         assert "st_epi: 1" in summary
         assert "st_learning_queue: 1" in summary
         assert "Total: 2" in summary
+
+
+# =============================================================================
+# Test: M10.8 Pattern Name Generation
+# =============================================================================
+
+
+class TestPatternNameGeneration:
+    """Tests for M10.8: Semantic pattern name generation."""
+
+    def test_pattern_name_from_activity_and_entities(self):
+        """Pattern name uses activity type and NER entities."""
+        from k0.modules.consolidation.staging.truth_write_assembler import _generate_pattern_name
+
+        state = P03EventState(event_id="e1")
+        state.activity_type_ultrabert = "MEAL"
+        state.ner_entities_json = (
+            '[{"text": "Mom", "label": "KINSHIP"}, {"text": "Thai Palace", "label": "ORG"}]'
+        )
+        state.location_name = "Downtown"
+
+        result = _generate_pattern_name(state)
+
+        assert "Meal" in result
+        assert "Mom" in result
+        assert "Thai Palace" in result
+
+    def test_pattern_name_from_activity_and_location(self):
+        """Pattern name uses activity type and location when no entities."""
+        from k0.modules.consolidation.staging.truth_write_assembler import _generate_pattern_name
+
+        state = P03EventState(event_id="e1")
+        state.activity_type_ultrabert = "WORK"
+        state.ner_entities_json = "[]"
+        state.location_name = "Office"
+
+        result = _generate_pattern_name(state)
+
+        assert "Work" in result
+        assert "Office" in result
+
+    def test_pattern_name_from_entities_only(self):
+        """Pattern name uses entities when no activity type."""
+        from k0.modules.consolidation.staging.truth_write_assembler import _generate_pattern_name
+
+        state = P03EventState(event_id="e1")
+        state.activity_type_ultrabert = ""
+        state.activity_type = ""
+        state.content_type = ""
+        state.ner_entities_json = '[{"text": "Grandma", "label": "KINSHIP"}]'
+
+        result = _generate_pattern_name(state)
+
+        assert "Grandma" in result
+
+    def test_pattern_name_fallback_to_text(self):
+        """Pattern name falls back to content text when no metadata."""
+        from k0.modules.consolidation.staging.truth_write_assembler import _generate_pattern_name
+
+        state = P03EventState(event_id="e1")
+        state.content_text = "Had a great time at the beach"
+        state.ner_entities_json = "[]"
+
+        result = _generate_pattern_name(state)
+
+        assert "beach" in result.lower() or "great time" in result.lower()
+
+    def test_pattern_name_fallback_to_event_id(self):
+        """Pattern name falls back to event ID when nothing available."""
+        from k0.modules.consolidation.staging.truth_write_assembler import _generate_pattern_name
+
+        state = P03EventState(event_id="evt_12345")
+        state.content_text = ""
+        state.ner_entities_json = "[]"
+
+        result = _generate_pattern_name(state)
+
+        assert "evt_12345" in result
+
+    def test_pattern_name_max_length(self):
+        """Pattern name respects max_length."""
+        from k0.modules.consolidation.staging.truth_write_assembler import _generate_pattern_name
+
+        state = P03EventState(event_id="e1")
+        state.content_text = "A" * 500  # Very long text
+
+        result = _generate_pattern_name(state, max_length=50)
+
+        assert len(result) <= 50
+
+    def test_pattern_name_handles_invalid_json(self):
+        """Pattern name handles invalid NER JSON gracefully."""
+        from k0.modules.consolidation.staging.truth_write_assembler import _generate_pattern_name
+
+        state = P03EventState(event_id="e1")
+        state.ner_entities_json = "not valid json"
+        state.content_text = "Some content"
+
+        # Should not raise, falls back to content
+        result = _generate_pattern_name(state)
+
+        assert result  # Non-empty
+
+    def test_pattern_name_limits_entities(self):
+        """Pattern name limits to 3 entities."""
+        from k0.modules.consolidation.staging.truth_write_assembler import _generate_pattern_name
+
+        state = P03EventState(event_id="e1")
+        state.activity_type_ultrabert = "CELEBRATION"
+        state.ner_entities_json = (
+            '[{"text": "A"}, {"text": "B"}, {"text": "C"}, {"text": "D"}, {"text": "E"}]'
+        )
+
+        result = _generate_pattern_name(state)
+
+        # Should have at most 3 entities
+        entity_count = sum(1 for e in ["A", "B", "C", "D", "E"] if e in result)
+        assert entity_count <= 3

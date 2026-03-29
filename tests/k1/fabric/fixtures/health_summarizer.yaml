@@ -1,0 +1,47 @@
+# Sample agent contract: health_summarizer (AGENT, HEALTH domain, AMBER)
+# Valid against agent_contract.schema.json
+# Higher safety band for health-sensitive data
+
+agent_contract:
+  name: "agent.execute.health_summarizer"
+  version: "2.0.0"
+  domain:
+    - "HEALTH"
+    - "WELLNESS"
+  description: "Summarize health metrics and provide wellness insights"
+  capabilities:
+    - "health_summary"
+    - "trend_analysis"
+    - "recommendation"
+  limitations:
+    - "no_diagnosis"
+    - "no_prescription"
+  required_inputs:
+    - name: "time_range"
+      type: "STRING"
+      description: "Time range for summary (e.g. 7d, 30d)"
+  required_context:
+    - "beliefs_active.health_metrics"
+  optional_context:
+    - "beliefs_active.goals"
+  prompt_template: "health_summary_v2"
+  tools_granted:
+    - "tool.read.weather_api"
+  llm_budget_tokens: 8192
+  max_tool_calls: 3
+  max_execution_time_ms: 30000
+  output:
+    type: "object"
+    properties:
+      summary:
+        type: "string"
+      trends:
+        type: "array"
+    required:
+      - "summary"
+  provider_type: "AGENT"
+  safety_band_min: "AMBER"
+  cost_per_call: 0.20
+  avg_latency_ms: 5000
+  max_latency_ms: 20000
+  availability: "ONLINE"

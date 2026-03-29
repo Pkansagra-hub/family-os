@@ -50,11 +50,28 @@ class MockEventState:
     content_type: str = "message"
     timestamp: int = 1704067200000
 
-    # NLP fields
+    # NLP fields (CONFIG_B inputs)
     sentiment_score: float = 0.0
     affect_valence: float = 0.0
+    affect_arousal: float = 0.0
+    surprise_level: float = 0.0
+    novelty: str = ""
     novelty_score: float = 0.0
-    participant_count: int = 1
+    salience_score: float = 0.0
+    num_participants: int = 1
+    participant_count: int = 1  # legacy alias
+    social_intimacy: str = ""
+    identity_relevance: float = 0.0
+    identity_domains_json: str = "[]"
+    elaboration_depth: str = ""
+    narrative_is_goal_event: bool = False
+    narrative_arc_position: str = ""
+    temporal_orientation: str = ""
+    source_reliability: float = 1.0
+    source_type: str = ""
+    memory_tier: str = "routine"
+    activity_type_ultrabert: str = ""
+    intent_ultrabert: str = ""
 
     # Importance fields (set by R1)
     importance_score: float = 0.0
@@ -62,6 +79,8 @@ class MockEventState:
     affect_factor: float = 0.0
     social_factor: float = 0.0
     novelty_factor: float = 0.0
+    surprise_factor: float = 0.0
+    identity_factor: float = 0.0
     importance_computed: bool = False
 
     def set_importance(
@@ -71,6 +90,8 @@ class MockEventState:
         affect: float,
         social: float,
         novelty: float,
+        surprise: float = 0.0,
+        identity: float = 0.0,
     ) -> None:
         """Set importance score and factors."""
         self.importance_score = score
@@ -78,6 +99,8 @@ class MockEventState:
         self.affect_factor = affect
         self.social_factor = social
         self.novelty_factor = novelty
+        self.surprise_factor = surprise
+        self.identity_factor = identity
         self.importance_computed = True
 
 
@@ -150,7 +173,10 @@ def mock_envelope_with_events() -> MockEnvelope:
             event_id="evt_001",
             sentiment_score=0.8,
             affect_valence=0.7,
+            affect_arousal=0.4,
+            novelty="moderate",
             novelty_score=0.5,
+            num_participants=3,
             participant_count=3,
             content_type="message",
         ),
@@ -158,7 +184,10 @@ def mock_envelope_with_events() -> MockEnvelope:
             event_id="evt_002",
             sentiment_score=0.2,
             affect_valence=0.1,
+            affect_arousal=0.1,
+            novelty="routine",
             novelty_score=0.2,
+            num_participants=1,
             participant_count=1,
             content_type="routine",
         ),
@@ -166,8 +195,14 @@ def mock_envelope_with_events() -> MockEnvelope:
             event_id="evt_003",
             sentiment_score=0.9,
             affect_valence=0.9,
+            affect_arousal=0.8,
+            surprise_level=0.7,
+            novelty="high",
             novelty_score=0.8,
+            num_participants=5,
             participant_count=5,
+            social_intimacy="close",
+            identity_relevance=0.6,
             content_type="milestone",
         ),
     ]
@@ -195,25 +230,30 @@ class TestR1Config:
     def test_default_config(self):
         """Default config has sensible values."""
         config = R1Config()
-        assert config.audit_sample_rate == 1.0  # 100% for debug
+        assert config.audit_sample_rate == 0.10  # 10% for production
         assert config.enable_hebbian is False  # Not yet implemented
         assert config.min_samples_for_learned_weights == 500
 
     def test_custom_config(self):
         """Custom config overrides defaults."""
         config = R1Config(
-            audit_sample_rate=0.1,
+            audit_sample_rate=0.5,
             enable_hebbian=True,
             importance_weights=ImportanceWeights(
-                sentiment_weight=0.30,
-                affect_weight=0.30,
-                novelty_weight=0.20,
-                social_weight=0.20,
+                sentiment_weight=0.15,
+                affect_weight=0.15,
+                arousal_weight=0.10,
+                surprise_weight=0.10,
+                novelty_weight=0.15,
+                social_weight=0.15,
+                identity_weight=0.10,
+                recency_weight=0.10,
             ),
         )
-        assert config.audit_sample_rate == 0.1
+        assert config.audit_sample_rate == 0.5
         assert config.enable_hebbian is True
-        assert config.importance_weights.sentiment_weight == 0.30
+        assert config.importance_weights.sentiment_weight == 0.15
+        assert config.importance_weights.total() == 1.0
 
 
 # =============================================================================
@@ -232,7 +272,7 @@ class TestR1ImportanceScorerBasic:
         """Factory function creates phase correctly."""
         phase = create_r1_phase()
         assert isinstance(phase, R1ImportanceScorer)
-        assert phase.config.audit_sample_rate == 1.0
+        assert phase.config.audit_sample_rate == 0.10
 
     def test_factory_with_config(self):
         """Factory accepts custom config."""
@@ -410,7 +450,7 @@ class TestAuditLoggingIntegration:
             record = phases.r1_audit_records[0]
             assert record.action == AuditAction.SCORE
             assert record.formula_used == "importance_scorer"
-            assert record.formula_version == "1.0.0"
+            assert record.formula_version == "2.0.0"
             assert record.inputs is not None
             assert record.outputs is not None
 
@@ -480,8 +520,12 @@ class TestPriorityDistribution:
         result = await r1_phase.run(mock_envelope_with_events, mock_context)
 
         summary = result.outputs_summary
-        # At least one of these should be present
-        priority_keys = ["critical_count", "high_count", "medium_count", "low_count"]
+        # 6-tier priority: critical, high, medium_high, medium, low_medium, low
+        priority_keys = [
+            "critical_count",
+            "high_count",
+            "medium_high_count",
+        ]
         has_priority = any(k in summary for k in priority_keys)
         assert has_priority or "events_scored" in summary
 
@@ -507,6 +551,9 @@ class TestScoredEventOutput:
             assert hasattr(scored, "affect_factor")
             assert hasattr(scored, "social_factor")
             assert hasattr(scored, "novelty_factor")
+            assert hasattr(scored, "surprise_factor")
+            assert hasattr(scored, "identity_factor")
+            assert hasattr(scored, "priority_tier")
 
     @pytest.mark.asyncio
     async def test_scored_event_values_match(

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/plan_requested.v1.json",
+  "title": "plan.requested.v1",
+  "description": "Emitted when Orchestrator sends a plan request to the Planner.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.plan.requested.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["request_id", "intent"],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "PlanRequest.request_id for Planner correlation."
+        },
+        "intent": {
+          "type": "string",
+          "description": "User intent forwarded to Planner."
+        },
+        "constraints": {
+          "type": "object",
+          "description": "Budget, time, safety constraints for plan construction."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Planner response timeout in milliseconds."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

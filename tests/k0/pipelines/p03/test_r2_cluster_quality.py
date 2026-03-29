@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import pytest
 
 from k0.modules.consolidation.algorithms.cluster_quality import (
+    CHANNEL_COHERENCE_LIVE,
+    WEIGHT_COHERENCE,
     WEIGHT_CORRECTION,
     WEIGHT_GROUNDING,
     WEIGHT_SILHOUETTE,
@@ -92,35 +94,37 @@ class TestCompositeQualityFormula:
         ) == pytest.approx(1.0, abs=1e-9)
 
     def test_composite_quality_mixed(self) -> None:
-        """Mixed metrics compute correctly."""
+        """Mixed metrics compute correctly with live channels only."""
         metrics = ClusterQualityMetrics(
             silhouette_score=0.5,  # Moderate silhouette
-            grounding_rate=0.5,  # Half grounded
-            correction_rate=0.1,  # 10% corrections
+            grounding_rate=0.5,  # Half grounded (dormant — excluded)
+            correction_rate=0.1,  # 10% corrections (dormant — excluded)
             singleton_rate=0.2,  # 20% singletons
         )
 
         composite = metrics.compute_composite()
 
+        # Only silhouette (0.40) + singleton (0.10) are live
         # normalized_silhouette = (0.5 + 1.0) / 2.0 = 0.75
-        # = 0.40 × 0.75 + 0.30 × 0.5 + 0.20 × 0.9 + 0.10 × 0.8
-        # = 0.30 + 0.15 + 0.18 + 0.08 = 0.71
-        expected = 0.40 * 0.75 + 0.30 * 0.5 + 0.20 * 0.9 + 0.10 * 0.8
+        # composite = (0.40 * 0.75 + 0.10 * 0.80) / 0.50 = (0.30 + 0.08) / 0.50 = 0.76
+        expected = (0.40 * 0.75 + 0.10 * 0.80) / 0.50
         assert composite == pytest.approx(expected, abs=0.01)
 
     def test_silhouette_normalization(self) -> None:
-        """Silhouette normalized from [-1, 1] to [0, 1]."""
+        """Silhouette normalized from [-1, 1] to [0, 1] with live channels."""
         # Silhouette of 0 should normalize to 0.5
         metrics = ClusterQualityMetrics(
             silhouette_score=0.0,
             grounding_rate=0.0,
             correction_rate=1.0,
-            singleton_rate=1.0,
+            singleton_rate=1.0,  # (1 - 1.0) = 0.0
         )
         composite = metrics.compute_composite()
 
-        # Only silhouette contributes: 0.40 × 0.5 = 0.20
-        expected = 0.40 * 0.5
+        # Live channels: silhouette (0.40) + singleton (0.10)
+        # sil_norm = 0.5, singleton_val = 0.0
+        # composite = (0.40 * 0.5 + 0.10 * 0.0) / 0.50 = 0.20 / 0.50 = 0.40
+        expected = (0.40 * 0.5 + 0.10 * 0.0) / 0.50
         assert composite == pytest.approx(expected, abs=0.01)
 
 
@@ -262,7 +266,7 @@ class TestTuningRecommendations:
     def test_low_silhouette_high_singletons_recommends_increase_eps(self) -> None:
         """Low silhouette + high singletons → increase eps."""
         tracker = ClusterQualityTracker()
-        metrics = ClusterQualityMetrics(silhouette_score=0.3, singleton_rate=0.25)
+        metrics = ClusterQualityMetrics(silhouette_score=0.2, singleton_rate=0.25)
 
         recs = tracker.get_tuning_recommendation(metrics)
 
@@ -272,7 +276,7 @@ class TestTuningRecommendations:
     def test_low_silhouette_low_singletons_recommends_decrease_eps(self) -> None:
         """Low silhouette + low singletons → decrease eps."""
         tracker = ClusterQualityTracker()
-        metrics = ClusterQualityMetrics(silhouette_score=0.3, singleton_rate=0.10)
+        metrics = ClusterQualityMetrics(silhouette_score=0.2, singleton_rate=0.10)
 
         recs = tracker.get_tuning_recommendation(metrics)
 
@@ -380,3 +384,295 @@ class TestComputeFromR2Output:
         assert metrics.grounding_rate == pytest.approx(0.5, abs=0.01)
         assert metrics.correction_rate == pytest.approx(1 / 12, abs=0.01)
         assert metrics.composite_quality > 0.0
+
+
+# =============================================================================
+# Issue 2.2.6 — Quality Regression Tests (real silhouette semantics)
+# =============================================================================
+
+
+class TestSilhouetteValidity:
+    """Prove silhouette_valid propagation through the quality pipeline."""
+
+    def test_invalid_silhouette_excluded_from_composite(self) -> None:
+        """When silhouette_valid=False, composite uses only singleton channel."""
+        metrics = ClusterQualityMetrics(
+            silhouette_score=0.0,
+            silhouette_valid=False,
+            singleton_rate=0.10,
+        )
+        composite = metrics.compute_composite()
+
+        # Only singleton channel is live and valid:
+        # effective = 1.0 * (1 - 0.10) = 0.90
+        assert composite == pytest.approx(0.90, abs=0.01)
+
+    def test_valid_silhouette_included_in_composite(self) -> None:
+        """When silhouette_valid=True, both silhouette and singleton contribute."""
+        metrics = ClusterQualityMetrics(
+            silhouette_score=0.27,  # real-world mean from POC-02/03
+            silhouette_valid=True,
+            singleton_rate=0.10,
+        )
+        composite = metrics.compute_composite()
+
+        # silhouette weight=0.40, singleton weight=0.10
+        # normalized_sil = (0.27 + 1) / 2 = 0.635
+        # composite = (0.40 * 0.635 + 0.10 * 0.90) / 0.50 = (0.254 + 0.09) / 0.50 = 0.688
+        assert 0.5 < composite < 0.85
+
+    def test_negative_silhouette_produces_lower_composite(self) -> None:
+        """Negative silhouette (poor clustering) reduces composite."""
+        metrics_good = ClusterQualityMetrics(
+            silhouette_score=0.30, silhouette_valid=True, singleton_rate=0.10
+        )
+        metrics_bad = ClusterQualityMetrics(
+            silhouette_score=-0.20, silhouette_valid=True, singleton_rate=0.10
+        )
+        assert metrics_good.compute_composite() > metrics_bad.compute_composite()
+
+    def test_all_noise_batch_silhouette_invalid(self) -> None:
+        """All-noise clustering should use silhouette_valid=False."""
+        metrics = ClusterQualityMetrics(
+            silhouette_score=0.0,
+            silhouette_valid=False,
+            singleton_rate=1.0,  # 100% noise
+        )
+        composite = metrics.compute_composite()
+        # singleton channel: (1 - 1.0) = 0.0
+        assert composite == pytest.approx(0.0, abs=0.01)
+
+    def test_one_cluster_batch_silhouette_invalid(self) -> None:
+        """Single-cluster batch has silhouette_valid=False, non-zero composite."""
+        metrics = ClusterQualityMetrics(
+            silhouette_score=0.0,
+            silhouette_valid=False,
+            singleton_rate=0.0,  # all events in one cluster
+        )
+        composite = metrics.compute_composite()
+        # singleton channel: (1 - 0.0) = 1.0
+        assert composite == pytest.approx(1.0, abs=0.01)
+
+
+class TestDormantChannelHonesty:
+    """Issue 2.2.7: Prove dormant grounding/correction channels do not inflate quality."""
+
+    def test_dormant_channels_excluded_from_composite(self) -> None:
+        """Composite only uses silhouette + singleton when grounding/correction dormant."""
+        from k0.modules.consolidation.algorithms.cluster_quality import (
+            CHANNEL_CORRECTION_LIVE,
+            CHANNEL_GROUNDING_LIVE,
+        )
+
+        # Verify dormant at module level
+        assert not CHANNEL_GROUNDING_LIVE
+        assert not CHANNEL_CORRECTION_LIVE
+
+        # Even with grounding/correction set to specific values,
+        # they should not affect composite
+        metrics_with_grounding = ClusterQualityMetrics(
+            silhouette_score=0.27,
+            silhouette_valid=True,
+            grounding_rate=0.80,
+            correction_rate=0.50,
+            singleton_rate=0.10,
+        )
+        metrics_without = ClusterQualityMetrics(
+            silhouette_score=0.27,
+            silhouette_valid=True,
+            grounding_rate=0.0,
+            correction_rate=0.0,
+            singleton_rate=0.10,
+        )
+
+        c1 = metrics_with_grounding.compute_composite()
+        c2 = metrics_without.compute_composite()
+
+        # Should be identical since dormant channels are excluded
+        assert c1 == pytest.approx(c2, abs=0.001)
+
+    def test_to_dict_includes_channel_liveness(self) -> None:
+        """Serialized metrics include channel_liveness map."""
+        metrics = ClusterQualityMetrics()
+        data = metrics.to_dict()
+
+        assert "channel_liveness" in data
+        assert data["channel_liveness"]["silhouette"] is True
+        assert data["channel_liveness"]["grounding"] is False
+        assert data["channel_liveness"]["correction"] is False
+        assert data["channel_liveness"]["singleton"] is True
+
+    def test_correction_zero_does_not_inflate(self) -> None:
+        """Zero correction_rate no longer inflates composite (dormant = excluded)."""
+        metrics = ClusterQualityMetrics(
+            silhouette_score=0.0,
+            silhouette_valid=False,
+            correction_rate=0.0,  # Would add 0.20 if correction channel were live
+            singleton_rate=0.10,
+        )
+        composite = metrics.compute_composite()
+
+        # Only singleton contributes: (1 - 0.10) = 0.90
+        # Without dormant channel fix, correction_rate=0 would add 0.20
+        assert composite == pytest.approx(0.90, abs=0.01)
+
+
+class TestAlertWithSilhouetteValidity:
+    """Prove alert tracking respects silhouette_valid (Issue 2.2.3/2.2.6)."""
+
+    def test_invalid_silhouette_skipped_in_alert_tracking(self) -> None:
+        """Invalid silhouette cycles do not count toward alert accumulation."""
+        tracker = ClusterQualityTracker()
+
+        # 3 cycles with invalid silhouette (should not trigger alert)
+        for _ in range(3):
+            metrics = ClusterQualityMetrics(
+                silhouette_score=0.0,
+                silhouette_valid=False,
+            )
+            alert = tracker.check_for_alert(metrics)
+            assert alert is None
+
+        # 2 cycles with low but valid silhouette (not enough for 3 consecutive)
+        for _ in range(2):
+            metrics = ClusterQualityMetrics(
+                silhouette_score=0.1,
+                silhouette_valid=True,
+            )
+            alert = tracker.check_for_alert(metrics)
+            assert alert is None
+
+    def test_valid_low_silhouette_triggers_alert(self) -> None:
+        """3 consecutive valid low-silhouette cycles trigger alert."""
+        tracker = ClusterQualityTracker()
+
+        for i in range(3):
+            metrics = ClusterQualityMetrics(
+                silhouette_score=0.1,
+                silhouette_valid=True,
+            )
+            alert = tracker.check_for_alert(metrics)
+
+        assert alert is not None
+        assert "CLUSTER_QUALITY_DEGRADED" in alert
+
+
+# =============================================================================
+# Coherence Integration Tests (M4-RSCH-04)
+# =============================================================================
+
+
+class TestCoherenceQualityIntegration:
+    """Prove coherence_score integration into composite quality formula."""
+
+    def test_coherence_channel_live(self) -> None:
+        """CHANNEL_COHERENCE_LIVE is True (M4-RSCH-04)."""
+        assert CHANNEL_COHERENCE_LIVE is True
+
+    def test_coherence_weight_value(self) -> None:
+        """WEIGHT_COHERENCE = 0.40 (highest priority live channel)."""
+        assert WEIGHT_COHERENCE == 0.40
+
+    def test_coherence_valid_contributes_to_composite(self) -> None:
+        """When coherence_valid=True, coherence raises composite vs without."""
+        metrics_with = ClusterQualityMetrics(
+            coherence_score=0.80,
+            coherence_valid=True,
+            silhouette_score=0.27,
+            silhouette_valid=True,
+            singleton_rate=0.10,
+        )
+        metrics_without = ClusterQualityMetrics(
+            coherence_score=0.80,
+            coherence_valid=False,  # excluded
+            silhouette_score=0.27,
+            silhouette_valid=True,
+            singleton_rate=0.10,
+        )
+
+        c_with = metrics_with.compute_composite()
+        c_without = metrics_without.compute_composite()
+
+        # Both should be valid composites
+        assert 0.0 < c_with <= 1.0
+        assert 0.0 < c_without <= 1.0
+        # They differ because coherence adds a channel
+        assert c_with != pytest.approx(c_without, abs=0.001)
+
+    def test_all_live_channels_formula(self) -> None:
+        """All 3 live channels: coherence(0.40) + silhouette(0.40) + singleton(0.10)."""
+        metrics = ClusterQualityMetrics(
+            coherence_score=0.75,
+            coherence_valid=True,
+            silhouette_score=0.50,
+            silhouette_valid=True,
+            singleton_rate=0.20,
+        )
+        composite = metrics.compute_composite()
+
+        # Weights: coherence=0.40, silhouette=0.40, singleton=0.10; total=0.90
+        norm_sil = (0.50 + 1.0) / 2.0  # 0.75
+        expected = (0.40 * 0.75 + 0.40 * norm_sil + 0.10 * 0.80) / 0.90
+        assert composite == pytest.approx(expected, abs=0.001)
+
+    def test_coherence_only_no_silhouette(self) -> None:
+        """Coherence valid + silhouette invalid → coherence + singleton only."""
+        metrics = ClusterQualityMetrics(
+            coherence_score=0.60,
+            coherence_valid=True,
+            silhouette_score=0.0,
+            silhouette_valid=False,
+            singleton_rate=0.10,
+        )
+        composite = metrics.compute_composite()
+
+        # Weights: coherence=0.40, singleton=0.10; total=0.50
+        expected = (0.40 * 0.60 + 0.10 * 0.90) / 0.50
+        assert composite == pytest.approx(expected, abs=0.001)
+
+    def test_high_coherence_improves_quality(self) -> None:
+        """Higher coherence → higher composite (monotonic)."""
+        metrics_low = ClusterQualityMetrics(
+            coherence_score=0.30,
+            coherence_valid=True,
+            silhouette_score=0.27,
+            silhouette_valid=True,
+            singleton_rate=0.10,
+        )
+        metrics_high = ClusterQualityMetrics(
+            coherence_score=0.90,
+            coherence_valid=True,
+            silhouette_score=0.27,
+            silhouette_valid=True,
+            singleton_rate=0.10,
+        )
+
+        assert metrics_high.compute_composite() > metrics_low.compute_composite()
+
+    def test_coherence_in_to_dict(self) -> None:
+        """to_dict() includes coherence_score and coherence_valid."""
+        metrics = ClusterQualityMetrics(
+            coherence_score=0.65,
+            coherence_valid=True,
+        )
+        data = metrics.to_dict()
+
+        assert data["coherence_score"] == 0.65
+        assert data["coherence_valid"] is True
+        assert data["channel_liveness"]["coherence"] is True
+
+    def test_coherence_default_invalid(self) -> None:
+        """Default coherence_valid=False, coherence excluded from composite."""
+        metrics = ClusterQualityMetrics(
+            silhouette_score=0.27,
+            silhouette_valid=True,
+            singleton_rate=0.10,
+        )
+        # coherence_valid defaults to False
+        assert metrics.coherence_valid is False
+
+        composite = metrics.compute_composite()
+        # Only silhouette + singleton (same as pre-coherence behavior)
+        norm_sil = (0.27 + 1.0) / 2.0
+        expected = (0.40 * norm_sil + 0.10 * 0.90) / 0.50
+        assert composite == pytest.approx(expected, abs=0.001)

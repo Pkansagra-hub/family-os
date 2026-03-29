@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/dag_started.v1.json",
+  "title": "dag.started.v1",
+  "description": "Emitted when DAG execution begins after plan commitment.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.dag.started.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["dag_id", "plan_id", "total_steps", "total_waves"],
+      "properties": {
+        "dag_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique DAG execution identifier."
+        },
+        "plan_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "CommittedPlan.plan_id that sourced this DAG."
+        },
+        "total_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total number of steps in the DAG."
+        },
+        "total_waves": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total number of waves (parallel batches)."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

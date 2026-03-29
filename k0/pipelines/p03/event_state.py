@@ -128,7 +128,7 @@ class P03EventState:
     # === CONTENT (R0 - from P02 pre-computation) ===
     content_text: str = ""
     content_type: str = ""
-    content_hash: str = ""
+    content_hash: str = ""  # Not loaded by R0; reserved for future exact-dedup
     simhash_hex: str = ""
     timestamp: int = 0
     channel_id: str = ""
@@ -143,18 +143,47 @@ class P03EventState:
     ner_entities_json: str = "[]"
     temporal_expressions_json: str = "[]"
 
+    # === AFFECT & SALIENCE (R0 - from P02/UltraBERT) ===
+    # Issue 1 Fix: These fields were missing, causing 55% of importance formula to be dead
+    affect_valence: float = 0.0  # Emotional valence [-1, 1]
+    affect_arousal: float = 0.0  # Emotional arousal [0, 1]
+    salience_score: float = (
+        0.0  # P02 computed salience [0, 1] (0.50×social + 0.40×affect + 0.10×recency)
+    )
+    salience_band: str = ""  # HIGH, MED, LOW
+    # NOTE: novelty_score is defined once in DEDUPLICATION section below.
+    # R0 loads the P02 salience-novelty value; R3 overwrites with dedup novelty.
+
     # === SOCIAL CONTEXT (R0 - from st_hipp_events) ===
     # Used by R4 for social relationship extraction
     participants_json: str = "[]"  # JSON array of participant IDs
     num_participants: int = 0
     social_context: str = ""  # nuclear_family, solo, work, etc.
     social_intimacy: str = ""  # HIGH, LOW, etc.
+    is_solo_event: Optional[bool] = None
     location_name: str = ""
     location_type: str = ""
+    geohash_6: str = ""
+    place_id: str = ""  # Stable place identity from K1 PlaceResolver
+    location_hierarchy_json: str = "[]"  # JSON array: most specific -> most general
+    spatial_context_json: str = "{}"  # Bundled transition: {transition_from_place, transition_mode}
     activity_type: str = (
         ""  # Legacy 7-type (meal/conversation/routine/milestone/social/work/unknown)
     )
     actor_id: str = ""  # SELF actor ID for relationship extraction
+
+    # === TEMPORAL CONTEXT (R0 - Issue 7.6) ===
+    # Time-of-day and circadian context for st_observations
+    time_of_day_bucket: str = ""  # MORNING, AFTERNOON, EVENING, NIGHT
+    circadian_slot: str = ""  # WAKE, ACTIVE, WIND_DOWN, SLEEP
+    is_weekend: Optional[bool] = None
+    day_of_week: str = ""  # Monday, Tuesday, etc.
+
+    # === MODALITY CONTEXT (R0 - Issue 7.6) ===
+    # How user communicated - for st_observations
+    ingress_channel: str = ""  # voice, chat, api
+    ingress_source: str = ""  # Concrete origin app
+    device_kind: str = ""  # phone, desktop, tablet, speaker
 
     # === UltraBERT CLASSIFICATION (R0 - Issue 0060) ===
     # Full 12-type INGRESS classification for better episode inference
@@ -165,6 +194,52 @@ class P03EventState:
     # log_memory/query_memory/set_reminder/express_feeling/seek_advice/share_news/reflect/other
     intent_ultrabert: str = ""
     intent_confidence: float = 0.0
+    # UltraBERT extracted relationship types (parent_of, spouse_of, friend_of, etc.)
+    # Used by R4 for relationship type inference
+    extracted_relations_json: str = "[]"
+
+    # === MW v2 COGNITIVE SIGNALS (R0 - M5A) ===
+    # M3 (0073) narrative context
+    narrative_thread_id: str = ""
+    narrative_arc_position: str = ""
+    narrative_is_goal_event: bool = False
+    # Epic 5.2: True if this episode completes a narrative goal arc
+    narrative_thread_completed: bool = False
+    # M3 (0073) cognitive dimensions
+    intent_type: str = ""
+    goal_context: str = ""
+    source_type: str = ""
+    novelty: str = ""  # Categorical: ROUTINE/EXPECTED/NOVEL/SURPRISING
+    elaboration_depth: str = ""  # MENTION/DISCUSSED/ELABORATED/DEEPLY_PROCESSED
+    identity_domains_json: str = "[]"
+    entity_salience_json: str = "{}"
+    k1_signal_version: str = "2.0"
+    affect_dominance: float = 0.0
+    temporal_mentioned_time: str = ""
+    temporal_resolved_epoch_ms: float = 0.0
+    # Issue 1.2.3: Provenance of timestamp -- mw_resolved/ner_temporal/event_time/envelope_ts/now
+    temporal_source: str = ""
+    temporal_orientation: str = ""
+    # Epic 2.4 (GAP-002): Multi-link temporal model -- JSON array of TemporalLink dicts
+    temporal_links_json: str = "[]"
+    extraction_sequence: int = 0
+    participant_relationships_json: str = "[]"
+    cognitive_trace_id: str = ""
+    # M5A (0074) new signals
+    surprise_level: float = 0.0
+    identity_relevance: float = 0.0
+    source_reliability: float = 1.0
+    memory_tier: str = "routine"
+    temporal_anchor_json: str = "{}"
+
+    # === K1 CORRECTION SIGNALS (R0 - 0085) ===
+    # Epic 7.2: K1 LLM-detected correction/contradiction signals
+    # R3 reads these to route EVOLVE/CONTRADICT without cosine similarity
+    correction_signal: bool = False
+    contradiction_signal: bool = False
+    supersedes_concept: str = ""  # What concept this corrects
+    correction_source: str = ""  # user_explicit / user_implicit / context_change
+    session_context_id: str = ""  # K1 session that produced the correction
 
     # === IMPORTANCE SCORING (R1) ===
     importance_score: float = 0.0
@@ -172,6 +247,8 @@ class P03EventState:
     affect_factor: float = 0.0
     social_factor: float = 0.0
     novelty_factor: float = 0.0
+    surprise_factor: float = 0.0
+    identity_factor: float = 0.0
     importance_computed: bool = False
 
     # === HEBBIAN UPDATES (R1) ===
@@ -182,6 +259,13 @@ class P03EventState:
     cluster_label: int = -1
     is_noise: bool = False
     centroid_distance: float = 0.0
+
+    # === EPISODE MATCHING (R2) - Issue 2 Fix ===
+    # R2 now queries st_epi for existing episodes before clustering.
+    # Events matching existing episodes get REINFORCE action instead of creating duplicates.
+    episode_match_id: Optional[str] = None  # Matched existing episode ID from st_epi
+    episode_match_similarity: float = 0.0  # Cosine similarity to matched episode [0, 1]
+    episode_match_version: int = 0  # Version of matched episode (for optimistic locking)
 
     # === RECONCILIATION DECISION (R3) ===
     reconciliation_action: ReconciliationAction = ReconciliationAction.PENDING
@@ -195,6 +279,10 @@ class P03EventState:
     is_duplicate: bool = False
     duplicate_of_id: Optional[str] = None
     hamming_distance: int = 64  # Max = 64 (no match)
+    # Dual-purpose: R0 loads P02 salience novelty (default 0.0 from st_hipp_events),
+    # R1 reads it for importance scoring, then R3 overwrites with dedup novelty [0,1].
+    novelty_score: float = 0.0
+    near_duplicates_json: str = "[]"  # JSON array of near-duplicate event_ids
 
     # === DECAY (R3) ===
     decay_score: float = 1.0
@@ -259,6 +347,8 @@ class P03EventState:
         affect: float,
         social: float,
         novelty: float,
+        surprise: float = 0.0,
+        identity: float = 0.0,
     ) -> None:
         """
         Set importance score and contributing factors (R1).
@@ -269,12 +359,16 @@ class P03EventState:
             affect: Emotional intensity contribution
             social: Social relevance contribution
             novelty: Information novelty contribution
+            surprise: Cognitive surprise contribution
+            identity: Self-referential identity contribution
         """
         self.importance_score = score
         self.recency_factor = recency
         self.affect_factor = affect
         self.social_factor = social
         self.novelty_factor = novelty
+        self.surprise_factor = surprise
+        self.identity_factor = identity
         self.importance_computed = True
 
     def add_hebbian_update(

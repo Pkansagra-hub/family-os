@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/saga_compensating.v1.json",
+  "title": "saga.compensating.v1",
+  "description": "Emitted when saga compensation begins for a failed or interrupted DAG.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.saga.compensating.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["dag_id", "compensation_records", "trigger_reason"],
+      "properties": {
+        "dag_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "DAG execution identifier being compensated."
+        },
+        "trigger_reason": {
+          "type": "string",
+          "enum": ["STEP_FAILURE", "INTERRUPT", "SHUTDOWN", "WORKFLOW_ABORT"],
+          "description": "Why compensation was triggered."
+        },
+        "compensation_records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["record_id", "step_id", "compensation_capability", "status"],
+            "properties": {
+              "record_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Unique compensation record identifier."
+              },
+              "step_id": {
+                "type": "string",
+                "description": "Step being compensated."
+              },
+              "compensation_capability": {
+                "type": "string",
+                "description": "Capability invoked for compensation."
+              },
+              "status": {
+                "type": "string",
+                "enum": ["PENDING", "EXECUTED", "FAILED", "DEAD_LETTERED"],
+                "description": "Current compensation status."
+              },
+              "error_detail": {
+                "type": ["string", "null"],
+                "description": "Error detail if compensation failed."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "List of compensation actions for side-effect-producing steps."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

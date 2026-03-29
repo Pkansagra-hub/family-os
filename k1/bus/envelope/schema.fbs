@@ -1,0 +1,46 @@
+// k1.bus.envelope.schema -- FlatBuffers schema for BusEnvelope.
+//
+// This is the canonical wire-format definition for all envelope data
+// flowing through IBus and IMailboxRouter.  Shared by:
+//   - Python (V2-M1): flatc --python codegen
+//   - Rust  (V2-M4): flatc --rust   codegen
+//
+// VERSIONING: Fields marked // FROZEN must never be removed or reordered.
+// New fields are added at the END with explicit defaults.
+//
+// Layout:
+//   Fixed-size numeric fields first (cache-friendly access).
+//   Variable-length strings and payload last (offset-based).
+
+namespace k1.bus.envelope;
+
+/// Wire-format envelope carried by the K1 bus.
+/// The bus reads header fields for routing, timing, and scheduling.
+/// The payload field is opaque bytes -- the bus NEVER reads it.
+table BusEnvelope {
+    // --- Numeric header (fixed-size, hot-path reads) ---
+
+    envelope_id:        uint64 = 0;   // FROZEN -- global monotonic ID, bus-assigned
+    sequence:           uint64 = 0;   // FROZEN -- per-topic monotonic, bus-assigned
+    parent_id:          uint64 = 0;   // FROZEN -- causal parent (0 = root)
+    created_ns:         uint64 = 0;   // FROZEN -- monotonic clock ns, bus-assigned
+    priority:           uint8  = 2;   // FROZEN -- 0=URGENT,1=REALTIME,2=INTERACTIVE,3=BACKGROUND
+
+    // --- V2 additions (after all V1 fields) ---
+
+    ttl_ms:             uint32 = 0;   // V2 -- time-to-live in ms (0 = no expiry). Bus checks at dispatch.
+    payload_format:     uint8  = 0;   // V2 -- 0=OPAQUE,1=JSON,2=MSGPACK. Hint for adapters.
+
+    // --- Variable-length fields (offset-based) ---
+
+    topic:              string;       // FROZEN -- hierarchical dot-separated topic
+    cognitive_trace_id: string;       // FROZEN -- cross-K0/K1 correlation key
+    session_id:         string;       // FROZEN -- session scope identifier
+    request_id:         string;       // FROZEN -- request scope within session
+
+    // --- Payload (opaque bytes, bus-blind) ---
+
+    payload:            [ubyte];      // FROZEN -- opaque bytes, bus never reads this
+}
+
+root_type BusEnvelope;

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 if TYPE_CHECKING:
@@ -130,6 +130,9 @@ from k0.modules.consolidation.staging.truth_query_service import TruthQueryServi
 # P03 Phase Interface
 from k0.pipelines.p03.phase_interface import P03PhaseId, P03PhaseResult
 
+# Syscall-backed store adapters for production wiring
+from k0.pipelines.p03.stores import SyscallLearnedWeightsStore
+
 logger = logging.getLogger(__name__)
 
 
@@ -207,6 +210,9 @@ class R3PhaseStats:
     duplicates_found: int = 0
     near_duplicates_found: int = 0
     distinct_events: int = 0
+
+    # Dedup results by event_id (for populating envelope)
+    dedup_results: Dict[str, DuplicationResult] = field(default_factory=dict)
 
     # Novelty scoring stats
     avg_novelty_score: float = 0.0
@@ -329,6 +335,16 @@ class R3Stores:
             access_store=InMemoryAccessStore(),
             pruned_entity_store=InMemoryPrunedEntityStore(),
             learned_weights_store=InMemoryLearnedWeightsStore(),
+            audit_store=InMemoryAuditStore(),
+        )
+
+    @classmethod
+    def create_production(cls, syscalls: Any) -> "R3Stores":
+        """Create stores with syscall-backed learned weights for production."""
+        return cls(
+            access_store=InMemoryAccessStore(),
+            pruned_entity_store=InMemoryPrunedEntityStore(),
+            learned_weights_store=SyscallLearnedWeightsStore(syscalls=syscalls),
             audit_store=InMemoryAuditStore(),
         )
 
@@ -515,8 +531,8 @@ class R3DedupDecay:
                 skip_reason="No events or clusters to process",
             )
 
-        # Create in-memory stores for this cycle
-        stores = R3Stores.create_in_memory()
+        # Create production stores with syscall-backed learned weights
+        stores = R3Stores.create_production(syscalls=ctx.syscalls)
 
         # Lazy initialization of TruthQueryService for reconciliation (Issue 4.3.13)
         if self.config.enable_reconciliation and self._truth_query_service is None:
@@ -542,10 +558,38 @@ class R3DedupDecay:
 
         # Execute the full R3 phase
         current_time = int(time.time() * 1000)
+
+        # Query truth layer entities needing decay evaluation
+        # Uses TruthQueryService to fetch ACTIVE entities with decay_factor < 1.0
+        entities_for_decay: List[Dict[str, Any]] = []
+        if self._truth_query_service is not None:
+            try:
+                decay_candidates = await self._truth_query_service.query_entities_for_decay(
+                    space_id=space_id,
+                    tenant_id=tenant_id,
+                    max_decay_factor=0.99,  # Any entity that has started decaying
+                    limit_per_layer=100,  # Limit per layer to avoid overload
+                )
+                # Convert DecayCandidate to dict for execute()
+                entities_for_decay = [c.to_dict() for c in decay_candidates]
+                logger.debug(
+                    f"R3: Queried {len(entities_for_decay)} entities for decay evaluation",
+                    extra={
+                        "cycle_id": cycle_id,
+                        "entity_count": len(entities_for_decay),
+                    },
+                )
+            except Exception as e:
+                logger.warning(
+                    f"R3: Failed to query entities for decay: {e}. "
+                    "Decay evaluation will run on empty set."
+                )
+                entities_for_decay = []
+
         stats = await self.execute(
             events=envelope.events,
             existing_events=existing_events,
-            entities_for_decay=[],  # Entities evaluated in later cycles
+            entities_for_decay=entities_for_decay,
             space_id=space_id,
             tenant_id=tenant_id,
             cycle_id=cycle_id,
@@ -553,10 +597,23 @@ class R3DedupDecay:
             stores=stores,
         )
 
-        # Store results in envelope using existing R3 output fields
-        # Note: The phase tracks duplicates but uses different output structure
-        # Prune candidates are events marked as duplicates
-        # Archive candidates are near-duplicates for potential merge
+        # Store dedup results in envelope for R6 consumption
+        envelope.phases.r3_dedup_results = stats.dedup_results
+
+        # Update each event's P03EventState with R3 results
+        import json
+
+        for event in envelope.events:
+            result = stats.dedup_results.get(event.event_id)
+            if result:
+                event.novelty_score = result.novelty_score
+                event.is_duplicate = result.is_duplicate
+                event.duplicate_of_id = result.duplicate_of
+                if result.near_duplicates:
+                    event.near_duplicates_json = json.dumps(result.near_duplicates)
+                # hamming_distance may not exist on all DuplicationResult objects
+                if hasattr(result, "hamming_distance") and result.hamming_distance is not None:
+                    event.hamming_distance = result.hamming_distance
 
         duration_ms = int(time.time() * 1000) - start_ms
 
@@ -1290,7 +1347,13 @@ class R3DedupDecay:
         stats.events_processed = len(dedup_results)
         novelty_sum = 0.0
 
-        for result in dedup_results:
+        for i, result in enumerate(dedup_results):
+            # Store result keyed by event_id for envelope population
+            if i < len(events):
+                event_id = getattr(events[i], "event_id", None)
+                if event_id:
+                    stats.dedup_results[event_id] = result
+
             if result.is_duplicate:
                 stats.duplicates_found += 1
             elif result.near_duplicates:

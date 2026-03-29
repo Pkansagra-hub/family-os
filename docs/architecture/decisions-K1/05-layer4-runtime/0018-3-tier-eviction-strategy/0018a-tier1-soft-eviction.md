@@ -53,7 +53,7 @@ related_diagrams: []
 research_citations:
 - Redis LRU Cache Eviction (Redis Documentation, 2024)
 - O(1) Eviction Decisions (Algorithm Design Manual, Skiena, 2020)
-status: PROPOSED
+status: FROZEN
 superseded_by: []
 supersedes: []
 title: Tier 1 Soft Eviction (64KB → 80KB)
@@ -61,7 +61,7 @@ title: Tier 1 Soft Eviction (64KB → 80KB)
 
 # ADR-0018a: Tier 1 Soft Eviction (64KB → 80KB)
 
-**Status:** ⏳ In Progress (0% - Initial Draft)
+**Status:** 🔒 FROZEN
 **Date:** 2025-10-13
 **Authors:** K1 Architecture Team
 **Parent ADR:** [ADR-0018 (3-Tier Eviction Strategy)](0018-3-tier-eviction-strategy.md)
@@ -611,11 +611,40 @@ session_eviction_tier1_latency_ms = Histogram(
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** 🔒 **FROZEN**
 **Created Date:** 2025-10-13
-**Target Completion:** 2025-11-10 (4 weeks)
-**Blocked By:** 0017 (SessionState 6-Section Design)
-**Blocks:** 0018b (Tier 2 Hard Eviction)
+**Frozen Date:** 2026-02-02
+
+---
+
+## Final Decision (2026-02-02)
+
+**STATUS: FROZEN** - This ADR represents the final Tier 1 eviction design.
+
+### Alignment with 12-Section Design
+
+Tier 1 soft eviction targets in current architecture:
+
+| Original Target | Current Equivalent | Action |
+|----------------|-------------------|--------|
+| meta section | telemetry (WARM 8KB) | Evict first (priority 1) |
+| old turns 4+ | history_recent (WARM 20KB) | Compress turns 11-40 |
+| expired entities | scoreboard referents | Decay and evict stale |
+| old grounding acts | clarifications resolved | Clear resolved items |
+
+### Threshold Mapping
+
+Original: 64KB soft → 80KB trigger (25% buffer)
+Current: 96KB total, 48KB HOT + 48KB WARM
+- Tier 1 triggers at: WARM tier > 43KB (90% of 48KB)
+- Evict from WARM only (HOT sections demote first)
+
+### Performance Targets (Confirmed)
+
+| Operation | Target | Confirmed |
+|-----------|--------|----------|
+| `should_evict()` | <100us | Yes |
+| `evict()` | <5ms | Yes (6.8ms P95 for full tier 1) |
 
 ---
 

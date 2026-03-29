@@ -102,6 +102,34 @@ ROLLOUT_ALLOCATION = {
 
 
 # =============================================================================
+# SIMPLE ACTION
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class SimpleAction:
+    """
+    Simple action for MCTS simulation.
+
+    Attributes:
+        action_id: Unique identifier for the action
+        action_type: Category of the action
+    """
+
+    action_id: str
+    action_type: str
+    action_type: str
+
+    def __hash__(self) -> int:
+        return hash(self.action_id)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SimpleAction):
+            return False
+        return self.action_id == other.action_id
+
+
+# =============================================================================
 # PROTOCOLS
 # =============================================================================
 
@@ -962,6 +990,13 @@ class TemporalProjectionMCTS:
 
         if root.is_leaf:
             return scenarios
+
+        # Debug: log child visit counts
+        child_visits = {aid: c.visit_count for aid, c in root.children.items()}
+        self._logger.debug(
+            "MCTS extract_scenarios: child visit counts",
+            extra={"child_visits": child_visits, "total_children": len(root.children)},
+        )
 
         # Extract paths from root to each child
         for action_id, child in root.children.items():

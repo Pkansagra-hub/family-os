@@ -1,0 +1,99 @@
+// ============================================================================
+// history_active_section.fbs - History Active Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/history_active_section.fbs
+// Purpose: Last 10 turns with full fidelity (raw text preserved)
+// Size Budget: 8KB max
+// Tier: HOT CORE
+// ADR: ADR-0017 (SessionState Design), Section 5.4
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// FULL FIDELITY TURN
+// ============================================================================
+
+/// Full fidelity turn - complete text preserved
+/// Used for turns 1-10 (most recent, always in HOT)
+table TurnFull {
+    turn_id: string (required);
+    turn_number: uint16;              // 1-based turn number
+
+    // Full message content (not compressed)
+    user_message: string (required);
+    assistant_response: string (required);
+
+    // Timing
+    timestamp_ms: int64;
+    duration_ms: uint32;              // Turn processing time
+
+    // Extracted metadata (for quick access without parsing)
+    metadata: TurnMetadata;
+
+    // Entity and intent extraction results
+    entities: [string];               // Entity IDs mentioned
+    intents: [string];                // Classified intents
+    emotion: string;                  // Detected emotion
+
+    // Size tracking
+    user_message_bytes: uint32;
+    response_bytes: uint32;
+}
+
+// ============================================================================
+// HISTORY ACTIVE SECTION ROOT
+// ============================================================================
+
+/// History Active Section - last 10 turns, full fidelity
+/// These turns preserve complete user messages and assistant responses
+table HistoryActiveSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Full fidelity turns (max 10)
+    // Ordered: index 0 = oldest, index 9 = newest
+    turns: [TurnFull];                // Max 10 turns
+
+    // Current turn tracking
+    current_turn_number: uint16;
+    oldest_turn_number: uint16;
+
+    // Session context
+    session_start_ms: int64;
+    last_activity_ms: int64;
+
+    // Quick stats
+    total_user_tokens: uint32;
+    total_response_tokens: uint32;
+    avg_turn_duration_ms: uint32;
+}
+
+root_type HistoryActiveSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 8KB max
+//
+// Constraint: 10 turns x ~800 bytes per turn = 8KB
+//
+// Per-turn breakdown:
+// - turn_id: ~40 bytes
+// - turn_number: 2 bytes
+// - user_message: ~200 bytes avg (short messages)
+// - assistant_response: ~400 bytes avg
+// - timestamp + duration: 12 bytes
+// - metadata: ~50 bytes
+// - entities/intents: ~100 bytes
+// Total per turn: ~800 bytes
+//
+// Strategy: If messages exceed budget, user_message and assistant_response
+// are truncated with "..." marker. Full text available in history_recent
+// after demotion.
+//
+// IMPORTANT: This is HOT, so we keep full fidelity for the most recent
+// turns. Older turns (11-40) are compressed in history_recent (WARM).
+// ============================================================================

@@ -1754,6 +1754,7 @@ def build_union_index():
 Extends Phase 7 to cover ALL intent types for secondary memory formation (dreaming):
 
 **8.1 Schema Migration** (0.5 day):
+
 - st_prospective: Add `decision_domain`, `outcome`, `resolved_at` columns
 - st_prospective: Extend intention_type CHECK to include `DECISION`, `CONCERN`, `TASK`
 - st_sem: Add `pattern_domain` column
@@ -1761,16 +1762,19 @@ Extends Phase 7 to cover ALL intent types for secondary memory formation (dreami
 - st_kg_edges: Add `query_count`, `last_queried_at`, `sentiment_avg` columns
 
 **8.2 R1 Importance Scorer — Query Entity Boost** (0.5 day):
+
 - Boost salience for entities with high query_count
 - Formula: `salience *= (1 + log(query_count + 1) * 0.1)`
 - Integration point: `k0/modules/consolidation/algorithms/importance_scorer.py`
 
 **8.3 R4 KG Consolidator — Query Tracking** (0.5 day):
+
 - When `intent_label == "query_memory"`: increment entity query_count
 - Stage KG_QUERY_INCREMENT writes to st_kg_dom, st_kg_edges
 - Integration point: `k0/pipelines/p03/phases/r4_kg_consolidator.py`
 
 **8.4 R5 Forward Simulator — Intent Signal Detection** (1 day):
+
 - Detect memory formation signals from all intent types
 - ReminderSignal (set_reminder) → st_prospective REMINDER
 - DecisionSignal (seek_advice) → st_prospective DECISION
@@ -1781,16 +1785,19 @@ Extends Phase 7 to cover ALL intent types for secondary memory formation (dreami
 - Integration point: `k0/modules/consolidation/algorithms/forward_simulator.py`
 
 **8.5 R6 Staging — Intent Router** (0.5 day):
+
 - Route R5 IntentSignals to appropriate layer writers
 - TruthWriteAssembler.assemble_intent_signal_writes()
 - Integration point: `k0/modules/consolidation/staging/truth_write_assembler.py`
 
 **8.6 R7 Layer Writer Updates** (0.5 day):
+
 - SemanticLayerWriter: Add pattern_type `LESSON`, `EMOTIONAL_TREND`
 - ProspectiveLayerWriter: Add intention_type `DECISION`, `CONCERN`
 - KGLayerWriter: Handle query_count increment, milestones_json
 
 **8.7 Integration Tests** (0.5 day):
+
 - Test each intent → layer flow
 - Test query_count accumulation over multiple events
 - Test decision lifecycle (PENDING → RESOLVED)
@@ -2016,13 +2023,13 @@ Detailed implementation issues are tracked in separate milestone documents:
 
 | Milestone | Title | Effort | Location |
 |-----------|-------|--------|----------|
-| M1 | Schema Migration | 1 day | [GAP_001_MILESTONE_1_SCHEMA_MIGRATION.md](../../plans/GAP_001_MILESTONE_1_SCHEMA_MIGRATION.md) |
-| M2 | Summary Generator | 2 days | [GAP_001_MILESTONE_2_SUMMARY_GENERATOR.md](../../plans/GAP_001_MILESTONE_2_SUMMARY_GENERATOR.md) |
-| M3 | R7 Writer Updates | 3 days | [GAP_001_MILESTONE_3_R7_WRITER_UPDATES.md](../../plans/GAP_001_MILESTONE_3_R7_WRITER_UPDATES.md) |
-| M4 | FAISS Union Index | 1 day | [GAP_001_MILESTONE_4_FAISS_UNION_INDEX.md](../../plans/GAP_001_MILESTONE_4_FAISS_UNION_INDEX.md) |
-| M5 | Context Expander | 2 days | [GAP_001_MILESTONE_5_CONTEXT_EXPANDER.md](../../plans/GAP_001_MILESTONE_5_CONTEXT_EXPANDER.md) |
-| M7 | Intent-Aware Prospective Writer | 1 day | [GAP_001_MILESTONE_7_INTENT_PROSPECTIVE_WRITER.md](../../plans/GAP_001_MILESTONE_7_INTENT_PROSPECTIVE_WRITER.md) |
-| M8 | Intent-Aware Memory Formation | 4 days | [GAP_001_MILESTONE_8_INTENT_MEMORY_FORMATION.md](../../plans/GAP_001_MILESTONE_8_INTENT_MEMORY_FORMATION.md) |
+| M1 | Schema Migration | 1 day | [GAP_001_MILESTONE_1_SCHEMA_MIGRATION.md](../../plans_completed_donotrefer/GAP_001_MILESTONE_1_SCHEMA_MIGRATION.md) |
+| M2 | Summary Generator | 2 days | [GAP_001_MILESTONE_2_SUMMARY_GENERATOR.md](../../plans_completed_donotrefer/GAP_001_MILESTONE_2_SUMMARY_GENERATOR.md) |
+| M3 | R7 Writer Updates | 3 days | [GAP_001_MILESTONE_3_R7_WRITER_UPDATES.md](../../plans_completed_donotrefer/GAP_001_MILESTONE_3_R7_WRITER_UPDATES.md) |
+| M4 | FAISS Union Index | 1 day | [GAP_001_MILESTONE_4_FAISS_UNION_INDEX.md](../../plans_completed_donotrefer/GAP_001_MILESTONE_4_FAISS_UNION_INDEX.md) |
+| M5 | Context Expander | 2 days | [GAP_001_MILESTONE_5_CONTEXT_EXPANDER.md](../../plans_completed_donotrefer/GAP_001_MILESTONE_5_CONTEXT_EXPANDER.md) |
+| M7 | Intent-Aware Prospective Writer | 1 day | [GAP_001_MILESTONE_7_INTENT_PROSPECTIVE_WRITER.md](../../plans_completed_donotrefer/GAP_001_MILESTONE_7_INTENT_PROSPECTIVE_WRITER.md) |
+| M8 | Intent-Aware Memory Formation | 4 days | [GAP_001_MILESTONE_8_INTENT_MEMORY_FORMATION.md](../../plans_completed_donotrefer/GAP_001_MILESTONE_8_INTENT_MEMORY_FORMATION.md) |
 | M9 | R5 Dream Stage Cold Start Fix | 3 days | See §12.1 below |
 
 > **Note**: Milestone 6 (Backfill) does not have a separate plan document; see Phase 6 details above.
@@ -2048,6 +2055,7 @@ R5 Dream Stage algorithms run successfully but produce **zero high-level outputs
 | **MCTS** | Forward Scenarios | ✅ 1 per batch | Working correctly |
 
 **Logs from 2000-event test (20 batches × 100 events)**:
+
 ```
 DreamExplorer completed exploration:
   insights_count: 0
@@ -2063,6 +2071,7 @@ DreamExplorer completed exploration:
 #### Root Cause Analysis
 
 **1. BGT-SM Cold Start Check (bgt_sm.py:860-920)**:
+
 ```python
 P03_BGT_COLD_START_THRESHOLD = 10_000  # Requires 10K observations
 
@@ -2072,11 +2081,13 @@ if self.config.corpus_size_n < self.config.cold_start_threshold:
 ```
 
 **Problem**: 10,000 events is an unrealistic requirement for personal memory systems:
+
 - Typical user generates 5-20 events/day
 - 10K events = **500-2000 days** of usage (1.5-5.5 years)
 - Early users get zero dream-stage benefits
 
 **2. R5 Input Data Limited to Batch (r5_dream_explorer.py:374-380)**:
+
 ```python
 input_data = DreamExplorerInput(
     recent_episodes=list(envelope.phases.r2_clusters),      # Episodes from THIS batch
@@ -2088,11 +2099,13 @@ input_data = DreamExplorerInput(
 **Problem**: R5 only sees newly created entities/edges per batch (2-10 entities, 0-2 edges), not the accumulated KG.
 
 **3. CPN Emotional Threshold (cpn.py:65)**:
+
 ```python
 emotional_threshold: float = 0.6  # Min |sentiment| for regret events
 ```
 
 **Problem**: From 2000 events, sentiment distribution shows most events are neutral:
+
 - Neutral: 51.8% (1,035 events)
 - Positive: 29.0% (580 events)
 - Negative: 19.2% (385 events)
@@ -2108,6 +2121,7 @@ Few events have |sentiment_score| ≥ 0.6 for counterfactual analysis.
 | 10,000 | **1,000** | ~2-3 months of typical usage |
 
 **Implementation**:
+
 ```python
 # k0/modules/consolidation/algorithms/bgt_sm.py
 P03_BGT_COLD_START_THRESHOLD = 1_000  # Lowered for personal memory systems
@@ -2141,6 +2155,7 @@ kg_entities = await self._fetch_accumulated_kg_entities(
 | 0.6 | **0.4** | Captures more emotionally significant events |
 
 **Implementation**:
+
 ```python
 # k0/modules/consolidation/algorithms/cpn.py
 emotional_threshold: float = 0.4  # Lowered from 0.6
@@ -2168,6 +2183,7 @@ embeddings = self._extract_embeddings(input_data)  # Returns {}
 | **MCTS** | N/A | N/A | ✅ Already works |
 
 **Verdict**: Running R5 on 1,000 events is **feasible** with adjusted thresholds:
+
 - BGT-SM: PMI calculations less statistically robust but still surface useful connections
 - CPN: Lower emotional threshold may produce more speculative counterfactuals
 - SPC-UQ/TDL-HCO: Still require temporal accumulation, may remain inactive until ~30 days of data
@@ -2195,11 +2211,13 @@ embeddings = self._extract_embeddings(input_data)  # Returns {}
 | st_vec | 2,000 | ✅ 100% embedding coverage |
 
 **Semantic Layer Breakdown**:
+
 - Emotional trends detected: annoyance (139), relief (89), joy (68), sadness (40), 18+ others
 - Lessons learned: 258 patterns (e.g., "When I sleep 7+ hours, everything feels better")
 - Themes: 100 patterns
 
 **Prospective Memory Detection**:
+
 - Reminders: 272 (e.g., "remind me to call Medical Center about GERD")
 - Decisions: 92 (e.g., "Should I buy new monitor or fix current?")
 
@@ -2214,6 +2232,7 @@ embeddings = self._extract_embeddings(input_data)  # Returns {}
 | Theme Naming | Low | Generic "Pattern from [uuid]" names |
 
 **Knowledge Graph Quality**:
+
 - 188 entities extracted (43 UNKNOWN, 38 PERSON, 32 FAMILY_MEMBER, 25 ORGANIZATION)
 - 38 edges (all RELATED_TO type)
 - Entity misclassification examples: "SSD" → PERSON, "schema" → FAMILY_MEMBER
@@ -2238,3 +2257,318 @@ After implementing M9 fixes, re-run 2000-event test and verify:
 - [k003-inline-embedding-ultrabert.md](../decisions-K0/pipelines/k003-inline-embedding-ultrabert.md) - Current embedding architecture
 - [vector.py](../../../k0/modules/consolidation/truth_writer/layers/vector.py) - VectorLayerWriter implementation
 - [truth_write_assembler.py](../../../k0/modules/consolidation/staging/truth_write_assembler.py) - R7 write assembly
+
+---
+
+## 14. st_vec Migration Inventory (Future Work)
+
+This section catalogs all code locations that currently use `st_vec` for vector storage and retrieval.
+After GAP-001 Phase 1 (M1) schema migration adds inline `embedding_vector` columns to truth layers,
+these locations will need updating in subsequent phases to read from native columns instead of JOINing to st_vec.
+
+### 14.1 Current st_vec Usage Pattern
+
+```
+CURRENT (st_vec JOIN pattern):
+┌──────────────────┐      JOIN       ┌──────────────────┐
+│   Truth Layer    │ ──────────────► │     st_vec       │
+│   (st_epi, etc.) │  embedding_id   │  (vector BYTEA)  │
+└──────────────────┘                 └──────────────────┘
+
+FUTURE (inline vector pattern):
+┌─────────────────────────────────────────────────────────┐
+│   Truth Layer (st_epi, st_sem, etc.)                    │
+│   embedding_vector BYTEA  ← Direct column, no JOIN      │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 14.2 Code Locations Requiring Migration
+
+#### 14.2.1 TruthQueryService (P03 Reconciliation)
+
+| File | Function | Current Behavior | Future Change |
+|------|----------|------------------|---------------|
+| [truth_query_service.py](../../../k0/modules/consolidation/staging/truth_query_service.py) | `_query_layer()` | JOINs `st_vec` on `embedding_id` | Read `embedding_vector` directly from truth layer |
+| [truth_query_service.py](../../../k0/modules/consolidation/staging/truth_query_service.py) | `find_candidates()` | Queries 5 layers via st_vec JOIN | Query each layer's native `embedding_vector` column |
+| [truth_query_service.py](../../../k0/modules/consolidation/staging/truth_query_service.py) | `_decode_bytea_vector()` | Decodes `v.vector` from st_vec | Decode `t.embedding_vector` from truth layer |
+
+**Current Query Pattern** (lines 287-311):
+
+```sql
+SELECT t.{pk}, v.vector, v.vector_dim, t.{confidence}
+FROM {layer} t
+JOIN st_vec v ON t.embedding_id = v.embedding_id
+WHERE t.tenant_id = $1 AND t.space_id = $2
+```
+
+**Future Query Pattern**:
+
+```sql
+SELECT {pk}, embedding_vector, confidence_score
+FROM {layer}
+WHERE tenant_id = $1 AND space_id = $2
+  AND embedding_vector IS NOT NULL
+```
+
+#### 14.2.2 R0 Batch Selector (P03 Embedding Load)
+
+| File | Function | Current Behavior | Future Change |
+|------|----------|------------------|---------------|
+| [r0_batch_selector.py](../../../k0/pipelines/p03/phases/r0_batch_selector.py) | `_load_embeddings_for_events()` | Queries `st_vec` by `event_id` | N/A for st_hipp_events (source layer keeps st_vec) |
+
+**Note**: st_hipp_events is a source layer that will continue using st_vec. Only truth layers (st_epi, st_sem, etc.) get inline vectors.
+
+**Current Query** (lines 700-705):
+
+```sql
+SELECT event_id, vector, vector_dim
+FROM st_vec
+WHERE event_id IN (...)
+  AND status IN ('READY', 'INDEXED')
+```
+
+**Future**: No change needed for R0 — st_hipp_events is pre-consolidation.
+
+#### 14.2.3 P08 Circuit Breaker (Embedding Fallback)
+
+| File | Function | Current Behavior | Future Change |
+|------|----------|------------------|---------------|
+| [p08_circuit.py](../../../k0/pipelines/p03/ops/p08_circuit.py) | `_fallback_to_cached()` | Reads embedding from st_vec | Read from truth layer's `embedding_vector` if available |
+
+**Current Query** (lines 130-140):
+
+```sql
+SELECT embedding
+FROM st_vec
+WHERE entity_id = $1 AND status = 'ACTIVE'
+ORDER BY created_at DESC
+LIMIT 1
+```
+
+**Future**: Fallback to truth layer embedding_vector column when st_vec unavailable.
+
+#### 14.2.4 FAISS Circuit Breaker (Brute Force Fallback)
+
+| File | Function | Current Behavior | Future Change |
+|------|----------|------------------|---------------|
+| [faiss_circuit.py](../../../k0/pipelines/p03/ops/faiss_circuit.py) | `_brute_force_search()` | Scans st_vec for vectors | Scan truth layers with `embedding_vector IS NOT NULL` |
+
+**Current Query** (lines 176-185):
+
+```sql
+SELECT entity_id, embedding
+FROM st_vec
+WHERE space_id = $1 AND status = 'ACTIVE'
+LIMIT 2000
+```
+
+**Future**: Query UNION across truth layers:
+
+```sql
+SELECT episode_id as entity_id, embedding_vector
+FROM st_epi WHERE space_id = $1 AND embedding_vector IS NOT NULL
+UNION ALL
+SELECT semantic_id, embedding_vector
+FROM st_sem WHERE space_id = $1 AND embedding_vector IS NOT NULL
+-- ... etc for other layers
+```
+
+#### 14.2.5 FAISS Rebuild Script
+
+| File | Function | Current Behavior | Future Change |
+|------|----------|------------------|---------------|
+| [rebuild_faiss_index.py](../../../k0/scripts/rebuild_faiss_index.py) | `_fetch_vectors()` | Bulk SELECT from st_vec | Build union index from all truth layer embeddings |
+
+**Current Query** (lines 130-140):
+
+```sql
+SELECT embedding_id, vector, vector_dim
+FROM st_vec
+WHERE status = 'READY'
+ORDER BY embedding_id
+LIMIT $1 OFFSET $2
+```
+
+**Future** (M4 FAISS Union Index):
+
+- Query each truth layer's `embedding_vector` column
+- Build composite index with layer+id metadata
+- See [GAP_001_MILESTONE_4_FAISS_UNION_INDEX.md](../../plans_completed_donotrefer/GAP_001_MILESTONE_4_FAISS_UNION_INDEX.md)
+
+#### 14.2.6 Syscalls (st_vec Operations)
+
+All st_vec syscalls in [syscalls.py](../../../k0/kernel/syscalls.py):
+
+| Syscall | Lines | Purpose | Capability | Future Migration |
+|---------|-------|---------|------------|------------------|
+| `vec_write()` | 1296-1478 | INSERT into st_vec | st_vec.write | **Keep** — st_hipp_events stays on st_vec |
+| `vec_query()` | 1479-1642 | SELECT from st_vec by status | st_vec.read | **Keep** — P08 FAISS indexer for pre-consolidation events |
+| `vec_update_status()` | 1643-1760 | UPDATE st_vec status | st_vec.write | **Keep** — Status tracking for FAISS indexing |
+| `embedding_vectors_batch_query()` | 3321-3435 | Batch SELECT from st_vec by embedding_ids | st_vec.read | **Extend** — Add layer parameter for truth layer vectors |
+
+##### 14.2.6.1 `vec_write()` — No Migration Needed
+
+**Purpose**: Writes 768-dim UltraBERT embeddings for st_hipp_events during P02.
+
+**Current Query** (lines 1422-1437):
+
+```sql
+INSERT INTO st_vec (
+    embedding_id, event_id, tenant_id, space_id,
+    vector, vector_dim, model_id, status,
+    created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, ...)
+ON CONFLICT (embedding_id) DO NOTHING
+```
+
+**Migration**: None needed. st_hipp_events is a source layer that continues using st_vec for pre-consolidation embeddings.
+
+##### 14.2.6.2 `vec_query()` — No Migration Needed
+
+**Purpose**: Queries st_vec by status for P08 FAISS indexer to find READY embeddings.
+
+**Current Query** (lines 1580-1595):
+
+```sql
+SELECT embedding_id, event_id, tenant_id, space_id,
+       vector, vector_dim, model_id, status, created_at
+FROM st_vec
+WHERE status = $1 AND tenant_id = $2
+ORDER BY created_at ASC
+LIMIT $3 OFFSET $4
+```
+
+**Migration**: None needed. This serves P08 FAISS indexer for st_hipp_events embeddings.
+
+##### 14.2.6.3 `vec_update_status()` — No Migration Needed
+
+**Purpose**: Updates st_vec status after FAISS indexing (READY → INDEXED).
+
+**Current Query** (lines 1720-1730):
+
+```sql
+UPDATE st_vec SET status = $1, indexed_at = $2, updated_at = ...
+WHERE embedding_id = $3
+```
+
+**Migration**: None needed. Tracks FAISS indexing status for pre-consolidation vectors.
+
+##### 14.2.6.4 `embedding_vectors_batch_query()` — Extend for Truth Layers
+
+**Purpose**: Batch queries st_vec for embedding vectors (used by R5 BGT-SM for semantic distance).
+
+**Current Query** (lines 3383-3390):
+
+```sql
+SELECT embedding_id, vector, vector_dim
+FROM st_vec
+WHERE embedding_id IN (...)
+  AND status = 'INDEXED'
+```
+
+**Future Enhancement**: Add optional `layer` parameter to query truth layer inline vectors:
+
+```python
+# Future signature
+async def embedding_vectors_batch_query(
+    self,
+    embedding_ids: list[str],
+    layer: str | None = None,  # NEW: "st_epi", "st_sem", etc.
+) -> dict[str, Any]:
+    if layer and layer in TRUTH_LAYERS:
+        # Query truth layer's embedding_vector column
+        query = f"""
+            SELECT {PK_COLUMNS[layer]} as id, embedding_vector as vector
+            FROM {layer}
+            WHERE {PK_COLUMNS[layer]} IN (...)
+              AND embedding_vector IS NOT NULL
+        """
+    else:
+        # Fall back to st_vec (default, pre-consolidation)
+        query = "SELECT embedding_id, vector FROM st_vec WHERE ..."
+```
+
+**New Capability**: Consider adding `{layer}.vector.read` capability for each truth layer.
+
+**Note**: `st_vec.write` and `st_vec.read` capabilities remain for st_hipp_events.
+New capabilities may be needed for truth layer vector operations.
+
+#### 14.2.7 Embedding Cleanup Module
+
+| File | Function | Current Behavior | Future Change |
+|------|----------|------------------|---------------|
+| [cleanup.py](../../../k0/modules/embedding/cleanup.py) | `_delete_orphan_embeddings()` | Deletes from st_vec | Also clear truth layer embedding_vector columns on tombstone |
+
+**Current** (lines 136-150):
+
+- Identifies orphaned embeddings in st_vec
+- Deletes via `vec_delete` syscall
+
+**Future**: When truth layer records are tombstoned, set `embedding_vector = NULL` to reclaim storage.
+
+#### 14.2.8 FAISS Indexer Module
+
+| File | Function | Current Behavior | Future Change |
+|------|----------|------------------|---------------|
+| [faiss_indexer.py](../../../k0/modules/embedding/faiss_indexer.py) | `_index_embedding()` | Reads from st_vec, adds to FAISS | Read from truth layer inline vectors |
+
+**Requires**: `st_vec.read` capability (currently)
+**Future**: Query truth layers directly, build union index per M4 plan.
+
+### 14.3 Truth Layer Vector Columns (Post-M1)
+
+After M1 schema migration, each truth layer will have:
+
+| Layer | PK Column | Vector Column | Model Column | Status |
+|-------|-----------|---------------|--------------|--------|
+| st_epi | episode_id | embedding_vector | embedding_model | M1 adds columns |
+| st_sem | semantic_id | embedding_vector | embedding_model | M1 adds columns |
+| st_procedural | routine_id | embedding_vector | embedding_model | M1 adds columns |
+| st_social | relationship_id | embedding_vector | embedding_model | M1 adds columns |
+| st_prospective | intention_id | embedding_vector | embedding_model | M1 adds columns |
+| st_kg_dom | entity_id | embedding_vector | embedding_model | M1 adds columns |
+
+**Note**: st_hipp_events and st_vec remain unchanged — they handle pre-consolidation vectors.
+
+### 14.4 Migration Priority
+
+| Priority | Component | Effort | Phase |
+|----------|-----------|--------|-------|
+| P1 | TruthQueryService | 2 days | Phase 2 (M3) |
+| P1 | FAISS Rebuild Script | 1 day | Phase 4 (M4) |
+| P2 | FAISS Circuit Brute Force | 0.5 day | Phase 4 (M4) |
+| P2 | P08 Circuit Fallback | 0.5 day | Phase 4 (M4) |
+| P3 | Embedding Cleanup | 0.5 day | Phase 6 |
+| P3 | FAISS Indexer | 1 day | Phase 4 (M4) |
+
+**Total Effort**: ~5.5 days across Phases 2-6
+
+### 14.5 Backward Compatibility
+
+During transition:
+
+1. **Dual-Path Queries**: TruthQueryService can query both:
+   - `embedding_vector` (inline, preferred)
+   - st_vec JOIN (fallback for records without inline vectors)
+
+2. **Gradual Rollout**: New truth records get inline vectors; existing records query via st_vec until backfilled.
+
+3. **Feature Flag**: `ENABLE_INLINE_TRUTH_VECTORS` controls query path:
+
+   ```python
+   if settings.ENABLE_INLINE_TRUTH_VECTORS and record.embedding_vector:
+       return decode_vector(record.embedding_vector)
+   else:
+       return await self._query_st_vec(record.embedding_id)
+   ```
+
+### 14.6 Test Updates Required
+
+| Test File | Current Mock | Future Mock |
+|-----------|--------------|-------------|
+| test_r3_integration.py | MockConnection.st_vec_rows | Add inline embedding_vector support |
+| test_p03_r0_batch_selector.py | st_vec_rows fixture | N/A (R0 keeps st_vec) |
+| test_p03_faiss_circuit.py | st_vec query mocks | Add truth layer query mocks |
+| test_r7_truth_writer.py | LAYER_ST_VEC writes | Add embedding_vector column writes |
+
+**Note**: Current tests pass with st_vec pattern; migration tests should verify inline vector path.

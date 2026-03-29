@@ -33,6 +33,7 @@ from k0.ports.errors import (
     KERNEL_COMPONENT_QOS,
     ErrorEnvelope,
 )
+from k0.ports.topic_router import TopicRouter, UnknownTopicError
 from k0.qos import (
     QoSBudgetError,
     QoSContext,
@@ -53,9 +54,8 @@ from k0.uow import UnitOfWork
 router = APIRouter(prefix="/k0", tags=["command"])
 logger = logging.getLogger(__name__)
 
-DEFAULT_OUTBOX_DRIVER = "st_epi"
 DEFAULT_OUTBOX_OPERATION = "UPSERT"
-OUTBOX_INLINE_BODY_LIMIT_BYTES = 4096
+_FALLBACK_INLINE_BODY_LIMIT_BYTES = 4096
 
 UnitOfWorkFactory = Callable[[], UnitOfWork]
 T = TypeVar("T")
@@ -303,6 +303,22 @@ async def submit_command(
                     reason="IDEMPOTENCY_KEY_MISSING",
                     hint="Minimal Gate did not produce an idempotency key",
                 )
+
+            # M2 Epic 2.9: Topic-aware route resolution (fail-fast for unknown topics)
+            topic_router = _get_state_component_optional(request, "topic_router", TopicRouter)
+            route = None
+            if topic_router is not None:
+                try:
+                    route = topic_router.resolve(envelope_dict["topic"])
+                except UnknownTopicError:
+                    return _error_response(
+                        request,
+                        status.HTTP_400_BAD_REQUEST,
+                        "REJECTED_UNKNOWN_TOPIC",
+                        component=KERNEL_COMPONENT_GATE,
+                        reason="UNKNOWN_TOPIC",
+                        hint=f"Topic '{envelope_dict['topic']}' has no outbox route",
+                    )
 
             # ADR-K002: Early idempotency check for fast duplicate rejection
             # This is an optimization to avoid expensive policy evaluation for known duplicates.
@@ -606,10 +622,13 @@ async def submit_command(
         wal_pos: int | None = None
         receipt_doc: ReceiptDocument | None = None
         body_bytes_length = len(wal_body_bytes) if wal_body_bytes is not None else 0
+        _inline_limit = (
+            route.inline_body_limit if route is not None else _FALLBACK_INLINE_BODY_LIMIT_BYTES
+        )
         inline_body_allowed = (
             body_snapshot is not None
             and wal_body_bytes is not None
-            and body_bytes_length <= OUTBOX_INLINE_BODY_LIMIT_BYTES
+            and body_bytes_length <= _inline_limit
         )
 
         obligation_records: list[ObligationRecord] = []
@@ -711,6 +730,7 @@ async def submit_command(
             outbox_payload: dict[str, Any] = {
                 "wal_pos": wal_pos,
                 "topic": envelope_dict["topic"],
+                "bus_topic": route.bus_topic if route is not None else envelope_dict["topic"],
                 "tenant_id": envelope_dict["tenant_id"],
                 "space_id": envelope_dict["space_id"],
                 "schema_uri": envelope_dict["schema_uri"],
@@ -740,16 +760,17 @@ async def submit_command(
                 outbox_payload["body"] = _json_safe_body(body_for_outbox)
 
             outbox_bytes = canonical_json(outbox_payload).encode("utf-8")
+            _outbox_driver = route.outbox_driver if route is not None else "st_epi"
             outbox_entry = OutboxEntry(
                 id=None,
                 wal_pos=wal_pos,
                 tenant_id=envelope_dict["tenant_id"],
                 space_id=envelope_dict["space_id"],
-                driver=DEFAULT_OUTBOX_DRIVER,
+                driver=_outbox_driver,
                 op_kind=DEFAULT_OUTBOX_OPERATION,
                 payload=outbox_bytes,
                 fingerprint=compute_fingerprint(
-                    DEFAULT_OUTBOX_DRIVER,
+                    _outbox_driver,
                     DEFAULT_OUTBOX_OPERATION,
                     outbox_bytes,
                 ),

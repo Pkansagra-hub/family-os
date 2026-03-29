@@ -1,0 +1,449 @@
+%% ========================================================================================================
+%% K1 BUS V2 -- RUST CORE ARCHITECTURE (k1_bus_core via PyO3)
+%% ========================================================================================================
+%% STATUS: V2 Design -- Post V1 completion (446 tests, 3464 source lines, 4504 test lines)
+%% GOAL:   Replace hot-path internals with Rust via PyO3. Same IBus/IMailboxRouter interfaces.
+%%         Zero module code changes. Python V1 stays as permanent fallback.
+%% ========================================================================================================
+%% IMMUTABLE DESIGN DECISIONS:
+%%   1. TWO components: IBus (unified pub/sub) + IMailboxRouter (point-to-point actor messaging)
+%%   2. Bus is BLIND: payload = opaque bytes. Bus reads ONLY FlatBuffers envelope header.
+%%   3. FlatBuffers zero-copy envelope: 12 fields (10 V1 + ttl_ms + payload_format)
+%%   4. Trie-based topic matching with subscription cache (O(1) repeat topics)
+%%   5. Timing Chain: causal ordering + sequence gap detection + per-prefix delivery modes
+%%   6. Adapter pattern: Fabric(Dict) and SessionState(Any) -> Bus canonical bytes interface
+%%   7. Ring Buffer (LMAX Disruptor pattern): pre-allocated, cache-line padded, zero-alloc dispatch
+%%   8. Lock-free concurrency: AtomicU64, DashMap, parking_lot::RwLock -- no GIL on hot path
+%%   9. Deficit Round-Robin WFQ: true weighted fairness, starvation impossible
+%%  10. Circuit breaker per handler, DLQ for rejected/expired envelopes, built-in sweep timer
+%% ========================================================================================================
+%% REFERENCE SYSTEMS: NATS, Aeron, LMAX Disruptor, ZeroMQ, Kafka, tokio, crossbeam, Seastar
+%% ========================================================================================================
+%% V1 WEAKNESS CROSS-REFERENCE (28 items, all addressed):
+%%   CRITICAL: W-01 sync dispatch, W-02 no true WFQ, W-03 no batching
+%%   HIGH:     W-04 JSON ser, W-05 Python obj overhead, W-06 with_bus_fields copy,
+%%             W-07 Python RWLock, W-08 per-topic lock, W-09 GIL, W-10 causal global lock
+%%   MEDIUM:   W-11 list alloc, W-12 no cache, W-13 tombstones, W-14 no topic validation,
+%%             W-15 strict priority, W-16 no DLQ, W-17 no ack, W-18 mailbox blocks thread,
+%%             W-19 no handler latency, W-20 no TTL, W-21 no pub backpressure,
+%%             W-22 approx stats, W-23 no sub lifecycle, W-24 no middleware ordering
+%%   LOW:      W-25 no circuit breaker, W-26 no replay, W-27 external sweep, W-28 no retry
+%% ========================================================================================================
+
+flowchart TB
+
+    %% ========================================================================
+    %% PYTHON LAND -- Interfaces, Adapters, Middleware, Factory
+    %% ========================================================================
+    subgraph PYTHON_LAND["PYTHON LAND -- Stable Interfaces + Module Integration"]
+        direction TB
+
+        subgraph PY_PORTS["Port Interfaces (type declarations only, zero runtime)"]
+            direction LR
+            IBUS_PORT["IBus Protocol<br/>publish(topic, payload: bytes) -> u64<br/>subscribe(pattern, handler) -> handle<br/>unsubscribe(handle) -> bool<br/>stats() -> BusStats<br/>close()"]:::py_iface
+            IMR_PORT["IMailboxRouter Protocol<br/>register(actor_id, config) -> IMailbox<br/>send_to(actor_id, envelope: bytes)<br/>get_mailbox(actor_id) -> IMailbox<br/>unregister(actor_id)"]:::py_iface
+            IMB_PORT["IMailbox Protocol<br/>send(envelope: bytes)<br/>receive(timeout_ms) -> bytes?<br/>depth -> int<br/>close()"]:::py_iface
+        end
+
+        subgraph PY_MIDDLEWARE["Middleware Chain (Python -- OTel + Prometheus SDKs)"]
+            direction LR
+            MW_TRACE["TracingMiddleware<br/>OpenTelemetry spans<br/>cognitive_trace_id propagation"]:::py_middleware
+            MW_METRICS["MetricsMiddleware<br/>Prometheus counters<br/>p50/p95/p99 histograms"]:::py_middleware
+            MW_VALIDATE["TopicValidation<br/>TopicRegistry check<br/>Versioned topic enforcement"]:::py_middleware
+        end
+
+        subgraph PY_ADAPTERS["Module Adapters (Python -- runs once per publish, not hot path)"]
+            direction LR
+            FABRIC_ADAPTER["FabricBusAdapter<br/>IBus(bytes) <-> IEventPort(Dict)<br/>FlatBuffers ser/deser"]:::py_adapter
+            SESSION_ADAPTER["SessionBusAdapter<br/>IBus(bytes) <-> IEventPort(Any)<br/>Strips topic from handler"]:::py_adapter
+        end
+
+        subgraph PY_FACTORY["Factory + Fallback (Python -- startup only)"]
+            direction LR
+            BUS_FACTORY["BusFactory<br/>create_local() -> IBus<br/>create_for_testing() -> IBus<br/>Transparent V1/V2 switch:<br/>try: k1_bus_core.RustBus<br/>except: LocalBus (V1 fallback)"]:::py_factory
+            V1_FALLBACK["V1 LocalBus (permanent fallback)<br/>3464 lines, 446 tests<br/>Pure Python, no Rust needed<br/>Always available"]:::py_fallback
+        end
+    end
+
+    %% ========================================================================
+    %% PyO3 BOUNDARY -- The bridge between worlds
+    %% ========================================================================
+    PYO3_BOUNDARY["--- PyO3 FFI BOUNDARY ---<br/>GIL released on Rust entry | GIL acquired for Python callbacks<br/>FlatBuffers bytes cross boundary (zero-copy)<br/>Python handler refs stored as PyObject in Rust HashMap"]:::pyo3_boundary
+
+    %% ========================================================================
+    %% RUST LAND -- High-performance core (k1_bus_core crate)
+    %% ========================================================================
+    subgraph RUST_LAND["RUST LAND (k1_bus_core) -- Lock-Free High-Performance Core"]
+        direction TB
+
+        subgraph RUST_BUS["RustBus -- #[pyclass] Unified Pub/Sub Engine"]
+            direction TB
+
+            subgraph STAMP_ROUTE["Stamp + Route (zero GIL, zero alloc)"]
+                direction LR
+                ATOMIC_ID["AtomicU64<br/>Global Envelope ID<br/>fetch_add(1, Relaxed)<br/>No lock, no GIL"]:::rust_lockfree
+                ATOMIC_SEQ["DashMap + AtomicU64<br/>Per-topic Sequence<br/>get_or_insert via entry()<br/>Zero cross-topic contention"]:::rust_lockfree
+                TOPIC_VALID["Topic Validator<br/>Reject: empty, empty-segment,<br/>dots-only BEFORE stamping<br/>Err(InvalidTopic)"]:::rust_core
+            end
+
+            subgraph RING_BUFFER["Ring Buffer (LMAX Disruptor Pattern)"]
+                direction TB
+                RING_LAYOUT["Pre-allocated Fixed Slots<br/>Default: 64KB per slot<br/>Power-of-2 size (bitwise mod)<br/>#[repr(align(64))] cache-line padded"]:::rust_ring
+                RING_CURSORS["Cursor Architecture<br/>publisher_cursor: AtomicU64<br/>consumer_cursors: Vec of AtomicU64<br/>CAS-based publish, no locks"]:::rust_lockfree
+                RING_BP["Backpressure Strategy<br/>Ring full? Configurable:<br/>Block (spin-wait)<br/>Error(BusFullError)<br/>DropOldest"]:::rust_ring
+                RING_FANOUT["Multi-Consumer Fan-Out<br/>Each subscriber group gets own cursor<br/>Independent advancement<br/>Zero-copy reads from slots"]:::rust_ring
+            end
+
+            subgraph TRIE_CACHE["TopicTrie + Subscription Cache"]
+                direction LR
+                RUST_TRIE["Rust TopicTrie<br/>DashMap-backed concurrent trie<br/>Wildcards: * (single) > (greedy)<br/>Epoch-based reclamation (RCU)<br/>No tombstones, clean GC"]:::rust_core
+                SUB_CACHE["SubscriptionCache<br/>DashMap: topic -> Vec of handler_ids<br/>generation: AtomicU64<br/>Invalidate on subscribe/unsubscribe<br/>Stale entries auto-discard<br/>Target: cached match < 100ns"]:::rust_lockfree
+            end
+
+            subgraph DISPATCH["Async Fan-Out Dispatch"]
+                direction TB
+                GIL_BATCH["GIL Batching Strategy<br/>1. Collect handler_ids from trie (no GIL)<br/>2. Acquire GIL ONCE per publish<br/>3. Invoke all Python handlers<br/>4. Release GIL<br/>Minimizes GIL acquisitions"]:::rust_dispatch
+                HANDLER_ISO["Per-Handler Isolation<br/>catch_unwind() per handler.call1()<br/>Never propagate panics<br/>Record success/fail in circuit breaker"]:::rust_dispatch
+                HANDLER_LAT["Handler Latency Histogram<br/>Instant::now() before/after each call<br/>DashMap: handler_id -> LatencyHistogram<br/>p50/p95/p99 per handler pattern<br/>Exposed: handler_stats() -> dict"]:::rust_dispatch
+            end
+        end
+
+        subgraph RUST_TIMING["Rust Timing Chain (lock-free causal + gap engine)"]
+            direction TB
+            CAUSAL["Causal Ordering<br/>AtomicU64 parent_id tracking<br/>Child waits for parent delivery<br/>Lock-free via atomic CAS<br/>(was: single global threading.Lock)"]:::rust_timing
+            GAP_DETECT["Sequence Gap Detection<br/>Per-topic monotonic AtomicU64<br/>Gap buffered until filled<br/>Covers: F68 per-agent delta ordering"]:::rust_timing
+            TIMING_CFG["TimingConfig (Prefix Trie)<br/>Trie-based prefix match<br/>(was: linear scan)<br/>STRICT | RELAXED | BEST_EFFORT"]:::rust_timing
+            SWEEP_TIMER["Built-in Sweep Timer<br/>Dedicated thread: park/unpark<br/>No external caller needed<br/>Co-op via select! in async<br/>Auto-drains stuck STRICT envelopes"]:::rust_timing
+        end
+
+        subgraph RUST_WFQ["WFQ Deficit Round-Robin Scheduler"]
+            direction TB
+            WFQ_ALGO["Deficit Round-Robin Algorithm<br/>URGENT: weight=4, deficit+=4<br/>REALTIME: weight=3, deficit+=3<br/>INTERACTIVE: weight=2, deficit+=2<br/>BACKGROUND: weight=1, deficit+=1<br/>Dequeue when deficit >= 1<br/>Starvation IMPOSSIBLE"]:::rust_wfq
+            WFQ_SHARED["Shared Scheduler<br/>Used by BOTH pub/sub dispatch<br/>AND mailbox dequeue<br/>True fairness across all paths"]:::rust_wfq
+        end
+
+        subgraph RUST_MAILBOX["Rust Mailbox (bounded ring + WFQ)"]
+            direction TB
+            MB_RING["Bounded Ring per Actor<br/>crossbeam::channel + 4-priority ring<br/>Deficit round-robin dequeue<br/>No thread-blocking receive<br/>(was: threading.Condition.wait)"]:::rust_mailbox
+            MB_ACK["Delivery Acknowledgment<br/>Sender knows: enqueued vs consumed<br/>Async ack via ring slot status"]:::rust_mailbox
+        end
+
+        subgraph RUST_RESILIENCE["Resilience Layer"]
+            direction LR
+            CIRCUIT_BRK["Circuit Breaker<br/>Per-handler state machine:<br/>CLOSED -> OPEN (N failures)<br/>OPEN -> HALF_OPEN (cooldown)<br/>HALF_OPEN -> CLOSED (success)<br/>Zero-cost when circuit closed"]:::rust_resilience
+            DLQ["Dead Letter Queue<br/>Bounded ring buffer<br/>Captures: backpressure rejects,<br/>handler errors, expired TTL<br/>Exposed to Python: drain/inspect"]:::rust_resilience
+            TTL_CHECK["TTL Expiry Check<br/>At dispatch time (lazy):<br/>if now_ns - created_ns > ttl_ms * 1M<br/>-> route to DLQ, skip handlers<br/>Zero cost when ttl_ms = 0"]:::rust_resilience
+        end
+
+        subgraph RUST_STATS["Observability (lock-free atomics)"]
+            direction LR
+            ATOMIC_STATS["AtomicU64 Bus Stats<br/>Ordering::Relaxed for all counters<br/>envelopes_published, delivered,<br/>dropped, dlq_size, ring_utilization<br/>Exposed: stats() -> dict"]:::rust_obs
+            SUB_EVENTS["Subscription Lifecycle Events<br/>k1.bus.subscription.created<br/>k1.bus.subscription.removed<br/>Internal fast-path (no ring buffer)<br/>Operators subscribe to monitor"]:::rust_obs
+        end
+
+        subgraph RUST_ENVELOPE["FlatBuffers Envelope (Rust + Python shared schema)"]
+            direction TB
+            ENV_SCHEMA["envelope.fbs (FROZEN V1 fields + V2 extensions)<br/>topic: string | priority: uint8<br/>envelope_id: uint64 (global monotonic)<br/>sequence: uint64 (per-topic monotonic)<br/>cognitive_trace_id: string<br/>session_id: string | request_id: string<br/>parent_id: uint64 (causal parent, 0=root)<br/>created_ns: uint64 (monotonic clock)<br/>payload_len: uint32 | payload: [ubyte] OPAQUE<br/>ttl_ms: uint32 = 0 (V2: 0 = no expiry)<br/>payload_format: uint8 = 0 (0=opaque, 1=JSON, 2=msgpack)"]:::rust_envelope
+            ENV_OPS["Rust Envelope Ops<br/>#[pyclass(frozen)] -- 12 fields<br/>from_bytes(): zero-copy FlatBuffers reader<br/>to_bytes(): single-alloc FlatBuffers builder<br/>with_bus_fields(): cheap struct copy (~128 bytes)<br/>Cross-lang: Py to_bytes -> Rust from_bytes"]:::rust_envelope
+        end
+    end
+
+    %% ========================================================================
+    %% PUBLISH DATA FLOW (the hot path)
+    %% ========================================================================
+    subgraph DATA_FLOW["PUBLISH DATA FLOW -- The Hot Path"]
+        direction LR
+        DF1["1. Module calls<br/>publish(topic, bytes)"]:::flow_step
+        DF2["2. [Rust] stamp<br/>AtomicU64 IDs<br/>zero-alloc"]:::flow_rust
+        DF3["3. [Rust] ring_buffer<br/>.write(FlatBuffers)<br/>zero-copy"]:::flow_rust
+        DF4["4. [Python] middleware<br/>.process(header)<br/>GIL acquired"]:::flow_python
+        DF5["5. [Rust] trie.match<br/>cached handlers<br/>GIL released"]:::flow_rust
+        DF6["6. [Rust] timing_chain<br/>.process(mode)<br/>lock-free atomics"]:::flow_rust
+        DF7["7. [Rust->Py] dispatch<br/>GIL once per batch<br/>catch_unwind each"]:::flow_bridge
+        DF8["8. [Rust] circuit_breaker<br/>.record(result)<br/>+ stats.update"]:::flow_rust
+    end
+
+    %% ========================================================================
+    %% TOPIC NAMESPACE
+    %% ========================================================================
+    subgraph TOPICS["Topic Namespace (hierarchical, trie-matched)"]
+        direction TB
+
+        subgraph EVENT_TOPICS["Event Topics (fire-and-forget fan-out)"]
+            direction TB
+            T_RESPONSE["k1.response.* (STRICT)<br/>final.v1 | ack.v1 | progress.v1"]:::topic_concierge
+            T_CAPABILITY["k1.capability.* (STRICT)<br/>invoked.v1 | completed.v1 | failed.v1"]:::topic_fabric
+            T_ORCHESTRATION["k1.orchestration.* (STRICT)<br/>task.accepted | execution.* | step.progress"]:::topic_orch
+            T_PLANNER["k1.planner.* (STRICT)<br/>plan.ready.v1 | plan.failed.v1"]:::topic_planner
+            T_HIL["k1.hil.* (STRICT)<br/>clarification.v1 | approval_request.v1"]:::topic_hil
+            T_SESSION["k1.session.* (STRICT)<br/>checkpoint.v1 | eviction.v1 | emergency.v1"]:::topic_session
+            T_AFFECT["k1.affect.* (RELAXED)<br/>analyzed.v1"]:::topic_relaxed
+            T_CONSTRAINT["k1.constraint.* (RELAXED)<br/>progress.v1 | resolved.v1"]:::topic_relaxed
+            T_PROACTIVE["k1.proactive.* (RELAXED)<br/>question.v1 | message.v1"]:::topic_relaxed
+            T_WORKFLOW["k1.workflow.* (RELAXED)<br/>trigger.due | run.*"]:::topic_relaxed
+            T_SSE["k1.k0.sse.* (BEST_EFFORT)<br/>received.v1 | curiosity.intent.v1"]:::topic_besteffort
+            T_FABRIC_LEARN["k1.fabric.learning.* (BEST_EFFORT)<br/>signal.v1"]:::topic_besteffort
+        end
+
+        subgraph DELTA_TOPICS["Delta Topics (same IBus, delta.* prefix)"]
+            direction LR
+            DT_AGENT["k1.agent.{id}.delta.v1 (STRICT)"]:::topic_delta
+            DT_PLANNER["k1.planner.delta.v1"]:::topic_delta
+            DT_ORCH["k1.orchestration.delta.v1"]:::topic_delta
+            DT_MEMORY["k1.memory.delta.v1"]:::topic_delta
+        end
+
+        subgraph BUS_INTERNAL_TOPICS["Bus Internal Topics (lifecycle events)"]
+            direction LR
+            BT_SUB_CREATED["k1.bus.subscription.created"]:::topic_bus
+            BT_SUB_REMOVED["k1.bus.subscription.removed"]:::topic_bus
+            BT_DLQ_OVERFLOW["k1.bus.dlq.overflow"]:::topic_bus
+            BT_CIRCUIT_OPEN["k1.bus.circuit.opened"]:::topic_bus
+        end
+
+        subgraph MAILBOX_IDS["Mailbox Actor IDs (point-to-point, WFQ priority)"]
+            direction LR
+            MID_CONCIERGE["concierge<br/>REALTIME, cap:100"]:::topic_concierge
+            MID_ORCHESTRATOR["orchestrator<br/>REALTIME, cap:50"]:::topic_orch
+            MID_PLANNER["planner<br/>INTERACTIVE, cap:20"]:::topic_planner
+            MID_FABRIC["fabric<br/>REALTIME, cap:200"]:::topic_fabric
+            MID_AGENTS["agent.{id}<br/>varies"]:::topic_delta
+        end
+    end
+
+    %% ========================================================================
+    %% TIMING CONFIG TABLE
+    %% ========================================================================
+    subgraph TIMING_TABLE["Timing Delivery Modes (per topic prefix)"]
+        direction LR
+        TM_STRICT["STRICT<br/>Ordered, buffer on gap<br/>k1.capability.* | k1.orchestration.*<br/>k1.planner.* | k1.hil.*<br/>k1.agent.*.delta.* | k1.response.*<br/>k1.session.*"]:::tm_strict
+        TM_RELAXED["RELAXED<br/>Deliver as-is, log reorder<br/>k1.affect.* | k1.constraint.*<br/>k1.proactive.* | k1.workflow.*"]:::tm_relaxed
+        TM_BESTEFFORT["BEST_EFFORT<br/>Drop OK under pressure<br/>k1.k0.sse.*<br/>k1.fabric.learning.*"]:::tm_besteffort
+    end
+
+    %% ========================================================================
+    %% K1 MODULES (Hexagonal Ports)
+    %% ========================================================================
+    subgraph MODULES["K1 MODULES -- Hexagonal Port Architecture (all use bytes)"]
+        direction TB
+
+        subgraph MOD_L1["Layer 1 -- User Facing"]
+            C_SVC["CONCIERGE<br/>ConciergeFSM<br/>pub: k1.response.* | k1.affect.*<br/>sub: k1.capability.completed.*<br/>k1.hil.* | k1.k0.sse.*<br/>k1.agent.*.delta.* | k1.*.delta.*<br/>mailbox: concierge"]:::svc_concierge
+        end
+
+        subgraph MOD_L2["Layer 2 -- Coordination"]
+            O_SVC["ORCHESTRATOR<br/>OrchestratorActor<br/>pub: k1.orchestration.*<br/>k1.constraint.* | k1.*.delta.*<br/>sub: k1.planner.plan.ready.*<br/>k1.capability.completed.*<br/>mailbox: orchestrator"]:::svc_orch
+        end
+
+        subgraph MOD_L25["Layer 2.5 -- Capabilities"]
+            F_SVC["CAPABILITY FABRIC<br/>Resolution + Execution<br/>pub: k1.capability.*<br/>k1.fabric.learning.signal.*<br/>k1.agent.{id}.delta.*<br/>mailbox: fabric<br/>via FabricBusAdapter"]:::svc_fabric
+        end
+
+        subgraph MOD_L3["Layer 3 -- Intelligence"]
+            P_SVC["PLANNER<br/>LLM-Powered 4-Stage<br/>pub: k1.planner.plan.ready.*<br/>k1.hil.clarification.*<br/>k1.planner.delta.*<br/>sub: k1.hil.*_response.*<br/>mailbox: planner"]:::svc_planner
+        end
+
+        subgraph MOD_L4["Layer 4 -- Execution"]
+            SA_SVC["SUB-AGENTS<br/>Dynamic Instances<br/>pub: k1.agent.{id}.delta.*<br/>mailbox: agent.{id}"]:::svc_agent
+        end
+
+        subgraph MOD_L5["Layer 5 -- State"]
+            SS_SVC["SESSIONSTATE<br/>Central Working Memory<br/>pub: k1.session.*<br/>sub: k1.session.mutation.*<br/>via SessionBusAdapter"]:::svc_session
+        end
+
+        subgraph MOD_BRIDGE["Cross-Kernel"]
+            BR_SVC["K0 BRIDGE<br/>SSE Receiver + IFL<br/>pub: k1.k0.sse.received.*"]:::svc_bridge
+        end
+    end
+
+    %% ========================================================================
+    %% PERFORMANCE TARGETS
+    %% ========================================================================
+    subgraph PERF_TARGETS["V2 PERFORMANCE TARGETS"]
+        direction LR
+        PERF_PUB["Publish Latency<br/>p50: < 1 us<br/>p99: < 5 us<br/>p999: < 20 us"]:::perf_target
+        PERF_THROUGHPUT["Throughput<br/>Single-thread: > 1M msg/sec<br/>Multi-thread: > 5M msg/sec<br/>Fan-out=10: > 500K msg/sec"]:::perf_target
+        PERF_MATCH["Trie Match<br/>Cold: < 500ns (100 subs)<br/>Cached: < 100ns<br/>Cache hit rate: > 95%"]:::perf_target
+        PERF_MEMORY["Memory<br/>Per envelope: ~128 bytes (Rust)<br/>vs ~800 bytes (Python V1)<br/>Ring buffer: fixed allocation"]:::perf_target
+    end
+
+    %% ========================================================================
+    %% CONNECTIONS: Modules -> Python Ports -> PyO3 -> Rust Core
+    %% ========================================================================
+
+    %% Modules publish/subscribe through Python port interfaces
+    C_SVC -->|"publish + subscribe"| IBUS_PORT
+    O_SVC -->|"publish + subscribe"| IBUS_PORT
+    F_SVC -->|"via FabricBusAdapter"| FABRIC_ADAPTER --> IBUS_PORT
+    P_SVC -->|"publish + subscribe"| IBUS_PORT
+    SS_SVC -->|"via SessionBusAdapter"| SESSION_ADAPTER --> IBUS_PORT
+    BR_SVC -->|"publish"| IBUS_PORT
+    SA_SVC -->|"publish"| IBUS_PORT
+
+    %% Modules use mailbox router
+    C_SVC -->|"send_to + mailbox"| IMR_PORT
+    O_SVC -->|"send_to + mailbox"| IMR_PORT
+    F_SVC -->|"mailbox"| IMR_PORT
+    P_SVC -->|"mailbox"| IMR_PORT
+    SA_SVC -->|"mailbox"| IMR_PORT
+
+    %% Factory creates the bus
+    BUS_FACTORY -->|"creates"| IBUS_PORT
+    BUS_FACTORY -->|"creates"| IMR_PORT
+    BUS_FACTORY -.->|"fallback"| V1_FALLBACK
+
+    %% Python ports -> PyO3 boundary -> Rust
+    IBUS_PORT ==>|"publish(topic, bytes)"| PYO3_BOUNDARY
+    IMR_PORT ==>|"send_to(actor_id, bytes)"| PYO3_BOUNDARY
+
+    %% Middleware hooks (Python side, called from Rust via GIL)
+    MW_TRACE -.->|"header-only view"| PYO3_BOUNDARY
+    MW_METRICS -.->|"header-only view"| PYO3_BOUNDARY
+    MW_VALIDATE -.->|"header-only view"| PYO3_BOUNDARY
+
+    %% PyO3 -> Rust internals
+    PYO3_BOUNDARY ==>|"GIL released"| STAMP_ROUTE
+    STAMP_ROUTE ==> RING_BUFFER
+    RING_BUFFER ==> TRIE_CACHE
+    TRIE_CACHE ==> RUST_TIMING
+    RUST_TIMING ==> DISPATCH
+    DISPATCH ==> RUST_RESILIENCE
+
+    %% WFQ feeds into dispatch and mailbox
+    WFQ_ALGO -.->|"schedules"| DISPATCH
+    WFQ_ALGO -.->|"schedules"| MB_RING
+
+    %% Resilience wiring
+    CIRCUIT_BRK -.->|"gates"| DISPATCH
+    TTL_CHECK -.->|"filters"| DISPATCH
+    DLQ -.->|"captures rejects"| DISPATCH
+
+    %% Stats collection
+    ATOMIC_STATS -.->|"counters"| STAMP_ROUTE
+    ATOMIC_STATS -.->|"counters"| DISPATCH
+    SUB_EVENTS -.->|"lifecycle"| TRIE_CACHE
+
+    %% Sweep timer drives timing chain
+    SWEEP_TIMER -.->|"auto-drain"| GAP_DETECT
+
+    %% Rust timing -> config
+    TIMING_CFG -.->|"mode lookup"| CAUSAL
+    TIMING_CFG -.->|"mode lookup"| GAP_DETECT
+
+    %% Envelope schema shared
+    ENV_SCHEMA -.->|"flatc --rust"| ENV_OPS
+    ENV_SCHEMA -.->|"flatc --python"| FABRIC_ADAPTER
+    ENV_SCHEMA -.->|"flatc --python"| SESSION_ADAPTER
+
+    %% Rust routes to topics
+    RUST_TRIE -.->|"matches"| EVENT_TOPICS
+    RUST_TRIE -.->|"matches"| DELTA_TOPICS
+    SUB_EVENTS -.->|"emits"| BUS_INTERNAL_TOPICS
+    MB_RING -.->|"routes"| MAILBOX_IDS
+
+    %% Timing config table
+    TIMING_CFG -.->|"configures"| TIMING_TABLE
+
+    %% Data flow connections
+    DF1 --> DF2 --> DF3 --> DF4 --> DF5 --> DF6 --> DF7 --> DF8
+
+    %% ==========================================
+    %% KEY FLOWS (from K1_FLOWS.md, 137+ flows)
+    %% ==========================================
+    %%
+    %% FLOW 1: User -> Concierge -> Orchestrator (F01, F04-F06)
+    %%   Concierge receives user input via mailbox
+    %%   IMailboxRouter.send_to("orchestrator", TaskEnvelope bytes)
+    %%   parent_id chains: user_input -> dispatch -> task_accepted
+    %%
+    %% FLOW 2: Orchestrator -> Planner -> Execute (F06, F53-F56)
+    %%   IMailboxRouter.send_to("planner", PlanRequest bytes)
+    %%   IBus.publish("k1.planner.plan.ready.v1", bytes)
+    %%   STRICT timing: causal ordering ensures plan before execution
+    %%
+    %% FLOW 3: Capability Execution (F33, F37, F132-F133)
+    %%   IBus.publish("k1.capability.invoked.v1", bytes) -- ring buffer slot
+    %%   IBus.publish("k1.capability.completed.v1", bytes)
+    %%   Fan-out via cached trie: Fabric, Concierge, Tracing, Orchestrator
+    %%   Circuit breaker protects against broken handler flooding
+    %%
+    %% FLOW 4: Delta Aggregation (F64, F68-F69)
+    %%   IBus.publish("k1.agent.{id}.delta.v1", bytes)
+    %%   Concierge subscribes "k1.agent.*.delta.*" via trie wildcard
+    %%   STRICT timing: per-agent sequence gap detection prevents reorder
+    %%
+    %% FLOW 5: HIL Round-Trip (F57-F59)
+    %%   IBus.publish("k1.hil.clarification.v1", bytes) with ttl_ms=30000
+    %%   STRICT mode: causal ordering ensures request before response
+    %%   TTL: expired clarifications route to DLQ, not stale handlers
+    %%
+    %% FLOW 6: K0 Bridge (F82-F83)
+    %%   IBus.publish("k1.k0.sse.received.v1", bytes)
+    %%   BEST_EFFORT mode: DRR scheduler deprioritizes under load
+    %%   Ring buffer backpressure drops oldest if configurable
+    %%
+    %% FLOW 7: Preliminary Ack + Parallel Dispatch (F10)
+    %%   Parallel: ack + orchestrator dispatch (same parent_id)
+    %%   Ring buffer supports concurrent writes via CAS
+    %%   WFQ ensures ack (REALTIME) dispatches before progress (INTERACTIVE)
+
+    %% ========================================================================
+    %% STYLES -- Organized by domain
+    %% ========================================================================
+
+    %% Python Land
+    classDef py_iface fill:#1a237e,stroke:#0d47a1,stroke-width:3px,color:#fff,font-weight:bold
+    classDef py_middleware fill:#37474f,stroke:#607d8b,stroke-width:2px,color:#fff
+    classDef py_adapter fill:#fffde7,stroke:#f9a825,stroke-width:2px,color:#000,font-style:italic
+    classDef py_factory fill:#455a64,stroke:#78909c,stroke-width:2px,color:#fff
+    classDef py_fallback fill:#546e7a,stroke:#90a4ae,stroke-width:2px,color:#fff,stroke-dasharray: 5 5
+
+    %% PyO3 Boundary
+    classDef pyo3_boundary fill:#ff6f00,stroke:#e65100,stroke-width:4px,color:#fff,font-weight:bold
+
+    %% Rust Land -- Core
+    classDef rust_core fill:#bf360c,stroke:#d84315,stroke-width:2px,color:#fff,font-weight:bold
+    classDef rust_lockfree fill:#b71c1c,stroke:#c62828,stroke-width:3px,color:#fff,font-weight:bold
+    classDef rust_ring fill:#880e4f,stroke:#ad1457,stroke-width:2px,color:#fff,font-weight:bold
+    classDef rust_dispatch fill:#4a148c,stroke:#6a1b9a,stroke-width:2px,color:#fff
+    classDef rust_timing fill:#1a237e,stroke:#283593,stroke-width:2px,color:#fff
+    classDef rust_wfq fill:#004d40,stroke:#00695c,stroke-width:2px,color:#fff,font-weight:bold
+    classDef rust_mailbox fill:#0d47a1,stroke:#1565c0,stroke-width:2px,color:#fff
+    classDef rust_resilience fill:#e65100,stroke:#ff6f00,stroke-width:2px,color:#fff,font-weight:bold
+    classDef rust_obs fill:#263238,stroke:#37474f,stroke-width:2px,color:#fff
+    classDef rust_envelope fill:#6a1b9a,stroke:#7b1fa2,stroke-width:3px,color:#fff,font-weight:bold
+
+    %% Data Flow Steps
+    classDef flow_step fill:#e8eaf6,stroke:#3949ab,stroke-width:2px,color:#000,font-weight:bold
+    classDef flow_rust fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000,font-weight:bold
+    classDef flow_python fill:#bbdefb,stroke:#1565c0,stroke-width:2px,color:#000,font-weight:bold
+    classDef flow_bridge fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000,font-weight:bold
+
+    %% Topic Colors
+    classDef topic_concierge fill:#ffccbc,stroke:#bf360c,stroke-width:1px,color:#000
+    classDef topic_fabric fill:#b2ebf2,stroke:#00695c,stroke-width:1px,color:#000
+    classDef topic_orch fill:#c8e6c9,stroke:#1b5e20,stroke-width:1px,color:#000
+    classDef topic_planner fill:#bbdefb,stroke:#0d47a1,stroke-width:1px,color:#000
+    classDef topic_hil fill:#fff8e1,stroke:#f57c00,stroke-width:1px,color:#000
+    classDef topic_session fill:#e1bee7,stroke:#6a1b9a,stroke-width:1px,color:#000
+    classDef topic_relaxed fill:#fff9c4,stroke:#f9a825,stroke-width:1px,color:#000
+    classDef topic_besteffort fill:#c8e6c9,stroke:#2e7d32,stroke-width:1px,color:#000
+    classDef topic_delta fill:#e8eaf6,stroke:#3f51b5,stroke-width:1px,color:#000
+    classDef topic_bus fill:#eceff1,stroke:#455a64,stroke-width:1px,color:#000,stroke-dasharray: 3 3
+
+    %% Timing Mode Colors
+    classDef tm_strict fill:#ffcdd2,stroke:#c62828,stroke-width:2px,color:#000,font-weight:bold
+    classDef tm_relaxed fill:#fff9c4,stroke:#f9a825,stroke-width:2px,color:#000,font-weight:bold
+    classDef tm_besteffort fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px,color:#000,font-weight:bold
+
+    %% Service Colors
+    classDef svc_concierge fill:#ffccbc,stroke:#bf360c,stroke-width:3px,color:#000,font-weight:bold
+    classDef svc_orch fill:#c8e6c9,stroke:#1b5e20,stroke-width:3px,color:#000,font-weight:bold
+    classDef svc_fabric fill:#b2ebf2,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
+    classDef svc_planner fill:#bbdefb,stroke:#0d47a1,stroke-width:3px,color:#000,font-weight:bold
+    classDef svc_session fill:#e1bee7,stroke:#6a1b9a,stroke-width:3px,color:#000,font-weight:bold
+    classDef svc_bridge fill:#b2ebf2,stroke:#00695c,stroke-width:2px,color:#000
+    classDef svc_agent fill:#b2dfdb,stroke:#004d40,stroke-width:2px,color:#000
+
+    %% Performance Targets
+    classDef perf_target fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000,font-weight:bold

@@ -1,0 +1,659 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+  %% ======================================================================================
+  %% K1 MODEL HUB -- Capability-Driven Plugin Architecture (Production-Grade)
+  %% ======================================================================================
+  %% Updated: 2026-02-06
+  %% ADR: 0001b (Model Hub Architecture & LLM Integration)
+  %% Related ADRs: 0001, 0005, 0007, 0027 (Placement Cascade), 0027c (Cost-Aware Fallback),
+  %%               0027d (Remote Resilience)
+  %% ======================================================================================
+
+  %% DESIGN PRINCIPLES:
+  %%   1. CAPABILITY-DRIVEN -- Hub routes by capability, not by method name
+  %%   2. PLUGIN ARCHITECTURE -- Providers are plugins loaded from manifests
+  %%   3. ZERO HUB CHANGES to add a provider -- write manifest YAML + adapter class, register
+  %%   4. ZERO HUB CHANGES to add a capability -- extend CapabilityType enum, implement in plugin
+  %%   5. Hexagonal Architecture (Ports + Adapters) -- consistent with all K1 modules
+  %%   6. Standalone module -- NOT embedded in Fabric (Fabric delegates to Model Hub)
+  %%   7. Single Entry Point: IModelHubPort.execute(HubRequest) -- one method, all capabilities
+  %%   8. Fabric keeps Prompt Management + Output Validation (SessionState dependent)
+  %%   9. Edge-First: local model fallback when remote providers unavailable
+  %%  10. Provider manifests are the SINGLE SOURCE OF TRUTH for provider capabilities,
+  %%      models, costs, rate limits, circuit breaker config, and health checks
+
+  %% ======================================================================================
+  %% EXTENSIBILITY CONTRACT:
+  %%
+  %%   ADDING A NEW PROVIDER (e.g. Mistral, Cohere, xAI):
+  %%     1. Create manifest: k1/config/providers/mistral.manifest.yaml
+  %%     2. Implement IProviderPlugin (5 methods)
+  %%     3. Place in k1/model_hub/plugins/mistral_plugin.py
+  %%     4. ProviderRegistry auto-discovers on startup (scan plugins/ dir)
+  %%     5. DONE -- no hub code changes, no routing changes, no config changes
+  %%
+  %%   ADDING A NEW CAPABILITY (e.g. CODE_EXEC, REALTIME_VOICE):
+  %%     1. Add to CapabilityType enum in k1/model_hub/types.py
+  %%     2. Define request/response schema in k1/contracts/model_hub/capabilities/
+  %%     3. Update relevant provider plugins to declare + handle the capability
+  %%     4. Update relevant provider manifests (capabilities[] list)
+  %%     5. DONE -- CapabilityRouter auto-discovers, no hub service changes
+  %%
+  %%   ADDING A NEW MODEL to existing provider:
+  %%     1. Edit the provider manifest YAML (add to models[] list)
+  %%     2. Hot-reload picks it up within 30s (or restart)
+  %%     3. DONE -- ModelSelector auto-includes in selection, CostTracker auto-prices
+  %%
+  %% ======================================================================================
+  %%
+  %% CAPABILITY TAXONOMY (Extensible -- add without hub changes)
+  %% ======================================================================================
+  %% | ID              | Name                    | Streamable | Description                                      |
+  %% |-----------------|-------------------------|------------|--------------------------------------------------|
+  %% | CHAT            | Chat Completion         | Yes        | Standard message-in, message-out                  |
+  %% | TOOL_CALL       | Tool / Function Calling | Yes        | Messages + tool defs -> tool_use blocks + text    |
+  %% | STRUCTURED      | Structured Output       | No         | Messages + JSON Schema -> schema-valid JSON       |
+  %% | REASON          | Extended Thinking       | Yes        | Deep reasoning with thinking trace (o3, Claude)   |
+  %% | EMBED           | Text Embedding          | No         | Text[] -> float[][] vectors                       |
+  %% | VISION          | Vision (Image + Text)   | Yes        | Messages with image content -> text response      |
+  %% | BATCH           | Batch Processing        | No         | HubRequest[] -> BatchID (async, ~50% cheaper)     |
+  %% | MODERATE        | Content Moderation      | No         | Text -> safety categories + scores                |
+  %% | TOKEN_COUNT     | Token Counting          | No         | Messages -> count (pre-request budget planning)   |
+  %% | CACHE_PROMPT    | Prompt Caching          | No         | Cache management (explicit or auto)               |
+  %% | AUDIO_IN        | Audio Input             | Yes        | Messages + audio -> text response                 |
+  %% | TTS             | Text-to-Speech          | Yes        | Text + voice config -> audio bytes stream         |
+  %% | IMAGE_GEN       | Image Generation        | No         | Prompt -> image bytes/URL                         |
+  %% | WEB_SEARCH      | Web Search / Grounding  | No         | Query -> search results with citations            |
+  %% | CODE_EXEC       | Code Execution          | No         | Code -> execution result (sandboxed)              |
+  %% ======================================================================================
+  %% New capabilities added to this table automatically become routable once at least
+  %% one provider manifest declares support AND one plugin implements the handler.
+  %% ======================================================================================
+  %%
+  %% PROVIDER MANIFEST SCHEMA (Declarative -- one YAML per provider)
+  %% ======================================================================================
+  %% File location: k1/config/providers/{provider_id}.manifest.yaml
+  %%
+  %% provider_id: string          # unique key (e.g. "openai", "anthropic", "ollama")
+  %% display_name: string         # human label
+  %% plugin_class: string         # Python class path (e.g. "k1.model_hub.plugins.openai_plugin.OpenAIPlugin")
+  %% api_base: string             # base URL for API calls
+  %% auth:
+  %%   type: bearer | api_key_header | none
+  %%   credential_key: string     # key in CredentialStore
+  %%   header_name: string?       # custom header (e.g. "x-api-key" for Anthropic)
+  %% capabilities: CapabilityType[]  # what this provider can do
+  %% models:
+  %%   - id: string               # model identifier (e.g. "gpt-4o")
+  %%     capabilities: CapabilityType[]   # model-level capability subset
+  %%     cost_per_1m_input: float         # USD per 1M input tokens
+  %%     cost_per_1m_output: float        # USD per 1M output tokens
+  %%     max_context: int                 # max context window tokens
+  %%     max_output: int?                 # max output tokens (if different from context)
+  %%     supports_streaming: bool         # default true
+  %%     supports_parallel_tools: bool?   # for TOOL_CALL
+  %%     embedding_dimensions: int?       # for EMBED models
+  %%     rate_limit_rpm: int?             # requests per minute
+  %%     rate_limit_tpm: int?             # tokens per minute
+  %%     tier: FAST | STANDARD | PREMIUM  # performance tier hint
+  %% circuit_breaker:
+  %%   failure_threshold: int     # failures before OPEN (default 3)
+  %%   failure_window_s: int      # window for counting failures (default 60)
+  %%   cooldown_s: int            # OPEN duration before HALF_OPEN (default 30)
+  %% health_check:
+  %%   endpoint: string           # lightweight health endpoint
+  %%   interval_s: int            # check interval (default 30)
+  %%   timeout_s: int             # health check timeout (default 5)
+  %% concurrency:
+  %%   max_concurrent: int        # max parallel requests to this provider
+  %% rate_limits:
+  %%   rpm: int                   # requests per minute (provider-level)
+  %%   tpm: int                   # tokens per minute (provider-level)
+  %%   headroom_pct: float        # stay below this % of limit (default 0.80)
+  %% placement:
+  %%   type: remote | local_gpu | local_cpu   # where the provider runs
+  %%   device_requirements: string?           # e.g. "CUDA GPU >= 8GB VRAM"
+  %%
+  %% ======================================================================================
+  %% On startup, ProviderRegistry scans k1/config/providers/*.manifest.yaml,
+  %% validates each manifest, instantiates the plugin_class, calls plugin.initialize(manifest),
+  %% and registers in the capability index. Hot-reload watches for file changes.
+  %% ======================================================================================
+  %%
+  %% LLM CALL MATRIX (from skeleton -- all consumers and budgets)
+  %% ======================================================================================
+  %% | Consumer                    | Capabilities Used                | Tokens  | Priority    |
+  %% |-----------------------------|----------------------------------|---------|-------------|
+  %% | Concierge TIER_MEDIUM       | CHAT, TOOL_CALL                  | ~2K     | INTERACTIVE |
+  %% | Concierge TIER_HIGH         | CHAT, TOOL_CALL, REASON          | ~8K     | INTERACTIVE |
+  %% | Concierge DISPATCHING       | CHAT                             | ~200    | REALTIME    |
+  %% | Concierge DELIVERING        | CHAT, STRUCTURED                 | 500-8K  | REALTIME    |
+  %% | Concierge CLARIFYING        | CHAT                             | ~300    | INTERACTIVE |
+  %% | Concierge VISION            | VISION                           | ~2K     | INTERACTIVE |
+  %% | Planner STAGE1_SKETCH       | CHAT, TOOL_CALL                  | ~2K     | INTERACTIVE |
+  %% | Planner STAGE2_EXPAND       | CHAT, TOOL_CALL                  | ~1K     | INTERACTIVE |
+  %% | Planner STAGE3_VALIDATE     | CHAT, STRUCTURED                 | ~500    | INTERACTIVE |
+  %% | Planner HIL prompts         | CHAT                             | ~300    | INTERACTIVE |
+  %% NOTE: Planner TOOL_CALL = LLM function-calling to invoke 4 read-only discovery tools
+  %%   (discover_capabilities, find_relevant_prompts, query_planning_context, recall_for_planning).
+  %%   These are routed by Planner ToolCallRouter to IFabricRetrievalPort / IStateReadPort / IBridgePort.
+  %%   Planner consumer_id: 'planner'. Total ~3.5K tokens/plan. Max 5 LLM calls/plan (3 stages + 2 HIL).
+  %%   Type ownership: HubRequest/HubResponse imported from k1.model_hub.types (source of truth).
+  %% | Orchestrator EXEC_MONITOR   | CHAT                             | ~200    | BACKGROUND  |
+  %% | Orchestrator SOL_VALIDATOR  | CHAT, STRUCTURED                 | ~500    | INTERACTIVE |
+  %% | Curiosity Agent             | CHAT                             | ~300    | BACKGROUND  |
+  %% | Proactive Decision          | CHAT                             | ~500    | BACKGROUND  |
+  %% | Memory Writer Extraction    | CHAT, STRUCTURED                 | ~500    | BACKGROUND  |
+  %% | Learning Extractor          | CHAT, STRUCTURED                 | ~1K     | BACKGROUND  |
+  %% | Constitutional AI Filter    | MODERATE, CHAT                   | ~200    | BACKGROUND  |
+  %% | Dynamic Agents              | Per AgentContract                | Varies  | Variable    |
+  %% | Future: Document Processing | VISION (PDF)                     | ~4K     | INTERACTIVE |
+  %% | Future: Voice Interface     | AUDIO_IN, TTS                    | ~2K     | REALTIME    |
+  %% | Future: Embeddings          | EMBED                            | N/A     | BACKGROUND  |
+  %% | Future: Batch Operations    | BATCH                            | Varies  | BACKGROUND  |
+  %% ======================================================================================
+  %%
+  %% MH INVARIANTS (Non-Negotiable Rules -- MH-01 through MH-18)
+  %% ======================================================================================
+  %% MH-01: NEVER writes SessionState (read-only access for model selection context)
+  %% MH-02: ALL provider credentials in CredentialStore (never in config/env/manifest)
+  %% MH-03: Every request carries cognitive_trace_id (end-to-end tracing)
+  %% MH-04: Budget enforcement is HARD -- request rejected if budget exceeded
+  %% MH-05: Circuit breaker per provider (config from manifest, default 3/60s -> OPEN 30s)
+  %% MH-06: Fallback cascade is capability-aware: only fail over to providers that support the capability
+  %% MH-07: Cost tracking per request (token_count * model_cost from manifest)
+  %% MH-08: Daily budget enforcement ($5/day default, configurable per tenant)
+  %% MH-09: Response cache keyed by (capability, prompt_hash, model_id, temperature) -- TTL 5min
+  %% MH-10: Streaming responses validated chunk-by-chunk (partial output gating)
+  %% MH-11: All LLM calls audited: request_id, capability, model, tokens, latency, cost, trace_id
+  %% MH-12: Rate limiting per provider (from manifest, default 80% headroom)
+  %% MH-13: Model placement cascade: Local(NPU->GPU->CPU) -> Remote -> Cached -> Template
+  %% MH-14: Provider health checked per manifest interval (default 30s)
+  %% MH-15: Request timeout configurable per priority tier (REALTIME 10s, INTERACTIVE 30s, BACKGROUND 60s)
+  %% MH-16: ALL traffic through RequestRouter -- single funnel, no direct provider access
+  %% MH-17: Provider plugins are isolated -- one plugin crash does not affect others
+  %% MH-18: Manifest is SOLE source of truth for provider capabilities (no hardcoded checks)
+  %% ======================================================================================
+
+  %% ======================================================================================
+  %% MODULE HEADER
+  %% ======================================================================================
+  subgraph MODULE_HEADER["MODEL HUB -- Capability-Driven Plugin Architecture (ADR-0001b)"]
+    direction TB
+
+    MODULE_ID["Module: k1.model_hub<br/>Layer: L2.5 (Coordination / Infrastructure)<br/>Pattern: Capability-Driven Plugin Registry<br/>Owner: Model Hub<br/>Status: Production<br/>ADR: 0001b, 0027, 0027c, 0027d<br/>Invariants: MH-01..MH-18<br/>---<br/>EXTENSIBILITY:<br/>Add Provider: manifest YAML + IProviderPlugin impl (0 hub changes)<br/>Add Capability: extend CapabilityType + plugin handlers (0 hub changes)<br/>Add Model: edit provider manifest YAML (hot-reload, 0 restart)"]:::module_header
+  end
+
+  %% ======================================================================================
+  %% CAPABILITY REGISTRY (Visual -- what the hub can route)
+  %% ======================================================================================
+  subgraph CAPABILITY_REGISTRY["Capability Registry (Runtime-Populated from Provider Manifests)"]
+    direction TB
+
+    CAP_CORE["CORE CAPABILITIES (Day 1)<br/>---<br/>CHAT: Standard chat completion (all providers)<br/>TOOL_CALL: Function calling with parallel support<br/>STRUCTURED: JSON Schema-constrained output<br/>REASON: Extended thinking / chain-of-thought<br/>TOKEN_COUNT: Pre-request token estimation"]:::capability
+
+    CAP_MULTIMODAL["MULTIMODAL CAPABILITIES<br/>---<br/>VISION: Image + text input (GPT-4o, Claude, Gemini)<br/>AUDIO_IN: Audio input (GPT-4o-audio, Gemini)<br/>TTS: Text-to-speech output (OpenAI)<br/>IMAGE_GEN: Image generation (DALL-E, Imagen)"]:::capability
+
+    CAP_OPS["OPERATIONAL CAPABILITIES<br/>---<br/>EMBED: Text embeddings (OpenAI, Google, local)<br/>BATCH: Async batch processing (~50% cost)<br/>MODERATE: Content safety check<br/>CACHE_PROMPT: Explicit prompt caching<br/>WEB_SEARCH: Grounded web search<br/>CODE_EXEC: Sandboxed code execution"]:::capability
+
+    CAP_EXTENSIBILITY["FUTURE CAPABILITIES (Zero hub changes)<br/>---<br/>Any new CapabilityType + at least 1 plugin handler<br/>= automatically routable through hub<br/>---<br/>Examples: REALTIME_VOICE, FINE_TUNE, COMPUTER_USE,<br/>MCP_BRIDGE, VIDEO_IN, DOCUMENT_PARSE"]:::capability_future
+  end
+
+  %% ======================================================================================
+  %% K1 EVENT BUS TOPICS (Model Hub Events)
+  %% ======================================================================================
+  subgraph MODEL_HUB_EVENTS["Model Hub Event Bus Topics (K1 Internal)"]
+    direction TB
+
+    EVT_REQUEST_RECEIVED["k1.model_hub.request.received.v1<br/>Payload: request_id, consumer, capability, budget"]:::event
+
+    EVT_REQUEST_ROUTED["k1.model_hub.request.routed.v1<br/>Payload: request_id, provider_id, model_id, capability"]:::event
+
+    EVT_RESPONSE_COMPLETE["k1.model_hub.response.complete.v1<br/>Payload: request_id, tokens_used, latency_ms, cost"]:::event
+
+    EVT_CACHE_HIT["k1.model_hub.cache.hit.v1<br/>Payload: request_id, cache_key, capability, age_ms"]:::event
+
+    EVT_PROVIDER_FAILURE["k1.model_hub.provider.failure.v1<br/>Payload: request_id, provider_id, error_type, will_fallback"]:::event
+
+    EVT_FALLBACK_TRIGGERED["k1.model_hub.fallback.triggered.v1<br/>Payload: request_id, from_provider, to_provider, reason"]:::event
+
+    EVT_CIRCUIT_STATE["k1.model_hub.circuit.state.v1<br/>Payload: provider_id, old_state, new_state, failure_count"]:::event
+
+    EVT_BUDGET_ALERT["k1.model_hub.budget.alert.v1<br/>Payload: tenant_id, level(WARNING|EXCEEDED), pct, action"]:::event
+
+    EVT_PROVIDER_HEALTH["k1.model_hub.provider.health.v1<br/>Payload: provider_id, status, latency_p50, error_rate"]:::event
+
+    EVT_PROVIDER_REGISTERED["k1.model_hub.provider.registered.v1<br/>Payload: provider_id, capabilities[], model_count"]:::event
+
+    EVT_CAPABILITY_AVAILABLE["k1.model_hub.capability.available.v1<br/>Payload: capability, provider_ids[], model_count"]:::event
+  end
+
+  %% ======================================================================================
+  %% PORTS -- Hexagonal Boundaries (7 Ports)
+  %% MH-01 enforced at compile time: no IStateWritePort exists.
+  %% ======================================================================================
+  subgraph PORTS["Ports (7 Hexagonal Boundaries -- MH-01: No Write Ports to SessionState)"]
+    direction TB
+
+    PORT_HUB_INBOUND["IModelHubPort (Inbound -- THE Single Gateway)<br/>Direction: Inbound<br/>---<br/>execute(HubRequest) -> HubResponse<br/>stream_execute(HubRequest) -> AsyncIterator[HubChunk]<br/>discover_capabilities() -> CapabilityMap<br/>discover_models(capability?) -> ModelInfo[]<br/>health() -> HubHealthReport<br/>---<br/>HubRequest (Unified Envelope):<br/>  capability: CapabilityType<br/>  payload: CapabilityPayload (capability-specific, see below)<br/>  constraints: RequestConstraints<br/>  trace_id: cognitive_trace_id<br/>  idempotency_key: str?<br/>---<br/>RequestConstraints:<br/>  max_tokens: int<br/>  timeout_ms: int (default from priority tier MH-15)<br/>  priority: REALTIME | INTERACTIVE | BACKGROUND<br/>  temperature: float (0.0-1.0, default 0.7)<br/>  model_preference: ModelPreference?<br/>  provider_preference: str?<br/>  cost_limit: float?<br/>  consumer_id: str<br/>---<br/>HubResponse (Unified Envelope):<br/>  result: CapabilityResult (capability-specific)<br/>  metadata: ResponseMetadata<br/>---<br/>ResponseMetadata:<br/>  request_id, model_id, provider_id,<br/>  usage{prompt_tokens, completion_tokens, total},<br/>  cost_usd, latency_ms, cache_hit, capability,<br/>  trace_id, fallback_used"]:::port
+
+    PORT_EVENT["IEventPort<br/>Direction: Both<br/>publish(topic, payload) -> void<br/>subscribe(topics[], handler) -> Subscription<br/>Pub: all k1.model_hub.*.v1 events<br/>Sub: k1.model_hub.config_update.v1"]:::port
+
+    PORT_STATE_READ["IStateReadPort<br/>Direction: Inbound (read-only)<br/>read(sections[]) -> StateSnapshot<br/>Multi-reader, lock-free (MH-01)<br/>Sections: persona (model pref), control (user_band)"]:::port
+
+    PORT_METRICS["IMetricsPort<br/>Direction: Outbound<br/>emit(metric_name, value, labels) -> void<br/>Labels: provider, model, consumer, capability, priority"]:::port
+
+    PORT_CONFIG["IConfigPort<br/>Direction: Inbound<br/>get(key) -> ConfigValue<br/>watch(key, callback) -> Subscription<br/>Keys: budgets, timeouts, placement rules<br/>Provider config: from manifests (not here)"]:::port
+
+    PORT_CREDENTIAL["ICredentialPort<br/>Direction: Inbound<br/>get_key(provider_id) -> APIKey<br/>refresh_key(provider_id) -> APIKey<br/>Source: OS keychain / Vault / env (MH-02)<br/>NEVER stored in manifest YAML"]:::port
+
+    PORT_HEALTH["IHealthPort<br/>Direction: Outbound<br/>report_health(component, status) -> void<br/>check_health() -> HealthReport<br/>Status: HEALTHY | DEGRADED | UNHEALTHY"]:::port
+  end
+
+  %% ======================================================================================
+  %% CAPABILITY PAYLOAD SCHEMAS (Polymorphic -- one per CapabilityType)
+  %% ======================================================================================
+  subgraph PAYLOAD_SCHEMAS["CapabilityPayload Schemas (Polymorphic by capability)"]
+    direction TB
+
+    PL_CHAT["ChatPayload<br/>messages: Message[]<br/>system_prompt: str?"]:::schema
+
+    PL_TOOL_CALL["ToolCallPayload<br/>messages: Message[]<br/>tools: ToolDefinition[]<br/>tool_choice: auto | required | none | {name}<br/>parallel_tool_calls: bool (default true)"]:::schema
+
+    PL_STRUCTURED["StructuredOutputPayload<br/>messages: Message[]<br/>output_schema: JSONSchema<br/>strict: bool (default true)"]:::schema
+
+    PL_REASON["ReasonPayload<br/>messages: Message[]<br/>reasoning_effort: low | medium | high<br/>include_thinking: bool (default false)"]:::schema
+
+    PL_EMBED["EmbedPayload<br/>texts: str[]<br/>dimensions: int? (model default)<br/>encoding_format: float | base64"]:::schema
+
+    PL_VISION["VisionPayload<br/>messages: Message[] (with image_content)<br/>image_inputs: ImageInput[]<br/>detail: auto | low | high"]:::schema
+
+    PL_BATCH["BatchPayload<br/>requests: HubRequest[]<br/>callback_topic: str?<br/>priority: BACKGROUND (always)"]:::schema
+
+    PL_MODERATE["ModeratePayload<br/>text: str<br/>categories: str[]? (all if omitted)"]:::schema
+
+    PL_TOKEN_COUNT["TokenCountPayload<br/>messages: Message[]<br/>model_id: str? (estimate if omitted)"]:::schema
+
+    PL_CACHE["CachePromptPayload<br/>cache_key: str<br/>messages: Message[]<br/>ttl_s: int (default 300)"]:::schema
+
+    PL_AUDIO["AudioInputPayload<br/>messages: Message[]<br/>audio: AudioInput (base64 + format)<br/>voice_config: VoiceConfig?"]:::schema
+
+    PL_TTS["TTSPayload<br/>text: str<br/>voice: str (e.g. alloy, nova, shimmer)<br/>format: mp3 | opus | aac | flac<br/>speed: float (0.25-4.0)"]:::schema
+
+    PL_FUTURE["FuturePayload (generic fallback)<br/>data: dict[str, Any]<br/>---<br/>Any new capability can use this until<br/>a typed schema is defined"]:::schema_future
+  end
+
+  %% ======================================================================================
+  %% PROVIDER PLUGIN INTERFACE (Single contract ALL providers implement)
+  %% ======================================================================================
+  subgraph PLUGIN_INTERFACE["IProviderPlugin Interface (Single Contract for ALL Providers)"]
+    direction TB
+
+    PLUGIN_CONTRACT["IProviderPlugin<br/>---<br/>initialize(manifest: ProviderManifest) -> void<br/>  Called once on registration. Setup connections, validate keys.<br/>---<br/>supports(capability: CapabilityType) -> bool<br/>  From manifest. O(1) lookup.<br/>---<br/>execute(request: NormalizedRequest) -> ProviderResponse<br/>  Blocking call. Maps HubRequest -> provider-native API -> HubResponse.<br/>  Raises: ProviderError, TimeoutError, RateLimitError.<br/>---<br/>stream_execute(request: NormalizedRequest) -> AsyncIterator[ProviderChunk]<br/>  Streaming variant. Yields chunks. Supports backpressure + cancel.<br/>---<br/>estimate_tokens(messages: Message[]) -> int<br/>  Fast local estimate. Provider-specific tokenizer or tiktoken fallback.<br/>---<br/>health_check() -> ProviderHealth<br/>  Lightweight probe (from manifest.health_check.endpoint).<br/>---<br/>close() -> void<br/>  Cleanup connections, cancel in-flight.<br/>---<br/>NORMALIZATION:<br/>  NormalizationLayer converts HubRequest -> NormalizedRequest<br/>  which is provider-agnostic. Each plugin translates to native API.<br/>  This means: Hub does NOT know about /chat/completions vs /messages."]:::plugin_contract
+
+    PLUGIN_NOTE["PLUGIN ISOLATION (MH-17)<br/>Each plugin runs in its own error boundary.<br/>Plugin crash -> circuit breaker OPEN -> fallback to next provider.<br/>Plugin hangs -> timeout (from manifest) -> same fallback.<br/>Plugins share NOTHING except the IProviderPlugin interface."]:::plugin_note
+  end
+
+  %% ======================================================================================
+  %% ADAPTERS -- Production + Test (Infrastructure Bindings)
+  %% ======================================================================================
+  subgraph ADAPTERS["Adapters (Infrastructure Bindings)"]
+    direction TB
+
+    subgraph ADAPTERS_PROD["Production Adapters (7 Core + N Provider Plugins)"]
+      direction TB
+
+      ADAPT_HUB_INBOUND["LLMRequestBusAdapter<br/>Receives HubRequest from LLM Request Bus<br/>Deserializes capability-tagged envelope<br/>Returns HubResponse via bus reply channel<br/>Protocol: async request-reply on LLM_REQUEST_BUS<br/>---<br/>Error: RECOVERABLE (timeout -> fallback)"]:::adapter
+
+      ADAPT_EVENT["EventBusAdapter<br/>K1 Event Bus pub/sub binding<br/>All model_hub events with trace_id<br/>---<br/>Error: RECOVERABLE (resubscribe)"]:::adapter
+
+      ADAPT_STATE_READ["SessionStateReadAdapter<br/>Lock-free multi-reader access<br/>Read: persona (model pref), control (user_band)<br/>CB_SESSIONSTATE inherited (100ms, 10/min)<br/>---<br/>Error: DEGRADED (use default model pref)"]:::adapter
+
+      ADAPT_METRICS["PrometheusAdapter<br/>Histograms: latency, tokens, cost per capability<br/>Counters: requests, errors, cache_hits per provider<br/>Gauges: active_requests, circuit_state, budget_pct"]:::adapter
+
+      ADAPT_CONFIG["ConfigAdapter<br/>YAML config with hot-reload (30s watch)<br/>File: k1/config/model_hub.yaml<br/>Env override: MH_* prefix"]:::adapter
+
+      ADAPT_CREDENTIAL["CredentialStoreAdapter<br/>Encrypted (AES256-GCM at rest)<br/>Auto-refresh OAuth tokens<br/>Source: OS keychain / Vault / env<br/>MH-02: keys NEVER in manifest"]:::adapter
+
+      ADAPT_HEALTH["HealthReportAdapter<br/>Reports to Fabric health checks<br/>Integrates with Observability Layer"]:::adapter
+
+      subgraph PROVIDER_PLUGINS["Provider Plugins (Manifest-Driven, Auto-Discovered)"]
+        direction TB
+
+        PLUGIN_OPENAI["OpenAIPlugin : IProviderPlugin<br/>Manifest: openai.manifest.yaml<br/>Capabilities: CHAT, TOOL_CALL, STRUCTURED, REASON,<br/>  EMBED, VISION, BATCH, MODERATE, AUDIO_IN, TTS,<br/>  IMAGE_GEN, WEB_SEARCH, TOKEN_COUNT, CACHE_PROMPT<br/>Models: GPT-4o, GPT-4o-mini, o3, o4-mini,<br/>  text-embedding-3-small/large, DALL-E 3, whisper<br/>API: chat.completions / embeddings / images / audio / batches<br/>Auth: Bearer token"]:::provider
+
+        PLUGIN_ANTHROPIC["AnthropicPlugin : IProviderPlugin<br/>Manifest: anthropic.manifest.yaml<br/>Capabilities: CHAT, TOOL_CALL, STRUCTURED, REASON,<br/>  VISION, BATCH, TOKEN_COUNT, CACHE_PROMPT<br/>Models: Claude 4 Opus, Sonnet, Haiku<br/>API: messages / messages.batches / messages.count_tokens<br/>Auth: x-api-key header"]:::provider
+
+        PLUGIN_GOOGLE["GoogleGeminiPlugin : IProviderPlugin<br/>Manifest: google.manifest.yaml<br/>Capabilities: CHAT, TOOL_CALL, STRUCTURED, REASON,<br/>  EMBED, VISION, AUDIO_IN, WEB_SEARCH,<br/>  TOKEN_COUNT, CACHE_PROMPT, CODE_EXEC<br/>Models: Gemini 2.5 Pro, Flash, Embedding<br/>API: generateContent / embedContent / countTokens<br/>Auth: API key"]:::provider
+
+        PLUGIN_VLLM["vLLMPlugin : IProviderPlugin<br/>Manifest: vllm.manifest.yaml<br/>Capabilities: CHAT, TOOL_CALL (model-dependent),<br/>  EMBED, VISION (LLaVA), TOKEN_COUNT<br/>Models: Llama 3.3, Mistral, Qwen, LLaVA<br/>API: OpenAI-compatible /v1/*<br/>Auth: none (local)<br/>Placement: local_gpu"]:::provider
+
+        PLUGIN_OLLAMA["OllamaPlugin : IProviderPlugin<br/>Manifest: ollama.manifest.yaml<br/>Capabilities: CHAT, EMBED, VISION (LLaVA),<br/>  TOKEN_COUNT<br/>Models: Llama 3.3 8B-Q4, Phi-3, Gemma<br/>API: /api/chat, /api/embed, /api/generate<br/>Auth: none (local)<br/>Placement: local_cpu"]:::provider
+
+        PLUGIN_FUTURE["[Future Plugins -- 0 hub changes]<br/>MistralPlugin, CoherePlugin, xAIPlugin,<br/>DeepSeekPlugin, AWSBedrockPlugin ...<br/>---<br/>Each: 1 manifest + 1 IProviderPlugin class<br/>Auto-discovered on startup"]:::provider_future
+      end
+    end
+
+    subgraph ADAPTERS_TEST["Test Adapters (7 + 1 Mock Plugin)"]
+      direction TB
+
+      ADAPT_TEST_INBOUND["TestLLMRequestAdapter<br/>Inject HubRequest, capture HubResponse"]:::adapter_test
+      ADAPT_TEST_EVENT["TestEventAdapter<br/>Inject/capture model_hub events"]:::adapter_test
+      ADAPT_TEST_STATE["TestStateReadAdapter<br/>Scripted persona + control snapshots"]:::adapter_test
+      ADAPT_TEST_METRICS["TestMetricsAdapter<br/>Capture all emitted metrics"]:::adapter_test
+      ADAPT_TEST_CONFIG["TestConfigAdapter<br/>In-memory config, overridable"]:::adapter_test
+      ADAPT_TEST_CREDENTIAL["TestCredentialAdapter<br/>Fake API keys, no encryption"]:::adapter_test
+      ADAPT_TEST_HEALTH["TestHealthAdapter<br/>Capture health reports"]:::adapter_test
+
+      ADAPT_TEST_PROVIDER["TestProviderPlugin : IProviderPlugin<br/>Manifest: test.manifest.yaml<br/>Capabilities: ALL (configurable per test)<br/>Deterministic responses, configurable latency,<br/>errors, tokens, streaming chunks<br/>---<br/>Registered as any provider_id for test isolation"]:::adapter_test
+    end
+  end
+
+  %% ======================================================================================
+  %% INVARIANTS -- Visual Summary (MH-01 through MH-18)
+  %% ======================================================================================
+  subgraph INVARIANTS["Invariants (18 Non-Negotiable Rules -- MH-01..MH-18)"]
+    direction TB
+
+    INV_OWNERSHIP["OWNERSHIP (MH-01..03)<br/>MH-01: NEVER writes SessionState (read-only model pref)<br/>MH-02: ALL API keys in CredentialStore (never in manifest)<br/>MH-03: Every request carries cognitive_trace_id"]:::invariant
+
+    INV_BUDGET["BUDGET + COST (MH-04, MH-07..08)<br/>MH-04: Budget enforcement HARD (reject if exceeded)<br/>MH-07: Cost from manifest model cost table (not hardcoded)<br/>MH-08: Daily budget: $5/day default (configurable)"]:::invariant
+
+    INV_RESILIENCE["RESILIENCE (MH-05..06, MH-12..15)<br/>MH-05: CB per provider (config from manifest)<br/>MH-06: Fallback is CAPABILITY-AWARE (not blind)<br/>MH-12: Rate limits from manifest (80% headroom)<br/>MH-13: Placement: Local -> Remote -> Cached -> Template<br/>MH-14: Health check interval from manifest<br/>MH-15: Timeout per priority tier"]:::invariant
+
+    INV_OPERATIONAL["OPERATIONAL (MH-09..11, MH-16..18)<br/>MH-09: Cache key includes capability type<br/>MH-10: Stream chunks validated individually<br/>MH-11: Full audit with capability tag<br/>MH-16: ALL traffic through RequestRouter<br/>MH-17: Plugin isolation (crash boundary)<br/>MH-18: Manifest is SOLE capability truth"]:::invariant
+  end
+
+  %% ======================================================================================
+  %% PERFORMANCE BASELINES
+  %% ======================================================================================
+  subgraph PERF_BASELINES["Performance Baselines"]
+    direction TB
+
+    PERF_ROUTING["ROUTING OVERHEAD (P95)<br/>Request deserialization: < 1ms<br/>Budget check: < 1ms<br/>Capability routing: < 2ms<br/>Model selection: < 5ms<br/>Cache lookup: < 2ms<br/>Plugin dispatch: < 1ms<br/>---<br/>Total hub overhead: < 12ms<br/>(excluding actual LLM inference)"]:::perf
+
+    PERF_PROVIDERS["PROVIDER LATENCIES (P95, from manifests)<br/>GPT-4o / Claude Sonnet: 1-5s (INTERACTIVE)<br/>GPT-4o-mini / Gemini Flash: 200ms-1s (FAST)<br/>o3 / Claude Opus Reason: 5-30s (REASON)<br/>Embeddings: 50-200ms (EMBED)<br/>vLLM local GPU: 500ms-3s<br/>Ollama local CPU: 2-10s<br/>Cache hit: < 5ms"]:::perf
+
+    PERF_THROUGHPUT["THROUGHPUT<br/>Concurrent requests: 50 max (configurable)<br/>Per-provider: from manifest.concurrency.max_concurrent<br/>Requests/sec: 100 sustained, 200 burst<br/>Cache hit rate target: > 30%<br/>Provider failover: < 100ms"]:::perf
+
+    PERF_COST["COST BASELINES (from manifest cost tables)<br/>Avg cost per turn: $0.001-$0.01<br/>Daily budget default: $5.00<br/>Monthly budget default: $100.00<br/>Cost optimization target: < $0.005/turn avg<br/>Batch discount: ~50% (OpenAI, Anthropic)"]:::perf
+  end
+
+  %% ======================================================================================
+  %% INTERNAL SERVICES (13 Codeable Components -- ~550 Tests)
+  %% ======================================================================================
+  subgraph SERVICES["Internal Services (13 Components -- ~550 Tests)"]
+    direction TB
+
+    SVC_PROVIDER_REGISTRY["ProviderRegistry<br/>register(manifest_path) -> void<br/>unregister(provider_id) -> void<br/>get_plugin(provider_id) -> IProviderPlugin<br/>list_providers() -> ProviderInfo[]<br/>---<br/>STARTUP: scan k1/config/providers/*.manifest.yaml<br/>For each: validate schema -> load plugin_class<br/>  -> call plugin.initialize(manifest) -> index capabilities<br/>HOT RELOAD: watch manifest dir (30s interval)<br/>  changed file -> re-validate -> re-register<br/>  new file -> register new provider (emit registered.v1)<br/>  deleted file -> unregister (graceful drain)<br/>---<br/>CAPABILITY INDEX: dict[CapabilityType, list[ProviderInfo]]<br/>O(1) lookup: which providers support TOOL_CALL?<br/>~50 tests"]:::service
+
+    SVC_CAPABILITY_ROUTER["CapabilityRouter<br/>route(capability, constraints) -> EligibleProvider[]<br/>---<br/>1. Lookup capability in ProviderRegistry index (MH-18)<br/>2. Filter by: model supports capability (model-level)<br/>3. Filter by: circuit breaker not OPEN<br/>4. Filter by: rate limit not exhausted<br/>5. Filter by: health status >= DEGRADED<br/>6. Return ranked list (for ModelSelector)<br/>---<br/>If 0 eligible: check cache -> template fallback<br/>NEVER hardcodes provider names (MH-18)<br/>~55 tests"]:::service
+
+    SVC_REQUEST_ROUTER["RequestRouter<br/>route(HubRequest) -> HubResponse<br/>stream_route(HubRequest) -> AsyncIterator[HubChunk]<br/>---<br/>1. Validate envelope (schema, trace_id MH-03)<br/>2. Check daily budget (MH-04, MH-08)<br/>3. Classify priority -> set timeout (MH-15)<br/>4. CapabilityRouter -> eligible providers<br/>5. ModelSelector -> provider + model + fallback chain<br/>6. Check cache (MH-09)<br/>7. ProviderDispatcher -> execute/stream<br/>8. Post-process: cache, cost, audit, metrics<br/>9. Return HubResponse<br/>---<br/>SINGLE ENTRY POINT for all traffic (MH-16)<br/>~80 tests"]:::service
+
+    SVC_MODEL_SELECTOR["ModelSelector<br/>select(eligible_providers, request) -> ModelChoice<br/>---<br/>Input: eligible providers (from CapabilityRouter),<br/>  constraints (from HubRequest), persona (from SessionState)<br/>Algorithm:<br/>  1. Score each (provider, model) pair:<br/>     - cost_score: cheaper = higher (manifest cost table)<br/>     - latency_score: faster tier = higher (manifest tier)<br/>     - preference_score: user/consumer preference match<br/>     - placement_score: local > remote (MH-13)<br/>     - health_score: HEALTHY > DEGRADED<br/>  2. Weighted sum (weights configurable per priority):<br/>     REALTIME: latency 0.5, cost 0.1, pref 0.2, health 0.2<br/>     INTERACTIVE: latency 0.3, cost 0.2, pref 0.3, health 0.2<br/>     BACKGROUND: cost 0.5, latency 0.1, pref 0.1, health 0.3<br/>  3. Build fallback chain: top 3 choices (MH-06)<br/>Output: {provider_id, model_id, fallback_chain[]}<br/>~60 tests"]:::service
+
+    SVC_NORMALIZATION["NormalizationLayer<br/>normalize(HubRequest, target_provider) -> NormalizedRequest<br/>denormalize(ProviderResponse) -> HubResponse<br/>---<br/>Translates between hub-canonical format and<br/>provider-agnostic NormalizedRequest.<br/>Each IProviderPlugin then translates NormalizedRequest<br/>to its own native API format.<br/>---<br/>Handles: message format, tool schema format,<br/>  image encoding, audio encoding, etc.<br/>Hub NEVER knows about provider-specific wire formats.<br/>~40 tests"]:::service
+
+    SVC_BUDGET_ENFORCER["BudgetEnforcer<br/>check(request) -> BudgetDecision<br/>track(response) -> void<br/>---<br/>Per-request: max_tokens from constraints<br/>Per-session: cumulative token tracking<br/>Per-day: $5/day default (MH-08)<br/>---<br/>Decision: ALLOW | ALLOW_DEGRADED | REJECT<br/>ALLOW_DEGRADED: force cheapest model for capability<br/>REJECT: emit budget.alert.v1 (level=EXCEEDED)<br/>Warning at 80%: emit budget.alert.v1 (level=WARNING)<br/>---<br/>Cost lookup: manifest model cost tables (MH-07)<br/>~50 tests"]:::service
+
+    SVC_RESPONSE_CACHE["ResponseCache<br/>get(cache_key) -> CachedResponse?<br/>put(cache_key, response, ttl) -> void<br/>---<br/>Key: hash(capability + payload_hash + model_id + temperature)<br/>TTL: 5min default (MH-09)<br/>Eviction: LRU with max 1000 entries<br/>---<br/>SKIP CACHE for:<br/>  - TOOL_CALL (side-effect potential)<br/>  - temperature > 0.9 (high randomness)<br/>  - streaming requests<br/>  - BATCH (async by nature)<br/>  - MODERATE (must be fresh)<br/>~40 tests"]:::service
+
+    SVC_CIRCUIT_BREAKER_MGR["CircuitBreakerManager<br/>acquire(provider_id) -> CircuitState<br/>record_success(provider_id) -> void<br/>record_failure(provider_id, error) -> void<br/>---<br/>Config: FROM MANIFEST per provider (MH-05)<br/>Default: 3 failures in 60s -> OPEN for 30s<br/>States: CLOSED -> OPEN -> HALF_OPEN -> CLOSED<br/>---<br/>Emit: circuit.state.v1 on transitions<br/>~55 tests"]:::service
+
+    SVC_RATE_LIMITER["RateLimiter<br/>acquire(provider_id, token_estimate) -> RateDecision<br/>---<br/>Per-provider token bucket:<br/>Config: FROM MANIFEST per provider (MH-12)<br/>Headroom: manifest.rate_limits.headroom_pct (default 80%)<br/>Overflow: queue 5s max wait, then fallback<br/>~35 tests"]:::service
+
+    SVC_PROVIDER_DISPATCHER["ProviderDispatcher<br/>dispatch(routed_request) -> ProviderResponse<br/>stream(routed_request) -> AsyncIterator[Chunk]<br/>---<br/>1. Acquire circuit breaker<br/>2. Acquire rate limiter<br/>3. Get credential (via ICredentialPort MH-02)<br/>4. Call plugin.execute() or plugin.stream_execute()<br/>5. Record success/failure for CB<br/>6. On failure: next in fallback chain (MH-06)<br/>---<br/>Retry: 1 retry on timeout/5xx, then fallback<br/>Max fallback depth: 3 (from ModelSelector chain)<br/>~60 tests"]:::service
+
+    SVC_COST_TRACKER["CostTracker<br/>track(response, model_info) -> CostRecord<br/>---<br/>Cost: tokens * model.cost_per_1m / 1_000_000<br/>Model cost: FROM MANIFEST (not hardcoded MH-07)<br/>Aggregations: per-consumer, per-model, per-capability<br/>~30 tests"]:::service
+
+    SVC_HEALTH_MONITOR["ProviderHealthMonitor<br/>check_all() -> HealthReport<br/>---<br/>Periodic: per manifest.health_check.interval_s (MH-14)<br/>Method: plugin.health_check() (wraps manifest endpoint)<br/>Metrics: latency_p50, error_rate_1m, availability<br/>---<br/>HEALTHY: < 5% error, < 5s p95<br/>DEGRADED: 5-20% error or > 5s p95<br/>UNHEALTHY: > 20% error or > 15s p95<br/>Emit: provider.health.v1 on state change<br/>~25 tests"]:::service
+
+    SVC_AUDIT_LOGGER["AuditLogger<br/>log(request, response, metadata) -> void<br/>---<br/>Every call logged (MH-11):<br/>  request_id, consumer_id, capability,<br/>  model_id, provider_id, prompt_tokens,<br/>  completion_tokens, cost_usd, latency_ms,<br/>  cache_hit, fallback_chain, trace_id<br/>~15 tests"]:::service
+  end
+
+  %% ======================================================================================
+  %% TOUCHPOINTS -- External Systems Model Hub Interacts With
+  %% ======================================================================================
+  subgraph EXTERNAL["External Touchpoints"]
+    direction TB
+
+    subgraph TP_CONSUMERS["LLM Consumers (via LLM Request Bus)"]
+      direction TB
+
+      TP_CONCIERGE["Concierge<br/>Capabilities: CHAT, TOOL_CALL, STRUCTURED, VISION, REASON<br/>Priority: REALTIME + INTERACTIVE<br/>See: k1/concierge/concierge.mmd"]:::consumer
+
+      TP_PLANNER["Planner<br/>Capabilities: CHAT, TOOL_CALL, STRUCTURED<br/>Priority: INTERACTIVE<br/>See: k1/planner/planner.mmd"]:::consumer
+
+      TP_FABRIC["Fabric (Agent Factory)<br/>Capabilities: per AgentContract<br/>Priority: per AgentContract<br/>See: k1/fabric/fabric.mmd"]:::consumer
+
+      TP_MEMORY_WRITER["Memory Writer<br/>Capabilities: CHAT, STRUCTURED<br/>Priority: BACKGROUND<br/>See: k1/memory_writer/memory_writer.mmd"]:::consumer
+
+      TP_LEARNING["Learning Loop (Agents)<br/>Capabilities: CHAT, STRUCTURED, MODERATE<br/>Priority: BACKGROUND<br/>See: k1/learning/learning.mmd"]:::consumer
+    end
+
+    subgraph TP_FABRIC_SYSTEMS["Fabric-Owned Systems (Upstream/Downstream)"]
+      direction TB
+
+      TP_PROMPT_SYSTEM["Prompt Management System (Fabric-owned)<br/>Compiles prompt BEFORE hub receives request<br/>Hub gets compiled prompt string inside payload<br/>See: k1/fabric/fabric.mmd"]:::upstream
+
+      TP_OUTPUT_VALIDATION["Output Validation Pipeline (Fabric-owned)<br/>Validates AFTER hub returns response<br/>Hub returns raw LLM response<br/>See: k1/fabric/fabric.mmd"]:::upstream
+    end
+
+    subgraph TP_BUSES["Event Bus + LLM Request Bus"]
+      direction TB
+
+      LLM_REQUEST_BUS["LLM Request Bus<br/>Async request-reply channel<br/>Capability-tagged envelopes<br/>Protocol: HubRequest -> HubResponse"]:::bus
+
+      EVENT_BUS["K1 Event Bus<br/>Pub: all model_hub.*.v1 events<br/>Sub: config_update.v1"]:::bus
+    end
+
+    subgraph TP_OBSERVABILITY["Observability Layer"]
+      direction TB
+
+      OBS_METRICS["Metrics Aggregator<br/>Dashboards: cost, latency, errors per capability"]:::obs
+      OBS_TRACING["Distributed Tracing<br/>cognitive_trace_id -> provider.call spans"]:::obs
+    end
+  end
+
+  %% ======================================================================================
+  %% LIFECYCLE -- Model Hub Module Lifecycle
+  %% ======================================================================================
+  subgraph LIFECYCLE["Module Lifecycle"]
+    direction TB
+
+    LC_INIT["INIT<br/>1. Load hub config (model_hub.yaml)<br/>2. Initialize CredentialStore<br/>3. Scan k1/config/providers/*.manifest.yaml<br/>4. For each manifest: validate, load plugin_class,<br/>   plugin.initialize(manifest), index capabilities<br/>5. Initialize ResponseCache (empty)<br/>6. Initialize BudgetEnforcer (daily reset)<br/>7. Emit: provider.registered.v1 per provider<br/>8. Emit: capability.available.v1 per capability"]:::lifecycle
+
+    LC_HEALTH_CHECK["HEALTH_CHECK<br/>1. For each provider: plugin.health_check()<br/>2. Set initial health states<br/>3. Start periodic monitor (per manifest interval)<br/>4. Report aggregate health to Fabric"]:::lifecycle
+
+    LC_READY["READY<br/>1. Subscribe to LLM_REQUEST_BUS<br/>2. Register event handlers<br/>3. Start manifest hot-reload watcher<br/>4. Emit: k1.model_hub.ready.v1"]:::lifecycle
+
+    LC_RUNNING["RUNNING<br/>Steady state: route, dispatch, cache, track<br/>Periodic: health checks, budget resets,<br/>  cache eviction, manifest reload"]:::lifecycle
+
+    LC_DEGRADED["DEGRADED<br/>Some providers unavailable<br/>Capability-aware fallback active<br/>Reduced capability surface"]:::lifecycle
+
+    LC_SHUTDOWN["SHUTDOWN<br/>1. Stop accepting new requests<br/>2. Drain in-flight (10s timeout)<br/>3. For each plugin: plugin.close()<br/>4. Flush metrics + audit logs<br/>5. Emit: k1.model_hub.shutdown.v1"]:::lifecycle
+  end
+
+  %% ======================================================================================
+  %% CONCURRENCY MODEL
+  %% ======================================================================================
+  subgraph CONCURRENCY["Concurrency Model"]
+    direction TB
+
+    CONC_ASYNC["Async Event Loop<br/>All plugin calls are non-blocking async<br/>asyncio.gather for parallel health probes<br/>---<br/>Max concurrent: 50 total (configurable)<br/>Per-provider: from manifest.concurrency.max_concurrent"]:::concurrency
+
+    CONC_CACHE["Cache Concurrency<br/>Thread-safe LRU cache<br/>Lock-free reads (atomic get)<br/>Write lock for put + eviction"]:::concurrency
+
+    CONC_BUDGET["Budget Concurrency<br/>Atomic counters (CAS operations)<br/>Daily reset via scheduled task"]:::concurrency
+
+    CONC_CB["Circuit Breaker Concurrency<br/>Per-provider atomic state machine<br/>Read-heavy, write-rare"]:::concurrency
+
+    CONC_PLUGIN["Plugin Isolation (MH-17)<br/>Each plugin: own semaphore (from manifest max_concurrent)<br/>Plugin timeout: from manifest health_check.timeout_s<br/>Plugin crash: caught at ProviderDispatcher boundary<br/>  -> record_failure -> CB -> fallback"]:::concurrency
+  end
+
+  %% ======================================================================================
+  %% MODEL SELECTION STRATEGY
+  %% ======================================================================================
+  subgraph MODEL_SELECTION["Model Selection Strategy"]
+    direction TB
+
+    MS_PRIORITY["Priority -> Timeout Mapping (MH-15)<br/>---<br/>REALTIME: 10s (ack, dispatch, delivery)<br/>INTERACTIVE: 30s (plan, response, tools)<br/>BACKGROUND: 60s (extraction, learning, batch)"]:::strategy
+
+    MS_COST_OPT["Cost Optimization (from manifest cost tables)<br/>---<br/>BACKGROUND: always cheapest model for capability<br/>Budget > 80%: cheapest for non-REALTIME<br/>Budget > 95%: cheapest for ALL<br/>BATCH capability: 50% discount (MH-07)"]:::strategy
+
+    MS_PLACEMENT["Placement Cascade (MH-13, ADR-0027)<br/>---<br/>1. Local providers (manifest.placement.type=local_*)<br/>   NPU -> GPU -> CPU (check available plugins)<br/>2. Remote providers (manifest.placement.type=remote)<br/>   Ranked by score (cost, latency, preference)<br/>3. Cached response (stale but available)<br/>4. Template response (canned, last resort)"]:::strategy
+
+    MS_FALLBACK["Capability-Aware Fallback (MH-06)<br/>---<br/>ONLY fail over to providers that:<br/>  1. support the requested capability (MH-18)<br/>  2. have CB in CLOSED or HALF_OPEN<br/>  3. have rate limit headroom<br/>  4. are HEALTHY or DEGRADED<br/>---<br/>Fallback chain: up to 3 alternatives<br/>Built per-request by ModelSelector"]:::strategy
+  end
+
+  %% ======================================================================================
+  %% DATA FLOWS -- Request Processing Pipeline
+  %% ======================================================================================
+
+  %% Consumer -> LLM Request Bus -> Model Hub
+  TP_CONCIERGE -->|"HubRequest{CHAT|TOOL_CALL|...}"| LLM_REQUEST_BUS
+  TP_PLANNER -->|"HubRequest{CHAT|STRUCTURED|...}"| LLM_REQUEST_BUS
+  TP_FABRIC -->|"HubRequest{per AgentContract}"| LLM_REQUEST_BUS
+  TP_MEMORY_WRITER -->|"HubRequest{CHAT|STRUCTURED}"| LLM_REQUEST_BUS
+  TP_LEARNING -->|"HubRequest{CHAT|MODERATE}"| LLM_REQUEST_BUS
+
+  %% LLM Request Bus -> Hub entry
+  LLM_REQUEST_BUS -->|"HubRequest envelope"| SVC_REQUEST_ROUTER
+
+  %% Request Router pipeline
+  SVC_REQUEST_ROUTER -->|"1. validate + budget"| SVC_BUDGET_ENFORCER
+  SVC_BUDGET_ENFORCER -->|"ALLOW / ALLOW_DEGRADED"| SVC_CAPABILITY_ROUTER
+  SVC_BUDGET_ENFORCER -->|"REJECT"| EVT_BUDGET_ALERT
+  SVC_CAPABILITY_ROUTER -->|"eligible providers for capability"| SVC_MODEL_SELECTOR
+  SVC_MODEL_SELECTOR -->|"chosen (provider, model, fallback[])"| SVC_RESPONSE_CACHE
+  SVC_RESPONSE_CACHE -->|"cache miss"| SVC_NORMALIZATION
+  SVC_RESPONSE_CACHE -->|"cache hit"| SVC_REQUEST_ROUTER
+  SVC_NORMALIZATION -->|"NormalizedRequest"| SVC_PROVIDER_DISPATCHER
+
+  %% Model Selector reads
+  SVC_MODEL_SELECTOR -->|"persona model pref"| PORT_STATE_READ
+  SVC_MODEL_SELECTOR -->|"health states"| SVC_HEALTH_MONITOR
+  SVC_MODEL_SELECTOR -->|"CB states"| SVC_CIRCUIT_BREAKER_MGR
+
+  %% Capability Router reads
+  SVC_CAPABILITY_ROUTER -->|"capability index"| SVC_PROVIDER_REGISTRY
+
+  %% Provider Dispatcher -> Plugin
+  SVC_PROVIDER_DISPATCHER -->|"acquire CB"| SVC_CIRCUIT_BREAKER_MGR
+  SVC_PROVIDER_DISPATCHER -->|"acquire rate"| SVC_RATE_LIMITER
+  SVC_PROVIDER_DISPATCHER -->|"get credential"| PORT_CREDENTIAL
+  SVC_PROVIDER_DISPATCHER -->|"plugin.execute()"| PLUGIN_OPENAI
+  SVC_PROVIDER_DISPATCHER -->|"plugin.execute()"| PLUGIN_ANTHROPIC
+  SVC_PROVIDER_DISPATCHER -->|"plugin.execute()"| PLUGIN_GOOGLE
+  SVC_PROVIDER_DISPATCHER -->|"plugin.execute()"| PLUGIN_VLLM
+  SVC_PROVIDER_DISPATCHER -->|"plugin.execute()"| PLUGIN_OLLAMA
+
+  %% Plugin response flow
+  PLUGIN_OPENAI -.->|"ProviderResponse"| SVC_PROVIDER_DISPATCHER
+  PLUGIN_ANTHROPIC -.->|"ProviderResponse"| SVC_PROVIDER_DISPATCHER
+  PLUGIN_GOOGLE -.->|"ProviderResponse"| SVC_PROVIDER_DISPATCHER
+  PLUGIN_VLLM -.->|"ProviderResponse"| SVC_PROVIDER_DISPATCHER
+  PLUGIN_OLLAMA -.->|"ProviderResponse"| SVC_PROVIDER_DISPATCHER
+
+  %% Post-dispatch processing
+  SVC_PROVIDER_DISPATCHER -.->|"success/failure"| SVC_CIRCUIT_BREAKER_MGR
+  SVC_PROVIDER_DISPATCHER -.->|"track cost"| SVC_COST_TRACKER
+  SVC_PROVIDER_DISPATCHER -.->|"cache response"| SVC_RESPONSE_CACHE
+  SVC_PROVIDER_DISPATCHER -.->|"audit log"| SVC_AUDIT_LOGGER
+  SVC_PROVIDER_DISPATCHER -.->|"denormalize"| SVC_NORMALIZATION
+  SVC_NORMALIZATION -.->|"HubResponse"| SVC_REQUEST_ROUTER
+
+  %% Response to consumer
+  SVC_REQUEST_ROUTER -.->|"HubResponse"| LLM_REQUEST_BUS
+  LLM_REQUEST_BUS -.->|"to consumer"| TP_CONCIERGE
+  LLM_REQUEST_BUS -.->|"to consumer"| TP_PLANNER
+  LLM_REQUEST_BUS -.->|"to consumer"| TP_FABRIC
+  LLM_REQUEST_BUS -.->|"to consumer"| TP_MEMORY_WRITER
+  LLM_REQUEST_BUS -.->|"to consumer"| TP_LEARNING
+
+  %% Fallback on failure
+  SVC_PROVIDER_DISPATCHER -->|"failure: next in chain"| SVC_MODEL_SELECTOR
+
+  %% Provider Registry -> CapabilityRouter
+  SVC_PROVIDER_REGISTRY -->|"capability index"| SVC_CAPABILITY_ROUTER
+
+  %% Health monitor -> plugins
+  SVC_HEALTH_MONITOR -->|"plugin.health_check()"| PLUGIN_OPENAI
+  SVC_HEALTH_MONITOR -->|"plugin.health_check()"| PLUGIN_ANTHROPIC
+  SVC_HEALTH_MONITOR -->|"plugin.health_check()"| PLUGIN_GOOGLE
+  SVC_HEALTH_MONITOR -->|"plugin.health_check()"| PLUGIN_VLLM
+  SVC_HEALTH_MONITOR -->|"plugin.health_check()"| PLUGIN_OLLAMA
+
+  %% Events
+  SVC_REQUEST_ROUTER -->|"emit"| EVT_REQUEST_RECEIVED
+  SVC_REQUEST_ROUTER -->|"emit"| EVT_REQUEST_ROUTED
+  SVC_PROVIDER_DISPATCHER -->|"emit"| EVT_RESPONSE_COMPLETE
+  SVC_PROVIDER_DISPATCHER -->|"emit"| EVT_PROVIDER_FAILURE
+  SVC_MODEL_SELECTOR -->|"emit"| EVT_FALLBACK_TRIGGERED
+  SVC_CIRCUIT_BREAKER_MGR -->|"emit"| EVT_CIRCUIT_STATE
+  SVC_BUDGET_ENFORCER -->|"emit"| EVT_BUDGET_ALERT
+  SVC_HEALTH_MONITOR -->|"emit"| EVT_PROVIDER_HEALTH
+  SVC_PROVIDER_REGISTRY -->|"emit"| EVT_PROVIDER_REGISTERED
+  SVC_PROVIDER_REGISTRY -->|"emit"| EVT_CAPABILITY_AVAILABLE
+
+  %% Metrics
+  SVC_COST_TRACKER -->|"cost metrics"| PORT_METRICS
+  SVC_REQUEST_ROUTER -->|"latency metrics"| PORT_METRICS
+  SVC_CIRCUIT_BREAKER_MGR -->|"state metrics"| PORT_METRICS
+  SVC_RATE_LIMITER -->|"usage metrics"| PORT_METRICS
+  SVC_RESPONSE_CACHE -->|"hit/miss metrics"| PORT_METRICS
+  SVC_PROVIDER_REGISTRY -->|"provider count"| PORT_METRICS
+  PORT_METRICS -->|"exposition"| OBS_METRICS
+
+  %% Audit
+  SVC_AUDIT_LOGGER -->|"structured logs"| OBS_TRACING
+
+  %% Health
+  SVC_HEALTH_MONITOR -->|"report"| PORT_HEALTH
+  PORT_HEALTH -->|"to Fabric"| OBS_METRICS
+
+  %% Lifecycle
+  LC_INIT --> LC_HEALTH_CHECK
+  LC_HEALTH_CHECK --> LC_READY
+  LC_READY --> LC_RUNNING
+  LC_RUNNING -->|"providers fail"| LC_DEGRADED
+  LC_DEGRADED -->|"providers recover"| LC_RUNNING
+  LC_RUNNING --> LC_SHUTDOWN
+
+  %% Prompt System & Output Validation are UPSTREAM/DOWNSTREAM (Fabric-owned)
+  TP_PROMPT_SYSTEM -->|"compiled prompt in HubRequest.payload"| LLM_REQUEST_BUS
+  LLM_REQUEST_BUS -->|"raw response -> consumer -> validation"| TP_OUTPUT_VALIDATION
+
+  %% ======================================================================================
+  %% STYLE DEFINITIONS
+  %% ======================================================================================
+  classDef module_header fill:#1a237e,stroke:#0d47a1,stroke-width:3px,color:#fff,font-weight:bold
+  classDef event fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+  classDef port fill:#e3f2fd,stroke:#1565c0,stroke-width:3px,color:#000,font-weight:bold
+  classDef adapter fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#000
+  classDef adapter_test fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px,color:#000,font-style:italic
+  classDef provider fill:#fce4ec,stroke:#c62828,stroke-width:2px,color:#000,font-weight:bold
+  classDef provider_future fill:#fce4ec,stroke:#c62828,stroke-width:1px,color:#666,font-style:italic,stroke-dasharray: 5 5
+  classDef invariant fill:#ffebee,stroke:#c62828,stroke-width:3px,color:#000,font-weight:bold
+  classDef perf fill:#e0f2f1,stroke:#00695c,stroke-width:2px,color:#000
+  classDef service fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
+  classDef consumer fill:#bbdefb,stroke:#1565c0,stroke-width:2px,color:#000
+  classDef upstream fill:#b2ebf2,stroke:#00695c,stroke-width:2px,color:#000,font-style:italic
+  classDef external_api fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000
+  classDef bus fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,color:#000
+  classDef obs fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+  classDef circuit_breaker fill:#ffebee,stroke:#c62828,stroke-width:3px,color:#000,stroke-dasharray: 5 5
+  classDef lifecycle fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000
+  classDef concurrency fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+  classDef strategy fill:#e0f7fa,stroke:#006064,stroke-width:2px,color:#000
+  classDef gateway fill:#b2dfdb,stroke:#004d40,stroke-width:3px,color:#000,font-weight:bold
+  classDef capability fill:#e8eaf6,stroke:#283593,stroke-width:2px,color:#000,font-weight:bold
+  classDef capability_future fill:#e8eaf6,stroke:#283593,stroke-width:1px,color:#666,font-style:italic,stroke-dasharray: 5 5
+  classDef schema fill:#f1f8e9,stroke:#33691e,stroke-width:2px,color:#000
+  classDef schema_future fill:#f1f8e9,stroke:#33691e,stroke-width:1px,color:#666,font-style:italic,stroke-dasharray: 5 5
+  classDef plugin_contract fill:#e0f7fa,stroke:#006064,stroke-width:3px,color:#000,font-weight:bold
+  classDef plugin_note fill:#fff9c4,stroke:#f57f17,stroke-width:1px,color:#000,font-style:italic

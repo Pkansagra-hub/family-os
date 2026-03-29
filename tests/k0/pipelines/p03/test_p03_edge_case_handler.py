@@ -132,7 +132,7 @@ class TestEdgeCaseType:
             "PARTIAL_WRITE_FAILURE",
             "BACKLOG_OVERFLOW",
             "P08_CIRCUIT_OPEN",
-            "FAISS_UNAVAILABLE",
+            "VECTOR_INDEX_UNAVAILABLE",
             "DUPLICATE_TRIGGER",
             "MEMORY_PRESSURE",
             "KG_EXPLOSION",

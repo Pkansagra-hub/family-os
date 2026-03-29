@@ -1,3 +1,9 @@
+# DEPRECATED: Superseded by embedding.cleanup.v2.yaml (M4 Epic 4.4)
+# Reason: v1 references FAISS index removal, v2 is pure SQL DELETE
+# See: ADR-K003 v2.0, k0/contracts/modules/embedding.cleanup.v2.yaml
+deprecated: true
+superseded_by: embedding.cleanup.v2.yaml
+
 module_id: embedding.cleanup
 version: v1
 

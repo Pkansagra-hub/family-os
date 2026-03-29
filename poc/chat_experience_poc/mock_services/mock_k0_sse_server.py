@@ -96,6 +96,12 @@ async def fire_event(event: SSEEvent):
 
     Called by Temporal Module when trigger fires.
 
+    Supported event types:
+      - prospective.trigger.fired: User-defined triggers
+      - prospective.pattern.detected: Pattern detection
+      - prospective.anomaly.alert: Anomaly alerts
+      - knowledge.gap.detected: Knowledge gap needing user input
+
     Args:
         event: SSE event with type and data
 

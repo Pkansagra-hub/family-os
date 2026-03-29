@@ -1,0 +1,305 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+%% =====================================================================================
+%% SESSION KERNEL (K1) — HOT/WARM/COLD TIERED STATE (FINAL IMPLEMENTATION)
+%% =====================================================================================
+%% STATUS: ALL MILESTONES COMPLETE (M1-M4)
+%%   - 12 Sections (8 HOT + 4 WARM) — IMPLEMENTED
+%%   - 6 Kernel Services — IMPLEMENTED (455+ tests)
+%%   - 5 Ports, 6 Adapters, Factory — IMPLEMENTED
+%%   - Test Coverage: 400+ tests across unit/integration/contract
+%% =====================================================================================
+%% PERFORMANCE BASELINES (verified via load testing):
+%%   HOT Read P99:  0.20 us  (750x better than 150 us SLO)
+%%   Write P99:     18.8 us  (27x better than 500 us SLO)
+%%   Reconstruct:   2.60 ms  (19x better than 50 ms SLO)
+%%   Read Throughput:  10M+ ops/sec
+%%   Write Throughput: 327K ops/sec
+%% =====================================================================================
+%% EDGE-FIRST DESIGN PRINCIPLE:
+%%   K1 is the brain. K0 is the library. The brain works even if the library is closed.
+%%   LOCAL COLD (K1 SQLite) = Device-local archive, always available
+%%   CLOUD SYNC (K0) = Optional enhancement for cross-device sync + long-term memory
+%% =====================================================================================
+%% Constraints:
+%%   HOT  <= 48KB (never thrash)
+%%   WARM <= 48KB (evictable)
+%%   TOTAL<= 96KB (hard)
+%% =====================================================================================
+
+subgraph SK["🧠 K1 SessionKernel (Tiered) — total ≤ 96KB"]
+  direction TB
+
+  %% ---------------- HOT CORE ----------------
+  subgraph HOT["🔥 HOT CORE (≤ 48KB) — NEVER THRASH"]
+    direction TB
+
+    H_CONTROL["1) control (≤ 8KB)<br/>agent leases, turn lock, flow state<br/><b>NEVER EVICT</b>"]:::hot_critical
+    H_BELIEFS_ACTIVE["2) beliefs_active (≤ 8KB)<br/>facts needed THIS turn<br/>demote → beliefs_history"]:::hot
+    H_SCOREBOARD["3) scoreboard (≤ 6KB)<br/>referents, QUD top, salience"]:::hot
+    H_HISTORY_ACTIVE["4) history_active (≤ 8KB)<br/>last 10 turns<br/>full fidelity"]:::hot
+    H_CLARIFICATIONS["5) clarifications (≤ 4KB)<br/>open gaps THIS turn"]:::hot
+    H_AFFECT_NOW["6) affective_now (≤ 4KB)<br/>current emotion snapshot"]:::hot
+    H_NARR_ACTIVE["7) narrative_active (≤ 4KB)<br/>ONE active thread"]:::hot
+    H_META["8) meta (≤ 2KB)<br/>session id, band, timestamps"]:::hot
+  end
+
+  %% ---------------- WARM TIER ----------------
+  subgraph WARM["🌡️ WARM TIER (≤ 48KB) — EVICTABLE"]
+    direction TB
+
+    W_BELIEFS_HIST["9) beliefs_history (≤ 12KB)<br/>recent facts, capped<br/>archive → K0"]:::warm
+    W_HISTORY_RECENT["10) history_recent (≤ 20KB)<br/>turns 11-40<br/>lossy compression"]:::warm
+    W_PERSONA["11) persona (≤ 8KB)<br/>traits, style, voice controls"]:::warm
+    W_TELEMETRY["12) telemetry (≤ 8KB)<br/>tokens, cost, counters (lossy)"]:::warm
+  end
+
+  %% ---------------- KERNEL SERVICES ----------------
+  subgraph SVC["🧱 Kernel Services (455+ tests)"]
+    direction TB
+
+    SIZE_TRACKER["SizeTracker (62 tests)<br/>per-section byte accounting"]:::svc
+    MUTATION_GUARD["MutationGuard (79 tests)<br/>preflight estimate + reject<br/>API: preflight(section, op, data) → Approval"]:::svc_critical
+    EVICTION_ENGINE["EvictionEngine (63 tests)<br/>tier-aware eviction + summarization<br/>Emits: k1.session.eviction.v1 via IEventPort<br/>Consumers: Memory Writer (eviction listener)"]:::svc
+    MIGRATION_ENGINE["MigrationEngine (102 tests)<br/>HOT↔WARM demote/promote"]:::svc
+    SNAPSHOT_API["SnapshotAPI (64 tests)<br/>size breakdown + health"]:::svc
+    RECON_SLA["ReconstructionSLA (85 tests)<br/>P95 < 50ms, partial hydration"]:::svc
+  end
+
+  %% ---------------- PORTS (INTERFACE LAYER) ----------------
+  subgraph PORTS["🔌 Ports (Hexagonal Architecture)"]
+    direction TB
+
+    PORT_STORAGE["IStoragePort<br/>persist/load/delete/list"]:::port
+    PORT_EVENT["IEventPort<br/>publish/subscribe events"]:::port
+    PORT_WRITER["IWriterPort<br/>commit mutations"]:::port
+    PORT_LIFECYCLE["ILifecyclePort<br/>session start/stop/status"]:::port
+    PORT_K0SYNC["IK0SyncPort<br/>optional cloud sync"]:::port
+  end
+
+  %% ---------------- ADAPTERS (IMPLEMENTATIONS) ----------------
+  subgraph ADAPTERS["🔧 Adapters (Implementations)"]
+    direction TB
+
+    ADAPT_SQLITE["SQLiteStorageAdapter<br/>production persistence"]:::adapter
+    ADAPT_MEMORY["InMemoryStorageAdapter<br/>testing/ephemeral"]:::adapter
+    ADAPT_EVENTS["LocalEventAdapter<br/>in-process events"]:::adapter
+    ADAPT_WRITER["DirectWriterAdapter<br/>immediate commit"]:::adapter
+    ADAPT_LIFECYCLE["StandaloneLifecycle<br/>edge-only operation"]:::adapter
+    ADAPT_NULLSYNC["NullSyncPort<br/>offline mode (no K0)"]:::adapter
+  end
+
+  %% ---------------- FACTORY ----------------
+  subgraph FACTORY["🏭 SessionStateFactory"]
+    direction TB
+
+    FACTORY_STANDALONE["create_standalone()<br/>edge-first, full offline"]:::factory
+    FACTORY_TESTING["create_for_testing()<br/>in-memory, fast tests"]:::factory
+    FACTORY_PORTS["create_with_ports()<br/>custom adapter injection"]:::factory
+  end
+
+  %% ---------------- CROSS-SECTION DEPENDENCIES ----------------
+  subgraph DEP["🔗 Cross-Section Dependencies"]
+    direction TB
+
+    DEP_ACTIVE_HIST["beliefs_active → beliefs_history<br/>active facts reference history<br/>eviction: pin critical facts"]:::flow
+    DEP_CONTROL_ACTIVE["control → beliefs_active<br/>leases depend on current facts<br/>eviction: cascade invalidation"]:::flow
+    DEP_SCOREBOARD_HIST["scoreboard → history<br/>referents need context<br/>eviction: degrade to summaries"]:::flow
+    DEP_NARR_THREADS["narrative_active → conversation_threads<br/>active thread references full threads<br/>eviction: archive inactive"]:::flow
+  end
+
+  %% ---------------- EMERGENCY MODE ----------------
+  subgraph EMERGENCY["🚨 Emergency Mode (≥95KB)"]
+    direction TB
+
+    EMERGENCY_SUMMARIZE["Emergency Summarization<br/>aggressive compression<br/>telemetry → aggregates"]:::warn
+    EMERGENCY_READONLY["Read-Only Mode<br/>temporarily reject writes<br/>allow reads + critical updates"]:::warn
+    EMERGENCY_SHED["Priority-Based Shedding<br/>evict WARM by priority<br/>preserve HOT control"]:::warn
+  end
+
+end
+
+%% =====================================================================================
+%% LOCAL COLD (K1 SQLite) — DEVICE-LOCAL ARCHIVE, ALWAYS AVAILABLE
+%% =====================================================================================
+
+subgraph LOCAL_COLD["❄️ LOCAL COLD (K1 SQLite) — device-local, always available"]
+  direction TB
+
+  ST_BELIEFS_ARCHIVE["st_beliefs_archive<br/>archived facts (local)"]:::local_cold
+  ST_HISTORY_ARCHIVE["st_history_archive<br/>full turn log (local)"]:::local_cold
+  ST_NARRATIVE_ARCHIVE["st_narrative_archive<br/>inactive threads (local)"]:::local_cold
+
+  %% Local Reconstruction SLA (no network dependency)
+  LOCAL_RECON_SLA["Local Reconstruction SLA<br/>Max: <50ms (disk only)<br/>Partial: hydrate HOT first<br/>Always available: no network needed"]:::local_cold
+end
+
+%% =====================================================================================
+%% CLOUD SYNC (K0) — OPTIONAL ENHANCEMENT, NOT REQUIRED FOR OPERATION
+%% =====================================================================================
+
+subgraph CLOUD_SYNC["☁️ CLOUD SYNC (K0) — optional enhancement"]
+  direction TB
+
+  K0_BELIEFS_ARCHIVE["K0 beliefs_archive<br/>cross-device sync"]:::cold
+  K0_HISTORY_ARCHIVE["K0 history_archive<br/>long-term memory"]:::cold
+  K0_NARRATIVE_ARCHIVE["K0 narrative_archive<br/>knowledge graph links"]:::cold
+  K0_MULTIMODAL_RAW["K0 multimodal_raw<br/>blobs/embeddings/pointers"]:::cold
+
+  %% K0 Sync SLA (network dependent)
+  K0_SYNC_SLA["K0 Sync SLA<br/>Best-effort: async<br/>Degraded: queue locally<br/>Offline: retry on reconnect"]:::cold
+end
+
+%% =====================================================================================
+%% RUNTIME FLOWS (Text-only — FINAL IMPLEMENTATION)
+%% =====================================================================================
+
+subgraph FLOWS["🔄 Runtime Flows"]
+  direction TB
+
+  WRITE_REQ["WriteRequest<br/>(concierge mutation)"]:::flow
+  READ_REQ["ReadRequest<br/>(agents read-only)"]:::flow
+  REJECTED["RejectedMutation<br/>return reason + caps"]:::warn
+  OK_COMMIT["ApprovedMutation<br/>apply delta"]:::ok
+  WARM_EVICT["WarmEviction<br/>evict order + summarize"]:::warn
+  LOCAL_ARCHIVE["ArchiveToLocal<br/>write to K1 SQLite"]:::local_cold
+  K0_SYNC_ARCHIVE["SyncToK0<br/>async cloud backup (optional)"]:::cold
+  LOCAL_RECON["ReconstructFromLocal<br/>hydrate from K1 SQLite"]:::local_cold
+  K0_RECON["ReconstructFromK0<br/>fallback if local missing"]:::cold
+end
+
+%% =====================================================================================
+%% GUARDS & LIMITS
+%% =====================================================================================
+
+subgraph LIMITS["🧷 Invariants"]
+  direction TB
+  LIM_HOT["HOT ≤ 48KB<br/>NEVER thrash"]:::limit
+  LIM_WARM["WARM ≤ 48KB<br/>evictable"]:::limit
+  LIM_TOTAL["TOTAL ≤ 96KB<br/>hard reject if exceeded"]:::limit_critical
+  LIM_HISTORY["history ≤ 40 turns<br/>human-scale retention"]:::limit
+end
+
+%% =====================================================================================
+%% CONNECTIONS
+%% =====================================================================================
+
+WRITE_REQ --> MUTATION_GUARD
+MUTATION_GUARD -->|pass| OK_COMMIT
+MUTATION_GUARD -->|fail| REJECTED
+
+OK_COMMIT --> SIZE_TRACKER
+SIZE_TRACKER --> SNAPSHOT_API
+
+%% If HOT pressure, only demote/promote — never evict control
+SIZE_TRACKER -->|hot pressure| MIGRATION_ENGINE
+MIGRATION_ENGINE -->|demote oldest| W_BELIEFS_HIST
+MIGRATION_ENGINE -->|demote turn| W_HISTORY_RECENT
+
+%% If WARM pressure, evict + summarize + archive to LOCAL first
+SIZE_TRACKER -->|warm pressure| EVICTION_ENGINE
+EVICTION_ENGINE --> WARM_EVICT
+EVICTION_ENGINE -->|"emit k1.session.eviction.v1"| PORT_EVENT
+WARM_EVICT -->|summarize| W_HISTORY_RECENT
+WARM_EVICT -->|archive local| LOCAL_ARCHIVE
+LOCAL_ARCHIVE --> ST_BELIEFS_ARCHIVE
+LOCAL_ARCHIVE --> ST_HISTORY_ARCHIVE
+LOCAL_ARCHIVE --> ST_NARRATIVE_ARCHIVE
+
+%% Optional: async sync to K0 cloud (best-effort, non-blocking)
+LOCAL_ARCHIVE -.->|async sync| K0_SYNC_ARCHIVE
+K0_SYNC_ARCHIVE -.-> K0_BELIEFS_ARCHIVE
+K0_SYNC_ARCHIVE -.-> K0_HISTORY_ARCHIVE
+K0_SYNC_ARCHIVE -.-> K0_NARRATIVE_ARCHIVE
+
+%% Read side: LOCAL FIRST, K0 fallback
+READ_REQ -->|read-only| HOT
+READ_REQ -->|read-only| WARM
+READ_REQ -->|miss| LOCAL_RECON
+LOCAL_RECON -->|hydrate from local| HOT
+LOCAL_RECON -->|hydrate from local| WARM
+LOCAL_RECON -.->|local miss, K0 available| K0_RECON
+K0_RECON -.->|hydrate from cloud| HOT
+K0_RECON -.->|hydrate from cloud| WARM
+
+%% Cross-section dependencies
+H_BELIEFS_ACTIVE --> DEP_ACTIVE_HIST
+DEP_ACTIVE_HIST --> W_BELIEFS_HIST
+H_CONTROL --> DEP_CONTROL_ACTIVE
+DEP_CONTROL_ACTIVE --> H_BELIEFS_ACTIVE
+H_SCOREBOARD --> DEP_SCOREBOARD_HIST
+DEP_SCOREBOARD_HIST --> W_HISTORY_RECENT
+H_NARR_ACTIVE --> DEP_NARR_THREADS
+DEP_NARR_THREADS --> ST_NARRATIVE_ARCHIVE
+
+%% Emergency mode triggers
+SIZE_TRACKER -->|≥95KB| EMERGENCY_SUMMARIZE
+EMERGENCY_SUMMARIZE -->|aggressive| WARM_EVICT
+SIZE_TRACKER -->|critical| EMERGENCY_READONLY
+EMERGENCY_READONLY -->|temporary| REJECTED
+SIZE_TRACKER -->|overload| EMERGENCY_SHED
+EMERGENCY_SHED -->|priority| EVICTION_ENGINE
+
+%% Reconstruction SLA - LOCAL FIRST
+LOCAL_RECON --> LOCAL_RECON_SLA
+LOCAL_RECON_SLA -->|partial first| HOT
+LOCAL_RECON_SLA -->|full state| WARM
+K0_RECON -.-> K0_SYNC_SLA
+K0_SYNC_SLA -.->|cross-device data| HOT
+K0_SYNC_SLA -.->|long-term memory| WARM
+
+%% Limits visualization
+HOT --> LIM_HOT
+WARM --> LIM_WARM
+SK --> LIM_TOTAL
+W_HISTORY_RECENT --> LIM_HISTORY
+
+%% Port-to-Adapter bindings (hexagonal architecture)
+PORT_STORAGE --> ADAPT_SQLITE
+PORT_STORAGE --> ADAPT_MEMORY
+PORT_EVENT --> ADAPT_EVENTS
+PORT_WRITER --> ADAPT_WRITER
+PORT_LIFECYCLE --> ADAPT_LIFECYCLE
+PORT_K0SYNC --> ADAPT_NULLSYNC
+
+%% Factory creates configured instances
+FACTORY_STANDALONE --> PORT_STORAGE
+FACTORY_STANDALONE --> PORT_LIFECYCLE
+FACTORY_TESTING --> ADAPT_MEMORY
+FACTORY_PORTS --> PORTS
+
+%% Kernel services use ports
+SVC --> PORT_STORAGE
+SVC --> PORT_EVENT
+RECON_SLA --> PORT_STORAGE
+
+%% Prevent illegal behavior explicitly
+H_CONTROL -.->|NEVER EVICT| EVICTION_ENGINE
+
+%% Optional: narrative archive (inactive threads → local first)
+H_NARR_ACTIVE -->|inactive thread| ST_NARRATIVE_ARCHIVE
+ST_NARRATIVE_ARCHIVE -.->|async sync| K0_NARRATIVE_ARCHIVE
+
+%% =====================================================================================
+%% STYLES
+%% =====================================================================================
+
+classDef hot fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000
+classDef hot_critical fill:#ffcdd2,stroke:#b71c1c,stroke-width:3px,color:#000,font-weight:bold
+classDef warm fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000
+classDef local_cold fill:#e0f2f1,stroke:#00796b,stroke-width:2px,color:#000
+classDef cold fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000
+classDef svc fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef svc_critical fill:#c8e6c9,stroke:#1b5e20,stroke-width:3px,color:#000,font-weight:bold
+classDef flow fill:#ede7f6,stroke:#5e35b1,stroke-width:2px,color:#000
+classDef warn fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
+classDef ok fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef limit fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+classDef limit_critical fill:#e1bee7,stroke:#6a1b9a,stroke-width:3px,color:#000,font-weight:bold
+classDef port fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
+classDef adapter fill:#f1f8e9,stroke:#558b2f,stroke-width:2px,color:#000
+classDef factory fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#000

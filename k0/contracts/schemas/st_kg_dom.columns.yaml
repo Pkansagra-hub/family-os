@@ -1,0 +1,226 @@
+# =============================================================================
+# st_kg_dom v1.0.0 -- Truth Layer Column Contract
+# =============================================================================
+#
+# Single source of truth for every column in st_kg_dom (KG Domain Entities).
+# Used by TruthLayerRegistry to build TruthLayerSpec.
+#
+# Migrations: 0032_st_kg_dom, 0059_st_kg_dom_m5c_enrichment, 0066_st_kg_dom_inline_embedding
+# Writer: k0/modules/consolidation/truth_writer/layers/kg.py
+# =============================================================================
+
+schema: st_kg_dom
+version: "1.0.0"
+migrations:
+  - "0032"
+  - "0059"
+  - "0066"
+column_count: 30
+
+# ---------------------------------------------------------------------------
+# Layer Metadata
+# ---------------------------------------------------------------------------
+layer_metadata:
+  pk: entity_id
+  version_column: version
+  supersedes_column: supersedes_id
+  canonical_column: is_canonical
+  observation_count_column: observation_count
+  confidence_column: confidence_score
+  confidence_boost_strategy: multiplicative_1.1
+  archival_status_column: archival_status
+  active_status_value: ACTIVE
+  decay_lambda: 0.001
+
+  embedding_fk_column: embedding_id
+  supports_embedding_match: true
+  supports_key_match: true
+  identity_columns: [entity_type, canonical_name]
+
+  write_order: 2
+
+  temporal:
+    start: null
+    end: null
+    last_observed: last_observed_at
+    first_observed: null
+
+  thresholds:
+    reinforce: 0.90
+    extend: 0.70
+    evolve: 0.50
+
+# ---------------------------------------------------------------------------
+# Columns (migration 0032 -- base, 23 columns)
+# ---------------------------------------------------------------------------
+columns:
+
+  # --- Identity ---
+  entity_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  tenant_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  space_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  # --- Versioning ---
+  version:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  supersedes_id:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  is_canonical:
+    type: BOOLEAN
+    nullable: false
+    merge: status
+    description: "EVOLVE sets to FALSE"
+
+  # --- Entity Content ---
+  entity_type:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  entity_subtype:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  canonical_name:
+    type: TEXT
+    nullable: false
+    merge: replaced
+    description: "TOMBSTONE blanks to empty string"
+
+  aliases_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_distinct
+    description: "jsonb_agg(DISTINCT) on REINFORCE"
+
+  attributes_json:
+    type: TEXT
+    nullable: true
+    merge: shallow_merge
+    description: "Deep merge (||) jsonb on EXTEND; TOMBSTONE blanks to '{}'"
+
+  embedding_id:
+    type: TEXT
+    nullable: true
+    merge: immutable
+    description: "Legacy FK to st_vec; superseded by inline vectors"
+
+  # --- Source Tracking ---
+  source_episodes_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_distinct
+    description: "jsonb_agg(DISTINCT) on REINFORCE; append on EXTEND; TOMBSTONE blanks to '[]'"
+
+  first_mentioned_event_id:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  # --- Observation ---
+  observation_count:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  confidence_score:
+    type: FLOAT
+    nullable: false
+    merge: replaced
+    description: "LEAST(confidence * 1.1, 1.0) on EXTEND"
+
+  last_observed_at:
+    type: BIGINT
+    nullable: true
+    merge: coalesce
+
+  # --- Decay & Lifecycle ---
+  decay_factor:
+    type: FLOAT
+    nullable: false
+    merge: coalesce
+
+  archival_status:
+    type: TEXT
+    nullable: false
+    merge: status
+
+  created_at:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  updated_at:
+    type: BIGINT
+    nullable: false
+    merge: replaced
+
+  valid_from:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  valid_to:
+    type: BIGINT
+    nullable: true
+    merge: replaced
+    description: "Set to now on EVOLVE/ARCHIVE/TOMBSTONE"
+
+  # --- Query Tracking (migration 0059, 3 columns) ---
+  query_count:
+    type: INTEGER
+    nullable: false
+    merge: counter
+    description: "QUERY_BOOST: COALESCE(query_count, 0) + increment"
+
+  last_queried_at:
+    type: BIGINT
+    nullable: true
+    merge: replaced
+
+  milestones_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_all
+    description: "COALESCE(milestones_json::jsonb, '[]') || new_entry"
+
+  # --- Inline Vectors (migration 0066, 4 columns) ---
+  source_texts_json:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  embedding_text:
+    type: TEXT
+    nullable: true
+    merge: replaced
+    description: "TOMBSTONE sets to NULL"
+
+  embedding_vector:
+    type: BYTEA
+    nullable: true
+    merge: replaced
+    description: "TOMBSTONE sets to NULL"
+
+  embedding_model:
+    type: TEXT
+    nullable: true
+    merge: immutable

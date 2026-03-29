@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "k1_bus_core"
+version = "0.1.0"
+description = "Rust hot-path core for the K1 cognitive-architecture bus"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+[tool.maturin]
+# Build settings
+features = ["pyo3/extension-module"]
+module-name = "k1_bus_core"

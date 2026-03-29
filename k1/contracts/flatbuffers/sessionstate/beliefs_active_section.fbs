@@ -1,0 +1,88 @@
+// ============================================================================
+// beliefs_active_section.fbs - Beliefs Active Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/beliefs_active_section.fbs
+// Purpose: Facts needed for the current turn, demoted to beliefs_history after
+// Size Budget: 8KB max
+// Tier: HOT CORE
+// ADR: ADR-0017a (Beliefs Section)
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// MENTIONED CONTEXT
+// ============================================================================
+
+/// Time reference mentioned in current turn
+table MentionedTime {
+    raw_text: string;                 // "tomorrow", "next week", "3pm"
+    resolved_ms: int64;               // Resolved Unix timestamp
+    confidence: float = 1.0;
+    is_relative: bool = true;         // Relative vs absolute time
+}
+
+/// Location reference mentioned in current turn
+table MentionedLocation {
+    raw_text: string;                 // "the kitchen", "mom's house"
+    location_type: string;            // "room", "address", "zone"
+    entity_id: string;                // Link to entity if resolved
+    confidence: float = 1.0;
+}
+
+// ============================================================================
+// BELIEFS ACTIVE SECTION ROOT
+// ============================================================================
+
+/// Beliefs Active Section - facts needed THIS turn
+/// Lifecycle: After turn completion, facts demote to beliefs_history
+table BeliefsActiveSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Current turn identifier
+    turn_id: string (required);
+
+    // Facts extracted from current turn
+    current_turn_facts: [Fact];       // Max ~50 facts for 8KB budget
+
+    // Entity mentions from NER (UltraBERT)
+    mentioned_entities: [EntityRef];
+
+    // Temporal context
+    mentioned_time: MentionedTime;
+
+    // Spatial context
+    mentioned_location: MentionedLocation;
+
+    // Cross-references to beliefs_history
+    // These are pinned facts that should not be evicted
+    pinned_fact_ids: [string];
+
+    // Statistics
+    fact_count: uint16;
+    entity_count: uint16;
+    last_updated_ms: int64;
+}
+
+root_type BeliefsActiveSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 8KB max
+//
+// Breakdown:
+// - Header: ~100 bytes
+// - turn_id: ~50 bytes
+// - Fact: ~150 bytes each x 50 facts = 7.5KB max
+// - EntityRef: ~80 bytes each x 10 entities = 800 bytes
+// - MentionedTime: ~100 bytes
+// - MentionedLocation: ~100 bytes
+// - Pinned IDs + stats: ~200 bytes
+//
+// Typical usage: 3-5KB (10-20 facts per turn)
+// Max with full facts: 8KB
+// ============================================================================

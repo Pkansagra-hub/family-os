@@ -10,6 +10,8 @@ Spec Reference:
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from k0.modules.consolidation.staging.idempotency import IdempotencyKeyGenerator
@@ -25,11 +27,7 @@ from k0.pipelines.p03.phase_outputs import (
     KGEntity,
     KGEntityUpdate,
 )
-from k0.pipelines.p03.staged_writes import (
-    LAYER_ST_KG_DOM,
-    LAYER_ST_KG_EDGES,
-    WriteOperation,
-)
+from k0.pipelines.p03.staged_writes import LAYER_ST_KG_DOM, LAYER_ST_KG_EDGES, WriteOperation
 
 # =============================================================================
 # Fixtures
@@ -82,10 +80,13 @@ def make_edge(
         source_entity_id=source_id,
         target_entity_id=target_id,
         relationship_type=rel_type,
+        relation_subtype="FRIEND",
         weight=0.8,
         confidence=0.9,
         is_causal=False,
         evidence_event_ids=["evt_001", "evt_002"],
+        evidence_episode_ids=["epi_001"],
+        last_observed_at=1700000000000,
         is_new=is_new,
     )
 
@@ -175,10 +176,14 @@ class TestAssembleEntityWrites:
         assert data["entity_id"] == "ent_001"
         assert data["canonical_name"] == "John Doe"
         assert data["entity_type"] == "PERSON"
-        assert data["confidence"] == 0.9
+        assert data["attributes_json"] == "{}"
+        assert data["confidence_score"] == 0.9
         assert data["embedding_id"] == "emb_ent_001"
-        assert "source_event_ids_json" in data
-        assert "created_at_ms" in data
+        assert data["first_mentioned_event_id"] == "evt_001"
+        assert isinstance(data["last_observed_at"], int)
+        assert data["decay_factor"] == 1.0
+        assert "source_episodes_json" in data
+        assert "created_at" in data
 
     def test_entity_idempotency_key_format(self, assembler: KGWriteAssembler):
         """Entity write has correct idempotency key."""
@@ -255,10 +260,16 @@ class TestAssembleEdgeWrites:
         assert data["edge_id"] == "edge_001"
         assert data["source_entity_id"] == "ent_001"
         assert data["target_entity_id"] == "ent_002"
-        assert data["relationship_type"] == "KNOWS"
-        assert data["weight"] == 0.8
-        assert data["is_causal"] is False
-        assert "evidence_event_ids_json" in data
+        assert data["relation_type"] == "KNOWS"
+        assert data["relation_subtype"] == "FRIEND"
+        assert data["edge_weight"] == 0.8
+        assert data["confidence_score"] == 0.9
+        assert data["co_occurrence_count"] == 2
+        assert data["observation_count"] == 2
+        assert data["last_observed_at"] == 1700000000000
+        assert data["decay_factor"] == 1.0
+        assert data["evidence_episode_ids"] == ["epi_001"]
+        assert "source_episodes_json" in data
 
     def test_edge_idempotency_key_format(self, assembler: KGWriteAssembler):
         """Edge write has correct idempotency key."""
@@ -279,10 +290,13 @@ class TestAssembleEdgeWrites:
         write = writes[0]
         assert write.operation == WriteOperation.INSERT
         data = write.record_data
-        assert data["is_causal"] is True
-        assert data["relationship_type"] == "CAUSES"
-        assert data["granger_p_value"] == 0.01
-        assert data["lag_days"] == 7
+        assert data["relation_type"] == "CAUSES"
+        assert data["edge_weight"] == 0.6
+        assert data["confidence_score"] == 0.95
+        props = json.loads(data["properties_json"])
+        assert props["is_causal"] is True
+        assert props["granger_p_value"] == 0.01
+        assert props["lag_days"] == 7
 
     def test_causal_edge_id_format(self, assembler: KGWriteAssembler):
         """CausalEdge generates deterministic edge ID."""
@@ -291,6 +305,68 @@ class TestAssembleEdgeWrites:
         writes = assembler.assemble_edge_writes([], causal_edges=[causal])
 
         assert writes[0].record_id == "causal_cause_001_effect_001"
+
+    def test_duplicate_edges_are_merged(self, assembler: KGWriteAssembler):
+        """Duplicate edge_ids in the same batch are merged into one staged write."""
+        e1 = KGEdge(
+            edge_id="edge_dup",
+            source_entity_id="ent_001",
+            target_entity_id="ent_002",
+            relationship_type="KNOWS",
+            weight=0.4,
+            confidence=0.7,
+            evidence_event_ids=["evt_001"],
+            is_new=True,
+        )
+        e2 = KGEdge(
+            edge_id="edge_dup",
+            source_entity_id="ent_001",
+            target_entity_id="ent_002",
+            relationship_type="KNOWS",
+            weight=0.6,
+            confidence=0.9,
+            evidence_event_ids=["evt_002"],
+            is_new=True,
+        )
+
+        writes = assembler.assemble_edge_writes([e1, e2])
+        assert len(writes) == 1
+        data = writes[0].record_data
+        assert data["edge_id"] == "edge_dup"
+        # non-causal reinforcement sums weights
+        assert data["edge_weight"] == pytest.approx(1.0)
+        # confidence preserves the strongest signal
+        assert data["confidence_score"] == pytest.approx(0.9)
+        # evidence ids unioned
+        evidence = set(json.loads(data["source_episodes_json"]))
+        assert evidence.issuperset({"evt_001", "evt_002"})
+
+    def test_duplicate_causal_edges_are_merged(self, assembler: KGWriteAssembler):
+        """Duplicate causal edges in the same batch are merged into one staged write."""
+        c1 = CausalEdge(
+            cause_entity_id="cluster_PERSON_michael",
+            effect_entity_id="cluster_PERSON_sarah",
+            lag_days=7,
+            granger_p_value=0.05,
+            effect_size=0.4,
+            confidence=0.6,
+        )
+        c2 = CausalEdge(
+            cause_entity_id="cluster_PERSON_michael",
+            effect_entity_id="cluster_PERSON_sarah",
+            lag_days=7,
+            granger_p_value=0.01,
+            effect_size=0.7,
+            confidence=0.9,
+        )
+
+        writes = assembler.assemble_edge_writes([], causal_edges=[c1, c2])
+        assert len(writes) == 1
+        assert writes[0].record_id == "causal_cluster_PERSON_michael_cluster_PERSON_sarah"
+        data = writes[0].record_data
+        # CAUSES keeps the strongest effect size
+        assert data["edge_weight"] == pytest.approx(0.7)
+        assert data["confidence_score"] == pytest.approx(0.9)
 
     def test_edge_update(self, assembler: KGWriteAssembler):
         """Edge update produces UPDATE write."""
@@ -488,7 +564,7 @@ class TestEdgeCases:
         writes = assembler.assemble_edge_writes([edge])
 
         assert len(writes) == 1
-        assert writes[0].record_data["evidence_event_ids_json"] == "[]"
+        assert writes[0].record_data["source_episodes_json"] == "[]"
 
     def test_empty_update_id_skipped(self, assembler: KGWriteAssembler):
         """Update with empty ID is skipped."""

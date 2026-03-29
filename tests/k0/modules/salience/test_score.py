@@ -24,12 +24,18 @@ import pytest
 
 # Import module under test
 from k0.modules.salience.score import (
+    ENTITY_SALIENCE_DISCREPANCY_THRESHOLD,
+    SOCIAL_IMPORTANCE_SCORES,
+    WEIGHT_AFFECT,
+    WEIGHT_RECENCY,
+    WEIGHT_SOCIAL,
     SalienceResult,
     classify_salience_band,
     compute_affect_amplification,
     compute_recency_score,
     compute_salience,
     compute_social_importance,
+    cross_validate_entity_salience,
     generate_salience_reasons,
     get_metrics,
     reset_metrics,
@@ -734,3 +740,393 @@ class TestMetrics:
         metrics_after = get_metrics()
         assert metrics_after["salience_computations"] == 0
         assert metrics_after["high_band_count"] == 0
+
+
+# ==================== V2 Tests: Expanded Social Importance ====================
+
+
+class TestV2ExpandedSocialImportance:
+    """v2 tests for expanded SOCIAL_IMPORTANCE_SCORES (Epic 3.12)."""
+
+    def test_nuclear_family_returns_max_score(self):
+        """nuclear_family should map to 1.0 (v2 addition)."""
+        score = compute_social_importance("nuclear_family")
+        assert score == 1.0
+
+    def test_colleagues_returns_moderate_score(self):
+        """colleagues should map to 0.4 (v2 addition)."""
+        score = compute_social_importance("colleagues")
+        assert score == 0.4
+
+    def test_community_returns_low_moderate_score(self):
+        """community should map to 0.3 (v2 addition)."""
+        score = compute_social_importance("community")
+        assert score == 0.3
+
+    def test_family_still_returns_max_score(self):
+        """Original 'family' key must remain at 1.0 (backward compat)."""
+        score = compute_social_importance("family")
+        assert score == 1.0
+
+    def test_all_v2_contract_keys_present(self):
+        """All keys from salience.score.v2.yaml must be in the lookup dict."""
+        expected_keys = {
+            "nuclear_family",
+            "family",
+            "extended_family",
+            "close_friends",
+            "friends",
+            "colleagues",
+            "community",
+            "acquaintance",
+            "solo",
+            "unknown",
+        }
+        actual_keys = set(SOCIAL_IMPORTANCE_SCORES.keys())
+        missing = expected_keys - actual_keys
+        assert not missing, f"Missing keys in SOCIAL_IMPORTANCE_SCORES: {missing}"
+
+    def test_v2_score_values_match_contract(self):
+        """Score values must match salience.score.v2.yaml exactly."""
+        expected = {
+            "nuclear_family": 1.0,
+            "extended_family": 0.7,
+            "close_friends": 0.6,
+            "friends": 0.5,
+            "colleagues": 0.4,
+            "community": 0.3,
+            "acquaintance": 0.3,
+            "solo": 0.2,
+            "unknown": 0.4,
+        }
+        for key, expected_val in expected.items():
+            actual_val = SOCIAL_IMPORTANCE_SCORES[key]
+            assert (
+                actual_val == expected_val
+            ), f"SOCIAL_IMPORTANCE_SCORES['{key}'] = {actual_val}, expected {expected_val}"
+
+
+# ==================== V2 Tests: Acceptance Criteria ====================
+
+
+class TestV2AcceptanceCriteria:
+    """Acceptance criteria tests from Epic 3.12 skeleton spec."""
+
+    def test_nuclear_family_dinner_salience_gte_070(self, now_utc):
+        """Family dinner with social_context='nuclear_family' must produce salience >= 0.70."""
+        result = compute_salience(
+            social_context="nuclear_family",
+            affect_intensity=0.8,
+            timestamp=now_utc - timedelta(minutes=30),
+        )
+        assert (
+            result.salience_score >= 0.70
+        ), f"nuclear_family dinner salience={result.salience_score}, expected >= 0.70"
+        assert result.salience_band == "HIGH"
+
+    def test_solo_routine_event_salience_approx_030(self, now_utc):
+        """Solo routine event should produce salience around 0.30."""
+        result = compute_salience(
+            social_context="solo",
+            affect_intensity=0.2,
+            timestamp=now_utc - timedelta(days=3),
+        )
+        assert (
+            result.salience_score < 0.40
+        ), f"solo routine salience={result.salience_score}, expected < 0.40"
+        assert result.salience_band == "LOW"
+
+    def test_formula_weights_unchanged(self, now_utc):
+        """Formula weights must remain 0.50/0.40/0.10 (no change from v1)."""
+        assert WEIGHT_SOCIAL == 0.5
+        assert WEIGHT_AFFECT == 0.4
+        assert WEIGHT_RECENCY == 0.1
+
+        # Verify weighted formula produces correct result
+        result = compute_salience(
+            social_context="family",
+            affect_intensity=0.8,
+            timestamp=now_utc - timedelta(hours=2),
+        )
+        expected = (
+            0.50 * result.component_scores.social
+            + 0.40 * result.component_scores.affect
+            + 0.10 * result.component_scores.recency
+        )
+        assert abs(result.salience_score - expected) < 0.01
+
+    def test_output_shape_unchanged(self, now_utc):
+        """SalienceResult dataclass fields must remain compatible with v1."""
+        result = compute_salience(
+            social_context="family",
+            affect_intensity=0.7,
+            timestamp=now_utc - timedelta(hours=1),
+        )
+        assert isinstance(result, SalienceResult)
+        assert hasattr(result, "salience_score")
+        assert hasattr(result, "salience_band")
+        assert hasattr(result, "salience_reasons")
+        assert hasattr(result, "component_scores")
+        assert hasattr(result, "salience_computed_at_utc")
+
+
+# ==================== V2 Tests: Entity Salience Cross-Validation ====================
+
+
+class TestV2EntitySalienceCrossValidation:
+    """v2 cross-validation of M06 salience vs MW body.entity_salience."""
+
+    def test_returns_none_when_no_body(self):
+        """No body in envelope -> discrepancy is None."""
+        envelope = {"event": {"social_context": "family"}}
+        result = cross_validate_entity_salience(envelope, 0.75)
+        assert result is None
+
+    def test_returns_none_when_body_has_no_entity_salience(self):
+        """body present but no entity_salience -> discrepancy is None."""
+        envelope = {"body": {"text": "hello"}}
+        result = cross_validate_entity_salience(envelope, 0.75)
+        assert result is None
+
+    def test_returns_none_when_entity_salience_empty(self):
+        """body.entity_salience is empty dict -> discrepancy is None."""
+        envelope = {"body": {"entity_salience": {}}}
+        result = cross_validate_entity_salience(envelope, 0.75)
+        assert result is None
+
+    def test_returns_none_when_entity_salience_non_dict(self):
+        """body.entity_salience is not a dict -> discrepancy is None."""
+        envelope = {"body": {"entity_salience": "not_a_dict"}}
+        result = cross_validate_entity_salience(envelope, 0.75)
+        assert result is None
+
+    def test_computes_discrepancy_small_delta(self):
+        """Small delta between M06 and MW mean -> low discrepancy."""
+        envelope = {"body": {"entity_salience": {"person_a": 0.70, "person_b": 0.80}}}
+        # MW mean = 0.75, M06 = 0.75 -> delta = 0.0
+        result = cross_validate_entity_salience(envelope, 0.75)
+        assert result is not None
+        assert result == 0.0
+
+    def test_computes_discrepancy_large_delta(self):
+        """Large delta between M06 and MW mean -> high discrepancy."""
+        envelope = {"body": {"entity_salience": {"person_a": 0.3, "person_b": 0.1}}}
+        # MW mean = 0.2, M06 = 0.75 -> delta = 0.55
+        result = cross_validate_entity_salience(envelope, 0.75)
+        assert result is not None
+        assert abs(result - 0.55) < 0.001
+
+    def test_ignores_non_numeric_values(self):
+        """Non-numeric values in entity_salience should be skipped."""
+        envelope = {
+            "body": {
+                "entity_salience": {
+                    "person_a": 0.6,
+                    "person_b": "invalid",
+                    "person_c": 0.8,
+                }
+            }
+        }
+        # MW mean = (0.6 + 0.8) / 2 = 0.7, M06 = 0.75 -> delta = 0.05
+        result = cross_validate_entity_salience(envelope, 0.75)
+        assert result is not None
+        assert abs(result - 0.05) < 0.001
+
+    def test_all_non_numeric_returns_none(self):
+        """If all values are non-numeric, return None."""
+        envelope = {"body": {"entity_salience": {"a": "bad", "b": None, "c": [1, 2]}}}
+        result = cross_validate_entity_salience(envelope, 0.75)
+        assert result is None
+
+    def test_threshold_default_is_03(self):
+        """Default discrepancy threshold should be 0.3."""
+        assert ENTITY_SALIENCE_DISCREPANCY_THRESHOLD == 0.3
+
+
+# ==================== V2 Tests: Async Integration with Entity Salience ====================
+
+
+class TestV2AsyncIntegration:
+    """v2 async run() tests with entity_salience cross-validation."""
+
+    @pytest.mark.asyncio
+    async def test_entity_salience_discrepancy_in_output_when_present(self):
+        """Output should include entity_salience_discrepancy when MW data present."""
+        now = datetime.now(timezone.utc)
+        envelope = {
+            "event": {
+                "social_context": "nuclear_family",
+                "event_time_utc": (now - timedelta(hours=1)).isoformat(),
+            },
+            "affect_intensity": 0.8,
+            "body": {"entity_salience": {"mom": 0.3, "dad": 0.1}},
+        }
+
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
+
+        # Discrepancy should be computed (M06 score high, MW mean low)
+        assert "entity_salience_discrepancy" in result
+        assert result["entity_salience_discrepancy"] is not None
+        assert isinstance(result["entity_salience_discrepancy"], float)
+        assert result["entity_salience_discrepancy"] > 0.3  # big gap
+
+        # Verify warning was logged (discrepancy > threshold)
+        context.logger.warning.assert_called()
+        warning_call = context.logger.warning.call_args
+        assert "discrepancy" in warning_call[0][0].lower()
+
+    @pytest.mark.asyncio
+    async def test_entity_salience_discrepancy_none_when_absent(self):
+        """Output should have entity_salience_discrepancy=None when no MW data."""
+        now = datetime.now(timezone.utc)
+        envelope = {
+            "event": {
+                "social_context": "family",
+                "event_time_utc": (now - timedelta(hours=2)).isoformat(),
+            },
+            "affect_intensity": 0.7,
+        }
+
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
+
+        assert "entity_salience_discrepancy" in result
+        assert result["entity_salience_discrepancy"] is None
+
+    @pytest.mark.asyncio
+    async def test_entity_salience_no_warning_when_small_delta(self):
+        """No warning when discrepancy <= threshold."""
+        now = datetime.now(timezone.utc)
+        envelope = {
+            "event": {
+                "social_context": "family",
+                "event_time_utc": (now - timedelta(hours=1)).isoformat(),
+            },
+            "affect_intensity": 0.8,
+            "body": {"entity_salience": {"mom": 0.80, "dad": 0.85}},
+        }
+
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
+
+        assert result["entity_salience_discrepancy"] is not None
+        # Discrepancy should be small (M06 ~ 0.8+, MW mean ~ 0.825)
+        assert result["entity_salience_discrepancy"] <= 0.3
+        # No warning should have been logged for discrepancy
+        # (debug calls are fine, but no warning about discrepancy)
+        for call in context.logger.warning.call_args_list:
+            assert "discrepancy" not in call[0][0].lower()
+
+    @pytest.mark.asyncio
+    async def test_module_version_is_v2(self):
+        """Enrichments module_version should be 'v2'."""
+        now = datetime.now(timezone.utc)
+        envelope = {
+            "event": {
+                "social_context": "nuclear_family",
+                "event_time_utc": (now - timedelta(hours=1)).isoformat(),
+            },
+            "affect_intensity": 0.7,
+        }
+
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
+
+        assert result["enrichments"]["salience_scorer"]["module_version"] == "v2"
+
+    @pytest.mark.asyncio
+    async def test_entity_salience_discrepancy_in_enrichments(self):
+        """entity_salience_discrepancy should appear in both flat and nested output."""
+        now = datetime.now(timezone.utc)
+        envelope = {
+            "event": {
+                "social_context": "family",
+                "event_time_utc": (now - timedelta(hours=1)).isoformat(),
+            },
+            "affect_intensity": 0.8,
+            "body": {"entity_salience": {"person": 0.5}},
+        }
+
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
+
+        # Flat field
+        assert "entity_salience_discrepancy" in result
+        # Nested field
+        assert "entity_salience_discrepancy" in result["enrichments"]["salience_scorer"]
+        # Both should match
+        assert (
+            result["entity_salience_discrepancy"]
+            == result["enrichments"]["salience_scorer"]["entity_salience_discrepancy"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_error_fallback_includes_entity_salience_discrepancy(self):
+        """Error fallback output should include entity_salience_discrepancy=None."""
+        envelope = {
+            "event": {"social_context": "family"},
+            "affect_intensity": 0.8,
+            # Missing event_time_utc -> triggers fallback
+        }
+
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
+
+        assert result["entity_salience_discrepancy"] is None
+        assert result["enrichments"]["salience_scorer"]["entity_salience_discrepancy"] is None
+        assert result["enrichments"]["salience_scorer"]["module_version"] == "v2"
+
+    @pytest.mark.asyncio
+    async def test_nuclear_family_via_run_produces_high(self):
+        """Full pipeline: nuclear_family through run() should produce HIGH band."""
+        now = datetime.now(timezone.utc)
+        envelope = {
+            "event": {
+                "social_context": "nuclear_family",
+                "event_time_utc": (now - timedelta(minutes=15)).isoformat(),
+            },
+            "affect_intensity": 0.85,
+        }
+
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
+
+        assert result["salience_score"] >= 0.70
+        assert result["salience_band"] == "HIGH"
+
+    @pytest.mark.asyncio
+    async def test_colleagues_via_run_produces_expected_score(self):
+        """colleagues social_context through run() should use 0.4 social score."""
+        now = datetime.now(timezone.utc)
+        envelope = {
+            "event": {
+                "social_context": "colleagues",
+                "event_time_utc": (now - timedelta(hours=2)).isoformat(),
+            },
+            "affect_intensity": 0.5,
+        }
+
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
+
+        components = json.loads(result["component_scores_json"])
+        assert components["social"] == 0.4
+
+    @pytest.mark.asyncio
+    async def test_community_via_run_produces_expected_score(self):
+        """community social_context through run() should use 0.3 social score."""
+        now = datetime.now(timezone.utc)
+        envelope = {
+            "event": {
+                "social_context": "community",
+                "event_time_utc": (now - timedelta(hours=2)).isoformat(),
+            },
+            "affect_intensity": 0.5,
+        }
+
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
+
+        components = json.loads(result["component_scores_json"])
+        assert components["social"] == 0.3

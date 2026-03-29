@@ -1,0 +1,38 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://schemas/wiring/state.schema.yaml"
+title: "State Access Spec"
+type: object
+additionalProperties: false
+properties:
+  reads:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [path, access]
+      properties:
+        path:
+          type: string
+          pattern: "^[a-zA-Z0-9_.]{1,128}$"
+        access:
+          type: string
+          enum: ["SHARED", "EXCLUSIVE"]
+    maxItems: 512
+
+  writes:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [path, access]
+      properties:
+        path:
+          type: string
+          pattern: "^[a-zA-Z0-9_.]{1,128}$"
+        access:
+          type: string
+          enum: ["EXCLUSIVE", "SHARED"]
+        validator:
+          type: string
+          pattern: "^[a-zA-Z0-9_.]+:[A-Za-z_][A-Za-z0-9_]*$"
+    maxItems: 512

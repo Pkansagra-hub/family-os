@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sessionstate.reconstruction.started.v1.json",
+  "title": "SessionState Reconstruction Started",
+  "description": "Emitted when session reconstruction from COLD tier begins",
+  "type": "object",
+  "required": ["session_id", "reconstruction_source", "requested_sections", "mode", "timestamp_ms"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Session being reconstructed"
+    },
+    "reconstruction_source": {
+      "type": "string",
+      "enum": ["LOCAL_COLD", "K0_COLD"],
+      "description": "Source tier for reconstruction"
+    },
+    "requested_sections": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "control",
+          "beliefs_active",
+          "beliefs_history",
+          "scoreboard",
+          "history_active",
+          "history_recent",
+          "clarifications",
+          "affective_now",
+          "narrative_active",
+          "meta",
+          "persona",
+          "telemetry"
+        ]
+      },
+      "description": "Sections requested for reconstruction"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["FULL", "PARTIAL", "DEGRADED"],
+      "description": "Reconstruction mode"
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["SESSION_RESUME", "CACHE_MISS", "FAILOVER", "MANUAL"],
+      "description": "Why reconstruction was triggered"
+    },
+    "sla_target_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Target SLA for reconstruction in ms (50ms LOCAL_COLD, 100ms K0_COLD)"
+    },
+    "reconstruction_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this reconstruction"
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds"
+    }
+  },
+  "examples": [
+    {
+      "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "reconstruction_source": "LOCAL_COLD",
+      "requested_sections": ["control", "beliefs_active", "scoreboard", "history_active"],
+      "mode": "PARTIAL",
+      "reason": "SESSION_RESUME",
+      "sla_target_ms": 50,
+      "reconstruction_id": "990e8400-e29b-41d4-a716-446655440004",
+      "timestamp_ms": 1699012500000
+    }
+  ]
+}

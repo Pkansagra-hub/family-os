@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/consumed/capability_completed.v1.json",
+  "title": "capability.completed.v1",
+  "description": "Consumed from Fabric when a capability invocation completes (any status).",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.capability.completed.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "fabric"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["request_id", "capability_name", "status"],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "CapabilityRequest.request_id for step correlation."
+        },
+        "capability_name": {
+          "type": "string",
+          "description": "Capability that executed."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["SUCCESS", "FAILURE", "TIMEOUT", "DEGRADED"],
+          "description": "Execution result status."
+        },
+        "data": {
+          "type": ["object", "null"],
+          "description": "Capability output data (null on failure)."
+        },
+        "execution_time_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Execution duration in milliseconds."
+        },
+        "discoveries": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "required": ["key", "value"],
+            "properties": {
+              "key": {
+                "type": "string",
+                "description": "Discovery identifier (e.g. entity name, preference key)."
+              },
+              "value": {
+                "description": "Discovered value (any JSON type)."
+              },
+              "source": {
+                "type": "string",
+                "description": "Capability that produced this discovery."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "New facts discovered during execution for SessionState or K0 memory."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

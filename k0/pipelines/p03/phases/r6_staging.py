@@ -305,13 +305,35 @@ class R6Staging:
         # Extract existing entity IDs for FK validation
         existing_entity_ids = self._get_existing_entity_ids(envelope)
 
+        # Extract actor_id from batch events (should be same for all events in batch)
+        actor_id = self._extract_batch_actor_id(envelope)
+
         return R6Coordinator.create(
             cycle_ulid=cycle_ulid,
             tenant_id=tenant_id,
             space_id=space_id,
+            actor_id=actor_id,
             existing_entity_ids=existing_entity_ids,
             config=self._config,
         )
+
+    def _extract_batch_actor_id(self, envelope: P03BatchEnvelope) -> str:
+        """
+        Extract actor_id from batch events.
+
+        In single-user mode, all events in a batch should have the same actor_id.
+        Returns the first non-empty actor_id found, or empty string if none.
+
+        Args:
+            envelope: Batch envelope with events
+
+        Returns:
+            Actor ID string (e.g., "Prince") or empty string
+        """
+        for event in envelope.events:
+            if event.actor_id:
+                return event.actor_id
+        return ""
 
     def _get_existing_entity_ids(self, envelope: P03BatchEnvelope) -> Set[str]:
         """
@@ -409,6 +431,11 @@ class R6Staging:
         envelope: P03BatchEnvelope,
     ) -> Optional[Dict[str, DuplicationResult]]:
         """Extract dedup results from R3 outputs."""
+        # Primary location: r3_dedup_results (new canonical location)
+        if envelope.phases.r3_dedup_results:
+            return dict(envelope.phases.r3_dedup_results)
+
+        # Legacy fallback: r3.dedup_results (for backwards compatibility)
         r3_outputs = getattr(envelope.phases, "r3", None)
         if r3_outputs:
             dedup_results = getattr(r3_outputs, "dedup_results", None)

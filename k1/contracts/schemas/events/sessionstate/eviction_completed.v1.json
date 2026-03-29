@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sessionstate.eviction.completed.v1.json",
+  "title": "SessionState Eviction Completed",
+  "description": "Emitted when eviction process finishes successfully",
+  "type": "object",
+  "required": ["session_id", "eviction_id", "evicted_sections", "bytes_freed", "timestamp_ms"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Session that underwent eviction"
+    },
+    "eviction_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Eviction operation ID from eviction.triggered event"
+    },
+    "evicted_sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["section", "bytes_evicted", "items_evicted"],
+        "properties": {
+          "section": {
+            "type": "string",
+            "description": "Section name"
+          },
+          "bytes_evicted": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Bytes evicted from this section"
+          },
+          "items_evicted": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of items evicted"
+          },
+          "archived_to": {
+            "type": "string",
+            "enum": ["LOCAL_COLD", "K0_COLD"],
+            "description": "Where data was archived"
+          }
+        }
+      },
+      "description": "Details of each evicted section"
+    },
+    "bytes_freed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total bytes freed by eviction"
+    },
+    "size_before_kb": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Total size before eviction in KB"
+    },
+    "size_after_kb": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Total size after eviction in KB"
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total eviction latency in milliseconds"
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds"
+    }
+  },
+  "examples": [
+    {
+      "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "eviction_id": "770e8400-e29b-41d4-a716-446655440002",
+      "evicted_sections": [
+        {
+          "section": "telemetry",
+          "bytes_evicted": 4096,
+          "items_evicted": 50,
+          "archived_to": "LOCAL_COLD"
+        },
+        {
+          "section": "beliefs_history",
+          "bytes_evicted": 8192,
+          "items_evicted": 25,
+          "archived_to": "LOCAL_COLD"
+        }
+      ],
+      "bytes_freed": 12288,
+      "size_before_kb": 88.5,
+      "size_after_kb": 76.5,
+      "latency_ms": 12,
+      "timestamp_ms": 1699012300012
+    }
+  ]
+}

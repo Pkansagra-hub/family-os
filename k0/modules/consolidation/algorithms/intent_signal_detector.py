@@ -31,6 +31,8 @@ from typing import List, Optional
 # Direct module import to avoid triggering dream/__init__.py during import
 # (DreamExplorer now uses runtime import of IntentSignalDetector)
 import k0.modules.consolidation.dream.intent_signals as _signals
+from k0.modules.consolidation.algorithms.temporal_parser import TemporalParser
+from k0.pipelines.p03.event_state import P03EventState
 
 AnyIntentSignal = _signals.AnyIntentSignal
 DecisionSignal = _signals.DecisionSignal
@@ -41,8 +43,6 @@ MilestoneSignal = _signals.MilestoneSignal
 MilestoneType = _signals.MilestoneType
 QueryBoostSignal = _signals.QueryBoostSignal
 ReminderSignal = _signals.ReminderSignal
-
-from k0.pipelines.p03.event_state import P03EventState
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +137,10 @@ class IntentSignalDetector:
     # Default confidence for detected signals (no UltraBERT confidence available)
     DEFAULT_CONFIDENCE = 0.8
 
+    def __init__(self) -> None:
+        """Initialize the IntentSignalDetector with TemporalParser."""
+        self._temporal_parser = TemporalParser()
+
     def detect_all(
         self,
         event_states: List[P03EventState],
@@ -229,8 +233,11 @@ class IntentSignalDetector:
         Returns:
             ReminderSignal with action and optional target_date
         """
-        # Parse temporal_json for target date
-        target_date = self._parse_temporal_date(event.temporal_expressions_json)
+        # Parse temporal_json for target date (GAP-002 fix: use TemporalParser)
+        target_date = self._parse_temporal_date(
+            event.temporal_expressions_json,
+            reference_time_ms=event.timestamp,
+        )
 
         # Extract action from text using patterns
         action = self._extract_action_from_text(event.content_text)
@@ -393,43 +400,34 @@ class IntentSignalDetector:
     def _parse_temporal_date(
         self,
         temporal_json: str,
+        reference_time_ms: Optional[int] = None,
     ) -> Optional[int]:
         """
-        Parse temporal_json to extract target date.
+        Parse temporal_json to extract target date using TemporalParser.
 
         UltraBERT temporal head produces:
         {"entities": [{"text": "tomorrow at 3pm", "label": "TIME"}]}
 
-        This returns the raw temporal text for now.
-        Phase 6 TemporalParser will convert to Unix ms.
+        GAP-002 fix: Now wired to TemporalParser for actual parsing.
 
         Args:
             temporal_json: JSON string from st_hipp_events.temporal_json
+            reference_time_ms: Reference timestamp for relative dates (event time)
 
         Returns:
             Unix ms timestamp or None if no parseable date
-
-        Note:
-            Full temporal parsing is deferred to Phase 6 TemporalParser.
-            This method returns None until that module is implemented.
         """
         if not temporal_json or temporal_json == "[]":
             return None
 
         try:
-            data = json.loads(temporal_json)
-        except json.JSONDecodeError:
+            return self._temporal_parser.parse_temporal_json(
+                temporal_json=temporal_json,
+                reference_time=reference_time_ms,
+            )
+        except Exception as e:
+            logger.warning(f"Temporal parsing failed: {e}")
             return None
-
-        # UltraBERT format: {"entities": [...]} or [...]
-        entities = data.get("entities", []) if isinstance(data, dict) else data
-
-        if not entities:
-            return None
-
-        # For now, return None - Phase 6 will implement actual parsing
-        # We still create the ReminderSignal for routing purposes
-        return None
 
     def _extract_action_from_text(self, text: str) -> str:
         """

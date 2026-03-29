@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/workflow_completed.v1.json",
+  "title": "workflow.completed.v1",
+  "description": "Emitted when a workflow run reaches a terminal state.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.workflow.completed.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["workflow_id", "execution_id", "status"],
+      "properties": {
+        "workflow_id": {
+          "type": "string",
+          "description": "WorkflowRunRequest.workflow_id identifying the workflow definition."
+        },
+        "execution_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique execution run identifier."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["COMPLETED", "FAILED", "INTERRUPTED", "ABORTED"],
+          "description": "Terminal workflow status."
+        },
+        "step_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total steps executed in the workflow."
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total workflow duration in milliseconds."
+        },
+        "trigger_type": {
+          "type": "string",
+          "enum": ["CRON", "EVENT", "MANUAL"],
+          "description": "How the workflow was originally triggered."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

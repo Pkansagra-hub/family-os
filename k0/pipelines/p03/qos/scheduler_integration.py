@@ -65,7 +65,7 @@ P03_SCHEDULER_PROFILES: dict[str, P03SchedulerProfile] = {
     ),
     "SIMILARITY_SEARCH": P03SchedulerProfile(
         name="SIMILARITY_SEARCH",
-        description="FAISS similarity queries during R2-R4",
+        description="pgvector similarity queries during R2-R4",
         port="query",
         base_cost=5,
         cost_per_event=0.05,
@@ -203,7 +203,7 @@ class P03SchedulerIntegration:
         Acquire scheduler token for similarity queries.
 
         Uses SIMILARITY_SEARCH profile for query-side operations
-        (FAISS queries, pattern matching).
+                (pgvector queries, pattern matching).
 
         Args:
             query_count: Number of queries to execute

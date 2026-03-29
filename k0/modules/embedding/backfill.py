@@ -1,23 +1,24 @@
-"""
-M25: embedding.backfill
+"""M25: embedding.backfill -- pgvector-native backfill.
 
 Backfill PENDING embeddings for legacy events.
-Reads st_hipp_events WHERE embedding_status=PENDING, computes embeddings, writes to st_vec.
+Reads st_hipp_events WHERE embedding_status=PENDING, computes embeddings,
+writes to st_vec as pgvector VECTOR(768).
 
-ADR Reference: ADR-K003 (Inline Embedding via UltraBERT)
-Contract: k0/contracts/modules/embedding.backfill.v1.yaml
+ADR Reference: ADR-K003 v2.0 (Inline Embedding via UltraBERT)
+Contract: k0/contracts/modules/embedding.backfill.v2.yaml
 
 Flow:
 1. Query st_hipp_events WHERE embedding_status=PENDING (batch of 100)
-2. Compute embeddings via UltraBERT (batch inference)
-3. Write to st_vec via vec_write syscall
-4. Update st_hipp_events.embedding_status to READY
-5. Emit cognitive.embedding.backfilled.v1 event
+2. Compute 768-dim embeddings via UltraBERT v2.1.0
+3. Validate dimension == 768
+4. Write to st_vec via vec_write syscall (pgvector VECTOR(768))
+5. Update st_hipp_events.embedding_status to READY
+6. Emit cognitive.embedding.backfilled.v1 event
 
 Performance: <5s per batch (100 events), parallel embedding computation
 
-Version: 1.0.0
-Last Updated: 2025-12-13
+Version: 2.0.0
+Last Updated: 2025-06-30
 """
 
 import logging
@@ -156,16 +157,25 @@ async def run(
                 )
                 continue
 
-            # Write to st_vec
+            # Validate dimension (must be exactly 768 for pgvector VECTOR(768))
+            if len(embedding) != 768:
+                logger.error(
+                    "M25: Dimension mismatch, expected 768",
+                    extra={"event_id": event_id, "actual_dim": len(embedding)},
+                )
+                failed_count += 1
+                continue
+
+            # Write to st_vec (pgvector VECTOR(768))
             await syscalls.vec_write(
                 embedding_id=embedding_id,
                 event_id=event_id,
                 tenant_id=tenant_id,
                 space_id=space_id,
                 vector=embedding,
-                vector_dim=len(embedding),
+                vector_dim=768,
                 model_id=model_id,
-                embedding_status="READY",
+                status="READY",
             )
 
             # Update st_hipp_events.embedding_status
@@ -248,6 +258,12 @@ def get_metrics() -> dict[str, int]:
         Dictionary with metric counters
     """
     return dict(_metrics)
+
+
+def reset_metrics() -> None:
+    """Reset metrics counters (for testing)."""
+    for key in _metrics:
+        _metrics[key] = 0
 
 
 def reset_metrics() -> None:

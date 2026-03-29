@@ -1,0 +1,222 @@
+# =============================================================================
+# M28 Embedding Integrity Check Module Contract v1.0.0
+# =============================================================================
+#
+# NEW module: validates embedding data consistency across st_vec and
+# st_hipp_events. Detects dimension mismatches, model version drift,
+# orphaned vectors, and missing vectors.
+#
+# History:
+#   v1.0.0: Initial contract (no predecessor -- integrity was previously implicit)
+#
+# Pipeline: P08 stage_30_integrity
+# ADR: ADR-K003 v2.0
+# Schema: st_vec_v2.columns.yaml, st_hipp_events_v2.columns.yaml
+# Milestone: M4 Epic 4.6
+# =============================================================================
+
+module_id: embedding.integrity_check
+name: "embedding.integrity_check"
+version: v1
+
+# =============================================================================
+# Event Types
+# =============================================================================
+input_event_types:
+  - cognitive.embedding.integrity_check.requested.v1
+
+output_event_types:
+  - cognitive.embedding.integrity_check.completed.v1
+
+# =============================================================================
+# Module Characteristics
+# =============================================================================
+latency_budget_ms: 500
+idempotent: true
+
+side_effects:
+  - read:st_vec
+  - read:st_hipp_events
+  - write:st_hipp_events
+
+# =============================================================================
+# Description
+# =============================================================================
+description: |
+  M28: Embedding Integrity Check Module (NEW)
+
+  Validates embedding data health by running 4 diagnostic queries and
+  producing a structured integrity report. Runs as P08 stage_30 after
+  backfill (stage_10) and cleanup (stage_20).
+
+  This module did not exist before M4. Integrity was previously assumed
+  but never verified, leading to silent data inconsistencies.
+
+  P08 v3 Role: stage_30_integrity
+  - Triggered by: P08 scheduler after cleanup (stage_20) completes
+  - Runs 4 integrity checks via diagnostic syscalls
+  - Produces structured integrity report with health classification
+  - Auto-corrects: sets embedding_status=PENDING for missing vectors
+    (M25 backfill picks them up on next P08 cycle)
+
+  Checks:
+  1. Dimension validation: st_vec rows where vector_dim != 768
+  2. Model consistency: distinct model_id values in st_vec
+  3. Orphan detection: st_vec rows without parent st_hipp_events
+  4. Missing vectors: st_hipp_events READY but no st_vec row
+
+  Health Classification:
+  - HEALTHY: all issue counts are zero
+  - DEGRADED: total issues > 0 and < 100
+  - CRITICAL: total issues >= 100
+
+  Performance: ~500ms (4 COUNT queries, mostly index scans)
+
+# =============================================================================
+# Integrity Checks
+# =============================================================================
+checks:
+
+  dimension_validation:
+    query: "SELECT COUNT(*) FROM st_vec WHERE vector_dim != 768"
+    action: "Log warning, set status=FAILED for mismatched rows"
+    severity: high
+    description: "Detect vectors with wrong dimension (model misconfiguration)"
+
+  model_consistency:
+    query: "SELECT DISTINCT model_id FROM st_vec"
+    action: "Log all model versions present, warn if >1 version detected"
+    severity: medium
+    description: "Detect mixed model versions (incomplete recompute by M26)"
+
+  orphan_detection:
+    query: >
+      SELECT COUNT(*) FROM st_vec v
+      WHERE NOT EXISTS (
+        SELECT 1 FROM st_hipp_events h WHERE h.event_id = v.event_id
+      )
+    action: "Report count, delegate to M27 cleanup if > 0"
+    severity: medium
+    description: "Detect st_vec rows without parent st_hipp_events (FK survivors)"
+
+  missing_vectors:
+    query: >
+      SELECT COUNT(*) FROM st_hipp_events h
+      WHERE h.embedding_status = 'READY'
+      AND NOT EXISTS (
+        SELECT 1 FROM st_vec v WHERE v.event_id = h.event_id
+      )
+    action: "Set embedding_status=PENDING for missing, delegate to M25 backfill"
+    severity: high
+    auto_correct: true
+    description: "Detect events claiming READY but with no st_vec row"
+
+# =============================================================================
+# Failure Modes
+# =============================================================================
+failure_modes:
+  - code: CHECK_QUERY_FAILED
+    description: "One or more diagnostic queries failed (connection, timeout)"
+    policy: retry
+    max_retries: 2
+
+  - code: AUTO_CORRECT_FAILED
+    description: "Failed to reset embedding_status=PENDING for missing vectors"
+    policy: log_and_continue
+    max_retries: 1
+
+# =============================================================================
+# Configuration Schema
+# =============================================================================
+config_schema:
+  type: object
+  properties:
+    auto_correct_missing:
+      type: boolean
+      default: true
+      description: "Automatically set embedding_status=PENDING for events missing vectors"
+    degraded_threshold:
+      type: integer
+      default: 100
+      description: "Issue count threshold for DEGRADED vs CRITICAL classification"
+
+# =============================================================================
+# Input Schema
+# =============================================================================
+input_schema:
+  type: object
+  properties:
+    tenant_id:
+      type: string
+      description: "Scope integrity check to specific tenant (optional)"
+    space_id:
+      type: string
+      description: "Scope integrity check to specific space (optional)"
+    checks:
+      type: array
+      items:
+        type: string
+        enum: ["dimension_validation", "model_consistency", "orphan_detection", "missing_vectors"]
+      description: "Specific checks to run (default: all 4)"
+
+# =============================================================================
+# Output Schema
+# =============================================================================
+output_schema:
+  type: object
+  required:
+    - status
+    - total_vectors
+    - dimension_mismatches
+    - orphaned_vectors
+    - missing_vectors
+  properties:
+    status:
+      type: string
+      enum: ["HEALTHY", "DEGRADED", "CRITICAL"]
+      description: "Overall health classification"
+    total_vectors:
+      type: integer
+      description: "Total st_vec row count"
+    dimension_mismatches:
+      type: integer
+      description: "Count of vectors with vector_dim != 768"
+    model_versions:
+      type: array
+      items:
+        type: string
+      description: "Distinct model_id values found in st_vec"
+    orphaned_vectors:
+      type: integer
+      description: "st_vec rows without parent st_hipp_events"
+    missing_vectors:
+      type: integer
+      description: "st_hipp_events READY events without st_vec row"
+    auto_corrected:
+      type: integer
+      description: "Count of events reset from READY to PENDING (auto-correction)"
+    checked_at:
+      type: string
+      format: date-time
+      description: "TIMESTAMPTZ when integrity check completed"
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+dependencies:
+  syscalls:
+    - name: st_vec.read
+      description: "Diagnostic queries: count, dimension check, model versions, orphans"
+    - name: st_hipp_events.read
+      description: "Missing vector detection: READY events without st_vec row"
+    - name: st_hipp_events.write
+      description: "Auto-correction: reset embedding_status=PENDING for missing vectors"
+
+# =============================================================================
+# Performance
+# =============================================================================
+performance:
+  p50_latency_ms: 200
+  p95_latency_ms: 500
+  p99_latency_ms: 1000
+  queries_per_check: 4

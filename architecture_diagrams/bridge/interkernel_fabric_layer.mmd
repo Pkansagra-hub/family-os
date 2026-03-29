@@ -1,0 +1,553 @@
+%% ======================================================================================
+%% INTERKERNEL FABRIC LANGUAGE (IFL) -- UNIVERSAL CONNECTOR PROTOCOL
+%% ======================================================================================
+%% Created: 2026-02-01
+%% Updated: 2026-02-06 -- Reworked: IFL as universal protocol (not device-only)
+%% Location: architecture_diagrams/bridge/ (Bridge owns IFL Runtime)
+%%
+%% VISION: IFL is the universal language all external services speak to connect to FamilyOS.
+%%   Like Alexa Skills Kit or Apple HomeKit -- but for EVERYTHING: devices, banks, health,
+%%   transport, shopping, education, communication, sensors, fitness, and more.
+%%   Companies build IFL-compliant adapters. FamilyOS publishes the IFL Spec + SDK.
+%%
+%% KEY DESIGN DECISIONS:
+%%   1. MANIFEST TRUST: FamilyOS signing REQUIRED for all adapters.
+%%      Only the owning company can publish an adapter (Chase builds com.chase.*,
+%%      Plaid builds com.plaid.*). No third-party adapter development.
+%%      Enforced by: company domain verification + FamilyOS CA code signing.
+%%
+%%   2. ADAPTER HOSTING: Primarily company-hosted (their infra, their security).
+%%      Optional: WASM sandboxed modules for lightweight/offline adapters.
+%%      Company-hosted = Alexa Skills model (adapter runs on company servers).
+%%      WASM sandboxed = plugin model (adapter runs inside Bridge sandbox).
+%%
+%%   3. AUTO-REGISTRATION: When user connects an adapter (OAuth login in app),
+%%      IFL pulls the adapter's Capability Manifest, translates each capability
+%%      into a Fabric tool contract, and auto-registers in Capability Registry.
+%%      User connects Chase -> Fabric instantly knows tool.read.finance.chase.check_balance.
+%%
+%%   4. EVENT TAXONOMY: ifl.{category}.{adapter_id}.{event_type}
+%%      Examples: ifl.finance.chase.transaction.alert
+%%                ifl.health.fitbit.heart_rate
+%%                ifl.home.hue.light.state_changed
+%%                ifl.transport.uber.ride.status
+%%
+%%   5. CONNECTOR GATEWAY: Name stays IConnectorGatewayPort.
+%%      Everything external is a "connector" to FamilyOS.
+%%      Scope: ALL external traffic (devices, APIs, services, sensors).
+%%
+%% ARCHITECTURE:
+%%   Layer 1: K1 Fabric (caller -- auto-registered capabilities from manifests)
+%%   Layer 2: Bridge ConnectorGateway (security, auth, rate limiting, offline queue)
+%%   Layer 3: IFL Runtime (manifest mgmt, protocol translation, adapter routing)
+%%   Layer 4: IFL Adapters (company-hosted endpoints OR WASM sandboxed)
+%%   Layer 5: External Services and Devices (the real world)
+%%   Storage: K0 (adapter registry, credentials, event persistence)
+%%
+%% IFL SPEC (Published Protocol -- Version 1.0):
+%%   Message format: JSON envelope (+ optional Protobuf for high-throughput)
+%%   Auth flow: OAuth2 Authorization Code (company -> user -> FamilyOS)
+%%   Manifest schema: YAML capability declaration + event declaration
+%%   Health check: /ifl/health (adapter must respond within 5s)
+%%   Versioning: Semver per adapter, IFL spec version in manifest header
+%%
+%% GOVERNING DOCUMENTS:
+%%   Bridge architecture: architecture_diagrams/bridge/bridge_architecture.mmd
+%%   Fabric (consumer): k1/fabric/fabric.mmd
+%%   Whiteboard: docs/architecture/whiteboard_k1/whiteboard_concierge_orchestrator_planner_fabric.md
+%% ======================================================================================
+
+flowchart TB
+
+    %% ======================================================================================
+    %% LAYER 1: K1 FABRIC (Auto-Registered Capabilities from Manifests)
+    %% ======================================================================================
+    subgraph L1_K1_FABRIC["K1: Fabric Capability Registry (Auto-Populated from IFL Manifests)"]
+        direction TB
+
+        subgraph K1_MANIFEST_TRANSLATOR["ManifestTranslator (k1/fabric/manifest_translator.py)"]
+            direction TB
+
+            MT_RECEIVE["receive_manifest(adapter_id, manifest)<br/>Triggered by: k1.ifl.adapter.connected.v1"]:::k1_engine
+
+            MT_TRANSLATE["translate_capabilities(manifest)<br/>For each capability in manifest:<br/>  IFL capability -> Fabric tool contract<br/>  name: tool.{type}.{category}.{adapter}.{action}<br/>  provider_type: BRIDGE (always -- routes via IFL)<br/>  safety_band_min: from manifest (FamilyOS-signed)<br/>  required_inputs: from manifest input schema<br/>  output: from manifest output schema<br/>  cost_per_call: from manifest latency_hint<br/>  description: from manifest (used for embedding)"]:::k1_engine
+
+            MT_VALIDATE["validate_contracts(contracts[])<br/>Module Validator (12 rules, FAB-12)<br/>Schema validation, name conventions,<br/>safety band checks, input/output schemas"]:::k1_validator
+
+            MT_REGISTER["register_in_fabric(contracts[])<br/>Capability Registry: register(contract)<br/>Embedding Index: add(description)<br/>Emit: k1.fabric.capability.registered.v1"]:::k1_engine
+
+            MT_UNREGISTER["unregister_adapter(adapter_id)<br/>Remove all capabilities for adapter<br/>Emit: k1.fabric.capability.unregistered.v1<br/>Triggered by: k1.ifl.adapter.disconnected.v1"]:::k1_engine
+        end
+
+        subgraph K1_AUTO_REGISTERED["Auto-Registered Tool Examples (from Manifests)"]
+            direction LR
+
+            subgraph K1_REG_FINANCE["Finance Tools"]
+                K1_CHASE_BAL["tool.read.finance.chase.check_balance"]:::k1_tool_auto
+                K1_CHASE_XFER["tool.execute.finance.chase.transfer_money"]:::k1_tool_auto
+                K1_VENMO_SEND["tool.execute.finance.venmo.send_payment"]:::k1_tool_auto
+                K1_PLAID_LINK["tool.read.finance.plaid.get_transactions"]:::k1_tool_auto
+            end
+
+            subgraph K1_REG_HOME["Smart Home Tools"]
+                K1_HUE_LIGHT["tool.execute.home.hue.set_brightness"]:::k1_tool_auto
+                K1_NEST_TEMP["tool.execute.home.nest.set_temperature"]:::k1_tool_auto
+                K1_RING_ARM["tool.execute.home.ring.arm_alarm"]:::k1_tool_auto
+                K1_SONOS_PLAY["tool.execute.home.sonos.play_music"]:::k1_tool_auto
+            end
+
+            subgraph K1_REG_HEALTH["Health Tools"]
+                K1_FITBIT_HR["tool.read.health.fitbit.heart_rate"]:::k1_tool_auto
+                K1_APPLE_SLEEP["tool.read.health.apple_health.sleep_score"]:::k1_tool_auto
+                K1_GARMIN_WORKOUT["tool.read.health.garmin.workout_log"]:::k1_tool_auto
+            end
+
+            subgraph K1_REG_TRANSPORT["Transport Tools"]
+                K1_UBER_RIDE["tool.execute.transport.uber.request_ride"]:::k1_tool_auto
+                K1_TESLA_UNLOCK["tool.execute.transport.tesla.unlock"]:::k1_tool_auto
+                K1_MAPS_ROUTE["tool.read.transport.google_maps.route"]:::k1_tool_auto
+            end
+
+            subgraph K1_REG_SHOPPING["Shopping Tools"]
+                K1_INSTACART_ORDER["tool.execute.shopping.instacart.place_order"]:::k1_tool_auto
+                K1_DOORDASH_TRACK["tool.read.shopping.doordash.track_delivery"]:::k1_tool_auto
+                K1_AMAZON_REORDER["tool.execute.shopping.amazon.reorder"]:::k1_tool_auto
+            end
+
+            subgraph K1_REG_OTHER["Calendar / Education / Communication"]
+                K1_GCAL_CREATE["tool.execute.calendar.google.create_event"]:::k1_tool_auto
+                K1_OUTLOOK_AVAIL["tool.read.calendar.outlook.check_availability"]:::k1_tool_auto
+                K1_CLASSROOM_GRADES["tool.read.education.classroom.check_grades"]:::k1_tool_auto
+                K1_GMAIL_SEND["tool.execute.communication.gmail.send_message"]:::k1_tool_auto
+            end
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 2: BRIDGE CONNECTOR GATEWAY (Security, Auth, Rate Limiting)
+    %% ======================================================================================
+    subgraph L2_BRIDGE_GATEWAY["Bridge: ConnectorGateway (bridge/connector/)"]
+        direction TB
+
+        GATEWAY_PORT["IConnectorGatewayPort<br/>execute(adapter_id, action, params)<br/>register_adapter(manifest, oauth_token)<br/>unregister_adapter(adapter_id)<br/>list_adapters() -> AdapterStatus[]<br/>---<br/>ALL external traffic enters here<br/>Devices, APIs, services, sensors"]:::bridge_port
+
+        subgraph GATEWAY_SECURITY["Gateway Security Pipeline"]
+            direction TB
+
+            GW_TOKEN_VERIFY["TokenVerifier<br/>Verify FamilyOS capability token<br/>Check: user_band >= action safety_band"]:::bridge_security
+
+            GW_ADAPTER_VERIFY["AdapterVerifier<br/>Verify adapter signature (FamilyOS CA)<br/>Verify company domain ownership<br/>Check: adapter not revoked"]:::bridge_security
+
+            GW_RATE_LIMITER["RateLimiter<br/>Per-adapter, per-user, per-action<br/>TokenBucket sliding window<br/>Limits from manifest rate_limits{}"]:::bridge_security
+
+            GW_CIRCUIT_BREAKER["CircuitBreaker<br/>Per-adapter failure protection<br/>Threshold: from manifest or default 5/min<br/>Half-open: 30s"]:::bridge_security
+
+            GW_REQUEST_ROUTER["RequestRouter<br/>Route to IFL Runtime<br/>adapter_id -> hosting_mode -> dispatch"]:::bridge_internal
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 3: IFL RUNTIME (Universal Connector Protocol Engine)
+    %% ======================================================================================
+    subgraph L3_IFL_RUNTIME["IFL Runtime (bridge/ifl/) -- Universal Connector Protocol"]
+        direction TB
+
+        %% ==================================================================================
+        %% IFL MANIFEST SYSTEM (Marketplace + Signing + Ingestion)
+        %% ==================================================================================
+        subgraph IFL_MANIFEST_SYSTEM["IFL Manifest System (bridge/ifl/manifest/)"]
+            direction TB
+
+            subgraph IFL_MARKETPLACE["Adapter Marketplace Registry"]
+                MKT_CATALOG["AdapterCatalog<br/>All published adapters<br/>Searchable by category, name<br/>---<br/>Source: FamilyOS Marketplace API<br/>Cached locally, refreshed daily"]:::ifl_core
+
+                MKT_CATEGORIES["Adapter Categories<br/>---<br/>home: Smart Home, IoT, Sensors<br/>health: Wearables, Medical, Fitness<br/>finance: Banking, Payments, Investment<br/>transport: Vehicles, Ride-share, Maps<br/>shopping: Grocery, Delivery, E-commerce<br/>calendar: Scheduling, Events<br/>education: Schools, Learning<br/>communication: Email, Messaging<br/>media: Music, Video, Podcasts<br/>security: Cameras, Locks, Alarms<br/>energy: Solar, EV Charging, Utilities<br/>custom: Developer-built (still signed)"]:::ifl_schema
+
+                MKT_SEARCH["search_adapters(category?, query?)<br/>browse_categories()<br/>get_adapter_info(adapter_id)"]:::ifl_core
+            end
+
+            subgraph IFL_SIGNING["FamilyOS Signing Authority"]
+                SIGN_CA["FamilyOS Certificate Authority<br/>Root CA for adapter signing<br/>---<br/>Signs: adapter manifest + binary<br/>Verifies: company domain ownership<br/>Revokes: compromised adapters"]:::ifl_security
+
+                SIGN_COMPANY_VERIFY["Company Verification<br/>---<br/>com.chase.* -> Chase Bank (verified)<br/>com.plaid.* -> Plaid Inc (verified)<br/>com.tesla.* -> Tesla Inc (verified)<br/>com.philips.hue.* -> Signify (verified)<br/>---<br/>ENFORCED: Only owning company can publish<br/>No third-party adapter development<br/>Domain claim + legal entity verification"]:::ifl_security
+
+                SIGN_MANIFEST_SIGN["ManifestSigner<br/>sign(manifest, company_cert) -> signed_manifest<br/>verify(signed_manifest) -> bool<br/>check_revocation(adapter_id) -> bool"]:::ifl_security
+
+                SIGN_REVIEW["FamilyOS Review Process<br/>---<br/>1. Company submits adapter + manifest<br/>2. Automated: schema validation, safety audit<br/>3. Manual: privacy review, capability audit<br/>4. Signed: FamilyOS CA signs manifest<br/>5. Published: appears in Marketplace<br/>---<br/>Safety band overrides: FamilyOS can<br/>escalate declared bands (never lower)"]:::ifl_security
+            end
+
+            subgraph IFL_MANIFEST_SCHEMA["IFL Capability Manifest (ifl_manifest.schema.yaml)"]
+                direction TB
+
+                MANIFEST_HEADER["Manifest Header<br/>---<br/>ifl_version: '1.0'<br/>adapter_id: 'com.chase.banking'<br/>adapter_name: 'Chase Banking'<br/>company: 'JPMorgan Chase'<br/>category: 'finance'<br/>hosting_mode: 'company_hosted' | 'wasm_sandboxed'<br/>endpoint: 'https://ifl.chase.com/v1'  (if company_hosted)<br/>wasm_module: 'chase_banking.wasm'    (if wasm_sandboxed)<br/>auth_flow: 'oauth2_authorization_code'<br/>auth_url: 'https://chase.com/oauth/authorize'<br/>icon_url, description, privacy_policy_url<br/>familyos_signature: '...'  (FamilyOS CA signed)"]:::ifl_manifest
+
+                MANIFEST_CAPABILITIES["Capabilities Declaration<br/>---<br/>capabilities[]:<br/>  - name: 'check_balance'<br/>    type: 'read' | 'execute' | 'subscribe'<br/>    description: 'Check account balance...'<br/>    safety_band_min: 'AMBER'<br/>    inputs: [{name, type, required, enum}]<br/>    output: {json_schema}<br/>    latency_hint_ms: 2000<br/>    rate_limit: {max_per_minute: 10}<br/>    requires_confirmation: false<br/>    cost_tier: 'free' | 'metered'"]:::ifl_manifest
+
+                MANIFEST_EVENTS["Events Declaration<br/>---<br/>events_inbound[]:<br/>  - topic: 'transaction.alert'<br/>    full_topic: 'ifl.finance.chase.transaction.alert'<br/>    description: 'Real-time transaction notification'<br/>    schema: {json_schema}<br/>    frequency_hint: 'per_transaction'<br/>    safety_band_min: 'AMBER'<br/>---<br/>events_outbound[]:<br/>  - topic: 'balance.threshold'<br/>    trigger: 'balance < user_config.threshold'"]:::ifl_manifest
+
+                MANIFEST_PERMISSIONS["Permissions Declaration<br/>---<br/>permissions_required[]:<br/>  - scope: 'accounts:read'<br/>    reason: 'View account balances'<br/>  - scope: 'transfers:write'<br/>    reason: 'Initiate money transfers'<br/>---<br/>data_retention: 'none' | 'session' | '30d'<br/>data_shared_with: [] (transparency)"]:::ifl_manifest
+            end
+
+            subgraph IFL_MANIFEST_INGESTION["Manifest Ingestion Pipeline"]
+                INGEST_PULL["pull_manifest(adapter_endpoint)<br/>Fetch manifest from adapter"]:::ifl_core
+
+                INGEST_VERIFY_SIG["verify_signature(manifest)<br/>Check FamilyOS CA signature<br/>Check company domain match<br/>Check not revoked"]:::ifl_security
+
+                INGEST_VALIDATE["validate_manifest(manifest)<br/>Schema validation against ifl_manifest.schema.yaml<br/>Safety band audit (no GREEN for financial writes)<br/>Input/output schema completeness"]:::ifl_core
+
+                INGEST_STORE["store_manifest(manifest)<br/>Persist in IFL AdapterRegistry<br/>Credentials in CredentialStore<br/>Emit: ifl.adapter.manifest.ingested.v1"]:::ifl_core
+            end
+        end
+
+        %% ==================================================================================
+        %% IFL PROTOCOL ENGINE (Message Translation, Routing)
+        %% ==================================================================================
+        subgraph IFL_PROTOCOL_ENGINE["IFL Protocol Engine (bridge/ifl/protocol/)"]
+            direction TB
+
+            subgraph IFL_MESSAGE_FORMAT["IFL Message Format (Universal Envelope)"]
+                IFL_REQUEST_ENV["IFLRequest Envelope<br/>---<br/>ifl_version: '1.0'<br/>request_id: uuid<br/>adapter_id: 'com.chase.banking'<br/>action: 'check_balance'<br/>params: {account_type: 'checking'}<br/>auth_token: '...' (user's OAuth token)<br/>trace_id: cognitive_trace_id<br/>timestamp: ISO8601"]:::ifl_protocol
+
+                IFL_RESPONSE_ENV["IFLResponse Envelope<br/>---<br/>request_id: uuid (correlation)<br/>status: 'success' | 'error' | 'pending'<br/>data: {balance: 5420.50, currency: 'USD'}<br/>error: {code, message} (if error)<br/>latency_ms: actual<br/>adapter_version: '2.1.0'"]:::ifl_protocol
+
+                IFL_EVENT_ENV["IFLEvent Envelope<br/>---<br/>event_id: uuid<br/>adapter_id: 'com.chase.banking'<br/>topic: 'ifl.finance.chase.transaction.alert'<br/>data: {amount: -42.50, merchant: 'Starbucks'}<br/>timestamp: ISO8601<br/>safety_band: 'AMBER'"]:::ifl_protocol
+            end
+
+            subgraph IFL_TRANSLATOR["Protocol Translator (bridge/ifl/protocol/translator.py)"]
+                TRANSLATE_TO_IFL["to_ifl(fabric_request) -> IFLRequest<br/>Fabric CapabilityRequest -> IFL envelope"]:::ifl_core
+
+                TRANSLATE_FROM_IFL["from_ifl(ifl_response) -> CapabilityResult<br/>IFL response -> Fabric result"]:::ifl_core
+
+                TRANSLATE_EVENT["translate_event(ifl_event) -> K0 Envelope<br/>IFL inbound event -> K0 command.submit<br/>topic: ifl.{category}.{adapter}.{event}"]:::ifl_core
+            end
+
+            subgraph IFL_VALIDATOR["Payload Validator (bridge/ifl/protocol/validator.py)"]
+                VALIDATE_REQUEST["validate_request(request, manifest)<br/>Check params against capability input schema<br/>Check required fields present<br/>Check types match"]:::ifl_core
+
+                VALIDATE_RESPONSE["validate_response(response, manifest)<br/>Check output matches declared schema<br/>Flag: unexpected fields, type mismatches<br/>Adapter trust score adjustment"]:::ifl_core
+
+                VALIDATE_EVENT["validate_event(event, manifest)<br/>Check event matches declared event schema<br/>Check topic matches declared topics<br/>Reject undeclared event topics"]:::ifl_core
+            end
+        end
+
+        %% ==================================================================================
+        %% IFL ADAPTER REGISTRY (Connected Adapters + Credentials)
+        %% ==================================================================================
+        subgraph IFL_ADAPTER_REGISTRY["IFL Adapter Registry (bridge/ifl/registry/)"]
+            direction TB
+
+            ADAPTER_REG["AdapterRegistry<br/>---<br/>register(adapter_id, manifest, credentials)<br/>unregister(adapter_id)<br/>get(adapter_id) -> AdapterRecord<br/>list(category?) -> AdapterRecord[]<br/>update_status(adapter_id, status)<br/>---<br/>Status: CONNECTED, DEGRADED, OFFLINE, REVOKED"]:::ifl_core
+
+            ADAPTER_CRED["CredentialStore<br/>---<br/>store(adapter_id, oauth_token, refresh_token)<br/>get(adapter_id) -> Credentials<br/>refresh(adapter_id) -> new_token<br/>revoke(adapter_id)<br/>---<br/>Encrypted at rest (AES256-GCM)<br/>Auto-refresh before expiry"]:::ifl_security
+
+            ADAPTER_HEALTH["AdapterHealthMonitor<br/>---<br/>check_health(adapter_id) -> HealthStatus<br/>Periodic: /ifl/health ping (60s interval)<br/>Timeout: 5s<br/>3 consecutive fails: DEGRADED<br/>5 consecutive fails: OFFLINE<br/>Emit: ifl.adapter.health.changed.v1"]:::ifl_core
+
+            ADAPTER_TRUST["AdapterTrustScore<br/>---<br/>Per-adapter rolling score (0.0 - 1.0)<br/>Factors: response validity, latency accuracy,<br/>error rate, schema compliance<br/>Below 0.5: flag for review<br/>Below 0.2: auto-suspend"]:::ifl_core
+        end
+
+        %% ==================================================================================
+        %% IFL ADAPTER DISPATCH (Company-Hosted + WASM Sandboxed)
+        %% ==================================================================================
+        subgraph IFL_ADAPTER_DISPATCH["IFL Adapter Dispatch (bridge/ifl/dispatch/)"]
+            direction TB
+
+            subgraph IFL_COMPANY_HOSTED["Company-Hosted Adapters (Primary Model)"]
+                HOSTED_DISPATCHER["CompanyHostedDispatcher<br/>---<br/>dispatch(ifl_request, endpoint) -> ifl_response<br/>HTTP/2 with TLS 1.3<br/>Timeout: from manifest latency_hint * 2<br/>Retry: 1 retry on 5xx, exponential backoff<br/>---<br/>Adapter runs on company infrastructure<br/>Company handles: scaling, uptime, security<br/>FamilyOS handles: auth token, rate limits"]:::ifl_hosted
+
+                HOSTED_CONN_POOL["ConnectionPool<br/>Per-adapter connection pooling<br/>Max connections: 10 per adapter<br/>Keep-alive: 30s<br/>Health check: via pool ping"]:::ifl_hosted
+            end
+
+            subgraph IFL_WASM_SANDBOXED["WASM Sandboxed Adapters (Lightweight / Offline)"]
+                WASM_DISPATCHER["WASMSandboxDispatcher<br/>---<br/>dispatch(ifl_request, wasm_module) -> ifl_response<br/>Sandbox: memory 64MB, CPU 5s timeout<br/>No network access (must use provided APIs)<br/>---<br/>Use cases: offline adapters, local sensors,<br/>MQTT protocol translation, Zigbee, BLE<br/>FamilyOS downloads signed WASM at install"]:::ifl_wasm
+
+                WASM_SANDBOX["WASMSandbox<br/>Memory: configurable (default 64MB)<br/>CPU timeout: configurable (default 5s)<br/>Filesystem: none<br/>Network: none (uses host IFL APIs)<br/>Import: ifl_host_send(), ifl_host_receive()"]:::ifl_wasm
+
+                WASM_CACHE["WASMModuleCache<br/>Cached compiled modules<br/>Validated: signature check on load<br/>Version: auto-update from Marketplace"]:::ifl_wasm
+            end
+
+            DISPATCH_ROUTER["DispatchRouter<br/>---<br/>manifest.hosting_mode == 'company_hosted'<br/>  -> CompanyHostedDispatcher<br/>manifest.hosting_mode == 'wasm_sandboxed'<br/>  -> WASMSandboxDispatcher"]:::ifl_core
+        end
+
+        %% ==================================================================================
+        %% IFL EVENT SYSTEM (Inbound Events from Adapters)
+        %% ==================================================================================
+        subgraph IFL_EVENT_SYSTEM["IFL Event System (bridge/ifl/events/)"]
+            direction TB
+
+            subgraph IFL_EVENT_INGRESS["Event Ingress (Adapters -> FamilyOS)"]
+                EVT_WEBHOOK_RECEIVER["WebhookReceiver<br/>POST /ifl/events/{adapter_id}<br/>Verify: adapter signature on event<br/>Validate: event schema from manifest"]:::ifl_core
+
+                EVT_SSE_RECEIVER["SSEStreamReceiver<br/>For adapters that stream events<br/>Persistent connection per adapter<br/>Backpressure: pause/resume"]:::ifl_core
+
+                EVT_POLL_RECEIVER["PollReceiver<br/>For adapters without push capability<br/>Configurable interval from manifest<br/>Deduplication: event_id tracking"]:::ifl_core
+            end
+
+            subgraph IFL_EVENT_TAXONOMY["Event Taxonomy (Standard Naming)"]
+                EVT_TAXONOMY["Topic Format: ifl.{category}.{adapter_id}.{event_type}<br/>---<br/>ifl.finance.chase.transaction.alert<br/>ifl.finance.chase.balance.threshold<br/>ifl.health.fitbit.heart_rate<br/>ifl.health.apple_health.sleep.completed<br/>ifl.home.hue.light.state_changed<br/>ifl.home.nest.temperature.changed<br/>ifl.home.ring.motion.detected<br/>ifl.transport.tesla.charge.completed<br/>ifl.transport.uber.ride.status<br/>ifl.shopping.instacart.delivery.eta<br/>ifl.education.classroom.grade.posted<br/>ifl.communication.gmail.message.received<br/>ifl.security.ring.alarm.triggered<br/>ifl.energy.solar.production.daily"]:::ifl_manifest
+            end
+
+            subgraph IFL_EVENT_ROUTING["Event Routing"]
+                EVT_TO_K0["Route to K0 (Persistence)<br/>IFLEvent -> Envelope(topic, data)<br/>-> Bridge CMD_PORT -> K0 P02<br/>All events persisted for memory"]:::ifl_core
+
+                EVT_TO_K1["Route to K1 (Real-time)<br/>IFLEvent -> K1 Event Bus<br/>topic: k1.ifl.event.v1<br/>For: proactive agents, SSE to user"]:::ifl_core
+            end
+        end
+
+        %% ==================================================================================
+        %% IFL CONNECTION FLOW (User Connects an Adapter)
+        %% ==================================================================================
+        subgraph IFL_CONNECTION_FLOW["Adapter Connection Flow (User App -> IFL -> Fabric)"]
+            direction TB
+
+            CONN_STEP1["Step 1: User browses Marketplace<br/>FamilyOS App -> MKT_SEARCH<br/>User selects 'Chase Banking'"]:::ifl_flow
+
+            CONN_STEP2["Step 2: OAuth Authorization<br/>App opens Chase OAuth URL (from manifest)<br/>User logs in, grants permissions<br/>Chase returns auth_code -> App -> Bridge"]:::ifl_flow
+
+            CONN_STEP3["Step 3: Token Exchange<br/>Bridge exchanges auth_code for tokens<br/>Stores in CredentialStore (encrypted)"]:::ifl_flow
+
+            CONN_STEP4["Step 4: Manifest Ingestion<br/>pull_manifest() -> verify_signature()<br/>-> validate_manifest() -> store_manifest()<br/>Adapter recorded in AdapterRegistry"]:::ifl_flow
+
+            CONN_STEP5["Step 5: Auto-Registration in Fabric<br/>Emit: k1.ifl.adapter.connected.v1<br/>ManifestTranslator receives event<br/>Translates capabilities -> tool contracts<br/>Registers in Capability Registry + Embedding Index"]:::ifl_flow
+
+            CONN_STEP6["Step 6: Ready<br/>User: 'What is my checking balance?'<br/>Concierge LOW -> invoke_capability<br/>-> tool.read.finance.chase.check_balance<br/>-> Fabric -> Bridge -> IFL -> Chase API"]:::ifl_flow
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 4: EXTERNAL SERVICES AND DEVICES (The Real World)
+    %% ======================================================================================
+    subgraph L4_EXTERNAL["External Services and Devices (Company-Hosted IFL Endpoints)"]
+        direction TB
+
+        subgraph EXT_FINANCE["Finance Adapters"]
+            EXT_CHASE["Chase Banking<br/>com.chase.banking<br/>https://ifl.chase.com/v1<br/>company_hosted"]:::ext_service
+            EXT_VENMO["Venmo<br/>com.venmo.payments<br/>https://ifl.venmo.com/v1<br/>company_hosted"]:::ext_service
+            EXT_PLAID["Plaid<br/>com.plaid.connect<br/>https://ifl.plaid.com/v1<br/>company_hosted"]:::ext_service
+            EXT_ROBINHOOD["Robinhood<br/>com.robinhood.invest<br/>company_hosted"]:::ext_service
+        end
+
+        subgraph EXT_SMART_HOME["Smart Home Adapters"]
+            EXT_HUE["Philips Hue<br/>com.philips.hue<br/>company_hosted"]:::ext_device
+            EXT_NEST["Google Nest<br/>com.google.nest<br/>company_hosted"]:::ext_device
+            EXT_RING["Ring<br/>com.ring.security<br/>company_hosted"]:::ext_device
+            EXT_SONOS["Sonos<br/>com.sonos.audio<br/>company_hosted"]:::ext_device
+            EXT_LOCKS["Smart Locks<br/>com.august.locks<br/>company_hosted"]:::ext_device
+        end
+
+        subgraph EXT_HEALTH["Health Adapters"]
+            EXT_APPLE_HEALTH["Apple Health<br/>com.apple.healthkit<br/>wasm_sandboxed (on-device)"]:::ext_device
+            EXT_FITBIT["Fitbit<br/>com.fitbit.health<br/>company_hosted"]:::ext_device
+            EXT_GARMIN["Garmin<br/>com.garmin.connect<br/>company_hosted"]:::ext_device
+            EXT_CGM["Dexcom CGM<br/>com.dexcom.cgm<br/>company_hosted"]:::ext_device
+        end
+
+        subgraph EXT_TRANSPORT["Transport Adapters"]
+            EXT_TESLA["Tesla<br/>com.tesla.vehicle<br/>company_hosted"]:::ext_device
+            EXT_UBER["Uber<br/>com.uber.rides<br/>company_hosted"]:::ext_service
+            EXT_GOOGLE_MAPS["Google Maps<br/>com.google.maps<br/>company_hosted"]:::ext_service
+            EXT_TRANSIT["Transit API<br/>com.transit.local<br/>company_hosted"]:::ext_service
+        end
+
+        subgraph EXT_SHOPPING["Shopping Adapters"]
+            EXT_INSTACART["Instacart<br/>com.instacart.grocery<br/>company_hosted"]:::ext_service
+            EXT_DOORDASH["DoorDash<br/>com.doordash.delivery<br/>company_hosted"]:::ext_service
+            EXT_AMAZON["Amazon<br/>com.amazon.shopping<br/>company_hosted"]:::ext_service
+        end
+
+        subgraph EXT_CALENDAR["Calendar and Communication"]
+            EXT_GCAL["Google Calendar<br/>com.google.calendar<br/>company_hosted"]:::ext_service
+            EXT_OUTLOOK["Outlook<br/>com.microsoft.outlook<br/>company_hosted"]:::ext_service
+            EXT_GMAIL["Gmail<br/>com.google.gmail<br/>company_hosted"]:::ext_service
+        end
+
+        subgraph EXT_EDUCATION["Education"]
+            EXT_CLASSROOM["Google Classroom<br/>com.google.classroom<br/>company_hosted"]:::ext_service
+            EXT_KHAN["Khan Academy<br/>com.khanacademy.learn<br/>company_hosted"]:::ext_service
+        end
+
+        subgraph EXT_LOCAL["Local / WASM Adapters (Offline-Capable)"]
+            EXT_MQTT["MQTT Broker<br/>com.familyos.mqtt<br/>wasm_sandboxed"]:::ext_local
+            EXT_ZIGBEE["Zigbee Hub<br/>com.familyos.zigbee<br/>wasm_sandboxed"]:::ext_local
+            EXT_BLE["BLE Devices<br/>com.familyos.ble<br/>wasm_sandboxed"]:::ext_local
+            EXT_WEBHOOK["Webhook Sources<br/>com.familyos.webhooks<br/>wasm_sandboxed"]:::ext_local
+        end
+
+        subgraph EXT_FAMILY_SYNC["Family Device Sync"]
+            EXT_FAMILY["FamilySyncAdapter<br/>com.familyos.sync<br/>wasm_sandboxed<br/>P2P E2EE between family devices"]:::ext_local
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 5: K0 STORAGE (Adapter Registry, Credentials, Events)
+    %% ======================================================================================
+    subgraph L5_K0_STORAGE["K0: Storage (Adapter Data + Event Persistence)"]
+        direction TB
+
+        subgraph K0_ADAPTER_STORAGE["Adapter Storage"]
+            K0_ADAPTER_REG["st_ifl_adapter_registry<br/>adapter_id, company, category,<br/>manifest_hash, status, connected_at"]:::k0_storage
+
+            K0_ADAPTER_CREDS["st_ifl_credentials<br/>adapter_id, oauth_token (encrypted),<br/>refresh_token, expires_at, scopes[]"]:::k0_storage
+
+            K0_ADAPTER_MANIFESTS["st_ifl_manifests<br/>adapter_id, manifest_yaml,<br/>familyos_signature, version"]:::k0_storage
+        end
+
+        subgraph K0_EVENT_STORAGE["Event Storage"]
+            K0_IFL_EVENTS["st_ifl_events<br/>event_id, adapter_id, topic,<br/>data (JSONB), timestamp,<br/>safety_band, processed"]:::k0_storage
+        end
+
+        subgraph K0_PIPELINES["K0 Pipelines"]
+            K0_P02["P02: Write/Ingest<br/>Persist IFL events as episodic memory"]:::k0_pipeline
+            K0_P07["P07: Sync/CRDT<br/>Family device sync persistence"]:::k0_pipeline
+        end
+    end
+
+    %% ======================================================================================
+    %% DATA FLOWS: Auto-Registration (Manifest -> Fabric)
+    %% ======================================================================================
+
+    %% Manifest ingestion pipeline
+    INGEST_PULL -->|"fetch"| INGEST_VERIFY_SIG
+    INGEST_VERIFY_SIG -->|"valid signature"| INGEST_VALIDATE
+    INGEST_VALIDATE -->|"valid schema"| INGEST_STORE
+
+    %% Manifest store -> emit event -> ManifestTranslator
+    INGEST_STORE -->|"emit: k1.ifl.adapter.connected.v1"| MT_RECEIVE
+    MT_RECEIVE -->|"translate capabilities"| MT_TRANSLATE
+    MT_TRANSLATE -->|"validate contracts"| MT_VALIDATE
+    MT_VALIDATE -->|"register tools"| MT_REGISTER
+
+    %% Unregister flow
+    ADAPTER_REG -->|"adapter disconnected"| MT_UNREGISTER
+
+    %% ======================================================================================
+    %% DATA FLOWS: Outbound (K1 Fabric -> Bridge -> IFL -> External)
+    %% ======================================================================================
+
+    %% Fabric auto-registered tools -> Bridge Gateway
+    K1_CHASE_BAL -->|"CapabilityRequest"| GATEWAY_PORT
+    K1_HUE_LIGHT -->|"CapabilityRequest"| GATEWAY_PORT
+    K1_FITBIT_HR -->|"CapabilityRequest"| GATEWAY_PORT
+    K1_UBER_RIDE -->|"CapabilityRequest"| GATEWAY_PORT
+    K1_INSTACART_ORDER -->|"CapabilityRequest"| GATEWAY_PORT
+    K1_GCAL_CREATE -->|"CapabilityRequest"| GATEWAY_PORT
+
+    %% Gateway security pipeline
+    GATEWAY_PORT -->|"verify token"| GW_TOKEN_VERIFY
+    GW_TOKEN_VERIFY -->|"verify adapter"| GW_ADAPTER_VERIFY
+    GW_ADAPTER_VERIFY -->|"rate limit"| GW_RATE_LIMITER
+    GW_RATE_LIMITER -->|"circuit check"| GW_CIRCUIT_BREAKER
+    GW_CIRCUIT_BREAKER -->|"route"| GW_REQUEST_ROUTER
+
+    %% Gateway -> IFL Protocol Engine
+    GW_REQUEST_ROUTER -->|"translate"| TRANSLATE_TO_IFL
+    TRANSLATE_TO_IFL -->|"validate"| VALIDATE_REQUEST
+    VALIDATE_REQUEST -->|"dispatch"| DISPATCH_ROUTER
+
+    %% Dispatch to appropriate hosting mode
+    DISPATCH_ROUTER -->|"company_hosted"| HOSTED_DISPATCHER
+    DISPATCH_ROUTER -->|"wasm_sandboxed"| WASM_DISPATCHER
+
+    %% Company-hosted -> External services
+    HOSTED_DISPATCHER -->|"HTTPS/2 + TLS 1.3"| EXT_CHASE
+    HOSTED_DISPATCHER -->|"HTTPS/2"| EXT_HUE
+    HOSTED_DISPATCHER -->|"HTTPS/2"| EXT_NEST
+    HOSTED_DISPATCHER -->|"HTTPS/2"| EXT_FITBIT
+    HOSTED_DISPATCHER -->|"HTTPS/2"| EXT_TESLA
+    HOSTED_DISPATCHER -->|"HTTPS/2"| EXT_UBER
+    HOSTED_DISPATCHER -->|"HTTPS/2"| EXT_INSTACART
+    HOSTED_DISPATCHER -->|"HTTPS/2"| EXT_GCAL
+    HOSTED_DISPATCHER -->|"HTTPS/2"| EXT_GMAIL
+    HOSTED_DISPATCHER -->|"HTTPS/2"| EXT_CLASSROOM
+
+    %% WASM sandboxed -> Local adapters
+    WASM_DISPATCHER -->|"sandbox exec"| EXT_MQTT
+    WASM_DISPATCHER -->|"sandbox exec"| EXT_ZIGBEE
+    WASM_DISPATCHER -->|"sandbox exec"| EXT_BLE
+    WASM_DISPATCHER -->|"sandbox exec"| EXT_WEBHOOK
+    WASM_DISPATCHER -->|"sandbox exec"| EXT_APPLE_HEALTH
+    WASM_DISPATCHER -->|"sandbox exec"| EXT_FAMILY
+
+    %% Response flow back
+    EXT_CHASE -.->|"IFLResponse"| TRANSLATE_FROM_IFL
+    EXT_HUE -.->|"IFLResponse"| TRANSLATE_FROM_IFL
+    EXT_FITBIT -.->|"IFLResponse"| TRANSLATE_FROM_IFL
+    EXT_TESLA -.->|"IFLResponse"| TRANSLATE_FROM_IFL
+    TRANSLATE_FROM_IFL -.->|"CapabilityResult"| GATEWAY_PORT
+
+    %% ======================================================================================
+    %% DATA FLOWS: Inbound Events (External -> IFL -> K0 + K1)
+    %% ======================================================================================
+
+    %% External services push events
+    EXT_CHASE -.->|"transaction alert"| EVT_WEBHOOK_RECEIVER
+    EXT_FITBIT -.->|"heart rate"| EVT_SSE_RECEIVER
+    EXT_NEST -.->|"temp changed"| EVT_WEBHOOK_RECEIVER
+    EXT_RING -.->|"motion detected"| EVT_WEBHOOK_RECEIVER
+    EXT_TESLA -.->|"charge complete"| EVT_WEBHOOK_RECEIVER
+    EXT_MQTT -.->|"sensor data"| EVT_POLL_RECEIVER
+
+    %% Event validation and routing
+    EVT_WEBHOOK_RECEIVER -.->|"validate"| VALIDATE_EVENT
+    EVT_SSE_RECEIVER -.->|"validate"| VALIDATE_EVENT
+    EVT_POLL_RECEIVER -.->|"validate"| VALIDATE_EVENT
+    VALIDATE_EVENT -.->|"translate"| TRANSLATE_EVENT
+    TRANSLATE_EVENT -.->|"persist"| EVT_TO_K0
+    TRANSLATE_EVENT -.->|"notify"| EVT_TO_K1
+
+    %% K0 persistence
+    EVT_TO_K0 -.->|"Envelope(topic, data)"| K0_P02
+    K0_P02 -.->|"store"| K0_IFL_EVENTS
+
+    %% Family sync
+    EXT_FAMILY -.->|"CRDT delta"| K0_P07
+
+    %% ======================================================================================
+    %% DATA FLOWS: Adapter Registry -> K0 Persistence
+    %% ======================================================================================
+
+    ADAPTER_REG -.->|"persist"| K0_ADAPTER_REG
+    ADAPTER_CRED -.->|"persist encrypted"| K0_ADAPTER_CREDS
+    INGEST_STORE -.->|"persist manifest"| K0_ADAPTER_MANIFESTS
+
+    %% ======================================================================================
+    %% DATA FLOWS: Connection Flow Steps
+    %% ======================================================================================
+
+    CONN_STEP1 -->|"select adapter"| CONN_STEP2
+    CONN_STEP2 -->|"OAuth complete"| CONN_STEP3
+    CONN_STEP3 -->|"tokens stored"| CONN_STEP4
+    CONN_STEP4 -->|"manifest ingested"| CONN_STEP5
+    CONN_STEP5 -->|"capabilities registered"| CONN_STEP6
+
+    %% ======================================================================================
+    %% STYLE DEFINITIONS
+    %% ======================================================================================
+
+    %% K1 Fabric (Blue)
+    classDef k1_engine fill:#bbdefb,stroke:#1565c0,stroke-width:2px,color:#000,font-weight:bold
+    classDef k1_validator fill:#ffcdd2,stroke:#c62828,stroke-width:2px,color:#000
+    classDef k1_tool_auto fill:#90caf9,stroke:#0d47a1,stroke-width:2px,color:#000
+
+    %% Bridge Gateway (Orange/Red)
+    classDef bridge_port fill:#ff7043,stroke:#bf360c,stroke-width:3px,color:#fff,font-weight:bold
+    classDef bridge_security fill:#ef5350,stroke:#b71c1c,stroke-width:2px,color:#fff,font-weight:bold
+    classDef bridge_internal fill:#ffe0b2,stroke:#f57c00,stroke-width:1px,color:#000
+
+    %% IFL Runtime (Purple)
+    classDef ifl_core fill:#ce93d8,stroke:#7b1fa2,stroke-width:2px,color:#000,font-weight:bold
+    classDef ifl_security fill:#f48fb1,stroke:#ad1457,stroke-width:2px,color:#000,font-weight:bold
+    classDef ifl_manifest fill:#e1bee7,stroke:#6a1b9a,stroke-width:2px,color:#000
+    classDef ifl_schema fill:#f3e5f5,stroke:#9c27b0,stroke-width:1px,color:#000
+    classDef ifl_protocol fill:#d1c4e9,stroke:#4527a0,stroke-width:2px,color:#000
+    classDef ifl_hosted fill:#b39ddb,stroke:#512da8,stroke-width:2px,color:#000
+    classDef ifl_wasm fill:#c5cae9,stroke:#283593,stroke-width:2px,color:#000
+    classDef ifl_flow fill:#e8eaf6,stroke:#3f51b5,stroke-width:1px,color:#000
+
+    %% External Services (Teal for services, Blue-gray for devices)
+    classDef ext_service fill:#80cbc4,stroke:#00695c,stroke-width:2px,color:#000
+    classDef ext_device fill:#78909c,stroke:#37474f,stroke-width:2px,color:#fff
+    classDef ext_local fill:#a5d6a7,stroke:#2e7d32,stroke-width:2px,color:#000
+
+    %% K0 Storage (Green)
+    classDef k0_storage fill:#81c784,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef k0_pipeline fill:#c8e6c9,stroke:#388e3c,stroke-width:2px,color:#000

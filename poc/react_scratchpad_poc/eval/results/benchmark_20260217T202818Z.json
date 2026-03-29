@@ -1,0 +1,144 @@
+{
+  "timestamp": "20260217T202818Z",
+  "scenario_count": 1,
+  "results": [
+    {
+      "scenario_id": "test_10_concierge_full",
+      "scenario_name": "Concierge Full Tool Suite (13 tools)",
+      "naive": {
+        "runner_name": "naive_react",
+        "scenario_id": "test_10_concierge_full",
+        "success": true,
+        "final_answer": "LLM_ERROR: 400 * GenerateContentRequest.tools[0].function_declarations[4].parameters.properties[domains].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[7].parameters.properties[selectors].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[8].parameters.properties[domain].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[9].parameters.properties[sections].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[tools_granted].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[domain].items: missing field.\n",
+        "turns": [
+          {
+            "iteration": 0,
+            "assistant_message": "LLM_ERROR: 400 * GenerateContentRequest.tools[0].function_declarations[4].parameters.properties[domains].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[7].parameters.properties[selectors].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[8].parameters.properties[domain].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[9].parameters.properties[sections].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[tools_granted].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[domain].items: missing field.\n",
+            "tool_calls": [],
+            "tool_results": [],
+            "context_tokens_estimate": 622,
+            "findings_snapshot": {},
+            "final_answer_fragment": "LLM_ERROR: 400 * GenerateContentRequest.tools[0].function_declarations[4].parameters.properties[domains].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[7].parameters.properties[selectors].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[8].parameters.properties[domain].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[9].parameters.properties[sections].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[tools_granted].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[domain].items: missing field.\n"
+          }
+        ],
+        "metrics": {
+          "iterations": 1,
+          "tool_calls": 0,
+          "message_count_final": 2,
+          "context_tokens_final": 622,
+          "token_input": 0,
+          "token_output": 0,
+          "latency_ms": 285,
+          "context_tokens_per_iteration": [
+            622
+          ]
+        },
+        "errors": [],
+        "started_at": "2026-02-17T20:28:18.603346+00:00",
+        "finished_at": "2026-02-17T20:28:18.888474+00:00",
+        "total_compactions": 0,
+        "total_findings": 0,
+        "total_sub_agents": 0,
+        "max_nesting_depth": 0,
+        "budget_overspend": false
+      },
+      "smart": {
+        "runner_name": "smart_react",
+        "scenario_id": "test_10_concierge_full",
+        "success": true,
+        "final_answer": "LLM_ERROR: 400 * GenerateContentRequest.tools[0].function_declarations[4].parameters.properties[domains].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[7].parameters.properties[selectors].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[8].parameters.properties[domain].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[9].parameters.properties[sections].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[tools_granted].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[domain].items: missing field.\n",
+        "turns": [
+          {
+            "iteration": 1,
+            "assistant_message": "LLM_ERROR: 400 * GenerateContentRequest.tools[0].function_declarations[4].parameters.properties[domains].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[7].parameters.properties[selectors].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[8].parameters.properties[domain].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[9].parameters.properties[sections].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[tools_granted].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[domain].items: missing field.\n",
+            "tool_calls": [],
+            "tool_results": [],
+            "context_tokens_estimate": 648,
+            "findings_snapshot": {},
+            "final_answer_fragment": "LLM_ERROR: 400 * GenerateContentRequest.tools[0].function_declarations[4].parameters.properties[domains].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[7].parameters.properties[selectors].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[8].parameters.properties[domain].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[9].parameters.properties[sections].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[tools_granted].items: missing field.\n* GenerateContentRequest.tools[0].function_declarations[11].parameters.properties[domain].items: missing field.\n"
+          }
+        ],
+        "metrics": {
+          "iterations": 1,
+          "tool_calls": 0,
+          "compactions": 0,
+          "scratchpad_messages_final": 1,
+          "findings_count": 0,
+          "typed_findings_count": 0,
+          "failed_count": 0,
+          "cognitive_writes_count": 0,
+          "remaining_tool_calls": 20,
+          "remaining_iterations": 11,
+          "token_input": 0,
+          "token_output": 0,
+          "elapsed_budget_ms": 67,
+          "latency_ms": 67,
+          "sub_agent_count": 0,
+          "max_nesting_depth": 0,
+          "context_tokens_per_iteration": [
+            648
+          ]
+        },
+        "errors": [],
+        "started_at": "2026-02-17T20:28:18.889269+00:00",
+        "finished_at": "2026-02-17T20:28:18.956870+00:00",
+        "total_compactions": 0,
+        "total_findings": 0,
+        "total_sub_agents": 0,
+        "max_nesting_depth": 0,
+        "budget_overspend": false
+      },
+      "comparison": {
+        "scenario_id": "test_10_concierge_full",
+        "scenario_name": "Concierge Full Tool Suite (13 tools)",
+        "naive_success": true,
+        "smart_success": true,
+        "winner": "smart",
+        "naive_iterations": 1,
+        "smart_iterations": 1,
+        "naive_tool_calls": 0,
+        "smart_tool_calls": 0,
+        "naive_context_final": 622,
+        "smart_context_final": 1,
+        "context_savings_pct": 99.83922829581994,
+        "naive_tokens_total": 0,
+        "smart_tokens_total": 0,
+        "token_savings_pct": 0.0,
+        "naive_latency_ms": 285,
+        "smart_latency_ms": 67,
+        "compactions": 0,
+        "findings_count": 0,
+        "sub_agent_count": 0,
+        "max_nesting_depth": 0,
+        "failed_attempts": 0,
+        "naive_context_growth": [
+          622
+        ],
+        "smart_context_growth": [
+          648
+        ],
+        "winner_reasons": [
+          "Smart used 100% less context"
+        ]
+      }
+    }
+  ],
+  "aggregate": {
+    "scenario_count": 1,
+    "naive_success_rate": 100.0,
+    "smart_success_rate": 100.0,
+    "naive_wins": 0,
+    "smart_wins": 1,
+    "ties": 0,
+    "avg_context_savings_pct": 99.83922829581994,
+    "avg_token_savings_pct": 0,
+    "naive_avg_latency_ms": 285.0,
+    "smart_avg_latency_ms": 67.0,
+    "total_compactions": 0,
+    "total_findings": 0,
+    "total_sub_agents": 0,
+    "max_nesting_depth": 0,
+    "overall_winner": "SMART (Scratchpad)",
+    "summary": "Smart wins 1/1 scenarios. Context savings: 99.8%. Token savings: 0.0%. Total findings extracted: 0. Compactions performed: 0."
+  }
+}

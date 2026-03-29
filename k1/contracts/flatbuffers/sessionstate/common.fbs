@@ -1,0 +1,182 @@
+// ============================================================================
+// common.fbs - Shared Types for SessionState
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/common.fbs
+// Purpose: Common types, enums, and structs shared across all section schemas
+// Size: N/A (types only, no root)
+// ADR: ADR-0019a (SessionState FlatBuffers Serialization)
+// ============================================================================
+
+namespace K1.SessionState;
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+/// Privacy classification bands per ADR-0042 (Data Privacy Classifications)
+enum PrivacyBand : byte {
+    GREEN = 0,   // Public/non-sensitive
+    AMBER = 1,   // Internal/sensitive
+    RED = 2,     // Confidential/PII
+    BLACK = 3    // Restricted/regulated
+}
+
+/// Agent lifecycle states per ADR-0017c (Control Section)
+enum AgentState : byte {
+    PENDING = 0,     // Created, not yet initialized
+    WARMING = 1,     // Initializing, loading resources
+    ACTIVE = 2,      // Fully operational
+    IDLE = 3,        // Active but no current task
+    DRAINING = 4,    // Completing work, rejecting new
+    TERMINATED = 5   // Shutdown complete
+}
+
+/// Orchestration flow phases per ADR-0017c
+enum FlowPhase : byte {
+    IDLE = 0,         // No active turn
+    NEGOTIATION = 1,  // Agents negotiating
+    SELECTION = 2,    // Agent selection complete
+    EXECUTION = 3     // Executing turn
+}
+
+/// Question/clarification status
+enum QuestionStatus : byte {
+    OPEN = 0,         // Awaiting answer
+    ANSWERED = 1,     // User responded
+    EXPIRED = 2,      // Timed out
+    CANCELLED = 3     // Agent cancelled
+}
+
+/// Eviction trigger reasons
+enum EvictionReason : byte {
+    TIER_PRESSURE = 0,    // Tier at capacity
+    TOTAL_PRESSURE = 1,   // Total SessionState at capacity
+    EMERGENCY_MODE = 2,   // Emergency eviction
+    SCHEDULED = 3,        // Periodic cleanup
+    MANUAL = 4            // Manual eviction request
+}
+
+/// Emergency mode stages per Section 14 (Emergency Modes)
+enum EmergencyMode : byte {
+    NONE = 0,            // Normal operation
+    SUMMARIZATION = 1,   // Stage 1: Aggressive compression
+    READONLY = 2,        // Stage 2: Block writes
+    SHEDDING = 3         // Stage 3: Priority-based drop
+}
+
+/// Pressure levels for SizeTracker
+enum PressureLevel : byte {
+    NORMAL = 0,      // <80% capacity
+    ELEVATED = 1,    // 80-90% capacity
+    CRITICAL = 2,    // 90-95% capacity
+    EMERGENCY = 3    // >95% capacity
+}
+
+/// Narrative arc positions per Section 21
+enum ArcPosition : byte {
+    EXPOSITION = 0,       // Turns 1-10: User intro, goals set
+    RISING_ACTION = 1,    // Turns 11-40: Working on tasks
+    CLIMAX = 2,           // Turns 41-60: Key decision moment
+    RESOLUTION = 3        // Ongoing: Wrapping up
+}
+
+/// Emotional trajectory
+enum EmotionTrajectory : byte {
+    INCREASING = 0,
+    STABLE = 1,
+    DECREASING = 2
+}
+
+/// Mutation rejection reasons per ADR-0017g (Single-Writer)
+enum RejectionReason : byte {
+    NOT_WRITER = 0,           // Agent not authorized to write
+    SECTION_LOCKED = 1,       // Section currently locked
+    SIZE_EXCEEDED = 2,        // Would exceed size limit
+    NEVER_EVICT_VIOLATION = 3,// Attempted to evict protected section
+    INVALID_OPERATION = 4,    // Operation not valid for section
+    PREFLIGHT_FAILED = 5      // Preflight check failed
+}
+
+// ============================================================================
+// STRUCTS (fixed size, inline storage)
+// ============================================================================
+
+/// Timestamp in milliseconds (Unix epoch)
+struct Timestamp {
+    ms: int64;
+}
+
+/// Size tracking for sections/tiers
+struct SizeInfo {
+    current_bytes: uint32;
+    max_bytes: uint32;
+    pressure: PressureLevel;
+}
+
+/// Floating point range (e.g., valence -1 to +1)
+struct FloatRange {
+    value: float;
+    min: float;
+    max: float;
+}
+
+// ============================================================================
+// TABLES (variable size, heap allocated)
+// ============================================================================
+
+/// Entity reference (used across sections)
+table EntityRef {
+    id: string (required);
+    type: string (required);  // "person", "place", "device", "time", etc.
+    display_name: string;
+    confidence: float = 1.0;
+}
+
+/// Fact structure for beliefs sections
+table Fact {
+    id: string (required);
+    subject: string (required);
+    predicate: string (required);
+    object: string (required);
+    confidence: float = 1.0;
+    source: string;           // Which agent/process created this
+    timestamp_ms: int64;
+    privacy_band: PrivacyBand = GREEN;
+}
+
+/// Intent classification result
+table IntentClassification {
+    primary: string (required);   // Top intent
+    all_intents: [string];        // All detected intents
+    scores: [float];              // Confidence scores (parallel to all_intents)
+    classifier: string;           // "ultrabert", "openai", etc.
+}
+
+/// Metadata for a conversation turn
+table TurnMetadata {
+    intent: string;
+    entities: [string];
+    emotion: string;
+    confidence: float = 1.0;
+    processing_time_ms: uint32;
+}
+
+/// Version info for schema evolution
+table SchemaVersion {
+    major: uint16 = 1;
+    minor: uint16 = 0;
+    patch: uint16 = 0;
+}
+
+// ============================================================================
+// COMMON SECTION HEADER
+// ============================================================================
+
+/// Standard header for all sections (for debugging/telemetry)
+table SectionHeader {
+    section_name: string (required);
+    version: SchemaVersion;
+    size_bytes: uint32;
+    last_updated_ms: int64;
+    checksum: uint32;    // CRC32 for corruption detection
+}

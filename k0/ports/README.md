@@ -298,6 +298,249 @@ return CommandResponse(
 
 ---
 
+### 2.1 Command Topic Routing (M2 Architecture)
+
+The command port is **topic-routed**: the `topic` field in every envelope determines which outbox driver receives the data, which body schema validates the payload, and which gate rules apply.
+
+#### How It Works
+
+```
+Envelope arrives at POST /k0/command.submit
+         |
+         v
+  Stage 1: Gate reads envelope.topic
+         |  -> gate_topic_validation.yaml: per-topic rules (body_required, max_body_bytes, allowed_bands)
+         |  -> envelope.schema.json: if/then allOf validates body against topic-specific schema
+         v
+  Stage 7: Outbox stages event
+         |  -> outbox_routing.yaml: topic -> driver + priority + target_pipeline
+         |     e.g. topic=memory.write -> driver=st_epi, pipeline=P02
+         v
+  Driver picks up from outbox, writes to target storage
+```
+
+#### Contract Files (Source of Truth)
+
+| Contract | Path | Purpose |
+| -------- | ---- | ------- |
+| Topic Registry | `k0/contracts/taxonomies/command_topics.yaml` | Canonical list of 7 command topics + resolution rules |
+| Body Schemas | `k0/contracts/jsonschema/topics/<topic>.body.json` | Per-topic payload validation (one file per topic) |
+| Outbox Routing | `k0/contracts/taxonomies/outbox_routing.yaml` | topic -> outbox driver + priority + pipeline |
+| Gate Validation | `k0/contracts/capabilities/gate_topic_validation.yaml` | Per-topic gate rules (body_required, max_bytes, bands) |
+| Envelope Schema | `k0/contracts/jsonschema/envelope.schema.json` | Master envelope schema with if/then allOf per topic |
+| Bridge Protocol | `bridge/contracts/command_port.protocol.yaml` | IKernelCommandPort formal protocol spec |
+| Bridge Envelope | `bridge/contracts/schemas/command_envelope.json` | Bridge-side envelope schema |
+
+#### Current Topics (7)
+
+| Topic | Driver | Pipeline | Body Schema |
+| ----- | ------ | -------- | ----------- |
+| `memory.write` | `st_epi` | P02 | `memory_write.body.json` |
+| `session.snapshot` | `st_session` | Archive | `session_snapshot.body.json` |
+| `beliefs.archive` | `st_beliefs` | Archive | `beliefs_archive.body.json` |
+| `history.archive` | `st_history` | Archive | `history_archive.body.json` |
+| `plan.committed` | `st_epi` | P02 | `plan_committed.body.json` |
+| `ifl.*` | `st_epi` | P02 | `ifl_event.body.json` |
+| `sync.delta` | `st_sync` | P07 | `sync_delta.body.json` |
+
+> **Note**: `ifl.*` uses glob resolution (`fnmatch`). An incoming topic like `ifl.health.apple_watch.heart_rate` matches the `ifl.*` route. Resolution order is defined in `command_topics.yaml` field `resolution: exact_then_glob`.
+
+---
+
+### 2.2 How to Add a New Command Topic
+
+This is the end-to-end checklist for introducing a new topic to the command port. Follow every step; skipping any step will cause either validation failures or unrouted data.
+
+#### Step 1: Register the Topic
+
+**File**: `k0/contracts/taxonomies/command_topics.yaml`
+
+Add a new entry under the `topics` list:
+
+```yaml
+- topic_id: "your_domain.your_action"
+  description: "One-line description of what this topic carries"
+  body_schema: "$ref: ../jsonschema/topics/your_domain_your_action.body.json"
+  producers:
+    - "k1.module_that_sends_this"
+  consumers:
+    - "k0.pipeline_that_receives_this"
+  introduced_in: "M<milestone>"
+```
+
+**Rules**:
+
+- `topic_id` must be DNS-1035 compatible: lowercase, dots, no spaces
+- Glob topics (e.g. `foo.*`) are allowed for wildcard families
+- The `body_schema` `$ref` MUST point to the file you will create in Step 2
+
+#### Step 2: Create the Body JSON Schema
+
+**File**: `k0/contracts/jsonschema/topics/<topic_name>.body.json`
+
+Create a new JSON Schema file that validates the `body` field for this topic:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:familyos:k0:topic:your_domain.your_action:body:v1",
+  "title": "your_domain.your_action body",
+  "description": "Payload schema for your_domain.your_action topic",
+  "type": "object",
+  "required": ["field_a", "field_b"],
+  "properties": {
+    "field_a": { "type": "string" },
+    "field_b": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}
+```
+
+**Rules**:
+
+- `$id` must follow pattern `urn:familyos:k0:topic:<topic_id>:body:v<N>`
+- Use `additionalProperties: false` to catch unexpected fields
+- Filename convention: replace dots with underscores, append `.body.json`
+
+#### Step 3: Add Outbox Route
+
+**File**: `k0/contracts/taxonomies/outbox_routing.yaml`
+
+Add a new entry under the `routes` list:
+
+```yaml
+- topic_id: "your_domain.your_action"
+  driver: "st_your_driver"
+  priority: "normal"          # or "high", "low"
+  target_pipeline: "P0N"     # Which K0 pipeline consumes this
+  driver_meta:
+    table: "your_table_name"
+    index_embedding: false    # true if vectors needed
+    index_fts: false          # true if full-text search needed
+```
+
+**Rules**:
+
+- `driver` must be a known outbox driver ID (check existing routes for valid IDs)
+- `priority` governs outbox pickup order: high > normal > low
+- `driver_meta` fields are driver-specific; check the target driver's contract
+
+#### Step 4: Add Envelope Conditional Validation
+
+**File**: `k0/contracts/jsonschema/envelope.schema.json`
+
+Two changes:
+
+**(a)** Update the `topic` field regex to include your new prefix (if it is a new prefix not already covered):
+
+```json
+"topic": {
+  "type": "string",
+  "pattern": "^(memory|events|ui|policy|session|beliefs|history|plan|ifl|sync|infra\\.sanitized|privacy|intelligence\\.advisory|YOUR_NEW_PREFIX)\\."
+}
+```
+
+**(b)** Add an `if/then` block in the `allOf` array:
+
+```json
+{
+  "if": {
+    "properties": { "topic": { "const": "your_domain.your_action" } }
+  },
+  "then": {
+    "properties": {
+      "body": { "$ref": "topics/your_domain_your_action.body.json" }
+    }
+  }
+}
+```
+
+For glob topics (e.g. `foo.*`), use `pattern` instead of `const`:
+
+```json
+{
+  "if": {
+    "properties": { "topic": { "pattern": "^foo\\." } }
+  },
+  "then": {
+    "properties": {
+      "body": { "$ref": "topics/foo_event.body.json" }
+    }
+  }
+}
+```
+
+#### Step 5: Add Gate Validation Rule
+
+**File**: `k0/contracts/capabilities/gate_topic_validation.yaml`
+
+Add a new entry under the `topic_rules` list:
+
+```yaml
+- topic_id: "your_domain.your_action"
+  body_required: true
+  max_body_bytes: 65536        # Adjust based on expected payload size
+  allowed_bands: ["GREEN", "AMBER", "RED"]   # Which privacy bands can carry this topic
+  validation_level: "strict"   # "strict" or "permissive"
+  notes: "Short rationale for the limits"
+```
+
+**Rules**:
+
+- `body_required: true` is the default for all command topics (data must have a payload)
+- `max_body_bytes`: size-gate the body before deserialization (prevents OOM)
+- `allowed_bands`: restrict which privacy bands can carry this topic (e.g. RED-only topics)
+- `validation_level`: `strict` = reject unknown fields, `permissive` = warn only
+
+#### Step 6: Update Bridge Protocol (If Bridge Changes Needed)
+
+**File**: `bridge/contracts/command_port.protocol.yaml`
+
+Usually NOT required unless:
+
+- The new topic needs a new Bridge-side builder method
+- Transport behavior differs (e.g. new offline queueing rules)
+- New capability token scopes are needed
+
+If changes are needed, update the `envelope_building` section to add the new topic's builder pattern.
+
+#### Step 7: Update Architecture Documentation
+
+Update these files to reflect the new topic:
+
+| File | What to update |
+| ---- | -------------- |
+| `architecture_diagrams/bridge/bridge_architecture.mmd` | Add node in `TRANSPORT_COMMAND_TOPICS` subgraph, add edge from K1 caller |
+| `bridge/README.md` | Section 12 implementation status if needed |
+| `k0/ports/README.md` (this file) | Add row to Section 2.1 "Current Topics" table |
+| `governance/k0/k0_architecture_master.md` | Part 4.1 Event Topics Registry |
+
+#### Step 8: Validate Cross-Consistency
+
+Run this validation after all files are created/updated:
+
+```python
+# Parse all contract files and check:
+# 1. Every topic in command_topics.yaml has a body schema file
+# 2. Every topic in command_topics.yaml has a route in outbox_routing.yaml
+# 3. Every topic in command_topics.yaml has a gate rule in gate_topic_validation.yaml
+# 4. Every topic in outbox_routing.yaml exists in command_topics.yaml
+# 5. Every if/then in envelope.schema.json allOf maps to a topic in command_topics.yaml
+# 6. Topic regex in envelope.schema.json covers all topic prefixes
+```
+
+#### Quick Reference: File Naming Conventions
+
+| Item | Convention | Example |
+| ---- | ---------- | ------- |
+| Topic ID | `domain.action` (DNS-1035) | `memory.write` |
+| Body schema filename | `<topic_id dots→underscores>.body.json` | `memory_write.body.json` |
+| Body schema `$id` | `urn:familyos:k0:topic:<topic_id>:body:v<N>` | `urn:familyos:k0:topic:memory.write:body:v1` |
+| Glob topic | `domain.*` | `ifl.*` |
+| Glob body schema | `<domain>_event.body.json` | `ifl_event.body.json` |
+
+---
+
 ### 3. `query.py`
 
 **Purpose**: Query recall port with selector-based memory retrieval, QoS budgets, time slicing, policy stamp inclusion (Gap 20), streaming mode support (400+ lines).

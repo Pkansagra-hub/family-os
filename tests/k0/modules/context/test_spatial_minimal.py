@@ -16,7 +16,7 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -45,6 +45,7 @@ class MockContext:
     def __init__(self):
         self.logger = Mock()
         self.syscalls = Mock()
+        self.syscalls.query_count = AsyncMock(return_value=0)
         self.config = {}
 
 
@@ -71,13 +72,17 @@ def create_envelope(
     location_geohash: str = "9q8yywkg62",
     location_name: str = "Olive Garden, Market St",
     location_type: str = "restaurant",
+    tenant_id: str = "tenant_test",
+    place_id: str | None = None,
 ) -> dict:
     """Helper to create test envelope."""
     return {
+        "tenant_id": tenant_id,
         "body": {
             "location_geohash": location_geohash,
             "location_name": location_name,
             "location_type": location_type,
+            "place_id": place_id,
         },
         "policy_stamp": {
             "band": band,
@@ -197,6 +202,7 @@ def test_minimize_green_band_full():
     assert spatial.geohash_6 == "9q8yyw"
     assert spatial.location_name == "Olive Garden, Market St"
     assert spatial.location_type == "restaurant"
+    assert spatial.spatial_familiarity is None
     assert spatial.spatial_minimized_at_utc  # Timestamp present
 
 
@@ -305,6 +311,7 @@ async def test_run_green_band_full_envelope():
     assert result["geohash_6"] == "9q8yyw"
     assert result["location_name"] == "Olive Garden, Market St"
     assert result["location_type"] == "restaurant"
+    assert result["spatial_familiarity"] is None
     assert "spatial_minimized_at_utc" in result
 
 
@@ -342,6 +349,42 @@ async def test_run_red_band_null_geohash():
     assert result["geohash_6"] is None  # RED band omits
     assert result["location_name"] == "City"
     assert result["location_type"] == "city"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "previous_visits,expected",
+    [
+        (0, "FIRST_VISIT"),
+        (1, "OCCASIONAL"),
+        (4, "OCCASIONAL"),
+        (5, "REGULAR"),
+        (19, "REGULAR"),
+        (20, "DAILY"),
+    ],
+)
+async def test_run_computes_spatial_familiarity(previous_visits: int, expected: str):
+    """End-to-end: spatial_familiarity is derived from historical visit count."""
+    envelope = create_envelope(place_id="place_olive_garden")
+    message, context, config = make_test_call(envelope)
+    context.syscalls.query_count = AsyncMock(return_value=previous_visits)
+
+    result = await run(message, context, **config)
+
+    assert result["spatial_familiarity"] == expected
+    context.syscalls.query_count.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_skips_familiarity_without_place_id():
+    """No place_id means familiarity is left NULL and no DB lookup is attempted."""
+    envelope = create_envelope(place_id=None)
+    message, context, config = make_test_call(envelope)
+
+    result = await run(message, context, **config)
+
+    assert result["spatial_familiarity"] is None
+    context.syscalls.query_count.assert_not_awaited()
 
 
 @pytest.mark.asyncio

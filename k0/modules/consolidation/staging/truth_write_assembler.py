@@ -28,12 +28,28 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from k0.pipelines.p03.event_state import P03EventState, ReconciliationAction
+from k0.modules.consolidation.algorithms.mcts import MCTSScenario
+
+# Issue 7.6: Import ObservationContext for attaching to StagedWrite
+from k0.modules.consolidation.algorithms.observation_context import ObservationContext
+from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
+from k0.modules.consolidation.dream.intent_signals import (
+    DecisionSignal,
+    IntentSignal,
+    IntentSignalType,
+    ReminderSignal,
+)
 from k0.modules.consolidation.dream.models import (
     CounterfactualScenario,
     Insight,
     RoutineOptimization,
 )
+from k0.modules.context.temporal_profile import (
+    convert_to_local_timezone,
+    get_day_of_week,
+    get_time_of_day_bucket,
+)
+from k0.pipelines.p03.event_state import P03EventState, ReconciliationAction
 from k0.pipelines.p03.phase_outputs import (
     EpisodeCluster,
     GapCandidate,
@@ -43,6 +59,7 @@ from k0.pipelines.p03.phase_outputs import (
 from k0.pipelines.p03.staged_writes import (
     LAYER_ST_EPI,
     LAYER_ST_LEARNING_QUEUE,
+    LAYER_ST_MCTS,
     LAYER_ST_PROCEDURAL,
     LAYER_ST_PROSPECTIVE,
     LAYER_ST_SEM,
@@ -64,7 +81,6 @@ UPDATE_ACTIONS = frozenset(
     {
         ReconciliationAction.REINFORCE,
         ReconciliationAction.EXTEND,
-        ReconciliationAction.EVOLVE,
     }
 )
 
@@ -75,6 +91,137 @@ ARCHIVE_ACTIONS = frozenset({ReconciliationAction.PRUNE})
 def _now_ms() -> int:
     """Return current time in milliseconds since epoch."""
     return int(time.time() * 1000)
+
+
+def _generate_pattern_name(state: P03EventState, max_length: int = 200) -> str:
+    """
+    Generate a descriptive pattern name from event state.
+
+    M10.8: Creates semantic names instead of raw event text truncation.
+
+    Priority order for name generation:
+    1. Activity type + key entities (e.g., "Dinner with Mom at Thai Palace")
+    2. Activity type + location (e.g., "Work meeting at Office")
+    3. Content type + entities (e.g., "Chat about vacation plans")
+    4. Fallback to truncated text
+
+    Args:
+        state: P03EventState with NER entities, activity type, etc.
+        max_length: Maximum length for pattern name
+
+    Returns:
+        Descriptive pattern name
+    """
+    # Parse NER entities from nested structure:
+    # {"ner_family": {"entities": [{"text": "Emma", "label": "PERSON"}]}, "ner_general": {...}}
+    # Only extract entities with labels indicating people/orgs (not events/actions)
+    VALID_ENTITY_LABELS = {"PERSON", "PER", "KINSHIP", "ORG", "LOC", "PET"}
+    entities: List[str] = []
+    seen_texts: set = set()  # Avoid duplicates
+    try:
+        ner_json = getattr(state, "ner_entities_json", "{}") or "{}"
+        ner_data = json.loads(ner_json) if ner_json else {}
+
+        # Handle nested NER structure (ner_family, ner_general each have entities array)
+        if isinstance(ner_data, dict):
+            # Prefer ner_family entities over ner_general (more specific)
+            for ner_source in ["ner_family", "ner_general"]:
+                if ner_source in ner_data:
+                    source_data = ner_data[ner_source]
+                    if isinstance(source_data, dict) and "entities" in source_data:
+                        for ent in source_data["entities"]:
+                            if isinstance(ent, dict) and "text" in ent:
+                                # Filter by entity label - only use people/orgs/locations
+                                label = ent.get("label", "")
+                                if label not in VALID_ENTITY_LABELS:
+                                    continue
+                                text = ent["text"].strip()
+                                # Skip possessive forms, normalize
+                                if text.endswith("'s"):
+                                    text = text[:-2]
+                                # Skip garbage like "and Jake", "with Emma"
+                                if text.lower().startswith(("and ", "with ", "the ")):
+                                    text = text.split(" ", 1)[1] if " " in text else text
+                                # Skip duplicates and very short entities
+                                if text and len(text) > 1 and text.lower() not in seen_texts:
+                                    entities.append(text)
+                                    seen_texts.add(text.lower())
+        # Handle legacy flat list format: [{"text": "Mom", "label": "KINSHIP"}]
+        elif isinstance(ner_data, list):
+            for ent in ner_data:
+                if isinstance(ent, dict) and "text" in ent:
+                    label = ent.get("label", "")
+                    if label and label not in VALID_ENTITY_LABELS:
+                        continue
+                    text = ent["text"].strip()
+                    if text and len(text) > 1 and text.lower() not in seen_texts:
+                        entities.append(text)
+                        seen_texts.add(text.lower())
+                elif isinstance(ent, str) and ent:
+                    if ent.lower() not in seen_texts:
+                        entities.append(ent)
+                        seen_texts.add(ent.lower())
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Get activity type (prefer UltraBERT classification)
+    activity = getattr(state, "activity_type_ultrabert", "") or ""
+    if not activity:
+        activity = getattr(state, "activity_type", "") or ""
+    if not activity:
+        activity = getattr(state, "content_type", "") or ""
+
+    # Normalize activity type for display
+    activity_display = activity.replace("_", " ").title() if activity else ""
+
+    # Get location
+    location = getattr(state, "location_name", "") or ""
+
+    # Build pattern name based on available data
+    pattern_name = ""
+
+    # Priority 1: Activity + entities (e.g., "Dinner with Mom, Dad")
+    if activity_display and entities:
+        entity_str = ", ".join(entities[:3])  # Max 3 entities
+        pattern_name = f"{activity_display} with {entity_str}"
+        if location:
+            pattern_name += f" at {location}"
+
+    # Priority 2: Activity + location
+    elif activity_display and location:
+        pattern_name = f"{activity_display} at {location}"
+
+    # Priority 3: Activity + first part of text
+    elif activity_display:
+        text = getattr(state, "content_text", "") or ""
+        if text:
+            # Take first sentence or 50 chars
+            first_sentence = text.split(".")[0][:50].strip()
+            if first_sentence:
+                pattern_name = f"{activity_display}: {first_sentence}"
+            else:
+                pattern_name = activity_display
+        else:
+            pattern_name = activity_display
+
+    # Priority 4: Just entities
+    elif entities:
+        pattern_name = f"Memory about {', '.join(entities[:3])}"
+
+    # Fallback: Use text content
+    if not pattern_name:
+        text = getattr(state, "content_text", "") or ""
+        if text:
+            pattern_name = text
+        else:
+            event_id = getattr(state, "event_id", "unknown")
+            pattern_name = f"Pattern from {event_id}"
+
+    # Truncate to max length
+    if len(pattern_name) > max_length:
+        pattern_name = pattern_name[: max_length - 3] + "..."
+
+    return pattern_name
 
 
 # =============================================================================
@@ -125,6 +272,7 @@ class TruthWriteAssembler:
         source_phase: str = "R6",
         tenant_id: str = "default",
         space_id: str = "default",
+        consolidation_cycle_id: Optional[str] = None,
     ) -> None:
         """
         Initialize assembler with idempotency generator.
@@ -139,6 +287,7 @@ class TruthWriteAssembler:
         self.source_phase = source_phase
         self.tenant_id = tenant_id
         self.space_id = space_id
+        self.consolidation_cycle_id = consolidation_cycle_id
 
     # =========================================================================
     # st_epi — Episodic Memory (from R2 EpisodeCluster)
@@ -155,17 +304,26 @@ class TruthWriteAssembler:
         Each cluster becomes an episodic memory record. Events in the
         cluster contribute to the episode's provenance.
 
+        Issue 2 Fix: Also generates UPDATE writes for events that matched
+        existing episodes (reconciliation_action=REINFORCE).
+
         Args:
             clusters: R2 episode clusters
             event_states: Event states for provenance lookup
 
         Returns:
-            List of StagedWrite for st_epi inserts
+            List of StagedWrite for st_epi inserts AND updates
         """
-        if not clusters:
-            return []
-
         writes: List[StagedWrite] = []
+
+        # === ISSUE 2 FIX: Generate UPDATE writes for matched events ===
+        # Events with episode_match_id should UPDATE existing episodes
+        episode_updates = self._assemble_epi_update_writes(event_states)
+        writes.extend(episode_updates)
+
+        # === Original logic: Generate INSERT writes for new clusters ===
+        if not clusters:
+            return writes
 
         for cluster in clusters:
             # Extract source event IDs from cluster members
@@ -180,6 +338,19 @@ class TruthWriteAssembler:
                 cluster.cluster_id,
             )
 
+            # Issue 7.6: Get observation context from cluster
+            # Use first member_context or create from episode cluster
+            obs_context = None
+            if cluster.member_contexts:
+                obs_context = cluster.member_contexts[0]
+            elif cluster.member_event_ids:
+                # Fallback: create from first event state
+                first_event_id = cluster.member_event_ids[0]
+                if first_event_id in event_states:
+                    obs_context = ObservationContext.from_event(event_states[first_event_id])
+            if obs_context and self.consolidation_cycle_id:
+                obs_context.consolidation_cycle_id = self.consolidation_cycle_id
+
             # Create INSERT write
             write = StagedWrite.insert(
                 layer=LAYER_ST_EPI,
@@ -190,6 +361,107 @@ class TruthWriteAssembler:
             )
             # Override idempotency key with proper format
             write.idempotency_key = idem_key
+            # Issue 7.6: Attach observation context for st_observations recording
+            write.observation_context = obs_context
+
+            writes.append(write)
+
+        return writes
+
+    def _assemble_epi_update_writes(
+        self,
+        event_states: Dict[str, P03EventState],
+    ) -> List[StagedWrite]:
+        """
+        Assemble st_epi UPDATE writes for events matching existing episodes.
+
+        Issue 2 Fix: Events with episode_match_id and reconciliation_action=REINFORCE
+        should UPDATE the existing episode instead of creating a new one.
+
+        The UPDATE increments source_event_count and extends temporal bounds.
+
+        Args:
+            event_states: Event states with episode match info from R2
+
+        Returns:
+            List of StagedWrite for st_epi updates (one per unique episode)
+        """
+        from collections import Counter, defaultdict
+
+        # Group events by matched episode_id
+        episode_events: Dict[str, List[P03EventState]] = defaultdict(list)
+
+        for state in event_states.values():
+            if state.reconciliation_action == ReconciliationAction.REINFORCE and getattr(
+                state, "episode_match_id", None
+            ):
+                episode_events[state.episode_match_id].append(state)
+
+        if not episode_events:
+            return []
+
+        writes: List[StagedWrite] = []
+        now_ms = _now_ms()
+
+        for episode_id, events in episode_events.items():
+            # Build UPDATE payload
+            # Get the version from the first event (all should have same version)
+            expected_version = (
+                events[0].episode_match_version
+                if hasattr(events[0], "episode_match_version")
+                else 1
+            )
+
+            # Collect event IDs to add to source_events_json
+            new_event_ids = [e.event_id for e in events]
+
+            # Compute new temporal bounds (will be merged with existing in writer)
+            event_timestamps = [e.timestamp for e in events if e.timestamp > 0]
+            min_timestamp = min(event_timestamps) if event_timestamps else 0
+            max_timestamp = max(event_timestamps) if event_timestamps else 0
+
+            update_data = {
+                "episode_id": episode_id,
+                "tenant_id": self.tenant_id,
+                "space_id": self.space_id,
+                # Fields to UPDATE:
+                "additional_event_ids": new_event_ids,  # Will be appended to source_events_json
+                "additional_event_count": len(new_event_ids),
+                "new_start_time_utc": min_timestamp,  # Will use MIN(existing, new)
+                "new_end_time_utc": max_timestamp,  # Will use MAX(existing, new)
+                "consolidation_cycle_id": self.consolidation_cycle_id,
+                "updated_at": now_ms,
+            }
+
+            # Epic 5.1: Collect narrative thread_ids from reinforcing events
+            reinforce_threads = [e.narrative_thread_id for e in events if e.narrative_thread_id]
+            if reinforce_threads:
+                update_data["narrative_thread_ids_json"] = json.dumps(
+                    sorted(set(reinforce_threads))
+                )
+                update_data["narrative_thread_id"] = Counter(reinforce_threads).most_common(1)[0][0]
+
+            # Generate idempotency key
+            idem_key = self.idempotency.for_truth_write(
+                LAYER_ST_EPI,
+                f"{episode_id}:update",
+            )
+
+            # Create UPDATE write with optimistic locking
+            write = StagedWrite.update(
+                layer=LAYER_ST_EPI,
+                record_id=episode_id,
+                data=update_data,
+                expected_version=expected_version,
+                phase=self.source_phase,
+                event_ids=new_event_ids,
+            )
+            write.idempotency_key = idem_key
+            if events:
+                obs_context = ObservationContext.from_event(events[0])
+                if self.consolidation_cycle_id:
+                    obs_context.consolidation_cycle_id = self.consolidation_cycle_id
+                write.observation_context = obs_context
 
             writes.append(write)
 
@@ -206,10 +478,44 @@ class TruthWriteAssembler:
             episode_type, start_time_utc, end_time_utc, primary_location,
             location_type, participants_json, participant_count,
             embedding_id, cluster_id, cluster_confidence, source_events_json,
-            source_event_count, archival_status, created_at, updated_at, valid_from
+            source_event_count, archival_status, created_at, updated_at, valid_from,
+            narrative_thread_id, narrative_thread_ids_json, narrative_arc_position,
+            continuation_of_episode_id
         """
+        from collections import Counter
+
         now_ms = _now_ms()
         member_ids = list(cluster.member_event_ids)
+
+        first_event: Optional[P03EventState] = None
+        for event_id in member_ids:
+            if event_id in event_states:
+                first_event = event_states[event_id]
+                break
+
+        location_type = cluster.location_type
+        if not location_type and first_event:
+            location_type = getattr(first_event, "location_type", None) or None
+
+        temporal_bucket = None
+        day_of_week = None
+        if first_event:
+            bucket = getattr(first_event, "time_of_day_bucket", None) or ""
+            day = getattr(first_event, "day_of_week", None) or ""
+            temporal_bucket = bucket.upper() if bucket else None
+            day_of_week = day.upper() if day else None
+
+        if (not temporal_bucket or not day_of_week) and cluster.temporal_start > 0:
+            derived_bucket, derived_day = self._derive_temporal_fields(cluster.temporal_start)
+            temporal_bucket = temporal_bucket or derived_bucket
+            day_of_week = day_of_week or derived_day
+
+        duration_minutes = None
+        if cluster.temporal_start > 0 and cluster.temporal_end > 0:
+            if cluster.temporal_end >= cluster.temporal_start:
+                duration_minutes = int((cluster.temporal_end - cluster.temporal_start) / 60000)
+
+        last_observed_at = cluster.temporal_end if cluster.temporal_end > 0 else now_ms
 
         # Get embedding_id from cluster centroid or first member event
         embedding_id = cluster.centroid_embedding_id
@@ -217,6 +523,21 @@ class TruthWriteAssembler:
             first_event = event_states.get(member_ids[0])
             if first_event:
                 embedding_id = first_event.embedding_id
+
+        # Epic 5.1: Compute narrative columns from source events
+        thread_ids = [
+            event_states[eid].narrative_thread_id
+            for eid in member_ids
+            if eid in event_states and event_states[eid].narrative_thread_id
+        ]
+        dominant_thread_id = Counter(thread_ids).most_common(1)[0][0] if thread_ids else None
+        all_thread_ids_json = json.dumps(sorted(set(thread_ids))) if thread_ids else None
+        arc_positions = [
+            event_states[eid].narrative_arc_position
+            for eid in member_ids
+            if eid in event_states and event_states[eid].narrative_arc_position
+        ]
+        dominant_arc = Counter(arc_positions).most_common(1)[0][0] if arc_positions else None
 
         return {
             "episode_id": cluster.cluster_id,
@@ -227,19 +548,156 @@ class TruthWriteAssembler:
             "episode_type": cluster.activity_type or "GENERAL",
             "start_time_utc": cluster.temporal_start,
             "end_time_utc": cluster.temporal_end,
+            "duration_minutes": duration_minutes,
+            "temporal_bucket": temporal_bucket,
+            "day_of_week": day_of_week,
+            "is_recurring": None,
+            "recurrence_pattern": None,
             "primary_location": cluster.location_hint,
+            "location_type": location_type,  # GAP-002: location category
             "participants_json": cluster.participants_json,
             "participant_count": len(json.loads(cluster.participants_json or "[]")),
             "embedding_id": embedding_id,
             "cluster_id": cluster.cluster_id,
             "cluster_confidence": cluster.cohesion_score or 0.5,
+            "consolidation_cycle_id": self.consolidation_cycle_id,
             "source_events_json": json.dumps(member_ids),
             "source_event_count": len(member_ids),
             "archival_status": "ACTIVE",
+            "last_observed_at": last_observed_at,
             "created_at": now_ms,
             "updated_at": now_ms,
             "valid_from": now_ms,
+            # Epic 5.1: Narrative thread columns
+            "narrative_thread_id": dominant_thread_id,
+            "narrative_thread_ids_json": all_thread_ids_json,
+            "narrative_arc_position": dominant_arc,
+            "continuation_of_episode_id": None,  # Set by R2 thread matching
+            # Epic 5.2: Goal completion
+            "narrative_thread_completed": False,  # Set by R2 detect_arc_completion
+            # === Epic 6.5: Metadata Preservation ===
+            "centroid_metadata_json": (
+                json.dumps(cluster.centroid_metadata) if cluster.centroid_metadata else None
+            ),
+            "ambiguity_score": cluster.ambiguity_score or None,
+            "entity_ids_json": (
+                json.dumps(sorted(cluster.entity_ids)) if cluster.entity_ids else None
+            ),
+            "dominant_sentiment": cluster.dominant_sentiment or None,
+            "dominant_sentiment_label": cluster.dominant_sentiment_label or None,
+            "dominant_emotion": cluster.dominant_emotion or None,
+            "aggregated_sentiment": cluster.aggregated_sentiment,
+            "aggregated_salience": cluster.aggregated_salience,
+            "dominant_social_context": cluster.dominant_social_context,
+            "activity_type_ultrabert": cluster.activity_type_ultrabert or None,
         }
+
+    def _derive_temporal_fields(
+        self,
+        timestamp_ms: int,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """
+        Derive temporal_bucket and day_of_week from a UTC timestamp in ms.
+
+        Returns uppercase bucket/day strings or (None, None) if derivation fails.
+        """
+        if timestamp_ms <= 0:
+            return None, None
+
+        try:
+            dt_local, _ = convert_to_local_timezone(int(timestamp_ms / 1000), self.tenant_id)
+        except Exception:
+            return None, None
+
+        bucket = get_time_of_day_bucket(dt_local).upper()
+        day = get_day_of_week(dt_local).upper()
+        return bucket, day
+
+    def _format_recurrence_pattern(self, candidate: RoutineCandidate) -> Optional[str]:
+        """Format recurrence_pattern from RoutineCandidate fields."""
+        parts: List[str] = []
+
+        frequency = getattr(candidate, "frequency", None)
+        if frequency is not None:
+            freq_value = getattr(frequency, "value", None) or str(frequency)
+            if freq_value:
+                parts.append(freq_value)
+
+        day_pattern = getattr(candidate, "day_pattern", None)
+        if day_pattern:
+            parts.append(str(day_pattern).upper())
+
+        temporal_anchor = getattr(candidate, "temporal_anchor", None)
+        if temporal_anchor:
+            parts.append(str(temporal_anchor))
+
+        return ":".join(parts) if parts else None
+
+    def _merge_epi_recurrence_updates(
+        self,
+        epi_writes: List[StagedWrite],
+        routine_candidates: List[RoutineCandidate],
+    ) -> None:
+        """
+        Merge recurrence signals into existing st_epi writes or add updates.
+
+        This avoids duplicate writes for the same episode_id while allowing
+        recurrence fields to be populated when RoutineDetector emits candidates.
+        """
+        if not routine_candidates:
+            return
+
+        now_ms = _now_ms()
+        write_by_id: Dict[str, StagedWrite] = {
+            w.record_id: w for w in epi_writes if w.layer == LAYER_ST_EPI
+        }
+
+        for candidate in routine_candidates:
+            source_json = getattr(candidate, "source_episodes_json", "[]") or "[]"
+            try:
+                episode_ids = json.loads(source_json)
+                if not isinstance(episode_ids, list):
+                    episode_ids = []
+            except (json.JSONDecodeError, TypeError):
+                episode_ids = []
+
+            recurrence_pattern = self._format_recurrence_pattern(candidate)
+
+            for episode_id in episode_ids:
+                if not episode_id:
+                    continue
+
+                if episode_id in write_by_id:
+                    write = write_by_id[episode_id]
+                    write.record_data["is_recurring"] = True
+                    if recurrence_pattern:
+                        write.record_data["recurrence_pattern"] = recurrence_pattern
+                    write.record_data["updated_at"] = now_ms
+                    continue
+
+                record_data = {
+                    "is_recurring": True,
+                    "updated_at": now_ms,
+                }
+                if recurrence_pattern:
+                    record_data["recurrence_pattern"] = recurrence_pattern
+
+                idem_key = self.idempotency.for_truth_write(
+                    LAYER_ST_EPI,
+                    f"{episode_id}:recurrence",
+                )
+
+                write = StagedWrite.update(
+                    layer=LAYER_ST_EPI,
+                    record_id=episode_id,
+                    data=record_data,
+                    phase=self.source_phase,
+                    expected_version=None,
+                    event_ids=[],
+                )
+                write.idempotency_key = idem_key
+                epi_writes.append(write)
+                write_by_id[episode_id] = write
 
     # =========================================================================
     # st_sem — Semantic Memory (from R3 reconciliation decisions)
@@ -276,6 +734,9 @@ class TruthWriteAssembler:
                 if write:
                     writes.append(write)
 
+            elif action == ReconciliationAction.EVOLVE:
+                writes.extend(self._create_sem_evolve_writes(event_id, state))
+
             elif action in UPDATE_ACTIONS:
                 write = self._create_sem_update(event_id, state)
                 if write:
@@ -293,8 +754,23 @@ class TruthWriteAssembler:
         event_id: str,
         state: P03EventState,
     ) -> Optional[StagedWrite]:
-        """Create st_sem INSERT for CREATE action."""
+        """
+        Create st_sem INSERT for CREATE action.
+
+        GAP-006: actor_id is intentionally NULL for semantic patterns.
+        Semantic memory represents generalized, actor-independent knowledge
+        extracted from episodic memories. Unlike episodic memories which are
+        tied to specific actors, semantic patterns (routines, preferences,
+        themes) are abstractions that can apply across actors.
+
+        Actor-specific idiosyncratic patterns should use st_epi (episodic)
+        or st_procedural (habits) where actor_id is populated.
+
+        Reference: Tulving's Memory Systems (1972, 1985)
+        """
         import json
+
+        from k0.modules.consolidation.algorithms.subtype_classifier import get_subtype_classifier
 
         # Pattern ID comes from event being promoted to pattern
         pattern_id = f"sem_{event_id}"
@@ -305,16 +781,33 @@ class TruthWriteAssembler:
         if pattern_type not in ("ROUTINE", "PREFERENCE", "THEME", "RELATIONSHIP", "GOAL", "VALUE"):
             pattern_type = "THEME"  # Default valid type
 
-        pattern_name = getattr(state, "text", None) or f"Pattern from {event_id}"
-        if len(pattern_name) > 200:
-            pattern_name = pattern_name[:197] + "..."
+        # M10.8: Generate descriptive pattern name from NER entities and activity type
+        pattern_name = _generate_pattern_name(state, max_length=200)
+
+        # GAP-005: Classify pattern_subtype
+        classifier = get_subtype_classifier()
+        pattern_subtype = classifier.classify_pattern(
+            pattern_type=pattern_type,
+            pattern_name=pattern_name,
+            source_texts=[state.content_text] if state.content_text else None,
+        )
+
+        description = self._build_sem_description(state, pattern_name, pattern_type)
+        attributes_json = self._build_sem_attributes(state, pattern_type)
+        temporal_regularity, temporal_pattern_json = self._build_sem_temporal_fields(state)
 
         record_data = {
             "pattern_id": pattern_id,
             "tenant_id": self.tenant_id,
             "space_id": self.space_id,
+            "actor_id": getattr(state, "actor_id", None) or None,
             "pattern_type": pattern_type,
+            "pattern_subtype": pattern_subtype,  # GAP-005
             "pattern_name": pattern_name,
+            "pattern_description": description,
+            "pattern_attributes_json": attributes_json,
+            "temporal_regularity": temporal_regularity,
+            "temporal_pattern_json": temporal_pattern_json,
             "embedding_id": state.embedding_id,
             "source_episodes_json": json.dumps([event_id]),
             "source_episode_count": 1,
@@ -338,8 +831,214 @@ class TruthWriteAssembler:
             event_ids=[event_id],
         )
         write.idempotency_key = idem_key
+        # Issue 7.6: Attach observation context for st_observations recording
+        write.observation_context = ObservationContext.from_event(state)
 
         return write
+
+    def _create_sem_evolve_writes(
+        self,
+        event_id: str,
+        state: P03EventState,
+    ) -> List[StagedWrite]:
+        """
+        Create EVOLVE writes for st_sem.
+
+        EVOLVE creates a new canonical pattern that supersedes the old one,
+        and marks the old pattern non-canonical with a valid_to timestamp.
+        """
+        writes: List[StagedWrite] = []
+
+        old_pattern_id = state.best_match_id
+        if not old_pattern_id:
+            return writes
+
+        now = _now_ms()
+        new_pattern_id = f"sem_{event_id}"
+
+        pattern_type = getattr(state, "content_type", "general").upper()
+        if pattern_type not in ("ROUTINE", "PREFERENCE", "THEME", "RELATIONSHIP", "GOAL", "VALUE"):
+            pattern_type = "THEME"
+
+        pattern_name = _generate_pattern_name(state, max_length=200)
+        description = self._build_sem_description(state, pattern_name, pattern_type)
+        attributes_json = self._build_sem_attributes(state, pattern_type)
+        temporal_regularity, temporal_pattern_json = self._build_sem_temporal_fields(state)
+
+        record_data = {
+            "pattern_id": new_pattern_id,
+            "tenant_id": self.tenant_id,
+            "space_id": self.space_id,
+            "actor_id": getattr(state, "actor_id", None) or None,
+            "pattern_type": pattern_type,
+            "pattern_subtype": None,
+            "pattern_name": pattern_name,
+            "pattern_description": description,
+            "pattern_attributes_json": attributes_json,
+            "temporal_regularity": temporal_regularity,
+            "temporal_pattern_json": temporal_pattern_json,
+            "embedding_id": state.embedding_id,
+            "source_episodes_json": json.dumps([event_id]),
+            "source_episode_count": 1,
+            "confidence_score": state.confidence or 0.5,
+            "observation_count": 1,
+            "first_observed_at": now,
+            "last_observed_at": now,
+            "created_at": now,
+            "updated_at": now,
+            "valid_from": now,
+            "archival_status": "ACTIVE",
+            "supersedes_id": old_pattern_id,
+        }
+
+        idem_key = self.idempotency.for_truth_write(LAYER_ST_SEM, new_pattern_id)
+        insert_write = StagedWrite.insert(
+            layer=LAYER_ST_SEM,
+            record_id=new_pattern_id,
+            data=record_data,
+            phase=self.source_phase,
+            event_ids=[event_id],
+        )
+        insert_write.idempotency_key = idem_key
+        insert_write.observation_context = ObservationContext.from_event(state)
+        writes.append(insert_write)
+
+        update_data = {
+            "_action": "EVOLVE",
+            "updated_at": now,
+            "valid_to": now,
+        }
+
+        update_idem = self.idempotency.for_truth_write(
+            LAYER_ST_SEM,
+            f"{old_pattern_id}:evolve",
+        )
+        update_write = StagedWrite.update(
+            layer=LAYER_ST_SEM,
+            record_id=old_pattern_id,
+            data=update_data,
+            phase=self.source_phase,
+            expected_version=None,
+            event_ids=[event_id],
+        )
+        update_write.idempotency_key = update_idem
+        update_write.observation_context = ObservationContext.from_event(state)
+        writes.append(update_write)
+
+        return writes
+
+    def _build_sem_description(
+        self,
+        state: P03EventState,
+        pattern_name: str,
+        pattern_type: str,
+    ) -> Optional[str]:
+        """Build a lightweight semantic pattern description."""
+        location = getattr(state, "location_name", "") or ""
+        activity = getattr(state, "activity_type_ultrabert", "") or getattr(
+            state, "activity_type", ""
+        )
+        activity = activity.replace("_", " ") if activity else ""
+
+        parts = [pattern_name]
+        if pattern_type:
+            parts.append(f"Type: {pattern_type}")
+        if activity:
+            parts.append(f"Activity: {activity}")
+        if location:
+            parts.append(f"Location: {location}")
+
+        description = "; ".join(parts).strip()
+        return description if description else None
+
+    def _build_sem_attributes(self, state: P03EventState, pattern_type: str) -> str:
+        """Build JSON attributes for semantic pattern."""
+        attributes: Dict[str, Any] = {
+            "pattern_type": pattern_type,
+            "activity_type": getattr(state, "activity_type_ultrabert", None)
+            or getattr(state, "activity_type", None),
+            "location_name": getattr(state, "location_name", None),
+            "location_type": getattr(state, "location_type", None),
+            "intent": getattr(state, "intent_label", None),
+            "sentiment_label": getattr(state, "sentiment_label", None),
+            "sentiment_score": getattr(state, "sentiment_score", None),
+            "source_event_id": state.event_id,
+        }
+
+        entities: List[str] = []
+        try:
+            ner_json = getattr(state, "ner_entities_json", "[]") or "[]"
+            ner_data = json.loads(ner_json)
+            if isinstance(ner_data, list):
+                for ent in ner_data:
+                    if isinstance(ent, dict) and ent.get("text"):
+                        entities.append(ent["text"])
+            elif isinstance(ner_data, dict):
+                for source in ("ner_family", "ner_general"):
+                    source_data = ner_data.get(source, {})
+                    if isinstance(source_data, dict):
+                        for ent in source_data.get("entities", []):
+                            if isinstance(ent, dict) and ent.get("text"):
+                                entities.append(ent["text"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        if entities:
+            attributes["entities"] = entities
+
+        return json.dumps(attributes)
+
+    def _build_sem_temporal_fields(
+        self,
+        state: P03EventState,
+    ) -> tuple[Optional[float], Optional[str]]:
+        """
+        Build temporal_regularity and temporal_pattern_json.
+
+        Uses explicit temporal expressions when present; otherwise
+        falls back to day_of_week/time_of_day_bucket context.
+        """
+        temporal_pattern: Dict[str, Any] = {}
+        temporal_regularity: Optional[float] = None
+
+        day_of_week = getattr(state, "day_of_week", "") or ""
+        time_bucket = getattr(state, "time_of_day_bucket", "") or ""
+
+        if day_of_week:
+            temporal_pattern["day_of_week"] = day_of_week.upper()
+        if time_bucket:
+            temporal_pattern["time_of_day_bucket"] = time_bucket.upper()
+
+        try:
+            temporal_json = getattr(state, "temporal_expressions_json", "[]") or "[]"
+            expressions = json.loads(temporal_json)
+        except (json.JSONDecodeError, TypeError):
+            expressions = []
+
+        if isinstance(expressions, list) and expressions:
+            texts: List[str] = []
+            for exp in expressions:
+                if isinstance(exp, dict) and exp.get("text"):
+                    texts.append(str(exp["text"]).lower())
+                elif isinstance(exp, str):
+                    texts.append(exp.lower())
+
+            frequency = None
+            if any("daily" in text or "every day" in text for text in texts):
+                frequency = "DAILY"
+            elif any("weekly" in text or "every week" in text for text in texts):
+                frequency = "WEEKLY"
+            elif any("monthly" in text or "every month" in text for text in texts):
+                frequency = "MONTHLY"
+
+            if frequency:
+                temporal_pattern["frequency"] = frequency
+                temporal_regularity = 0.7
+
+        if not temporal_pattern:
+            return None, None
+
+        return temporal_regularity, json.dumps(temporal_pattern)
 
     def _create_sem_update(
         self,
@@ -361,7 +1060,8 @@ class TruthWriteAssembler:
             "updated_at": now,
         }
 
-        # Use expected version 0 for first update attempt
+        # Use expected version None for REINFORCE/EXTEND - these are idempotent
+        # operations and don't need strict version control
         idem_key = self.idempotency.for_truth_write(LAYER_ST_SEM, pattern_id)
 
         write = StagedWrite.update(
@@ -369,10 +1069,12 @@ class TruthWriteAssembler:
             record_id=pattern_id,
             data=record_data,
             phase=self.source_phase,
-            expected_version=0,  # Will be resolved at R7
+            expected_version=None,  # Idempotent operation - no version check
             event_ids=[event_id],
         )
         write.idempotency_key = idem_key
+        # Issue 7.6: Attach observation context for st_observations recording
+        write.observation_context = ObservationContext.from_event(state)
 
         return write
 
@@ -451,6 +1153,82 @@ class TruthWriteAssembler:
                 )
                 write.idempotency_key = idem_key
                 writes.append(write)
+
+        return writes
+
+    def assemble_routine_candidate_writes(
+        self,
+        candidates: List[RoutineCandidate],
+    ) -> List[StagedWrite]:
+        """
+        Assemble st_procedural writes from RoutineDetector candidates (GAP-003).
+
+        Maps RoutineCandidate dataclass fields to st_procedural table columns.
+        This is the primary routine detection path - RoutineDetector analyzes
+        episodic memory to detect recurring behavioral patterns.
+
+        Args:
+            candidates: List of RoutineCandidate from RoutineDetector.detect()
+
+        Returns:
+            List of StagedWrite for st_procedural
+        """
+        if not candidates:
+            return []
+
+        writes: List[StagedWrite] = []
+        now_ms = _now_ms()
+
+        for candidate in candidates:
+            if not candidate.routine_id:
+                continue
+
+            # Map RoutineCandidate to st_procedural columns
+            record_data = {
+                # Identity
+                "routine_id": candidate.routine_id,
+                "tenant_id": self.tenant_id,
+                "space_id": self.space_id,
+                "actor_id": self.tenant_id,  # Default actor
+                "version": 1,
+                "is_canonical": True,
+                # Routine metadata
+                "routine_name": candidate.routine_name,
+                "routine_category": candidate.routine_category,
+                "temporal_anchor": candidate.temporal_anchor,
+                "day_pattern": candidate.day_pattern,
+                "frequency": candidate.frequency.value if candidate.frequency else "IRREGULAR",
+                "regularity_score": candidate.regularity_score,
+                "action_sequence_json": candidate.action_sequence_json,
+                "typical_duration_minutes": candidate.typical_duration_minutes,
+                # Source tracking
+                "source_episodes_json": candidate.source_episodes_json,
+                "source_episode_count": candidate.source_episode_count,
+                # Scoring
+                "observation_count": candidate.source_episode_count,
+                "confidence_score": candidate.confidence_score,
+                "streak_count": candidate.streak_count,
+                # Timestamps
+                "archival_status": "ACTIVE",
+                "created_at": now_ms,
+                "updated_at": now_ms,
+                "valid_from": now_ms,
+            }
+
+            idem_key = self.idempotency.for_truth_write(
+                LAYER_ST_PROCEDURAL,
+                candidate.routine_id,
+            )
+
+            write = StagedWrite.insert(
+                layer=LAYER_ST_PROCEDURAL,
+                record_id=candidate.routine_id,
+                data=record_data,
+                phase=self.source_phase,
+                event_ids=[],  # Source episodes tracked in source_episodes_json
+            )
+            write.idempotency_key = idem_key
+            writes.append(write)
 
         return writes
 
@@ -550,6 +1328,8 @@ class TruthWriteAssembler:
                     event_ids=rel.source_event_ids,
                 )
                 write.idempotency_key = idem_key
+                # Issue 7.6: Create minimal observation context from timestamp
+                write.observation_context = ObservationContext.from_timestamp(now_ms)
                 writes.append(write)
 
         return writes
@@ -587,6 +1367,9 @@ class TruthWriteAssembler:
                 "importance": intention.importance,
                 "source_episode_id": intention.source_episode_id,
                 "created_at_ms": _now_ms(),
+                # Issue 7.7: Temporal anchor context
+                "anchor_time_utc": getattr(intention, "anchor_time_utc", None),
+                "original_temporal_expr": getattr(intention, "original_temporal_expr", None),
             }
 
             idem_key = self.idempotency.for_truth_write(
@@ -604,6 +1387,12 @@ class TruthWriteAssembler:
                 event_ids=source_ids,
             )
             write.idempotency_key = idem_key
+            # Issue 7.6/7.7: Create observation context with anchor time if available
+            anchor_ts = getattr(intention, "anchor_time_utc", None) or _now_ms()
+            write.observation_context = ObservationContext.from_timestamp(anchor_ts)
+            # Issue 7.7: Set original temporal expression if available
+            if getattr(intention, "original_temporal_expr", None):
+                write.observation_context.original_temporal_expr = intention.original_temporal_expr
             writes.append(write)
 
         return writes
@@ -645,7 +1434,9 @@ class TruthWriteAssembler:
                 "tenant_id": self.tenant_id,
                 "space_id": self.space_id,
                 "pattern_type": "INSIGHT",  # R5 insight type
-                "pattern_name": insight.description[:200] if insight.description else "Untitled insight",
+                "pattern_name": (
+                    insight.description[:200] if insight.description else "Untitled insight"
+                ),
                 "embedding_id": None,  # Insights don't have embeddings yet
                 "source_episodes_json": json.dumps(list(insight.supporting_evidence)),
                 "source_episode_count": len(insight.supporting_evidence),
@@ -710,11 +1501,13 @@ class TruthWriteAssembler:
 
         for scenario in counterfactuals:
             record_data = {
-                "prosp_id": scenario.scenario_id,
+                "intention_id": scenario.scenario_id,  # Primary key for st_prospective
                 "tenant_id": self.tenant_id,
                 "space_id": self.space_id,
                 "intention_type": "COUNTERFACTUAL",  # Type for counterfactual scenarios
-                "description": scenario.counterfactual_outcome[:500] if scenario.counterfactual_outcome else "",
+                "description": (
+                    scenario.counterfactual_outcome[:500] if scenario.counterfactual_outcome else ""
+                ),
                 "trigger_condition": f"If: {scenario.perturbation_target}",
                 "action_to_take": scenario.counterfactual_outcome,
                 "original_outcome": scenario.original_outcome,
@@ -816,6 +1609,236 @@ class TruthWriteAssembler:
         return writes
 
     # =========================================================================
+    # st_mcts_decisions — MCTS Scenario Writes (R5 Forward Simulation)
+    # =========================================================================
+
+    def assemble_mcts_writes(
+        self,
+        scenarios: List[MCTSScenario],
+    ) -> List[StagedWrite]:
+        """
+        Assemble st_mcts_decisions writes from R5 MCTS scenarios.
+
+        MCTS scenarios are forward simulations from the MCTS algorithm
+        that predict future outcomes based on action sequences.
+
+        Args:
+            scenarios: List of MCTSScenario from R5
+
+        Returns:
+            List of StagedWrite for st_mcts_decisions
+        """
+        if not scenarios:
+            return []
+
+        writes: List[StagedWrite] = []
+        now_ms = _now_ms()
+
+        for scenario in scenarios:
+            # Build action sequence JSON
+            action_sequence_json = json.dumps(list(scenario.action_sequence))
+
+            # Store extended scenario data in context_json
+            # Table schema has fixed columns; extra fields go in context
+            context_data = {
+                "predicted_outcome": scenario.predicted_outcome,
+                "action_sequence": list(scenario.action_sequence),
+                "success_probability": scenario.success_probability,
+                "plausibility": scenario.plausibility,
+                "depth": scenario.depth,
+                "tenant_id": self.tenant_id,
+                "space_id": self.space_id,
+            }
+
+            record_data = {
+                "decision_id": scenario.scenario_id,
+                "cycle_id": self.consolidation_cycle_id,
+                "decision_type": "forward_simulation",
+                "context_json": json.dumps(context_data),
+                "rollouts_allocated": scenario.visit_count,
+                "rollouts_executed": scenario.visit_count,
+                "early_termination": False,
+                "termination_reason": None,
+                "chosen_action": action_sequence_json,
+                "value_estimate": scenario.expected_reward,
+                "confidence_interval_width": 1.0 - scenario.plausibility,
+                "compute_ms": 0,  # Not tracked per-scenario
+                "created_at": now_ms,
+            }
+
+            idem_key = self.idempotency.for_truth_write(
+                LAYER_ST_MCTS,
+                scenario.scenario_id,
+            )
+
+            write = StagedWrite.insert(
+                layer=LAYER_ST_MCTS,
+                record_id=scenario.scenario_id,
+                data=record_data,
+                phase="R5",
+                event_ids=[],
+            )
+            write.idempotency_key = idem_key
+            writes.append(write)
+
+        return writes
+
+    # =========================================================================
+    # st_prospective — Intent Signal Writes (GAP-001 Milestone 7)
+    # Routes ReminderSignal, DecisionSignal to st_prospective
+    # =========================================================================
+
+    def assemble_intent_signal_writes(
+        self,
+        intent_signals: List[IntentSignal],
+    ) -> List[StagedWrite]:
+        """
+        Assemble st_prospective writes from R5 intent signals.
+
+        Routes intent signals to appropriate layers:
+        - ReminderSignal → st_prospective with intention_type='REMINDER'
+        - DecisionSignal → st_prospective with intention_type='DECISION'
+
+        GAP Reference: GAP_001 Milestone 7 (Intent-Aware Prospective Writer)
+
+        Args:
+            intent_signals: List of IntentSignal objects from R5
+
+        Returns:
+            List of StagedWrite for st_prospective inserts
+        """
+        if not intent_signals:
+            return []
+
+        writes: List[StagedWrite] = []
+        now_ms = _now_ms()
+
+        for signal in intent_signals:
+            if signal.signal_type == IntentSignalType.REMINDER:
+                write = self._assemble_reminder_write(signal, now_ms)
+                if write:
+                    writes.append(write)
+            elif signal.signal_type == IntentSignalType.DECISION:
+                write = self._assemble_decision_write(signal, now_ms)
+                if write:
+                    writes.append(write)
+            # Other signal types (LESSON, EMOTIONAL_TREND, etc.) go to different layers
+            # and will be handled by separate methods if needed
+
+        return writes
+
+    def _assemble_reminder_write(
+        self,
+        signal: IntentSignal,
+        now_ms: int,
+    ) -> Optional[StagedWrite]:
+        """
+        Create st_prospective write from ReminderSignal.
+
+        Args:
+            signal: ReminderSignal from IntentSignalDetector
+            now_ms: Current timestamp in milliseconds
+
+        Returns:
+            StagedWrite for st_prospective INSERT
+        """
+        if not isinstance(signal, ReminderSignal):
+            return None
+
+        # Generate intention_id from event_id
+        intention_id = f"reminder_{signal.event_id}"
+
+        record_data = {
+            "intention_id": intention_id,
+            "tenant_id": self.tenant_id,
+            "space_id": self.space_id,
+            "intention_type": "REMINDER",
+            "description": signal.action_description or signal.source_text,
+            "trigger_time_ms": signal.target_date,
+            "trigger_context_json": json.dumps({"source_text": signal.source_text}),
+            "goal_inference_json": "{}",
+            "confidence": signal.confidence,
+            "status": "pending",
+            "source_episodes_json": json.dumps([signal.event_id]),
+            "counterfactual_json": None,
+        }
+
+        idem_key = self.idempotency.for_truth_write(
+            LAYER_ST_PROSPECTIVE,
+            intention_id,
+        )
+
+        write = StagedWrite.insert(
+            layer=LAYER_ST_PROSPECTIVE,
+            record_id=intention_id,
+            data=record_data,
+            phase="R5",
+            event_ids=[signal.event_id],
+        )
+        write.idempotency_key = idem_key
+
+        return write
+
+    def _assemble_decision_write(
+        self,
+        signal: IntentSignal,
+        now_ms: int,
+    ) -> Optional[StagedWrite]:
+        """
+        Create st_prospective write from DecisionSignal.
+
+        Args:
+            signal: DecisionSignal from IntentSignalDetector
+            now_ms: Current timestamp in milliseconds
+
+        Returns:
+            StagedWrite for st_prospective INSERT
+        """
+        if not isinstance(signal, DecisionSignal):
+            return None
+
+        # Generate intention_id from event_id
+        intention_id = f"decision_{signal.event_id}"
+
+        # Build decision context from options
+        decision_context = {
+            "source_text": signal.source_text,
+            "options": signal.options if hasattr(signal, "options") else [],
+            "domain": signal.decision_domain if hasattr(signal, "decision_domain") else None,
+        }
+
+        record_data = {
+            "intention_id": intention_id,
+            "tenant_id": self.tenant_id,
+            "space_id": self.space_id,
+            "intention_type": "GOAL",  # Decision uses GOAL type per schema constraint
+            "description": signal.source_text,
+            "trigger_time_ms": None,  # Decisions don't have target dates
+            "trigger_context_json": json.dumps(decision_context),
+            "goal_inference_json": "{}",
+            "confidence": signal.confidence,
+            "status": "pending",
+            "source_episodes_json": json.dumps([signal.event_id]),
+            "counterfactual_json": None,
+        }
+
+        idem_key = self.idempotency.for_truth_write(
+            LAYER_ST_PROSPECTIVE,
+            intention_id,
+        )
+
+        write = StagedWrite.insert(
+            layer=LAYER_ST_PROSPECTIVE,
+            record_id=intention_id,
+            data=record_data,
+            phase="R5",
+            event_ids=[signal.event_id],
+        )
+        write.idempotency_key = idem_key
+
+        return write
+
+    # =========================================================================
     # st_learning_queue — P06 Gap Queue (from R4 GapCandidate)
     # =========================================================================
 
@@ -883,6 +1906,12 @@ class TruthWriteAssembler:
         insights: Optional[List[Insight]] = None,
         counterfactuals: Optional[List[CounterfactualScenario]] = None,
         routine_optimizations: Optional[List[RoutineOptimization]] = None,
+        # GAP-001 Milestone 7: Intent signals
+        intent_signals: Optional[List[IntentSignal]] = None,
+        # GAP-003: Routine candidates from RoutineDetector
+        routine_candidates: Optional[List[RoutineCandidate]] = None,
+        # MCTS scenarios for st_mcts_decisions
+        mcts_scenarios: Optional[List[MCTSScenario]] = None,
     ) -> Dict[str, List[StagedWrite]]:
         """
         Assemble all truth layer writes from phase outputs.
@@ -899,6 +1928,9 @@ class TruthWriteAssembler:
             insights: R5 insights from BGT-SM (Issue 8.1.16)
             counterfactuals: R5 counterfactual scenarios from CPN (Issue 8.1.16)
             routine_optimizations: R5 routine optimizations from TDL-HCO (Issue 8.1.16)
+            intent_signals: R5 intent signals (GAP-001 Milestone 7)
+            routine_candidates: GAP-003 routine candidates from RoutineDetector
+            mcts_scenarios: R5 MCTS forward simulation scenarios
 
         Returns:
             Dict mapping layer name to list of StagedWrite
@@ -907,6 +1939,7 @@ class TruthWriteAssembler:
 
         # st_epi from R2 clusters
         epi_writes = self.assemble_epi_writes(clusters or [], event_states or {})
+        self._merge_epi_recurrence_updates(epi_writes, routine_candidates or [])
         if epi_writes:
             result[LAYER_ST_EPI] = epi_writes
 
@@ -938,6 +1971,15 @@ class TruthWriteAssembler:
             else:
                 result[LAYER_ST_PROCEDURAL] = opt_writes
 
+        # st_procedural from GAP-003 routine candidates (RoutineDetector)
+        candidate_writes = self.assemble_routine_candidate_writes(routine_candidates or [])
+        if candidate_writes:
+            # Merge with existing st_procedural writes
+            if LAYER_ST_PROCEDURAL in result:
+                result[LAYER_ST_PROCEDURAL].extend(candidate_writes)
+            else:
+                result[LAYER_ST_PROCEDURAL] = candidate_writes
+
         # st_social from R4 relationships
         social_writes = self.assemble_social_writes(social_relationships or [])
         if social_writes:
@@ -957,10 +1999,24 @@ class TruthWriteAssembler:
             else:
                 result[LAYER_ST_PROSPECTIVE] = cf_writes
 
+        # st_prospective from R5 intent signals (GAP-001 Milestone 7)
+        intent_writes = self.assemble_intent_signal_writes(intent_signals or [])
+        if intent_writes:
+            # Merge with existing st_prospective writes
+            if LAYER_ST_PROSPECTIVE in result:
+                result[LAYER_ST_PROSPECTIVE].extend(intent_writes)
+            else:
+                result[LAYER_ST_PROSPECTIVE] = intent_writes
+
         # st_learning_queue from R4 gaps
         queue_writes = self.assemble_learning_queue_writes(gaps or [])
         if queue_writes:
             result[LAYER_ST_LEARNING_QUEUE] = queue_writes
+
+        # st_mcts_decisions from R5 MCTS scenarios
+        mcts_writes = self.assemble_mcts_writes(mcts_scenarios or [])
+        if mcts_writes:
+            result[LAYER_ST_MCTS] = mcts_writes
 
         return result
 

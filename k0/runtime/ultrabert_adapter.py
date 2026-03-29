@@ -744,29 +744,59 @@ def analyze_affect(text: str) -> AffectResult | None:
                 capabilities=["sentiment", "emotions", "safety_familyos"],
             )
 
-        # Map sentiment to valence
-        valence = SENTIMENT_TO_VALENCE.get(result.sentiment, 0.5)
+        # Valence: continuous weighted sum from sentiment probability distribution.
+        # Uses the FULL 5-class distribution instead of collapsing to a discrete label.
+        # This preserves uncertainty and handles mixed-signal cases (e.g. sarcasm)
+        # where probability mass is spread across classes.
+        sentiment_scores = getattr(result, "sentiment_scores", {}) or {}
+        if sentiment_scores:
+            valence = (
+                sentiment_scores.get("very_negative", 0.0) * 0.1
+                + sentiment_scores.get("negative", 0.0) * 0.3
+                + sentiment_scores.get("neutral", 0.0) * 0.5
+                + sentiment_scores.get("positive", 0.0) * 0.7
+                + sentiment_scores.get("very_positive", 0.0) * 0.9
+            )
+        else:
+            # Fallback to discrete label when scores unavailable
+            valence = SENTIMENT_TO_VALENCE.get(result.sentiment, 0.5)
 
-        # Estimate arousal from emotion intensity
+        # Arousal: mean of top-3 emotion intensities.
+        # Old code averaged ALL 44 scores (most near-zero), washing out signal.
         emotion_scores = getattr(result, "emotion_scores", {}) or {}
         if emotion_scores:
-            arousal = min(1.0, sum(emotion_scores.values()) / len(emotion_scores) * 2)
+            top3 = sorted(emotion_scores.values(), reverse=True)[:3]
+            arousal = min(1.0, sum(top3) / len(top3))
         else:
-            arousal = 0.3  # Default calm
+            arousal = 0.3
 
-        # Map safety to affect band
-        affect_band = SAFETY_TO_BAND.get(result.safety, "GREEN")
+        # Affect band: derived from valence/arousal (emotional state),
+        # NOT from safety head (which measures harm/danger, not mood).
+        if valence >= 0.5:
+            affect_band = "GREEN"
+            band_reasons = ["positive_affect"]
+        elif valence < 0.25:
+            affect_band = "RED"
+            band_reasons = ["strong_negative_affect"]
+            if arousal >= 0.6:
+                band_reasons.append("high_arousal")
+        elif valence >= 0.4 and arousal < 0.6:
+            affect_band = "AMBER"
+            band_reasons = ["mild_negative_affect", "low_arousal"]
+        else:
+            affect_band = "AMBER"
+            band_reasons = ["moderate_negative_affect"]
 
-        # Determine band reasons
-        band_reasons = []
+        # Safety override: escalate band if safety head detects risk
         if result.safety == "CRISIS":
+            affect_band = "RED"
             band_reasons.append("crisis_detected")
-        elif result.safety == "RED":
+        elif result.safety == "RED" and affect_band != "RED":
+            affect_band = "RED"
             band_reasons.append("high_risk_detected")
-        elif result.safety == "AMBER":
+        elif result.safety == "AMBER" and affect_band == "GREEN":
+            affect_band = "AMBER"
             band_reasons.append("moderate_concern")
-        else:
-            band_reasons.append("positive_affect" if valence > 0.5 else "neutral_affect")
 
         # Map safety to severity for clinical safety compatibility
         safety_severity_map = {
@@ -784,7 +814,7 @@ def analyze_affect(text: str) -> AffectResult | None:
             band_reasons=tuple(band_reasons),
             sentiment=result.sentiment,
             sentiment_confidence=getattr(result, "sentiment_confidence", 0.8),
-            model_version="ultrabert_v2.0.3",
+            model_version=client.VERSION,
             tier="ULTRABERT",
             confidence=getattr(result, "sentiment_confidence", 0.8),
             safety_severity=safety_severity_map.get(result.safety, "NONE"),

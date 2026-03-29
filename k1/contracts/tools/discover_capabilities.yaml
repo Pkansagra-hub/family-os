@@ -1,0 +1,96 @@
+# k1/contracts/tools/discover_capabilities.yaml
+# Discovery Tool Contract (4.5.3)
+#
+# MCP tool contract for capability discovery. GREEN-band read-only tool
+# safe for Planner to invoke via Orchestrator DAG steps.
+#
+# References:
+#   - fabric-implementation-plan.md Issue 4.5.3
+#   - meta-agent-creation-integration-proposal.md PART 1
+#   - ADR-K004 (Capability Fabric Adaptation)
+
+tool_contract:
+  name: "tool.read.discover_capabilities"
+  version: "1.0.0"
+  domain:
+    - "META"
+    - "DISCOVERY"
+  description: >
+    Discover capabilities matching domain and intent via semantic retrieval.
+    Delegates to RetrievalEngine 4-step pipeline (embed, hard-filter,
+    soft-rank, top-K). Returns scored capability contracts with full
+    schema information so Planner can inspect inputs/outputs before
+    composing agent specifications.
+  capabilities:
+    - "capability_discovery"
+    - "semantic_search"
+    - "contract_inspection"
+  limitations:
+    - "read_only"
+    - "no_state_mutation"
+    - "max_top_k_25"
+
+  required_inputs:
+    - name: "intent"
+      type: "STRING"
+      description: "Natural-language description of desired capability"
+    - name: "domain"
+      type: "ARRAY[STRING]"
+      description: "Domain tag filter(s) to narrow search scope"
+
+  optional_inputs:
+    - name: "top_k"
+      type: "NUMBER"
+      description: "Number of results to return (default: 10, max: 25)"
+      default: 10
+    - name: "safety_band"
+      type: "STRING"
+      description: "Caller's safety band for filtering (default: GREEN)"
+      default: "GREEN"
+
+  output:
+    type: "object"
+    properties:
+      capabilities:
+        type: "array"
+        items:
+          type: "object"
+          properties:
+            contract:
+              type: "object"
+              description: "Full capability contract (name, version, domain, inputs, output, etc.)"
+            score:
+              type: "number"
+              description: "Cosine similarity score [0.0, 1.0]"
+        description: "Scored capability contracts sorted by descending score"
+      total_matched:
+        type: "integer"
+        description: "Total number of matches before top-K truncation"
+      query_latency_ms:
+        type: "integer"
+        description: "End-to-end retrieval pipeline latency in milliseconds"
+      query_intent:
+        type: "string"
+        description: "Echo of the query intent"
+      index_size:
+        type: "integer"
+        description: "Total number of indexed capabilities"
+      embedding_model:
+        type: "string"
+        description: "Embedding model used for similarity search"
+    required:
+      - "capabilities"
+      - "total_matched"
+      - "query_latency_ms"
+
+  provider_type: "MCP"
+  provider_id: "discover_capabilities_handler"
+  safety_band_min: "GREEN"
+  cost_per_call: 0.0
+  avg_latency_ms: 20
+  max_latency_ms: 200
+  availability: "ONLINE"
+  tags:
+    - "meta"
+    - "discovery"
+    - "read_only"

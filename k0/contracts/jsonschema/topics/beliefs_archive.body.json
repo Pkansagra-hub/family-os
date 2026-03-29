@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k0://contracts/jsonschema/topics/beliefs_archive.body.json",
+  "title": "beliefs.archive Body Schema",
+  "description": "Body schema for beliefs.archive command topic. Carries an evicted belief from Planner belief store for archival to K0 storage.",
+  "type": "object",
+  "required": [
+    "belief_id",
+    "belief_text",
+    "confidence",
+    "created_at",
+    "evicted_reason",
+    "source_turns"
+  ],
+  "properties": {
+    "belief_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique belief identifier from Planner belief store."
+    },
+    "belief_text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable belief statement."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Belief confidence at eviction time."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601 timestamp when belief was created."
+    },
+    "evicted_reason": {
+      "type": "string",
+      "enum": [
+        "low_confidence",
+        "contradicted",
+        "superseded",
+        "ttl_expired",
+        "capacity_limit"
+      ],
+      "description": "Reason the belief was evicted from active store."
+    },
+    "source_turns": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "description": "Conversation turn ordinals that contributed to this belief."
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Session where belief originated."
+    },
+    "superseded_by": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "ID of belief that replaced this one, if superseded."
+    },
+    "domain": {
+      "type": "string",
+      "description": "Belief domain (e.g. preference, fact, opinion, goal)."
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Classification tags for the belief."
+    }
+  },
+  "additionalProperties": false
+}

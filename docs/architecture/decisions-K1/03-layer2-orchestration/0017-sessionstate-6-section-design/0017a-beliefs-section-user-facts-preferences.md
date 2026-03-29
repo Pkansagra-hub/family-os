@@ -20,7 +20,7 @@ date_created: '2025-11-03'
 date_updated: '2025-11-03'
 implementation_date: null
 implementation_phase: Phase 1 (Foundation)
-implementation_status: IN_PROGRESS
+implementation_status: FROZEN
 propagation:
   affected_adrs:
   - ADR-0011
@@ -55,7 +55,7 @@ research_citations:
 - Knowledge Graphs for Conversational AI (Google Knowledge Graph, 2024)
 - User Model Persistence (Amazon Alexa User Profile, 2024)
 - Confidence Scoring in NLP (Uncertainty Estimation, 2023)
-status: PROPOSED
+status: FROZEN
 superseded_by: []
 supersedes: []
 title: Beliefs Section - User Facts & Preferences
@@ -913,11 +913,9 @@ beliefs_fact_count = Gauge(
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** 🔒 **FROZEN**
 **Created Date:** 2025-10-12
-**Target Completion:** 2025-11-09 (4 weeks)
-**Blocked By:** 0017 (SessionState 6-Section Design)
-**Blocks:** None
+**Frozen Date:** 2026-02-02
 
 ---
 
@@ -925,9 +923,54 @@ beliefs_fact_count = Gauge(
 
 | Committee | Approval Status | Date | Notes |
 |-----------|----------------|------|-------|
-| **Architecture Committee** | ⏳ Pending | TBD | Review LRU eviction strategy |
-| **Performance Team** | ⏳ Pending | TBD | Validate <100μs lookup target |
-| **Security Team** | ⏳ Pending | TBD | Review PII storage, privacy bands |
+| **Architecture Committee** | ✅ Approved | 2026-02-02 | FROZEN |
+| **Performance Team** | ✅ Approved | 2026-02-02 | FROZEN |
+| **Security Team** | ✅ Approved | 2026-02-02 | FROZEN |
+
+---
+
+## Final Decision (2026-02-02)
+
+**STATUS: FROZEN** - This ADR represents the final architectural decision.
+
+### Evolution: Single Beliefs Section to HOT/WARM Split
+
+The original single "beliefs" section was **split into two sections**:
+
+| Original | Final | Tier | Budget | Eviction |
+|----------|-------|------|--------|----------|
+| beliefs (10-20KB) | beliefs_active | HOT | 8KB | Demote to beliefs_history |
+| (same) | beliefs_history | WARM | 12KB | Priority 2 (archive to LOCAL COLD) |
+
+### Final Implementation
+
+**beliefs_active (HOT CORE - 8KB)**:
+- Facts needed for THIS turn only
+- Demotes to beliefs_history after turn completion
+- Never evicted during turn execution
+- Location: `k1/sessionstate/sections/beliefs_active.py`
+
+**beliefs_history (WARM TIER - 12KB)**:
+- Recent facts from previous turns (LRU capped)
+- Eviction priority 2 (after telemetry)
+- Archives to LOCAL COLD (K1 SQLite) on eviction
+- Location: `k1/sessionstate/sections/beliefs_history.py`
+
+### Key Design Decisions Confirmed
+
+1. **LRU Eviction**: Oldest facts evicted first (original design confirmed)
+2. **Confidence Tracking**: 0.0-1.0 confidence scores (original design confirmed)
+3. **Source Tracking**: user_stated, inferred, system (original design confirmed)
+4. **Demotion Pair**: beliefs_active to beliefs_history (NEW in tiered design)
+
+### Performance Targets (Confirmed)
+
+| Operation | Target | Status |
+|-----------|--------|--------|
+| `get_fact(key)` | <100us | Confirmed |
+| `add_fact(key, value)` | <500us | Confirmed |
+| `evict_lru()` | <5ms | Confirmed |
+| `serialize()` | <10ms | Confirmed (FlatBuffers) |
 
 ---
 

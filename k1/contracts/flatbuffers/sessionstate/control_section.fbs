@@ -1,0 +1,127 @@
+// ============================================================================
+// control_section.fbs - Control Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/control_section.fbs
+// Purpose: Agent leases, turn coordination, flow state - NEVER EVICT
+// Size Budget: 8KB max
+// Tier: HOT CORE
+// ADR: ADR-0017c (Control Section - Agent Leases & Flow State)
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// AGENT LEASES
+// ============================================================================
+
+/// Agent lease - grants temporary access to orchestration
+/// Default TTL: 30s, renewable
+table AgentLease {
+    agent_id: string (required);
+    agent_type: string (required);    // "intent_classifier", "planner", "concierge", etc.
+    state: AgentState = PENDING;
+    lease_started_ms: int64;          // Lease start timestamp
+    lease_expires_ms: int64;          // Lease expiration timestamp
+    capabilities: [string];           // ["read", "write", "execute"]
+    priority: uint8 = 0;              // 0=normal, 1=high, 2=urgent
+}
+
+// ============================================================================
+// FLOW STATE
+// ============================================================================
+
+/// Current orchestration phase and turn context
+table FlowState {
+    current_phase: FlowPhase = IDLE;
+    turn_id: string;
+    started_at_ms: int64;
+    timeout_ms: int64 = 60000;        // Default: 60s turn timeout
+    pending_agents: [string];          // Agents waiting to execute
+    completed_agents: [string];        // Agents that finished this turn
+}
+
+// ============================================================================
+// TURN LOCK
+// ============================================================================
+
+/// Turn-level lock to prevent concurrent turn processing
+table TurnLock {
+    locked: bool = false;
+    lock_holder: string;              // Agent ID holding the lock
+    locked_at_ms: int64;
+    lock_timeout_ms: int64 = 30000;   // Default: 30s lock timeout
+    turn_id: string;
+}
+
+// ============================================================================
+// DOMAIN CONTEXT
+// ============================================================================
+
+/// Active domains for this session
+table DomainContext {
+    active_domains: [string];         // ["lighting", "climate", "music"]
+    primary_domain: string;           // Most relevant domain for current turn
+    domain_confidence: [float];       // Parallel to active_domains
+}
+
+// ============================================================================
+// SAFETY CONTEXT
+// ============================================================================
+
+/// Safety band and context for policy enforcement
+table SafetyContext {
+    band: PrivacyBand = GREEN;
+    escalation_reason: string;        // Why elevated from previous band
+    escalated_at_ms: int64;
+    requires_confirmation: bool = false;
+    blocked_actions: [string];        // Actions blocked at current band
+}
+
+// ============================================================================
+// CONTROL SECTION ROOT
+// ============================================================================
+
+/// Control Section - NEVER EVICT
+/// Contains critical orchestration state that must always be present
+table ControlSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Agent management
+    agent_leases: [AgentLease];       // Max 10-20 active agents
+
+    // Turn coordination
+    flow_state: FlowState;
+    turn_lock: TurnLock;
+
+    // Intent and domain context
+    intents: IntentClassification;
+    domains: DomainContext;
+
+    // Safety enforcement
+    safety: SafetyContext;
+
+    // Invariant: This section is NEVER evicted
+    // If control is lost, orchestration crashes
+    never_evict: bool = true;
+}
+
+root_type ControlSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 8KB max
+//
+// Breakdown:
+// - AgentLease: ~100 bytes each x 20 agents = 2KB
+// - FlowState: ~200 bytes
+// - TurnLock: ~100 bytes
+// - IntentClassification: ~500 bytes
+// - DomainContext: ~300 bytes
+// - SafetyContext: ~200 bytes
+// - Header + overhead: ~500 bytes
+// Total estimated: ~4KB typical, 8KB max with full agent roster
+// ============================================================================

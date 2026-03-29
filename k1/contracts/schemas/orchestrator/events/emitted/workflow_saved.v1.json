@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/workflow_saved.v1.json",
+  "title": "workflow.saved.v1",
+  "description": "Emitted when a workflow definition is saved from a committed plan.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.workflow.saved.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["committed_plan_id", "workflow_name", "trigger_type", "trace_id"],
+      "properties": {
+        "committed_plan_id": {
+          "type": "string",
+          "description": "ID of the committed plan that was saved as a workflow."
+        },
+        "workflow_name": {
+          "type": "string",
+          "description": "Human-readable name assigned to the workflow."
+        },
+        "trigger_type": {
+          "type": "string",
+          "enum": ["CRON", "EVENT", "MANUAL"],
+          "description": "How the workflow is triggered."
+        },
+        "trace_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Trace ID of the originating save request."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

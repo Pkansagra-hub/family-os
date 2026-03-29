@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Emitted when session sections are evicted",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "evicted_sections": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": ["session_id", "evicted_sections"]
+}

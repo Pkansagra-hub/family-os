@@ -2,7 +2,9 @@
 # K1 Intelligence Module - Complete Chat Experience Architecture
 
 # Core LLM & API
-groq>=0.4.1                  # Groq API client for fast LLM inference
+google-generativeai>=0.8.0  # Google AI (Gemini) client - PRIMARY
+google-cloud-aiplatform>=1.50.0  # Vertex AI client (optional, for enterprise)
+groq>=0.4.1                  # Groq API client (legacy, deprecated)
 python-dotenv>=1.0.0        # Environment variable management
 
 # Web Framework & Server

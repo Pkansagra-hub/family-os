@@ -1,0 +1,270 @@
+# =============================================================================
+# M07 social.family_graph_resolve v2.0.0 -- Trust-Then-Fill Social Contract
+# =============================================================================
+#
+# Replaces v1 st_kg_edges-only strategy with trust-then-fill waterfall:
+#   tier0: MW v2 participant_relationships mapping + KG write (~85%)
+#   tier1: st_kg_edges READ (may have MW-seeded data) (~8%)
+#   tier2: M02 NER person entities + name-pattern heuristics (~5%)
+#   tier3: Defaults (solo/unknown) (~2%)
+#
+# Critical fix: v1 always returned "friends"/"solo" because st_kg_edges was empty.
+# MW v2 provides typed relationships (PARENT_OF, SPOUSE_OF, etc.) that immediately
+# fix social_context, has_partner_present, and has_parent_present.
+#
+# Side effect: MW relationships WRITTEN to st_kg_edges to progressively seed the KG.
+#
+# ADRs: TBD (M3 trust-then-fill architecture)
+# Epic: 3.3
+# =============================================================================
+
+module_id: social.family_graph_resolve
+version: "v2"
+mode: trust_then_fill
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.social.family_resolved.v2
+
+# P95 latency budget (worst-case fallback_path)
+# Breakdown: fast_path ~3ms, fallback_path ~12ms
+latency_budget_ms: 12
+
+idempotent: true
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+inputs:
+  required:
+    - field: actor_id
+      type: TEXT
+      description: "Tenant actor performing the action (always present in envelope)"
+
+  preferred_from_mw:
+    - field: body.participant_relationships
+      type: LIST[OBJECT]
+      format: "[{person: TEXT, relationship_type: TEXT, confidence: FLOAT}, ...]"
+      description: |
+        Typed relationships from MW v2. K1 beliefs_active resolves person names to
+        person_ids with aliases and knows relationship types (PARENT_OF, SPOUSE_OF, etc.).
+        When present, M07 maps directly to social_context without any DB queries.
+
+  fallback_inputs:
+    - field: body.participants
+      type: LIST[TEXT]
+      description: "Fallback participant list (names only, no relationship types)"
+
+    - field: m02_ner_entities
+      type: LIST[OBJECT]
+      description: "UltraBERT NER person entities from M02 enrichment output"
+
+# ---------------------------------------------------------------------------
+# Side Effects
+# ---------------------------------------------------------------------------
+side_effects:
+  - read:st_kg_edges
+  - write:st_kg_edges
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+outputs:
+  - name: social_context
+    type: TEXT
+    enum: [nuclear_family, extended_family, friends, solo, colleagues, community, unknown]
+    description: "Derived from highest-priority relationship type among participants"
+
+  - name: social_intimacy
+    type: TEXT
+    enum: [HIGH, MEDIUM, LOW]
+    description: "From relationship strength (nuclear_family=HIGH, extended_family/friends=MEDIUM, others=LOW)"
+
+  - name: has_partner_present
+    type: BOOLEAN
+    description: "True if any participant has relationship_type SPOUSE_OF"
+
+  - name: has_parent_present
+    type: BOOLEAN
+    description: "True if any participant has relationship_type PARENT_OF"
+
+  - name: is_solo_event
+    type: BOOLEAN
+    description: "True if participant_relationships is empty or single-actor"
+
+  - name: num_participants
+    type: INTEGER
+    description: "Count of unique participants in participant_relationships"
+
+  - name: participant_roles_json
+    type: TEXT
+    format: json_object
+    description: "Map of {person_name: relationship_type} from participant_relationships"
+
+  - name: participant_relationships_json
+    type: TEXT
+    format: json_array
+    description: "Passthrough from MW body.participant_relationships for st_hipp_events new column"
+
+  - name: social_source
+    type: TEXT
+    enum: [mw_v2, kg_edges, ner_heuristic, default]
+    description: "Provenance tracking: which tier produced the social values"
+
+# ---------------------------------------------------------------------------
+# Relationship Type to Social Context Mapping
+# ---------------------------------------------------------------------------
+relationship_type_to_social_context:
+  PARENT_OF: nuclear_family
+  CHILD_OF: nuclear_family
+  SPOUSE_OF: nuclear_family
+  SIBLING_OF: nuclear_family
+  CAREGIVER_OF: nuclear_family
+  GRANDPARENT_OF: extended_family
+  AUNT_UNCLE_OF: extended_family
+  COUSIN_OF: extended_family
+  FRIEND_OF: friends
+  COLLEAGUE_OF: colleagues
+  _default: unknown
+
+# When multiple participants have different relationship types, the HIGHEST
+# priority social_context wins. Priority order:
+# nuclear_family > extended_family > friends > colleagues > community > unknown > solo
+
+# ---------------------------------------------------------------------------
+# Trust-Then-Fill Strategy
+# ---------------------------------------------------------------------------
+strategy:
+  tier0:
+    name: mw_relationship_mapping
+    expected_frequency: "~85% of envelopes"
+    condition: "body.participant_relationships present AND non-empty"
+    behavior: |
+      Map MW relationships to social_context using relationship_type_to_social_context table.
+      Derive has_partner_present from SPOUSE_OF, has_parent_present from PARENT_OF.
+      Write relationships to st_kg_edges (progressive KG seeding).
+      No DB READ required.
+      Set social_source = "mw_v2".
+
+  tier1:
+    name: kg_edges_lookup
+    expected_frequency: "~8% of envelopes"
+    condition: "body.participant_relationships MISSING or empty, body.participants non-empty"
+    behavior: |
+      Query st_kg_edges for actor_id + participant relationships.
+      May now contain data from previous MW tier0 writes.
+      Use cached results (5-minute TTL, max 1000 entries).
+      Set social_source = "kg_edges".
+
+  tier2:
+    name: ner_plus_name_pattern
+    expected_frequency: "~5% of envelopes"
+    condition: "st_kg_edges also returns empty for participants"
+    behavior: |
+      Use M02 NER person entities + _infer_from_name_pattern() heuristics.
+      Pattern examples: "Mom"/"Dad" -> PARENT_OF, "husband"/"wife" -> SPOUSE_OF.
+      Set social_source = "ner_heuristic".
+
+  tier3:
+    name: defaults
+    expected_frequency: "~2% of envelopes"
+    condition: "No relationship data from any source"
+    behavior: |
+      social_context = "solo" if single actor (no participants).
+      social_context = "unknown" if multiple participants but no relationships resolved.
+      has_partner_present = false, has_parent_present = false.
+      Set social_source = "default".
+
+# ---------------------------------------------------------------------------
+# Failure Modes
+# ---------------------------------------------------------------------------
+failure_modes:
+  - code: MW_RELATIONSHIPS_MALFORMED
+    policy: fallback_tier1
+    description: "body.participant_relationships present but invalid structure"
+
+  - code: KG_EDGES_QUERY_FAILED
+    policy: fallback_tier2
+    max_retries: 2
+    description: "st_kg_edges query fails (DB error, timeout)"
+
+  - code: KG_EDGES_WRITE_FAILED
+    policy: log_and_continue
+    max_retries: 1
+    description: "st_kg_edges write fails. Non-blocking: social output still valid."
+
+  - code: NER_ENTITIES_UNAVAILABLE
+    policy: fallback_tier3
+    description: "M02 NER output not available for person entity extraction"
+
+  - code: PERSON_NOT_FOUND
+    policy: use_default
+    max_retries: 1
+    description: "Participant cannot be resolved to a known person"
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+config_schema:
+  type: object
+  properties:
+    cache_ttl_seconds:
+      type: integer
+      default: 300
+      description: "TTL for st_kg_edges relationship cache (5 minutes)"
+    max_cache_entries:
+      type: integer
+      default: 1000
+      description: "Maximum entries in relationship cache"
+    default_social_context:
+      type: string
+      default: "solo"
+      description: "Fallback social_context if all tiers fail (single actor)"
+    default_social_intimacy:
+      type: string
+      default: "LOW"
+      description: "Fallback social_intimacy if all tiers fail"
+    max_participants_to_resolve:
+      type: integer
+      default: 20
+      description: "Maximum number of participants to resolve relationships for"
+    kg_write_confidence_threshold:
+      type: number
+      default: 0.5
+      description: "Minimum MW confidence to write relationship to st_kg_edges"
+    kg_write_source_tag:
+      type: string
+      default: "mw_v2"
+      description: "Source tag for st_kg_edges writes from MW relationships"
+
+description: |
+  Family Graph Resolver Module (Social Brain Network) -- Trust-Then-Fill v2
+
+  CRITICAL FIX: v1 always returned social_context="friends" (68%) or "solo" (32%)
+  because st_kg_edges was empty. MW v2 provides typed relationships that immediately
+  fix social_context, has_partner_present, has_parent_present, and cascade correct
+  inputs to M06 salience scoring.
+
+  When MW participant_relationships IS present (tier0, ~85%):
+    - Map relationships to social_context (nuclear_family, extended_family, etc.)
+    - Derive boolean flags from relationship types
+    - Write to st_kg_edges for progressive KG seeding
+    - Total: ~3ms
+
+  When MW participant_relationships is MISSING (tier1, ~8%):
+    - Query st_kg_edges (may have data from previous MW writes)
+    - Use 5-minute cache for repeated lookups
+    - Total: ~12ms
+
+  When st_kg_edges also empty (tier2, ~5%):
+    - Use M02 NER person entities + name-pattern heuristics
+    - Pattern matching: "Mom"->PARENT_OF, "husband"->SPOUSE_OF
+    - Total: ~12ms
+
+  st_kg_edges WRITE (progressive KG seeding):
+    When MW provides relationships, M07 writes them to st_kg_edges.
+    Over time, st_kg_edges accumulates family graph data from MW interactions.
+    This means tier1 (kg_edges_lookup) becomes increasingly effective
+    even when MW drops participant_relationships from individual envelopes.

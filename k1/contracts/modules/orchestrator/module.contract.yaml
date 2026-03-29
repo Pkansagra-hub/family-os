@@ -1,0 +1,242 @@
+# ---------------------------------------------------------------------------
+# Orchestrator Module Contract
+# Follows Fabric pattern: k1/contracts/modules/fabric/module.contract.yaml
+# Reference: Schema Whiteboard Section 4.1
+# ---------------------------------------------------------------------------
+$schema: "k1://schemas/module/module.contract.schema.yaml"
+
+metadata:
+  module_id: "orchestrator"
+  owner: "platform-team"
+  band: "GREEN"
+  description: >
+    Orchestrator module for K1. Blind DAG executor, workflow engine,
+    connector host. Pure deterministic actor. Zero LLM calls, zero tools,
+    NEVER writes SessionState.
+  tags: ["orchestrator", "dag", "workflows", "mcp"]
+
+contract_version: 1
+impl_version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# Exported symbols -- all from k1/orchestrator/__init__.py
+# ---------------------------------------------------------------------------
+exports:
+  # --- Facade (entry point) ---
+  - symbol: "OrchestratorService"
+    from_file: "k1/orchestrator/__init__.py"
+
+  # --- Core Services ---
+  - symbol: "DAGExecutor"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "StepRunner"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "ConstraintResolver"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "ErrorRouter"
+    from_file: "k1/orchestrator/__init__.py"
+
+  # --- Workflow Services ---
+  - symbol: "WorkflowEngine"
+    from_file: "k1/orchestrator/__init__.py"
+
+  # --- Connector Services ---
+  - symbol: "ConnectorLifecycleManager"
+    from_file: "k1/orchestrator/__init__.py"
+
+  # --- Port Protocols (8 ports) ---
+  - symbol: "IMailboxPort"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "IFabricGatewayPort"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "IPlannerPort"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "IStateReadPort"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "IDeltaEmitPort"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "IBridgeWritePort"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "IEventSubscriptionPort"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "IWorkflowStoragePort"
+    from_file: "k1/orchestrator/__init__.py"
+
+  # --- Core Types ---
+  - symbol: "TaskEnvelope"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "PlanRequest"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "CommittedPlan"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "AggregatedResult"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "StepResult"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "PlanStep"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "Wave"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "WorkflowRunRequest"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "WorkflowSaveRequest"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "InterruptRequest"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "MicroReplanRequest"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "CompensationRecord"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "ProcessingContext"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "OrchestratorConfig"
+    from_file: "k1/orchestrator/__init__.py"
+
+  # --- Enums ---
+  - symbol: "StepStatus"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "TriggerType"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "ProcessResult"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "ErrorSeverity"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "GuardAction"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "ProactiveGapStatus"
+    from_file: "k1/orchestrator/__init__.py"
+
+  # --- Error & Guard Types ---
+  - symbol: "AdapterError"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "GuardDecision"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "CircuitBreakerConfig"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "CircuitBreakerState"
+    from_file: "k1/orchestrator/__init__.py"
+
+  # --- Admin Types ---
+  - symbol: "HealthStatus"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "ActiveDAGInfo"
+    from_file: "k1/orchestrator/__init__.py"
+  - symbol: "DrainResult"
+    from_file: "k1/orchestrator/__init__.py"
+
+# ---------------------------------------------------------------------------
+# Entrypoints
+# ---------------------------------------------------------------------------
+entrypoints:
+  init: "orchestrator:initialize"
+  shutdown: "orchestrator:cleanup"
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+dependencies:
+  - module: "kernel"
+    version: "1.0.0"
+  - module: "bus"
+    version: "1.0.0"
+  - module: "fabric"
+    version: "1.0.0"
+  - module: "sessionstate"
+    version: "1.0.0"
+  # bridge is optional -- audit writes are fire-and-forget
+  - module: "bridge"
+    version: "1.0.0"
+    required: false
+
+# ---------------------------------------------------------------------------
+# 16 Hard Invariants (ORCH-01 to ORCH-16)
+# ---------------------------------------------------------------------------
+invariants:
+  # --- Identity ---
+  - id: "ORCH-01"
+    description: "Orchestrator NEVER writes SessionState"
+    category: "identity"
+    enforcement: "compile-time (no IStateWritePort exists)"
+
+  - id: "ORCH-02"
+    description: "Orchestrator NEVER calls LLM directly"
+    category: "identity"
+    enforcement: "compile-time (no model_hub import)"
+
+  - id: "ORCH-03"
+    description: "Orchestrator has zero tools -- all execution via Fabric"
+    category: "identity"
+    enforcement: "compile-time (no tool imports)"
+
+  # --- Execution ---
+  - id: "ORCH-04"
+    description: "Every step dispatched through IFabricGatewayPort.execute()"
+    category: "execution"
+    enforcement: "runtime (StepRunner contract)"
+
+  - id: "ORCH-05"
+    description: "Steps execute in topological order (Kahn's algorithm)"
+    category: "execution"
+    enforcement: "runtime (DAGExecutor.build_waves)"
+
+  - id: "ORCH-06"
+    description: "Max 2 retries per step (normal), 1 schema retry"
+    category: "execution"
+    enforcement: "runtime (StepRunner config)"
+
+  - id: "ORCH-07"
+    description: "Dependent steps cancelled on parent failure"
+    category: "execution"
+    enforcement: "runtime (DAGExecutor wave processing)"
+
+  # --- Workflow ---
+  - id: "ORCH-08"
+    description: "Max workflow depth 3 (no deeper nesting)"
+    category: "workflow"
+    enforcement: "runtime (WorkflowEngine depth check)"
+
+  - id: "ORCH-09"
+    description: "All emitted events carry trace_id"
+    category: "workflow"
+    enforcement: "runtime (IDeltaEmitPort + IEventSubscriptionPort)"
+
+  # --- Tier ---
+  - id: "ORCH-10"
+    description: "MEDIUM tier: max 2 direct Fabric calls, no Planner"
+    category: "tier"
+    enforcement: "runtime (dispatch_medium validation)"
+
+  - id: "ORCH-11"
+    description: "HIGH tier: requires CommittedPlan from Planner"
+    category: "tier"
+    enforcement: "runtime (dispatch_high sends PlanRequest)"
+
+  # --- Cross-Workflow ---
+  - id: "ORCH-12"
+    description: "Workflow trigger cycle validation (no circular triggers)"
+    category: "cross-workflow"
+    enforcement: "runtime (WorkflowRegistry.save validation)"
+
+  # --- Adaptive DAG ---
+  - id: "ORCH-13"
+    description: "Max 1 micro-replan per DAG execution"
+    category: "adaptive-dag"
+    enforcement: "runtime (MicroReplanCheckpoint guard)"
+
+  # --- ORCH-14: V1 DEFERRED (token budget enforcement -- no upstream data) ---
+  - id: "ORCH-14"
+    description: "Token budget enforcement per step"
+    category: "budget"
+    enforcement: "V1 DEFERRED -- no provider populates token metadata"
+    status: "deferred"
+
+  # --- Agent Guard ---
+  - id: "ORCH-15"
+    description: "Output schema validation on step results"
+    category: "agent-guard"
+    enforcement: "runtime (OutputSchemaGuard)"
+
+  - id: "ORCH-16"
+    description: "Conditional edges evaluated at wave boundaries"
+    category: "agent-guard"
+    enforcement: "runtime (ConditionalEdgeEvaluator guard)"

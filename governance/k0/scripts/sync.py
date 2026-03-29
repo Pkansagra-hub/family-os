@@ -753,6 +753,90 @@ def check_artifact_checksums() -> SyncReport:
     )
 
 
+def check_p03_wiring() -> SyncReport:
+    """Check P03 pipeline wiring - detect orphan files not imported in production."""
+    from governance.k0.scripts.p03_wiring_scanner import (
+        build_import_graph,
+        find_orphan_files,
+        scan_consolidation_algorithm_files,
+        scan_p03_pipeline_files,
+    )
+
+    # Scan files
+    pipeline_files = scan_p03_pipeline_files()
+    algorithm_files = scan_consolidation_algorithm_files()
+
+    # Build import graph
+    build_import_graph(pipeline_files, algorithm_files)
+
+    # Find orphans (excluding test imports - only production wiring)
+    orphan_pipeline, orphan_algorithm = find_orphan_files(
+        pipeline_files, algorithm_files, include_extended=True
+    )
+
+    total_files = len(pipeline_files) + len(algorithm_files)
+    total_orphans = len(orphan_pipeline) + len(orphan_algorithm)
+    wired_files = total_files - total_orphans
+
+    # Orphans are "missing in code" in the sense that they exist but aren't wired
+    orphan_list = [f"pipeline:{f}" for f in orphan_pipeline] + [
+        f"algorithm:{f}" for f in orphan_algorithm
+    ]
+
+    return SyncReport(
+        category="P03Wiring",
+        scanned_count=total_files,
+        registered_count=wired_files,
+        missing_in_master=[],  # No master registry for individual file wiring
+        missing_in_code=orphan_list,  # Orphans = files not wired in production
+        status_mismatches=[],
+    )
+
+
+def check_p03_version_integrity() -> SyncReport:
+    """Check P03 version integrity - detect modified/new/deleted files vs VERSION.yaml."""
+    from pathlib import Path
+
+    from governance.k0.scripts.p03_version_manager import check_version_integrity
+
+    # Check both P03 directories
+    pipeline_dir = Path("d:/familyos/k0/pipelines/p03")
+    algorithm_dir = Path("d:/familyos/k0/modules/consolidation")
+
+    missing_files: list[str] = []
+    mismatches: list[str] = []
+    total_files = 0
+
+    for label, directory in [("pipeline", pipeline_dir), ("algorithm", algorithm_dir)]:
+        report = check_version_integrity(directory)
+        total_files += report.total_files
+
+        # Check for missing VERSION.yaml (version 0.0.0 means no file exists)
+        if report.version == "0.0.0":
+            missing_files.append(f"{label}:VERSION.yaml missing")
+            continue
+
+        # Process changes from the report
+        for result in report.changes:
+            if result.status == "modified":
+                mismatches.append(f"{label}:{result.path} (modified)")
+            elif result.status == "added":
+                missing_files.append(f"{label}:{result.path} (new file)")
+            elif result.status == "deleted":
+                missing_files.append(f"{label}:{result.path} (deleted)")
+
+    valid_count = total_files - len(mismatches) - len(missing_files)
+
+    return SyncReport(
+        category="P03Version",
+        scanned_count=total_files,
+        registered_count=max(0, valid_count),
+        missing_in_master=[],
+        missing_in_code=missing_files,  # New/deleted files not in VERSION.yaml
+        status_mismatches=mismatches,  # Modified files
+    )
+
+
 def run_all_checks() -> list[SyncReport]:
     """Run all sync checks and return reports."""
     reports = []
@@ -760,89 +844,107 @@ def run_all_checks() -> list[SyncReport]:
     print("Scanning codebase...")
     print()
 
-    print("  [1/21] Scanning syscalls...", end=" ", flush=True)
+    print("  [1/23] Scanning syscalls...", end=" ", flush=True)
     reports.append(check_syscalls())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [2/21] Scanning pipelines...", end=" ", flush=True)
+    print("  [2/23] Scanning pipelines...", end=" ", flush=True)
     reports.append(check_pipelines())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [3/21] Scanning modules...", end=" ", flush=True)
+    print("  [3/23] Scanning modules...", end=" ", flush=True)
     reports.append(check_modules())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [4/21] Scanning ADRs...", end=" ", flush=True)
+    print("  [4/23] Scanning ADRs...", end=" ", flush=True)
     reports.append(check_adrs())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [5/21] Scanning events...", end=" ", flush=True)
+    print("  [5/23] Scanning events...", end=" ", flush=True)
     reports.append(check_events())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [6/21] Scanning tables...", end=" ", flush=True)
+    print("  [6/23] Scanning tables...", end=" ", flush=True)
     reports.append(check_tables())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [7/21] Scanning migrations...", end=" ", flush=True)
+    print("  [7/23] Scanning migrations...", end=" ", flush=True)
     reports.append(check_migrations())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [8/21] Scanning indexes...", end=" ", flush=True)
+    print("  [8/23] Scanning indexes...", end=" ", flush=True)
     reports.append(check_indexes())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [9/21] Scanning module contracts...", end=" ", flush=True)
+    print("  [9/23] Scanning module contracts...", end=" ", flush=True)
     reports.append(check_module_contracts())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [10/21] Scanning pipeline contracts...", end=" ", flush=True)
+    print("  [10/23] Scanning pipeline contracts...", end=" ", flush=True)
     reports.append(check_pipeline_contracts())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [11/21] Scanning event schemas...", end=" ", flush=True)
+    print("  [11/23] Scanning event schemas...", end=" ", flush=True)
     reports.append(check_event_schemas())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [12/21] Scanning capabilities...", end=" ", flush=True)
+    print("  [12/23] Scanning capabilities...", end=" ", flush=True)
     reports.append(check_capabilities())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [13/21] Scanning fabric providers...", end=" ", flush=True)
+    print("  [13/23] Scanning fabric providers...", end=" ", flush=True)
     reports.append(check_fabric_providers())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [14/21] Scanning kernel hooks...", end=" ", flush=True)
+    print("  [14/23] Scanning kernel hooks...", end=" ", flush=True)
     reports.append(check_kernel_hooks())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [15/21] Scanning background workers...", end=" ", flush=True)
+    print("  [15/23] Scanning background workers...", end=" ", flush=True)
     reports.append(check_background_workers())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [16/21] Scanning metrics...", end=" ", flush=True)
+    print("  [16/23] Scanning metrics...", end=" ", flush=True)
     reports.append(check_metrics())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [17/21] Scanning config keys...", end=" ", flush=True)
+    print("  [17/23] Scanning config keys...", end=" ", flush=True)
     reports.append(check_config_keys())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [18/21] Scanning feature flags...", end=" ", flush=True)
+    print("  [18/23] Scanning feature flags...", end=" ", flush=True)
     reports.append(check_feature_flags())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [19/21] Scanning config versions...", end=" ", flush=True)
+    print("  [19/23] Scanning config versions...", end=" ", flush=True)
     reports.append(check_config_versions())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [20/21] Scanning contract versions...", end=" ", flush=True)
+    print("  [20/23] Scanning contract versions...", end=" ", flush=True)
     reports.append(check_contract_versions())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [21/21] Verifying artifact checksums...", end=" ", flush=True)
+    print("  [21/23] Verifying artifact checksums...", end=" ", flush=True)
     reports.append(check_artifact_checksums())
     print(f"found {reports[-1].scanned_count}")
+
+    print("  [22/23] Checking P03 wiring...", end=" ", flush=True)
+    reports.append(check_p03_wiring())
+    wiring_report = reports[-1]
+    orphan_count = len(wiring_report.missing_in_code)
+    if orphan_count > 0:
+        print(f"found {wiring_report.scanned_count} files, {orphan_count} ORPHANS")
+    else:
+        print(f"found {wiring_report.scanned_count} files, all wired")
+
+    print("  [23/23] Checking P03 version integrity...", end=" ", flush=True)
+    reports.append(check_p03_version_integrity())
+    version_report = reports[-1]
+    issues = len(version_report.missing_in_code) + len(version_report.status_mismatches)
+    if issues > 0:
+        print(f"found {version_report.scanned_count} files, {issues} ISSUES")
+    else:
+        print(f"found {version_report.scanned_count} files, all valid")
 
     print()
     return reports
@@ -886,6 +988,61 @@ def print_summary(reports: list[SyncReport]) -> None:
     print()
 
 
+def print_p03_breakdown() -> None:
+    """Print detailed P03 folder breakdown table."""
+    from governance.k0.scripts.p03_wiring_scanner import generate_folder_breakdown
+
+    pipeline_stats, algo_stats = generate_folder_breakdown()
+
+    print()
+    print("=" * 70)
+    print("P03 WIRING BREAKDOWN")
+    print("=" * 70)
+    print()
+
+    # Pipeline table
+    print("Pipeline (k0/pipelines/p03/):")
+    print("-" * 50)
+    print(f"{'Folder':<20} {'Total':>8} {'Wired':>8} {'Orphans':>8} {'Coverage':>10}")
+    print("-" * 50)
+    p_total = p_wired = p_orphans = 0
+    for s in pipeline_stats:
+        print(f"{s.folder:<20} {s.total:>8} {s.wired:>8} {s.orphans:>8} {s.coverage:>9.1f}%")
+        p_total += s.total
+        p_wired += s.wired
+        p_orphans += s.orphans
+    print("-" * 50)
+    p_cov = (p_wired / p_total * 100) if p_total > 0 else 100.0
+    print(f"{'TOTAL':<20} {p_total:>8} {p_wired:>8} {p_orphans:>8} {p_cov:>9.1f}%")
+    print()
+
+    # Algorithm table
+    print("Algorithms (k0/modules/consolidation/):")
+    print("-" * 50)
+    print(f"{'Folder':<20} {'Total':>8} {'Wired':>8} {'Orphans':>8} {'Coverage':>10}")
+    print("-" * 50)
+    a_total = a_wired = a_orphans = 0
+    for s in algo_stats:
+        print(f"{s.folder:<20} {s.total:>8} {s.wired:>8} {s.orphans:>8} {s.coverage:>9.1f}%")
+        a_total += s.total
+        a_wired += s.wired
+        a_orphans += s.orphans
+    print("-" * 50)
+    a_cov = (a_wired / a_total * 100) if a_total > 0 else 100.0
+    print(f"{'TOTAL':<20} {a_total:>8} {a_wired:>8} {a_orphans:>8} {a_cov:>9.1f}%")
+    print()
+
+    # Grand total
+    grand_total = p_total + a_total
+    grand_wired = p_wired + a_wired
+    grand_orphans = p_orphans + a_orphans
+    grand_cov = (grand_wired / grand_total * 100) if grand_total > 0 else 100.0
+    print(
+        f"GRAND TOTAL: {grand_total} files, {grand_wired} wired, {grand_orphans} orphans ({grand_cov:.1f}% coverage)"
+    )
+    print()
+
+
 def print_diff(reports: list[SyncReport]) -> None:
     """Print detailed diff for each category."""
     print()
@@ -915,7 +1072,11 @@ def print_diff(reports: list[SyncReport]) -> None:
                 print(f"    ... and {len(r.missing_in_master) - 10} more")
 
         if r.missing_in_code:
-            print("  Missing in code (exists in master):")
+            # Special label for P03Wiring - these are orphan files, not missing files
+            if r.category == "P03Wiring":
+                print("  Orphan files (exist but not wired in production):")
+            else:
+                print("  Missing in code (exists in master):")
             for item in r.missing_in_code[:10]:
                 print(f"    - {item}")
             if len(r.missing_in_code) > 10:
@@ -1006,6 +1167,7 @@ It does NOT modify the master document (use --update for that).
 
     reports = run_all_checks()
     print_summary(reports)
+    print_p03_breakdown()
 
     if args.diff or args.report:
         print_diff(reports)

@@ -1,0 +1,334 @@
+# =============================================================================
+# M13 builders.hipp_events_row v2.0.0 -- 16 New Column Mappings Contract
+# =============================================================================
+#
+# M13 is the convergence point where ALL enrichment outputs are assembled into
+# the st_hipp_events INSERT row. v2 adds Group 12 (MW v2 Signals) with 11 pure
+# passthrough columns, plus updates to Groups 5, 7, and 11 for +5 columns.
+#
+# Total M13 output: 111 columns across 12 groups.
+# (Remaining columns up to 136 are set by migration defaults or P03.)
+#
+# ADRs: TBD (M3 trust-then-fill architecture)
+# Epic: 3.6
+# =============================================================================
+
+module_id: builders.hipp_events_row
+version: "v2"
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+  - p02.hippocampus.pattern_separated.v1
+  - p02.hippocampus.semantic_projected.v2
+  - p02.embedding.extracted.v1
+  - p02.affect.analyzed.v2
+  - p02.space.visibility_resolved.v1
+  - p02.salience.scored.v2
+  - p02.context.temporal_profiled.v2
+  - p02.context.device_profiled.v1
+  - p02.context.ingress_classified.v1
+  - p02.context.retention_resolved.v1
+  - p02.context.geo_enriched.v1
+  - p02.social.family_resolved.v2
+
+output_event_types:
+  - p02.builders.hipp_row_built.v2
+
+latency_budget_ms: 10   # Unchanged: pure assembly, no I/O
+
+side_effects: []
+
+idempotent: true
+
+total_columns: 111   # M13 actively maps 111 columns; remaining to 136 are migration defaults or P03
+
+# ---------------------------------------------------------------------------
+# Column Groups
+# ---------------------------------------------------------------------------
+column_groups:
+
+  # Groups 1-4: Unchanged from v1
+  group_1_identity_trace:
+    count: 9
+    status: unchanged
+    description: "event_id, wal_pos, tenant_id, space_id, actor_id, cognitive_trace_id, schema_uri, hippocampus_api_version, k1_signal_version"
+
+  group_2_provenance:
+    count: 7
+    status: unchanged
+    description: "ingressed_at, event_time_utc, write_time_utc, write_lag_ms, pipeline_version, processing_duration_ms, updated_at"
+
+  group_3_hippocampus_dg_ca1:
+    count: 8
+    status: unchanged
+    description: "simhash_hex, minhash32, body_text, embedding_id, embedding_status, entities_json, kg_triples_json, ner_entities_json"
+
+  group_4_dedup_cluster:
+    count: 5
+    status: unchanged
+    description: "is_near_duplicate, duplicate_of_event_id, episode_cluster_id, cluster_confidence, novelty_score (all NULL, populated by P03)"
+
+  # Group 5: Temporal -- +3 columns from M08 v2
+  group_5_temporal:
+    count: 14           # was 11
+    status: updated
+    existing_columns:
+      - event_time_utc
+      - write_time_utc
+      - write_lag_ms
+      - local_date
+      - local_time
+      - day_of_week
+      - is_weekend
+      - time_of_day_bucket
+      - circadian_slot
+      - is_backdated
+      - created_at
+    new_columns:
+      - name: temporal_mentioned_time
+        type: TEXT
+        source: "M08 (passthrough from MW body.temporal.mentioned_time)"
+        description: "Raw temporal reference string"
+
+      - name: temporal_resolved_epoch_ms
+        type: BIGINT
+        source: "M08 (passthrough from MW body.temporal.resolved_epoch_ms)"
+        description: "K1-resolved epoch for mentioned time"
+
+      - name: temporal_orientation
+        type: TEXT
+        source: "M08 (passthrough from MW body.temporal.orientation)"
+        description: "PAST/ONGOING/FUTURE_COMMITMENT"
+
+  # Group 6: Context (device, ingress, retention) -- Unchanged
+  group_6_context:
+    count: 10
+    status: unchanged
+    description: "device_kind, device_platform, client_version, ingress_topic, activity_type, activity_type_ultrabert, content_type, retention_policy_id, retention_bucket, language"
+
+  # Group 7: Social -- +1 column
+  group_7_social:
+    count: 8            # was 7
+    status: updated
+    existing_columns:
+      - num_participants
+      - participant_roles_json
+      - has_partner_present
+      - has_parent_present
+      - is_solo_event
+      - social_context
+      - social_intimacy
+    new_columns:
+      - name: participant_relationships_json
+        type: TEXT
+        format: json_array
+        source: "M07 (passthrough from MW body.participant_relationships)"
+        description: "Typed relationships [{person, relationship_type, confidence}, ...]"
+
+  # Group 8: Privacy -- Unchanged
+  group_8_privacy:
+    count: 5
+    status: unchanged
+    description: "owner_id, visible_to_json, visibility_scope, obligations_json, geo_precision_external"
+
+  # Group 9: Spatial -- Unchanged
+  group_9_spatial:
+    count: 3
+    status: unchanged
+    description: "geohash_6, location_name, location_type"
+
+  # Group 10: UltraBERT full capability -- Unchanged
+  group_10_ultrabert:
+    count: 12
+    status: unchanged
+    description: "safety_familyos_band, safety_familyos_subcategory, clinical_safety_risk, clinical_safety_severity, intent_ultrabert, extracted_relations_json, nli_label, nli_score, sentiment_ultrabert, sentiment_score_ultrabert, emotion_primary_ultrabert, emotion_scores_ultrabert_json"
+
+  # Group 11: Affect and Salience -- +1 column
+  group_11_affect_salience:
+    count: 10           # was 9
+    status: updated
+    existing_columns:
+      - affect_valence
+      - affect_arousal
+      - dominant_emotions_json
+      - affect_band
+      - band_reasons_json
+      - salience_score
+      - salience_band
+      - salience_reasons_json
+      - component_scores_json
+    new_columns:
+      - name: affect_dominance
+        type: FLOAT
+        source: "M04 (passthrough from MW body.affect.dominance)"
+        description: "3rd VAD dimension from per-extraction affect"
+
+  # Group 12: MW v2 Signals -- 11 NEW columns (pure MW passthrough)
+  group_12_mw_v2_signals:
+    count: 11
+    status: new
+    source: "envelope.body (direct MW passthrough, no computation)"
+    description: |
+      Pure passthrough columns from MW v2 body. M13 reads these directly from
+      the envelope body and writes them to st_hipp_events. No transformation,
+      no inference, no computation. If MW did not provide the field, the column
+      gets its migration default (NULL or '{}' or '[]').
+    columns:
+      - name: entity_salience_json
+        type: TEXT
+        format: json_object
+        default: "'{}'"
+        source: "body.entity_salience"
+        description: "Per-entity salience map from MW scoreboard"
+
+      - name: narrative_thread_id
+        type: TEXT
+        source: "body.narrative.thread_id"
+        description: "Conversation thread UUID from MW narrative_active"
+
+      - name: narrative_arc_position
+        type: TEXT
+        enum: [EXPOSITION, RISING_ACTION, CLIMAX, RESOLUTION]
+        source: "body.narrative.arc_position"
+        description: "Position within narrative arc"
+
+      - name: narrative_is_goal_event
+        type: BOOLEAN
+        default: false
+        source: "body.narrative.is_goal_event"
+        description: "Whether atom represents a goal event in its thread"
+
+      - name: intent_type
+        type: TEXT
+        source: "body.intent_type"
+        description: "K1 primary intent classification (distinct from intent_ultrabert)"
+
+      - name: goal_context
+        type: TEXT
+        source: "body.goal_context"
+        description: "Goal/intention context from MW"
+
+      - name: source_type
+        type: TEXT
+        enum: [user_stated, user_implied, device_observed, system_inferred]
+        source: "body.source_type"
+        description: "Provenance of information in this atom"
+
+      - name: novelty
+        type: TEXT
+        enum: [ROUTINE, EXPECTED, NOVEL, SURPRISING]
+        source: "body.novelty"
+        description: "Categorical novelty (distinct from novelty_score FLOAT set by P03)"
+
+      - name: elaboration_depth
+        type: TEXT
+        enum: [MENTION, DISCUSSED, ELABORATED, DEEPLY_PROCESSED]
+        source: "body.elaboration_depth"
+        description: "How deeply user engaged with this topic"
+
+      - name: identity_domains_json
+        type: TEXT
+        format: json_array
+        default: "'[]'"
+        source: "body.identity_domains"
+        description: "Identity domains this atom touches (parent, professional, etc.)"
+
+      - name: k1_signal_version
+        type: TEXT
+        default: "'2.0'"
+        source: "body.k1_signal_version"
+        description: "MW version that produced this atom"
+
+# ---------------------------------------------------------------------------
+# Column Count Verification
+# ---------------------------------------------------------------------------
+column_count_by_group:
+  group_1: 9
+  group_2: 7
+  group_3: 8
+  group_4: 5
+  group_5: 14     # +3
+  group_6: 10
+  group_7: 8      # +1
+  group_8: 5
+  group_9: 3
+  group_10: 12
+  group_11: 10    # +1
+  group_12: 11    # new
+  # Subtotal M13 active: 102
+  # Archival/P03 columns (not M13 mapped): 9
+  # Grand total M13 output: ~111
+
+# Note: st_hipp_events has 136 total columns (per Epic 3.1 contract).
+# M13 actively maps ~111. Remaining 25 are:
+#   - Migration defaults (archival_status, P03 consolidation columns)
+#   - P03-set columns (novelty_score, episode_cluster_id, etc.)
+#   - System-managed (created_at via trigger)
+
+# ---------------------------------------------------------------------------
+# Failure Modes
+# ---------------------------------------------------------------------------
+failure_modes:
+  - code: ROW_ASSEMBLY_FAILED
+    policy: retry
+    max_retries: 3
+    description: "Unexpected error during column mapping"
+
+  - code: MISSING_REQUIRED_FIELD
+    policy: drop
+    description: "Required field (event_id, tenant_id, actor_id) missing from enrichments"
+
+  - code: JSON_SERIALIZATION_FAILED
+    policy: retry
+    max_retries: 2
+    description: "JSON column serialization error"
+
+  - code: MW_FIELD_TYPE_MISMATCH
+    policy: use_default
+    description: "MW body field has unexpected type. Use column default."
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+config_schema:
+  type: object
+  properties:
+    schema_uri:
+      type: string
+      default: "familyos://schema/hipp_events/v2"
+      description: "Schema URI for st_hipp_events v2 rows"
+    api_version:
+      type: string
+      default: "2.0.0"
+      description: "Hippocampus API version identifier"
+    validate_required_fields:
+      type: boolean
+      default: true
+      description: "Whether to validate all required fields present"
+    null_cluster_fields:
+      type: boolean
+      default: true
+      description: "Ensure dedup/cluster fields are NULL (populated by P03)"
+    validate_mw_field_types:
+      type: boolean
+      default: true
+      description: "Validate MW body field types before passthrough (log mismatch)"
+
+description: |
+  Hippocampus Events Row Builder Module (Memory Consolidation Builder) -- v2
+
+  Assembles complete st_hipp_events row from all module outputs.
+  v2 adds 16 new columns across 4 groups:
+    - Group 5 (Temporal): +3 columns from M08 v2
+    - Group 7 (Social): +1 column from M07 v2
+    - Group 11 (Affect & Salience): +1 column from M04 v2
+    - Group 12 (MW v2 Signals): 11 NEW pure passthrough columns
+
+  Group 12 is pure passthrough: M13 reads fields directly from envelope.body
+  and writes to st_hipp_events. No transformation, no inference. If MW did not
+  provide the field, column gets migration default (NULL, '{}', '[]').
+
+  M13 total output: ~111 actively-mapped columns across 12 groups.
+  Remaining columns (up to 136) are migration defaults or P03-populated.
+
+  No I/O added. Group 12 is pure mapping from envelope.body. Latency unchanged.

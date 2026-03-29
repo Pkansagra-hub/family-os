@@ -601,7 +601,7 @@ async def test_run_preserves_original_envelope():
     assert "arousal" in affect_enrichment
     assert "band" in affect_enrichment
     assert "module_version" in affect_enrichment
-    assert affect_enrichment["module_version"] == "v1"
+    assert affect_enrichment["module_version"] == "v2"
 
 
 # ============================================================================

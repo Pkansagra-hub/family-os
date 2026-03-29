@@ -1,17 +1,25 @@
 """
 M07: social.family_graph_resolve - Family Graph Resolver (Social Context Attribution)
 
-Resolves social relationships and family context for episodic memories:
-- Queries st_kg_edges for family graph (ADR-K022: PostgreSQL-only, no Neo4j)
-- Supports 9 relationship types: SPOUSE_OF, PARENT_OF, CHILD_OF, SIBLING_OF,
-  CARETAKER_OF, GRANDPARENT_OF, GRANDCHILD_OF, FRIEND_OF, COLLEAGUE_OF
-- Infers relationships from co-occurrence patterns when DB lookup fails (Issue 4.1.2)
-- Computes participant roles relative to actor
-- Derives social context using Dunbar layers (Issue 4.1.3)
-- Scores social intimacy (HIGH/MED/LOW)
+Trust-Then-Fill v2: MW participant_relationships fast path + st_kg_edges fallback.
 
-Performance target: <=8ms P95 (cached lookups)
-Contract: k0/contracts/modules/social.family_graph_resolve.v1.yaml
+Waterfall tiers:
+  tier0: MW v2 participant_relationships mapping + KG write (~85%)
+  tier1: st_kg_edges READ (may have MW-seeded data) (~8%)
+  tier2: M02 NER person entities + name-pattern heuristics (~5%)
+  tier3: Defaults (solo/unknown) (~2%)
+
+CRITICAL FIX: v1 always returned social_context="friends" because st_kg_edges was
+empty. MW v2 provides typed relationships that immediately fix social_context,
+has_partner_present, and has_parent_present.
+
+Side effect: MW relationships WRITTEN to st_kg_edges to progressively seed the KG.
+
+Supports 9 relationship types: SPOUSE_OF, PARENT_OF, CHILD_OF, SIBLING_OF,
+CARETAKER_OF, GRANDPARENT_OF, GRANDCHILD_OF, FRIEND_OF, COLLEAGUE_OF
+
+Performance target: <=3ms P95 (MW fast path), <=12ms P95 (fallback)
+Contract: k0/contracts/modules/social.family_graph_resolve.v2.yaml
 ADR: docs/architecture/decisions-K0/k022-remove-neo4j-postgresql-graph.md
 
 Usage:
@@ -23,10 +31,11 @@ Research Foundation:
 """
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Import enhanced modules
 from k0.modules.social.relationship_inference import RelationType, _infer_from_name_pattern
@@ -35,6 +44,8 @@ from k0.modules.social.social_context_classifier import (
     get_classifier,
     get_relationship_strength,
 )
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # Data Structures
@@ -50,9 +61,11 @@ class SocialContext:
     has_partner_present: bool
     has_parent_present: bool
     is_solo_event: bool
-    social_context: str  # solo/nuclear_family/extended_family/friends/work
+    social_context: str  # solo/nuclear_family/extended_family/friends/colleagues/community/unknown
     social_intimacy: str  # HIGH/MED/LOW
     social_resolved_at_utc: str
+    participant_relationships_json: str  # v2: MW passthrough for M13 column
+    social_source: str  # v2: provenance "mw_v2"|"kg_edges"|"ner_heuristic"|"default"
 
 
 # ============================================================================
@@ -408,6 +421,266 @@ def _score_social_intimacy_enhanced(
 
 
 # ============================================================================
+# Trust-Then-Fill: MW Relationship Extraction (v2)
+# ============================================================================
+
+# Relationship type to social context mapping (from v2 contract)
+_RELATIONSHIP_TO_SOCIAL_CONTEXT: Dict[str, str] = {
+    "PARENT_OF": "nuclear_family",
+    "CHILD_OF": "nuclear_family",
+    "SPOUSE_OF": "nuclear_family",
+    "SIBLING_OF": "nuclear_family",
+    "CAREGIVER_OF": "nuclear_family",
+    "GRANDPARENT_OF": "extended_family",
+    "AUNT_UNCLE_OF": "extended_family",
+    "COUSIN_OF": "extended_family",
+    "FRIEND_OF": "friends",
+    "COLLEAGUE_OF": "colleagues",
+}
+
+# Priority order: nuclear_family > extended_family > friends > colleagues > community > unknown > solo
+_SOCIAL_CONTEXT_PRIORITY: Dict[str, int] = {
+    "nuclear_family": 7,
+    "extended_family": 6,
+    "friends": 5,
+    "colleagues": 4,
+    "community": 3,
+    "unknown": 2,
+    "solo": 1,
+}
+
+
+def _extract_mw_relationships(body: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """
+    Extract and validate MW v2 participant_relationships from envelope body.
+
+    Supports two formats per MW v2 schema evolution:
+    1. Object map (schema canonical): {person_id: {type, target, confidence}}
+    2. List format (legacy): [{person, relationship_type, confidence}]
+
+    Normalizes both to list of {person, relationship_type, confidence} dicts.
+
+    Args:
+        body: Envelope body dict
+
+    Returns:
+        Validated list of relationship dicts, or None if missing/invalid.
+    """
+    rels = body.get("participant_relationships")
+    if not rels:
+        return None
+
+    # MW v2 schema canonical format: object map {person_id: {type, target, confidence}}
+    if isinstance(rels, dict):
+        validated = []
+        for person_id, descriptor in rels.items():
+            if not isinstance(descriptor, dict):
+                continue
+            rel_type = descriptor.get("type")
+            if not person_id or not rel_type:
+                continue
+            validated.append(
+                {
+                    "person": person_id,
+                    "relationship_type": rel_type,
+                    "confidence": descriptor.get("confidence", 1.0),
+                    "target": descriptor.get("target", person_id),
+                }
+            )
+        return validated if validated else None
+
+    # Legacy list format: [{person, relationship_type, confidence}]
+    if not isinstance(rels, list) or len(rels) == 0:
+        return None
+
+    # Validate structure: each entry must have person + relationship_type
+    validated = []
+    for entry in rels:
+        if not isinstance(entry, dict):
+            continue
+        person = entry.get("person")
+        rel_type = entry.get("relationship_type")
+        if not person or not rel_type:
+            continue
+        validated.append(entry)
+
+    return validated if validated else None
+
+
+def _derive_social_context(relationships: List[Dict[str, Any]]) -> str:
+    """
+    Derive social_context from MW relationship types using priority mapping.
+
+    Uses relationship_type_to_social_context mapping from v2 contract.
+    When multiple participants have different types, highest priority wins.
+
+    Args:
+        relationships: List of {person, relationship_type, confidence} dicts
+
+    Returns:
+        Social context string (nuclear_family, extended_family, friends, etc.)
+    """
+    best_context = "unknown"
+    best_priority = _SOCIAL_CONTEXT_PRIORITY.get("unknown", 2)
+
+    for rel in relationships:
+        rel_type = rel.get("relationship_type", "")
+        context = _RELATIONSHIP_TO_SOCIAL_CONTEXT.get(rel_type, "unknown")
+        priority = _SOCIAL_CONTEXT_PRIORITY.get(context, 2)
+        if priority > best_priority:
+            best_priority = priority
+            best_context = context
+
+    return best_context
+
+
+def _derive_family_flags(
+    relationships: List[Dict[str, Any]],
+) -> Tuple[bool, bool]:
+    """
+    Derive has_partner_present and has_parent_present from relationship types.
+
+    Args:
+        relationships: List of {person, relationship_type, confidence} dicts
+
+    Returns:
+        Tuple of (has_partner_present, has_parent_present)
+    """
+    has_partner = False
+    has_parent = False
+
+    for rel in relationships:
+        rel_type = rel.get("relationship_type", "")
+        if rel_type == "SPOUSE_OF":
+            has_partner = True
+        # PARENT_OF = user is the parent; CHILD_OF = parent is present
+        if rel_type in ("PARENT_OF", "CHILD_OF"):
+            has_parent = True
+
+    return has_partner, has_parent
+
+
+def _derive_intimacy_from_context(social_context: str) -> str:
+    """
+    Derive social_intimacy from social_context.
+
+    Args:
+        social_context: Derived social context string
+
+    Returns:
+        Intimacy level: HIGH, MED, or LOW
+    """
+    if social_context == "nuclear_family":
+        return "HIGH"
+    elif social_context in ("extended_family", "friends"):
+        return "MED"
+    else:
+        return "LOW"
+
+
+def _build_participant_roles_from_mw(
+    actor_id: str,
+    relationships: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """
+    Build participant_roles dict from MW relationships.
+
+    Maps MW relationship_type to role strings compatible with existing output format.
+
+    Args:
+        actor_id: Actor performing the action
+        relationships: List of {person, relationship_type, confidence} dicts
+
+    Returns:
+        Dict mapping person_id to role string
+    """
+    _MW_REL_TO_ROLE: Dict[str, str] = {
+        "SPOUSE_OF": "SPOUSE",
+        "PARENT_OF": "CHILD",  # Actor is parent_of person -> person's role is CHILD
+        "CHILD_OF": "PARENT",  # Actor is child_of person -> person's role is PARENT
+        "SIBLING_OF": "SIBLING",
+        "CAREGIVER_OF": "CAREGIVER",
+        "GRANDPARENT_OF": "GRANDCHILD",  # Actor is grandparent -> person is GRANDCHILD
+        "GRANDCHILD_OF": "GRANDPARENT",  # Actor is grandchild -> person is GRANDPARENT
+        "AUNT_UNCLE_OF": "AUNT_UNCLE",
+        "COUSIN_OF": "COUSIN",
+        "FRIEND_OF": "FRIEND",
+        "COLLEAGUE_OF": "COLLEAGUE",
+    }
+
+    roles: Dict[str, str] = {actor_id: "SELF"}
+    for rel in relationships:
+        person = rel.get("person", "")
+        rel_type = rel.get("relationship_type", "")
+        role = _MW_REL_TO_ROLE.get(rel_type, "OTHER")
+        if person and person != actor_id:
+            roles[person] = role
+
+    return roles
+
+
+async def _write_relationships_to_kg(
+    relationships: List[Dict[str, Any]],
+    actor_id: str,
+    syscalls: Any,
+    confidence_threshold: float = 0.5,
+    source_tag: str = "mw_v2",
+    cognitive_trace_id: str | None = None,
+) -> None:
+    """
+    Write MW relationships to st_kg_edges for progressive KG seeding.
+
+    Non-blocking: if write fails, log and continue (social output still valid).
+    Only writes relationships with confidence >= threshold.
+
+    Args:
+        relationships: List of {person, relationship_type, confidence} dicts
+        actor_id: Actor ID (source entity)
+        syscalls: Kernel syscalls (may or may not have kg_edges_upsert)
+        confidence_threshold: Minimum confidence to write (default 0.5)
+        source_tag: Source tag for KG writes (default "mw_v2")
+        cognitive_trace_id: Optional trace ID for observability
+    """
+    try:
+        # Check if syscalls has kg_edges_upsert capability
+        write_fn = getattr(syscalls, "kg_edges_upsert", None)
+        if write_fn is None:
+            # Syscall not yet implemented -- log and skip (non-blocking)
+            logger.debug(
+                "M07 kg_edges_upsert not available, skipping KG write",
+                extra={
+                    "module_id": "social.family_graph_resolve",
+                    "actor_id": actor_id,
+                    "num_relationships": len(relationships),
+                },
+            )
+            return
+
+        for rel in relationships:
+            confidence = rel.get("confidence", 0.0)
+            if confidence < confidence_threshold:
+                continue
+            await write_fn(
+                subject_id=actor_id,
+                predicate=rel.get("relationship_type", "UNKNOWN"),
+                object_id=rel.get("person", ""),
+                confidence=confidence,
+                source=source_tag,
+                cognitive_trace_id=cognitive_trace_id,
+            )
+    except Exception as exc:
+        # KG_EDGES_WRITE_FAILED: log_and_continue per contract failure mode
+        logger.warning(
+            "M07 st_kg_edges write failed (non-blocking)",
+            extra={
+                "module_id": "social.family_graph_resolve",
+                "actor_id": actor_id,
+                "error": str(exc),
+            },
+        )
+
+
+# ============================================================================
 # Boolean Flags
 # ============================================================================
 
@@ -429,7 +702,13 @@ def _check_parent_present(participant_roles: Dict[str, str]) -> bool:
 
 async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
-    M07: Family Graph Resolver - Resolve social context from family relationships.
+    M07: Family Graph Resolver - Trust-Then-Fill v2.
+
+    4-tier waterfall:
+      tier0: MW participant_relationships mapping + st_kg_edges WRITE (~85%)
+      tier1: st_kg_edges READ (may have MW-seeded data) (~8%)
+      tier2: NER + name-pattern heuristics (~5%)
+      tier3: Defaults (solo/unknown) (~2%)
 
     Args:
         message: BusMessage with .payload, .trace_id, .offset
@@ -439,6 +718,8 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
             - default_social_context: Fallback context (default "solo")
             - default_social_intimacy: Fallback intimacy (default "LOW")
             - max_participants_to_resolve: Max participants to process (default 20)
+            - kg_write_confidence_threshold: Min MW confidence for KG write (default 0.5)
+            - kg_write_source_tag: Source tag for KG writes (default "mw_v2")
 
     Returns:
         Enriched envelope dict with social context fields:
@@ -450,10 +731,12 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
             - social_context: TEXT
             - social_intimacy: TEXT
             - social_resolved_at_utc: ISO timestamp
+            - participant_relationships_json: TEXT (v2: MW passthrough)
+            - social_source: TEXT (v2: provenance)
 
-    Performance: ≤8ms P95 (cached lookups)
+    Performance: <=3ms P95 (MW fast path), <=12ms P95 (fallback)
 
-    Contract: k0/contracts/modules/social.family_graph_resolve.v1.yaml
+    Contract: k0/contracts/modules/social.family_graph_resolve.v2.yaml
     """
     # Use enriched envelope from pipeline_runner, with fallback to message.payload
     envelope = config.get("envelope")
@@ -481,6 +764,8 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     default_context = config.get("default_social_context", "solo")
     default_intimacy = config.get("default_social_intimacy", "LOW")
     max_participants = config.get("max_participants_to_resolve", 20)
+    kg_confidence_threshold = config.get("kg_write_confidence_threshold", 0.5)
+    kg_source_tag = config.get("kg_write_source_tag", "mw_v2")
 
     # Extract actor and participants
     actor_id = envelope.get("actor_id")
@@ -492,9 +777,78 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     body = envelope.get("body", {})
     participants = body.get("participants", [])
 
-    # Handle missing or empty participants
+    # ---------------------------------------------------------------
+    # TIER 0: MW participant_relationships fast path
+    # ---------------------------------------------------------------
+    mw_rels = _extract_mw_relationships(body)
+
+    if mw_rels is not None:
+        try:
+            # Derive social outputs from MW relationships (no DB READ)
+            social_context = _derive_social_context(mw_rels)
+            has_partner, has_parent = _derive_family_flags(mw_rels)
+            social_intimacy = _derive_intimacy_from_context(social_context)
+            participant_roles = _build_participant_roles_from_mw(actor_id, mw_rels)
+            num_participants = len(participant_roles)
+            is_solo = num_participants <= 1
+
+            # Passthrough MW relationships for M13 new column
+            participant_relationships_json = json.dumps(mw_rels)
+            social_source = "mw_v2"
+
+            # Non-blocking st_kg_edges WRITE (progressive KG seeding)
+            await _write_relationships_to_kg(
+                relationships=mw_rels,
+                actor_id=actor_id,
+                syscalls=context.syscalls,
+                confidence_threshold=kg_confidence_threshold,
+                source_tag=kg_source_tag,
+                cognitive_trace_id=message.trace_id,
+            )
+
+            result = {
+                "num_participants": num_participants,
+                "participant_roles_json": json.dumps(participant_roles),
+                "has_partner_present": has_partner,
+                "has_parent_present": has_parent,
+                "is_solo_event": is_solo,
+                "social_context": social_context,
+                "social_intimacy": social_intimacy,
+                "social_resolved_at_utc": datetime.now(timezone.utc).isoformat(),
+                "participant_relationships_json": participant_relationships_json,
+                "social_source": social_source,
+            }
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            context.logger.debug(
+                "M07 social.family_graph_resolve completed (tier0 mw_v2)",
+                extra={
+                    "module_id": "social.family_graph_resolve",
+                    "trace_id": message.trace_id,
+                    "social_context": social_context,
+                    "social_source": social_source,
+                    "num_participants": num_participants,
+                    "elapsed_ms": elapsed_ms,
+                },
+            )
+            return {**envelope, **result}
+
+        except Exception as exc:
+            # MW_RELATIONSHIPS_MALFORMED: fall through to tier1
+            context.logger.warning(
+                "M07 MW relationships malformed, falling back to tier1",
+                extra={
+                    "module_id": "social.family_graph_resolve",
+                    "trace_id": message.trace_id,
+                    "error": str(exc),
+                },
+            )
+            # Fall through to tier1/2/3
+
+    # ---------------------------------------------------------------
+    # Handle solo events (no participants at all)
+    # ---------------------------------------------------------------
     if not participants:
-        # Solo event (actor only)
         result = _build_solo_response()
         context.logger.debug(
             "M07 social.family_graph_resolve completed (solo)",
@@ -524,10 +878,11 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         return {**envelope, **result}
 
     try:
-        # Extract cache TTL from config
+        # ---------------------------------------------------------------
+        # TIER 1: st_kg_edges READ (may have data from previous MW writes)
+        # ---------------------------------------------------------------
         cache_ttl = config.get("cache_ttl_seconds", _CACHE_TTL_SECONDS)
 
-        # Step 1: Lookup relationships (async cached via syscalls)
         relationships = await _lookup_relationships(
             actor_id=actor_id,
             syscalls=context.syscalls,
@@ -535,49 +890,121 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
             cognitive_trace_id=message.trace_id,
         )
 
-        # Step 2: Map participant roles
+        if relationships:
+            # KG edges found -- use existing v1 logic as fallback
+            participant_roles = _map_participant_roles(actor_id, participants, relationships)
+            social_context = _classify_social_context(participant_roles)
+            social_intimacy = _score_social_intimacy(social_context)
+            has_partner = _check_partner_present(participant_roles)
+            has_parent = _check_parent_present(participant_roles)
+            is_solo = len(participants) == 1
+            social_source = "kg_edges"
+
+            result = {
+                "num_participants": len(participants),
+                "participant_roles_json": json.dumps(participant_roles),
+                "has_partner_present": has_partner,
+                "has_parent_present": has_parent,
+                "is_solo_event": is_solo,
+                "social_context": social_context,
+                "social_intimacy": social_intimacy,
+                "social_resolved_at_utc": datetime.now(timezone.utc).isoformat(),
+                "participant_relationships_json": json.dumps([]),
+                "social_source": social_source,
+            }
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            context.logger.debug(
+                "M07 social.family_graph_resolve completed (tier1 kg_edges)",
+                extra={
+                    "module_id": "social.family_graph_resolve",
+                    "trace_id": message.trace_id,
+                    "social_context": social_context,
+                    "social_source": social_source,
+                    "num_participants": len(participants),
+                    "elapsed_ms": elapsed_ms,
+                },
+            )
+            return {**envelope, **result}
+
+        # ---------------------------------------------------------------
+        # TIER 2: NER + name-pattern heuristics
+        # ---------------------------------------------------------------
+        # Use existing _map_participant_roles which falls back to
+        # _infer_from_name_pattern for unresolved participants
         participant_roles = _map_participant_roles(actor_id, participants, relationships)
 
-        # Step 3: Classify social context
-        social_context = _classify_social_context(participant_roles)
+        # Check if name-pattern inference resolved anything beyond SELF/OTHER
+        has_inferred = any(role not in ("SELF", "OTHER") for role in participant_roles.values())
 
-        # Step 4: Score social intimacy
-        social_intimacy = _score_social_intimacy(social_context)
+        if has_inferred:
+            social_context = _classify_social_context(participant_roles)
+            social_intimacy = _score_social_intimacy(social_context)
+            has_partner = _check_partner_present(participant_roles)
+            has_parent = _check_parent_present(participant_roles)
+            is_solo = len(participants) == 1
+            social_source = "ner_heuristic"
 
-        # Step 5: Compute boolean flags
-        has_partner = _check_partner_present(participant_roles)
-        has_parent = _check_parent_present(participant_roles)
-        is_solo = len(participants) == 1
+            result = {
+                "num_participants": len(participants),
+                "participant_roles_json": json.dumps(participant_roles),
+                "has_partner_present": has_partner,
+                "has_parent_present": has_parent,
+                "is_solo_event": is_solo,
+                "social_context": social_context,
+                "social_intimacy": social_intimacy,
+                "social_resolved_at_utc": datetime.now(timezone.utc).isoformat(),
+                "participant_relationships_json": json.dumps([]),
+                "social_source": social_source,
+            }
 
-        # Build response
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            context.logger.debug(
+                "M07 social.family_graph_resolve completed (tier2 ner_heuristic)",
+                extra={
+                    "module_id": "social.family_graph_resolve",
+                    "trace_id": message.trace_id,
+                    "social_context": social_context,
+                    "social_source": social_source,
+                    "num_participants": len(participants),
+                    "elapsed_ms": elapsed_ms,
+                },
+            )
+            return {**envelope, **result}
+
+        # ---------------------------------------------------------------
+        # TIER 3: Defaults (no relationship data from any source)
+        # ---------------------------------------------------------------
+        # Multiple participants but no relationships resolved -> "unknown"
+        social_context = "unknown" if len(participants) > 1 else "solo"
+        social_intimacy = "LOW"
+        social_source = "default"
+
         result = {
             "num_participants": len(participants),
             "participant_roles_json": json.dumps(participant_roles),
-            "has_partner_present": has_partner,
-            "has_parent_present": has_parent,
-            "is_solo_event": is_solo,
+            "has_partner_present": False,
+            "has_parent_present": False,
+            "is_solo_event": len(participants) <= 1,
             "social_context": social_context,
             "social_intimacy": social_intimacy,
             "social_resolved_at_utc": datetime.now(timezone.utc).isoformat(),
+            "participant_relationships_json": json.dumps([]),
+            "social_source": social_source,
         }
 
-        # Track performance (could emit metric here)
         elapsed_ms = (time.perf_counter() - start_time) * 1000
-
-        # Log completion
         context.logger.debug(
-            "M07 social.family_graph_resolve completed",
+            "M07 social.family_graph_resolve completed (tier3 default)",
             extra={
                 "module_id": "social.family_graph_resolve",
                 "trace_id": message.trace_id,
                 "social_context": social_context,
-                "social_intimacy": social_intimacy,
+                "social_source": social_source,
                 "num_participants": len(participants),
                 "elapsed_ms": elapsed_ms,
             },
         )
-
-        # Return enriched envelope (merge social fields into original envelope)
         return {**envelope, **result}
 
     except Exception as e:
@@ -594,13 +1021,15 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         # Fallback to default values on error
         fallback_result = {
             "num_participants": len(participants),
-            "participant_roles_json": json.dumps({p: "OTHER" for p in participants}),  # All unknown
+            "participant_roles_json": json.dumps({p: "OTHER" for p in participants}),
             "has_partner_present": False,
             "has_parent_present": False,
             "is_solo_event": False,
             "social_context": default_context,
             "social_intimacy": default_intimacy,
             "social_resolved_at_utc": datetime.now(timezone.utc).isoformat(),
+            "participant_relationships_json": json.dumps([]),
+            "social_source": "default",
             "error": str(e),
         }
         return {
@@ -617,13 +1046,15 @@ def _build_solo_response() -> Dict[str, Any]:
     """Build response for solo events (no participants or only actor)."""
     social_data = {
         "num_participants": 1,
-        "participant_roles_json": json.dumps({}),  # Empty roles for solo
+        "participant_roles_json": json.dumps({}),
         "has_partner_present": False,
         "has_parent_present": False,
         "is_solo_event": True,
         "social_context": "solo",
         "social_intimacy": "LOW",
         "social_resolved_at_utc": datetime.now(timezone.utc).isoformat(),
+        "participant_relationships_json": json.dumps([]),
+        "social_source": "default",
     }
     return {
         **social_data,
@@ -636,7 +1067,7 @@ def _build_solo_response() -> Dict[str, Any]:
             "social_context": "solo",
             "social_intimacy": "LOW",
             "social_resolved_at_utc": datetime.now(timezone.utc).isoformat(),
-            "module_version": "v1",
+            "module_version": "v2",
             "execution_time_ms": 0.0,
         },
     }

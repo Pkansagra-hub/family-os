@@ -150,7 +150,7 @@ class TestCollectContractArtifacts:
         assert "sha256" in artifacts["asyncapi"]
 
         # Check schemas
-        assert len(artifacts["schemas"]) == 16  # Real count from workspace
+        assert len(artifacts["schemas"]) == 17  # Real count from workspace
         schema_files = [s["file"] for s in artifacts["schemas"]]
         assert "jsonschema/acl.schema.json" in schema_files
 

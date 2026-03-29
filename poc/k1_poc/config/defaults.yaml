@@ -1,0 +1,871 @@
+# =========================================================================
+# POC Central Configuration — defaults.yaml
+# =========================================================================
+#
+# All runtime-tunable knobs for poc/k1_poc, extracted from hardcoded
+# values in actors/, bus/, delta/.
+#
+# Override at startup: PocConfig.load("path/to/override.yaml")
+# =========================================================================
+
+# ── actors/back.py ──────────────────────────────────────────────────────
+
+actors:
+  back:
+    # Max ReAct iterations per tier (V2 Section 6.2)
+    max_iterations:
+      LOW: 10
+      MEDIUM: 14
+      HIGH: 24
+
+    # Floor for budget_hint -> iterations mapping
+    budget_floor: 4
+
+    # Chat history window for Back context
+    history_window: 5
+
+    # Default safety band when control section is absent
+    default_safety_band: "AMBER"
+
+    # HITL suspension timeout in seconds
+    hitl_timeout_s: 60
+
+    # Observability summarisation truncation limits
+    summarize_args_max_len: 200
+    summarize_result_max_len: 500
+
+    # Keys masked in observability summaries
+    sensitive_keys:
+      - session_id
+      - payment
+      - credential
+      - password
+      - token
+
+  # ── actors/front.py ─────────────────────────────────────────────────
+
+  front:
+    # Fallback history window when SS_READ_CONFIGS has no entry
+    history_window_fallback: 20
+
+    # Default tier when control section has no tier
+    default_tier: "LOW"
+
+    # Default affect confidence when affect section is absent
+    default_affect_confidence: 1.0
+
+    # Default FSM state when control section is absent
+    default_fsm_state: "DISPATCHING"
+
+  # ── actors/back_pool.py (M7: BackPool + Task Lease Model) ──────────
+
+  back_pool:
+    # Max concurrent react_loop workers (M7 7.1.1)
+    pool_size: 3
+
+    # Max concurrent tasks from a single session (M7 7.1.1)
+    max_concurrent_per_session: 2
+
+    # Task lease time-to-live in seconds (M7 7.2.1)
+    lease_ttl_s: 300.0
+
+    # How often the lease watcher scans for expired leases (M7 7.2.3)
+    reclaim_check_interval_s: 30.0
+
+    # Enable dependency ordering in the ready-queue (M7 7.3.1)
+    enable_dependency_ordering: true
+
+    # Lease renewal extension per renewal call in seconds (M7 7.2.5)
+    lease_renewal_extension_s: 60.0
+
+    # Max lease renewals before hard expiry (M7 7.2.5)
+    max_lease_renewals: 3
+
+    # Grace period in seconds before hard-killing a cancelled worker (M7 7.2.3)
+    grace_period_s: 5.0
+
+
+# ── bus/setup.py ────────────────────────────────────────────────────────
+
+bus:
+  # Mailbox capacity (bounded buffer per actor)
+  mailbox_capacity: 64
+
+  # Gap timeout for ordered bus (ms)
+  gap_timeout_ms: 5000
+
+  # Actor identifiers
+  actor_front_id: "front_half"
+  actor_back_id: "back_half"
+
+  # Weighted-fair-queuing priority scheduling
+  priority_wfq: true
+
+  # M1 E1.3: Validate canonical event payloads in builders.
+  # Off in production (perf), on in tests (catches schema drift).
+  validate_canonical_events: false
+
+
+# ── delta/aggregator.py ─────────────────────────────────────────────────
+
+delta:
+  # Batch window in milliseconds (V2 Section 10)
+  batch_window_ms: 500
+
+  # ── delta/overflow.py ───────────────────────────────────────────────
+
+  overflow:
+    # HOT tier total budget in bytes (V2 Section 5)
+    hot_budget_total: 53248
+
+    # Sliding-window size for history_active eviction
+    history_window_size: 20
+
+    # Per-section budgets in bytes (V2 Section 5, HOT Tier Budget)
+    section_budgets:
+      control: 8192
+      beliefs_active: 8192
+      scoreboard: 6144
+      history_active: 8192
+      clarifications: 4096
+      affective_now: 4096
+      narrative_active: 4096
+      meta: 2048
+      task_state: 4096
+      task_artifacts: 4096
+
+
+# ── experience/layer.py ─────────────────────────────────────────────────
+
+experience:
+  # Component fire cadences (turn intervals)
+  emotional_processor_cadence: 25
+  narrative_weaver_cadence: 20
+  anticipatory_responder_cadence: 30
+
+  # EP skip rule: skip EmotionalProcessor if Front affect confidence exceeds this
+  ep_skip_confidence_threshold: 0.8
+
+  # ProactiveAgent fires when wait exceeds this (ms) during COMPANIONING
+  proactive_wait_threshold_ms: 5000
+
+
+# ── fsm/ ────────────────────────────────────────────────────────────────
+
+fsm:
+  # FrontLock max queued events before backpressure (fsm/front_lock.py)
+  front_lock_max_queue_depth: 8
+
+  # History windows for Front and Back LLM views (fsm/history_writer.py)
+  front_history_window: 20
+  back_history_window: 5
+
+  # Pruning: remove completed tasks N turns after presentation (fsm/task_bridge.py)
+  prune_completed_after_turns: 10
+
+  # Eviction: evict artifacts N turns after presentation (fsm/task_bridge.py)
+  evict_artifacts_after_turns: 10
+
+  # Cancel-intent keywords for InterruptClassifier (fsm/interrupt_handler.py)
+  cancel_keywords:
+    - cancel
+    - stop
+    - abort
+    - nevermind
+    - "never mind"
+    - "don't bother"
+    - "forget it"
+    - "skip it"
+    - "call it off"
+
+  # -- M2: FSM hardening additions --
+
+  # Max depth of pending_results deque before backpressure (fsm/turn_state.py)
+  pending_results_max_depth: 16
+
+  # TTL in seconds for stale pending results (fsm/turn_state.py)
+  pending_results_ttl_seconds: 300
+
+  # Enable dead-letter routing for undeliverable results (M2 E2.2)
+  dead_letter_enabled: true
+
+  # Max entries in the idempotency ledger before compaction (M2 E2.3)
+  idempotency_ledger_max_entries: 500
+
+
+# ── kernel/bootstrap.py ────────────────────────────────────────────────
+
+kernel:
+  # Mailbox consumer polling interval in seconds
+  poll_interval_s: 0.05
+
+  # Envelope dedup cache size (cleared when exceeded)
+  dedup_cache_size: 4096
+
+
+# ── llm/ ────────────────────────────────────────────────────────────────
+
+llm:
+  # Fallback model when selection table has no match (model_selection.py)
+  default_model: "gemini-2.5-flash-lite"
+
+  # Max concurrent requests in generate_batch() (gemini_adapter.py)
+  batch_max_concurrency: 5
+
+  # Hint string -> model name overrides (model_selection.py)
+  model_hint_overrides:
+    fast: "gemini-2.5-flash-lite"
+    smart: "gemini-2.5-flash-lite"
+    cheap: "gemini-2.5-flash-lite"
+    thinking: "gemini-2.5-flash-lite"
+    pro: "gemini-2.5-flash-lite"
+    flash: "gemini-2.5-flash-lite"
+
+  # Default max output tokens for LLM requests (llm/types.py)
+  default_max_tokens: 65536
+
+  # Default timeout for LLM requests in milliseconds (llm/types.py)
+  default_timeout_ms: 120000
+
+  # Default temperature for LLM requests (llm/types.py)
+  default_temperature: 1.0
+
+  # Capability + actor -> model routing table (model_selection.py)
+  # Nested as capability -> actor -> model
+  model_selection_table:
+    CHAT:
+      front: "gemini-2.5-flash-lite"
+      back: "gemini-2.5-flash-lite"
+    TOOL_CALL:
+      front: "gemini-2.5-flash-lite"
+      back: "gemini-2.5-flash-lite"
+      planner: "gemini-2.5-flash-lite"
+    STRUCTURED:
+      front: "gemini-2.5-flash-lite"
+      back: "gemini-2.5-flash-lite"
+    REASON:
+      front: "gemini-2.5-flash-lite"
+      back: "gemini-2.5-flash-lite"
+    STREAM:
+      front: "gemini-2.5-flash-lite"
+
+
+# ── orchestrator/ ───────────────────────────────────────────────────────
+
+orchestrator:
+  # Max Fabric calls per tier (routing.py)
+  tier_fabric_budget:
+    LOW: 1
+    MEDIUM: 2
+    HIGH: 10
+
+  # Max Planner tokens per tier (routing.py)
+  tier_planner_token_budget:
+    LOW: 0
+    MEDIUM: 0
+    HIGH: 3500
+
+  # Default timeout for orchestrator Budget in milliseconds (types.py)
+  default_budget_timeout_ms: 60000
+
+  # Canned response when all circuit breakers are open (degradation.py)
+  canned_response_text: "I'm having trouble right now. Could you try again in a moment?"
+
+
+# ── prompt/ ─────────────────────────────────────────────────────────────
+
+prompt:
+  # prompt/builder.py -- DynamicPromptBuilder context-window budget
+  context_window: 128000
+  safety_margin: 0.80
+  chars_per_token: 4
+
+  # prompt/mode.py -- per-mode iteration budgets
+  max_iterations:
+    STANDARD: 10
+    CLARIFY_ASK: 5
+    CLARIFY_RESOLVE: 8
+    HITL_RELAY: 2
+    HITL_RESOLVE: 5
+    PRESENT: 5
+    WEAVE: 5
+    CANCEL: 5
+    INTERRUPT: 10
+    ERROR: 4
+
+  crisis_iterations:
+    STANDARD: 6
+    CLARIFY_ASK: 3
+    CLARIFY_RESOLVE: 6
+    HITL_RELAY: 2
+    HITL_RESOLVE: 4
+    PRESENT: 4
+    WEAVE: 4
+    CANCEL: 3
+    INTERRUPT: 6
+    ERROR: 3
+
+  # prompt/mode.py -- threshold below which refine_affect tool is added
+  affect_confidence_threshold: 0.6
+
+  # prompt/clarify_depth.py -- max re-asks before guessing
+  max_clarify_depth: 2
+
+  # prompt/back_prompt.py -- default max tool calls in Back system prompt
+  back_max_tool_calls: 10
+
+
+# ── protocols/ ──────────────────────────────────────────────────────────
+
+protocols:
+  # protocols/suspension.py -- suspension limits
+  max_suspensions_per_task: 2
+  max_concurrent_suspensions: 1
+
+  # protocols/suspension.py -- per-type timeouts in seconds
+  suspension_timeouts:
+    clarification: 60.0
+    approval: 120.0
+    selection: 90.0
+
+  # protocols/hitl.py -- per-type HITL timeouts in seconds
+  # (V3 E0.2.1: unified to seconds; was milliseconds)
+  hil_timeouts:
+    clarification: 60.0
+    approval: 120.0
+    selection: 90.0
+
+  # protocols/weave_batcher.py -- batch window in milliseconds
+  weave_batch_window_ms: 500
+
+  # -- M2: protocols additions --
+
+  # Max queued depth for weave batcher before dead-letter (M2 E2.2)
+  weave_max_queued_depth: 16
+
+
+# ── react/loop.py ───────────────────────────────────────────────────────
+
+react:
+  # Default max iterations for Front ReAct loop (V2 Section 7.5)
+  default_front_max_iterations: 10
+
+  # Default max iterations for Back ReAct loop (V2 Section 7.5)
+  default_back_max_iterations: 16
+
+  # Fallback response when LLM produces a degenerate (empty) response
+  front_degenerate_fallback: "Let me think about that for a moment."
+
+  # Fallback response when Front exhausts its iteration budget
+  front_budget_fallback: "Let me get back to you on that."
+
+  # M3 E3.4.3: toggle parallel tool execution in react_loop.
+  # When false, ALL tools execute sequentially (useful for debugging).
+  parallel_tools_enabled: true
+
+  # NOTE: Per-mode iteration tables (MODE_MAX_ITERATIONS, CRISIS_MAX_ITERATIONS)
+  # live in prompt.max_iterations and prompt.crisis_iterations above.
+
+
+# ── tools/dispatcher.py & tools/schemas_back.py ────────────────────────
+
+tools:
+  # Max tool calls per tier per turn (tools/dispatcher.py)
+  budget_limits:
+    LOW: 10
+    MEDIUM: 16
+    HIGH: 30
+    CRISIS: 5
+
+  # Front tier allowlists (V2 Section 15.3, tools/dispatcher.py)
+  front_tier_allowlists:
+    LOW:
+      - update_beliefs
+      - update_scoreboard
+      - update_clarifications
+      - update_narrative
+      - refine_affect
+      - recall_memory
+      - summarize_context
+      - dispatch_task
+    MEDIUM:
+      - update_beliefs
+      - update_scoreboard
+      - update_clarifications
+      - update_narrative
+      - refine_affect
+      - promote_belief
+      - recall_memory
+      - summarize_context
+      - dispatch_task
+    HIGH:
+      - update_beliefs
+      - update_scoreboard
+      - update_clarifications
+      - update_narrative
+      - refine_affect
+      - promote_belief
+      - recall_memory
+      - summarize_context
+      - dispatch_task
+    CRISIS: []
+
+  # Back tier allowlists (V2 Section 6.2, tools/schemas_back.py)
+  back_tier_allowlists:
+    LOW:
+      - recall_memory
+      - discover_capabilities
+      - invoke_capability
+      - submit_result
+    MEDIUM:
+      - recall_memory
+      - discover_capabilities
+      - invoke_capability
+      - spawn_via_fabric
+      - execute_workflow
+      - submit_result
+    HIGH:
+      - recall_memory
+      - discover_capabilities
+      - invoke_capability
+      - spawn_via_fabric
+      - execute_workflow
+      - submit_result
+
+  # Back max ReAct iterations per tier (V2 Section 6.2)
+  back_max_iterations:
+    LOW: 6
+    MEDIUM: 10
+    HIGH: 14
+
+  # Parallel-safe tool categories (task/parallel_safety.py)
+  parallel_safety:
+    reads:
+      - recall_memory
+      - summarize_context
+      - discover_capabilities
+    writes:
+      - update_beliefs
+      - update_scoreboard
+      - update_narrative
+      - update_clarifications
+      - refine_affect
+      - promote_belief
+    actions:
+      - invoke_capability
+      - spawn_via_fabric
+      - execute_workflow
+      - dispatch_task
+    control:
+      - submit_result
+
+
+# ── sessionstate/ ───────────────────────────────────────────────────────
+
+sessionstate:
+
+  # -- Tier budgets (sizetracker.py, tiers/hot.py, tiers/warm.py) --
+  tiers:
+    total_size_limit_bytes: 106496    # 104 KB total session memory cap
+    hot_budget_bytes: 53248           # 52 KB HOT tier
+    warm_budget_bytes: 49152          # 48 KB WARM tier
+
+    # Pressure thresholds (shared by sizetracker, hot, warm)
+    normal_threshold_pct: 0.80
+    elevated_threshold_pct: 0.90
+    critical_threshold_pct: 0.95
+
+    # Per-section budgets in bytes (HOT tier)
+    hot_section_budgets:
+      control: 8192
+      beliefs_active: 8192
+      scoreboard: 6144
+      history_active: 8192
+      clarifications: 4096
+      affective_now: 4096
+      narrative_active: 4096
+      meta: 2048
+      task_state: 4096
+      task_artifacts: 4096
+
+    # Per-section budgets in bytes (WARM tier)
+    warm_section_budgets:
+      telemetry: 8192
+      beliefs_history: 12288
+      history_recent: 20480
+      persona: 8192
+      artifacts_warm: 8192
+
+  # -- Eviction engine (eviction.py) --
+  eviction:
+    target_utilization: 0.70
+    min_eviction_bytes: 1024
+    max_eviction_iterations: 10
+
+  # -- Migration engine (migration.py) --
+  migration:
+    max_history_active_turns: 10
+    compression_turn_threshold: 30
+    target_hot_utilization: 0.70
+    min_demote_bytes: 1024
+    max_demote_iterations: 10
+
+  # -- Thrash detection (snapshot.py) --
+  thrash:
+    mild_migrations: 5
+    mild_evictions: 2
+    moderate_migrations: 10
+    moderate_evictions: 5
+    severe_migrations: 20
+    severe_evictions: 10
+    window_ms: 60000
+
+  # -- Reconstruction SLAs (reconstruction.py) --
+  reconstruction:
+    sla_local_cold_ms: 50.0
+    sla_k0_fallback_ms: 100.0
+    k0_timeout_ms: 80.0
+    estimate_local_cold_base_ms: 5.0
+    estimate_local_cold_per_kb_ms: 0.5
+    estimate_k0_base_ms: 30.0
+    estimate_k0_per_kb_ms: 1.0
+
+  # -- LLM-writable vs system-owned section classification (M4 E4.2.2) --
+  llm_writable_sections:
+    - beliefs_active
+    - scoreboard
+    - clarifications
+    - narrative_active
+    - affective_now
+  system_owned_sections:
+    - control
+    - task_state
+    - task_artifacts
+    - meta
+    - history_active
+    - beliefs_history
+    - history_recent
+    - persona
+    - telemetry
+    - artifacts_warm
+
+  # -- Guard (guard.py) --
+  flatbuffer_overhead_factor: 1.10
+
+  # -- Storage (factory.py, local_cold.py, adapters/sqlite_storage.py) --
+  storage:
+    default_db_path: "~/.familyos/k1/sessionstate.db"
+    checkpoint_interval_s: 30.0
+    sla_restore_ms: 50.0
+    sla_storage_ms: 50.0
+
+  # -- Cold tier (tiers/local_cold.py) --
+  cold:
+    default_max_age_days: 30
+    restore_sla_ms: 50.0
+
+  # -- Per-section knobs --
+  sections:
+    history_active:
+      budget_bytes: 16384
+      max_turns: 25
+
+    history_recent:
+      budget_bytes: 20480
+      max_compressed_turns: 20
+      max_summarized_turns: 10
+      max_session_summary_chars: 200
+      compressed_start: 11
+      compressed_end: 30
+      summarized_start: 31
+      summarized_end: 40
+      eviction_priority: 3
+
+    scoreboard:
+      budget_bytes: 6144
+      default_decay_rate: 0.1
+      min_salience: 0.01
+
+    narrative_active:
+      budget_bytes: 4096
+      max_paused_threads: 5
+      default_resumption_template: "Earlier, you were discussing {title}."
+
+    telemetry:
+      budget_bytes: 8192
+      eviction_priority: 1
+      max_turn_timings: 20
+      max_latency_samples: 100
+      latency_sla_p95_ms: 500
+
+    task_state:
+      budget_bytes: 4096
+      max_tasks: 20
+
+    task_artifacts:
+      budget_bytes: 4096
+      max_artifacts: 30
+
+    beliefs_active:
+      budget_bytes: 8192
+      max_facts: 50
+
+    beliefs_history:
+      budget_bytes: 12288
+      eviction_priority: 2
+      max_facts: 100
+
+    clarifications:
+      budget_bytes: 4096
+      max_pending: 20
+      max_recently_resolved: 5
+
+    affective_now:
+      budget_bytes: 4096
+      max_recent_emotions: 5
+      significant_change_threshold: 0.3
+
+    control:
+      budget_bytes: 8192
+      default_lease_ttl_ms: 30000
+      flow_timeout_ms: 60000
+      lock_timeout_ms: 30000
+
+    meta:
+      budget_bytes: 2048
+      idle_timeout_ms: 3600000
+      max_lifetime_ms: 86400000
+
+    persona:
+      budget_bytes: 8192
+      eviction_priority: 4
+      max_vocabulary_entries: 30
+      max_custom_traits: 20
+
+    artifacts_warm:
+      budget_bytes: 8192
+      max_artifacts: 50
+
+
+# ── task/complexity.py ──────────────────────────────────────────────────
+
+task:
+  # Max tool-call iterations per complexity tier (V2 Section 6.2)
+  tier_budget:
+    LOW: 8
+    MEDIUM: 12
+    HIGH: 16
+
+
+# ── fsm/arbiter.py (M5: Conversation Arbiter) ──────────────────────────
+
+arbiter:
+  # Domain overlap threshold for MODIFY_INFLIGHT decision (M5 5.2.1)
+  domain_overlap_threshold: 0.7
+
+  # Entity overlap threshold for MODIFY_INFLIGHT decision (M5 5.2.1)
+  entity_overlap_threshold: 0.5
+
+  # Require confirmation for conflicting high-impact actions (M5 5.4.3)
+  high_impact_confirmation_required: true
+
+  # High-impact action types that trigger confirmation on multi-device conflict
+  high_impact_actions:
+    - booking
+    - payment
+    - deletion
+    - send_message
+
+
+# ── protocols/weave_policy.py (M8: Adaptive Weave Policy) ──────────────
+
+weave_policy:
+  # Master toggle for adaptive weave policy (M8 8.4.3)
+  enabled: true
+
+  # User idle >= this triggers IMMEDIATE weave delivery (M8 8.1.3, 8.2.2)
+  idle_eager_ms: 10000
+
+  # User idle >= this triggers BATCH (shorter window) (M8 8.1.3, 8.2.2)
+  idle_batch_ms: 3000
+
+  # Typing detected within this window suppresses weave (M8 8.1.3, 8.2.2)
+  typing_suppress_ms: 500
+
+  # Pending count >= this triggers DIGEST mode (M8 8.2.2)
+  digest_threshold_count: 3
+
+  # DIGEST accumulation window in milliseconds (M8 8.2.2)
+  digest_window_ms: 15000
+
+  # BackPool utilization above this triggers longer batch (M8 8.2.2)
+  pool_pressure_threshold: 0.8
+
+  # Batch window when pool is under pressure (M8 8.2.2)
+  pool_pressure_batch_ms: 2000
+
+  # Default batch window (fallback, same as current fixed 500ms) (M8 8.2.3)
+  default_batch_ms: 500
+
+  # Maximum batch window cap (M8 8.2.3)
+  max_batch_ms: 5000
+
+  # Affect valence below this triggers emotional suppression (M8 8.2.3)
+  emotional_suppress_valence: -0.5
+
+  # Max consecutive defers before forced BATCH delivery (M8 8.2.3)
+  max_consecutive_defers: 5
+
+
+# ── ledger/ (M9: Protocol Lifecycle Migration) ──────────────────────────
+
+ledger:
+  # Max events per session before compaction is triggered (M9)
+  max_events_per_session: 10000
+
+  # Event count threshold that triggers ledger compaction (M9)
+  compaction_threshold: 1000
+
+  # Crash recovery timeout -- max seconds allowed for ledger replay (M9)
+  crash_recovery_timeout_s: 30.0
+
+
+# ── fsm/ultrabert_phase1.py (M10: UltraBERT Integration) ───────────────
+
+phase1:
+  # Pipeline selection: "ultrabert" | "stub" (M10 10.4.2)
+  # Use "stub" for tests (no GPU). Use "ultrabert" for production.
+  pipeline: "ultrabert"
+
+  # Confidence threshold for multi-label intent inclusion (M10 10.1.3)
+  intent_confidence_threshold: 0.3
+
+  # Complexity score -> tier mapping thresholds (M10 10.1.2)
+  # Score <= low_max -> LOW, <= medium_max -> MEDIUM, else HIGH
+  complexity_thresholds:
+    low_max: 0
+    medium_max: 2
+
+  # Enable fallback to heuristic classification on UltraBERT failure (M10 10.1.1)
+  degradation_fallback_enabled: true
+
+  # Run warmup forward pass on startup (M10 10.4.3)
+  warmup_on_startup: true
+
+  # LRU cache size for full_analysis results (from K0 adapter)
+  cache_size: 64
+
+  # Cache TTL in seconds (from K0 adapter)
+  cache_ttl_s: 30.0
+
+  # Target Phase 1 duration including all SS writes (M10 10.2.4)
+  target_latency_ms: 25
+
+
+# ── obs/ (M11: Observability & Telemetry) ───────────────────────────────
+
+obs:
+  metrics:
+    # Master toggle for metrics emission
+    enabled: true
+
+    # Sliding window size for MetricAggregator (M11 11.1.2)
+    window_size_s: 300.0
+
+    # How often to flush batch metrics to bus (M11 11.1.4)
+    emit_interval_s: 10.0
+
+  alerts:
+    # Master toggle for alert evaluation
+    enabled: true
+
+    # How often the AlertEngine evaluates rules (M11 11.5.4)
+    evaluation_interval_s: 10.0
+
+    # Default cooldown between re-firing the same alert (M11 11.5.1)
+    default_cooldown_s: 600.0
+
+    # Alert threshold rules (M11 11.5.2)
+    rules:
+      - name: high_degenerate_rate
+        metric: react_loop.front.degenerate_count
+        condition: rate_gt
+        threshold: 0.3
+        window_s: 300
+        severity: warning
+
+      - name: pool_saturation
+        metric: backpool.utilization
+        condition: gauge_gt
+        threshold: 0.9
+        window_s: 30
+        severity: critical
+
+      - name: ledger_write_slow
+        metric: ledger.append_latency_ms
+        condition: p95_gt
+        threshold: 5.0
+        severity: warning
+
+      - name: hitl_timeout_high
+        metric: hitl.timeout_rate
+        condition: gauge_gt
+        threshold: 0.3
+        severity: warning
+
+      - name: phase1_degraded
+        metric: phase1.degraded_count
+        condition: count_gt
+        threshold: 0
+        severity: critical
+
+      - name: ss_near_capacity
+        metric: ss.total.budget_utilization
+        condition: gauge_gt
+        threshold: 0.85
+        severity: warning
+
+      - name: crisis_detected
+        metric: phase1.safety_band_count
+        labels: {band: CRISIS}
+        condition: count_gt
+        threshold: 0
+        severity: critical
+
+      - name: bus_dropping_messages
+        metric: bus.dropped_count
+        condition: count_gt
+        threshold: 0
+        severity: critical
+
+      - name: tier_mismatch_high
+        metric: phase1.tier_mismatch_count
+        condition: rate_gt
+        threshold: 0.2
+        severity: warning
+
+      - name: session_stuck_defer
+        metric: arbiter.decision_count
+        labels: {decision: DEFER}
+        condition: rate_gt
+        threshold: 0.5
+        severity: warning
+
+      - name: excessive_weave_suppress
+        metric: weave.decision_count
+        labels: {decision: SUPPRESS}
+        condition: rate_gt
+        threshold: 0.3
+        severity: warning
+
+      - name: back_budget_exhaustion
+        metric: back.tier.budget_utilization
+        condition: p95_gt
+        threshold: 0.95
+        severity: warning
+
+  fsm:
+    # Per-state stuck detection thresholds in seconds (M11 11.3.1)
+    stuck_state_thresholds:
+      COMPANIONING: 120
+      CLARIFYING_WORKER: 300

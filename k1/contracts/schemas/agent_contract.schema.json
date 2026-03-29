@@ -1,0 +1,270 @@
+{
+  "$id": "agent_contract.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent Contract Schema",
+  "description": "JSON Schema for validating agent capability contracts. Agents are tools with their own LLM, spawned on-demand by the Agent Factory from YAML templates.",
+  "type": "object",
+  "required": ["agent_contract"],
+  "additionalProperties": false,
+  "properties": {
+    "agent_contract": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "domain",
+        "description",
+        "required_inputs",
+        "prompt_template",
+        "tools_granted",
+        "llm_budget_tokens",
+        "max_tool_calls",
+        "max_execution_time_ms",
+        "output",
+        "provider_type",
+        "safety_band_min",
+        "availability"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^agent\\.(execute|spawn)\\.[a-z][a-z0-9_]+$",
+          "description": "Canonical capability name. Must follow type convention: agent.<verb>.<name>"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Semantic version (major.minor.patch)"
+        },
+        "domain": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Domain tags for retrieval ranking (e.g. SOCIAL, HEALTH)"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "description": "Human-readable description used for semantic retrieval embedding"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "What this agent CAN do (list of verbs)"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "What this agent CANNOT do (explicit boundaries)"
+        },
+        "required_inputs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/input_spec" },
+          "description": "Inputs the agent requires"
+        },
+        "optional_inputs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/input_spec_optional" },
+          "description": "Inputs the agent can optionally accept"
+        },
+        "required_context": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "SessionState sections the agent needs"
+        },
+        "optional_context": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "SessionState sections the agent can optionally use"
+        },
+        "prompt_template": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Default prompt template name from Prompt Registry"
+        },
+        "tools_granted": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(tool|agent)\\.(execute|read|write|delete|spawn)\\.[a-z][a-z0-9_]+$"
+          },
+          "description": "Tools this agent is allowed to use (FAB-07: scoped to plan-specified tools_granted[] only)"
+        },
+        "llm_budget_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Max tokens per LLM invocation"
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max tool calls per agent execution"
+        },
+        "max_execution_time_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Agent timeout in milliseconds"
+        },
+        "template_file": {
+          "type": "string",
+          "description": "YAML template file in k1/contracts/agents/"
+        },
+        "output": {
+          "type": "object",
+          "description": "JSON Schema describing the agent's output format",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["object", "array", "string", "number", "boolean"]
+            },
+            "properties": {
+              "type": "object"
+            },
+            "items": {
+              "type": "object"
+            },
+            "required": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "provider_type": {
+          "type": "string",
+          "enum": ["AGENT"],
+          "description": "Must be AGENT for agent contracts"
+        },
+        "provider_id": {
+          "type": "string",
+          "description": "Optional explicit provider ID (defaults to template_file-based resolution)"
+        },
+        "provider_endpoint": {
+          "type": "string",
+          "description": "Optional endpoint URI for external provider resolution"
+        },
+        "safety_band_min": {
+          "type": "string",
+          "enum": ["GREEN", "AMBER", "RED", "CRISIS"],
+          "description": "Minimum safety band required to spawn this agent"
+        },
+        "cost_per_call": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Estimated cost in USD per invocation (typically higher than tools due to LLM)"
+        },
+        "avg_latency_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Average execution time in milliseconds"
+        },
+        "max_latency_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum expected latency (circuit breaker hint)"
+        },
+        "availability": {
+          "type": "string",
+          "enum": ["ONLINE", "DEGRADED", "OFFLINE"],
+          "description": "Current availability status"
+        },
+        "registered_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of initial registration"
+        },
+        "last_updated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of last contract update"
+        },
+        "success_rate_30d": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Rolling 30-day success rate (0.0 to 1.0)"
+        },
+        "total_invocations_30d": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Rolling 30-day invocation count"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "input_spec": {
+      "type": "object",
+      "required": ["name", "type", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Parameter name"
+        },
+        "type": {
+          "type": "string",
+          "description": "Data type: STRING, NUMBER, BOOLEAN, DATE, OBJECT, or ARRAY[T]"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable description of the input"
+        },
+        "enum": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Allowed values (optional constraint)"
+        }
+      }
+    },
+    "input_spec_optional": {
+      "type": "object",
+      "required": ["name", "type", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Parameter name"
+        },
+        "type": {
+          "type": "string",
+          "description": "Data type: STRING, NUMBER, BOOLEAN, DATE, OBJECT, or ARRAY[T]"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable description of the input"
+        },
+        "enum": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Allowed values (optional constraint)"
+        },
+        "default": {
+          "description": "Default value if not provided"
+        }
+      }
+    }
+  }
+}

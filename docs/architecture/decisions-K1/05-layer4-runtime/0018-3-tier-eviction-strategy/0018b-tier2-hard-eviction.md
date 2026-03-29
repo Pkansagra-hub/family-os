@@ -55,7 +55,7 @@ research_citations:
 - PostgreSQL Buffer Eviction (Clock Sweep Algorithm, PostgreSQL Docs, 2024)
 - Frequency-Based Eviction (Access Patterns, 2023)
 - Zstandard Compression (Facebook, 2024)
-status: PROPOSED
+status: FROZEN
 superseded_by: []
 supersedes: []
 title: Tier 2 Hard Eviction (128KB → 192KB)
@@ -63,7 +63,7 @@ title: Tier 2 Hard Eviction (128KB → 192KB)
 
 # ADR-0018b: Tier 2 Hard Eviction (128KB → 192KB)
 
-**Status:** ⏳ In Progress (0% - Initial Draft)
+**Status:** 🔒 FROZEN
 **Date:** 2025-10-13
 **Authors:** K1 Architecture Team
 **Parent ADR:** [ADR-0018 (3-Tier Eviction Strategy)](0018-3-tier-eviction-strategy.md)
@@ -574,11 +574,45 @@ session_eviction_ux_impact = Histogram(
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** 🔒 **FROZEN**
 **Created Date:** 2025-10-13
-**Target Completion:** 2025-11-10 (4 weeks)
-**Blocked By:** 0018a (Tier 1 Soft Eviction)
-**Blocks:** 0018c (Tier 3 OOM Prevention)
+**Frozen Date:** 2026-02-02
+
+---
+
+## Final Decision (2026-02-02)
+
+**STATUS: FROZEN** - This ADR represents the final Tier 2 eviction design.
+
+### Alignment with 12-Section Design
+
+Tier 2 hard eviction in current architecture:
+
+| Original Target | Current Equivalent | Action |
+|----------------|-------------------|--------|
+| beliefs LRU | beliefs_history (WARM 12KB) | Archive to LOCAL COLD |
+| scoreboard LRU | scoreboard items (HOT 6KB) | Demote to WARM then evict |
+| multimodal compression | REMOVED (text-only V1) | N/A |
+| persona LRU | persona (WARM 8KB) | Archive to LOCAL COLD |
+
+### Threshold Mapping
+
+Original: 128KB hard → 192KB trigger (50% buffer)
+Current: 96KB total cap
+- Tier 2 triggers at: Total > 91KB (95% of 96KB)
+- Action: Aggressive eviction from WARM to LOCAL COLD
+
+### Key Change: LOCAL COLD Destination
+
+Original ADR archives to K0 (network required).
+Current architecture archives to LOCAL COLD (K1 SQLite, offline-safe).
+
+### Performance Targets (Confirmed)
+
+| Operation | Target | Confirmed |
+|-----------|--------|----------|
+| `evict()` | <10ms | Yes |
+| Frequency | <0.1% sessions | Yes |
 
 ---
 

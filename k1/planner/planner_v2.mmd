@@ -1,0 +1,1010 @@
+%% =====================================================================================
+%% PLANNER_V2.MMD -- K1 Cognitive Kernel Layer 3: Planner (Implementation Truth)
+%% =====================================================================================
+%% Source of truth: planner.md (Sections 1-32)
+%% Type ownership: k1/orchestrator/types.py (PlanRequest, PlanAck, CommittedPlan, PlanStep, MicroReplanRequest)
+%% Type imports:    k1/model_hub/types.py (HubRequest, HubResponse, CapabilityType, RequestConstraints)
+%% Position:        L0 Rhythm -> L1 Concierge -> L2 Orchestrator -> [L3 PLANNER] -> L2.5 Fabric
+%% Activation:      Orchestrator routes HIGH-tier tasks -> Planner Mailbox
+%% Delivery:        CommittedPlan via k1.planner.plan.ready.v1 event
+%% Contract files:  k1/contracts/modules/planner/wiring.contract.yaml (39 files)
+%%                  k1/contracts/modules/planner/module.contract.yaml
+%%
+%% =====================================================================================
+%% LLM CALL MATRIX
+%% =====================================================================================
+%%  ID   | Stage      | Capability  | Tokens | Timeout | Temp | Purpose
+%%  LLM-1| SKETCH     | CHAT        | 2048   | 8000ms  | 0.7  | Rough plan from intent + caps
+%%  LLM-2| EXPAND     | CHAT        | 1024   | 5000ms  | 0.3  | Map tools, params, prompts
+%%  LLM-3| VALIDATE   | STRUCTURED  | 512    | 3000ms  | 0.1  | Arbiter verdict
+%%  LLM-4| (COMMIT)   | (none)      | 0      | -       | -    | Deterministic, no LLM
+%%  LLM-5a| HIL Clar. | CHAT        | 300    | 3000ms  | -    | Generate clarification question
+%%  LLM-5b| HIL Appr. | CHAT        | 400    | 3000ms  | -    | Format approval summary
+%%  LLM-M1| uSKETCH   | CHAT        | 1024   | 5000ms  | 0.7  | Micro-replan sketch
+%%  LLM-M2| uEXPAND   | CHAT        | 512    | 3000ms  | 0.3  | Micro-replan expand
+%%  LLM-M3| uVALIDATE | STRUCTURED  | 256    | 2000ms  | 0.1  | Micro-replan validate
+%%
+%% =====================================================================================
+%% DISCOVERY TOOL MATRIX (4 tools, ALL read-only, PLAN-02)
+%% =====================================================================================
+%%  Tool                     | Routes To            | Stages         | Latency
+%%  discover_capabilities()  | IFabricRetrievalPort | SKETCH, EXPAND | <50ms
+%%  find_relevant_prompts()  | IFabricRetrievalPort | EXPAND         | <50ms
+%%  query_planning_context() | IStateReadPort       | SKETCH         | <10ms
+%%  recall_for_planning()    | IBridgePort          | SKETCH         | <100ms
+%%  Max per plan: 6 (PLAN-05)
+%%
+%% =====================================================================================
+%% PERFORMANCE TARGETS
+%% =====================================================================================
+%%  Operation        | P50   | P99   | Tokens
+%%  Stage 1 SKETCH   | 4s    | 8s    | ~2K
+%%  Stage 2 EXPAND   | 3s    | 5s    | ~1K
+%%  Stage 3 VALIDATE | 2s    | 3s    | ~500
+%%  Stage 4 COMMIT   | 20ms  | 100ms | 0
+%%  Total Planning   | 12s   | 30s   | ~3.5K
+%%  Micro-Replan     | 8s    | 15s   | ~2K
+%%  Plan Delivery    | 2ms   | 10ms  | 0
+%%
+%% =====================================================================================
+%% INVARIANTS (PLAN-01 to PLAN-12)
+%% =====================================================================================
+%%  PLAN-01: NEVER writes SessionState (IStateReadPort has no write methods)
+%%  PLAN-02: ALL 4 discovery tools read-only (zero side effects)
+%%  PLAN-03: Stage 4 COMMIT deterministic (zero LLM calls, no ILLMPort dep)
+%%  PLAN-04: Max planning time 45s (CB_PLANNER timeout, Orchestrator-owned)
+%%  PLAN-05: Max 6 discovery tool calls per plan (ToolCallRouter counter)
+%%  PLAN-06: NEVER executes capabilities (discovery only)
+%%  PLAN-07: V1 DEFERRED -- token_budget_max removed from types.py
+%%  PLAN-08: Each step references valid Fabric capability (ValidateService)
+%%  PLAN-09: Plan deps form DAG, no cycles (ValidateService Kahn's algo)
+%%  PLAN-10: HIL max 2 rounds per plan (HILCoordinator counter)
+%%  PLAN-11: All LLM calls carry budget {max_tokens, timeout_ms} (PipelineController)
+%%  PLAN-12: Micro-replan adjusts remaining steps only, completed frozen
+%%
+%% =====================================================================================
+%% PLAN STATE MACHINE (10 states)
+%% =====================================================================================
+%%  IDLE -> SKETCHING -> EXPANDING -> VALIDATING -> COMMITTING -> COMPLETED
+%%  IDLE -> MICRO_SKETCH -> MICRO_EXPAND -> MICRO_VALIDATE -> COMMITTING
+%%  Any non-terminal -> FAILED | CANCELLED
+%%  Terminal (COMPLETED | FAILED | CANCELLED) -> IDLE (reset)
+%%
+%% =====================================================================================
+%% EVENT CATALOG
+%% =====================================================================================
+%%  Published (Event Bus, at-least-once):
+%%    k1.planner.plan.ready.v1         CommittedPlan        -> Orchestrator
+%%    k1.planner.plan.failed.v1        failure payload       -> Orchestrator, Learning Loop
+%%    k1.planner.plan.cancelled.v1     cancel payload        -> Orchestrator
+%%    k1.planner.micro_replan.ready.v1 partial plan          -> Learning Loop (telemetry only)
+%%    k1.hil.clarification.v1          question payload      -> Concierge -> User
+%%    k1.hil.approval_request.v1       approval payload      -> Concierge -> User
+%%  Subscribed (Event Bus):
+%%    k1.hil.clarification_response.v1 user answer           <- Concierge
+%%    k1.hil.approval_response.v1      approve/modify/reject <- Concierge
+%%    k1.planner.plan.request.v1       async plan request    <- Orchestrator (alt path)
+%%    k1.planner.plan.cancel.v1        async cancel          <- Orchestrator (alt path)
+%%  Published (K1 Bus delta lane, fire-and-forget):
+%%    k1.planner.delta.v1              11 delta_types        -> Learning Loop, SessionState
+%%
+%% =====================================================================================
+%% DELTA TYPE CATALOG (all via IDeltaEmitPort, PipelineController sole emitter)
+%% =====================================================================================
+%%  delta_type         | section    | When
+%%  stage_transition   | pipeline   | Stage start / complete / fail
+%%  tool_result        | tools      | Discovery tool returns
+%%  hil_event          | pipeline   | HIL round start / end
+%%  plan_update        | plan       | Committed / failed / cancelled
+%%  plan_end           | pipeline   | Plan lifecycle ends
+%%  micro_replan       | pipeline   | Micro-replan completes
+%%  crash_recovery     | pipeline   | Crash recovery runs
+%%
+%% =====================================================================================
+%% METRICS (planner.* namespace)
+%% =====================================================================================
+%%  Counters (9): plan.total, plan.degraded, stage.total, llm.calls, tool.calls,
+%%                hil.rounds, micro_replan.total, mailbox.rejected, recovery.activated
+%%  Histograms (6): plan.duration_ms, stage.duration_ms, llm.latency_ms,
+%%                  llm.tokens, tool.latency_ms, micro_replan.duration_ms
+%%  Gauges (4): mailbox.depth, plan.in_flight, tokens.budget_remaining, tool.budget_remaining
+%%
+%% =====================================================================================
+%% RESOURCE BUDGETS
+%% =====================================================================================
+%%  Total tokens/plan:        ~3.5K    |  Total tokens/micro-replan: ~2K
+%%  Discovery tools/plan:     Max 6    |  HIL rounds/plan:           Max 2
+%%  Mailbox depth:            Max 5    |  Concurrent plans (V1):     1
+%%
+%% =====================================================================================
+%% DIRECTORY STRUCTURE (39 required files from wiring.contract.yaml)
+%% =====================================================================================
+%%  k1/planner/
+%%    __init__.py  planner_agent.py  pipeline_controller.py  plan_fsm.py
+%%    types.py  events.py  config.py  factory.py  metrics.py  tracing.py
+%%    ports/   (8 files: __init__ + 7 port Protocols)
+%%    stages/  (5 files: __init__ + sketch/expand/validate/commit services)
+%%    services/(3 files: __init__ + tool_call_router + hil_coordinator)
+%%    adapters/(8 files: __init__ + 7 production adapters)
+%%
+%% =====================================================================================
+%% DEPENDENCY LAYER (no circular imports)
+%% =====================================================================================
+%%  L0: types.py, events.py, config.py, plan_fsm.py (no internal deps)
+%%  L1: ports/*            (imports types)
+%%  L2: adapters/*         (imports ports, types)
+%%  L3: services/*         (imports ports, types)
+%%  L4: stages/*           (imports ports, types, services)
+%%  L5: pipeline_controller (imports stages, ports, types)
+%%  L6: planner_agent      (imports pipeline_controller, ports, config)
+%%  L7: factory            (imports everything -- sole cross-layer file)
+%%  L8: __init__           (re-exports only)
+%%
+%% =====================================================================================
+
+flowchart TB
+
+%% =====================================================================================
+%% PLANNER CORE
+%% =====================================================================================
+
+subgraph PLANNER_CORE["PLANNER CORE -- L3 LLM-Powered Planning Engine"]
+  direction TB
+
+  PLANNER_MAILBOX["PLANNER MAILBOX\nFIFO | Max depth: 5\nAccepts: PlanRequest, MicroReplanRequest\nRejects beyond depth via MailboxFullError"]:::mailbox
+
+  PLANNER_AGENT["PLANNER AGENT\nSingle-threaded async coordinator\nOwns: mailbox loop, plan lock, cancel set\nV1: one plan at a time (asyncio.Lock)"]:::planner
+
+  PIPELINE_CTRL["PIPELINE CONTROLLER\nOrchestrates 4 stages sequentially\nBudget injection per stage (PLAN-11)\nCancel check between stages\nSole delta emitter (centralized)\n~80 tests"]:::service
+
+  PLAN_FSM["PLAN STATE MACHINE\n10 states | Monotonic transitions\nFull: IDLE->SKETCHING->EXPANDING->VALIDATING->COMMITTING->COMPLETED\nMicro: IDLE->MICRO_SKETCH->MICRO_EXPAND->MICRO_VALIDATE->COMMITTING\nTerminal: COMPLETED | FAILED | CANCELLED -> IDLE (reset)"]:::brain
+end
+
+%% =====================================================================================
+%% 4-STAGE PIPELINE
+%% =====================================================================================
+
+subgraph PIPELINE["4-STAGE PLANNING PIPELINE"]
+  direction TB
+
+  subgraph STAGE1["STAGE 1: SKETCH -- LLM ~2K tokens, 3-8s"]
+    direction TB
+
+    S1_ENTRY["Receive PlanRequest\nExtract intent + constraints"]:::step
+    S1_TOOLS["3 Discovery Tool Calls:\n1. discover_capabilities(domain, intent)\n2. query_planning_context(sections)\n3. recall_for_planning(query)"]:::tool_read
+    S1_HIL_CHECK{"Intent\nambiguous?"}:::decision
+    S1_CLARIFY["HIL Clarification\nLLM ~300 tokens\nMax 2 rounds (PLAN-10)\n60s timeout per round"]:::hil
+    S1_LLM["LLM SKETCH Call\nCapability: CHAT\nmax_tokens: 2048 | timeout: 8s | temp: 0.7\nPrompt: ROLE_DEFINITION + OUTPUT_SCHEMA\n+ intent + capabilities + context + memory"]:::llm
+    S1_OUTPUT["SketchResult\nrough_steps[] | capability_candidates[]\nrationale | needs_clarification"]:::step
+  end
+
+  subgraph STAGE2["STAGE 2: EXPAND -- LLM ~1K tokens, 2-5s"]
+    direction TB
+
+    S2_ENTRY["Receive SketchResult\nMap rough steps to concrete tools"]:::step
+    S2_TOOLS["2-3 Discovery Tool Calls:\n1. discover_capabilities(specific)\n2. find_relevant_prompts(intent, domain)\n3. (optional) discover_capabilities(refined)"]:::tool_fabric
+    S2_LLM["LLM EXPAND Call\nCapability: CHAT\nmax_tokens: 1024 | timeout: 5s | temp: 0.3\nPrompt: sketch + caps + prompts\nOutput: steps with params, deps, schemas"]:::llm
+    S2_ENRICH["Deterministic Enrichment\n7/14 PlanStep fields from LLM\n7/14 from CapabilityContract metadata:\nhas_side_effects, compensation, timeout_ms,\nrequired_context, safety_band_min, tools_granted"]:::engine
+    S2_OUTPUT["ExpandedPlan\nsteps: PlanStep[14 fields]\ndependencies: Dict[str, List[str]]\ntool_mappings | rationale"]:::step
+  end
+
+  subgraph STAGE3["STAGE 3: VALIDATE -- LLM ~500 tokens, 1-3s"]
+    direction TB
+
+    S3_ENTRY["Receive ExpandedPlan\nValidate coherence + feasibility"]:::step
+    S3_DAG["DAG Cycle Detection\nKahn's algorithm (deterministic)\nPLAN-09 enforced"]:::engine
+    S3_CAP["Capability Existence Check\nAll steps reference valid Fabric caps\nPLAN-08 enforced"]:::engine
+    S3_ARBITER["LLM Arbiter\nCapability: STRUCTURED | strict: true\nmax_tokens: 512 | timeout: 3s | temp: 0.1\nVerdict: approved | revise | reject\nMax 1 revise cycle -> retry EXPAND"]:::llm
+    S3_HIL_CHECK{"High-impact\noperations?"}:::decision
+    S3_APPROVAL["HIL Approval\nLLM ~400 tokens\nOptions: approve | modify | reject\n120s timeout -> auto-approve if safe"]:::hil
+    S3_VERDICT["ValidationVerdict\nstatus | issues[] | confidence | rationale"]:::step
+  end
+
+  subgraph STAGE4["STAGE 4: COMMIT -- Deterministic, 0 tokens, <100ms"]
+    direction TB
+
+    S4_BUILD["Build CommittedPlan\nAssign plan_id (uuid) + created_at\nAssemble steps + dependencies\nFreeze plan structure\nNO ILLMPort (PLAN-03)"]:::step
+    S4_WAL["Persist to K0 WAL\nIBridgePort.persist_plan()\nFire-and-forget | Idempotent via plan_id\nFailure does NOT block delivery"]:::step
+    S4_EMIT["Emit plan.ready.v1\nIEventPort.publish()\nPayload: CommittedPlan\nAt-least-once delivery"]:::step
+  end
+end
+
+%% =====================================================================================
+%% MICRO-REPLAN (ORCH-13)
+%% =====================================================================================
+
+subgraph MICRO_REPLAN["MICRO-REPLAN -- ORCH-13 Adaptive Blind DAG"]
+  direction TB
+
+  MR_ENTRY["Receive MicroReplanRequest\nremaining_steps + failure_context + discoveries\nCompleted steps FROZEN (PLAN-12)\nProtocol: synchronous return, 10s timeout\nNo HIL interaction"]:::step
+
+  MR_SKETCH["Micro-SKETCH\nLLM: re-plan remaining steps\nmax_tokens: 1024 | timeout: 5s"]:::llm
+
+  MR_EXPAND["Micro-EXPAND\nLLM: re-map tools for replacement\nmax_tokens: 512 | timeout: 3s"]:::llm
+
+  MR_VALIDATE["Micro-VALIDATE\nLLM: validate replacement plan\nmax_tokens: 256 | timeout: 2s\n'revise' treated as 'approved'"]:::llm
+
+  MR_OUTPUT["Partial CommittedPlan\nReplacement steps only\nReturned directly (synchronous)\nTelemetry: micro_replan.ready.v1\nOn ANY failure: return None"]:::step
+end
+
+%% =====================================================================================
+%% DISCOVERY TOOLS
+%% =====================================================================================
+
+subgraph DISCOVERY_TOOLS["DISCOVERY TOOLS -- 4 Read-Only (PLAN-02, PLAN-06)"]
+  direction TB
+
+  TOOL_DISCOVER["discover_capabilities()\nSemantic Top-K from Fabric\nTool + Agent registries\nRoute: IFabricRetrievalPort\n<50ms | retry: 1"]:::tool_fabric
+
+  TOOL_PROMPTS["find_relevant_prompts()\nSemantic Top-K from Prompt Registry\nAgent-step templates (not Planner's own)\nRoute: IFabricRetrievalPort\n<50ms | retry: 1"]:::tool_fabric
+
+  TOOL_CONTEXT["query_planning_context()\nSections: beliefs_active, persona,\ncontrol, temporal\nRoute: IStateReadPort\n<10ms | lock-free"]:::tool_read
+
+  TOOL_RECALL["recall_for_planning()\nK0 long-term memory\nPreferences, outcomes, entity history\nRoute: IBridgePort\n<100ms | retry: 1"]:::tool_read
+end
+
+%% =====================================================================================
+%% HIL SYSTEM
+%% =====================================================================================
+
+subgraph HIL_SYSTEM["HIL -- Human-In-The-Loop (Planning-Time)"]
+  direction TB
+
+  HIL_COORD["HIL COORDINATOR\nManages clarification + approval flows\nLLM prompt generation for messages\nRound counting (PLAN-10: max 2)\nCorrelates responses via request_id\n~35 tests"]:::service
+
+  HIL_CLAR["CLARIFICATION (Stage 1)\nTrigger: ambiguous intent\nPublish: k1.hil.clarification.v1\nSubscribe: k1.hil.clarification_response.v1\nTimeout: 60s/round -> best-effort\nRoute: Concierge -> User -> Event Bus"]:::hil
+
+  HIL_APPR["APPROVAL (Stage 3)\nTrigger: high-impact operations\nPublish: k1.hil.approval_request.v1\nSubscribe: k1.hil.approval_response.v1\nTimeout: 120s -> auto-approve if GREEN\nOptions: approve | modify | reject"]:::hil
+end
+
+%% =====================================================================================
+%% 7 HEXAGONAL PORTS
+%% =====================================================================================
+
+subgraph PORTS["7 HEXAGONAL PORTS"]
+  direction TB
+
+  PORT_MAILBOX["IMailboxPort\nenqueue(PlanRequest)\nsend_cancel(request_id)\nmicro_replan(MicroReplanRequest)"]:::port
+
+  PORT_LLM["ILLMPort\nexecute(HubRequest) -> HubResponse\nRoutes to Model Hub via LLM Request Bus\nconsumer_id: 'planner' (MH-11 cost tracking)"]:::port
+
+  PORT_FABRIC["IFabricRetrievalPort\ndiscover_capabilities(query, top_k, trace_id)\nfind_relevant_prompts(query, top_k, trace_id)\nIn-process direct call (not HTTP)"]:::port
+
+  PORT_STATE["IStateReadPort\nread_sections(sections[], trace_id) -> StateSnapshot\nget_snapshot() -> SessionSnapshot\nNo write methods (PLAN-01)"]:::port
+
+  PORT_BRIDGE["IBridgePort\nrecall(query, trace_id) -> RecallResponse\npersist_plan(CommittedPlan) -> void\nK0 read path + WAL write path"]:::port
+
+  PORT_DELTA["IDeltaEmitPort\nemit(DeltaPayload) -> void\nSynchronous fire-and-forget\nNever raises | Never blocks"]:::port
+
+  PORT_EVENT["IEventPort\npublish(topic, payload)\nsubscribe(topic, handler) -> Subscription\nunsubscribe(handle)\nBidirectional pub/sub"]:::port
+end
+
+%% =====================================================================================
+%% 7 PRODUCTION ADAPTERS
+%% =====================================================================================
+
+subgraph ADAPTERS_PROD["7 PRODUCTION ADAPTERS"]
+  direction TB
+
+  A_MAILBOX["MailboxAdapter\nasyncio.Queue(maxsize=5)\n_cancel_set: Set[str]\n_plan_lock: asyncio.Lock"]:::adapter
+
+  A_LLM["LLMGatewayAdapter\nLLM_REQUEST_BUS -> Model Hub\nconsumer_id='planner'\nInherits CB_LLM per provider\nV1: TestLLMAdapter"]:::adapter
+
+  A_FABRIC["FabricRetrievalAdapter\nIn-process Fabric API\n<50ms per call | retry: 1\nReturns RetrievalResult[]"]:::adapter
+
+  A_STATE["SessionStateReadAdapter\nPre-bound session_id\nLock-free multi-reader\nNo write capability (<10ms)"]:::adapter
+
+  A_BRIDGE["BridgeAdapter\nK0 Bridge client\nrecall <100ms\npersist fire-and-forget"]:::adapter
+
+  A_DELTA["DeltaBusAdapter\nPre-stamps agent_id='planner'\nTopic: k1.planner.delta.v1\nFire-and-forget, logs on fail"]:::adapter
+
+  A_EVENT["EventBusAdapter\nK1 Event Bus wrapper\nPublish + subscribe + unsubscribe\nAt-least-once for lifecycle events"]:::adapter
+end
+
+%% =====================================================================================
+%% 7 TEST ADAPTERS
+%% =====================================================================================
+
+subgraph ADAPTERS_TEST["7 TEST ADAPTERS (In-Memory)"]
+  direction TB
+
+  T_MAILBOX["TestMailboxAdapter\nIn-memory queue, injectable"]:::adapter_test
+  T_LLM["TestLLMAdapter\nPer-stage canned responses\nDeterministic HubResponse"]:::adapter_test
+  T_FABRIC["TestFabricRetrievalAdapter\nConfigurable capabilities"]:::adapter_test
+  T_STATE["TestStateReadAdapter\nPreset StateSnapshot"]:::adapter_test
+  T_BRIDGE["TestBridgeAdapter\nIn-memory WAL + recall"]:::adapter_test
+  T_DELTA["TestDeltaAdapter\nCaptures emitted deltas"]:::adapter_test
+  T_EVENT["TestEventAdapter\nCaptures published events"]:::adapter_test
+end
+
+%% =====================================================================================
+%% 7 INTERNAL SERVICES (~335 tests)
+%% =====================================================================================
+
+subgraph SERVICES["7 INTERNAL SERVICES (~335 tests)"]
+  direction TB
+
+  SVC_PIPELINE["PipelineController (~80 tests)\nStage sequencing | Budget injection\nCancel check between stages\nSole delta emitter | PLAN-12 safety net\nPorts: IDeltaEmitPort, IEventPort"]:::service
+
+  SVC_SKETCH["SketchService (~60 tests)\nSlot-based prompt composition\n3 discovery tools via ToolCallRouter\nHIL clarification trigger\nPorts: ILLMPort (via TCR: Fabric, State, Bridge)"]:::service
+
+  SVC_EXPAND["ExpandService (~50 tests)\nTool mapping + parameterization\n2-3 discovery tools via ToolCallRouter\nDeterministic field enrichment post-LLM\nPorts: ILLMPort (via TCR: Fabric, Bridge)"]:::service
+
+  SVC_VALIDATE["ValidateService (~45 tests)\nDAG cycle detection (Kahn's)\nCapability existence check\nLLM arbiter (STRUCTURED)\nHIL approval trigger\nPorts: ILLMPort, IFabricRetrievalPort"]:::service
+
+  SVC_COMMIT["CommitService (~30 tests)\nBuild CommittedPlan | Assign plan_id\nWAL persist (fire-and-forget)\nEmit plan.ready event\nNO ILLMPort (PLAN-03)\nPorts: IBridgePort, IDeltaEmitPort, IEventPort"]:::service
+
+  SVC_TCR["ToolCallRouter (~35 tests)\nRoutes 4 discovery tools\nPLAN-05: max 6 calls counter\nPLAN-06: no execution, retrieval only\nPorts: IFabricRetrievalPort, IStateReadPort, IBridgePort"]:::service
+
+  SVC_HIL_SVC["HILCoordinator (~35 tests)\nClarification + approval flows\nLLM prompt generation\nPLAN-10: max 2 rounds counter\nCorrelates responses via request_id\nPorts: ILLMPort, IEventPort"]:::service
+end
+
+%% =====================================================================================
+%% INVARIANTS
+%% =====================================================================================
+
+subgraph INVARIANTS["12 HARD INVARIANTS"]
+  direction TB
+
+  subgraph INV_ACCESS["Ownership / Access"]
+    INV01["PLAN-01\nNever writes SessionState\nIStateReadPort: no write methods"]:::invariant
+    INV02["PLAN-02\nAll 4 tools read-only\nToolCallRouter: no action tools"]:::invariant
+    INV06["PLAN-06\nNever executes capabilities\nIFabricRetrievalPort: retrieval only"]:::invariant
+  end
+
+  subgraph INV_SAFETY["Determinism / Safety"]
+    INV03["PLAN-03\nCOMMIT deterministic\nCommitService: no ILLMPort"]:::invariant
+    INV08["PLAN-08\nValid Fabric capabilities\nValidateService: existence check"]:::invariant
+    INV09["PLAN-09\nDeps form DAG (no cycles)\nValidateService: Kahn's algo"]:::invariant
+  end
+
+  subgraph INV_BOUNDS["Rate Limits / Bounds"]
+    INV04["PLAN-04\nMax 45s planning\nCB_PLANNER (Orchestrator)"]:::invariant
+    INV05["PLAN-05\nMax 6 tool calls/plan\nToolCallRouter counter"]:::invariant
+    INV10["PLAN-10\nMax 2 HIL rounds\nHILCoordinator counter"]:::invariant
+  end
+
+  subgraph INV_TOKENS["Token Management"]
+    INV07["PLAN-07 (V1 DEFERRED)\ntoken_budget_max removed\nNo upstream data source"]:::invariant
+    INV11["PLAN-11\nAll LLM calls carry budget\nPipelineController injection"]:::invariant
+  end
+
+  subgraph INV_MICRO["Micro-Replan"]
+    INV12["PLAN-12\nCompleted steps frozen\nOnly remaining steps adjusted"]:::invariant
+  end
+end
+
+%% =====================================================================================
+%% LIFECYCLE (6 Phases)
+%% =====================================================================================
+
+subgraph LIFECYCLE["LIFECYCLE -- 6 Phases"]
+  direction TB
+
+  LC_INIT["INIT (once at startup)\nCreate 7 services | Wire 7 ports\nSubscribe 4 events | FSM -> IDLE\nServices: TCR(Fabric,State,Bridge)\nHIL(LLM,Event) | Sketch(LLM,TCR,HIL)\nExpand(LLM,TCR) | Validate(LLM,Fabric,HIL)\nCommit(Bridge,Delta,Event)\nPipeline(Sketch,Expand,Validate,Commit,Delta,Event)"]:::lifecycle
+
+  LC_START["PLAN_START (per plan)\nDequeue from mailbox\nCancel check (pre-execution)\nAcquire _plan_lock\nReset: PipelineCtrl, TCR, HIL\nFSM: IDLE -> SKETCHING"]:::lifecycle
+
+  LC_TRANS["STAGE_TRANSITION (3x per plan)\nRecord stage tokens + duration\nCheck cancel flag | Advance FSM\nEmit stage delta | Inject next budget\nSKETCHING->EXPANDING->VALIDATING->COMMITTING"]:::lifecycle
+
+  LC_END["PLAN_END (per plan)\nRelease _plan_lock\nClear pipeline state\nEmit plan_end delta\nFSM: terminal -> IDLE\nResume mailbox loop"]:::lifecycle
+
+  LC_SHUT["SHUTDOWN\n1. Stop accepting (ShutdownError)\n2. Drain mailbox (cancel.v1 each)\n3. Cancel in-flight (cooperative)\n4. Flush deltas (best-effort)\n5. Persist partial state (fire-forget)\n6. Release lock | Unsubscribe events\nGrace timeout: 5s"]:::lifecycle
+
+  LC_CRASH["CRASH_RECOVERY (at startup)\nCheck WAL for partial plan\nIf stale (>120s): discard\nElse: resume at last completed stage\nEmit recovery delta\nV1: simplified -- treat as lost"]:::lifecycle
+end
+
+%% =====================================================================================
+%% CONCURRENCY MODEL
+%% =====================================================================================
+
+subgraph CONCURRENCY["CONCURRENCY -- V1 Single Plan"]
+  direction TB
+
+  CONC_LOCK["Plan Lock\nasyncio.Lock (FIFO)\nAcquire: PLAN_START\nRelease: PLAN_END\nOne plan at a time"]:::concurrency
+
+  CONC_CANCEL["Cooperative Cancel\n_cancel_set: Set[str]\nCheckpoints: pre-exec, between stages,\nbefore WAL persist\nNot mid-LLM (waits for return)"]:::concurrency
+
+  CONC_MICRO["Micro-Replan Concurrency\nBypasses mailbox queue\nAwaits _plan_lock directly\n10s caller timeout < 12s plan p50\n= almost always times out if plan in-flight\nReturns None on timeout"]:::concurrency
+
+  CONC_QUEUE["Mailbox Queuing\nFIFO within priority band\nDepth > 5: MailboxFullError\n-> PlanAck(REJECTED)\n-> CB_PLANNER counts as failure"]:::concurrency
+end
+
+%% =====================================================================================
+%% ERROR RECOVERY (6 Named Paths)
+%% =====================================================================================
+
+subgraph ERROR_RECOVERY["ERROR RECOVERY -- 6 Named Paths"]
+  direction TB
+
+  ERR_SK["ERR_SKETCH_FAIL\nRetry once (simplified prompt)\nIf still fails: PLAN FAILED (terminal)\nImpact rank: 6/8"]:::recovery
+
+  ERR_EX["ERR_EXPAND_FAIL\nRetry once (same prompt)\nIf still fails: FALLBACK to SketchResult\nas degraded PlanSteps (empty params,\ndefault timeout 10s)\nPipeline continues -> VALIDATE\nImpact rank: 3/8"]:::recovery
+
+  ERR_VA["ERR_VALIDATE_FAIL\nIf 'revise': retry EXPAND once\nIf arbiter down + deterministic pass:\nauto-approve (key graceful degradation)\nIf DAG/cap fail 2nd time: PLAN FAILED\nImpact rank: 4/8"]:::recovery
+
+  ERR_CO["ERR_COMMIT_FAIL\nWAL persist: retry once (idempotent)\nWAL fail: proceed anyway (durability loss)\nEvent publish: retry once\nEvent fail: plan valid but undeliverable\nImpact rank: 2/8 (WAL) or 7/8 (event)"]:::recovery
+
+  ERR_HIL["ERR_HIL_TIMEOUT\nClarification: best-effort interpretation\nApproval: auto-approve if all GREEN\nIf any AMBER/RED: PLAN FAILED\nImpact rank: 1/8 (clar) or 5/8 (appr)"]:::recovery
+
+  ERR_CB["ERR_CB_OPEN\nOrchestrator-owned (Planner unaware)\nImmediate AdapterException(DEGRADED)\nFallback: HIGH -> MEDIUM tier\nDirect Fabric exec (no planning)\nImpact rank: 8/8 (highest)"]:::recovery
+end
+
+%% =====================================================================================
+%% CIRCUIT BREAKERS
+%% =====================================================================================
+
+subgraph CIRCUIT_BREAKERS["CIRCUIT BREAKERS -- 2 External"]
+  direction TB
+
+  CB_PLAN["CB_PLANNER\nOwner: Orchestrator PlannerAdapter\nProtects: PLANNER_MAILBOX\nThreshold: 3 consecutive failures\nReset: 60s | Half-open probes: 1\nTracks availability, NOT plan quality\nplan.failed does NOT count as CB failure\nStates: CLOSED -> OPEN -> HALF_OPEN"]:::circuit_breaker
+
+  CB_LLM["CB_LLM_INHERIT\nOwner: Model Hub (MH-05)\nProtects: ILLMPort (per provider)\nThreshold: 3 per provider\nReset: 30s | probes: 1\nFallback: next capable provider\nAll OPEN: stage error recovery"]:::circuit_breaker
+end
+
+%% =====================================================================================
+%% EXTERNAL TOUCHPOINTS
+%% =====================================================================================
+
+subgraph EXTERNALS["EXTERNAL TOUCHPOINTS"]
+  direction TB
+
+  EXT_ORCH["ORCHESTRATOR\nSole caller | Primary consumer\nSends: PlanRequest, MicroReplanRequest, cancel\nReceives: PlanAck (sync), CommittedPlan (async)\nOwns: CB_PLANNER, PlannerAdapter,\nPendingPlanContext, tier degradation"]:::caller
+
+  EXT_MH["MODEL HUB\nProvides all LLM capabilities\nCapabilities: CHAT, STRUCTURED, TOOL_CALL\nPlanner does NOT select models\nconsumer_id: 'planner' (cost tracking)\nOwns: model selection, provider CBs,\ncost enforcement (MH-04), rate limiting"]:::gateway
+
+  EXT_FABRIC["FABRIC RETRIEVAL\nRead-only capability + prompt discovery\nIn-process direct method call\n<50ms per call | 3-6 calls per plan\nOwns: capability registry, embedding index"]:::fabric
+
+  EXT_SS["SESSION STATE\nHot-tier context for plan grounding\nSections: beliefs_active, persona,\ncontrol, temporal\nMulti-reader lock-free (PLAN-01)\nOwns: data storage, section schemas"]:::ss
+
+  EXT_BRIDGE["K0 BRIDGE\nPath 1 Read: recall() <100ms\nPath 2 Write: persist_plan() fire-forget\nIdempotent via plan_id dedup key\nOwns: storage, recall ranking, WAL"]:::bridge
+
+  EXT_BUSES["K1 BUS (ONE PHYSICAL)\nEvent lane: k1.* (at-least-once lifecycle events)\nDelta lane: k1.*.delta.v1 (STRICT, fire-and-forget progress)\nOwns: transport infrastructure"]:::bus
+
+  EXT_CONCIERGE["CONCIERGE (via HIL)\nRoutes HIL to user (Event Bus)\nNo direct Planner-to-Concierge call\nCorrelates via request_id\nOwns: user rendering, output channel"]:::output
+end
+
+%% =====================================================================================
+%% OBSERVABILITY
+%% =====================================================================================
+
+subgraph OBSERVABILITY["OBSERVABILITY"]
+  direction TB
+
+  OBS_TRACE["TRACE PROPAGATION\ncognitive_trace_id on ALL port calls\nOrigin: Concierge -> TaskEnvelope\nPlanner NEVER generates trace_id\nEvery outbound call stamps trace_id\nFAB-09 compliance"]:::obs
+
+  OBS_LOGS["STRUCTURED LOGS\nJSON records | No free-form strings\nFields: trace_id, timestamp_ms, level, component\nLevels: DEBUG (flow), INFO (lifecycle),\nWARN (recoverable), ERROR (undeliverable)\nNo FATAL: PlannerAgent never crashes\nSensitive data masked (80 char truncate)"]:::obs
+
+  OBS_METRICS["METRICS (planner.* namespace)\n9 counters + 6 histograms + 4 gauges\nSLI-aligned to performance targets\nPlan success rate target: >95%\nToken utilization: ~3.5K per plan"]:::obs
+
+  OBS_DELTAS["DELTA EMISSIONS\n11 delta types via IDeltaEmitPort\nPipelineController: sole emitter\nFire-and-forget to k1.planner.delta.v1\nConsumers: Learning Loop, SessionState,\ndebugging tools"]:::obs
+end
+
+%% =====================================================================================
+%% BOOTSTRAP & KERNEL INTEGRATION
+%% =====================================================================================
+
+subgraph BOOTSTRAP["BOOTSTRAP -- Kernel Phase 5"]
+  direction TB
+
+  BOOT_PHASE["KERNEL PHASE 5 (TODO)\nCurrent: MockPlannerAdapter in Phase 4\nPhase 5 activates real Planner:\n1. PlannerFactory.create_standalone(7 ports)\n2. Extract mailbox reference\n3. Create CB_PLANNER\n4. Create PlannerAdapter(mailbox, cb)\n5. Hot-swap mock -> production"]:::bootstrap
+
+  BOOT_MOCK["MockPlannerAdapter (pre-Phase-5)\nrequest_plan -> PlanAck(ACCEPTED), never produces plan\ncancel_plan -> no-op\nmicro_replan -> None\nOrchestrator timeout reaper cleans up (45s)"]:::adapter_test
+
+  BOOT_SHUTDOWN["SHUTDOWN ORDER\n1. Orchestrator: stop new tasks\n2. Orchestrator: drain DAG (30s)\n3. Planner: shutdown (5s grace)\n4. Orchestrator: final teardown\n5. Fabric -> SessionState -> Bus\nConsumers before infrastructure"]:::lifecycle
+end
+
+%% =====================================================================================
+%% TWO-PHASE DELIVERY PROTOCOL
+%% =====================================================================================
+
+subgraph DELIVERY["TWO-PHASE PLAN DELIVERY"]
+  direction LR
+
+  DEL_P1["PHASE 1: Synchronous\nOrch -> PlannerAdapter.request_plan()\n-> CB_PLANNER check\n-> IPlannerMailbox.enqueue()\n-> PlanAck{ACCEPTED} returned\n-> Save PendingPlanContext"]:::step
+
+  DEL_P2["PHASE 2: Asynchronous\nPlanner runs 4-stage pipeline\n-> CommitService emits\nk1.planner.plan.ready.v1\nOR plan.failed.v1\nOR plan.cancelled.v1\n-> Orchestrator correlates\nvia request_id"]:::step
+end
+
+%% =====================================================================================
+%% PIPELINE FLOW EDGES
+%% =====================================================================================
+
+%% Core flow
+PLANNER_MAILBOX -->|"dequeue"| PLANNER_AGENT
+PLANNER_AGENT -->|"start pipeline"| PIPELINE_CTRL
+PIPELINE_CTRL -->|"set SKETCHING"| PLAN_FSM
+
+%% Stage 1 internal
+PIPELINE_CTRL -->|"invoke"| S1_ENTRY
+S1_ENTRY --> S1_TOOLS
+S1_TOOLS --> S1_HIL_CHECK
+S1_HIL_CHECK -->|"yes"| S1_CLARIFY
+S1_CLARIFY --> S1_LLM
+S1_HIL_CHECK -->|"no"| S1_LLM
+S1_LLM --> S1_OUTPUT
+
+%% Stage 1 -> Stage 2
+S1_OUTPUT -->|"SketchResult"| S2_ENTRY
+S1_OUTPUT -->|"EXPANDING"| PLAN_FSM
+
+%% Stage 2 internal
+S2_ENTRY --> S2_TOOLS
+S2_TOOLS --> S2_LLM
+S2_LLM --> S2_ENRICH
+S2_ENRICH --> S2_OUTPUT
+
+%% Stage 2 -> Stage 3
+S2_OUTPUT -->|"ExpandedPlan"| S3_ENTRY
+S2_OUTPUT -->|"VALIDATING"| PLAN_FSM
+
+%% Stage 3 internal
+S3_ENTRY --> S3_DAG
+S3_ENTRY --> S3_CAP
+S3_DAG --> S3_ARBITER
+S3_CAP --> S3_ARBITER
+S3_ARBITER --> S3_HIL_CHECK
+S3_HIL_CHECK -->|"yes"| S3_APPROVAL
+S3_APPROVAL --> S3_VERDICT
+S3_HIL_CHECK -->|"no"| S3_VERDICT
+
+%% Stage 3 verdict routing
+S3_VERDICT -->|"approved"| S4_BUILD
+S3_VERDICT -->|"revise (max 1x)"| S2_ENTRY
+S3_VERDICT -->|"COMMITTING"| PLAN_FSM
+
+%% Stage 4 internal
+S4_BUILD --> S4_WAL
+S4_WAL --> S4_EMIT
+S4_EMIT -->|"COMPLETED"| PLAN_FSM
+
+%% =====================================================================================
+%% MICRO-REPLAN FLOW
+%% =====================================================================================
+
+PLANNER_MAILBOX -->|"micro_replan()"| MR_ENTRY
+MR_ENTRY -->|"MICRO_SKETCH"| PLAN_FSM
+MR_ENTRY --> MR_SKETCH
+MR_SKETCH -->|"MICRO_EXPAND"| PLAN_FSM
+MR_SKETCH --> MR_EXPAND
+MR_EXPAND -->|"MICRO_VALIDATE"| PLAN_FSM
+MR_EXPAND --> MR_VALIDATE
+MR_VALIDATE --> MR_OUTPUT
+MR_OUTPUT -->|"to COMMIT"| S4_BUILD
+
+%% =====================================================================================
+%% TOOL ROUTING (Stage -> Discovery Tool -> Port -> External)
+%% =====================================================================================
+
+%% Stage 1 SKETCH uses 3 discovery tools
+S1_TOOLS -->|"discover_capabilities()"| TOOL_DISCOVER
+S1_TOOLS -->|"query_planning_context()"| TOOL_CONTEXT
+S1_TOOLS -->|"recall_for_planning()"| TOOL_RECALL
+
+%% Stage 2 EXPAND uses 2-3 discovery tools
+S2_TOOLS -->|"discover_capabilities()"| TOOL_DISCOVER
+S2_TOOLS -->|"find_relevant_prompts()"| TOOL_PROMPTS
+
+%% ToolCallRouter manages routing + counter (PLAN-05)
+SVC_TCR -->|"route + count"| TOOL_DISCOVER
+SVC_TCR -->|"route + count"| TOOL_PROMPTS
+SVC_TCR -->|"route + count"| TOOL_CONTEXT
+SVC_TCR -->|"route + count"| TOOL_RECALL
+
+%% Discovery tools connect to their backing ports
+TOOL_DISCOVER -->|"semantic top-k"| PORT_FABRIC
+TOOL_PROMPTS -->|"prompt lookup"| PORT_FABRIC
+TOOL_CONTEXT -->|"read sections"| PORT_STATE
+TOOL_RECALL -->|"recall query"| PORT_BRIDGE
+
+%% Ports to external systems
+PORT_FABRIC --> EXT_FABRIC
+PORT_STATE --> EXT_SS
+PORT_BRIDGE -->|"recall()"| EXT_BRIDGE
+
+%% =====================================================================================
+%% LLM ROUTING (All stages -> ILLMPort -> Model Hub)
+%% =====================================================================================
+
+S1_LLM --> PORT_LLM
+S2_LLM --> PORT_LLM
+S3_ARBITER --> PORT_LLM
+MR_SKETCH --> PORT_LLM
+MR_EXPAND --> PORT_LLM
+MR_VALIDATE --> PORT_LLM
+PORT_LLM --> EXT_MH
+
+%% =====================================================================================
+%% HIL FLOW (bidirectional: publish questions + receive responses)
+%% =====================================================================================
+
+%% Outbound: stage -> HILCoordinator -> Event Bus -> Concierge -> User
+S1_CLARIFY --> HIL_COORD
+S3_APPROVAL --> HIL_COORD
+HIL_COORD --> HIL_CLAR
+HIL_COORD --> HIL_APPR
+HIL_CLAR -->|"k1.hil.clarification.v1"| PORT_EVENT
+HIL_APPR -->|"k1.hil.approval_request.v1"| PORT_EVENT
+PORT_EVENT -->|"route to user"| EXT_CONCIERGE
+HIL_COORD -->|"generate prompts"| PORT_LLM
+
+%% Inbound: User -> Concierge -> Event Bus -> HILCoordinator -> resume stage
+EXT_CONCIERGE -->|"user response"| EXT_BUSES
+EXT_BUSES -->|"hil.*.response.v1"| PORT_EVENT
+PORT_EVENT -->|"clarification_response"| HIL_COORD
+PORT_EVENT -->|"approval_response"| HIL_COORD
+HIL_COORD -->|"resume with answer"| S1_LLM
+HIL_COORD -->|"resume with verdict"| S3_VERDICT
+
+%% =====================================================================================
+%% EVENT + DELTA FLOW
+%% =====================================================================================
+
+%% Plan delivery via Event Bus
+S4_EMIT -->|"k1.planner.plan.ready.v1"| PORT_EVENT
+PORT_EVENT --> EXT_BUSES
+EXT_BUSES -->|"CommittedPlan"| EXT_ORCH
+
+%% Plan failure / cancel events
+PLAN_FSM -->|"FAILED"| PORT_EVENT
+PLAN_FSM -->|"CANCELLED"| PORT_EVENT
+
+%% Stage deltas
+PIPELINE_CTRL -->|"k1.planner.delta.v1"| PORT_DELTA
+PORT_DELTA -->|"fire-and-forget"| EXT_BUSES
+
+%% WAL persistence
+S4_WAL -->|"persist_plan()"| PORT_BRIDGE
+PORT_BRIDGE -->|"K0 WAL write"| EXT_BRIDGE
+
+%% =====================================================================================
+%% PORT -> ADAPTER WIRING
+%% =====================================================================================
+
+PORT_MAILBOX -.->|"prod"| A_MAILBOX
+PORT_MAILBOX -.->|"test"| T_MAILBOX
+PORT_LLM -.->|"prod"| A_LLM
+PORT_LLM -.->|"test"| T_LLM
+PORT_FABRIC -.->|"prod"| A_FABRIC
+PORT_FABRIC -.->|"test"| T_FABRIC
+PORT_STATE -.->|"prod"| A_STATE
+PORT_STATE -.->|"test"| T_STATE
+PORT_BRIDGE -.->|"prod"| A_BRIDGE
+PORT_BRIDGE -.->|"test"| T_BRIDGE
+PORT_DELTA -.->|"prod"| A_DELTA
+PORT_DELTA -.->|"test"| T_DELTA
+PORT_EVENT -.->|"prod"| A_EVENT
+PORT_EVENT -.->|"test"| T_EVENT
+
+%% =====================================================================================
+%% SERVICE DEPENDENCY GRAPH
+%% =====================================================================================
+
+SVC_PIPELINE -->|"orchestrates"| SVC_SKETCH
+SVC_PIPELINE -->|"orchestrates"| SVC_EXPAND
+SVC_PIPELINE -->|"orchestrates"| SVC_VALIDATE
+SVC_PIPELINE -->|"orchestrates"| SVC_COMMIT
+SVC_SKETCH -->|"tool calls"| SVC_TCR
+SVC_EXPAND -->|"tool calls"| SVC_TCR
+SVC_SKETCH -->|"HIL clarification"| SVC_HIL_SVC
+SVC_VALIDATE -->|"HIL approval"| SVC_HIL_SVC
+
+%% =====================================================================================
+%% SERVICE -> PORT USAGE
+%% =====================================================================================
+
+SVC_PIPELINE -.-> PORT_DELTA
+SVC_PIPELINE -.-> PORT_EVENT
+SVC_SKETCH -.-> PORT_LLM
+SVC_EXPAND -.-> PORT_LLM
+SVC_VALIDATE -.-> PORT_LLM
+SVC_VALIDATE -.-> PORT_FABRIC
+SVC_COMMIT -.-> PORT_BRIDGE
+SVC_COMMIT -.-> PORT_DELTA
+SVC_COMMIT -.-> PORT_EVENT
+SVC_TCR -.-> PORT_FABRIC
+SVC_TCR -.-> PORT_STATE
+SVC_TCR -.-> PORT_BRIDGE
+SVC_HIL_SVC -.-> PORT_LLM
+SVC_HIL_SVC -.-> PORT_EVENT
+
+%% =====================================================================================
+%% SERVICE -> INVARIANT ENFORCEMENT
+%% =====================================================================================
+
+SVC_PIPELINE -.-> INV04
+SVC_PIPELINE -.-> INV11
+SVC_SKETCH -.-> INV01
+SVC_EXPAND -.-> INV02
+SVC_VALIDATE -.-> INV08
+SVC_VALIDATE -.-> INV09
+SVC_COMMIT -.-> INV03
+SVC_TCR -.-> INV05
+SVC_TCR -.-> INV06
+SVC_HIL_SVC -.-> INV10
+
+%% =====================================================================================
+%% LIFECYCLE -> SERVICE DELEGATION
+%% =====================================================================================
+
+LC_INIT -->|"create + wire all"| SVC_PIPELINE
+LC_START -->|"acquire lock + execute"| SVC_PIPELINE
+LC_START -->|"reset counters"| SVC_TCR
+LC_START -->|"reset counters"| SVC_HIL_SVC
+LC_TRANS -->|"log + delta"| SVC_PIPELINE
+LC_END -->|"emit + release"| SVC_COMMIT
+LC_SHUT -->|"cancel + flush"| SVC_PIPELINE
+LC_CRASH -->|"check WAL + resume"| SVC_PIPELINE
+
+%% =====================================================================================
+%% LIFECYCLE -> PORT USAGE
+%% =====================================================================================
+
+LC_INIT -.-> PORT_MAILBOX
+LC_INIT -.-> PORT_EVENT
+LC_START -.-> PORT_MAILBOX
+LC_TRANS -.-> PORT_DELTA
+LC_END -.-> PORT_EVENT
+LC_END -.-> PORT_BRIDGE
+LC_SHUT -.-> PORT_DELTA
+LC_SHUT -.-> PORT_LLM
+LC_CRASH -.-> PORT_BRIDGE
+LC_CRASH -.-> PORT_DELTA
+
+%% =====================================================================================
+%% CIRCUIT BREAKER PROTECTION
+%% =====================================================================================
+
+CB_PLAN -.->|"protects"| PLANNER_MAILBOX
+CB_LLM -.->|"protects"| PORT_LLM
+CB_PLAN -->|"OPEN: skip planning"| EXT_ORCH
+
+%% =====================================================================================
+%% ERROR RECOVERY WIRING
+%% =====================================================================================
+
+SVC_SKETCH -->|"LLM/tool fail"| ERR_SK
+ERR_SK -->|"retry once"| SVC_SKETCH
+ERR_SK -->|"still fails"| PLAN_FSM
+
+SVC_EXPAND -->|"LLM/tool fail"| ERR_EX
+ERR_EX -->|"retry once"| SVC_EXPAND
+ERR_EX -->|"fallback"| SVC_VALIDATE
+
+SVC_VALIDATE -->|"reject/fail"| ERR_VA
+ERR_VA -->|"revise: retry EXPAND"| SVC_EXPAND
+ERR_VA -->|"arbiter down: auto-approve"| SVC_COMMIT
+
+SVC_COMMIT -->|"WAL/event fail"| ERR_CO
+ERR_CO -->|"retry"| SVC_COMMIT
+
+SVC_HIL_SVC -->|"timeout"| ERR_HIL
+ERR_HIL -->|"clar: best-effort"| SVC_SKETCH
+ERR_HIL -->|"appr: auto-approve if safe"| SVC_VALIDATE
+
+%% =====================================================================================
+%% LIFECYCLE STATE FLOW
+%% =====================================================================================
+
+LC_INIT -->|"ready: IDLE"| PLAN_FSM
+LC_START -->|"request received"| PLAN_FSM
+LC_TRANS -->|"stage complete"| PLAN_FSM
+LC_END -->|"plan delivered"| PLAN_FSM
+LC_SHUT -->|"process exit"| PLAN_FSM
+LC_CRASH -->|"recovered"| PLAN_FSM
+
+%% =====================================================================================
+%% DELIVERY PROTOCOL EDGES
+%% =====================================================================================
+
+EXT_ORCH -->|"Phase 1: request_plan()"| DEL_P1
+DEL_P1 -->|"enqueue"| PLANNER_MAILBOX
+DEL_P2 -->|"plan.ready.v1"| EXT_ORCH
+
+%% =====================================================================================
+%% DELIVERY PROTOCOL: Phase 2 inbound (pipeline completion -> DEL_P2)
+%% =====================================================================================
+
+S4_EMIT -->|"plan.ready / failed / cancelled"| DEL_P2
+
+%% =====================================================================================
+%% ADAPTER -> EXTERNAL SYSTEM ROUTING
+%% =====================================================================================
+
+A_LLM -->|"LLM_REQUEST_BUS"| EXT_MH
+A_FABRIC -->|"in-process API"| EXT_FABRIC
+A_STATE -->|"lock-free read"| EXT_SS
+A_BRIDGE -->|"K0 Bridge client"| EXT_BRIDGE
+A_DELTA -->|"fire-and-forget"| EXT_BUSES
+A_EVENT -->|"pub/sub transport"| EXT_BUSES
+
+%% =====================================================================================
+%% OBSERVABILITY CONNECTIONS
+%% =====================================================================================
+
+%% Trace propagation: all port calls carry cognitive_trace_id
+PLANNER_AGENT -->|"propagate trace_id"| OBS_TRACE
+OBS_TRACE -.->|"FAB-09: stamp all calls"| PORT_LLM
+OBS_TRACE -.->|"stamp"| PORT_FABRIC
+OBS_TRACE -.->|"stamp"| PORT_STATE
+OBS_TRACE -.->|"stamp"| PORT_BRIDGE
+OBS_TRACE -.->|"stamp"| PORT_DELTA
+OBS_TRACE -.->|"stamp"| PORT_EVENT
+
+%% Structured logging: all services emit JSON logs
+SVC_PIPELINE -->|"JSON logs"| OBS_LOGS
+SVC_SKETCH -->|"JSON logs"| OBS_LOGS
+SVC_EXPAND -->|"JSON logs"| OBS_LOGS
+SVC_VALIDATE -->|"JSON logs"| OBS_LOGS
+SVC_COMMIT -->|"JSON logs"| OBS_LOGS
+SVC_TCR -->|"JSON logs"| OBS_LOGS
+SVC_HIL_SVC -->|"JSON logs"| OBS_LOGS
+
+%% Delta emissions: PipelineController sole emitter
+PIPELINE_CTRL -->|"emit 11 delta types"| OBS_DELTAS
+OBS_DELTAS -->|"k1.planner.delta.v1"| PORT_DELTA
+
+%% Metrics: 9 counters + 6 histograms + 4 gauges
+SVC_PIPELINE -->|"plan.duration_ms, stage.duration_ms"| OBS_METRICS
+SVC_TCR -->|"tool.calls, tool.latency_ms"| OBS_METRICS
+SVC_HIL_SVC -->|"hil.rounds"| OBS_METRICS
+PLANNER_AGENT -->|"plan.total, plan.in_flight"| OBS_METRICS
+
+%% =====================================================================================
+%% CONCURRENCY MECHANISM CONNECTIONS
+%% =====================================================================================
+
+%% Plan Lock: one plan at a time (V1)
+CONC_LOCK -.->|"asyncio.Lock"| PLANNER_AGENT
+CONC_LOCK -.->|"acquire at PLAN_START"| LC_START
+CONC_LOCK -.->|"release at PLAN_END"| LC_END
+
+%% Cooperative Cancel: checkpoints not mid-LLM
+CONC_CANCEL -.->|"_cancel_set"| PLANNER_AGENT
+CONC_CANCEL -.->|"check between stages"| PIPELINE_CTRL
+CONC_CANCEL -.->|"check before WAL"| S4_WAL
+
+%% Micro-Replan Concurrency: bypasses mailbox, awaits lock
+CONC_MICRO -.->|"bypass queue"| MR_ENTRY
+CONC_MICRO -.->|"awaits _plan_lock"| CONC_LOCK
+CONC_MICRO -.->|"10s caller timeout"| EXT_ORCH
+
+%% Mailbox Queuing: FIFO, depth limit
+CONC_QUEUE -.->|"FIFO depth limit"| PLANNER_MAILBOX
+CONC_QUEUE -.->|"depth > 5: MailboxFullError"| CB_PLAN
+
+%% =====================================================================================
+%% BOOTSTRAP & KERNEL INTEGRATION CONNECTIONS
+%% =====================================================================================
+
+%% Phase 5 activation sequence
+BOOT_PHASE -->|"1. PlannerFactory.create_standalone()"| LC_INIT
+BOOT_PHASE -->|"5. hot-swap mock -> prod"| PLANNER_AGENT
+BOOT_PHASE -->|"3. create CB_PLANNER"| CB_PLAN
+BOOT_PHASE -->|"4. create PlannerAdapter"| PORT_MAILBOX
+
+%% MockPlannerAdapter (pre-Phase-5)
+BOOT_MOCK -.->|"pre-Phase-5 stub"| PORT_MAILBOX
+BOOT_MOCK -.->|"never produces plan"| EXT_ORCH
+BOOT_PHASE -->|"hot-swap replaces"| BOOT_MOCK
+
+%% Shutdown order: consumers before infrastructure
+BOOT_SHUTDOWN -->|"step 3: 5s grace"| LC_SHUT
+BOOT_SHUTDOWN -->|"step 1-2: stop + drain"| EXT_ORCH
+BOOT_SHUTDOWN -->|"step 5: tear down"| EXT_BUSES
+
+%% =====================================================================================
+%% LIFECYCLE INTERNAL PHASE FLOW
+%% =====================================================================================
+
+LC_INIT -->|"startup complete"| LC_START
+LC_START -->|"pipeline running"| LC_TRANS
+LC_TRANS -->|"all stages done"| LC_END
+LC_END -->|"resume mailbox"| LC_START
+LC_CRASH -->|"recovered -> resume"| LC_START
+
+%% =====================================================================================
+%% ERROR RECOVERY -> CIRCUIT BREAKER LINK
+%% =====================================================================================
+
+ERR_CB -->|"CB_PLANNER OPEN"| CB_PLAN
+ERR_CB -->|"bypass -> MEDIUM tier"| EXT_ORCH
+
+%% =====================================================================================
+%% PORT-TO-SERVICE ASSIGNMENT MATRIX (Principle of Least Privilege)
+%% =====================================================================================
+%% Direct injection:
+%%   PlannerAgent:       IMailboxPort, IEventPort
+%%   PipelineController: IDeltaEmitPort, IEventPort
+%%   SketchService:      ILLMPort (+ Fabric/State/Bridge via TCR)
+%%   ExpandService:      ILLMPort (+ Fabric/Bridge via TCR)
+%%   ValidateService:    ILLMPort, IFabricRetrievalPort
+%%   CommitService:      IBridgePort, IDeltaEmitPort, IEventPort
+%%   ToolCallRouter:     IFabricRetrievalPort, IStateReadPort, IBridgePort
+%%   HILCoordinator:     ILLMPort, IEventPort
+%%
+%% =====================================================================================
+%% FAULT TOLERANCE BY PORT
+%% =====================================================================================
+%% Port              | CB?               | Failure Mode            | Response
+%% IMailboxPort      | CB_PLANNER (ext)  | Full (depth>5)          | Reject, PlanAck(REJECTED)
+%% ILLMPort          | CB_LLM (ext)      | Timeout, all OPEN       | Stage error recovery (S19)
+%% IFabricRetrieval  | None (in-process) | Timeout/exception       | Empty result, degraded
+%% IStateReadPort    | None (in-process) | Unavailable             | Empty Dict, degraded
+%% IBridgePort       | None              | K0 WAL timeout          | Log, retry, proceed
+%% IDeltaEmitPort    | None              | Bus failure             | Log+drop, no propagation
+%% IEventPort        | None              | Bus failure             | Retry once, plan valid
+%%
+%% =====================================================================================
+%% CB INTERACTION MATRIX
+%% =====================================================================================
+%% CB_PLANNER | CB_LLM (all)   | Outcome
+%% CLOSED     | CLOSED          | Normal pipeline
+%% CLOSED     | Partial OPEN    | Normal (Model Hub handles)
+%% CLOSED     | All OPEN        | Pipeline starts, LLM stages fail, likely plan.failed
+%% OPEN       | (irrelevant)    | Planner bypassed, MEDIUM-tier
+%% HALF_OPEN  | CLOSED          | Probe: if enqueue OK, normal pipeline
+%% HALF_OPEN  | All OPEN        | Probe: enqueue OK but LLM fails, plan.failed
+%%
+%% =====================================================================================
+%% TYPE OWNERSHIP REFERENCE
+%% =====================================================================================
+%% Type               | Owner                    | Used By
+%% PlanRequest        | k1/orchestrator/types.py | Orchestrator -> Planner
+%% PlanAck            | k1/orchestrator/types.py | Planner -> Orchestrator
+%% CommittedPlan      | k1/orchestrator/types.py | Planner -> Orchestrator -> DAGExecutor
+%% PlanStep (14 flds) | k1/orchestrator/types.py | CommittedPlan.steps[]
+%% MicroReplanRequest | k1/orchestrator/types.py | Orchestrator -> Planner
+%% HubRequest         | k1/model_hub/types.py    | Planner -> Model Hub
+%% HubResponse        | k1/model_hub/types.py    | Model Hub -> Planner
+%%
+%% Internal types (k1/planner/types.py, never cross boundary):
+%%   RoughStep, SketchResult, ExpandedPlan, ValidationVerdict,
+%%   ValidationIssue, StageContext, DeltaPayload
+%%
+%% =====================================================================================
+%% ENVELOPE SCHEMAS
+%% =====================================================================================
+%% PlanRequest:        intent, trace_id, context, request_id, constraints, timeout_ms
+%% MicroReplanRequest: original_plan_id, completed_results, remaining_steps, trace_id,
+%%                     request_id, discoveries, failure_context
+%% PlanAck:            request_id, status (ACCEPTED|REJECTED), estimated_duration_ms
+%% CommittedPlan:      plan_id, request_id, intent, steps[], trace_id, dependencies,
+%%                     estimated_duration_ms, created_at
+%% PlanStep (14):      id, capability, params, deps, prompt_template, tools_granted,
+%%                     output_schema, condition, is_optional, has_side_effects,
+%%                     compensation, timeout_ms, required_context, safety_band_min
+%%
+%% =====================================================================================
+%% STYLES
+%% =====================================================================================
+
+classDef planner fill:#bbdefb,stroke:#0d47a1,stroke-width:3px,color:#000,font-weight:bold
+classDef brain fill:#ffccbc,stroke:#bf360c,stroke-width:3px,color:#000,font-weight:bold
+classDef mailbox fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
+classDef service fill:#e0f2f1,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
+classDef step fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000
+classDef llm fill:#f3e5f5,stroke:#7b1fa2,stroke-width:3px,color:#000,font-weight:bold
+classDef engine fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef tool_fabric fill:#b2ebf2,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
+classDef tool_read fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+classDef hil fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000,font-style:italic
+classDef port fill:#e3f2fd,stroke:#1565c0,stroke-width:3px,color:#000,font-weight:bold
+classDef adapter fill:#e8eaf6,stroke:#283593,stroke-width:2px,color:#000
+classDef adapter_test fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,color:#000,font-style:italic
+classDef invariant fill:#fce4ec,stroke:#880e4f,stroke-width:3px,color:#000,font-weight:bold
+classDef perf fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:#000,font-weight:bold
+classDef lifecycle fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#000,font-weight:bold
+classDef concurrency fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+classDef caller fill:#c8e6c9,stroke:#1b5e20,stroke-width:3px,color:#000,font-weight:bold
+classDef fabric fill:#b2ebf2,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
+classDef ss fill:#ffe0b2,stroke:#e65100,stroke-width:2px,color:#000
+classDef bridge fill:#b2ebf2,stroke:#00695c,stroke-width:2px,color:#000
+classDef gateway fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef bus fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,color:#000
+classDef output fill:#a5d6a7,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+classDef circuit_breaker fill:#ffebee,stroke:#c62828,stroke-width:3px,color:#000,stroke-dasharray: 5 5
+classDef recovery fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000
+classDef obs fill:#e8eaf6,stroke:#3949ab,stroke-width:2px,color:#000
+classDef bootstrap fill:#e0f7fa,stroke:#00695c,stroke-width:2px,color:#000
+classDef decision fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000

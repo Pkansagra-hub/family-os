@@ -536,9 +536,10 @@ async def test_cache_miss_fallback():
     message, context = make_test_call(envelope)
     result = await family_graph_resolve.run(message, context)
 
-    # Should still work (fallback to friends context)
-    assert result["social_context"] == "friends"
+    # v2: no relationships resolved from any source -> tier3 default "unknown"
+    assert result["social_context"] == "unknown"
     assert result["social_intimacy"] == "LOW"
+    assert result["social_source"] == "default"
 
     # Check DB query happened
     metrics = family_graph_resolve.get_metrics()
@@ -756,3 +757,755 @@ async def test_idempotency():
     assert result1["social_intimacy"] == result2["social_intimacy"]
     assert result1["participant_roles_json"] == result2["participant_roles_json"]
     assert result1["participant_roles_json"] == result2["participant_roles_json"]
+
+
+# ============================================================================
+# Test: v2 Trust-Then-Fill -- New Fields Present
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_v2_solo_has_new_fields():
+    """Test that v2 solo response includes participant_relationships_json and social_source."""
+    envelope = {"actor_id": "person_dad", "body": {"participants": []}}
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    assert "participant_relationships_json" in result
+    assert "social_source" in result
+    assert result["social_source"] == "default"
+    assert json.loads(result["participant_relationships_json"]) == []
+
+
+@pytest.mark.asyncio
+async def test_v2_kg_edges_has_new_fields():
+    """Test that v2 KG edges fallback includes new fields."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Family dinner",
+            "participants": ["person_dad", "person_mom"],
+            # NO participant_relationships (MW missing)
+        },
+    }
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    assert "participant_relationships_json" in result
+    assert "social_source" in result
+    assert result["social_source"] == "kg_edges"
+
+
+# ============================================================================
+# Test: v2 Trust-Then-Fill -- Tier 0 MW Fast Path
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_v2_tier0_mw_nuclear_family():
+    """Test tier0 MW fast path: PARENT_OF + SPOUSE_OF -> nuclear_family."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Family dinner",
+            "participants": ["person_dad", "person_mom", "person_sharvi"],
+            "participant_relationships": [
+                {"person": "person_mom", "relationship_type": "SPOUSE_OF", "confidence": 0.95},
+                {"person": "person_sharvi", "relationship_type": "PARENT_OF", "confidence": 0.90},
+            ],
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    assert result["social_context"] == "nuclear_family"
+    assert result["social_intimacy"] == "HIGH"
+    assert result["has_partner_present"] is True
+    assert result["has_parent_present"] is True
+    assert result["social_source"] == "mw_v2"
+    assert result["is_solo_event"] is False
+
+    # Passthrough MW relationships for M13
+    rels = json.loads(result["participant_relationships_json"])
+    assert len(rels) == 2
+    assert rels[0]["person"] == "person_mom"
+    assert rels[0]["relationship_type"] == "SPOUSE_OF"
+
+    # Participant roles correctly mapped
+    roles = json.loads(result["participant_roles_json"])
+    assert roles["person_dad"] == "SELF"
+    assert roles["person_mom"] == "SPOUSE"
+    assert roles["person_sharvi"] == "CHILD"
+
+
+@pytest.mark.asyncio
+async def test_v2_tier0_mw_extended_family():
+    """Test tier0 MW fast path: GRANDPARENT_OF -> extended_family."""
+    envelope = {
+        "actor_id": "person_grandpa",
+        "body": {
+            "text": "Visiting grandchild",
+            "participants": ["person_grandpa", "person_sharvi"],
+            "participant_relationships": [
+                {
+                    "person": "person_sharvi",
+                    "relationship_type": "GRANDPARENT_OF",
+                    "confidence": 0.85,
+                },
+            ],
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    assert result["social_context"] == "extended_family"
+    assert result["social_intimacy"] == "MED"
+    assert result["social_source"] == "mw_v2"
+    assert result["has_partner_present"] is False
+    assert result["has_parent_present"] is False
+
+
+@pytest.mark.asyncio
+async def test_v2_tier0_mw_friends():
+    """Test tier0 MW fast path: FRIEND_OF -> friends."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Coffee with friend",
+            "participants": ["person_dad", "person_john"],
+            "participant_relationships": [
+                {"person": "person_john", "relationship_type": "FRIEND_OF", "confidence": 0.80},
+            ],
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    assert result["social_context"] == "friends"
+    assert result["social_intimacy"] == "MED"
+    assert result["social_source"] == "mw_v2"
+
+
+@pytest.mark.asyncio
+async def test_v2_tier0_mw_colleagues():
+    """Test tier0 MW fast path: COLLEAGUE_OF -> colleagues."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Team meeting",
+            "participants": ["person_dad", "person_bob"],
+            "participant_relationships": [
+                {"person": "person_bob", "relationship_type": "COLLEAGUE_OF", "confidence": 0.75},
+            ],
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    assert result["social_context"] == "colleagues"
+    assert result["social_intimacy"] == "LOW"
+    assert result["social_source"] == "mw_v2"
+
+
+@pytest.mark.asyncio
+async def test_v2_tier0_mw_spouse_only():
+    """Test tier0: SPOUSE_OF -> has_partner_present=True, has_parent_present=False."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Date night",
+            "participants": ["person_dad", "person_mom"],
+            "participant_relationships": [
+                {"person": "person_mom", "relationship_type": "SPOUSE_OF", "confidence": 0.99},
+            ],
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    assert result["has_partner_present"] is True
+    assert result["has_parent_present"] is False
+    assert result["social_context"] == "nuclear_family"
+
+
+@pytest.mark.asyncio
+async def test_v2_tier0_mw_parent_only():
+    """Test tier0: PARENT_OF -> has_parent_present=True, has_partner_present=False."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Playing with kid",
+            "participants": ["person_dad", "person_sharvi"],
+            "participant_relationships": [
+                {"person": "person_sharvi", "relationship_type": "PARENT_OF", "confidence": 0.90},
+            ],
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    assert result["has_partner_present"] is False
+    assert result["has_parent_present"] is True
+    assert result["social_context"] == "nuclear_family"
+
+
+@pytest.mark.asyncio
+async def test_v2_tier0_mw_priority_nuclear_over_extended():
+    """Test tier0: mixed relationships -> highest priority wins (nuclear > extended)."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Family gathering",
+            "participants": ["person_dad", "person_mom", "person_uncle"],
+            "participant_relationships": [
+                {"person": "person_mom", "relationship_type": "SPOUSE_OF", "confidence": 0.95},
+                {
+                    "person": "person_uncle",
+                    "relationship_type": "AUNT_UNCLE_OF",
+                    "confidence": 0.80,
+                },
+            ],
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    # nuclear_family wins over extended_family
+    assert result["social_context"] == "nuclear_family"
+    assert result["social_source"] == "mw_v2"
+
+
+@pytest.mark.asyncio
+async def test_v2_tier0_no_db_read():
+    """Test tier0: MW fast path does NOT trigger DB read (no cache miss)."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Family dinner",
+            "participants": ["person_dad", "person_mom"],
+            "participant_relationships": [
+                {"person": "person_mom", "relationship_type": "SPOUSE_OF", "confidence": 0.95},
+            ],
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    # MW fast path should NOT query DB
+    metrics = family_graph_resolve.get_metrics()
+    assert metrics["db_queries"] == 0
+    assert metrics["cache_misses"] == 0
+    assert result["social_source"] == "mw_v2"
+
+
+@pytest.mark.asyncio
+async def test_v2_tier0_kg_write_attempted():
+    """Test tier0: MW fast path triggers st_kg_edges write attempt."""
+    write_calls = []
+
+    class MockSyscallsWithWrite(MockSyscalls):
+        async def kg_edges_upsert(self, **kwargs):
+            write_calls.append(kwargs)
+
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Family dinner",
+            "participants": ["person_dad", "person_mom"],
+            "participant_relationships": [
+                {"person": "person_mom", "relationship_type": "SPOUSE_OF", "confidence": 0.95},
+            ],
+        },
+    }
+
+    message = MockMessage(payload=envelope, trace_id="test_trace")
+    ctx = MockContext()
+    ctx.syscalls = MockSyscallsWithWrite()
+    result = await family_graph_resolve.run(message, ctx)
+
+    assert result["social_source"] == "mw_v2"
+    # KG write should have been called
+    assert len(write_calls) == 1
+    assert write_calls[0]["subject_id"] == "person_dad"
+    assert write_calls[0]["predicate"] == "SPOUSE_OF"
+    assert write_calls[0]["object_id"] == "person_mom"
+    assert write_calls[0]["source"] == "mw_v2"
+
+
+@pytest.mark.asyncio
+async def test_v2_tier0_kg_write_skips_low_confidence():
+    """Test tier0: KG write skips relationships below confidence threshold."""
+    write_calls = []
+
+    class MockSyscallsWithWrite(MockSyscalls):
+        async def kg_edges_upsert(self, **kwargs):
+            write_calls.append(kwargs)
+
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Maybe with friend",
+            "participants": ["person_dad", "person_bob"],
+            "participant_relationships": [
+                {"person": "person_bob", "relationship_type": "FRIEND_OF", "confidence": 0.3},
+            ],
+        },
+    }
+
+    message = MockMessage(payload=envelope, trace_id="test_trace")
+    ctx = MockContext()
+    ctx.syscalls = MockSyscallsWithWrite()
+    result = await family_graph_resolve.run(message, ctx)
+
+    assert result["social_source"] == "mw_v2"
+    # Confidence 0.3 < threshold 0.5, so no write
+    assert len(write_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_v2_tier0_kg_write_failure_nonblocking():
+    """Test tier0: KG write failure does NOT block social output."""
+
+    class MockSyscallsWithFailingWrite(MockSyscalls):
+        async def kg_edges_upsert(self, **kwargs):
+            raise RuntimeError("DB write failed")
+
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Family dinner",
+            "participants": ["person_dad", "person_mom"],
+            "participant_relationships": [
+                {"person": "person_mom", "relationship_type": "SPOUSE_OF", "confidence": 0.95},
+            ],
+        },
+    }
+
+    message = MockMessage(payload=envelope, trace_id="test_trace")
+    ctx = MockContext()
+    ctx.syscalls = MockSyscallsWithFailingWrite()
+    result = await family_graph_resolve.run(message, ctx)
+
+    # Social output should still be correct despite write failure
+    assert result["social_context"] == "nuclear_family"
+    assert result["social_source"] == "mw_v2"
+    assert result["has_partner_present"] is True
+
+
+# ============================================================================
+# Test: v2 Trust-Then-Fill -- Tier 1 KG Edges Fallback
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_v2_tier1_kg_edges_fallback():
+    """Test tier1: MW missing -> falls back to st_kg_edges READ."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Family dinner",
+            "participants": ["person_dad", "person_mom"],
+            # NO participant_relationships (MW missing)
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    # Falls back to st_kg_edges which has MOCK_RELATIONSHIPS
+    assert result["social_context"] == "nuclear_family"
+    assert result["social_source"] == "kg_edges"
+    assert result["has_partner_present"] is True
+
+    # DB query should have been made
+    metrics = family_graph_resolve.get_metrics()
+    assert metrics["db_queries"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_v2_tier1_empty_mw_falls_to_kg():
+    """Test tier1: empty MW participant_relationships -> falls to KG."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Family dinner",
+            "participants": ["person_dad", "person_mom"],
+            "participant_relationships": [],  # Empty
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    assert result["social_source"] == "kg_edges"
+
+
+# ============================================================================
+# Test: v2 Trust-Then-Fill -- Tier 2 NER/Heuristic Fallback
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_v2_tier2_name_pattern_inference():
+    """Test tier2: no KG edges -> name pattern inference (person_mom -> PARENT)."""
+    # Empty relationships in DB
+    relationships = {}
+
+    envelope = {
+        "actor_id": "person_prince",
+        "body": {
+            "text": "Dinner with Mom",
+            "participants": ["person_prince", "person_mom"],
+            # NO participant_relationships
+        },
+    }
+
+    message, context = make_test_call(envelope, relationships=relationships)
+    result = await family_graph_resolve.run(message, context)
+
+    # _infer_from_name_pattern should resolve "person_mom" -> PARENT role
+    assert result["social_source"] == "ner_heuristic"
+    assert result["social_context"] == "nuclear_family"
+    assert result["has_parent_present"] is True
+
+
+@pytest.mark.asyncio
+async def test_v2_tier2_name_pattern_spouse():
+    """Test tier2: name pattern inference for spouse."""
+    relationships = {}
+
+    envelope = {
+        "actor_id": "person_prince",
+        "body": {
+            "text": "Date night",
+            "participants": ["person_prince", "person_wife"],
+            # NO participant_relationships
+        },
+    }
+
+    message, context = make_test_call(envelope, relationships=relationships)
+    result = await family_graph_resolve.run(message, context)
+
+    assert result["social_source"] == "ner_heuristic"
+    assert result["has_partner_present"] is True
+
+
+# ============================================================================
+# Test: v2 Trust-Then-Fill -- Tier 3 Defaults
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_v2_tier3_unknown_multiple_participants():
+    """Test tier3: multiple participants, no relationships -> unknown."""
+    relationships = {}
+
+    envelope = {
+        "actor_id": "person_x",
+        "body": {
+            "text": "Meeting",
+            "participants": ["person_x", "person_y"],
+        },
+    }
+
+    message, context = make_test_call(envelope, relationships=relationships)
+    result = await family_graph_resolve.run(message, context)
+
+    assert result["social_context"] == "unknown"
+    assert result["social_source"] == "default"
+    assert result["social_intimacy"] == "LOW"
+
+
+# ============================================================================
+# Test: v2 MW Validation Edge Cases
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_v2_mw_malformed_not_list():
+    """Test MW participant_relationships is not a list -> fallback to tier1+."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Family dinner",
+            "participants": ["person_dad", "person_mom"],
+            "participant_relationships": "not_a_list",
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    # Should fall back to KG edges (tier1)
+    assert result["social_source"] in ("kg_edges", "ner_heuristic", "default")
+
+
+@pytest.mark.asyncio
+async def test_v2_mw_malformed_entries():
+    """Test MW entries missing required fields -> fallback."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Family dinner",
+            "participants": ["person_dad", "person_mom"],
+            "participant_relationships": [
+                {"invalid_key": "value"},  # Missing person + relationship_type
+            ],
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    # All entries invalid -> falls to tier1+
+    assert result["social_source"] in ("kg_edges", "ner_heuristic", "default")
+
+
+@pytest.mark.asyncio
+async def test_v2_mw_partial_valid_entries():
+    """Test MW with mix of valid and invalid entries -> uses valid ones."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "text": "Family dinner",
+            "participants": ["person_dad", "person_mom"],
+            "participant_relationships": [
+                {"person": "person_mom", "relationship_type": "SPOUSE_OF", "confidence": 0.95},
+                {"invalid_key": "value"},  # Invalid entry
+                {},  # Empty entry
+            ],
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    # Valid entry should be used (tier0)
+    assert result["social_source"] == "mw_v2"
+    assert result["social_context"] == "nuclear_family"
+    assert result["has_partner_present"] is True
+
+
+# ============================================================================
+# Test: v2 _extract_mw_relationships Unit Tests
+# ============================================================================
+
+
+def test_extract_mw_relationships_present():
+    """Test _extract_mw_relationships with valid MW data."""
+    body = {
+        "participant_relationships": [
+            {"person": "person_mom", "relationship_type": "SPOUSE_OF", "confidence": 0.95},
+        ],
+    }
+    result = family_graph_resolve._extract_mw_relationships(body)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["person"] == "person_mom"
+
+
+def test_extract_mw_relationships_missing():
+    """Test _extract_mw_relationships with missing MW data."""
+    body = {"text": "hello"}
+    result = family_graph_resolve._extract_mw_relationships(body)
+    assert result is None
+
+
+def test_extract_mw_relationships_empty_list():
+    """Test _extract_mw_relationships with empty list."""
+    body = {"participant_relationships": []}
+    result = family_graph_resolve._extract_mw_relationships(body)
+    assert result is None
+
+
+def test_extract_mw_relationships_not_list():
+    """Test _extract_mw_relationships with non-list value."""
+    body = {"participant_relationships": "string_value"}
+    result = family_graph_resolve._extract_mw_relationships(body)
+    assert result is None
+
+
+def test_extract_mw_relationships_filters_invalid():
+    """Test _extract_mw_relationships filters out invalid entries."""
+    body = {
+        "participant_relationships": [
+            {"person": "person_mom", "relationship_type": "SPOUSE_OF"},
+            {"invalid": "entry"},
+            42,
+        ],
+    }
+    result = family_graph_resolve._extract_mw_relationships(body)
+    assert result is not None
+    assert len(result) == 1
+
+
+# ============================================================================
+# Test: v2 _derive_social_context Unit Tests
+# ============================================================================
+
+
+def test_derive_social_context_nuclear():
+    """Test _derive_social_context: SPOUSE_OF -> nuclear_family."""
+    rels = [{"person": "mom", "relationship_type": "SPOUSE_OF", "confidence": 0.9}]
+    assert family_graph_resolve._derive_social_context(rels) == "nuclear_family"
+
+
+def test_derive_social_context_extended():
+    """Test _derive_social_context: GRANDPARENT_OF -> extended_family."""
+    rels = [{"person": "grandpa", "relationship_type": "GRANDPARENT_OF", "confidence": 0.8}]
+    assert family_graph_resolve._derive_social_context(rels) == "extended_family"
+
+
+def test_derive_social_context_friends():
+    """Test _derive_social_context: FRIEND_OF -> friends."""
+    rels = [{"person": "john", "relationship_type": "FRIEND_OF", "confidence": 0.7}]
+    assert family_graph_resolve._derive_social_context(rels) == "friends"
+
+
+def test_derive_social_context_colleagues():
+    """Test _derive_social_context: COLLEAGUE_OF -> colleagues."""
+    rels = [{"person": "bob", "relationship_type": "COLLEAGUE_OF", "confidence": 0.7}]
+    assert family_graph_resolve._derive_social_context(rels) == "colleagues"
+
+
+def test_derive_social_context_unknown_type():
+    """Test _derive_social_context: unknown type -> unknown."""
+    rels = [{"person": "x", "relationship_type": "CUSTOM_TYPE", "confidence": 0.5}]
+    assert family_graph_resolve._derive_social_context(rels) == "unknown"
+
+
+def test_derive_social_context_priority():
+    """Test _derive_social_context: highest priority wins."""
+    rels = [
+        {"person": "friend", "relationship_type": "FRIEND_OF", "confidence": 0.9},
+        {"person": "spouse", "relationship_type": "SPOUSE_OF", "confidence": 0.8},
+    ]
+    # nuclear_family (SPOUSE_OF) > friends (FRIEND_OF)
+    assert family_graph_resolve._derive_social_context(rels) == "nuclear_family"
+
+
+# ============================================================================
+# Test: v2 _derive_family_flags Unit Tests
+# ============================================================================
+
+
+def test_derive_family_flags_spouse():
+    """Test _derive_family_flags: SPOUSE_OF -> (True, False)."""
+    rels = [{"person": "mom", "relationship_type": "SPOUSE_OF"}]
+    has_partner, has_parent = family_graph_resolve._derive_family_flags(rels)
+    assert has_partner is True
+    assert has_parent is False
+
+
+def test_derive_family_flags_parent():
+    """Test _derive_family_flags: PARENT_OF -> (False, True)."""
+    rels = [{"person": "kid", "relationship_type": "PARENT_OF"}]
+    has_partner, has_parent = family_graph_resolve._derive_family_flags(rels)
+    assert has_partner is False
+    assert has_parent is True
+
+
+def test_derive_family_flags_both():
+    """Test _derive_family_flags: SPOUSE_OF + PARENT_OF -> (True, True)."""
+    rels = [
+        {"person": "spouse", "relationship_type": "SPOUSE_OF"},
+        {"person": "kid", "relationship_type": "PARENT_OF"},
+    ]
+    has_partner, has_parent = family_graph_resolve._derive_family_flags(rels)
+    assert has_partner is True
+    assert has_parent is True
+
+
+def test_derive_family_flags_neither():
+    """Test _derive_family_flags: FRIEND_OF -> (False, False)."""
+    rels = [{"person": "friend", "relationship_type": "FRIEND_OF"}]
+    has_partner, has_parent = family_graph_resolve._derive_family_flags(rels)
+    assert has_partner is False
+    assert has_parent is False
+
+
+# ============================================================================
+# Test: v2 Social Source Provenance
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_v2_social_source_mw_v2():
+    """Test social_source = 'mw_v2' when MW provides relationships."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {
+            "participants": ["person_dad", "person_mom"],
+            "participant_relationships": [
+                {"person": "person_mom", "relationship_type": "SPOUSE_OF", "confidence": 0.9},
+            ],
+        },
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+    assert result["social_source"] == "mw_v2"
+
+
+@pytest.mark.asyncio
+async def test_v2_social_source_kg_edges():
+    """Test social_source = 'kg_edges' when falling back to DB."""
+    envelope = {
+        "actor_id": "person_dad",
+        "body": {"participants": ["person_dad", "person_mom"]},
+    }
+
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+    assert result["social_source"] == "kg_edges"
+
+
+@pytest.mark.asyncio
+async def test_v2_social_source_ner_heuristic():
+    """Test social_source = 'ner_heuristic' when name pattern inference resolves."""
+    relationships = {}
+    envelope = {
+        "actor_id": "person_prince",
+        "body": {"participants": ["person_prince", "person_mom"]},
+    }
+
+    message, context = make_test_call(envelope, relationships=relationships)
+    result = await family_graph_resolve.run(message, context)
+    assert result["social_source"] == "ner_heuristic"
+
+
+@pytest.mark.asyncio
+async def test_v2_social_source_default():
+    """Test social_source = 'default' when no relationships resolved."""
+    relationships = {}
+    envelope = {
+        "actor_id": "person_x",
+        "body": {"participants": ["person_x", "person_y"]},
+    }
+
+    message, context = make_test_call(envelope, relationships=relationships)
+    result = await family_graph_resolve.run(message, context)
+    assert result["social_source"] == "default"
+
+
+# ============================================================================
+# Test: v2 Module Version
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_v2_module_version():
+    """Test that _build_solo_response uses v2 module version."""
+    envelope = {"actor_id": "person_dad", "body": {"participants": []}}
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
+
+    assert result["_enrichment"]["module_version"] == "v2"

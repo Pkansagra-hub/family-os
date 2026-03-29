@@ -1,0 +1,45 @@
+{
+  "workflow_id": "workflow-daily-backup",
+  "name": "Daily Data Backup",
+  "source_plan_id": "plan-backup-001",
+  "version": "1.0.0",
+  "trigger": {
+    "type": "CRON",
+    "schedule": "0 2 * * *",
+    "timezone": "UTC",
+    "event_topic": null,
+    "enabled": true
+  },
+  "steps": [
+    {
+      "id": "backup_step",
+      "capability": "tool.backup.create",
+      "params": {
+        "source_path": "/data",
+        "destination": "s3://backup-bucket"
+      },
+      "deps": [],
+      "prompt_template": null,
+      "tools_granted": null,
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "backup_id": {"type": "string"},
+          "size_bytes": {"type": "number"}
+        }
+      },
+      "condition": null,
+      "is_optional": false,
+      "has_side_effects": true,
+      "compensation": "tool.backup.delete",
+      "timeout_ms": 3600000,
+      "required_context": null,
+      "safety_band_min": null
+    }
+  ],
+  "dependencies": {},
+  "active": true,
+  "created_at": 1640995200.0,
+  "updated_at": 1640995200.0,
+  "created_by": "admin"
+}

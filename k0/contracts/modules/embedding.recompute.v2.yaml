@@ -1,0 +1,231 @@
+# =============================================================================
+# M26 Embedding Recompute Module Contract v2.0.0
+# =============================================================================
+#
+# Recomputes embeddings when model version changes or upgrade is required
+# (e.g., ultrabert_v2.1.0 -> ultrabert_v3.0.0).
+#
+# History:
+#   v1.0.0: Recompute with struct.pack bytes output, FAISS re-indexing trigger
+#   v2.0.0: pgvector VECTOR(768) native writes, no FAISS trigger, simplified
+#
+# Changes from v1:
+#   - Output format: struct.pack bytes -> pgvector VECTOR(768) via vec_write syscall
+#   - Removed: cognitive.vector.stored.v1 event emission (no FAISS to trigger)
+#   - Removed: emit_reindexing_event config option
+#   - Removed: events.emit from syscall dependencies
+#   - Removed: M24 FAISS indexer reference
+#   - Added: updated_at TIMESTAMPTZ column update (was BigInteger Unix epoch)
+#
+# Supersedes: k0/contracts/modules/embedding.recompute.v1.yaml
+#
+# Pipeline: P08 (not in default 3-stage DAG; triggered on-demand for model upgrades)
+# ADR: ADR-K003 v2.0
+# Schema: st_vec_v2.columns.yaml
+# Milestone: M4 Epic 4.5
+# =============================================================================
+
+module_id: embedding.recompute
+name: "embedding.recompute"
+version: v2
+
+# =============================================================================
+# Event Types
+# =============================================================================
+input_event_types:
+  - cognitive.embedding.recompute.requested.v1
+
+output_event_types:
+  - cognitive.embedding.recomputed.v1
+
+# =============================================================================
+# Module Characteristics
+# =============================================================================
+latency_budget_ms: 100
+idempotent: true
+
+side_effects:
+  - write:st_vec
+  - read:st_vec
+  - read:st_hipp_events
+
+# =============================================================================
+# Description
+# =============================================================================
+description: |
+  M26: Embedding Recompute Module (pgvector-native)
+
+  Recomputes embeddings when model version changes or upgrade is required.
+  Triggered when a new UltraBERT model version is deployed and existing
+  embeddings need regeneration for consistency.
+
+  Trigger condition: st_vec rows where model_id != current_model_id
+  Batch size: up to 1000 (larger than backfill -- recompute is bulk operation)
+
+  v2 changes from v1:
+  - Vector format: pgvector VECTOR(768) native (was struct.pack 3072-byte blob)
+  - No FAISS trigger: removed cognitive.vector.stored.v1 emission
+  - Status: unchanged at READY (HNSW auto-re-indexes on UPDATE)
+  - Timestamps: updated_at uses TIMESTAMPTZ (was BigInteger Unix epoch)
+
+  Operations:
+  1. Query: SELECT embedding_id, event_id FROM st_vec
+            WHERE model_id != :current_model_id LIMIT 1000
+  2. Join: SELECT text FROM st_hipp_events WHERE event_id = :event_id
+  3. Generate: ultrabert.get_embedding(text) -> list[float] (768 dims)
+  4. Validate: assert len(embedding) == 768
+  5. Update: UPDATE st_vec SET vector = :new_vector,
+            model_id = :current_model_id, updated_at = NOW()
+            WHERE embedding_id = :embedding_id
+
+  Use Cases:
+  - Model upgrade: ultrabert v2.1.0 -> v3.0.0
+  - Quality improvement: recompute with better hyperparameters
+  - Corruption recovery: regenerate if vectors corrupted
+
+  Performance:
+  - Per event: ~100ms (UltraBERT inference dominated)
+  - Batch (1000): ~10 events/sec (GPU throughput limited)
+
+# =============================================================================
+# Failure Modes
+# =============================================================================
+failure_modes:
+  - code: EVENT_NOT_FOUND
+    description: "Event deleted since embedding was created"
+    policy: skip
+    max_retries: 0
+
+  - code: MODEL_UNAVAILABLE
+    description: "New UltraBERT model version not loaded or unreachable"
+    policy: retry
+    max_retries: 3
+
+  - code: EMBEDDING_GENERATION_FAILED
+    description: "UltraBERT returned error for this text"
+    policy: mark_failed
+    max_retries: 0
+
+  - code: VECTOR_UPDATE_FAILED
+    description: "st_vec UPDATE failed (constraint violation, connection error)"
+    policy: retry
+    max_retries: 3
+
+  - code: DIMENSION_MISMATCH
+    description: "Generated embedding is not 768-dim (model misconfiguration)"
+    policy: skip
+    max_retries: 0
+
+# =============================================================================
+# Configuration Schema
+# =============================================================================
+config_schema:
+  type: object
+  properties:
+    batch_size:
+      type: integer
+      default: 1000
+      description: "Number of embeddings to recompute per batch (larger than backfill)"
+    target_model_id:
+      type: string
+      default: "ultrabert_v2.1.0"
+      description: "Target model version for recomputation"
+    source_model_filter:
+      type: string
+      description: "Only recompute embeddings from this model version (e.g., 'ultrabert_v2.0.0')"
+    preserve_old_vectors:
+      type: boolean
+      default: false
+      description: "Keep old vectors in archive table before overwrite (future feature)"
+
+# =============================================================================
+# Input Schema
+# =============================================================================
+input_schema:
+  type: object
+  properties:
+    embedding_id:
+      type: string
+      format: uuid
+      description: "Specific embedding to recompute (single mode)"
+    event_id:
+      type: string
+      format: uuid
+      description: "Event ID to recompute embedding for (single mode)"
+    batch_criteria:
+      type: object
+      description: "Query filters for bulk recompute"
+      properties:
+        model_id:
+          type: string
+          description: "Only recompute embeddings from this model"
+        tenant_id:
+          type: string
+          description: "Filter by tenant"
+        space_id:
+          type: string
+          description: "Filter by space"
+        created_before:
+          type: string
+          format: date-time
+          description: "Only recompute embeddings created before this time"
+    target_model_id:
+      type: string
+      default: "ultrabert_v2.1.0"
+      description: "New model version to use for recomputation"
+    reason:
+      type: string
+      enum: ["upgrade", "quality_improvement", "corruption_recovery"]
+      description: "Reason for recomputation (for audit logging)"
+
+# =============================================================================
+# Output Schema
+# =============================================================================
+output_schema:
+  type: object
+  required:
+    - recomputed
+    - embedding_id
+  properties:
+    recomputed:
+      type: boolean
+      description: "True if recompute succeeded"
+    embedding_id:
+      type: string
+      format: uuid
+    old_model_id:
+      type: string
+      description: "Previous model version"
+    new_model_id:
+      type: string
+      description: "New model version after recompute"
+    vector_dim:
+      type: integer
+      enum: [768]
+    recomputed_at:
+      type: string
+      format: date-time
+      description: "TIMESTAMPTZ when recomputed (was Unix epoch in v1)"
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+dependencies:
+  syscalls:
+    - name: st_vec.read
+      description: "Query embeddings by model_id for recomputation"
+    - name: st_vec.write
+      description: "UPDATE vector, model_id, updated_at after recompute"
+    - name: st_hipp_events.read
+      description: "Read event text for embedding regeneration"
+  runtime:
+    - k0.runtime.ultrabert_adapter
+
+# =============================================================================
+# Performance
+# =============================================================================
+performance:
+  p50_latency_ms: 50
+  p95_latency_ms: 100
+  p99_latency_ms: 200
+  batch_throughput_events_per_sec: 10

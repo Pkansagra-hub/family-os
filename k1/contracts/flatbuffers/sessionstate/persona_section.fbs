@@ -1,0 +1,132 @@
+// ============================================================================
+// persona_section.fbs - Persona Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/persona_section.fbs
+// Purpose: User personality, voice preferences, style controls
+// Size Budget: 8KB max
+// Tier: WARM (never evict unless EMERGENCY)
+// ADR: ADR-0017 (SessionState Design), Section 6.3
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// PERSONALITY TRAITS
+// ============================================================================
+
+/// Named trait with value
+table PersonalityTrait {
+    name: string (required);          // e.g., "warmth", "formality", "verbosity"
+    value: float;                     // 0.0 to 1.0
+}
+
+/// User personality profile
+table PersonalityProfile {
+    // Core traits (0.0 to 1.0)
+    traits: [PersonalityTrait];
+
+    // Common presets (denormalized for quick access)
+    warmth: float = 0.5;
+    formality: float = 0.5;
+    verbosity: float = 0.5;
+    humor: float = 0.5;
+    directness: float = 0.5;
+
+    // Derived profile type
+    profile_type: string;             // "friendly", "professional", "casual", etc.
+}
+
+// ============================================================================
+// VOICE PREFERENCES
+// ============================================================================
+
+/// Prosody controls for voice/tone
+table ProsodyControls {
+    speaking_rate: float = 1.0;       // 0.5 to 2.0
+    pitch: float = 0.0;               // -1.0 to 1.0
+    volume: float = 1.0;              // 0.0 to 1.0
+
+    // Voice character
+    voice_id: string;                 // TTS voice identifier
+    language: string;                 // Default: "en-US"
+    accent: string;
+}
+
+/// Vocabulary mapping for custom terms
+table VocabularyEntry {
+    user_term: string (required);     // What user says: "the cottage"
+    system_term: string (required);   // What it means: "vacation home in Maine"
+    context: string;                  // When to apply
+}
+
+// ============================================================================
+// INTERACTION STYLE
+// ============================================================================
+
+/// Interaction style enum
+enum InteractionStyle : byte {
+    CONCISE = 0,
+    DETAILED = 1,
+    CASUAL = 2,
+    FORMAL = 3,
+    TECHNICAL = 4,
+    FRIENDLY = 5
+}
+
+/// Response format preferences
+table ResponsePreferences {
+    style: InteractionStyle = CONCISE;
+    max_response_length: uint16;      // Characters (0 = no limit)
+    use_bullet_points: bool = true;
+    use_headers: bool = false;
+    include_examples: bool = true;
+    explain_reasoning: bool = false;
+}
+
+// ============================================================================
+// PERSONA SECTION ROOT
+// ============================================================================
+
+/// Persona Section - User personality and preferences
+/// HIGH PRIORITY - Never evict unless EMERGENCY_SHED
+table PersonaSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Personality profile
+    personality: PersonalityProfile;
+
+    // Voice/prosody controls
+    voice: ProsodyControls;
+
+    // Custom vocabulary
+    vocabulary: [VocabularyEntry];
+
+    // Interaction style
+    response_prefs: ResponsePreferences;
+
+    // Quick access
+    interaction_style: InteractionStyle = CONCISE;
+    is_personalized: bool = false;    // True if user has set preferences
+
+    // Last calibration
+    last_calibrated_turn: uint16;
+    calibration_confidence: float = 0.5;  // How confident in persona (0-1)
+}
+
+root_type PersonaSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 8KB max
+//
+// PersonalityProfile: ~300 bytes
+// ProsodyControls: ~100 bytes
+// VocabularyEntry: ~100 bytes each (max ~30 entries = 3KB)
+// ResponsePreferences: ~50 bytes
+// Header + metadata: ~200 bytes
+// Total: ~4KB typical, 8KB max with extensive vocabulary
+// ============================================================================

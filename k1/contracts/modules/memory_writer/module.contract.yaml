@@ -1,0 +1,191 @@
+# ---------------------------------------------------------------------------
+# Memory Writer v2 Module Contract
+# Follows Orchestrator pattern: k1/contracts/modules/orchestrator/module.contract.yaml
+# Reference: MASTER_IMPLEMENTATION_SKELETON.md Epic 1.1
+# Source of truth: docs/pipelines/p03/stage5_proposal_corrections.md LAYER 2
+# ---------------------------------------------------------------------------
+$schema: "k1://schemas/module/module.contract.schema.yaml"
+
+metadata:
+  module_id: "memory_writer"
+  owner: "platform-team"
+  band: "GREEN"
+  description: >
+    Memory Writer v2 module for K1. Extracts episodic memory atoms from
+    conversation turns via LLM, producing 34-field MemoryAtom envelopes
+    routed through Bridge to K0 P02. 2000-token LLM budget, 12 cognitive
+    dimensions, 0-6 atoms per turn. NEVER writes SessionState.
+  tags: ["memory_writer", "extraction", "episodic", "atoms", "bridge"]
+
+contract_version: 1
+impl_version: "2.0.0"
+
+# ---------------------------------------------------------------------------
+# Exported symbols -- all from k1/memory_writer/__init__.py
+# ---------------------------------------------------------------------------
+exports:
+  # --- Facade (entry point) ---
+  - symbol: "MemoryWriterPipeline"
+    from_file: "k1/memory_writer/__init__.py"
+
+  # --- Core Services ---
+  - symbol: "RelevanceFilter"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "ContextBuilder"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "ExtractionValidator"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "EnvelopeBuilder"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "DeltaAggregator"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "BatchEmitter"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "PersonResolver"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "PrivacyEnforcer"
+    from_file: "k1/memory_writer/__init__.py"
+
+  # --- Port Protocols (5 ports) ---
+  - symbol: "ISessionReadPort"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "IBridgeCommandPort"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "IEventSubscriptionPort"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "IModelHubPort"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "IHealthPort"
+    from_file: "k1/memory_writer/__init__.py"
+
+  # --- Core Types ---
+  - symbol: "MemoryAtom"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "ExtractionContext"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "CompressedTurn"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "MWEnvelope"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "MWConfig"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "FilterDecision"
+    from_file: "k1/memory_writer/__init__.py"
+
+  # --- Enums ---
+  - symbol: "SkipReason"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "NoveltyLevel"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "ElaborationDepth"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "TemporalOrientation"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "SourceType"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "ArcPosition"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "SocialIntimacy"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "ActivityType"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "RelationshipType"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "LocationType"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "IdentityDomain"
+    from_file: "k1/memory_writer/__init__.py"
+  - symbol: "SentimentLabel"
+    from_file: "k1/memory_writer/__init__.py"
+
+# ---------------------------------------------------------------------------
+# Entrypoints
+# ---------------------------------------------------------------------------
+entrypoints:
+  init: "memory_writer:initialize"
+  shutdown: "memory_writer:cleanup"
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+dependencies:
+  - module: "sessionstate"
+    version: "1.0.0"
+    required: true
+    note: "ISessionReadPort -- read-only, lock-free, MW-01"
+  - module: "bridge"
+    version: "1.0.0"
+    required: true
+    note: "IBridgeCommandPort -- fire-and-forget to K0, MW-03"
+  - module: "bus"
+    version: "1.0.0"
+    required: true
+    note: "IEventSubscriptionPort -- turn.complete.v1 subscription"
+  - module: "model_hub"
+    version: "1.0.0"
+    required: false
+    note: "IModelHubPort -- LLM extraction, circuit breaker protected, MW-06"
+
+# ---------------------------------------------------------------------------
+# 11 Hard Invariants (MW-01 to MW-11)
+# ---------------------------------------------------------------------------
+invariants:
+  # --- Identity ---
+  - id: "MW-01"
+    description: "NEVER writes SessionState"
+    category: "identity"
+    enforcement: "compile-time (no IStateWritePort dependency)"
+
+  - id: "MW-02"
+    description: "Reads SessionState lock-free <1ms"
+    category: "identity"
+    enforcement: "runtime (timing assertion on snapshot call)"
+
+  - id: "MW-03"
+    description: "All K0 writes via Bridge only"
+    category: "identity"
+    enforcement: "compile-time (only IBridgeCommandPort output)"
+
+  # --- Extraction ---
+  - id: "MW-04"
+    description: "Body text <= 50 words"
+    category: "extraction"
+    enforcement: "runtime (ExtractionValidator assertion)"
+
+  - id: "MW-05"
+    description: "0-6 atoms per turn max"
+    category: "extraction"
+    enforcement: "runtime (pipeline output assertion)"
+
+  - id: "MW-06"
+    description: "LLM budget: 2000 tokens"
+    category: "extraction"
+    enforcement: "runtime (IModelHubPort call assertion)"
+
+  - id: "MW-07"
+    description: "Filter is rule-based (no LLM)"
+    category: "filter"
+    enforcement: "compile-time (no IModelHubPort dependency in filter)"
+
+  # --- Batch ---
+  - id: "MW-08"
+    description: "Batch window: 250ms"
+    category: "batch"
+    enforcement: "runtime (config enforcement)"
+
+  - id: "MW-09"
+    description: "Offline-safe (LocalOutbox)"
+    category: "batch"
+    enforcement: "runtime (adapter guarantee)"
+
+  # --- Envelope ---
+  - id: "MW-10"
+    description: "All envelopes carry cognitive_trace_id"
+    category: "envelope"
+    enforcement: "runtime (EnvelopeBuilder assertion)"
+
+  # --- Architecture ---
+  - id: "MW-11"
+    description: "UltraBERT validates in K0 P02 (not K1)"
+    category: "architecture"
+    enforcement: "compile-time (no UltraBERT import in memory_writer)"

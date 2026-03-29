@@ -1,0 +1,332 @@
+# ==============================================================================
+# SessionState Alert Rules
+# ==============================================================================
+#
+# REFERENCE: docs/plans/k1/sessionstate-implementation-plan.md - Epic 5.4.1
+# POLICY: k1/contracts/schemas/runtime/sessionstate.policies.yaml
+# RUNBOOK: docs/runbooks/sessionstate.md
+#
+# This file defines Prometheus alerting rules for SessionState SLO violations.
+# Each alert maps to a section in the runbook for investigation and remediation.
+#
+# ==============================================================================
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://sessionstate/alerts.yaml"
+title: "SessionState Alerting Rules"
+description: "Prometheus alert rules for SessionState SLO violations"
+
+metadata:
+  module: sessionstate
+  owner: k1-kernel
+  created: "2026-02-05"
+  version: "1.0.0"
+  runbook: "docs/runbooks/sessionstate.md"
+
+# ==============================================================================
+# ALERT DEFINITIONS
+# ==============================================================================
+
+groups:
+  - name: sessionstate.memory
+    interval: 15s
+    rules:
+      # --------------------------------------------------------------------------
+      # SessionStateMemoryWarning
+      # --------------------------------------------------------------------------
+      # Memory utilization above 90% - elevated pressure, soft eviction active
+      # Severity: warning
+      # Runbook Section: 2.1
+      - alert: SessionStateMemoryWarning
+        expr: |
+          (sessionstate_total_size_bytes / 98304) > 0.90
+        for: 1m
+        labels:
+          severity: warning
+          component: sessionstate
+          tier: memory
+        annotations:
+          summary: "SessionState memory utilization above 90%"
+          description: |
+            SessionState memory utilization is {{ $value | humanizePercentage }}
+            which exceeds the 90% warning threshold.
+            Current size: {{ with query "sessionstate_total_size_bytes" }}{{ . | first | value }}{{ end }} bytes
+            Limit: 98304 bytes (96KB)
+          runbook_url: "docs/runbooks/sessionstate.md#21-sessionstatememorywarning"
+          dashboard: "sessionstate-overview"
+
+      # --------------------------------------------------------------------------
+      # SessionStateMemoryCritical
+      # --------------------------------------------------------------------------
+      # Memory utilization above 95% - critical pressure, hard eviction active
+      # Severity: critical
+      # Runbook Section: 2.2
+      - alert: SessionStateMemoryCritical
+        expr: |
+          (sessionstate_total_size_bytes / 98304) > 0.95
+        for: 30s
+        labels:
+          severity: critical
+          component: sessionstate
+          tier: memory
+        annotations:
+          summary: "SessionState memory utilization above 95%"
+          description: |
+            SessionState memory utilization is {{ $value | humanizePercentage }}
+            which exceeds the 95% critical threshold. Emergency mode imminent.
+            Current size: {{ with query "sessionstate_total_size_bytes" }}{{ . | first | value }}{{ end }} bytes
+            Limit: 98304 bytes (96KB)
+            HOT tier: {{ with query "sessionstate_tier_size_bytes{tier=\"hot\"}" }}{{ . | first | value }}{{ end }} bytes
+            WARM tier: {{ with query "sessionstate_tier_size_bytes{tier=\"warm\"}" }}{{ . | first | value }}{{ end }} bytes
+          runbook_url: "docs/runbooks/sessionstate.md#22-sessionstatememorcritical"
+          dashboard: "sessionstate-overview"
+
+  - name: sessionstate.emergency
+    interval: 10s
+    rules:
+      # --------------------------------------------------------------------------
+      # SessionStateEmergencyActivated
+      # --------------------------------------------------------------------------
+      # Emergency mode activated - writes are being rejected
+      # Severity: critical
+      # Runbook Section: 2.3
+      - alert: SessionStateEmergencyActivated
+        expr: |
+          sessionstate_pressure_level{tier="total"} == 3
+        for: 0s
+        labels:
+          severity: critical
+          component: sessionstate
+          tier: emergency
+        annotations:
+          summary: "SessionState emergency mode activated"
+          description: |
+            SessionState has entered EMERGENCY mode. New mutations are being REJECTED.
+            Pressure level: EMERGENCY (3)
+            Utilization: {{ with query "(sessionstate_total_size_bytes / 98304) * 100" }}{{ . | first | value | printf "%.1f" }}{{ end }}%
+            This is a data-loss-prevention measure. Immediate investigation required.
+          runbook_url: "docs/runbooks/sessionstate.md#23-sessionstateemergencyactivated"
+          dashboard: "sessionstate-emergency"
+
+  - name: sessionstate.reconstruction
+    interval: 30s
+    rules:
+      # --------------------------------------------------------------------------
+      # SessionStateReconstructionSLABreach
+      # --------------------------------------------------------------------------
+      # Reconstruction latency exceeds SLA targets
+      # LOCAL COLD: P95 > 50ms
+      # K0: P95 > 100ms
+      # Severity: warning
+      # Runbook Section: 2.4
+      - alert: SessionStateReconstructionSLABreach
+        expr: |
+          histogram_quantile(0.95, rate(sessionstate_reconstruction_latency_seconds_bucket{source="local_cold"}[5m])) > 0.050
+          or
+          histogram_quantile(0.95, rate(sessionstate_reconstruction_latency_seconds_bucket{source="k0"}[5m])) > 0.100
+        for: 5m
+        labels:
+          severity: warning
+          component: sessionstate
+          tier: latency
+        annotations:
+          summary: "SessionState reconstruction SLA breach"
+          description: |
+            SessionState reconstruction latency exceeds SLA targets.
+            LOCAL COLD P95 target: 50ms
+            K0 P95 target: 100ms
+            Current LOCAL COLD P95: {{ with query "histogram_quantile(0.95, rate(sessionstate_reconstruction_latency_seconds_bucket{source=\"local_cold\"}[5m]))" }}{{ . | first | value | humanizeDuration }}{{ end }}
+            Current K0 P95: {{ with query "histogram_quantile(0.95, rate(sessionstate_reconstruction_latency_seconds_bucket{source=\"k0\"}[5m]))" }}{{ . | first | value | humanizeDuration }}{{ end }}
+          runbook_url: "docs/runbooks/sessionstate.md#24-sessionstatereconstructionslabreach"
+          dashboard: "sessionstate-latency"
+
+  - name: sessionstate.eviction
+    interval: 30s
+    rules:
+      # --------------------------------------------------------------------------
+      # SessionStateEvictionFailure
+      # --------------------------------------------------------------------------
+      # Eviction success rate below 99.9%
+      # Severity: critical
+      # Runbook Section: 2.5
+      - alert: SessionStateEvictionFailure
+        expr: |
+          (
+            sum(rate(sessionstate_evictions_total{result="success"}[5m]))
+            /
+            sum(rate(sessionstate_evictions_total[5m]))
+          ) < 0.999
+        for: 5m
+        labels:
+          severity: critical
+          component: sessionstate
+          tier: eviction
+        annotations:
+          summary: "SessionState eviction success rate below threshold"
+          description: |
+            SessionState eviction success rate is {{ $value | humanizePercentage }}
+            which is below the 99.9% target.
+            Failed evictions can lead to memory pressure buildup and emergency mode.
+            Total evictions (5m): {{ with query "sum(rate(sessionstate_evictions_total[5m]))" }}{{ . | first | value }}{{ end }}
+            Failed evictions (5m): {{ with query "sum(rate(sessionstate_evictions_total{result=\"failed\"}[5m]))" }}{{ . | first | value }}{{ end }}
+          runbook_url: "docs/runbooks/sessionstate.md#25-sessionstateevictionfailure"
+          dashboard: "sessionstate-eviction"
+
+  - name: sessionstate.latency
+    interval: 30s
+    rules:
+      # --------------------------------------------------------------------------
+      # SessionStateLatencySLOBreach
+      # --------------------------------------------------------------------------
+      # Latency SLO compliance below 99.5%
+      # Severity: warning
+      # Runbook Section: 2.6
+      - alert: SessionStateLatencySLOBreach
+        expr: |
+          (
+            sum(rate(sessionstate_read_latency_seconds_bucket{tier="hot",le="0.0001"}[5m]))
+            /
+            sum(rate(sessionstate_read_latency_seconds_count{tier="hot"}[5m]))
+          ) < 0.995
+          or
+          (
+            sum(rate(sessionstate_read_latency_seconds_bucket{tier="warm",le="0.0002"}[5m]))
+            /
+            sum(rate(sessionstate_read_latency_seconds_count{tier="warm"}[5m]))
+          ) < 0.995
+          or
+          (
+            sum(rate(sessionstate_preflight_latency_seconds_bucket{le="0.00005"}[5m]))
+            /
+            sum(rate(sessionstate_preflight_latency_seconds_count[5m]))
+          ) < 0.995
+        for: 5m
+        labels:
+          severity: warning
+          component: sessionstate
+          tier: latency
+        annotations:
+          summary: "SessionState latency SLO compliance below target"
+          description: |
+            SessionState latency SLO compliance is below 99.5% target.
+            SLO targets:
+            - HOT read P95 < 100us (0.0001s)
+            - WARM read P95 < 200us (0.0002s)
+            - Preflight P95 < 50us (0.00005s)
+
+            Current compliance:
+            - HOT read: {{ with query "sum(rate(sessionstate_read_latency_seconds_bucket{tier=\"hot\",le=\"0.0001\"}[5m])) / sum(rate(sessionstate_read_latency_seconds_count{tier=\"hot\"}[5m]))" }}{{ . | first | value | humanizePercentage }}{{ end }}
+            - WARM read: {{ with query "sum(rate(sessionstate_read_latency_seconds_bucket{tier=\"warm\",le=\"0.0002\"}[5m])) / sum(rate(sessionstate_read_latency_seconds_count{tier=\"warm\"}[5m]))" }}{{ . | first | value | humanizePercentage }}{{ end }}
+            - Preflight: {{ with query "sum(rate(sessionstate_preflight_latency_seconds_bucket{le=\"0.00005\"}[5m])) / sum(rate(sessionstate_preflight_latency_seconds_count[5m]))" }}{{ . | first | value | humanizePercentage }}{{ end }}
+          runbook_url: "docs/runbooks/sessionstate.md#26-sessionstatelatencyslobreach"
+          dashboard: "sessionstate-latency"
+
+# ==============================================================================
+# RECORDING RULES
+# ==============================================================================
+# Pre-calculated metrics for efficient alerting and dashboards
+
+recording_rules:
+  - name: sessionstate.aggregations
+    interval: 15s
+    rules:
+      # Memory utilization ratio
+      - record: sessionstate:utilization_ratio
+        expr: sessionstate_total_size_bytes / 98304
+
+      # HOT tier utilization ratio
+      - record: sessionstate:hot_utilization_ratio
+        expr: sessionstate_tier_size_bytes{tier="hot"} / 49152
+
+      # WARM tier utilization ratio
+      - record: sessionstate:warm_utilization_ratio
+        expr: sessionstate_tier_size_bytes{tier="warm"} / 49152
+
+      # Eviction success rate (5m window)
+      - record: sessionstate:eviction_success_rate_5m
+        expr: |
+          sum(rate(sessionstate_evictions_total{result="success"}[5m]))
+          /
+          sum(rate(sessionstate_evictions_total[5m]))
+
+      # HOT read P95 latency (5m window)
+      - record: sessionstate:hot_read_p95_seconds
+        expr: histogram_quantile(0.95, rate(sessionstate_read_latency_seconds_bucket{tier="hot"}[5m]))
+
+      # WARM read P95 latency (5m window)
+      - record: sessionstate:warm_read_p95_seconds
+        expr: histogram_quantile(0.95, rate(sessionstate_read_latency_seconds_bucket{tier="warm"}[5m]))
+
+      # Preflight P95 latency (5m window)
+      - record: sessionstate:preflight_p95_seconds
+        expr: histogram_quantile(0.95, rate(sessionstate_preflight_latency_seconds_bucket[5m]))
+
+      # Reconstruction P95 latency by source (5m window)
+      - record: sessionstate:reconstruction_p95_seconds
+        expr: histogram_quantile(0.95, rate(sessionstate_reconstruction_latency_seconds_bucket[5m]))
+        labels:
+          source: "{{ .source }}"
+
+      # Mutation rate (approved/rejected per second)
+      - record: sessionstate:mutation_rate_total
+        expr: sum(rate(sessionstate_mutations_total[5m]))
+
+      # Mutation approval rate
+      - record: sessionstate:mutation_approval_rate
+        expr: |
+          sum(rate(sessionstate_mutations_total{result="approved"}[5m]))
+          /
+          sum(rate(sessionstate_mutations_total[5m]))
+
+# ==============================================================================
+# INHIBIT RULES
+# ==============================================================================
+# Prevent alert storms by suppressing related alerts
+
+inhibit_rules:
+  # If emergency is active, suppress memory warning/critical
+  - source_match:
+      alertname: SessionStateEmergencyActivated
+    target_match:
+      alertname: SessionStateMemoryWarning
+    equal:
+      - component
+
+  - source_match:
+      alertname: SessionStateEmergencyActivated
+    target_match:
+      alertname: SessionStateMemoryCritical
+    equal:
+      - component
+
+  # If critical memory, suppress warning
+  - source_match:
+      alertname: SessionStateMemoryCritical
+    target_match:
+      alertname: SessionStateMemoryWarning
+    equal:
+      - component
+
+# ==============================================================================
+# SILENCE TEMPLATES
+# ==============================================================================
+# Pre-defined silences for maintenance windows
+
+silence_templates:
+  - name: sessionstate-maintenance
+    description: "Silence all SessionState alerts during maintenance"
+    matchers:
+      - name: component
+        value: sessionstate
+        isRegex: false
+    duration: "2h"
+    comment: "Planned maintenance window"
+
+  - name: sessionstate-memory-tuning
+    description: "Silence memory alerts during capacity tuning"
+    matchers:
+      - name: alertname
+        value: "SessionStateMemory.*"
+        isRegex: true
+    duration: "30m"
+    comment: "Memory budget tuning in progress"

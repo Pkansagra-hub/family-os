@@ -99,6 +99,30 @@ class R1PhaseMetrics:
     hebbian_weight_values: List[float] = field(default_factory=list)
     anti_hebbian_decreases: int = 0
 
+    # === Priority Tier Counts (5.O.1.4) ===
+    tier_counts: Dict[str, int] = field(
+        default_factory=lambda: {
+            "CRITICAL": 0,
+            "HIGH": 0,
+            "MEDIUM_HIGH": 0,
+            "MEDIUM": 0,
+            "LOW_MEDIUM": 0,
+            "LOW": 0,
+        }
+    )
+
+    # === Component Distributions (5.O.1.6) ===
+    emotional_components: List[float] = field(default_factory=list)
+    surprise_components: List[float] = field(default_factory=list)
+    novelty_components: List[float] = field(default_factory=list)
+    social_components: List[float] = field(default_factory=list)
+    identity_components: List[float] = field(default_factory=list)
+    recency_components: List[float] = field(default_factory=list)
+
+    # === Audit Sampling Metrics (5.O.1.5) ===
+    events_scored: int = 0
+    audit_records_generated: int = 0
+
     # === Timing Metrics ===
     r1_duration_ms: float = 0.0
     importance_scoring_ms: float = 0.0
@@ -111,6 +135,73 @@ class R1PhaseMetrics:
     def record_importance_scores(self, scores: List[float]) -> None:
         """Record multiple importance scores."""
         self.importance_scores.extend(scores)
+
+    def record_component_breakdown(
+        self,
+        emotional: float,
+        surprise: float,
+        novelty: float,
+        social: float,
+        identity: float,
+        recency: float,
+    ) -> None:
+        """
+        Record component values from a single event's breakdown (5.O.1.6).
+
+        Args:
+            emotional: Emotional component value
+            surprise: Surprise component value
+            novelty: Novelty component value
+            social: Social component value
+            identity: Identity component value
+            recency: Recency component value
+        """
+        self.emotional_components.append(emotional)
+        self.surprise_components.append(surprise)
+        self.novelty_components.append(novelty)
+        self.social_components.append(social)
+        self.identity_components.append(identity)
+        self.recency_components.append(recency)
+
+    def set_tier_counts(
+        self,
+        critical: int = 0,
+        high: int = 0,
+        medium_high: int = 0,
+        medium: int = 0,
+        low_medium: int = 0,
+        low: int = 0,
+    ) -> None:
+        """
+        Set priority tier counts for this cycle (5.O.1.4).
+
+        Args:
+            critical: Count of scores >= 0.80
+            high: Count of scores in [0.60, 0.80)
+            medium_high: Count of scores in [0.45, 0.60)
+            medium: Count of scores in [0.30, 0.45)
+            low_medium: Count of scores in [0.15, 0.30)
+            low: Count of scores < 0.15
+        """
+        self.tier_counts = {
+            "CRITICAL": critical,
+            "HIGH": high,
+            "MEDIUM_HIGH": medium_high,
+            "MEDIUM": medium,
+            "LOW_MEDIUM": low_medium,
+            "LOW": low,
+        }
+
+    def set_audit_counts(self, events_scored: int, audit_records: int) -> None:
+        """
+        Set audit sampling metrics (5.O.1.5).
+
+        Args:
+            events_scored: Total events scored this cycle
+            audit_records: Number of audit records actually generated
+        """
+        self.events_scored = events_scored
+        self.audit_records_generated = audit_records
 
     def set_weight_info(
         self,
@@ -208,7 +299,7 @@ class R1PhaseMetrics:
 
         Prometheus Metrics (from Issue 4.1.7 spec):
             - p03_importance_score_distribution: Histogram of importance scores
-            - p03_importance_weight_{emotional,recency,access,social}: Gauge per factor
+            - p03_importance_weight_{component}: Gauge per CONFIG_B component
             - p03_importance_weight_sample_count: Gauge of training samples
             - p03_hebbian_edges_created: Counter
             - p03_hebbian_edges_updated: Counter
@@ -225,8 +316,17 @@ class R1PhaseMetrics:
             "buckets": IMPORTANCE_SCORE_BUCKETS,
         }
 
-        # Per-factor weight gauges
-        for factor in ("emotional", "recency", "access", "social"):
+        # Per-component weight gauges (8 CONFIG_B components, ADR-K024)
+        for factor in (
+            "sentiment",
+            "affect",
+            "arousal",
+            "surprise",
+            "novelty",
+            "social",
+            "identity",
+            "recency",
+        ):
             key = f"p03_importance_weight_{factor}"
             metrics[key] = self.importance_weight_values.get(factor, 0.0)
 
@@ -258,6 +358,30 @@ class R1PhaseMetrics:
         metrics["p03_r1_importance_scoring_ms"] = self.importance_scoring_ms
         metrics["p03_r1_hebbian_update_ms"] = self.hebbian_update_ms
 
+        # 5.O.1.3: Weight source counter
+        metrics["p03_r1_weight_source_counter"] = self.importance_weight_source
+
+        # 5.O.1.4: Priority tier gauge
+        metrics["p03_r1_tier_counts"] = dict(self.tier_counts)
+
+        # 5.O.1.5: Audit sampling metrics
+        metrics["p03_r1_events_scored"] = self.events_scored
+        metrics["p03_r1_audit_records_generated"] = self.audit_records_generated
+
+        # 5.O.1.6: Component distribution histograms
+        for component_name, component_values in (
+            ("emotional", self.emotional_components),
+            ("surprise", self.surprise_components),
+            ("novelty", self.novelty_components),
+            ("social", self.social_components),
+            ("identity", self.identity_components),
+            ("recency", self.recency_components),
+        ):
+            metrics[f"p03_r1_component_{component_name}"] = {
+                "values": component_values,
+                "buckets": IMPORTANCE_SCORE_BUCKETS,
+            }
+
         return metrics
 
     def to_dict(self) -> Dict[str, Any]:
@@ -281,6 +405,17 @@ class R1PhaseMetrics:
             "importance_scoring_ms": self.importance_scoring_ms,
             "hebbian_update_ms": self.hebbian_update_ms,
             "performance_status": self.check_performance_threshold(),
+            "tier_counts": dict(self.tier_counts),
+            "events_scored": self.events_scored,
+            "audit_records_generated": self.audit_records_generated,
+            "component_distribution": {
+                "emotional": len(self.emotional_components),
+                "surprise": len(self.surprise_components),
+                "novelty": len(self.novelty_components),
+                "social": len(self.social_components),
+                "identity": len(self.identity_components),
+                "recency": len(self.recency_components),
+            },
         }
 
     def merge(self, other: "R1PhaseMetrics") -> None:
@@ -307,6 +442,19 @@ class R1PhaseMetrics:
         self.r1_duration_ms = max(self.r1_duration_ms, other.r1_duration_ms)
         self.importance_scoring_ms += other.importance_scoring_ms
         self.hebbian_update_ms += other.hebbian_update_ms
+        # Tier counts: sum across partitions
+        for tier, count in other.tier_counts.items():
+            self.tier_counts[tier] = self.tier_counts.get(tier, 0) + count
+        # Component distributions: extend
+        self.emotional_components.extend(other.emotional_components)
+        self.surprise_components.extend(other.surprise_components)
+        self.novelty_components.extend(other.novelty_components)
+        self.social_components.extend(other.social_components)
+        self.identity_components.extend(other.identity_components)
+        self.recency_components.extend(other.recency_components)
+        # Audit counts: sum
+        self.events_scored += other.events_scored
+        self.audit_records_generated += other.audit_records_generated
 
 
 # =============================================================================

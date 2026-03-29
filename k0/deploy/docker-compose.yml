@@ -66,6 +66,8 @@ services:
       K0_POSTGRES_USER: k0user
       K0_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       K0_USE_POSTGRESQL: "true"
+      # HuggingFace token for UltraBERT weight downloads (loaded from env/k0.env)
+      HF_TOKEN: ${HF_TOKEN}
     depends_on:
       pgbouncer:
         condition: service_started
@@ -73,6 +75,7 @@ services:
         condition: service_healthy
     volumes:
       - ../:/app/k0 # Mount source code for hot reloading
+      - ../../k1/contracts:/app/k1/contracts:ro # K1 schemas for gate $ref resolution
       - ./secrets:/secrets:ro
       # PEP Schema (core policy enforcement schema)
       - type: bind

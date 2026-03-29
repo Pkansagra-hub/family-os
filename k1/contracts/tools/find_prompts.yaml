@@ -1,0 +1,93 @@
+# k1/contracts/tools/find_prompts.yaml
+# Prompt Discovery Tool Contract (4.5.3)
+#
+# MCP tool contract for prompt template discovery. GREEN-band read-only
+# tool safe for Planner to invoke via Orchestrator DAG steps.
+#
+# References:
+#   - fabric-implementation-plan.md Issue 4.5.3
+#   - meta-agent-creation-integration-proposal.md PART 1
+#   - ADR-K004 (Capability Fabric Adaptation)
+
+tool_contract:
+  name: "tool.read.find_prompts"
+  version: "1.0.0"
+  domain:
+    - "META"
+    - "DISCOVERY"
+  description: >
+    Find prompt-type capabilities matching intent via semantic retrieval.
+    Filters to prompt contracts only (provider_type starts with 'prompt'
+    or name starts with 'prompt.'). Returns scored prompt contracts so
+    Planner can select templates for agent composition.
+  capabilities:
+    - "prompt_discovery"
+    - "semantic_search"
+    - "template_inspection"
+  limitations:
+    - "read_only"
+    - "no_state_mutation"
+    - "prompt_type_only"
+    - "max_top_k_25"
+
+  required_inputs:
+    - name: "intent"
+      type: "STRING"
+      description: "Natural-language description of desired prompt template"
+
+  optional_inputs:
+    - name: "domain"
+      type: "ARRAY[STRING]"
+      description: "Domain tag filter(s) to narrow search scope"
+    - name: "top_k"
+      type: "NUMBER"
+      description: "Number of results to return (default: 5, max: 25)"
+      default: 5
+
+  output:
+    type: "object"
+    properties:
+      capabilities:
+        type: "array"
+        items:
+          type: "object"
+          properties:
+            contract:
+              type: "object"
+              description: "Full prompt contract (name, version, domain, variables, output_format, etc.)"
+            score:
+              type: "number"
+              description: "Cosine similarity score [0.0, 1.0]"
+        description: "Scored prompt contracts sorted by descending score"
+      total_matched:
+        type: "integer"
+        description: "Total number of prompt matches before top-K truncation"
+      query_latency_ms:
+        type: "integer"
+        description: "End-to-end retrieval pipeline latency in milliseconds"
+      query_intent:
+        type: "string"
+        description: "Echo of the query intent"
+      index_size:
+        type: "integer"
+        description: "Total number of indexed capabilities"
+      embedding_model:
+        type: "string"
+        description: "Embedding model used for similarity search"
+    required:
+      - "capabilities"
+      - "total_matched"
+      - "query_latency_ms"
+
+  provider_type: "MCP"
+  provider_id: "find_prompts_handler"
+  safety_band_min: "GREEN"
+  cost_per_call: 0.0
+  avg_latency_ms: 20
+  max_latency_ms: 200
+  availability: "ONLINE"
+  tags:
+    - "meta"
+    - "discovery"
+    - "prompt"
+    - "read_only"

@@ -87,7 +87,7 @@ supersedes: []
 
 # ADR-0019a: SessionState FlatBuffers Schema Definition
 
-**Status:** ⏳ In Progress (0% - Initial Draft)
+**Status:** 🔒 FROZEN
 **Date:** 2025-10-13
 **Authors:** K1 Architecture Team
 **Parent ADR:** [ADR-0019 (FlatBuffers SessionState Serialization)](0019-flatbuffers-sessionstate-serialization.md)
@@ -1098,11 +1098,90 @@ schema_validation_latency_us = Histogram(
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** 🔒 **FROZEN**
 **Created Date:** 2025-10-13
-**Target Completion:** 2025-11-10 (4 weeks)
-**Blocked By:** ADR-0017a-f (6 SessionState section sub-ADRs)
-**Blocks:** 0019b (Delta Serialization Pipeline), 0019d (Zero-Copy Deserialization)
+**Frozen Date:** 2026-02-02
+
+---
+
+## Final Decision (2026-02-02)
+
+**STATUS: FROZEN** - This ADR represents the final FlatBuffers schema design framework.
+
+### Evolution: 6-Section to 12-Section Schema Requirements
+
+This ADR was written for 6 sections. Current architecture has 12 sections (8 HOT + 4 WARM).
+
+#### Schema Files Required (Current 12-Section Design)
+
+**HOT CORE Sections (8 files):**
+
+| Section | File | Size Budget | Status |
+|---------|------|-------------|--------|
+| control | control_section.fbs | 8KB | Defined in ADR |
+| beliefs_active | beliefs_active_section.fbs | 8KB | NEW (split from beliefs) |
+| scoreboard | scoreboard_section.fbs | 6KB | Defined in ADR |
+| history_active | history_active_section.fbs | 8KB | NEW |
+| clarifications | clarifications_section.fbs | 4KB | NEW |
+| affective_now | affective_now_section.fbs | 4KB | NEW |
+| narrative_active | narrative_active_section.fbs | 4KB | NEW |
+| meta | meta_section.fbs | 2KB | Defined in ADR |
+
+**WARM TIER Sections (4 files):**
+
+| Section | File | Size Budget | Status |
+|---------|------|-------------|--------|
+| beliefs_history | beliefs_history_section.fbs | 12KB | NEW (split from beliefs) |
+| history_recent | history_recent_section.fbs | 20KB | NEW |
+| persona | persona_section.fbs | 8KB | Defined in ADR |
+| telemetry | telemetry_section.fbs | 8KB | NEW (split from meta) |
+
+**Root Schema:**
+
+| File | Purpose | Status |
+|------|---------|--------|
+| session_kernel.fbs | Root with HotCore + WarmTier | NEW (replaces session_state_root.fbs) |
+| session_state_delta.fbs | Delta serialization | Defined in ADR |
+| common.fbs | Shared types | NEW |
+
+### GAPS Identified
+
+1. **No .fbs files exist**: Directory `k1/contracts/flatbuffers/layer2_state/` does not exist.
+2. **6 new section schemas needed**: beliefs_active, beliefs_history, history_active, history_recent, clarifications, affective_now, narrative_active, telemetry.
+3. **Python bindings not generated**: flatc not run, no generated code.
+4. **Multimodal schema superseded**: ADR-0017e multimodal removed for text-only V1.
+
+### Confirmed Design Decisions
+
+1. **FlatBuffers for zero-copy**: <100us read latency requirement confirmed.
+2. **Schema versioning**: SemVer 2.0 with schema_version field.
+3. **Nullable delta sections**: Only serialize changed sections.
+4. **Namespace**: K1.SessionState confirmed.
+
+### Implementation Location
+
+Final schema location: `k1/contracts/flatbuffers/sessionstate/`
+
+```
+k1/contracts/flatbuffers/sessionstate/
+├── common.fbs                    # Shared types (Timestamp, EntityRef, etc.)
+├── session_kernel.fbs            # Root schema (HotCore + WarmTier)
+├── session_state_delta.fbs       # Delta schema
+├── hot/
+│   ├── control_section.fbs
+│   ├── beliefs_active_section.fbs
+│   ├── scoreboard_section.fbs
+│   ├── history_active_section.fbs
+│   ├── clarifications_section.fbs
+│   ├── affective_now_section.fbs
+│   ├── narrative_active_section.fbs
+│   └── meta_section.fbs
+└── warm/
+    ├── beliefs_history_section.fbs
+    ├── history_recent_section.fbs
+    ├── persona_section.fbs
+    └── telemetry_section.fbs
+```
 
 ---
 

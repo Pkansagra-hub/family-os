@@ -369,6 +369,37 @@ class ToolRegistry:
             )
         )
 
+        # --- Memory Recall Tools (K0 PostgreSQL memory layers) ---
+        self.add_tool(
+            ToolDefinition(
+                tool_id="query_memory",
+                name="Query Memory Layers",
+                description="Query K0 memory layers (episodic, semantic, social, prospective, knowledge graph) to recall personal memories, relationships, decisions, and life patterns",
+                category="memory",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "user_id": {"type": "string", "description": "User identifier"},
+                        "layers": {
+                            "type": "array",
+                            "description": "Memory layers to query: st_epi (events), st_sem (patterns), st_kg_dom (entities), st_social (relationships), st_prospective (decisions/reminders), st_observations (emotions)",
+                            "items": {"type": "string"},
+                        },
+                        "search_term": {
+                            "type": "string",
+                            "description": "Primary search keyword to find in memories",
+                        },
+                        "query_type": {
+                            "type": "string",
+                            "description": "Type of query: relationship, memory, emotion, decision, location, general",
+                        },
+                    },
+                },
+                required_fields=["user_id", "layers", "search_term"],
+                mock_endpoint="http://localhost:8001/tools/query_memory",
+            )
+        )
+
         logger.info(
             "tool_registry_initialized",
             num_tools=len(self.tools),
@@ -389,6 +420,7 @@ class ToolRegistry:
             "financialanalyst": ["web_search"],
             "researcharticleagent": ["web_search"],
             "generalistspecialist": ["web_search", "email_send"],
+            "memory_recall": ["query_memory"],
         }
 
         logger.debug(

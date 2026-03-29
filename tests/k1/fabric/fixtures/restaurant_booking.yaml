@@ -1,0 +1,54 @@
+# Sample tool contract: restaurant_booking (MCP, FOOD domain, GREEN)
+# Valid against tool_contract.schema.json
+# Used by: conftest.py fixtures, ModuleLoader tests, integration tests
+
+tool_contract:
+  name: "tool.execute.restaurant_booking"
+  version: "1.0.0"
+  domain:
+    - "FOOD"
+    - "SOCIAL"
+  description: "Book a restaurant reservation via OpenTable integration"
+  capabilities:
+    - "restaurant_search"
+    - "reservation_create"
+    - "reservation_cancel"
+  limitations:
+    - "no_international"
+    - "no_same_day_cancellation"
+  required_inputs:
+    - name: "restaurant_name"
+      type: "STRING"
+      description: "Name of the restaurant"
+    - name: "date"
+      type: "DATE"
+      description: "Reservation date (YYYY-MM-DD)"
+    - name: "party_size"
+      type: "NUMBER"
+      description: "Number of guests"
+  optional_inputs:
+    - name: "time_preference"
+      type: "STRING"
+      description: "Preferred time slot"
+  required_context:
+    - "beliefs_active.entities"
+  optional_context:
+    - "beliefs_active.preferences"
+  output:
+    type: "object"
+    properties:
+      confirmation_id:
+        type: "string"
+      status:
+        type: "string"
+    required:
+      - "confirmation_id"
+      - "status"
+  provider_type: "MCP"
+  provider_id: "mcp-opentable"
+  provider_endpoint: "mcp://local/opentable"
+  safety_band_min: "GREEN"
+  cost_per_call: 0.05
+  avg_latency_ms: 200
+  max_latency_ms: 2000
+  availability: "ONLINE"

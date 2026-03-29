@@ -1,0 +1,363 @@
+---
+adr_id: ORCH-002
+title: "4-Stage Planning Protocol -- Orchestrator as Plan Consumer"
+status: Accepted
+date: 2026-02-11
+module: orchestrator
+layer: "L2"
+authors:
+  - "K1 Architecture Team"
+related_adrs:
+  - "ORCH-001"
+  - "ORCH-003"
+  - "ORCH-005"
+  - "ORCH-007"
+  - "ORCH-012"
+related_events:
+  - "k1.planner.plan.ready.v1"
+  - "k1.planner.plan.failed.v1"
+  - "k1.planner.plan.cancelled.v1"
+  - "k1.orchestration.task.accepted.v1"
+  - "k1.orchestration.dag.started.v1"
+related_contracts:
+  - "k1/contracts/schemas/modules/orchestrator/module.contract.yaml"
+  - "k1/contracts/schemas/events/planner/plan_ready.v1.json"
+related_ports:
+  - "IPlannerPort"
+  - "IMailboxPort"
+  - "IFabricGatewayPort"
+  - "IEventSubscriptionPort"
+implements_issue: "1.1.2"
+superseded_by: ""
+tags:
+  - architecture
+  - orchestrator
+  - planner
+  - protocol
+  - committed-plan
+  - envelope
+---
+
+# ORCH-002: 4-Stage Planning Protocol -- Orchestrator as Plan Consumer
+
+## Context
+
+### Problem Statement
+
+ADR-0007 defines a 4-Stage Planning Pipeline (Sketch -> Expand -> Validate -> Commit) that produces a `CommittedPlan` for execution. The Orchestrator is the sole consumer of CommittedPlan artifacts. This ADR documents the precise protocol contract between Planner (L3) and Orchestrator (L2): message formats, delivery mechanism, correlation semantics, timeout behavior, and failure handling.
+
+The protocol must be event-driven and non-blocking -- the Orchestrator's single-threaded mailbox loop must never block waiting for a plan. A blocked mailbox means MEDIUM-tier tasks, workflow triggers, and user interrupts all stall behind a single HIGH-tier planning request.
+
+### Current Situation
+
+ADR-0007 defines the 4-stage pipeline but focuses on the Planner's internal architecture. The Orchestrator-Planner boundary contract needs explicit definition:
+
+1. How does `PlanRequest` reach the Planner?
+2. How does `CommittedPlan` reach the Orchestrator?
+3. How are requests and plans correlated?
+4. What happens when planning fails or times out?
+5. How does the mailbox loop remain unblocked during planning?
+
+### Constraints
+
+- Orchestrator is single-threaded (one message from mailbox at a time)
+- Orchestrator has no LLM (ORCH-02) -- cannot evaluate plan quality, only structure
+- Planner is not yet implemented (SOFT constraint -- API signatures defined here as requirements)
+- CommittedPlan delivery must not bypass the mailbox (deterministic processing order)
+- Circuit breaker CB_PLANNER (owned by Concierge FabricOrchestratorAdapter) has 45s timeout, 2 failures/min threshold
+
+### Requirements
+
+- Non-blocking plan request: `dispatch_high()` must return to mailbox loop immediately after sending PlanRequest
+- Correlation: each CommittedPlan must echo the `request_id` from its originating PlanRequest
+- Timeout: stale PlanRequest contexts expire after 45s (CB_PLANNER alignment)
+- Failure path: planning failure degrades HIGH -> MEDIUM tier (skip planning, try direct Fabric calls)
+- Micro-replan: support mid-DAG replanning via `MicroReplanRequest -> CommittedPlan` (max 1 per DAG, ORCH-13)
+- CommittedPlan validation: Orchestrator defensively validates dependency graph acyclicity before execution (Planner Stage 3 already validates, but defense in depth)
+
+---
+
+## Decision
+
+### Chosen Approach
+
+An **event-driven, non-blocking plan request protocol** with context parking, correlation-based matching, and timeout reaping.
+
+### Key Design
+
+**1. PlanRequest Dispatch (Non-Blocking)**
+
+When `OrchestratorService.dispatch_high()` receives a HIGH-tier `TaskEnvelope`:
+
+```
+dispatch_high(envelope):
+  1. Read SessionState snapshot via IStateReadPort
+  2. Build PlanRequest:
+       request_id = uuid4()  (NEW -- not envelope_id)
+       intent = envelope.intent
+       constraints = envelope.constraints
+       context = snapshot
+       trace_id = envelope.trace_id
+       timeout_ms = 45000  (CB_PLANNER alignment)
+  3. Park context in PendingPlanContext store:
+       pending_plans[request_id] = PendingPlanContext(
+           envelope=envelope,
+           request_id=request_id,
+           parked_at=monotonic(),
+           timeout_ms=45000
+       )
+  4. Send PlanRequest to Planner via IPlannerPort.request_plan()
+  5. Return immediately to mailbox loop
+```
+
+The mailbox loop is NEVER blocked by Planner. MEDIUM tasks, WorkflowRunRequests, and InterruptRequests continue processing during HIGH planning.
+
+**2. CommittedPlan Delivery (Event-Driven)**
+
+Planner delivers the completed plan as an event on the K1 Event Bus:
+
+```
+Topic: k1.planner.plan.ready.v1
+Payload: CommittedPlan (serialized)
+
+Orchestrator subscribes via IEventSubscriptionPort.
+Event handler: re-enqueue CommittedPlan into Orchestrator Mailbox.
+Mailbox processes it as any other message: deterministic ordering preserved.
+```
+
+**3. Correlation Protocol**
+
+| Field | PlanRequest | CommittedPlan | Validation |
+|-------|-------------|---------------|------------|
+| `request_id` | Generated by Orchestrator (uuid4) | Echoed by Planner | MUST match for PendingPlanContext lookup |
+| `trace_id` | Propagated from TaskEnvelope | Propagated from PlanRequest | MUST match for tracing continuity |
+| `plan_id` | N/A | Generated by Planner (uuid4) | Unique plan identifier |
+
+```
+receive_plan(committed_plan):
+  1. Look up pending_plans[committed_plan.request_id]
+  2. If not found: log warning, discard (timeout already reaped context)
+  3. If found: retrieve parked TaskEnvelope
+  4. Remove from pending_plans store
+  5. Validate CommittedPlan defensively:
+       a. steps non-empty
+       b. dependency graph acyclic (Kahn's algorithm)
+       c. All step_ids unique
+       d. dependency keys subset of step_ids
+  6. Execute DAG: DAGExecutor.execute(committed_plan)
+```
+
+**4. CommittedPlan Envelope Schema**
+
+```
+CommittedPlan:
+  plan_id:      str          # Planner-generated unique ID
+  request_id:   str          # Echo of PlanRequest.request_id (REQUIRED)
+  intent:       str          # Original intent label
+  steps:        List[PlanStep]  # Ordered execution steps
+  dependencies: Dict[str, List[str]]  # step_id -> [prerequisite step_ids]
+  created_at:   float        # Planner timestamp
+  trace_id:     str          # Cognitive trace ID
+
+PlanStep (extends Fabric PlanStep with Orchestrator fields):
+  step_id:         str
+  capability_name: str       # e.g. "tool.calendar.search", "agent.research.web"
+  params:          Dict      # Input parameters (may contain $ref placeholders)
+  output_schema:   Optional[Dict]  # JSON Schema for output validation (ORCH-15)
+  deps:            List[str] # Dependency step_ids (redundant with dependencies dict)
+  condition:       Optional[str]   # Boolean expression for conditional edges (ORCH-16)
+  compensation:    Optional[Dict]  # Saga compensation action
+  timeout_ms:      Optional[int]   # Per-step timeout override
+  safety_band:     Optional[str]   # Minimum safety band required
+
+Dependencies format: {"s2": ["s1"], "s3": ["s1", "s2"]}
+  step_id -> list of prerequisite step_ids
+  Used directly by Kahn's algorithm for topological sort
+```
+
+**5. Timeout Reaping**
+
+A reaper coroutine runs every 5 seconds:
+
+```
+_reap_stale_contexts():
+  for request_id, ctx in pending_plans.items():
+    if monotonic() - ctx.parked_at > ctx.timeout_ms / 1000:
+      remove from pending_plans
+      emit k1.orchestration.plan.timeout.v1
+      attempt MEDIUM degradation:
+        if envelope.capabilities non-empty:
+          dispatch_medium(envelope)  # Skip planning, try direct
+        else:
+          return AggregatedResult(failed, error="Planning timeout")
+```
+
+**6. Failure Handling**
+
+| Failure | Event | Orchestrator Response |
+|---------|-------|-----------------------|
+| Planning succeeded | `k1.planner.plan.ready.v1` | Execute DAG |
+| Planning failed | `k1.planner.plan.failed.v1` | Degrade HIGH -> MEDIUM (if capabilities available) |
+| Planning cancelled | `k1.planner.plan.cancelled.v1` | Return cancelled AggregatedResult |
+| Planning timeout | Reaper fires after 45s | Degrade HIGH -> MEDIUM or fail |
+| CommittedPlan invalid | Defensive validation fails | Return failed AggregatedResult |
+
+**7. Micro-Replan Protocol (ORCH-13)**
+
+DAGExecutor may request a mid-execution replan (max 1 per DAG):
+
+```
+MicroReplanRequest:
+  request_id:       str          # New correlation ID
+  original_plan_id: str          # CommittedPlan being modified
+  completed_results: Dict[str, StepResult]  # What succeeded so far
+  discoveries:      List[Discovery]          # New info from agent results
+  remaining_steps:  List[PlanStep]           # What was supposed to run next
+  failure_context:  Optional[FailureContext] # If triggered by step failure
+  trace_id:         str
+
+Flow:
+  1. DAGExecutor checkpoints completed results
+  2. Sends MicroReplanRequest via IPlannerPort.micro_replan()
+  3. Parks MicroReplanContext (same pattern as PendingPlanContext)
+  4. Returns to mailbox loop
+  5. Planner returns modified CommittedPlan via k1.planner.plan.ready.v1
+  6. Orchestrator replaces remaining waves, resumes execution
+  7. If Planner fails: continue original plan (best-effort)
+```
+
+### Rationale
+
+- **Event-driven non-blocking** eliminates the mailbox stall risk. A HIGH-tier planning request takes 10-30s; blocking the mailbox for that duration kills responsiveness for all concurrent tasks.
+- **Correlation via request_id** is simple, reliable, and debuggable. Each PlanRequest gets a fresh UUID, and the Planner echoes it back in CommittedPlan.
+- **Defensive validation** at the Orchestrator boundary catches Planner bugs before DAG execution. The cost is <5ms for Kahn's acyclicity check on typical plans (3-8 steps).
+- **Timeout reaping with MEDIUM degradation** provides graceful fallback. Users get a degraded but functional response rather than a 45s hang.
+
+---
+
+## Alternatives Considered
+
+### Alternative 1: Synchronous await_plan() with Blocking Call
+
+**Description:** `dispatch_high()` calls `await_plan(request_id)` and blocks until CommittedPlan arrives or timeout.
+
+**Pros:**
+- Simpler code flow (linear, no context parking)
+- No reaper coroutine needed
+
+**Cons:**
+- Mailbox blocked for 10-30s during planning
+- MEDIUM tasks, workflow triggers, and user interrupts all stall
+- Single point of failure for all Orchestrator processing
+
+**Rejected because:** Blocks single-threaded event loop. All Orchestrator processing halts during planning. Unacceptable for production responsiveness.
+
+### Alternative 2: Callback-Based Plan Delivery
+
+**Description:** Planner calls a callback function registered by Orchestrator when plan is ready.
+
+**Pros:**
+- Direct delivery, no event bus intermediary
+- Lower latency (no event serialization/deserialization)
+
+**Cons:**
+- Tight coupling between Planner and Orchestrator
+- Callback bypasses mailbox (breaks deterministic message ordering)
+- Harder to test (must inject callback into Planner)
+
+**Rejected because:** Bypassing the mailbox breaks the single-threaded processing guarantee. Out-of-order message processing creates race conditions and non-deterministic behavior.
+
+---
+
+## Consequences
+
+### Positive
+
+- Mailbox never blocks on Planner -- MEDIUM and workflow tasks process uninterrupted
+- Clean separation: Orchestrator owns execution, Planner owns planning
+- Correlation protocol enables reliable multi-request tracking
+- Defensive validation catches Planner bugs before DAG execution
+- Micro-replan protocol handles mid-execution discoveries without restarting
+
+### Negative
+
+- Context parking adds complexity (PendingPlanContext store, reaper coroutine)
+- Eventual delivery via Event Bus adds ~1ms latency vs direct callback
+- Timeout reaper creates periodic wake-up overhead (5s interval, negligible)
+
+### Risks
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| Planner echoes wrong request_id | Low | High | Defensive check logs warning, discards orphan plan |
+| Reaper clears context just as plan arrives | Low | Medium | Timing window <5s; plan discarded gracefully, user gets degraded response |
+| PendingPlanContext store grows unbounded | Low | Medium | Max 10 concurrent parked contexts; reject new HIGH tasks beyond limit |
+| Micro-replan loops (Planner keeps failing) | Low | Medium | ORCH-13: max 1 micro-replan per DAG, hard enforced |
+
+---
+
+## Implementation
+
+### Affected Code Paths
+
+| Component | File | Change Type |
+|-----------|------|-------------|
+| OrchestratorService (dispatch_high, receive_plan) | `k1/orchestrator/orchestration/orchestrator_service.py` | New |
+| PendingPlanContext | `k1/orchestrator/orchestration/pending_contexts.py` | New |
+| Context reaper | `k1/orchestrator/orchestration/orchestrator_service.py` | New |
+| PlanRequest type | `k1/orchestrator/types.py` | New |
+| CommittedPlan type | `k1/orchestrator/types.py` | New |
+| MicroReplanRequest type | `k1/orchestrator/types.py` | New |
+| IPlannerPort | `k1/orchestrator/ports/planner_port.py` | New |
+| PlannerAdapter | `k1/orchestrator/adapters/planner_adapter.py` | New |
+| MockPlannerAdapter | `k1/orchestrator/adapters/test/mock_planner_adapter.py` | New |
+
+### Events Emitted/Consumed
+
+| Event Topic | Direction | Description |
+|-------------|-----------|-------------|
+| `k1.planner.plan.ready.v1` | Consumed | CommittedPlan available for execution |
+| `k1.planner.plan.failed.v1` | Consumed | Planning failed, degrade HIGH -> MEDIUM |
+| `k1.planner.plan.cancelled.v1` | Consumed | Planning cancelled |
+| `k1.orchestration.plan.timeout.v1` | Emitted | PlanRequest timed out, degrading |
+| `k1.orchestration.dag.started.v1` | Emitted | DAG execution beginning from CommittedPlan |
+
+### Contracts Affected
+
+| Contract | Type | Change |
+|----------|------|--------|
+| CommittedPlan schema | Event payload | Defined -- Planner must conform |
+| PlanRequest schema | Event payload | Defined -- Orchestrator emits |
+| PlanStep extended schema | Shared type | Extends Fabric PlanStep with 8 Orchestrator fields |
+
+### Port/Adapter Impact
+
+| Port | Adapter | Change |
+|------|---------|--------|
+| `IPlannerPort` | `PlannerAdapter` | New -- request_plan(), micro_replan() |
+| `IEventSubscriptionPort` | `EventSubscriptionAdapter` | Subscribe to 3 planner topics |
+| `IMailboxPort` | `MailboxAdapter` | CommittedPlan re-enqueued as mailbox message |
+
+### Success Metrics
+
+- Zero mailbox stalls during HIGH-tier planning (non-blocking confirmed by test)
+- PlanRequest -> CommittedPlan correlation: 100% match rate in integration tests
+- Timeout degradation covers 100% of planning timeout scenarios
+- Defensive validation catches all invalid plans before DAG execution
+- Micro-replan limited to 1 per DAG (ORCH-13 enforced)
+
+### Testing Strategy
+
+- [ ] Unit tests: PendingPlanContext lifecycle, reaper timing, correlation matching
+- [ ] Integration tests: HIGH-tier dispatch -> plan -> DAG end-to-end
+- [ ] Timeout tests: reaper clears stale contexts, degrades correctly
+- [ ] Contract tests: CommittedPlan schema validation, PlanStep extension
+- [ ] Concurrency tests: MEDIUM and HIGH processing simultaneously without stalls
+
+---
+
+## Amendment History
+
+| Date | Author | Change |
+|------|--------|--------|
+| 2026-02-11 | K1 Architecture Team | Initial decision -- Planner-Orchestrator protocol for ADR-0007 compliance |

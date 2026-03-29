@@ -11,7 +11,6 @@ import pytest
 
 from k0.pipelines.p03.ops.circuit_breaker import (
     BUS_DISPATCHER_CONFIG,
-    FAISS_INDEX_CONFIG,
     P08_EMBEDDING_CONFIG,
     P03CircuitBreaker,
     P03CircuitBreakerConfig,
@@ -78,13 +77,6 @@ class TestPreconfiguredConfigs:
         assert isinstance(BUS_DISPATCHER_CONFIG, P03CircuitBreakerConfig)
         assert BUS_DISPATCHER_CONFIG.failure_threshold == 5
         assert BUS_DISPATCHER_CONFIG.reset_timeout_seconds == 60.0
-
-    def test_faiss_index_config(self) -> None:
-        """Test FAISS_INDEX_CONFIG exists and is valid."""
-        assert FAISS_INDEX_CONFIG is not None
-        assert isinstance(FAISS_INDEX_CONFIG, P03CircuitBreakerConfig)
-        assert FAISS_INDEX_CONFIG.failure_threshold == 3
-        assert FAISS_INDEX_CONFIG.reset_timeout_seconds == 30.0
 
 
 class TestP03CircuitBreaker:
@@ -250,8 +242,3 @@ class TestCreateP03CircuitBreakers:
         """Test registry includes bus_dispatcher breaker."""
         registry = create_p03_circuit_breakers()
         assert registry.get("bus_dispatcher") is not None
-
-    def test_includes_faiss_index(self) -> None:
-        """Test registry includes faiss_index breaker."""
-        registry = create_p03_circuit_breakers()
-        assert registry.get("faiss_index") is not None

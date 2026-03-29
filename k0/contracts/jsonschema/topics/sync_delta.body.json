@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k0://contracts/jsonschema/topics/sync_delta.body.json",
+  "title": "sync.delta Body Schema",
+  "description": "Body schema for sync.delta command topic. Carries a CRDT sync delta from the multi-device family sync subsystem. GREEN band only.",
+  "type": "object",
+  "required": [
+    "device_id",
+    "delta_type",
+    "timestamp",
+    "lww_register"
+  ],
+  "properties": {
+    "device_id": {
+      "type": "string",
+      "description": "Source device identifier that produced this delta."
+    },
+    "delta_type": {
+      "type": "string",
+      "enum": [
+        "memory_insert",
+        "memory_update",
+        "memory_tombstone",
+        "config_change",
+        "device_register",
+        "device_deregister"
+      ],
+      "description": "Type of CRDT delta operation."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601 timestamp of delta creation (used for LWW resolution)."
+    },
+    "lww_register": {
+      "type": "object",
+      "required": ["key", "value", "wall_clock_ms"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "LWW register key (resource identifier)."
+        },
+        "value": {
+          "description": "LWW register value (any serializable type)."
+        },
+        "wall_clock_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Wall clock milliseconds for LWW conflict resolution."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Last-Writer-Wins register for conflict resolution."
+    },
+    "conflict_id": {
+      "type": ["string", "null"],
+      "description": "Conflict identifier if this delta resulted from conflict resolution."
+    },
+    "source_wal_pos": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "WAL position on source device for ordering."
+    },
+    "merge_vector": {
+      "type": ["object", "null"],
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "description": "Vector clock for causal ordering. Map of device_id to logical clock."
+    },
+    "batch_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Batch identifier if this delta is part of a multi-delta sync."
+    },
+    "batch_seq": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Sequence number within batch."
+    }
+  },
+  "additionalProperties": false
+}

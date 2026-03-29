@@ -1,0 +1,166 @@
+# K0 Gate Topic Validation Contract
+#
+# Defines per-topic validation rules for MinimalGate.
+# Currently MinimalGate validates envelope structure but NOT per-topic body schema.
+# This contract specifies what MinimalGate should validate per command topic.
+#
+# Contract: k0/contracts/capabilities/gate_topic_validation.yaml
+# Milestone: M2 Epic 2.5
+# Related: k0/gate/minimal_gate.py (consumer)
+# Related: k0/contracts/taxonomies/command_topics.yaml (topic registry)
+# Related: k0/contracts/jsonschema/topics/*.json (body schemas)
+
+gate_topic_validation:
+  version: "1.0.0"
+  last_updated: "2026-03-01"
+
+  # ===========================================================================
+  # Global Defaults
+  # ===========================================================================
+  defaults:
+    body_required: true
+    validation_level: "STRICT"
+    max_body_bytes: 8192
+
+  # ===========================================================================
+  # Per-Topic Validation Rules
+  # ===========================================================================
+  topics:
+
+    # -------------------------------------------------------------------------
+    # memory.write
+    # -------------------------------------------------------------------------
+    - topic_pattern: "memory.write"
+      match_type: "exact"
+      body_required: true
+      body_schema: "k0/contracts/jsonschema/topics/memory_write.body.json"
+      max_body_bytes: 8192
+      allowed_bands:
+        - "GREEN"
+        - "AMBER"
+        - "RED"
+      required_envelope_fields:
+        - "schema_uri"
+        - "schema_version"
+      validation_level: "STRICT"
+
+    # -------------------------------------------------------------------------
+    # session.snapshot
+    # -------------------------------------------------------------------------
+    - topic_pattern: "session.snapshot"
+      match_type: "exact"
+      body_required: true
+      body_schema: "k0/contracts/jsonschema/topics/session_snapshot.body.json"
+      max_body_bytes: 65536
+      allowed_bands:
+        - "GREEN"
+        - "AMBER"
+      required_envelope_fields:
+        - "schema_uri"
+      validation_level: "STRICT"
+
+    # -------------------------------------------------------------------------
+    # beliefs.archive
+    # -------------------------------------------------------------------------
+    - topic_pattern: "beliefs.archive"
+      match_type: "exact"
+      body_required: true
+      body_schema: "k0/contracts/jsonschema/topics/beliefs_archive.body.json"
+      max_body_bytes: 16384
+      allowed_bands:
+        - "GREEN"
+        - "AMBER"
+      required_envelope_fields:
+        - "schema_uri"
+      validation_level: "STRICT"
+
+    # -------------------------------------------------------------------------
+    # history.archive
+    # -------------------------------------------------------------------------
+    - topic_pattern: "history.archive"
+      match_type: "exact"
+      body_required: true
+      body_schema: "k0/contracts/jsonschema/topics/history_archive.body.json"
+      max_body_bytes: 32768
+      allowed_bands:
+        - "GREEN"
+        - "AMBER"
+      required_envelope_fields:
+        - "schema_uri"
+      validation_level: "STRICT"
+
+    # -------------------------------------------------------------------------
+    # plan.committed
+    # -------------------------------------------------------------------------
+    - topic_pattern: "plan.committed"
+      match_type: "exact"
+      body_required: true
+      body_schema: "k0/contracts/jsonschema/topics/plan_committed.body.json"
+      max_body_bytes: 16384
+      allowed_bands:
+        - "GREEN"
+        - "AMBER"
+      required_envelope_fields:
+        - "schema_uri"
+      validation_level: "STRICT"
+
+    # -------------------------------------------------------------------------
+    # ifl.* (glob match for all IFL adapter events)
+    # -------------------------------------------------------------------------
+    - topic_pattern: "ifl.*"
+      match_type: "glob"
+      body_required: true
+      body_schema: "k0/contracts/jsonschema/topics/ifl_event.body.json"
+      max_body_bytes: 8192
+      allowed_bands:
+        - "GREEN"
+        - "AMBER"
+        - "RED"
+      required_envelope_fields:
+        - "schema_uri"
+      validation_level: "STRICT"
+
+    # -------------------------------------------------------------------------
+    # sync.delta
+    # -------------------------------------------------------------------------
+    - topic_pattern: "sync.delta"
+      match_type: "exact"
+      body_required: true
+      body_schema: "k0/contracts/jsonschema/topics/sync_delta.body.json"
+      max_body_bytes: 65536
+      allowed_bands:
+        - "GREEN"
+      required_envelope_fields:
+        - "schema_uri"
+      validation_level: "STRICT"
+
+  # ===========================================================================
+  # Validation Behavior
+  # ===========================================================================
+  behavior:
+    strict:
+      description: "Reject envelope on any validation error. Return 400 with field-level violations."
+      on_failure: "REJECT"
+      error_code: 400
+    lenient:
+      description: "Log warning but accept envelope. Reserved for future migration scenarios."
+      on_failure: "WARN"
+      error_code: null
+
+  # ===========================================================================
+  # Error Response Format
+  # ===========================================================================
+  error_format:
+    description: >
+      On STRICT validation failure, Gate returns a structured error with:
+      - error: Error code string (e.g. BODY_VALIDATION_FAILED)
+      - topic: The command topic that failed validation
+      - violations: Array of {path, message} field-level errors
+    example:
+      error: "BODY_VALIDATION_FAILED"
+      topic: "memory.write"
+      violations:
+        - path: "$.affect.valence"
+          message: "required field missing"
+        - path: "$.text"
+          message: "string length below minimum 1"

@@ -1,0 +1,9 @@
+scenario,raw_reliability,floor,effective_reliability,score,tier
+scenario_06_grocery,0.7,0.0,0.7,0.0970,LOW
+scenario_06_grocery,0.7,0.3,0.7,0.0970,LOW
+scenario_06_grocery,0.7,0.5,0.7,0.0970,LOW
+scenario_06_grocery,0.7,0.7,0.7,0.0970,LOW
+scenario_15_low_confidence,0.35,0.0,0.35,0.0289,LOW
+scenario_15_low_confidence,0.35,0.3,0.35,0.0289,LOW
+scenario_15_low_confidence,0.35,0.5,0.5,0.0412,LOW
+scenario_15_low_confidence,0.35,0.7,0.7,0.0577,LOW

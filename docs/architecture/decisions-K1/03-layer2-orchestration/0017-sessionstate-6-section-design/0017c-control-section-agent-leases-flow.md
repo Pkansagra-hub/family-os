@@ -21,7 +21,7 @@ date_created: '2025-11-03'
 date_updated: '2025-11-03'
 implementation_date: null
 implementation_phase: Phase 1 (Foundation)
-implementation_status: IN_PROGRESS
+implementation_status: FROZEN
 propagation:
   affected_adrs:
   - ADR-0002
@@ -58,7 +58,7 @@ research_citations:
 - Distributed Lease Management (Chubby Lock Service, Google, 2006)
 - Orchestration State Machines (Saga Pattern, 1987)
 - Actor Model Supervision (Akka Documentation, 2024)
-status: PROPOSED
+status: FROZEN
 superseded_by: []
 supersedes: []
 title: Control Section - Active Agent Leases & Flow State
@@ -620,11 +620,57 @@ def _(control=control):
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** 🔒 **FROZEN**
 **Created Date:** 2025-10-12
-**Target Completion:** 2025-11-09 (4 weeks)
-**Blocked By:** 0017 (SessionState 6-Section Design)
-**Blocks:** None
+**Frozen Date:** 2026-02-02
+
+---
+
+## Final Decision (2026-02-02)
+
+**STATUS: FROZEN** - This ADR represents the final architectural decision.
+
+### Control Section - NEVER EVICT Confirmed
+
+| Aspect | Original Design | Final Design | Change |
+|--------|----------------|--------------|--------|
+| Tier | N/A | HOT CORE | Placed in HOT |
+| Budget | 8-12KB | 8KB | Refined |
+| Eviction | Critical (never during turn) | **NEVER EVICT** | Elevated to absolute |
+
+### Final Implementation
+
+**control (HOT CORE - 8KB - NEVER EVICT)**:
+- Agent leases with expiration tracking
+- Flow state (negotiation → selection → execution)
+- Turn lock (single-turn concurrency)
+- Intent classification results
+- Domain and safety band tracking
+- Location: `k1/sessionstate/sections/control.py`
+
+### Critical Invariant: NEVER EVICT
+
+The control section has a **NEVER EVICT** flag because:
+1. Evicting control during turn = orchestration crash
+2. Agent leases must persist for coordination
+3. Turn lock prevents race conditions
+4. Flow state is required for phase transitions
+
+### Key Design Decisions Confirmed
+
+1. **Agent Lease Tracking**: HashMap with expiration (original design confirmed)
+2. **Flow State FSM**: 3-phase coordination (original design confirmed)
+3. **Turn Lock**: Boolean + turn_id (original design confirmed)
+4. **Timeout Detection**: Periodic check (original design confirmed)
+
+### Performance Targets (Confirmed)
+
+| Operation | Target | Status |
+|-----------|--------|--------|
+| `acquire_lease(agent_id)` | <300μs | Confirmed |
+| `release_lease(agent_id)` | <200μs | Confirmed |
+| `check_timeouts()` | <5ms | Confirmed |
+| `set_flow_state(phase)` | <100μs | Confirmed |
 
 ---
 

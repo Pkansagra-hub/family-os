@@ -130,7 +130,8 @@ class KGEdge:
     """
     Represents a knowledge graph edge for Hebbian updates.
 
-    Mirrors st_kg_edges schema from migration 0033.
+    Mirrors st_kg_edges schema from migrations 0033, 0069, 0070.
+    GAP-007: Added source_algorithm and evidence provenance fields.
     """
 
     edge_id: str
@@ -143,6 +144,12 @@ class KGEdge:
     space_id: str = ""
     tenant_id: str = ""
     archival_status: str = "ACTIVE"
+    # GAP-007: Edge provenance tracking (migrations 0069, 0070)
+    source_algorithm: str = "co_occurrence"
+    evidence_event_ids: list[str] | None = None
+    evidence_episode_ids: list[str] | None = None
+    algorithm_params_json: str | None = None
+    inference_chain_json: str | None = None
 
 
 @dataclass

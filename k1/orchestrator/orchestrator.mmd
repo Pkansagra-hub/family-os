@@ -1,0 +1,897 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+%% =====================================================================================
+%% ORCHESTRATOR (K1) -- DEEP ARCHITECTURE (Production-Grade)
+%% =====================================================================================
+%% STATUS: SKELETON + Hexagonal Architecture + Invariants + Performance Baselines
+%%         + Internal Services + Lifecycle + Concurrency Model + Error Recovery
+%%
+%% The Orchestrator is Layer 2 of the K1 Cognitive Kernel. It is:
+%%   - A PURE DETERMINISTIC ACTOR (NO LLM, NO tools, NEVER writes SessionState)
+%%   - The blind muscle: follows DAG plans mechanically via Fabric
+%%   - The workflow engine: manages saved plans as scheduled/event-driven tasks
+%%   - The connector host: manages MCP server tool registration into Fabric
+%%
+%% WHAT ORCHESTRATOR IS NOT (NON-NEGOTIABLE):
+%%   - NOT an LLM consumer (zero LLM calls, zero token budget)
+%%   - NOT a tool caller (zero tools -- calls Fabric.execute() directly)
+%%   - NOT a state writer (NEVER writes SessionState, ORCH-01 / INV-04)
+%%   - NOT a planner (walks a plan, does not create one)
+%%   - NOT a negotiator (Contract-Net from ADR-0006 is SUPERSEDED)
+%%
+%% NOTE (MISS-3 fix): Admin API (health, metrics, CB state, config reload)
+%%   is a DEPLOYMENT OVERLAY, not part of the core actor model.
+%%   See schema_whiteboard.md Section 5 for full Admin API schema.
+%%   The Orchestrator exposes admin endpoints only when admin_enabled=True.
+%%
+%% CALL CHAIN:
+%%   User -> Concierge (L1) -> Orchestrator (L2) -> Planner (L3, conditional)
+%%                                               -> Fabric (L2.5) -> Sub-Agents / Tools
+%%
+%% TIER INVOLVEMENT:
+%%   LOW    -> NO  (Concierge uses LLM tool loop; action tools invoke_capability/spawn_via_fabric/execute_workflow route to Fabric)
+%%   MEDIUM -> YES (TaskEnvelope, 1-2 Fabric calls, no planning)
+%%   HIGH   -> YES (TaskEnvelope -> PlanRequest -> CommittedPlan -> DAG execution)
+%%   CRISIS -> NO  (Safety Agent handles immediately)
+%%
+%% MESSAGE ENVELOPES:
+%%   TaskEnvelope      : Concierge DISPATCHING -> Orchestrator Mailbox
+%%   PlanRequest       : Orchestrator -> Planner Mailbox (HIGH tier only)
+%%   CommittedPlan     : Planner -> Orchestrator (via k1.planner.plan.ready.v1)
+%%   CapabilityRequest : Orchestrator -> Fabric Gateway (per DAG step)
+%%   CapabilityResult  : Fabric -> Orchestrator (per DAG step)
+%%   AggregatedResult  : Orchestrator -> Concierge COMPANIONING
+%%   WorkflowRunRequest: Workflow Scheduler -> Orchestrator Mailbox
+%%
+%% TIER DEGRADATION CASCADE:
+%%   HIGH -> CB_PLANNER OPEN -> degrade to MEDIUM (skip planning)
+%%   MEDIUM -> CB_ORCHESTRATOR OPEN -> degrade to LOW (Concierge calls Fabric direct)
+%%   LOW -> CB_FABRIC OPEN -> canned response
+%%
+%% PERFORMANCE BUDGET:
+%%   Orchestrator overhead (excl. Fabric + Planner): < 15ms P99
+%%   MEDIUM end-to-end: 10s | HIGH end-to-end: 45s
+%%   DAG typical: 3-8 steps | max: 50 | concurrent per wave: up to 10
+%%   Token budget: plan.token_budget_max enforced at wave boundaries (ORCH-14)
+%%
+%% ADAPTIVE BLIND DAG (Agent-Aware Extensions):
+%%   The Orchestrator remains a PURE DETERMINISTIC ACTOR (NO LLM).
+%%   6 extensions handle the non-deterministic nature of LLM agent steps:
+%%   1. Output Schema Guard (ORCH-15): validate agent JSON output before param resolution
+%%   2. Conditional DAG Edges (ORCH-16): branch on step status/result at wave boundaries
+%%   3. Mid-DAG Micro-Replan (ORCH-13): checkpoint + Planner re-plan when discoveries change plan
+%%   4. Token Budget Tracker (ORCH-14): cumulative LLM spend with wave-boundary enforcement
+%%   5. Quality Gate: soft-fail detection for technically-successful-but-useless agent results
+%%   6. Sub-Step Observability: pass-through of Fabric agent sub-step progress events
+%%   All 6 are DETERMINISTIC (JSON Schema, boolean conditions, counters, thresholds).
+%%
+%% GOVERNING DOCUMENTS:
+%%   k1/orchestrator/orchestrator.md (28-section design doc)
+%%   architecture_diagrams/k1/k1_cognitive_architecture_skeleton.mmd (L2_ORCHESTRATOR)
+%%   k1/fabric/fabric.mmd (caller touchpoints)
+%%   k1/concierge/concierge.mmd (FabricOrchestratorAdapter, DeltaBusAdapter)
+%%   docs/architecture/whiteboard_k1/whiteboard_concierge_orchestrator_planner_fabric.md
+%%   ADRs: ADR-0006 (superseded), ADR-0005, ADR-0007, ADR-0017, ADR-0028
+%% =====================================================================================
+
+subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Deterministic Actor)"]
+  direction TB
+
+  %% ==================================================================================
+  %% ORCHESTRATOR CORE -- Central Dispatch (No LLM, No Tools)
+  %% ==================================================================================
+
+  subgraph ORCH_CORE["Orchestrator Core (Central Dispatch)"]
+    direction TB
+
+    ORCH_ACTOR["OrchestratorActor<br/>Pure deterministic logic, central dispatch<br/>NO LLM, NO tools, NEVER writes SessionState<br/>---<br/>Dequeue from Mailbox, route by type:<br/>  TaskEnvelope(MEDIUM): 1-2 CapReq direct to Fabric<br/>  TaskEnvelope(HIGH): PlanRequest -> Planner -> DAG<br/>  WorkflowRunRequest: rehydrate -> DAG (no Planner)<br/>  CommittedPlan: execute DAG immediately<br/>---<br/>Aggregates all results -> AggregatedResult"]:::actor
+
+    ORCH_MAILBOX["Orchestrator Mailbox<br/>MPSC queue + WFQ priority: REALTIME<br/>Single inbound entry point<br/>---<br/>Producers:<br/>  Concierge DISPATCHING (TaskEnvelope)<br/>  Planner (CommittedPlan via k1.planner.plan.ready.v1)<br/>  Workflow Scheduler (WorkflowRunRequest)<br/>  Workflow Provider (rehydrated sub-workflow plan)"]:::mailbox
+
+    FABRIC_GATEWAY["Fabric Gateway<br/>Bridge to Capability Fabric L2.5<br/>All step execution routes through here<br/>---<br/>execute(CapabilityRequest) -> CapabilityResult<br/>execute_batch(CapReq[]) -> CapResult[] (parallel)<br/>spawn(AgentContract) -> AgentHandle"]:::gateway
+  end
+
+  %% ==================================================================================
+  %% BLIND DAG EXECUTOR (Supersedes ADR-0006 Contract-Net)
+  %% ==================================================================================
+
+  subgraph DAG_EXECUTOR["Adaptive Blind DAG Executor (Heart of HIGH-Tier Execution)"]
+    direction TB
+
+    subgraph DAG_ENGINE_GROUP["DAG Engine"]
+      direction TB
+
+      DAG_ENGINE["DAG Engine<br/>Builds execution waves from<br/>CommittedPlan.dependencies graph<br/>Topological sort into parallel batches"]:::engine
+
+      TOPO_WALKER["Topological Walker<br/>Walks CommittedPlan.steps[]<br/>Wave N: steps whose deps all in Wave N-1<br/>Steps in same wave run concurrently"]:::engine
+
+      PARALLEL_DAG["Parallel Executor<br/>execute_batch(wave_steps[])<br/>await_all(pending) per wave<br/>Up to 10 concurrent steps per wave"]:::engine
+    end
+
+    subgraph PARAM_RESOLUTION["Parameter Resolution"]
+      PARAM_RESOLVER["Parameter Reference Resolver<br/>Resolves $step_id.result.path at execution time<br/>e.g. $s3.result.contacts, $s1.result.venue<br/>Referenced step guaranteed complete by DAG order<br/>---<br/>META-AGENT CREATION (4.5.9):<br/>Also resolves CAPABILITY NAMES from prior results:<br/>  capability: $step_1.result.agent_name<br/>  -> resolves to dynamically created agent name<br/>Required for build_agent -> execute created agent flow<br/>Pattern: build_agent returns {agent_name: agent.execute.X}<br/>  next step references $step_1.result.agent_name<br/>  ParamResolver substitutes before Fabric.execute()"]:::engine
+    end
+
+    subgraph RETRY_FAILURE["Retry & Failure Handling"]
+      direction TB
+
+      STEP_RETRY["Step Retry<br/>Policy: 2 retries then graceful failure (ORCH-06)<br/>Same capability, same params per retry<br/>Retry delay: 0ms (immediate)"]:::recovery
+
+      STEP_CANCEL["Step Cancellation<br/>On parent failure: CANCEL all transitive dependents<br/>Independent steps CONTINUE (ORCH-07)<br/>Cancelled steps appear in AggregatedResult"]:::recovery
+
+      SAGA_RECOVERY["Saga Recovery<br/>When side-effect step fails after earlier side-effect succeeded:<br/>Execute compensations in REVERSE order<br/>Compensation per capability contract YAML<br/>If compensation fails: dead-letter + telemetry alert"]:::recovery
+    end
+
+    subgraph CONSTRAINT_ENGINE["Constraint Resolution Engine"]
+      direction TB
+
+      CONSTRAINT_MGR["Constraint Manager<br/>Pre-execution validation:<br/>All capabilities exist? Params satisfiable?<br/>Safety band OK? Time within budget?"]:::engine
+
+      ITERATION_CTRL["Iteration Controller<br/>Max 3 resolution cycles<br/>Cycle1: Fabric-aware alternatives<br/>Cycle2: Try alt capabilities, re-validate<br/>Cycle3: Fallback -> HIL question to user<br/>After 3: graceful failure + explanation"]:::engine
+
+      CAP_RESOLVER["Capability Constraint Resolver<br/>Queries Fabric Capability Registry:<br/>Is capability available? Provider ONLINE?<br/>Safety band allowed? Suggests alternatives"]:::engine
+
+      FALLBACK_TRIGGER["Fallback Trigger<br/>Routes to HIL when automated resolution stalls<br/>Question routed via K1 Bus -> Concierge"]:::hil
+    end
+
+    RESULT_AGGREGATOR["Result Aggregator<br/>Collects per step: CapResult, duration,<br/>status (COMPLETED|FAILED|CANCELLED|SKIPPED),<br/>error details, retry attempts consumed<br/>---<br/>AggregatedResult:<br/>  total_steps, completed, failed, cancelled, skipped<br/>  total_tokens_consumed, budget_utilization<br/>  success: true only if zero failures"]:::engine
+
+    subgraph ADAPTIVE_DAG["Agent-Aware Extensions (All Deterministic -- NO LLM)"]
+      direction TB
+
+      OUTPUT_SCHEMA_GUARD["Output Schema Guard (ORCH-15)<br/>Validates agent result.data against step.output_schema<br/>JSON Schema validation: O(n) in field count<br/>---<br/>PASS: proceed to param resolution<br/>FAIL: retry with schema_hint in CapReq<br/>  (Fabric injects schema into agent prompt)<br/>  Max 1 schema retry (separate from normal retries)<br/>FAIL after retry: step FAILED, deps CANCELLED<br/>Prevents silent data corruption in DAG chain"]:::guard
+
+      CONDITIONAL_EVAL["Conditional Edge Evaluator (ORCH-16)<br/>Evaluates boolean conditions on prior results<br/>at wave boundaries, BEFORE step dispatch<br/>---<br/>Condition language (deterministic):<br/>  step.status == COMPLETED | FAILED | CANCELLED<br/>  step.result.path == literal | > number | != null<br/>  AND | OR | NOT operators<br/>---<br/>FALSE: step marked SKIPPED (intentional branch)<br/>TRUE: step dispatched normally<br/>Topological sort still works (conditions are guards)"]:::guard
+
+      MICRO_REPLAN["Micro-Replan Checkpoint (ORCH-13)<br/>After each wave: check CapResult.discoveries[]<br/>---<br/>Discovery = agent-reported new info<br/>  (facts, constraints, corrections)<br/>Heuristic: discovery.field overlaps remaining params?<br/>---<br/>If yes AND replan not used (max 1 per DAG):<br/>  1. Checkpoint completed results<br/>  2. MicroReplanRequest -> Planner<br/>  3. Planner adjusts remaining steps only<br/>  4. Replace remaining waves, resume<br/>If Planner fails: continue original plan"]:::guard
+
+      TOKEN_TRACKER["Token Budget Tracker (ORCH-14)<br/>Cumulative LLM token counter per DAG<br/>---<br/>plan.token_budget_max set by Planner<br/>After each step: add result.tokens_consumed<br/>At wave boundary:<br/>  >= 80%: WARN event, compress remaining prompts<br/>  >= 95%: skip optional steps (no dependents)<br/>  >= 100%: HARD STOP, aggregate partial results<br/>---<br/>Cost: O(1) per step (counter + threshold)"]:::guard
+
+      QUALITY_GATE["Quality Gate<br/>Soft failure detection for agent results<br/>---<br/>quality_score from Fabric (deterministic):<br/>  0.5 * schema_completeness +<br/>  0.3 * content_density +<br/>  0.2 * (1.0 - null_ratio)<br/>---<br/>quality >= 0.7: PASS<br/>0.3 <= quality < 0.7: RETRY with quality hint<br/>quality < 0.3: SOFT FAIL (treat as FAILED)<br/>null (non-agent): always PASS (bypass gate)"]:::guard
+
+      EXECUTION_MONITOR["Execution Monitor (GAP-2 fix)<br/>Emits step progress narration to user via K1 Bus (delta lane)<br/>---<br/>After each wave completion:<br/>  Emit k1.hil.progress.v1 via PORT_DELTA<br/>  Content: step_id, summary, progress_pct<br/>  Priority: BACKGROUND (~200 tokens narration)<br/>---<br/>user.override handling:<br/>  Receives via PORT_EVENT subscription<br/>  Actions: CANCEL_DAG | MODIFY_PARAMS | CONTINUE<br/>  On CANCEL: interrupt flag set, cancel at next wave"]:::hil
+    end
+  end
+
+  %% ==================================================================================
+  %% USER WORKFLOW SYSTEM (Saved Plans as Scheduled/Event-Driven)
+  %% ==================================================================================
+
+  subgraph WORKFLOW_SYSTEM["User Workflow System"]
+    direction TB
+
+    WF_REGISTRY["Workflow Registry<br/>Stores WorkflowSpec + TriggerSpec<br/>Created when user says 'do this every Monday'<br/>Source: frozen CommittedPlan from HIGH execution"]:::registry
+
+    WF_VERSION["Workflow Version Pointer<br/>Active version per workflow<br/>Monotonic bump on re-plan"]:::registry
+
+    WF_COMPILER["Workflow Compiler<br/>Rehydrates frozen DAG from WorkflowSpec<br/>Validates: all capabilities still exist?<br/>Resolves dynamic params (today's date, etc.)<br/>Schema mismatch: SMALL (auto-fill) / LARGE (gap)"]:::engine
+
+    WF_SCHEDULER["Workflow Scheduler<br/>Trigger types: cron | event | manual<br/>Shares System Clock with Concierge<br/>Reads user timezone from SessionState<br/>Due -> WorkflowRunRequest -> Orchestrator Mailbox"]:::scheduling
+
+    SYSTEM_CLOCK["System Clock<br/>UTC + device_local_time()<br/>Shared: Concierge Temporal Resolution"]:::engine
+
+    WF_SUPERVISOR["Workflow Run Supervisor<br/>Creates Run Manifest per execution<br/>Manages leases + guards + lifecycle<br/>Status: RUNNING | COMPLETED | FAILED | ABORTED"]:::supervisor
+
+    RUN_MANIFEST["Run Manifest<br/>run_id, workflow_id, version<br/>compiled_hash, trigger_type, status"]:::supervisor
+
+    CROSS_WF_RESOLVER["Cross-Workflow Resolver<br/>Steps with capability workflow.run.* trigger sub-workflows<br/>Looks up in Registry, Compiler rehydrates"]:::engine
+
+    WF_DEPTH_GUARD["Workflow Depth Guard<br/>Max depth: 3 (ORCH-08)<br/>Cycle detection pre-validated by Planner Stage 3"]:::safety
+
+    GAP_DETECTOR["Proactive Gap Detector<br/>Listens: k1.fabric.capability.registered.v1,<br/>k1.fabric.capability.unregistered.v1,<br/>k1.fabric.provider.health.changed.v1<br/>Scans active WorkflowSpecs<br/>SMALL gap: auto-fill defaults, notify user<br/>LARGE gap: store ProactiveGap, ask user when free"]:::engine
+  end
+
+  %% ==================================================================================
+  %% CONNECTOR ECOSYSTEM (MCP Server Management + Tool Registration)
+  %% ==================================================================================
+
+  subgraph CONNECTOR_ECO["Connector Ecosystem"]
+    direction TB
+
+    LOCAL_MCP["Local MCP Servers<br/>Device-hosted, always available (Edge-First)<br/>Calendar, contacts, notes, file system"]:::local
+
+    REMOTE_MCP["Remote MCP Servers<br/>Company-hosted, requires network<br/>Restaurant booking, weather, banking"]:::remote
+
+    K0_PROXY["K0 Connector Proxy<br/>Cloud-hosted (optional enhancement)<br/>Auth proxy, caching, rate limiting"]:::k0
+
+    MCP_DISCOVERY["MCP Tool Discovery<br/>Scans MCP servers for available tools<br/>Extracts tool schema (name, params, desc)"]:::engine
+
+    MCP_REGISTRAR["MCP Capability Registrar<br/>Maps to FamilyOS naming: tool.{type}.{name}<br/>Generates tool contract YAML<br/>Registers in Fabric Capability Registry"]:::engine
+
+    MCP_FACTORY["MCP Provider Factory<br/>Creates capability handlers for MCP tools<br/>Instantiates MCP-backed providers for Fabric"]:::engine
+
+    CONNECTOR_SANDBOX["Connector Sandbox<br/>Per-connector isolation:<br/>Process isolation, resource limits,<br/>network allowlist, timeout enforcement,<br/>output schema validation"]:::safety
+  end
+
+  %% ==================================================================================
+  %% PORTS -- Boundary Contracts (Hexagonal Architecture)
+  %% 8 ports define all external interactions. Internal services call ports,
+  %% NEVER external systems directly. Same pattern as Concierge.
+  %% ==================================================================================
+
+  subgraph PORTS["Ports (Boundary Contracts)"]
+    direction TB
+
+    PORT_MAILBOX["IMailboxPort<br/>enqueue(message) -> QueuePosition<br/>dequeue() -> Message | None<br/>depth() -> int<br/>priority_class: REALTIME"]:::port
+
+    PORT_FABRIC["IFabricGatewayPort<br/>execute(CapabilityRequest) -> CapabilityResult<br/>execute_batch(CapReq[]) -> CapResult[]<br/>spawn(AgentContract) -> AgentHandle<br/>query_registry(capability_name) -> RegistryEntry | None"]:::port
+
+    PORT_PLANNER["IPlannerPort<br/>request_plan(PlanRequest) -> PlanAck<br/>await_plan(request_id) -> CommittedPlan<br/>cancel_plan(request_id) -> void<br/>micro_replan(MicroReplanRequest) -> CommittedPlan | null"]:::port
+
+    PORT_STATE["IStateReadPort<br/>read(section) -> SectionData (multi-reader, lock-free)<br/>snapshot(sections[]) -> ContextSnapshot<br/>---<br/>READ ONLY -- Orchestrator NEVER writes (ORCH-01)"]:::port
+
+    PORT_DELTA["IDeltaEmitPort<br/>emit(delta_type, payload, trace_id) -> void<br/>emit_progress(step_id, summary) -> void<br/>FIRE-AND-FORGET, RECOVERABLE on failure"]:::port
+
+    PORT_BRIDGE["IBridgeWritePort<br/>submit_audit(RunManifest) -> void<br/>submit_plan(CommittedPlan, wal_offset) -> void<br/>FIRE-AND-FORGET (Edge-First: continues if K0 offline)"]:::port
+
+    PORT_EVENT["IEventSubscriptionPort<br/>subscribe(topic, handler) -> Subscription<br/>unsubscribe(sub_id) -> void<br/>Topics: k1.planner.plan.ready.v1, plan.failed.v1, plan.cancelled.v1,<br/>        k1.capability.*, k1.fabric.capability.registered.v1,<br/>        k1.fabric.capability.unregistered.v1, k1.fabric.provider.health.changed.v1,<br/>        k1.workflow.trigger.due,
+      k1.hil.override_response.v1,
+      k1.hil.fallback_response.v1"]:::port
+
+    PORT_WORKFLOW_STORAGE["IWorkflowStoragePort<br/>save_workflow(WorkflowDef) -> void<br/>load_workflow(workflow_id) -> WorkflowDef | None<br/>list_active_workflows() -> WorkflowDef[]<br/>delete_workflow(workflow_id) -> void<br/>---<br/>SQLite-backed workflow persistence<br/>Used by WorkflowSchedulerService (ORCH-16)<br/>Survives process restart (crash recovery)"]:::port
+  end
+
+  %% ==================================================================================
+  %% ADAPTERS -- Infrastructure Bindings (Production + Test)
+  %% ==================================================================================
+
+  subgraph ADAPTERS["Adapters (Infrastructure Bindings)"]
+    direction TB
+
+    subgraph ADAPTERS_PROD["Production Adapters"]
+      direction TB
+
+      ADAPT_MAILBOX["MailboxAdapter<br/>In-memory MPSC + WFQ<br/>Priority: REALTIME<br/>---<br/>Backpressure: reject at depth 100<br/>Error: RECOVERABLE (re-enqueue once)"]:::adapter
+
+      ADAPT_FABRIC["FabricGatewayAdapter<br/>Routes to Capability Fabric L2.5<br/>Protected by CB_FABRIC (30s, 5/min) (owned upstream)<br/>---<br/>Step timeout enforcement per CapReq<br/>Error: DEGRADED (partial results)<br/>CB OPEN: capability unavailable"]:::adapter
+
+      ADAPT_PLANNER["PlannerAdapter<br/>Routes PlanRequest to Planner Mailbox<br/>Protected by CB_PLANNER (45s, 2/min) (owned upstream)<br/>---<br/>Await plan with timeout (Planner budget)<br/>Error: DEGRADED (skip planning, try MEDIUM)<br/>CB OPEN: degrade HIGH -> MEDIUM"]:::adapter
+
+      ADAPT_STATE["StateReadAdapter<br/>Multi-reader lock-free SessionState access<br/>Protected by CB_SESSIONSTATE (100ms, 10/min) (owned upstream)<br/>---<br/>Snapshot at TaskEnvelope dequeue time<br/>Re-read safety_band at wave boundaries (HIGH)<br/>Error: DEGRADED (stale cached snapshot)"]:::adapter
+
+      ADAPT_DELTA["DeltaEmitAdapter<br/>Emits to K1 Bus (one physical; event+delta lanes)<br/>---<br/>Fire-and-forget: emit failure = log + skip<br/>Never TERMINAL (Edge-First: best-effort)<br/>Uses cognitive_trace_id on all deltas"]:::adapter
+
+      ADAPT_BRIDGE["BridgeWriteAdapter<br/>Fire-and-forget writes to K0 via Bridge<br/>---<br/>Workflow audit records, CommittedPlan WAL<br/>Error: RECOVERABLE (skip, continues offline)<br/>Edge-First: never blocks on K0"]:::adapter
+
+      ADAPT_EVENT["EventSubscriptionAdapter<br/>K1 Event Bus pub/sub binding<br/>---<br/>Topics: plan.ready, capability.*, workflow.trigger<br/>Error: RECOVERABLE (resubscribe)"]:::adapter
+    end
+
+    subgraph ADAPTERS_TEST["Test Adapters"]
+      direction TB
+
+      ADAPT_TEST_MAILBOX["TestMailboxAdapter<br/>In-memory queue, inject messages"]:::adapter_test
+      ADAPT_TEST_FABRIC["MockFabricAdapter<br/>Scripted CapabilityResults<br/>Simulate failures, timeouts"]:::adapter_test
+      ADAPT_TEST_PLANNER["MockPlannerAdapter<br/>Scripted CommittedPlans<br/>Simulate planning failure"]:::adapter_test
+      ADAPT_TEST_STATE["MockStateReadAdapter<br/>Scripted SessionState snapshots"]:::adapter_test
+      ADAPT_TEST_DELTA["TestDeltaAdapter<br/>Captures emitted deltas for assertion"]:::adapter_test
+      ADAPT_TEST_BRIDGE["MockBridgeAdapter<br/>Captures audit writes for assertion"]:::adapter_test
+      ADAPT_TEST_EVENT["TestEventAdapter<br/>Fire events on demand for testing"]:::adapter_test
+    end
+  end
+
+  %% ==================================================================================
+  %% INVARIANTS -- Non-Negotiable Rules (12 rules, 5 categories)
+  %% ==================================================================================
+
+  subgraph INVARIANTS["Invariants (16 Non-Negotiable Rules)"]
+    direction TB
+
+    INV_IDENTITY["IDENTITY (ORCH-01..03)<br/>ORCH-01: NEVER writes SessionState (no IStateWritePort)<br/>ORCH-02: NO LLM -- zero model calls (no ILLMPort)<br/>ORCH-03: ZERO tools -- calls Fabric.execute() directly"]:::invariant
+
+    INV_EXECUTION["EXECUTION (ORCH-04..07)<br/>ORCH-04: Every step through Fabric (never direct provider)<br/>ORCH-05: DAG in topological order (no out-of-order)<br/>ORCH-06: Step retry: 2 retries then graceful failure<br/>ORCH-07: Dependent CANCELLED on parent fail; independent CONTINUE"]:::invariant
+
+    INV_WORKFLOW["WORKFLOW (ORCH-08..09)<br/>ORCH-08: Workflow depth: max 3 (sub-workflow nesting limit)<br/>ORCH-09: All events emitted with cognitive_trace_id"]:::invariant
+
+    INV_TIER["TIER (ORCH-10..11)<br/>ORCH-10: MEDIUM: max 2 Fabric calls (no planning)<br/>ORCH-11: HIGH: CommittedPlan required before execution"]:::invariant
+
+    INV_CROSS["CROSS-WORKFLOW (ORCH-12)<br/>ORCH-12: Cross-workflow triggers validated for cycles"]:::invariant
+
+    INV_ADAPTIVE["ADAPTIVE DAG (ORCH-13..14)<br/>ORCH-13: Max 1 micro-replan per DAG (no infinite loops)<br/>ORCH-14: DAG tokens MUST NOT exceed plan.token_budget_max"]:::invariant
+
+    INV_AGENT["AGENT GUARD (ORCH-15..16)<br/>ORCH-15: Agent output validated against output_schema<br/>before parameter resolution (prevents silent corruption)<br/>ORCH-16: Conditional edges evaluated ONLY at wave boundaries<br/>using deterministic boolean expressions (no LLM)"]:::invariant
+  end
+
+  %% ==================================================================================
+  %% PERFORMANCE BASELINES (System-Owned + Budget Envelopes)
+  %% ==================================================================================
+
+  subgraph PERF_BASELINES["Performance Baselines"]
+    direction TB
+
+    PERF_SYSTEM["SYSTEM-OWNED LATENCIES (P99)<br/>Mailbox dequeue + routing decision: < 1ms<br/>DAG wave construction (topological sort): < 5ms<br/>CapabilityRequest construction: < 1ms per step<br/>Parameter reference resolution: < 1ms per step<br/>Output schema validation: < 1ms per step (ORCH-15)<br/>Conditional edge evaluation: < 1ms per wave (ORCH-16)<br/>Token budget check: < 0.1ms per wave (ORCH-14)<br/>Quality gate check: < 0.1ms per step<br/>Discovery heuristic: < 1ms per wave (ORCH-13)<br/>Result aggregation: < 2ms<br/>Progress delta emission: < 1ms (fire-and-forget)<br/>Constraint validation (pre-execution): < 5ms<br/>---<br/>Total Orchestrator overhead: < 18ms<br/>(excludes Fabric + Planner + micro-replan time)"]:::perf
+
+    PERF_ENVELOPES["BUDGET ENVELOPES (Tier Limits)<br/>MEDIUM total: 10s (Orch < 15ms + Fabric 1-9.9s)<br/>HIGH total: 45s (Orch < 15ms + Planner 10-30s + Fabric varies)<br/>15s headroom before CB_ORCHESTRATOR 60s timeout<br/>Step timeout (default): 30s per step<br/>---<br/>DAG targets:<br/>  Typical steps per plan: 3-8<br/>  Max steps per plan: 50<br/>  Concurrent steps per wave: up to 10<br/>  Retry delay: 0ms (immediate)"]:::perf
+  end
+
+  %% ==================================================================================
+  %% INTERNAL SERVICES -- Codeable Components (~280 tests estimated)
+  %% 6 services derived from tracing every subgraph. Each service owns behavioral
+  %% flows, enforces invariants, and uses ports from hexagonal architecture.
+  %% Dependency: OrchestratorService -> {DAGExecutor, WorkflowEngine, ConnectorManager}
+  %%   DAGExecutor -> {StepRunner, ConstraintResolver}
+  %%   WorkflowEngine -> {WorkflowCompiler, WorkflowScheduler, GapDetector}
+  %% No circular dependencies.
+  %% ==================================================================================
+
+  subgraph SERVICES["Internal Services (6 Codeable Components -- ~380 Tests)"]
+    direction TB
+
+    SVC_ORCH["OrchestratorService<br/>process(message) -> ProcessResult<br/>route_task(TaskEnvelope) -> RouteDecision (MEDIUM|HIGH)<br/>dispatch_medium(envelope) -> AggregatedResult<br/>dispatch_high(envelope) -> AggregatedResult<br/>dispatch_workflow(WorkflowRunRequest) -> AggregatedResult<br/>receive_plan(CommittedPlan) -> void<br/>receive_micro_replan(MicroReplanResult) -> void<br/>aggregate(step_results[]) -> AggregatedResult<br/>---<br/>Central entry point. Routes by message type.<br/>~55 tests"]:::service
+
+    SVC_DAG["DAGExecutor<br/>execute(CommittedPlan) -> AggregatedResult<br/>build_waves(steps[], deps) -> Wave[]<br/>execute_wave(wave, ctx) -> WaveResult<br/>resolve_params(params, results) -> ResolvedParams<br/>evaluate_conditions(step, deps, results) -> bool (ORCH-16)<br/>validate_output(result, schema) -> SchemaResult (ORCH-15)<br/>check_quality(result) -> QualityDecision<br/>check_discoveries(wave_results) -> Discovery[] (ORCH-13)<br/>cancel_dependents(failed_step, deps) -> CancelledSteps<br/>compensate(completed_with_effects[]) -> CompensationResult<br/>---<br/>Adaptive topological walk: schema guard, conditional edges,<br/>quality gate, token budget, micro-replan, retry, saga.<br/>~120 tests"]:::service
+
+    SVC_STEP["StepRunner<br/>run(step, context, attempt) -> CapabilityResult<br/>retry(step, last_result, attempt) -> CapabilityResult<br/>retry_with_schema_hint(step, schema) -> CapabilityResult<br/>retry_with_quality_hint(step) -> CapabilityResult<br/>should_retry(result) -> bool<br/>build_request(step, resolved_params) -> CapabilityRequest<br/>---<br/>Single step execution with retry policy.<br/>Schema retry + quality retry (separate budgets).<br/>Uses IFabricGatewayPort.execute() per step.<br/>~55 tests"]:::service
+
+    SVC_CONSTRAINT["ConstraintResolver<br/>validate(CommittedPlan) -> ValidationResult<br/>check_capabilities(steps[]) -> CapabilityCheck[]<br/>find_alternatives(missing_cap) -> Alternative[]<br/>resolve_cycle(cycle_num, issues[]) -> ResolutionResult<br/>trigger_hil(unresolved[]) -> HILRequest<br/>receive_hil_response(FallbackResponse) -> ResolutionResult<br/>---<br/>Max 3 cycles. Fabric-aware. HIL fallback.<br/>Fallback response via k1.hil.fallback_response.v1<br/>~40 tests"]:::service
+
+    SVC_WORKFLOW["WorkflowEngine<br/>trigger(WorkflowRunRequest) -> AggregatedResult<br/>save_workflow(CommittedPlan, TriggerSpec) -> WorkflowSpec<br/>compile(workflow_id) -> CommittedPlan<br/>detect_gaps(contract_update_event) -> ProactiveGap[]<br/>resolve_cross(workflow_step) -> CommittedPlan<br/>check_depth(current_depth) -> bool<br/>---<br/>Registry, compiler, scheduler, gap detection.<br/>~45 tests"]:::service
+
+    SVC_CONNECTOR["ConnectorManager<br/>discover_tools(server) -> ToolSchema[]<br/>register_tools(schemas[]) -> RegistrationResult<br/>create_providers(schemas[]) -> Provider[]<br/>health_check(server_id) -> HealthStatus<br/>sandbox_config(server_id) -> SandboxPolicy<br/>---<br/>MCP discovery, registration, factory, sandbox.<br/>~25 tests"]:::service
+  end
+
+  %% ==================================================================================
+  %% LIFECYCLE -- Orchestrator Lifecycle (5 Phases)
+  %% OrchestratorService owns init/shutdown/crash.
+  %% Run phases are implicit (mailbox processing loop).
+  %% ==================================================================================
+
+  subgraph LIFECYCLE["Lifecycle (5 Phases)"]
+    direction TB
+
+    LC_INIT["init(session_id)<br/>Owner: OrchestratorService<br/>---<br/>1. Create 6 services (no I/O)<br/>2. Connect 8 ports<br/>3. Discover MCP servers (ConnectorManager)<br/>4. Register discovered tools in Fabric registry<br/>5. Load active workflows from Registry<br/>6. Start Workflow Scheduler timer<br/>7. Subscribe to event topics (plan.ready, capability.*)<br/>8. Start mailbox processing loop<br/>---<br/>Max init time: 500ms (MCP discovery is async)"]:::lifecycle
+
+    LC_RUN_START["run_start(message)<br/>Owner: OrchestratorService<br/>---<br/>1. Dequeue message from Mailbox<br/>2. Read SessionState snapshot via IStateReadPort<br/>3. Classify message: TaskEnvelope | CommittedPlan |<br/>   WorkflowRunRequest<br/>4. Emit k1.orchestration.task.accepted delta<br/>5. Route to dispatch_medium | dispatch_high |<br/>   dispatch_workflow | receive_plan"]:::lifecycle
+
+    LC_RUN_END["run_end(aggregated_result)<br/>Owner: OrchestratorService<br/>---<br/>1. Emit k1.orchestration.dag.completed delta<br/>2. Send AggregatedResult to Concierge COMPANIONING<br/>3. Write audit record via IBridgeWritePort<br/>   (fire-and-forget, Edge-First)<br/>4. If workflow: update Run Manifest status<br/>5. Resume mailbox processing loop"]:::lifecycle
+
+    LC_SHUTDOWN["shutdown()<br/>Owner: OrchestratorService<br/>---<br/>1. Stop accepting new messages (mailbox drain)<br/>2. Wait active DAG execution (30s) or force-cancel<br/>3. Compensate any in-flight side-effect steps (Saga)<br/>4. Stop Workflow Scheduler timer<br/>5. Unsubscribe from event topics<br/>6. Final audit write to K0 (5s wait)<br/>7. Disconnect ports (LIFO)"]:::lifecycle
+
+    LC_CRASH_RECOVERY["crash_recovery(session_id)<br/>Owner: OrchestratorService<br/>---<br/>1. Bootstrap (6 services + 8 ports)<br/>2. Detect: check K0 WAL for in-flight CommittedPlan<br/>3. If found: load plan, check step completion markers<br/>4. Resume from last completed wave (skip completed steps)<br/>5. If no WAL: clean start (no state to recover)<br/>6. Restart MCP discovery + workflow scheduler<br/>7. Resume mailbox processing loop<br/>---<br/>Max loss: partial DAG progress (retry from last wave)"]:::lifecycle
+  end
+
+  %% ==================================================================================
+  %% CONCURRENCY MODEL -- Mailbox Processing Loop
+  %% Single-threaded async event loop (same pattern as Concierge).
+  %% One message at a time from mailbox. Parallel only within DAG waves.
+  %% ==================================================================================
+
+  subgraph CONCURRENCY["Concurrency Model"]
+    direction TB
+
+    CONC_LOOP["Mailbox Processing Loop<br/>---<br/>while running:<br/>  msg = mailbox.dequeue()  # blocks until available<br/>  run_start(msg)<br/>  result = process(msg)    # may fan out DAG waves<br/>  run_end(result)<br/>---<br/>Single-threaded: one message at a time<br/>Parallel only within execute_batch() per wave<br/>No concurrent DAG executions (V1)"]:::concurrency
+
+    CONC_INTERRUPT["Interrupt Handling<br/>---<br/>Concierge sends interrupt via K1 Bus (delta lane):<br/>  k1.orchestration.cancel_request<br/>At next wave boundary: check interrupt flag<br/>If set: cancel remaining waves, compensate (Saga)<br/>Return partial AggregatedResult"]:::concurrency
+  end
+
+end
+
+%% =====================================================================================
+%% EXTERNAL TOUCHPOINTS (Components Orchestrator Interacts With)
+%% =====================================================================================
+
+subgraph TOUCHPOINTS["External Touchpoints (Orchestrator Interfaces)"]
+  direction TB
+
+  subgraph TP_CONCIERGE["Concierge (L1 -- Conversation Conductor)"]
+    direction TB
+
+    CONCIERGE_DISPATCHING["Concierge DISPATCHING<br/>Creates TaskEnvelope{intent, context, tier}<br/>MEDIUM/HIGH only (LOW bypasses Orchestrator)<br/>-> FabricOrchestratorAdapter -> Orchestrator Mailbox<br/>Latency: 2ms envelope dispatch"]:::concierge
+
+    CONCIERGE_COMPANIONING["Concierge COMPANIONING<br/>Receives AggregatedResult from Orchestrator<br/>Stages in TOOL_RESULT_BUFFER<br/>Triggers DELIVERING: LLM final response"]:::concierge
+
+    CONCIERGE_PROGRESSING["Concierge PROGRESSING<br/>Receives step progress via K1 Bus (delta lane)<br/>Streams to user: 'Booking restaurant...'"]:::concierge
+
+    FABRIC_ORCH_ADAPTER["FabricOrchestratorAdapter (Concierge side)<br/>Owns CB_ORCHESTRATOR (60s, 2/min)<br/>Owns CB_PLANNER (45s, 2/min)<br/>Owns CB_FABRIC (30s, 5/min)<br/>Owns CB_MCP (10s, 3/min)<br/>TIER_DEGRADATION: HIGH->MED->LOW->canned"]:::adapter
+  end
+
+  subgraph TP_PLANNER["Planner (L3 -- LLM-Powered 4-Stage Pipeline)"]
+    direction TB
+
+    PLANNER_MAILBOX["Planner Mailbox<br/>Receives PlanRequest from Orchestrator"]:::planner
+
+    PLANNER_PIPELINE["Planner Pipeline<br/>Stage1 SKETCH: LLM + discover_capabilities()<br/>Stage2 EXPAND: LLM + find_relevant_prompts()<br/>Stage3 VALIDATE: DAG acyclic, caps exist, safe<br/>Stage4 COMMIT: persist CommittedPlan to K0 WAL<br/>Returns CommittedPlan via k1.planner.plan.ready.v1"]:::planner
+
+    PLANNER_HIL["Planner HIL<br/>Requirement clarification, plan approval"]:::hil
+  end
+
+  subgraph TP_FABRIC["Capability Fabric (L2.5 -- Resolution + Execution)"]
+    direction TB
+
+    FABRIC_EXEC["Fabric Execution API<br/>execute(CapReq) -> CapResult<br/>execute_batch(CapReq[]) -> CapResult[]<br/>Stateless per request (no DAG awareness)<br/>Pipeline: Resolve -> Policy -> Context -> Execute<br/>Providers: MCP | WASM | BRIDGE | AGENT | WORKFLOW"]:::fabric
+
+    FABRIC_REGISTRY["Fabric Capability Registry<br/>Agent/Tool/Workflow/Prompt index<br/>100K+ items at scale<br/>query(name) -> RegistryEntry | None<br/>Used by ConstraintResolver + ConnectorManager"]:::registry
+
+    FABRIC_AGENT_FACTORY["Fabric Agent Factory<br/>Spawns per-step workers from YAML templates<br/>Each gets: Mailbox, LLM handle (via Model Hub), SessionState reader,<br/>scoped tools from tools_granted[] (FAB-07)<br/>LLM: capability-driven plugin architecture<br/>Capabilities scoped per AgentContract<br/>See: k1/model_hub/model_hub.mmd"]:::fabric
+
+    FABRIC_META_AGENT["Fabric Meta-Agent Creation (Epic 4.5)<br/>---<br/>tool.write.build_agent: MCP tool executed as DAG step<br/>Validates spec, composes contract, registers agent<br/>Returns: {agent_name, status}<br/>---<br/>Meta-Agent DAG Pattern:<br/>  step_1: build_agent -> {agent_name: agent.execute.X}<br/>  step_2: capability=$step_1.result.agent_name<br/>  ParamResolver resolves dynamically (4.5.9)<br/>---<br/>Safety: AMBER min, no recursive creation, depth=1<br/>See: k1/fabric/fabric.mmd META_AGENT_CREATION"]:::fabric
+
+    FABRIC_WORKFLOW_PROVIDER["Fabric Workflow Provider<br/>Rehydrates frozen WorkflowSpec<br/>Routes to Orchestrator for DAG execution"]:::fabric
+  end
+
+  subgraph TP_SESSIONSTATE["SessionState (Read-Only Access -- ORCH-01)"]
+    direction TB
+
+    SS_BELIEFS["beliefs_active<br/>Current facts, entities"]:::ss
+    SS_CONTROL["control<br/>intents, domains, safety_band,<br/>temporal_context (sub-field)"]:::ss
+    SS_PERSONA["persona<br/>Personality, style config"]:::ss
+    SS_TEMPORAL["control.temporal_context<br/>Resolved time references<br/>(read-alias; data lives in control)"]:::ss
+    SS_SAFETY["control.safety_band<br/>GREEN | AMBER | RED | CRISIS<br/>Re-read at wave boundaries (HIGH)"]:::ss
+  end
+
+  subgraph TP_BUS["K1 Bus (one physical bus; two logical lanes)"]
+    direction TB
+
+    EVENT_BUS["K1 Bus — Event lane<br/>Topics: k1.*<br/>All events carry cognitive_trace_id"]:::bus
+
+    DELTA_BUS["K1 Bus — Delta lane<br/>k1.orchestration.delta.v1<br/>500ms aggregation -> Concierge FSM<br/>-> MutationGuard -> SessionState"]:::bus
+  end
+
+  subgraph TP_BRIDGE["Cross-Kernel Bridge (K0 Gateway)"]
+    direction TB
+
+    BRIDGE_CMD["Bridge Command Port<br/>Fire-and-forget writes to K0<br/>Workflow audit, CommittedPlan WAL<br/>Edge-First: continues if K0 offline"]:::bridge
+
+    BRIDGE_SSE["Bridge SSE Receiver<br/>K0 event stream<br/>k1.fabric.capability.registered.v1,<br/>k1.fabric.capability.unregistered.v1,<br/>k1.fabric.provider.health.changed.v1"]:::bridge
+  end
+
+  subgraph TP_CIRCUIT_BREAKERS["Circuit Breakers (Owned by Concierge FabricOrchestratorAdapter)"]
+    direction TB
+
+    CB_ORCH["CB_ORCHESTRATOR<br/>60s timeout, 2/min<br/>Fallback: degrade to LOW"]:::cb
+    CB_PLANNER2["CB_PLANNER<br/>45s timeout, 2/min<br/>Fallback: skip planning"]:::cb
+    CB_FABRIC2["CB_FABRIC<br/>30s timeout, 5/min<br/>Fallback: unavailable"]:::cb
+    CB_MCP["CB_MCP<br/>10s timeout, 3/min<br/>Fallback: tool offline<br/>Half-open probe: 30s"]:::cb
+  end
+
+  subgraph TP_LEARNING_MW["Memory Writer + Learning Loop (Downstream Consumers)"]
+    direction TB
+
+    TP_MW["Memory Writer<br/>Consumes: turn.complete.v1 (from Concierge)<br/>DAG outcomes flow: Orchestrator -> AggregatedResult<br/>-> Concierge turn_end -> turn.complete.v1 -> MW<br/>See: k1/memory_writer/memory_writer.mmd"]:::bus
+
+    TP_LL["Learning Loop<br/>Consumes: turn.complete.v1 (feedback detectors)<br/>DAG quality signals feed drift detection<br/>Orchestrator outcomes visible via turn context<br/>See: k1/learning/learning.mmd"]:::bus
+  end
+end
+
+%% =====================================================================================
+%% ERROR RECOVERY PATHS
+%% Adapters classify errors by severity. Same pattern as Concierge Epic 8.
+%% RECOVERABLE: retry/fallback in same phase
+%% DEGRADED: partial results, continue execution
+%% TERMINAL: abort DAG, return partial AggregatedResult
+%% =====================================================================================
+
+%% Error edges from adapters to OrchestratorService via ports
+ADAPT_FABRIC -->|"DEGRADED: step failed, retry?"| PORT_FABRIC
+ADAPT_FABRIC -->|"CB OPEN: capability unavailable"| PORT_FABRIC
+ADAPT_PLANNER -->|"DEGRADED: planning failed, skip?"| PORT_PLANNER
+ADAPT_PLANNER -->|"CB OPEN: degrade HIGH -> MEDIUM"| PORT_PLANNER
+ADAPT_STATE -->|"DEGRADED: stale snapshot"| PORT_STATE
+ADAPT_DELTA -->|"RECOVERABLE: log + skip"| PORT_DELTA
+ADAPT_BRIDGE -->|"RECOVERABLE: skip audit write"| PORT_BRIDGE
+ADAPT_MAILBOX -->|"RECOVERABLE: re-enqueue once"| PORT_MAILBOX
+
+%% =====================================================================================
+%% INTERNAL WIRING: Core -> DAG -> Workflows -> Connectors
+%% =====================================================================================
+
+%% Mailbox -> Actor
+ORCH_MAILBOX -->|"dequeue"| ORCH_ACTOR
+
+%% Actor -> Fabric Gateway (all Fabric calls)
+ORCH_ACTOR -->|"execute() per step"| FABRIC_GATEWAY
+
+%% Actor -> DAG Executor (HIGH tier + workflows)
+ORCH_ACTOR -->|"HIGH: execute_dag(CommittedPlan)"| DAG_ENGINE
+DAG_ENGINE -->|"build waves"| TOPO_WALKER
+TOPO_WALKER -->|"dispatch wave"| PARALLEL_DAG
+PARALLEL_DAG -->|"resolve $refs"| PARAM_RESOLVER
+
+%% DAG steps -> Fabric Gateway
+PARALLEL_DAG -->|"CapabilityRequest per step"| FABRIC_GATEWAY
+
+%% Retry / failure
+PARALLEL_DAG -->|"step failed"| STEP_RETRY
+STEP_RETRY -->|"retry exhausted"| STEP_CANCEL
+STEP_CANCEL -->|"side-effect rollback"| SAGA_RECOVERY
+
+%% Constraint resolution
+ORCH_ACTOR -->|"pre-execution validate"| CONSTRAINT_MGR
+CONSTRAINT_MGR -->|"iterate"| ITERATION_CTRL
+ITERATION_CTRL -->|"check availability"| CAP_RESOLVER
+ITERATION_CTRL -->|"cycle 3: stuck"| FALLBACK_TRIGGER\n\n%% HIL Fallback Response (GAP-1 fix: return path from user)\nPORT_EVENT -->|"k1.hil.fallback_response.v1"| FALLBACK_TRIGGER\nFALLBACK_TRIGGER -->|"user resolved: retry resolution"| ITERATION_CTRL
+
+%% Result aggregation
+PARALLEL_DAG -->|"step results"| RESULT_AGGREGATOR
+STEP_RETRY -->|"retry results"| RESULT_AGGREGATOR
+STEP_CANCEL -->|"cancelled steps"| RESULT_AGGREGATOR
+
+%% =====================================================================================
+%% ADAPTIVE BLIND DAG EDGES (Agent-Aware Extensions)
+%% =====================================================================================
+
+%% Output Schema Guard (ORCH-15)
+PARALLEL_DAG -->|"validate output against schema"| OUTPUT_SCHEMA_GUARD
+OUTPUT_SCHEMA_GUARD -->|"schema PASS"| PARAM_RESOLVER
+OUTPUT_SCHEMA_GUARD -->|"schema FAIL: retry with hint"| STEP_RETRY
+
+%% Conditional Edge Evaluator (ORCH-16)
+TOPO_WALKER -->|"evaluate step conditions"| CONDITIONAL_EVAL
+CONDITIONAL_EVAL -->|"condition TRUE: dispatch"| PARALLEL_DAG
+CONDITIONAL_EVAL -->|"condition FALSE: SKIPPED"| RESULT_AGGREGATOR
+
+%% Micro-Replan Checkpoint (ORCH-13)
+PARALLEL_DAG -->|"wave complete: check discoveries"| MICRO_REPLAN
+MICRO_REPLAN -->|"MicroReplanRequest"| PORT_PLANNER
+PORT_PLANNER -->|"micro_replan result"| MICRO_REPLAN
+MICRO_REPLAN -->|"adjusted remaining waves"| TOPO_WALKER
+
+%% Token Budget Tracker (ORCH-14)
+PARALLEL_DAG -->|"tokens_consumed per step"| TOKEN_TRACKER
+TOKEN_TRACKER -->|"budget >= 80%: WARN"| PORT_DELTA
+TOKEN_TRACKER -->|"budget >= 95%: skip optional"| RESULT_AGGREGATOR
+TOKEN_TRACKER -->|"budget >= 100%: HARD STOP"| RESULT_AGGREGATOR
+
+%% Quality Gate
+PARALLEL_DAG -->|"quality_score check"| QUALITY_GATE
+QUALITY_GATE -->|"quality >= 0.7: PASS"| RESULT_AGGREGATOR
+QUALITY_GATE -->|"0.3 <= quality < 0.7: RETRY"| STEP_RETRY
+QUALITY_GATE -->|"quality < 0.3: SOFT FAIL"| RESULT_AGGREGATOR
+
+%% Execution Monitor (GAP-2 fix: k1.hil.progress.v1 + user.override)
+PARALLEL_DAG -->|"wave complete: progress summary"| EXECUTION_MONITOR
+EXECUTION_MONITOR -->|"k1.hil.progress.v1"| PORT_DELTA
+PORT_EVENT -->|"k1.hil.override_response.v1"| EXECUTION_MONITOR
+EXECUTION_MONITOR -->|"CANCEL_DAG: set interrupt flag"| CONC_INTERRUPT
+EXECUTION_MONITOR -->|"progress narration (~200 tokens)"| PORT_DELTA
+
+%% Sub-Step Observability (pass-through agent events)
+PORT_EVENT -->|"fabric.agent.*.tool_call.*"| PORT_DELTA
+PORT_EVENT -->|"fabric.agent.*.llm_call.*"| PORT_DELTA
+
+%% Actor -> Workflow
+ORCH_ACTOR -->|"workflow: run saved plan"| WF_COMPILER
+
+%% Workflow internal
+WF_SCHEDULER -->|"WorkflowRunRequest"| ORCH_MAILBOX
+WF_SCHEDULER -->|"time source"| SYSTEM_CLOCK
+WF_COMPILER -->|"rehydrated DAG"| ORCH_ACTOR
+WF_COMPILER -->|"mismatch?"| GAP_DETECTOR
+WF_SUPERVISOR -->|"create"| RUN_MANIFEST
+WF_COMPILER -->|"ready"| WF_SUPERVISOR
+CROSS_WF_RESOLVER -->|"sub-workflow DAG"| ORCH_MAILBOX
+CROSS_WF_RESOLVER -->|"depth check"| WF_DEPTH_GUARD
+ORCH_ACTOR -->|"workflow.run.* step"| CROSS_WF_RESOLVER
+
+%% Connector pipeline
+MCP_DISCOVERY -->|"scan"| LOCAL_MCP
+MCP_DISCOVERY -->|"scan"| REMOTE_MCP
+MCP_DISCOVERY -->|"extracted schemas"| MCP_REGISTRAR
+MCP_REGISTRAR -->|"create handlers"| MCP_FACTORY
+MCP_FACTORY -->|"sandbox"| CONNECTOR_SANDBOX
+
+%% =====================================================================================
+%% DATA FLOWS: INBOUND TO ORCHESTRATOR
+%% =====================================================================================
+
+%% Concierge -> Orchestrator (TaskEnvelope)
+CONCIERGE_DISPATCHING -->|"TaskEnvelope{tier, intent, context}"| PORT_MAILBOX
+FABRIC_ORCH_ADAPTER -->|"CB protection + tier routing"| CONCIERGE_DISPATCHING
+
+%% Planner -> Orchestrator (CommittedPlan via event)
+PLANNER_PIPELINE -->|"k1.planner.plan.ready.v1"| PORT_EVENT
+PORT_EVENT -->|"CommittedPlan"| PORT_MAILBOX
+
+%% Workflow Scheduler -> Orchestrator
+WF_SCHEDULER -->|"WorkflowRunRequest"| PORT_MAILBOX
+
+%% Fabric Workflow Provider -> Orchestrator (sub-workflow)
+FABRIC_WORKFLOW_PROVIDER -->|"rehydrated sub-workflow plan"| PORT_MAILBOX
+
+%% =====================================================================================
+%% DATA FLOWS: OUTBOUND FROM ORCHESTRATOR
+%% =====================================================================================
+
+%% Orchestrator -> Planner (HIGH tier)
+ORCH_ACTOR -->|"PlanRequest{intent, constraints, context}"| PORT_PLANNER
+PORT_PLANNER -->|"route to Planner"| PLANNER_MAILBOX
+
+%% Orchestrator -> Fabric (per-step execution)
+FABRIC_GATEWAY -->|"CapabilityRequest per step"| PORT_FABRIC
+PORT_FABRIC -->|"execute"| FABRIC_EXEC
+PORT_FABRIC -->|"spawn"| FABRIC_AGENT_FACTORY
+
+%% Fabric -> Orchestrator (results)
+FABRIC_EXEC -->|"CapabilityResult"| PORT_FABRIC
+PORT_FABRIC -->|"step result"| RESULT_AGGREGATOR
+
+%% Orchestrator -> Concierge (aggregated results)
+RESULT_AGGREGATOR -->|"AggregatedResult"| CONCIERGE_COMPANIONING
+
+%% Orchestrator -> K1 Bus (delta lane) (progress)
+ORCH_ACTOR -->|"k1.orchestration.delta.v1"| PORT_DELTA
+PORT_DELTA -->|"emit"| DELTA_BUS
+DELTA_BUS -->|"500ms aggregation"| CONCIERGE_PROGRESSING
+
+%% Orchestrator -> Bridge (K0 audit)
+WF_SUPERVISOR -->|"audit records"| PORT_BRIDGE
+PORT_BRIDGE -->|"fire-and-forget"| BRIDGE_CMD
+
+%% =====================================================================================
+%% DATA FLOWS: READS (Read-Only via IStateReadPort)
+%% =====================================================================================
+
+ORCH_ACTOR -.->|"READ: context snapshot"| PORT_STATE
+PORT_STATE -.->|"multi-reader"| SS_BELIEFS
+PORT_STATE -.->|"multi-reader"| SS_CONTROL
+PORT_STATE -.->|"multi-reader"| SS_PERSONA
+PORT_STATE -.->|"multi-reader (via control)"| SS_TEMPORAL
+PORT_STATE -.->|"re-read at wave boundaries"| SS_SAFETY
+WF_SCHEDULER -.->|"READ: user timezone"| PORT_STATE
+
+%% Constraint Resolver -> Fabric Registry
+CAP_RESOLVER -.->|"capability check"| PORT_FABRIC
+PORT_FABRIC -.->|"query_registry"| FABRIC_REGISTRY
+
+%% Gap Detector <- Fabric Registry events via Bridge SSE
+BRIDGE_SSE -.->|"k1.fabric.capability.registered/unregistered/health.changed.v1"| PORT_EVENT
+PORT_EVENT -.->|"contract update"| GAP_DETECTOR
+GAP_DETECTOR -.->|"proactive gap -> K1 Bus (delta lane)"| PORT_DELTA
+
+%% Connector -> Fabric Registry (tool registration)
+MCP_REGISTRAR -->|"register capabilities"| PORT_FABRIC
+
+%% =====================================================================================
+%% DATA FLOWS: CIRCUIT BREAKER INTEGRATION (CB on Concierge side)
+%% =====================================================================================
+
+CB_ORCH -->|"OPEN: degrade tier"| FABRIC_ORCH_ADAPTER
+CB_PLANNER2 -->|"OPEN: skip planning"| FABRIC_ORCH_ADAPTER
+CB_FABRIC2 -->|"OPEN: unavailable"| FABRIC_ORCH_ADAPTER
+CB_MCP -->|"OPEN: tool offline"| FABRIC_ORCH_ADAPTER
+
+%% =====================================================================================
+%% MEDIUM TIER FLOW (1-2 Fabric calls, no planning)
+%% =====================================================================================
+
+%% 1. Concierge DISPATCHING: TaskEnvelope{tier=MEDIUM, capabilities[], params}
+%% 2. -> Orchestrator Mailbox
+%% 3. OrchestratorActor dequeues, emits task.accepted
+%% 4. 1-2 CapabilityRequest(s) -> Fabric Gateway -> Fabric (concurrent if 2)
+%% 5. Aggregate results -> Concierge COMPANIONING
+%% Max 2 Fabric calls (ORCH-10). No Planner. Timeout: 10s.
+
+%% =====================================================================================
+%% HIGH TIER FLOW (Planner + DAG execution)
+%% =====================================================================================
+
+%% 1. TaskEnvelope{tier=HIGH} -> Orchestrator Mailbox
+%% 2. OrchestratorActor: PlanRequest -> Planner
+%% 3. Planner 4 stages: SKETCH -> EXPAND -> VALIDATE -> COMMIT
+%% 4. CommittedPlan via k1.planner.plan.ready.v1 -> Orchestrator
+%% 5. DAG Engine builds waves. Topological Walker executes:
+%%    Wave 0: all steps with deps=[] (parallel)
+%%    Wave 1: steps whose deps in Wave 0 (wait, then parallel)
+%%    Per step: CapReq -> Fabric -> CapResult -> progress delta
+%% 6. All waves complete: aggregate -> Concierge COMPANIONING
+
+%% =====================================================================================
+%% WORKFLOW FLOW (Frozen plan, no Planner)
+%% =====================================================================================
+
+%% 1. Scheduler trigger (cron/event/manual) -> WorkflowRunRequest
+%% 2. Compiler rehydrates frozen DAG from WorkflowSpec
+%% 3. Run Supervisor creates Run Manifest (pinned version + hash)
+%% 4. OrchestratorActor executes DAG via Fabric (same as HIGH DAG walk)
+%% 5. Results -> user (or logged if no active session)
+
+%% =====================================================================================
+%% PORT -> ADAPTER -> TOUCHPOINT WIRING (Hexagonal Architecture)
+%% =====================================================================================
+
+%% IMailboxPort wiring
+PORT_MAILBOX -.->|"prod"| ADAPT_MAILBOX
+PORT_MAILBOX -.->|"test"| ADAPT_TEST_MAILBOX
+ADAPT_MAILBOX -.->|"in-memory"| ORCH_MAILBOX
+
+%% IFabricGatewayPort wiring
+PORT_FABRIC -.->|"prod"| ADAPT_FABRIC
+PORT_FABRIC -.->|"test"| ADAPT_TEST_FABRIC
+ADAPT_FABRIC -.->|"route"| FABRIC_EXEC
+ADAPT_FABRIC -.->|"registry"| FABRIC_REGISTRY
+
+%% IPlannerPort wiring
+PORT_PLANNER -.->|"prod"| ADAPT_PLANNER
+PORT_PLANNER -.->|"test"| ADAPT_TEST_PLANNER
+ADAPT_PLANNER -.->|"route"| PLANNER_MAILBOX
+
+%% IStateReadPort wiring
+PORT_STATE -.->|"prod"| ADAPT_STATE
+PORT_STATE -.->|"test"| ADAPT_TEST_STATE
+ADAPT_STATE -.->|"multi-reader"| SS_BELIEFS
+ADAPT_STATE -.->|"multi-reader"| SS_CONTROL
+ADAPT_STATE -.->|"multi-reader"| SS_PERSONA
+ADAPT_STATE -.->|"multi-reader (via control)"| SS_TEMPORAL
+
+%% IDeltaEmitPort wiring
+PORT_DELTA -.->|"prod"| ADAPT_DELTA
+PORT_DELTA -.->|"test"| ADAPT_TEST_DELTA
+ADAPT_DELTA -.->|"emit"| EVENT_BUS
+ADAPT_DELTA -.->|"emit"| DELTA_BUS
+
+%% IBridgeWritePort wiring
+PORT_BRIDGE -.->|"prod"| ADAPT_BRIDGE
+PORT_BRIDGE -.->|"test"| ADAPT_TEST_BRIDGE
+ADAPT_BRIDGE -.->|"fire-and-forget"| BRIDGE_CMD
+
+%% IEventSubscriptionPort wiring
+PORT_EVENT -.->|"prod"| ADAPT_EVENT
+PORT_EVENT -.->|"test"| ADAPT_TEST_EVENT
+ADAPT_EVENT -.->|"subscribe"| EVENT_BUS
+ADAPT_EVENT -.->|"subscribe"| BRIDGE_SSE
+
+%% =====================================================================================
+%% SERVICE DEPENDENCY GRAPH (No circular dependencies)
+%% =====================================================================================
+
+SVC_ORCH -->|"DAG execution"| SVC_DAG
+SVC_ORCH -->|"workflow mgmt"| SVC_WORKFLOW
+SVC_ORCH -->|"connector mgmt"| SVC_CONNECTOR
+SVC_DAG -->|"per-step execution"| SVC_STEP
+SVC_DAG -->|"pre-execution validation"| SVC_CONSTRAINT
+
+%% =====================================================================================
+%% SERVICE -> INVARIANT ENFORCEMENT
+%% =====================================================================================
+
+SVC_ORCH -.->|"ORCH-01 (no writes), ORCH-02 (no LLM)"| INV_IDENTITY
+SVC_ORCH -.->|"ORCH-09 (trace_id on all events)"| INV_WORKFLOW
+SVC_ORCH -.->|"ORCH-10 (MEDIUM max 2), ORCH-11 (HIGH needs plan)"| INV_TIER
+SVC_DAG -.->|"ORCH-04 (through Fabric), ORCH-05 (topological)"| INV_EXECUTION
+SVC_DAG -.->|"ORCH-06 (2 retries), ORCH-07 (cancel deps)"| INV_EXECUTION
+SVC_STEP -.->|"ORCH-03 (calls Fabric directly, no tools)"| INV_IDENTITY
+SVC_STEP -.->|"ORCH-04 (through Fabric)"| INV_EXECUTION
+SVC_WORKFLOW -.->|"ORCH-08 (depth max 3)"| INV_WORKFLOW
+SVC_WORKFLOW -.->|"ORCH-12 (cycle detection)"| INV_CROSS
+SVC_DAG -.->|"ORCH-13 (max 1 micro-replan)"| INV_ADAPTIVE
+SVC_DAG -.->|"ORCH-14 (token budget)"| INV_ADAPTIVE
+SVC_DAG -.->|"ORCH-15 (output schema guard)"| INV_AGENT
+SVC_DAG -.->|"ORCH-16 (conditional edges)"| INV_AGENT
+SVC_STEP -.->|"ORCH-15 (schema retry)"| INV_AGENT
+
+%% =====================================================================================
+%% SERVICE -> PORT USAGE
+%% Services call ports, never external systems directly.
+%% =====================================================================================
+
+SVC_ORCH -.->|"dequeue messages"| PORT_MAILBOX
+SVC_ORCH -.->|"read context"| PORT_STATE
+SVC_ORCH -.->|"emit deltas"| PORT_DELTA
+SVC_ORCH -.->|"send plan request"| PORT_PLANNER
+SVC_DAG -.->|"execute steps"| PORT_FABRIC
+SVC_DAG -.->|"emit progress"| PORT_DELTA
+SVC_STEP -.->|"Fabric.execute()"| PORT_FABRIC
+SVC_CONSTRAINT -.->|"registry query"| PORT_FABRIC
+SVC_CONSTRAINT -.->|"HIL via delta"| PORT_DELTA
+SVC_DAG -.->|"execution monitor progress"| PORT_DELTA
+SVC_DAG -.->|"user.override subscription"| PORT_EVENT
+SVC_WORKFLOW -.->|"scheduler events"| PORT_EVENT
+SVC_WORKFLOW -.->|"audit writes"| PORT_BRIDGE
+SVC_WORKFLOW -.->|"read timezone"| PORT_STATE
+SVC_CONNECTOR -.->|"register tools"| PORT_FABRIC
+
+%% =====================================================================================
+%% LIFECYCLE -> SERVICE DELEGATION
+%% =====================================================================================
+
+LC_INIT -->|"create + wire"| SVC_ORCH
+LC_INIT -->|"create"| SVC_DAG
+LC_INIT -->|"create"| SVC_STEP
+LC_INIT -->|"create"| SVC_CONSTRAINT
+LC_INIT -->|"create + start scheduler"| SVC_WORKFLOW
+LC_INIT -->|"create + discover"| SVC_CONNECTOR
+
+LC_RUN_START -->|"route message"| SVC_ORCH
+LC_RUN_END -->|"aggregate + emit"| SVC_ORCH
+
+LC_SHUTDOWN -->|"wait active DAG"| SVC_DAG
+LC_SHUTDOWN -->|"stop scheduler"| SVC_WORKFLOW
+LC_SHUTDOWN -->|"disconnect"| SVC_CONNECTOR
+
+LC_CRASH_RECOVERY -->|"bootstrap"| SVC_ORCH
+LC_CRASH_RECOVERY -->|"resume partial DAG"| SVC_DAG
+LC_CRASH_RECOVERY -->|"restart scheduler"| SVC_WORKFLOW
+LC_CRASH_RECOVERY -->|"rediscover"| SVC_CONNECTOR
+
+%% =====================================================================================
+%% LIFECYCLE -> PORT USAGE
+%% =====================================================================================
+
+LC_INIT -.->|"connect all 8 ports"| PORT_MAILBOX
+LC_INIT -.->|"subscribe events"| PORT_EVENT
+LC_INIT -.->|"register tools"| PORT_FABRIC
+
+LC_RUN_START -.->|"dequeue"| PORT_MAILBOX
+LC_RUN_START -.->|"read snapshot"| PORT_STATE
+
+LC_RUN_END -.->|"emit completed delta"| PORT_DELTA
+LC_RUN_END -.->|"audit write"| PORT_BRIDGE
+
+LC_SHUTDOWN -.->|"unsubscribe"| PORT_EVENT
+LC_SHUTDOWN -.->|"final audit"| PORT_BRIDGE
+
+LC_CRASH_RECOVERY -.->|"check WAL"| PORT_BRIDGE
+LC_CRASH_RECOVERY -.->|"resubscribe"| PORT_EVENT
+LC_CRASH_RECOVERY -.->|"read state"| PORT_STATE
+
+%% =====================================================================================
+%% LIFECYCLE STATE FLOW
+%% =====================================================================================
+
+LC_INIT -->|"ready"| CONC_LOOP
+LC_RUN_START -->|"processing"| SVC_ORCH
+LC_RUN_END -->|"resume loop"| CONC_LOOP
+LC_SHUTDOWN -->|"terminated"| PORT_MAILBOX
+LC_CRASH_RECOVERY -->|"recovered"| CONC_LOOP
+
+%% =====================================================================================
+%% STYLES
+%% =====================================================================================
+
+%% Orchestrator Core
+classDef actor fill:#7e57c2,stroke:#4527a0,stroke-width:3px,color:#fff,font-weight:bold
+classDef mailbox fill:#ab47bc,stroke:#6a1b9a,stroke-width:2px,color:#fff,font-weight:bold
+classDef gateway fill:#9575cd,stroke:#512da8,stroke-width:2px,color:#fff
+
+%% DAG Executor
+classDef engine fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
+classDef recovery fill:#ef5350,stroke:#b71c1c,stroke-width:2px,color:#fff,font-weight:bold
+classDef safety fill:#ff7043,stroke:#d84315,stroke-width:2px,color:#fff,font-weight:bold
+
+%% Workflow
+classDef registry fill:#42a5f5,stroke:#1565c0,stroke-width:2px,color:#fff
+classDef scheduling fill:#26c6da,stroke:#00838f,stroke-width:2px,color:#000,font-weight:bold
+classDef supervisor fill:#66bb6a,stroke:#2e7d32,stroke-width:2px,color:#000
+
+%% Connectors
+classDef local fill:#81c784,stroke:#388e3c,stroke-width:2px,color:#000
+classDef remote fill:#4db6ac,stroke:#00695c,stroke-width:2px,color:#000
+classDef k0 fill:#a5d6a7,stroke:#2e7d32,stroke-width:1px,color:#000
+
+%% Ports
+classDef port fill:#e3f2fd,stroke:#1565c0,stroke-width:3px,color:#000,font-weight:bold
+
+%% Adapters
+classDef adapter fill:#e8eaf6,stroke:#283593,stroke-width:2px,color:#000
+classDef adapter_test fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,color:#000,font-style:italic
+
+%% Invariants
+classDef invariant fill:#fce4ec,stroke:#880e4f,stroke-width:3px,color:#000,font-weight:bold
+
+%% Performance
+classDef perf fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:#000,font-weight:bold
+
+%% Services
+classDef service fill:#e0f2f1,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
+
+%% Agent-Aware Guards (Adaptive Blind DAG)
+classDef guard fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#000,font-weight:bold,stroke-dasharray: 4 2
+
+%% Lifecycle
+classDef lifecycle fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#000,font-weight:bold
+
+%% Concurrency
+classDef concurrency fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000
+
+%% Touchpoints
+classDef concierge fill:#ffb74d,stroke:#e65100,stroke-width:2px,color:#000,font-weight:bold
+classDef planner fill:#bbdefb,stroke:#0d47a1,stroke-width:3px,color:#000,font-weight:bold
+classDef fabric fill:#b2ebf2,stroke:#00695c,stroke-width:3px,color:#000,font-weight:bold
+classDef hil fill:#fff8e1,stroke:#f57c00,stroke-width:2px,color:#000,font-style:italic
+classDef ss fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000
+classDef bus fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,color:#000
+classDef bridge fill:#b2ebf2,stroke:#00695c,stroke-width:2px,color:#000
+classDef cb fill:#ffebee,stroke:#c62828,stroke-width:3px,color:#000,stroke-dasharray: 5 5

@@ -1,7 +1,7 @@
 """
 M06: Salience Scoring Module (Attention Network / Priority Ranking System)
 
-**Contract**: salience.score.v1.yaml
+**Contract**: salience.score.v2.yaml
 **ADR**: k006.1 (Write-Path Salience - Social + Affect + Recency Formula)
 **Performance Budget**: <5ms P95 (pure computation, no I/O)
 
@@ -57,12 +57,16 @@ MED_BAND_THRESHOLD = 0.4  # Minimum score for MED salience
 DEFAULT_SALIENCE_ON_FAILURE = 0.5  # Neutral fallback
 
 # Social importance scores (research-validated)
+# v2: Added nuclear_family, colleagues, community per salience.score.v2.yaml
 SOCIAL_IMPORTANCE_SCORES = {
-    "family": 1.0,  # Immediate family (spouse, children, parents)
+    "nuclear_family": 1.0,  # Nuclear family (spouse, children, parents in household)
+    "family": 1.0,  # Immediate family (spouse, children, parents) - legacy alias
     "extended_family": 0.7,  # Grandparents, aunts, uncles, cousins
     "close_friends": 0.6,  # Best friends, close confidants
     "friends": 0.5,  # Friends, regular social contacts
-    "acquaintance": 0.3,  # Neighbors, colleagues, casual contacts
+    "colleagues": 0.4,  # Work colleagues, professional contacts
+    "community": 0.3,  # Community members, neighbors, group affiliations
+    "acquaintance": 0.3,  # Casual contacts
     "solo": 0.2,  # Self, alone time, personal reflection
     "unknown": 0.4,  # Default (between solo and friends)
 }
@@ -441,6 +445,53 @@ def generate_salience_reasons(
     return reasons
 
 
+# ==================== Entity Salience Cross-Validation (v2) ====================
+
+# Default threshold for entity_salience discrepancy logging
+ENTITY_SALIENCE_DISCREPANCY_THRESHOLD = 0.3
+
+
+def cross_validate_entity_salience(
+    envelope: dict,
+    computed_salience: float,
+    threshold: float = ENTITY_SALIENCE_DISCREPANCY_THRESHOLD,
+) -> Optional[float]:
+    """
+    Cross-validate M06 computed salience against MW body.entity_salience.
+
+    This is an OBSERVABILITY feature only -- it does NOT change the salience
+    formula.  When the middleware (MW) supplies per-entity salience scores via
+    ``body.entity_salience``, we compute the mean of those scores and compare
+    it with the M06-computed ``salience_score``.  If the absolute delta exceeds
+    ``threshold`` (default 0.3), callers should log a discrepancy warning.
+
+    Args:
+        envelope: The full pipeline envelope dict.
+        computed_salience: The salience_score produced by M06.
+        threshold: Absolute-delta threshold (used by caller for logging).
+
+    Returns:
+        The absolute discrepancy (float) if ``body.entity_salience`` is
+        present and non-empty; ``None`` otherwise.
+    """
+    body = envelope.get("body")
+    if not body or not isinstance(body, dict):
+        return None
+
+    entity_salience = body.get("entity_salience")
+    if not entity_salience or not isinstance(entity_salience, dict):
+        return None
+
+    # Compute mean of per-entity salience values (only numeric values)
+    numeric_values = [v for v in entity_salience.values() if isinstance(v, (int, float))]
+    if not numeric_values:
+        return None
+
+    mw_mean = sum(numeric_values) / len(numeric_values)
+    discrepancy = round(abs(computed_salience - mw_mean), 4)
+    return discrepancy
+
+
 # ==================== Module Entry Point ====================
 
 
@@ -458,12 +509,13 @@ async def run(message: any, context: any, **config: any) -> dict:
     - affect_weight (float): Affect intensity weight (default: 0.4)
     - recency_weight (float): Recency weight (default: 0.1)
 
-    Contract: salience.score.v1.yaml
+    Contract: salience.score.v2.yaml
 
     Input: Envelope from P02 with:
     - event.social_context (social context string)
     - affect_intensity (from M04 - Tier-0 Fast Affect, 0-1)
     - event.event_time_utc (event timestamp)
+    - body.entity_salience (OBJECT, nullable -- MW per-entity salience map)
 
     Output: Dict with salience scoring fields for st_hipp_events:
     - salience_score (REAL 0-1)
@@ -471,6 +523,7 @@ async def run(message: any, context: any, **config: any) -> dict:
     - salience_reasons_json (TEXT: JSON array of reasons)
     - component_scores (JSON: {social, affect, recency})
     - salience_computed_at_utc (TEXT: ISO 8601 timestamp)
+    - entity_salience_discrepancy (REAL, nullable -- v2 cross-validation)
 
     Args:
         message: BusMessage with envelope payload
@@ -514,11 +567,24 @@ async def run(message: any, context: any, **config: any) -> dict:
         # Extract inputs from envelope
         event_data = envelope.get("event", {})
 
-        # Social context (may be None if not set)
-        social_context = event_data.get("social_context")
+        # Social context: M07 outputs at envelope top-level, fallback to event.social_context
+        social_context = envelope.get("social_context") or event_data.get("social_context")
 
-        # Affect intensity from M04 (may be None if M04 failed)
-        affect_intensity = envelope.get("affect_intensity")
+        # Affect intensity: Derive from M04 affect_valence + affect_arousal
+        # M04 outputs affect_valence (0-1) and affect_arousal (0-1), not affect_intensity.
+        # Combine them: intensity = distance from neutral valence + arousal contribution
+        # Formula: |valence - 0.5| * 2 gives emotional polarity strength (0-1)
+        #          arousal gives emotional activation (0-1)
+        #          affect_intensity = 0.5 * polarity + 0.5 * arousal
+        affect_valence = envelope.get("affect_valence")
+        affect_arousal = envelope.get("affect_arousal")
+        if affect_valence is not None and affect_arousal is not None:
+            polarity_strength = abs(affect_valence - 0.5) * 2.0  # 0-1
+            affect_intensity = 0.5 * polarity_strength + 0.5 * affect_arousal
+        elif affect_valence is not None:
+            affect_intensity = abs(affect_valence - 0.5) * 2.0
+        else:
+            affect_intensity = envelope.get("affect_intensity")  # Legacy fallback
 
         # Event timestamp (required) - check both event.event_time_utc and top-level event_time_utc
         # (temporal_profile module sets event_time_utc at top level as integer Unix timestamp)
@@ -558,6 +624,7 @@ async def run(message: any, context: any, **config: any) -> dict:
             "salience_reasons_json": json.dumps(["Scoring failed, using default"]),
             "component_scores_json": json.dumps({"social": 0.4, "affect": 0.5, "recency": 0.5}),
             "salience_computed_at_utc": datetime.now(timezone.utc).isoformat(),
+            "entity_salience_discrepancy": None,
             # NEW: Nested enrichments structure (Phase 2)
             "enrichments": {
                 **envelope.get("enrichments", {}),
@@ -567,7 +634,8 @@ async def run(message: any, context: any, **config: any) -> dict:
                     "reasons": ["Scoring failed, using default"],
                     "component_scores": {"social": 0.4, "affect": 0.5, "recency": 0.5},
                     "computed_at_utc": datetime.now(timezone.utc).isoformat(),
-                    "module_version": "v1",
+                    "entity_salience_discrepancy": None,
+                    "module_version": "v2",
                     "execution_time_ms": 0.0,
                 },
             },
@@ -578,6 +646,32 @@ async def run(message: any, context: any, **config: any) -> dict:
         social_context=social_context, affect_intensity=affect_intensity, timestamp=timestamp
     )
 
+    # v2: Entity salience cross-validation (observability only, no formula change)
+    discrepancy_threshold = config.get(
+        "entity_salience_discrepancy_threshold", ENTITY_SALIENCE_DISCREPANCY_THRESHOLD
+    )
+    entity_discrepancy = cross_validate_entity_salience(
+        envelope, result.salience_score, threshold=discrepancy_threshold
+    )
+    if entity_discrepancy is not None and entity_discrepancy > discrepancy_threshold:
+        context.logger.warning(
+            "M06 entity_salience discrepancy detected",
+            extra={
+                "trace_id": message.trace_id,
+                "m06_salience_score": result.salience_score,
+                "mw_entity_salience_mean": round(
+                    (
+                        result.salience_score - entity_discrepancy
+                        if result.salience_score >= entity_discrepancy
+                        else result.salience_score + entity_discrepancy
+                    ),
+                    4,
+                ),
+                "discrepancy": entity_discrepancy,
+                "threshold": discrepancy_threshold,
+            },
+        )
+
     # Log completion
     context.logger.debug(
         "M06 salience.score completed",
@@ -585,6 +679,7 @@ async def run(message: any, context: any, **config: any) -> dict:
             "trace_id": message.trace_id,
             "salience_score": result.salience_score,
             "salience_band": result.salience_band,
+            "entity_salience_discrepancy": entity_discrepancy,
         },
     )
 
@@ -603,6 +698,7 @@ async def run(message: any, context: any, **config: any) -> dict:
             }
         ),
         "salience_computed_at_utc": result.salience_computed_at_utc,
+        "entity_salience_discrepancy": entity_discrepancy,
         # NEW: Nested enrichments structure (Phase 2)
         "enrichments": {
             **envelope.get("enrichments", {}),
@@ -616,7 +712,8 @@ async def run(message: any, context: any, **config: any) -> dict:
                     "recency": result.component_scores.recency,
                 },
                 "computed_at_utc": result.salience_computed_at_utc,
-                "module_version": "v1",
+                "entity_salience_discrepancy": entity_discrepancy,
+                "module_version": "v2",
                 "execution_time_ms": 0.0,  # Set by PipelineRunner
             },
         },

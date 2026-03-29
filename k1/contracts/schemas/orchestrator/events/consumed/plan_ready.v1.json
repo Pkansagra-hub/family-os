@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/consumed/plan_ready.v1.json",
+  "title": "plan.ready.v1",
+  "description": "Consumed from Planner when a CommittedPlan is ready for DAG execution.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.planner.plan.ready.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "planner"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["plan_id", "request_id", "steps", "dependencies"],
+      "properties": {
+        "plan_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique plan identifier assigned by Planner."
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Echoed from PlanRequest.request_id for PendingPlanContext correlation."
+        },
+        "intent": {
+          "type": "string",
+          "description": "Original user intent echoed back."
+        },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PlanStep" },
+          "minItems": 1,
+          "description": "Ordered list of plan steps for DAG construction."
+        },
+        "dependencies": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "description": "Step dependency graph: step_id -> [dependency_step_ids]."
+        }
+      },
+      "additionalProperties": false,
+      "_V1_REMOVED": "token_budget_max and cost_budget_max_usd fields removed -- no upstream data source. Re-add in V2."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "PlanStep": {
+      "type": "object",
+      "required": ["id", "capability"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique step identifier within the plan."
+        },
+        "capability": {
+          "type": "string",
+          "description": "Capability name to invoke via Fabric."
+        },
+        "params": {
+          "type": "object",
+          "description": "Parameters passed to the capability."
+        },
+        "deps": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Step IDs this step depends on."
+        },
+        "prompt_template": {
+          "type": ["string", "null"],
+          "description": "Optional prompt template for LLM-backed capabilities."
+        },
+        "tools_granted": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "description": "MCP tools this step may invoke."
+        },
+        "output_schema": {
+          "type": ["object", "null"],
+          "description": "JSON Schema the step output must conform to."
+        },
+        "condition": {
+          "type": ["object", "null"],
+          "description": "Conditional edge expression (evaluated at runtime)."
+        },
+        "is_optional": {
+          "type": "boolean",
+          "description": "If true, step failure does not block downstream."
+        },
+        "has_side_effects": {
+          "type": "boolean",
+          "description": "If true, saga compensation is required on rollback."
+        },
+        "compensation": {
+          "type": ["string", "null"],
+          "description": "Compensation capability name for saga rollback."
+        },
+        "timeout_ms": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Per-step timeout override in milliseconds."
+        },
+        "required_context": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "description": "SessionState section names this step needs at execution time."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -28,6 +28,7 @@ Test Categories:
 
 from __future__ import annotations
 
+import struct
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -59,6 +60,17 @@ from k0.storage.outbox import OutboxEntry
 # =============================================================================
 # MOCK INFRASTRUCTURE
 # =============================================================================
+
+
+def create_mock_st_vec_row(event_id: str) -> Dict[str, Any]:
+    """Create a mock st_vec row with embedding vector."""
+    mock_vector = [0.1] * 768
+    vector_bytes = struct.pack(f"{768}f", *mock_vector)
+    return {
+        "event_id": event_id,
+        "vector": vector_bytes,
+        "vector_dim": 768,
+    }
 
 
 @dataclass
@@ -115,6 +127,7 @@ class MockConnection:
     """Mock asyncpg connection for E2E tests."""
 
     rows: List[Dict[str, Any]] = field(default_factory=list)
+    st_vec_rows: List[Dict[str, Any]] = field(default_factory=list)
     executed_queries: List[tuple[str, tuple]] = field(default_factory=list)
     execution_order: List[str] = field(default_factory=list)
     should_fail_on_query: Optional[str] = None
@@ -123,6 +136,8 @@ class MockConnection:
 
     async def fetch(self, query: str, *params: Any) -> List[Dict[str, Any]]:
         self.executed_queries.append((query, params))
+        if "st_vec" in query:
+            return self.st_vec_rows
         return self.rows
 
     async def execute(self, query: str, *args: Any) -> str:
@@ -150,6 +165,15 @@ class MockConnection:
         if "st_learning_queue" in query:
             return None  # No duplicates
         return {"version": 1}
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        """Fetch single value."""
+        self.executed_queries.append((query, args))
+        if "COUNT" in query:
+            return 0
+        if "version" in query.lower():
+            return 1
+        return None
 
 
 @dataclass
@@ -407,6 +431,15 @@ def sample_hipp_event_rows() -> List[Dict[str, Any]]:
 
 
 @pytest.fixture
+def sample_st_vec_rows() -> List[Dict[str, Any]]:
+    """Create mock st_vec rows with embeddings for sample events."""
+    return [
+        create_mock_st_vec_row("evt-e2e-001"),
+        create_mock_st_vec_row("evt-e2e-002"),
+    ]
+
+
+@pytest.fixture
 def sample_envelope() -> P03BatchEnvelope:
     """Create sample envelope for phase testing."""
     context = P03CycleContext.create(
@@ -536,6 +569,7 @@ class TestFullCycleHappyPath:
         mock_uow: MockUnitOfWork,
         mock_runner_context: P03RunnerContext,
         sample_hipp_event_rows: List[Dict[str, Any]],
+        sample_st_vec_rows: List[Dict[str, Any]],
     ) -> None:
         """
         Given: Events in st_hipp_events ready for consolidation
@@ -544,6 +578,7 @@ class TestFullCycleHappyPath:
         """
         # Setup: Events ready for ingestion
         mock_connection.rows = sample_hipp_event_rows
+        mock_connection.st_vec_rows = sample_st_vec_rows
 
         # R0: Batch Selection
         r0 = R0BatchSelector()

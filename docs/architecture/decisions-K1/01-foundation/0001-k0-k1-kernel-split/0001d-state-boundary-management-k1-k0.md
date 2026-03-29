@@ -90,6 +90,7 @@ title: State Boundary Management (K1 vs K0)
 **Technical Story:** Define clear state boundaries between K1 working memory and K0 long-term memory
 **Parent ADR:** [ADR-0001: K0/K1 Kernel Split](0001-k0-k1-kernel-split.md)
 **Related ADRs:**
+
 - [ADR-0001a: K0 Bridge Communication Protocol](0001a-k0-bridge-communication-protocol.md)
 - [ADR-0017: SessionState 6-Section Design](0017-sessionstate-6-section-design.md)
 - [ADR-0020: Multi-Tier Storage](0020-multi-tier-storage.md)
@@ -115,18 +116,21 @@ K1 Intelligence Module maintains **ephemeral working memory** (SessionState, 64K
 ### The Memory Hierarchy Challenge
 
 **K1 Intelligence Module needs:**
+
 - Fast, in-memory state for active conversations (beliefs, goals, agent negotiation)
 - Bounded memory footprint (500MB total for 10-15 concurrent sessions)
 - Low-latency access (<1ms) for turn-by-turn execution
 - Ability to recover quickly after crashes (<5s)
 
 **K0 Memory Module provides:**
+
 - Durable, persistent storage for family history (years of conversations, events, facts)
 - Unbounded growth (1-100GB over lifetime)
 - Multi-store retrieval (FTS, Vector, KG, Episodic)
 - ACID guarantees (WAL, receipts)
 
 **Problem:** Without clear state boundaries, K1 and K0 responsibilities blur:
+
 - Which state is ephemeral vs durable?
 - When does K1 flush to K0?
 - How does K1 recover from crashes?
@@ -257,6 +261,7 @@ We establish **clear state boundaries** between K1 and K0:
 | **6. Meta** | Trace IDs, timestamps, metrics, debug | Continuously for observability | {trace_id: "abc", ttft_ms: 140} |
 
 **Characteristics:**
+
 - **Size:** 64KB soft limit per session (FlatBuffers serialization)
 - **Lifetime:** Session duration (discarded on session end)
 - **Durability:** Ephemeral (lost on K1 crash, rebuilt from K0 WAL)
@@ -279,6 +284,7 @@ We establish **clear state boundaries** between K1 and K0:
 | **Social** | Theory of mind, relationships | ~20KB/week | "Alice trusts Bob for finance" |
 
 **Characteristics:**
+
 - **Size:** Unbounded (1-100GB over years, family-dependent)
 - **Lifetime:** Permanent (until explicit deletion or retention policy)
 - **Durability:** ACID guarantees (WAL, receipts, signed)
@@ -298,13 +304,16 @@ We establish **clear state boundaries** between K1 and K0:
 **Purpose:** Persist K1 working memory to K0 long-term storage.
 
 **Pattern 1: SessionState Delta Batching**
+
 ```
 K1 SessionState → Batch every 250ms → P02 (MemoryWrite) → K0 WAL → Receipt
 ```
 
 **Flow:**
+
 1. K1 updates SessionState in-memory (beliefs, scoreboard, control)
 2. Every 250ms OR 64KB buffer full, K1 serializes delta:
+
    ```json
    {
      "port": "command",
@@ -328,8 +337,10 @@ K1 SessionState → Batch every 250ms → P02 (MemoryWrite) → K0 WAL → Recei
      }
    }
    ```
+
 3. K1 → K0 Bridge Client → P02 (MemoryWrite)
 4. K0 writes to WAL, returns receipt:
+
    ```json
    {
      "receipt_id": "rcpt_abc123",
@@ -338,6 +349,7 @@ K1 SessionState → Batch every 250ms → P02 (MemoryWrite) → K0 WAL → Recei
      "signature": "sha256_hash"
    }
    ```
+
 5. K1 stores receipt in SessionState.meta (for audit trail)
 
 **Performance:** <10ms P95 (K0 Bridge latency measured 8ms)
@@ -345,13 +357,16 @@ K1 SessionState → Batch every 250ms → P02 (MemoryWrite) → K0 WAL → Recei
 ---
 
 **Pattern 2: GroundingCommit (Conversation Turn)**
+
 ```
 K1 Turn Complete → GroundingCommit → P02 (MemoryWrite) → K0 Episodic Memory
 ```
 
 **Flow:**
+
 1. K1 completes conversation turn (user message → agent response)
 2. K1 generates GroundingCommit:
+
    ```json
    {
      "port": "command",
@@ -371,6 +386,7 @@ K1 Turn Complete → GroundingCommit → P02 (MemoryWrite) → K0 Episodic Memor
      }
    }
    ```
+
 3. K1 → K0 Bridge Client → P02 (MemoryWrite)
 4. K0 routes to Hippocampus (Smart Lane, AMBER band)
 5. K0 stores in episodic memory (SQLite + Vector DB)
@@ -385,13 +401,16 @@ K1 Turn Complete → GroundingCommit → P02 (MemoryWrite) → K0 Episodic Memor
 **Purpose:** Load relevant memories from K0 for K1 context.
 
 **Pattern 1: Context Retrieval (Multi-Store Query)**
+
 ```
 K1 Needs Context → P01 (RecallQuery) → K0 Multi-Store Retrieval → K1 SessionState.beliefs
 ```
 
 **Flow:**
+
 1. K1 needs context for current task (e.g., "Emma's soccer schedule")
 2. K1 queries K0 via Bridge Client (P01):
+
    ```json
    {
      "port": "query",
@@ -410,12 +429,14 @@ K1 Needs Context → P01 (RecallQuery) → K0 Multi-Store Retrieval → K1 Sessi
      }
    }
    ```
+
 3. K0 performs multi-store retrieval:
    - FTS: Keyword search "Emma", "soccer", "schedule"
    - Vector: Semantic similarity (FAISS)
    - KG: Relationship traversal (Emma → Soccer → Schedule)
    - Episodic: Sequential memories (last 7 days)
 4. K0 returns ranked results with provenance:
+
    ```json
    {
      "results": [
@@ -434,6 +455,7 @@ K1 Needs Context → P01 (RecallQuery) → K0 Multi-Store Retrieval → K1 Sessi
      ]
    }
    ```
+
 5. K1 injects top results into SessionState.beliefs
 
 **Performance:** <50ms P95 (K0 multi-store retrieval)
@@ -441,13 +463,16 @@ K1 Needs Context → P01 (RecallQuery) → K0 Multi-Store Retrieval → K1 Sessi
 ---
 
 **Pattern 2: Persona State Sync**
+
 ```
 K1 Session Start → P18 (PersonalizationSync) → K0 Self-Model → K1 SessionState.persona
 ```
 
 **Flow:**
+
 1. K1 starts new session, needs user persona
 2. K1 queries K0 (P18 PersonalizationSync):
+
    ```json
    {
      "port": "query",
@@ -456,8 +481,10 @@ K1 Session Start → P18 (PersonalizationSync) → K0 Self-Model → K1 SessionS
      "traits_requested": ["formality", "verbosity", "emoji_use", "diet", "sleep_goal"]
    }
    ```
+
 3. K0 retrieves from Self-Model (SQLite hot tier)
 4. K0 returns persona traits:
+
    ```json
    {
      "traits": {
@@ -469,6 +496,7 @@ K1 Session Start → P18 (PersonalizationSync) → K0 Self-Model → K1 SessionS
      }
    }
    ```
+
 5. K1 loads into SessionState.persona
 
 **Performance:** <10ms P95 (K0 SQLite hot tier)
@@ -480,14 +508,17 @@ K1 Session Start → P18 (PersonalizationSync) → K0 Self-Model → K1 SessionS
 **Purpose:** Recover K1 SessionState after crash.
 
 **Pattern: WAL Replay**
+
 ```
 K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionState Rebuilt
 ```
 
 **Flow:**
+
 1. K1 crashes (OOM, segfault, power loss)
 2. K1 restarts, detects crash (no graceful shutdown marker)
 3. K1 queries K0 for latest SessionState checkpoint (P07):
+
    ```json
    {
      "port": "sync",
@@ -496,11 +527,13 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
      "last_checkpoint_turn": 0  // Start from beginning if unknown
    }
    ```
+
 4. K0 replays WAL from last checkpoint:
    - Load SessionState snapshot at turn 10 (or 0 if none)
    - Apply all deltas from turn 10 → crash point
    - Rebuild SessionState section by section
 5. K0 returns reconstructed SessionState:
+
    ```json
    {
      "session_state": {
@@ -518,6 +551,7 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
      }
    }
    ```
+
 6. K1 loads SessionState, resumes from last consistent turn
 
 **Performance:** <5s recovery (target), measured 4.5s for 50 deltas
@@ -630,6 +664,7 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
 ```
 
 **Total Session Latency:**
+
 - Persona load: 10ms
 - Context retrieval: 50ms
 - Orchestration: 200ms
@@ -657,6 +692,7 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
 | **Total** | **54KB** | **92KB** | Hard limit: 128KB (trigger warning) |
 
 **K1 Total Memory Budget:** 500MB
+
 - 10-15 concurrent sessions × 64KB = 640KB-960KB
 - Agent overhead (Concierge, Planner, etc.): ~100MB
 - Model Hub (KV cache, prompts): ~300MB
@@ -678,11 +714,13 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
 | **Total** | **~1.2MB/day** | **~450MB/year** | **~4.5GB/10 years** |
 
 **Storage Tiers:**
+
 - **CACHE (RAM):** 128MB (working memory boost, last 5 min)
 - **HOT (SQLite):** 1GB (recent memories, last 30 days)
 - **COLD (Disk/Vector/KG):** Unbounded (old memories, >30 days)
 
 **Retention Policies:**
+
 - Episodic memories: Indefinite (user controls deletion)
 - Working memory snapshots: 30 days (then archived to cold tier)
 - Affect states: 90 days (then aggregated to monthly summaries)
@@ -697,6 +735,7 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
 **Guarantee:** K1 SessionState may lag K0 by <250ms (batch flush interval).
 
 **Example Scenario:**
+
 1. K1 updates SessionState.beliefs.current_task = "Find Emma's soccer"
 2. K1 continues executing (doesn't wait for K0 flush)
 3. 250ms later, K1 flushes delta to K0
@@ -711,12 +750,14 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
 **Guarantee:** K0 provides ACID guarantees via WAL (Write-Ahead Log).
 
 **WAL Guarantees:**
+
 - **Atomicity:** All deltas in a batch commit together or not at all
 - **Consistency:** K0 state always valid (constraints enforced)
 - **Isolation:** Concurrent writes don't interfere (SQLite locking)
 - **Durability:** Once receipt issued, data survives crash
 
 **Example:**
+
 1. K1 sends batch flush with 10 deltas to K0
 2. K0 writes all 10 deltas to WAL (atomic transaction)
 3. K0 issues receipt only after WAL sync to disk
@@ -728,6 +769,7 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
 **Guarantee:** K1 reads from K0 may be stale by <50ms (K0 cache invalidation lag).
 
 **Example:**
+
 1. K1 writes "Emma's soccer → Wednesday 4pm" to K0 (via P02)
 2. Immediately after, K1 reads "Emma's soccer" from K0 (via P01)
 3. K0 may return stale result (old schedule "Tuesday 3pm") if cache not yet invalidated
@@ -746,10 +788,12 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
 **Scenario:** K1 crashes mid-session (OOM, segfault, power loss).
 
 **Recovery Steps:**
+
 1. K1 restarts, detects crash (no graceful shutdown marker in SessionState)
 2. K1 queries K0 for active sessions: P07 Sync/CRDT (list_active_sessions)
 3. K0 returns session IDs: ["sess_xyz", "sess_abc"]
 4. For each session, K1 requests WAL replay:
+
    ```json
    {
      "port": "sync",
@@ -758,6 +802,7 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
      "last_checkpoint_turn": 0  // Start from beginning
    }
    ```
+
 5. K0 replays WAL:
    - Load SessionState snapshot at last checkpoint (turn 10)
    - Apply all deltas from turn 10 → crash point (deltas 11-50)
@@ -775,6 +820,7 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
 **Scenario:** K0 crashes mid-write (disk failure, OOM, power loss).
 
 **Recovery Steps:**
+
 1. K0 restarts, detects crash (WAL incomplete)
 2. K0 loads WAL from disk, checks integrity (checksums)
 3. K0 replays all committed transactions from WAL
@@ -791,6 +837,7 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
 **Scenario:** Network partition, K1 cannot reach K0.
 
 **K1 Behavior:**
+
 1. K1 detects K0 unavailable (circuit breaker opens after 3 failures)
 2. K1 continues executing in "degraded mode":
    - Uses local SessionState (no K0 queries, no batch flushes)
@@ -812,31 +859,37 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
 ### Positive ✅
 
 **✅ Clear Separation of Concerns:**
+
 - K1 = fast working memory (ephemeral, bounded)
 - K0 = durable long-term memory (persistent, unbounded)
 - **Result:** Simple mental model, easy to reason about state flow
 
 **✅ Fast K1 Performance:**
+
 - SessionState in-memory (<1ms access)
 - No disk I/O during turn execution
 - **Result:** Meets K1 performance budgets (<500ms sync, <2000ms async)
 
 **✅ Durable K0 Storage:**
+
 - WAL ensures ACID guarantees
 - All conversation turns persisted
 - **Result:** Zero data loss on K1 crashes
 
 **✅ Graceful Crash Recovery:**
+
 - K1 recovers from K0 WAL (<5s)
 - Minimal data loss (<250ms of SessionState updates)
 - **Result:** Production-grade resilience
 
 **✅ Network Partition Resilience:**
+
 - K1 buffers deltas during K0 unavailability
 - Flushes on reconnect
 - **Result:** Zero data loss during network partitions
 
 **✅ Observable State Flow:**
+
 - cognitive_trace_id propagates through all state transitions
 - Receipts provide audit trail
 - **Result:** Full observability, debugging-friendly
@@ -846,26 +899,31 @@ K1 Crash → K1 Restart → P07 (Sync/CRDT) → K0 WAL Replay → K1 SessionStat
 ### Negative ⚠️
 
 **⚠️ Eventual Consistency Complexity:**
+
 - K1 SessionState may lag K0 by <250ms
 - Stale reads possible when K1 queries K0
 - **Mitigation:** K1 prefers local SessionState over K0 for recent updates, only queries K0 for historical context
 
 **⚠️ Crash Recovery Latency:**
+
 - K1 recovery takes <5s (WAL replay overhead)
 - User experiences brief delay on reconnect
 - **Mitigation:** Notify user "Recovering session..." with progress indicator
 
 **⚠️ SessionState Size Management:**
+
 - 64KB soft limit requires careful eviction policies
 - Risk of exceeding limit if multimodal data (audio) grows
 - **Mitigation:** LRU eviction for audio buffers, drop oldest data, alert if approaching 128KB hard limit
 
 **⚠️ K0 Storage Growth:**
+
 - Unbounded growth (1-100GB over years)
 - Retention policies required to avoid disk exhaustion
 - **Mitigation:** Cold tier archiving (>30 days), user controls deletion, retention policies (90 days for affect states)
 
 **⚠️ Network Partition Degradation:**
+
 - K1 cannot query K0 during partition
 - Context may be stale, responses less accurate
 - **Mitigation:** K1 buffers deltas, flushes on reconnect, notifies user "Operating with cached data"
@@ -887,6 +945,7 @@ K1 Intelligence Module maintains **ephemeral working memory** (SessionState, 64K
 **Status:** Architecture approved, ready for Phase 1 implementation (Weeks 3-4, parallel with 0001a).
 
 **Key Resources:**
+
 - [ADR-0001a: K0 Bridge Communication Protocol](0001a-k0-bridge-communication-protocol.md)
 - [ADR-0017: SessionState 6-Section Design](0017-sessionstate-6-section-design.md)
 - [Sub-ADR Plan](../../../sub_adr_plan.md)
@@ -896,18 +955,21 @@ K1 Intelligence Module maintains **ephemeral working memory** (SessionState, 64K
 ## Implementation
 
 ### Phase 1: State Boundary Documentation (Week 1)
+
 - [ ] Document K1 SessionState structure (6 sections)
 - [ ] Document K0 memory types (7 types)
 - [ ] Document state flow patterns (write, read, recovery)
 - [ ] Create state lifecycle diagrams
 
 ### Phase 2: State Size Budgets & Eviction (Week 2)
+
 - [ ] Define per-section size limits (beliefs 16KB, multimodal 48KB, etc.)
 - [ ] Implement eviction policies (LRU for audio, recency for beliefs)
 - [ ] Add size monitoring (Prometheus metrics: session_state_size_bytes)
 - [ ] Test size limits with realistic sessions
 
 ### Phase 3: Integration with 0001a (K0 Bridge) (Weeks 3-4)
+
 - [ ] Implement P02 batch flush (SessionState deltas)
 - [ ] Implement P01 context retrieval (multi-store query)
 - [ ] Implement P18 persona sync (Self-Model load)
@@ -919,23 +981,27 @@ K1 Intelligence Module maintains **ephemeral working memory** (SessionState, 64K
 ## Success Metrics
 
 **Performance:**
+
 - ✅ K1 SessionState access <1ms P95 (in-memory)
 - ✅ K1 → K0 batch flush <10ms P95 (Bridge latency)
 - ✅ K0 → K1 context retrieval <50ms P95 (multi-store query)
 - ✅ K1 crash recovery <5s P95 (WAL replay)
 
 **Consistency:**
+
 - ✅ K1 eventually consistent (<250ms lag)
 - ✅ K0 strongly consistent (ACID via WAL)
 - ✅ Zero data loss on K0 crash
 - ✅ Minimal data loss on K1 crash (<250ms)
 
 **Size Management:**
+
 - ✅ K1 SessionState <64KB per session (90% within limit)
 - ✅ K1 total memory <500MB (10-15 concurrent sessions)
 - ✅ K0 storage growth ~1.2MB/day (~450MB/year)
 
 **Observability:**
+
 - ✅ cognitive_trace_id propagates through all state transitions
 - ✅ Receipts provide audit trail for all K0 writes
 - ✅ Prometheus metrics for state size, flush latency, recovery time

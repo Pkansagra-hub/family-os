@@ -1,0 +1,340 @@
+# =============================================================================
+# P02 Write Pipeline v2.0.0 -- Trust-Then-Fill Architecture
+# =============================================================================
+#
+# Transforms cognitive.memory.write.committed.v1 -> st_hipp_events + st_vec.
+# v2 documents trust-then-fill mode across all affected stages with dual-path
+# latency budgets: FAST PATH (MW present, ~80ms) and FALLBACK PATH (MW absent, ~140ms).
+#
+# Key design principle: When MW is good (~85%), P02 saves ~60ms.
+# When MW is bad, P02 is NO WORSE than v1. There is no regression path.
+#
+# DAG shape unchanged: 16 stages. No new stages added.
+# 6 stages updated with trust-then-fill annotations.
+#
+# Owner: Intelligence Kernel (K0)
+# Status: PRE-PRODUCTION
+# ADRs: k009.2 (builder pattern), k010.1 (atomic writes), k007.2 (event bus), TBD (M3 trust-then-fill)
+# Epic: 3.7
+# =============================================================================
+
+pipeline_id: P02_WRITE
+version: v2
+name: P02 Write - Episodic Memory Formation (Trust-Then-Fill)
+description: |
+  Transforms committed memory write events into structured hippocampal records.
+  Performs pattern separation, semantic projection, context enrichment, and atomic storage.
+
+  v2 ARCHITECTURE SHIFT: Trust-Then-Fill Waterfall
+    All enrichment modules PREFER MW v2 signals from K1 (full conversation context).
+    When MW signals are present (~85%), modules validate and passthrough (fast path).
+    When MW signals are missing or malformed, modules fall back to UltraBERT/heuristic
+    inference (same as v1 -- no regression).
+
+  Dual-path latency:
+    FAST PATH (MW present):    ~80ms total
+    FALLBACK PATH (MW absent): ~140ms total (same as v1)
+
+  Primary exit topic: p02.write.complete.v2
+  Additional emitter topics: memory.formed.v2, cognitive.vector.stored.v1
+
+entry_topic: cognitive.memory.write.committed.v1
+exit_topic: p02.write.complete.v2
+concurrency: 1
+max_queue_depth: 512
+
+# ---------------------------------------------------------------------------
+# Required Storage Capabilities
+# ---------------------------------------------------------------------------
+required_capabilities:
+  - st_hipp_events.read
+  - st_hipp_events.write
+  - st_vec.write
+  - st_pipeline_processed.write
+  - st_outbox.write
+  - st_kg_edges.read     # M07 fallback: read relationships
+  - st_kg_edges.write    # M07 new: write MW relationships to seed KG
+
+# ---------------------------------------------------------------------------
+# Latency Budget Summary (Dual-Path)
+# ---------------------------------------------------------------------------
+#                           FAST PATH (MW present)  FALLBACK PATH (MW absent)
+# stage_10 (M01):           ~5ms                    ~5ms          (unchanged, always runs)
+# stage_20 (M02):           ~150ms                  ~150ms        (ALWAYS runs -- primary gap-filler)
+# stage_22 (M22):           ~0ms                    ~0ms          (cache hit from M02)
+# stage_30 (M04):           ~10ms (safety only)     ~70ms         (full UltraBERT, same as v1)
+# stage_31 (M05):           ~2ms                    ~2ms          (unchanged)
+# stage_32 (M07):           ~3ms (MW mapping)       ~12ms         (st_kg_edges READ + NER)
+# stage_33 (M08):           ~4ms (MW temporal)      ~6ms          (NER temporal + envelope.ts)
+# stage_40-43:              ~5ms                    ~5ms          (unchanged)
+# stage_50:                 ~2ms                    ~2ms          (unchanged)
+# stage_55 (M06):           ~5ms                    ~5ms          (formula, no I/O)
+# stage_60 (M13):           ~10ms                   ~10ms         (16 more cols, pure assembly)
+# stage_70:                 ~15ms                   ~15ms         (unchanged)
+# stage_80:                 ~2ms                    ~2ms          (unchanged)
+# -----------------------------------------------------------------------
+# TOTAL:                    ~80ms                   ~140ms        (no regression from v1)
+
+latency_budget_ms:
+  fast_path: 80     # MW signals present for all modules
+  fallback_path: 140  # MW signals absent, full recomputation (same as v1)
+
+# ---------------------------------------------------------------------------
+# DAG Definition (16 Stages)
+# ---------------------------------------------------------------------------
+dag:
+  # STAGE 10: DG Pattern Separation (unchanged)
+  - id: stage_10_dg_pattern_separate
+    module: hippocampus.pattern_separate:v1
+    after: []
+    trust_then_fill: false   # Always runs, no MW dependency
+    description: "Dentate Gyrus pattern separation. SimHash + MinHash from body.text. No MW dependency."
+    config:
+      novelty_threshold: 0.7
+      hash_seed: 42
+
+  # STAGE 20: CA1 Semantic Projection (enhanced, ALWAYS runs)
+  - id: stage_20_ca1_semantic_project
+    module: hippocampus.semantic_project:v2
+    after:
+      - stage_10_dg_pattern_separate
+    trust_then_fill: false   # ALWAYS runs full UltraBERT -- primary gap-filler
+    description: |
+      CA1 semantic projection. ALWAYS runs full UltraBERT NER + embedding.
+      M02 is the PRIMARY GAP-FILLER for all other modules.
+      MW participant_relationships ENHANCE entity resolution when present.
+      NER outputs (temporal, LOC, PER) are fallback sources for M08, M07.
+    config:
+      entity_extraction_model: ultrabert_3head
+      kg_confidence_threshold: 0.6
+      max_triples_per_event: 10
+
+  # STAGE 22: Embedding Cache Extraction (unchanged)
+  - id: stage_22_embedding_extract
+    module: embedding.extract_from_cache:v1
+    after:
+      - stage_20_ca1_semantic_project
+    trust_then_fill: false   # Cache hit from M02, no MW dependency
+    description: "Extract 768-dim embedding from UltraBERT cache (ADR-K003 inline embedding)."
+    config:
+      fallback_to_direct_call: true
+      expected_vector_dim: 768
+      model_id: ultrabert_v2.1.0
+
+  # STAGE 30: Affect Analysis (TRUST-THEN-FILL)
+  - id: stage_30_affect_analyze
+    module: affect.analyze:v2
+    after:
+      - stage_20_ca1_semantic_project
+    trust_then_fill: true
+    mw_input: body.affect
+    description: |
+      Affect trust-then-fill:
+        MW present (~85%): Passthrough valence/arousal/dominance, safety heads only (~10ms)
+        MW absent (~10%): Full UltraBERT inference (~70ms, same as v1)
+        UltraBERT fails (~5%): VADER fallback (~20ms)
+      Safety heads (clinical_safety_*) ALWAYS run on body.text regardless of path.
+    latency_ms:
+      fast_path: 10
+      fallback_path: 70
+    config:
+      safety_heads_timeout_ms: 10
+      ultrabert_full_timeout_ms: 60
+
+  # STAGE 31: Space Resolution (unchanged)
+  - id: stage_31_space_resolve
+    module: space.resolve_visibility:v1
+    after:
+      - stage_20_ca1_semantic_project
+    trust_then_fill: false
+    description: "Space visibility resolution. No MW dependency."
+    config:
+      visibility_mode: household
+
+  # STAGE 32: Social Graph Resolution (TRUST-THEN-FILL)
+  - id: stage_32_social_resolve
+    module: social.family_graph_resolve:v2
+    after:
+      - stage_20_ca1_semantic_project
+    trust_then_fill: true
+    mw_input: body.participant_relationships
+    description: |
+      Social trust-then-fill:
+        MW present (~85%): Map relationships to social_context (~3ms). Write to st_kg_edges.
+        MW absent (~8%): st_kg_edges READ (may have MW-seeded data, ~12ms)
+        KG empty (~5%): M02 NER PER entities + name-pattern heuristics (~12ms)
+        All fail (~2%): Defaults (solo/unknown)
+      Progressively seeds st_kg_edges with MW relationships for future fallback.
+    latency_ms:
+      fast_path: 3
+      fallback_path: 12
+    config:
+      cache_ttl_seconds: 300
+      default_social_context: solo
+      kg_write_confidence_threshold: 0.5
+
+  # STAGE 33: Temporal Profile (TRUST-THEN-FILL)
+  - id: stage_33_temporal_profile
+    module: context.temporal_profile:v2
+    after:
+      - stage_20_ca1_semantic_project
+    trust_then_fill: true
+    mw_input: body.temporal
+    description: |
+      Temporal trust-then-fill: 14 dimensions (was 11).
+      Temporal chain: MW resolved_epoch_ms -> NER temporal -> event_time -> envelope.ts -> now()
+      Spatial chain: MW location_name -> NER LOC -> text heuristic -> null
+      event_time_utc is NEVER null (envelope.ts is hard backstop).
+    latency_ms:
+      fast_path: 4
+      ner_lookup: 6
+    config:
+      timezone_source: tenant_config
+      ner_temporal_resolution_enabled: true
+
+  # STAGE 40-43: Context Enrichment (unchanged)
+  - id: stage_40_device_profile
+    module: context.device_profile:v1
+    after:
+      - stage_20_ca1_semantic_project
+    trust_then_fill: false
+    description: "Device profiling. No MW dependency."
+    config:
+      default_device_kind: phone
+
+  - id: stage_41_ingress_classify
+    module: context.ingress_classify:v1
+    after:
+      - stage_20_ca1_semantic_project
+    trust_then_fill: false
+    description: "Ingress classification. No MW dependency."
+    config:
+      default_activity_type: routine
+
+  - id: stage_42_geo_metadata
+    module: context.geo_metadata:v1
+    after:
+      - stage_20_ca1_semantic_project
+    trust_then_fill: false
+    description: "Geo metadata enrichment. No MW dependency."
+    config:
+      default_location_type: unknown
+
+  - id: stage_43_spatial_minimal
+    module: context.spatial_minimal:v1
+    after:
+      - stage_20_ca1_semantic_project
+    trust_then_fill: false
+    description: "Spatial minimal processing. Privacy-aware location handling."
+    config:
+      green_band_precision: 6
+
+  # STAGE 50: Retention Lookup (unchanged)
+  - id: stage_50_retention_lookup
+    module: context.retention_lookup:v1
+    after:
+      - stage_40_device_profile
+    trust_then_fill: false
+    description: "Retention policy lookup. No MW dependency."
+    config:
+      default_retention_bucket: STANDARD
+
+  # STAGE 55: Salience Scoring (CORRECTED INPUTS)
+  - id: stage_55_salience_score
+    module: salience.score:v2
+    after:
+      - stage_30_affect_analyze
+      - stage_32_social_resolve
+      - stage_33_temporal_profile
+    trust_then_fill: true
+    mw_input: body.entity_salience (cross-validation only)
+    description: |
+      Salience scoring: same formula (0.50xSocial + 0.40xAffect + 0.10xRecency).
+      Inputs from upstream trust-then-fill chains (always correct regardless of source).
+      MW entity_salience used for cross-validation (log discrepancy if delta > 0.3).
+      The fix is correct INPUTS, not a new formula.
+    latency_ms:
+      always: 5
+    config:
+      social_weight: 0.50
+      affect_weight: 0.40
+      recency_weight: 0.10
+      entity_salience_discrepancy_threshold: 0.3
+
+  # STAGE 60: Row Builder (EXPANDED)
+  - id: stage_60_build_hipp_events_row
+    module: builders.hipp_events_row:v2
+    after:
+      - stage_10_dg_pattern_separate
+      - stage_20_ca1_semantic_project
+      - stage_22_embedding_extract
+      - stage_30_affect_analyze
+      - stage_31_space_resolve
+      - stage_32_social_resolve
+      - stage_33_temporal_profile
+      - stage_40_device_profile
+      - stage_41_ingress_classify
+      - stage_42_geo_metadata
+      - stage_43_spatial_minimal
+      - stage_50_retention_lookup
+      - stage_55_salience_score
+    trust_then_fill: false   # Pure assembly from upstream outputs
+    description: |
+      Row assembly: ~111 columns across 12 groups (was ~95 across 11).
+      Group 12 (MW v2 Signals): 11 pure passthrough columns from envelope.body.
+      All columns handle null gracefully (migration defaults for missing MW fields).
+    latency_ms:
+      always: 10
+    config:
+      validate_required_fields: true
+      validate_mw_field_types: true
+
+  # STAGE 70: Atomic Storage Commit (unchanged)
+  - id: stage_70_atomic_writer
+    module: core.hipp_events_writer:v1
+    after:
+      - stage_60_build_hipp_events_row
+      - stage_22_embedding_extract
+    trust_then_fill: false
+    description: |
+      Atomic writer: commits st_hipp_events + st_vec + st_pipeline_processed.
+      ADR-K003 v1.2: 3-table atomic transaction.
+    config:
+      batch_size: 128
+      retry_backoff_ms: 100
+      max_retry_attempts: 3
+      write_embedding: true
+      emit_stored_event: true
+      stored_event_topic: cognitive.vector.stored.v1
+
+  # STAGE 80: Event Emission (unchanged)
+  - id: stage_80_event_emitter
+    module: core.event_emitter:v1
+    after:
+      - stage_70_atomic_writer
+    trust_then_fill: false
+    description: "Event emitter. Publishes memory.formed.v2 and telemetry."
+    config:
+      enable_telemetry_event: true
+      batch_emit_enabled: true
+
+# ---------------------------------------------------------------------------
+# Trust-Then-Fill Waterfall Summary
+# ---------------------------------------------------------------------------
+# When MW v2 envelope is rich (~85% of traffic):
+#   M04: passthrough affect + safety heads only (10ms vs 70ms)
+#   M07: map relationships + write KG (3ms vs 12ms)
+#   M08: use resolved_epoch_ms (4ms, same)
+#   M06: correct social inputs -> proper salience distribution
+#   M13: all 12 groups populated, Group 12 has real MW data
+#   TOTAL: ~80ms
+#
+# When MW v2 envelope is partial or missing (~15% of traffic):
+#   M04: full UltraBERT inference + safety (70ms, same as v1)
+#   M07: st_kg_edges READ + NER + heuristics (12ms)
+#   M08: NER temporal + event_time + envelope.ts chain (6ms)
+#   M06: formula with whatever upstream produced (5ms, same)
+#   M13: Group 12 columns get migration defaults (NULL, '{}', '[]')
+#   TOTAL: ~140ms (same as v1 -- no regression)
+#
+# Key: P02 always produces complete output. The source varies but the shape is constant.

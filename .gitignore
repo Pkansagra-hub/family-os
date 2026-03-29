@@ -121,8 +121,12 @@ yarn.lock
 local/
 temp/
 tmp/
+poc/
 
 # Large files
 *.tar
 *.zip
 archive/
+.github/
+.claude/
+.qoder/

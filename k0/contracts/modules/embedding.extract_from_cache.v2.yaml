@@ -1,0 +1,222 @@
+# =============================================================================
+# M22 Embedding Extract-from-Cache Module Contract v2.0.0
+# =============================================================================
+#
+# Extracts 768-dimensional embedding from UltraBERT's single-pass cache
+# with zero additional inference latency. Output is consumed by M16
+# (hipp_events_writer) which writes to st_vec as pgvector VECTOR(768).
+#
+# History:
+#   v1.0.0: Original contract -- output consumed by M23 (struct.pack bytes)
+#   v2.0.0: Output explicitly documented as list[float] for pgvector path
+#
+# Changes from v1:
+#   - Downstream consumer: M23 (deprecated) -> M16 (hipp_events_writer)
+#   - Output format: explicitly documented as list[float] for pgvector INSERT
+#   - Related modules: M23 reference removed, M16 added as consumer
+#   - Migration reference: 0026 -> 0071 (pgvector-native)
+#   - Added: downstream_consumer field naming M16 explicitly
+#
+# NOTE: M22 code itself may NOT need changes -- it already returns list[float].
+# This contract update documents the pgvector context for the output convention.
+#
+# Supersedes: k0/contracts/modules/embedding.extract_from_cache.v1.yaml
+#
+# Pipeline: P02 Write (stage 22)
+# ADR: ADR-K003 v1.2 (inline embedding), ADR-K003 v2.0 (pgvector migration)
+# Schema: st_vec_v2.columns.yaml
+# Milestone: M4 Epic 4.7
+# =============================================================================
+
+module_id: embedding.extract_from_cache
+name: "embedding.extract_from_cache"
+version: v2
+
+# =============================================================================
+# Event Types
+# =============================================================================
+input_event_types:
+  - cognitive.memory.write.committed.v1
+  - p02.hippocampus.semantic_projected.v1
+
+output_event_types:
+  - p02.embedding.extracted.v1
+
+# =============================================================================
+# Module Characteristics
+# =============================================================================
+latency_budget_ms: 1
+idempotent: true
+side_effects: []
+
+# =============================================================================
+# Description
+# =============================================================================
+description: |
+  M22: UltraBERT Embedding Cache Extraction Module (pgvector-aware)
+
+  Extracts 768-dimensional embedding from UltraBERT's single-pass cache
+  with ZERO additional inference latency.
+
+  Architecture (ADR-K003):
+  - P02 M02 (semantic_project) calls UltraBERT for entity extraction
+  - P02 M04 (affect.analyze) calls UltraBERT for sentiment/emotions
+  - P02 M10 (ingress_classify) calls UltraBERT for intent/routing
+  - All three share ONE cached forward pass (K0_ULTRABERT_SINGLE_PASS=1)
+  - M22 extracts the 768-dim embedding from this cached result
+
+  Downstream Consumer:
+  - M16 (hipp_events_writer) receives M22's list[float] output
+  - M16 passes list[float] to vec_write syscall
+  - vec_write formats as pgvector VECTOR(768) for INSERT
+  - pgvector HNSW auto-indexes on INSERT
+
+  v2 changes from v1:
+  - Downstream consumer: M23 (deprecated, deleted in Epic 4.12) -> M16
+  - Output format convention: list[float] explicitly for pgvector path
+  - Migration reference: 0071 (pgvector-native, replaces 0026)
+  - M16 no longer calls struct.pack -- passes float list directly
+
+  Output format:
+  - embedding: list[float] (768 floats, NOT bytes/struct.pack)
+  - Output wrapped under "extract_from_cache" key in module result dict
+
+  Fallback Behavior:
+  1. Try cache: _get_full_analysis_result(text) -> check .embedding
+  2. Cache miss: Call get_embedding(text) directly (rare, <5% cases, ~30ms)
+  3. Failure: Return source='failed', set embedding_status=PENDING for P08 backfill
+
+  Performance Target: <1ms P95 (cache hit), ~30ms (direct call)
+  Cache TTL: 30 seconds (configured in ultrabert_adapter.py)
+
+# =============================================================================
+# Failure Modes
+# =============================================================================
+failure_modes:
+  - code: CACHE_MISS_FALLBACK
+    description: "UltraBERT cache expired or not populated -- falls back to direct call"
+    policy: fallback_to_direct_call
+    max_retries: 1
+
+  - code: ULTRABERT_UNAVAILABLE
+    description: "UltraBERT service unreachable -- embedding generation impossible"
+    policy: graceful_degradation
+    max_retries: 0
+
+  - code: NO_TEXT_INPUT
+    description: "Envelope body has no text field or empty text"
+    policy: skip
+    max_retries: 0
+
+  - code: EMBEDDING_GENERATION_FAILED
+    description: "UltraBERT returned error -- sets embedding_status=PENDING for P08 backfill"
+    policy: set_pending_for_backfill
+    max_retries: 0
+
+# =============================================================================
+# Configuration Schema
+# =============================================================================
+config_schema:
+  type: object
+  properties:
+    fallback_to_direct_call:
+      type: boolean
+      default: true
+      description: "If cache miss, call get_embedding() directly (adds ~30ms)"
+    expected_vector_dim:
+      type: integer
+      default: 768
+      description: "Expected embedding dimension from UltraBERT"
+    model_id:
+      type: string
+      default: "ultrabert_v2.1.0"
+      description: "Model version identifier for st_vec.model_id"
+
+# =============================================================================
+# Input Schema
+# =============================================================================
+input_schema:
+  type: object
+  required:
+    - envelope
+  properties:
+    envelope:
+      type: object
+      required:
+        - body
+      properties:
+        body:
+          type: object
+          required:
+            - text
+          properties:
+            text:
+              type: string
+              minLength: 1
+              description: "Input text for embedding extraction"
+
+# =============================================================================
+# Output Schema
+# =============================================================================
+output_schema:
+  type: object
+  required:
+    - embedding_id
+    - vector_dim
+    - model_id
+    - source
+  properties:
+    embedding:
+      type: array
+      items:
+        type: number
+      minItems: 768
+      maxItems: 768
+      description: "768-dimensional embedding as list[float]. M16 passes to vec_write for pgvector INSERT."
+    embedding_id:
+      type: string
+      format: uuid
+      description: "UUID for this embedding (links to st_vec.embedding_id)"
+    vector_dim:
+      type: integer
+      enum: [768]
+      description: "Dimension of embedding vector"
+    model_id:
+      type: string
+      enum: ["ultrabert_v2.1.0"]
+      description: "Model identifier"
+    source:
+      type: string
+      enum: ["cache_hit", "direct_call", "failed", "no_text"]
+      description: |
+        cache_hit: Extracted from UltraBERT single-pass cache (optimal, <1ms)
+        direct_call: Cache miss, called get_embedding() directly (~30ms)
+        failed: UltraBERT unavailable or error (embedding_status=PENDING)
+        no_text: Empty or missing input text (skip)
+
+# =============================================================================
+# Downstream Consumer
+# =============================================================================
+downstream_consumer:
+  module: "M16 (hipp_events_writer)"
+  description: "M16 receives list[float] from M22 and passes to vec_write syscall for pgvector INSERT"
+  contract: "hipp_events_writer contract (M16 -- no separate YAML, embedded in P02 pipeline)"
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+dependencies:
+  runtime:
+    - k0.runtime.ultrabert_adapter
+  modules:
+    - hippocampus.semantic_project:v1
+
+# =============================================================================
+# Performance
+# =============================================================================
+performance:
+  p50_latency_ms: 0.5
+  p95_latency_ms: 1
+  p99_latency_ms: 5
+  cache_hit_rate: 0.95
+  cache_miss_latency_ms: 30

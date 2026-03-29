@@ -30,6 +30,7 @@ Test Matrix (per M3_EXECUTION.md):
 from __future__ import annotations
 
 import logging
+import struct
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -113,12 +114,15 @@ class MockConnection:
     """Mock database connection for testing."""
 
     rows: List[Dict[str, Any]] = field(default_factory=list)
+    st_vec_rows: List[Dict[str, Any]] = field(default_factory=list)
     executed_queries: List[tuple] = field(default_factory=list)
     fail_on_execute: bool = False
 
     async def fetch(self, query: str, *params: Any) -> List[Dict[str, Any]]:
-        """Return configured rows."""
+        """Return configured rows based on query type."""
         self.executed_queries.append((query, params))
+        if "st_vec" in query:
+            return self.st_vec_rows
         return self.rows
 
     async def execute(self, query: str, *args: Any) -> str:
@@ -131,6 +135,15 @@ class MockConnection:
     async def fetchrow(self, query: str, *args: Any) -> Optional[Dict[str, Any]]:
         """Fetch single row."""
         self.executed_queries.append((query, args))
+        return None
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        """Fetch single value."""
+        self.executed_queries.append((query, args))
+        if "COUNT" in query:
+            return 0
+        if "version" in query.lower():
+            return 1
         return None
 
 
@@ -180,6 +193,17 @@ def make_runner_context(syscalls: MockSyscalls) -> P03RunnerContext:
         qos_band="GREEN",
         priority=50,
     )
+
+
+def create_mock_st_vec_row(event_id: str) -> Dict[str, Any]:
+    """Create a mock st_vec row with embedding vector."""
+    mock_vector = [0.1] * 768
+    vector_bytes = struct.pack(f"{768}f", *mock_vector)
+    return {
+        "event_id": event_id,
+        "vector": vector_bytes,
+        "vector_dim": 768,
+    }
 
 
 # =============================================================================
@@ -235,7 +259,8 @@ class TestR0EventIngestion:
                     "salience_score": 0.8,
                     "created_at": int(time.time() * 1000),
                 }
-            ]
+            ],
+            st_vec_rows=[create_mock_st_vec_row("evt-003")],
         )
 
         uow = MockUnitOfWork(connection=conn)

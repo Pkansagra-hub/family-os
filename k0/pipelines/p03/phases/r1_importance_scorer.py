@@ -1,12 +1,16 @@
 """
-R1 Phase — Importance Scoring and Hebbian Learning.
+R1 Phase — Importance Scoring, audit sampling, and observability.
 
 M4 Issues 4.1.1-4.1.2: Implement R1 Phase for Importance Scoring with Audit Logging.
+M5.O Issues 5.O.1.1-5.O.1.6: R1 Observability (OTel span, histograms, gauges).
 
-This phase performs two core operations:
-1. Compute importance scores for each event (Issue 4.1.1)
-2. Log scoring factors for audit trail (Issue 4.1.2)
-3. (Future) Hebbian edge updates for co-occurring entities (Issue 4.1.3)
+This phase performs three live operations:
+1. Compute CONFIG_B importance scores for each event (Issue 4.1.1)
+2. Log sampled scoring factors for audit trail (Issue 4.1.2)
+3. Populate R1 observability metrics for downstream reporting (Issue 5.O.1)
+
+Hebbian learning infrastructure exists in the R1 code surface, but this phase
+does not execute Hebbian updates. That logic remains gated and downstream.
 
 References:
     - Dossier §2.4: Scientific Formulas - Importance Score
@@ -29,10 +33,11 @@ from k0.modules.consolidation.algorithms.importance_scorer import (
     ImportanceWeights,
 )
 from k0.pipelines.p03.audit_logger import P03AuditLogger
-from k0.pipelines.p03.observability import P03Error
+from k0.pipelines.p03.observability import P03Error, R1PhaseMetrics
 from k0.pipelines.p03.phase_interface import P03PhaseResult
 from k0.pipelines.p03.phase_outputs import ScoredEvent
 from k0.pipelines.p03.runner_contract import P03PhaseId
+from k0.pipelines.p03.stores import SyscallWeightStore
 
 if TYPE_CHECKING:
     from k0.pipelines.p03.envelope import P03BatchEnvelope
@@ -54,15 +59,33 @@ class R1Config:
     Attributes:
         audit_sample_rate: Fraction of events to audit [0.0, 1.0].
                           Use 1.0 for debug (100%), 0.1 for production (10%).
-        enable_hebbian: Whether to run Hebbian learning (Issue 4.1.3).
-        min_samples_for_learned_weights: Minimum samples before using learned weights.
-        importance_weights: Optional custom weights (uses defaults if None).
+        enable_hebbian: Reserved gate for downstream Hebbian integration.
+            R1 scoring remains valid with this disabled during phase hardening.
+        hebbian_activation_threshold: Cumulative scored events required before
+            adaptive Hebbian infrastructure would activate. Mirrors the
+            threshold in WeightTrainingConfig. Decision D-R1-001.
+        min_samples_for_learned_weights: Minimum samples before trusting pure
+            learned weights over blended cold-start priors.
+        importance_weights: Optional explicit override passed to
+            ImportanceScorer before any learned-weight lookup.
+        enable_kg_boost: Whether to enable KG relationship boost (ADR-K026).
+            When True, events mentioning entities with strong KG edges
+            get a multiplicative importance boost.
+        kg_boost_scale: Multiplier for max edge weight in boost formula.
+        kg_max_boost_cap: Hard cap on boost above 1.0.
     """
 
-    audit_sample_rate: float = 1.0  # 100% for debug; 0.1 for production
-    enable_hebbian: bool = False  # Not yet implemented (Issue 4.1.3)
+    audit_sample_rate: float = 0.10  # 10% for production (was 1.0 debug)
+    enable_hebbian: bool = (
+        False  # Auto-activates at hebbian_activation_threshold (Decision D-R1-001)
+    )
+    hebbian_activation_threshold: int = 500  # Same as weight learner threshold
     min_samples_for_learned_weights: int = 500
     importance_weights: Optional[ImportanceWeights] = None
+    # ADR-K026: KG relationship boost
+    enable_kg_boost: bool = False  # Disabled until KG has meaningful data
+    kg_boost_scale: float = 0.15
+    kg_max_boost_cap: float = 0.20
 
 
 # =============================================================================
@@ -72,14 +95,14 @@ class R1Config:
 
 class R1ImportanceScorer:
     """
-    R1 Phase: Importance Scoring and Hebbian Learning.
+    R1 Phase: Importance Scoring.
 
     Responsibilities:
-        1. Load importance weights (learned or static)
-        2. Compute importance score for each event
+        1. Load importance weights (config override, cold-start blend, or static)
+        2. Compute CONFIG_B importance score for each event
         3. Log scoring factors for audit trail
         4. Update event state with importance fields
-        5. (Future) Extract co-occurrences for Hebbian updates
+        5. Publish R1 metrics for observability
 
     Scientific Basis:
         McGaugh (2004) - Emotional memories are more strongly encoded
@@ -88,7 +111,9 @@ class R1ImportanceScorer:
         prioritized for consolidation.
 
     Scoring Formula:
-        importance = (emotional + novelty + social) × event_type_multiplier
+        base = emotional + surprise + novelty + social + identity + recency
+        importance = clamp(base * elaboration * goal * arc * temporal * type
+                           * intent * relationship * tier * reliability, 0, 1)
 
     Audit Logging:
         Each scoring decision can be logged to st_consolidation_audit
@@ -97,7 +122,7 @@ class R1ImportanceScorer:
     Idempotency:
         - Same events always produce same importance scores
         - Audit records use idempotency keys to prevent duplicates
-        - Hebbian updates are deterministic given same input
+        - No Hebbian side effects are emitted from this phase
     """
 
     PHASE_ID = P03PhaseId.R1_SCORE
@@ -164,6 +189,8 @@ class R1ImportanceScorer:
             3. Log audit records for sampled events
             4. Update event states with importance fields
             5. Collect scored events into phase outputs
+            6. Populate R1PhaseMetrics for observability (5.O.1.1-6)
+            7. Emit OTel span attributes and metrics
 
         Args:
             envelope: Batch envelope with events to score
@@ -204,12 +231,46 @@ class R1ImportanceScorer:
                 idempotency_key=self.idempotency_key(envelope),
             )
 
+        # 5.O.1: Initialize R1PhaseMetrics for this cycle
+        r1_metrics = R1PhaseMetrics()
+
         try:
-            # Initialize scorer with weight store from syscalls
-            weight_store = getattr(ctx.syscalls, "weight_store", None)
+            # ADR-K026: Load KG edge cache if boost enabled
+            kg_boost_config = None
+            kg_edge_cache = None
+            if self.config.enable_kg_boost:
+                from k0.modules.consolidation.algorithms.kg_relationship_boost import (
+                    KGBoostConfig,
+                    KGEdgeCache,
+                )
+
+                kg_boost_config = KGBoostConfig(
+                    enabled=True,
+                    boost_scale=self.config.kg_boost_scale,
+                    max_boost_cap=self.config.kg_max_boost_cap,
+                )
+                kg_edge_cache = KGEdgeCache()
+                await kg_edge_cache.load_edges(
+                    tenant_id=tenant_id,
+                    space_id=space_id,
+                    syscalls=ctx.syscalls,
+                )
+                logger.info(
+                    "R1: KG edge cache loaded for relationship boost",
+                    extra={
+                        "cycle_id": cycle_id,
+                        "edge_count": kg_edge_cache.edge_count,
+                    },
+                )
+
+            # Initialize scorer with weight store backed by syscalls
+            weight_store = SyscallWeightStore(syscalls=ctx.syscalls)
             scorer = ImportanceScorer(
                 space_id=space_id,
                 weight_store=weight_store,
+                static_weights=self.config.importance_weights,
+                kg_boost_config=kg_boost_config,
+                kg_edge_cache=kg_edge_cache,
             )
 
             # Create audit logger for this cycle
@@ -225,12 +286,21 @@ class R1ImportanceScorer:
                 self.config.audit_sample_rate,
             )
 
+            # Capture batch timestamp for consistent recency computation
+            now_ms = int(time.time() * 1000)
+
+            # Time the scoring operation specifically (5.O.1.1)
+            scoring_start_ms = int(time.time() * 1000)
+
             # Score all events with audit logging
             scored_results = await scorer.score_batch_with_audit(
                 events=envelope.events,
                 audit_logger=audit_logger,
                 sample_rate=sample_rate,
+                now_ms=now_ms,
             )
+
+            scoring_duration_ms = int(time.time() * 1000) - scoring_start_ms
 
             # Collect scored events into phase outputs
             scored_events: List[ScoredEvent] = []
@@ -243,8 +313,26 @@ class R1ImportanceScorer:
                         affect_factor=result["affect_factor"],
                         social_factor=result["social_factor"],
                         novelty_factor=result["novelty_factor"],
+                        surprise_factor=result.get("surprise_factor", 0.0),
+                        identity_factor=result.get("identity_factor", 0.0),
+                        priority_tier=result.get("priority_tier", "LOW"),
                     )
                 )
+
+                # 5.O.1.2: Record score for histogram
+                r1_metrics.record_importance_score(result["importance_score"])
+
+                # 5.O.1.6: Record component breakdown for distribution
+                breakdown = result.get("breakdown")
+                if breakdown is not None:
+                    r1_metrics.record_component_breakdown(
+                        emotional=breakdown.emotional_component,
+                        surprise=breakdown.surprise_component,
+                        novelty=breakdown.novelty_component,
+                        social=breakdown.social_component,
+                        identity=breakdown.identity_component,
+                        recency=breakdown.recency_component,
+                    )
 
             # Store scored events in envelope phases
             envelope.phases.r1_scored_events = scored_events
@@ -258,13 +346,66 @@ class R1ImportanceScorer:
             max_score = max(scores) if scores else 0.0
             min_score = min(scores) if scores else 0.0
 
-            # Count priority tiers
+            # Count priority tiers (6-tier, POC validated)
             critical_count = sum(1 for s in scores if s >= 0.80)
-            high_count = sum(1 for s in scores if 0.50 <= s < 0.80)
-            medium_count = sum(1 for s in scores if 0.30 <= s < 0.50)
-            low_count = sum(1 for s in scores if s < 0.30)
+            high_count = sum(1 for s in scores if 0.60 <= s < 0.80)
+            medium_high_count = sum(1 for s in scores if 0.45 <= s < 0.60)
+            medium_count = sum(1 for s in scores if 0.30 <= s < 0.45)
+            low_medium_count = sum(1 for s in scores if 0.15 <= s < 0.30)
+            low_count = sum(1 for s in scores if s < 0.15)
 
             duration_ms = int(time.time() * 1000) - start_ms
+
+            # ================================================================
+            # 5.O.1: Populate R1PhaseMetrics
+            # ================================================================
+
+            # 5.O.1.3: Weight source info
+            weights = await scorer.get_weights()
+            r1_metrics.set_weight_info(
+                weights=weights.as_dict(),
+                sample_count=scorer._cached_sample_count,
+                source=scorer._weights_source,
+            )
+
+            # 5.O.1.4: Priority tier gauge
+            r1_metrics.set_tier_counts(
+                critical=critical_count,
+                high=high_count,
+                medium_high=medium_high_count,
+                medium=medium_count,
+                low_medium=low_medium_count,
+                low=low_count,
+            )
+
+            # 5.O.1.5: Audit sampling metrics
+            r1_metrics.set_audit_counts(
+                events_scored=len(scored_events),
+                audit_records=audit_logger.record_count(),
+            )
+
+            # Timing
+            r1_metrics.r1_duration_ms = duration_ms
+            r1_metrics.importance_scoring_ms = scoring_duration_ms
+
+            # Store R1 metrics on envelope for downstream consumption
+            envelope.phases.r1_metrics = r1_metrics
+
+            # ================================================================
+            # 5.O.1: Emit metrics via registry if available
+            # ================================================================
+            metrics_registry = getattr(ctx, "metrics_registry", None)
+            if metrics_registry is not None:
+                try:
+                    metrics_registry.emit_r1_scoring(
+                        tenant_id=tenant_id,
+                        r1_metrics=r1_metrics,
+                    )
+                except Exception as metrics_err:
+                    logger.warning(
+                        "R1: Failed to emit metrics (non-fatal)",
+                        extra={"error": str(metrics_err)},
+                    )
 
             logger.info(
                 "R1: Importance scoring complete",
@@ -277,10 +418,14 @@ class R1ImportanceScorer:
                     "min_score": round(min_score, 3),
                     "critical_count": critical_count,
                     "high_count": high_count,
+                    "medium_high_count": medium_high_count,
                     "medium_count": medium_count,
+                    "low_medium_count": low_medium_count,
                     "low_count": low_count,
                     "weights_source": scorer._weights_source,
                     "duration_ms": duration_ms,
+                    "scoring_ms": scoring_duration_ms,
+                    "performance_status": r1_metrics.check_performance_threshold(),
                 },
             )
 
@@ -293,7 +438,10 @@ class R1ImportanceScorer:
                     "avg_importance": round(avg_score, 3),
                     "critical_count": critical_count,
                     "high_count": high_count,
+                    "medium_high_count": medium_high_count,
                     "weights_source": scorer._weights_source,
+                    "scoring_ms": scoring_duration_ms,
+                    "r1_metrics": r1_metrics.to_dict(),
                 },
                 idempotency_key=self.idempotency_key(envelope),
             )

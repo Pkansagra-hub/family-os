@@ -52,5 +52,31 @@ class ObservabilityEmitter:
         with self._lock:
             self._events.clear()
 
+    def emit_metric(
+        self,
+        name: str,
+        value: float,
+        **labels: Any,
+    ) -> None:
+        """Record a metric observation.
+
+        Parameters
+        ----------
+        name:
+            Metric name (e.g., 'sse_broadcast_events_total')
+        value:
+            Numeric value for the metric
+        **labels:
+            Additional labels/dimensions for the metric
+        """
+        self.emit(
+            {
+                "type": "metric",
+                "name": name,
+                "value": value,
+                "labels": labels,
+            }
+        )
+
 
 __all__ = ["ObservabilityEmitter"]

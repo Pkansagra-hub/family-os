@@ -1,0 +1,200 @@
+# ---------------------------------------------------------------------------
+# Memory Writer v2 Policies Contract
+# Follows Orchestrator pattern: k1/contracts/modules/orchestrator/policies.contract.yaml
+# Reference: MASTER_IMPLEMENTATION_SKELETON.md Epic 1.3
+# Source of truth: docs/pipelines/p03/stage5_proposal_corrections.md
+# ---------------------------------------------------------------------------
+$schema: "k1://schemas/module/policies.contract.schema.yaml"
+
+metadata:
+  module_id: "memory_writer"
+  owner: "platform-team"
+  band: "GREEN"
+
+contract_version: 1
+impl_version: "2.0.0"
+
+# ---------------------------------------------------------------------------
+# Capabilities granted to Memory Writer at runtime
+# ---------------------------------------------------------------------------
+capabilities:
+  granted:
+    - "session:read:v1"
+    - "bridge:command:v1"
+    - "bus:subscribe:v1"
+    - "model_hub:chat:v1"    # soft dependency -- circuit breaker protected
+
+# ---------------------------------------------------------------------------
+# Performance budgets
+# Memory Writer end-to-end MUST remain within these bounds.
+# Source: stage5_proposal_corrections.md + memory_writer_architecture.md
+# ---------------------------------------------------------------------------
+budgets:
+  # Per-stage P99 latency targets
+  filter_ms_p99: 2
+  session_read_ms_p99: 1
+  llm_extraction_ms_p99: 500
+  envelope_build_ms_p99: 2
+  batch_submit_ms_p99: 310
+  # End-to-end total (sum of all stages)
+  total_ms_p95: 815
+
+# ---------------------------------------------------------------------------
+# Extraction limits
+# MW-04, MW-05, MW-06: hard caps on LLM output
+# ---------------------------------------------------------------------------
+extraction_limits:
+  # MW-05: Maximum atoms extracted per turn
+  max_atoms_per_turn: 6
+  # MW-06: LLM token budget (input + output combined)
+  llm_token_budget: 2000
+  # MW-04: Maximum words per atom text field
+  max_text_words: 50
+  # Minimum confidence to keep an atom (below = dropped)
+  confidence_floor: 0.30
+
+# ---------------------------------------------------------------------------
+# Batch configuration
+# MW-08: batch window for envelope aggregation
+# ---------------------------------------------------------------------------
+batch:
+  # MW-08: Aggregation window before flush
+  window_ms: 250
+  # Maximum envelopes per batch submission
+  max_batch_size: 10
+
+# ---------------------------------------------------------------------------
+# Filter configuration
+# MW-07: All rule-based, no LLM
+# ---------------------------------------------------------------------------
+filter:
+  # R1 Dedup: time window for turn ID deduplication
+  dedup_window_seconds: 300
+  # R2 Trivial: minimum word count to pass filter
+  trivial_word_threshold: 5
+
+# ---------------------------------------------------------------------------
+# SessionState sections read by MW
+# 13 of 15 sections read (skip telemetry + artifacts_warm)
+# MW-01: read-only, MW-02: lock-free <1ms
+# ---------------------------------------------------------------------------
+session_sections:
+  hot:
+    - "beliefs_active"
+    - "beliefs_history"
+    - "history_active"
+    - "history_recent"
+    - "affective_now"
+    - "affective_baseline"
+    - "narrative_active"
+    - "scoreboard"
+    - "control"
+    - "persona"
+  warm:
+    - "task_state"
+    - "ifl"
+    - "meta"
+  skipped:
+    - "telemetry"
+    - "artifacts_warm"
+
+# ---------------------------------------------------------------------------
+# Circuit breaker policies
+# Protects LLM extraction stage (IModelHubPort)
+# ---------------------------------------------------------------------------
+circuit_breaker:
+  llm:
+    # Failures within window before circuit opens
+    failure_threshold_per_min: 3
+    # Window for counting failures
+    window_s: 60
+    # Time before recovery probe attempt
+    recovery_probe_s: 30
+    # Model Hub routing hint (cheapest model for extraction)
+    model_hint: "cheapest"
+
+# ---------------------------------------------------------------------------
+# Invariants (MW-01 through MW-11) -- machine-readable assertion IDs
+# Each invariant has a unique ID, description, and enforcement mechanism
+# ---------------------------------------------------------------------------
+invariants:
+  - id: "MW-01"
+    description: "NEVER writes SessionState"
+    enforcement: "compile-time"
+    check: "No IStateWritePort dependency exists"
+
+  - id: "MW-02"
+    description: "Reads SessionState lock-free <1ms"
+    enforcement: "runtime"
+    check: "Timing assertion on ISessionReadPort.snapshot()"
+
+  - id: "MW-03"
+    description: "All K0 writes via Bridge only"
+    enforcement: "compile-time"
+    check: "Only IBridgeCommandPort as output path"
+
+  - id: "MW-04"
+    description: "Body text <= 50 words"
+    enforcement: "runtime"
+    check: "ExtractionValidator truncates and warns"
+
+  - id: "MW-05"
+    description: "0-6 atoms per turn max"
+    enforcement: "runtime"
+    check: "Pipeline drops lowest-confidence excess"
+
+  - id: "MW-06"
+    description: "LLM budget: 2000 tokens"
+    enforcement: "runtime"
+    check: "IModelHubPort.chat budget_tokens=2000"
+
+  - id: "MW-07"
+    description: "Filter is rule-based (no LLM)"
+    enforcement: "compile-time"
+    check: "No IModelHubPort in filter package"
+
+  - id: "MW-08"
+    description: "Batch window: 250ms"
+    enforcement: "runtime"
+    check: "MWConfig.batch_window_ms enforced"
+
+  - id: "MW-09"
+    description: "Offline-safe (LocalOutbox)"
+    enforcement: "runtime"
+    check: "IBridgeCommandPort adapter queues when offline"
+
+  - id: "MW-10"
+    description: "All envelopes carry cognitive_trace_id"
+    enforcement: "runtime"
+    check: "EnvelopeBuilder assertion on every build"
+
+  - id: "MW-11"
+    description: "UltraBERT validates in K0 P02 (not K1)"
+    enforcement: "compile-time"
+    check: "No ultrabert import anywhere in k1/memory_writer/"
+
+# ---------------------------------------------------------------------------
+# Safety band enforcement (MW reads band from session, PrivacyEnforcer acts)
+# ---------------------------------------------------------------------------
+safety:
+  band_enforcement: "mandatory"
+  green_band: "All 34 fields pass through"
+  amber_band: "Strip location_type, location_name"
+  red_band: "Strip location + participant names (keep person_ids)"
+  unclassified_default: "deny"
+
+# ---------------------------------------------------------------------------
+# Audit and observability
+# MW-10: every envelope MUST carry a cognitive_trace_id
+# ---------------------------------------------------------------------------
+audit:
+  require_trace_id: true
+  trace_id_field: "cognitive_trace_id"
+  required_fields:
+    - "cognitive_trace_id"
+    - "session_id"
+    - "conversation_turn"
+    - "schema_version"
+    - "latency_ms"
+    - "atom_count"
+    - "timestamp_utc"

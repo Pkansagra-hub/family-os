@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Emitted for orchestrator-initiated session mutations",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "mutations": {
+      "type": "array"
+    }
+  },
+  "required": ["session_id", "mutations"]
+}

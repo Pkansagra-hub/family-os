@@ -1,0 +1,276 @@
+# =============================================================================
+# M02 hippocampus.semantic_project v2.0.0 -- Primary Gap-Filler Contract
+# =============================================================================
+#
+# M02 is the PRIMARY GAP-FILLING ENGINE for ALL other P02 modules.
+# M02 ALWAYS runs full UltraBERT NER + embedding -- it is NEVER skipped.
+# When MW drops fields, other modules fall back to M02's NER output:
+#   - ner_temporal -> M08 temporal fallback
+#   - ner_general_LOC -> M08/M13 spatial fallback
+#   - ner_general_PER -> M07 social fallback
+#
+# MW v2 participant_relationships ENHANCE M02's entity resolution when present
+# (typed KG predicates like PARENT_OF instead of generic MENTIONED_WITH),
+# but M02 does NOT depend on MW -- it is the one module that always fills gaps.
+#
+# ADRs: k003 (inline embedding), TBD (M3 trust-then-fill architecture)
+# Epic: 3.8
+# =============================================================================
+
+module_id: hippocampus.semantic_project
+version: "v2"
+role: primary_gap_filler   # M02 is the deterministic backstop for ALL other modules
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.hippocampus.semantic_projected.v2
+
+latency_budget_ms: 150   # Unchanged. Already most expensive stage. ALWAYS runs full.
+
+side_effects:
+  - write:st_kg_edges   # KG triples (enhanced with MW types when present)
+
+idempotent: true
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+inputs:
+  required:
+    - field: body.text
+      type: TEXT
+      description: |
+        ALWAYS processed. NER + embedding computed from body.text.
+        Never skipped regardless of MW presence. M02 is the deterministic backstop.
+
+  optional_enhancement:
+    - field: body.participant_relationships
+      type: LIST[OBJECT]
+      format: "[{person: TEXT, relationship_type: TEXT, confidence: FLOAT}, ...]"
+      description: |
+        Enhances KG triple quality when present.
+        With MW: KG triples use typed predicates (PARENT_OF, SPOUSE_OF, etc.)
+        Without MW: KG triples use generic MENTIONED_WITH predicate (same as v1).
+        Does NOT affect NER extraction or embedding -- those always run from body.text.
+
+# ---------------------------------------------------------------------------
+# NER Outputs Consumed By Other Modules
+# ---------------------------------------------------------------------------
+ner_outputs_consumed_by_other_modules:
+
+  ner_temporal:
+    consumers: [M08]
+    description: |
+      Temporal expressions detected in body.text ("yesterday evening", "last Tuesday").
+      M08 uses these as FALLBACK when MW body.temporal.resolved_epoch_ms is missing.
+      M02 extracts the raw string; M08 attempts basic regex resolution
+      ("yesterday" = now-24h, "last Tuesday" = previous Tuesday).
+    examples:
+      - 'yesterday evening'
+      - 'last Tuesday'
+      - 'two weeks ago'
+      - 'next Friday'
+
+  ner_general_LOC:
+    consumers: [M08, M13]
+    description: |
+      Location entities detected in body.text ("Olive Garden", "the office", "home").
+      Used as FALLBACK when MW body.location_name is missing.
+      Provides location_name and location_type for spatial resolution.
+    examples:
+      - 'Olive Garden -> LOC (restaurant)'
+      - 'Central Park -> LOC (park)'
+      - 'the office -> LOC (workplace)'
+
+  ner_general_PER:
+    consumers: [M07]
+    description: |
+      Person entities detected in body.text ("Mom", "Dad", "Sarah").
+      M07 uses these as FALLBACK when MW body.participant_relationships is missing.
+      Combined with _infer_from_name_pattern() for relationship heuristics.
+    examples:
+      - 'Mom -> PER (potential PARENT_OF via name-pattern)'
+      - 'Sarah -> PER (relationship unknown without MW)'
+
+  ner_family:
+    consumers: [M02_internal, M13]
+    description: |
+      UltraBERT family-domain NER: KINSHIP, TRADITION, ACTIVITY entities.
+      Stored in ner_entities_json for P03 consolidation algorithms.
+
+# ---------------------------------------------------------------------------
+# Entity Resolution Strategy
+# ---------------------------------------------------------------------------
+entity_resolution:
+  primary_strategy: |
+    spaCy NER -> UltraBERT 3-head NER -> name matching (ALWAYS runs).
+    1. spaCy: fast baseline entity extraction
+    2. UltraBERT ner_family: KINSHIP, TRADITION types
+    3. UltraBERT ner_general: PER, ORG, LOC, TEMPORAL types
+    4. Name matching: resolve detected names against body.participants
+
+  mw_enhancement: |
+    When body.participant_relationships IS present:
+    - Use relationship_type to annotate person entities in kg_triples_json
+    - Example: NER detects "Mom" as PER entity
+      participant_relationships has {person: "Mom", relationship_type: "PARENT_OF"}
+      KG triple becomes: (Mom, PARENT_OF, actor) instead of (Mom, MENTIONED_WITH, actor)
+    - Produces higher-quality KG triples for P03 R4 enrichers and R5 algorithms
+
+  without_mw: |
+    When body.participant_relationships is MISSING:
+    - NER person entities with generic MENTIONED_WITH predicates (same as v1)
+    - NER temporal entities for M08 temporal fallback
+    - NER LOC entities for spatial fallback
+    - Full embedding for semantic search
+    - This is the BASELINE that every other module can depend on
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+outputs:
+  always_produced:
+    - name: embedding_id
+      type: TEXT
+      format: uuid
+      description: "768-dim UltraBERT embedding stored in st_vec (ALWAYS produced)"
+
+    - name: entities_json
+      type: TEXT
+      format: json_array
+      description: "spaCy NER entities (ALWAYS produced)"
+
+    - name: ner_entities_json
+      type: TEXT
+      format: json_object
+      description: "UltraBERT 3-head NER entities: ner_family + ner_general (ALWAYS produced)"
+
+    - name: kg_triples_json
+      type: TEXT
+      format: json_array
+      description: |
+        KG triples (ALWAYS produced).
+        Quality varies: with MW -> typed predicates (PARENT_OF, etc.)
+                        without MW -> generic MENTIONED_WITH
+
+    - name: ner_temporal_entities
+      type: LIST[OBJECT]
+      description: "Temporal expressions for M08 fallback (ALWAYS produced, may be empty)"
+
+    - name: ner_loc_entities
+      type: LIST[OBJECT]
+      description: "Location entities for M08/spatial fallback (ALWAYS produced, may be empty)"
+
+    - name: ner_per_entities
+      type: LIST[OBJECT]
+      description: "Person entities for M07 fallback (ALWAYS produced, may be empty)"
+
+    - name: extracted_relations_json
+      type: TEXT
+      format: json_array
+      description: "Relationship labels from UltraBERT relation head (ALWAYS produced)"
+
+    - name: safety_familyos_band
+      type: TEXT
+      enum: [GREEN, AMBER, RED, CRISIS]
+      description: "Safety classification from UltraBERT safety head (ALWAYS produced)"
+
+    - name: nli_label
+      type: TEXT
+      enum: [entailment, contradiction, neutral]
+      description: "NLI classification from UltraBERT (ALWAYS produced)"
+
+  enhanced_when_mw_present:
+    - name: kg_triples_json
+      description: "Includes typed predicates (PARENT_OF, SPOUSE_OF, etc.) instead of generic MENTIONED_WITH"
+
+# ---------------------------------------------------------------------------
+# Failure Modes
+# ---------------------------------------------------------------------------
+failure_modes:
+  - code: ENTITY_EXTRACTION_FAILED
+    policy: retry
+    max_retries: 3
+    description: "NER extraction fails. Must retry -- M02 is the gap-filler."
+
+  - code: KG_TRIPLE_GENERATION_FAILED
+    policy: retry
+    max_retries: 3
+    description: "KG triple generation fails. Must retry."
+
+  - code: EMBEDDING_GENERATION_FAILED
+    policy: retry
+    max_retries: 3
+    description: "Embedding extraction fails. Critical -- no embedding = no vector search."
+
+  - code: ULTRABERT_TIMEOUT
+    policy: retry
+    max_retries: 2
+    description: "UltraBERT exceeds timeout. Must retry -- M02 cannot be skipped."
+
+  - code: MW_RELATIONSHIPS_MALFORMED
+    policy: ignore_enhancement
+    description: "body.participant_relationships present but invalid. Ignore MW, use generic predicates."
+
+  - code: INVALID_INPUT_TEXT
+    policy: drop
+    description: "body.text is null or empty. Cannot process."
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+config_schema:
+  type: object
+  properties:
+    entity_extraction_model:
+      type: string
+      default: "ultrabert_3head"
+      description: "NER model: UltraBERT 3-head (ner_family + ner_general + ner_temporal)"
+    kg_confidence_threshold:
+      type: number
+      default: 0.6
+      description: "Minimum confidence for KG triple inclusion"
+    max_triples_per_event:
+      type: integer
+      default: 10
+      description: "Maximum KG triples per event"
+    embedding_dim:
+      type: integer
+      default: 768
+      description: "Expected embedding dimensionality"
+    mw_enhancement_enabled:
+      type: boolean
+      default: true
+      description: "Whether to use MW participant_relationships for KG triple enhancement"
+
+description: |
+  CA1 (Semantic Projection) Module -- Primary Gap-Filler v2
+
+  M02 is the LINCHPIN of the trust-then-fill architecture.
+  It ALWAYS runs full UltraBERT NER + embedding -- it is NEVER skipped.
+
+  When MW drops temporal fields, M08 falls back to M02's ner_temporal entities.
+  When MW drops location fields, spatial resolution falls back to M02's ner_LOC.
+  When MW drops participant_relationships, M07 falls back to M02's ner_PER + heuristics.
+  M02 ALWAYS produces deterministic output from body.text via UltraBERT.
+
+  MW Enhancement (when present):
+    body.participant_relationships improve KG triple quality:
+      - NER detects "Mom" as PER
+      - MW says Mom is PARENT_OF
+      - KG triple: (Mom, PARENT_OF, actor) instead of (Mom, MENTIONED_WITH, actor)
+    This is an ENHANCEMENT, not a dependency. M02 works fine without MW.
+
+  Outputs always produced (regardless of MW):
+    - embedding_id (768-dim UltraBERT embedding)
+    - entities_json (spaCy NER)
+    - ner_entities_json (UltraBERT 3-head NER)
+    - kg_triples_json (quality varies with MW)
+    - ner_temporal_entities (for M08 fallback)
+    - ner_loc_entities (for spatial fallback)
+    - ner_per_entities (for M07 fallback)
+
+  Latency unchanged: M02 is already the most expensive stage.
+  ALWAYS runs full UltraBERT regardless of MW presence.

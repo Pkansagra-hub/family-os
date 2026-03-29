@@ -17,7 +17,7 @@ date_created: '2025-11-03'
 date_updated: '2025-11-03'
 implementation_date: null
 implementation_phase: Phase 1 (Foundation)
-implementation_status: IN_PROGRESS
+implementation_status: FROZEN
 propagation:
   affected_adrs:
   - ADR-0011
@@ -45,7 +45,7 @@ research_citations:
 - Prometheus Metrics (Prometheus Documentation, 2024)
 - OpenTelemetry Spans (OpenTelemetry Specification, 2024)
 - StatsD Counters (StatsD Protocol, 2024)
-status: PROPOSED
+status: FROZEN
 superseded_by: []
 supersedes: []
 title: Meta Section - Telemetry & Performance Metrics
@@ -529,11 +529,63 @@ def metrics():
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** 🔒 **FROZEN**
 **Created Date:** 2025-10-12
-**Target Completion:** 2025-11-09 (4 weeks)
-**Blocked By:** 0017 (SessionState 6-Section Design)
-**Blocks:** None
+**Frozen Date:** 2026-02-02
+
+---
+
+## Final Decision (2026-02-02)
+
+**STATUS: FROZEN** - This ADR represents the final architectural decision.
+
+### Meta Section - Split into HOT meta + WARM telemetry
+
+The original "meta" section was **split into two sections**:
+
+| Original | Final | Tier | Budget | Purpose |
+|----------|-------|------|--------|--------|
+| meta (2-4KB) | meta | HOT | 2KB | Session identifiers, timestamps |
+| (same) | telemetry | WARM | 8KB | Metrics, counters, performance |
+
+### Final Implementation
+
+**meta (HOT CORE - 2KB)**:
+- Session ID, user ID, device ID
+- Privacy band classification
+- Created timestamp, last activity timestamp
+- Turn count
+- Location: `k1/sessionstate/sections/meta.py`
+
+**telemetry (WARM TIER - 8KB - Eviction Priority 1)**:
+- Token count, cost tracking
+- Latency metrics (P50, P95)
+- Turn durations (rolling window)
+- Error counts
+- Location: `k1/sessionstate/sections/telemetry.py`
+
+### Rationale for Split
+
+1. **meta in HOT**: Session identifiers always needed (NEVER evict-worthy)
+2. **telemetry in WARM**: Metrics are lossy-safe (can aggregate and evict)
+3. **Eviction Priority 1**: Telemetry is FIRST to evict (observability, not critical)
+4. **Size Optimization**: 2KB HOT + 8KB WARM = 10KB total (was 2-4KB)
+
+### Key Design Decisions Confirmed
+
+1. **Incremental Aggregation**: Running averages (original design confirmed)
+2. **Low Priority**: Evict first under pressure (original → priority 1)
+3. **Prometheus Export**: Metrics endpoint (original design confirmed)
+4. **Minimal Overhead**: <100μs per metric update (original design confirmed)
+
+### Performance Targets (Confirmed)
+
+| Operation | Target | Status |
+|-----------|--------|--------|
+| `increment_counter(name)` | <50μs | Confirmed |
+| `record_latency(value)` | <100μs | Confirmed |
+| `get_metrics()` | <1ms | Confirmed |
+| `serialize()` | <5ms | Confirmed |
 
 ---
 

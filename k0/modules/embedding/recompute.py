@@ -12,7 +12,7 @@ Architecture:
 - P08 M26 scans st_vec for embeddings with old model_id
 - P08 M26 regenerates embedding via new UltraBERT version
 - P08 M26 updates st_vec (new vector blob, new model_id)
-- P08 M24 reindexes updated vectors in FAISS
+- pgvector HNSW index auto-maintains (no manual reindex needed)
 
 Status: STUB - To be implemented in Milestone 3 (P08 Implementation)
 """

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Emitted during session state migrations between tiers",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "from_tier": {
+      "type": "string"
+    },
+    "to_tier": {
+      "type": "string"
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": ["session_id", "from_tier", "to_tier", "sections"]
+}

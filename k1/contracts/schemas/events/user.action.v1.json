@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Emitted for user actions triggering session updates",
+  "type": "object",
+  "properties": {
+    "user_id": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    }
+  },
+  "required": ["user_id", "action"]
+}

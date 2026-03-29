@@ -37,12 +37,16 @@ from k0.pipelines.p03.r5_config import R5Config
 from k0.pipelines.p03.runner_contract import P03PhaseId
 
 if TYPE_CHECKING:
+    from k0.modules.consolidation.algorithms.mcts import MCTSScenario
+    from k0.modules.consolidation.algorithms.routine_detector import RoutineCandidate
     from k0.modules.consolidation.dream.intent_signals import IntentSignal
     from k0.pipelines.p03.envelope import P03BatchEnvelope
     from k0.pipelines.p03.phase_interface import P03RunnerContext
     from k0.pipelines.p03.phase_outputs import (
         CounterfactualScenario,
         Insight,
+        KGEdge,
+        KGEntity,
         ProspectiveMemory,
         RoutineOptimization,
     )
@@ -81,8 +85,10 @@ class R5PhaseOutputs:
         insights: BGT-SM generated insights
         counterfactuals: CPN generated counterfactual scenarios
         routine_optimizations: TDL-HCO motor rehearsal results
+        routine_candidates: RoutineDetector detected habits (GAP-003)
         prospective_memories: SPC-UQ prospective memory predictions
         intent_signals: Intent signals for layer routing (GAP-001)
+        mcts_scenarios: MCTS forward simulation scenarios
         mcts_decisions_count: Number of MCTS decisions evaluated
         compute_seconds_saved: Compute time saved by skipping (for metrics)
     """
@@ -90,8 +96,10 @@ class R5PhaseOutputs:
     insights: List["Insight"]
     counterfactuals: List["CounterfactualScenario"]
     routine_optimizations: List["RoutineOptimization"]
-    prospective_memories: List["ProspectiveMemory"]
+    routine_candidates: List["RoutineCandidate"] = field(default_factory=list)
+    prospective_memories: List["ProspectiveMemory"] = field(default_factory=list)
     intent_signals: List["IntentSignal"] = field(default_factory=list)
+    mcts_scenarios: List["MCTSScenario"] = field(default_factory=list)
     mcts_decisions_count: int = 0
     compute_seconds_saved: float = 0.0
 
@@ -333,6 +341,9 @@ class R5DreamExplorer:
         - BGT-SM: Insight generation (Issue 8.1.9)
         - TDL-HCO: Routine optimization (Issue 8.1.11)
 
+        GAP-001 M9.2: Loads accumulated KG entities and edges from storage
+        and merges with batch-new entities for BGT-SM insight generation.
+
         Args:
             envelope: P03 batch envelope
             ctx: Runner context
@@ -340,7 +351,11 @@ class R5DreamExplorer:
         Returns:
             R5PhaseOutputs container with generated outputs
         """
-        from k0.modules.consolidation.dream import DreamConfig, DreamExplorer, DreamExplorerInput
+        from k0.modules.consolidation.dream import (
+            DreamConfig,
+            DreamExplorer,
+            DreamExplorerInput,
+        )
 
         # Create DreamConfig from R5Config
         dream_config = DreamConfig.from_r5_config(self.config)
@@ -370,15 +385,121 @@ class R5DreamExplorer:
         # Create DreamExplorer instance
         explorer = DreamExplorer(config=dream_config)
 
-        # Build input from envelope
+        # =====================================================================
+        # GAP-001 M9.2: Load accumulated KG entities and edges
+        # BGT-SM needs the full graph, not just batch-new entities
+        # =====================================================================
+        accumulated_entities = await self._load_accumulated_entities(
+            ctx=ctx,
+            tenant_id=envelope.context.tenant_id,
+            space_id=envelope.context.space_id,
+        )
+        accumulated_edges = await self._load_accumulated_edges(
+            ctx=ctx,
+            tenant_id=envelope.context.tenant_id,
+            space_id=envelope.context.space_id,
+        )
+
+        # Merge accumulated with new (new entities take precedence via dict)
+        new_entities = list(envelope.phases.r4_new_entities)
+        new_edges = list(envelope.phases.r4_new_edges)
+
+        # Create entity ID set for deduplication
+        new_entity_ids = {e.entity_id for e in new_entities}
+        merged_entities = new_entities + [
+            e for e in accumulated_entities if e.entity_id not in new_entity_ids
+        ]
+
+        new_edge_ids = {e.edge_id for e in new_edges}
+        merged_edges = new_edges + [e for e in accumulated_edges if e.edge_id not in new_edge_ids]
+
+        self._logger.info(
+            "R5 loaded accumulated KG for BGT-SM",
+            extra={
+                "cycle_id": envelope.context.cycle_id,
+                "new_entities": len(new_entities),
+                "accumulated_entities": len(accumulated_entities),
+                "merged_entities": len(merged_entities),
+                "new_edges": len(new_edges),
+                "accumulated_edges": len(accumulated_edges),
+                "merged_edges": len(merged_edges),
+            },
+        )
+
+        # =====================================================================
+        # R5 Parity Resolution: Load accumulated episodes
+        # RoutineDetector, CPN, TDL-HCO need historical episode context
+        # =====================================================================
+        accumulated_episodes = await self._load_accumulated_episodes(
+            ctx=ctx,
+            tenant_id=envelope.context.tenant_id,
+            space_id=envelope.context.space_id,
+        )
+
+        # Merge accumulated with current cycle (current takes precedence)
+        current_episodes = list(envelope.phases.r2_clusters)
+        current_episode_ids = {e.cluster_id for e in current_episodes}
+        merged_episodes = current_episodes + [
+            e for e in accumulated_episodes if e.cluster_id not in current_episode_ids
+        ]
+
+        self._logger.info(
+            "R5 loaded accumulated episodes for RoutineDetector/CPN",
+            extra={
+                "cycle_id": envelope.context.cycle_id,
+                "current_episodes": len(current_episodes),
+                "accumulated_episodes": len(accumulated_episodes),
+                "merged_episodes": len(merged_episodes),
+            },
+        )
+
+        # =====================================================================
+        # M4-E2: Load accumulated schemas for SPC-UQ reconstruction
+        # SPC-UQ needs semantic patterns to fill gaps in ambiguous episodes
+        # =====================================================================
+        accumulated_schemas = await self._load_accumulated_schemas(
+            ctx=ctx,
+            tenant_id=envelope.context.tenant_id,
+            space_id=envelope.context.space_id,
+        )
+
+        self._logger.info(
+            "R5 loaded accumulated schemas for SPC-UQ",
+            extra={
+                "cycle_id": envelope.context.cycle_id,
+                "schema_count": len(accumulated_schemas),
+            },
+        )
+
+        # =====================================================================
+        # M5-E1: Load accumulated routines for TDL-HCO optimization
+        # TDL-HCO needs historical routines from st_procedural for TD learning
+        # =====================================================================
+        accumulated_routines = await self._load_accumulated_routines(
+            ctx=ctx,
+            tenant_id=envelope.context.tenant_id,
+            space_id=envelope.context.space_id,
+        )
+
+        self._logger.info(
+            "R5 loaded accumulated routines for TDL-HCO",
+            extra={
+                "cycle_id": envelope.context.cycle_id,
+                "routine_count": len(accumulated_routines),
+            },
+        )
+
+        # Build input from envelope with merged KG, episodes, schemas, and routines
         input_data = DreamExplorerInput(
             cycle_id=envelope.context.cycle_id,
             tenant_id=envelope.context.tenant_id,
             space_id=envelope.context.space_id,
-            recent_episodes=list(envelope.phases.r2_clusters),
-            kg_entities=list(envelope.phases.r4_new_entities),
-            kg_edges=list(envelope.phases.r4_new_edges),
+            recent_episodes=merged_episodes,
+            kg_entities=merged_entities,
+            kg_edges=merged_edges,
             event_states=list(envelope.events),
+            schemas=accumulated_schemas,
+            accumulated_routines=accumulated_routines,
         )
 
         self._logger.debug(
@@ -400,8 +521,10 @@ class R5DreamExplorer:
             insights=output.insights,
             counterfactuals=output.counterfactuals,
             routine_optimizations=output.routine_optimizations,
+            routine_candidates=output.routine_candidates,
             prospective_memories=output.prospective_memories,
             intent_signals=output.intent_signals,
+            mcts_scenarios=output.mcts_scenarios,
             mcts_decisions_count=output.mcts_decisions_evaluated,
             compute_seconds_saved=0.0,
         )
@@ -421,8 +544,10 @@ class R5DreamExplorer:
         envelope.phases.r5_insights = outputs.insights
         envelope.phases.r5_counterfactuals = outputs.counterfactuals
         envelope.phases.r5_routine_optimizations = outputs.routine_optimizations
+        envelope.phases.r5_routine_candidates = outputs.routine_candidates
         envelope.phases.r5_prospective_memories = outputs.prospective_memories
         envelope.phases.r5_intent_signals = outputs.intent_signals
+        envelope.phases.r5_mcts_scenarios = outputs.mcts_scenarios
         envelope.phases.r5_skipped = False
         envelope.phases.r5_skip_reason = None
 
@@ -528,3 +653,417 @@ class R5DreamExplorer:
                     tenant_id=tenant_id,
                     decisions_count=outputs.mcts_decisions_count,
                 )
+
+    # =========================================================================
+    # GAP-001 M9.2: Accumulated KG Loading
+    # =========================================================================
+
+    async def _load_accumulated_entities(
+        self,
+        ctx: "P03RunnerContext",
+        tenant_id: str,
+        space_id: str,
+    ) -> List["KGEntity"]:
+        """
+        Load accumulated KG entities from storage for R5.
+
+        GAP-001 M9.2: BGT-SM needs access to the full knowledge graph
+        to find meaningful bisociative connections, not just batch-new entities.
+
+        Args:
+            ctx: Runner context with syscalls
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of KGEntity objects from storage
+        """
+        from k0.pipelines.p03.phase_outputs import KGEntity
+
+        try:
+            result = await ctx.syscalls.kg_entities_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                limit=self.config.accumulated_kg_entity_limit,
+            )
+
+            entities = []
+            for row in result.get("entities", []):
+                entity = KGEntity(
+                    entity_id=row["entity_id"],
+                    canonical_name=row["canonical_name"],
+                    entity_type=row["entity_type"],
+                    aliases_json=row.get("aliases_json", "[]"),
+                    confidence=row.get("confidence", 0.0),
+                    embedding_id=row.get("embedding_id"),
+                    source_event_ids=[],  # Not loaded for accumulated
+                    is_new=False,  # Mark as accumulated, not new
+                )
+                entities.append(entity)
+
+            # GAP-001 M9.4: Load embeddings for entities that have embedding_id
+            # BGT-SM needs semantic vectors to compute distances for bisociative insights
+            embedding_ids = [e.embedding_id for e in entities if e.embedding_id is not None]
+            if embedding_ids:
+                try:
+                    emb_result = await ctx.syscalls.embedding_vectors_batch_query(
+                        embedding_ids=embedding_ids
+                    )
+                    vectors = emb_result.get("vectors", {})
+                    populated_count = 0
+                    for entity in entities:
+                        if entity.embedding_id and entity.embedding_id in vectors:
+                            entity.embedding = vectors[entity.embedding_id]
+                            populated_count += 1
+
+                    self._logger.debug(
+                        "Loaded embeddings for accumulated entities",
+                        extra={
+                            "requested": len(embedding_ids),
+                            "populated": populated_count,
+                            "missing": len(emb_result.get("missing", [])),
+                        },
+                    )
+                except Exception as emb_err:
+                    self._logger.warning(
+                        "Failed to load embeddings for accumulated entities",
+                        extra={"error": str(emb_err)},
+                    )
+
+            self._logger.debug(
+                "Loaded accumulated KG entities",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "entity_count": len(entities),
+                    "limit": self.config.accumulated_kg_entity_limit,
+                },
+            )
+
+            return entities
+
+        except Exception as e:
+            self._logger.warning(
+                "Failed to load accumulated KG entities, proceeding with batch-only",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "error": str(e),
+                },
+            )
+            return []
+
+    async def _load_accumulated_edges(
+        self,
+        ctx: "P03RunnerContext",
+        tenant_id: str,
+        space_id: str,
+    ) -> List["KGEdge"]:
+        """
+        Load accumulated KG edges from storage for R5.
+
+        GAP-001 M9.2: BGT-SM random walks need the full graph structure
+        to traverse and discover bisociative connections.
+
+        Args:
+            ctx: Runner context with syscalls
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of KGEdge objects from storage
+        """
+        from k0.pipelines.p03.phase_outputs import KGEdge
+
+        try:
+            result = await ctx.syscalls.kg_edges_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                limit=self.config.accumulated_kg_edge_limit,
+            )
+
+            edges = []
+            for row in result.get("edges", []):
+                edge = KGEdge(
+                    edge_id=row["edge_id"],
+                    source_entity_id=row["source_entity_id"],
+                    target_entity_id=row["target_entity_id"],
+                    relationship_type=row["relationship_type"],
+                    weight=row.get("weight", 0.5),
+                    confidence=row.get("confidence", 0.0),
+                    is_causal=False,  # Not loaded for accumulated
+                    evidence_event_ids=[],  # Not loaded for accumulated
+                    is_new=False,  # Mark as accumulated, not new
+                )
+                edges.append(edge)
+
+            self._logger.debug(
+                "Loaded accumulated KG edges",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "edge_count": len(edges),
+                    "limit": self.config.accumulated_kg_edge_limit,
+                },
+            )
+
+            return edges
+
+        except Exception as e:
+            self._logger.warning(
+                "Failed to load accumulated KG edges, proceeding with batch-only",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "error": str(e),
+                },
+            )
+            return []
+
+    # =========================================================================
+    # R5 Parity Resolution: Accumulated Episode/Routine Loading
+    # =========================================================================
+
+    async def _load_accumulated_episodes(
+        self,
+        ctx: "P03RunnerContext",
+        tenant_id: str,
+        space_id: str,
+    ) -> List["EpisodeCluster"]:
+        """
+        Load accumulated episodes from st_epi for R5.
+
+        R5 Parity Resolution: Algorithms like RoutineDetector, CPN, and TDL-HCO
+        need historical episode context to detect patterns, generate counterfactuals,
+        and optimize routines. This applies the same merge pattern as GAP-001 M9.2.
+
+        Args:
+            ctx: Runner context with syscalls
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of EpisodeCluster objects from storage
+        """
+        import json
+
+        from k0.pipelines.p03.phase_outputs import EpisodeCluster
+
+        try:
+            result = await ctx.syscalls.episodes_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                limit=self.config.accumulated_episode_limit,
+            )
+
+            # Build participant name to entity_id mapping from KG
+            kg_result = await ctx.syscalls.kg_entities_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                limit=5000,  # Load enough entities for name resolution
+            )
+
+            name_to_entity_id = {}
+            for kg_entity in kg_result.get("entities", []):
+                entity_id = kg_entity["entity_id"]
+                canonical_name = kg_entity["canonical_name"].lower()
+                name_to_entity_id[canonical_name] = entity_id
+
+                # Also map aliases
+                try:
+                    aliases = json.loads(kg_entity.get("aliases_json", "[]"))
+                    for alias in aliases:
+                        if isinstance(alias, str):
+                            name_to_entity_id[alias.lower()] = entity_id
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            episodes = []
+            for row in result.get("episodes", []):
+                # Parse source_events_json to get member_event_ids
+                try:
+                    member_event_ids = json.loads(row.get("source_events_json", "[]"))
+                except (json.JSONDecodeError, TypeError):
+                    member_event_ids = []
+
+                # Resolve participant names to entity_ids
+                entity_ids = []
+                try:
+                    participants = json.loads(row.get("participants_json", "[]"))
+                    for participant in participants:
+                        if isinstance(participant, str):
+                            entity_id = name_to_entity_id.get(participant.lower())
+                            if entity_id:
+                                entity_ids.append(entity_id)
+                        elif isinstance(participant, dict):
+                            name = participant.get("name", participant.get("id", ""))
+                            if name:
+                                entity_id = name_to_entity_id.get(name.lower())
+                                if entity_id:
+                                    entity_ids.append(entity_id)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+                episode = EpisodeCluster(
+                    cluster_id=row["episode_id"],
+                    member_event_ids=member_event_ids,
+                    entity_ids=entity_ids,  # Populate resolved entity IDs
+                    dominant_sentiment=row.get("sentiment_score", 0.0),
+                    aggregated_sentiment=row.get("sentiment_score"),
+                    aggregated_salience=row.get("salience_score"),
+                    dominant_location=row.get("primary_location"),
+                    location_hint=row.get("primary_location"),
+                    temporal_start=row.get("start_time_utc", 0),
+                    temporal_end=row.get("end_time_utc", 0),
+                    activity_type=row.get("episode_type", ""),
+                    summary=row.get("episode_summary", ""),
+                )
+                episodes.append(episode)
+
+            self._logger.debug(
+                "Loaded accumulated episodes",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "episode_count": len(episodes),
+                    "limit": self.config.accumulated_episode_limit,
+                },
+            )
+
+            return episodes
+
+        except Exception as e:
+            self._logger.warning(
+                "Failed to load accumulated episodes, proceeding with batch-only",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "error": str(e),
+                },
+            )
+            return []
+
+    async def _load_accumulated_routines(
+        self,
+        ctx: "P03RunnerContext",
+        tenant_id: str,
+        space_id: str,
+    ) -> List[dict]:
+        """
+        Load accumulated routines from st_procedural for R5.
+
+        R5 Parity Resolution: TDL-HCO needs existing routines to optimize
+        using temporal difference learning. This loads historical routines
+        that can be passed to TDL-HCO for bottleneck detection.
+
+        Args:
+            ctx: Runner context with syscalls
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of routine dictionaries from storage
+        """
+        try:
+            result = await ctx.syscalls.procedural_memory_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                limit=self.config.accumulated_routine_limit,
+            )
+
+            routines = result.get("routines", [])
+
+            self._logger.debug(
+                "Loaded accumulated routines",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "routine_count": len(routines),
+                    "limit": self.config.accumulated_routine_limit,
+                },
+            )
+
+            return routines
+
+        except Exception as e:
+            self._logger.warning(
+                "Failed to load accumulated routines, proceeding without historical routines",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "error": str(e),
+                },
+            )
+            return []
+
+    async def _load_accumulated_schemas(
+        self,
+        ctx: "P03RunnerContext",
+        tenant_id: str,
+        space_id: str,
+    ) -> List["SemanticPatternData"]:
+        """
+        Load accumulated schemas from st_sem for SPC-UQ.
+
+        M4-E2: SPC-UQ needs semantic patterns to fill gaps in ambiguous
+        episodes. This loads patterns with attribute distributions for
+        schema-guided reconstruction.
+
+        Args:
+            ctx: Runner context with syscalls
+            tenant_id: Tenant identifier
+            space_id: Space identifier
+
+        Returns:
+            List of SemanticPatternData objects from storage
+        """
+        import json
+
+        from k0.modules.consolidation.algorithms.spc_uq import SemanticPatternData
+
+        try:
+            result = await ctx.syscalls.semantic_schema_query(
+                tenant_id=tenant_id,
+                space_id=space_id,
+                pattern_types=["ACTIVITY", "LOCATION", "ROUTINE", "THEME"],
+                min_confidence=0.5,
+                limit=100,
+            )
+
+            schemas = []
+            for row in result.get("schemas", []):
+                # Parse pattern_attributes_json for attribute distributions
+                try:
+                    attrs = json.loads(row.get("pattern_attributes_json", "{}") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    attrs = {}
+
+                schema = SemanticPatternData(
+                    pattern_id=row["pattern_id"],
+                    activity_type=row.get("activity_type", "UNKNOWN"),
+                    confidence=row.get("confidence", 0.5),
+                    attribute_distributions=attrs,
+                )
+                schemas.append(schema)
+
+            self._logger.debug(
+                "Loaded accumulated schemas for SPC-UQ",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "schema_count": len(schemas),
+                },
+            )
+
+            return schemas
+
+        except Exception as e:
+            self._logger.warning(
+                "Failed to load accumulated schemas, proceeding with empty schemas",
+                extra={
+                    "tenant_id": tenant_id,
+                    "space_id": space_id,
+                    "error": str(e),
+                },
+            )
+            return []

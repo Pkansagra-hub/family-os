@@ -1,0 +1,58 @@
+# k1/contracts/tools/notes_create.yaml
+# Notes Create Tool Contract (Phase 3 -- Fabric E2E Validation)
+#
+# MCP tool contract for creating a new note.
+# AMBER-band write tool. Local stdio transport via FastMCP.
+#
+# References:
+#   - fabric_tool_implementation_plan.md Phase 3, Section 5.1
+
+tool_contract:
+  name: "tool.write.notes_create"
+  version: "1.0.0"
+  domain:
+    - "NOTES"
+    - "FAMILY"
+  description: >
+    Create a new note with title, content, and optional tags.
+    Persists to local SQLite storage.
+  capabilities:
+    - "create_note"
+    - "tagging"
+  limitations:
+    - "local_storage"
+    - "single_user"
+
+  required_inputs:
+    - name: "title"
+      type: "STRING"
+      description: "Note title"
+    - name: "content"
+      type: "STRING"
+      description: "Note body text"
+
+  optional_inputs:
+    - name: "tags"
+      type: "STRING"
+      description: "Comma-separated tags for the note"
+
+  output:
+    type: "object"
+    properties:
+      note_id:
+        type: "string"
+        description: "Unique identifier for the new note"
+      status:
+        type: "string"
+        description: "Creation status (created or failed)"
+    required:
+      - "note_id"
+      - "status"
+
+  provider_type: "MCP"
+  provider_id: "notes_mcp_stdio"
+  safety_band_min: "AMBER"
+  cost_per_call: 0.0
+  avg_latency_ms: 15
+  max_latency_ms: 500
+  availability: "ONLINE"

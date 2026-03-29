@@ -91,7 +91,7 @@ class TestDreamConfigCreation:
     """Test DreamConfig dataclass creation and validation."""
 
     def test_default_values(self) -> None:
-        """DreamConfig should have sensible defaults per Issue 8.1.10."""
+        """DreamConfig should have sensible defaults per Issue 8.1.10 and M3-E2 cold-start."""
         config = DreamConfig()
 
         assert config.depth == 3
@@ -99,11 +99,11 @@ class TestDreamConfigCreation:
         assert config.seed is None
         assert config.max_insights == 10
         assert config.max_counterfactuals == 5
-        # Issue 8.1.10 thresholds
-        assert config.min_novelty_score == 0.5
+        # M3-E2 cold-start thresholds (lowered from production values)
+        assert config.min_novelty_score == 0.3  # M3-E2-I3: was 0.5
         assert config.min_confidence == 0.5
-        assert config.semantic_distance_threshold == 0.7
-        assert config.pmi_threshold == 3.0
+        assert config.semantic_distance_threshold == 0.5  # M3-E2-I1: was 0.7
+        assert config.pmi_threshold == 1.5  # M3-E2-I2: was 3.0
         assert config.serendipity_threshold == 0.6
 
     def test_custom_values(self, custom_config: DreamConfig) -> None:
@@ -913,12 +913,13 @@ class TestQualityThresholds:
         assert abs(insight.serendipity_score - expected) < 0.001
 
     def test_default_thresholds_per_spec(self) -> None:
-        """Default thresholds should match Issue 8.1.10 spec."""
+        """Default thresholds should match M3-E2 cold-start spec."""
         config = DreamConfig()
 
-        assert config.semantic_distance_threshold == 0.7
-        assert config.pmi_threshold == 3.0
-        assert config.min_novelty_score == 0.5
+        # M3-E2 cold-start thresholds (lowered from production)
+        assert config.semantic_distance_threshold == 0.5  # was 0.7
+        assert config.pmi_threshold == 1.5  # was 3.0
+        assert config.min_novelty_score == 0.3  # was 0.5
         assert config.serendipity_threshold == 0.6
 
     def test_null_pmi_treated_as_zero(self) -> None:
@@ -957,3 +958,355 @@ class TestQualityThresholds:
         # Only the insight with pmi >= 3.0 should pass
         assert len(ranked) == 1
         assert ranked[0].insight_id == "i2"
+
+
+class TestRoutineDetectorIntegration:
+    """Integration tests for RoutineDetector field mapping from EpisodeCluster."""
+
+    @pytest.mark.asyncio
+    async def test_episode_cluster_to_routine_detector_field_mapping(self) -> None:
+        """
+        Test that EpisodeCluster objects are correctly mapped to RoutineDetector dict format.
+
+        This verifies M2-E1-I1/I2/I3: field mapping fixes for RoutineDetector integration.
+        """
+        from k0.pipelines.p03.phase_outputs import EpisodeCluster
+
+        # Create EpisodeCluster objects with realistic data
+        clusters = [
+            EpisodeCluster(
+                cluster_id="ep_001",
+                activity_type="coffee",
+                location_hint="kitchen",
+                temporal_start=1640995200000,  # Jan 1, 2022 00:00:00 UTC (midnight)
+                temporal_end=1640998800000,  # Jan 1, 2022 01:00:00 UTC (+1 hour)
+                summary="Morning coffee routine",
+            ),
+            EpisodeCluster(
+                cluster_id="ep_002",
+                activity_type="coffee",
+                location_hint="kitchen",
+                temporal_start=1641081600000,  # Jan 2, 2022 00:00:00 UTC (midnight)
+                temporal_end=1641085200000,  # Jan 2, 2022 01:00:00 UTC (+1 hour)
+                summary="Morning coffee routine",
+            ),
+            EpisodeCluster(
+                cluster_id="ep_003",
+                activity_type="coffee",
+                location_hint="kitchen",
+                temporal_start=1641168000000,  # Jan 3, 2022 00:00:00 UTC (midnight)
+                temporal_end=1641171600000,  # Jan 3, 2022 01:00:00 UTC (+1 hour)
+                summary="Morning coffee routine",
+            ),
+        ]
+
+        # Create DreamExplorerInput
+        input_data = DreamExplorerInput(
+            cycle_id="test_cycle_m2_e1_i3",
+            tenant_id="test_tenant",
+            space_id="test_space",
+            recent_episodes=clusters,
+        )
+
+        # Create DreamExplorer and call _run_routine_detector
+        explorer = DreamExplorer()
+        candidates = await explorer._run_routine_detector(input_data, "test_cycle_m2_e1_i3")
+
+        # Verify routine detection worked
+        assert (
+            len(candidates) > 0
+        ), "RoutineDetector should detect coffee routine from EpisodeClusters"
+
+        # Verify the detected routine
+        coffee_routine = candidates[0]
+        assert "coffee" in coffee_routine.routine_name.lower()
+        assert "kitchen" in coffee_routine.routine_name.lower()
+        assert coffee_routine.habit_strength > 0.0
+        assert coffee_routine.confidence_score > 0.0
+
+    @pytest.mark.asyncio
+    async def test_empty_episodes_handled_gracefully(self) -> None:
+        """Test that empty episode list is handled gracefully."""
+        input_data = DreamExplorerInput(
+            cycle_id="test_cycle_empty",
+            tenant_id="test_tenant",
+            space_id="test_space",
+            recent_episodes=[],
+        )
+
+        explorer = DreamExplorer()
+        candidates = await explorer._run_routine_detector(input_data, "test_cycle_empty")
+
+        assert candidates == []
+
+    @pytest.mark.asyncio
+    async def test_single_episode_no_routine_detected(self) -> None:
+        """Test that single episode doesn't create a routine (needs min_occurrences=3)."""
+        from k0.pipelines.p03.phase_outputs import EpisodeCluster
+
+        clusters = [
+            EpisodeCluster(
+                cluster_id="ep_single",
+                activity_type="coffee",
+                location_hint="kitchen",
+                temporal_start=1640995200000,
+                temporal_end=1640998800000,
+                summary="Single coffee episode",
+            )
+        ]
+
+        input_data = DreamExplorerInput(
+            cycle_id="test_cycle_single",
+            tenant_id="test_tenant",
+            space_id="test_space",
+            recent_episodes=clusters,
+        )
+
+        explorer = DreamExplorer()
+        candidates = await explorer._run_routine_detector(input_data, "test_cycle_single")
+
+        assert len(candidates) == 0, "Single episode should not create routine"
+
+
+class TestSeedEntitySelection:
+    """Integration tests for BGT-SM seed entity selection - M3-E1-I1/I2."""
+
+    def test_seed_selection_from_episodes_with_entity_ids(self) -> None:
+        """
+        M3-E1-I1: Verify seed selection from episodes with entity_ids.
+
+        When episodes have entity_ids, seeds should be selected based on salience.
+        """
+        from k0.pipelines.p03.phase_outputs import EpisodeCluster
+
+        # Create episodes with entity_ids and varying salience
+        episodes = [
+            EpisodeCluster(
+                cluster_id="ep_high_salience",
+                entity_ids=["person_mom", "org_starbucks"],
+                aggregated_salience=0.9,
+                temporal_start=1705000000000,
+                temporal_end=1705003600000,
+            ),
+            EpisodeCluster(
+                cluster_id="ep_medium_salience",
+                entity_ids=["activity_coffee", "location_kitchen"],
+                aggregated_salience=0.6,
+                temporal_start=1705010000000,
+                temporal_end=1705013600000,
+            ),
+            EpisodeCluster(
+                cluster_id="ep_low_salience",
+                entity_ids=["event_meeting"],
+                aggregated_salience=0.3,
+                temporal_start=1705020000000,
+                temporal_end=1705023600000,
+            ),
+        ]
+
+        input_data = DreamExplorerInput(
+            cycle_id="test_seed_selection",
+            tenant_id="test_tenant",
+            space_id="test_space",
+            recent_episodes=episodes,
+        )
+
+        explorer = DreamExplorer()
+        seeds = explorer._select_seed_entities(input_data)
+
+        # Should return seeds from episodes
+        assert len(seeds) >= 1, "Should select at least 1 seed"
+        assert len(seeds) <= 5, "Should limit to max 5 seeds"
+
+        # High-salience entity should be prioritized
+        assert (
+            "person_mom" in seeds or "org_starbucks" in seeds
+        ), "High-salience entities should be selected"
+
+    def test_seed_selection_kg_fallback_when_no_episode_entities(self) -> None:
+        """
+        M3-E1-I2: Verify KG fallback when episodes have no entity_ids.
+
+        When episodes lack entity_ids, should fall back to high-observation KG entities.
+        """
+        from dataclasses import dataclass
+
+        from k0.pipelines.p03.phase_outputs import EpisodeCluster
+
+        @dataclass
+        class MockKGEntity:
+            """Mock KG entity for testing."""
+
+            entity_id: str
+            entity_type: str
+            observation_count: int
+            embedding: list = None
+
+        # Create episodes without entity_ids
+        episodes = [
+            EpisodeCluster(
+                cluster_id="ep_no_entities",
+                entity_ids=[],  # Empty!
+                temporal_start=1705000000000,
+                temporal_end=1705003600000,
+            )
+        ]
+
+        # Create KG entities with observation counts
+        kg_entities = [
+            MockKGEntity(entity_id="ent_high", entity_type="PERSON", observation_count=50),
+            MockKGEntity(entity_id="ent_medium", entity_type="ORG", observation_count=20),
+            MockKGEntity(entity_id="ent_low", entity_type="LOCATION", observation_count=10),
+            MockKGEntity(
+                entity_id="ent_below_threshold", entity_type="EVENT", observation_count=3
+            ),  # Below 5 threshold
+        ]
+
+        input_data = DreamExplorerInput(
+            cycle_id="test_kg_fallback",
+            tenant_id="test_tenant",
+            space_id="test_space",
+            recent_episodes=episodes,
+            kg_entities=kg_entities,
+        )
+
+        explorer = DreamExplorer()
+        seeds = explorer._select_seed_entities(input_data)
+
+        # Should select from KG entities with obs_count >= 5
+        assert len(seeds) >= 1, "Should select seeds from KG fallback"
+        assert "ent_high" in seeds, "Highest observation count entity should be selected"
+        assert "ent_below_threshold" not in seeds, "Entities below threshold should be excluded"
+
+    def test_seed_selection_combines_episode_and_kg_entities(self) -> None:
+        """Verify seed selection combines episode entities and KG entities."""
+        from dataclasses import dataclass
+
+        from k0.pipelines.p03.phase_outputs import EpisodeCluster
+
+        @dataclass
+        class MockKGEntity:
+            """Mock KG entity for testing."""
+
+            entity_id: str
+            entity_type: str
+            observation_count: int
+
+        # Create episode with some entities
+        episodes = [
+            EpisodeCluster(
+                cluster_id="ep_with_entities",
+                entity_ids=["person_alice"],
+                aggregated_salience=0.7,
+                temporal_start=1705000000000,
+                temporal_end=1705003600000,
+            )
+        ]
+
+        # Create KG entities
+        kg_entities = [
+            MockKGEntity(entity_id="org_company", entity_type="ORG", observation_count=30),
+        ]
+
+        input_data = DreamExplorerInput(
+            cycle_id="test_combined_seeds",
+            tenant_id="test_tenant",
+            space_id="test_space",
+            recent_episodes=episodes,
+            kg_entities=kg_entities,
+        )
+
+        explorer = DreamExplorer()
+        seeds = explorer._select_seed_entities(input_data)
+
+        # Should include both sources
+        assert len(seeds) >= 1
+        # Episode entity should be included
+        assert "person_alice" in seeds, "Episode entity should be in seeds"
+
+    def test_seed_selection_empty_input_returns_empty(self) -> None:
+        """Verify empty input returns empty seeds."""
+        input_data = DreamExplorerInput(
+            cycle_id="test_empty_seeds",
+            tenant_id="test_tenant",
+            space_id="test_space",
+            recent_episodes=[],
+            kg_entities=[],
+        )
+
+        explorer = DreamExplorer()
+        seeds = explorer._select_seed_entities(input_data)
+
+        assert seeds == [], "Empty input should return empty seeds"
+
+    def test_seed_selection_limits_to_max_five(self) -> None:
+        """Verify seed selection limits to maximum 5 seeds."""
+        from k0.pipelines.p03.phase_outputs import EpisodeCluster
+
+        # Create many episodes with different entities
+        episodes = []
+        for i in range(20):
+            episodes.append(
+                EpisodeCluster(
+                    cluster_id=f"ep_{i}",
+                    entity_ids=[f"entity_{i}"],
+                    aggregated_salience=0.5 + (i * 0.02),
+                    temporal_start=1705000000000 + (i * 3600000),
+                    temporal_end=1705003600000 + (i * 3600000),
+                )
+            )
+
+        input_data = DreamExplorerInput(
+            cycle_id="test_max_seeds",
+            tenant_id="test_tenant",
+            space_id="test_space",
+            recent_episodes=episodes,
+        )
+
+        explorer = DreamExplorer()
+        seeds = explorer._select_seed_entities(input_data)
+
+        assert len(seeds) == 5, "Should limit to exactly 5 seeds"
+
+    def test_seed_selection_salience_weighted(self) -> None:
+        """Verify seeds are selected by salience weighting."""
+        from k0.pipelines.p03.phase_outputs import EpisodeCluster
+
+        # Create episodes with clear salience difference
+        episodes = [
+            EpisodeCluster(
+                cluster_id="ep_highest",
+                entity_ids=["entity_highest"],
+                aggregated_salience=1.0,  # Highest salience
+                temporal_start=1705000000000,
+                temporal_end=1705003600000,
+            ),
+            EpisodeCluster(
+                cluster_id="ep_lowest",
+                entity_ids=["entity_lowest"],
+                aggregated_salience=0.1,  # Lowest salience
+                temporal_start=1705010000000,
+                temporal_end=1705013600000,
+            ),
+        ]
+
+        input_data = DreamExplorerInput(
+            cycle_id="test_salience_weighted",
+            tenant_id="test_tenant",
+            space_id="test_space",
+            recent_episodes=episodes,
+        )
+
+        explorer = DreamExplorer()
+        seeds = explorer._select_seed_entities(input_data)
+
+        # Highest salience entity should be first
+        assert seeds[0] == "entity_highest", "Highest salience entity should be first"
+        # Highest salience entity should be first
+        assert seeds[0] == "entity_highest", "Highest salience entity should be first"
+        # Highest salience entity should be first
+        assert seeds[0] == "entity_highest", "Highest salience entity should be first"
+        # Highest salience entity should be first
+        assert seeds[0] == "entity_highest", "Highest salience entity should be first"
+        # Highest salience entity should be first
+        assert seeds[0] == "entity_highest", "Highest salience entity should be first"

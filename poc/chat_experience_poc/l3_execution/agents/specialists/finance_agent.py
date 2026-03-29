@@ -47,6 +47,7 @@ class FinanceAgent(AgentBase):
         session_id: str,
         groq_client,
         trace_id: Optional[str] = None,
+        mailbox: Optional[Any] = None,
     ):
         """
         Initialize FinanceAgent.
@@ -56,12 +57,14 @@ class FinanceAgent(AgentBase):
             session_id: Session ID for this conversation
             groq_client: Groq client for LLM calls
             trace_id: Optional trace ID
+            mailbox: Optional mailbox from AgentFabric
         """
         super().__init__(
             agent_id=agent_id,
             agent_type="finance",
             session_id=session_id,
             groq_client=groq_client,
+            mailbox=mailbox,
             trace_id=trace_id,
         )
 

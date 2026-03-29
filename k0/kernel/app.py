@@ -32,6 +32,7 @@ from ..db.pool import configure_pool, shutdown_pool
 from ..drivers import AliasMap
 from ..gate import MinimalGate
 from ..gate.schema_registry import SchemaRegistry
+from ..gate.topic_body_validator import TopicBodyValidator
 from ..idem import IdempotencyLedger
 from ..obs import (
     CONTENT_TYPE_LATEST,
@@ -44,6 +45,7 @@ from ..obs import (
 )
 from ..outbox import DriverWorkerPool, RetryScheduler
 from ..ports import admin, command, drivers, observe, query, sse
+from ..ports.topic_router import TopicRouter
 from ..qos import QoSMetrics
 from ..receipts import ReceiptIssuer, ReceiptSigner
 from ..storage import (
@@ -197,11 +199,18 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         metrics_recorder=metrics_exporter.emit,
         observability_emitter=observability_emitter,
     )
+    # M2 Epic 2.10/2.11: Topic-aware body validation
+    topic_body_validator = TopicBodyValidator()
+
     minimal_gate = MinimalGate(
         registry=schema_registry,
         provisioning=provisioning_ledger,
+        max_clock_skew_seconds=settings.gate.max_clock_skew_seconds,
+        max_envelope_bytes=settings.gate.max_envelope_bytes,
+        max_body_bytes=settings.gate.max_body_bytes,
         metrics=metrics_exporter,
         observability=observability_emitter,
+        topic_body_validator=topic_body_validator,
     )
     idempotency_ledger = IdempotencyLedger(
         metrics=metrics_exporter,
@@ -285,6 +294,8 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.receipt_store = receipt_store
     app.state.receipt_issuer = receipt_issuer
     app.state.minimal_gate = minimal_gate
+    app.state.topic_body_validator = topic_body_validator
+    app.state.topic_router = TopicRouter()
     app.state.idempotency_ledger = idempotency_ledger
     app.state.observability_emitter = observability_emitter
     app.state.alias_map = alias_map
@@ -541,30 +552,11 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     break
 
     # =========================================================================
-    # DEPRECATED (M5 P08 Migration - ADR-K004)
+    # DEPRECATED (M4 ADR-K003 — FAISS eliminated, pgvector native)
     # =========================================================================
-    # The _p08_faiss_indexer_loop() function has been removed.
+    # The _p08_faiss_indexer_loop() function and all FAISS references removed.
     # P08 now uses declarative triggers via PipelineScheduler (Issue 5.2.1).
-    #
-    # Previously at lines 501-673:
-    #   - Hardcoded 5-minute interval loop
-    #   - Direct database access bypassing syscalls
-    #   - Manual FAISS indexing logic
-    #
-    # Replacement (k0/contracts/pipelines/p08_embedding_management.v2.yaml):
-    #   triggers:
-    #     - id: faiss_indexer_interval
-    #       type: interval
-    #       interval_seconds: 300
-    #     - id: faiss_indexer_threshold
-    #       type: threshold
-    #       table: st_vec
-    #       condition: "status = 'READY'"
-    #       threshold_count: 50
-    #     - id: faiss_indexer_manual
-    #       type: manual
-    #
-    # P08 now executes via PipelineScheduler.register_pipeline() in lifespan().
+    # Embedding indexing now uses pgvector HNSW natively (ADR-K003 v2.0).
     # =========================================================================
 
     async def _init_model_registry() -> "ModelRegistry":
@@ -779,33 +771,6 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                 "registry_stats": model_registry.get_stats(),
             },
         )
-
-        # Phase 1.6: Initialize FAISS Index Manager for P08 embedding indexing
-        try:
-            from pathlib import Path
-
-            from ..runtime.faiss_manager import FaissIndexManager
-
-            logger.info("Initializing FAISS Index Manager...")
-            faiss_mgr = FaissIndexManager.get_instance()
-            faiss_index_path = Path("/data/k0_faiss_indexes")
-            faiss_index_path.mkdir(parents=True, exist_ok=True)
-
-            await faiss_mgr.initialize(index_path=faiss_index_path, train_if_needed=False)
-
-            app.state.faiss_manager = faiss_mgr
-            logger.info(
-                "FAISS Index Manager initialized",
-                extra={
-                    "index_path": str(faiss_index_path),
-                    "is_trained": faiss_mgr._is_trained,
-                    "total_vectors": faiss_mgr.ntotal(),
-                    "index_type": "FlatL2" if faiss_mgr._is_trained else "IVF256+PQ64 (untrained)",
-                },
-            )
-        except Exception as e:
-            logger.error(f"Failed to initialize FAISS Index Manager: {e}", exc_info=True)
-            app.state.faiss_manager = None
 
         # Phase 2: Boot YAML-based declarative pipelines via runtime system
         from pathlib import Path
@@ -1098,8 +1063,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         # Start background tasks
         sse_metrics_task = asyncio.create_task(_report_sse_metrics_periodically())
         outbox_worker_task = asyncio.create_task(_outbox_worker_loop())
-        # DEPRECATED (M5): p08_indexer_task removed - P08 now uses PipelineScheduler
-        # Previously: p08_indexer_task = asyncio.create_task(_p08_faiss_indexer_loop())
+        # DEPRECATED (M4): p08_indexer_task removed - P08 now uses PipelineScheduler with pgvector
 
         # Issue 7.1.3: Start ActivityTracker for idle detection (Phase 2 - M7)
         from ..scheduler.activity import get_activity_tracker

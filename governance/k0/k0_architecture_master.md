@@ -1,8 +1,8 @@
 # K0 Cognitive Architecture - Master Registry
 
 **Status**: Living Document (Source of Truth)
-**Version**: 2.0.0
-**Last Updated**: 2025-12-24
+**Version**: 2.1.0
+**Last Updated**: 2026-01-24
 **Owner**: Architecture Team
 
 ---
@@ -20,6 +20,8 @@ This document is the **single source of truth** for tracking all K0 components b
 - [Part 1: Status Dashboard](#part-1-status-dashboard)
 - [Part 2: Pipeline Registry](#part-2-pipeline-registry)
 - [Part 3: Module Registry](#part-3-module-registry)
+  - [3.4 P03 Consolidation Algorithm Registry](#34-p03-consolidation-algorithm-registry)
+  - [3.5 P03 Pipeline Component Registry](#35-p03-pipeline-component-registry)
 - [Part 4: Event Topology](#part-4-event-topology)
 - [Part 5: Contract Registry](#part-5-contract-registry)
 - [Part 6: Storage Registry](#part-6-storage-registry)
@@ -41,7 +43,10 @@ This document is the **single source of truth** for tracking all K0 components b
 | Category | Total | ✅ Active | 🎯 Planning | ❌ Deprecated |
 |----------|-------|-----------|-------------|---------------|
 | Pipelines | 20 | 2 | 18 | - |
-| Modules | 23 | 15 | 5 | 1 |
+| Modules | 28 | 15 | 5 | 1 |
+| Recall Modules | 4 | 4 | - | - |
+| P03 Algorithms | 98 | 98 | - | - |
+| P03 Pipeline | 78 | 78 | - | - |
 | Events | 35+ | 25 | 7 | 3 |
 | Contracts (Module) | 22 | 15 | 3 | 2 |
 | Contracts (Pipeline) | 2 | 2 | - | - |
@@ -64,8 +69,10 @@ This document is the **single source of truth** for tracking all K0 components b
 | Environment Vars | 35 | 35 | - | - |
 | Config Files | 10 | 10 | - | - |
 
-> **Last Updated**: 2025-12-25
-> **Module Breakdown**: 14 Production-Ready, 1 Implementation, 2 Experimental, 4 Planning, 1 Deprecated
+> **Last Updated**: 2026-01-24
+> **Module Breakdown**: 14 Production-Ready, 24 Implementation (18 P03 + 4 Recall + 2 Other), 2 Experimental, 4 Planning, 1 Deprecated
+> **P03 Algorithm Breakdown**: 89 files (45 core, 7 text_gen, 6 dream, 2 emission, 13 staging, 7 truth_writer, 7 truth_layers, 2 root)
+> **P03 Pipeline Breakdown**: 78 files (9 phases, 22 ops, 8 qos, 8 security, 4 feedback, 3 learning, 1 maintenance, 1 api, 1 cache, 21 root)
 > **ADR Breakdown**: 39 Accepted (4 Core, 4 Pipeline, 31 Module)
 > **Contract Breakdown**: 78 total (22 module, 2 pipeline, 21 schema, 33 API) - 68 active, 6 planning, 2 deprecated
 > **Kernel Breakdown**: 13 startup hooks, 7 shutdown hooks (KH-007 FAISS deprecated)
@@ -137,9 +144,9 @@ Before writing any code, ensure these are registered:
 
 | ID | Name | Status | Modules Used | Scheduler? | Kernel Hooks | ADRs | Dossier | Version | Last Updated |
 |----|------|--------|--------------|------------|--------------|------|---------|---------|--------------|
-| P01 | Recall / Read | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
+| P01 | Recall / Read | ⚠️ Implementation | M55,M56,M57,M58 | No | - | - | - | 0.2.0 | 2025-01-17 |
 | P02 | Write / Ingest | ✅ Production | M01,M02,M04,M05,M06,M07,M08,M09,M10,M11,M12,M13,M15,M16,M17,M22 | No | on_startup | K003,K007.2,K009.2,K010.1 | `docs/pipelines/P02_write_dossier.md` | 1.1.0 | 2025-12-13 |
-| P03 | Memory Consolidation | 🎯 Planning | M28,M29,M30,M31,M32,M33,M34,M35 | Yes (INTERVAL/THRESHOLD/MANUAL) | on_startup | K010.5-K010.9 | `docs/pipelines/P03_consolidation_dossier_v2.md` | 0.1.0 | 2025-12-31 |
+| P03 | Memory Consolidation | ⚠️ Implementation | M37-M54 | Yes (INTERVAL/THRESHOLD/MANUAL) | on_startup | K010.5-K010.9 | `docs/pipelines/P03_consolidation_dossier_v2.md` | 0.2.0 | 2025-01-17 |
 | P04 | Arbitration / Action | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
 | P05 | Prospective / Triggers | 🎯 Planning | - | Yes (timer) | - | - | - | 0.1.0 | 2025-12-24 |
 | P06 | Learning / Neuromodulation | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
@@ -268,6 +275,11 @@ Before writing any code, ensure these are registered:
 | M26 | EmbeddingRecompute | Model Upgrade Re-vectorizer | 🎯 Planning | `k0/contracts/modules/embedding.recompute.v1.yaml` | `k0/modules/embedding/recompute.py` | batch | - | 0.1.0 | 2025-12-13 |
 | M27 | EmbeddingCleanup | Expired Vector Garbage Collector | 🎯 Planning | `k0/contracts/modules/embedding.cleanup.v1.yaml` | `k0/modules/embedding/cleanup.py` | <50ms/batch | - | 0.1.0 | 2025-12-13 |
 | M28 | FeedbackIngestor | Neuromodulation / Feedback Loop | 🎯 Planning | `k0/contracts/modules/feedback.ingest.v1.yaml` | `k0/modules/feedback/ingest.py` | <10ms | - | 0.1.0 | 2025-12-25 |
+| M37-M54 | ConsolidationModules | P03 Consolidation | ⚠️ Implementation | `k0/contracts/modules/consolidation.*.v1.yaml` | `k0/modules/consolidation/` | batch | - | 0.1.0 | 2025-01-17 |
+| M55 | ContextExpander | Recall Context Expansion | ⚠️ Implementation | - | `k0/modules/recall/context_expander.py` | <20ms | - | 0.1.0 | 2025-01-17 |
+| M56 | EntityExtractor | Recall Entity Extraction | ⚠️ Implementation | - | `k0/modules/recall/entity_extractor.py` | <15ms | - | 0.1.0 | 2025-01-17 |
+| M57 | EntityGraphExpander | Recall Graph Expansion | ⚠️ Implementation | - | `k0/modules/recall/entity_graph_expander.py` | <25ms | - | 0.1.0 | 2025-01-17 |
+| M58 | RelatedContextFetcher | Recall Related Context | ⚠️ Implementation | - | `k0/modules/recall/related_context_fetcher.py` | <30ms | - | 0.1.0 | 2025-01-17 |
 
 ### Status Legend
 
@@ -335,6 +347,11 @@ Before writing any code, ensure these are registered:
 | M25 | - | P08 | hipp_query,vec_write,ultrabert_embed | `cognitive.embedding.backfilled.v1` |
 | M27 | - | P08 | vec_delete | `cognitive.embedding.cleaned.v1` |
 | M28 | - | P02, P08 | feedback_signal_insert (planned) | `feedback.signal.p02.v1`, `feedback.signal.p08.v1` |
+| M37-M54 | - | P03 | hipp_query,vec_write,kg_write,truth_write | `p03.*.v1` (see Part 4) |
+| M55 | - | P01 | hipp_query,vec_search | `p01.context.expanded.v1` |
+| M56 | - | P01 | - | `p01.entities.extracted.v1` |
+| M57 | M56 | P01 | kg_query | `p01.graph.expanded.v1` |
+| M58 | M55,M57 | P01 | hipp_query,vec_search | `p01.related.fetched.v1` |
 
 ### How to Track Dependencies
 
@@ -357,6 +374,338 @@ Before writing any code, ensure these are registered:
 | M13-M14 | Builders | `k0/modules/builders/README.md` | 2025-11-17 | ✅ Complete | Yes |
 | M16-M17 | Core | - | - | ❌ Missing | No |
 | M22-M27 | Embedding | - | - | ❌ Missing | No |
+| M37-M54 | Consolidation | - | - | ❌ Missing | No |
+| M55-M58 | Recall | `k0/modules/recall/README.md` | 2025-01-17 | ✅ Complete | Yes |
+
+## 3.4 P03 Consolidation Algorithm Registry
+
+> **IMPORTANT**: This section tracks the 90 algorithm files in `k0/modules/consolidation/` that support P03 Memory Consolidation.
+> These algorithms are reusable, stateless components imported by P03 pipeline phases.
+> The 18 module contracts (M37-M54) in `k0/contracts/modules/consolidation.*.v1.yaml` define the module boundaries.
+
+### Architecture Pattern
+
+```
+P03 Pipeline Phases (k0/pipelines/p03/phases/)
+    └── Import from → Consolidation Algorithms (k0/modules/consolidation/)
+                          └── Governed by → Module Contracts (k0/contracts/modules/consolidation.*.v1.yaml)
+```
+
+### 3.4.1 Root Algorithms
+
+| File | Purpose | Used By Phases | Contract |
+|------|---------|----------------|----------|
+| `batch_selector.py` | Selects memory batches for consolidation | r0 | M37 |
+| `gap_auto_resolver.py` | Automatically resolves detected memory gaps | r0, r7 | M37 |
+
+### 3.4.2 Core Algorithms (`algorithms/`)
+
+| File | Category | Purpose | Used By Phases |
+|------|----------|---------|----------------|
+| `access_tracker.py` | Analytics | Tracks memory access patterns | r2, r5 |
+| `alias_detector.py` | Dedup | Detects entity aliases | r1, r4 |
+| `ambiguous_resolver.py` | NER | Resolves ambiguous entity references | r1 |
+| `bgt_sm.py` | Clustering | BGT small model clustering | r2 |
+| `causality_thresholds.py` | Analytics | Defines causality detection thresholds | r3 |
+| `centroid_calculator.py` | Clustering | Calculates cluster centroids | r2 |
+| `cluster_quality.py` | Clustering | Evaluates cluster quality metrics | r2 |
+| `composite_distance.py` | Similarity | Multi-dimensional distance calculation | r2, r4 |
+| `confidence_router.py` | Routing | Routes based on confidence scores | r1, r3 |
+| `cpn.py` | Learning | Counter-Propagation Network | r5 |
+| `decay_engine.py` | Retention | Memory decay calculations | r5, r8 |
+| `duplicate_detector.py` | Dedup | Detects duplicate memories | r1, r4 |
+| `edge_demotion.py` | KG | Demotes weak knowledge graph edges | r6 |
+| `edge_enrichers/bayesian_causal.py` | KG | Bayesian causal edge enrichment | r4 |
+| `edge_enrichers/contextual.py` | KG | Contextual similarity edge enrichment | r4 |
+| `edge_enrichers/emotion_similarity.py` | KG | Emotion-based edge enrichment | r4 |
+| `edge_enrichers/fusion.py` | KG | Edge enrichment fusion utilities | r4 |
+| `edge_enrichers/intent_similarity.py` | KG | Intent-based complementary edge enrichment | r4 |
+| `edge_enrichers/semantic_similarity.py` | KG | Semantic similarity edge enrichment | r4 |
+| `edge_enrichers/temporal_proximity.py` | KG | Temporal proximity edge enrichment | r4 |
+| `edge_enrichers/transitive_closure.py` | KG | Transitive closure edge enrichment | r4 |
+| `edge_enrichers/weight_normalization.py` | KG | Edge weight normalization | r4 |
+| `embedding_text_generator.py` | Embedding | Generates text for embeddings | r2, r7 |
+| `entity_disambiguator.py` | NER | Disambiguates entity references | r1 |
+| `entity_extractor.py` | NER | Extracts entities from text | r1 |
+| `entity_merger.py` | NER | Merges duplicate entities | r1, r4 |
+| `episode_splitter.py` | Episodic | Splits memories into episodes | r2 |
+| `episodic_hdbscan.py` | Clustering | HDBSCAN for episodic clustering | r2 |
+| `eps_adjuster.py` | Clustering | Adjusts HDBSCAN cluster_selection_epsilon | r2 |
+| `granger_causality.py` | Analytics | Granger causality detection | r3 |
+| `hebbian_learner.py` | Learning | Hebbian learning updates | r5 |
+| `immunity_checker.py` | Retention | Checks memory immunity status | r5, r8 |
+| `importance_scorer.py` | Analytics | Scores memory importance | r2, r5 |
+| `importance_weight_learner.py` | Learning | Learns importance weights | r5 |
+| `intent_signal_detector.py` | Analytics | Detects intent signals | r3 |
+| `mcts.py` | Search | Monte Carlo Tree Search | r3, dream |
+| `mcts_shadow.py` | Search | Shadow MCTS for exploration | r3, dream |
+| `merge_threshold_learner.py` | Learning | Learns merge thresholds | r4, r5 |
+| `minhash_lsh.py` | Dedup | MinHash LSH for near-duplicates | r1, r4 |
+| `min_samples_adjuster.py` | Clustering | Adjusts HDBSCAN min_samples | r2 |
+| `novelty_bonus_learner.py` | Learning | Learns novelty bonuses | r5 |
+| `observation_context.py` | Context | Carries holistic observation context through pipeline | r0, r6 |
+| `prune_audit_logger.py` | Audit | Logs pruning decisions | r8 |
+| `prune_regret_detector.py` | Learning | Detects pruning regret | r5, r8 |
+| `reconciliation_engine.py` | Sync | Reconciles memory conflicts | r4 |
+| `retention_enforcer.py` | Retention | Enforces retention policies | r5, r8 |
+| `routine_detector.py` | Analytics | Detects routine patterns | r3 |
+| `simhasher.py` | Dedup | SimHash for similarity | r1, r4 |
+| `spc_uq.py` | Uncertainty | Statistical process control UQ | r3 |
+| `subtype_classifier.py` | Classification | Classifies memory subtypes | r1 |
+| `tdl_hco.py` | Learning | Temporal difference learning HCO | r5 |
+| `temporal_parser.py` | Analytics | Parses temporal expressions | r1, r2 |
+| `two_stage_dedup.py` | Dedup | Two-stage deduplication | r1, r4 |
+
+### 3.4.3 Text Generators (`algorithms/text_generators/`)
+
+| File | Memory Layer | Purpose | Used By Phases |
+|------|--------------|---------|----------------|
+| `episodic.py` | st_epi | Generates episodic memory text | r2, r7 |
+| `kg_entity.py` | st_kg_dom | Generates KG entity descriptions | r6, r7 |
+| `procedural.py` | st_procedural | Generates procedural memory text | r3, r7 |
+| `prospective.py` | st_prospective | Generates prospective memory text | r3, r7 |
+| `semantic.py` | st_sem | Generates semantic memory text | r4, r7 |
+| `social.py` | st_social | Generates social memory text | r4, r7 |
+| `textrank.py` | - | TextRank summarization | r2, r4, r7 |
+
+### 3.4.4 Dream/Exploration (`dream/`)
+
+| File | Purpose | Used By Phases |
+|------|---------|----------------|
+| `compute_budget.py` | Manages dream compute budget | dream |
+| `config.py` | Dream exploration configuration | dream |
+| `dream_explorer.py` | Main dream exploration engine | dream |
+| `intent_signals.py` | Intent signal processing | dream |
+| `mcts_persistence.py` | MCTS state persistence | dream |
+| `models.py` | Dream data models | dream |
+
+### 3.4.5 Emission (`emission/`)
+
+| File | Purpose | Used By Phases |
+|------|---------|----------------|
+| `emitter.py` | Event emission coordinator | r7, r8 |
+| `gap_emitter.py` | Gap detection event emitter | r7 |
+
+### 3.4.6 Staging/Coordination (`staging/`)
+
+| File | Purpose | Used By Phases |
+|------|---------|----------------|
+| `dedup_metadata.py` | Deduplication metadata management | r1, r4 |
+| `idempotency.py` | Idempotency key management | r6, r7, r8 |
+| `intent_signal_assembler.py` | Assembles intent signals | r3 |
+| `kg_write_assembler.py` | Assembles KG write operations | r6 |
+| `manifest_validator.py` | Validates consolidation manifests | r0, r8 |
+| `outbox_assembler.py` | Assembles outbox events | r7, r8 |
+| `r6_coordinator.py` | Coordinates R6 phase operations | r6 |
+| `r6_output.py` | R6 phase output handling | r6 |
+| `reconciliation_recorder.py` | Records reconciliation decisions | r4 |
+| `status_marker.py` | Marks consolidation status | r0, r8 |
+| `summary_generator.py` | Generates consolidation summaries | r7 |
+| `truth_query_service.py` | Queries truth layer | r4, r6 |
+| `truth_write_assembler.py` | Assembles truth layer writes | r6 |
+
+### 3.4.7 Truth Writer (`truth_writer/`)
+
+| File | Purpose | Used By Phases |
+|------|---------|----------------|
+| `embedding_generator.py` | Generates embeddings for truth | r6, r7 |
+| `outbox.py` | Truth writer outbox | r6 |
+| `result.py` | Truth write result handling | r6 |
+| `router.py` | Routes to appropriate truth layer | r6 |
+| `source_text_fetcher.py` | Fetches source text for truth | r6 |
+| `text_vector_coordinator.py` | Coordinates text/vector writes | r6, r7 |
+| `transaction.py` | Truth write transactions | r6 |
+
+### 3.4.8 Truth Writer Layers (`truth_writer/layers/`)
+
+| File | Memory Layer | Purpose | Used By Phases |
+|------|--------------|---------|----------------|
+| `episodic.py` | st_epi | Episodic memory layer writer | r6 |
+| `kg.py` | st_kg_dom, st_kg_edges | Knowledge graph layer writer | r6 |
+| `procedural.py` | st_procedural | Procedural memory layer writer | r6 |
+| `prospective.py` | st_prospective | Prospective memory layer writer | r6 |
+| `semantic.py` | st_sem | Semantic memory layer writer | r6 |
+| `social.py` | st_social | Social memory layer writer | r6 |
+| `vector.py` | st_vec | Vector storage layer writer | r6, r7 |
+
+### 3.4.9 Algorithm Category Summary
+
+| Category | Count | Primary Purpose |
+|----------|-------|-----------------|
+| Root | 2 | Entry points (batch selection, gap resolution) |
+| Core Algorithms | 55 | Clustering, NER, dedup, learning, analytics, context, KG enrichment |
+| Text Generators | 7 | Memory layer text generation |
+| Dream | 6 | Exploration and simulation |
+| Emission | 2 | Event emission |
+| Staging | 13 | Coordination and assembly |
+| Truth Writer | 7 | Truth layer operations |
+| Truth Layers | 7 | Layer-specific writers |
+| **Total** | **99** | |
+
+### 3.4.10 Phase-to-Algorithm Matrix
+
+| Phase | Primary Algorithms | Category Focus |
+|-------|-------------------|----------------|
+| r0 | batch_selector, gap_auto_resolver, manifest_validator, status_marker, observation_context | Selection, Validation, Context |
+| r1 | entity_*, alias_detector, minhash_lsh, simhasher, subtype_classifier | NER, Dedup |
+| r2 | episodic_*, cluster_*, centroid_*, importance_scorer, episode_splitter | Clustering, Episodic |
+| r3 | granger_causality, routine_detector, intent_signal_*, mcts* | Analytics, Intent |
+| r4 | reconciliation_*, entity_merger, duplicate_detector, semantic text_gen | Reconciliation, Semantic |
+| r5 | decay_engine, retention_enforcer, hebbian_learner, *_learner | Learning, Retention |
+| r6 | truth_writer/*, kg_write_assembler, edge_demotion, observation_context | Truth Writing, Context |
+| r7 | text_generators/*, embedding_generator, outbox_assembler | Emission, Embedding |
+| r8 | prune_audit_logger, retention_enforcer, status_marker | Pruning, Finalization |
+| dream | dream/*, mcts*, novelty_bonus_learner | Exploration |
+
+## 3.5 P03 Pipeline Component Registry
+
+> **IMPORTANT**: This section tracks the 78 pipeline orchestration files in `k0/pipelines/p03/`.
+> These are distinct from the reusable algorithms in `k0/modules/consolidation/` (section 3.4).
+> Pipeline components handle orchestration, QoS, security, and operational concerns.
+
+### Architecture Pattern
+
+```
+P03 Pipeline (k0/pipelines/p03/)
+    ├── phases/      → 9 phase orchestrators (r0-r8)
+    ├── ops/         → 22 operational utilities
+    ├── qos/         → 8 quality of service components
+    ├── security/    → 8 privacy/audit components
+    ├── feedback/    → 4 feedback loop components
+    ├── learning/    → 3 learning integration
+    ├── maintenance/ → 1 maintenance utilities
+    ├── api/         → 1 API endpoints
+    └── cache/       → 1 caching layer
+```
+
+### 3.5.1 Phase Orchestrators (`phases/`)
+
+| File | Phase | Purpose | Imports From |
+|------|-------|---------|--------------|
+| `r0_batch_selector.py` | R0 | Batch selection and gap resolution | consolidation.batch_selector, consolidation.gap_auto_resolver |
+| `r1_importance_scorer.py` | R1 | Importance scoring and NER | consolidation.algorithms.importance_scorer, consolidation.algorithms.entity_* |
+| `r2_episodic_integrator.py` | R2 | Episodic clustering and episode building | consolidation.algorithms.episodic_*, consolidation.algorithms.cluster_* |
+| `r3_dedup_decay.py` | R3 | Deduplication and decay scoring | consolidation.algorithms.simhasher, consolidation.algorithms.decay_engine |
+| `r4_kg_consolidator.py` | R4 | Knowledge graph consolidation | consolidation.algorithms.entity_merger, consolidation.staging.reconciliation_* |
+| `r5_dream_explorer.py` | R5 | Dream exploration and learning | consolidation.dream.*, consolidation.algorithms.*_learner |
+| `r6_staging.py` | R6 | Truth layer staging | consolidation.staging.*, consolidation.truth_writer.* |
+| `r7_truth_writer.py` | R7 | Truth layer writing | consolidation.truth_writer.*, consolidation.emission.* |
+| `r8_event_emitter.py` | R8 | Event emission and finalization | consolidation.emission.*, consolidation.staging.status_marker |
+
+### 3.5.2 Operational Utilities (`ops/`)
+
+| File | Category | Purpose |
+|------|----------|---------|
+| `alerting.py` | Alerting | P03 alerting integration |
+| `bus_circuit.py` | Circuit | Event bus circuit breaker |
+| `circuit_breaker.py` | Circuit | General circuit breaker |
+| `context_propagation.py` | Context | Trace context propagation |
+| `dlq_store.py` | DLQ | Dead letter queue storage |
+| `edge_case_handler.py` | Error | Edge case handling |
+| `error_classifier.py` | Error | Error classification |
+| `error_handler.py` | Error | Error handling |
+| `faiss_circuit.py` | Circuit | FAISS-specific circuit breaker |
+| `formula_comparison.py` | Testing | Formula comparison utilities |
+| `formula_tracing.py` | Tracing | Formula tracing |
+| `logging.py` | Logging | P03 logging configuration |
+| `metrics.py` | Metrics | P03 metrics collection |
+| `module_metrics.py` | Metrics | Module-level metrics |
+| `p08_circuit.py` | Circuit | P08 integration circuit |
+| `partial_failure.py` | Error | Partial failure handling |
+| `phase_logger.py` | Logging | Phase-specific logging |
+| `quarantine_metrics.py` | Metrics | Quarantine metrics |
+| `retry_config.py` | Retry | Retry configuration |
+| `security.py` | Security | Security utilities |
+| `shadow_comparator.py` | Testing | Shadow mode comparison |
+| `tracing.py` | Tracing | Distributed tracing |
+
+### 3.5.3 Quality of Service (`qos/`)
+
+| File | Purpose |
+|------|---------|
+| `adaptive_batch_sizer.py` | Adaptive batch sizing based on load |
+| `context_integration.py` | QoS context integration |
+| `learning_budget.py` | Learning compute budget management |
+| `phase_metrics.py` | Phase-level QoS metrics |
+| `query_metrics.py` | Query performance metrics |
+| `resource_metrics.py` | Resource utilization metrics |
+| `scheduler_integration.py` | Scheduler QoS integration |
+| `throughput_tracker.py` | Throughput tracking |
+
+### 3.5.4 Security & Privacy (`security/`)
+
+| File | Purpose |
+|------|---------|
+| `audit_trail.py` | Consolidation audit trail |
+| `device_retention.py` | Device-specific retention |
+| `fingerprint.py` | Memory fingerprinting |
+| `location_masking.py` | Location data masking |
+| `privacy_band.py` | Privacy band enforcement |
+| `query_auditor.py` | Query auditing |
+| `rls_verifier.py` | Row-level security verification |
+| `tombstone.py` | Tombstone management |
+
+### 3.5.5 Feedback & Learning (`feedback/`, `learning/`)
+
+| File | Category | Purpose |
+|------|----------|---------|
+| `anomaly_detector.py` | Feedback | Anomaly detection |
+| `quarantine_detector.py` | Feedback | Quarantine detection |
+| `rate_limiter.py` | Feedback | Rate limiting |
+| `velocity_detector.py` | Feedback | Velocity anomaly detection |
+| `async_audit.py` | Learning | Async audit integration |
+| `feedback_queue.py` | Learning | Feedback queue management |
+| `learning_anomaly_detector.py` | Learning | Learning anomaly detection |
+
+### 3.5.6 Support Components (`maintenance/`, `api/`, `cache/`)
+
+| File | Category | Purpose |
+|------|----------|---------|
+| `quarantine_cleanup.py` | Maintenance | Quarantine cleanup |
+| `quarantine_review.py` | API | Quarantine review endpoints |
+| `embedding_cache.py` | Cache | Embedding cache management |
+
+### 3.5.7 Root Pipeline Files
+
+| File | Purpose |
+|------|---------|
+| `audit_logger.py` | Main audit logging |
+| `checkpoint.py` | Checkpoint management |
+| `context.py` | Pipeline context |
+| `deterministic.py` | Deterministic execution |
+| `envelope.py` | Message envelope handling |
+| `erasure.py` | Data erasure support |
+| `event_state.py` | Event state management |
+| `explainability.py` | Explainability support |
+| `feedback_consumer.py` | Feedback consumption |
+| `gap_emitter.py` | Gap event emission |
+| `observability.py` | Observability integration |
+| `offset_manager.py` | Offset management |
+| `outbox_publisher.py` | Outbox publishing |
+| `phase_interface.py` | Phase interface definition |
+| `phase_outputs.py` | Phase output handling |
+| `r5_config.py` | R5 phase configuration |
+| `retention.py` | Retention policy handling |
+| `runner_contract.py` | Runner contract definition |
+| `sequential_runner.py` | Sequential phase runner |
+| `serializer.py` | Serialization utilities |
+| `staged_writes.py` | Staged write handling |
+
+### 3.5.8 P03 Component Summary
+
+| Category | Count | Primary Purpose |
+|----------|-------|-----------------|
+| Phases | 9 | Phase orchestration (r0-r8) |
+| Ops | 22 | Operational utilities |
+| QoS | 8 | Quality of service |
+| Security | 8 | Privacy and audit |
+| Feedback | 4 | Feedback loop |
+| Learning | 3 | Learning integration |
+| Maintenance | 1 | Cleanup utilities |
+| API | 1 | API endpoints |
+| Cache | 1 | Caching |
+| Root | 21 | Core pipeline files |
+| **Total** | **78** | |
 
 ---
 
@@ -442,6 +791,12 @@ Before writing any code, ensure these are registered:
 | `p02.embedding.enqueued.v1` | - | P02 (M14) | 🟢 GREEN | 3 days | v1 | ✅ Active |
 | `p02.enrichment.complete.v1` | - | P02 (M17) | 🟡 AMBER | 7 days | v1 | ✅ Active |
 | `p02.hipp_events.written.v1` | - | P02 (M13) | 🟡 AMBER | 7 days | v1 | ✅ Active |
+| `p02.affect.analyzed.v2` | - | P02 (M04) | 🟡 AMBER | 7 days | v2 | ✅ Active |
+| `p02.builders.hipp_row_built.v2` | - | P02 (M13) | 🟡 AMBER | 7 days | v2 | ✅ Active |
+| `p02.context.temporal_profiled.v2` | - | P02 (M08) | 🟡 AMBER | 7 days | v2 | ✅ Active |
+| `p02.hippocampus.semantic_projected.v2` | - | P02 (M02) | 🟡 AMBER | 7 days | v2 | ✅ Active |
+| `p02.salience.scored.v2` | - | P02 (M06) | 🟡 AMBER | 7 days | v2 | ✅ Active |
+| `p02.social.family_resolved.v2` | - | P02 (M07) | 🟡 AMBER | 7 days | v2 | ✅ Active |
 
 ### Vector/Embedding Events
 
@@ -455,6 +810,8 @@ Before writing any code, ensure these are registered:
 | `cognitive.embedding.backfilled.v1` | `k0/contracts/schemas/cognitive_embedding_backfilled.json` | P08 (M25) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
 | `cognitive.embedding.recomputed.v1` | `k0/contracts/schemas/cognitive_embedding_recomputed.json` | P08 (M26) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
 | `cognitive.embedding.cleaned.v1` | `k0/contracts/schemas/cognitive_embedding_cleaned.json` | P08 (M27) | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `cognitive.embedding.integrity_check.requested.v1` | - | P08 Scheduler | 🟢 GREEN | 3 days | v1 | ✅ Active |
+| `cognitive.embedding.integrity_check.completed.v1` | - | P08 (M28) | 🟢 GREEN | 3 days | v1 | ✅ Active |
 
 ### Fanout Events (M17 Event Emitter)
 
@@ -696,10 +1053,11 @@ graph LR
 | `core.event_emitter` | M17 | `k0/contracts/modules/core.event_emitter.v1.yaml` | v1 | ✅ Active | 2025-11-17 |
 | `embedding.extract_from_cache` | M22 | `k0/contracts/modules/embedding.extract_from_cache.v1.yaml` | v1 | ✅ Active | 2025-12-13 |
 | `builders.embedding_write` | M23 | `k0/contracts/modules/builders.embedding_write.v1.yaml` | v1 | ❌ Deprecated | 2025-12-13 |
-| `embedding.faiss_indexer` | M24 | `k0/contracts/modules/embedding.faiss_indexer.v1.yaml` | v1 | ✅ Active | 2025-12-13 |
+| ~~embedding.faiss_indexer~~ | M24 | `k0/contracts/modules/embedding.faiss_indexer.v1.yaml` | v1 | ❌ Deleted | 2026-03-01 |
 | `embedding.backfill` | M25 | `k0/contracts/modules/embedding.backfill.v1.yaml` | v1 | 🎯 Planning | 2025-12-13 |
 | `embedding.recompute` | M26 | `k0/contracts/modules/embedding.recompute.v1.yaml` | v1 | 🎯 Planning | 2025-12-13 |
 | `embedding.cleanup` | M27 | `k0/contracts/modules/embedding.cleanup.v1.yaml` | v1 | 🎯 Planning | 2025-12-13 |
+| `embedding.integrity_check` | M28 | `k0/contracts/modules/embedding.integrity_check.v1.yaml` | v1 | ✅ Active | 2026-03-01 |
 | `feedback.ingest` | M28 | `k0/contracts/modules/feedback.ingest.v1.yaml` | v1 | 🎯 Planning | 2025-12-25 |
 | `consolidation.batch_selector` | M37 | `k0/contracts/modules/consolidation.batch_selector.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
 | `consolidation.importance_scorer` | M38 | `k0/contracts/modules/consolidation.importance_scorer.v1.yaml` | v1 | 🎯 Planning | 2025-12-31 |
@@ -730,10 +1088,12 @@ graph LR
 | Contract Name | Pipeline | Path | Version | Status | Last Updated |
 |---------------|----------|------|---------|--------|--------------|
 | `p02_write` | P02 | `k0/contracts/pipelines/p02_write.v1.yaml` | v1 | ✅ Active | 2025-12-13 |
+| `p02_write` | P02 | `k0/contracts/pipelines/p02_write.v2.yaml` | v2 | ✅ Active | 2026-03-01 |
 | `p03_consolidation` | P03 | `k0/contracts/pipelines/p03_consolidation.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
-| `p08_embedding_management` | P08 | `k0/contracts/pipelines/p08_embedding_management.v2.yaml` | v3 | ✅ Active | 2025-12-24 |
+| `p08_embedding_management` | P08 | `k0/contracts/pipelines/p08_embedding_management.v3.yaml` | v3 | ✅ Active | 2026-03-01 |
+| `_deprecated_p08_embedding_management` | P08 | `k0/contracts/pipelines/_deprecated_p08_embedding_management.v2.yaml` | v2 | ❌ Deprecated | 2026-03-01 |
 
-> **Pipeline Contract Summary**: 3 contracts (2 Active, 1 Planning)
+> **Pipeline Contract Summary**: 5 contracts (3 Active, 1 Planning, 1 Deprecated)
 > **Note**: P08 version is v3 (Maintenance Mode after PostgreSQL/pgvector migration)
 
 ## 5.3 Event Schema Registry
@@ -1006,6 +1366,7 @@ graph LR
 | `st_learning_queue` | P03 (M35) | P06, P03 | Gap queue for active learning | ~200B | 30 days | 🎯 Planning |
 | `st_anchors` | P03 (M35), P06 | P03, P06 | Bayesian anchor beliefs | ~400B | Permanent | 🎯 Planning |
 | `st_anchor_observations` | P03, P06 | P03, P06 | Evidence log for anchors | ~200B | 90 days | 🎯 Planning |
+| `st_observations` | P03 | P01, P03 | Holistic observation log (32 cols): temporal, emotional, social, modality, location context | ~400B | 1-5 years | ✅ Active |
 | `st_consolidation_audit` | P03 | Ops | P03 cycle audit trail | ~500B | 90 days | 🎯 Planning |
 | `st_mcts_decisions` | P03 | P03, Ops | MCTS decision traces for analysis | ~1KB | 90 days | 🎯 Planning |
 | `st_mcts_shadow_log` | P03 | P03, Ops | Shadow-mode heuristic vs MCTS comparisons | ~1KB | 90 days | 🎯 Planning |
@@ -1085,10 +1446,21 @@ graph LR
 | 0058 | `0058_st_sem_pattern_types.py` | - | idx_sem_* | Add pattern types to st_sem | ❌ No |
 | 0059 | `0059_kg_query_tracking.py` | - | idx_kg_* | Add query tracking to st_kg_dom/st_kg_edges | ❌ No |
 | 0060 | `0060_st_hipp_events_activity_ultrabert.py` | - | idx_hipp_events_* | Add activity UltraBERT columns to st_hipp_events | ❌ No |
+| 0061 | `0061_st_epi_inline_vectors.py` | - | idx_epi_* | Add inline vectors to st_epi | ❌ No |
+| 0062 | `0062_st_sem_inline_vectors.py` | - | idx_sem_* | Add inline vectors to st_sem | ❌ No |
+| 0063 | `0063_st_procedural_inline_vectors.py` | - | idx_procedural_* | Add inline vectors to st_procedural | ❌ No |
+| 0064 | `0064_st_social_inline_vectors.py` | - | idx_social_* | Add inline vectors to st_social | ❌ No |
+| 0065 | `0065_st_prospective_inline_vectors.py` | - | idx_prospective_* | Add inline vectors to st_prospective | ❌ No |
+| 0066 | `0066_st_kg_dom_inline_vectors.py` | - | idx_kg_dom_* | Add inline vectors to st_kg_dom | ❌ No |
+| 0067 | `0067_st_observations.py` | st_observations | idx_obs_* (13) | Holistic observation log for truth layers | ❌ No |
+| 0068 | `0068_st_observations_allow_kg_edges_layer.py` | - | - | Allow st_kg_edges layer in st_observations CHECK constraint | ❌ No |
+| 0069 | `0069_st_kg_edges_source_algorithm.py` | - | idx_kg_edges_source_algorithm | Add source_algorithm column to st_kg_edges | ❌ No |
+| 0070 | `0070_st_kg_edges_evidence.py` | - | - | Add evidence columns to st_kg_edges (evidence_event_ids, evidence_episode_ids, algorithm_params_json, inference_chain_json) | ❌ No |
+| 0071 | `0071_st_vec_pgvector_native.py` | st_vec (recreate) | idx_vec_* (5 BTREE) | Drop and recreate st_vec with pgvector VECTOR(768), BTREE indexes, remove FAISS columns | ❌ No |
 
 > **Migration Tool**: Alembic (SQLAlchemy)
 > **Location**: `k0/db/alembic/versions/`
-> **Total Migrations**: 26 (25 applied, 1 planned)
+> **Total Migrations**: 71 (25 applied, 46 planned)
 > **PostgreSQL Version**: 15+ (required for pgvector)
 
 ## 6.3 Index Registry
@@ -1128,7 +1500,7 @@ graph LR
 | `idx_vec_tenant_space` | tenant_id, space_id | BTREE | Tenant/space isolation |
 | `idx_vec_model_id` | model_id | BTREE | Model version filtering |
 | `idx_vec_status_created` | status, created_at | BTREE | Backfill queries (partial: READY) |
-| `idx_vec_faiss_id` | faiss_id | BTREE | FAISS index mapping |
+| `idx_vec_faiss_id` | faiss_id | BTREE | Legacy FAISS ID lookup |
 
 ### st_outbox Indexes (3)
 
@@ -1356,6 +1728,20 @@ graph LR
 | `idx_shadow_log_cycle` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
 | `idx_shadow_log_type_created` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
 | `idx_shadow_log_pending_eval` | st_mcts_shadow_log | see migration | BTREE/partial | Query optimization |
+| `idx_obs_record_time` | st_observations | layer, record_id, observed_at DESC | BTREE | Primary lookup by truth record |
+| `idx_obs_tenant_time` | st_observations | tenant_id, observed_at DESC | BTREE | Temporal range queries |
+| `idx_obs_sentiment` | st_observations | tenant_id, sentiment_label, observed_at DESC | BTREE/partial | Emotional pattern queries |
+| `idx_obs_salience_high` | st_observations | tenant_id, observed_at DESC WHERE salience_band='HIGH' | BTREE/partial | High salience queries |
+| `idx_obs_channel` | st_observations | tenant_id, ingress_channel, observed_at DESC | BTREE/partial | Modality queries |
+| `idx_obs_social` | st_observations | tenant_id, social_context, observed_at DESC | BTREE/partial | Social context queries |
+| `idx_obs_location` | st_observations | tenant_id, location_type, observed_at DESC | BTREE/partial | Location queries |
+| `idx_obs_anchor_time` | st_observations | tenant_id, anchor_time_utc DESC | BTREE/partial | Prospective memory queries |
+| `idx_obs_circadian` | st_observations | tenant_id, time_of_day_bucket, circadian_slot | BTREE/partial | Circadian pattern queries |
+| `idx_obs_high_novelty` | st_observations | tenant_id, observed_at DESC WHERE novelty_score>0.8 | BTREE/partial | High novelty queries |
+| `idx_obs_weekend` | st_observations | tenant_id, is_weekend, observed_at DESC | BTREE/partial | Weekend/weekday analysis |
+| `idx_obs_source_event` | st_observations | source_event_id | BTREE/partial | Source event lookup |
+| `idx_obs_layer_tenant_time` | st_observations | layer, tenant_id, observed_at DESC | BTREE | Layer-specific tenant queries |
+| `idx_kg_edges_source_algorithm` | st_kg_edges | source_algorithm | BTREE | Source algorithm filtering |
 
 #### Entity Resolution/Merge Indexes (ix_ prefix)
 
@@ -1384,8 +1770,9 @@ graph LR
 | st_embedding_queue | 4 | 1 | 0 |
 | st_pipeline_* | 4 | 0 | 0 |
 | st_feedback_signals | 7 | 2 | 0 |
+| st_observations | 13 | 9 | 0 |
 | Other tables | 9 | 1 | 0 |
-| **TOTAL** | **74** | **14** | **2** |
+| **TOTAL** | **87** | **23** | **2** |
 
 > **Index Strategy**:
 >
@@ -1460,10 +1847,10 @@ graph LR
 | `vec_write()` | `st_vec.write` | st_vec | INSERT | ✅ Yes | <5ms | ✅ Active |
 | `vec_query()` | `st_vec.read` | st_vec | SELECT | ✅ Yes | <20ms | ✅ Active |
 | `vec_update_status()` | `st_vec.write` | st_vec | UPDATE | ✅ Yes | <5ms | ✅ Active |
-| `faiss_add()` | `faiss.write` | FAISS index | ADD | ✅ Yes | <50ms | ⚠️ pgvector replaces |
-| `faiss_add_batch()` | `faiss.write` | FAISS index | ADD | ✅ Yes | 5ms/vec | ⚠️ pgvector replaces |
-| `faiss_search()` | `faiss.read` | FAISS index | SEARCH | ✅ Yes | <50ms | ⚠️ pgvector replaces |
-| `faiss_remove_batch()` | `faiss.write` | FAISS index | REMOVE | ✅ Yes | 0.5ms/vec | ⚠️ pgvector replaces |
+| `faiss_add()` | `faiss.write` | FAISS index | ADD | ✅ Yes | <50ms | ❌ Removed (ADR-K003) |
+| `faiss_add_batch()` | `faiss.write` | FAISS index | ADD | ✅ Yes | 5ms/vec | ❌ Removed (ADR-K003) |
+| `faiss_search()` | `faiss.read` | FAISS index | SEARCH | ✅ Yes | <50ms | ❌ Removed (ADR-K003) |
+| `faiss_remove_batch()` | `faiss.write` | FAISS index | REMOVE | ✅ Yes | 0.5ms/vec | ❌ Removed (ADR-K003) |
 | `hipp_events_query()` | `st_hipp_events.read` | st_hipp_events | SELECT | ✅ Yes | <20ms | ✅ Active |
 | `hipp_events_update_embedding_status()` | `st_hipp_events.write` | st_hipp_events | UPDATE | ✅ Yes | <5ms | ✅ Active |
 | `query_count()` | `{table}.read` | various | COUNT | ✅ Yes | <5ms | ✅ Active |
@@ -1471,9 +1858,35 @@ graph LR
 | `lock_acquire()` | `advisory_lock.acquire` | pg_advisory_lock | LOCK | ✅ Yes | <5ms | ✅ Active |
 | `lock_release()` | `advisory_lock.release` | pg_advisory_lock | UNLOCK | ✅ Yes | <5ms | ✅ Active |
 | `lock_is_held()` | `advisory_lock.read` | pg_locks | SELECT | ✅ Yes | <5ms | ✅ Active |
+| `union_index_search()` | `faiss.read` | FAISS union index | SEARCH | ✅ Yes | <20ms | ❌ Removed (ADR-K003) |
+| `union_index_rebuild()` | `faiss.write` | FAISS union index | REBUILD | ✅ Yes | <5s | ❌ Removed (ADR-K003) |
+| `union_index_stats()` | `faiss.read` | FAISS union index | STATS | ✅ Yes | <5ms | ❌ Removed (ADR-K003) |
+| `context_expand()` | `faiss.read, context.expand` | st_vec, st_kg_dom, st_kg_edges | SELECT | ✅ Yes | <100ms | ✅ Active |
+| `kg_entities_query()` | `st_kg_dom.read` | st_kg_dom | SELECT | ✅ Yes | <100ms | ✅ Active |
+| `kg_edges_query()` | `st_kg_edges.read` | st_kg_edges | SELECT | ✅ Yes | <100ms | ✅ Active |
+| `kg_edges_lookup()` | `st_kg_edges.read` | st_kg_edges | SELECT | ✅ Yes | <50ms | ✅ Active |
+| `kg_entities_lookup()` | `st_kg_dom.read` | st_kg_dom | SELECT | ✅ Yes | <50ms | ✅ Active |
+| `kg_candidates_fuzzy_query()` | `st_kg_dom.read` | st_kg_dom | SELECT | ✅ Yes | <50ms | ✅ Active |
+| `embedding_vectors_batch_query()` | `st_vec.read` | st_vec | SELECT | ✅ Yes | <50ms | ✅ Active |
+| `observations_write()` | `st_observations.write` | st_observations | INSERT | ✅ Yes | <10ms | ✅ Active |
+| `observations_write_batch()` | `st_observations.write` | st_observations | INSERT | ✅ Yes | <50ms | ✅ Active |
+| `vec_count()` | `st_vec.read` | st_vec | COUNT | ✅ Yes | <5ms | ✅ Active |
+| `vec_count_dimension_mismatches()` | `st_vec.read` | st_vec | COUNT | ✅ Yes | <5ms | ✅ Active |
+| `vec_distinct_models()` | `st_vec.read` | st_vec | SELECT | ✅ Yes | <5ms | ✅ Active |
+| `vec_orphan_count()` | `st_vec.read, st_hipp_events.read` | st_vec, st_hipp_events | COUNT | ✅ Yes | <10ms | ✅ Active |
+| `vec_delete_orphans()` | `st_vec.write` | st_vec | DELETE | ✅ Yes | <50ms | ✅ Active |
+| `hipp_events_missing_vectors()` | `st_hipp_events.read, st_vec.read` | st_hipp_events, st_vec | COUNT | ✅ Yes | <10ms | ✅ Active |
+| `hipp_events_reset_missing_embedding_status()` | `st_hipp_events.write` | st_hipp_events | UPDATE | ✅ Yes | <10ms | ✅ Active |
+| `episodes_query()` | `st_epi.read` | st_epi | SELECT | ✅ Yes | <20ms | ✅ Active |
+| `semantic_schema_query()` | `st_sem.read` | st_sem | SELECT | ✅ Yes | <20ms | ✅ Active |
+| `procedural_memory_query()` | `st_procedural.read` | st_procedural | SELECT | ✅ Yes | <20ms | ✅ Active |
+| `embeddings_by_event_ids()` | `st_vec.read` | st_vec | SELECT | ✅ Yes | <50ms | ✅ Active |
+| `learned_weights_query()` | `st_learned_weights.read` | st_learned_weights | SELECT | ✅ Yes | <10ms | ✅ Active |
+| `learned_weights_get()` | `st_learned_weights.read` | st_learned_weights | SELECT | ✅ Yes | <5ms | ✅ Active |
+| `learned_weights_upsert()` | `st_learned_weights.write` | st_learned_weights | UPSERT | ✅ Yes | <15ms | ✅ Active |
 <!-- AUTOGEN:SYSCALL_TABLE:END -->
 
-> **Source**: `k0/kernel/syscalls.py` (19 syscall methods, 2623 lines)
+> **Source**: `k0/kernel/syscalls.py` (45 async syscall methods + 3 sync accessors, 5400 lines)
 > **Capability Check**: `_require_cap()` method at line 2565
 > **Architecture**: Dennis & Van Horn (1966) capability-based security
 > **Audit**: All syscalls include structured logging with `pipeline_id`, `operation`, `latency_ms`
@@ -1485,7 +1898,7 @@ graph LR
 | Component | Type | Capabilities Granted | ADR | Notes |
 |-----------|------|----------------------|-----|-------|
 | P02 (Write) | Pipeline | `st_hipp_events.write, st_vec.write, st_pipeline_processed.write, st_outbox.write, st_kg_edges.read` | ADR-P02-001 | `st_embedding_queue.write` deprecated (inline embedding) |
-| P03 (Consolidation) | Pipeline | `st_hipp_events.read, st_epi.write, st_sem.write, st_procedural.write, st_social.write, st_prospective.write, st_kg_dom.write, st_kg_edges.write, st_vec.read, st_learning_queue.write, st_anchors.write, st_anchor_observations.write, st_consolidation_audit.write, st_outbox.write` | K021 (Planning) | P03 has broad read access to st_hipp_events, write to 8 memory layers |
+| P03 (Consolidation) | Pipeline | `st_hipp_events.read, st_epi.write, st_sem.write, st_procedural.write, st_social.write, st_prospective.write, st_kg_dom.write, st_kg_edges.write, st_vec.read, st_learning_queue.write, st_anchors.write, st_anchor_observations.write, st_observations.write, st_consolidation_audit.write, st_outbox.write, st_learned_weights.read, st_learned_weights.write` | K021 (Planning) | P03 has broad read access to st_hipp_events, write to 9 memory layers + observations + learned weights |
 | P06 (Learning) | Pipeline | `st_learning_queue.read, st_learning_queue.write, st_anchors.read, st_anchors.write, st_anchor_observations.write, st_learned_weights.write, st_golden_dataset_pairs.write, st_validation_results.write` | (Planning) | Active learning loop capabilities |
 | P08 (Embedding Mgmt) | Pipeline | `st_vec.read, st_vec.write, st_hipp_events.read, st_hipp_events.write, ultrabert.embed` | ADR-P08-001 | `faiss.read, faiss.write` removed (pgvector replaces) |
 | Kernel (Observe Port) | Kernel | `st_feedback_signals.write` | K020 | Persist feedback signals emitted via observe port |
@@ -1504,7 +1917,7 @@ graph LR
 4. **ADR**: Architecture Decision Record documenting the grant
 5. **Notes**: Deprecation, special conditions
 
-### All Unique Capabilities (27 Total)
+### All Unique Capabilities (29 Total)
 
 | Capability | Type | Status | Primary Consumer |
 |------------|------|--------|------------------|
@@ -1525,6 +1938,7 @@ graph LR
 | `st_social.write` | Storage | 🎯 Planned | P03 |
 | `st_prospective.write` | Storage | 🎯 Planned | P03 |
 | `st_kg_dom.write` | Storage | 🎯 Planned | P03 |
+| `st_kg_dom.read` | Storage | ✅ Active | P03, P05 |
 | `st_kg_edges.write` | Storage | 🎯 Planned | P03 |
 | `st_kg_edges.read` | Storage | ✅ Active | P02, P03 |
 | `st_learning_queue.read` | Storage | 🎯 Planned | P06 |
@@ -1532,13 +1946,21 @@ graph LR
 | `st_anchors.read` | Storage | 🎯 Planned | P06 |
 | `st_anchors.write` | Storage | 🎯 Planned | P03, P06 |
 | `st_anchor_observations.write` | Storage | 🎯 Planned | P03, P06 |
+| `st_observations.write` | Storage | ✅ Active | P03 |
+| `st_observations.read` | Storage | 🎯 Planned | P01 |
+| `st_epi.read` | Storage | ✅ Active | P03 |
+| `st_sem.read` | Storage | ✅ Active | P03 |
+| `st_procedural.read` | Storage | ✅ Active | P03 |
 | `st_consolidation_audit.write` | Storage | 🎯 Planned | P03 |
+| `st_learned_weights.read` | Storage | ✅ Active | P03, P06 |
+| `st_learned_weights.write` | Storage | ✅ Active | P03, P06 |
 | `st_embedding_queue.write` | Storage | ❌ Deprecated | - |
 | `working_memory.write` | Storage | 🎯 Planned | - |
 | `embeddings.read` | Storage | 🎯 Planned | - |
 | `ultrabert.embed` | API | ✅ Active | P08, M22, M25 |
-| `faiss.read` | Index | ⚠️ pgvector replaces | - |
-| `faiss.write` | Index | ⚠️ pgvector replaces | - |
+| `context.expand` | API | ✅ Active | P03 |
+| `faiss.read` | Index | ❌ Removed (ADR-K003) | - |
+| `faiss.write` | Index | ❌ Removed (ADR-K003) | - |
 | `st_hipp_store.write` | Storage | ❌ Deprecated | - |
 
 > **Principle**: Least-privilege (Saltzer & Schroeder 1975) - grant only what's needed
@@ -2181,6 +2603,8 @@ K{NNN}[.{sub}] - {Title}
 | k009.3 | Batch Optimization | ✅ Accepted | M13, M14 | 2025-11-16 | K0 Team | `docs/architecture/decisions-K0/modules/k009.3-batch-optimization.md` |
 | K010.1 | Atomic UoW Writer | ✅ Accepted | M16 | 2025-11-16 | K0 Team | `docs/architecture/decisions-K0/modules/k010.1-atomic-uow-writer.md` |
 | K011.1 | Outbox Emitter | ✅ Accepted | M17 | 2025-11-16 | K0 Team | `docs/architecture/decisions-K0/modules/k011.1-outbox-emitter.md` |
+| K023 | Entity Filtering Consolidation - Single Source of Truth | 📝 Draft | P03, consolidation/algorithms/entity_extractor, pipelines/p03/phases/r4_kg_consolidator | 2025-01-19 | K0 Architecture Team | `docs/architecture/decisions-K0/modules/k023-entity-filtering-consolidation.md` |
+| K023.1 | NER Quality Issues Catalog | ✅ Active | P03, UltraBERT NER post-processing | 2025-01-19 | K0 Architecture Team | `docs/architecture/decisions-K0/modules/k023.1-ner-quality-issues-catalog.md` |
 
 ### ADR Summary
 
@@ -2336,22 +2760,17 @@ K{NNN}[.{sub}] - {Title}
 
 | Key | Type | Default | Description | Used By | Required? |
 |-----|------|---------|-------------|---------|-----------|
-| `default_backend` | string | `sentence-transformers` | Embedding backend selection | Embedding Worker | Yes |
-| `backends.sentence-transformers.model` | string | `all-mpnet-base-v2` | HuggingFace model (768 dims) | Embedding Worker | Yes |
-| `backends.sentence-transformers.device` | string | `cpu` | Device (cpu/cuda) | Embedding Worker | Yes |
-| `backends.sentence-transformers.batch_size` | int | `32` | Batch size for efficiency | Embedding Worker | Yes |
-| `backends.sentence-transformers.normalize_embeddings` | bool | `true` | Normalize to unit vectors | Embedding Worker | No |
-| `backends.openai.model` | string | `text-embedding-3-small` | OpenAI model (1536 dims) | Embedding Worker | No |
-| `backends.openai.rate_limit_rpm` | int | `3000` | Rate limit requests/minute | Embedding Worker | No |
-| `backends.openai.rate_limit_tpm` | int | `1000000` | Rate limit tokens/minute | Embedding Worker | No |
-| `backends.openai.timeout_sec` | int | `30` | Request timeout in seconds | Embedding Worker | No |
-| `backends.openai.retry_max_attempts` | int | `3` | Max retry attempts on failure | Embedding Worker | No |
-| `backends.openai.retry_exponential_base` | int | `2` | Exponential backoff base | Embedding Worker | No |
-| `backends.ollama.url` | string | `http://localhost:11434` | Ollama server URL | Embedding Worker | No |
-| `backends.ollama.model` | string | `llama2` | Ollama model name | Embedding Worker | No |
-| `backends.ollama.timeout_sec` | int | `30` | Request timeout in seconds | Embedding Worker | No |
-| `backends.fake.dimension` | int | `384` | Fake embedding dimension (test) | Testing | No |
-| `backends.fake.model` | string | `fake-minilm-l6` | Fake model identifier (test) | Testing | No |
+| `version` | string | `2.0` | Embedding config version | Config | Yes |
+| `default_backend` | string | `ultrabert` | Embedding backend selection | Embedding | Yes |
+| `backends.ultrabert.model` | string | `ultrabert_v2.1.0` | UltraBERT model (768 dims) | Embedding | Yes |
+| `backends.ultrabert.dimension` | int | `768` | UltraBERT vector dimension | Embedding | Yes |
+| `backends.ultrabert.device` | string | `cpu` | Device (cpu/cuda) | Embedding | Yes |
+| `backends.ultrabert.batch_size` | int | `32` | Batch size for efficiency | Embedding | Yes |
+| `backends.ultrabert.normalize_embeddings` | bool | `true` | Normalize to unit vectors | Embedding | No |
+| `backends.fake.model` | string | `fake-768` | Fake model identifier (test) | Testing | No |
+| `backends.fake.dimension` | int | `768` | Fake embedding dimension (test) | Testing | No |
+| `backends.fake.description` | string | `Test-only fake embeddings` | Description | Testing | No |
+| `worker.enabled` | bool | `false` | Legacy worker disabled (P02 inline) | Embedding | Yes |
 | `worker.batch_size` | int | `10` | Outbox entries per run_once() | Embedding Worker | Yes |
 | `worker.poll_interval_sec` | float | `1.0` | Outbox poll interval | Embedding Worker | Yes |
 | `worker.max_retries` | int | `3` | Max retry attempts | Embedding Worker | Yes |
@@ -2687,27 +3106,27 @@ K{NNN}[.{sub}] - {Title}
 |------|-----------------|--------------|-------|
 | `kernel.yaml` | `0.0.0-dev` | 2025-12-31 | Development version |
 | `models.yaml` | `2.0.0` | 2025-12-31 | UltraBERT v2.0.3 integration |
+| `embeddings.yml` | `2.0` | 2026-03-01 | UltraBERT-only, removed legacy backends |
 | `feature_flags.yaml` | `1.0.0` | 2025-12-31 | ML tier flags stable |
 | `logging.yaml` | `1` | 2025-12-31 | Python logging dictConfig |
 
 ### 13.5.2 Contract Artifact Versions
 
 > **Source**: `k0/contracts/VERSION` v1.1.0 - Frozen contract artifacts with checksums
-> **Coverage**: 70 total artifacts across all categories
+> **Coverage**: 71 total artifacts across all categories
 
 | Category | Count | Description |
 |----------|-------|-------------|
 | Root-level | 2 | OpenAPI, AsyncAPI specs |
 | Modules | 22 | Module contract definitions |
-| Pipelines | 2 | Pipeline contract definitions |
+| Pipelines | 4 | Pipeline contract definitions |
 | Capabilities | 1 | Core capability schema |
 | Policy | 1 | PEP policy schema |
 | Schemas | 5 | Event payload schemas |
-| Table Schemas | 1 | P02 table definitions |
 | Taxonomies | 1 | Activity taxonomy |
 | JSON Schema | 16 | Core JSON schemas |
 | JSON Schema Examples | 19 | Validation test fixtures |
-| **TOTAL** | **70** | **All tracked with SHA256** |
+| **TOTAL** | **71** | **All tracked with SHA256** |
 
 **Root-Level API Specs:**
 
@@ -2732,23 +3151,25 @@ K{NNN}[.{sub}] - {Title}
 | `context.temporal_profile.v1` | v1 | `d2e58f18d0853e2b` |
 | `core.event_emitter.v1` | v1 | `c774d8c3c4478dde` |
 | `core.hipp_events_writer.v1` | v1 | `33636a470996f955` |
-| `embedding.backfill.v1` | v1 | `2ef8c99d1ab00fc0` |
-| `embedding.cleanup.v1` | v1 | `2bf327929d5a33b7` |
-| `embedding.extract_from_cache.v1` | v1 | `7d2b436a09e89d48` |
-| `embedding.faiss_indexer.v1` | v1 | `ff98c4f2584d3419` |
-| `embedding.recompute.v1` | v1 | `373715dc15692ea1` |
+| `embedding.backfill.v1` | v1 | `d5dedfe40d327cbb` |
+| `embedding.cleanup.v1` | v1 | `db8ed89d57402cc2` |
+| `embedding.extract_from_cache.v1` | v1 | `5e410432b2578fc1` |
+| `embedding.integrity_check.v1` | v1 | `18b4af7a02e6f025` |
+| `embedding.recompute.v1` | v1 | `6fcb73e25e8bb971` |
 | `hippocampus.pattern_separate.v1` | v1 | `b5079e49f7b61556` |
 | `hippocampus.semantic_project.v1` | v1 | `8149dbf1a289d648` |
 | `salience.score.v1` | v1 | `89c59c218d268825` |
 | `social.family_graph_resolve.v1` | v1 | `181840479b2c2b5f` |
 | `space.resolve_visibility.v1` | v1 | `dd62f9473aef657a` |
 
-**Pipeline Contracts (2):**
+**Pipeline Contracts (4):**
 
 | Pipeline | Version | SHA256 (first 16) |
 |----------|---------|-------------------|
-| `p02_write.v1` | v1 | `3d3ee3acb03ab7c5` |
-| `p08_embedding_management.v2` | v3 | `24cbcd38daa16d4b` |
+| `p02_write.v1` | v1 | `6c59721a87ab311d` |
+| `p02_write.v2` | v2 | `2d9ff1b989e27877` |
+| `_deprecated_p08_embedding_management.v2` | v2 | `7167d68d2df7e33a` |
+| `p08_embedding_management.v3` | v3 | `fa28f84b27f946fb` |
 
 ### 13.5.3 JSON Schema Artifacts (16 schemas + 19 examples)
 
@@ -2760,7 +3181,7 @@ K{NNN}[.{sub}] - {Title}
 | `crdt_merge_log.schema.json` | CRDT merge log | `74566aded4448748` |
 | `driver.handshake.request.json` | Driver handshake req | `0d0867ac14135470` |
 | `driver.handshake.response.json` | Driver handshake resp | `0034743d370e031e` |
-| `envelope.schema.json` | Event envelope | `31bd48f212b32929` |
+| `envelope.schema.json` | Event envelope | `7387c187ed0b0f55` |
 | `error.schema.json` | Error response | `674fbed68d52f417` |
 | `infra.snapshot.event.json` | Snapshot event | `78607e085f426268` |
 | `offset.cursor.schema.json` | Offset cursor | `d5c5e4fdd064ad07` |

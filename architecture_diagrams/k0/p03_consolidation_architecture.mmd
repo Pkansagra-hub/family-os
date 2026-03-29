@@ -45,7 +45,7 @@ graph TB
             R1_SELECTION["Event Selection"]:::logic
         end
         subgraph R2_PHASE["R2: Neocortical Integration (NREM2)"]
-            R2_DBSCAN["DBSCAN Clustering"]:::algorithm
+            R2_HDBSCAN["HDBSCAN Clustering"]:::algorithm
             R2_CLUSTER_QUALITY["Cluster Quality"]:::evaluation
             R2_PATTERN_EXTRACT["Pattern Extraction"]:::logic
         end
@@ -181,7 +181,7 @@ graph TB
             THOMPSON_HIERARCHY["3-level fallback hierarchy"]:::architecture
         end
 
-        subgraph ADAPTIVE_DBSCAN["Adaptive DBSCAN"]
+        subgraph ADAPTIVE_CLUSTERING["Adaptive Clustering"]
             ADAPTIVE_PARAMS["Learn eps and min_samples"]:::parameters
             ADAPTIVE_SILHOUETTE["Silhouette score optimization"]:::optimization
             ADAPTIVE_CLOSED_LOOP["Closed-loop via user corrections"]:::feedback
@@ -354,13 +354,13 @@ graph TB
         end
     end
     P02_EVENTS --> R0_TRIGGER_LOGIC
-    P08_VECTORS --> R2_DBSCAN
+    P08_VECTORS --> R2_HDBSCAN
     P08_VECTORS --> R4_ENTITY
     K1_FEEDBACK --> IMP_LEARNING
     K1_FEEDBACK --> WEIGHTS_LEARNING
     P06_RESOLUTIONS --> R0_TRIGGER_LOGIC
     R0_TRANSITION --> R1_IMPORTANCE
-    R1_SELECTION --> R2_DBSCAN
+    R1_SELECTION --> R2_HDBSCAN
     R2_PATTERN_EXTRACT --> R3_SIMHASH
     R3_PRUNE --> R4_ENTITY
     R4_RELATIONSHIPS --> R5_COUNTERFACTUAL
@@ -376,7 +376,7 @@ graph TB
     R7_RECONCILIATION --> ST_KG_DOM
     R7_RECONCILIATION --> ST_KG_EDGES
     R7_RECONCILIATION --> ST_VEC
-    M18 --> R2_DBSCAN
+    M18 --> R2_HDBSCAN
     M19 --> R3_SIMHASH
     M20 --> R3_DECAY
     M21 --> R4_RELATIONSHIPS
@@ -389,7 +389,7 @@ graph TB
     DECAY_FORMULA --> R3_DECAY
     CAUSAL_FORMULA --> R4_CAUSALITY
     THOMPSON_UPDATE --> REC_REINFORCE
-    ADAPTIVE_SILHOUETTE --> R2_DBSCAN
+    ADAPTIVE_SILHOUETTE --> R2_HDBSCAN
     ANCHOR_DRIFT --> P06_GAP_EVENT
     WEIGHTS_LEARNING --> SIM_LAYER_WEIGHTS
     ST_EPI --> P04_TRUTH
@@ -398,7 +398,7 @@ graph TB
     P06_GAP_EVENT --> P06_OUTPUT
     R7_COORD_P08 --> P08_TRIGGER
     CORE_HIPP --> R0_TRIGGER_LOGIC
-    CORE_VEC --> R2_DBSCAN
+    CORE_VEC --> R2_HDBSCAN
     LEARNING_WEIGHTS --> IMP_LEARNING
     LEARNING_QUEUE --> P06_GAP_EVENT
     SUPPORT_OUTBOX --> R7_WRITE_OUTBOX

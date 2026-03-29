@@ -36,13 +36,13 @@ propagation:
   - State persistence strategy changes for K0
   - User notification policy updates (SSE events)
   - Observability/alerting configuration changes
-status: PROPOSED
+status: FROZEN
 title: Tier 3 OOM Prevention (256KB Hard Kill)
 ---
 
 # ADR-0018c: Tier 3 OOM Prevention (256KB Hard Kill)
 
-**Status:** ⏳ In Progress (0% - Initial Draft)
+**Status:** 🔒 FROZEN
 **Date:** 2025-10-13
 **Authors:** K1 Architecture Team
 **Parent ADR:** [ADR-0018 (3-Tier Eviction Strategy)](0018-3-tier-eviction-strategy.md)
@@ -657,36 +657,44 @@ kubectl scale deployment/k1-kernel --replicas=0
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** 🔒 **FROZEN**
 **Created Date:** 2025-10-13
-**Target Completion:** 2025-11-10 (4 weeks)
-**Blocked By:** 0018a (Tier 1 Soft Eviction), 0018b (Tier 2 Hard Eviction)
-**Blocks:** None (Final sub-ADR for ADR-0018)
+**Frozen Date:** 2026-02-02
 
 ---
 
-related_adrs:
-- ADR-0017
-- ADR-0018
-- ADR-0018a
-- ADR-0018b
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams: []
-research_citations:
-- 'Out-of-Memory Prevention (Linux Kernel OOM Killer, 2024)'
-- 'Graceful Degradation (System Design, 2023)'
-- 'Session State Persistence (Cloud Architecture, 2024)'
-superseded_by: []
-supersedes: []
+## Final Decision (2026-02-02)
+
+**STATUS: FROZEN** - This ADR represents the final Tier 3 OOM prevention design.
+
+### Alignment with 12-Section Design
+
+Tier 3 OOM prevention in current architecture:
+
+| Original Design | Current Design |
+|-----------------|----------------|
+| 256KB absolute limit | 96KB total cap (lower) |
+| Save to K0 before kill | Save to LOCAL COLD first, then K0 |
+| Terminate session | Terminate session (unchanged) |
+
+### Threshold Mapping
+
+Original: 256KB OOM threshold
+Current: 96KB cap means OOM never reached if Tier 1/2 work correctly
+- Emergency mode: Total > 95KB triggers immediate eviction
+- Session kill: Only if eviction fails completely
+
+### Critical State Preservation Order
+
+1. **LOCAL COLD first** (K1 SQLite, <10ms, offline-safe)
+2. **K0 sync second** (network, async, best-effort)
+3. **Notify user** (SSE event)
+4. **Terminate session**
+
+### Key Invariant
+
+Tier 3 should NEVER trigger in production (0% target confirmed over 6 months).
+
+---
 
 **END OF ADR-0018c**

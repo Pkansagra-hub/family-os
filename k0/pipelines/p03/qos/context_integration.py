@@ -67,7 +67,7 @@ class P03QoSContext:
 
     Provides budget tracking and consumption for:
     - fanout_budget: Limits cross-event/cross-table queries during R1-R4
-    - top_k_budget: Limits similarity search results from FAISS
+    - top_k_budget: Limits similarity search results from pgvector
 
     K0 References:
     - k0/qos/context.py: QoSContext.consume_fanout(), QoSContext.consume_top_k()
@@ -188,7 +188,7 @@ class P03QoSContext:
         """
         Check if top_k budget allows similarity search.
 
-        Used during FAISS queries for pattern matching (R2-R4).
+        Used during pgvector queries for pattern matching (R2-R4).
         Does NOT consume budget - use consume_top_k() after check.
 
         Args:

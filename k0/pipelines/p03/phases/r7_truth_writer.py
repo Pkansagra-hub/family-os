@@ -101,7 +101,7 @@ class R7TruthWriter:
 
     # M5: Use per-layer router instead of inline SQL (toggle for rollback)
     # Default to False during rollout to avoid breaking existing tests
-    USE_M5_ROUTER = False
+    USE_M5_ROUTER = True
 
     def __init__(self) -> None:
         """Initialize R7 phase with M5 router (lazy-loaded)."""
@@ -448,6 +448,9 @@ class R7TruthWriter:
         Lazy-initializes the router with all layer writers.
         Cached for reuse across calls within same R7 instance.
 
+        GAP-001: Injects TextVectorCoordinator into all layer writers
+        for inline embedding generation during consolidation.
+
         Returns:
             Configured TransactionCoordinator
         """
@@ -455,31 +458,55 @@ class R7TruthWriter:
             return self._coordinator
 
         # Import layer writers (M5 modules)
-        from k0.modules.consolidation.truth_writer.layers.episodic import EpisodicLayerWriter
+        from k0.modules.consolidation.truth_writer.layers.episodic import (
+            EpisodicLayerWriter,
+        )
         from k0.modules.consolidation.truth_writer.layers.kg import KGLayerWriter
-        from k0.modules.consolidation.truth_writer.layers.procedural import ProceduralLayerWriter
-        from k0.modules.consolidation.truth_writer.layers.prospective import ProspectiveLayerWriter
-        from k0.modules.consolidation.truth_writer.layers.semantic import SemanticLayerWriter
-        from k0.modules.consolidation.truth_writer.layers.social import SocialLayerWriter
-        from k0.modules.consolidation.truth_writer.layers.vector import VectorLayerWriter
-        from k0.modules.consolidation.truth_writer.router import DecisionRouter, WriteMode
+        from k0.modules.consolidation.truth_writer.layers.mcts import MCTSLayerWriter
+        from k0.modules.consolidation.truth_writer.layers.procedural import (
+            ProceduralLayerWriter,
+        )
+        from k0.modules.consolidation.truth_writer.layers.prospective import (
+            ProspectiveLayerWriter,
+        )
+        from k0.modules.consolidation.truth_writer.layers.semantic import (
+            SemanticLayerWriter,
+        )
+        from k0.modules.consolidation.truth_writer.layers.social import (
+            SocialLayerWriter,
+        )
+        from k0.modules.consolidation.truth_writer.layers.vector import (
+            VectorLayerWriter,
+        )
+        from k0.modules.consolidation.truth_writer.router import (
+            DecisionRouter,
+            WriteMode,
+        )
+        from k0.modules.consolidation.truth_writer.text_vector_coordinator import (
+            get_coordinator,
+        )
         from k0.modules.consolidation.truth_writer.transaction import (
             TransactionConfig,
             TransactionCoordinator,
         )
 
+        # GAP-001: Get shared TextVectorCoordinator for inline embedding generation
+        tv_coordinator = get_coordinator()
+
         # Build router with all layer writers
-        # NOTE: KGLayerWriter handles both st_kg_dom and st_kg_edges internally
-        kg_writer = KGLayerWriter()
+        # GAP-001: Inject TextVectorCoordinator into writers that generate embeddings
+        kg_writer = KGLayerWriter(coordinator=tv_coordinator)
         self._router = DecisionRouter(
             layer_writers={
-                "st_epi": EpisodicLayerWriter(),
-                "st_sem": SemanticLayerWriter(),
-                "st_procedural": ProceduralLayerWriter(),
-                "st_social": SocialLayerWriter(),
-                "st_prospective": ProspectiveLayerWriter(),
-                "st_kg": kg_writer,  # Single writer for both st_kg_dom and st_kg_edges
-                "st_vec": VectorLayerWriter(),
+                "st_epi": EpisodicLayerWriter(coordinator=tv_coordinator),
+                "st_sem": SemanticLayerWriter(coordinator=tv_coordinator),
+                "st_procedural": ProceduralLayerWriter(coordinator=tv_coordinator),
+                "st_social": SocialLayerWriter(coordinator=tv_coordinator),
+                "st_prospective": ProspectiveLayerWriter(coordinator=tv_coordinator),
+                "st_mcts_decisions": MCTSLayerWriter(),
+                "st_kg_dom": kg_writer,  # KGLayerWriter handles both tables
+                "st_kg_edges": kg_writer,  # Same writer instance for edges
+                "st_vec": VectorLayerWriter(),  # No coordinator needed (already has vectors)
             },
             mode=WriteMode.ATOMIC,
         )
@@ -1040,6 +1067,19 @@ class R7TruthWriter:
             truth_match_id = getattr(event, "truth_match_id", None)
             truth_match_similarity = getattr(event, "truth_match_similarity", None)
 
+            # Get R3 dedup/novelty results
+            novelty_score = getattr(event, "novelty_score", None)
+            near_duplicates_json = getattr(event, "near_duplicates_json", None)
+            is_near_duplicate = getattr(event, "is_duplicate", None)
+            episode_cluster_id = getattr(event, "cluster_id", None)
+
+            # Get additional reconciliation details
+            best_match_id = getattr(event, "best_match_id", None)
+            best_match_layer = getattr(event, "best_match_layer", None)
+            similarity_score = getattr(event, "similarity_score", None)
+            confidence = getattr(event, "confidence", None)
+            reconciliation_reason = getattr(event, "reconciliation_reason", None)
+
             await uow.connection.execute(
                 """
                 UPDATE st_hipp_events
@@ -1048,8 +1088,17 @@ class R7TruthWriter:
                     consolidated_at = $3,
                     reconciliation_decision = $4,
                     truth_match_id = $5,
-                    truth_match_similarity = $6
-                WHERE event_id = $7
+                    truth_match_similarity = $6,
+                    novelty_score = $7,
+                    near_duplicates_json = $8,
+                    is_near_duplicate = $9,
+                    episode_cluster_id = $10,
+                    best_match_id = $11,
+                    best_match_layer = $12,
+                    similarity_score = $13,
+                    confidence = $14,
+                    reconciliation_reason = $15
+                WHERE event_id = $16
             """,
                 status,
                 cycle_id,
@@ -1057,6 +1106,15 @@ class R7TruthWriter:
                 reconciliation_decision,
                 truth_match_id,
                 truth_match_similarity,
+                novelty_score,
+                near_duplicates_json,
+                is_near_duplicate,
+                episode_cluster_id,
+                best_match_id,
+                best_match_layer,
+                similarity_score,
+                confidence,
+                reconciliation_reason,
                 event.event_id,
             )
 

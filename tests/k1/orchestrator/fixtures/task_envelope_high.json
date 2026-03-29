@@ -1,0 +1,19 @@
+{
+  "intent": "Plan a complex multi-step project with dependencies",
+  "trace_id": "trace-67890-high",
+  "caller_id": "user-xyz",
+  "envelope_id": "env-67890",
+  "context": {
+    "project_name": "Q4 Marketing Campaign",
+    "deadline": "2024-12-31",
+    "stakeholders": ["marketing", "design", "engineering"]
+  },
+  "tier": "HIGH",
+  "capabilities": [],
+  "params": {},
+  "constraints": {
+    "max_duration_days": 90,
+    "budget_usd": 50000
+  },
+  "timeout_ms": 120000
+}

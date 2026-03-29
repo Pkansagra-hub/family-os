@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/consumed/agent_llm_call.v1.json",
+  "title": "agent.llm_call.v1",
+  "description": "Consumed from Fabric when an agent makes an LLM call during capability execution. Used by ExecutionMonitor for substep tracking.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.fabric.agent.llm_call.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "fabric"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["agent_id", "model_id", "step_id"],
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "description": "Agent instance identifier making the LLM call."
+        },
+        "model_id": {
+          "type": "string",
+          "description": "LLM model identifier used."
+        },
+        "step_id": {
+          "type": "string",
+          "description": "DAG step identifier the agent is executing."
+        },
+        "tokens_used": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of tokens consumed (if reported by provider)."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -89,7 +89,11 @@ class ProactiveAgent(AgentBase):
         self.trigger_ticks = 0
         self.pattern_ticks = 0
         self.anomaly_ticks = 0
+        self.gap_ticks = 0
         self.reconnect_attempts = 0
+
+        # Gap resolution agents spawned (for tracking)
+        self.active_gap_agents: Dict[str, Any] = {}
 
         logger.info(
             "proactive_agent_initialized",
@@ -354,6 +358,8 @@ class ProactiveAgent(AgentBase):
                     await self._handle_pattern_tick(data)
                 elif event_type == "prospective.anomaly.alert":
                     await self._handle_anomaly_tick(data)
+                elif event_type == "knowledge.gap.detected":
+                    await self._handle_knowledge_gap(data)
                 else:
                     logger.warning(
                         "unknown_sse_event_type",
@@ -638,6 +644,144 @@ class ProactiveAgent(AgentBase):
         # Update SessionState with anomaly alert
         await self._update_session_state_with_anomaly(tick_data)
 
+    async def _handle_knowledge_gap(self, gap_data: Dict[str, Any]):
+        """
+        Handle knowledge.gap.detected event.
+
+        Spawns a GapResolutionAgent to ask the user about the detected gap
+        and persist the learned information.
+
+        Knowledge gap payload:
+          {
+            "gap_id": "gap_sam_unknown",
+            "gap_type": "entity_unknown",
+            "entity_name": "Sam",
+            "context": "User said 'Sam needs to pick up groceries'",
+            "confidence": 0.85,
+            "suggested_questions": ["Who is Sam?", "Is Sam a family member?"]
+          }
+
+        Args:
+            gap_data: Knowledge gap payload from SSE
+        """
+        logger.info(
+            "knowledge_gap_received",
+            gap_data=gap_data,
+            trace_id=self.trace_id,
+        )
+
+        self.gap_ticks += 1
+
+        gap_id = gap_data.get("gap_id", "unknown")
+        entity_name = gap_data.get("entity_name", "unknown")
+        gap_type = gap_data.get("gap_type", "entity_unknown")
+
+        logger.info(
+            "spawning_gap_resolution_agent",
+            gap_id=gap_id,
+            entity_name=entity_name,
+            gap_type=gap_type,
+            trace_id=self.trace_id,
+        )
+
+        try:
+            # Import GapResolutionAgent
+            # Generate unique agent ID for this gap resolution
+            import uuid
+
+            from l3_execution.agents.gap_resolution_agent import GapResolutionAgent
+
+            agent_id = f"gap_agent_{uuid.uuid4().hex[:8]}"
+
+            # Spawn GapResolutionAgent
+            gap_agent = GapResolutionAgent(
+                agent_id=agent_id,
+                session_id=self.session_id,
+                groq_client=self.groq_client,
+                gap_data=gap_data,
+                mailbox=None,  # Will get mailbox from AgentFabric if available
+                trace_id=self.trace_id,
+            )
+
+            # Track active gap agent
+            self.active_gap_agents[gap_id] = gap_agent
+
+            # Transition through lifecycle
+            await gap_agent.transition_to(AgentState.WARMING)
+            await gap_agent.transition_to(AgentState.ACTIVE)
+
+            logger.info(
+                "gap_resolution_agent_spawned",
+                agent_id=agent_id,
+                gap_id=gap_id,
+                entity_name=entity_name,
+                question=gap_agent.question_asked,
+                trace_id=self.trace_id,
+            )
+
+        except Exception as e:
+            logger.error(
+                "gap_resolution_agent_spawn_error",
+                error=str(e),
+                gap_id=gap_id,
+                trace_id=self.trace_id,
+            )
+
+    async def handle_gap_response(self, gap_id: str, user_response: str):
+        """
+        Route user response to the appropriate GapResolutionAgent.
+
+        Called when user answers a gap question (via mailbox or direct).
+
+        Args:
+            gap_id: Gap ID to match with active agent
+            user_response: User's answer to the gap question
+        """
+        logger.info(
+            "routing_gap_response",
+            gap_id=gap_id,
+            response_preview=user_response[:50] if user_response else "",
+            trace_id=self.trace_id,
+        )
+
+        gap_agent = self.active_gap_agents.get(gap_id)
+        if not gap_agent:
+            logger.warning(
+                "gap_agent_not_found",
+                gap_id=gap_id,
+                active_gaps=list(self.active_gap_agents.keys()),
+                trace_id=self.trace_id,
+            )
+            return
+
+        # Send response to gap agent
+        await gap_agent.process_message(
+            {
+                "type": "gap_response",
+                "gap_id": gap_id,
+                "user_response": user_response,
+            }
+        )
+
+        # Wait for resolution to complete
+        resolved = await gap_agent.wait_for_response(timeout=30.0)
+
+        if resolved:
+            logger.info(
+                "gap_resolved",
+                gap_id=gap_id,
+                learned_facts=gap_agent.learned_facts,
+                trace_id=self.trace_id,
+            )
+            # Cleanup
+            del self.active_gap_agents[gap_id]
+        else:
+            logger.warning(
+                "gap_resolution_timeout",
+                gap_id=gap_id,
+                trace_id=self.trace_id,
+            )
+
     # ==============================
     # SessionState & Notification Helpers (Placeholder for POC)
     # ==============================
@@ -845,6 +989,8 @@ class ProactiveAgent(AgentBase):
             "trigger_ticks": self.trigger_ticks,
             "pattern_ticks": self.pattern_ticks,
             "anomaly_ticks": self.anomaly_ticks,
+            "gap_ticks": self.gap_ticks,
+            "active_gap_agents": len(self.active_gap_agents),
             "reconnect_attempts": self.reconnect_attempts,
         }
 

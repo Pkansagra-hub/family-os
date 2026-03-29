@@ -1,0 +1,659 @@
+# ---------------------------------------------------------------------------
+# Planner Wiring Contract
+# Follows Orchestrator pattern: k1/contracts/modules/orchestrator/wiring.contract.yaml
+# Reference: planner.mmd (authoritative), Schema Whiteboard Section 10
+# ---------------------------------------------------------------------------
+$schema: "k1://schemas/wiring/wiring.contract.schema.yaml"
+
+metadata:
+  module_id: "planner"
+  owner: "platform-team"
+  band: "GREEN"
+
+contract_version: 1
+impl_version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# Code ownership boundaries
+# ---------------------------------------------------------------------------
+code:
+  roots:
+    - "k1/planner"
+  required_files:
+    # --- Package root ---
+    - path: "k1/planner/__init__.py"
+    - path: "k1/planner/planner_agent.py"
+    - path: "k1/planner/pipeline_controller.py"
+    - path: "k1/planner/plan_fsm.py"
+    - path: "k1/planner/types.py"
+    - path: "k1/planner/events.py"
+    - path: "k1/planner/config.py"
+
+    # --- Ports (7 Protocol interfaces) ---
+    - path: "k1/planner/ports/__init__.py"
+    - path: "k1/planner/ports/mailbox_port.py"
+    - path: "k1/planner/ports/llm_port.py"
+    - path: "k1/planner/ports/fabric_retrieval_port.py"
+    - path: "k1/planner/ports/state_read_port.py"
+    - path: "k1/planner/ports/bridge_port.py"
+    - path: "k1/planner/ports/delta_emit_port.py"
+    - path: "k1/planner/ports/event_port.py"
+
+    # --- Stage services (4-stage pipeline) ---
+    - path: "k1/planner/stages/__init__.py"
+    - path: "k1/planner/stages/sketch_service.py"
+    - path: "k1/planner/stages/expand_service.py"
+    - path: "k1/planner/stages/validate_service.py"
+    - path: "k1/planner/stages/commit_service.py"
+
+    # --- Internal services ---
+    - path: "k1/planner/services/__init__.py"
+    - path: "k1/planner/services/tool_call_router.py"
+    - path: "k1/planner/services/hil_coordinator.py"
+
+    # --- Adapters (7 production port implementations) ---
+    - path: "k1/planner/adapters/__init__.py"
+    - path: "k1/planner/adapters/mailbox_adapter.py"
+    - path: "k1/planner/adapters/llm_gateway_adapter.py"
+    - path: "k1/planner/adapters/fabric_retrieval_adapter.py"
+    - path: "k1/planner/adapters/session_state_adapter.py"
+    - path: "k1/planner/adapters/bridge_adapter.py"
+    - path: "k1/planner/adapters/delta_bus_adapter.py"
+    - path: "k1/planner/adapters/event_bus_adapter.py"
+
+    # --- Factory, metrics, tracing ---
+    - path: "k1/planner/factory.py"
+    - path: "k1/planner/metrics.py"
+    - path: "k1/planner/tracing.py"
+
+  forbidden_patterns: ["*.pyc", "__pycache__"]
+
+# ---------------------------------------------------------------------------
+# Import wiring: what Planner imports from other modules
+# ---------------------------------------------------------------------------
+wiring:
+  imports:
+    required_modules: ["kernel", "bus", "fabric", "sessionstate", "model_hub", "bridge"]
+    required_symbols:
+      - from: "fabric"
+        import: "RetrievalResult"
+        used_in_files: ["k1/planner/stages/sketch_service.py", "k1/planner/stages/expand_service.py"]
+      - from: "fabric"
+        import: "ScoredCapability"
+        used_in_files: ["k1/planner/services/tool_call_router.py"]
+        note: "discover_capabilities() returns RetrievalResult containing ScoredCapability[]. Was incorrectly named CapabilityDescriptor -- Fabric has no such class."
+      - from: "model_hub"
+        import: "HubRequest"
+        used_in_files: ["k1/planner/adapters/llm_gateway_adapter.py"]
+        note: "Model Hub canonical request type. See k1/model_hub/model_hub.mmd IModelHubPort."
+      - from: "model_hub"
+        import: "HubResponse"
+        used_in_files: ["k1/planner/adapters/llm_gateway_adapter.py"]
+        note: "Model Hub canonical response type. Includes ResponseMetadata (usage, cost, latency)."
+      - from: "bus"
+        import: "EventBus"
+        used_in_files: ["k1/planner/adapters/event_bus_adapter.py"]
+      - from: "sessionstate"
+        import: "SessionStateManager"
+        used_in_files: ["k1/planner/adapters/session_state_adapter.py"]
+    forbidden:
+      - "direct_db_access"
+      - "external_http_without_adapter"
+      - "sessionstate_writer"           # PLAN-01
+      - "fabric_execute"                # PLAN-06: discovery only, never execute
+      - "direct_tool_execution"         # PLAN-02, PLAN-06
+
+# ---------------------------------------------------------------------------
+# Port interfaces (hexagonal architecture) -- 7 ports
+# ---------------------------------------------------------------------------
+capabilities:
+  provides:
+    # --- Planner request interface (Orchestrator calls this) ---
+    - name: "planner:request:v1"
+      description: "Plan request interface consumed by Orchestrator via IPlannerPort."
+      interface:
+        methods:
+          - name: "request_plan"
+            description: "Fire-and-forget. PlanAck returned within 500ms. CommittedPlan delivered via plan.ready.v1 event."
+            parameters:
+              - name: "request"
+                type: "PlanRequest"
+                schema: "k1/contracts/schemas/orchestrator/plan_request.v1.json"
+            returns: "PlanAck"
+            timeout_ms: 500
+          - name: "cancel_plan"
+            description: "Best-effort cancellation. Sets FSM to CANCELLED, emits plan.cancelled.v1."
+            parameters:
+              - name: "request_id"
+                type: "string"
+                format: "uuid"
+          - name: "micro_replan"
+            description: "SYNCHRONOUS mid-DAG replan. Returns revised CommittedPlan or None on timeout/failure."
+            parameters:
+              - name: "request"
+                type: "MicroReplanRequest"
+                schema: "k1/contracts/schemas/orchestrator/micro_replan_request.v1.json"
+            returns: "Optional[CommittedPlan]"
+            timeout_ms: 10000
+      version: "1.0.0"
+      qos: "INTERACTIVE"
+
+    # --- Health/readiness probes ---
+    - name: "planner:health:v1"
+      interface:
+        methods:
+          - name: "health"
+            returns: "HealthStatus"
+          - name: "ready"
+            returns: "bool"
+      version: "1.0.0"
+      qos: "BACKGROUND"
+      timeout_ms: 5000
+
+  consumes:
+    # --- Fabric Retrieval (4 discovery tools -- PLAN-02, PLAN-06) ---
+    - name: "fabric:retrieval:v1"
+      description: "Read-only discovery. Never execute. PLAN-02 + PLAN-06."
+      interface:
+        methods:
+          - name: "discover_capabilities"
+            description: "Top-K semantic search over Fabric registry. <50ms latency."
+            parameters:
+              - name: "query"
+                type: "string"
+              - name: "top_k"
+                type: "int"
+                default: 5
+            returns: "List[CapabilityDescriptor]"
+          - name: "find_relevant_prompts"
+            description: "Top-K semantic search over prompt templates."
+            parameters:
+              - name: "query"
+                type: "string"
+              - name: "top_k"
+                type: "int"
+                default: 3
+            returns: "List[RetrievalResult]"
+      version: "1.0.0"
+
+    # --- SessionState read-only (PLAN-01: NO writes) ---
+    - name: "session:read:v1"
+      description: "Read-only HOT tier access. Sections: beliefs_active, persona, control, temporal. Lock-free, multi-reader."
+      interface:
+        methods:
+          - name: "query_planning_context"
+            description: "Read state snapshot for planning context. PLAN-01."
+            parameters:
+              - name: "sections"
+                type: "List[str]"
+                default: ["beliefs_active", "persona", "control", "temporal"]
+            returns: "StateSnapshot"
+      version: "1.0.0"
+
+    # --- Model Hub LLM (3 stage calls + 2 HIL prompt calls) ---
+    - name: "model_hub:llm:v1"
+      description: "LLM calls via Model Hub. ~3.5K tokens per plan. Budget objects on every call (PLAN-11)."
+      interface:
+        methods:
+          - name: "complete"
+            description: "LLM completion with budget enforcement. PLAN-11."
+            parameters:
+              - name: "prompt"
+                type: "string"
+              - name: "budget"
+                type: "LLMBudget"
+                note: "PLAN-11: budget MUST be present on every call."
+              - name: "call_type"
+                type: "string"
+                enum: ["CHAT", "TOOL_CALL", "STRUCTURED"]
+            returns: "LLMResponse"
+      version: "1.0.0"
+
+    # --- Event bus pub/sub ---
+    - name: "bus:publish:v1"
+      interface:
+        methods:
+          - name: "publish_event"
+          - name: "subscribe"
+          - name: "unsubscribe"
+      version: "1.0.0"
+
+    # --- Delta bus (stage progress to Concierge) ---
+    - name: "delta-bus:publish:v1"
+      interface:
+        methods:
+          - name: "emit"
+            parameters:
+              - name: "delta"
+                type: "object"
+      version: "1.0.0"
+
+    # --- Bridge (K0 recall + WAL persist) ---
+    - name: "bridge:query:v1"
+      description: "K0 long-term memory recall for planning context."
+      interface:
+        methods:
+          - name: "recall_for_planning"
+            description: "Recall relevant memories from K0 hippocampus."
+            parameters:
+              - name: "query"
+                type: "string"
+            returns: "RecallResponse"
+      version: "1.0.0"
+
+    - name: "bridge:write:v1"
+      description: "WAL persist for committed plans. Fire-and-forget."
+      interface:
+        methods:
+          - name: "persist_plan"
+            description: "Write CommittedPlan to K0 WAL. Idempotent (PLAN-03 allows retry)."
+            parameters:
+              - name: "plan"
+                type: "CommittedPlan"
+      version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# Events emitted (3 plan lifecycle + 1 delta)
+# ---------------------------------------------------------------------------
+events:
+  emits:
+    # Plan delivery -- Orchestrator subscribes (WB Section 10.1)
+    - topic: "k1.planner.plan.ready.v1"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/plan_ready.v1.json"
+      description: "CommittedPlan delivered. request_id echoed for correlation (WB 10.10)."
+      payload_type: "CommittedPlan"
+      consumers: ["orchestrator", "learning-loop"]
+
+    # Plan failure -- Orchestrator + Learning Loop subscribe
+    - topic: "k1.planner.plan.failed.v1"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/plan_failed.v1.json"
+      description: "Planning failed. Includes request_id, reason enum, and error details."
+      payload_fields:
+        - name: "request_id"
+          type: "string"
+          format: "uuid"
+          note: "Echo contract -- WB 10.10"
+        - name: "reason"
+          type: "string"
+          enum: ["INTERNAL_ERROR", "CAPABILITY_NOT_FOUND", "CONSTRAINT_UNSATISFIABLE", "TIMEOUT", "HIL_REJECTED"]
+      consumers: ["orchestrator", "learning-loop"]
+
+    # Plan cancellation
+    - topic: "k1.planner.plan.cancelled.v1"
+      schema: "k1/contracts/schemas/orchestrator/events/consumed/plan_cancelled.v1.json"
+      description: "Planning cancelled (external cancel_plan() or HIL rejection)."
+      consumers: ["orchestrator", "learning-loop"]
+
+    # Stage deltas (progress updates, NOT SessionState writes)
+    - topic: "k1.planner.delta.v1"
+      description: "Per-stage progress delta. Fire-and-forget to Delta Bus."
+      consumers: ["concierge"]
+
+    # Micro-replan telemetry (synchronous path has no event delivery)
+    - topic: "k1.planner.micro_replan.ready.v1"
+      description: "Partial CommittedPlan emitted for telemetry. TELEMETRY-ONLY -- Orchestrator receives CommittedPlan synchronously via micro_replan() return."
+      payload_type: "CommittedPlan (partial -- replacement steps only)"
+      consumers: ["learning-loop"]
+
+    # HIL outbound (clarification + approval requests to Concierge)
+    - topic: "k1.hil.clarification.v1"
+      description: "Stage 1 ambiguous intent. Routed via Concierge OUTPUT_CHANNEL to user."
+      consumers: ["concierge"]
+
+    - topic: "k1.hil.approval_request.v1"
+      description: "Stage 3 high-impact plan requires user approval."
+      consumers: ["concierge"]
+
+  # ---------------------------------------------------------------------------
+  # Events consumed (subscribed)
+  # ---------------------------------------------------------------------------
+  subscribes:
+    # Orchestrator sends plan request via event bus
+    - topic: "k1.planner.plan.request.v1"
+      description: "PlanRequest from Orchestrator dispatch_high(). Dequeued from bounded mailbox (max_depth=5)."
+      handler: "planner.planner_agent:on_plan_request"
+
+    # Orchestrator sends plan cancellation
+    - topic: "k1.planner.plan.cancel.v1"
+      description: "Best-effort cancel. Sets FSM to CANCELLED if still in-flight."
+      handler: "planner.planner_agent:on_plan_cancel"
+
+    # HIL responses routed back from Concierge via Event Bus
+    - topic: "k1.hil.clarification_response.v1"
+      description: "User response to Stage 1 clarification prompt. Max 2 rounds (PLAN-10)."
+      handler: "planner.services.hil_coordinator:on_clarification_response"
+
+    - topic: "k1.hil.approval_response.v1"
+      description: "User approve/modify/reject response to Stage 3 approval request. PLAN-10."
+      handler: "planner.services.hil_coordinator:on_approval_response"
+
+# ---------------------------------------------------------------------------
+# Port specifications (7 hexagonal boundaries -- Section 15)
+# Protocol classes defined in k1/planner/ports/
+# ---------------------------------------------------------------------------
+port_specs:
+  - name: "IMailboxPort"
+    direction: "inbound"
+    file: "k1/planner/ports/mailbox_port.py"
+    adapter_prod: "MailboxAdapter"
+    adapter_test: "TestMailboxAdapter"
+    methods: ["enqueue", "send_cancel", "micro_replan"]
+    note: "Consumer-driven contract (IPlannerMailbox on Orchestrator side)"
+
+  - name: "ILLMPort"
+    direction: "outbound"
+    file: "k1/planner/ports/llm_port.py"
+    adapter_prod: "LLMGatewayAdapter"
+    adapter_test: "TestLLMAdapter"
+    methods: ["execute"]
+    note: "Single LLM inference call via Model Hub"
+
+  - name: "IFabricRetrievalPort"
+    direction: "outbound"
+    file: "k1/planner/ports/fabric_retrieval_port.py"
+    adapter_prod: "FabricRetrievalAdapter"
+    adapter_test: "TestFabricRetrievalAdapter"
+    methods: ["discover_capabilities", "find_relevant_prompts"]
+    note: "PLAN-06: discovery only, never execute"
+
+  - name: "IStateReadPort"
+    direction: "outbound"
+    file: "k1/planner/ports/state_read_port.py"
+    adapter_prod: "SessionStateReadAdapter"
+    adapter_test: "TestStateReadAdapter"
+    methods: ["read_sections"]
+    note: "PLAN-01: no write methods"
+
+  - name: "IBridgePort"
+    direction: "outbound"
+    file: "k1/planner/ports/bridge_port.py"
+    adapter_prod: "BridgeAdapter"
+    adapter_test: "TestBridgeAdapter"
+    methods: ["recall", "persist_plan"]
+    note: "K0 recall (read) + WAL persist (fire-and-forget)"
+
+  - name: "IDeltaEmitPort"
+    direction: "outbound"
+    file: "k1/planner/ports/delta_emit_port.py"
+    adapter_prod: "DeltaBusAdapter"
+    adapter_test: "TestDeltaAdapter"
+    methods: ["emit"]
+    note: "Synchronous fire-and-forget, never raises"
+
+  - name: "IEventPort"
+    direction: "inbound_outbound"
+    file: "k1/planner/ports/event_port.py"
+    adapter_prod: "EventBusAdapter"
+    adapter_test: "TestEventAdapter"
+    methods: ["publish", "subscribe", "unsubscribe"]
+    note: "Bidirectional event bus pub/sub"
+
+# ---------------------------------------------------------------------------
+# Protocol contracts (cross-module guarantees)
+# Reference: WB Section 10
+# ---------------------------------------------------------------------------
+protocols:
+  # --- request_id echo contract (WB 10.10) ---
+  - name: "request_id_correlation"
+    description: >
+      Orchestrator generates request_id (uuid4) in dispatch_high().
+      Planner MUST echo request_id in ALL response events
+      (plan.ready.v1, plan.failed.v1, plan.cancelled.v1).
+      Orchestrator correlates via pending_plans[request_id].
+    source: "WB Section 10.10"
+    rules:
+      - "Orchestrator generates request_id, sets on PlanRequest"
+      - "Planner echoes request_id in CommittedPlan.request_id"
+      - "Planner echoes request_id in plan.failed.v1 payload"
+      - "Planner echoes request_id in plan.cancelled.v1 payload"
+      - "plan_id is generated by Planner (distinct from request_id)"
+      - "Orchestrator uses plan_id for dedup (executed_plans set) and WAL tracking"
+
+  # --- PlanAck latency contract ---
+  - name: "plan_ack_latency"
+    description: >
+      request_plan() MUST return PlanAck within 500ms.
+      PlanAck.status: ACCEPTED (enqueued) or REJECTED (mailbox full, CB open).
+      Actual CommittedPlan arrives later via plan.ready.v1 event.
+    timeout_ms: 500
+    source: "planner.mmd performance budget"
+
+  # --- request_plan() vs micro_replan() contract (WB 10.6) ---
+  - name: "dual_request_protocol"
+    description: "Two distinct invocation paths with different semantics."
+    source: "WB Section 10.6"
+    request_plan:
+      delivery: "fire-and-forget (async, event-driven)"
+      response: "CommittedPlan via plan.ready.v1 event bus"
+      correlation: "PendingPlanContext via request_id"
+      context: "Full ContextSnapshot (tier, session_id, family_member_id, state snapshot)"
+      max_calls: "unlimited per session"
+      timeout_ms: 45000
+      on_failure: "AggregatedResult FAILED"
+    micro_replan:
+      delivery: "synchronous (blocking, direct return)"
+      response: "Optional[CommittedPlan] returned directly"
+      correlation: "direct await (no parking)"
+      context: "completed_results + discoveries + remaining_steps"
+      max_calls: "1 per DAG execution (ORCH-13)"
+      timeout_ms: 10000
+      on_failure: "continue with original plan (graceful fallback)"
+
+  # --- CommittedPlan production spec (WB 10.3) ---
+  - name: "committed_plan_spec"
+    description: "CommittedPlan field contract between Planner (producer) and Orchestrator (consumer)."
+    source: "WB Section 10.3"
+    required_fields:
+      - name: "plan_id"
+        type: "str"
+        format: "uuid"
+        note: "Planner-generated, unique per plan"
+      - name: "request_id"
+        type: "str"
+        format: "uuid"
+        note: "Echo of PlanRequest.request_id -- correlation contract"
+      - name: "intent"
+        type: "str"
+        note: "Echoed from PlanRequest"
+      - name: "steps"
+        type: "List[PlanStep]"
+        note: "14-field PlanStep (WB 10.4)"
+      - name: "dependencies"
+        type: "Dict[str, List[str]]"
+        note: "step_id -> [predecessor_step_ids]. DAGExecutor builds waves from this."
+      - name: "trace_id"
+        type: "str"
+        format: "uuid"
+        note: "Forwarded from PlanRequest"
+    optional_fields:
+      - name: "estimated_duration_ms"
+        type: "Optional[int]"
+        note: "Planner estimate. Orchestrator may use for budget tracking."
+      - name: "created_at"
+        type: "float"
+        default: 0.0
+        note: "Epoch seconds (float), NOT ISO date-time string. Matches types.py."
+    v1_removed:
+      - name: "token_budget_max"
+        reason: "No upstream data source in V1"
+      - name: "cost_budget_max_usd"
+        reason: "No upstream data source in V1"
+
+  # --- PlanStep 14-field mapping (SOURCE OF TRUTH: k1/orchestrator/types.py) ---
+  - name: "plan_step_spec"
+    description: "PlanStep field mapping. Planner produces, Orchestrator consumes. 14 frozen dataclass fields."
+    source: "k1/orchestrator/types.py PlanStep"
+    fields:
+      # -- Fabric-aligned fields (1-6) --
+      - name: "id"
+        type: "str"
+        note: "Required. Planner-generated (e.g. 's1', 's2'). Orchestrator uses as DAG node key."
+      - name: "capability"
+        type: "str"
+        note: "Required. Must resolve to registered Fabric capability (PLAN-08)."
+      - name: "params"
+        type: "Dict[str, Any]"
+        default: "{}"
+        note: "Forwarded as CapabilityRequest.parameters."
+      - name: "deps"
+        type: "List[str]"
+        default: "[]"
+        note: "Step IDs this depends on. DAGExecutor builds waves from these."
+      - name: "prompt_template"
+        type: "Optional[str]"
+        note: "Template name reference (resolved by Fabric ContextBuilder)."
+      - name: "tools_granted"
+        type: "Optional[List[str]]"
+        note: "FAB-07: Scoped tool list for agent steps."
+      # -- Orchestrator extension fields (7-14) --
+      - name: "output_schema"
+        type: "Optional[Dict[str, Any]]"
+        note: "JSON Schema. OutputSchemaGuard validates against this."
+      - name: "condition"
+        type: "Optional[ConditionExpr]"
+        note: "Structured expression (type, operands, path, literal). NOT raw JSONPath string."
+      - name: "is_optional"
+        type: "bool"
+        default: false
+        note: "If true, failure does not fail the DAG."
+      - name: "has_side_effects"
+        type: "bool"
+        default: false
+        note: "From Fabric CapabilityDescriptor. Drives saga compensation."
+      - name: "compensation"
+        type: "Optional[str]"
+        note: "Capability to call on rollback if has_side_effects=true."
+      - name: "timeout_ms"
+        type: "Optional[int]"
+        note: "Per-step timeout. Seeded from Fabric estimated_duration_ms."
+      - name: "required_context"
+        type: "Optional[List[str]]"
+        note: "SessionState sections needed before execution."
+      - name: "safety_band_min"
+        type: "Optional[str]"
+        note: "Minimum safety band for this step."
+    v1_removed:
+      - name: "token_budget"
+        reason: "No upstream data source in V1 (PLAN-07 DEFERRED)"
+    v2_planned:
+      - name: "tool_name"
+        type: "Optional[str]"
+        note: "MCP tool name if StepOp.TOOL. V2 addition."
+      - name: "agent_name"
+        type: "Optional[str]"
+        note: "Agent name if StepOp.Model. V2 addition."
+      - name: "description"
+        type: "str"
+        note: "Human-readable step description. V2 addition."
+      - name: "retry_count"
+        type: "int"
+        default: 0
+        note: "Planner suggestion. Orchestrator caps at max 2 (ORCH-06). V2 addition."
+      - name: "priority"
+        type: "int"
+        default: 0
+        note: "Internal ordering hint. V2 addition."
+      - name: "metadata"
+        type: "Optional[Dict[str, Any]]"
+        note: "Arbitrary metadata passed through. V2 addition."
+      - name: "human_label"
+        type: "Optional[str]"
+        note: "User-facing step description for delta/progress updates. V2 addition."
+
+# ---------------------------------------------------------------------------
+# State: Planner NEVER writes SessionState (PLAN-01)
+# Reads HOT tier for planning context only
+# ---------------------------------------------------------------------------
+state:
+  reads:
+    - path: "session_data.beliefs_active"
+      access: "SHARED"
+      note: "Lock-free multi-reader (PLAN-01)"
+    - path: "session_data.persona"
+      access: "SHARED"
+    - path: "session_data.control"
+      access: "SHARED"
+    - path: "session_data.temporal"
+      access: "SHARED"
+  writes: []
+
+# ---------------------------------------------------------------------------
+# Performance budget (from planner.mmd)
+# ---------------------------------------------------------------------------
+performance:
+  full_plan:
+    p50_ms: 12000
+    p99_ms: 30000
+    max_ms: 45000
+  micro_replan:
+    p50_ms: 8000
+    p99_ms: 15000
+    max_ms: 10000
+    note: "Synchronous. Returns None on timeout (graceful fallback)."
+  plan_ack:
+    max_ms: 500
+  llm_budget:
+    sketch_tokens: 2000
+    expand_tokens: 1000
+    validate_tokens: 500
+    commit_tokens: 0
+    total_approx: 3500
+  concurrency:
+    model: "single-plan-at-a-time (V1)"
+    mailbox_max_depth: 5
+    note: "Reject with REJECTED PlanAck if mailbox full."
+
+# ---------------------------------------------------------------------------
+# Circuit breaker (owned by Concierge, protects Planner mailbox)
+# Reference: WB Section 10.7
+# ---------------------------------------------------------------------------
+circuit_breaker:
+  name: "CB_PLANNER"
+  owner: "concierge"
+  timeout_ms: 45000
+  failure_threshold: 3
+  recovery_timeout_ms: 45000
+  states:
+    closed: "Normal operation"
+    open: "All request_plan() return REJECTED. Skip planning, degrade HIGH -> MEDIUM."
+    half_open: "Next request_plan() success -> CLOSED, failure -> OPEN."
+  failure_signals:
+    - "plan.failed.v1 event"
+    - "45s timeout expiry (PendingPlanContext reaper)"
+
+# ---------------------------------------------------------------------------
+# Runtime assertions for contract compliance
+# ---------------------------------------------------------------------------
+runtime_assertions:
+  on_load:
+    - condition: "All 7 port Protocols defined"
+      test: "from k1.planner import IMailboxPort, ILLMPort, IFabricRetrievalPort, IStateReadPort, IBridgePort, IDeltaEmitPort, IEventPort"
+    - condition: "Core services available"
+      test: "from k1.planner import PlannerAgent, PipelineController, PlanStateMachine"
+    - condition: "Shared types importable"
+      test: "from k1.planner import CommittedPlan, PlanAck, PlanStep"
+  invariants:
+    - condition: "PLAN-01: Planner never writes SessionState"
+      test: "assert 'IStateWritePort' not in dir(k1.planner)"
+    - condition: "PLAN-06: No Fabric execution port"
+      test: "assert 'IFabricExecutionPort' not in dir(k1.planner)"
+    - condition: "PLAN-03: CommitService has no LLM dependency"
+      test: "assert not hasattr(k1.planner.stages.commit_service.CommitService, '_llm_port')"
+
+# ---------------------------------------------------------------------------
+# Validation rules (12 PLAN invariants)
+# ---------------------------------------------------------------------------
+validation:
+  rules:
+    - "plan_01_no_sessionstate_write"
+    - "plan_02_read_only_discovery"
+    - "plan_03_commit_deterministic"
+    - "plan_04_45s_pipeline_timeout"
+    - "plan_05_max_6_discovery_calls"
+    - "plan_06_no_capability_execution"
+    - "plan_07_token_budget_per_step"    # V1 DEFERRED
+    - "plan_08_capability_name_validates"
+    - "plan_09_dag_no_cycles"
+    - "plan_10_max_2_hil_rounds"
+    - "plan_11_llm_budget_required"
+    - "plan_12_micro_replan_remaining_only"

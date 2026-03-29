@@ -1,0 +1,78 @@
+{
+  "workflow_id": "workflow-user-login-alert",
+  "name": "User Login Alert",
+  "source_plan_id": "plan-alert-002",
+  "version": "1.0.0",
+  "trigger": {
+    "type": "EVENT",
+    "schedule": null,
+    "timezone": "UTC",
+    "event_topic": "k1.user.login.success",
+    "enabled": true
+  },
+  "steps": [
+    {
+      "id": "check_risk",
+      "capability": "tool.security.risk_assess",
+      "params": {
+        "user_id": "$context.user_id",
+        "ip_address": "$context.ip_address"
+      },
+      "deps": [],
+      "prompt_template": null,
+      "tools_granted": null,
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+          "actions": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "condition": null,
+      "is_optional": false,
+      "has_side_effects": false,
+      "compensation": null,
+      "timeout_ms": 10000,
+      "required_context": null,
+      "safety_band_min": null
+    },
+    {
+      "id": "send_alert",
+      "capability": "tool.notification.send",
+      "params": {
+        "recipient": "security@company.com",
+        "subject": "High-risk login detected",
+        "message": "User $context.user_id logged in from high-risk location",
+        "priority": "$step_1.result.risk_level"
+      },
+      "deps": ["check_risk"],
+      "prompt_template": null,
+      "tools_granted": null,
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "message_id": {"type": "string"},
+          "delivered": {"type": "boolean"}
+        }
+      },
+      "condition": {
+        "type": "EQ",
+        "path": "step_1.result.risk_level",
+        "literal": "high"
+      },
+      "is_optional": false,
+      "has_side_effects": false,
+      "compensation": null,
+      "timeout_ms": 5000,
+      "required_context": null,
+      "safety_band_min": null
+    }
+  ],
+  "dependencies": {
+    "send_alert": ["check_risk"]
+  },
+  "active": true,
+  "created_at": 1640995200.0,
+  "updated_at": 1640995200.0,
+  "created_by": "security_team"
+}

@@ -1,0 +1,100 @@
+$schema: "k1://schemas/module/module.contract.schema.yaml"
+
+metadata:
+  module_id: "fabric"
+  owner: "platform-team"
+  band: "GREEN"
+  description: "Capability Fabric module for K1. Central resolution, retrieval, and execution engine. Stateless per-request, NO LLM, NEVER writes SessionState."
+  tags: ["fabric", "capabilities", "resolution", "retrieval", "execution", "registry"]
+
+contract_version: 1
+impl_version: "1.0.0"
+
+exports:
+  # --- Facade (entry point) ---
+  - symbol: "CapabilityFabric"
+    from_file: "k1/fabric/__init__.py"
+
+  # --- Role 1: Retrieval ---
+  - symbol: "FabricRetrieval"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "SemanticIndex"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "SoftRanker"
+    from_file: "k1/fabric/__init__.py"
+
+  # --- Subsystem 1: Contract System ---
+  - symbol: "ContractValidator"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "ToolContractParser"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "AgentContractParser"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "PromptContractParser"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "WorkflowContractParser"
+    from_file: "k1/fabric/__init__.py"
+
+  # --- Subsystem 2: Registry ---
+  - symbol: "CapabilityRegistry"
+    from_file: "k1/fabric/__init__.py"
+
+  # --- Subsystem 4: Resolution ---
+  - symbol: "ProviderResolver"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "ProviderSelector"
+    from_file: "k1/fabric/__init__.py"
+
+  # --- Subsystem 5: Policy ---
+  - symbol: "PolicyEngine"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "PolicyGuard"
+    from_file: "k1/fabric/__init__.py"
+
+  # --- Subsystem 7: Context ---
+  - symbol: "ContextBuilder"
+    from_file: "k1/fabric/__init__.py"
+
+  # --- Role 3: Agent Factory ---
+  - symbol: "AgentFactory"
+    from_file: "k1/fabric/__init__.py"
+
+  # --- Subsystem 8: Output Validation ---
+  - symbol: "OutputValidationPipeline"
+    from_file: "k1/fabric/__init__.py"
+
+  # --- Subsystem 9: Health ---
+  - symbol: "HealthChecker"
+    from_file: "k1/fabric/__init__.py"
+
+  # --- Types ---
+  - symbol: "CapabilityRequest"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "CapabilityResult"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "CapabilityContract"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "AgentContract"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "PromptContract"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "WorkflowContract"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "RetrievalResult"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "ExecutionContext"
+    from_file: "k1/fabric/__init__.py"
+  - symbol: "ProviderConfig"
+    from_file: "k1/fabric/__init__.py"
+
+entrypoints:
+  init: "fabric:initialize"
+  shutdown: "fabric:cleanup"
+
+dependencies:
+  - module: "kernel"
+    version: "1.0.0"
+  - module: "bus"
+    version: "1.0.0"
+  - module: "sessionstate"
+    version: "1.0.0"

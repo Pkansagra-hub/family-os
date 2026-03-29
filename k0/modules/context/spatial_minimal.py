@@ -51,6 +51,7 @@ class SpatialMinimal:
     geohash_6: Optional[str]
     location_name: Optional[str]
     location_type: Optional[str]
+    spatial_familiarity: Optional[str]
     spatial_minimized_at_utc: str
 
 
@@ -80,8 +81,64 @@ _metrics = {
     "location_name_missing": 0,
     "location_type_present": 0,
     "location_type_missing": 0,
+    "familiarity_computed": 0,
+    "familiarity_missing_place": 0,
+    "familiarity_missing_tenant": 0,
+    "familiarity_lookup_failed": 0,
+    "familiarity_first_visit": 0,
+    "familiarity_occasional": 0,
+    "familiarity_regular": 0,
+    "familiarity_daily": 0,
     "band_unknown": 0,
 }
+
+
+def _map_spatial_familiarity(previous_visits: int) -> str:
+    """Map prior visit count to familiarity band.
+
+    Count is computed before writing the current event.
+    """
+    if previous_visits <= 0:
+        _metrics["familiarity_first_visit"] += 1
+        return "FIRST_VISIT"
+    if previous_visits < 5:
+        _metrics["familiarity_occasional"] += 1
+        return "OCCASIONAL"
+    if previous_visits < 20:
+        _metrics["familiarity_regular"] += 1
+        return "REGULAR"
+    _metrics["familiarity_daily"] += 1
+    return "DAILY"
+
+
+async def _compute_spatial_familiarity(envelope: Dict[str, Any], context: Any) -> Optional[str]:
+    """Compute familiarity from historical st_hipp_events count for (tenant_id, place_id)."""
+    body = envelope.get("body", {})
+    place_id = body.get("place_id") if isinstance(body, dict) else None
+    if not place_id:
+        _metrics["familiarity_missing_place"] += 1
+        return None
+
+    tenant_id = envelope.get("tenant_id")
+    if not tenant_id:
+        _metrics["familiarity_missing_tenant"] += 1
+        return None
+
+    if not hasattr(context, "syscalls") or not hasattr(context.syscalls, "query_count"):
+        _metrics["familiarity_lookup_failed"] += 1
+        return None
+
+    try:
+        previous_visits = await context.syscalls.query_count(
+            table="st_hipp_events",
+            where="tenant_id = $1 AND place_id = $2 AND place_id IS NOT NULL",
+            params=[tenant_id, place_id],
+        )
+        _metrics["familiarity_computed"] += 1
+        return _map_spatial_familiarity(int(previous_visits or 0))
+    except Exception:
+        _metrics["familiarity_lookup_failed"] += 1
+        return None
 
 
 # ===========================
@@ -128,7 +185,9 @@ def truncate_geohash(geohash: Optional[str], band: Optional[str]) -> Optional[st
     return truncated
 
 
-def minimize_spatial_fields(envelope: Dict[str, Any]) -> SpatialMinimal:
+def minimize_spatial_fields(
+    envelope: Dict[str, Any], spatial_familiarity: Optional[str] = None
+) -> SpatialMinimal:
     """
     Copy and minimize spatial fields from envelope (COPY MODE).
 
@@ -154,8 +213,11 @@ def minimize_spatial_fields(envelope: Dict[str, Any]) -> SpatialMinimal:
     # Extract band for truncation logic
     band = policy_stamp.get("band")
 
-    # Copy location_geohash from envelope (already computed by Gate Stage 3)
+    # Copy location_geohash from envelope (already computed by Gate Stage 3).
+    # Keep body fallback for legacy/test envelopes.
     location_geohash = envelope.get("location_geohash")
+    if location_geohash is None and isinstance(body, dict):
+        location_geohash = body.get("location_geohash")
 
     # Apply final band-based truncation (double-check Gate's work)
     geohash_6 = truncate_geohash(location_geohash, band)
@@ -180,6 +242,7 @@ def minimize_spatial_fields(envelope: Dict[str, Any]) -> SpatialMinimal:
         geohash_6=geohash_6,
         location_name=location_name,
         location_type=location_type,
+        spatial_familiarity=spatial_familiarity,
         spatial_minimized_at_utc=spatial_minimized_at_utc,
     )
 
@@ -242,8 +305,11 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         },
     )
 
+    # Compute familiarity from historical place visits when place_id is available.
+    spatial_familiarity = await _compute_spatial_familiarity(envelope, context)
+
     # Execute minimization logic
-    spatial = minimize_spatial_fields(envelope)
+    spatial = minimize_spatial_fields(envelope, spatial_familiarity=spatial_familiarity)
 
     # Log completion
     context.logger.debug(
@@ -262,6 +328,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         "geohash_6": spatial.geohash_6,
         "location_name": spatial.location_name,
         "location_type": spatial.location_type,
+        "spatial_familiarity": spatial.spatial_familiarity,
         "spatial_minimized_at_utc": spatial.spatial_minimized_at_utc,
         # NEW: Nested enrichments structure (Phase 4)
         "enrichments": {
@@ -270,6 +337,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
                 "geohash_6": spatial.geohash_6,
                 "location_name": spatial.location_name,
                 "location_type": spatial.location_type,
+                "spatial_familiarity": spatial.spatial_familiarity,
                 "spatial_minimized_at_utc": spatial.spatial_minimized_at_utc,
                 "module_version": "v1",
                 "execution_time_ms": 0.0,  # Set by PipelineRunner

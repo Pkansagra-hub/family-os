@@ -22,17 +22,29 @@ TIMESTAMP CONVENTION (LOCKED):
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, List
+from typing import TYPE_CHECKING, Any, List, Optional
 
+from k0.modules.consolidation.algorithms.observation_context import ObservationContext
+from k0.modules.consolidation.truth_writer.observation_recorder import (
+    ObservationRecorder,
+    get_observation_recorder,
+)
 from k0.modules.consolidation.truth_writer.result import LayerWriteResult
+from k0.modules.consolidation.truth_writer.text_vector_coordinator import (
+    TextVectorCoordinator,
+    get_coordinator,
+)
 from k0.pipelines.p03.phases.r7_truth_writer import OptimisticLockError
 from k0.pipelines.p03.staged_writes import LAYER_ST_SOCIAL, StagedWrite, WriteOperation
 
 if TYPE_CHECKING:
     from k0.uow.unit_of_work import UnitOfWork
+
+logger = logging.getLogger(__name__)
 
 
 def _now_ms() -> int:
@@ -87,6 +99,12 @@ class RelationshipWriteData:
     sentiment_avg: float = 0.0
     interaction_types_json: str = "[]"
 
+    # GAP-001: Inline vector and text preservation fields
+    source_texts_json: Optional[str] = None  # JSON array of source event texts
+    embedding_text: Optional[str] = None  # Generated text for UltraBERT embedding
+    embedding_vector: Optional[bytes] = None  # 768-dim float32 as BYTEA (3072 bytes)
+    embedding_model: Optional[str] = None  # Model version (e.g., "ultrabert-v2.1.0")
+
 
 class SocialLayerWriter:
     """
@@ -120,6 +138,52 @@ class SocialLayerWriter:
     # Sentiment smoothing factors (new value weight)
     SENTIMENT_NEW_WEIGHT = 0.1
     SENTIMENT_OLD_WEIGHT = 0.9
+
+    def __init__(
+        self,
+        coordinator: Optional[TextVectorCoordinator] = None,
+        observation_recorder: Optional[ObservationRecorder] = None,
+    ) -> None:
+        """
+        Initialize SocialLayerWriter.
+
+        Args:
+            coordinator: Optional TextVectorCoordinator for GAP-001 embedding generation.
+                        If not provided, uses singleton via get_coordinator().
+            observation_recorder: ObservationRecorder for holistic context (uses singleton if None)
+        """
+        self._coordinator = coordinator
+        self._observation_recorder = observation_recorder
+
+    def _get_coordinator(self) -> TextVectorCoordinator:
+        """Get coordinator, initializing singleton if needed."""
+        if self._coordinator is None:
+            self._coordinator = get_coordinator()
+        return self._coordinator
+
+    def _get_recorder(self) -> ObservationRecorder:
+        """Get observation recorder, using singleton if not injected."""
+        if self._observation_recorder is None:
+            self._observation_recorder = get_observation_recorder()
+        return self._observation_recorder
+
+    def _extract_context(self, write: StagedWrite) -> Optional[ObservationContext]:
+        """
+        Extract observation context from StagedWrite.
+
+        Returns the attached observation_context if present, otherwise
+        builds a minimal context from record_data.
+        """
+        if write.observation_context is not None:
+            return write.observation_context
+
+        data = write.record_data
+        observed_at = data.get("created_at") or data.get("last_interaction_at") or _now_ms()
+
+        return ObservationContext(
+            observed_at=observed_at,
+            source_event_id=write.source_event_ids[0] if write.source_event_ids else None,
+        )
 
     @property
     def layer(self) -> str:
@@ -196,6 +260,8 @@ class SocialLayerWriter:
         - interaction_modalities_json, typical_activities_json
         - emotions_json, sentiment_trajectory_json
 
+        GAP-001: Fetches source texts and generates embeddings.
+
         Args:
             uow: UnitOfWork providing database connection
             write: StagedWrite with record data
@@ -230,6 +296,38 @@ class SocialLayerWriter:
         if isinstance(source_episodes, list):
             source_episodes = json.dumps(source_episodes)
 
+        # GAP-001: Fetch source texts and generate embedding
+        # Social layer uses source_episodes_json - need to resolve episodes to events
+        source_texts_json: Optional[str] = None
+        embedding_text: Optional[str] = None
+        embedding_vector: Optional[bytes] = None
+        embedding_model: Optional[str] = None
+
+        try:
+            episode_ids: List[str] = []
+            if source_episodes and source_episodes != "[]":
+                parsed_episodes = json.loads(source_episodes)
+                if isinstance(parsed_episodes, list):
+                    episode_ids = [str(eid) for eid in parsed_episodes]
+
+            if episode_ids:
+                coordinator = self._get_coordinator()
+                tv_result = await coordinator.process_for_episodes(
+                    layer=self.LAYER,
+                    record_data=data,
+                    source_episode_ids=episode_ids,
+                    conn=uow.connection,
+                )
+                source_texts_json = tv_result.source_texts_json
+                embedding_text = tv_result.embedding_text
+                embedding_vector = tv_result.embedding_vector
+                embedding_model = tv_result.embedding_model
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).warning(f"Social embedding failed: {e}")
+            # Non-fatal: continue with INSERT
+
         await uow.connection.execute(
             """
             INSERT INTO st_social (
@@ -254,7 +352,12 @@ class SocialLayerWriter:
                 sentiment_trajectory_json,
                 emotions_json,
                 dominant_emotion,
-                canonical_entity_id
+                canonical_entity_id,
+                -- GAP-001: Inline vector and text preservation columns
+                source_texts_json,
+                embedding_text,
+                embedding_vector,
+                embedding_model
             ) VALUES (
                 $1, $2, $3,
                 $4, $5,
@@ -266,7 +369,8 @@ class SocialLayerWriter:
                 $20,
                 $21, $22, $23, $24,
                 1,
-                $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35
+                $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35,
+                $36, $37, $38, $39
             )
             ON CONFLICT (relationship_id) DO NOTHING
             """,
@@ -306,7 +410,31 @@ class SocialLayerWriter:
             emotions,
             data.get("dominant_emotion"),
             data.get("canonical_entity_id"),
+            # GAP-001: Inline vector fields
+            source_texts_json,
+            embedding_text,
+            embedding_vector,
+            embedding_model,
         )
+
+        # Issue 7.5: Record observation with FIRST_SEEN type
+        context = self._extract_context(write)
+        if context is not None:
+            context.observation_type = "FIRST_SEEN"
+            try:
+                await self._get_recorder().record(
+                    uow=uow,
+                    layer=self.LAYER,
+                    record_id=write.record_id,
+                    context=context,
+                    tenant_id=data["tenant_id"],
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to record observation for %s: %s",
+                    write.record_id,
+                    e,
+                )
 
     async def _update(self, uow: UnitOfWork, write: StagedWrite) -> None:
         """
@@ -430,6 +558,25 @@ class SocialLayerWriter:
         rows_affected = _parse_rows_affected(result)
         if rows_affected == 0 and write.expected_version is not None:
             raise OptimisticLockError(f"Version conflict for st_social:{write.record_id}")
+
+        # Issue 7.5: Record observation with REINFORCEMENT type
+        context = self._extract_context(write)
+        if context is not None:
+            context.observation_type = "REINFORCEMENT"
+            try:
+                await self._get_recorder().record(
+                    uow=uow,
+                    layer=self.LAYER,
+                    record_id=write.record_id,
+                    context=context,
+                    tenant_id=data.get("tenant_id", "unknown"),
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to record reinforcement observation for %s: %s",
+                    write.record_id,
+                    e,
+                )
 
     async def _extend(self, uow: UnitOfWork, write: StagedWrite) -> None:
         """

@@ -19,8 +19,10 @@ from .minimal_gate import (
     MinimalGate,
 )
 from .schema_registry import SchemaRecord, SchemaRegistry
+from .topic_body_validator import BodyViolation, TopicBodyValidator, TopicValidationResult
 
 __all__ = [
+    "BodyViolation",
     "CANONICALIZATION_ERROR",
     "DEVICE_NOT_PROVISIONED",
     "ENVELOPE_REPLAY_DETECTED",
@@ -37,4 +39,6 @@ __all__ = [
     "SchemaRegistry",
     "SIGNATURE_INVALID",
     "SIGNATURE_MISSING",
+    "TopicBodyValidator",
+    "TopicValidationResult",
 ]

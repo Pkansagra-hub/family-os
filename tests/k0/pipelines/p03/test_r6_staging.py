@@ -52,6 +52,7 @@ class MockCycleContext:
     tenant_id: str = TEST_TENANT
     space_id: str = TEST_SPACE
     cycle_start_ts: int = 1704067200000
+    triggered_at: int = 1704067200000  # Required by _extract_inputs
 
 
 @dataclass

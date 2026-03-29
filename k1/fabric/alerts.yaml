@@ -1,0 +1,223 @@
+# ==============================================================================
+# Fabric Alert Rules
+# ==============================================================================
+#
+# REFERENCE: docs/plans/k1/fabric-implementation-plan.md - Epic 7.4.1
+# RUNBOOK: docs/runbooks/fabric.md
+#
+# This file defines Prometheus alerting rules for Fabric SLO violations.
+# Each alert maps to a section in the runbook for investigation and remediation.
+#
+# ==============================================================================
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "k1://fabric/alerts.yaml"
+title: "Fabric Alerting Rules"
+description: "Prometheus alert rules for Fabric SLO violations"
+
+metadata:
+  module: fabric
+  owner: k1-kernel
+  created: "2026-02-09"
+  version: "1.0.0"
+  runbook: "docs/runbooks/fabric.md"
+
+# ==============================================================================
+# ALERT DEFINITIONS
+# ==============================================================================
+
+groups:
+  - name: fabric.latency
+    interval: 30s
+    rules:
+      # --------------------------------------------------------------------------
+      # FabricHighLatency
+      # --------------------------------------------------------------------------
+      # Execution latency P95 > 200ms sustained 5 minutes
+      # Severity: warning
+      # Runbook Section: 2.1
+      - alert: FabricHighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(fabric_execution_duration_seconds_bucket[5m])) by (le)
+          ) > 0.200
+        for: 5m
+        labels:
+          severity: warning
+          component: fabric
+          tier: latency
+        annotations:
+          summary: "Fabric execution latency P95 above 200ms"
+          description: |
+            Fabric execution latency P95 exceeds the 200ms threshold.
+            Current P95: {{ $value | humanizeDuration }}
+            Target: 200ms
+            This indicates increased overhead in resolve/context/execute phases.
+          runbook_url: "docs/runbooks/fabric.md#21-fabrichighlatency"
+          dashboard: "fabric-overview"
+
+  - name: fabric.circuit_breaker
+    interval: 30s
+    rules:
+      # --------------------------------------------------------------------------
+      # FabricCircuitBreakerOpen
+      # --------------------------------------------------------------------------
+      # Any circuit breaker OPEN for > 2 minutes
+      # Severity: critical
+      # Runbook Section: 2.2
+      - alert: FabricCircuitBreakerOpen
+        expr: |
+          max(fabric_circuit_breaker_state{state="OPEN"}) == 1
+        for: 2m
+        labels:
+          severity: critical
+          component: fabric
+          tier: circuit_breaker
+        annotations:
+          summary: "Fabric circuit breaker OPEN > 2 minutes"
+          description: |
+            One or more providers have an OPEN circuit breaker for >2 minutes.
+            Requests to those providers are being rejected.
+            Open breakers: {{ with query "sum(fabric_circuit_breaker_state{state=\"OPEN\"})" }}{{ . | first | value }}{{ end }}
+          runbook_url: "docs/runbooks/fabric.md#22-fabriccircuitbreakeropen"
+          dashboard: "fabric-circuit-breakers"
+
+  - name: fabric.retrieval
+    interval: 30s
+    rules:
+      # --------------------------------------------------------------------------
+      # FabricRetrievalSlow
+      # --------------------------------------------------------------------------
+      # Retrieval latency P95 > 100ms sustained 5 minutes
+      # Severity: warning
+      # Runbook Section: 2.3
+      - alert: FabricRetrievalSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(fabric_retrieval_duration_seconds_bucket[5m])) by (le)
+          ) > 0.100
+        for: 5m
+        labels:
+          severity: warning
+          component: fabric
+          tier: retrieval
+        annotations:
+          summary: "Fabric retrieval latency P95 above 100ms"
+          description: |
+            Fabric retrieval latency P95 exceeds the 100ms threshold.
+            Current P95: {{ $value | humanizeDuration }}
+            Target: 100ms
+            This may indicate embedding or ranking degradation.
+          runbook_url: "docs/runbooks/fabric.md#23-fabricretrievalslow"
+          dashboard: "fabric-retrieval"
+
+  - name: fabric.agent_pool
+    interval: 30s
+    rules:
+      # --------------------------------------------------------------------------
+      # FabricAgentPoolExhausted
+      # --------------------------------------------------------------------------
+      # Agent pool size is zero for any contract
+      # Severity: warning
+      # Runbook Section: 2.4
+      - alert: FabricAgentPoolExhausted
+        expr: |
+          min(fabric_agent_pool_size) == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: fabric
+          tier: agent_pool
+        annotations:
+          summary: "Fabric agent pool exhausted for at least one contract"
+          description: |
+            One or more agent pools are at size 0 for >5 minutes.
+            This can increase agent spawn latency and impact high-tier requests.
+          runbook_url: "docs/runbooks/fabric.md#24-fabricagentpoolexhausted"
+          dashboard: "fabric-agents"
+
+  - name: fabric.registry
+    interval: 30s
+    rules:
+      # --------------------------------------------------------------------------
+      # FabricRegistryEmpty
+      # --------------------------------------------------------------------------
+      # Registry size is zero for any capability type
+      # Severity: critical
+      # Runbook Section: 2.5
+      - alert: FabricRegistryEmpty
+        expr: |
+          min(fabric_registry_size) == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: fabric
+          tier: registry
+        annotations:
+          summary: "Fabric registry empty for at least one capability type"
+          description: |
+            At least one capability type has zero registered entries.
+            This may indicate contract load failure or registry corruption.
+          runbook_url: "docs/runbooks/fabric.md#25-fabricregistryempty"
+          dashboard: "fabric-registry"
+
+# ==============================================================================
+# RECORDING RULES
+# ==============================================================================
+
+recording_rules:
+  - name: fabric.aggregations
+    interval: 30s
+    rules:
+      - record: fabric:execution_p95_seconds
+        expr: histogram_quantile(0.95, rate(fabric_execution_duration_seconds_bucket[5m]))
+
+      - record: fabric:retrieval_p95_seconds
+        expr: histogram_quantile(0.95, rate(fabric_retrieval_duration_seconds_bucket[5m]))
+
+      - record: fabric:circuit_breaker_open_count
+        expr: sum(fabric_circuit_breaker_state{state="OPEN"})
+
+      - record: fabric:registry_min_size
+        expr: min(fabric_registry_size)
+
+      - record: fabric:agent_pool_min_size
+        expr: min(fabric_agent_pool_size)
+
+# ==============================================================================
+# INHIBIT RULES
+# ==============================================================================
+
+inhibit_rules:
+  # If circuit breakers are open, suppress high latency to avoid alert storms
+  - source_match:
+      alertname: FabricCircuitBreakerOpen
+    target_match:
+      alertname: FabricHighLatency
+    equal:
+      - component
+
+# ==============================================================================
+# SILENCE TEMPLATES
+# ==============================================================================
+
+silence_templates:
+  - name: fabric-maintenance
+    description: "Silence all Fabric alerts during maintenance"
+    matchers:
+      - name: component
+        value: fabric
+        isRegex: false
+    duration: "2h"
+    comment: "Planned maintenance window"
+
+  - name: fabric-latency-tuning
+    description: "Silence Fabric latency alerts during performance tuning"
+    matchers:
+      - name: alertname
+        value: "Fabric(HighLatency|RetrievalSlow)"
+        isRegex: true
+    duration: "30m"
+    comment: "Performance tuning in progress"

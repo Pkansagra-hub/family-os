@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/dag_completed.v1.json",
+  "title": "dag.completed.v1",
+  "description": "Emitted when DAG execution finishes (any terminal status).",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.dag.completed.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["dag_id", "plan_id", "status", "total_steps", "completed", "failed", "duration_ms"],
+      "properties": {
+        "dag_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "DAG execution identifier."
+        },
+        "plan_id": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "CommittedPlan.plan_id. Null for MEDIUM-tier direct dispatch."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["COMPLETED", "FAILED", "PARTIAL_SUCCESS", "INTERRUPTED", "DEGRADED"],
+          "description": "Terminal DAG status."
+        },
+        "total_steps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total steps in the DAG."
+        },
+        "completed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of steps that completed successfully."
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of steps that failed."
+        },
+        "cancelled": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of steps that were cancelled."
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of steps that were skipped."
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total DAG execution duration in milliseconds."
+        },
+        "compensation_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of compensation actions executed."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

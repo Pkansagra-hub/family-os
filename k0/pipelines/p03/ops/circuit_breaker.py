@@ -331,15 +331,6 @@ BUS_DISPATCHER_CONFIG = P03CircuitBreakerConfig(
     half_open_max_requests=1,
 )
 
-# FAISS vector index circuit breaker config (more sensitive)
-FAISS_INDEX_CONFIG = P03CircuitBreakerConfig(
-    failure_threshold=3,  # More sensitive
-    reset_timeout_seconds=30.0,  # Faster recovery
-    success_threshold=2,
-    half_open_max_requests=1,
-)
-
-
 def create_p03_circuit_breakers(
     metrics: Optional[MetricsExporter] = None,
 ) -> P03CircuitBreakerRegistry:
@@ -348,7 +339,6 @@ def create_p03_circuit_breakers(
     Creates registry with the following circuits:
     - p08_embedding: P08 embedding pipeline coordination
     - bus_dispatcher: Internal event bus
-    - faiss_index: FAISS vector index
 
     Args:
         metrics: Optional metrics exporter.
@@ -363,9 +353,6 @@ def create_p03_circuit_breakers(
 
     # Internal event bus
     registry.register("bus_dispatcher", BUS_DISPATCHER_CONFIG)
-
-    # FAISS vector index
-    registry.register("faiss_index", FAISS_INDEX_CONFIG)
 
     return registry
 

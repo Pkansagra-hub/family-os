@@ -1,0 +1,23 @@
+{
+  "timestamp": "20260217T203526Z",
+  "scenario_count": 0,
+  "results": [],
+  "aggregate": {
+    "scenario_count": 0,
+    "naive_success_rate": 0.0,
+    "smart_success_rate": 0.0,
+    "naive_wins": 0,
+    "smart_wins": 0,
+    "ties": 0,
+    "avg_context_savings_pct": 0.0,
+    "avg_token_savings_pct": 0.0,
+    "naive_avg_latency_ms": 0.0,
+    "smart_avg_latency_ms": 0.0,
+    "total_compactions": 0,
+    "total_findings": 0,
+    "total_sub_agents": 0,
+    "max_nesting_depth": 0,
+    "overall_winner": "undetermined",
+    "summary": ""
+  }
+}

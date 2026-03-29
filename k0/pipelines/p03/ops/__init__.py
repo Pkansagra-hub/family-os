@@ -21,7 +21,7 @@ Modules:
     circuit_breaker: Circuit breaker state machine (6.2.5)
     p08_circuit: P08 embedding circuit breaker (6.2.6)
     bus_circuit: Bus dispatcher circuit breaker (6.2.7)
-    faiss_circuit: FAISS index circuit breaker (6.2.8)
+    faiss_circuit: FAISS index circuit breaker (6.2.8) [REMOVED M4 — pgvector native]
     partial_failure: Partial failure handling strategies (6.2.9)
 
 M6 Reference: docs/TEMP_EXECUTION_DOCS/M6_EXECUTION.md Epic 6.1, 6.2
@@ -41,7 +41,6 @@ from k0.pipelines.p03.ops.bus_circuit import (
 )
 from k0.pipelines.p03.ops.circuit_breaker import (
     BUS_DISPATCHER_CONFIG,
-    FAISS_INDEX_CONFIG,
     P08_EMBEDDING_CONFIG,
     P03CircuitBreaker,
     P03CircuitBreakerConfig,
@@ -76,11 +75,6 @@ from k0.pipelines.p03.ops.error_classifier import (
     P03ErrorCategory,
 )
 from k0.pipelines.p03.ops.error_handler import P03ErrorContext, P03ErrorHandler
-from k0.pipelines.p03.ops.faiss_circuit import (
-    FAISSCircuitBreaker,
-    SimilarityResult,
-    create_faiss_circuit_breaker,
-)
 from k0.pipelines.p03.ops.formula_comparison import FormulaComparator, FormulaComparisonResult
 from k0.pipelines.p03.ops.formula_tracing import (
     FormulaTracer,
@@ -90,6 +84,12 @@ from k0.pipelines.p03.ops.formula_tracing import (
 )
 from k0.pipelines.p03.ops.logging import P03LogContextManager
 from k0.pipelines.p03.ops.metrics import P03MetricsRegistry
+from k0.pipelines.p03.ops.module_metrics import (
+    ModuleMetricContext,
+    emit_clustering_metrics,
+    module_metric,
+    module_metric_sync,
+)
 from k0.pipelines.p03.ops.p08_circuit import P08EmbeddingCircuitBreaker, create_p08_circuit_breaker
 from k0.pipelines.p03.ops.partial_failure import (
     ORDERING_CRITICAL_PHASES,
@@ -120,11 +120,18 @@ from k0.pipelines.p03.ops.retry_config import (
 )
 from k0.pipelines.p03.ops.security import CrossSpaceAuditor
 from k0.pipelines.p03.ops.shadow_comparator import ShadowModeComparator
+from k0.pipelines.p03.ops.tracing import P03ConsolidationTracer
 
 __all__ = [
     # Metrics (6.1.1-6.1.9)
     "P03MetricsRegistry",
+    # Module Metrics (6.1.7)
+    "module_metric",
+    "module_metric_sync",
+    "ModuleMetricContext",
+    "emit_clustering_metrics",
     # Tracing (6.1.10-6.1.11)
+    "P03ConsolidationTracer",
     "P03TraceContextPropagator",
     "P03BaggageKeys",
     "P03ContextSnapshot",
@@ -176,7 +183,6 @@ __all__ = [
     "create_p03_circuit_breakers",
     "P08_EMBEDDING_CONFIG",
     "BUS_DISPATCHER_CONFIG",
-    "FAISS_INDEX_CONFIG",
     # P08 Embedding Circuit Breaker (6.2.6)
     "P08EmbeddingCircuitBreaker",
     "create_p08_circuit_breaker",
@@ -185,10 +191,7 @@ __all__ = [
     "EventPriority",
     "EmissionResult",
     "create_bus_circuit_breaker",
-    # FAISS Index Circuit Breaker (6.2.8)
-    "FAISSCircuitBreaker",
-    "SimilarityResult",
-    "create_faiss_circuit_breaker",
+    # FAISS Index Circuit Breaker (6.2.8) — REMOVED M4 (pgvector native)
     # Partial Failure Handling (6.2.9)
     "P03PartialFailureStrategy",
     "P03EventResult",

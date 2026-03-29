@@ -29,14 +29,21 @@ import pytest
 from k0.modules.consolidation.algorithms.decay_engine import DecayClassification
 from k0.modules.consolidation.algorithms.immunity_checker import ImmunityLevel
 from k0.modules.consolidation.algorithms.minhash_lsh import DeduplicationStrategy
-from k0.modules.consolidation.algorithms.novelty_bonus_learner import NoveltyFeedbackSignal
+from k0.modules.consolidation.algorithms.novelty_bonus_learner import (
+    NoveltyFeedbackSignal,
+)
 from k0.modules.consolidation.algorithms.prune_audit_logger import PruneAction
 from k0.modules.consolidation.algorithms.prune_regret_detector import MatchType
 from k0.modules.consolidation.algorithms.retention_enforcer import (
     ResurrectionTrigger,
     RetentionDecision,
 )
-from k0.pipelines.p03.phases.r3_dedup_decay import R3Config, R3DedupDecay, R3PhaseStats, R3Stores
+from k0.pipelines.p03.phases.r3_dedup_decay import (
+    R3Config,
+    R3DedupDecay,
+    R3PhaseStats,
+    R3Stores,
+)
 
 # =============================================================================
 # Test Fixtures
@@ -52,12 +59,41 @@ class MockEvent:
     content_type: str
     content_text: str
     embedding_768: Optional[List[float]] = None
+    # Reconciliation attributes required by ReconciliationEngine
+    is_duplicate: bool = False
+    prune_decision: str = "KEEP"  # KEEP, ARCHIVE, TOMBSTONE
+    decay_score: float = 1.0
+    canonical_event_id: Optional[str] = None
+    # Reconciliation state
+    reconciliation_action: str = "PENDING"
+    best_match_id: Optional[str] = None
+    best_match_layer: Optional[str] = None
+    similarity_score: float = 0.0
+    confidence: float = 0.0
+    reconciliation_reason: str = ""
 
     def __post_init__(self) -> None:
         if self.embedding_768 is None:
             # Generate random embedding
             np.random.seed(hash(self.event_id) % 2**32)
             self.embedding_768 = np.random.randn(768).tolist()
+
+    def set_reconciliation(
+        self,
+        action: Any,
+        match_id: Optional[str] = None,
+        match_layer: Optional[str] = None,
+        similarity: float = 0.0,
+        confidence: float = 0.0,
+        reason: str = "",
+    ) -> None:
+        """Set reconciliation decision (mock implementation)."""
+        self.reconciliation_action = action if isinstance(action, str) else action.value
+        self.best_match_id = match_id
+        self.best_match_layer = match_layer
+        self.similarity_score = similarity
+        self.confidence = confidence
+        self.reconciliation_reason = reason
 
 
 def create_mock_event(
@@ -435,7 +471,9 @@ class TestR3AuditLogging:
     @pytest.mark.asyncio
     async def test_log_prune_decision(self, r3_phase: R3DedupDecay, r3_stores: R3Stores) -> None:
         """Test prune decision logging."""
-        from k0.modules.consolidation.algorithms.prune_audit_logger import PruneDecisionContext
+        from k0.modules.consolidation.algorithms.prune_audit_logger import (
+            PruneDecisionContext,
+        )
 
         context = PruneDecisionContext(
             memory_id="mem_1",

@@ -1,0 +1,433 @@
+"""
+K1 Port Scanner - Extract port interfaces and adapter implementations from K1 codebase.
+
+Scans K1 modules for hexagonal architecture compliance:
+- Port interface definitions (ABC/Protocol-based I*Port, I*Provider classes)
+- Adapter implementations (classes implementing port interfaces)
+- Port-adapter mapping (which adapters satisfy which ports)
+- Null/mock adapters for testing
+
+This scanner is K1-specific: K0 does not use the hexagonal port/adapter pattern.
+
+Usage:
+    from governance.k1.scripts.port_scanner import scan_ports
+    ports = scan_ports()
+    for p in ports:
+        print(f"{p.port_name} ({p.module}): {len(p.adapters)} adapters")
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+
+@dataclass
+class AdapterInfo:
+    """Information about a single adapter implementation."""
+
+    class_name: str
+    file_path: str
+    line_number: int
+    is_null: bool = False  # Null/noop adapter
+    is_mock: bool = False  # Mock/test adapter
+
+
+@dataclass
+class K1PortInfo:
+    """Extracted K1 port interface information."""
+
+    port_name: str  # IEventPort, IStoragePort, IK0SyncPort
+    module: str  # sessionstate, fabric
+    file_path: str  # k1/sessionstate/ports/events.py
+    line_number: int
+    base_class: str  # ABC, Protocol
+    method_count: int  # Number of abstract methods
+    methods: list[str] = field(default_factory=list)  # Method names
+    adapters: list[AdapterInfo] = field(default_factory=list)
+    status: str = "Active"
+
+
+def _scan_port_definitions(k1_path: Path) -> list[K1PortInfo]:
+    """
+    Scan K1 Python files for port interface definitions.
+
+    Detects:
+    - class I*Port(ABC): or class I*Port(ABC, ...):
+    - class I*Provider(ABC):
+    - class I*Port(Protocol):
+    - class I*Provider(Protocol):
+    """
+    ports: list[K1PortInfo] = []
+
+    for py_file in k1_path.rglob("*.py"):
+        if "__pycache__" in str(py_file):
+            continue
+
+        try:
+            content = py_file.read_text(encoding="utf-8")
+            lines = content.split("\n")
+            rel_path = str(py_file.relative_to(k1_path.parent))
+
+            # Infer module from path
+            module = _infer_module(py_file, k1_path)
+
+            for i, line in enumerate(lines):
+                # Match port interface class definitions
+                match = re.match(
+                    r"^class\s+(I[A-Z]\w*(?:Port|Provider))\s*\(\s*(\w+)",
+                    line,
+                )
+                if match:
+                    port_name = match.group(1)
+                    base_class = match.group(2)
+
+                    # Only count ABC and Protocol based interfaces
+                    if base_class not in ("ABC", "Protocol"):
+                        continue
+
+                    # Count abstract methods
+                    methods = _extract_abstract_methods(lines, i)
+
+                    ports.append(
+                        K1PortInfo(
+                            port_name=port_name,
+                            module=module,
+                            file_path=rel_path,
+                            line_number=i + 1,
+                            base_class=base_class,
+                            method_count=len(methods),
+                            methods=methods,
+                        )
+                    )
+
+        except Exception:
+            continue
+
+    return ports
+
+
+def _extract_abstract_methods(lines: list[str], class_start: int) -> list[str]:
+    """
+    Extract abstract method names from a class definition.
+
+    Scans from class_start until next class or end of indented block.
+    """
+    methods: list[str] = []
+    # Determine class indentation
+    class_indent = len(lines[class_start]) - len(lines[class_start].lstrip())
+
+    in_class = False
+    for i in range(class_start + 1, min(class_start + 200, len(lines))):
+        line = lines[i]
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        curr_indent = len(line) - len(line.lstrip())
+
+        # Check if we've left the class
+        if curr_indent <= class_indent and stripped and not stripped.startswith("#"):
+            break
+
+        in_class = True
+
+        # Check for @abstractmethod decorator or abstract def
+        if "@abstractmethod" in stripped:
+            # Next non-empty line should be the method def
+            for j in range(i + 1, min(i + 5, len(lines))):
+                method_line = lines[j].strip()
+                if method_line.startswith("def ") or method_line.startswith("async def "):
+                    match = re.match(r"(?:async\s+)?def\s+(\w+)", method_line)
+                    if match:
+                        methods.append(match.group(1))
+                    break
+
+        # Also match abstract methods without decorator (Protocol-based)
+        if in_class and (stripped.startswith("def ") or stripped.startswith("async def ")):
+            # Check if it has ... body (Protocol style)
+            match = re.match(r"(?:async\s+)?def\s+(\w+)", stripped)
+            if match:
+                method_name = match.group(1)
+                if method_name.startswith("_") and not method_name.startswith("__"):
+                    continue  # Skip private methods
+                # Check next non-empty line for ...
+                for j in range(i + 1, min(i + 3, len(lines))):
+                    body_line = lines[j].strip()
+                    if body_line == "...":
+                        if method_name not in methods:
+                            methods.append(method_name)
+                        break
+                    elif body_line:
+                        break
+
+    return methods
+
+
+def _scan_adapter_implementations(k1_path: Path, ports: list[K1PortInfo]) -> None:
+    """
+    Scan K1 Python files for adapter implementations and link to ports.
+
+    Detects classes that inherit from port interfaces:
+    - class FileStorageAdapter(IStoragePort):
+    - class NullSyncPort(IK0SyncPort):
+    """
+    port_names = {p.port_name for p in ports}
+    port_by_name = {p.port_name: p for p in ports}
+
+    for py_file in k1_path.rglob("*.py"):
+        if "__pycache__" in str(py_file):
+            continue
+
+        try:
+            content = py_file.read_text(encoding="utf-8")
+            lines = content.split("\n")
+            rel_path = str(py_file.relative_to(k1_path.parent))
+
+            for i, line in enumerate(lines):
+                # Match class definitions that reference a known port
+                match = re.match(
+                    r"^class\s+(\w+)\s*\(([^)]+)\)",
+                    line,
+                )
+                if not match:
+                    continue
+
+                class_name = match.group(1)
+                bases = match.group(2)
+
+                # Check if any base class is a known port
+                for port_name in port_names:
+                    if port_name in bases:
+                        # Determine if this is a null/mock adapter
+                        name_lower = class_name.lower()
+                        is_null = "null" in name_lower or "noop" in name_lower
+                        is_mock = (
+                            "mock" in name_lower or "fake" in name_lower or "stub" in name_lower
+                        )
+
+                        adapter = AdapterInfo(
+                            class_name=class_name,
+                            file_path=rel_path,
+                            line_number=i + 1,
+                            is_null=is_null,
+                            is_mock=is_mock,
+                        )
+
+                        port_by_name[port_name].adapters.append(adapter)
+                        break
+
+        except Exception:
+            continue
+
+    # Also scan tests/ directory for mock adapters
+    tests_path = k1_path.parent / "tests" / "k1"
+    if tests_path.exists():
+        for py_file in tests_path.rglob("*.py"):
+            if "__pycache__" in str(py_file):
+                continue
+
+            try:
+                content = py_file.read_text(encoding="utf-8")
+                lines = content.split("\n")
+                rel_path = str(py_file.relative_to(k1_path.parent))
+
+                for i, line in enumerate(lines):
+                    match = re.match(r"^class\s+(\w+)\s*\(([^)]+)\)", line)
+                    if not match:
+                        continue
+
+                    class_name = match.group(1)
+                    bases = match.group(2)
+
+                    for port_name in port_names:
+                        if port_name in bases:
+                            adapter = AdapterInfo(
+                                class_name=class_name,
+                                file_path=rel_path,
+                                line_number=i + 1,
+                                is_null=False,
+                                is_mock=True,
+                            )
+                            port_by_name[port_name].adapters.append(adapter)
+                            break
+
+            except Exception:
+                continue
+
+
+def _infer_module(py_file: Path, k1_path: Path) -> str:
+    """Infer module name from file path."""
+    try:
+        rel = py_file.relative_to(k1_path)
+        parts = rel.parts
+        if parts:
+            return parts[0]
+    except ValueError:
+        pass
+    return "unknown"
+
+
+def scan_ports(k1_path: Path | None = None) -> list[K1PortInfo]:
+    """
+    Scan K1 codebase for port interfaces and their adapter implementations.
+
+    Steps:
+    1. Find all port interface definitions (I*Port, I*Provider)
+    2. Find all adapter implementations that inherit from ports
+    3. Link adapters to their port interfaces
+
+    Args:
+        k1_path: Path to k1/ directory
+
+    Returns:
+        Sorted list of K1PortInfo with linked adapters
+    """
+    if k1_path is None:
+        repo_root = Path(__file__).parent.parent.parent.parent
+        k1_path = repo_root / "k1"
+
+    if not k1_path.exists():
+        return []
+
+    # 1. Scan for port definitions
+    ports = _scan_port_definitions(k1_path)
+
+    # 2. Scan for adapters and link to ports
+    _scan_adapter_implementations(k1_path, ports)
+
+    # Sort by module then port name
+    ports.sort(key=lambda p: (p.module, p.port_name))
+
+    return ports
+
+
+def generate_markdown_table(ports: list[K1PortInfo]) -> str:
+    """Generate markdown table for port registry."""
+    lines = [
+        "| Port | Module | Base | Methods | Adapters | Null | Mock | File |",
+        "|------|--------|------|---------|----------|------|------|------|",
+    ]
+
+    for p in ports:
+        real_adapters = [a for a in p.adapters if not a.is_null and not a.is_mock]
+        null_adapters = [a for a in p.adapters if a.is_null]
+        mock_adapters = [a for a in p.adapters if a.is_mock]
+
+        adapter_names = ", ".join(a.class_name for a in real_adapters[:2])
+        if len(real_adapters) > 2:
+            adapter_names += "..."
+
+        lines.append(
+            f"| `{p.port_name}` | {p.module} | {p.base_class} | "
+            f"{p.method_count} | {adapter_names or '-'} | "
+            f"{len(null_adapters)} | {len(mock_adapters)} | "
+            f"`{p.file_path.split('/')[-1]}` |"
+        )
+
+    return "\n".join(lines)
+
+
+def generate_summary(ports: list[K1PortInfo]) -> dict[str, Any]:
+    """Generate port/adapter summary."""
+    by_module: dict[str, int] = {}
+    total_adapters = 0
+    total_null = 0
+    total_mock = 0
+    unimplemented: list[str] = []
+
+    for p in ports:
+        by_module[p.module] = by_module.get(p.module, 0) + 1
+        real = [a for a in p.adapters if not a.is_null and not a.is_mock]
+        total_adapters += len(real)
+        total_null += sum(1 for a in p.adapters if a.is_null)
+        total_mock += sum(1 for a in p.adapters if a.is_mock)
+        if not real:
+            unimplemented.append(f"{p.module}.{p.port_name}")
+
+    return {
+        "total_ports": len(ports),
+        "total_adapters": total_adapters,
+        "total_null": total_null,
+        "total_mock": total_mock,
+        "by_module": by_module,
+        "unimplemented": unimplemented,
+    }
+
+
+def diff_with_registry(ports: list[K1PortInfo]) -> dict[str, Any]:
+    """
+    Validate port/adapter consistency.
+
+    Checks:
+    - Ports without any real adapters (only null/mock)
+    - Ports without null adapters (missing testability)
+    - Adapters in test code but no real adapters
+    - Protocol ports without ... method bodies
+    """
+    issues: list[str] = []
+
+    for p in ports:
+        real = [a for a in p.adapters if not a.is_null and not a.is_mock]
+        null = [a for a in p.adapters if a.is_null]
+
+        if not real and not null:
+            issues.append(f"{p.module}.{p.port_name}: no adapters found")
+        elif not real:
+            issues.append(
+                f"{p.module}.{p.port_name}: only null/mock adapters, " f"no production adapter"
+            )
+        if not null and real:
+            issues.append(f"{p.module}.{p.port_name}: missing null adapter for testing")
+        if p.method_count == 0:
+            issues.append(f"{p.module}.{p.port_name}: port has no abstract methods")
+
+    return {
+        "scanned_count": len(ports),
+        "issues": issues,
+        "issue_count": len(issues),
+    }
+
+
+if __name__ == "__main__":
+    ports = scan_ports()
+    print("K1 Port Scanner")
+    print("=" * 60)
+    print(f"Found {len(ports)} port interfaces:\n")
+
+    by_module: dict[str, list[K1PortInfo]] = {}
+    for p in ports:
+        by_module.setdefault(p.module, []).append(p)
+
+    for mod, mod_ports in sorted(by_module.items()):
+        print(f"\n  {mod} ({len(mod_ports)} ports):")
+        for p in mod_ports:
+            real = [a for a in p.adapters if not a.is_null and not a.is_mock]
+            null = [a for a in p.adapters if a.is_null]
+            mock = [a for a in p.adapters if a.is_mock]
+            print(f"    {p.port_name} ({p.base_class}, {p.method_count} methods)")
+            for a in real:
+                print(f"      -> {a.class_name} ({a.file_path})")
+            if null:
+                print(f"      -> {len(null)} null adapter(s)")
+            if mock:
+                print(f"      -> {len(mock)} mock adapter(s)")
+
+    summary = generate_summary(ports)
+    print(
+        f"\nSummary: {summary['total_ports']} ports, "
+        f"{summary['total_adapters']} adapters, "
+        f"{summary['total_null']} null, {summary['total_mock']} mock"
+    )
+
+    if summary["unimplemented"]:
+        print(f"\nUnimplemented ports ({len(summary['unimplemented'])}):")
+        for name in summary["unimplemented"]:
+            print(f"  ! {name}")
+
+    print("\n" + "=" * 60)
+    print("Markdown Table:")
+    print(generate_markdown_table(ports))

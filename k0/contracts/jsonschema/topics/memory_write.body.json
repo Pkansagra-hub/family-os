@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k0://contracts/jsonschema/topics/memory_write.body.json",
+  "title": "memory.write Body Schema",
+  "description": "Body schema for the memory.write command topic. References the authoritative MemoryAtom v2 schema from M1 Epic 1.4. All 34 fields, 14 required, 4 $defs.",
+  "$ref": "k1://contracts/schemas/memory_writer/memory_atom.v2.schema.json"
+}

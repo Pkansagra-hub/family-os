@@ -7,17 +7,30 @@ neuroscience principles (McGaugh, 2004) showing emotional memories are more
 strongly encoded due to amygdala-hippocampus interaction.
 
 Spec Reference:
-    - Dossier §2.4: Scientific Formulas - Importance Score
+    - Dossier 2.4: Scientific Formulas - Importance Score
     - Dossier Appendix C.2.1: Algorithm Specification
     - M4_EXECUTION.md Issue 4.1.1
+    - P03 R1 Discovery: P03_R1_IMPORTANCE_SCORING_DISCOVERY.md
 
-Formula:
-    importance = (emotional + novelty + social) × event_type_multiplier
+Formula (CONFIG_B, POC validated -- 562K events, 120/120 scenarios):
+    base = emotional + surprise + novelty + social + identity + recency
+    importance = clamp(base * elab * goal * arc * temporal
+                       * type * intent * relationship * tier * reliability, 0, 1)
 
-Where:
-    - emotional = sentiment_weight × |sentiment| + affect_weight × |affect|
-    - novelty = novelty_weight × novelty_score
-    - social = social_weight × log2(participants) / 3.32
+Where (6 additive, 8 weights summing to 1.0):
+    - emotional = sent_w*|sent| + affect_w*|val| + arousal_w*arousal
+    - surprise  = surprise_w * surprise_level
+    - novelty   = novelty_w * NOVELTY_MAP[categorical]
+    - social    = social_w * log2(participants)/3.32 * intimacy_scale
+    - identity  = identity_w * identity_signal
+    - recency   = recency_w * exp(-0.005 * hours_since_event)
+
+8 multiplicative modulators:
+    elab, goal, arc, temporal, type, intent, relationship, tier, reliability
+
+KG Relationship Boost (ADR-K026):
+    relationship = 1.0 + boost_scale * max_edge_weight_in_event
+    Disabled by default (enable_kg_boost=False -> relationship=1.0)
 
 TIMESTAMP CONVENTION: All timestamps use MILLISECONDS since Unix epoch.
 """
@@ -45,29 +58,52 @@ class ImportanceWeights:
     These weights determine how much each factor contributes to
     the final importance score. They sum to 1.0 for normalization.
 
-    Default values from Dossier C.2.1:
-        - sentiment: 0.25 (sentiment analysis contribution)
-        - affect: 0.30 (emotional valence/arousal contribution)
-        - novelty: 0.25 (information novelty contribution)
-        - social: 0.20 (social context contribution)
+    CONFIG_B defaults (POC validated -- 562K events, 120/120 scenarios):
+        Emotional group (0.30): sentiment=0.10, affect=0.12, arousal=0.08
+        Surprise: 0.15
+        Novelty: 0.15
+        Social: 0.15
+        Identity: 0.10
+        Recency: 0.15
     """
 
-    sentiment_weight: float = 0.25
-    affect_weight: float = 0.30
-    novelty_weight: float = 0.25
-    social_weight: float = 0.20
+    # Emotional group (combined = 0.30)
+    sentiment_weight: float = 0.10
+    affect_weight: float = 0.12
+    arousal_weight: float = 0.08
+    # Cognitive signals
+    surprise_weight: float = 0.15
+    novelty_weight: float = 0.15
+    # Social + identity
+    social_weight: float = 0.15
+    identity_weight: float = 0.10
+    # Temporal
+    recency_weight: float = 0.15
 
     def total(self) -> float:
         """Sum of all weights (should be 1.0 for normalization)."""
-        return self.sentiment_weight + self.affect_weight + self.novelty_weight + self.social_weight
+        return (
+            self.sentiment_weight
+            + self.affect_weight
+            + self.arousal_weight
+            + self.surprise_weight
+            + self.novelty_weight
+            + self.social_weight
+            + self.identity_weight
+            + self.recency_weight
+        )
 
     def as_dict(self) -> Dict[str, float]:
         """Return weights as dictionary for serialization."""
         return {
             "sentiment": self.sentiment_weight,
             "affect": self.affect_weight,
+            "arousal": self.arousal_weight,
+            "surprise": self.surprise_weight,
             "novelty": self.novelty_weight,
             "social": self.social_weight,
+            "identity": self.identity_weight,
+            "recency": self.recency_weight,
         }
 
 
@@ -76,24 +112,56 @@ class ImportanceBreakdown:
     """
     Component breakdown of importance score for audit logging.
 
-    This provides transparency into how the final score was computed,
-    enabling debugging and learning feedback loops.
+    This provides full transparency into how the final score was computed,
+    enabling debugging, explainability, and learning feedback loops.
+
+    6 additive components + base_score + 8 multiplicative modulators + final.
     """
 
-    emotional_component: float  # Combined sentiment + affect contribution
-    novelty_component: float  # Novelty contribution
-    social_component: float  # Social relevance contribution
-    multiplier: float  # Event type multiplier applied
-    final_score: float  # Final normalized score [0, 1]
-    weights_source: str = "static"  # "static" or "learned"
+    # 6 additive components
+    emotional_component: float = 0.0  # Combined sentiment + affect + arousal
+    surprise_component: float = 0.0  # Cognitive surprise contribution
+    novelty_component: float = 0.0  # Information novelty contribution
+    social_component: float = 0.0  # Social relevance contribution
+    identity_component: float = 0.0  # Self-referential identity contribution
+    recency_component: float = 0.0  # Temporal freshness contribution
+    # Base score (sum of 6 components, before modulators)
+    base_score: float = 0.0
+    # 8 multiplicative modulators (ADR-K026: added relationship_boost)
+    elab_boost: float = 1.0  # Elaboration depth multiplier
+    goal_boost: float = 1.0  # Narrative goal event multiplier
+    arc_boost: float = 1.0  # Narrative arc position multiplier
+    temporal_boost: float = 1.0  # Temporal orientation multiplier
+    type_multiplier: float = 1.0  # Event type multiplier
+    intent_boost: float = 1.0  # Intent classification multiplier
+    relationship_boost: float = 1.0  # KG relationship strength (ADR-K026)
+    max_edge_weight: float = 0.0  # Raw max edge weight for audit (ADR-K026)
+    tier_multiplier: float = 1.0  # Memory tier multiplier
+    reliability: float = 1.0  # Source reliability (floored)
+    # Final
+    final_score: float = 0.0  # Final normalized score [0, 1]
+    weights_source: str = "static"  # "static", "learned", "per-space", etc.
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for audit logging outputs."""
         return {
             "emotional_component": self.emotional_component,
+            "surprise_component": self.surprise_component,
             "novelty_component": self.novelty_component,
             "social_component": self.social_component,
-            "multiplier": self.multiplier,
+            "identity_component": self.identity_component,
+            "recency_component": self.recency_component,
+            "base_score": self.base_score,
+            "elab_boost": self.elab_boost,
+            "goal_boost": self.goal_boost,
+            "arc_boost": self.arc_boost,
+            "temporal_boost": self.temporal_boost,
+            "type_multiplier": self.type_multiplier,
+            "intent_boost": self.intent_boost,
+            "relationship_boost": self.relationship_boost,
+            "max_edge_weight": self.max_edge_weight,
+            "tier_multiplier": self.tier_multiplier,
+            "reliability": self.reliability,
             "final_score": self.final_score,
             "weights_source": self.weights_source,
         }
@@ -133,17 +201,22 @@ class ImportanceScorer:
         emotional salience, novelty, or social significance are
         prioritized for consolidation.
 
-    Scoring Formula:
-        importance = (emotional + novelty + social) × multiplier
+    Scoring Formula (CONFIG_B -- POC validated 120/120 scenarios):
+        base = emotional + surprise + novelty + social + identity + recency
+        importance = clamp(base * elab * goal * arc * temporal
+                          * type * intent * relationship * tier * reliability, 0, 1)
 
-        Where:
-        - emotional = sentiment_weight × |sentiment| + affect_weight × |affect|
-        - novelty = novelty_weight × novelty_score
-        - social = social_weight × log2(participants) / 3.32
+        Where (6 additive components, 8 weights summing to 1.0):
+        - emotional = sent_w*|sent| + affect_w*|val| + arousal_w*arousal
+        - surprise  = surprise_w * surprise_level
+        - novelty   = novelty_w * NOVELTY_MAP[categorical]
+        - social    = social_w * log2(participants)/3.32 * intimacy_scale
+        - identity  = identity_w * identity_signal
+        - recency   = recency_w * exp(-0.005 * hours_since_event)
 
     Weight Learning:
-        Initially uses static weights. After 500+ samples with outcome
-        feedback, switches to learned weights from st_learned_weights.
+        Initially uses CONFIG_B static weights. After 500+ samples with
+        outcome feedback, switches to learned weights from st_learned_weights.
 
     Usage:
         scorer = ImportanceScorer(space_id="sp_123", weight_store=store)
@@ -178,10 +251,101 @@ class ImportanceScorer:
     # Log2(10) for social factor normalization
     LOG2_10 = 3.321928  # log2(10)
 
+    # Intent-based boost multipliers (GAP-001 Milestone 8, Issue 8.2)
+    # UltraBERT intent types affect memory salience based on cognitive significance
+    # Scientific basis: Retrieval practice strengthens memory (Roediger & Karpicke, 2006)
+    # Intentional actions (planning, reminders) indicate future relevance
+    INTENT_BOOST_MULTIPLIERS: Dict[str, float] = {
+        "query_memory": 1.20,  # Retrieval strengthens memory traces
+        "share_news": 1.20,  # News-sharing events are typically significant
+        "set_reminder": 1.15,  # Reminders indicate future importance
+        "make_plan": 1.15,  # Planning content has intentional significance
+        "seek_advice": 1.10,  # Decision-making context matters
+        "reflect": 1.10,  # Reflective content often leads to semantic patterns
+        "express_feeling": 1.00,  # Already captured by emotional_intensity component
+        "casual_chat": 0.90,  # Routine conversation, slightly lower salience
+    }
+
+    # =========================================================================
+    # CONFIG_B Constants (POC validated -- Discovery 16.6)
+    # =========================================================================
+
+    # Recency decay (POC Phase 5: lambda=0.005, half-life ~139h / ~6 days)
+    RECENCY_LAMBDA: float = 0.005
+
+    # Source reliability floor (POC Phase 5: floor=0.3)
+    # Prevents total suppression -- even untrusted sources keep 30% signal
+    RELIABILITY_FLOOR: float = 0.3
+
+    # Goal event boost (Discovery 16.6 Q8: stacks with arc_boost)
+    GOAL_BOOST: float = 1.15
+
+    # Novelty categorical -> numeric (Discovery 16.3.1)
+    # P03EventState.novelty is a categorical string from MW v2
+    NOVELTY_MAP: Dict[str, float] = {
+        "ROUTINE": 0.10,
+        "EXPECTED": 0.30,
+        "NOVEL": 0.70,
+        "SURPRISING": 1.00,
+    }
+
+    # Elaboration depth -> multiplicative boost (Discovery 16.3.2)
+    # NOT additive -- deeper elaboration amplifies base score
+    ELABORATION_MAP: Dict[str, float] = {
+        "MENTION": 1.00,
+        "DISCUSSED": 1.05,
+        "ELABORATED": 1.10,
+        "DEEPLY_PROCESSED": 1.15,
+    }
+
+    # Temporal orientation -> boost (Discovery 16.3.4)
+    TEMPORAL_MAP: Dict[str, float] = {
+        "PAST": 1.00,
+        "ONGOING": 1.05,
+        "FUTURE_COMMITMENT": 1.10,
+    }
+
+    # Narrative arc position -> boost (Discovery 16.3.5)
+    ARC_MAP: Dict[str, float] = {
+        "EXPOSITION": 1.00,
+        "RISING_ACTION": 1.05,
+        "CLIMAX": 1.15,
+        "RESOLUTION": 1.00,
+    }
+
+    # Memory tier -> multiplier (Discovery 16.4)
+    # routine is baseline; higher tiers amplify importance
+    MEMORY_TIER_MAP: Dict[str, float] = {
+        "routine": 1.00,
+        "notable": 1.10,
+        "significant": 1.25,
+        "landmark": 1.50,
+    }
+
+    # Intimacy scale multiplier for social factor (Discovery 16.6 Q6)
+    # Multiplicative to social, not additive (POC validated)
+    INTIMACY_SCALE: Dict[str, float] = {
+        "HIGH": 1.20,
+        "MEDIUM": 1.00,
+        "LOW": 0.80,
+    }
+
+    # Source type -> base reliability (Discovery 16.3.3)
+    # Used when event.source_reliability is not set by MW
+    SOURCE_TYPE_RELIABILITY: Dict[str, float] = {
+        "user_stated": 0.95,
+        "system_inferred": 0.60,
+        "device_observed": 0.80,
+        "third_party": 0.70,
+    }
+
     def __init__(
         self,
         space_id: str,
         weight_store: Optional[WeightStoreProtocol] = None,
+        static_weights: Optional[ImportanceWeights] = None,
+        kg_boost_config: Optional["KGBoostConfig"] = None,
+        kg_edge_cache: Optional["KGEdgeCache"] = None,
     ):
         """
         Initialize ImportanceScorer for a space.
@@ -190,12 +354,53 @@ class ImportanceScorer:
             space_id: User/family space ID for weight lookup
             weight_store: Optional backend for learned weights.
                          If None, always uses static defaults.
+            static_weights: Optional explicit CONFIG_B-compatible override.
+                           When provided, this takes precedence over learned
+                           weight lookup and cold-start blending.
+            kg_boost_config: Optional KG relationship boost config (ADR-K026).
+                            If None, KG boost is disabled.
+            kg_edge_cache: Optional pre-loaded KG edge cache (ADR-K026).
+                          If None, relationship_boost is always 1.0.
         """
         self.space_id = space_id
         self.weight_store = weight_store
+        self._static_weights_override = static_weights
         self._cached_weights: Optional[ImportanceWeights] = None
         self._weights_source: str = "static"
         self._cached_sample_count: int = 0
+        # ADR-K026: KG relationship boost
+        self._kg_boost_config = kg_boost_config
+        self._kg_edge_cache = kg_edge_cache
+
+    @staticmethod
+    def _weights_from_dict(
+        d: Dict[str, float],
+        defaults: Optional[ImportanceWeights] = None,
+    ) -> ImportanceWeights:
+        """
+        Construct ImportanceWeights from a dictionary.
+
+        Uses CONFIG_B defaults for any missing keys. This avoids
+        hardcoding 8 field mappings at every construction site.
+
+        Args:
+            d: Weight dictionary (keys match as_dict() output).
+            defaults: Fallback ImportanceWeights (default: CONFIG_B).
+
+        Returns:
+            ImportanceWeights with values from dict + defaults.
+        """
+        fb = defaults or ImportanceWeights()
+        return ImportanceWeights(
+            sentiment_weight=d.get("sentiment", fb.sentiment_weight),
+            affect_weight=d.get("affect", fb.affect_weight),
+            arousal_weight=d.get("arousal", fb.arousal_weight),
+            surprise_weight=d.get("surprise", fb.surprise_weight),
+            novelty_weight=d.get("novelty", fb.novelty_weight),
+            social_weight=d.get("social", fb.social_weight),
+            identity_weight=d.get("identity", fb.identity_weight),
+            recency_weight=d.get("recency", fb.recency_weight),
+        )
 
     async def get_weights(self) -> ImportanceWeights:
         """
@@ -206,10 +411,17 @@ class ImportanceScorer:
 
         Priority:
             1. Cached weights (if already loaded)
-            2. Learned weights (if sample_count >= 500)
-            3. Static defaults
+            2. Explicit override weights (if provided by phase config)
+            3. Learned weights (if sample_count >= 500)
+            4. Static defaults
         """
         if self._cached_weights is not None:
+            return self._cached_weights
+
+        if self._static_weights_override is not None:
+            self._cached_weights = self._static_weights_override
+            self._weights_source = "config-override"
+            self._cached_sample_count = 0
             return self._cached_weights
 
         # Try to load learned weights if store is available
@@ -224,12 +436,7 @@ class ImportanceScorer:
                     learned is not None
                     and learned.sample_count >= self.MIN_SAMPLES_FOR_LEARNED_WEIGHTS
                 ):
-                    self._cached_weights = ImportanceWeights(
-                        sentiment_weight=learned.weights.get("sentiment", 0.25),
-                        affect_weight=learned.weights.get("affect", 0.30),
-                        novelty_weight=learned.weights.get("novelty", 0.25),
-                        social_weight=learned.weights.get("social", 0.20),
-                    )
+                    self._cached_weights = self._weights_from_dict(learned.weights)
                     self._weights_source = "learned"
                     logger.info(
                         "Using learned importance weights",
@@ -287,6 +494,12 @@ class ImportanceScorer:
                 - str: Source description ("per-space", "global-blend", "static")
                 - int: Sample count used for blending
         """
+        if self._static_weights_override is not None:
+            self._cached_weights = self._static_weights_override
+            self._weights_source = "config-override"
+            self._cached_sample_count = 0
+            return self._cached_weights, self._weights_source, self._cached_sample_count
+
         # Check cache first
         if self._cached_weights is not None:
             # Extract sample count from source if available
@@ -317,12 +530,7 @@ class ImportanceScorer:
 
                     if alpha >= 1.0:
                         # Full learned weights (500+ samples)
-                        self._cached_weights = ImportanceWeights(
-                            sentiment_weight=space_weights.weights.get("sentiment", 0.25),
-                            affect_weight=space_weights.weights.get("affect", 0.30),
-                            novelty_weight=space_weights.weights.get("novelty", 0.25),
-                            social_weight=space_weights.weights.get("social", 0.20),
-                        )
+                        self._cached_weights = self._weights_from_dict(space_weights.weights)
                         self._weights_source = "per-space"
                         self._cached_sample_count = space_weights.sample_count
                         logger.info(
@@ -341,12 +549,7 @@ class ImportanceScorer:
                             static=static_priors.as_dict(),
                             alpha=alpha,
                         )
-                        self._cached_weights = ImportanceWeights(
-                            sentiment_weight=blended.get("sentiment", 0.25),
-                            affect_weight=blended.get("affect", 0.30),
-                            novelty_weight=blended.get("novelty", 0.25),
-                            social_weight=blended.get("social", 0.20),
-                        )
+                        self._cached_weights = self._weights_from_dict(blended)
                         self._weights_source = f"per-space-blend-{alpha:.2f}"
                         self._cached_sample_count = space_weights.sample_count
                         logger.info(
@@ -379,12 +582,7 @@ class ImportanceScorer:
                     alpha = min(1.0, global_weights.sample_count / full_blend_samples)
 
                     if alpha >= 1.0:
-                        self._cached_weights = ImportanceWeights(
-                            sentiment_weight=global_weights.weights.get("sentiment", 0.25),
-                            affect_weight=global_weights.weights.get("affect", 0.30),
-                            novelty_weight=global_weights.weights.get("novelty", 0.25),
-                            social_weight=global_weights.weights.get("social", 0.20),
-                        )
+                        self._cached_weights = self._weights_from_dict(global_weights.weights)
                         self._weights_source = "global"
                         self._cached_sample_count = global_weights.sample_count
                         logger.info(
@@ -401,12 +599,7 @@ class ImportanceScorer:
                             static=static_priors.as_dict(),
                             alpha=alpha,
                         )
-                        self._cached_weights = ImportanceWeights(
-                            sentiment_weight=blended.get("sentiment", 0.25),
-                            affect_weight=blended.get("affect", 0.30),
-                            novelty_weight=blended.get("novelty", 0.25),
-                            social_weight=blended.get("social", 0.20),
-                        )
+                        self._cached_weights = self._weights_from_dict(blended)
                         self._weights_source = f"global-blend-{alpha:.2f}"
                         self._cached_sample_count = global_weights.sample_count
                         logger.info(
@@ -481,82 +674,218 @@ class ImportanceScorer:
         self,
         sentiment_score: float,
         affect_valence: float,
+        affect_arousal: float,
         weights: ImportanceWeights,
     ) -> float:
         """
-        Compute emotional intensity from sentiment and affect.
+        Compute emotional intensity from sentiment, affect valence, and arousal.
 
-        Uses absolute values because both strong positive AND strong
-        negative emotions enhance memory encoding (McGaugh, 2004).
+        Uses absolute values for sentiment and valence because both strong
+        positive AND strong negative emotions enhance memory encoding
+        (McGaugh, 2004). Arousal is already [0, 1] so no abs() needed.
+
+        CONFIG_B split: sentiment_w=0.10, affect_w=0.12, arousal_w=0.08 (total=0.30)
 
         Args:
             sentiment_score: Sentiment analysis score [-1, 1]
             affect_valence: Emotional valence [-1, 1]
+            affect_arousal: Emotional arousal [0, 1]
             weights: Weight configuration
 
         Returns:
-            Emotional intensity component [0, ~0.55] (unclamped)
+            Emotional intensity component [0, 0.30]
         """
         sentiment_intensity = abs(sentiment_score)
         affect_intensity = abs(affect_valence)
+        arousal = max(0.0, min(1.0, affect_arousal))
 
         return (
             sentiment_intensity * weights.sentiment_weight
             + affect_intensity * weights.affect_weight
+            + arousal * weights.arousal_weight
         )
 
     def compute_social_factor(
         self,
-        participant_count: int,
+        num_participants: int,
+        social_intimacy: str,
         weights: ImportanceWeights,
     ) -> float:
         """
-        Compute social factor from participant count.
+        Compute social factor from participant count and intimacy level.
 
-        Uses logarithmic scaling to prevent large groups from
-        completely dominating importance scores.
+        Uses logarithmic scaling multiplied by intimacy scale
+        (HIGH=1.2, MEDIUM=1.0, LOW=0.8). POC validated Q6.
 
         Scale interpretation:
             - 1 person: 0.0 (solo event, no social bonus)
-            - 2 people: ~0.30 × weight
-            - 5 people: ~0.70 × weight
-            - 10+ people: ~1.0 × weight (capped)
+            - 2 people: ~0.30 x weight x intimacy
+            - 5 people: ~0.70 x weight x intimacy
+            - 10+ people: ~1.0 x weight x intimacy (capped)
 
         Args:
-            participant_count: Number of participants in event
+            num_participants: Number of participants in event
+            social_intimacy: Intimacy level (HIGH/MEDIUM/LOW)
             weights: Weight configuration
 
         Returns:
-            Social factor component [0, social_weight]
+            Social factor component [0, social_weight x 1.2]
         """
-        if participant_count <= 1:
+        if num_participants <= 1:
             return 0.0  # Solo event, no social bonus
 
         # Log scale: log2(count) / log2(10)
-        log_factor = min(1.0, math.log2(participant_count) / self.LOG2_10)
-        return log_factor * weights.social_weight
+        log_factor = min(1.0, math.log2(num_participants) / self.LOG2_10)
+        # Intimacy modulates social: HIGH=1.2, MED=1.0, LOW=0.8
+        intimacy_key = social_intimacy.upper() if social_intimacy else ""
+        intimacy = self.INTIMACY_SCALE.get(intimacy_key, 1.0)
+        return log_factor * weights.social_weight * intimacy
 
     def compute_novelty_factor(
         self,
-        novelty_score: float,
+        novelty_categorical: str,
+        salience_fallback: float,
         weights: ImportanceWeights,
     ) -> float:
         """
-        Compute novelty factor from novelty score.
+        Compute novelty factor from categorical novelty level.
 
-        Novelty score represents how different this event is from
-        existing memory clusters (computed from embedding distances).
+        Maps categorical novelty (from MW v2) to numeric:
+            ROUTINE=0.10, EXPECTED=0.30, NOVEL=0.70, SURPRISING=1.00
+
+        Falls back to salience_score if novelty categorical is empty
+        (pre-MW v2 events).
 
         Args:
-            novelty_score: Pre-computed novelty score [0, 1]
+            novelty_categorical: Categorical novelty level from MW v2
+            salience_fallback: P02 salience_score [0, 1] as fallback
             weights: Weight configuration
 
         Returns:
             Novelty factor component [0, novelty_weight]
         """
-        # Clamp input to valid range
-        clamped_novelty = max(0.0, min(1.0, novelty_score))
-        return clamped_novelty * weights.novelty_weight
+        if novelty_categorical and novelty_categorical.upper() in self.NOVELTY_MAP:
+            novelty_numeric = self.NOVELTY_MAP[novelty_categorical.upper()]
+        else:
+            # Fallback to salience_score for pre-MW v2 events
+            novelty_numeric = max(0.0, min(1.0, salience_fallback))
+        return novelty_numeric * weights.novelty_weight
+
+    def compute_surprise_factor(
+        self,
+        surprise_level: float,
+        weights: ImportanceWeights,
+    ) -> float:
+        """
+        Compute surprise factor from cognitive surprise level.
+
+        Surprise enhances memory encoding by triggering prediction-error
+        signals in the hippocampus (Ranganath & Rainer, 2003).
+
+        Args:
+            surprise_level: Cognitive surprise [0, 1] from MW v2
+            weights: Weight configuration
+
+        Returns:
+            Surprise factor component [0, surprise_weight]
+        """
+        clamped = max(0.0, min(1.0, surprise_level))
+        return clamped * weights.surprise_weight
+
+    def compute_identity_factor(
+        self,
+        identity_relevance: float,
+        identity_domains_json: str,
+        weights: ImportanceWeights,
+    ) -> float:
+        """
+        Compute identity factor from self-referential signals.
+
+        Uses identity_relevance from MW v2 if available (> 0.0).
+        Falls back to identity_domains count / 9.0 as proxy
+        (POC validated, Discovery 16.6 Q7).
+
+        Args:
+            identity_relevance: MW v2 identity relevance [0, 1]
+            identity_domains_json: JSON array of identity domain strings
+            weights: Weight configuration
+
+        Returns:
+            Identity factor component [0, identity_weight]
+        """
+        import json as _json
+
+        if identity_relevance > 0.0:
+            signal = min(1.0, identity_relevance)
+        else:
+            try:
+                domains = _json.loads(identity_domains_json) if identity_domains_json else []
+            except (ValueError, TypeError):
+                domains = []
+            signal = min(1.0, len(domains) / 9.0)
+
+        return signal * weights.identity_weight
+
+    def compute_recency_factor(
+        self,
+        event_timestamp_ms: int,
+        now_ms: int,
+        weights: ImportanceWeights,
+    ) -> float:
+        """
+        Compute recency factor using exponential decay.
+
+        Models hippocampal prioritization of fresh experiences
+        (Frankland & Bontempi, 2005).
+
+        Formula: recency_w * exp(-lambda * hours_since_event)
+        Lambda: 0.005 (half-life ~139h / ~6 days, POC Phase 5)
+
+        Args:
+            event_timestamp_ms: Event time (ms since epoch)
+            now_ms: Current time (ms since epoch)
+            weights: Weight configuration
+
+        Returns:
+            Recency factor component [0, recency_weight]
+        """
+        if event_timestamp_ms <= 0 or now_ms <= 0:
+            return 0.0
+
+        hours_since = max(0.0, (now_ms - event_timestamp_ms) / 3_600_000.0)
+        decay = math.exp(-self.RECENCY_LAMBDA * hours_since)
+        return decay * weights.recency_weight
+
+    def derive_source_reliability(
+        self,
+        source_reliability: float,
+        source_type: str,
+    ) -> float:
+        """
+        Derive source reliability for importance modulation.
+
+        Priority:
+            1. MW-provided source_reliability (if != 1.0 default)
+            2. SOURCE_TYPE_RELIABILITY lookup by source_type
+            3. Default 1.0 (fully trusted)
+
+        Always applies RELIABILITY_FLOOR (0.3) to prevent total
+        suppression of any event.
+
+        Args:
+            source_reliability: MW v2 source reliability [0, 1]
+            source_type: Source type string for lookup fallback
+
+        Returns:
+            Floored reliability [RELIABILITY_FLOOR, 1.0]
+        """
+        if source_reliability < 1.0:
+            raw = source_reliability
+        elif source_type:
+            raw = self.SOURCE_TYPE_RELIABILITY.get(source_type, 1.0)
+        else:
+            raw = 1.0
+        return max(self.RELIABILITY_FLOOR, raw)
 
     def get_event_type_multiplier(self, content_type: str) -> float:
         """
@@ -576,65 +905,169 @@ class ImportanceScorer:
         self,
         event: Any,
         weights: ImportanceWeights,
+        now_ms: Optional[int] = None,
     ) -> Tuple[float, ImportanceBreakdown]:
         """
         Compute importance score for a single event.
 
-        Formula:
-            importance = (emotional + novelty + social) × multiplier
-
-        All component scores are computed using the configured weights,
-        then multiplied by the event type multiplier. Final score is
-        clamped to [0.0, 1.0].
+        CONFIG_B Formula (POC validated -- 562K events, 120/120 scenarios):
+            base = emotional + surprise + novelty + social + identity + recency
+            importance = clamp(base * elab * goal * arc * temporal
+                              * type * intent * relationship * tier * reliability, 0, 1)
 
         Args:
             event: P03EventState or object with required attributes
             weights: Weight configuration to use
+            now_ms: Current time in ms (for recency). Uses time.time() if None.
 
         Returns:
             Tuple of (score, breakdown) where:
                 - score: Final importance [0.0, 1.0]
                 - breakdown: Component values for audit
         """
-        # Extract event attributes with safe defaults
+        import time as _time
+
+        if now_ms is None:
+            now_ms = int(_time.time() * 1000)
+
+        # --- Extract event attributes with safe defaults ---
         sentiment_score = getattr(event, "sentiment_score", 0.0) or 0.0
         affect_valence = getattr(event, "affect_valence", 0.0) or 0.0
-        novelty_score = getattr(event, "novelty_score", 0.0) or 0.0
-        participant_count = getattr(event, "participant_count", 1) or 1
+        affect_arousal = getattr(event, "affect_arousal", 0.0) or 0.0
+        surprise_level = getattr(event, "surprise_level", 0.0) or 0.0
+        novelty_cat = getattr(event, "novelty", "") or ""
+        salience_score = getattr(event, "salience_score", 0.0) or 0.0
+        num_participants = getattr(event, "num_participants", 1) or 1
+        social_intimacy = getattr(event, "social_intimacy", "") or ""
+        identity_relevance_val = getattr(event, "identity_relevance", 0.0) or 0.0
+        identity_domains_json = getattr(event, "identity_domains_json", "[]") or "[]"
+        event_timestamp = getattr(event, "timestamp", 0) or 0
+        elaboration_depth = getattr(event, "elaboration_depth", "") or ""
+        narrative_is_goal = getattr(event, "narrative_is_goal_event", False)
+        narrative_arc = getattr(event, "narrative_arc_position", "") or ""
+        temporal_orientation = getattr(event, "temporal_orientation", "") or ""
+        source_reliability_val = getattr(event, "source_reliability", 1.0)
+        if source_reliability_val is None:
+            source_reliability_val = 1.0
+        source_type = getattr(event, "source_type", "") or ""
+        memory_tier = getattr(event, "memory_tier", "routine") or "routine"
         content_type = getattr(event, "content_type", "message") or "message"
+        # Prefer activity_type_ultrabert for type multiplier, fallback to content_type
+        activity_type = getattr(event, "activity_type_ultrabert", "") or ""
+        if not activity_type:
+            activity_type = content_type
+        # Prefer intent_ultrabert, fallback to intent_label
+        intent_label = getattr(event, "intent_ultrabert", "") or ""
+        if not intent_label:
+            intent_label = getattr(event, "intent_label", "") or ""
 
-        # Compute each component
+        # --- 6 Additive Components ---
         emotional = self.compute_emotional_intensity(
             sentiment_score=sentiment_score,
             affect_valence=affect_valence,
+            affect_arousal=affect_arousal,
+            weights=weights,
+        )
+
+        surprise = self.compute_surprise_factor(
+            surprise_level=surprise_level,
             weights=weights,
         )
 
         novelty = self.compute_novelty_factor(
-            novelty_score=novelty_score,
+            novelty_categorical=novelty_cat,
+            salience_fallback=salience_score,
             weights=weights,
         )
 
         social = self.compute_social_factor(
-            participant_count=participant_count,
+            num_participants=num_participants,
+            social_intimacy=social_intimacy,
             weights=weights,
         )
 
-        # Sum components for base importance
-        base_importance = emotional + novelty + social
+        identity = self.compute_identity_factor(
+            identity_relevance=identity_relevance_val,
+            identity_domains_json=identity_domains_json,
+            weights=weights,
+        )
 
-        # Apply event type multiplier
-        multiplier = self.get_event_type_multiplier(content_type)
-        raw_score = base_importance * multiplier
+        recency = self.compute_recency_factor(
+            event_timestamp_ms=event_timestamp,
+            now_ms=now_ms,
+            weights=weights,
+        )
 
-        # Clamp to [0.0, 1.0]
+        base = emotional + surprise + novelty + social + identity + recency
+
+        # --- 7 Multiplicative Modulators ---
+        elab = self.ELABORATION_MAP.get(elaboration_depth, 1.0)
+        goal = self.GOAL_BOOST if narrative_is_goal else 1.0
+        arc = self.ARC_MAP.get(narrative_arc, 1.0)
+        temporal = self.TEMPORAL_MAP.get(temporal_orientation, 1.0)
+        type_mult = self.EVENT_TYPE_MULTIPLIERS.get(activity_type.lower().strip(), 1.0)
+        intent_boost_val = self.INTENT_BOOST_MULTIPLIERS.get(intent_label, 1.0)
+
+        # ADR-K026: KG relationship boost
+        relationship_boost_val = 1.0
+        max_edge_weight_val = 0.0
+        if (
+            self._kg_boost_config is not None
+            and self._kg_boost_config.enabled
+            and self._kg_edge_cache is not None
+        ):
+            from k0.modules.consolidation.algorithms.kg_relationship_boost import (
+                compute_relationship_boost,
+                extract_entity_ids,
+            )
+
+            ner_json = getattr(event, "ner_entities_json", "[]") or "[]"
+            entity_ids = extract_entity_ids(ner_json)
+            relationship_boost_val, max_edge_weight_val = compute_relationship_boost(
+                entity_ids=entity_ids,
+                edge_cache=self._kg_edge_cache,
+                config=self._kg_boost_config,
+            )
+
+        tier = self.MEMORY_TIER_MAP.get(memory_tier, 1.0)
+        reliability_val = self.derive_source_reliability(
+            source_reliability=source_reliability_val,
+            source_type=source_type,
+        )
+
+        # Apply all modulators (8 multiplicative, ADR-K026 added relationship)
+        raw_score = (
+            base
+            * elab
+            * goal
+            * arc
+            * temporal
+            * type_mult
+            * intent_boost_val
+            * relationship_boost_val
+            * tier
+            * reliability_val
+        )
         final_score = max(0.0, min(1.0, raw_score))
 
         breakdown = ImportanceBreakdown(
             emotional_component=emotional,
+            surprise_component=surprise,
             novelty_component=novelty,
             social_component=social,
-            multiplier=multiplier,
+            identity_component=identity,
+            recency_component=recency,
+            base_score=base,
+            elab_boost=elab,
+            goal_boost=goal,
+            arc_boost=arc,
+            temporal_boost=temporal,
+            type_multiplier=type_mult,
+            intent_boost=intent_boost_val,
+            relationship_boost=relationship_boost_val,
+            max_edge_weight=max_edge_weight_val,
+            tier_multiplier=tier,
+            reliability=reliability_val,
             final_score=final_score,
             weights_source=self._weights_source,
         )
@@ -644,6 +1077,7 @@ class ImportanceScorer:
     async def score_batch(
         self,
         events: List[Any],
+        now_ms: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         Score all events in a batch and update P03EventState.
@@ -653,35 +1087,47 @@ class ImportanceScorer:
 
         Args:
             events: List of P03EventState objects
+            now_ms: Current time in ms. If None, uses time.time().
 
         Returns:
             List of ScoredEvent-compatible dictionaries
         """
-        weights = await self.get_weights()
+        import time as _time
+
+        if now_ms is None:
+            now_ms = int(_time.time() * 1000)
+
+        weights, _, _ = await self.get_weights_with_cold_start()
         scored: List[Dict[str, Any]] = []
 
         for event in events:
-            score, breakdown = self.compute_importance_score(event, weights)
+            score, breakdown = self.compute_importance_score(event, weights, now_ms=now_ms)
+            priority_tier = self.get_priority_tier(score)
 
             # Update event state in-place if method exists
             if hasattr(event, "set_importance"):
                 event.set_importance(
                     score=score,
-                    recency=0.0,  # Reserved for future recency decay
+                    recency=breakdown.recency_component,
                     affect=breakdown.emotional_component,
                     social=breakdown.social_component,
                     novelty=breakdown.novelty_component,
+                    surprise=breakdown.surprise_component,
+                    identity=breakdown.identity_component,
                 )
 
             scored.append(
                 {
                     "event_id": getattr(event, "event_id", "unknown"),
                     "importance_score": score,
-                    "recency_factor": 0.0,
+                    "recency_factor": breakdown.recency_component,
                     "affect_factor": breakdown.emotional_component,
                     "social_factor": breakdown.social_component,
                     "novelty_factor": breakdown.novelty_component,
-                    "breakdown": breakdown,  # For audit logging
+                    "surprise_factor": breakdown.surprise_component,
+                    "identity_factor": breakdown.identity_component,
+                    "priority_tier": priority_tier,
+                    "breakdown": breakdown,
                 }
             )
 
@@ -717,11 +1163,13 @@ class ImportanceScorer:
         """
         Map importance score to priority tier.
 
-        Thresholds from Dossier C.2.1:
+        6-tier system (POC Phase 6 validated, CONFIG_B):
             - 0.80-1.00: CRITICAL (process immediately)
-            - 0.50-0.79: HIGH (process in current cycle)
-            - 0.30-0.49: MEDIUM (process if capacity allows)
-            - 0.00-0.29: LOW (may be deferred)
+            - 0.60-0.79: HIGH (process in current cycle)
+            - 0.45-0.59: MEDIUM_HIGH (high-priority processing)
+            - 0.30-0.44: MEDIUM (process if capacity allows)
+            - 0.15-0.29: LOW_MEDIUM (low priority, may defer)
+            - 0.00-0.14: LOW (defer or skip)
 
         Args:
             score: Importance score [0, 1]
@@ -731,10 +1179,14 @@ class ImportanceScorer:
         """
         if score >= 0.80:
             return "CRITICAL"
-        elif score >= 0.50:
+        elif score >= 0.60:
             return "HIGH"
+        elif score >= 0.45:
+            return "MEDIUM_HIGH"
         elif score >= 0.30:
             return "MEDIUM"
+        elif score >= 0.15:
+            return "LOW_MEDIUM"
         else:
             return "LOW"
 
@@ -743,6 +1195,7 @@ class ImportanceScorer:
         events: List[Any],
         audit_logger: Any,
         sample_rate: float = 1.0,
+        now_ms: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         Score all events with factor audit logging (Issue 4.1.2).
@@ -755,45 +1208,46 @@ class ImportanceScorer:
             audit_logger: P03AuditLogger instance for recording decisions
             sample_rate: Fraction of events to audit [0.0, 1.0].
                         Use 1.0 for debug (100%), 0.1 for production (10%).
+            now_ms: Current time in ms. If None, uses time.time().
 
         Returns:
             List of ScoredEvent-compatible dictionaries
-
-        Audit Record Fields:
-            - action: AuditAction.SCORE
-            - formula_used: "importance_scorer"
-            - formula_version: "1.0.0"
-            - inputs: sentiment_score, affect_valence, novelty_score,
-                     participant_count, content_type, weights_source
-            - outputs: importance_score, emotional_component, novelty_component,
-                      social_component, multiplier
-            - confidence: importance_score value
         """
         import random
+        import time as _time
 
-        weights = await self.get_weights()
+        if now_ms is None:
+            now_ms = int(_time.time() * 1000)
+
+        weights, _, _ = await self.get_weights_with_cold_start()
         scored: List[Dict[str, Any]] = []
 
         for event in events:
-            score, breakdown = self.compute_importance_score(event, weights)
+            score, breakdown = self.compute_importance_score(event, weights, now_ms=now_ms)
+            priority_tier = self.get_priority_tier(score)
 
             # Update event state in-place if method exists
             if hasattr(event, "set_importance"):
                 event.set_importance(
                     score=score,
-                    recency=0.0,  # Reserved for future recency decay
+                    recency=breakdown.recency_component,
                     affect=breakdown.emotional_component,
                     social=breakdown.social_component,
                     novelty=breakdown.novelty_component,
+                    surprise=breakdown.surprise_component,
+                    identity=breakdown.identity_component,
                 )
 
             scored_event = {
                 "event_id": getattr(event, "event_id", "unknown"),
                 "importance_score": score,
-                "recency_factor": 0.0,
+                "recency_factor": breakdown.recency_component,
                 "affect_factor": breakdown.emotional_component,
                 "social_factor": breakdown.social_component,
                 "novelty_factor": breakdown.novelty_component,
+                "surprise_factor": breakdown.surprise_component,
+                "identity_factor": breakdown.identity_component,
+                "priority_tier": priority_tier,
                 "breakdown": breakdown,
             }
             scored.append(scored_event)
@@ -803,28 +1257,47 @@ class ImportanceScorer:
                 # Import AuditAction here to avoid circular import
                 from k0.pipelines.p03.audit_logger import AuditAction
 
-                priority_tier = self.get_priority_tier(score)
-
                 audit_logger.log_decision(
                     memory_id=getattr(event, "event_id", "unknown"),
                     source_table="st_hipp_events",
                     action=AuditAction.SCORE,
                     formula_used="importance_scorer",
-                    formula_version="1.0.0",
+                    formula_version="2.0.0",
                     inputs={
                         "sentiment_score": getattr(event, "sentiment_score", 0.0),
                         "affect_valence": getattr(event, "affect_valence", 0.0),
-                        "novelty_score": getattr(event, "novelty_score", 0.0),
-                        "participant_count": getattr(event, "participant_count", 1),
+                        "affect_arousal": getattr(event, "affect_arousal", 0.0),
+                        "surprise_level": getattr(event, "surprise_level", 0.0),
+                        "novelty": getattr(event, "novelty", ""),
+                        "num_participants": getattr(event, "num_participants", 1),
+                        "social_intimacy": getattr(event, "social_intimacy", ""),
+                        "identity_relevance": getattr(event, "identity_relevance", 0.0),
+                        "elaboration_depth": getattr(event, "elaboration_depth", ""),
+                        "source_reliability": getattr(event, "source_reliability", 1.0),
+                        "memory_tier": getattr(event, "memory_tier", "routine"),
+                        "narrative_is_goal_event": getattr(event, "narrative_is_goal_event", False),
+                        "narrative_arc_position": getattr(event, "narrative_arc_position", ""),
+                        "temporal_orientation": getattr(event, "temporal_orientation", ""),
                         "content_type": getattr(event, "content_type", "message"),
                         "weights_source": self._weights_source,
                     },
                     outputs={
                         "importance_score": score,
                         "emotional_component": breakdown.emotional_component,
+                        "surprise_component": breakdown.surprise_component,
                         "novelty_component": breakdown.novelty_component,
                         "social_component": breakdown.social_component,
-                        "multiplier": breakdown.multiplier,
+                        "identity_component": breakdown.identity_component,
+                        "recency_component": breakdown.recency_component,
+                        "base_score": breakdown.base_score,
+                        "elab_boost": breakdown.elab_boost,
+                        "goal_boost": breakdown.goal_boost,
+                        "arc_boost": breakdown.arc_boost,
+                        "temporal_boost": breakdown.temporal_boost,
+                        "type_multiplier": breakdown.type_multiplier,
+                        "intent_boost": breakdown.intent_boost,
+                        "tier_multiplier": breakdown.tier_multiplier,
+                        "reliability": breakdown.reliability,
                         "priority_tier": priority_tier,
                     },
                     decision_id=getattr(audit_logger, "cycle_id", None),
@@ -833,9 +1306,13 @@ class ImportanceScorer:
                         "importance_score": score,
                         "priority_tier": priority_tier,
                         "emotional": breakdown.emotional_component,
+                        "surprise": breakdown.surprise_component,
                         "novelty": breakdown.novelty_component,
                         "social": breakdown.social_component,
-                        "multiplier": breakdown.multiplier,
+                        "identity": breakdown.identity_component,
+                        "recency": breakdown.recency_component,
+                        "base_score": breakdown.base_score,
+                        "type_multiplier": breakdown.type_multiplier,
                         "weights_source": self._weights_source,
                     },
                 )

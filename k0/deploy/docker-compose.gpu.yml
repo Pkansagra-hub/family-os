@@ -66,7 +66,7 @@ services:
       K0_POSTGRES_USER: k0user
       K0_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       K0_USE_POSTGRESQL: "true"
-      # HuggingFace authentication (for private ultrabert-weights repo)
+      # HuggingFace token for UltraBERT weight downloads (loaded from env/k0.env)
       HF_TOKEN: ${HF_TOKEN}
       # GPU settings
       CUDA_VISIBLE_DEVICES: "0"
@@ -78,9 +78,14 @@ services:
         condition: service_healthy
     volumes:
       - ../:/app/k0 # Mount source code for hot reloading
+      - ../../k1/contracts:/app/k1/contracts:ro # K1 schemas for gate $ref resolution
       - ./secrets:/secrets:ro
       # Mount modeling_studio for PyTorch UltraBERT backend
       - D:/Modeling_studio/src:/app/modeling_studio:ro
+      # UltraBERT pre-cached weights (avoids runtime HuggingFace download)
+      # Host cache: ~/.cache/familyos_ultrabert/encoder/v2/fp32/ (~967MB)
+      # Container runs as root (user: 0:0) so Path.home() = /root
+      - ~/.cache/familyos_ultrabert:/root/.cache/familyos_ultrabert:ro
       # PEP Schema (core policy enforcement schema)
       - type: bind
         source: ../contracts/policy/pep.schema.json

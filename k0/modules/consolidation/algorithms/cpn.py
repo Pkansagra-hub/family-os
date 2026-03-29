@@ -64,23 +64,25 @@ class CPNConfig:
     Configuration for Causal Perturbation Network.
 
     Attributes:
-        emotional_threshold: Min |sentiment| for regret event selection (default: 0.6)
-        top_k_regret_events: Number of events to analyze (default: 10)
-        causal_chain_depth: Max hops in causal graph (default: 5)
+        emotional_threshold: Min |sentiment| for regret event selection (default: 0.3)
+        top_k_regret_events: Number of events to analyze (default: 20, increased for cold-start)
+        causal_chain_depth: Max hops in causal graph (default: 3, decreased for cold-start)
         perturbation_std: Gaussian perturbation std (default: 0.1)
-        min_plausibility: Min plausibility to keep scenario (default: 0.3)
-        min_utility_delta: Min utility change for UPWARD/DOWNWARD (default: 0.3)
-        counterfactual_types: Scenario types to generate (default: all three)
+        min_plausibility: Min plausibility to keep scenario (default: 0.1, lowered for cold-start)
+        min_utility_delta: Min utility change for UPWARD/DOWNWARD (default: 0.1, lowered for cold-start)
+        counterfactual_types: Scenario types to generate (default: UPWARD only for cold-start)
         seed: RNG seed for determinism (default: None)
     """
 
-    emotional_threshold: float = 0.6
-    top_k_regret_events: int = 10
-    causal_chain_depth: int = 5
+    emotional_threshold: float = 0.3  # GAP-001 M9.3: lowered from 0.6 for family events
+    top_k_regret_events: int = 20  # M1-E3-I4: increased from 10 for cold-start
+    causal_chain_depth: int = 3  # M1-E3-I5: decreased from 5 for cold-start
     perturbation_std: float = 0.1
-    min_plausibility: float = 0.3
-    min_utility_delta: float = 0.3
-    counterfactual_types: Tuple[str, ...] = ("UPWARD", "DOWNWARD", "SEMIFACTUAL")
+    min_plausibility: float = 0.1  # M1-E3-I2: lowered from 0.3 for cold-start
+    min_utility_delta: float = 0.1  # M1-E3-I3: lowered from 0.3 for cold-start
+    counterfactual_types: Tuple[str, ...] = (
+        "UPWARD",
+    )  # M1-E3-I6: focus on improvements for cold-start
     seed: Optional[int] = None
 
     def __post_init__(self) -> None:
@@ -371,6 +373,7 @@ class CausalPerturbationNetwork:
         episodes: List[Any],
         kg_edges: List[Any],
         rng_seed: Optional[int] = None,
+        kg_entities: Optional[List[Any]] = None,
     ) -> List[CPNCounterfactual]:
         """
         Generate counterfactual scenarios from episodes and knowledge graph.
@@ -379,6 +382,7 @@ class CausalPerturbationNetwork:
             episodes: List of episode objects (matching EpisodeProtocol)
             kg_edges: List of KG edge objects (matching KGEdgeProtocol)
             rng_seed: Optional RNG seed for determinism
+            kg_entities: Optional list of KG entities for label lookup
 
         Returns:
             List of CPNCounterfactual scenarios
@@ -386,14 +390,39 @@ class CausalPerturbationNetwork:
         seed = rng_seed or self.config.seed
         rng = random.Random(seed) if seed else random.Random()
 
+        # Build entity label lookup for better counterfactual descriptions
+        entity_labels: Dict[str, str] = {}
+        if kg_entities:
+            for entity in kg_entities:
+                entity_id = getattr(entity, "entity_id", None)
+                if entity_id:
+                    # Prefer canonical_name, fall back to entity_type
+                    label = getattr(entity, "canonical_name", None)
+                    if not label:
+                        label = getattr(entity, "name", None)
+                    if label:
+                        entity_labels[entity_id] = label
+
         self._logger.debug(
-            "CPN starting generation",
+            "CPN generate method entered",
             extra={
                 "episodes_count": len(episodes),
                 "edges_count": len(kg_edges),
                 "seed": seed,
             },
         )
+
+        # Debug: log first episode entity_ids
+        if episodes:
+            first_ep = episodes[0]
+            entity_ids = getattr(first_ep, "entity_ids", [])
+            self._logger.debug(
+                "CPN first episode entity_ids",
+                extra={
+                    "entity_ids": entity_ids,
+                    "episode_id": getattr(first_ep, "cluster_id", "unknown"),
+                },
+            )
 
         # Step 1: Select regret-worthy events
         regret_events = self._select_regret_events(episodes, rng)
@@ -405,12 +434,36 @@ class CausalPerturbationNetwork:
         # Build edge lookup for efficient causal chain extraction
         edge_lookup = self._build_edge_lookup(kg_edges)
 
+        self._logger.debug(
+            "CPN edge lookup built",
+            extra={
+                "total_edges": len(kg_edges),
+                "lookup_targets": len(edge_lookup),
+                "causes_edges": sum(
+                    1 for edges in edge_lookup.values() for _, conf in edges if conf >= 0.7
+                ),
+                "precedes_edges": sum(
+                    1 for edges in edge_lookup.values() for _, conf in edges if conf < 0.7
+                ),
+            },
+        )
+
         # Step 2-4: For each regret event, build DAG and generate scenarios
         all_scenarios: List[CPNCounterfactual] = []
 
         for episode in regret_events:
-            # Extract causal chain
-            dag = self._extract_causal_chain(episode, edge_lookup)
+            # Extract causal chain with entity labels for better descriptions
+            dag = self._extract_causal_chain(episode, edge_lookup, entity_labels)
+
+            self._logger.debug(
+                "CPN causal chain extracted",
+                extra={
+                    "episode_id": self._get_episode_id(episode),
+                    "dag_nodes": dag.node_count,
+                    "dag_edges": dag.edge_count,
+                    "entity_ids": len(self._get_episode_entities(episode)),
+                },
+            )
 
             if dag.node_count == 0:
                 continue
@@ -421,12 +474,21 @@ class CausalPerturbationNetwork:
                 dag=dag,
                 rng=rng,
             )
+
+            self._logger.debug(
+                "CPN scenarios generated for episode",
+                extra={
+                    "episode_id": self._get_episode_id(episode),
+                    "scenarios_before_filter": len(scenarios),
+                },
+            )
+
             all_scenarios.extend(scenarios)
 
         # Sort by utility_delta descending (most impactful first)
         all_scenarios.sort(key=lambda s: abs(s.utility_delta), reverse=True)
 
-        self._logger.info(
+        self._logger.debug(
             "CPN completed generation",
             extra={
                 "regret_events_count": len(regret_events),
@@ -448,6 +510,9 @@ class CausalPerturbationNetwork:
         - High |sentiment| (emotionally charged)
         - High salience (important to user)
         - Recency (more relevant for learning)
+
+        GAP-001 M9.3: Added fallback to select top episodes by salience
+        when no episodes pass emotional threshold.
 
         Args:
             episodes: All episodes to consider
@@ -476,6 +541,23 @@ class CausalPerturbationNetwork:
 
             scored.append((ep, impact))
 
+        # GAP-001 M9.3: Fallback to salience-based selection if no emotional matches
+        if not scored and episodes:
+            logger.info(
+                "CPN fallback: no episodes passed emotional threshold, selecting by salience",
+                extra={
+                    "emotional_threshold": self.config.emotional_threshold,
+                    "episode_count": len(episodes),
+                },
+            )
+            for ep in episodes:
+                salience = self._get_episode_salience(ep)
+                start_time = self._get_episode_start_time(ep)
+                recency_weight = self._compute_recency_weight(start_time)
+                impact = salience * recency_weight
+                impact += rng.random() * 0.0001
+                scored.append((ep, impact))
+
         # Sort by impact descending
         scored.sort(key=lambda x: x[1], reverse=True)
 
@@ -488,19 +570,25 @@ class CausalPerturbationNetwork:
         """
         Build lookup: target_id -> [(source_id, confidence), ...]
 
-        Only includes CAUSES edges.
+        Includes CAUSES edges and PRECEDES edges as weak causal candidates.
+        PRECEDES edges are treated as weak causation (A precedes B → A might cause B).
         """
         lookup: Dict[str, List[Tuple[str, float]]] = {}
 
         for edge in kg_edges:
             rel_type = self._get_edge_relation_type(edge)
 
-            if rel_type != "CAUSES":
+            # M1-E2-I4: Include PRECEDES edges as weak causal candidates
+            if rel_type not in ("CAUSES", "PRECEDES"):
                 continue
 
             target_id = self._get_edge_target(edge)
             source_id = self._get_edge_source(edge)
             confidence = self._get_edge_confidence(edge)
+
+            # Apply confidence penalty for PRECEDES edges (weaker causal evidence)
+            if rel_type == "PRECEDES":
+                confidence *= 0.7  # 30% penalty for weaker causal evidence
 
             if target_id not in lookup:
                 lookup[target_id] = []
@@ -512,6 +600,7 @@ class CausalPerturbationNetwork:
         self,
         episode: Any,
         edge_lookup: Dict[str, List[Tuple[str, float]]],
+        entity_labels: Optional[Dict[str, str]] = None,
     ) -> CausalDAG:
         """
         Build causal predecessor DAG from knowledge graph.
@@ -522,11 +611,13 @@ class CausalPerturbationNetwork:
         Args:
             episode: Episode to analyze
             edge_lookup: Pre-built edge lookup
+            entity_labels: Optional entity_id -> canonical_name mapping
 
         Returns:
             CausalDAG with tagged nodes
         """
         dag = CausalDAG()
+        entity_labels = entity_labels or {}
 
         # Get entity IDs from episode
         entity_ids = self._get_episode_entities(episode)
@@ -536,6 +627,17 @@ class CausalPerturbationNetwork:
             return dag
 
         dag.target_node_id = episode_id
+
+        # Debug: check if entity_ids are in edge_lookup
+        self._logger.debug(
+            "CPN extract causal chain",
+            extra={
+                "episode_id": episode_id,
+                "entity_ids": entity_ids,
+                "edge_lookup_keys": list(edge_lookup.keys())[:10],  # First 10 keys
+                "matches": [eid for eid in entity_ids if eid in edge_lookup],
+            },
+        )
 
         # BFS to extract causal chain
         visited: Set[str] = set()
@@ -554,10 +656,14 @@ class CausalPerturbationNetwork:
             # Determine modifiability (simplified heuristic)
             modifiability = self._determine_modifiability(node_id)
 
+            # Get human-readable label from entity lookup
+            label = entity_labels.get(node_id)
+
             dag.add_node(
                 node_id=node_id,
                 modifiability=modifiability,
                 depth=depth,
+                label=label,
             )
 
             # Get predecessors
@@ -566,6 +672,18 @@ class CausalPerturbationNetwork:
                     dag.add_edge(source_id, node_id, confidence)
                     if source_id not in visited:
                         queue.append((source_id, depth + 1))
+
+        self._logger.debug(
+            "CPN DAG built",
+            extra={
+                "episode_id": episode_id,
+                "entity_ids": entity_ids,
+                "dag_nodes": dag.node_count,
+                "dag_edges": dag.edge_count,
+                "modifiable_nodes": len(dag.get_modifiable_nodes()),
+                "edge_lookup_hits": sum(1 for eid in entity_ids if eid in edge_lookup),
+            },
+        )
 
         return dag
 
@@ -590,6 +708,15 @@ class CausalPerturbationNetwork:
 
         modifiable_nodes = dag.get_modifiable_nodes()
 
+        self._logger.debug(
+            "CPN modifiable nodes found",
+            extra={
+                "episode_id": self._get_episode_id(episode),
+                "modifiable_nodes": len(modifiable_nodes),
+                "total_nodes": dag.node_count,
+            },
+        )
+
         if not modifiable_nodes:
             return scenarios
 
@@ -603,9 +730,29 @@ class CausalPerturbationNetwork:
                     intervention_type=ScenarioType.UPWARD,
                     rng=rng,
                 )
-                if upward and upward.plausibility >= self.config.min_plausibility:
-                    if upward.utility_delta >= self.config.min_utility_delta:
-                        scenarios.append(upward)
+                if upward:
+                    self._logger.debug(
+                        "CPN upward scenario generated",
+                        extra={
+                            "episode_id": self._get_episode_id(episode),
+                            "node_id": node.node_id,
+                            "plausibility": upward.plausibility,
+                            "utility_delta": upward.utility_delta,
+                            "min_plausibility": self.config.min_plausibility,
+                            "min_utility_delta": self.config.min_utility_delta,
+                        },
+                    )
+                    if upward.plausibility >= self.config.min_plausibility:
+                        if upward.utility_delta >= self.config.min_utility_delta:
+                            scenarios.append(upward)
+                        else:
+                            self._logger.debug(
+                                "CPN upward scenario filtered: utility_delta too low"
+                            )
+                    else:
+                        self._logger.debug("CPN upward scenario filtered: plausibility too low")
+                else:
+                    self._logger.debug("CPN upward scenario not generated")
 
             if "DOWNWARD" in self.config.counterfactual_types:
                 downward = self._simulate_intervention(
@@ -680,10 +827,10 @@ class CausalPerturbationNetwork:
             if abs(utility_delta) > 0.15:
                 return None  # Not a valid semifactual
 
-        # Generate descriptions
+        # Generate descriptions with episode context
         original_outcome = self._generate_outcome_description(episode, original_sentiment)
         counterfactual_outcome = self._generate_counterfactual_description(
-            node, intervention_type, predicted_sentiment
+            node, intervention_type, predicted_sentiment, episode
         )
 
         # Generate mitigation suggestion for UPWARD scenarios
@@ -801,16 +948,27 @@ class CausalPerturbationNetwork:
         node: CausalNode,
         intervention_type: ScenarioType,
         predicted_sentiment: float,
+        episode: Any = None,
     ) -> str:
-        """Generate description of counterfactual outcome."""
-        node_label = node.label or f"action at {node.node_id}"
+        """Generate description of counterfactual outcome with episode context."""
+        node_label = node.label or node.node_id.replace("cluster_", "").replace("_", " ").title()
+
+        # Get episode context for richer description
+        episode_context = ""
+        if episode:
+            summary = self._get_episode_summary(episode)
+            if summary:
+                # Truncate long summaries
+                if len(summary) > 60:
+                    summary = summary[:57] + "..."
+                episode_context = f" during '{summary}'"
 
         if intervention_type == ScenarioType.UPWARD:
-            return f"If {node_label} had been different, outcome would be better"
+            return f"If {node_label}'s involvement{episode_context} had been different, the outcome could have been better"
         elif intervention_type == ScenarioType.DOWNWARD:
-            return f"If {node_label} had also gone wrong, outcome would be worse"
+            return f"If {node_label} had also caused issues{episode_context}, the outcome would have been worse"
         else:
-            return f"Even if {node_label} changed, outcome would be similar"
+            return f"Even if {node_label}'s role{episode_context} had changed, the outcome would be similar"
 
     def _generate_mitigation(self, node: CausalNode) -> str:
         """Generate if-then mitigation rule for upward counterfactual."""
@@ -876,6 +1034,35 @@ class CausalPerturbationNetwork:
         elif isinstance(episode, dict):
             return episode.get("entity_ids", [])
         return []
+
+    def _get_episode_summary(self, episode: Any) -> str:
+        """Get summary from episode object.
+
+        Tries multiple fields in order of preference:
+        1. episode_summary (from st_epi table)
+        2. summary (from EpisodeCluster dataclass)
+        3. title (fallback)
+        """
+        # Try episode_summary first (from st_epi table)
+        if hasattr(episode, "episode_summary"):
+            val = episode.episode_summary
+            if val:
+                return val
+        # Try summary (from EpisodeCluster dataclass)
+        if hasattr(episode, "summary"):
+            val = episode.summary
+            if val:
+                return val
+        elif isinstance(episode, dict):
+            val = episode.get("episode_summary", episode.get("summary", ""))
+            if val:
+                return val
+
+        # Fallback: try to build from title if available
+        if hasattr(episode, "title") and episode.title:
+            return episode.title
+
+        return ""
 
     # =========================================================================
     # EDGE ACCESS HELPERS

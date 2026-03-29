@@ -388,9 +388,73 @@ P02 → st_hipp_events → RECONCILE AGAINST → 8 Memory Layers (TRUTH)
 | **REINFORCE** | New signal matches existing truth (similarity >0.85) | Increment `observation_count`, boost `confidence_score`, refresh `last_observed_at` | "Tuesday yoga" seen for 5th time |
 | **EXTEND** | New signal adds details to existing truth (similarity 0.6-0.85) | Append to `source_episodes_json`, update attributes | "Tuesday yoga" now has location "CorePower" |
 | **CREATE** | New signal has no match in truth (similarity <0.6) | INSERT new record with `is_canonical=1` | First "Wednesday hiking" pattern |
-| **EVOLVE** | New signal represents schema evolution | Create new version, mark old as `is_canonical=0` | "Prefers Thai" → "Prefers Vietnamese" |
-| **CONTRADICT** | New signal conflicts with existing truth | Flag for P06 Active Learning resolution | "Hates yoga" vs "Loves yoga" |
+| **EVOLVE** | New signal represents schema evolution (K1-signaled) | Create new version, mark old as `is_canonical=0` | "Prefers Thai" → "Prefers Indian" |
+| **CONTRADICT** | New signal conflicts with existing truth (K1-signaled) | Flag for P06 Active Learning resolution | "Hates yoga" vs "Loves yoga" |
 | **PRUNE** | Existing truth not reinforced for extended period | Apply decay, archive, or tombstone | Pattern not seen in 180 days |
+
+#### 1.3.1 Signal Detection Boundary: K0 vs K1
+
+**Research Finding (R2 Phase Research, 2026-03-08)**: R2 episodic research proved that EVOLVE and
+CONTRADICT cannot be detected by cosine similarity or any embedding-based distance metric. The
+six reconciliation decisions split cleanly into two detection tiers:
+
+| Decision | Detection Tier | Detection Method | Why |
+|----------|---------------|------------------|-----|
+| **REINFORCE** | K0 (embedding) | Cosine similarity > 0.85 | "Same thing again" = high similarity, same structure |
+| **EXTEND** | K0 (embedding) | Cosine similarity 0.6-0.85 | "Same thing + new detail" = moderate similarity |
+| **CREATE** | K0 (embedding) | Cosine similarity < 0.6 | "Never seen this" = low similarity |
+| **EVOLVE** | **K1 (LLM in conversation)** | Correction signal from Memory Writer atom | "User corrected me" = conversational context, not vector distance |
+| **CONTRADICT** | **K1 (LLM in conversation)** | Contradiction signal from Memory Writer atom | "This conflicts with what I know" = semantic reasoning |
+| **PRUNE** | K0 (timer) | Temporal decay threshold | "Haven't seen this in N days" = purely temporal |
+
+**Why embeddings fail for EVOLVE**: "Prefers Thai" and "Prefers Indian" have cosine similarity
+~0.93 (both are cuisine preferences with nearly identical semantic structure). No threshold can
+distinguish "similar but additive" (EXTEND) from "similar but corrective" (EVOLVE) using vector
+distance alone. The correction signal is inherently conversational: the LLM recommended Thai
+based on existing truth, the user said "actually, Indian" -- the LLM *knows* this is a correction
+because it participated in the conversation.
+
+**Why embeddings fail for CONTRADICT**: "Loves yoga" and "Hates yoga" have high cosine similarity
+(both are yoga preference statements). Semantic opposition requires understanding negation and
+sentiment reversal, which is a reasoning task, not a distance task.
+
+**Signal Flow for EVOLVE/CONTRADICT**:
+
+```
+K1 LLM in conversation
+  -> detects correction/contradiction (it recommended X, user said Y)
+  -> K1 Memory Writer tags atom with correction metadata:
+     - correction_signal: true
+     - supersedes_concept: "<what truth is being replaced>"
+     - correction_source: "user_explicit" | "user_implicit" | "context_change"
+     - session_context_id: <session_id>
+  -> P02 writes tagged event to st_hipp_events
+  -> P03 reads correction_signal tag
+  -> P03 executes EVOLVE mechanics (version flip, supersedes_id, is_canonical)
+```
+
+**Architectural Implication**: P03 is a **signal processor** for EVOLVE/CONTRADICT, not a
+**signal detector**. P03 does not need to figure out *whether* something is an evolution or
+contradiction -- K1 already told it via the Memory Writer atom metadata. P03 executes the
+truth-versioning mechanics (which it is well-suited for as a batch pipeline).
+
+The reconciliation engine simplifies to:
+
+```python
+# K0 P03 reconciliation (simplified):
+if atom.has_correction_signal:
+    # K1 told us this is an evolution
+    return EVOLVE
+elif atom.has_contradiction_signal:
+    # K1 told us this conflicts with truth
+    return CONTRADICT
+elif similarity > 0.85:
+    return REINFORCE
+elif similarity > 0.60:
+    return EXTEND
+else:
+    return CREATE
+```
 
 ### 1.4 The Reconciliation Algorithm
 
@@ -6678,11 +6742,13 @@ P03_SHADOW_OUTCOME_SIGNIFICANCE = 0.10  # Score must differ by 0.10 to count as 
 | **Target Table** | `st_sem` with `pattern_type='INSIGHT'` |
 
 **Input Fields Used:**
+
 - `input_data.kg_entities` → Graph nodes
 - `input_data.kg_edges` → Graph edges
 - `input_data.recent_episodes` → Seed entity selection (via `entity_ids` attribute)
 
 **Skip Conditions:**
+
 ```python
 # Skip if no KG data
 if not input_data.kg_entities or not input_data.kg_edges:
@@ -6695,6 +6761,7 @@ if not seed_entity_ids:
 ```
 
 **Seed Selection Logic (ISSUE FOUND):**
+
 ```python
 # From episodes (returns [] - EpisodeCluster has no entity_ids)
 entity_ids = getattr(episode, "entity_ids", [])
@@ -6705,6 +6772,7 @@ if entity_id and obs_count >= 5:  # Threshold never met
 ```
 
 **Output Schema (Insight):**
+
 ```python
 @dataclass(frozen=True)
 class Insight:
@@ -6734,10 +6802,12 @@ class Insight:
 | **Target Table** | `st_prospective` with `intention_type='COUNTERFACTUAL'` |
 
 **Input Fields Used:**
+
 - `input_data.recent_episodes` → High-emotion episodes for analysis
 - `input_data.kg_edges` → Only edges with `relationship_type == 'CAUSES'`
 
 **Skip Conditions:**
+
 ```python
 # Skip if no regret-worthy episodes found
 regret_events = self._select_regret_events(episodes, rng)
@@ -6750,11 +6820,13 @@ edge_lookup = self._build_edge_lookup(kg_edges)
 ```
 
 **Issue Found:** R4 produces 0 causal edges:
+
 ```
 "R4: Causal inference complete - 0 causal edges from 37 candidate edges"
 ```
 
 **Output Schema (CounterfactualScenario):**
+
 ```python
 @dataclass(frozen=True)
 class CounterfactualScenario:
@@ -6782,14 +6854,17 @@ class CounterfactualScenario:
 | **Target Table** | `st_prospective` with `intention_type='GOAL/REMINDER/etc.'` |
 
 **Input Fields Used:**
+
 - `input_data.recent_episodes` → Episodes with incomplete data
 - Episode fields: `location_hint`, `participants_json`, `activity_type`
 
 **Skip Conditions:**
+
 - Episodes must have gaps (missing location, time, participants, etc.)
 - Minimum confidence threshold for reconstructions
 
 **Output Schema (ProspectiveMemory):**
+
 ```python
 @dataclass(frozen=True)
 class ProspectiveMemory:
@@ -6817,10 +6892,12 @@ class ProspectiveMemory:
 | **Target Table** | `st_procedural` |
 
 **Input Fields Used:**
+
 - Episodes → Grouped by temporal/activity patterns
 - Requires min `P03_TDL_MIN_ROUTINE_OCCURRENCES = 3` occurrences
 
 **Skip Conditions:**
+
 ```python
 # Skip if no routines detected
 if not routines:
@@ -6828,6 +6905,7 @@ if not routines:
 ```
 
 **Output Schema (RoutineOptimization):**
+
 ```python
 @dataclass(frozen=True)
 class RoutineOptimization:
@@ -6854,6 +6932,7 @@ class RoutineOptimization:
 | **Target Table** | `st_mcts_decisions` + `st_mcts_shadow_log` |
 
 **Rollout Allocation (per decision type):**
+
 ```python
 ROLLOUT_ALLOCATION = {
     ENTITY_MERGE: 100,
@@ -6867,6 +6946,7 @@ ROLLOUT_ALLOCATION = {
 ```
 
 **Output Schema (MCTSDecisionRecord):**
+
 ```python
 @dataclass(frozen=True)
 class MCTSDecisionRecord:
@@ -6969,6 +7049,7 @@ R5 Phase Output
 ### 📋 Database Table Schemas (R5 targets)
 
 **st_sem (Insights)**
+
 ```sql
 pattern_id, tenant_id, space_id, pattern_type, pattern_name,
 source_episodes_json, confidence_score, novelty_score, pmi_score,
@@ -6979,6 +7060,7 @@ valid_from, archival_status
 ```
 
 **st_prospective (Counterfactuals + Prospective Memories)**
+
 ```sql
 intention_id, tenant_id, space_id, actor_id, intention_type,
 intention_description, target_date, target_context, status,
@@ -6988,6 +7070,7 @@ created_at, updated_at, valid_from, valid_to
 ```
 
 **st_procedural (Routine Optimizations)**
+
 ```sql
 routine_id, tenant_id, space_id, actor_id, routine_name,
 routine_category, temporal_anchor, day_pattern, frequency,
@@ -6998,6 +7081,7 @@ archival_status, created_at, updated_at, valid_from, valid_to
 ```
 
 **st_mcts_decisions (MCTS Traces)**
+
 ```sql
 decision_id, cycle_id, decision_type, context_json,
 rollouts_allocated, rollouts_executed, early_termination,
@@ -20843,7 +20927,7 @@ p03_automatic_rollback_cooldown_active
 |   |           action=action,                                                  |   |
 |   |           best_match_id=best_id,                                          |   |
 |   |           similarity_score=best_score,                                    |   |
-|   |           confidence=abs(best_score - 0.5)* 2  # Confidence in decision  |   |
+|   |           confidence=abs(best_score - 0.5)* 2  # Confidence in decision   |   |
 |   |       )                                                                   |   |
 |   |                                                                           |   |
 |   +---------------------------------------------------------------------------+   |
@@ -20872,18 +20956,18 @@ p03_automatic_rollback_cooldown_active
 |                                                                                   |
 |   STORAGE EFFECTS:                                                                |
 |   +-----------------------------------------------------------------------+       |
-|   | Action     | st_sem Effect                  | st_kg_edges Effect     |       |
-|   |------------|--------------------------------|------------------------|       |
-|   | REINFORCE  | observation_count++            | edge weights++         |       |
-|   |            | confidence_score = f(obs)      |                        |       |
-|   |            | last_observed_at = now()       |                        |       |
-|   |------------|--------------------------------|------------------------|       |
-|   | EXTEND     | pattern_attributes += new      | new edges created      |       |
-|   |            | embedding_centroid = weighted  |                        |       |
-|   |------------|--------------------------------|------------------------|       |
-|   | CONTRADICT | Insert conflicting_pattern_ids | contradiction edges    |       |
-|   |------------|--------------------------------|------------------------|       |
-|   | CREATE     | INSERT new st_sem record       | new entity nodes       |       |
+|   | Action     | st_sem Effect                  | st_kg_edges Effect      |       |
+|   |------------|--------------------------------|------------------------ |       |
+|   | REINFORCE  | observation_count++            | edge weights++          |       |
+|   |            | confidence_score = f(obs)      |                         |       |
+|   |            | last_observed_at = now()       |                         |       |
+|   |------------|--------------------------------|------------------------ |       |
+|   | EXTEND     | pattern_attributes += new      | new edges created       |       |
+|   |            | embedding_centroid = weighted  |                         |       |
+|   |------------|--------------------------------|------------------------ |       |
+|   | CONTRADICT | Insert conflicting_pattern_ids | contradiction edges     |       |
+|   |------------|--------------------------------|------------------------ |       |
+|   | CREATE     | INSERT new st_sem record       | new entity nodes        |       |
 |   +-----------------------------------------------------------------------+       |
 |                                                                                   |
 +-----------------------------------------------------------------------------------+
@@ -20948,7 +21032,7 @@ p03_automatic_rollback_cooldown_active
 |   |       Updates confidence scores using Bayesian principles.                |   |
 |   |                                                                           |   |
 |   |       Core Formula:                                                       |   |
-|   |         confidence = sqrt(frequency *consistency* significance)         |   |
+|   |         confidence = sqrt(frequency *consistency* significance)           |   |
 |   |                                                                           |   |
 |   |       This is a geometric mean that ensures all three factors             |   |
 |   |       must be reasonably high for confidence to be high.                  |   |
@@ -20967,7 +21051,7 @@ p03_automatic_rollback_cooldown_active
 |   |                                                                           |   |
 |   |           Formula: log(1 + obs_count) / log(1 + expected_count)           |   |
 |   |           """                                                             |   |
-|   |           expected_count = max(1, days_observed *0.5)  # Expect ~0.5/day |   |
+|   |           expected_count = max(1, days_observed *0.5)  # Expect ~0.5/day  |   |
 |   |           raw = math.log(1 + observation_count) / math.log(1 + expected)  |   |
 |   |           return min(1.0, raw)  # Cap at 1.0                              |   |
 |   |                                                                           |   |
@@ -21001,10 +21085,10 @@ p03_automatic_rollback_cooldown_active
 |   |           High emotion or high importance = memory sticks better          |   |
 |   |           (McGaugh 2004: Emotional memory enhancement)                    |   |
 |   |                                                                           |   |
-|   |           Formula: 0.5 + 0.5* max(|affect|, importance)                  |   |
+|   |           Formula: 0.5 + 0.5* max(|affect|, importance)                   |   |
 |   |           """                                                             |   |
 |   |           emotional_intensity = abs(affect_valence)                       |   |
-|   |           return 0.5 + 0.5 *max(emotional_intensity, importance_score)   |   |
+|   |           return 0.5 + 0.5 *max(emotional_intensity, importance_score)    |   |
 |   |                                                                           |   |
 |   |       def update_confidence(                                              |   |
 |   |           self,                                                           |   |
@@ -21038,10 +21122,10 @@ p03_automatic_rollback_cooldown_active
 |   |           )                                                               |   |
 |   |                                                                           |   |
 |   |           # Geometric mean (the core formula)                             |   |
-|   |           confidence = math.sqrt(frequency* consistency *significance)  |   |
+|   |           confidence = math.sqrt(frequency* consistency *significance)    |   |
 |   |                                                                           |   |
 |   |           # Apply source reliability adjustment                           |   |
-|   |           confidence*= new_observation.source_reliability                |   |
+|   |           confidence*= new_observation.source_reliability                 |   |
 |   |                                                                           |   |
 |   |           return min(1.0, max(0.0, confidence))                           |   |
 |   |                                                                           |   |
@@ -21259,11 +21343,11 @@ p03_automatic_rollback_cooldown_active
 |   CONFLICT RESOLUTION STRATEGIES:                                                 |
 |   +-----------------------------------------------------------------------+       |
 |   | Conflict Type       | Resolution Strategy                             |       |
-|   |---------------------|-----------------------------------------------|       |
-|   | Confidence Update   | Re-read, recompute with merged observations   |       |
-|   | Observation Count   | Re-read, add delta (commutative)              |       |
-|   | Embedding Centroid  | Re-read, weighted average with both updates   |       |
-|   | Pattern Attributes  | Merge JSON, union of keys                     |       |
+|   |---------------------|-----------------------------------------------  |       |
+|   | Confidence Update   | Re-read, recompute with merged observations     |       |
+|   | Observation Count   | Re-read, add delta (commutative)                |       |
+|   | Embedding Centroid  | Re-read, weighted average with both updates     |       |
+|   | Pattern Attributes  | Merge JSON, union of keys                       |       |
 |   +-----------------------------------------------------------------------+       |
 |                                                                                   |
 +-----------------------------------------------------------------------------------+

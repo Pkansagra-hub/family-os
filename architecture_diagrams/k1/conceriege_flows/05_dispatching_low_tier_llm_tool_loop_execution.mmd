@@ -1,0 +1,50 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+D["DISPATCHING (tier=LOW)"] --> LLM1["ILLMPort TOOL_CALL\nmax_tokens=150 for intent ack, then action loop"]
+
+LLM1 --> ACKTOOL["acknowledge_request(intent, plan_preview)"]
+ACKTOOL --> ACKEV["k1.response.intent_ack.v1\nIMMEDIATE"] --> OUT["OUTPUT_CHANNEL"]
+
+LLM1 --> ACT1["tool_call invoke_capability()/execute_workflow()/spawn_via_fabric"]
+ACT1 --> DISP["ToolDispatcher allowlist+schema gate"]
+DISP --> PDISP["IDispatchPort.dispatch_direct(CapReq)"]
+PDISP --> FAB["Capability Fabric execute"]
+FAB --> RES["tool_result"] --> BUF["Tool result buffer"]
+BUF --> LLM2["ILLMPort final response\nmax_tokens=500"]
+LLM2 --> V1["T1 structural validation\n(JSON/FlatBuffer parse)"]
+V1 --> V2["T2 schema validation\nrequired fields/types"]
+V2 --> V3["T3 semantic validation\nhallucination + business rules"]
+V3 -->|"pass"| COG["cognitive tool calls\nupdate_scoreboard/update_beliefs/...\nall through MutationGuard"]
+V2 -->|"fail"| FB["Validation fallback\nretry<=2 with schema hint"]
+V3 -->|"fail"| RP["Repair/Warn/Reject\nremove unsupported claims"]
+FB --> LLM2
+RP --> DEL
+COG --> STATE["IStatePort write (approved/rejected)"]
+LLM2 --> DEL["DELIVERING"]
+DEL --> FINAL["k1.response.final.v1"] --> OUT
+
+subgraph INV["Enforced constraints"]
+  direction TB
+  I1["Prompt injection non-operative: text cannot mutate or execute"]
+  I2["Only tool_call can cause side effects"]
+  I3["ToolDispatcher gates by state+tier+safety"]
+  I4["Action tool output buffered before final llm response"]
+end
+
+DISP -.enforces.-> I1
+DISP -.enforces.-> I2
+DISP -.enforces.-> I3
+BUF -.enforces.-> I4
+
+classDef m fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+classDef t fill:#fffde7,stroke:#f9a825,stroke-width:2px;
+classDef e fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+classDef i fill:#fce4ec,stroke:#ad1457,stroke-width:2px;
+class D,LLM1,LLM2,DEL,OUT m;
+class ACKTOOL,ACT1,DISP,PDISP,COG,BUF t;
+class ACKEV,FAB,RES,STATE,FINAL e;
+class I1,I2,I3,I4 i;

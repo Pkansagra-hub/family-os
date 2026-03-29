@@ -1,0 +1,440 @@
+$schema: "k1://schemas/wiring/wiring.contract.schema.yaml"
+
+metadata:
+  module_id: "fabric"
+  owner: "platform-team"
+  band: "GREEN"
+
+contract_version: 1
+impl_version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# Code ownership boundaries
+# ---------------------------------------------------------------------------
+code:
+  roots:
+    - "k1/fabric"
+  required_files:
+    - path: "k1/fabric/__init__.py"
+    - path: "k1/fabric/facade.py"
+    - path: "k1/fabric/types.py"
+    - path: "k1/fabric/core/__init__.py"
+    - path: "k1/fabric/core/registry.py"
+    - path: "k1/fabric/contracts/__init__.py"
+    - path: "k1/fabric/contracts/tool_contract.py"
+    - path: "k1/fabric/contracts/agent_contract.py"
+    - path: "k1/fabric/contracts/prompt_contract.py"
+    - path: "k1/fabric/contracts/workflow_contract.py"
+    - path: "k1/fabric/contracts/validator.py"
+    - path: "k1/fabric/retrieval/__init__.py"
+    - path: "k1/fabric/retrieval/semantic_index.py"
+    - path: "k1/fabric/retrieval/soft_ranker.py"
+    - path: "k1/fabric/provider_resolution/__init__.py"
+    - path: "k1/fabric/provider_resolution/resolver.py"
+    - path: "k1/fabric/provider_resolution/selector.py"
+    - path: "k1/fabric/provider_resolution/scoring.py"
+    - path: "k1/fabric/policy/__init__.py"
+    - path: "k1/fabric/policy/engine.py"
+    - path: "k1/fabric/policy/guard.py"
+    - path: "k1/fabric/providers/__init__.py"
+    - path: "k1/fabric/providers/agent_factory.py"
+    - path: "k1/fabric/providers/agent_pool.py"
+    - path: "k1/fabric/providers/scoped_tools.py"
+    - path: "k1/fabric/providers/mcp_provider.py"
+    - path: "k1/fabric/providers/wasm_provider.py"
+    - path: "k1/fabric/providers/bridge_provider.py"
+    - path: "k1/fabric/providers/agent_provider.py"
+    - path: "k1/fabric/providers/workflow_provider.py"
+    - path: "k1/fabric/providers/concierge_provider.py"
+    - path: "k1/fabric/core/context_builder.py"
+    - path: "k1/fabric/output_validation/__init__.py"
+    - path: "k1/fabric/output_validation/pipeline.py"
+    - path: "k1/fabric/health/__init__.py"
+    - path: "k1/fabric/health/checker.py"
+    - path: "k1/fabric/concurrency/__init__.py"
+    - path: "k1/fabric/concurrency/dispatcher.py"
+    - path: "k1/fabric/concurrency/timeout.py"
+    - path: "k1/fabric/ports/__init__.py"
+    - path: "k1/fabric/ports/session_reader.py"
+    - path: "k1/fabric/ports/event_port.py"
+    - path: "k1/fabric/ports/bridge_port.py"
+    - path: "k1/fabric/ports/model_gateway_port.py"
+    - path: "k1/fabric/ports/prompt_system_port.py"
+    - path: "k1/fabric/codecs/__init__.py"
+    - path: "k1/fabric/codecs/envelope_codec.py"
+
+# ---------------------------------------------------------------------------
+# Import wiring: what Fabric imports from other modules
+# ---------------------------------------------------------------------------
+wiring:
+  imports:
+    required_modules: ["kernel", "bus", "sessionstate"]
+    required_symbols:
+      - from: "sessionstate"
+        import: "SessionStateManager"
+        used_in_files: ["k1/fabric/core/context_builder.py"]
+      - from: "bus"
+        import: "EventBus"
+        used_in_files: ["k1/fabric/facade.py"]
+    forbidden: ["direct_db_access", "external_http_without_adapter", "sessionstate_writer"]
+  implementations:
+    fabric-execute:v1:
+      files: ["k1/fabric/facade.py"]
+    fabric-retrieve:v1:
+      files: ["k1/fabric/retrieval/semantic_index.py"]
+    fabric-register:v1:
+      files: ["k1/fabric/core/registry.py"]
+    fabric-resolve:v1:
+      files: ["k1/fabric/provider_resolution/resolver.py"]
+    fabric-health:v1:
+      files: ["k1/fabric/health/checker.py"]
+
+# ---------------------------------------------------------------------------
+# File constraints
+# ---------------------------------------------------------------------------
+files:
+  required:
+    - path: "k1/fabric/__init__.py"
+      type: "module_init"
+    - path: "k1/fabric/core/__init__.py"
+      type: "submodule_init"
+    - path: "k1/fabric/contracts/__init__.py"
+      type: "submodule_init"
+    - path: "k1/fabric/retrieval/__init__.py"
+      type: "submodule_init"
+    - path: "k1/fabric/provider_resolution/__init__.py"
+      type: "submodule_init"
+    - path: "k1/fabric/policy/__init__.py"
+      type: "submodule_init"
+    - path: "k1/fabric/providers/__init__.py"
+      type: "submodule_init"
+    - path: "k1/fabric/output_validation/__init__.py"
+      type: "submodule_init"
+    - path: "k1/fabric/health/__init__.py"
+      type: "submodule_init"
+    - path: "k1/fabric/concurrency/__init__.py"
+      type: "submodule_init"
+    - path: "k1/fabric/ports/__init__.py"
+      type: "submodule_init"
+    - path: "k1/fabric/codecs/__init__.py"
+      type: "submodule_init"
+  forbidden_patterns: ["*.pyc", "__pycache__"]
+
+# ---------------------------------------------------------------------------
+# Port interfaces (hexagonal architecture)
+# 5 ports as defined in FAB-005
+# ---------------------------------------------------------------------------
+capabilities:
+  provides:
+    # --- fabric:execute --- Role 2 entry point
+    - name: "fabric:execute:v1"
+      interface:
+        methods:
+          - name: "execute"
+            parameters:
+              - name: "request"
+                type: "CapabilityRequest"
+          - name: "execute_plan"
+            parameters:
+              - name: "plan"
+                type: "CommittedPlan"
+      version: "1.0.0"
+      qos: "INTERACTIVE"
+      timeout_ms: 30000
+
+    # --- fabric:retrieve --- Role 1 entry point
+    - name: "fabric:retrieve:v1"
+      interface:
+        methods:
+          - name: "discover_capabilities"
+            parameters:
+              - name: "domain"
+                type: "string"
+              - name: "intent"
+                type: "string"
+              - name: "top_k"
+                type: "integer"
+          - name: "find_relevant_prompts"
+            parameters:
+              - name: "intent"
+                type: "string"
+              - name: "domain"
+                type: "string"
+              - name: "top_k"
+                type: "integer"
+      version: "1.0.0"
+      qos: "INTERACTIVE"
+      timeout_ms: 5000
+
+    # --- fabric:register --- Registry management
+    - name: "fabric:register:v1"
+      interface:
+        methods:
+          - name: "register"
+            parameters:
+              - name: "contract"
+                type: "CapabilityContract"
+          - name: "unregister"
+            parameters:
+              - name: "name"
+                type: "string"
+          - name: "lookup"
+            parameters:
+              - name: "name"
+                type: "string"
+          - name: "reload"
+          - name: "health"
+          - name: "list_by_domain"
+            parameters:
+              - name: "domain"
+                type: "string"
+          - name: "list_by_type"
+            parameters:
+              - name: "type_prefix"
+                type: "string"
+          - name: "update_availability"
+            parameters:
+              - name: "name"
+                type: "string"
+              - name: "status"
+                type: "string"
+          - name: "update_metrics"
+            parameters:
+              - name: "name"
+                type: "string"
+              - name: "success"
+                type: "boolean"
+              - name: "latency_ms"
+                type: "integer"
+      version: "1.0.0"
+      qos: "BACKGROUND"
+      timeout_ms: 10000
+
+    # --- fabric:resolve --- Provider resolution only (no execution)
+    - name: "fabric:resolve:v1"
+      interface:
+        methods:
+          - name: "resolve"
+            parameters:
+              - name: "capability_name"
+                type: "string"
+              - name: "request"
+                type: "CapabilityRequest"
+      version: "1.0.0"
+      qos: "INTERACTIVE"
+      timeout_ms: 5000
+
+    # --- fabric:health --- Health monitoring
+    - name: "fabric:health:v1"
+      interface:
+        methods:
+          - name: "check_provider_health"
+            parameters:
+              - name: "provider_id"
+                type: "string"
+          - name: "get_availability_report"
+          - name: "detect_capability_gaps"
+      version: "1.0.0"
+      qos: "BACKGROUND"
+      timeout_ms: 10000
+
+  consumes:
+    # --- SessionState read-only access (FAB-008: no writer) ---
+    - name: "session:read:v1"
+      interface:
+        methods:
+          - name: "get_session_data"
+            parameters:
+              - name: "section"
+                type: "string"
+              - name: "key"
+                type: "string"
+          - name: "get_full_session"
+      version: "1.0.0"
+
+    # --- Event bus publish ---
+    - name: "bus:publish:v1"
+      interface:
+        methods:
+          - name: "publish_event"
+      version: "1.0.0"
+
+    # --- Bridge for K0 cross-kernel tool routing ---
+    - name: "bridge:execute:v1"
+      interface:
+        methods:
+          - name: "execute_bridged"
+            parameters:
+              - name: "request"
+                type: "CapabilityRequest"
+      version: "1.0.0"
+      required: false
+
+    # --- Model Gateway for Agent Factory LLM access ---
+    - name: "model-gateway:call:v1"
+      interface:
+        methods:
+          - name: "call_model"
+            parameters:
+              - name: "prompt"
+                type: "string"
+              - name: "model_id"
+                type: "string"
+              - name: "params"
+                type: "object"
+      version: "1.0.0"
+      required: false
+
+    # --- Prompt System for template resolution ---
+    - name: "prompt-system:resolve:v1"
+      interface:
+        methods:
+          - name: "resolve_template"
+            parameters:
+              - name: "template_name"
+                type: "string"
+              - name: "variables"
+                type: "object"
+          - name: "compile_prompt"
+            parameters:
+              - name: "template"
+                type: "string"
+              - name: "context"
+                type: "object"
+      version: "1.0.0"
+      required: false
+
+    # --- Delta Bus for agent fact discovery (FAB-008) ---
+    - name: "delta-bus:publish:v1"
+      interface:
+        methods:
+          - name: "publish"
+            parameters:
+              - name: "topic"
+                type: "string"
+              - name: "payload"
+                type: "object"
+      version: "1.0.0"
+      required: false
+
+    # --- WFQ Scheduler for agent execution (FAB-009) ---
+    - name: "scheduler:submit:v1"
+      interface:
+        methods:
+          - name: "submit"
+            parameters:
+              - name: "task"
+                type: "object"
+              - name: "priority"
+                type: "string"
+              - name: "deadline_ms"
+                type: "integer"
+      version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# Events emitted and consumed
+# ---------------------------------------------------------------------------
+events:
+  emits:
+    # Capability lifecycle events
+    - topic: "k1.capability.invoked.v1"
+      schema: "k1/contracts/schemas/events/fabric/capability.invoked.v1.json"
+    - topic: "k1.capability.completed.v1"
+      schema: "k1/contracts/schemas/events/fabric/capability.completed.v1.json"
+    - topic: "k1.capability.failed.v1"
+      schema: "k1/contracts/schemas/events/fabric/capability.failed.v1.json"
+    # Registry events
+    - topic: "k1.fabric.capability.registered.v1"
+      schema: "k1/contracts/schemas/events/fabric/capability.registered.v1.json"
+    - topic: "k1.fabric.capability.unregistered.v1"
+      schema: "k1/contracts/schemas/events/fabric/capability.unregistered.v1.json"
+    - topic: "k1.fabric.contract.validation.failed.v1"
+      schema: "k1/contracts/schemas/events/fabric/contract.validation.failed.v1.json"
+    # Observability events
+    - topic: "k1.fabric.learning.signal.v1"
+      schema: "k1/contracts/schemas/events/fabric/learning.signal.v1.json"
+    - topic: "k1.fabric.provider.health.changed.v1"
+      schema: "k1/contracts/schemas/events/fabric/provider.health.changed.v1.json"
+    # Agent lifecycle events (FAB-006)
+    - topic: "k1.fabric.agent.spawned.v1"
+      schema: "k1/contracts/schemas/events/fabric/agent.spawned.v1.json"
+    - topic: "k1.fabric.agent.state_changed.v1"
+      schema: "k1/contracts/schemas/events/fabric/agent.state_changed.v1.json"
+    - topic: "k1.fabric.agent.pooled.v1"
+      schema: "k1/contracts/schemas/events/fabric/agent.pooled.v1.json"
+    - topic: "k1.fabric.agent.terminated.v1"
+      schema: "k1/contracts/schemas/events/fabric/agent.terminated.v1.json"
+  subscribes:
+    - topic: "k1.orchestration.step.execute.v1"
+      schema: "k1/contracts/schemas/events/orchestration/step.execute.v1.json"
+      handler: "fabric.facade:on_step_execute"
+    - topic: "k1.planner.discovery.request.v1"
+      schema: "k1/contracts/schemas/events/planner/discovery.request.v1.json"
+      handler: "fabric.retrieval:on_discovery_request"
+    - topic: "k1.fabric.provider.health.check.v1"
+      schema: "k1/contracts/schemas/events/fabric/provider.health.check.v1.json"
+      handler: "fabric.health:on_health_check"
+
+# ---------------------------------------------------------------------------
+# No mailboxes: FAB-003 decided async facade + WFQ scheduler (no FABRIC_MAILBOX)
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# State: Fabric is stateless per-request (FAB-05 invariant FAB-03)
+# Only reads SessionState, never writes (FAB-08 invariant FAB-01)
+# ---------------------------------------------------------------------------
+state:
+  reads:
+    - path: "session_data.beliefs"
+      access: "SHARED"
+    - path: "session_data.scoreboard"
+      access: "SHARED"
+    - path: "session_data.control"
+      access: "SHARED"
+    - path: "session_data.persona"
+      access: "SHARED"
+    - path: "session_data.multimodal"
+      access: "SHARED"
+    - path: "session_data.meta"
+      access: "SHARED"
+  writes: []
+
+# ---------------------------------------------------------------------------
+# Runtime assertions for contract compliance
+# ---------------------------------------------------------------------------
+runtime_assertions:
+  on_load:
+    - condition: "CapabilityFabric is instantiable"
+      test: "import k1.fabric; fab = k1.fabric.CapabilityFabric()"
+    - condition: "All required exports available"
+      test: "from k1.fabric import CapabilityFabric, FabricRetrieval, CapabilityRegistry, ContractValidator, ProviderResolver, PolicyEngine, ContextBuilder, AgentFactory"
+    - condition: "All types available"
+      test: "from k1.fabric import CapabilityRequest, CapabilityResult, CapabilityContract, AgentContract, PromptContract, WorkflowContract, RetrievalResult, ExecutionContext, ProviderConfig"
+  invariants:
+    - condition: "FAB-01: Fabric never writes SessionState"
+      test: "assert 'ISessionStateWriter' not in dir(k1.fabric)"
+    - condition: "FAB-02: Fabric never calls LLM directly"
+      test: "assert no direct model_hub import in k1.fabric.facade"
+    - condition: "FAB-03: Fabric is stateless per-request"
+      test: "assert no instance-level mutable request state between execute() calls"
+    - condition: "FAB-10: Provider selection is deterministic"
+      test: "assert resolve(request) == resolve(request) for same registry state"
+
+# ---------------------------------------------------------------------------
+# Validation rules (subset of 13 hard invariants)
+# ---------------------------------------------------------------------------
+validation:
+  rules:
+    - "fab_01_no_sessionstate_write"
+    - "fab_02_no_direct_llm_call"
+    - "fab_03_stateless_per_request"
+    - "fab_04_circuit_breaker_timeout_30s"
+    - "fab_05_hard_filter_before_soft_rank"
+    - "fab_06_safety_band_check_before_execution"
+    - "fab_07_scoped_tools_granted_only"
+    - "fab_08_context_128k_token_budget"
+    - "fab_09_events_with_cognitive_trace_id"
+    - "fab_10_deterministic_provider_selection"
+    - "fab_11_capability_name_conventions"
+    - "fab_12_contracts_validated_before_registration"
+    - "fab_13_performance_budgets"

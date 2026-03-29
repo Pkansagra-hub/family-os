@@ -1,0 +1,73 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+
+subgraph C["Concierge (L1) Core Boundary"]
+  direction TB
+  FSM["FSMController\nLISTENING->ACKING->CLARIFYING->DISPATCHING\n->COMPANIONING->PROGRESSING->DELIVERING"]
+  RHY["RhythmController (L1)\nQUICK/THOUGHTFUL/DEEP/EXTENDED beat"]
+  EMP["Empathy Stack (L3.5)\nToM + cognitive-load + mirroring"]
+  TURN["TurnProcessor\nphase1 deterministic + phase2 llm tool loop"]
+  TOOLS["ToolDispatcher\nCognitive(6) Read(3) Action(3) Signal(1)"]
+  CTX["ContextAssembler\n128K window, summarize trigger at 80%"]
+  OUT["OutputManager\npriority queue REALTIME/INTERACTIVE/BACKGROUND"]
+  DLT["DeltaAggregator\n500ms fixed window, LWW merge"]
+  CLAR["ClarificationTracker\nmax rounds=3"]
+  FSM --> TURN
+  RHY --> FSM
+  EMP --> FSM
+  TURN --> TOOLS
+  TURN --> CTX
+  TURN --> OUT
+  DLT --> FSM
+  CLAR --> FSM
+end
+
+subgraph PORTS["Ports"]
+  direction LR
+  PIN["IInputPort\nreceive(UserMessage)"]
+  POUT["IOutputPort\nsend(OutputEvent)"]
+  PCLS["IClassificationPort\nclassify(text)"]
+  PLLM["ILLMPort\nexecute(HubRequest)"]
+  PST["IStatePort\nread/write via MutationGuard"]
+  PDISP["IDispatchPort\ndispatch_direct / dispatch_envelope"]
+  PDELTA["IDeltaPort\nsubscribe/publish/errors"]
+  PMEM["IMemoryPort\nrecall(query, selectors)"]
+end
+
+subgraph EXT["External Systems"]
+  direction TB
+  SS["SessionState\nSingle-writer target"]
+  FAB["Capability Fabric\nretrieval + execution + agent factory"]
+  ORCH["Orchestrator\nblind DAG executor (no llm, no tools)"]
+  PLN["Planner\n4-stage llm pipeline"]
+  BUS["K1 Bus\none physical bus\nevent lane: k1.*\ndelta lane: k1.*.delta.v1\nWFQ: URGENT(4)/REALTIME(3)/INTERACTIVE(2)/BACKGROUND(1)"]
+  BR["K0 Bridge\nquery + command + sse"]
+  MGW["Model Gateway\nprompt resolver -> injector -> compiler -> router"]
+  MH["Model Hub\nCHAT/TOOL_CALL/STRUCTURED/VISION/REASON"]
+  OBS["Observability\nDistributed tracing + metrics aggregator"]
+end
+
+PIN --> FSM
+FSM --> PCLS --> TURN
+TURN --> PLLM --> MGW --> MH
+TOOLS --> PDISP --> FAB
+TURN --> PST --> SS
+TURN --> PMEM --> BR
+OUT --> POUT
+PDELTA --> BUS
+OUT --> OBS
+TURN --> OBS
+PDISP --> ORCH
+ORCH --> PLN
+PLN --> ORCH
+ORCH --> FAB
+
+classDef core fill:#ffe0b2,stroke:#e65100,stroke-width:2px;
+classDef port fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+classDef ext fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+class FSM,RHY,EMP,TURN,TOOLS,CTX,OUT,DLT,CLAR core;
+class PIN,POUT,PCLS,PLLM,PST,PDISP,PDELTA,PMEM port;
+class SS,FAB,ORCH,PLN,BUS,BR,MGW,MH,OBS ext;

@@ -935,3 +935,563 @@ async def test_spacy_model_not_available_graceful_degradation(mock_message, mock
     # Assert: Module runs (with or without spaCy)
     assert result["embedding_id"] is not None
     assert result["entities_json"] is not None
+
+
+# ============================================================================
+# v2 Tests: NER Output Categorization for Downstream Fallback
+# ============================================================================
+
+
+class TestV2NerOutputCategorization:
+    """v2 tests for structured NER outputs (ner_temporal, ner_loc, ner_per)."""
+
+    @pytest.fixture
+    def mock_context(self):
+        context = MagicMock()
+        context.trace_id = "test-trace-v2"
+        context.correlation_id = "test-corr-v2"
+        context.preloaded_models = None
+        return context
+
+    @pytest.fixture
+    def mock_message(self):
+        message = MagicMock()
+        message.trace_id = "test-trace-v2"
+        message.correlation_id = "test-corr-v2"
+        message.payload = None
+        return message
+
+    @pytest.mark.asyncio
+    async def test_ner_temporal_entities_exposed(self, mock_message, mock_context):
+        """ner_temporal_entities should be present in output (list)."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-temporal",
+            "body": {"text": "We had dinner yesterday evening at 6pm"},
+            "activity_type": "MEAL",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        assert "ner_temporal_entities" in result
+        assert isinstance(result["ner_temporal_entities"], list)
+
+    @pytest.mark.asyncio
+    async def test_ner_loc_entities_exposed(self, mock_message, mock_context):
+        """ner_loc_entities should be present in output (list)."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-loc",
+            "body": {"text": "We went to Olive Garden in San Francisco"},
+            "activity_type": "MEAL",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        assert "ner_loc_entities" in result
+        assert isinstance(result["ner_loc_entities"], list)
+
+    @pytest.mark.asyncio
+    async def test_ner_per_entities_exposed(self, mock_message, mock_context):
+        """ner_per_entities should be present in output (list)."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-per",
+            "body": {"text": "Had dinner with mom and dad at the park"},
+            "activity_type": "MEAL",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        assert "ner_per_entities" in result
+        assert isinstance(result["ner_per_entities"], list)
+        # Family terms should be detected as PER entities
+        if result["ner_per_entities"]:
+            for ent in result["ner_per_entities"]:
+                assert ent["type"] == "PER"
+
+    @pytest.mark.asyncio
+    async def test_ner_outputs_in_enrichments(self, mock_message, mock_context):
+        """NER outputs should also be in nested enrichments."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-enrichments",
+            "body": {"text": "Mom went to Central Park yesterday"},
+            "activity_type": "SOCIAL_EVENT",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        enrichment = result["enrichments"]["semantic_projector"]
+        assert "ner_temporal_entities" in enrichment
+        assert "ner_loc_entities" in enrichment
+        assert "ner_per_entities" in enrichment
+        assert isinstance(enrichment["ner_temporal_entities"], list)
+        assert isinstance(enrichment["ner_loc_entities"], list)
+        assert isinstance(enrichment["ner_per_entities"], list)
+
+    @pytest.mark.asyncio
+    async def test_empty_text_returns_empty_ner_lists(self, mock_message, mock_context):
+        """Empty text should produce empty NER entity lists."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-empty",
+            "body": {"text": ""},
+            "activity_type": "MEAL",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        assert result["ner_temporal_entities"] == []
+        assert result["ner_loc_entities"] == []
+        assert result["ner_per_entities"] == []
+
+    @pytest.mark.asyncio
+    async def test_ner_entity_dict_format(self, mock_message, mock_context):
+        """NER entities should have expected dict keys."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-format",
+            "body": {"text": "Dad took us to the park yesterday"},
+            "activity_type": "SOCIAL_EVENT",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        # Check all NER lists for correct dict format
+        for ner_list_key in ["ner_temporal_entities", "ner_loc_entities", "ner_per_entities"]:
+            for ent in result[ner_list_key]:
+                assert "text" in ent
+                assert "type" in ent
+                assert "confidence" in ent
+                assert isinstance(ent["confidence"], float)
+
+
+# ============================================================================
+# v2 Tests: MW KG Triple Enhancement
+# ============================================================================
+
+
+class TestV2MwKgEnhancement:
+    """v2 tests for MW participant_relationships KG triple enhancement."""
+
+    @pytest.fixture
+    def mock_context(self):
+        context = MagicMock()
+        context.trace_id = "test-trace-v2-mw"
+        context.correlation_id = "test-corr-v2-mw"
+        context.preloaded_models = None
+        return context
+
+    @pytest.fixture
+    def mock_message(self):
+        message = MagicMock()
+        message.trace_id = "test-trace-v2-mw"
+        message.correlation_id = "test-corr-v2-mw"
+        message.payload = None
+        return message
+
+    @pytest.mark.asyncio
+    async def test_mw_relationships_enhance_kg_triples(self, mock_message, mock_context):
+        """MW participant_relationships should enhance KG triple predicates."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-mw-enhance",
+            "actor_id": "person_dad",
+            "body": {
+                "text": "Had dinner with mom at Olive Garden",
+                "participant_relationships": [
+                    {"person": "mom", "relationship_type": "PARENT_OF", "confidence": 0.95},
+                ],
+            },
+            "participants": ["person_mom"],
+            "location_name": "Olive_Garden",
+            "activity_type": "MEAL",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        kg_triples = json.loads(result["kg_triples_json"])
+        assert isinstance(kg_triples, list)
+        # KG triples should exist (exact content depends on extraction)
+        assert len(kg_triples) > 0
+
+    @pytest.mark.asyncio
+    async def test_without_mw_relationships_generic_predicates(self, mock_message, mock_context):
+        """Without MW relationships, KG uses generic predicates."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-no-mw",
+            "actor_id": "person_dad",
+            "body": {"text": "Had dinner with mom at Olive Garden"},
+            "participants": ["person_mom"],
+            "location_name": "Olive_Garden",
+            "activity_type": "MEAL",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        kg_triples = json.loads(result["kg_triples_json"])
+        assert isinstance(kg_triples, list)
+        # Should have triples but with standard predicates
+        assert len(kg_triples) > 0
+
+    @pytest.mark.asyncio
+    async def test_malformed_mw_relationships_ignored(self, mock_message, mock_context):
+        """Malformed MW relationships should be ignored (no crash)."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-malformed-mw",
+            "actor_id": "person_dad",
+            "body": {
+                "text": "Had dinner with mom",
+                "participant_relationships": "INVALID_NOT_A_LIST",
+            },
+            "activity_type": "MEAL",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        # Should still complete (malformed MW ignored)
+        assert result["embedding_id"] is not None
+        assert result["kg_triples_json"] is not None
+
+    def test_enhance_kg_triples_with_typed_predicates(self):
+        """Unit test: _enhance_kg_triples_with_mw_relationships replaces predicates."""
+        from k0.modules.hippocampus.semantic_project import (
+            _enhance_kg_triples_with_mw_relationships,
+        )
+
+        triples = [
+            ["person_dad", "interacted_with", "person_mom"],
+            ["event", "occurred_at", "place_olive_garden"],
+            ["event", "mentions", "person_sarah"],
+        ]
+        mw_relationships = [
+            {"person": "mom", "relationship_type": "PARENT_OF", "confidence": 0.95},
+            {"person": "sarah", "relationship_type": "SIBLING_OF", "confidence": 0.8},
+        ]
+
+        enhanced = _enhance_kg_triples_with_mw_relationships(triples, mw_relationships)
+
+        # Triple 1: "mom" matched -> PARENT_OF
+        assert enhanced[0][1] == "PARENT_OF"
+        # Triple 2: location -> unchanged
+        assert enhanced[1][1] == "occurred_at"
+        # Triple 3: "sarah" matched -> SIBLING_OF
+        assert enhanced[2][1] == "SIBLING_OF"
+
+    def test_enhance_empty_relationships_returns_original(self):
+        """Empty MW relationships should return original triples."""
+        from k0.modules.hippocampus.semantic_project import (
+            _enhance_kg_triples_with_mw_relationships,
+        )
+
+        triples = [["person_dad", "interacted_with", "person_mom"]]
+        enhanced = _enhance_kg_triples_with_mw_relationships(triples, [])
+        assert enhanced == triples
+
+    def test_enhance_unmatched_keeps_original_predicate(self):
+        """Unmatched person entities retain original predicate."""
+        from k0.modules.hippocampus.semantic_project import (
+            _enhance_kg_triples_with_mw_relationships,
+        )
+
+        triples = [
+            ["person_dad", "had_meal_with", "person_mom"],  # "had_meal_with" is not generic
+        ]
+        mw_relationships = [
+            {"person": "mom", "relationship_type": "PARENT_OF", "confidence": 0.95},
+        ]
+
+        enhanced = _enhance_kg_triples_with_mw_relationships(triples, mw_relationships)
+        # "had_meal_with" is not in the replacement list -> unchanged
+        assert enhanced[0][1] == "had_meal_with"
+
+
+# ============================================================================
+# v2 Tests: NER Categorization Unit Tests
+# ============================================================================
+
+
+class TestV2NerCategorization:
+    """Unit tests for _categorize_ner_entities."""
+
+    def test_categorize_temporal_entities(self):
+        """DATE/TIME entities should be categorized as TEMPORAL."""
+        from k0.modules.hippocampus.semantic_project import Entity, _categorize_ner_entities
+
+        entities = [
+            Entity(
+                text="yesterday", label="DATE", confidence=0.9, start=0, end=9, source="spacy_sm"
+            ),
+            Entity(
+                text="6:30 PM", label="TIME", confidence=0.85, start=20, end=27, source="spacy_sm"
+            ),
+        ]
+
+        temporal, loc, per = _categorize_ner_entities(entities)
+        assert len(temporal) == 2
+        assert len(loc) == 0
+        assert len(per) == 0
+        assert all(e["type"] == "TEMPORAL" for e in temporal)
+
+    def test_categorize_location_entities(self):
+        """GPE/LOC entities should be categorized as LOC."""
+        from k0.modules.hippocampus.semantic_project import Entity, _categorize_ner_entities
+
+        entities = [
+            Entity(
+                text="San Francisco",
+                label="GPE",
+                confidence=0.9,
+                start=0,
+                end=13,
+                source="spacy_sm",
+            ),
+            Entity(
+                text="Central Park",
+                label="LOC",
+                confidence=0.85,
+                start=20,
+                end=32,
+                source="spacy_sm",
+            ),
+        ]
+
+        temporal, loc, per = _categorize_ner_entities(entities)
+        assert len(temporal) == 0
+        assert len(loc) == 2
+        assert len(per) == 0
+        assert all(e["type"] == "LOC" for e in loc)
+
+    def test_categorize_person_entities(self):
+        """PERSON/PER/KINSHIP entities should be categorized as PER."""
+        from k0.modules.hippocampus.semantic_project import Entity, _categorize_ner_entities
+
+        entities = [
+            Entity(text="mom", label="PERSON", confidence=0.85, start=0, end=3, source="rule"),
+            Entity(text="Sarah", label="PER", confidence=0.9, start=10, end=15, source="ultrabert"),
+        ]
+
+        temporal, loc, per = _categorize_ner_entities(entities)
+        assert len(temporal) == 0
+        assert len(loc) == 0
+        assert len(per) == 2
+        assert all(e["type"] == "PER" for e in per)
+
+    def test_categorize_mixed_entities(self):
+        """Mixed entity types should be correctly categorized."""
+        from k0.modules.hippocampus.semantic_project import Entity, _categorize_ner_entities
+
+        entities = [
+            Entity(text="mom", label="PERSON", confidence=0.85, start=0, end=3, source="rule"),
+            Entity(
+                text="yesterday", label="DATE", confidence=0.9, start=10, end=19, source="spacy_sm"
+            ),
+            Entity(
+                text="Olive Garden",
+                label="GPE",
+                confidence=0.8,
+                start=25,
+                end=37,
+                source="spacy_sm",
+            ),
+        ]
+
+        temporal, loc, per = _categorize_ner_entities(entities)
+        assert len(temporal) == 1
+        assert len(loc) == 1
+        assert len(per) == 1
+
+    def test_categorize_empty_list(self):
+        """Empty entity list should produce empty categorizations."""
+        from k0.modules.hippocampus.semantic_project import _categorize_ner_entities
+
+        temporal, loc, per = _categorize_ner_entities([])
+        assert temporal == []
+        assert loc == []
+        assert per == []
+
+    def test_categorize_unknown_label_ignored(self):
+        """Unknown entity labels should be silently ignored."""
+        from k0.modules.hippocampus.semantic_project import Entity, _categorize_ner_entities
+
+        entities = [
+            Entity(text="ACME", label="ORG", confidence=0.9, start=0, end=4, source="spacy_sm"),
+        ]
+
+        temporal, loc, per = _categorize_ner_entities(entities)
+        assert len(temporal) == 0
+        assert len(loc) == 0
+        assert len(per) == 0
+
+
+# ============================================================================
+# v2 Tests: Module Version and Full Integration
+# ============================================================================
+
+
+class TestV2Integration:
+    """v2 integration tests for module version and full output."""
+
+    @pytest.fixture
+    def mock_context(self):
+        context = MagicMock()
+        context.trace_id = "test-trace-v2-int"
+        context.correlation_id = "test-corr-v2-int"
+        context.preloaded_models = None
+        return context
+
+    @pytest.fixture
+    def mock_message(self):
+        message = MagicMock()
+        message.trace_id = "test-trace-v2-int"
+        message.correlation_id = "test-corr-v2-int"
+        message.payload = None
+        return message
+
+    @pytest.mark.asyncio
+    async def test_module_version_is_v2(self, mock_message, mock_context):
+        """Enrichments module_version should be 'v2'."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-version",
+            "body": {"text": "Had dinner with mom"},
+            "activity_type": "MEAL",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        assert result["enrichments"]["semantic_projector"]["module_version"] == "v2"
+
+    @pytest.mark.asyncio
+    async def test_enrichment_key_is_semantic_projector(self, mock_message, mock_context):
+        """v2 enrichment key should be 'semantic_projector'."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-key",
+            "body": {"text": "Family dinner"},
+            "activity_type": "MEAL",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        assert "semantic_projector" in result["enrichments"]
+
+    @pytest.mark.asyncio
+    async def test_full_v2_output_structure(self, mock_message, mock_context):
+        """Full v2 output should contain all expected fields."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-full",
+            "actor_id": "person_dad",
+            "body": {
+                "text": "Had dinner with mom yesterday at Olive Garden",
+                "participant_relationships": [
+                    {"person": "mom", "relationship_type": "PARENT_OF", "confidence": 0.95},
+                ],
+            },
+            "participants": ["person_mom"],
+            "location_name": "Olive_Garden",
+            "activity_type": "MEAL",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        # v1 fields still present
+        assert "embedding_id" in result
+        assert "entities_json" in result
+        assert "kg_triples_json" in result
+        assert "semantic_projected_at_utc" in result
+        assert "ner_entities_json" in result
+
+        # v2 fields present (flat)
+        assert "ner_temporal_entities" in result
+        assert "ner_loc_entities" in result
+        assert "ner_per_entities" in result
+
+        # v2 fields in enrichments
+        enrichment = result["enrichments"]["semantic_projector"]
+        assert "ner_temporal_entities" in enrichment
+        assert "ner_loc_entities" in enrichment
+        assert "ner_per_entities" in enrichment
+        assert enrichment["module_version"] == "v2"
+
+    @pytest.mark.asyncio
+    async def test_ner_always_runs_even_with_mw(self, mock_message, mock_context):
+        """M02 ALWAYS runs full NER regardless of MW presence."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-always-ner",
+            "actor_id": "person_dad",
+            "body": {
+                "text": "Mom and Dad went to Central Park yesterday",
+                "participant_relationships": [
+                    {"person": "mom", "relationship_type": "PARENT_OF", "confidence": 0.95},
+                    {"person": "dad", "relationship_type": "SELF", "confidence": 1.0},
+                ],
+            },
+            "participants": ["person_mom", "person_dad"],
+            "activity_type": "SOCIAL_EVENT",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        # NER should have run (entities extracted)
+        assert result["entities_json"] is not None
+        entities = json.loads(result["entities_json"])
+        assert isinstance(entities, list)
+
+        # Structured NER outputs should be populated
+        assert isinstance(result["ner_temporal_entities"], list)
+        assert isinstance(result["ner_loc_entities"], list)
+        assert isinstance(result["ner_per_entities"], list)
+
+        # Per entities should be non-empty (mom/dad detected as family terms)
+        assert len(result["ner_per_entities"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_flat_and_enrichment_ner_match(self, mock_message, mock_context):
+        """Flat NER outputs should match enrichment NER outputs."""
+        envelope = {
+            "cognitive_trace_id": "event-v2-match",
+            "body": {"text": "Mom visited the park last Tuesday"},
+            "activity_type": "SOCIAL_EVENT",
+        }
+        mock_message.payload = envelope
+
+        result = await semantic_project_run(
+            message=mock_message, context=mock_context, envelope=envelope
+        )
+
+        enrichment = result["enrichments"]["semantic_projector"]
+        assert result["ner_temporal_entities"] == enrichment["ner_temporal_entities"]
+        assert result["ner_loc_entities"] == enrichment["ner_loc_entities"]
+        assert result["ner_per_entities"] == enrichment["ner_per_entities"]

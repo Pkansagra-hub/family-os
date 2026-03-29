@@ -1,6 +1,6 @@
-# K0 Runbooks - Incident Response Procedures
+# K0/K1 Runbooks - Incident Response Procedures
 
-This directory contains operational runbooks for investigating and mitigating production issues in the K0 microkernel.
+This directory contains operational runbooks for investigating and mitigating production issues in the K0 microkernel and K1 orchestration layer.
 
 ## Priority Levels
 
@@ -13,10 +13,11 @@ This directory contains operational runbooks for investigating and mitigating pr
 
 ## P0 - CRITICAL BLOCKERS
 
-| Runbook | Gap | Component | Symptoms |
-|---------|-----|-----------|----------|
+| Runbook | Gap/Module | Component | Symptoms |
+|---------|------------|-----------|----------|
 | [Gap 27: Idempotency TOCTOU Race](gap-27-toctou-race.md) | 27 | `k0/ports/command.py`, `k0/idem/` | Duplicate WAL entries, `k0_idem_toctou_race_detected_total` metric increasing |
 | [Gap 28: UnitOfWork Connection Leak](gap-28-connection-leak.md) | 28 | `k0/uow/unit_of_work.py` | Pool exhaustion, `sqlite_pool_saturation_ratio` → 1.0, timeouts |
+| [SessionState Memory Management](sessionstate.md) | SessionState | `k1/sessionstate/` | Memory pressure, emergency mode, eviction failures, SLO breaches |
 
 ---
 
@@ -58,6 +59,12 @@ curl http://localhost:9090/metrics | grep sqlite_pool_saturation_ratio
 | `K0PoolSaturationHigh` | critical | [gap-28-connection-leak.md](gap-28-connection-leak.md) |
 | `K0CommandLatencyTrendIncreasing` | warning | Anomaly detection response |
 | `K0TrafficSpikeAnomaly` | warning | Anomaly detection response |
+| `SessionStateMemoryWarning` | warning | [sessionstate.md](sessionstate.md#21-sessionstatememorywarning) |
+| `SessionStateMemoryCritical` | critical | [sessionstate.md](sessionstate.md#22-sessionstatememorcritical) |
+| `SessionStateEmergencyActivated` | critical | [sessionstate.md](sessionstate.md#23-sessionstateemergencyactivated) |
+| `SessionStateReconstructionSLABreach` | warning | [sessionstate.md](sessionstate.md#24-sessionstatereconstructionslabreach) |
+| `SessionStateEvictionFailure` | critical | [sessionstate.md](sessionstate.md#25-sessionstateevictionfailure) |
+| `SessionStateLatencySLOBreach` | warning | [sessionstate.md](sessionstate.md#26-sessionstatelatencyslobreach) |
 
 ---
 

@@ -25,12 +25,22 @@ TIMESTAMP CONVENTION (LOCKED):
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, List, Optional
 
+from k0.modules.consolidation.algorithms.observation_context import ObservationContext
+from k0.modules.consolidation.truth_writer.observation_recorder import (
+    ObservationRecorder,
+    get_observation_recorder,
+)
 from k0.modules.consolidation.truth_writer.result import LayerWriteResult
+from k0.modules.consolidation.truth_writer.text_vector_coordinator import (
+    TextVectorCoordinator,
+    get_coordinator,
+)
 from k0.pipelines.p03.phases.r7_truth_writer import OptimisticLockError
 from k0.pipelines.p03.staged_writes import (
     LAYER_ST_PROSPECTIVE,
@@ -40,6 +50,8 @@ from k0.pipelines.p03.staged_writes import (
 
 if TYPE_CHECKING:
     from k0.uow.unit_of_work import UnitOfWork
+
+logger = logging.getLogger(__name__)
 
 
 def _now_ms() -> int:
@@ -96,6 +108,16 @@ class IntentionWriteData:
     source_episodes_json: str = "[]"
     counterfactual_json: Optional[str] = None
 
+    # GAP-001: Inline vector and text preservation fields
+    source_texts_json: Optional[str] = None  # JSON array of source event texts
+    embedding_text: Optional[str] = None  # Generated text for UltraBERT embedding
+    embedding_vector: Optional[bytes] = None  # 768-dim float32 as BYTEA (3072 bytes)
+    embedding_model: Optional[str] = None  # Model version (e.g., "ultrabert-v2.1.0")
+
+    # Issue 7.7: Temporal anchor context for prospective memories
+    anchor_time_utc: Optional[int] = None  # When user expressed the intention (MILLISECONDS)
+    original_temporal_expr: Optional[str] = None  # Original expression ("next week", "tomorrow")
+
 
 class ProspectiveLayerWriter:
     """
@@ -119,6 +141,52 @@ class ProspectiveLayerWriter:
     """
 
     LAYER = LAYER_ST_PROSPECTIVE
+
+    def __init__(
+        self,
+        coordinator: Optional[TextVectorCoordinator] = None,
+        observation_recorder: Optional[ObservationRecorder] = None,
+    ) -> None:
+        """
+        Initialize ProspectiveLayerWriter.
+
+        Args:
+            coordinator: Optional TextVectorCoordinator for GAP-001 embedding generation.
+                        If not provided, uses singleton via get_coordinator().
+            observation_recorder: ObservationRecorder for holistic context (uses singleton if None)
+        """
+        self._coordinator = coordinator
+        self._observation_recorder = observation_recorder
+
+    def _get_coordinator(self) -> TextVectorCoordinator:
+        """Get coordinator, initializing singleton if needed."""
+        if self._coordinator is None:
+            self._coordinator = get_coordinator()
+        return self._coordinator
+
+    def _get_recorder(self) -> ObservationRecorder:
+        """Get observation recorder, using singleton if not injected."""
+        if self._observation_recorder is None:
+            self._observation_recorder = get_observation_recorder()
+        return self._observation_recorder
+
+    def _extract_context(self, write: StagedWrite) -> Optional[ObservationContext]:
+        """
+        Extract observation context from StagedWrite.
+
+        Returns the attached observation_context if present, otherwise
+        builds a minimal context from record_data.
+        """
+        if write.observation_context is not None:
+            return write.observation_context
+
+        data = write.record_data
+        observed_at = data.get("created_at") or data.get("target_date") or _now_ms()
+
+        return ObservationContext(
+            observed_at=observed_at,
+            source_event_id=write.source_event_ids[0] if write.source_event_ids else None,
+        )
 
     @property
     def layer(self) -> str:
@@ -183,35 +251,90 @@ class ProspectiveLayerWriter:
 
         Creates a new intention record with initial values.
         Uses ON CONFLICT DO NOTHING for idempotency.
+
+        GAP-001: Uses description field as embedding text (no source events to fetch).
         """
         data = write.record_data
         now = _now_ms()
 
+        # GAP-001: Generate embedding from description
+        # Prospective layer uses description field as the embedding text
+        source_texts_json: Optional[str] = None
+        embedding_text: Optional[str] = None
+        embedding_vector: Optional[bytes] = None
+        embedding_model: Optional[str] = None
+
+        try:
+            description = data.get("intention_description", data.get("description", ""))
+            if description:
+                coordinator = self._get_coordinator()
+                tv_result = await coordinator.process_without_fetch(
+                    layer=self.LAYER,
+                    record_data=data,
+                    source_texts=[description],
+                )
+                source_texts_json = tv_result.source_texts_json
+                embedding_text = tv_result.embedding_text
+                embedding_vector = tv_result.embedding_vector
+                embedding_model = tv_result.embedding_model
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).warning(f"Prospective embedding failed: {e}")
+            # Non-fatal: continue with INSERT
+
         await uow.connection.execute(
             """
             INSERT INTO st_prospective (
-                intention_id, tenant_id, space_id, intention_type,
-                description, trigger_time, trigger_context_json,
-                goal_inference_json, confidence, status,
-                source_episodes_json, counterfactual_json,
-                created_at, version
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1)
+                intention_id, tenant_id, space_id, actor_id, intention_type,
+                intention_description, target_date, target_context,
+                inferred_from_json, inference_confidence, confidence_score, status,
+                created_at, updated_at, valid_from, version,
+                -- GAP-001: Inline vector and text preservation columns
+                source_texts_json, embedding_text, embedding_vector, embedding_model
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, $13, 1,
+                      $14, $15, $16, $17)
             ON CONFLICT (intention_id) DO NOTHING
             """,
             data["intention_id"],
             data["tenant_id"],
             data["space_id"],
-            data.get("intention_type", "intention"),
-            data.get("description", ""),
-            data.get("trigger_time_ms"),
-            data.get("trigger_context_json", "{}"),
-            data.get("goal_inference_json", "{}"),
-            data.get("confidence", 0.5),
-            data.get("status", "pending"),
-            data.get("source_episodes_json", "[]"),
-            data.get("counterfactual_json"),
+            data.get("actor_id", data["tenant_id"]),  # Default to tenant if no actor
+            data.get("intention_type", "GOAL"),
+            data.get("intention_description", data.get("description", "")),
+            data.get("target_date", data.get("trigger_time_ms")),
+            data.get("target_context", data.get("trigger_context_json")),
+            data.get("inferred_from_json", data.get("goal_inference_json")),
+            data.get("inference_confidence", data.get("confidence", 0.5)),
+            data.get("confidence_score", data.get("confidence", 0.5)),
+            data.get("status", "ACTIVE"),
             now,
+            # GAP-001 fields
+            source_texts_json,
+            embedding_text,
+            embedding_vector,
+            embedding_model,
         )
+
+        # Issue 7.5: Record observation with FIRST_SEEN type
+        # Note: Prospective layer has INSERT only (no MERGE/REINFORCE)
+        context = self._extract_context(write)
+        if context is not None:
+            context.observation_type = "FIRST_SEEN"
+            try:
+                await self._get_recorder().record(
+                    uow=uow,
+                    layer=self.LAYER,
+                    record_id=write.record_id,
+                    context=context,
+                    tenant_id=data["tenant_id"],
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to record observation for %s: %s",
+                    write.record_id,
+                    e,
+                )
 
     async def _update(self, uow: UnitOfWork, write: StagedWrite) -> None:
         """

@@ -1,0 +1,93 @@
+// ============================================================================
+// affective_now_section.fbs - Affective Now Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/affective_now_section.fbs
+// Purpose: Current emotional state snapshot
+// Size Budget: 4KB max
+// Tier: HOT CORE
+// ADR: ADR-0017 (SessionState Design), Section 5.6
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// EMOTION DIMENSIONS
+// ============================================================================
+
+/// Core emotion dimensions (Russell's circumplex model)
+table EmotionDimensions {
+    // Valence: negative (-1.0) to positive (+1.0)
+    valence: float = 0.0;
+
+    // Arousal: calm (0.0) to excited (1.0)
+    arousal: float = 0.5;
+
+    // Dominance: submissive (0.0) to dominant (1.0) (optional)
+    dominance: float = 0.5;
+}
+
+// ============================================================================
+// EMOTION HISTORY ENTRY
+// ============================================================================
+
+/// Historical emotion snapshot (for trajectory calculation)
+table EmotionSnapshot {
+    turn_number: uint16;
+    emotion: string;
+    intensity: float;
+    valence: float;
+    arousal: float;
+    timestamp_ms: int64;
+}
+
+// ============================================================================
+// AFFECTIVE NOW SECTION ROOT
+// ============================================================================
+
+/// Affective Now Section - current emotional state
+/// Used for empathetic response generation and tone adjustment
+table AffectiveNowSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Current emotion (from UltraBERT emotions head)
+    current_emotion: string;          // "happy", "frustrated", "curious", etc.
+    intensity: float = 0.5;           // 0.0 to 1.0
+
+    // Dimensional representation
+    dimensions: EmotionDimensions;
+
+    // Trajectory tracking
+    trajectory: EmotionTrajectory = STABLE;
+
+    // Recent history (for trajectory calculation)
+    recent_emotions: [EmotionSnapshot]; // Last 5 turns
+
+    // Confidence and source
+    confidence: float = 0.8;
+    source: string;                   // "ultrabert", "explicit", "inferred"
+
+    // Timing
+    last_updated_ms: int64;
+    last_significant_change_ms: int64;
+
+    // Thresholds for response adjustment
+    empathy_needed: bool = false;     // True if negative trajectory detected
+    celebration_appropriate: bool = false; // True if positive achievement detected
+}
+
+root_type AffectiveNowSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 4KB max
+//
+// Core fields: ~200 bytes
+// EmotionDimensions: ~20 bytes
+// EmotionSnapshot: ~50 bytes each x 5 = 250 bytes
+// Header: ~100 bytes
+// Total: ~600 bytes typical, 4KB max if extended
+// ============================================================================

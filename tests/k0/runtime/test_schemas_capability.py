@@ -220,7 +220,7 @@ class TestCapabilityDefinition:
             providers=[
                 CapabilityProvider(
                     type=ProviderType.MODULE,
-                    module_id="retrieval.faiss:v1",
+                    module_id="retrieval.pgvector:v1",
                     priority=1,
                 ),
                 CapabilityProvider(

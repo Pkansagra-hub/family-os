@@ -1,0 +1,883 @@
+%% ======================================================================================
+%% K0-K1 BRIDGE - DETAILED ARCHITECTURE DIAGRAM
+%% ======================================================================================
+%% Created: 2026-02-01
+%% Updated: 2026-02-01 - IFL moved to Bridge (Option B: Bridge owns IFL)
+%% Updated: 2026-02-01 - IFL reworked: Universal Connector Protocol (not devices only)
+%%   IFL adapters are company-built, FamilyOS-signed, manifest-based
+%% Updated: 2026-02-01 - Added offline-first architecture (K1 self-sufficient)
+%% Updated: 2026-02-01 - Added complete envelope, query, SSE schemas from K0 ports
+%% Updated: 2026-02-01 - Added observability/feedback flow from FEEDBACK.md + observe.py
+%% Updated: 2026-02-01 - Fixed flow directions per K0/K1 skeleton diagrams
+%% Purpose: Bridge as central security gateway between K0 and K1
+%% Location: bridge/ (root level - NOT inside K0 or K1)
+%% EDGE-FIRST DESIGN PRINCIPLE:
+%%   - K1 is self-sufficient (works offline with reduced functionality)
+%%   - K0 is enhancement layer (cross-device sync, long-term memory, KG)
+%%   - Bridge handles K0 availability gracefully (queue when offline)
+%%   - SessionState COLD tier is LOCAL to K1 (not K0 dependent)
+%% FLOW DIRECTIONS (Corrected):
+%%   - Command: K1 -> K0 (ONE-WAY fire-and-forget, no response)
+%%   - Query:   K1 -> K0 -> K1 (REQUEST/RESPONSE, two-way)
+%%   - SSE:     K0 -> K1 (ONE-WAY streaming, K0 pushes events)
+%%   - Feedback: K1 -> K0 (ONE-WAY via obs.emit kind=feedback)
+%%   - IFL:     BIDIRECTIONAL to ALL external services (company-hosted + WASM adapters)
+%% K0 PORTS (Bridge connects to):
+%%   - /k0/command.submit  - POST - Write any topic (ONE-WAY, no response)
+%%   - /k0/query.recall    - POST - Multi-selector recall bundles (REQUEST/RESPONSE)
+%%   - /k0/sse.subscribe   - GET  - Real-time event stream (K0 -> K1 STREAMING)
+%%   - /k0/obs.emit        - POST - Telemetry + Feedback (ONE-WAY)
+%% COMMAND TOPICS (What K1 writes to K0):
+%%   Canonical registry: k0/contracts/taxonomies/command_topics.yaml
+%%   memory.write        → st_epi   → P02 (Episodic memory from conversations)
+%%   session.snapshot    → st_session → Archive (SessionState COLD tier)
+%%   beliefs.archive     → st_beliefs → Archive (Evicted beliefs from Planner)
+%%   history.archive     → st_history → Archive (Evicted turn history from Concierge)
+%%   plan.committed      → st_epi   → P02 (Planner Stage 4 committed plans)
+%%   ifl.*               → st_epi   → P02 (IFL inbound: ifl.{category}.{adapter}.{event})
+%%   sync.delta          → st_sync  → P07 (CRDT device sync)
+%%   NOTE: Feedback flows through obs port (kind=feedback), NOT command topics
+%% QUERY SELECTORS (RecallSelector types):
+%%   Canonical catalog: k0/contracts/taxonomies/query_selectors.yaml
+%%   type: episodic  - topic: memory.write  - WAL position recall
+%%   type: semantic  - query: free-text     - pgvector similarity
+%%   type: session   - topic: session.*     - SessionState history
+%%   type: device    - topic: ifl.*         - IFL adapter event history
+%%   type: belief    - topic: beliefs.*     - Archived belief lookup
+%%   type: graph     - topic: any           - KG edge traversal
+%% SSE EVENTS (K0 → K1):
+%%   SSETraceEvent: cursor, topic, wal_pos, commit_ts, policy_stamp
+%%   memory.formed.v1         - Memory consolidation complete
+%%   k0.learning.advisory.v1  - Validated feedback signal
+%%   k0.proactive.signal.v1   - Proactive agent trigger
+%%   k0.sync.complete.v1      - Device sync finished
+%%   cognitive.vector.stored.v1 - Embedding indexed
+%%   Backpressure: level (ok/throttle/shed), lag_ms, pending_events
+%% OBSERVABILITY KINDS (/k0/obs.emit):
+%%   kind: metrics  - snapshot (prometheus format), captured_at, source
+%%   kind: logs     - entries[]: message, level, event, cognitive_trace_id
+%%   kind: feedback - FeedbackEnvelope (see below)
+%% TWO-SYSTEM ARCHITECTURE (Learning/Feedback):
+%%   SYSTEM 1: GAP RESOLUTION (Active Learning Loop)
+%%     Purpose: Add NEW FACTS to memory by asking users
+%%     Flow: P03 gap → st_learning_queue → P06 → P05 Attention → curiosity.intent.v1 (SSE)
+%%           → K1 Curiosity Agent → User answers → Command Port (memory.write + gap_id)
+%%           → P02 → st_hipp_events → P03 resolves gap
+%%     Port: Command Port (user answer IS new content)
+%%   SYSTEM 2: MODEL REFINEMENT (Algorithm Tuning)
+%%     Purpose: Tune weights/thresholds based on behavioral signals
+%%     Flow: K1 detects signal → FeedbackEnvelope → Obs Port (kind=feedback)
+%%           → P21 validates → st_feedback_signals → feedback.signal.<pipeline>.v1
+%%           → P02/P03/P08 learning modules → st_learned_weights
+%%     Port: Obs Port (tunes algorithms, not creates facts)
+%% FEEDBACK ENVELOPE (K1 → K0 via obs.emit kind=feedback):
+%%   feedback_id, pipeline_id (P02/P06/P08), tenant_id, space_id
+%%   signal_class: CORRECTION | VALIDATION | IMPLICIT | EXPLICIT | OUTCOME
+%%   signal_subtype: user_correction, reformulation_detected, etc.
+%%   correlation: session_id, event_ids[], wal_positions[], recall_id, target_entity_id
+%%   provenance: source_message_id, recall_context_hash, feedback_timestamp
+%%   payload: pipeline-specific (P02FeedbackPayload, P08FeedbackPayload)
+%%   K0 persists to st_feedback_signals → BusDispatcher → feedback.signal.<pipeline>.v1
+%% ENVELOPE V1 (CommandEnvelope schema):
+%%   cognitive_trace_id, tenant_id, space_id
+%%   topic, schema_uri, body
+%%   actor, device_id, band
+%%   sig_alg (Ed25519), sig_kid, sig
+%%   envelope_sha256 (full envelope integrity)
+%%   idem_key (BLAKE3 derived, duplicate detection)
+%% This diagram shows:
+%%   - K1 TOUCHPOINTS (Left): Where K1 components connect TO Bridge
+%%   - K1 LOCAL STORAGE (Left): K1's own SQLite for offline operation
+%%   - BRIDGE INTERNALS (Center): All responsibilities + offline awareness
+%%   - K0 TOUCHPOINTS (Right): Where Bridge connects TO K0 (optional cloud)
+%%   - PHYSICAL DEVICES (Right): Where Bridge IFL connects to external devices
+%%   - FAMILY DEVICES (Bottom): Multi-device sync mesh
+%% Five Responsibilities:
+%%   1. Kernel Transport: K0 ↔ K1 memory/storage communication
+%%   2. Connector Security: Tool registration, auth, rate limiting
+%%   3. Device Sync: Multi-device family sync via K0 P07
+%%   4. IFL (Interkernel Fabric Language): Device protocol adapters (BRIDGE OWNED)
+%%   5. Offline Awareness: Queue commands when K0 unavailable, drain when back
+%% ======================================================================================
+
+graph LR
+    %% ======================================================================================
+    %% K1 TOUCHPOINTS (Left Side - K1 Components that call Bridge)
+    %% ======================================================================================
+    subgraph K1_TOUCHPOINTS["🧠 K1 KERNEL (Callers)"]
+        direction TB
+
+        subgraph K1_SESSIONSTATE["SessionState (L5)"]
+            SS_LOCAL_COLD["LOCAL COLD Tier<br/>K1 SQLite archive<br/>OFFLINE SAFE"]:::k1_local
+            SS_CLOUD_SYNC["Cloud Sync<br/>Backup to K0 (optional)<br/>topic: session.snapshot"]:::k1_caller
+            SS_RESTORE["Session Restore<br/>Local first, then K0<br/>query: type=session"]:::k1_caller
+            SS_CHECKPOINT["Checkpointing<br/>Periodic snapshots<br/>topic: session.snapshot"]:::k1_caller
+            SS_BELIEFS_EVICT["Beliefs Eviction<br/>topic: beliefs.archive"]:::k1_caller
+            SS_HISTORY_EVICT["History Eviction<br/>topic: history.archive"]:::k1_caller
+        end
+
+        subgraph K1_LOCAL_STORAGE["K1 Local Storage (Offline Safe)"]
+            K1_SQLITE["K1 SQLite<br/>st_session_archive<br/>st_beliefs_archive<br/>st_history_archive"]:::k1_local
+            K1_LOCAL_OUTBOX["Local Outbox<br/>Queue for K0 sync"]:::k1_local
+        end
+
+        subgraph K1_CONCIERGE["Concierge (L1)"]
+            CON_RECALL["Memory Recall<br/>Query K0 memories<br/>selectors: episodic, semantic"]:::k1_caller
+            CON_CONTEXT["Context Builder<br/>Fetch episodes<br/>query: type=episodic"]:::k1_caller
+        end
+
+        subgraph K1_MEMORY_WRITERS["Memory Writers (L4)"]
+            MW_EPISODIC["Memory Writer Agent<br/>topic: memory.write<br/>LLM conversation → memory"]:::k1_caller
+            MW_PLAN["Plan Committer<br/>topic: plan.committed<br/>Planner Stage 4 output"]:::k1_caller
+            MW_GAP_ANSWER["Gap Answer Writer<br/>topic: memory.write<br/>body.correlation.gap_id"]:::k1_caller
+        end
+
+        subgraph K1_TOOLS["IFL-Connected Tools (Auto-Registered from Manifests)"]
+            TOOL_HOME["Home Tools<br/>tool.execute.home.hue.*<br/>tool.execute.home.nest.*<br/>via IFL -> company adapters"]:::k1_tool
+            TOOL_TRANSPORT["Transport Tools<br/>tool.execute.transport.tesla.*<br/>tool.execute.transport.uber.*<br/>via IFL -> company adapters"]:::k1_tool
+            TOOL_FINANCE["Finance Tools<br/>tool.read.finance.chase.*<br/>tool.execute.finance.venmo.*<br/>via IFL -> company adapters"]:::k1_tool
+            TOOL_HEALTH["Health Tools<br/>tool.read.health.fitbit.*<br/>tool.read.health.apple_health.*<br/>via IFL -> company adapters<br/>inbound: ifl.health.*.heart_rate"]:::k1_tool
+            TOOL_CALENDAR["Calendar Tools<br/>tool.execute.calendar.google.*<br/>tool.read.calendar.outlook.*<br/>via IFL -> company adapters"]:::k1_tool
+            TOOL_SHOPPING["Shopping Tools<br/>tool.execute.shopping.instacart.*<br/>tool.read.shopping.doordash.*<br/>via IFL -> company adapters"]:::k1_tool
+        end
+
+        subgraph K1_FABRIC["Capability Fabric (L2.5)"]
+            FAB_INVOKE["fabric.invoke(adapter, action)<br/>ALL external services via IFL<br/>-> GATEWAY_PORT -> IFL Runtime"]:::k1_caller
+            FAB_RECALL["fabric.invoke(k0.query)<br/>Memory recall<br/>-> QUERY_PORT for K0"]:::k1_caller
+            FAB_SPAWN["fabric.spawn()<br/>Agent creation<br/>K1-INTERNAL (no K0)"]:::k1_caller
+        end
+
+        subgraph K1_SSE_LISTENER["SSE Listener (K0 Events)"]
+            SSE_LISTEN["SSE Subscriber<br/>K0 event stream<br/>topics: memory.*, learning.*<br/>Header: X-SSE-Subscriber"]:::k1_caller
+            SSE_HANDLER["Event Handler<br/>Process K0 events<br/>→ K1 Event Bus routing"]:::k1_caller
+            SSE_CURSOR["Cursor Manager<br/>Track wal_pos per topic<br/>Resume on reconnect"]:::k1_caller
+            SSE_BACKPRESSURE["Backpressure Handler<br/>React to throttle/shed<br/>Adjust consumption rate"]:::k1_caller
+        end
+
+        subgraph K1_FEEDBACK_EMITTER["Feedback Emitter (K1 → K0) via OBS PORT"]
+            FB_CONTEXT["ConversationContext<br/>Track event_ids, recall_id<br/>grounded_event_ids per turn"]:::k1_caller
+            FB_DETECTORS["Feedback Detectors<br/>CorrectionDetector<br/>ValidationDetector<br/>ReformulationDetector"]:::k1_caller
+            FB_EMITTER["FeedbackEmitter<br/>emit_to_k0(kind=feedback,<br/>pipeline_id, signal_class)"]:::k1_caller
+        end
+
+        subgraph K1_PROACTIVE_FLOW["Proactive Agent Flow (Gap Resolution)"]
+            PROACTIVE_LISTEN["SSE Listener<br/>curiosity.intent.v1<br/>k0.learning.advisory.v1"]:::k1_caller
+            PROACTIVE_DECISION["Proactive Decision Engine<br/>LLM-based question framing"]:::k1_caller
+            PROACTIVE_BUDGET["Attention Budget Gate<br/>Token bucket (3/day)<br/>Context readiness check"]:::k1_caller
+            CURIOSITY_AGENT["Curiosity Agent<br/>Formulate natural question<br/>Respect politeness theory"]:::k1_caller
+        end
+    end
+
+    %% ======================================================================================
+    %% BRIDGE CORE (Center - The Security Gateway)
+    %% ======================================================================================
+    subgraph BRIDGE_CORE["🔐 K0-K1 BRIDGE (bridge/)"]
+        direction TB
+
+        %% ==================================================================================
+        %% RESPONSIBILITY 1: KERNEL TRANSPORT
+        %% ==================================================================================
+        subgraph BRIDGE_TRANSPORT["1️⃣ KERNEL TRANSPORT"]
+            direction TB
+
+            subgraph TRANSPORT_QUERY["Query Path (K1 → K0 → K1) REQUEST/RESPONSE"]
+                QUERY_PORT["IKernelQueryPort<br/>query(selectors, space_id)<br/>multi_query(), paginate()"]:::bridge_port
+                QUERY_ENVELOPE["QueryEnvelope<br/>selectors[]: type, topic,<br/>limit, cursor, after, query<br/>space_id, tenant_id<br/>max_latency_ms, fail_fast"]:::bridge_envelope
+                QUERY_BUILDER["QueryBuilder<br/>Build RecallSelector bundles"]:::bridge_internal
+            end
+
+            subgraph TRANSPORT_QUERY_TYPES["Query Selector Types"]
+                QRY_EPISODIC["type: episodic<br/>topic: memory.write<br/>WAL recall by position"]:::bridge_envelope
+                QRY_SEMANTIC["type: semantic<br/>query: free-text<br/>pgvector similarity"]:::bridge_envelope
+                QRY_SESSION["type: session<br/>topic: session.*<br/>SessionState history"]:::bridge_envelope
+                QRY_DEVICE["type: device<br/>topic: ifl.*<br/>IFL adapter event history"]:::bridge_envelope
+            end
+
+            subgraph TRANSPORT_COMMAND["Command Path (K1 → K0) ONE-WAY FIRE-AND-FORGET"]
+                CMD_PORT["IKernelCommandPort<br/>submit(topic, schema_uri, body)<br/>ONE-WAY: No response expected"]:::bridge_port
+                CMD_ENVELOPE["CommandEnvelope<br/>cognitive_trace_id, tenant_id<br/>space_id, topic, schema_uri<br/>actor, device_id, band<br/>sig_alg, sig_kid, sig<br/>envelope_sha256, body"]:::bridge_envelope
+                CMD_BUILDER["CommandBuilder<br/>FlatBuffer/JSON"]:::bridge_internal
+            end
+
+            subgraph TRANSPORT_COMMAND_TOPICS["Command Topics (k0/contracts/taxonomies/command_topics.yaml)"]
+                CMD_MEMORY["memory.write<br/>→ st_epi → P02<br/>Episodic memories"]:::bridge_envelope
+                CMD_SESSION["session.snapshot<br/>→ st_session → Archive<br/>SessionState snapshots"]:::bridge_envelope
+                CMD_BELIEFS["beliefs.archive<br/>→ st_beliefs → Archive<br/>Archived beliefs"]:::bridge_envelope
+                CMD_HISTORY["history.archive<br/>→ st_history → Archive<br/>Turn history"]:::bridge_envelope
+                CMD_PLAN["plan.committed<br/>→ st_epi → P02<br/>Planner Stage 4"]:::bridge_envelope
+                CMD_DEVICE["ifl.*<br/>→ st_epi → P02<br/>IFL device events"]:::bridge_envelope
+                CMD_SYNC["sync.delta<br/>→ st_sync → P07<br/>CRDT device sync"]:::bridge_envelope
+            end
+
+            subgraph TRANSPORT_SSE["SSE Path (K0 → K1) ONE-WAY STREAMING"]
+                SSE_PORT["IKernelSSEPort<br/>subscribe(topics, cursor)<br/>ack(topic, offset)"]:::bridge_port
+                SSE_RECEIVER["SSEReceiver<br/>Event stream parser<br/>Header: X-SSE-Subscriber"]:::bridge_internal
+                SSE_ROUTER["EventRouter<br/>Topic → Handler mapping"]:::bridge_internal
+                SSE_ACK["SSEAcknowledger<br/>ack(subscriber_id, topic,<br/>space_id, tenant_id, offset)"]:::bridge_internal
+            end
+
+            subgraph TRANSPORT_SSE_EVENTS["SSE Event Types (K0 → K1)"]
+                SSE_TRACE["SSETraceEvent<br/>cursor, topic, wal_pos<br/>commit_ts, policy_stamp"]:::bridge_envelope
+                SSE_MEMORY_FORMED["memory.formed.v1<br/>Memory consolidation done"]:::bridge_envelope
+                SSE_LEARNING_ADV["k0.learning.advisory.v1<br/>Validated feedback signal"]:::bridge_envelope
+                SSE_PROACTIVE["k0.proactive.signal.v1<br/>Proactive agent trigger"]:::bridge_envelope
+                SSE_CURIOSITY["curiosity.intent.v1<br/>Gap question from P06<br/>→ K1 Curiosity Agent"]:::bridge_envelope
+                SSE_SYNC_DONE["k0.sync.complete.v1<br/>Device sync finished"]:::bridge_envelope
+                SSE_EMBEDDING["cognitive.vector.stored.v1<br/>Embedding indexed"]:::bridge_envelope
+            end
+
+            subgraph TRANSPORT_SSE_BACKPRESSURE["SSE Backpressure (K0 → K1)"]
+                SSE_BP_METRICS["BackpressureMetrics<br/>lag_ms, pending_events<br/>level: ok/throttle/shed"]:::bridge_envelope
+                SSE_BP_THROTTLE["level: throttle<br/>Reduce consumption rate<br/>throttle_ratio applied"]:::bridge_envelope
+                SSE_BP_SHED["level: shed<br/>HTTP 429 returned<br/>Consumer too slow"]:::bridge_envelope
+            end
+
+            subgraph TRANSPORT_OBS["Observability Path (K1 → K0) ONE-WAY"]
+                OBS_PORT["IKernelObsPort<br/>emit(kind, body)<br/>ONE-WAY: No response expected"]:::bridge_port
+                OBS_BUFFER["TelemetryBuffer<br/>Batch emissions"]:::bridge_internal
+                OBS_FEEDBACK["FeedbackBuilder<br/>Build FeedbackEnvelope<br/>correlation, provenance, payload"]:::bridge_internal
+            end
+
+            subgraph TRANSPORT_OBS_KINDS["Observability Kinds (What K1 Sends)"]
+                OBS_METRICS["kind: metrics<br/>snapshot: prometheus format<br/>captured_at, source"]:::bridge_envelope
+                OBS_LOGS["kind: logs<br/>entries[]: message, level,<br/>event, cognitive_trace_id"]:::bridge_envelope
+                OBS_FEEDBACK_KIND["kind: feedback<br/>FeedbackEnvelope:<br/>feedback_id, pipeline_id<br/>signal_class, correlation<br/>provenance, payload"]:::bridge_envelope
+            end
+
+            subgraph TRANSPORT_FEEDBACK["Feedback Signal Flow (K1 → K0)"]
+                FB_CORRELATION["CorrelationIds<br/>session_id, event_ids[]<br/>wal_positions[], recall_id<br/>target_entity_type/id"]:::bridge_envelope
+                FB_SIGNAL_CLASS["signal_class:<br/>CORRECTION, VALIDATION<br/>IMPLICIT, EXPLICIT, OUTCOME"]:::bridge_envelope
+                FB_PIPELINES["Target Pipelines:<br/>P02 (memory quality)<br/>P08 (embedding relevance)<br/>P06 (learning loop)"]:::bridge_envelope
+            end
+        end
+
+        %% ==================================================================================
+        %% RESPONSIBILITY 5: OFFLINE AWARENESS (Edge-First)
+        %% ==================================================================================
+        subgraph BRIDGE_OFFLINE["5️⃣ OFFLINE AWARENESS (Edge-First)"]
+            direction TB
+
+            subgraph OFFLINE_MONITOR["K0 Availability Monitor"]
+                K0_HEALTH["K0HealthChecker<br/>Periodic /healthz ping"]:::bridge_offline
+                K0_STATUS["K0AvailabilityStatus<br/>ONLINE/OFFLINE/DEGRADED"]:::bridge_offline
+                HEALTH_INTERVAL["Check interval: 30s"]:::bridge_internal
+            end
+
+            subgraph OFFLINE_QUEUE["Local Command Queue"]
+                LOCAL_OUTBOX["LocalOutbox<br/>K1 SQLite queue"]:::bridge_offline
+                QUEUE_ENQUEUE["enqueue(envelope)<br/>When K0 offline"]:::bridge_internal
+                QUEUE_DRAIN["drain()<br/>When K0 returns"]:::bridge_internal
+            end
+
+            subgraph OFFLINE_MODES["Degradation Modes"]
+                MODE_ONLINE["ONLINE<br/>Full K0 access"]:::bridge_mode_online
+                MODE_OFFLINE["OFFLINE<br/>Queue + local only"]:::bridge_mode_offline
+                MODE_DEGRADED["DEGRADED<br/>Limited K0 access"]:::bridge_mode_degraded
+            end
+
+            subgraph OFFLINE_PRIORITY["Offline Priority"]
+                PRIO_CRITICAL["CRITICAL: IFL devices<br/>Always work (local)"]:::bridge_internal
+                PRIO_HIGH["HIGH: SessionState<br/>Local COLD works"]:::bridge_internal
+                PRIO_NORMAL["NORMAL: Memory writes<br/>Queued for sync"]:::bridge_internal
+                PRIO_LOW["LOW: Telemetry<br/>Dropped if offline"]:::bridge_internal
+            end
+        end
+
+        %% ==================================================================================
+        %% RESPONSIBILITY 2: CONNECTOR SECURITY
+        %% ==================================================================================
+        subgraph BRIDGE_CONNECTOR["2️⃣ CONNECTOR SECURITY (Tools → Devices)"]
+            direction TB
+
+            subgraph CONNECTOR_GATEWAY["Connector Gateway"]
+                GATEWAY_PORT["IConnectorGatewayPort<br/>execute(), register()"]:::bridge_port
+                GATEWAY_ROUTER["RequestRouter<br/>Tool → Adapter mapping"]:::bridge_internal
+            end
+
+            subgraph CONNECTOR_REGISTRY["Tool Registry"]
+                TOOL_REG["ToolRegistry<br/>Registered tools"]:::bridge_registry
+                TOOL_CONFIG["ToolConfig<br/>capabilities, actions<br/>rate_limits, policies"]:::bridge_internal
+                TOOL_VALIDATOR["ToolValidator<br/>Action allowed?"]:::bridge_internal
+            end
+
+            subgraph CONNECTOR_AUTH["Credential Management"]
+                CRED_STORE["CredentialStore<br/>OAuth tokens, API keys"]:::bridge_security
+                CRED_REFRESH["TokenRefresher<br/>Auto-refresh expiring"]:::bridge_internal
+                OAUTH_FLOW["OAuthFlow<br/>Authorization code"]:::bridge_internal
+            end
+
+            subgraph CONNECTOR_LIMITS["Rate Limiting"]
+                RATE_LIMITER["RateLimiter<br/>Per-tool, per-device"]:::bridge_security
+                RATE_BUCKET["TokenBucket<br/>Sliding window"]:::bridge_internal
+                RATE_CIRCUIT["CircuitBreaker<br/>Failure protection"]:::bridge_internal
+            end
+
+            subgraph CONNECTOR_IFL["IFL Gateway (→ Bridge IFL)"]
+                IFL_GATEWAY["IFLGateway<br/>Route to IFL Core"]:::bridge_port
+                IFL_TRANSLATE["RequestTranslator<br/>Tool → IFL format"]:::bridge_internal
+            end
+        end
+
+        %% ==================================================================================
+        %% BRIDGE IFL (Interkernel Fabric Language - BRIDGE OWNED)
+        %% ==================================================================================
+        subgraph BRIDGE_IFL["4 IFL (Universal Connector Protocol) - BRIDGE OWNED"]
+            direction TB
+
+            subgraph IFL_CORE["IFL Runtime (bridge/ifl/)"]
+                IFL_PARSER["IFLProtocolEngine<br/>to_ifl(), from_ifl(), translate_event()"]:::bridge_ifl
+                IFL_TRANSLATOR["ManifestIngestion<br/>pull, verify (FamilyOS CA), validate, store"]:::bridge_ifl
+                IFL_REGISTRY["AdapterRegistry<br/>register(), lookup(), list(category?)<br/>Status: CONNECTED, DEGRADED, OFFLINE, REVOKED"]:::bridge_registry
+                IFL_SCHEMA["ManifestValidator<br/>ifl_manifest.schema.yaml<br/>Safety band audit, schema completeness"]:::bridge_internal
+            end
+
+            subgraph IFL_ADAPTERS["IFL Adapter Dispatch (Company-Hosted + WASM)"]
+                IFL_HOSTED["CompanyHostedDispatcher<br/>HTTPS/2 + TLS 1.3 to company endpoint<br/>Primary model: adapter runs on company infra<br/>FamilyOS-signed manifest required"]:::bridge_ifl
+                IFL_WASM["WASMSandboxDispatcher<br/>Local WASM modules (offline-capable)<br/>64MB mem, 5s CPU, no network<br/>For: MQTT, Zigbee, BLE, local sensors"]:::bridge_ifl
+                IFL_FAMILY_SYNC["FamilySyncAdapter<br/>Device P2P sync (WASM)"]:::bridge_ifl
+            end
+
+            subgraph IFL_INBOUND["IFL Inbound Events (External -> K0 + K1)"]
+                IFL_INBOUND_PARSER["EventIngress<br/>WebhookReceiver, SSEStream, PollReceiver<br/>Verify adapter signature on events"]:::bridge_ifl
+                IFL_INBOUND_ENVELOPE["envelope.to_envelope()<br/>topic: ifl.{category}.{adapter}.{event}"]:::bridge_envelope
+                IFL_INBOUND_CMD["-> K0 command.submit (persist)<br/>-> K1 Event Bus (real-time notify)"]:::bridge_internal
+            end
+        end
+
+        %% ==================================================================================
+        %% RESPONSIBILITY 3: DEVICE SYNC
+        %% ==================================================================================
+        subgraph BRIDGE_SYNC["3️⃣ DEVICE SYNC (Multi-Device Family)"]
+            direction TB
+
+            subgraph SYNC_DISCOVERY["Device Discovery"]
+                MDNS_SCANNER["mDNS Scanner<br/>_familyos._tcp.local"]:::bridge_sync
+                DEVICE_REGISTRY["DeviceRegistry<br/>Known family devices"]:::bridge_registry
+                PEER_RESOLVER["PeerResolver<br/>Device ID → IP:Port"]:::bridge_internal
+            end
+
+            subgraph SYNC_CRDT["CRDT Merge Engine"]
+                CRDT_MERGE["CRDTMerge<br/>Last-Write-Wins"]:::bridge_sync
+                LWW_REGISTER["LWW Register<br/>timestamp + device_id"]:::bridge_internal
+                CONFLICT_LOG["ConflictLog<br/>Resolution audit"]:::bridge_internal
+            end
+
+            subgraph SYNC_ENCRYPTION["E2EE Encryption"]
+                E2EE_ENGINE["E2EEncryption<br/>AES256-GCM"]:::bridge_security
+                SESSION_KEYS["SessionKeyStore<br/>Per-peer keys"]:::bridge_internal
+                KEY_EXCHANGE["KeyExchange<br/>X25519 ECDH"]:::bridge_internal
+            end
+
+            subgraph SYNC_CERTS["Certificate Management"]
+                CERT_MANAGER["CertificateManager<br/>ED25519 keypairs"]:::bridge_security
+                DEVICE_CERT["DeviceCertificate<br/>device_id, family_id<br/>public_keys"]:::bridge_internal
+                PAIRING_FLOW["PairingFlow<br/>6-digit code exchange"]:::bridge_internal
+            end
+
+            subgraph SYNC_P2P["P2P Tunnels (Phase 2)"]
+                P2P_MANAGER["P2PManager<br/>Internet sync"]:::bridge_sync
+                NAT_TRAVERSE["NAT Traversal<br/>STUN/TURN"]:::bridge_internal
+                TUNNEL_CONN["TunnelConnection<br/>WebRTC data channel"]:::bridge_internal
+            end
+
+            subgraph SYNC_PORT["Sync Port"]
+                ISYNC_PORT["ISyncPort<br/>sync_session()<br/>pull_session()"]:::bridge_port
+                SYNC_ENVELOPE["SyncEnvelope<br/>delta, timestamp<br/>device_id, signature"]:::bridge_envelope
+            end
+        end
+
+        %% ==================================================================================
+        %% SECURITY CORE (Shared across all responsibilities)
+        %% ==================================================================================
+        subgraph BRIDGE_SECURITY_CORE["🔒 SECURITY CORE"]
+            direction TB
+
+            subgraph SEC_TOKENS["Capability Tokens"]
+                TOKEN_ISSUER["TokenIssuer<br/>Issue tokens"]:::bridge_security
+                TOKEN_VALIDATOR["TokenValidator<br/>Verify signatures"]:::bridge_security
+                CAP_TOKEN["CapabilityToken<br/>issuer, subject<br/>capabilities[], band<br/>expires_at, signature"]:::bridge_envelope
+            end
+
+            subgraph SEC_SIGNING["Request Signing"]
+                REQ_SIGNER["RequestSigner<br/>HMAC-SHA256"]:::bridge_security
+                SIG_VERIFY["SignatureVerifier<br/>Validate K0 responses"]:::bridge_security
+            end
+
+            subgraph SEC_BANDS["Privacy Band Enforcement"]
+                BAND_ENFORCER["BandEnforcer<br/>GREEN/AMBER/RED/BLACK"]:::bridge_security
+                BAND_RULES["BandRules<br/>Per-band policies"]:::bridge_internal
+            end
+
+            subgraph SEC_AUDIT["Audit Trail"]
+                AUDIT_LOGGER["AuditLogger<br/>All operations logged"]:::bridge_audit
+                AUDIT_STORE["AuditStore<br/>Structured events"]:::bridge_internal
+                AUDIT_EXPORT["AuditExporter<br/>Compliance reports"]:::bridge_internal
+            end
+        end
+
+        %% ==================================================================================
+        %% CODECS & ADAPTERS
+        %% ==================================================================================
+        subgraph BRIDGE_CODECS["📦 CODECS & ADAPTERS"]
+            direction TB
+
+            subgraph CODECS["Serialization"]
+                JSON_CODEC["JSONCodec<br/>JSON envelopes"]:::bridge_internal
+                FB_CODEC["FlatBufferCodec<br/>Binary envelopes"]:::bridge_internal
+                CODEC_SELECT["CodecSelector<br/>Content-type routing"]:::bridge_internal
+            end
+
+            subgraph ADAPTERS["Transport Adapters"]
+                HTTP_ADAPTER["HTTPAdapter<br/>K0 REST API"]:::bridge_adapter
+                GRPC_ADAPTER["gRPCAdapter<br/>Future: streaming"]:::bridge_adapter
+                TCP_ADAPTER["TCPAdapter<br/>Device sync (LAN)"]:::bridge_adapter
+            end
+        end
+    end
+
+    %% ======================================================================================
+    %% K0 TOUCHPOINTS (Right Side - K0 Endpoints - OPTIONAL CLOUD)
+    %% ======================================================================================
+    subgraph K0_TOUCHPOINTS["⚙️ K0 KERNEL (Optional Cloud - Enhancement Layer)"]
+        direction TB
+
+        subgraph K0_AVAILABILITY["K0 Availability Note"]
+            K0_NOTE["K0 is OPTIONAL<br/>K1 works offline<br/>K0 adds: cross-device sync,<br/>long-term memory, KG, patterns"]:::k0_note
+        end
+
+        subgraph K0_PORTS["K0 Ports (FastAPI)"]
+            K0_PORT_QRY["PORT_QRY<br/>/k0/query.recall<br/>RecallRequest → RecallResponse<br/>Multi-selector bundle queries"]:::k0_port
+            K0_PORT_CMD["PORT_CMD<br/>/k0/command.submit<br/>Envelope → (fire-and-forget)<br/>ONE-WAY: K0 persists, no response"]:::k0_port
+            K0_PORT_SSE["PORT_SSE<br/>/k0/sse.subscribe<br/>K0 → K1 STREAMING<br/>Header: X-SSE-Subscriber"]:::k0_port
+            K0_PORT_OBS["PORT_OBS<br/>/k0/obs.emit<br/>ONE-WAY: metrics/logs/feedback<br/>Telemetry + Feedback ingestion"]:::k0_port
+        end
+
+        subgraph K0_PIPELINES["K0 Pipelines"]
+            K0_P01["P01: Recall/Read<br/>Query execution"]:::k0_pipeline
+            K0_P02["P02: Write/Ingest<br/>Episodic memory<br/>Handles feedback.signal.p02.v1"]:::k0_pipeline
+            K0_P03["P03: Consolidation<br/>Gap Detection → st_learning_queue<br/>Emits p03.gap.detected.v1"]:::k0_pipeline
+            K0_P05["P05: Attention Manager<br/>Token bucket (3/day)<br/>Context-aware timing"]:::k0_pipeline
+            K0_P06["P06: Active Learning<br/>Gap prioritization<br/>Emits curiosity.intent.v1 (SSE)"]:::k0_pipeline
+            K0_P07["P07: Sync/CRDT<br/>Device sync persist"]:::k0_pipeline
+            K0_P08["P08: Embedding<br/>Vector management<br/>Handles feedback.signal.p08.v1"]:::k0_pipeline
+            K0_P21["P21: Feedback Pipeline<br/>Validates FeedbackEnvelope<br/>Routes to target pipelines"]:::k0_pipeline
+        end
+
+        subgraph K0_LEARNING_STORAGE["K0 Learning Storage"]
+            K0_LEARNING_QUEUE["st_learning_queue<br/>Gap records (PENDING/ASKED/RESOLVED)"]:::k0_storage
+            K0_ANCHORS["st_anchors<br/>Bayesian beliefs (alpha/beta)"]:::k0_storage
+            K0_LEARNED_WEIGHTS["st_learned_weights<br/>Algorithm tuning params"]:::k0_storage
+        end
+
+        subgraph K0_STORAGE["K0 Storage"]
+            K0_WAL["WAL<br/>Write-ahead log"]:::k0_storage
+            K0_VEC["pgvector<br/>Semantic search"]:::k0_storage
+            K0_FTS["tsvector<br/>Full-text search"]:::k0_storage
+            K0_FEEDBACK["st_feedback_signals<br/>Feedback persistence<br/>→ BusDispatcher publish"]:::k0_storage
+        end
+
+        subgraph K0_FEEDBACK_BUS["K0 Feedback Bus"]
+            K0_BUS["BusDispatcher<br/>feedback.signal.<pipeline>.v1"]:::k0_security
+            K0_FB_P02["feedback.signal.p02.v1<br/>Memory quality"]:::k0_storage
+            K0_FB_P08["feedback.signal.p08.v1<br/>Embedding relevance"]:::k0_storage
+        end
+
+        subgraph K0_SECURITY["K0 Security"]
+            K0_GATE["MinimalGate<br/>Envelope validation"]:::k0_security
+            K0_POLICY["PolicyEngine<br/>Band enforcement"]:::k0_security
+            K0_IDEM["IdempotencyLedger<br/>Duplicate detection"]:::k0_security
+        end
+    end
+
+    %% ======================================================================================
+    %% FAMILY DEVICE MESH (Bottom - Multi-device sync targets)
+    %% ======================================================================================
+    subgraph FAMILY_DEVICES["📱 FAMILY DEVICE MESH"]
+        direction LR
+
+        subgraph DEVICE_IPHONE["Mom's iPhone"]
+            IPHONE_K0["K0 Kernel"]:::family_k0
+            IPHONE_K1["K1 Kernel"]:::family_k1
+            IPHONE_BRIDGE["Bridge"]:::family_bridge
+        end
+
+        subgraph DEVICE_LAPTOP["Dad's Laptop"]
+            LAPTOP_K0["K0 Kernel"]:::family_k0
+            LAPTOP_K1["K1 Kernel"]:::family_k1
+            LAPTOP_BRIDGE["Bridge"]:::family_bridge
+        end
+
+        subgraph DEVICE_TABLET["Kid's Tablet"]
+            TABLET_K0["K0 Kernel"]:::family_k0
+            TABLET_K1["K1 Kernel"]:::family_k1
+            TABLET_BRIDGE["Bridge"]:::family_bridge
+        end
+
+        subgraph DEVICE_HUB["Family Hub"]
+            HUB_K0["K0 Kernel"]:::family_k0
+            HUB_K1["K1 Kernel"]:::family_k1
+            HUB_BRIDGE["Bridge"]:::family_bridge
+        end
+    end
+
+    %% ======================================================================================
+    %% EXTERNAL SERVICES & DEVICES (Far Right - Company-hosted adapters + local hardware)
+    %% ======================================================================================
+    subgraph EXTERNAL_WORLD["EXTERNAL SERVICES & DEVICES (IFL Adapters)"]
+        direction TB
+
+        subgraph EXT_HOME["Home"]
+            DEV_HUE["Philips Hue<br/>Company Adapter"]:::device
+            DEV_NEST_HW["Nest / Google Home<br/>Company Adapter"]:::device
+            DEV_RING_CAM["Ring<br/>Company Adapter"]:::device
+        end
+
+        subgraph EXT_TRANSPORT["Transport"]
+            DEV_TESLA_CAR["Tesla<br/>Company Adapter"]:::device
+            EXT_UBER["Uber<br/>Company Adapter"]:::ext_service
+        end
+
+        subgraph EXT_FINANCE["Finance"]
+            EXT_CHASE["Chase<br/>Company Adapter"]:::ext_service
+            EXT_VENMO["Venmo<br/>Company Adapter"]:::ext_service
+        end
+
+        subgraph EXT_HEALTH["Health"]
+            DEV_WATCH["Apple Watch<br/>HealthKit Adapter"]:::device
+            EXT_FITBIT["Fitbit<br/>Company Adapter"]:::ext_service
+        end
+
+        subgraph EXT_CALENDAR["Calendar & Comms"]
+            EXT_GCAL["Google Calendar<br/>Company Adapter"]:::ext_service
+            EXT_OUTLOOK["Outlook<br/>Company Adapter"]:::ext_service
+        end
+
+        subgraph EXT_LOCAL["Local / WASM"]
+            DEV_IOT["IoT Sensors<br/>MQTT / Zigbee"]:::device
+            DEV_SONOS_SPK["Sonos<br/>Local mDNS"]:::device
+        end
+    end
+
+    %% ======================================================================================
+    %% DATA FLOWS: K1 → BRIDGE (Left connections)
+    %% ======================================================================================
+
+    %% SessionState → Local COLD (always works)
+    SS_LOCAL_COLD -->|"archive (local)"| K1_SQLITE
+    K1_SQLITE -->|"restore (offline safe)"| SS_RESTORE
+
+    %% SessionState → K0 Cloud Sync (optional, async)
+    SS_CLOUD_SYNC -->|"sync (if K0 up)"| CMD_PORT
+    SS_CHECKPOINT -->|"checkpoint(snapshot)"| CMD_PORT
+    SS_BELIEFS_EVICT -->|"beliefs.archive"| CMD_PORT
+    SS_HISTORY_EVICT -->|"history.archive"| CMD_PORT
+
+    %% Memory Writers → Bridge (Memory formation)
+    MW_EPISODIC -->|"memory.write"| CMD_PORT
+    MW_PLAN -->|"plan.committed"| CMD_PORT
+    MW_GAP_ANSWER -->|"memory.write + gap_id"| CMD_PORT
+
+    %% Concierge → Bridge (Memory operations)
+    CON_RECALL -->|"recall(query)"| QUERY_PORT
+    CON_CONTEXT -->|"query(episodes)"| QUERY_PORT
+
+    %% Feedback Emitter → OBS PORT (Algorithm tuning signals)
+    FB_CONTEXT -->|"track turns"| FB_DETECTORS
+    FB_DETECTORS -->|"detect signals"| FB_EMITTER
+    FB_EMITTER -->|"emit(kind=feedback)"| OBS_PORT
+
+    %% Proactive Agent Flow (Gap Resolution from K0 P06)
+    SSE_PORT -->|"curiosity.intent.v1"| PROACTIVE_LISTEN
+    PROACTIVE_LISTEN -->|"gap context"| PROACTIVE_DECISION
+    PROACTIVE_DECISION -->|"check budget"| PROACTIVE_BUDGET
+    PROACTIVE_BUDGET -->|"budget ok"| CURIOSITY_AGENT
+    CURIOSITY_AGENT -->|"user answers"| MW_GAP_ANSWER
+
+    %% Tools -> Bridge (All external services via IFL)
+    TOOL_HOME -->|"execute(adapter, action)"| GATEWAY_PORT
+    TOOL_TRANSPORT -->|"execute(adapter, action)"| GATEWAY_PORT
+    TOOL_FINANCE -->|"execute(adapter, action)"| GATEWAY_PORT
+    TOOL_HEALTH -->|"execute(adapter, action)"| GATEWAY_PORT
+    TOOL_CALENDAR -->|"execute(adapter, action)"| GATEWAY_PORT
+    TOOL_SHOPPING -->|"execute(adapter, action)"| GATEWAY_PORT
+
+    %% Fabric -> Bridge (Capability invocation via IFL)
+    FAB_INVOKE -->|"invoke(adapter, action)"| GATEWAY_PORT
+    FAB_RECALL -->|"invoke(k0.query)"| QUERY_PORT
+    %% FAB_SPAWN is K1-internal - no flow to Bridge/K0
+
+    %% SSE Listener ← Bridge (Event stream)
+    SSE_PORT -->|"events"| SSE_LISTEN
+    SSE_LISTEN -->|"process"| SSE_HANDLER
+    SSE_LISTEN -->|"track cursor"| SSE_CURSOR
+    SSE_LISTEN -->|"backpressure"| SSE_BACKPRESSURE
+
+    %% ======================================================================================
+    %% DATA FLOWS: BRIDGE INTERNAL (Center connections)
+    %% ======================================================================================
+
+    %% Query flow internal
+    QUERY_PORT -->|"build"| QUERY_BUILDER
+    QUERY_BUILDER -->|"envelope"| QUERY_ENVELOPE
+    QUERY_ENVELOPE -->|"sign"| REQ_SIGNER
+    REQ_SIGNER -->|"validate token"| TOKEN_VALIDATOR
+
+    %% Command flow internal
+    CMD_PORT -->|"build"| CMD_BUILDER
+    CMD_BUILDER -->|"envelope"| CMD_ENVELOPE
+    CMD_ENVELOPE -->|"sign"| REQ_SIGNER
+    CMD_ENVELOPE -->|"enforce band"| BAND_ENFORCER
+
+    %% Command topics routing
+    CMD_ENVELOPE -->|"topic routing"| CMD_MEMORY
+    CMD_ENVELOPE -->|"topic routing"| CMD_SESSION
+    CMD_ENVELOPE -->|"topic routing"| CMD_BELIEFS
+    CMD_ENVELOPE -->|"topic routing"| CMD_HISTORY
+    CMD_ENVELOPE -->|"topic routing"| CMD_DEVICE
+    CMD_ENVELOPE -->|"topic routing"| CMD_SYNC
+
+    %% Query types routing
+    QUERY_ENVELOPE -->|"selector types"| QRY_EPISODIC
+    QUERY_ENVELOPE -->|"selector types"| QRY_SEMANTIC
+    QUERY_ENVELOPE -->|"selector types"| QRY_SESSION
+    QUERY_ENVELOPE -->|"selector types"| QRY_DEVICE
+
+    %% SSE event routing
+    SSE_RECEIVER -->|"parse event"| SSE_TRACE
+    SSE_RECEIVER -->|"event type"| SSE_MEMORY_FORMED
+    SSE_RECEIVER -->|"event type"| SSE_LEARNING_ADV
+    SSE_RECEIVER -->|"event type"| SSE_PROACTIVE
+    SSE_RECEIVER -->|"event type"| SSE_SYNC_DONE
+    SSE_RECEIVER -->|"event type"| SSE_EMBEDDING
+    SSE_RECEIVER -->|"event type"| SSE_CURIOSITY
+    SSE_CURIOSITY -->|"curiosity.intent.v1"| SSE_PORT
+    SSE_RECEIVER -->|"backpressure"| SSE_BP_METRICS
+    SSE_BP_METRICS -->|"level check"| SSE_BP_THROTTLE
+    SSE_BP_METRICS -->|"level check"| SSE_BP_SHED
+    SSE_RECEIVER -->|"ack consumed"| SSE_ACK
+
+    %% Observability kinds routing
+    OBS_PORT -->|"batch"| OBS_BUFFER
+    OBS_BUFFER -->|"kind: metrics"| OBS_METRICS
+    OBS_BUFFER -->|"kind: logs"| OBS_LOGS
+    OBS_BUFFER -->|"kind: feedback"| OBS_FEEDBACK_KIND
+    OBS_FEEDBACK_KIND -->|"build envelope"| OBS_FEEDBACK
+    OBS_FEEDBACK -->|"correlation"| FB_CORRELATION
+    OBS_FEEDBACK -->|"signal routing"| FB_SIGNAL_CLASS
+    FB_SIGNAL_CLASS -->|"target pipeline"| FB_PIPELINES
+
+    %% Connector flow internal → IFL Gateway
+    GATEWAY_PORT -->|"route"| GATEWAY_ROUTER
+    GATEWAY_ROUTER -->|"validate"| TOOL_VALIDATOR
+    TOOL_VALIDATOR -->|"check auth"| CRED_STORE
+    TOOL_VALIDATOR -->|"check rate"| RATE_LIMITER
+    RATE_LIMITER -->|"forward"| IFL_GATEWAY
+
+    %% IFL Gateway → IFL Runtime → Adapter Dispatch
+    IFL_GATEWAY -->|"parse IFL envelope"| IFL_PARSER
+    IFL_PARSER -->|"ingest manifest / validate"| IFL_TRANSLATOR
+    IFL_TRANSLATOR -->|"lookup adapter"| IFL_REGISTRY
+    IFL_REGISTRY -->|"validate manifest schema"| IFL_SCHEMA
+    IFL_SCHEMA -->|"company-hosted adapter"| IFL_HOSTED
+    IFL_SCHEMA -->|"WASM sandboxed adapter"| IFL_WASM
+    IFL_SCHEMA -->|"family sync (P2P)"| IFL_FAMILY_SYNC
+
+    %% Device Sync flow internal
+    MDNS_SCANNER -->|"register"| DEVICE_REGISTRY
+    DEVICE_REGISTRY -->|"resolve"| PEER_RESOLVER
+    PEER_RESOLVER -->|"connect"| P2P_MANAGER
+    ISYNC_PORT -->|"encrypt"| E2EE_ENGINE
+    E2EE_ENGINE -->|"sign"| CERT_MANAGER
+    CRDT_MERGE -->|"log"| CONFLICT_LOG
+
+    %% All paths → Audit
+    TOKEN_VALIDATOR -->|"log"| AUDIT_LOGGER
+    RATE_LIMITER -->|"log"| AUDIT_LOGGER
+    E2EE_ENGINE -->|"log"| AUDIT_LOGGER
+
+    %% Codec routing
+    QUERY_ENVELOPE -->|"serialize"| JSON_CODEC
+    CMD_ENVELOPE -->|"serialize"| FB_CODEC
+    SYNC_ENVELOPE -->|"serialize"| FB_CODEC
+
+    %% Adapter selection
+    JSON_CODEC -->|"transport"| HTTP_ADAPTER
+    FB_CODEC -->|"transport"| HTTP_ADAPTER
+    TCP_ADAPTER -->|"sync"| ISYNC_PORT
+
+    %% ======================================================================================
+    %% DATA FLOWS: BRIDGE → K0 (Right connections) - OFFLINE AWARE
+    %% ======================================================================================
+
+    %% Offline check before K0 operations
+    HTTP_ADAPTER -->|"check status"| K0_HEALTH
+    K0_HEALTH -->|"if ONLINE"| K0_PORT_QRY
+    K0_HEALTH -->|"if OFFLINE"| LOCAL_OUTBOX
+
+    %% Query path → K0 (when online)
+    HTTP_ADAPTER -->|"POST /query"| K0_PORT_QRY
+    K0_PORT_QRY -->|"route"| K0_P01
+
+    %% Command path → K0 (topic-based pipeline routing)
+    HTTP_ADAPTER -->|"POST /command"| K0_PORT_CMD
+    K0_PORT_CMD -->|"memory.*, session.*, beliefs.*, history.*, plan.*"| K0_P02
+    K0_PORT_CMD -->|"sync.delta"| K0_P07
+
+    %% Gap Resolution Flow (System 1: Active Learning Loop)
+    K0_P02 -->|"new event"| K0_P03
+    K0_P03 -->|"gap detected"| K0_LEARNING_QUEUE
+    K0_LEARNING_QUEUE -->|"p03.gap.detected.v1"| K0_P06
+    K0_P06 -->|"prioritize"| K0_P05
+    K0_P05 -->|"context ready"| K0_PORT_SSE
+    K0_PORT_SSE -->|"curiosity.intent.v1"| SSE_RECEIVER
+
+    %% SSE path ← K0
+    K0_PORT_SSE -->|"stream"| SSE_RECEIVER
+
+    %% Observability → K0
+    HTTP_ADAPTER -->|"POST /obs.emit"| K0_PORT_OBS
+
+    %% Model Refinement Flow (System 2: Algorithm Tuning)
+    K0_PORT_OBS -->|"kind=feedback"| K0_P21
+    K0_P21 -->|"validate + persist"| K0_FEEDBACK
+    K0_FEEDBACK -->|"publish"| K0_BUS
+    K0_BUS -->|"route"| K0_FB_P02
+    K0_BUS -->|"route"| K0_FB_P08
+    K0_FB_P02 -->|"learning module"| K0_LEARNED_WEIGHTS
+    K0_FB_P08 -->|"learning module"| K0_LEARNED_WEIGHTS
+    K0_FB_P02 -->|"subscribe"| K0_P02
+    K0_FB_P08 -->|"subscribe"| K0_P08
+
+    %% Gap Answer Return Flow (System 1 completion)
+    %% User answers gap question → Curiosity Agent → Memory Writer → Command Port → P02 resolves gap
+    CMD_PORT -->|"memory.write + gap_id correlation"| HTTP_ADAPTER
+    HTTP_ADAPTER -->|"POST /command"| K0_PORT_CMD
+    K0_P02 -->|"gap_id resolved"| K0_P03
+
+    %% Device Sync uses FamilySyncAdapter → K0 P07 for persistence
+    IFL_FAMILY_SYNC -->|"persist sync"| K0_P07
+    ISYNC_PORT -->|"use adapter"| IFL_FAMILY_SYNC
+
+    %% K0 validation
+    K0_PORT_CMD -->|"validate"| K0_GATE
+    K0_GATE -->|"policy"| K0_POLICY
+    K0_POLICY -->|"dedup"| K0_IDEM
+
+    %% K0 storage
+    K0_P02 -->|"write"| K0_WAL
+    K0_P08 -->|"embed"| K0_VEC
+    K0_P01 -->|"search"| K0_FTS
+
+    %% ======================================================================================
+    %% DATA FLOWS: OFFLINE QUEUE (When K0 unavailable)
+    %% ======================================================================================
+
+    %% Queue commands when offline
+    CMD_PORT -->|"if K0 offline"| LOCAL_OUTBOX
+    LOCAL_OUTBOX -->|"persist"| K1_LOCAL_OUTBOX
+
+    %% Drain queue when K0 returns
+    K0_HEALTH -->|"K0 back online"| QUEUE_DRAIN
+    QUEUE_DRAIN -->|"drain queued"| HTTP_ADAPTER
+
+    %% Local COLD always works
+    K1_SQLITE -.->|"NO K0 NEEDED"| SS_RESTORE
+
+    %% ======================================================================================
+    %% DATA FLOWS: IFL → EXTERNAL SERVICES & DEVICES (BIDIRECTIONAL)
+    %% ======================================================================================
+
+    %% Outbound: Company-Hosted Dispatcher → Company Adapter endpoints
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| DEV_HUE
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| DEV_NEST_HW
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| DEV_TESLA_CAR
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| DEV_RING_CAM
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_UBER
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_CHASE
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_VENMO
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| DEV_WATCH
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_FITBIT
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_GCAL
+    IFL_HOSTED -->|"HTTPS/2 + mTLS"| EXT_OUTLOOK
+
+    %% Outbound: WASM Sandboxed Dispatcher → Local devices
+    IFL_WASM -->|"MQTT / Zigbee / BLE"| DEV_IOT
+    IFL_WASM -->|"mDNS local"| DEV_SONOS_SPK
+
+    %% Inbound: External events → IFL EventIngress → envelope → K0 + K1
+    DEV_WATCH -->|"ifl.health.apple_health.*"| IFL_INBOUND_PARSER
+    EXT_FITBIT -->|"ifl.health.fitbit.*"| IFL_INBOUND_PARSER
+    DEV_RING_CAM -->|"ifl.home.ring.motion"| IFL_INBOUND_PARSER
+    DEV_NEST_HW -->|"ifl.home.nest.temp"| IFL_INBOUND_PARSER
+    DEV_IOT -->|"ifl.home.sensor.*"| IFL_INBOUND_PARSER
+    EXT_CHASE -->|"ifl.finance.chase.transaction"| IFL_INBOUND_PARSER
+    IFL_INBOUND_PARSER -->|"verify adapter signature"| IFL_INBOUND_ENVELOPE
+    IFL_INBOUND_ENVELOPE -->|"ifl.{category}.{adapter}.{event}"| CMD_PORT
+
+    %% ======================================================================================
+    %% DATA FLOWS: DEVICE SYNC MESH
+    %% ======================================================================================
+
+    %% This device's Bridge ↔ Family devices
+    ISYNC_PORT -.->|"mDNS/E2EE"| IPHONE_BRIDGE
+    ISYNC_PORT -.->|"mDNS/E2EE"| LAPTOP_BRIDGE
+    ISYNC_PORT -.->|"mDNS/E2EE"| TABLET_BRIDGE
+    ISYNC_PORT -.->|"mDNS/E2EE"| HUB_BRIDGE
+
+    %% Family device internal wiring
+    IPHONE_BRIDGE --- IPHONE_K0
+    IPHONE_BRIDGE --- IPHONE_K1
+    LAPTOP_BRIDGE --- LAPTOP_K0
+    LAPTOP_BRIDGE --- LAPTOP_K1
+    TABLET_BRIDGE --- TABLET_K0
+    TABLET_BRIDGE --- TABLET_K1
+    HUB_BRIDGE --- HUB_K0
+    HUB_BRIDGE --- HUB_K1
+
+    %% ======================================================================================
+    %% STYLE DEFINITIONS
+    %% ======================================================================================
+
+    %% K1 Touchpoints (Blue shades)
+    classDef k1_caller fill:#bbdefb,stroke:#1565c0,stroke-width:2px,color:#000
+    classDef k1_tool fill:#90caf9,stroke:#0d47a1,stroke-width:2px,color:#000
+
+    %% Bridge Components (Orange/Red shades - security focus)
+    classDef bridge_port fill:#ff7043,stroke:#bf360c,stroke-width:3px,color:#fff,font-weight:bold
+    classDef bridge_envelope fill:#ffab91,stroke:#e64a19,stroke-width:2px,color:#000
+    classDef bridge_internal fill:#ffe0b2,stroke:#f57c00,stroke-width:1px,color:#000
+    classDef bridge_registry fill:#fff3e0,stroke:#ff9800,stroke-width:2px,color:#000
+    classDef bridge_security fill:#ef5350,stroke:#b71c1c,stroke-width:2px,color:#fff,font-weight:bold
+    classDef bridge_audit fill:#ffcdd2,stroke:#c62828,stroke-width:2px,color:#000
+    classDef bridge_sync fill:#ce93d8,stroke:#7b1fa2,stroke-width:2px,color:#000
+    classDef bridge_adapter fill:#ffcc80,stroke:#ef6c00,stroke-width:2px,color:#000
+    classDef bridge_ifl fill:#7e57c2,stroke:#4527a0,stroke-width:2px,color:#fff,font-weight:bold
+
+    %% K0 Touchpoints (Green shades - Storage/Memory only)
+    classDef k0_port fill:#a5d6a7,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+    classDef k0_pipeline fill:#c8e6c9,stroke:#388e3c,stroke-width:2px,color:#000
+    classDef k0_storage fill:#81c784,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef k0_security fill:#66bb6a,stroke:#2e7d32,stroke-width:2px,color:#000
+
+    %% Physical Devices (Gray)
+    classDef device fill:#78909c,stroke:#37474f,stroke-width:2px,color:#fff
+
+    %% External Services (Company-hosted adapters - Teal)
+    classDef ext_service fill:#26a69a,stroke:#00695c,stroke-width:2px,color:#fff,font-weight:bold
+
+    %% Family Device Mesh
+    classDef family_k0 fill:#a5d6a7,stroke:#2e7d32,stroke-width:1px,color:#000
+    classDef family_k1 fill:#90caf9,stroke:#1565c0,stroke-width:1px,color:#000
+    classDef family_bridge fill:#ffab91,stroke:#e64a19,stroke-width:2px,color:#000
+
+    %% K1 Local Storage (Offline Safe - Cyan)
+    classDef k1_local fill:#4dd0e1,stroke:#00838f,stroke-width:3px,color:#000,font-weight:bold
+
+    %% Offline Awareness Components
+    classDef bridge_offline fill:#b39ddb,stroke:#512da8,stroke-width:2px,color:#000,font-weight:bold
+    classDef bridge_mode_online fill:#a5d6a7,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef bridge_mode_offline fill:#ef9a9a,stroke:#c62828,stroke-width:2px,color:#000
+    classDef bridge_mode_degraded fill:#fff59d,stroke:#f9a825,stroke-width:2px,color:#000
+
+    %% K0 Optional Note
+    classDef k0_note fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000,font-style:italic

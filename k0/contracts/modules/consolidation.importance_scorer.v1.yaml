@@ -1,6 +1,7 @@
 # P03 Module Contract: Importance Scorer
 # Phase: R1 - Importance Scoring
-# Dossier: §D.3.1 stage_10_importance_score, §4.1, Appendix C.2
+# Dossier: 2.4, Appendix C.2.1
+# Formula version: 2.0.0 (CONFIG_B, POC validated)
 
 module_id: consolidation.importance_scorer
 version: v1
@@ -8,14 +9,13 @@ version: v1
 input_event_types:
   - p03.batch.selected.v1
 
-output_event_types:
-  - p03.importance.scored.v1
+output_event_types: []  # Removed: p03.importance.scored.v1 was never emitted (Decision D-R1-002)
 
 latency_budget_ms: 30
 
 side_effects:
   - read:st_learned_weights
-  - write:st_learned_weights  # Thompson Sampling updates
+  - read:st_kg_edges  # ADR-K026: KG relationship boost (optional, gated by enable_kg_boost)
 
 idempotent: true
 
@@ -25,39 +25,67 @@ fabric_capabilities:
 failure_modes:
   - code: WEIGHTS_NOT_FOUND
     policy: fallback_default
-    description: Use default weights if learned weights unavailable
+    description: Use CONFIG_B static weights if learned weights unavailable
   - code: INVALID_SCORE
     policy: clamp
     description: Clamp score to [0, 1] range
+  - code: KG_EDGES_UNAVAILABLE
+    policy: fallback_default
+    description: If KG edge cache fails to load, relationship_boost=1.0 (no effect)
+
+formula_version: "2.0.0"
+
+weights:
+  defaults: CONFIG_B
+  sentiment: 0.10
+  affect: 0.12
+  arousal: 0.08
+  surprise: 0.15
+  novelty: 0.15
+  social: 0.15
+  identity: 0.10
+  recency: 0.15
+
+priority_tiers:
+  CRITICAL: ">=0.80"
+  HIGH: ">=0.60"
+  MEDIUM_HIGH: ">=0.45"
+  MEDIUM: ">=0.30"
+  LOW_MEDIUM: ">=0.15"
+  LOW: "<0.15"
 
 description: |
   Importance Scorer Module (R1 Phase)
 
-  Computes importance scores using weighted formula:
-    importance = w_recency * recency_score +
-                 w_affect * affect_score +
-                 w_social * social_score +
-                 w_rehearsal * rehearsal_score +
-                 w_novelty * novelty_score
+  Computes importance using CONFIG_B formula (POC validated: 562K events,
+  120/120 scenarios):
+
+  6 additive components (8 weights summing to 1.0):
+    emotional = sent_w*|sent| + affect_w*|val| + arousal_w*arousal
+    surprise  = surprise_w * surprise_level
+    novelty   = novelty_w * NOVELTY_MAP[categorical]
+    social    = social_w * log2(participants)/3.32 * intimacy_scale
+    identity  = identity_w * identity_signal
+    recency   = recency_w * exp(-0.005 * hours_since_event)
+
+  8 multiplicative modulators:
+    elaboration, goal, arc, temporal, type, intent, relationship, tier, reliability
+
+  KG Relationship Boost (ADR-K026, disabled by default):
+    relationship = 1.0 + boost_scale * max_edge_weight
+    Requires enable_kg_boost=True and read:st_kg_edges capability.
+    Edges loaded once per cycle; per-event lookup is O(1).
+
+  Final: importance = clamp(base * elab * goal * arc * temporal
+                            * type * intent * relationship * tier * reliability, 0, 1)
 
   Weight Sources:
-  - Default weights: Hard-coded baseline
-  - Learned weights: Thompson Sampling from st_learned_weights (adaptive)
-  - Fallback chain: learned → default
-
-  Score Components (normalized to 0-1):
-  - recency_score: Exponential decay from event timestamp
-  - affect_score: From P02 affect.analyze enrichment
-  - social_score: Based on social graph significance
-  - rehearsal_score: Access frequency from P04/K1 usage
-  - novelty_score: 1 - max_similarity to existing memories
-
-  Thompson Sampling (K020 Feedback):
-  - Updates weights based on P04/K1 retrieval success signals
-  - Beta prior: α=17, β=3 (prior E[x]=0.85)
-  - Momentum: 0.9 (prevents wild swings)
-  - Bounds: [0.5, 0.95] (stability)
+  - Default weights: CONFIG_B hard-coded baseline (8 weights sum to 1.0)
+  - Learned weights: Hebbian gradient descent from st_learned_weights (adaptive)
+  - Fallback chain: per-space -> global-blend -> static
+  - Cold start: Progressive blending alpha = sample_count / 500
 
   Output:
   - envelope.events[*].importance_score: REAL (0-1)
   - envelope.events[*].importance_breakdown: JSON decomposition
+  - envelope.events[*].priority_tier: 6-tier classification

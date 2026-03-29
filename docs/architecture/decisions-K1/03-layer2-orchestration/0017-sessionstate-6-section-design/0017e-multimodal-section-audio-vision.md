@@ -19,7 +19,7 @@ date_created: '2025-11-03'
 date_updated: '2025-11-03'
 implementation_date: null
 implementation_phase: Phase 1 (Foundation)
-implementation_status: IN_PROGRESS
+implementation_status: SUPERSEDED
 propagation:
   affected_adrs:
   - ADR-0011
@@ -54,7 +54,7 @@ research_citations:
 - WebRTC MediaStream API (W3C Specification, 2024)
 - Real-Time Audio Processing (Web Audio API, 2024)
 - Vision Embedding Storage (FAISS Vector Database, 2024)
-status: PROPOSED
+status: SUPERSEDED
 superseded_by: []
 supersedes: []
 title: Multimodal Section - Audio/Vision State
@@ -629,11 +629,59 @@ DeviceContext:
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** ⏸️ **SUPERSEDED** - Deferred to V2
 **Created Date:** 2025-10-12
-**Target Completion:** 2025-11-09 (4 weeks)
-**Blocked By:** 0017 (SessionState 6-Section Design)
-**Blocks:** None
+**Superseded Date:** 2026-02-02
+
+---
+
+## Final Decision (2026-02-02)
+
+**STATUS: SUPERSEDED** - This ADR is deferred to V2 (post-MVP).
+
+### Multimodal Section - REMOVED from V1
+
+The multimodal section was **removed from the V1 (Text-Only) implementation**:
+
+| Aspect | Original Design | Final Decision |
+|--------|----------------|----------------|
+| Included | Yes (4-8KB) | **NO** - Removed |
+| Reason | Audio/vision state | Text-only V1 |
+| Deferred To | N/A | V2 (Voice + Vision) |
+
+### Rationale for Removal
+
+1. **Text-Only V1**: MVP focuses on text conversation only
+2. **Complexity**: Audio/vision adds significant complexity
+3. **Size Budget**: Freed 4-8KB for other sections
+4. **Edge-First**: Multimodal requires K0 blob storage (network dependency)
+
+### V2 Reintroduction Plan
+
+When V2 adds voice/vision capabilities:
+
+1. Create new ADR-0017e-v2 for multimodal section
+2. Consider separate audio_state and vision_state sections
+3. Integrate with ADR-0085 series (device presence, BLE proximity)
+4. Audio buffers as K0 blob pointers (not in SessionState RAM)
+
+### Current Architecture (V1 - Text Only)
+
+```
+SessionState (96KB) - NO MULTIMODAL
+├── HOT CORE (48KB) - 8 sections
+└── WARM TIER (48KB) - 4 sections
+    (No multimodal section)
+```
+
+### Future Architecture (V2 - Voice + Vision)
+
+```
+SessionState (TBD)
+├── HOT CORE - (may add audio_active)
+└── WARM TIER - (may add vision_cache)
+└── K0 BLOB - audio/video raw data (pointers only in RAM)
+```
 
 ---
 

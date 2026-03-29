@@ -13,12 +13,12 @@ Problem Statement:
     Need proxy metrics to evaluate quality.
 
 Quality Signals:
-    | Signal           | Source              | Weight | Target | Interpretation             |
-    |------------------|---------------------|--------|--------|----------------------------|
-    | Silhouette Score | sklearn (automated) | 0.40   | > 0.5  | Cluster cohesion/separation|
-    | Grounding Rate   | K1 feedback         | 0.30   | > 0.6  | % clusters used by K1      |
-    | Correction Rate  | User feedback       | 0.20   | < 0.05 | User corrections / cluster |
-    | Singleton Rate   | Noise proxy         | 0.10   | < 0.20 | Singleton % of total       |
+    | Signal           | Source              | Weight | Target | Status   | Interpretation             |
+    |------------------|---------------------|--------|--------|----------|----------------------------|
+    | Silhouette Score | sklearn (automated) | 0.40   | > 0.30 | LIVE     | Cluster cohesion/separation|
+    | Grounding Rate   | K1 feedback         | 0.30   | > 0.6  | DORMANT  | % clusters used by K1      |
+    | Correction Rate  | User feedback       | 0.20   | < 0.05 | DORMANT  | User corrections / cluster |
+    | Singleton Rate   | Noise proxy         | 0.10   | < 0.20 | LIVE     | Singleton % of total       |
 
 Composite Quality Formula:
     composite = 0.40 × silhouette + 0.30 × grounding + 0.20 × (1-correction) + 0.10 × (1-singleton)
@@ -46,6 +46,18 @@ WEIGHT_SILHOUETTE: float = 0.40
 WEIGHT_GROUNDING: float = 0.30
 WEIGHT_CORRECTION: float = 0.20
 WEIGHT_SINGLETON: float = 0.10
+
+# Channel liveness — which quality signals actually have data sources.
+# Dormant channels are excluded from composite weight to avoid phantom quality.
+# When grounding/correction pipelines go live, flip these to True.
+CHANNEL_SILHOUETTE_LIVE: bool = True
+CHANNEL_GROUNDING_LIVE: bool = False  # No K1 grounding feedback loop yet
+CHANNEL_CORRECTION_LIVE: bool = False  # No user correction signals yet
+CHANNEL_SINGLETON_LIVE: bool = True
+CHANNEL_COHERENCE_LIVE: bool = True  # M4-RSCH-04: episodic coherence rho=0.4556
+
+# Coherence weight (M4-RSCH-04: replaces phantom grounding+correction)
+WEIGHT_COHERENCE: float = 0.40
 
 # Alert thresholds
 ALERT_THRESHOLD_LOW: float = 0.3
@@ -76,7 +88,19 @@ class ClusterQualityMetrics:
 
     # Core metrics (all in [0, 1] range)
     silhouette_score: float = 0.0
-    """Silhouette score from sklearn [-1, 1], normalized to [0, 1]."""
+    """Silhouette score from sklearn [-1, 1]. Only meaningful when silhouette_valid is True."""
+
+    silhouette_valid: bool = True
+    """Whether silhouette_score was computed from a real sklearn.metrics.silhouette_score
+    call. False when silhouette is mathematically undefined (fewer than 2 clusters,
+    all noise, or insufficient data). When False, silhouette is excluded from
+    the composite quality weight."""
+
+    coherence_score: float = 0.0
+    """Episodic coherence from M4-RSCH-04 (equal-weight 5-dimension mean)."""
+
+    coherence_valid: bool = False
+    """Whether coherence_score was computed from member context signals."""
 
     grounding_rate: float = 0.0
     """Fraction of clusters used by K1 in responses."""
@@ -116,26 +140,45 @@ class ClusterQualityMetrics:
 
     def compute_composite(self) -> float:
         """
-        Compute composite quality score.
+        Compute composite quality score from live channels only.
 
-        Formula from Dossier §4.3.4.1:
-            0.40 × silhouette +
-            0.30 × grounding_rate +
-            0.20 × (1 - correction_rate) +
-            0.10 × (1 - singleton_rate)
+        Formula from Dossier 4.3.4.1 with channel liveness gating:
+            Only channels with CHANNEL_*_LIVE=True contribute weight.
+            Dormant channels (grounding, correction) are excluded and their
+            weight is redistributed across live channels.
+
+            Current live channels: silhouette (when valid) + singleton.
+            Dormant channels: grounding, correction (no feedback loop yet).
 
         Returns:
             Composite quality in [0, 1], higher is better.
         """
-        # Normalize silhouette from [-1, 1] to [0, 1]
-        normalized_silhouette = (self.silhouette_score + 1.0) / 2.0
+        # Build weighted terms for live channels only
+        terms: list[tuple[float, float]] = []  # (weight, value)
 
-        self.composite_quality = (
-            WEIGHT_SILHOUETTE * normalized_silhouette
-            + WEIGHT_GROUNDING * self.grounding_rate
-            + WEIGHT_CORRECTION * (1.0 - self.correction_rate)
-            + WEIGHT_SINGLETON * (1.0 - self.singleton_rate)
-        )
+        if CHANNEL_COHERENCE_LIVE and self.coherence_valid:
+            terms.append((WEIGHT_COHERENCE, self.coherence_score))
+
+        if CHANNEL_SILHOUETTE_LIVE and self.silhouette_valid:
+            normalized_silhouette = (self.silhouette_score + 1.0) / 2.0
+            terms.append((WEIGHT_SILHOUETTE, normalized_silhouette))
+
+        if CHANNEL_GROUNDING_LIVE:
+            terms.append((WEIGHT_GROUNDING, self.grounding_rate))
+
+        if CHANNEL_CORRECTION_LIVE:
+            terms.append((WEIGHT_CORRECTION, 1.0 - self.correction_rate))
+
+        if CHANNEL_SINGLETON_LIVE:
+            terms.append((WEIGHT_SINGLETON, 1.0 - self.singleton_rate))
+
+        if not terms:
+            self.composite_quality = 0.0
+            return self.composite_quality
+
+        # Renormalize weights so they sum to 1.0
+        total_weight = sum(w for w, _ in terms)
+        self.composite_quality = sum(w * v for w, v in terms) / total_weight
 
         # Clamp to [0, 1]
         self.composite_quality = max(0.0, min(1.0, self.composite_quality))
@@ -162,6 +205,7 @@ class ClusterQualityMetrics:
         """Convert to dictionary for serialization."""
         return {
             "silhouette_score": round(self.silhouette_score, 4),
+            "silhouette_valid": self.silhouette_valid,
             "grounding_rate": round(self.grounding_rate, 4),
             "correction_rate": round(self.correction_rate, 4),
             "singleton_rate": round(self.singleton_rate, 4),
@@ -173,6 +217,15 @@ class ClusterQualityMetrics:
             "space_id": self.space_id,
             "cycle_id": self.cycle_id,
             "computed_at": self.computed_at,
+            "coherence_score": round(self.coherence_score, 4),
+            "coherence_valid": self.coherence_valid,
+            "channel_liveness": {
+                "coherence": CHANNEL_COHERENCE_LIVE,
+                "silhouette": CHANNEL_SILHOUETTE_LIVE,
+                "grounding": CHANNEL_GROUNDING_LIVE,
+                "correction": CHANNEL_CORRECTION_LIVE,
+                "singleton": CHANNEL_SINGLETON_LIVE,
+            },
         }
 
     @property
@@ -182,7 +235,7 @@ class ClusterQualityMetrics:
 
 
 # =============================================================================
-# R2StagedOutput Protocol
+# R2 Output Protocol (used by ClusterQualityTracker)
 # =============================================================================
 
 
@@ -193,6 +246,7 @@ class R2OutputProtocol(Protocol):
     batch_silhouette_score: float
     cluster_count: int
     noise_count: int
+    silhouette_valid: bool
 
 
 # =============================================================================
@@ -298,6 +352,7 @@ class ClusterQualityTracker:
 
         # From R2 output
         metrics.silhouette_score = r2_output.batch_silhouette_score
+        metrics.silhouette_valid = getattr(r2_output, "silhouette_valid", True)
         metrics.total_clusters = r2_output.cluster_count + r2_output.noise_count
         metrics.singleton_clusters = r2_output.noise_count
 
@@ -341,6 +396,7 @@ class ClusterQualityTracker:
 
         # From R2 output
         metrics.silhouette_score = r2_output.batch_silhouette_score
+        metrics.silhouette_valid = getattr(r2_output, "silhouette_valid", True)
         metrics.total_clusters = r2_output.cluster_count + r2_output.noise_count
         metrics.singleton_clusters = r2_output.noise_count
 
@@ -434,6 +490,8 @@ class ClusterQualityTracker:
         Check if alert should be raised.
 
         Alert when silhouette < alert_threshold for consecutive_failures cycles.
+        Cycles where silhouette is invalid (< 2 clusters) are skipped — they
+        do not count toward or against the consecutive-failure window.
 
         Args:
             metrics: Current cycle's quality metrics
@@ -441,6 +499,10 @@ class ClusterQualityTracker:
         Returns:
             Alert message if triggered, None otherwise
         """
+        # Skip cycles where silhouette could not be computed
+        if not metrics.silhouette_valid:
+            return None
+
         self._recent_scores.append(metrics.silhouette_score)
 
         # Keep only the last N scores
@@ -479,8 +541,8 @@ class ClusterQualityTracker:
         """
         recommendations: Dict[str, str] = {}
 
-        # Silhouette < 0.5 → poor separation
-        if metrics.silhouette_score < 0.5:
+        # Silhouette < 0.30 -> poor separation (skip when invalid)
+        if metrics.silhouette_valid and metrics.silhouette_score < 0.30:
             if metrics.singleton_rate > 0.20:
                 recommendations["eps"] = "INCREASE (too much noise)"
             else:
@@ -516,6 +578,10 @@ __all__ = [
     "WEIGHT_GROUNDING",
     "WEIGHT_CORRECTION",
     "WEIGHT_SINGLETON",
+    "CHANNEL_SILHOUETTE_LIVE",
+    "CHANNEL_GROUNDING_LIVE",
+    "CHANNEL_CORRECTION_LIVE",
+    "CHANNEL_SINGLETON_LIVE",
     "ALERT_THRESHOLD_LOW",
     "CONSECUTIVE_FAILURES_FOR_ALERT",
 ]

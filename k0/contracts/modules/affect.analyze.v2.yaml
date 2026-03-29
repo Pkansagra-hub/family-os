@@ -1,0 +1,264 @@
+# =============================================================================
+# M04 affect.analyze v2.0.0 -- Trust-Then-Fill Affect Contract
+# =============================================================================
+#
+# Replaces v1 single-strategy UltraBERT inference with trust-then-fill waterfall:
+#   tier0: MW v2 per-extraction affect passthrough + safety heads only (~85%)
+#   tier1: Full UltraBERT inference (MW absent/malformed) (~10%)
+#   tier2: VADER fallback (UltraBERT fails) (~5%)
+#   tier3: Safe defaults (all fail) (<1%)
+#
+# Safety heads (clinical_safety_risk, safety_familyos_band) ALWAYS run on body.text.
+# UltraBERT is DEMOTED from primary to fallback. MW LLM sees full conversation
+# context; UltraBERT sees only 15-30 token text body.
+#
+# ADRs: TBD (M3 trust-then-fill architecture)
+# Epic: 3.2
+# =============================================================================
+
+module_id: affect.analyze
+version: "v2"
+mode: trust_then_fill
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.affect.analyzed.v2
+
+# P95 latency budget (worst-case fallback_path)
+# Breakdown: fast_path ~10ms, vader_path ~20ms, fallback_path ~70ms
+latency_budget_ms: 70
+
+side_effects: []
+
+idempotent: true
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+inputs:
+  required:
+    - field: body.text
+      type: TEXT
+      description: "ALWAYS needed for safety head analysis + fallback inference"
+
+  preferred_from_mw:
+    - field: body.affect.valence
+      type: FLOAT
+      range: [0.0, 1.0]
+      description: "Per-extraction valence from MW v2 (full conversation context)"
+
+    - field: body.affect.arousal
+      type: FLOAT
+      range: [0.0, 1.0]
+      description: "Per-extraction arousal from MW v2 (full conversation context)"
+
+    - field: body.affect.dominance
+      type: FLOAT
+      range: [0.0, 1.0]
+      description: "3rd VAD dimension from MW v2 (new in v2)"
+
+    - field: body.affect.dominant_emotions
+      type: LIST[TEXT]
+      description: "Per-extraction emotion tags from MW v2 (44-class)"
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+outputs:
+  affect_values:
+    - name: valence
+      type: FLOAT
+      range: [0.0, 1.0]
+      source: "MW passthrough OR UltraBERT recompute OR VADER"
+
+    - name: arousal
+      type: FLOAT
+      range: [0.0, 1.0]
+      source: "MW passthrough OR UltraBERT recompute OR VADER"
+
+    - name: dominance
+      type: FLOAT
+      range: [0.0, 1.0]
+      nullable: true
+      source: "MW passthrough OR UltraBERT recompute (VADER: null)"
+
+    - name: dominant_emotions
+      type: LIST[TEXT]
+      source: "MW passthrough OR UltraBERT recompute OR []"
+
+  always_computed_by_m04:
+    - name: clinical_safety_risk
+      type: BOOLEAN
+      source: "UltraBERT safety heads (ALWAYS)"
+      description: "Content-level clinical risk flag. Never trust LLM alone for safety."
+
+    - name: clinical_safety_severity
+      type: TEXT
+      enum: [CRITICAL, HIGH, MEDIUM, LOW, NONE]
+      source: "UltraBERT safety heads (ALWAYS)"
+
+    - name: safety_familyos_band
+      type: TEXT
+      enum: [GREEN, AMBER, RED, CRISIS]
+      source: "UltraBERT safety heads (ALWAYS)"
+
+    - name: safety_familyos_subcategory
+      type: TEXT
+      source: "UltraBERT safety heads (ALWAYS)"
+
+    - name: affect_band
+      type: TEXT
+      enum: [GREEN, AMBER, RED]
+      source: "Derived from valence + safety override"
+
+    - name: confidence
+      type: FLOAT
+      range: [0.0, 1.0]
+      source: "Safety head confidence score"
+
+    - name: affect_source
+      type: TEXT
+      enum: [mw_v2, ultrabert, vader, default]
+      description: "Provenance tracking: which tier produced the affect values"
+
+# ---------------------------------------------------------------------------
+# Trust-Then-Fill Strategy
+# ---------------------------------------------------------------------------
+strategy:
+  tier0:
+    name: mw_passthrough_plus_safety
+    timeout_ms: 10
+    expected_frequency: "~85% of envelopes"
+    condition: "body.affect present AND body.affect.valence is float in [0.0, 1.0]"
+    behavior: |
+      Passthrough MW affect values (valence, arousal, dominance, dominant_emotions).
+      Run UltraBERT safety heads ONLY on body.text (~10ms).
+      Set affect_source = "mw_v2".
+
+  tier1:
+    name: ultrabert_full_inference
+    timeout_ms: 60
+    expected_frequency: "~10% of envelopes"
+    condition: "body.affect MISSING or malformed (no valence, out of range)"
+    behavior: |
+      Full UltraBERT inference (sentiment + emotion + safety) on body.text.
+      Same as v1 behavior. Set affect_source = "ultrabert".
+
+  tier2:
+    name: vader_fallback
+    timeout_ms: 10
+    expected_frequency: "~5% of envelopes"
+    condition: "UltraBERT inference fails (timeout, model error)"
+    behavior: |
+      VADER sentiment on body.text + UltraBERT safety heads.
+      Produces valence and arousal only (no dominance).
+      Set affect_source = "vader".
+
+  tier3:
+    name: safe_defaults
+    timeout_ms: 0
+    expected_frequency: "<1% of envelopes"
+    condition: "All above fail"
+    behavior: |
+      valence=0.5, arousal=0.3, dominance=null, dominant_emotions=[].
+      affect_band=GREEN, safety_familyos_band=GREEN.
+      Set affect_source = "default".
+
+# ---------------------------------------------------------------------------
+# Failure Modes
+# ---------------------------------------------------------------------------
+failure_modes:
+  - code: MW_AFFECT_MALFORMED
+    policy: fallback_tier1
+    description: "body.affect present but invalid (valence not float, out of range)"
+
+  - code: ULTRABERT_TIMEOUT
+    policy: fallback_tier2
+    description: "UltraBERT inference exceeds 60ms timeout"
+
+  - code: ULTRABERT_MODEL_ERROR
+    policy: fallback_tier2
+    description: "UltraBERT model runtime error"
+
+  - code: VADER_FAILED
+    policy: use_safe_defaults
+    description: "VADER also fails (extremely rare)"
+
+  - code: SAFETY_HEAD_FAILURE
+    policy: retry
+    max_retries: 2
+    description: "Safety heads must succeed. Retry on failure."
+
+  - code: INVALID_INPUT_TEXT
+    policy: drop
+    description: "body.text is null or empty"
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+config_schema:
+  type: object
+  properties:
+    safety_heads_timeout_ms:
+      type: integer
+      default: 10
+      description: "Timeout for UltraBERT safety heads only (fast path)"
+    ultrabert_full_timeout_ms:
+      type: integer
+      default: 60
+      description: "Timeout for full UltraBERT inference (fallback path)"
+    vader_timeout_ms:
+      type: integer
+      default: 10
+      description: "Timeout for VADER fallback"
+    default_valence:
+      type: number
+      default: 0.5
+      description: "Default valence for safe_defaults tier"
+    default_arousal:
+      type: number
+      default: 0.3
+      description: "Default arousal for safe_defaults tier"
+    mw_valence_range_min:
+      type: number
+      default: 0.0
+      description: "Minimum valid MW valence (tier0 validation)"
+    mw_valence_range_max:
+      type: number
+      default: 1.0
+      description: "Maximum valid MW valence (tier0 validation)"
+    affect_divergence_log_threshold:
+      type: number
+      default: 0.3
+      description: "Log warning when MW vs UltraBERT valence differ by more than this"
+
+description: |
+  Affect Classification Module (Amygdala/Affect System) -- Trust-Then-Fill v2
+
+  ARCHITECTURE SHIFT: UltraBERT is DEMOTED from primary to fallback.
+  MW v2 provides per-extraction affect from full conversation context (~2000 tokens).
+  UltraBERT sees only body.text (~15-30 tokens). MW affect is higher quality when present.
+
+  When MW affect IS present (tier0, ~85%):
+    - Passthrough valence, arousal, dominance, dominant_emotions
+    - Run safety heads ONLY on body.text (~10ms)
+    - Total: ~10ms
+
+  When MW affect is MISSING (tier1, ~10%):
+    - Full UltraBERT inference (sentiment + emotion + safety) on body.text (~60ms)
+    - Same as v1 behavior -- no regression
+    - Total: ~70ms
+
+  When UltraBERT FAILS (tier2, ~5%):
+    - VADER sentiment + safety heads (~10ms)
+    - Produces valence/arousal only (no dominance)
+    - Total: ~20ms
+
+  Safety heads (clinical_safety_risk, clinical_safety_severity, safety_familyos_band)
+  ALWAYS run on body.text regardless of path. Content-level safety classification
+  is a safety-critical validation -- never trust LLM alone for safety.
+
+  Key invariant: EVERY output always has all fields populated.
+  The source varies (mw_v2/ultrabert/vader/default) but the shape is constant.

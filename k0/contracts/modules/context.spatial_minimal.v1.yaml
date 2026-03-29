@@ -9,7 +9,8 @@ output_event_types:
 
 latency_budget_ms: 3
 
-side_effects: []
+side_effects:
+  - read:st_hipp_events
 
 idempotent: true
 
@@ -44,12 +45,13 @@ description: |
   - Place chain detection (brand_lexicon unavailable)
   - Geofence matching (st_geo_geofence not implemented)
 
-  Performance: <3ms P95 (copy/truncate operations only, no DB lookups)
+  Performance: <3ms P95 (copy/truncate + optional familiarity count lookup)
 
   Output fields (st_hipp_events):
   - location_name: TEXT (from envelope body)
   - location_type: TEXT (from envelope body)
   - geohash_6: TEXT (NULL for RED band, truncated for AMBER)
+  - spatial_familiarity: TEXT (FIRST_VISIT/OCCASIONAL/REGULAR/DAILY when place_id is available)
 
 config_schema:
   type: object

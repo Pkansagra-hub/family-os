@@ -1,0 +1,190 @@
+# M9.3 -- Truth Candidates Query Syscall Contract
+# Unified read path for reconciliation engine candidate retrieval.
+#
+# Replaces:
+#   - TruthQueryService.find_candidates()  (5 layers, Python cosine)
+#   - kg_entities_lookup syscall            (full table scan)
+#   - kg_edges_lookup syscall               (full table scan)
+#   - kg_candidates_fuzzy_query syscall     (ILIKE only)
+#   - CrossBatchExtend caller pre-query     (implicit episodes fetch)
+
+module_id: consolidation.truth_query
+version: v1
+latency_budget_ms: 5000
+
+input_event_types:
+  - p03.truth.query.requested.v1
+
+output_event_types:
+  - p03.truth.query.response.v1
+
+side_effects:
+  - read:st_epi
+  - read:st_sem
+  - read:st_procedural
+  - read:st_social
+  - read:st_prospective
+  - read:st_kg_dom
+  - read:st_kg_edges
+  - read:st_vec
+
+idempotent: true
+
+contract:
+  name: consolidation.truth_query
+  version: v1
+  milestone: M9.3
+  description: |
+    Unified truth layer candidate query syscall for the Universal
+    Reconciliation Engine.  Supports three query modes (EMBEDDING,
+    KEY, HYBRID) across all 7 truth layers.  Uses pgvector HNSW
+    index for O(log N) approximate nearest neighbour search.
+
+syscall:
+  name: truth_candidates_query
+  capability: truth.reconcile.read
+  method: async
+
+input:
+  type: TruthCandidateRequest
+  module: k0.modules.consolidation.query
+  fields:
+    tenant_id:
+      type: str
+      required: true
+    space_id:
+      type: str
+      required: true
+    layers:
+      type: tuple[str, ...]
+      required: true
+      description: Target truth layer(s) to query
+    query_embedding:
+      type: list[float] | None
+      required: false
+      description: 768-dim L2-normalised embedding for ANN search
+    key_filters:
+      type: dict[str, Any]
+      required: false
+      description: Key-value pairs for WHERE clause filtering
+    top_k:
+      type: int
+      default: 10
+    min_similarity:
+      type: float
+      default: 0.0
+    mode:
+      type: QueryMode | None
+      default: null
+      description: Override auto-detected query mode
+    timeout_ms:
+      type: int
+      default: 5000
+
+output:
+  type: TruthCandidateResponse
+  module: k0.modules.consolidation.query
+  fields:
+    candidates:
+      type: dict[str, list[TruthRecord]]
+      description: Results grouped by layer name
+    total_count:
+      type: int
+    layers_queried:
+      type: tuple[str, ...]
+    modes_used:
+      type: dict[str, str]
+    elapsed_ms:
+      type: float
+    query_id:
+      type: str
+    errors:
+      type: dict[str, str]
+
+query_modes:
+  EMBEDDING:
+    sql_pattern: "ORDER BY v.vector <=> $1::vector LIMIT $K"
+    index: ix_st_vec_hnsw (HNSW, m=16, ef_construction=64)
+    layers: [st_epi, st_sem, st_procedural, st_social, st_prospective]
+    join: "JOIN st_vec v ON t.{embedding_fk} = v.embedding_id"
+
+  KEY:
+    sql_pattern: "WHERE {identity_columns} = $N"
+    index: B-tree on identity columns
+    layers: [st_kg_edges]
+    join: null
+
+  HYBRID:
+    sql_pattern: "WHERE {key_cols} ORDER BY v.vector <=> $1::vector"
+    index: ix_st_vec_hnsw + B-tree
+    layers: [st_kg_dom]
+    join: "LEFT JOIN st_vec v ON t.{embedding_fk} = v.embedding_id"
+
+layers_covered:
+  - layer: st_epi
+    mode: EMBEDDING
+    pk: episode_id
+    embedding_fk: embedding_id
+  - layer: st_sem
+    mode: EMBEDDING
+    pk: pattern_id
+    embedding_fk: embedding_id
+  - layer: st_procedural
+    mode: EMBEDDING
+    pk: routine_id
+    embedding_fk: embedding_id
+  - layer: st_social
+    mode: EMBEDDING
+    pk: relationship_id
+    embedding_fk: embedding_id
+  - layer: st_prospective
+    mode: EMBEDDING
+    pk: intention_id
+    embedding_fk: embedding_id
+  - layer: st_kg_dom
+    mode: HYBRID
+    pk: entity_id
+    embedding_fk: embedding_id
+    identity_columns: [entity_type, canonical_name]
+  - layer: st_kg_edges
+    mode: KEY
+    pk: edge_id
+    embedding_fk: null
+    identity_columns: [source_entity_id, target_entity_id, relation_type]
+
+dependencies:
+  - contract: truth_layer_registry.v1
+    milestone: M9.1
+    usage: Per-layer column mapping, thresholds, merge rules
+  - contract: consolidation.identity.v1
+    milestone: M9.2
+    usage: TruthRecord return type, ReconciliationCandidate input
+  - storage: st_vec
+    migration: "0071"
+    usage: VECTOR(768) column with HNSW index
+
+performance:
+  targets:
+    single_layer_embedding_p95_ms: 100
+    all_layers_p95_ms: 200
+  improvements:
+    - "pgvector HNSW ANN: O(log N) vs O(N) brute-force"
+    - "SQL-side cosine: eliminates Python numpy decode+sort on 100 rows"
+    - "Per-layer LIMIT: returns only top_k, not all active records"
+
+bugs_fixed:
+  - id: B1
+    description: "struct.unpack on VECTOR(768) -- asyncpg returns string, not bytes"
+    fix: "TruthCandidateMapper.decode_vector() uses json.loads"
+  - id: B2
+    description: "No ORDER BY on similarity query"
+    fix: "ORDER BY v.vector <=> $1::vector ASC"
+  - id: B3
+    description: "Python-side cosine on ALL rows"
+    fix: "Pushed to pgvector <=> operator in SQL"
+  - id: B4
+    description: "HNSW index unused"
+    fix: "<=> operator triggers HNSW probe"
+  - id: B5
+    description: "st_kg_dom/st_kg_edges not in find_candidates"
+    fix: "All 7 layers covered via TruthLayerRegistry"

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/step_schema_retry.v1.json",
+  "title": "step.schema_retry.v1",
+  "description": "Emitted when a DAG step is retried due to output schema validation failure.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.step.schema_retry.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["dag_id", "step_id", "attempt", "schema_errors"],
+      "properties": {
+        "dag_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Parent DAG execution identifier."
+        },
+        "step_id": {
+          "type": "string",
+          "description": "Unique step identifier within the DAG."
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Current schema-retry attempt number (1-based)."
+        },
+        "schema_errors": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of schema validation error messages."
+        },
+        "schema_hint": {
+          "type": "string",
+          "description": "Hint text appended to the re-prompt for schema correction."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

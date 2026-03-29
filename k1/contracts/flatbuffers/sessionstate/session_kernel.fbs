@@ -1,0 +1,240 @@
+// ============================================================================
+// session_kernel.fbs - Session Kernel Root Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/session_kernel.fbs
+// Purpose: Root schema combining all HOT and WARM sections into unified kernel
+// Total Budget: 96KB (48KB HOT + 48KB WARM)
+// ADR: ADR-0017 (SessionState Design), Sections 5-6, 13
+// ============================================================================
+
+include "common.fbs";
+include "control_section.fbs";
+include "beliefs_active_section.fbs";
+include "scoreboard_section.fbs";
+include "history_active_section.fbs";
+include "history_recent_section.fbs";
+include "clarifications_section.fbs";
+include "affective_now_section.fbs";
+include "narrative_active_section.fbs";
+include "meta_section.fbs";
+include "beliefs_history_section.fbs";
+include "persona_section.fbs";
+include "telemetry_section.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// HOT CORE - 48KB TOTAL
+// ============================================================================
+// 8 sections, <100μs read via zero-copy deserialization
+//
+// Section budgets:
+// - control: 8KB (NEVER EVICT)
+// - beliefs_active: 8KB
+// - scoreboard: 6KB
+// - history_active: 8KB
+// - clarifications: 4KB
+// - affective_now: 4KB
+// - narrative_active: 4KB
+// - meta: 2KB (NEVER EVICT)
+// ============================================================================
+
+/// Hot Core - Always in memory, never paged to disk
+table HotCore {
+    // Control section (NEVER EVICT) - 8KB
+    control: ControlSection;
+
+    // Beliefs active section - 8KB
+    beliefs_active: BeliefsActiveSection;
+
+    // Scoreboard section - 6KB
+    scoreboard: ScoreboardSection;
+
+    // History active section - 8KB
+    history_active: HistoryActiveSection;
+
+    // Clarifications section - 4KB
+    clarifications: ClarificationsSection;
+
+    // Affective now section - 4KB
+    affective_now: AffectiveNowSection;
+
+    // Narrative active section - 4KB
+    narrative_active: NarrativeActiveSection;
+
+    // Meta section (NEVER EVICT) - 2KB
+    meta: MetaSection;
+
+    // Hot tier metadata
+    total_size_bytes: uint32;
+    budget_bytes: uint32 = 49152;     // 48KB
+    is_over_budget: bool = false;
+}
+
+// ============================================================================
+// WARM TIER - 48KB TOTAL
+// ============================================================================
+// 4 sections, evictable to COLD when pressure
+//
+// Section budgets:
+// - beliefs_history: 12KB
+// - history_recent: 20KB
+// - persona: 8KB (high priority, rarely evict)
+// - telemetry: 8KB (lowest priority, first to evict)
+// ============================================================================
+
+/// Warm Tier - In memory but evictable to COLD
+table WarmTier {
+    // Beliefs history section - 12KB
+    beliefs_history: BeliefsHistorySection;
+
+    // History recent section - 20KB
+    history_recent: HistoryRecentSection;
+
+    // Persona section - 8KB (high priority)
+    persona: PersonaSection;
+
+    // Telemetry section - 8KB (lowest priority)
+    telemetry: TelemetrySection;
+
+    // Warm tier metadata
+    total_size_bytes: uint32;
+    budget_bytes: uint32 = 49152;     // 48KB
+    is_over_budget: bool = false;
+
+    // Eviction tracking
+    eviction_count: uint32;
+    last_eviction: Timestamp;
+}
+
+// ============================================================================
+// COLD SHADOW POINTERS
+// ============================================================================
+
+/// Pointer to archived data in K0/COLD storage
+table ColdPointer {
+    archive_id: string (required);    // K0 archive reference
+    section_type: string;             // e.g., "beliefs_archive", "history_archive"
+    archived_at: Timestamp;
+    size_bytes: uint32;
+    item_count: uint32;               // Number of items archived
+    checksum: string;                 // Integrity check
+}
+
+/// Cold Shadow - References to K0-backed archives
+table ColdShadow {
+    // Archive pointers
+    beliefs_archive: ColdPointer;
+    history_archive: ColdPointer;
+    session_snapshots: [ColdPointer];
+
+    // Reconstruction metadata
+    last_full_archive: Timestamp;
+    total_archived_bytes: uint64;
+    reconstruction_sla_ms: uint16 = 100;
+}
+
+// ============================================================================
+// KERNEL HEALTH & METRICS
+// ============================================================================
+
+/// Kernel health status
+table KernelHealth {
+    // Pressure levels
+    hot_pressure: PressureLevel = NORMAL;
+    warm_pressure: PressureLevel = NORMAL;
+    overall_pressure: PressureLevel = NORMAL;
+
+    // Size metrics
+    hot_size_bytes: uint32;
+    warm_size_bytes: uint32;
+    total_size_bytes: uint32;
+    cold_references_bytes: uint64;
+
+    // Budget compliance
+    hot_utilization: float;           // 0.0 to 1.0
+    warm_utilization: float;
+    total_utilization: float;
+
+    // Emergency status
+    emergency_mode: EmergencyMode = NONE;
+    emergency_since: Timestamp;
+
+    // Performance
+    last_read_latency_us: uint32;     // Microseconds
+    avg_read_latency_us: uint32;
+}
+
+// ============================================================================
+// SESSION KERNEL ROOT
+// ============================================================================
+
+/// Session Kernel - The complete session state container
+/// Total budget: 96KB (HOT 48KB + WARM 48KB)
+/// Design: Edge-first, zero-copy reads, tiered eviction
+table SessionKernel {
+    // Schema version for compatibility
+    version: SchemaVersion;
+
+    // Session identity (denormalized for quick access)
+    session_id: string;
+    user_id: string;
+    privacy_band: PrivacyBand = AMBER;
+
+    // HOT CORE - always in memory
+    hot: HotCore;
+
+    // WARM TIER - evictable to COLD
+    warm: WarmTier;
+
+    // COLD SHADOW - K0 archive references
+    cold: ColdShadow;
+
+    // Kernel health
+    health: KernelHealth;
+
+    // Lifecycle
+    created_at: Timestamp;
+    last_modified: Timestamp;
+    turn_count: uint32;
+
+    // State flags
+    is_active: bool = true;
+    is_locked: bool = false;
+    is_readonly: bool = false;
+
+    // Checksum for integrity
+    checksum: string;
+}
+
+root_type SessionKernel;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+//
+// HOT CORE (48KB hard cap):
+//   control:          8KB  (NEVER EVICT)
+//   beliefs_active:   8KB
+//   scoreboard:       6KB
+//   history_active:   8KB
+//   clarifications:   4KB
+//   affective_now:    4KB
+//   narrative_active: 4KB
+//   meta:             2KB  (NEVER EVICT)
+//   TOTAL:           48KB
+//
+// WARM TIER (48KB, evictable):
+//   beliefs_history: 12KB
+//   history_recent:  20KB
+//   persona:          8KB  (high priority)
+//   telemetry:        8KB  (lowest priority)
+//   TOTAL:           48KB
+//
+// GRAND TOTAL: 96KB hard cap
+//
+// Performance targets:
+//   HOT read: <100μs (zero-copy deserialization)
+//   WARM read: <1ms
+//   COLD reconstruction: <100ms
+// ============================================================================

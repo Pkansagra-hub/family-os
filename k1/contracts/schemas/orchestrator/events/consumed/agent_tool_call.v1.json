@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/consumed/agent_tool_call.v1.json",
+  "title": "agent.tool_call.v1",
+  "description": "Consumed from Fabric when an agent invokes a tool during capability execution. Used by ExecutionMonitor for substep tracking.",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.fabric.agent.tool_call.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09: cognitive trace ID propagated on all events."
+    },
+    "source": {
+      "type": "string",
+      "const": "fabric"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["agent_id", "tool_name", "step_id"],
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "description": "Agent instance identifier performing the tool call."
+        },
+        "tool_name": {
+          "type": "string",
+          "description": "Name of the tool being invoked."
+        },
+        "step_id": {
+          "type": "string",
+          "description": "DAG step identifier the agent is executing."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

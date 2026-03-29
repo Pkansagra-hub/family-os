@@ -21,7 +21,7 @@ class TestP08ContractValidation:
     @pytest.fixture
     def p08_contract_path(self) -> Path:
         """Path to P08 contract file."""
-        return Path("k0/contracts/pipelines/p08_embedding_management.v2.yaml")
+        return Path("k0/contracts/pipelines/p08_embedding_management.v3.yaml")
 
     @pytest.fixture
     def p08_contract(self, p08_contract_path: Path) -> dict:
@@ -32,7 +32,7 @@ class TestP08ContractValidation:
     def test_p08_contract_loads_without_error(self, p08_contract: dict) -> None:
         """Verify P08 contract loads successfully."""
         assert p08_contract is not None
-        assert p08_contract["pipeline_id"] == "P08_EMBEDDING_MANAGEMENT"
+        assert p08_contract["pipeline_id"] == "P08_EMBEDDING"
 
     def test_p08_contract_validates_schema(self, p08_contract: dict) -> None:
         """Verify P08 contract validates against PipelineSpec schema."""
@@ -44,7 +44,7 @@ class TestP08ContractValidation:
                 StageSpec(
                     id=stage["id"],
                     module=stage["module"],
-                    after=stage.get("depends_on", []),
+                    after=stage.get("after", stage.get("depends_on", [])),
                 )
             )
 
@@ -57,7 +57,7 @@ class TestP08ContractValidation:
             exit_topic=p08_contract.get("exit_topic"),
             triggers=p08_contract.get("triggers", []),
             concurrency=p08_contract.get("concurrency", 1),
-            max_queue=p08_contract.get("max_queue_depth", 100),
+            max_queue=p08_contract.get("max_queue", 100),
             dag=(
                 dag_stages
                 if dag_stages
@@ -66,7 +66,7 @@ class TestP08ContractValidation:
         )
 
         # If we got here, validation passed
-        assert spec.pipeline_id == "P08_EMBEDDING_MANAGEMENT"
+        assert spec.pipeline_id == "P08_EMBEDDING"
         assert len(spec.triggers) == 3
 
     def test_p08_has_triggers(self, p08_contract: dict) -> None:
@@ -81,7 +81,7 @@ class TestP08ContractValidation:
         interval = next((t for t in triggers if t["type"] == "interval"), None)
 
         assert interval is not None, "Missing interval trigger"
-        assert interval["id"] == "maintenance_interval"
+        assert interval["id"] == "backfill_interval"
         assert interval["interval_seconds"] == 300
         assert interval["batch_size"] == 100
         assert interval["catch_up_enabled"] is True
@@ -92,9 +92,9 @@ class TestP08ContractValidation:
         threshold = next((t for t in triggers if t["type"] == "threshold"), None)
 
         assert threshold is not None, "Missing threshold trigger"
-        assert threshold["id"] == "maintenance_threshold"
-        assert threshold["table"] == "st_vec"
-        assert threshold["condition"] == "status = 'PENDING'"
+        assert threshold["id"] == "backfill_threshold"
+        assert threshold["table"] == "st_hipp_events"
+        assert threshold["condition"] == "embedding_status = 'PENDING'"
         assert threshold["threshold_count"] == 50
         assert threshold["check_interval_seconds"] == 60
         assert threshold["batch_size"] == 50

@@ -20,10 +20,16 @@ from typing import Any, Dict, Optional
 
 import yaml
 from dotenv import load_dotenv
-from l5_infrastructure.groq_client import GroqClient
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Import LLM client based on provider
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "google")
+if LLM_PROVIDER in ("google", "vertex"):
+    from l5_infrastructure.google_client import GoogleClient as LLMClient
+else:
+    from l5_infrastructure.groq_client import GroqClient as LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -159,45 +165,86 @@ class SystemCoordinator:
             raise
 
     def _init_groq_client(self):
-        """Initialize Groq API client with API key from environment."""
-        api_key = os.getenv("GROQ_API_KEY")
+        """Initialize LLM client (Google AI, Vertex AI, or Groq) based on LLM_PROVIDER env var."""
+        provider = os.getenv("LLM_PROVIDER", "google")
 
-        if not api_key:
-            logger.warning(
-                "⚠️ GROQ_API_KEY not found in environment. "
-                "Falling back to mock client. "
-                "Set GROQ_API_KEY to enable real LLM calls."
-            )
+        if provider == "google":
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                logger.warning(
+                    "⚠️ GOOGLE_API_KEY not found in environment. "
+                    "Falling back to mock client. "
+                    "Set GOOGLE_API_KEY to enable real LLM calls."
+                )
+                return self._create_mock_client()
 
-            # Return mock client for testing without API key
-            class MockGroqClient:
-                async def complete(self, messages, **kwargs):
-                    await asyncio.sleep(0.1)  # Simulate network call
-                    return {
-                        "content": "Mock response from Groq client",
-                        "tokens_used": 50,
-                        "finish_reason": "stop",
-                        "trace_id": kwargs.get("trace_id", "mock-trace"),
-                        "timestamp": "2025-11-06T00:00:00.000Z",
-                    }
+            try:
+                client = LLMClient(api_key=api_key, provider="google")
+                logger.info("✅ Google AI client initialized (API key found)")
+                return client
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize Google AI client: {e}")
+                raise
 
-                async def test_connection(self):
-                    await asyncio.sleep(0.1)
-                    return True
+        elif provider == "vertex":
+            project_id = os.getenv("GOOGLE_PROJECT_ID")
+            location = os.getenv("GOOGLE_LOCATION", "us-central1")
+            if not project_id:
+                logger.warning(
+                    "⚠️ GOOGLE_PROJECT_ID not found in environment. "
+                    "Falling back to mock client. "
+                    "Set GOOGLE_PROJECT_ID to enable Vertex AI calls."
+                )
+                return self._create_mock_client()
 
-                async def close(self):
-                    pass
+            try:
+                client = LLMClient(project_id=project_id, location=location, provider="vertex")
+                logger.info("✅ Vertex AI client initialized")
+                return client
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize Vertex AI client: {e}")
+                raise
 
-            return MockGroqClient()
+        else:  # groq (legacy)
+            api_key = os.getenv("GROQ_API_KEY")
+            if not api_key:
+                logger.warning(
+                    "⚠️ GROQ_API_KEY not found in environment. "
+                    "Falling back to mock client. "
+                    "Set GROQ_API_KEY to enable real LLM calls."
+                )
+                return self._create_mock_client()
 
-        # Initialize real Groq client
-        try:
-            client = GroqClient(api_key=api_key)
-            logger.info("✅ Real Groq client initialized (API key found)")
-            return client
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Groq client: {e}")
-            raise
+            try:
+                client = LLMClient(api_key=api_key)
+                logger.info("✅ Groq client initialized (API key found)")
+                return client
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize Groq client: {e}")
+                raise
+
+    def _create_mock_client(self):
+        """Create a mock LLM client for testing without API keys."""
+
+        class MockLLMClient:
+            async def complete(self, messages, **kwargs):
+                await asyncio.sleep(0.1)  # Simulate network call
+                return {
+                    "content": "Mock response from LLM client",
+                    "tokens_used": 50,
+                    "finish_reason": "stop",
+                    "trace_id": kwargs.get("trace_id", "mock-trace"),
+                    "timestamp": "2025-11-06T00:00:00.000Z",
+                }
+
+            async def test_connection(self):
+                await asyncio.sleep(0.1)
+                return True
+
+            async def close(self):
+                pass
+
+        return MockLLMClient()
 
     async def _connect_user_kg_db(self):
         """Connect to User KG SQLite database"""
@@ -269,6 +316,25 @@ class SystemCoordinator:
             # Mark them as available for Phase 5
             self.session_state_available = True
             logger.info("✅ SessionState module available (per-session instances)")
+
+            # 5. Warm up UltraBERT (12-head model for intent classification)
+            # Load once at startup to avoid ~7s delay on first classification
+            try:
+                from k0.runtime.ultrabert_adapter import (
+                    get_ultrabert_client,
+                    is_ultrabert_available,
+                )
+
+                if is_ultrabert_available():
+                    # Trigger model load by getting the client
+                    _client = get_ultrabert_client()
+                    logger.info("✅ UltraBERT warmed up (12-head model, ~22ms classification)")
+                else:
+                    logger.warning("⚠️ UltraBERT not available, will use LLM fallback for intent")
+            except ImportError:
+                logger.warning("⚠️ UltraBERT adapter not installed, will use LLM fallback")
+            except Exception as ub_err:
+                logger.warning(f"⚠️ UltraBERT warmup failed: {ub_err}")
 
             # Note: AgentFabric singleton will be initialized in Phase 6
             # (Issue 1.2.1 - Implement lifecycle orchestration in l4_runtime/agent_fabric/fabric.py)

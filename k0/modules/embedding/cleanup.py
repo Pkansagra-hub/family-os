@@ -1,22 +1,20 @@
-"""
-M27: embedding.cleanup
+"""M27: embedding.cleanup -- pgvector-only orphan cleanup.
 
-Cleanup orphaned embeddings.
-Removes vectors from st_vec and FAISS when parent event no longer exists.
+Cleanup orphaned embeddings from st_vec.
+Pure SQL DELETE for st_vec rows without parent st_hipp_events.
 
-ADR Reference: ADR-K003 (Inline Embedding via UltraBERT)
-Contract: k0/contracts/modules/embedding.cleanup.v1.yaml
+ADR Reference: ADR-K003 v2.0 (Inline Embedding via UltraBERT)
+Contract: k0/contracts/modules/embedding.cleanup.v2.yaml
 
 Flow:
-1. Query st_vec for embeddings without parent events in st_hipp_events
-2. Remove from FAISS index via faiss_remove_batch syscall
-3. Delete from st_vec via vec_delete syscall
-4. Emit cognitive.embedding.cleaned.v1 event
+1. Count orphaned st_vec rows (NOT EXISTS st_hipp_events)
+2. Batch DELETE orphaned rows (LIMIT for safety)
+3. Emit cognitive.embedding.cleaned.v1 event
 
-Performance: <2s per batch (100 orphans), parallel deletion
+Performance: <2s per batch (500 deletes), pure SQL
 
-Version: 1.0.0
-Last Updated: 2025-12-13
+Version: 2.0.0
+Last Updated: 2025-06-30
 """
 
 import logging
@@ -35,14 +33,23 @@ _metrics = {
 }
 
 
-async def run(envelope: dict[str, Any], enriched: dict[str, Any], context: Any) -> dict[str, Any]:
+async def run(
+    message: Any, context: Any, envelope: dict[str, Any] | None = None, **config: Any
+) -> dict[str, Any]:
     """
-    Cleanup orphaned embeddings.
+    Cleanup orphaned embeddings via pure SQL DELETE.
+
+    Removes st_vec rows where event_id has no matching st_hipp_events row.
+    No FAISS index manipulation -- pgvector HNSW auto-maintains.
 
     Args:
-        envelope: Event envelope with cognitive.cleanup.requested.v1 data
-        enriched: Enrichment data from previous modules
+        message: BusMessage (trigger message from scheduler or bus)
         context: Execution context with syscalls and config
+        envelope: Event envelope (optional, for scoped cleanup)
+        **config: Stage configuration:
+            - batch_size: int (default: 500)
+            - dry_run: bool (default: False)
+            - emit_cleaned_event: bool (default: True)
 
     Returns:
         Dictionary with:
@@ -55,32 +62,38 @@ async def run(envelope: dict[str, Any], enriched: dict[str, Any], context: Any) 
         ValueError: If required fields missing
         RuntimeError: If cleanup fails
     """
-    # Extract configuration
-    config = getattr(context, "config", {})
-    batch_size = config.get("batch_size", 100)
-    emit_cleaned_event = config.get("emit_cleaned_event", True)
-    cleaned_event_topic = config.get("cleaned_event_topic", "cognitive.embedding.cleaned.v1")
-    index_id = config.get("index_id", "ultrabert_v2.1.0_ivf256_pq64")
+    # Extract configuration from **config (stage config) or context.config
+    ctx_config = getattr(context, "config", {})
+    batch_size = config.get("batch_size", ctx_config.get("batch_size", 500))
+    emit_cleaned_event = config.get(
+        "emit_cleaned_event", ctx_config.get("emit_cleaned_event", True)
+    )
+    cleaned_event_topic = config.get(
+        "cleaned_event_topic",
+        ctx_config.get("cleaned_event_topic", "cognitive.embedding.cleaned.v1"),
+    )
+    dry_run = config.get("dry_run", ctx_config.get("dry_run", False))
 
-    # Extract event payload
-    payload = envelope.get("payload", {})
+    # Extract event payload from envelope
+    if envelope:
+        payload = envelope.get("payload", {})
+    else:
+        payload = {}
     tenant_id = payload.get("tenant_id")
     space_id = payload.get("space_id")
 
     # Get syscalls
     syscalls = context.syscalls
 
-    # Find orphaned embeddings (st_vec entries without parent in st_hipp_events)
+    # Count orphaned embeddings first (for metrics/reporting)
     try:
-        orphan_result = await syscalls.vec_find_orphans(
+        orphan_count_result = await syscalls.vec_orphan_count(
             tenant_id=tenant_id,
             space_id=space_id,
-            limit=batch_size,
         )
+        total_orphans = orphan_count_result.get("count", 0)
 
-        orphaned_embeddings = orphan_result.get("orphans", [])
-
-        if not orphaned_embeddings:
+        if total_orphans == 0:
             logger.info(
                 "M27: No orphaned embeddings found",
                 extra={"tenant_id": tenant_id, "space_id": space_id},
@@ -91,64 +104,54 @@ async def run(envelope: dict[str, Any], enriched: dict[str, Any], context: Any) 
                 "batch_size": batch_size,
                 "remaining": 0,
                 "completed": True,
+                "dry_run": dry_run,
             }
 
         logger.info(
-            "M27: Processing orphaned embeddings batch",
+            "M27: Found orphaned embeddings",
             extra={
                 "tenant_id": tenant_id,
                 "space_id": space_id,
-                "batch_size": len(orphaned_embeddings),
+                "total_orphans": total_orphans,
+                "dry_run": dry_run,
             },
         )
 
     except Exception as e:
         _metrics["cleanup_failures"] += 1
         logger.error(
-            "M27: Failed to find orphaned embeddings",
+            "M27: Failed to count orphaned embeddings",
             extra={"tenant_id": tenant_id, "space_id": space_id, "error": str(e)},
         )
-        raise RuntimeError(f"Failed to find orphaned embeddings: {e}") from e
+        raise RuntimeError(f"Failed to count orphaned embeddings: {e}") from e
 
-    # Remove from FAISS (batch)
-    embedding_ids = [orphan["embedding_id"] for orphan in orphaned_embeddings]
+    if dry_run:
+        logger.info("M27: Dry run -- no deletes executed", extra={"total_orphans": total_orphans})
+        return {
+            "cleaned_count": 0,
+            "batch_size": batch_size,
+            "remaining": total_orphans,
+            "completed": False,
+            "dry_run": True,
+        }
 
+    # Batch DELETE orphaned st_vec rows (pure SQL, no FAISS)
+    # DELETE FROM st_vec WHERE NOT EXISTS (SELECT 1 FROM st_hipp_events ...) LIMIT batch_size
     try:
-        faiss_result = await syscalls.faiss_remove_batch(
-            embedding_ids=embedding_ids,
-            index_id=index_id,
+        delete_result = await syscalls.vec_delete_orphans(
+            tenant_id=tenant_id,
+            space_id=space_id,
+            limit=batch_size,
         )
-
-        logger.info(
-            "M27: Removed embeddings from FAISS",
-            extra={
-                "removed_count": faiss_result.get("removed_count", 0),
-                "index_id": index_id,
-            },
-        )
+        cleaned_count = delete_result.get("deleted_count", 0)
 
     except Exception as e:
-        logger.warning(
-            "M27: Failed to remove from FAISS (continuing with st_vec cleanup)",
-            extra={"error": str(e)},
+        _metrics["cleanup_failures"] += 1
+        logger.error(
+            "M27: Failed to delete orphaned embeddings",
+            extra={"tenant_id": tenant_id, "space_id": space_id, "error": str(e)},
         )
-
-    # Delete from st_vec
-    cleaned_count = 0
-    failed_count = 0
-
-    for embedding_id in embedding_ids:
-        try:
-            await syscalls.vec_delete(embedding_id=embedding_id)
-            cleaned_count += 1
-            logger.debug("M27: Deleted orphaned embedding", extra={"embedding_id": embedding_id})
-
-        except Exception as e:
-            failed_count += 1
-            logger.error(
-                "M27: Failed to delete embedding from st_vec",
-                extra={"embedding_id": embedding_id, "error": str(e)},
-            )
+        raise RuntimeError(f"Failed to delete orphaned embeddings: {e}") from e
 
     # Emit cognitive.embedding.cleaned.v1 event
     if emit_cleaned_event and cleaned_count > 0:
@@ -161,9 +164,7 @@ async def run(envelope: dict[str, Any], enriched: dict[str, Any], context: Any) 
                             "tenant_id": tenant_id,
                             "space_id": space_id,
                             "cleaned_count": cleaned_count,
-                            "failed_count": failed_count,
-                            "batch_size": len(orphaned_embeddings),
-                            "index_id": index_id,
+                            "batch_size": batch_size,
                             "cleaned_at": int(time.time()),
                         },
                         "event_id": f"cleanup_{tenant_id}_{int(time.time())}",
@@ -180,16 +181,14 @@ async def run(envelope: dict[str, Any], enriched: dict[str, Any], context: Any) 
 
     _metrics["batches_processed"] += 1
     _metrics["embeddings_cleaned"] += cleaned_count
-    _metrics["cleanup_failures"] += failed_count
 
-    remaining = orphan_result.get("total_count", 0) - cleaned_count
+    remaining = max(0, total_orphans - cleaned_count)
     completed = remaining == 0
 
     logger.info(
         "M27: Cleanup batch complete",
         extra={
             "cleaned_count": cleaned_count,
-            "failed_count": failed_count,
             "remaining": remaining,
             "completed": completed,
         },
@@ -197,9 +196,10 @@ async def run(envelope: dict[str, Any], enriched: dict[str, Any], context: Any) 
 
     return {
         "cleaned_count": cleaned_count,
-        "batch_size": len(orphaned_embeddings),
+        "batch_size": batch_size,
         "remaining": remaining,
         "completed": completed,
+        "dry_run": False,
     }
 
 
@@ -214,8 +214,6 @@ def get_metrics() -> dict[str, int]:
 
 
 def reset_metrics() -> None:
-    """
-    Reset metrics counters (for testing).
-    """
+    """Reset metrics counters (for testing)."""
     for key in _metrics:
         _metrics[key] = 0

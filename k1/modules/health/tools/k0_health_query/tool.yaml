@@ -1,0 +1,9 @@
+name: k0_health_query
+description: Query health data from K0
+inputs:
+  query_type: string
+  params: object
+outputs:
+  result: object
+scopes:
+  - health.read

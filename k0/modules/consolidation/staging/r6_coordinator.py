@@ -42,7 +42,9 @@ from k0.modules.consolidation.staging.dedup_metadata import (
     DuplicationResult,
 )
 from k0.modules.consolidation.staging.idempotency import IdempotencyKeyGenerator
-from k0.modules.consolidation.staging.intent_signal_assembler import IntentSignalAssembler
+from k0.modules.consolidation.staging.intent_signal_assembler import (
+    IntentSignalAssembler,
+)
 from k0.modules.consolidation.staging.kg_write_assembler import KGWriteAssembler
 from k0.modules.consolidation.staging.manifest_validator import (
     ManifestValidationResult,
@@ -50,7 +52,9 @@ from k0.modules.consolidation.staging.manifest_validator import (
 )
 from k0.modules.consolidation.staging.outbox_assembler import OutboxEventAssembler
 from k0.modules.consolidation.staging.r6_output import R6Output, StagedEventUpdate
-from k0.modules.consolidation.staging.reconciliation_recorder import ReconciliationRecorder
+from k0.modules.consolidation.staging.reconciliation_recorder import (
+    ReconciliationRecorder,
+)
 from k0.modules.consolidation.staging.status_marker import ConsolidationStatusMarker
 from k0.modules.consolidation.staging.summary_generator import SummaryGenerator
 from k0.modules.consolidation.staging.truth_write_assembler import TruthWriteAssembler
@@ -215,6 +219,7 @@ class R6Coordinator:
                 idempotency_gen,
                 tenant_id=tenant_id,
                 space_id=space_id,
+                consolidation_cycle_id=cycle_ulid,
             ),
             kg_assembler=KGWriteAssembler(
                 idempotency_gen,
@@ -288,6 +293,10 @@ class R6Coordinator:
             r5_routine_optimizations = (
                 getattr(phase_outputs, "r5_routine_optimizations", None) or []
             )
+            # GAP-003: Include routine candidates from RoutineDetector
+            r5_routine_candidates = getattr(phase_outputs, "r5_routine_candidates", None) or []
+            # MCTS scenarios from R5 DreamExplorer
+            r5_mcts_scenarios = getattr(phase_outputs, "r5_mcts_scenarios", None) or []
             truth_assembly = self.truth_assembler.assemble_all(
                 clusters=getattr(phase_outputs, "r2_clusters", None),
                 event_states=event_states,
@@ -299,6 +308,10 @@ class R6Coordinator:
                 insights=r5_insights,
                 counterfactuals=r5_counterfactuals,
                 routine_optimizations=r5_routine_optimizations,
+                # GAP-003: Routine candidates from RoutineDetector
+                routine_candidates=r5_routine_candidates,
+                # MCTS scenarios for st_mcts_decisions
+                mcts_scenarios=r5_mcts_scenarios,
             )
             truth_writes = self._flatten_truth_writes(truth_assembly)
             step_durations["assemble_truth_writes"] = _now_ms() - step_start
@@ -311,7 +324,10 @@ class R6Coordinator:
             if r5_intent_signals and self.intent_signal_assembler:
                 intent_assembly = self.intent_signal_assembler.assemble_all(r5_intent_signals)
                 # Route intent writes by layer: KG layers go to kg_writes, others to truth_writes
-                from k0.pipelines.p03.staged_writes import LAYER_ST_KG_DOM, LAYER_ST_KG_EDGES
+                from k0.pipelines.p03.staged_writes import (
+                    LAYER_ST_KG_DOM,
+                    LAYER_ST_KG_EDGES,
+                )
 
                 for layer, writes in intent_assembly.items():
                     if layer in (LAYER_ST_KG_DOM, LAYER_ST_KG_EDGES):
@@ -344,7 +360,8 @@ class R6Coordinator:
                 gap_count=len(gaps),
                 insight_count=len(r5_insights),
                 counterfactual_count=len(r5_counterfactuals),
-                routine_optimization_count=len(r5_routine_optimizations),
+                routine_optimization_count=len(r5_routine_optimizations)
+                + len(r5_routine_candidates),
                 cycle_duration_ms=cycle_duration,
             )
             step_durations["generate_summary"] = _now_ms() - step_start

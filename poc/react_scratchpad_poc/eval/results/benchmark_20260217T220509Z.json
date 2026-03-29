@@ -1,0 +1,3449 @@
+{
+  "timestamp": "20260217T220509Z",
+  "scenario_count": 1,
+  "results": [
+    {
+      "scenario_id": "test_10_concierge_full",
+      "scenario_name": "Concierge Full Tool Suite (15 tools)",
+      "naive": {
+        "runner_name": "naive_react",
+        "scenario_id": "test_10_concierge_full",
+        "success": true,
+        "final_answer": "I found a few highly-rated vegan-friendly restaurants that can accommodate your family for Mom's birthday dinner next Saturday, including vegetarian and nut-free options for Sarah and Jake:\n\n1.  **The Green Garden** (Modern Vegan): A fine dining experience with a 4.8 rating and a $$$$ price range. They have ample vegan, vegetarian, and nut-free options and can seat up to 20 people.\n2.  **Sage & Thyme** (Plant-Based Contemporary): Rated 4.6 with a $$$ price range. This offers a casual elegant ambiance, also with plenty of vegan, vegetarian, and nut-free dishes, and can seat up to 16.\n3.  **Lotus Blossom** (Asian Vegan Fusion): With a 4.7 rating and $$$ price range, this restaurant offers an upscale Asian ambiance with exceptional vegan cuisine and can seat up to 14.\n\nAll these options have availability for next Saturday and meet all the dietary and party size requirements. Would you like me to tell you more about any of these, or perhaps book a table at one of them?",
+        "turns": [
+          {
+            "iteration": 0,
+            "assistant_message": "\n[Calling acknowledge({'ack_type': 'commit', 'message': \"I can help plan Mom's birthday dinner! I'll start by finding restaurants that can accommodate everyone's dietary needs and the family size.\", 'next_tool': 'update_narrative'})]\n[Calling update_narrative({'domains': ['DINING', 'FAMILY'], 'operation': 'new_thread', 'topic': \"Mom's birthday dinner planning\", 'goal': 'Plan a special vegan-friendly birthday dinner for Mom next Saturday with family, accommodating dietary needs.'})]\n[Calling discover_capabilities({'intent': 'find a restaurant for a birthday dinner', 'domain': ['DINING']})]",
+            "tool_calls": [
+              {
+                "call_id": "call-b6616f31",
+                "name": "acknowledge",
+                "arguments": {
+                  "ack_type": "commit",
+                  "message": "I can help plan Mom's birthday dinner! I'll start by finding restaurants that can accommodate everyone's dietary needs and the family size.",
+                  "next_tool": "update_narrative"
+                }
+              },
+              {
+                "call_id": "call-52855657",
+                "name": "update_narrative",
+                "arguments": {
+                  "domains": "['DINING', 'FAMILY']",
+                  "operation": "new_thread",
+                  "topic": "Mom's birthday dinner planning",
+                  "goal": "Plan a special vegan-friendly birthday dinner for Mom next Saturday with family, accommodating dietary needs."
+                }
+              },
+              {
+                "call_id": "call-5b7f83e8",
+                "name": "discover_capabilities",
+                "arguments": {
+                  "intent": "find a restaurant for a birthday dinner",
+                  "domain": "['DINING']"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "acknowledge",
+                "call_id": "call-b6616f31",
+                "ok": true,
+                "output": {
+                  "displayed": true,
+                  "formatted_message": "I can help plan Mom's birthday dinner! I'll start by finding restaurants that can accommodate everyone's dietary needs and the family size.",
+                  "display_latency_ms": 45
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_narrative",
+                "call_id": "call-52855657",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "thread_id": "a4e6ab77-1514-455e-9b5f-efaa78c22ed8",
+                  "active_threads": 1,
+                  "thread_status": "ACTIVE"
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "discover_capabilities",
+                "call_id": "call-5b7f83e8",
+                "ok": true,
+                "output": {
+                  "capabilities": [
+                    {
+                      "capability_id": "cap-001",
+                      "name": "tool.execute.restaurant_search",
+                      "description": "Search restaurants by cuisine, location, and dietary requirements. Returns up to 20 venues with ratings, pricing, and availability.",
+                      "domain": [
+                        "DINING",
+                        "LIFESTYLE"
+                      ],
+                      "safety_band": "GREEN",
+                      "score": 0.95,
+                      "score_breakdown": {
+                        "semantic": 0.96,
+                        "domain": 1.0,
+                        "success": 0.92,
+                        "cost": 0.9
+                      },
+                      "provider": "opentable_mcp",
+                      "avg_latency_ms": 450,
+                      "success_rate": 0.97,
+                      "suggested_inputs": [
+                        "cuisine",
+                        "location",
+                        "party_size"
+                      ],
+                      "defaults_note": "All inputs accept reasonable defaults if not specified by user.",
+                      "optional_inputs": [
+                        "dietary_requirements",
+                        "price_range",
+                        "date"
+                      ]
+                    },
+                    {
+                      "capability_id": "cap-002",
+                      "name": "tool.execute.restaurant_booking",
+                      "description": "Reserve a table at a specified restaurant. Handles party size, date/time, and special requests.",
+                      "domain": [
+                        "DINING"
+                      ],
+                      "safety_band": "AMBER",
+                      "score": 0.91,
+                      "score_breakdown": {
+                        "semantic": 0.88,
+                        "domain": 1.0,
+                        "success": 0.95,
+                        "cost": 0.8
+                      },
+                      "provider": "opentable_mcp",
+                      "avg_latency_ms": 800,
+                      "success_rate": 0.94,
+                      "suggested_inputs": [
+                        "restaurant_id",
+                        "date",
+                        "time",
+                        "party_size"
+                      ],
+                      "defaults_note": "All inputs accept reasonable defaults if not specified by user.",
+                      "optional_inputs": [
+                        "special_requests",
+                        "seating_preference"
+                      ]
+                    },
+                    {
+                      "capability_id": "cap-003",
+                      "name": "tool.execute.menu_lookup",
+                      "description": "Retrieve menu items and dietary labels for a specific restaurant. Supports vegan, vegetarian, gluten-free, nut-free filters.",
+                      "domain": [
+                        "DINING",
+                        "HEALTH"
+                      ],
+                      "safety_band": "GREEN",
+                      "score": 0.87,
+                      "score_breakdown": {
+                        "semantic": 0.9,
+                        "domain": 0.95,
+                        "success": 0.88,
+                        "cost": 0.75
+                      },
+                      "provider": "restaurant_api_native",
+                      "avg_latency_ms": 350,
+                      "success_rate": 0.91,
+                      "suggested_inputs": [
+                        "restaurant_id"
+                      ],
+                      "defaults_note": "All inputs accept reasonable defaults if not specified by user.",
+                      "optional_inputs": [
+                        "dietary_filter",
+                        "course_type"
+                      ]
+                    },
+                    {
+                      "capability_id": "cap-006",
+                      "name": "agent.execute.party_coordinator",
+                      "description": "Specialized agent for coordinating multi-aspect party planning including venue, catering, decorations, and guest management.",
+                      "domain": [
+                        "LIFESTYLE",
+                        "FAMILY",
+                        "DINING"
+                      ],
+                      "safety_band": "AMBER",
+                      "score": 0.65,
+                      "score_breakdown": {
+                        "semantic": 0.75,
+                        "domain": 0.85,
+                        "success": 0.5,
+                        "cost": 0.45
+                      },
+                      "provider": "fabric_dynamic_agent",
+                      "avg_latency_ms": 5000,
+                      "success_rate": 0.82,
+                      "suggested_inputs": [
+                        "event_type",
+                        "date",
+                        "guest_count"
+                      ],
+                      "defaults_note": "All inputs accept reasonable defaults if not specified by user.",
+                      "optional_inputs": [
+                        "budget",
+                        "dietary_requirements",
+                        "theme"
+                      ]
+                    }
+                  ],
+                  "total_matched": 4,
+                  "query_latency_ms": 18
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 590,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 1,
+            "assistant_message": "\n[Calling resolve_entity({'entity_type': 'person', 'name': 'Mom'})]\n[Calling resolve_entity({'entity_type': 'person', 'name': 'Sarah'})]\n[Calling resolve_entity({'entity_type': 'person', 'name': 'Jake'})]\n[Calling resolve_entity({'entity_type': 'event', 'name': \"Mom's birthday dinner\"})]",
+            "tool_calls": [
+              {
+                "call_id": "call-7b1c7bb5",
+                "name": "resolve_entity",
+                "arguments": {
+                  "entity_type": "person",
+                  "name": "Mom"
+                }
+              },
+              {
+                "call_id": "call-a274707e",
+                "name": "resolve_entity",
+                "arguments": {
+                  "entity_type": "person",
+                  "name": "Sarah"
+                }
+              },
+              {
+                "call_id": "call-db2d4f1e",
+                "name": "resolve_entity",
+                "arguments": {
+                  "entity_type": "person",
+                  "name": "Jake"
+                }
+              },
+              {
+                "call_id": "call-64be17c7",
+                "name": "resolve_entity",
+                "arguments": {
+                  "entity_type": "event",
+                  "name": "Mom's birthday dinner"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "resolve_entity",
+                "call_id": "call-7b1c7bb5",
+                "ok": true,
+                "output": {
+                  "found": false,
+                  "entity_id": "person:Mom:fd3f0474",
+                  "canonical_name": "Mom",
+                  "entity_type": "person",
+                  "confidence": 0.6
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "resolve_entity",
+                "call_id": "call-a274707e",
+                "ok": true,
+                "output": {
+                  "found": false,
+                  "entity_id": "person:Sarah:e5c1115f",
+                  "canonical_name": "Sarah",
+                  "entity_type": "person",
+                  "confidence": 0.6
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "resolve_entity",
+                "call_id": "call-db2d4f1e",
+                "ok": true,
+                "output": {
+                  "found": false,
+                  "entity_id": "person:Jake:bcc4422c",
+                  "canonical_name": "Jake",
+                  "entity_type": "person",
+                  "confidence": 0.6
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "resolve_entity",
+                "call_id": "call-64be17c7",
+                "ok": true,
+                "output": {
+                  "found": false,
+                  "entity_id": "event:Mom's birthday dinner:b854e297",
+                  "canonical_name": "Mom's birthday dinner",
+                  "entity_type": "event",
+                  "confidence": 0.6
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1505,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 2,
+            "assistant_message": "\n[Calling update_beliefs({'entity_type': 'person', 'source': 'user_stated', 'operation': 'add_preference', 'entity_id': 'person:Mom:fd3f0474', 'object_value': 'vegan', 'predicate': 'diet'})]\n[Calling update_beliefs({'entity_type': 'person', 'source': 'user_stated', 'operation': 'add_preference', 'entity_id': 'person:Sarah:e5c1115f', 'object_value': 'vegetarian', 'predicate': 'diet'})]\n[Calling update_beliefs({'entity_type': 'person', 'object_value': 'nut', 'operation': 'add_preference', 'source': 'user_stated', 'predicate': 'allergy', 'entity_id': 'person:Jake:bcc4422c'})]\n[Calling update_beliefs({'entity_type': 'event', 'source': 'user_stated', 'operation': 'add_fact', 'entity_id': \"event:Mom's birthday dinner:b854e297\", 'object_value': '8', 'predicate': 'party_size'})]\n[Calling update_beliefs({'entity_type': 'event', 'entity_id': \"event:Mom's birthday dinner:b854e297\", 'operation': 'add_fact', 'source': 'user_stated', 'predicate': 'date', 'object_value': 'next Saturday'})]\n[Calling invoke_capability({'timeout_ms': 5000.0, 'capability': 'tool.execute.restaurant_search', 'params': <proto.marshal.collections.maps.MapComposite object at 0x00000224FEC18590>})]",
+            "tool_calls": [
+              {
+                "call_id": "call-8fbe2e04",
+                "name": "update_beliefs",
+                "arguments": {
+                  "entity_type": "person",
+                  "source": "user_stated",
+                  "operation": "add_preference",
+                  "entity_id": "person:Mom:fd3f0474",
+                  "object_value": "vegan",
+                  "predicate": "diet"
+                }
+              },
+              {
+                "call_id": "call-c9be4db0",
+                "name": "update_beliefs",
+                "arguments": {
+                  "entity_type": "person",
+                  "source": "user_stated",
+                  "operation": "add_preference",
+                  "entity_id": "person:Sarah:e5c1115f",
+                  "object_value": "vegetarian",
+                  "predicate": "diet"
+                }
+              },
+              {
+                "call_id": "call-b38fb27e",
+                "name": "update_beliefs",
+                "arguments": {
+                  "entity_type": "person",
+                  "object_value": "nut",
+                  "operation": "add_preference",
+                  "source": "user_stated",
+                  "predicate": "allergy",
+                  "entity_id": "person:Jake:bcc4422c"
+                }
+              },
+              {
+                "call_id": "call-15c052de",
+                "name": "update_beliefs",
+                "arguments": {
+                  "entity_type": "event",
+                  "source": "user_stated",
+                  "operation": "add_fact",
+                  "entity_id": "event:Mom's birthday dinner:b854e297",
+                  "object_value": "8",
+                  "predicate": "party_size"
+                }
+              },
+              {
+                "call_id": "call-bd25d2b2",
+                "name": "update_beliefs",
+                "arguments": {
+                  "entity_type": "event",
+                  "entity_id": "event:Mom's birthday dinner:b854e297",
+                  "operation": "add_fact",
+                  "source": "user_stated",
+                  "predicate": "date",
+                  "object_value": "next Saturday"
+                }
+              },
+              {
+                "call_id": "call-83595ffa",
+                "name": "invoke_capability",
+                "arguments": {
+                  "timeout_ms": 5000.0,
+                  "capability": "tool.execute.restaurant_search",
+                  "params": "<proto.marshal.collections.maps.MapComposite object at 0x00000224FEC18590>"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-8fbe2e04",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "f5b8a265-e674-4337-96d6-c5d8f7274286",
+                  "entity_id": "person:Mom:fd3f0474",
+                  "is_correction": false,
+                  "section_bytes": 316,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-c9be4db0",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "ec09e779-613e-4252-ab30-720712eaf07e",
+                  "entity_id": "person:Sarah:e5c1115f",
+                  "is_correction": false,
+                  "section_bytes": 466,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-b38fb27e",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "9d09e668-bebb-4d2c-89f4-0bd9b05a600b",
+                  "entity_id": "person:Jake:bcc4422c",
+                  "is_correction": false,
+                  "section_bytes": 616,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-15c052de",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "c63e2622-c561-4052-8148-203190bfdae6",
+                  "entity_id": "event:Mom's birthday dinner:b854e297",
+                  "is_correction": false,
+                  "section_bytes": 766,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-bd25d2b2",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "c644958d-8ef3-45a9-ad08-89bcf81eb92c",
+                  "entity_id": "event:Mom's birthday dinner:b854e297",
+                  "is_correction": false,
+                  "section_bytes": 916,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "invoke_capability",
+                "call_id": "call-83595ffa",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "provider_id": "opentable_mcp",
+                  "duration_ms": 420,
+                  "trace_id": "tr-cap-rest-001",
+                  "data": {
+                    "restaurants": [
+                      {
+                        "id": "rest-001",
+                        "name": "The Green Garden",
+                        "cuisine": "Modern Vegan",
+                        "rating": 4.8,
+                        "price_range": "$$$$",
+                        "avg_price_per_person": 75,
+                        "location": "Downtown",
+                        "distance_km": 3.2,
+                        "vegan_options": 28,
+                        "vegetarian_options": 28,
+                        "nut_free_options": 22,
+                        "gluten_free_options": 18,
+                        "ambiance": "Fine Dining",
+                        "private_dining": true,
+                        "max_party_size": 20,
+                        "next_availability": "2026-03-15 18:00",
+                        "reviews_summary": "Outstanding vegan fine dining. Creative menu changes seasonally. Excellent wine list with organic options."
+                      },
+                      {
+                        "id": "rest-002",
+                        "name": "Sage & Thyme",
+                        "cuisine": "Plant-Based Contemporary",
+                        "rating": 4.6,
+                        "price_range": "$$$",
+                        "avg_price_per_person": 55,
+                        "location": "Midtown",
+                        "distance_km": 5.1,
+                        "vegan_options": 22,
+                        "vegetarian_options": 22,
+                        "nut_free_options": 15,
+                        "gluten_free_options": 12,
+                        "ambiance": "Casual Elegant",
+                        "private_dining": true,
+                        "max_party_size": 16,
+                        "next_availability": "2026-03-15 19:00",
+                        "reviews_summary": "Beautiful plant-based dishes with a focus on local ingredients. Great for special occasions."
+                      },
+                      {
+                        "id": "rest-003",
+                        "name": "Harvest Moon",
+                        "cuisine": "Farm-to-Table Vegan",
+                        "rating": 4.5,
+                        "price_range": "$$$",
+                        "avg_price_per_person": 60,
+                        "location": "West End",
+                        "distance_km": 4.8,
+                        "vegan_options": 20,
+                        "vegetarian_options": 25,
+                        "nut_free_options": 18,
+                        "gluten_free_options": 16,
+                        "ambiance": "Rustic Elegant",
+                        "private_dining": false,
+                        "max_party_size": 12,
+                        "next_availability": "2026-03-15 18:30",
+                        "reviews_summary": "Farm-to-table concept with organic produce. Intimate setting. Limited party size."
+                      },
+                      {
+                        "id": "rest-004",
+                        "name": "Verde Kitchen",
+                        "cuisine": "Mediterranean Vegan",
+                        "rating": 4.3,
+                        "price_range": "$$",
+                        "avg_price_per_person": 40,
+                        "location": "East Side",
+                        "distance_km": 6.5,
+                        "vegan_options": 18,
+                        "vegetarian_options": 24,
+                        "nut_free_options": 14,
+                        "gluten_free_options": 10,
+                        "ambiance": "Casual",
+                        "private_dining": false,
+                        "max_party_size": 30,
+                        "next_availability": "2026-03-15 17:30",
+                        "reviews_summary": "Great value Mediterranean vegan food. Large venue, good for groups. Quality varies."
+                      },
+                      {
+                        "id": "rest-005",
+                        "name": "Lotus Blossom",
+                        "cuisine": "Asian Vegan Fusion",
+                        "rating": 4.7,
+                        "price_range": "$$$",
+                        "avg_price_per_person": 65,
+                        "location": "Chinatown",
+                        "distance_km": 7.2,
+                        "vegan_options": 35,
+                        "vegetarian_options": 35,
+                        "nut_free_options": 20,
+                        "gluten_free_options": 25,
+                        "ambiance": "Upscale Asian",
+                        "private_dining": true,
+                        "max_party_size": 14,
+                        "next_availability": "2026-03-15 19:30",
+                        "reviews_summary": "Exceptional Asian fusion vegan cuisine. Beautiful presentation. Must try the dim sum and ramen."
+                      }
+                    ],
+                    "total_results": 5,
+                    "search_criteria": {
+                      "cuisine": "vegan",
+                      "date": "2026-03-15",
+                      "party_size": 8,
+                      "dietary": [
+                        "vegan",
+                        "vegetarian",
+                        "nut-free"
+                      ]
+                    }
+                  }
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1736,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 3,
+            "assistant_message": "\n[Calling update_scoreboard({'operation': 'set_intent', 'intent': 'plan_birthday_dinner'})]\n[Calling summarize_context({'sections': ['capabilities', 'beliefs', 'tool_results']})]",
+            "tool_calls": [
+              {
+                "call_id": "call-77c21fec",
+                "name": "update_scoreboard",
+                "arguments": {
+                  "operation": "set_intent",
+                  "intent": "plan_birthday_dinner"
+                }
+              },
+              {
+                "call_id": "call-2859e47a",
+                "name": "summarize_context",
+                "arguments": {
+                  "sections": "['capabilities', 'beliefs', 'tool_results']"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_scoreboard",
+                "call_id": "call-77c21fec",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "section_bytes": 580,
+                  "available_bytes": 5564,
+                  "operation": "set_intent"
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "summarize_context",
+                "call_id": "call-2859e47a",
+                "ok": true,
+                "output": {
+                  "summary": "Empty session state.",
+                  "original_tokens": 0,
+                  "summary_tokens": 5,
+                  "compression_ratio": 5.0,
+                  "sections_included": [
+                    "capabilities",
+                    "beliefs",
+                    "tool_results"
+                  ],
+                  "sections_dropped": [],
+                  "strategy_used": "hybrid",
+                  "section_details": {
+                    "capabilities": {
+                      "error": "section not available"
+                    },
+                    "beliefs": {
+                      "error": "section not available"
+                    },
+                    "tool_results": {
+                      "error": "section not available"
+                    }
+                  }
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 3003,
+            "findings_snapshot": {},
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 4,
+            "assistant_message": "I found a few highly-rated vegan-friendly restaurants that can accommodate your family for Mom's birthday dinner next Saturday, including vegetarian and nut-free options for Sarah and Jake:\n\n1.  **The Green Garden** (Modern Vegan): A fine dining experience with a 4.8 rating and a $$$$ price range. They have ample vegan, vegetarian, and nut-free options and can seat up to 20 people.\n2.  **Sage & Thyme** (Plant-Based Contemporary): Rated 4.6 with a $$$ price range. This offers a casual elegant ambiance, also with plenty of vegan, vegetarian, and nut-free dishes, and can seat up to 16.\n3.  **Lotus Blossom** (Asian Vegan Fusion): With a 4.7 rating and $$$ price range, this restaurant offers an upscale Asian ambiance with exceptional vegan cuisine and can seat up to 14.\n\nAll these options have availability for next Saturday and meet all the dietary and party size requirements. Would you like me to tell you more about any of these, or perhaps book a table at one of them?",
+            "tool_calls": [],
+            "tool_results": [],
+            "context_tokens_estimate": 3184,
+            "findings_snapshot": {},
+            "final_answer_fragment": "I found a few highly-rated vegan-friendly restaurants that can accommodate your family for Mom's birthday dinner next Saturday, including vegetarian and nut-free options for Sarah and Jake:\n\n1.  **The Green Garden** (Modern Vegan): A fine dining experience with a 4.8 rating and a $$$$ price range. They have ample vegan, vegetarian, and nut-free options and can seat up to 20 people.\n2.  **Sage & Thyme** (Plant-Based Contemporary): Rated 4.6 with a $$$ price range. This offers a casual elegant ambiance, also with plenty of vegan, vegetarian, and nut-free dishes, and can seat up to 16.\n3.  **Lotus Blossom** (Asian Vegan Fusion): With a 4.7 rating and $$$ price range, this restaurant offers an upscale Asian ambiance with exceptional vegan cuisine and can seat up to 14.\n\nAll these options have availability for next Saturday and meet all the dietary and party size requirements. Would you like me to tell you more about any of these, or perhaps book a table at one of them?"
+          }
+        ],
+        "metrics": {
+          "iterations": 5,
+          "tool_calls": 15,
+          "message_count_final": 21,
+          "context_tokens_final": 3184,
+          "token_input": 23733,
+          "token_output": 868,
+          "latency_ms": 47499,
+          "context_tokens_per_iteration": [
+            590,
+            1505,
+            1736,
+            3003,
+            3184
+          ]
+        },
+        "errors": [],
+        "started_at": "2026-02-17T22:02:14.354104+00:00",
+        "finished_at": "2026-02-17T22:03:01.853157+00:00",
+        "total_compactions": 0,
+        "total_findings": 0,
+        "total_sub_agents": 0,
+        "max_nesting_depth": 0,
+        "budget_overspend": false
+      },
+      "smart": {
+        "runner_name": "smart_react",
+        "scenario_id": "test_10_concierge_full",
+        "success": true,
+        "final_answer": "I found several excellent options for Mom's birthday dinner next Saturday, March 15th, for 8 people, accommodating vegan, vegetarian, and nut-free diets:\n\n1.  **The Green Garden:** A highly-rated (4.8) Modern Vegan fine dining restaurant located Downtown (3.2 km). They have 28 vegan and vegetarian options, and 22 nut-free options. Average price per person is $75. Next availability is 6:00 PM.\n\n2.  **Lotus Blossom:** An upscale Asian Vegan Fusion restaurant with a 4.7 rating in Chinatown (7.2 km). They offer a wide range of choices with 35 vegan/vegetarian and 20 nut-free options. Average price per person is $65. Next availability is 7:30 PM.\n\n3.  **Sage and Thyme:** A Plant-Based Contemporary restaurant in Midtown (5.1 km) with a 4.6 rating and a casual elegant ambiance. They have 22 vegan/vegetarian and 15 nut-free options. Average price per person is $55. Next availability is 7:00 PM.\n\nWould you like me to book a reservation for Mom's birthday dinner at The Green Garden for 8 people at 6:00 PM on March 15th?",
+        "turns": [
+          {
+            "iteration": 1,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-69594ed7",
+                "name": "acknowledge",
+                "arguments": {
+                  "ack_type": "commit",
+                  "message": "Absolutely, I can help you plan a special birthday dinner for Mom! I understand you're feeling a bit stressed, but we'll make sure it's a wonderful celebration for her.",
+                  "next_tool": "update_narrative"
+                }
+              },
+              {
+                "call_id": "call-8373e18f",
+                "name": "update_narrative",
+                "arguments": {
+                  "domains": "['DINING', 'FAMILY']",
+                  "operation": "new_thread",
+                  "topic": "Mom's Birthday Dinner Planning",
+                  "goal": "Plan a special vegan-friendly birthday dinner for Mom with family, accommodating all dietary needs."
+                }
+              },
+              {
+                "call_id": "call-1a7fe971",
+                "name": "resolve_entity",
+                "arguments": {
+                  "entity_type": "person",
+                  "name": "Mom"
+                }
+              },
+              {
+                "call_id": "call-21292206",
+                "name": "resolve_entity",
+                "arguments": {
+                  "entity_type": "person",
+                  "name": "Sarah"
+                }
+              },
+              {
+                "call_id": "call-8ddb442d",
+                "name": "resolve_entity",
+                "arguments": {
+                  "entity_type": "person",
+                  "name": "Jake"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "acknowledge",
+                "call_id": "call-69594ed7",
+                "ok": true,
+                "output": {
+                  "displayed": true,
+                  "formatted_message": "Absolutely, I can help you plan a special birthday dinner for Mom! I understand you're feeling a bit stressed, but we'll make sure it's a wonderful celebration for her.",
+                  "display_latency_ms": 45
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_narrative",
+                "call_id": "call-8373e18f",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "thread_id": "9b1701cc-1101-45eb-be14-f88f30268e9a",
+                  "active_threads": 1,
+                  "thread_status": "ACTIVE"
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "resolve_entity",
+                "call_id": "call-1a7fe971",
+                "ok": true,
+                "output": {
+                  "found": false,
+                  "entity_id": "person:Mom:bfa90978",
+                  "canonical_name": "Mom",
+                  "entity_type": "person",
+                  "confidence": 0.6
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "resolve_entity",
+                "call_id": "call-21292206",
+                "ok": true,
+                "output": {
+                  "found": false,
+                  "entity_id": "person:Sarah:21308a85",
+                  "canonical_name": "Sarah",
+                  "entity_type": "person",
+                  "confidence": 0.6
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "resolve_entity",
+                "call_id": "call-8ddb442d",
+                "ok": true,
+                "output": {
+                  "found": false,
+                  "entity_id": "person:Jake:1a11aae4",
+                  "canonical_name": "Jake",
+                  "entity_type": "person",
+                  "confidence": 0.6
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 616,
+            "findings_snapshot": {
+              "assistant_offer_planning_help": {
+                "value": true,
+                "type": "fact"
+              },
+              "mom_event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "user_emotional_state": {
+                "value": "stressed",
+                "type": "fact"
+              },
+              "mom_event_desired_outcome": {
+                "value": "wonderful celebration",
+                "type": "fact"
+              },
+              "operation_success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "9b1701cc-1101-45eb-be14-f88f30268e9a",
+                "type": "id"
+              },
+              "system_active_thread_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "mom_found_status": {
+                "value": false,
+                "type": "status"
+              },
+              "mom_entity_id": {
+                "value": "person:Mom:bfa90978",
+                "type": "fact"
+              },
+              "mom_canonical_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "mom_entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "mom_confidence_score": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "sarah_entity_found": {
+                "value": false,
+                "type": "fact"
+              },
+              "sarah_entity_id": {
+                "value": "person:Sarah:21308a85",
+                "type": "fact"
+              },
+              "sarah_canonical_name": {
+                "value": "Sarah",
+                "type": "fact"
+              },
+              "sarah_entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "sarah_confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "jake_found": {
+                "value": false,
+                "type": "fact"
+              },
+              "jake_entity_id": {
+                "value": "person:Jake:1a11aae4",
+                "type": "fact"
+              },
+              "jake_name": {
+                "value": "Jake",
+                "type": "fact"
+              },
+              "jake_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "jake_confidence": {
+                "value": 0.6,
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 2,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-ae30b024",
+                "name": "update_beliefs",
+                "arguments": {
+                  "entity_type": "person",
+                  "object_value": "birthday dinner",
+                  "operation": "add_fact",
+                  "entity_id": "person:Mom:bfa90978",
+                  "predicate": "event_type",
+                  "source": "user_stated"
+                }
+              },
+              {
+                "call_id": "call-20691f2b",
+                "name": "update_beliefs",
+                "arguments": {
+                  "entity_type": "person",
+                  "source": "user_stated",
+                  "operation": "add_preference",
+                  "entity_id": "person:Sarah:21308a85",
+                  "predicate": "dietary_preference",
+                  "object_value": "vegetarian"
+                }
+              },
+              {
+                "call_id": "call-87f26686",
+                "name": "update_beliefs",
+                "arguments": {
+                  "entity_type": "person",
+                  "entity_id": "person:Jake:1a11aae4",
+                  "operation": "add_fact",
+                  "source": "user_stated",
+                  "object_value": "nut allergy",
+                  "predicate": "dietary_restriction"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-ae30b024",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "3a0be452-d98c-4cb7-b25f-a3cddda04815",
+                  "entity_id": "person:Mom:bfa90978",
+                  "is_correction": false,
+                  "section_bytes": 316,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-20691f2b",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "8d57cbf0-d095-4b14-9dc7-9b6757bf7aed",
+                  "entity_id": "person:Sarah:21308a85",
+                  "is_correction": false,
+                  "section_bytes": 466,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_beliefs",
+                "call_id": "call-87f26686",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "belief_id": "60cc9983-d562-4e18-b5b9-76105504f510",
+                  "entity_id": "person:Jake:1a11aae4",
+                  "is_correction": false,
+                  "section_bytes": 616,
+                  "error": null
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1025,
+            "findings_snapshot": {
+              "assistant_offer_planning_help": {
+                "value": true,
+                "type": "fact"
+              },
+              "mom_event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "user_emotional_state": {
+                "value": "stressed",
+                "type": "fact"
+              },
+              "mom_event_desired_outcome": {
+                "value": "wonderful celebration",
+                "type": "fact"
+              },
+              "operation_success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "9b1701cc-1101-45eb-be14-f88f30268e9a",
+                "type": "id"
+              },
+              "system_active_thread_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "mom_found_status": {
+                "value": false,
+                "type": "status"
+              },
+              "mom_entity_id": {
+                "value": "person:Mom:bfa90978",
+                "type": "fact"
+              },
+              "mom_canonical_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "mom_entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "mom_confidence_score": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "sarah_entity_found": {
+                "value": false,
+                "type": "fact"
+              },
+              "sarah_entity_id": {
+                "value": "person:Sarah:21308a85",
+                "type": "fact"
+              },
+              "sarah_canonical_name": {
+                "value": "Sarah",
+                "type": "fact"
+              },
+              "sarah_entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "sarah_confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "jake_found": {
+                "value": false,
+                "type": "fact"
+              },
+              "jake_entity_id": {
+                "value": "person:Jake:1a11aae4",
+                "type": "fact"
+              },
+              "jake_name": {
+                "value": "Jake",
+                "type": "fact"
+              },
+              "jake_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "jake_confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "update_beliefs_success": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_id": {
+                "value": "3a0be452-d98c-4cb7-b25f-a3cddda04815",
+                "type": "fact"
+              },
+              "mom_entity_id_2": {
+                "value": "bfa90978",
+                "type": "fact"
+              },
+              "mom_entity_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "belief_is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "tool_call_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_update_id": {
+                "value": "8d57cbf0-d095-4b14-9dc7-9b6757bf7aed",
+                "type": "fact"
+              },
+              "sarah_entity_id_2": {
+                "value": "21308a85",
+                "type": "fact"
+              },
+              "belief_update_is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "belief_update_section_bytes": {
+                "value": 466,
+                "type": "fact"
+              },
+              "update_beliefs_error": {
+                "value": null,
+                "type": "error"
+              },
+              "operation_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_id_2": {
+                "value": "60cc9983-d562-4e18-b5b9-76105504f510",
+                "type": "fact"
+              },
+              "belief_section_bytes": {
+                "value": 616,
+                "type": "fact"
+              },
+              "operation_error": {
+                "value": null,
+                "type": "error"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 3,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-93db1375",
+                "name": "discover_capabilities",
+                "arguments": {
+                  "intent": "find a restaurant for a birthday dinner",
+                  "domain": "['DINING']"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "discover_capabilities",
+                "call_id": "call-93db1375",
+                "ok": true,
+                "output": {
+                  "capabilities": [
+                    {
+                      "capability_id": "cap-001",
+                      "name": "tool.execute.restaurant_search",
+                      "description": "Search restaurants by cuisine, location, and dietary requirements. Returns up to 20 venues with ratings, pricing, and availability.",
+                      "domain": [
+                        "DINING",
+                        "LIFESTYLE"
+                      ],
+                      "safety_band": "GREEN",
+                      "score": 0.95,
+                      "score_breakdown": {
+                        "semantic": 0.96,
+                        "domain": 1.0,
+                        "success": 0.92,
+                        "cost": 0.9
+                      },
+                      "provider": "opentable_mcp",
+                      "avg_latency_ms": 450,
+                      "success_rate": 0.97,
+                      "suggested_inputs": [
+                        "cuisine",
+                        "location",
+                        "party_size"
+                      ],
+                      "defaults_note": "All inputs accept reasonable defaults if not specified by user.",
+                      "optional_inputs": [
+                        "dietary_requirements",
+                        "price_range",
+                        "date"
+                      ]
+                    },
+                    {
+                      "capability_id": "cap-002",
+                      "name": "tool.execute.restaurant_booking",
+                      "description": "Reserve a table at a specified restaurant. Handles party size, date/time, and special requests.",
+                      "domain": [
+                        "DINING"
+                      ],
+                      "safety_band": "AMBER",
+                      "score": 0.91,
+                      "score_breakdown": {
+                        "semantic": 0.88,
+                        "domain": 1.0,
+                        "success": 0.95,
+                        "cost": 0.8
+                      },
+                      "provider": "opentable_mcp",
+                      "avg_latency_ms": 800,
+                      "success_rate": 0.94,
+                      "suggested_inputs": [
+                        "restaurant_id",
+                        "date",
+                        "time",
+                        "party_size"
+                      ],
+                      "defaults_note": "All inputs accept reasonable defaults if not specified by user.",
+                      "optional_inputs": [
+                        "special_requests",
+                        "seating_preference"
+                      ]
+                    },
+                    {
+                      "capability_id": "cap-003",
+                      "name": "tool.execute.menu_lookup",
+                      "description": "Retrieve menu items and dietary labels for a specific restaurant. Supports vegan, vegetarian, gluten-free, nut-free filters.",
+                      "domain": [
+                        "DINING",
+                        "HEALTH"
+                      ],
+                      "safety_band": "GREEN",
+                      "score": 0.87,
+                      "score_breakdown": {
+                        "semantic": 0.9,
+                        "domain": 0.95,
+                        "success": 0.88,
+                        "cost": 0.75
+                      },
+                      "provider": "restaurant_api_native",
+                      "avg_latency_ms": 350,
+                      "success_rate": 0.91,
+                      "suggested_inputs": [
+                        "restaurant_id"
+                      ],
+                      "defaults_note": "All inputs accept reasonable defaults if not specified by user.",
+                      "optional_inputs": [
+                        "dietary_filter",
+                        "course_type"
+                      ]
+                    },
+                    {
+                      "capability_id": "cap-006",
+                      "name": "agent.execute.party_coordinator",
+                      "description": "Specialized agent for coordinating multi-aspect party planning including venue, catering, decorations, and guest management.",
+                      "domain": [
+                        "LIFESTYLE",
+                        "FAMILY",
+                        "DINING"
+                      ],
+                      "safety_band": "AMBER",
+                      "score": 0.65,
+                      "score_breakdown": {
+                        "semantic": 0.75,
+                        "domain": 0.85,
+                        "success": 0.5,
+                        "cost": 0.45
+                      },
+                      "provider": "fabric_dynamic_agent",
+                      "avg_latency_ms": 5000,
+                      "success_rate": 0.82,
+                      "suggested_inputs": [
+                        "event_type",
+                        "date",
+                        "guest_count"
+                      ],
+                      "defaults_note": "All inputs accept reasonable defaults if not specified by user.",
+                      "optional_inputs": [
+                        "budget",
+                        "dietary_requirements",
+                        "theme"
+                      ]
+                    }
+                  ],
+                  "total_matched": 4,
+                  "query_latency_ms": 18
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1295,
+            "findings_snapshot": {
+              "assistant_offer_planning_help": {
+                "value": true,
+                "type": "fact"
+              },
+              "mom_event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "user_emotional_state": {
+                "value": "stressed",
+                "type": "fact"
+              },
+              "mom_event_desired_outcome": {
+                "value": "wonderful celebration",
+                "type": "fact"
+              },
+              "operation_success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "9b1701cc-1101-45eb-be14-f88f30268e9a",
+                "type": "id"
+              },
+              "system_active_thread_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "mom_found_status": {
+                "value": false,
+                "type": "status"
+              },
+              "mom_entity_id": {
+                "value": "person:Mom:bfa90978",
+                "type": "fact"
+              },
+              "mom_canonical_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "mom_entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "mom_confidence_score": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "sarah_entity_found": {
+                "value": false,
+                "type": "fact"
+              },
+              "sarah_entity_id": {
+                "value": "person:Sarah:21308a85",
+                "type": "fact"
+              },
+              "sarah_canonical_name": {
+                "value": "Sarah",
+                "type": "fact"
+              },
+              "sarah_entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "sarah_confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "jake_found": {
+                "value": false,
+                "type": "fact"
+              },
+              "jake_entity_id": {
+                "value": "person:Jake:1a11aae4",
+                "type": "fact"
+              },
+              "jake_name": {
+                "value": "Jake",
+                "type": "fact"
+              },
+              "jake_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "jake_confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "update_beliefs_success": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_id": {
+                "value": "3a0be452-d98c-4cb7-b25f-a3cddda04815",
+                "type": "fact"
+              },
+              "mom_entity_id_2": {
+                "value": "bfa90978",
+                "type": "fact"
+              },
+              "mom_entity_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "belief_is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "tool_call_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_update_id": {
+                "value": "8d57cbf0-d095-4b14-9dc7-9b6757bf7aed",
+                "type": "fact"
+              },
+              "sarah_entity_id_2": {
+                "value": "21308a85",
+                "type": "fact"
+              },
+              "belief_update_is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "belief_update_section_bytes": {
+                "value": 466,
+                "type": "fact"
+              },
+              "update_beliefs_error": {
+                "value": null,
+                "type": "error"
+              },
+              "operation_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_id_2": {
+                "value": "60cc9983-d562-4e18-b5b9-76105504f510",
+                "type": "fact"
+              },
+              "belief_section_bytes": {
+                "value": 616,
+                "type": "fact"
+              },
+              "operation_error": {
+                "value": null,
+                "type": "error"
+              },
+              "cap_001_id": {
+                "value": "cap-001",
+                "type": "fact"
+              },
+              "cap_001_name": {
+                "value": "tool.execute.restaurant_search",
+                "type": "fact"
+              },
+              "cap_001_description": {
+                "value": "Search restaurants by cuisine, location, and dietary requirements. Returns up to 20 venues with ratings, pricing, and availability.",
+                "type": "fact"
+              },
+              "cap_001_domain": {
+                "value": "DINING, LIFESTYLE",
+                "type": "fact"
+              },
+              "cap_001_safety_band": {
+                "value": "GREEN",
+                "type": "fact"
+              },
+              "cap_001_provider": {
+                "value": "opentable_mcp",
+                "type": "fact"
+              },
+              "cap_001_average_latency_ms": {
+                "value": 450,
+                "type": "fact"
+              },
+              "cap_001_success_rate": {
+                "value": 0.97,
+                "type": "fact"
+              },
+              "cap_001_suggested_inputs": {
+                "value": "cuisine, location, party_size",
+                "type": "fact"
+              },
+              "cap_001_optional_inputs": {
+                "value": "dietary_requirements, price_range, date",
+                "type": "fact"
+              },
+              "cap_002_id": {
+                "value": "cap-002",
+                "type": "fact"
+              },
+              "cap_002_name": {
+                "value": "tool.execute.restaurant_booking",
+                "type": "fact"
+              },
+              "cap_002_description": {
+                "value": "Reserve a table at a specified restaurant. Handles party size, date/time, and special requests.",
+                "type": "fact"
+              },
+              "cap_002_domain": {
+                "value": "DINING",
+                "type": "fact"
+              },
+              "cap_002_safety_band": {
+                "value": "AMBER",
+                "type": "fact"
+              },
+              "cap_002_provider": {
+                "value": "opentable_mcp",
+                "type": "fact"
+              },
+              "cap_002_average_latency_ms": {
+                "value": 800,
+                "type": "fact"
+              },
+              "cap_002_success_rate": {
+                "value": 0.94,
+                "type": "fact"
+              },
+              "cap_002_suggested_inputs": {
+                "value": "restaurant_id, date, time, party_size",
+                "type": "fact"
+              },
+              "cap_002_optional_inputs": {
+                "value": "special_requests, seating_preference",
+                "type": "fact"
+              },
+              "cap_003_id": {
+                "value": "cap-003",
+                "type": "fact"
+              },
+              "cap_003_name": {
+                "value": "tool.execute.menu_lookup",
+                "type": "fact"
+              },
+              "cap_003_description": {
+                "value": "Retrieve menu items and dietary labels for a specific restaurant. Supports vegan, vegetarian, gluten-free, nut-free filters.",
+                "type": "fact"
+              },
+              "cap_003_domain": {
+                "value": "DINING, HEALTH",
+                "type": "fact"
+              },
+              "cap_003_safety_band": {
+                "value": "GREEN",
+                "type": "fact"
+              },
+              "cap_003_provider": {
+                "value": "restaurant_api_native",
+                "type": "fact"
+              },
+              "cap_003_average_latency_ms": {
+                "value": 350,
+                "type": "fact"
+              },
+              "cap_003_success_rate": {
+                "value": 0.91,
+                "type": "fact"
+              },
+              "cap_003_suggested_inputs": {
+                "value": "restaurant_id",
+                "type": "fact"
+              },
+              "cap_003_optional_inputs": {
+                "value": "dietary_filter, course_type",
+                "type": "fact"
+              },
+              "cap_006_id": {
+                "value": "cap-006",
+                "type": "fact"
+              },
+              "cap_006_name": {
+                "value": "agent.execute.party_coordinator",
+                "type": "fact"
+              },
+              "cap_006_description": {
+                "value": "Specialized agent for coordinating multi-aspect party planning including venue, catering, decorations, and guest management.",
+                "type": "fact"
+              },
+              "cap_006_domain": {
+                "value": "LIFESTYLE, FAMILY, DINING",
+                "type": "fact"
+              },
+              "cap_006_safety_band": {
+                "value": "AMBER",
+                "type": "fact"
+              },
+              "cap_006_provider": {
+                "value": "fabric_dynamic_agent",
+                "type": "fact"
+              },
+              "cap_006_average_latency_ms": {
+                "value": 5000,
+                "type": "fact"
+              },
+              "cap_006_success_rate": {
+                "value": 0.82,
+                "type": "fact"
+              },
+              "cap_006_suggested_inputs": {
+                "value": "event_type, date, guest_count",
+                "type": "fact"
+              },
+              "cap_006_optional_inputs": {
+                "value": "budget, dietary_requirements, theme",
+                "type": "fact"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 4,
+            "assistant_message": "",
+            "tool_calls": [
+              {
+                "call_id": "call-7b9d277d",
+                "name": "invoke_capability",
+                "arguments": {
+                  "capability": "tool.execute.restaurant_search",
+                  "params": "<proto.marshal.collections.maps.MapComposite object at 0x00000224FEC19E50>"
+                }
+              },
+              {
+                "call_id": "call-2e46925e",
+                "name": "acknowledge",
+                "arguments": {
+                  "ack_type": "progress",
+                  "message": "Searching for restaurants that can accommodate a vegan, vegetarian, and nut allergy for Mom's birthday dinner for 8 people next Saturday in the local area.",
+                  "next_tool": "none"
+                }
+              },
+              {
+                "call_id": "call-d7bc4360",
+                "name": "update_scoreboard",
+                "arguments": {
+                  "task_status": "in_progress",
+                  "operation": "set_task",
+                  "progress_pct": 50.0,
+                  "task_name": "Restaurant search for Mom's birthday dinner"
+                }
+              },
+              {
+                "call_id": "call-186734a8",
+                "name": "summarize_context",
+                "arguments": {
+                  "sections": "['current_state', 'beliefs_active', 'capabilities_available']"
+                }
+              }
+            ],
+            "tool_results": [
+              {
+                "tool_name": "invoke_capability",
+                "call_id": "call-7b9d277d",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "provider_id": "opentable_mcp",
+                  "duration_ms": 420,
+                  "trace_id": "tr-cap-rest-001",
+                  "data": {
+                    "restaurants": [
+                      {
+                        "id": "rest-001",
+                        "name": "The Green Garden",
+                        "cuisine": "Modern Vegan",
+                        "rating": 4.8,
+                        "price_range": "$$$$",
+                        "avg_price_per_person": 75,
+                        "location": "Downtown",
+                        "distance_km": 3.2,
+                        "vegan_options": 28,
+                        "vegetarian_options": 28,
+                        "nut_free_options": 22,
+                        "gluten_free_options": 18,
+                        "ambiance": "Fine Dining",
+                        "private_dining": true,
+                        "max_party_size": 20,
+                        "next_availability": "2026-03-15 18:00",
+                        "reviews_summary": "Outstanding vegan fine dining. Creative menu changes seasonally. Excellent wine list with organic options."
+                      },
+                      {
+                        "id": "rest-002",
+                        "name": "Sage & Thyme",
+                        "cuisine": "Plant-Based Contemporary",
+                        "rating": 4.6,
+                        "price_range": "$$$",
+                        "avg_price_per_person": 55,
+                        "location": "Midtown",
+                        "distance_km": 5.1,
+                        "vegan_options": 22,
+                        "vegetarian_options": 22,
+                        "nut_free_options": 15,
+                        "gluten_free_options": 12,
+                        "ambiance": "Casual Elegant",
+                        "private_dining": true,
+                        "max_party_size": 16,
+                        "next_availability": "2026-03-15 19:00",
+                        "reviews_summary": "Beautiful plant-based dishes with a focus on local ingredients. Great for special occasions."
+                      },
+                      {
+                        "id": "rest-003",
+                        "name": "Harvest Moon",
+                        "cuisine": "Farm-to-Table Vegan",
+                        "rating": 4.5,
+                        "price_range": "$$$",
+                        "avg_price_per_person": 60,
+                        "location": "West End",
+                        "distance_km": 4.8,
+                        "vegan_options": 20,
+                        "vegetarian_options": 25,
+                        "nut_free_options": 18,
+                        "gluten_free_options": 16,
+                        "ambiance": "Rustic Elegant",
+                        "private_dining": false,
+                        "max_party_size": 12,
+                        "next_availability": "2026-03-15 18:30",
+                        "reviews_summary": "Farm-to-table concept with organic produce. Intimate setting. Limited party size."
+                      },
+                      {
+                        "id": "rest-004",
+                        "name": "Verde Kitchen",
+                        "cuisine": "Mediterranean Vegan",
+                        "rating": 4.3,
+                        "price_range": "$$",
+                        "avg_price_per_person": 40,
+                        "location": "East Side",
+                        "distance_km": 6.5,
+                        "vegan_options": 18,
+                        "vegetarian_options": 24,
+                        "nut_free_options": 14,
+                        "gluten_free_options": 10,
+                        "ambiance": "Casual",
+                        "private_dining": false,
+                        "max_party_size": 30,
+                        "next_availability": "2026-03-15 17:30",
+                        "reviews_summary": "Great value Mediterranean vegan food. Large venue, good for groups. Quality varies."
+                      },
+                      {
+                        "id": "rest-005",
+                        "name": "Lotus Blossom",
+                        "cuisine": "Asian Vegan Fusion",
+                        "rating": 4.7,
+                        "price_range": "$$$",
+                        "avg_price_per_person": 65,
+                        "location": "Chinatown",
+                        "distance_km": 7.2,
+                        "vegan_options": 35,
+                        "vegetarian_options": 35,
+                        "nut_free_options": 20,
+                        "gluten_free_options": 25,
+                        "ambiance": "Upscale Asian",
+                        "private_dining": true,
+                        "max_party_size": 14,
+                        "next_availability": "2026-03-15 19:30",
+                        "reviews_summary": "Exceptional Asian fusion vegan cuisine. Beautiful presentation. Must try the dim sum and ramen."
+                      }
+                    ],
+                    "total_results": 5,
+                    "search_criteria": {
+                      "cuisine": "vegan",
+                      "date": "2026-03-15",
+                      "party_size": 8,
+                      "dietary": [
+                        "vegan",
+                        "vegetarian",
+                        "nut-free"
+                      ]
+                    }
+                  }
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "acknowledge",
+                "call_id": "call-2e46925e",
+                "ok": true,
+                "output": {
+                  "displayed": true,
+                  "formatted_message": "Searching for restaurants that can accommodate a vegan, vegetarian, and nut allergy for Mom's birthday dinner for 8 people next Saturday in the local area.",
+                  "display_latency_ms": 45
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "update_scoreboard",
+                "call_id": "call-d7bc4360",
+                "ok": true,
+                "output": {
+                  "success": true,
+                  "section_bytes": 450,
+                  "available_bytes": 5694,
+                  "operation": "set_task"
+                },
+                "error_code": null,
+                "error_message": null
+              },
+              {
+                "tool_name": "summarize_context",
+                "call_id": "call-186734a8",
+                "ok": true,
+                "output": {
+                  "summary": "person:Mom:bfa90978 event_type birthday dinner; person:Sarah:21308a85 dietary_preference vegetarian; person:Jake:1a11aae4 dietary_restriction nut allergy",
+                  "original_tokens": 154,
+                  "summary_tokens": 38,
+                  "compression_ratio": 0.247,
+                  "sections_included": [
+                    "current_state",
+                    "beliefs_active",
+                    "capabilities_available"
+                  ],
+                  "sections_dropped": [],
+                  "strategy_used": "hybrid",
+                  "section_details": {
+                    "current_state": {
+                      "error": "section not available"
+                    },
+                    "beliefs_active": {
+                      "fact_count": 3,
+                      "facts": [
+                        {
+                          "subject": "person:Mom:bfa90978",
+                          "predicate": "event_type",
+                          "object": "birthday dinner",
+                          "confidence": 0.8
+                        },
+                        {
+                          "subject": "person:Sarah:21308a85",
+                          "predicate": "dietary_preference",
+                          "object": "vegetarian",
+                          "confidence": 0.8
+                        },
+                        {
+                          "subject": "person:Jake:1a11aae4",
+                          "predicate": "dietary_restriction",
+                          "object": "nut allergy",
+                          "confidence": 0.8
+                        }
+                      ],
+                      "size_bytes": 616
+                    },
+                    "capabilities_available": {
+                      "error": "section not available"
+                    }
+                  }
+                },
+                "error_code": null,
+                "error_message": null
+              }
+            ],
+            "context_tokens_estimate": 1824,
+            "findings_snapshot": {
+              "assistant_offer_planning_help": {
+                "value": true,
+                "type": "fact"
+              },
+              "mom_event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "user_emotional_state": {
+                "value": "stressed",
+                "type": "fact"
+              },
+              "mom_event_desired_outcome": {
+                "value": "wonderful celebration",
+                "type": "fact"
+              },
+              "operation_success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "9b1701cc-1101-45eb-be14-f88f30268e9a",
+                "type": "id"
+              },
+              "system_active_thread_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "mom_found_status": {
+                "value": false,
+                "type": "status"
+              },
+              "mom_entity_id": {
+                "value": "person:Mom:bfa90978",
+                "type": "fact"
+              },
+              "mom_canonical_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "mom_entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "mom_confidence_score": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "sarah_entity_found": {
+                "value": false,
+                "type": "fact"
+              },
+              "sarah_entity_id": {
+                "value": "person:Sarah:21308a85",
+                "type": "fact"
+              },
+              "sarah_canonical_name": {
+                "value": "Sarah",
+                "type": "fact"
+              },
+              "sarah_entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "sarah_confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "jake_found": {
+                "value": false,
+                "type": "fact"
+              },
+              "jake_entity_id": {
+                "value": "person:Jake:1a11aae4",
+                "type": "fact"
+              },
+              "jake_name": {
+                "value": "Jake",
+                "type": "fact"
+              },
+              "jake_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "jake_confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "update_beliefs_success": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_id": {
+                "value": "3a0be452-d98c-4cb7-b25f-a3cddda04815",
+                "type": "fact"
+              },
+              "mom_entity_id_2": {
+                "value": "bfa90978",
+                "type": "fact"
+              },
+              "mom_entity_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "belief_is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "tool_call_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_update_id": {
+                "value": "8d57cbf0-d095-4b14-9dc7-9b6757bf7aed",
+                "type": "fact"
+              },
+              "sarah_entity_id_2": {
+                "value": "21308a85",
+                "type": "fact"
+              },
+              "belief_update_is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "belief_update_section_bytes": {
+                "value": 466,
+                "type": "fact"
+              },
+              "update_beliefs_error": {
+                "value": null,
+                "type": "error"
+              },
+              "operation_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_id_2": {
+                "value": "60cc9983-d562-4e18-b5b9-76105504f510",
+                "type": "fact"
+              },
+              "belief_section_bytes": {
+                "value": 616,
+                "type": "fact"
+              },
+              "operation_error": {
+                "value": null,
+                "type": "error"
+              },
+              "cap_001_id": {
+                "value": "cap-001",
+                "type": "fact"
+              },
+              "cap_001_name": {
+                "value": "tool.execute.restaurant_search",
+                "type": "fact"
+              },
+              "cap_001_description": {
+                "value": "Search restaurants by cuisine, location, and dietary requirements. Returns up to 20 venues with ratings, pricing, and availability.",
+                "type": "fact"
+              },
+              "cap_001_domain": {
+                "value": "DINING, LIFESTYLE",
+                "type": "fact"
+              },
+              "cap_001_safety_band": {
+                "value": "GREEN",
+                "type": "fact"
+              },
+              "cap_001_provider": {
+                "value": "opentable_mcp",
+                "type": "fact"
+              },
+              "cap_001_average_latency_ms": {
+                "value": 450,
+                "type": "fact"
+              },
+              "cap_001_success_rate": {
+                "value": 0.97,
+                "type": "fact"
+              },
+              "cap_001_suggested_inputs": {
+                "value": "cuisine, location, party_size",
+                "type": "fact"
+              },
+              "cap_001_optional_inputs": {
+                "value": "dietary_requirements, price_range, date",
+                "type": "fact"
+              },
+              "cap_002_id": {
+                "value": "cap-002",
+                "type": "fact"
+              },
+              "cap_002_name": {
+                "value": "tool.execute.restaurant_booking",
+                "type": "fact"
+              },
+              "cap_002_description": {
+                "value": "Reserve a table at a specified restaurant. Handles party size, date/time, and special requests.",
+                "type": "fact"
+              },
+              "cap_002_domain": {
+                "value": "DINING",
+                "type": "fact"
+              },
+              "cap_002_safety_band": {
+                "value": "AMBER",
+                "type": "fact"
+              },
+              "cap_002_provider": {
+                "value": "opentable_mcp",
+                "type": "fact"
+              },
+              "cap_002_average_latency_ms": {
+                "value": 800,
+                "type": "fact"
+              },
+              "cap_002_success_rate": {
+                "value": 0.94,
+                "type": "fact"
+              },
+              "cap_002_suggested_inputs": {
+                "value": "restaurant_id, date, time, party_size",
+                "type": "fact"
+              },
+              "cap_002_optional_inputs": {
+                "value": "special_requests, seating_preference",
+                "type": "fact"
+              },
+              "cap_003_id": {
+                "value": "cap-003",
+                "type": "fact"
+              },
+              "cap_003_name": {
+                "value": "tool.execute.menu_lookup",
+                "type": "fact"
+              },
+              "cap_003_description": {
+                "value": "Retrieve menu items and dietary labels for a specific restaurant. Supports vegan, vegetarian, gluten-free, nut-free filters.",
+                "type": "fact"
+              },
+              "cap_003_domain": {
+                "value": "DINING, HEALTH",
+                "type": "fact"
+              },
+              "cap_003_safety_band": {
+                "value": "GREEN",
+                "type": "fact"
+              },
+              "cap_003_provider": {
+                "value": "restaurant_api_native",
+                "type": "fact"
+              },
+              "cap_003_average_latency_ms": {
+                "value": 350,
+                "type": "fact"
+              },
+              "cap_003_success_rate": {
+                "value": 0.91,
+                "type": "fact"
+              },
+              "cap_003_suggested_inputs": {
+                "value": "restaurant_id",
+                "type": "fact"
+              },
+              "cap_003_optional_inputs": {
+                "value": "dietary_filter, course_type",
+                "type": "fact"
+              },
+              "cap_006_id": {
+                "value": "cap-006",
+                "type": "fact"
+              },
+              "cap_006_name": {
+                "value": "agent.execute.party_coordinator",
+                "type": "fact"
+              },
+              "cap_006_description": {
+                "value": "Specialized agent for coordinating multi-aspect party planning including venue, catering, decorations, and guest management.",
+                "type": "fact"
+              },
+              "cap_006_domain": {
+                "value": "LIFESTYLE, FAMILY, DINING",
+                "type": "fact"
+              },
+              "cap_006_safety_band": {
+                "value": "AMBER",
+                "type": "fact"
+              },
+              "cap_006_provider": {
+                "value": "fabric_dynamic_agent",
+                "type": "fact"
+              },
+              "cap_006_average_latency_ms": {
+                "value": 5000,
+                "type": "fact"
+              },
+              "cap_006_success_rate": {
+                "value": 0.82,
+                "type": "fact"
+              },
+              "cap_006_suggested_inputs": {
+                "value": "event_type, date, guest_count",
+                "type": "fact"
+              },
+              "cap_006_optional_inputs": {
+                "value": "budget, dietary_requirements, theme",
+                "type": "fact"
+              },
+              "search_total_results": {
+                "value": 5,
+                "type": "count"
+              },
+              "search_cuisine_criteria": {
+                "value": "vegan",
+                "type": "search_criteria"
+              },
+              "search_date_criteria": {
+                "value": "2026-03-15",
+                "type": "search_criteria"
+              },
+              "search_party_size_criteria": {
+                "value": 8,
+                "type": "search_criteria"
+              },
+              "search_dietary_criteria": {
+                "value": [
+                  "vegan",
+                  "vegetarian",
+                  "nut-free"
+                ],
+                "type": "search_criteria"
+              },
+              "the_green_garden_restaurant_id": {
+                "value": "rest-001",
+                "type": "restaurant_id"
+              },
+              "the_green_garden_cuisine": {
+                "value": "Modern Vegan",
+                "type": "cuisine"
+              },
+              "the_green_garden_rating": {
+                "value": 4.8,
+                "type": "rating"
+              },
+              "the_green_garden_price_range": {
+                "value": "$$$$",
+                "type": "price"
+              },
+              "the_green_garden_avg_price_per_person": {
+                "value": 75,
+                "type": "price"
+              },
+              "the_green_garden_location": {
+                "value": "Downtown",
+                "type": "location"
+              },
+              "the_green_garden_distance_km": {
+                "value": 3.2,
+                "type": "distance"
+              },
+              "the_green_garden_vegan_options": {
+                "value": 28,
+                "type": "dietary_options"
+              },
+              "the_green_garden_vegetarian_options": {
+                "value": 28,
+                "type": "dietary_options"
+              },
+              "the_green_garden_nut_free_options": {
+                "value": 22,
+                "type": "dietary_options"
+              },
+              "the_green_garden_gluten_free_options": {
+                "value": 18,
+                "type": "dietary_options"
+              },
+              "the_green_garden_ambiance": {
+                "value": "Fine Dining",
+                "type": "ambiance"
+              },
+              "the_green_garden_private_dining_available": {
+                "value": true,
+                "type": "dining_feature"
+              },
+              "the_green_garden_max_party_size": {
+                "value": 20,
+                "type": "dining_feature"
+              },
+              "the_green_garden_next_availability": {
+                "value": "2026-03-15 18:00",
+                "type": "availability"
+              },
+              "the_green_garden_reviews_summary": {
+                "value": "Outstanding vegan fine dining. Creative menu changes seasonally. Excellent wine list with organic options.",
+                "type": "review"
+              },
+              "sage_and_thyme_restaurant_id": {
+                "value": "rest-002",
+                "type": "restaurant_id"
+              },
+              "sage_and_thyme_cuisine": {
+                "value": "Plant-Based Contemporary",
+                "type": "cuisine"
+              },
+              "sage_and_thyme_rating": {
+                "value": 4.6,
+                "type": "rating"
+              },
+              "sage_and_thyme_price_range": {
+                "value": "$$$",
+                "type": "price"
+              },
+              "sage_and_thyme_avg_price_per_person": {
+                "value": 55,
+                "type": "price"
+              },
+              "sage_and_thyme_location": {
+                "value": "Midtown",
+                "type": "location"
+              },
+              "sage_and_thyme_distance_km": {
+                "value": 5.1,
+                "type": "distance"
+              },
+              "sage_and_thyme_vegan_options": {
+                "value": 22,
+                "type": "dietary_options"
+              },
+              "sage_and_thyme_vegetarian_options": {
+                "value": 22,
+                "type": "dietary_options"
+              },
+              "sage_and_thyme_nut_free_options": {
+                "value": 15,
+                "type": "dietary_options"
+              },
+              "sage_and_thyme_gluten_free_options": {
+                "value": 12,
+                "type": "dietary_options"
+              },
+              "sage_and_thyme_ambiance": {
+                "value": "Casual Elegant",
+                "type": "ambiance"
+              },
+              "sage_and_thyme_private_dining_available": {
+                "value": true,
+                "type": "dining_feature"
+              },
+              "sage_and_thyme_max_party_size": {
+                "value": 16,
+                "type": "dining_feature"
+              },
+              "sage_and_thyme_next_availability": {
+                "value": "2026-03-15 19:00",
+                "type": "availability"
+              },
+              "sage_and_thyme_reviews_summary": {
+                "value": "Beautiful plant-based dishes with a focus on local ingredients. Great for special occasions.",
+                "type": "review"
+              },
+              "harvest_moon_restaurant_id": {
+                "value": "rest-003",
+                "type": "restaurant_id"
+              },
+              "harvest_moon_cuisine": {
+                "value": "Farm-to-Table Vegan",
+                "type": "cuisine"
+              },
+              "harvest_moon_rating": {
+                "value": 4.5,
+                "type": "rating"
+              },
+              "harvest_moon_price_range": {
+                "value": "$$$",
+                "type": "price"
+              },
+              "harvest_moon_avg_price_per_person": {
+                "value": 60,
+                "type": "price"
+              },
+              "harvest_moon_location": {
+                "value": "West End",
+                "type": "location"
+              },
+              "harvest_moon_distance_km": {
+                "value": 4.8,
+                "type": "distance"
+              },
+              "harvest_moon_vegan_options": {
+                "value": 20,
+                "type": "dietary_options"
+              },
+              "harvest_moon_vegetarian_options": {
+                "value": 25,
+                "type": "dietary_options"
+              },
+              "harvest_moon_nut_free_options": {
+                "value": 18,
+                "type": "dietary_options"
+              },
+              "harvest_moon_gluten_free_options": {
+                "value": 16,
+                "type": "dietary_options"
+              },
+              "harvest_moon_ambiance": {
+                "value": "Rustic Elegant",
+                "type": "ambiance"
+              },
+              "harvest_moon_private_dining_available": {
+                "value": false,
+                "type": "dining_feature"
+              },
+              "harvest_moon_max_party_size": {
+                "value": 12,
+                "type": "dining_feature"
+              },
+              "harvest_moon_next_availability": {
+                "value": "2026-03-15 18:30",
+                "type": "availability"
+              },
+              "harvest_moon_reviews_summary": {
+                "value": "Farm-to-table concept with organic produce. Intimate setting. Limited party size.",
+                "type": "review"
+              },
+              "verde_kitchen_restaurant_id": {
+                "value": "rest-004",
+                "type": "restaurant_id"
+              },
+              "verde_kitchen_cuisine": {
+                "value": "Mediterranean Vegan",
+                "type": "cuisine"
+              },
+              "verde_kitchen_rating": {
+                "value": 4.3,
+                "type": "rating"
+              },
+              "verde_kitchen_price_range": {
+                "value": "$$",
+                "type": "price"
+              },
+              "verde_kitchen_avg_price_per_person": {
+                "value": 40,
+                "type": "price"
+              },
+              "verde_kitchen_location": {
+                "value": "East Side",
+                "type": "location"
+              },
+              "verde_kitchen_distance_km": {
+                "value": 6.5,
+                "type": "distance"
+              },
+              "verde_kitchen_vegan_options": {
+                "value": 18,
+                "type": "dietary_options"
+              },
+              "verde_kitchen_vegetarian_options": {
+                "value": 24,
+                "type": "dietary_options"
+              },
+              "verde_kitchen_nut_free_options": {
+                "value": 14,
+                "type": "dietary_options"
+              },
+              "verde_kitchen_gluten_free_options": {
+                "value": 10,
+                "type": "dietary_options"
+              },
+              "verde_kitchen_ambiance": {
+                "value": "Casual",
+                "type": "ambiance"
+              },
+              "verde_kitchen_private_dining_available": {
+                "value": false,
+                "type": "dining_feature"
+              },
+              "verde_kitchen_max_party_size": {
+                "value": 30,
+                "type": "dining_feature"
+              },
+              "verde_kitchen_next_availability": {
+                "value": "2026-03-15 17:30",
+                "type": "availability"
+              },
+              "verde_kitchen_reviews_summary": {
+                "value": "Great value Mediterranean vegan food. Large venue, good for groups. Quality varies.",
+                "type": "review"
+              },
+              "lotus_blossom_restaurant_id": {
+                "value": "rest-005",
+                "type": "restaurant_id"
+              },
+              "lotus_blossom_cuisine": {
+                "value": "Asian Vegan Fusion",
+                "type": "cuisine"
+              },
+              "lotus_blossom_rating": {
+                "value": 4.7,
+                "type": "rating"
+              },
+              "lotus_blossom_price_range": {
+                "value": "$$$",
+                "type": "price"
+              },
+              "lotus_blossom_avg_price_per_person": {
+                "value": 65,
+                "type": "price"
+              },
+              "lotus_blossom_location": {
+                "value": "Chinatown",
+                "type": "location"
+              },
+              "lotus_blossom_distance_km": {
+                "value": 7.2,
+                "type": "distance"
+              },
+              "lotus_blossom_vegan_options": {
+                "value": 35,
+                "type": "dietary_options"
+              },
+              "lotus_blossom_vegetarian_options": {
+                "value": 35,
+                "type": "dietary_options"
+              },
+              "lotus_blossom_nut_free_options": {
+                "value": 20,
+                "type": "dietary_options"
+              },
+              "lotus_blossom_gluten_free_options": {
+                "value": 25,
+                "type": "dietary_options"
+              },
+              "lotus_blossom_ambiance": {
+                "value": "Upscale Asian",
+                "type": "ambiance"
+              },
+              "lotus_blossom_private_dining_available": {
+                "value": true,
+                "type": "dining_feature"
+              },
+              "lotus_blossom_max_party_size": {
+                "value": 14,
+                "type": "dining_feature"
+              },
+              "lotus_blossom_next_availability": {
+                "value": "2026-03-15 19:30",
+                "type": "availability"
+              },
+              "lotus_blossom_reviews_summary": {
+                "value": "Exceptional Asian fusion vegan cuisine. Beautiful presentation. Must try the dim sum and ramen.",
+                "type": "review"
+              },
+              "search_target": {
+                "value": "restaurants",
+                "type": "fact"
+              },
+              "search_occasion": {
+                "value": "Mom's birthday dinner",
+                "type": "fact"
+              },
+              "search_dietary_vegan": {
+                "value": "vegan",
+                "type": "fact"
+              },
+              "search_dietary_vegetarian": {
+                "value": "vegetarian",
+                "type": "fact"
+              },
+              "search_dietary_nut_allergy": {
+                "value": "nut allergy",
+                "type": "fact"
+              },
+              "search_party_size": {
+                "value": 8,
+                "type": "fact"
+              },
+              "search_date_relative": {
+                "value": "next Saturday",
+                "type": "fact"
+              },
+              "search_location_area": {
+                "value": "local area",
+                "type": "location"
+              },
+              "scoreboard_update_success": {
+                "value": true,
+                "type": "fact"
+              },
+              "scoreboard_section_bytes_used": {
+                "value": 450,
+                "type": "fact"
+              },
+              "scoreboard_available_bytes": {
+                "value": 5694,
+                "type": "fact"
+              },
+              "scoreboard_operation_performed": {
+                "value": "set_task",
+                "type": "fact"
+              },
+              "mom_entity_id_3": {
+                "value": "bfa90978",
+                "type": "id"
+              },
+              "sarah_entity_id_3": {
+                "value": "21308a85",
+                "type": "id"
+              },
+              "sarah_dietary_preference": {
+                "value": "vegetarian",
+                "type": "diet"
+              },
+              "jake_entity_id_2": {
+                "value": "1a11aae4",
+                "type": "id"
+              },
+              "jake_dietary_restriction": {
+                "value": "nut allergy",
+                "type": "diet"
+              }
+            },
+            "final_answer_fragment": null
+          },
+          {
+            "iteration": 5,
+            "assistant_message": "I found several excellent options for Mom's birthday dinner next Saturday, March 15th, for 8 people, accommodating vegan, vegetarian, and nut-free diets:\n\n1.  **The Green Garden:** A highly-rated (4.8) Modern Vegan fine dining restaurant located Downtown (3.2 km). They have 28 vegan and vegetarian options, and 22 nut-free options. Average price per person is $75. Next availability is 6:00 PM.\n\n2.  **Lotus Blossom:** An upscale Asian Vegan Fusion restaurant with a 4.7 rating in Chinatown (7.2 km). They offer a wide range of choices with 35 vegan/vegetarian and 20 nut-free options. Average price per person is $65. Next availability is 7:30 PM.\n\n3.  **Sage and Thyme:** A Plant-Based Contemporary restaurant in Midtown (5.1 km) with a 4.6 rating and a casual elegant ambiance. They have 22 vegan/vegetarian and 15 nut-free options. Average price per person is $55. Next availability is 7:00 PM.\n\nWould you like me to book a reservation for Mom's birthday dinner at The Green Garden for 8 people at 6:00 PM on March 15th?",
+            "tool_calls": [
+              {
+                "call_id": "call-79302fcd",
+                "name": "final_answer",
+                "arguments": {
+                  "answer": "I found several excellent options for Mom's birthday dinner next Saturday, March 15th, for 8 people, accommodating vegan, vegetarian, and nut-free diets:\n\n1.  **The Green Garden:** A highly-rated (4.8) Modern Vegan fine dining restaurant located Downtown (3.2 km). They have 28 vegan and vegetarian options, and 22 nut-free options. Average price per person is $75. Next availability is 6:00 PM.\n\n2.  **Lotus Blossom:** An upscale Asian Vegan Fusion restaurant with a 4.7 rating in Chinatown (7.2 km). They offer a wide range of choices with 35 vegan/vegetarian and 20 nut-free options. Average price per person is $65. Next availability is 7:30 PM.\n\n3.  **Sage and Thyme:** A Plant-Based Contemporary restaurant in Midtown (5.1 km) with a 4.6 rating and a casual elegant ambiance. They have 22 vegan/vegetarian and 15 nut-free options. Average price per person is $55. Next availability is 7:00 PM.\n\nWould you like me to book a reservation for Mom's birthday dinner at The Green Garden for 8 people at 6:00 PM on March 15th?"
+                }
+              }
+            ],
+            "tool_results": [],
+            "context_tokens_estimate": 2986,
+            "findings_snapshot": {
+              "assistant_offer_planning_help": {
+                "value": true,
+                "type": "fact"
+              },
+              "mom_event_type": {
+                "value": "birthday dinner",
+                "type": "fact"
+              },
+              "user_emotional_state": {
+                "value": "stressed",
+                "type": "fact"
+              },
+              "mom_event_desired_outcome": {
+                "value": "wonderful celebration",
+                "type": "fact"
+              },
+              "operation_success": {
+                "value": true,
+                "type": "fact"
+              },
+              "thread_id": {
+                "value": "9b1701cc-1101-45eb-be14-f88f30268e9a",
+                "type": "id"
+              },
+              "system_active_thread_count": {
+                "value": 1,
+                "type": "fact"
+              },
+              "thread_status": {
+                "value": "ACTIVE",
+                "type": "fact"
+              },
+              "mom_found_status": {
+                "value": false,
+                "type": "status"
+              },
+              "mom_entity_id": {
+                "value": "person:Mom:bfa90978",
+                "type": "fact"
+              },
+              "mom_canonical_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "mom_entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "mom_confidence_score": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "sarah_entity_found": {
+                "value": false,
+                "type": "fact"
+              },
+              "sarah_entity_id": {
+                "value": "person:Sarah:21308a85",
+                "type": "fact"
+              },
+              "sarah_canonical_name": {
+                "value": "Sarah",
+                "type": "fact"
+              },
+              "sarah_entity_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "sarah_confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "jake_found": {
+                "value": false,
+                "type": "fact"
+              },
+              "jake_entity_id": {
+                "value": "person:Jake:1a11aae4",
+                "type": "fact"
+              },
+              "jake_name": {
+                "value": "Jake",
+                "type": "fact"
+              },
+              "jake_type": {
+                "value": "person",
+                "type": "fact"
+              },
+              "jake_confidence": {
+                "value": 0.6,
+                "type": "fact"
+              },
+              "update_beliefs_success": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_id": {
+                "value": "3a0be452-d98c-4cb7-b25f-a3cddda04815",
+                "type": "fact"
+              },
+              "mom_entity_id_2": {
+                "value": "bfa90978",
+                "type": "fact"
+              },
+              "mom_entity_name": {
+                "value": "Mom",
+                "type": "fact"
+              },
+              "belief_is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "tool_call_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_update_id": {
+                "value": "8d57cbf0-d095-4b14-9dc7-9b6757bf7aed",
+                "type": "fact"
+              },
+              "sarah_entity_id_2": {
+                "value": "21308a85",
+                "type": "fact"
+              },
+              "belief_update_is_correction": {
+                "value": false,
+                "type": "fact"
+              },
+              "belief_update_section_bytes": {
+                "value": 466,
+                "type": "fact"
+              },
+              "update_beliefs_error": {
+                "value": null,
+                "type": "error"
+              },
+              "operation_successful": {
+                "value": true,
+                "type": "fact"
+              },
+              "belief_id_2": {
+                "value": "60cc9983-d562-4e18-b5b9-76105504f510",
+                "type": "fact"
+              },
+              "belief_section_bytes": {
+                "value": 616,
+                "type": "fact"
+              },
+              "operation_error": {
+                "value": null,
+                "type": "error"
+              },
+              "cap_001_id": {
+                "value": "cap-001",
+                "type": "fact"
+              },
+              "cap_001_name": {
+                "value": "tool.execute.restaurant_search",
+                "type": "fact"
+              },
+              "cap_001_description": {
+                "value": "Search restaurants by cuisine, location, and dietary requirements. Returns up to 20 venues with ratings, pricing, and availability.",
+                "type": "fact"
+              },
+              "cap_001_domain": {
+                "value": "DINING, LIFESTYLE",
+                "type": "fact"
+              },
+              "cap_001_safety_band": {
+                "value": "GREEN",
+                "type": "fact"
+              },
+              "cap_001_provider": {
+                "value": "opentable_mcp",
+                "type": "fact"
+              },
+              "cap_001_average_latency_ms": {
+                "value": 450,
+                "type": "fact"
+              },
+              "cap_001_success_rate": {
+                "value": 0.97,
+                "type": "fact"
+              },
+              "cap_001_suggested_inputs": {
+                "value": "cuisine, location, party_size",
+                "type": "fact"
+              },
+              "cap_001_optional_inputs": {
+                "value": "dietary_requirements, price_range, date",
+                "type": "fact"
+              },
+              "cap_002_id": {
+                "value": "cap-002",
+                "type": "fact"
+              },
+              "cap_002_name": {
+                "value": "tool.execute.restaurant_booking",
+                "type": "fact"
+              },
+              "cap_002_description": {
+                "value": "Reserve a table at a specified restaurant. Handles party size, date/time, and special requests.",
+                "type": "fact"
+              },
+              "cap_002_domain": {
+                "value": "DINING",
+                "type": "fact"
+              },
+              "cap_002_safety_band": {
+                "value": "AMBER",
+                "type": "fact"
+              },
+              "cap_002_provider": {
+                "value": "opentable_mcp",
+                "type": "fact"
+              },
+              "cap_002_average_latency_ms": {
+                "value": 800,
+                "type": "fact"
+              },
+              "cap_002_success_rate": {
+                "value": 0.94,
+                "type": "fact"
+              },
+              "cap_002_suggested_inputs": {
+                "value": "restaurant_id, date, time, party_size",
+                "type": "fact"
+              },
+              "cap_002_optional_inputs": {
+                "value": "special_requests, seating_preference",
+                "type": "fact"
+              },
+              "cap_003_id": {
+                "value": "cap-003",
+                "type": "fact"
+              },
+              "cap_003_name": {
+                "value": "tool.execute.menu_lookup",
+                "type": "fact"
+              },
+              "cap_003_description": {
+                "value": "Retrieve menu items and dietary labels for a specific restaurant. Supports vegan, vegetarian, gluten-free, nut-free filters.",
+                "type": "fact"
+              },
+              "cap_003_domain": {
+                "value": "DINING, HEALTH",
+                "type": "fact"
+              },
+              "cap_003_safety_band": {
+                "value": "GREEN",
+                "type": "fact"
+              },
+              "cap_003_provider": {
+                "value": "restaurant_api_native",
+                "type": "fact"
+              },
+              "cap_003_average_latency_ms": {
+                "value": 350,
+                "type": "fact"
+              },
+              "cap_003_success_rate": {
+                "value": 0.91,
+                "type": "fact"
+              },
+              "cap_003_suggested_inputs": {
+                "value": "restaurant_id",
+                "type": "fact"
+              },
+              "cap_003_optional_inputs": {
+                "value": "dietary_filter, course_type",
+                "type": "fact"
+              },
+              "cap_006_id": {
+                "value": "cap-006",
+                "type": "fact"
+              },
+              "cap_006_name": {
+                "value": "agent.execute.party_coordinator",
+                "type": "fact"
+              },
+              "cap_006_description": {
+                "value": "Specialized agent for coordinating multi-aspect party planning including venue, catering, decorations, and guest management.",
+                "type": "fact"
+              },
+              "cap_006_domain": {
+                "value": "LIFESTYLE, FAMILY, DINING",
+                "type": "fact"
+              },
+              "cap_006_safety_band": {
+                "value": "AMBER",
+                "type": "fact"
+              },
+              "cap_006_provider": {
+                "value": "fabric_dynamic_agent",
+                "type": "fact"
+              },
+              "cap_006_average_latency_ms": {
+                "value": 5000,
+                "type": "fact"
+              },
+              "cap_006_success_rate": {
+                "value": 0.82,
+                "type": "fact"
+              },
+              "cap_006_suggested_inputs": {
+                "value": "event_type, date, guest_count",
+                "type": "fact"
+              },
+              "cap_006_optional_inputs": {
+                "value": "budget, dietary_requirements, theme",
+                "type": "fact"
+              },
+              "search_total_results": {
+                "value": 5,
+                "type": "count"
+              },
+              "search_cuisine_criteria": {
+                "value": "vegan",
+                "type": "search_criteria"
+              },
+              "search_date_criteria": {
+                "value": "2026-03-15",
+                "type": "search_criteria"
+              },
+              "search_party_size_criteria": {
+                "value": 8,
+                "type": "search_criteria"
+              },
+              "search_dietary_criteria": {
+                "value": [
+                  "vegan",
+                  "vegetarian",
+                  "nut-free"
+                ],
+                "type": "search_criteria"
+              },
+              "the_green_garden_restaurant_id": {
+                "value": "rest-001",
+                "type": "restaurant_id"
+              },
+              "the_green_garden_cuisine": {
+                "value": "Modern Vegan",
+                "type": "cuisine"
+              },
+              "the_green_garden_rating": {
+                "value": 4.8,
+                "type": "rating"
+              },
+              "the_green_garden_price_range": {
+                "value": "$$$$",
+                "type": "price"
+              },
+              "the_green_garden_avg_price_per_person": {
+                "value": 75,
+                "type": "price"
+              },
+              "the_green_garden_location": {
+                "value": "Downtown",
+                "type": "location"
+              },
+              "the_green_garden_distance_km": {
+                "value": 3.2,
+                "type": "distance"
+              },
+              "the_green_garden_vegan_options": {
+                "value": 28,
+                "type": "dietary_options"
+              },
+              "the_green_garden_vegetarian_options": {
+                "value": 28,
+                "type": "dietary_options"
+              },
+              "the_green_garden_nut_free_options": {
+                "value": 22,
+                "type": "dietary_options"
+              },
+              "the_green_garden_gluten_free_options": {
+                "value": 18,
+                "type": "dietary_options"
+              },
+              "the_green_garden_ambiance": {
+                "value": "Fine Dining",
+                "type": "ambiance"
+              },
+              "the_green_garden_private_dining_available": {
+                "value": true,
+                "type": "dining_feature"
+              },
+              "the_green_garden_max_party_size": {
+                "value": 20,
+                "type": "dining_feature"
+              },
+              "the_green_garden_next_availability": {
+                "value": "2026-03-15 18:00",
+                "type": "availability"
+              },
+              "the_green_garden_reviews_summary": {
+                "value": "Outstanding vegan fine dining. Creative menu changes seasonally. Excellent wine list with organic options.",
+                "type": "review"
+              },
+              "sage_and_thyme_restaurant_id": {
+                "value": "rest-002",
+                "type": "restaurant_id"
+              },
+              "sage_and_thyme_cuisine": {
+                "value": "Plant-Based Contemporary",
+                "type": "cuisine"
+              },
+              "sage_and_thyme_rating": {
+                "value": 4.6,
+                "type": "rating"
+              },
+              "sage_and_thyme_price_range": {
+                "value": "$$$",
+                "type": "price"
+              },
+              "sage_and_thyme_avg_price_per_person": {
+                "value": 55,
+                "type": "price"
+              },
+              "sage_and_thyme_location": {
+                "value": "Midtown",
+                "type": "location"
+              },
+              "sage_and_thyme_distance_km": {
+                "value": 5.1,
+                "type": "distance"
+              },
+              "sage_and_thyme_vegan_options": {
+                "value": 22,
+                "type": "dietary_options"
+              },
+              "sage_and_thyme_vegetarian_options": {
+                "value": 22,
+                "type": "dietary_options"
+              },
+              "sage_and_thyme_nut_free_options": {
+                "value": 15,
+                "type": "dietary_options"
+              },
+              "sage_and_thyme_gluten_free_options": {
+                "value": 12,
+                "type": "dietary_options"
+              },
+              "sage_and_thyme_ambiance": {
+                "value": "Casual Elegant",
+                "type": "ambiance"
+              },
+              "sage_and_thyme_private_dining_available": {
+                "value": true,
+                "type": "dining_feature"
+              },
+              "sage_and_thyme_max_party_size": {
+                "value": 16,
+                "type": "dining_feature"
+              },
+              "sage_and_thyme_next_availability": {
+                "value": "2026-03-15 19:00",
+                "type": "availability"
+              },
+              "sage_and_thyme_reviews_summary": {
+                "value": "Beautiful plant-based dishes with a focus on local ingredients. Great for special occasions.",
+                "type": "review"
+              },
+              "harvest_moon_restaurant_id": {
+                "value": "rest-003",
+                "type": "restaurant_id"
+              },
+              "harvest_moon_cuisine": {
+                "value": "Farm-to-Table Vegan",
+                "type": "cuisine"
+              },
+              "harvest_moon_rating": {
+                "value": 4.5,
+                "type": "rating"
+              },
+              "harvest_moon_price_range": {
+                "value": "$$$",
+                "type": "price"
+              },
+              "harvest_moon_avg_price_per_person": {
+                "value": 60,
+                "type": "price"
+              },
+              "harvest_moon_location": {
+                "value": "West End",
+                "type": "location"
+              },
+              "harvest_moon_distance_km": {
+                "value": 4.8,
+                "type": "distance"
+              },
+              "harvest_moon_vegan_options": {
+                "value": 20,
+                "type": "dietary_options"
+              },
+              "harvest_moon_vegetarian_options": {
+                "value": 25,
+                "type": "dietary_options"
+              },
+              "harvest_moon_nut_free_options": {
+                "value": 18,
+                "type": "dietary_options"
+              },
+              "harvest_moon_gluten_free_options": {
+                "value": 16,
+                "type": "dietary_options"
+              },
+              "harvest_moon_ambiance": {
+                "value": "Rustic Elegant",
+                "type": "ambiance"
+              },
+              "harvest_moon_private_dining_available": {
+                "value": false,
+                "type": "dining_feature"
+              },
+              "harvest_moon_max_party_size": {
+                "value": 12,
+                "type": "dining_feature"
+              },
+              "harvest_moon_next_availability": {
+                "value": "2026-03-15 18:30",
+                "type": "availability"
+              },
+              "harvest_moon_reviews_summary": {
+                "value": "Farm-to-table concept with organic produce. Intimate setting. Limited party size.",
+                "type": "review"
+              },
+              "verde_kitchen_restaurant_id": {
+                "value": "rest-004",
+                "type": "restaurant_id"
+              },
+              "verde_kitchen_cuisine": {
+                "value": "Mediterranean Vegan",
+                "type": "cuisine"
+              },
+              "verde_kitchen_rating": {
+                "value": 4.3,
+                "type": "rating"
+              },
+              "verde_kitchen_price_range": {
+                "value": "$$",
+                "type": "price"
+              },
+              "verde_kitchen_avg_price_per_person": {
+                "value": 40,
+                "type": "price"
+              },
+              "verde_kitchen_location": {
+                "value": "East Side",
+                "type": "location"
+              },
+              "verde_kitchen_distance_km": {
+                "value": 6.5,
+                "type": "distance"
+              },
+              "verde_kitchen_vegan_options": {
+                "value": 18,
+                "type": "dietary_options"
+              },
+              "verde_kitchen_vegetarian_options": {
+                "value": 24,
+                "type": "dietary_options"
+              },
+              "verde_kitchen_nut_free_options": {
+                "value": 14,
+                "type": "dietary_options"
+              },
+              "verde_kitchen_gluten_free_options": {
+                "value": 10,
+                "type": "dietary_options"
+              },
+              "verde_kitchen_ambiance": {
+                "value": "Casual",
+                "type": "ambiance"
+              },
+              "verde_kitchen_private_dining_available": {
+                "value": false,
+                "type": "dining_feature"
+              },
+              "verde_kitchen_max_party_size": {
+                "value": 30,
+                "type": "dining_feature"
+              },
+              "verde_kitchen_next_availability": {
+                "value": "2026-03-15 17:30",
+                "type": "availability"
+              },
+              "verde_kitchen_reviews_summary": {
+                "value": "Great value Mediterranean vegan food. Large venue, good for groups. Quality varies.",
+                "type": "review"
+              },
+              "lotus_blossom_restaurant_id": {
+                "value": "rest-005",
+                "type": "restaurant_id"
+              },
+              "lotus_blossom_cuisine": {
+                "value": "Asian Vegan Fusion",
+                "type": "cuisine"
+              },
+              "lotus_blossom_rating": {
+                "value": 4.7,
+                "type": "rating"
+              },
+              "lotus_blossom_price_range": {
+                "value": "$$$",
+                "type": "price"
+              },
+              "lotus_blossom_avg_price_per_person": {
+                "value": 65,
+                "type": "price"
+              },
+              "lotus_blossom_location": {
+                "value": "Chinatown",
+                "type": "location"
+              },
+              "lotus_blossom_distance_km": {
+                "value": 7.2,
+                "type": "distance"
+              },
+              "lotus_blossom_vegan_options": {
+                "value": 35,
+                "type": "dietary_options"
+              },
+              "lotus_blossom_vegetarian_options": {
+                "value": 35,
+                "type": "dietary_options"
+              },
+              "lotus_blossom_nut_free_options": {
+                "value": 20,
+                "type": "dietary_options"
+              },
+              "lotus_blossom_gluten_free_options": {
+                "value": 25,
+                "type": "dietary_options"
+              },
+              "lotus_blossom_ambiance": {
+                "value": "Upscale Asian",
+                "type": "ambiance"
+              },
+              "lotus_blossom_private_dining_available": {
+                "value": true,
+                "type": "dining_feature"
+              },
+              "lotus_blossom_max_party_size": {
+                "value": 14,
+                "type": "dining_feature"
+              },
+              "lotus_blossom_next_availability": {
+                "value": "2026-03-15 19:30",
+                "type": "availability"
+              },
+              "lotus_blossom_reviews_summary": {
+                "value": "Exceptional Asian fusion vegan cuisine. Beautiful presentation. Must try the dim sum and ramen.",
+                "type": "review"
+              },
+              "search_target": {
+                "value": "restaurants",
+                "type": "fact"
+              },
+              "search_occasion": {
+                "value": "Mom's birthday dinner",
+                "type": "fact"
+              },
+              "search_dietary_vegan": {
+                "value": "vegan",
+                "type": "fact"
+              },
+              "search_dietary_vegetarian": {
+                "value": "vegetarian",
+                "type": "fact"
+              },
+              "search_dietary_nut_allergy": {
+                "value": "nut allergy",
+                "type": "fact"
+              },
+              "search_party_size": {
+                "value": 8,
+                "type": "fact"
+              },
+              "search_date_relative": {
+                "value": "next Saturday",
+                "type": "fact"
+              },
+              "search_location_area": {
+                "value": "local area",
+                "type": "location"
+              },
+              "scoreboard_update_success": {
+                "value": true,
+                "type": "fact"
+              },
+              "scoreboard_section_bytes_used": {
+                "value": 450,
+                "type": "fact"
+              },
+              "scoreboard_available_bytes": {
+                "value": 5694,
+                "type": "fact"
+              },
+              "scoreboard_operation_performed": {
+                "value": "set_task",
+                "type": "fact"
+              },
+              "mom_entity_id_3": {
+                "value": "bfa90978",
+                "type": "id"
+              },
+              "sarah_entity_id_3": {
+                "value": "21308a85",
+                "type": "id"
+              },
+              "sarah_dietary_preference": {
+                "value": "vegetarian",
+                "type": "diet"
+              },
+              "jake_entity_id_2": {
+                "value": "1a11aae4",
+                "type": "id"
+              },
+              "jake_dietary_restriction": {
+                "value": "nut allergy",
+                "type": "diet"
+              }
+            },
+            "final_answer_fragment": "I found several excellent options for Mom's birthday dinner next Saturday, March 15th, for 8 people, accommodating vegan, vegetarian, and nut-free diets:\n\n1.  **The Green Garden:** A highly-rated (4.8) Modern Vegan fine dining restaurant located Downtown (3.2 km). They have 28 vegan and vegetarian options, and 22 nut-free options. Average price per person is $75. Next availability is 6:00 PM.\n\n2.  **Lotus Blossom:** An upscale Asian Vegan Fusion restaurant with a 4.7 rating in Chinatown (7.2 km). They offer a wide range of choices with 35 vegan/vegetarian and 20 nut-free options. Average price per person is $65. Next availability is 7:30 PM.\n\n3.  **Sage and Thyme:** A Plant-Based Contemporary restaurant in Midtown (5.1 km) with a 4.6 rating and a casual elegant ambiance. They have 22 vegan/vegetarian and 15 nut-free options. Average price per person is $55. Next availability is 7:00 PM.\n\nWould you like me to book a reservation for Mom's birthday dinner at The Green Garden for 8 people at 6:00 PM on March 15th?"
+          }
+        ],
+        "metrics": {
+          "iterations": 5,
+          "tool_calls": 13,
+          "compactions": 4,
+          "scratchpad_messages_final": 8,
+          "context_tokens_final": 2986,
+          "findings_count": 180,
+          "typed_findings_count": 18,
+          "failed_count": 0,
+          "cognitive_writes_count": 0,
+          "remaining_tool_calls": 17,
+          "remaining_iterations": 15,
+          "token_input": 15204,
+          "token_output": 566,
+          "elapsed_budget_ms": 127441,
+          "latency_ms": 127441,
+          "sub_agent_count": 0,
+          "max_nesting_depth": 0,
+          "context_tokens_per_iteration": [
+            616,
+            1025,
+            1295,
+            1824,
+            2986
+          ],
+          "findings_per_iteration": [
+            23,
+            38,
+            78,
+            180,
+            180
+          ]
+        },
+        "errors": [],
+        "started_at": "2026-02-17T22:03:01.869558+00:00",
+        "finished_at": "2026-02-17T22:05:09.311457+00:00",
+        "total_compactions": 4,
+        "total_findings": 180,
+        "total_sub_agents": 0,
+        "max_nesting_depth": 0,
+        "budget_overspend": false
+      },
+      "comparison": {
+        "scenario_id": "test_10_concierge_full",
+        "scenario_name": "Concierge Full Tool Suite (15 tools)",
+        "naive_success": true,
+        "smart_success": true,
+        "winner": "smart",
+        "naive_iterations": 5,
+        "smart_iterations": 5,
+        "naive_tool_calls": 15,
+        "smart_tool_calls": 13,
+        "naive_context_final": 3184,
+        "smart_context_final": 2986,
+        "context_savings_pct": 6.218592964824121,
+        "naive_tokens_total": 24601,
+        "smart_tokens_total": 15770,
+        "token_savings_pct": 35.89691475956261,
+        "naive_latency_ms": 47499,
+        "smart_latency_ms": 127441,
+        "compactions": 4,
+        "findings_count": 180,
+        "sub_agent_count": 0,
+        "max_nesting_depth": 0,
+        "failed_attempts": 0,
+        "naive_context_growth": [
+          590,
+          1505,
+          1736,
+          3003,
+          3184
+        ],
+        "smart_context_growth": [
+          616,
+          1025,
+          1295,
+          1824,
+          2986
+        ],
+        "findings_per_iteration": [
+          23,
+          38,
+          78,
+          180,
+          180
+        ],
+        "winner_reasons": [
+          "Smart used 36% fewer tokens",
+          "Smart extracted 180 structured findings",
+          "Smart performed 4 compactions"
+        ]
+      }
+    }
+  ],
+  "aggregate": {
+    "scenario_count": 1,
+    "naive_success_rate": 100.0,
+    "smart_success_rate": 100.0,
+    "naive_wins": 0,
+    "smart_wins": 1,
+    "ties": 0,
+    "avg_context_savings_pct": 6.218592964824121,
+    "avg_token_savings_pct": 35.89691475956261,
+    "naive_avg_latency_ms": 47499.0,
+    "smart_avg_latency_ms": 127441.0,
+    "total_compactions": 4,
+    "total_findings": 180,
+    "total_sub_agents": 0,
+    "max_nesting_depth": 0,
+    "overall_winner": "SMART (Scratchpad)",
+    "summary": "Smart wins 1/1 scenarios. Context savings: 6.2%. Token savings: 35.9%. Total findings extracted: 180. Compactions performed: 4."
+  }
+}

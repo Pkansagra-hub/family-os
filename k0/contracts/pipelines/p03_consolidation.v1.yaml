@@ -15,7 +15,7 @@ description: |
   Implements R0-R8 phases:
   - R0: Batch selection and context hydration
   - R1: Importance scoring + Hebbian co-occurrence learning
-  - R2: Episodic clustering (DBSCAN on 768-dim embeddings)
+  - R2: Episodic clustering (HDBSCAN on precomputed composite distance)
   - R3: Near-duplicate detection (SimHash) + decay scoring + prune decisions
   - R4: Knowledge graph consolidation (entity extraction, relationship building, causal inference)
   - R5: Dream phase (counterfactual CPN, forward TPN-MCTS, insight BGT-SM) - optional, skippable
@@ -86,15 +86,15 @@ required_capabilities:
   # Truth layer - Prospective
   - st_prospective.read
   - st_prospective.write
+  # M9.3 -- Unified truth candidate query for reconciliation
+  - truth.reconcile.read
   # Support tables
   - st_learning_queue.read    # R0 gap auto-resolution reads pending gaps
   - st_learning_queue.write   # P06 gap records
   - st_outbox.write           # Event emission
   - st_pipeline_status.write  # Execution state
-  - st_learned_weights.read   # Importance formula weights
-  - st_learned_weights.write  # Thompson Sampling updates
-  - st_cooccurrence.read      # Hebbian learning
-  - st_cooccurrence.write
+  - st_learned_weights.read   # Importance formula weights (R1) + novelty bonus learning (R3)
+  - st_learned_weights.write  # Hebbian weight updates (future) + novelty bonus updates (R3)
   - st_consolidation_audit.write  # Audit trail
 
 dag:
@@ -124,33 +124,33 @@ dag:
     after:
       - stage_00_select_batch
     description: |
-      R1 - Importance scoring using weighted formula.
-      importance = w_recency * recency + w_affect * affect + w_social * social +
-                   w_rehearsal * rehearsal + w_novelty * novelty
-      Weights from st_learned_weights (Thompson Sampling adaptive).
+      R1 - Importance scoring using CONFIG_B weighted formula (POC validated 120/120).
+      base = sentiment + affect + arousal + surprise + novelty + social + identity + recency
+      importance = clamp(base * elab * goal * arc * temporal * type * intent
+                         * relationship * tier * reliability, 0, 1)
+      Weights from st_learned_weights (prefix "importance_") if sample_count >= 500,
+      else CONFIG_B static defaults.
+      KG relationship boost (ADR-K026): relationship = 1.0 + boost_scale * max_edge_weight.
+      Disabled by default (enable_kg_boost=False).
     config:
-      default_weights:
-        recency: 0.25
-        affect: 0.30
-        social: 0.20
-        rehearsal: 0.15
-        novelty: 0.10
+      formula_version: "2.1.0"
+      defaults: CONFIG_B
+      weights:
+        sentiment: 0.10
+        affect: 0.12
+        arousal: 0.08
+        surprise: 0.15
+        novelty: 0.15
+        social: 0.15
+        identity: 0.10
+        recency: 0.15
       use_learned_weights: true
+      min_samples_for_learned: 500
       fallback_to_defaults: true
-
-  - id: stage_11_hebbian_update
-    module: consolidation.hebbian_learner:v1
-    after:
-      - stage_00_select_batch
-    description: |
-      R1 - Hebbian co-occurrence learning.
-      "What fires together, wires together" - updates edge weights in st_cooccurrence.
-      Strengthens connections between temporally proximate events.
-    config:
-      temporal_window_seconds: 3600  # 1 hour
-      learning_rate: 0.01
-      decay_factor: 0.995
-      max_edges_per_event: 50
+      # ADR-K026: KG relationship boost
+      enable_kg_boost: false
+      kg_boost_scale: 0.15
+      kg_max_boost_cap: 0.20
 
   # ============================================================================
   # PHASE R2: Episodic Clustering
@@ -159,18 +159,29 @@ dag:
     module: consolidation.episodic_clusterer:v1
     after:
       - stage_10_importance_score
-      - stage_11_hebbian_update
     description: |
-      R2 - Episodic clustering using DBSCAN on 768-dim embeddings.
-      Groups related events into coherent episodes based on embedding similarity.
-      eps=0.3, min_samples=3 (configurable).
+      R2 - Episodic clustering using HDBSCAN on precomputed ensemble distance matrices.
+      Groups related events into coherent episodes. Ensemble distance combines
+      semantic (0.45), temporal (0.25), and narrative (0.30) dimensions with
+      confidence-weighted bagging and 6-tier narrative fallback chain.
+      Hebbian co-occurrence boost (Epic 5.1) applied post-distance.
+      HDBSCAN with soft noise rescue (configurable).
+      Adaptive clustering parameters (eps, min_samples) via st_learned_weights.
     config:
-      algorithm: DBSCAN
-      eps: 0.3
-      min_samples: 3
-      metric: cosine
-      use_cooccurrence_boost: true
-      cooccurrence_weight: 0.2
+      algorithm: HDBSCAN
+      min_cluster_size: 2
+      min_samples: 1
+      metric: precomputed  # HDBSCAN operates on precomputed ensemble distance matrix
+      noise_rescue_threshold: 0.5
+      cluster_selection_method: leaf
+      distance_model: ensemble_v10  # Epic 6.1: 3D confidence-weighted
+      ensemble_weights:
+        semantic: 0.45
+        temporal: 0.25
+        narrative: 0.30
+      narrative_shortcircuit: true
+      narrative_shortcircuit_cap: 0.20
+      hebbian_boost: true  # Epic 5.1
 
   - id: stage_21_episode_builder
     module: consolidation.episode_builder:v1
@@ -402,8 +413,8 @@ failure_modes:
     description: Vector lookup failed - retry with backoff
 
   - code: CLUSTER_TIMEOUT
-    policy: fallback_skip
-    description: DBSCAN timeout - skip R2, continue with unclustered events
+    policy: phase_skip
+    description: Clustering timeout - skip R2 and emit no episodic output for this cycle
 
   - code: KG_CONFLICT
     policy: retry

@@ -1,0 +1,221 @@
+# =============================================================================
+# st_sem v1.0.0 -- Truth Layer Column Contract
+# =============================================================================
+#
+# Single source of truth for every column in st_sem (Semantic Patterns).
+# Used by TruthLayerRegistry to build TruthLayerSpec.
+#
+# Migrations: 0028_st_sem, 0062
+# Writer: k0/modules/consolidation/truth_writer/layers/semantic.py
+# =============================================================================
+
+schema: st_sem
+version: "1.0.0"
+migrations:
+  - "0028"
+  - "0062"
+column_count: 31
+
+# ---------------------------------------------------------------------------
+# Layer Metadata
+# ---------------------------------------------------------------------------
+layer_metadata:
+  pk: pattern_id
+  version_column: version
+  supersedes_column: supersedes_id
+  canonical_column: is_canonical
+  observation_count_column: observation_count
+  confidence_column: confidence_score
+  confidence_boost_strategy: additive_0.05
+  archival_status_column: archival_status
+  active_status_value: ACTIVE
+  decay_lambda: 0.003
+
+  embedding_fk_column: embedding_id
+  supports_embedding_match: true
+  supports_key_match: false
+  identity_columns: [pattern_type]
+
+  write_order: 5
+
+  temporal:
+    start: null
+    end: null
+    last_observed: last_observed_at
+    first_observed: first_observed_at
+
+  thresholds:
+    reinforce: 0.90
+    extend: 0.65
+    evolve: 0.45
+
+# ---------------------------------------------------------------------------
+# Columns
+# ---------------------------------------------------------------------------
+columns:
+
+  # --- Identity (migration 0028) ---
+  pattern_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  tenant_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  space_id:
+    type: TEXT
+    nullable: false
+    merge: immutable
+
+  actor_id:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  # --- Versioning (0028) ---
+  version:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  supersedes_id:
+    type: TEXT
+    nullable: true
+    merge: immutable
+
+  is_canonical:
+    type: BOOLEAN
+    nullable: false
+    merge: status
+
+  # --- Pattern Content (0028) ---
+  pattern_type:
+    type: TEXT
+    nullable: false
+    merge: immutable
+    description: "ROUTINE, PREFERENCE, THEME, RELATIONSHIP, GOAL, VALUE"
+
+  pattern_subtype:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+
+  pattern_name:
+    type: TEXT
+    nullable: false
+    merge: replaced
+
+  pattern_description:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  pattern_attributes_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_distinct
+
+  temporal_regularity:
+    type: FLOAT
+    nullable: true
+    merge: coalesce
+
+  temporal_pattern_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_distinct
+
+  # --- Source Episodes (0028) ---
+  source_episodes_json:
+    type: TEXT
+    nullable: false
+    merge: appendable_distinct
+    description: "JSON array of episode IDs, deduped on EXTEND"
+
+  source_episode_count:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  # --- Embedding (0028) ---
+  embedding_id:
+    type: TEXT
+    nullable: true
+    merge: coalesce
+
+  # --- Observation (0028) ---
+  observation_count:
+    type: INTEGER
+    nullable: false
+    merge: counter
+
+  confidence_score:
+    type: FLOAT
+    nullable: false
+    merge: replaced
+    description: "LEAST(confidence_score + 0.05, 1.0) on REINFORCE"
+
+  last_observed_at:
+    type: BIGINT
+    nullable: true
+    merge: temporal_max
+
+  first_observed_at:
+    type: BIGINT
+    nullable: true
+    merge: immutable
+
+  # --- Decay & Lifecycle (0028) ---
+  decay_factor:
+    type: FLOAT
+    nullable: false
+    merge: replaced
+
+  archival_status:
+    type: TEXT
+    nullable: false
+    merge: status
+
+  created_at:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  updated_at:
+    type: BIGINT
+    nullable: false
+    merge: replaced
+
+  valid_from:
+    type: BIGINT
+    nullable: false
+    merge: immutable
+
+  valid_to:
+    type: BIGINT
+    nullable: true
+    merge: replaced
+
+  # --- Inline Vectors & Text (migration 0062) ---
+  source_texts_json:
+    type: TEXT
+    nullable: true
+    merge: appendable_distinct
+
+  embedding_text:
+    type: TEXT
+    nullable: true
+    merge: replaced
+
+  embedding_vector:
+    type: BYTEA
+    nullable: true
+    merge: replaced
+
+  embedding_model:
+    type: TEXT
+    nullable: true
+    merge: immutable

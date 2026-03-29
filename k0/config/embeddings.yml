@@ -1,51 +1,41 @@
 # K0 Embedding Configuration (Production)
 #
-# This file configures embedding backends for async embedding workers.
-# Workers poll Outbox for embedding.enqueue entries and compute embeddings
-# using the configured backend.
+# Standardized on UltraBERT v2.1.0 (768-dim) per ADR-K003 v2.0.
+# Legacy backends (sentence-transformers, openai, ollama) removed.
+# Vectors stored as pgvector VECTOR(768) in st_vec table.
+#
+# Version: 2.0
+# Updated: 2025-06-30
 
-# Default backend (sentence-transformers, openai, ollama, fake)
-default_backend: "sentence-transformers"
+version: "2.0"
+
+# Default backend
+default_backend: "ultrabert"
 
 # Backend-specific configuration
 backends:
-  sentence-transformers:
-    # HuggingFace sentence-transformers (local, no API key needed)
-    model: "all-mpnet-base-v2"  # 768 dimensions, more accurate (default for local)
-    # Alternative models:
-    #   - "all-MiniLM-L6-v2" (384 dims, faster but less accurate)
-    #   - "paraphrase-multilingual-MiniLM-L12-v2" (multilingual)
+  ultrabert:
+    # UltraBERT v2.1.0 -- primary embedding model for all K0 paths
+    model: "ultrabert_v2.1.0"
+    dimension: 768
     device: "cpu"  # or "cuda" for GPU
-    batch_size: 32  # Batch multiple texts for efficiency
+    batch_size: 32
     normalize_embeddings: true
-
-  openai:
-    # OpenAI API (requires OPENAI_API_KEY env var)
-    model: "text-embedding-3-small"  # 1536 dims, $0.02/1M tokens
-    # Alternative: "text-embedding-3-large" (3072 dims, $0.13/1M tokens)
-    rate_limit_rpm: 3000  # Requests per minute (tier 1: 3000)
-    rate_limit_tpm: 1000000  # Tokens per minute (tier 1: 1M)
-    retry_max_attempts: 3
-    retry_exponential_base: 2  # 2^attempt seconds
-    timeout_sec: 30
-
-  ollama:
-    # Ollama local deployment (requires Ollama server running)
-    url: "http://localhost:11434"
-    model: "llama2"  # or "mistral", "codellama", etc.
-    timeout_sec: 30
+    description: "UltraBERT v2.1.0 -- 768-dim, primary model for all K0 embedding paths"
 
   fake:
     # Deterministic hash-based embeddings (testing only)
-    model: "fake-minilm-l6"
-    dimension: 384
+    model: "fake-768"
+    dimension: 768
+    description: "Test-only fake embeddings (random 768-dim vectors)"
 
-# Worker settings
+# Worker settings (legacy worker DISABLED -- P02 inline handles all embedding)
 worker:
-  batch_size: 10  # Process 10 Outbox entries per run_once()
-  poll_interval_sec: 1.0  # Poll Outbox every 1 second
-  max_retries: 3  # Max retry attempts for failed embeddings
-  retry_delay_sec: 5.0  # Delay between retries
+  enabled: false
+  batch_size: 10
+  poll_interval_sec: 1.0
+  max_retries: 3
+  retry_delay_sec: 5.0
 
 # Performance budgets (P95 latency targets)
 performance:
@@ -54,7 +44,7 @@ performance:
 
 # Observability
 observability:
-  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  log_level: "INFO"
   metrics_enabled: true
   trace_enabled: true
   emit_embedding_vector: false  # Expensive - only for debugging
