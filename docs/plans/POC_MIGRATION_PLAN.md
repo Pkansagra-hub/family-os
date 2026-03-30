@@ -915,6 +915,7 @@ The POC **already uses** the K1 bus as its event backbone — `create_poc_bus()`
 Replace concrete type hints in `poc/k1_poc/bus/setup.py` with K1 protocol types so all downstream code receives protocol-typed objects.
 
 **E3.1.1** — Change `create_poc_bus()` return type from `LocalBus` to `IBus`
+
 - File: `poc/k1_poc/bus/setup.py` L54
 - Current: `def create_poc_bus(*, capture: bool = False) -> LocalBus:`
 - Target: `def create_poc_bus(*, capture: bool = False) -> IBus:`
@@ -923,18 +924,21 @@ Replace concrete type hints in `poc/k1_poc/bus/setup.py` with K1 protocol types 
 - NOTE: `create_poc_session_adapter(bus: LocalBus)` param type also widens to `IBus` (L88)
 
 **E3.1.2** — Change `create_poc_router()` return type from `LocalMailboxRouter` to `IMailboxRouter`
+
 - File: `poc/k1_poc/bus/setup.py` L76
 - Current: `def create_poc_router() -> LocalMailboxRouter:`
 - Target: `def create_poc_router() -> IMailboxRouter:`
 - Add import: `from k1.bus.ports.mailbox import IMailboxRouter`
 
 **E3.1.3** — Change `register_poc_actors()` return type from `tuple[LocalMailbox, LocalMailbox]` to `tuple[IMailbox, IMailbox]`
+
 - File: `poc/k1_poc/bus/setup.py` L107-108
 - Current: `def register_poc_actors(router: LocalMailboxRouter, ...) -> tuple[LocalMailbox, LocalMailbox]:`
 - Target: `def register_poc_actors(router: IMailboxRouter, ...) -> tuple[IMailbox, IMailbox]:`
 - Add import: `from k1.bus.ports.mailbox import IMailbox`
 
 **E3.1.4** — Remove unused concrete imports from `setup.py`
+
 - After E3.1.1-3, `LocalBus`, `LocalMailbox`, `LocalMailboxRouter` are only needed inside function bodies (factory returns them)
 - Move these imports inside function bodies or keep at module level with `# noqa: used by factory internals` comment
 - `MailboxConfig` stays — it's a value type used in `register_poc_actors`
@@ -946,6 +950,7 @@ Replace concrete type hints in `poc/k1_poc/bus/setup.py` with K1 protocol types 
 Ensure `poc/k1_poc/bus/__init__.py` re-exports the K1 protocols alongside the POC setup functions.
 
 **E3.2.1** — Add protocol re-exports to `poc/k1_poc/bus/__init__.py`
+
 - Add: `from k1.bus.ports.bus import IBus, BusHandler, SubscriptionHandle`
 - Add: `from k1.bus.ports.mailbox import IMailbox, IMailboxRouter, MailboxConfig`
 - Add to `__all__`: `"IBus"`, `"IMailbox"`, `"IMailboxRouter"`, `"BusHandler"`, `"SubscriptionHandle"`, `"MailboxConfig"`
@@ -958,6 +963,7 @@ Ensure `poc/k1_poc/bus/__init__.py` re-exports the K1 protocols alongside the PO
 Replace `Any` type hints for bus/router/mailbox with protocol types.
 
 **E3.3.1** — Update `KernelConfig` type hints in `bootstrap.py`
+
 - File: `poc/k1_poc/kernel/bootstrap.py`
 - `bus: Any` (L85) → `bus: IBus`
 - `router: Any` (L86) → `router: IMailboxRouter`
@@ -967,15 +973,18 @@ Replace `Any` type hints for bus/router/mailbox with protocol types.
 - NOTE: The `KernelRuntime` class also has `bus`, `router`, `front_mailbox`, `back_mailbox` fields — these are assigned from `KernelConfig` fields and should also be typed
 
 **E3.3.2** — Update `_DeltaEmitAdapter` type hint in `bootstrap.py`
+
 - File: `poc/k1_poc/kernel/bootstrap.py` L1001
 - `bus: Any = None` → `bus: IBus | None = None`
 - `self._bus` typed accordingly
 
 **E3.3.3** — Update `_build_delta_applicator` type hint in `bootstrap.py`
+
 - File: `poc/k1_poc/kernel/bootstrap.py` L899
 - `def _build_delta_applicator(session_state: Any, bus: Any)` → `bus: IBus`
 
 **E3.3.4** — Update `main.py` type hints
+
 - File: `poc/k1_poc/main.py`
 - Variables `bus`, `router`, `front_mailbox`, `back_mailbox` (L60-67) are currently untyped — add type annotations using protocols
 - Return type of `boot()` currently returns `dict` — consider adding typed `BootResult` dataclass or keep dict
@@ -985,6 +994,7 @@ Replace `Any` type hints for bus/router/mailbox with protocol types.
 #### E3.4 — Widen Type Hints in `tools/dispatcher.py`
 
 **E3.4.1** — Replace `bus: Any | None = None` with `bus: IBus | None = None`
+
 - File: `poc/k1_poc/tools/dispatcher.py` L423, L468 (in `create_front_dispatcher`, `create_back_dispatcher`)
 - Also check `ToolDispatcher.__init__` for `bus` param type
 - Add import: `from k1.bus.ports.bus import IBus`
@@ -996,6 +1006,7 @@ Replace `Any` type hints for bus/router/mailbox with protocol types.
 The POC runs with zero middleware — no tracing, no topic validation, no metrics. K1 provides three ready-to-use middleware classes. Wiring them aligns POC with K1 production expectations.
 
 **E3.5.1** — Wire `TopicValidationMiddleware` in `create_poc_bus()`
+
 - File: `poc/k1_poc/bus/setup.py`
 - Create `TopicRegistry`, register all 47 `ALL_TOPICS`, build `TopicValidationMiddleware(registry)`
 - Pass as `middleware=MiddlewareChain([TopicValidationMiddleware(registry)])` to `BusFactory.create_local_ordered()`
@@ -1003,11 +1014,13 @@ The POC runs with zero middleware — no tracing, no topic validation, no metric
 - NOTE: Topic validation is SOFT (warns but never drops) — safe to add without breaking tests
 
 **E3.5.2** — Wire `TracingMiddleware` (behind config flag)
+
 - Add `bus.tracing_enabled: bool = false` to `poc/k1_poc/config/defaults.yaml`
 - Conditionally prepend `TracingMiddleware(enabled=config.bus.tracing_enabled)` to middleware chain
 - Import: `from k1.bus.middleware.tracing import TracingMiddleware`
 
 **E3.5.3** — Wire `MetricsMiddleware` (behind config flag)
+
 - Add `bus.metrics_enabled: bool = false` to `poc/k1_poc/config/defaults.yaml`
 - Conditionally append `MetricsMiddleware(enabled=config.bus.metrics_enabled)` to middleware chain
 - Import: `from k1.bus.middleware.metrics import MetricsMiddleware`
@@ -1019,6 +1032,7 @@ The POC runs with zero middleware — no tracing, no topic validation, no metric
 Verify protocol compliance and ensure factory-produced instances satisfy protocols at runtime.
 
 **E3.6.1** — Protocol compliance test: `isinstance(bus, IBus)` ✅
+
 - File: `tests/poc/bus/test_bus_port_compliance.py` (new, ~60 tests)
 - Test `isinstance(create_poc_bus(), IBus)` — must pass (`IBus` is `@runtime_checkable`)
 - Test `isinstance(create_poc_router(), IMailboxRouter)` — must pass
@@ -1028,11 +1042,13 @@ Verify protocol compliance and ensure factory-produced instances satisfy protoco
 - Test all 2 `IMailbox` methods work through protocol reference
 
 **E3.6.2** — Middleware integration test
+
 - Test `create_poc_bus()` with topic validation middleware: publish known topic → no warning; publish unknown topic → warning logged
 - Test middleware chain processes envelopes without dropping
 - Test TracingMiddleware and MetricsMiddleware are no-ops when disabled
 
 **E3.6.3** — Regression: existing bus tests still green
+
 - Run full `tests/poc/bus/` test suite — must be 100% green
 - Run full `tests/k1/bus/` test suite — must be 100% green (K1 bus unchanged)
 
@@ -1041,6 +1057,7 @@ Verify protocol compliance and ensure factory-produced instances satisfy protoco
 #### E3.7 — Full Suite Green + Tag
 
 **E3.7.1** — Run full test suite (3,261 tests)
+
 - All POC tests must pass — type narrowing should be transparent
 - Zero test changes expected for actors/FSM/react (they already use `IBus` / `IMailboxRouter`)
 
@@ -1066,17 +1083,232 @@ Verify protocol compliance and ensure factory-produced instances satisfy protoco
 
 ## M4 — Port: IStoragePort Audit
 
-> Session State already has ports/adapters in POC. Verify contracts are clean and aligned with K1 expectations.
+> Session State already has ports/adapters in POC. Verify contracts are clean, back-port POC improvements to K1 sessionstate, and resolve `poc.k1_poc.config` import coupling.
 
-**Existing ports**: `poc/k1_poc/sessionstate/ports/`
-**Existing adapters**: `poc/k1_poc/sessionstate/adapters/`
-**Work**: Audit interface alignment, add any missing contract tests
+**Existing K1 ports**: `k1/sessionstate/ports/` — 5 ABCs + supporting types (IStoragePort, IEventPort, IWriterPort, ILifecyclePort, IK0SyncPort)
+**Existing K1 adapters**: `k1/sessionstate/adapters/` — 5 adapters (DirectWriter, LocalEvents, MemoryStorage, SQLiteStorage, StandaloneLifecycle)
+**Existing POC ports**: `poc/k1_poc/sessionstate/ports/` — **byte-for-byte identical** to K1 ports
+**Existing POC adapters**: `poc/k1_poc/sessionstate/adapters/` — **DIVERGED** (POC is ahead by ~153 LoC across 4 files)
+**Status**: Ports are perfectly aligned. Adapters need back-port. Config coupling needs resolution.
+
+### Key Finding
+
+Unlike M1-M3, SessionState has a **unique topology**: the code exists in BOTH `k1/sessionstate/` AND `poc/k1_poc/sessionstate/`, with the POC copy being the actively developed version. All 6 port files are byte-for-byte identical. The adapters have diverged — POC added per-turn mutation tracking, LLM section guards, config-backing, and logging upgrades. The POC currently imports its own copy (`from poc.k1_poc.sessionstate import ...`). After M5 (Big Copy), concierge will import from `k1.concierge.sessionstate` — but since K1 already has `k1.sessionstate`, we need to decide the canonical home.
+
+### Divergence Inventory
+
+| File | K1 Lines | POC Lines | Delta | Nature of Change |
+|---|---|---|---|---|
+| `ports/*` (all 6 files) | identical | identical | 0 | **NONE** — ports are clean ✅ |
+| `adapters/direct_writer.py` | 487 | 628 | +141 | Per-turn mutation audit (`_turn_stats`, `_record_turn_mutation`, `snapshot_turn_stats`), LLM tool-writer section guard via `get_config().sessionstate.llm_writable_sections` |
+| `adapters/local_events.py` | 303 | 307 | +4 | `logger.info()` at init |
+| `adapters/sqlite_storage.py` | 520 | 524 | +4 | Config-backed: `get_config().sessionstate.storage.default_db_path` and `sla_storage_ms` replace hardcoded defaults |
+| `adapters/standalone_lifecycle.py` | 602 | 602 | ~0 | `logger.debug` → `logger.info` with richer format strings |
+| `adapters/memory_storage.py` | 227 | 227 | 0 | **IDENTICAL** ✅ |
+| `factory.py` | 325 | 334 | +9 | Config-backed: `get_config()` for `default_db_path` and `checkpoint_interval_s` |
+| `manager.py` | 1316 | 1327 | +11 | Logging only: `debug` → `info` with richer format strings |
+
+### POC `poc.k1_poc.config` Import Sites in SessionState
+
+These imports create a coupling to `poc.k1_poc.config` that will break at M5 (Big Copy) if not resolved:
+
+| File | Line | Import |
+|---|---|---|
+| `adapters/direct_writer.py` | 243 | `from poc.k1_poc.config import get_config` |
+| `adapters/sqlite_storage.py` | 55 | `from poc.k1_poc.config import get_config` |
+| `factory.py` | 44 | `from poc.k1_poc.config import get_config` |
+| `eviction.py` | 53 | `from poc.k1_poc.config import get_config` |
+| `guard.py` | 61 | `from poc.k1_poc.config import get_config` |
+| `local_cold.py` | 52 | `from poc.k1_poc.config import get_config` |
+| `migration.py` | 60 | `from poc.k1_poc.config import get_config` |
+| `reconstruction.py` | 47 | `from poc.k1_poc.config import get_config` |
+
+**8 files** import `poc.k1_poc.config.get_config` — all in adapter/service-layer code, never in port definitions.
+
+### 5-Port ABC Surface (from `k1/sessionstate/ports/` — identical in POC)
+
+| Port ABC | Methods | Supporting Types |
+|---|---|---|
+| `IStoragePort` | `is_available` (prop), `storage_type` (prop), `archive(section, data, metadata) → ArchiveResult`, `restore(section, filters) → RestoreResult`, `list_archives(session_id) → List[ArchiveEntry]`, `delete(archive_id) → bool` | `ArchiveResult`, `RestoreResult`, `ArchiveEntry` |
+| `IEventPort` | `is_connected` (prop), `emit(event_type, payload) → None`, `subscribe(event_type, handler) → str`, `unsubscribe(subscription_id) → bool`, `emit_batch(events) → None` (concrete default) | — |
+| `IWriterPort` | `writer_id` (prop), `request_mutation(MutationRequest) → MutationResponse`, `request_batch(BatchRequest) → BatchResult`, `authorize(writer_id) → WriterAuthorization`, `get_stats() → Dict`, `reset_stats() → None` | `MutationRequest`, `MutationResponse`, `BatchRequest`, `BatchResult`, `MutationPriority` (enum), `MutationStatus` (enum), `RejectionCategory` (enum), `WriterAuthorization` |
+| `ILifecyclePort` | `state` (prop), `config` (prop), `start(session_id) → StartResult`, `stop() → StopResult`, `checkpoint(trigger) → CheckpointResult`, `health_check() → HealthStatus`, `transition_to_error(error) → None` | `LifecycleState` (enum), `CheckpointTrigger` (enum), `RestoreSource` (enum), `PressureLevel` (enum), `LifecycleConfig`, `StartResult`, `StopResult`, `HealthStatus`, `CheckpointResult`, `InvalidStateError` |
+| `IK0SyncPort` | `is_available` (prop), `sync_to_k0(session_id) → SyncResult`, `restore_from_k0(session_id) → RestoreFromK0Result`, `get_sync_status(session_id) → SyncStatus`, `cancel_sync(session_id) → bool` | `SyncStatus` (enum), `SyncResult`, `RestoreFromK0Result`, `NullSyncPort` (concrete no-op) |
+
+### K1 External Consumers (Inversion — they do NOT import sessionstate)
+
+| Module | Port Used | Pattern |
+|---|---|---|
+| `k1/fabric/adapters/sessionstate_reader.py` | `ISessionStateReader` (Fabric's own port) | Wraps `manager: Any` — never imports `k1.sessionstate` |
+| `k1/planner/adapters/session_state_adapter.py` | `ISessionStateReader` (Fabric's port) | Same pattern — reads via Fabric's abstraction |
+| `k1/memory_writer/ports/session_read_port.py` | `ISessionReadPort` (own Protocol) | Defines `snapshot(sections)`, `read_section(name)` — explicitly documents "NEVER imports from k1.sessionstate" |
+
+**No K1 module imports `k1.sessionstate` directly.** All use their own adapter ports. This is correct hexagonal architecture.
+
+### Canonical Home Decision
+
+After M5, sessionstate lives at `k1/concierge/sessionstate/`. The existing `k1/sessionstate/` becomes a **re-export shim** (or is merged). K1 external consumers are unaffected because they never import from `k1.sessionstate` directly.
+
+**Decision**: **Option A — K1 becomes re-export shim** (preferred)
+- `k1/sessionstate/__init__.py` re-exports from `k1.concierge.sessionstate`
+- Existing `tests/k1/sessionstate/` tests (70+ files) keep working
+- Zero impact on K1 modules (they don't import k1.sessionstate anyway)
+- The POC (richer) copy becomes the canonical implementation
+
+### Existing Test Coverage
+
+| Test Suite | File Count | Location | Status |
+|---|---|---|---|
+| K1 sessionstate tests | 70+ files | `tests/k1/sessionstate/` | Tests K1 copy — will need to run against POC copy after merge |
+| POC session bundle test | 1 file | `tests/poc/test_m04_e43_session_bundle.py` | Tests POC-specific session bundling |
+| POC internal harness | 10 files | `poc/k1_poc/testing/harness/` | Creates sessions via `SessionStateFactory.create_for_testing()` |
 
 ### Epics
-<!-- TBD -->
 
-### Issues
-<!-- TBD -->
+#### E4.1 — Back-port POC Adapter Improvements to K1
+
+Copy POC adapter improvements back to `k1/sessionstate/adapters/` so both copies are in sync before M5.
+
+**E4.1.1** — Back-port `direct_writer.py` (+141 LoC)
+- Source: `poc/k1_poc/sessionstate/adapters/direct_writer.py`
+- Target: `k1/sessionstate/adapters/direct_writer.py`
+- Changes: Per-turn mutation audit (`_turn_stats`, `_empty_turn_stats()`, `_record_turn_mutation()`, `snapshot_turn_stats()`, `mutation_stats` property), LLM tool-writer section guard
+- NOTE: The `get_config()` import needs resolution (E4.3) — use `try/except` or parameter injection for now
+
+**E4.1.2** — Back-port `local_events.py` (+4 LoC)
+- Source: `poc/k1_poc/sessionstate/adapters/local_events.py`
+- Target: `k1/sessionstate/adapters/local_events.py`
+- Changes: `logger.info()` at init
+
+**E4.1.3** — Back-port `sqlite_storage.py` (+4 LoC)
+- Source: `poc/k1_poc/sessionstate/adapters/sqlite_storage.py`
+- Target: `k1/sessionstate/adapters/sqlite_storage.py`
+- Changes: Config-backed `default_db_path` and `sla_storage_ms`
+- NOTE: Same `get_config()` coupling issue — resolve in E4.3
+
+**E4.1.4** — Back-port `standalone_lifecycle.py` (logging upgrades)
+- Source: `poc/k1_poc/sessionstate/adapters/standalone_lifecycle.py`
+- Target: `k1/sessionstate/adapters/standalone_lifecycle.py`
+- Changes: `logger.debug` → `logger.info` with richer format strings
+
+**E4.1.5** — Back-port `factory.py` (+9 LoC)
+- Source: `poc/k1_poc/sessionstate/factory.py`
+- Target: `k1/sessionstate/factory.py`
+- Changes: Config-backed `default_db_path` and `checkpoint_interval_s`
+
+**E4.1.6** — Back-port `manager.py` (+11 LoC)
+- Source: `poc/k1_poc/sessionstate/manager.py`
+- Target: `k1/sessionstate/manager.py`
+- Changes: Logging only — `debug` → `info` with richer format strings
+
+---
+
+#### E4.2 — Fix POC `sqlite_storage.py` Bug
+
+**E4.2.1** — Fix duplicate `return` in `__repr__` (POC line ~598)
+- File: `poc/k1_poc/sessionstate/adapters/sqlite_storage.py`
+- Reported by audit: duplicate `return` statement in `__repr__` method
+- Fix in POC, then back-port to K1 copy
+
+---
+
+#### E4.3 — Resolve `poc.k1_poc.config` Coupling
+
+The 8 files that import `from poc.k1_poc.config import get_config` will break when moved to `k1/concierge/sessionstate/` in M5. Resolution strategy:
+
+**E4.3.1** — Introduce config parameter injection pattern
+- For `factory.py`, `sqlite_storage.py`, `direct_writer.py`: add optional config parameters to constructors/factory methods with fallback to `get_config()` when available
+- Pattern: `def __init__(self, ..., config: Any | None = None): self._config = config or _try_get_config()`
+- Helper: `def _try_get_config()` that wraps the import in `try/except ImportError: return _DEFAULT_CONFIG`
+- This lets the code work from EITHER `poc.k1_poc` or `k1.concierge` path
+
+**E4.3.2** — Apply same pattern to remaining 5 files
+- `eviction.py`, `guard.py`, `local_cold.py`, `migration.py`, `reconstruction.py`
+- All use `get_config()` for threshold values — inject via constructor or read from defaults
+
+**E4.3.3** — Update `SessionStateFactory.create_standalone()` and `create_for_testing()` to pass config explicitly
+- Factory already has `create_with_ports()` that takes injected ports — extend pattern to config
+- `create_standalone(session_id, config=None)` → passes config to adapters that need it
+
+---
+
+#### E4.4 — Resolve FlatBuffers Import Paths
+
+POC's generated FlatBuffers code uses `from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import ...` — K1 uses `from k1.sessionstate.generated.flatbuffers.K1.SessionState import ...`. These section files will break at M5.
+
+**E4.4.1** — Audit all section files for FlatBuffer import paths
+- Files: `poc/k1_poc/sessionstate/sections/` — 12+ section files
+- Each has 3-8 FlatBuffer imports with `poc.k1_poc.sessionstate.generated` prefix
+- These become `k1.concierge.sessionstate.generated` after M5
+- Decision: Let M5 handle mechanically (find-replace) OR add a re-export shim in `generated/__init__.py`
+
+---
+
+#### E4.5 — Verify Orchestrator-Level Abstractions
+
+POC has TWO layers of state abstraction: sessionstate ports (5 ABCs) + orchestrator ports (`IStateReadPort`, `IDeltaEmitPort`). Verify alignment.
+
+**E4.5.1** — Audit `IStateReadPort` → `SessionStateManager.get_section()` mapping
+- File: `poc/k1_poc/orchestrator/ports.py` L76 — `IStateReadPort(Protocol)`
+- This is the orchestrator's read-only view of session state
+- `SessionStateManager.get_section(name)` (L621 in `manager.py`) satisfies this
+- Verify structural compatibility — SessionStateManager must satisfy `IStateReadPort` without adapters
+
+**E4.5.2** — Audit `IDeltaEmitPort` → bus/delta wiring
+- File: `poc/k1_poc/orchestrator/ports.py` L110 — `IDeltaEmitPort(Protocol)`
+- Used by `_DeltaEmitAdapter` in `bootstrap.py` (wraps delta_aggregator + bus)
+- No direct sessionstate dependency — clean abstraction ✅
+
+---
+
+#### E4.6 — Contract Tests
+
+**E4.6.1** — Verify K1 sessionstate tests pass against POC copy
+- Run `tests/k1/sessionstate/test_all_ports.py` (35 tests covering all 5 port ABCs)
+- Run `tests/k1/sessionstate/test_factory.py` — factory wiring tests
+- Run `tests/k1/sessionstate/test_wiring_contract.py` — DI contract tests
+- These currently import from `k1.sessionstate` — they test the K1 copy
+- After E4.1 back-port, both copies should produce identical results
+
+**E4.6.2** — Add port-protocol compliance tests for POC path
+- File: `tests/poc/sessionstate/test_port_compliance.py` (new, ~40 tests)
+- `isinstance(adapter, IStoragePort)` for all storage adapters
+- `isinstance(adapter, IEventPort)` for LocalEventAdapter
+- `isinstance(adapter, IWriterPort)` for DirectWriterAdapter
+- `isinstance(adapter, ILifecyclePort)` for StandaloneLifecycle
+- Verify `SessionStateFactory.create_with_ports()` accepts all injected ports
+
+**E4.6.3** — Regression: POC session bundle test still green
+- Run `tests/poc/test_m04_e43_session_bundle.py`
+
+**E4.6.4** — Regression: full K1 sessionstate suite green (70+ files)
+- Run full `tests/k1/sessionstate/` — all tests must pass after back-port
+
+---
+
+#### E4.7 — Full Suite Green + Tag
+
+**E4.7.1** — Run full test suite (3,261 tests)
+- Back-port and config-decoupling changes must not break anything
+- POC tests import `poc.k1_poc.sessionstate` — must still work
+- K1 tests import `k1.sessionstate` — must still work
+
+**E4.7.2** — Git tag `m4-istorageport-audit-complete`
+
+### Structural Gap Analysis
+
+| Aspect | POC Current | K1 SessionState | Gap | Resolution |
+|---|---|---|---|---|
+| Port definitions | 5 ABCs, identical | 5 ABCs, identical | **NONE** ✅ | — |
+| Adapter implementations | Ahead by ~153 LoC | Behind | **BACK-PORT** needed | E4.1 |
+| Config coupling | `poc.k1_poc.config.get_config()` in 8 files | No config (hardcoded defaults) | **COUPLING** — will break at M5 | E4.3 |
+| FlatBuffer imports | `poc.k1_poc.sessionstate.generated.*` | `k1.sessionstate.generated.*` | **PATH** — mechanical M5 fix | E4.4 |
+| Factory DI | `create_with_ports()` accepts all 5 ABCs | Same | **NONE** ✅ | — |
+| Canonical home | `poc/k1_poc/sessionstate/` (active) | `k1/sessionstate/` (stale) | **DECISION** — POC copy is canonical | Option A: K1 becomes re-export shim |
+| External consumers | POC modules import POC path | K1 modules use own adapter ports | **NONE** — decoupled ✅ | — |
+| Test coverage | 1 POC-specific test + 10 harness files | 70+ K1 test files | **GOOD** — K1 tests cover port contracts thoroughly | E4.6 |
+| `sqlite_storage.py` bug | Duplicate `return` in `__repr__` | Not present | **BUG** — fix in POC + back-port | E4.2 |
+| Orchestrator ports | `IStateReadPort`, `IDeltaEmitPort` | N/A (concierge-specific) | **CLEAN** — separate layer ✅ | E4.5 verify only |
 
 ---
 
