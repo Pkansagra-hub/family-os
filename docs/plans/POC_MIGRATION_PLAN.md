@@ -372,6 +372,7 @@ Class: `ModelHubPOCBridge` implements `IModelHubPort`
 Constructor: `__init__(self, inner: GeminiConciergeAdapter | TestConciergeAdapter)`
 
 Translation methods (private):
+
 - `_hub_to_poc_request(hub_req: HubRequest) -> ConciergeModelRequest`:
   - `hub_req.capability` (CapabilityType) → `Capability` enum mapping
   - `hub_req.payload.messages` → `ConciergeModelRequest.messages` (Message → ModelMessage)
@@ -397,6 +398,7 @@ Translation methods (private):
   - `poc_resp.finish_reason` → `ResponseMetadata.finish_reason`
 
 Public methods (IModelHubPort):
+
 - `execute(HubRequest) -> HubResponse` — translate, call `inner.generate()`, translate back
 - `stream_execute(HubRequest) -> AsyncIterator[HubChunk]` — translate, call `inner.generate_stream()`, map `StreamChunk` → `HubChunk`
 - `discover_capabilities()` — hardcoded: CHAT, TOOL_CALL, STRUCTURED, REASON (POC Day 1 set)
@@ -409,6 +411,7 @@ Depends on: E1.1.1 (k1.model_hub.types), E1.2.1 (k1.model_hub.ports), existing `
 **Issue E1.4.2** — Create `poc/k1_poc/llm/test_model_hub_bridge.py` — TestModelHubBridge
 
 Same pattern as E1.4.1 but wraps `TestConciergeAdapter`:
+
 - `TestModelHubBridge(inner: TestConciergeAdapter)` implements `IModelHubPort`
 - Exposes `inner` for test configuration: `bridge.inner.set_response("front", "user_input", ...)`
 - Alternatively: add `set_response()` / `set_response_sequence()` pass-through methods
@@ -427,6 +430,7 @@ Depends on: E1.4.1, existing `test_adapter.py`
 This is the **only** file that constructs `ConciergeModelRequest` (line 340).
 
 Changes:
+
 - Import: replace `from poc.k1_poc.llm.ports import IConciergeModelPort` → `from k1.model_hub.ports import IModelHubPort`
 - Import: replace `from poc.k1_poc.llm.types import ConciergeModelRequest, ConciergeModelResponse, ...` → `from k1.model_hub.types import HubRequest, HubResponse, HubChunk, CapabilityType, RequestConstraints, ToolCallPayload, ChatPayload, ...`
 - `_streaming_generate()` signature: `model: IConciergeModelPort` → `model: IModelHubPort`
@@ -442,6 +446,7 @@ Touch points: EDIT `poc/k1_poc/react/loop.py` — imports (lines 25-35), `_strea
 **Issue E1.5.2** — Migrate `poc/k1_poc/actors/front.py`
 
 Changes:
+
 - Import: replace `from poc.k1_poc.llm.ports import IConciergeModelPort` → `from k1.model_hub.ports import IModelHubPort`
 - `front_handler()` signature (line 619): `model: IConciergeModelPort` → `model: IModelHubPort`
 - All internal calls already pass `model` to `react_loop()` which handles the actual LLM call — no request construction in this file
@@ -452,6 +457,7 @@ Touch point: EDIT `poc/k1_poc/actors/front.py` — import (line 46), signature (
 **Issue E1.5.3** — Migrate `poc/k1_poc/actors/back.py`
 
 Changes:
+
 - Import: replace `from poc.k1_poc.llm.ports import IConciergeModelPort` → `from k1.model_hub.ports import IModelHubPort`
 - 3 handler function signatures:
   - `back_handler()` (line 409): `model: IConciergeModelPort` → `model: IModelHubPort`
@@ -465,6 +471,7 @@ Touch point: EDIT `poc/k1_poc/actors/back.py` — import (line 55), signatures (
 **Issue E1.5.4** — Migrate `poc/k1_poc/kernel/bootstrap.py`
 
 Changes:
+
 - `_create_model()` (line 643): return type is now `IModelHubPort`
   - Test mode: `TestConciergeAdapter()` → `TestModelHubBridge(TestConciergeAdapter())`
   - Live mode: `GeminiConciergeAdapter(api_key=...)` → `ModelHubPOCBridge(GeminiConciergeAdapter(api_key=...))`
@@ -482,6 +489,7 @@ Touch point: EDIT `poc/k1_poc/kernel/bootstrap.py` — imports (top), `_create_m
 **Issue E1.6.1** — Update `poc/k1_poc/llm/validator.py` to accept HubResponse
 
 Two options (decide during implementation):
+
 - **Option A** (minimal diff): Add `_unwrap_hub_response(hr: HubResponse) -> ConciergeModelResponse` at the top of `validate()`. Internal validation logic stays unchanged. This is a thin shim.
 - **Option B** (clean): Change `validate()` to accept `HubResponse` directly. Update all field access (`response.text` → `response.result.text`, etc.).
 
@@ -498,6 +506,7 @@ Depends on: E1.1.1 (k1.model_hub.types), E1.5.1 (callers pass HubResponse)
 **Issue E1.7.1** — Create `tests/poc/test_model_hub_types.py`
 
 Tests for `k1/model_hub/types.py`:
+
 - All CapabilityType enum values match mmd table (15 capabilities)
 - HubRequest construction with each payload type
 - RequestConstraints defaults match mmd (timeout per priority tier)
@@ -510,6 +519,7 @@ Touch point: NEW file `tests/poc/test_model_hub_types.py` (~60 tests)
 **Issue E1.7.2** — Create `tests/poc/test_model_hub_ports.py`
 
 Tests for `k1/model_hub/ports.py`:
+
 - IModelHubPort is runtime_checkable
 - All 7 ports are Protocols with correct method signatures
 - TestProviderPlugin satisfies IProviderPlugin
@@ -519,6 +529,7 @@ Touch point: NEW file `tests/poc/test_model_hub_ports.py` (~20 tests)
 **Issue E1.7.3** — Create `tests/poc/test_model_hub_bridge.py`
 
 Tests for `poc/k1_poc/llm/model_hub_bridge.py`:
+
 - ModelHubPOCBridge satisfies IModelHubPort (isinstance check)
 - CHAT capability: HubRequest → ConciergeModelRequest → ConciergeModelResponse → HubResponse round-trip
 - TOOL_CALL capability: tools + tool_choice translate correctly
@@ -553,21 +564,277 @@ Touch point: NEW file `tests/poc/test_model_hub_bridge.py` (~40 tests)
 
 ---
 
-## M2 — Port: ICapabilityPort
+## M2 — ICapabilityPort (Bridge POC Tools → K1 Fabric)
 
-> Extract capability resolution boundary. Back's `invoke_capability()` calls port instead of flat dict lookup.
+> K1 Fabric is **FULLY IMPLEMENTED** — 183 Python files, all 6 ports, 9-step execution pipeline,
+> 6 provider types (MCP, WASM, Bridge, Agent, Workflow, Concierge), retrieval engine, circuit
+> breakers, output validation, policy engine, and test adapters. See `k1/fabric/fabric.mmd`.
+>
+> This milestone creates a bridge from the POC's 4 capability callbacks (`invoke_fn`,
+> `capability_fn`, `fabric_fn`, `workflow_fn`) to K1 Fabric's public API surface
+> (`CapabilityFabric.execute()`, `FabricRetrieval.discover_capabilities()`, Agent Factory,
+> Workflow Provider). After M5 (Big Copy), the bridge becomes a direct injection of the
+> real `Fabric` instance.
 
-**Boundary**: `poc/k1_poc/fabric/family_capabilities.py` → `CAPABILITY_HANDLERS` dict
-**Callers**: `tools/implementations.py` (`execute_invoke_capability`), `tools/dispatcher.py`
-**Port location**: `poc/k1_poc/fabric/ports/capability_port.py`
-**POC adapter**: `poc/k1_poc/fabric/adapters/dict_capability_adapter.py` (wraps existing dict)
-**K1 adapter** (M6): `k1/concierge/fabric/adapters/fabric_gateway_adapter.py`
+**K1 Fabric status**: Fully implemented. Key files: `k1/fabric/types.py` (~1600 lines, all types), `k1/fabric/fabric.py` (~1400 lines, CapabilityFabric + FabricRetrieval + Fabric container), `k1/fabric/factory.py` (20-step factory with 3 construction modes), `k1/fabric/ports/` (6 port Protocols), `k1/fabric/providers/` (7 providers), `k1/fabric/adapters/` (13 adapters)
+**POC fabric layer**: 4 files in `poc/k1_poc/fabric/` — `capability_registry.py` (discovery + invocation), `demo_capabilities.py` (7 mock), `family_capabilities.py` (31 mock), `web_capabilities.py` (2 live)
+**POC callers**: `ToolContext` in `tools/implementations.py` — 4 optional callbacks: `capability_fn`, `invoke_fn`, `fabric_fn`, `workflow_fn`
+**POC wiring**: `kernel/bootstrap.py` lines 827-842 (`_capability_discover`, `_capability_invoke`) + line 847 (`_FabricGatewayAdapter` for Orchestrator)
 
-### Epics
-<!-- TBD -->
+### Mapping: POC Fabric → K1 Fabric (K1 is production, POC must match it)
 
-### Issues
-<!-- TBD -->
+| POC Pattern | POC Location | K1 Fabric Equivalent | K1 Location |
+|---|---|---|---|
+| `CapabilityRegistry.invoke(name, params, session_id)` → dict | `poc/k1_poc/fabric/capability_registry.py` | `CapabilityFabric.execute(CapabilityRequest) -> CapabilityResult` | `k1/fabric/fabric.py` L309 |
+| `CapabilityRegistry.discover(intent, domain, constraints)` → dict | `poc/k1_poc/fabric/capability_registry.py` | `FabricRetrieval.discover_capabilities(domain, intent, safety_band, session_context, top_k) -> RetrievalResult` | `k1/fabric/fabric.py` L1110 |
+| Handler result dict `{success, data, artifact_type, duration_ms}` | POC mock handlers | `CapabilityResult` (frozen dataclass, 13 fields, factory methods) | `k1/fabric/types.py` L306 |
+| Capability definition dict `{name, description, required_inputs, ...}` | POC capability dicts | `CapabilityContract` (frozen dataclass, 24+ fields, lifecycle metadata) | `k1/fabric/types.py` |
+| POC `CapabilityRequest(name, params, session_id, trace_id)` — 4 fields | `poc/k1_poc/orchestrator/types.py` L123 | K1 `CapabilityRequest` — 16 fields: `request_id, capability_name, params, tier, wfq_priority, safety_band, timeout_ms, trace_id, session_id, plan_id, step_id, caller, caller_id, prompt_template, context_override, retry_count` | `k1/fabric/types.py` L118 |
+| POC `CapabilityResult(success, data, error, capability_name, duration_ms)` — 5 fields | `poc/k1_poc/orchestrator/types.py` L148 | K1 `CapabilityResult` — 13 fields: `request_id, trace_id, success, data, error: ErrorInfo, provider_id, duration_ms, retrieval_time_ms, resolution_time_ms, execution_time_ms` + factory methods | `k1/fabric/types.py` L306 |
+| `ToolContext.invoke_fn(name, params, session_id)` — untyped callable | `tools/implementations.py` L94 | Typed: `CapabilityFabric.execute(CapabilityRequest) -> CapabilityResult` | `k1/fabric/fabric.py` |
+| `ToolContext.capability_fn(intent, domain, constraints)` — untyped callable | `tools/implementations.py` L93 | Typed: `FabricRetrieval.discover_capabilities(...)  -> RetrievalResult` | `k1/fabric/fabric.py` |
+| `ToolContext.fabric_fn(agent_type, task, ...)` — untyped callable | `tools/implementations.py` L95 | `AgentProvider` via `CapabilityFabric.execute()` with `agent.*` capability name | `k1/fabric/providers/agent_provider.py` |
+| `ToolContext.workflow_fn(workflow_id, params, timeout)` — untyped callable | `tools/implementations.py` L96 | `WorkflowProvider` via `CapabilityFabric.execute()` with `workflow.*` capability name | `k1/fabric/providers/workflow_provider.py` |
+| `IFabricGatewayPort.execute/execute_batch` (Orchestrator port) | `poc/k1_poc/orchestrator/ports.py` L48 | Direct injection of `CapabilityFabric` or `Fabric` container (K1 Fabric IS the production gateway) | `k1/fabric/fabric.py` |
+| Fuzzy word-overlap discovery | POC `capability_registry.py` | FAISS semantic similarity (5-stage retrieval pipeline: EmbeddingIndex → HardFilter → SoftRanker → TopKSelector) | `k1/fabric/retrieval/` |
+
+### Key Structural Gap
+
+The POC conflates **discovery** and **execution** into one `CapabilityRegistry` class with `discover()` + `invoke()`. K1 separates them into two distinct APIs:
+- `FabricRetrieval` (Role 1 — discovery, ranking, read-only)
+- `CapabilityFabric` (Role 2 — 9-step execution pipeline with policy, circuit breaking, output validation)
+
+The POC also uses 4 separate untyped callbacks (`invoke_fn`, `capability_fn`, `fabric_fn`, `workflow_fn`) on `ToolContext`. In K1, ALL of these route through a single `CapabilityFabric.execute()` call — the capability name prefix (`tool.*`, `agent.*`, `workflow.*`) determines which provider handles it.
+
+### Epic E2.1 — Create IFabricPort Protocol for POC
+
+> Define a typed port protocol that the POC tools will call instead of untyped callbacks.
+> This port matches K1 Fabric's public API surface so the swap at M6 is trivial.
+
+**Issue E2.1.1** — Create `poc/k1_poc/fabric/ports.py` with `IFabricPort` Protocol
+
+Using K1 Fabric's actual `Fabric` class API (from `k1/fabric/fabric.py` L1257-1340) as the contract:
+
+```python
+@runtime_checkable
+class IFabricPort(Protocol):
+    async def execute(self, request: CapabilityRequest) -> CapabilityResult: ...
+    async def execute_batch(self, requests: list[CapabilityRequest], strategy: str = "PARALLEL") -> list[CapabilityResult]: ...
+    async def discover_capabilities(self, domain: list[str] | None = None, intent: str = "", safety_band: str = "GREEN", session_context: dict | None = None, top_k: int = 10) -> RetrievalResult: ...
+    async def find_relevant_prompts(self, intent: str = "", domain: list[str] | None = None, safety_band: str = "GREEN", top_k: int = 10) -> RetrievalResult: ...
+```
+
+Types used: Import `CapabilityRequest`, `CapabilityResult`, `RetrievalResult` from `k1.fabric.types`
+Note: This protocol intentionally uses K1 types — after M5 the real `Fabric` instance satisfies it natively.
+
+Touch point: NEW file `poc/k1_poc/fabric/ports.py` (~40 lines)
+Depends on: `k1/fabric/types.py` exists (it does — fully implemented)
+
+### Epic E2.2 — Create POC Fabric Bridge Adapter
+
+> Implements `IFabricPort` but internally delegates to the existing `CapabilityRegistry`.
+> Translates between K1 types and POC dict-based patterns. All 40 existing POC capabilities
+> remain accessible through the bridge.
+
+**Issue E2.2.1** — Create `poc/k1_poc/fabric/fabric_bridge.py` — FabricPOCBridge
+
+Class: `FabricPOCBridge` implements `IFabricPort`
+
+Constructor: `__init__(self, registry: CapabilityRegistry)`
+
+Translation methods (private):
+
+- `_to_k1_request(name: str, params: dict, session_id: str, trace_id: str) -> CapabilityRequest`:
+  - Maps POC flat args to K1 `CapabilityRequest` (16 fields)
+  - Sets defaults: `tier="MEDIUM"`, `wfq_priority="INTERACTIVE"`, `safety_band="GREEN"`, `timeout_ms=30000`, `caller="concierge"`, `caller_id="concierge.back"`
+  - Generates `request_id` via uuid4
+  - Passes `name` → `capability_name`, `params` → `params`, `session_id` → `session_id`, `trace_id` → `trace_id`
+
+- `_to_k1_result(poc_result: dict, request_id: str, trace_id: str, duration_ms: int) -> CapabilityResult`:
+  - `poc_result["success"]` → `CapabilityResult.success`
+  - `poc_result["data"]` or `poc_result` → `CapabilityResult.data`
+  - `poc_result.get("error", "")` → `CapabilityResult.error` (as `ErrorInfo` if present)
+  - `duration_ms` → `CapabilityResult.duration_ms` + `execution_time_ms`
+  - Uses `CapabilityResult.success_result()` / `.failure_result()` factory methods
+
+- `_to_k1_retrieval(poc_result: dict) -> RetrievalResult`:
+  - `poc_result["capabilities"]` list of dicts → `RetrievalResult` with `ScoredCapability` items
+  - POC capability dict `{name, description, domain, ...}` → `ScoredCapability` fields
+
+Public methods (IFabricPort):
+- `execute(CapabilityRequest) -> CapabilityResult`:
+  - Extract `capability_name` + `params` + `session_id` from request
+  - Call `registry.invoke(name, params, session_id)` (existing POC)
+  - Wrap result with `_to_k1_result()`
+- `execute_batch(requests, strategy) -> list[CapabilityResult]`:
+  - Sequential: `[await self.execute(r) for r in requests]` (POC doesn't support true parallel)
+- `discover_capabilities(domain, intent, safety_band, session_context, top_k) -> RetrievalResult`:
+  - Call `registry.discover(intent, domain, constraints)` (existing POC)
+  - Wrap result with `_to_k1_retrieval()`
+- `find_relevant_prompts(...)`:
+  - Returns empty `RetrievalResult` (POC has no prompt registry)
+
+Touch point: NEW file `poc/k1_poc/fabric/fabric_bridge.py` (~180 lines)
+Depends on: E2.1.1, existing `capability_registry.py`, `k1.fabric.types` (CapabilityRequest, CapabilityResult, RetrievalResult)
+
+### Epic E2.3 — Migrate ToolContext from Untyped Callbacks to IFabricPort
+
+> Replace the 4 untyped callbacks (`invoke_fn`, `capability_fn`, `fabric_fn`, `workflow_fn`)
+> on `ToolContext` with a single typed `fabric_port: IFabricPort`. All 4 tool functions
+> (`execute_invoke_capability`, `execute_discover_capabilities`, `execute_spawn_via_fabric`,
+> `execute_execute_workflow`) call the port instead of raw callbacks.
+
+**Issue E2.3.1** — Add `fabric_port: IFabricPort | None` to `ToolContext`
+
+Changes to `poc/k1_poc/tools/implementations.py`:
+- Import: add `from poc.k1_poc.fabric.ports import IFabricPort` and `from k1.fabric.types import CapabilityRequest, CapabilityResult`
+- `ToolContext` dataclass (line 55): add field `fabric_port: IFabricPort | None = None`
+- Keep `invoke_fn`, `capability_fn`, `fabric_fn`, `workflow_fn` for backward compatibility (deprecated, still checked as fallback)
+
+Touch point: EDIT `poc/k1_poc/tools/implementations.py` — import (top), `ToolContext` class (line 55, add 1 field)
+
+**Issue E2.3.2** — Migrate `execute_invoke_capability()` to use `fabric_port`
+
+Changes to `poc/k1_poc/tools/implementations.py` line 1099:
+- First check: `if ctx.fabric_port is not None:` → build `CapabilityRequest(capability_name=capability_name, params=params, session_id=session_id or "", trace_id=ctx.trace_id or "", caller="concierge", caller_id="concierge.back")` → `result = await ctx.fabric_port.execute(request)` → convert `CapabilityResult` to `ToolResult`
+- Fallback: existing `ctx.invoke_fn` path (for backward compat during transition)
+- HITL checks (L2 defense-in-depth) remain BEFORE the port call — no change to that block
+
+Touch point: EDIT `poc/k1_poc/tools/implementations.py` — `execute_invoke_capability()` (lines 1099-1220), add K1-type path before existing invoke_fn fallback
+
+**Issue E2.3.3** — Migrate `execute_discover_capabilities()` to use `fabric_port`
+
+Changes to `poc/k1_poc/tools/implementations.py` line 999:
+- First check: `if ctx.fabric_port is not None:` → `result = await ctx.fabric_port.discover_capabilities(intent=intent, domain=[domain] if domain else None, top_k=10)` → convert `RetrievalResult` to `ToolResult` dict with `{capabilities: [...], count: N}`
+- Fallback: existing `ctx.capability_fn` path
+- Cache logic stays — key remains `(intent, domain)`, value is `ToolResult`
+
+Touch point: EDIT `poc/k1_poc/tools/implementations.py` — `execute_discover_capabilities()` (lines 999-1097), add K1-type path
+
+**Issue E2.3.4** — Migrate `execute_spawn_via_fabric()` to use `fabric_port`
+
+Changes to `poc/k1_poc/tools/implementations.py` line 1321:
+- First check: `if ctx.fabric_port is not None:` → build `CapabilityRequest(capability_name=f"agent.{agent_type}", params={"task": task, "constraints": constraints, "capabilities_needed": capabilities_needed}, caller="concierge")` → `result = await ctx.fabric_port.execute(request)` → convert to `ToolResult`
+- Fallback: existing `ctx.fabric_fn` path
+
+Touch point: EDIT `poc/k1_poc/tools/implementations.py` — `execute_spawn_via_fabric()` (lines 1321-1365), add K1-type path
+
+**Issue E2.3.5** — Migrate `execute_execute_workflow()` to use `fabric_port`
+
+Changes to `poc/k1_poc/tools/implementations.py` line 1368:
+- First check: `if ctx.fabric_port is not None:` → build `CapabilityRequest(capability_name=f"workflow.{workflow_id}", params=params, timeout_ms=timeout_ms, caller="concierge")` → `result = await ctx.fabric_port.execute(request)` → convert to `ToolResult`
+- Fallback: existing `ctx.workflow_fn` path
+
+Touch point: EDIT `poc/k1_poc/tools/implementations.py` — `execute_execute_workflow()` (lines 1368-1410), add K1-type path
+
+### Epic E2.4 — Update Bootstrap Wiring
+
+> Replace the 4 lambda callbacks with a single `FabricPOCBridge` instance wired to `ToolContext.fabric_port`.
+
+**Issue E2.4.1** — Wire `FabricPOCBridge` into `kernel/bootstrap.py`
+
+Changes to `poc/k1_poc/kernel/bootstrap.py`:
+- Import: add `from poc.k1_poc.fabric.fabric_bridge import FabricPOCBridge`
+- After `capability_registry = _create_capability_registry()` (line 128):
+  - Add: `fabric_bridge = FabricPOCBridge(capability_registry)`
+- `ToolContext` construction (lines ~190-191 where capability_fn/invoke_fn are set):
+  - Add: `fabric_port=fabric_bridge`
+  - Keep `capability_fn` and `invoke_fn` for backward compat (tests that don't use bridge yet)
+- Remove: nothing yet (backward compat). Deprecation happens at M10.
+
+Touch point: EDIT `poc/k1_poc/kernel/bootstrap.py` — imports, line 128, ToolContext construction (~3 sites)
+
+**Issue E2.4.2** — Update `_FabricGatewayAdapter` (Orchestrator port) to use K1 types
+
+Changes to `poc/k1_poc/kernel/bootstrap.py` line 847:
+- `_FabricGatewayAdapter.__init__`: accept `FabricPOCBridge` instead of raw `CapabilityRegistry`
+- `execute()`: build K1 `CapabilityRequest` from POC `orchestrator.types.CapabilityRequest`, call `bridge.execute()`, convert K1 `CapabilityResult` back to POC `orchestrator.types.CapabilityResult`
+- `execute_batch()`: same pattern, sequential
+- ALTERNATIVE: Change `IFabricGatewayPort` (in `orchestrator/ports.py`) to use K1 types directly. This is cleaner but touches more test files — decide during implementation.
+
+Touch point: EDIT `poc/k1_poc/kernel/bootstrap.py` — `_FabricGatewayAdapter` class (lines 847-870)
+
+### Epic E2.5 — Migrate POC Orchestrator Types to K1 Fabric Types
+
+> The POC has its own `CapabilityRequest` and `CapabilityResult` in `orchestrator/types.py`.
+> After M2, all callers should use K1 `k1.fabric.types.CapabilityRequest/CapabilityResult`.
+> The POC-local types become thin aliases or are removed.
+
+**Issue E2.5.1** — Assess POC `orchestrator/types.py` usage and decide strategy
+
+Two options:
+- **Option A** (keep POC types, add translation layer): `_FabricGatewayAdapter` translates between POC Orchestrator types and K1 Fabric types. Tests keep using POC types. Minimal diff.
+- **Option B** (replace POC types with K1 types): Change `IFabricGatewayPort` and `OrchestratorStub` to import from `k1.fabric.types`. Larger diff but cleaner long-term.
+
+Recommended: **Option A** for M2 (translation in adapter, tests stay green). Option B deferred to M8 (Orchestrator Wiring).
+
+Touch point: DECISION doc only for M2; actual migration in M8
+Depends on: E2.4.2
+
+### Epic E2.6 — Unit Tests for Fabric Bridge + Port
+
+> Validate that the bridge correctly translates between POC dict patterns and K1 typed patterns,
+> and that all 40 existing capabilities are accessible through the new port.
+
+**Issue E2.6.1** — Create `tests/poc/test_fabric_port.py`
+
+Tests for `poc/k1_poc/fabric/ports.py`:
+- `IFabricPort` is `runtime_checkable`
+- `FabricPOCBridge` satisfies `IFabricPort` (isinstance check)
+- K1 `Fabric` class (if imported) would satisfy `IFabricPort` — validate signature match
+
+Touch point: NEW file `tests/poc/test_fabric_port.py` (~10 tests)
+
+**Issue E2.6.2** — Create `tests/poc/test_fabric_bridge.py`
+
+Tests for `poc/k1_poc/fabric/fabric_bridge.py`:
+- `execute()` with each of the 40 POC capabilities:
+  - Pass K1 `CapabilityRequest` → get K1 `CapabilityResult` back
+  - Verify `success`, `data`, `duration_ms` fields translate correctly
+  - Verify `error` → `ErrorInfo` mapping for failed capabilities
+  - Verify `request_id` and `trace_id` propagation
+- `discover_capabilities()`:
+  - Intent "send a message" returns messaging capabilities
+  - Domain filter works
+  - Result is `RetrievalResult` with `ScoredCapability` items
+  - Empty intent returns error
+- `execute_batch()` sequential execution
+- `find_relevant_prompts()` returns empty (POC has no prompt registry)
+- Factory method coverage: `CapabilityResult.success_result()`, `.failure_result()`
+
+Touch point: NEW file `tests/poc/test_fabric_bridge.py` (~50 tests)
+
+**Issue E2.6.3** — Create `tests/poc/test_tool_fabric_port_wiring.py`
+
+Tests for migrated tool implementations:
+- `execute_invoke_capability` with `fabric_port` set: builds correct `CapabilityRequest`, returns correct `ToolResult`
+- `execute_discover_capabilities` with `fabric_port` set: calls `discover_capabilities()`, returns correct `ToolResult`
+- `execute_spawn_via_fabric` with `fabric_port` set: builds `agent.*` capability name
+- `execute_execute_workflow` with `fabric_port` set: builds `workflow.*` capability name
+- Backward compat: when `fabric_port=None`, falls through to old `invoke_fn`/`capability_fn`
+- HITL blocking still works with `fabric_port` path
+
+Touch point: NEW file `tests/poc/test_tool_fabric_port_wiring.py` (~35 tests)
+
+### Epic E2.7 — Integration Tests: Full Suite Green
+
+> Final gate: all existing tests + new tests pass. Zero regressions from the capability port migration.
+
+**Issue E2.7.1** — Run full external test suite (3,054+ tests)
+
+- Command: `python -m pytest tests/poc/ --tb=short -q`
+- Gate: ALL pass. Focus areas: tool execution tests, orchestrator tests, capability tests
+- Any failure means E2.3/E2.4 translation broke something — fix before proceeding.
+
+**Issue E2.7.2** — Run full internal harness (207+ tests)
+
+- Command: `python -m pytest poc/k1_poc/testing/harness/ --tb=short -q`
+- Gate: ALL pass.
+
+**Issue E2.7.3** — Git tag `m2-icapabilityport-complete`
+
+- Tag commit after all tests green
+- Ensures we can diff M2 changes vs M1 baseline
 
 ---
 
