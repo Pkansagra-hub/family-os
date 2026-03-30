@@ -1314,48 +1314,283 @@ POC has TWO layers of state abstraction: sessionstate ports (5 ABCs) + orchestra
 
 ## M5 — The Big Copy
 
-> Single mechanical move: `poc/k1_poc/` → `k1/concierge/`. Fix imports. Verify all tests pass from new location.
+> Single mechanical move: `poc/k1_poc/` → `k1/concierge/`. Rewrite all import paths. Verify all tests pass from new location.
 
-**What copies** (the organs):
+**Source**: `poc/k1_poc/` — 277 .py files across 22 directories (+ 3 kernel/ files — decision below)
+**Target**: `k1/concierge/` — currently 5 empty `__init__.py` stubs + 4 .md docs + 1 .mmd diagram
+**Import rewrites**: 3,303 total (`poc.k1_poc` → `k1.concierge`) — 2,072 in source, 1,231 in tests
+**External consumers**: 0 (POC is fully self-contained — no files outside `poc/` and `tests/poc/` import it)
+**Test files**: 73 files in `tests/poc/` → move to `tests/k1/concierge/`
 
-- `fsm/` — 18 files, FSM controller + guard matrix + states
-- `react/` — ReAct loop engine + history
-- `prompt/` — DynamicPromptBuilder + 10 modes
-- `protocols/` — OPP (8 primitives), HITL, Weave, Suspension (18 files)
-- `sessionstate/` — manager + tiers + sections + ports + adapters
-- `actors/` — Front + Back handlers
-- `events/` — event type definitions
-- `delta/` — delta applicator + aggregation
-- `experience/` — 6 experience layer stubs
-- `identity/` — persona engine
-- `compression/` — episodic compression
-- `ledger/` — idempotency ledger
-- `obs/` — observability
-- `task/` — task model
-- `orchestrator/` — POC simple orchestrator (becomes LOW-tier path)
-- `llm/` — model port + POC adapter
-- `bus/` — bus port + POC adapter (or direct k1/bus/ import)
-- `fabric/` — capability port + POC adapter
-- `tools/` — dispatcher + schemas + implementations
-- `scheduler/` — proactive scheduler
-- `config/` — YAML configs (may merge with k1/config/)
+### What Copies (the organs) — 22 directories, 277 .py files
 
-**What stays behind** (not production):
+| Directory | .py Files | Description |
+|---|--:|---|
+| `sessionstate/` | 129 | Manager + tiers + sections + ports + adapters + 80 FlatBuffer generated files |
+| `protocols/` | 20 | OPP (8 primitives), HITL, Weave, Suspension |
+| `fsm/` | 19 | FSM controller + guard matrix + states + arbiter + task bridge |
+| `task/` | 12 | Task model + lifecycle + topics |
+| `events/` | 10 | Event type definitions + registry |
+| `prompt/` | 9 | DynamicPromptBuilder + 10 prompt modes |
+| `delta/` | 9 | Delta applicator + aggregation + bus adapter |
+| `experience/` | 8 | 6 experience layer stubs |
+| `actors/` | 7 | Front + Back handlers + shared utils |
+| `llm/` | 7 | Model port (M1) + POC adapter + test adapter + validator |
+| `tools/` | 7 | Dispatcher + schemas (front/back) + implementations |
+| `orchestrator/` | 7 | POC simple orchestrator (becomes LOW-tier path) |
+| `bus/` | 5 | Bus setup + builders + topics + deserialize (M3 port) |
+| `fabric/` | 5 | Capability port (M2) + POC bridge adapter |
+| `ledger/` | 5 | Idempotency ledger |
+| `obs/` | 4 | Observability |
+| `kernel/` | 3 | **COPIES** — bootstrap.py (wiring), runner.py (CLI), __init__.py |
+| `react/` | 3 | ReAct loop engine + history |
+| `config/` | 2 | defaults.yaml loader + __init__.py |
+| `compression/` | 2 | Episodic compression |
+| `identity/` | 2 | Persona engine |
+| `scheduler/` | 2 | Proactive scheduler |
 
-- `demo/` — test harness
-- `testing/` — test utilities
-- `main.py` — POC entrypoint
-- `concierge_poc_architecture.mmd` — moves to `k1/concierge/docs/` or `architecture_diagrams/`
+**Non-Python files that copy (24 files)**:
+- `config/defaults.yaml` — 59 tunable parameters
+- `sessionstate/alerts.yaml` — alert config
+- `sessionstate/sessionstate.mmd` + `sessionstate_internal.mmd` — architecture diagrams
+- `sessionstate/README.md` + `sessionstate/docs/` (8 .md files) — port documentation
+- `docs/` (11 .md files) — design docs, milestones, wiring plans → `k1/concierge/docs/`
 
-**What moves to tests**:
+### What Stays Behind (not production) — 33 .py files
 
-- All POC test files → `tests/k1/concierge/`
+| Item | .py Files | Reason |
+|---|--:|---|
+| `demo/` | 16 | Test harness, coordinator, web app — not production |
+| `testing/` | 16 | Test fixtures, harness engine — stays as POC test infra |
+| `main.py` | 1 | POC entrypoint — replaced by `k1/concierge/kernel/runner.py` |
+
+**Other files that stay**:
+- `concierge_poc_architecture.mmd` → copy to `k1/concierge/docs/` as historical reference
+- `demo/web/static/` (app.js, index.html, styles.css) — demo web UI
+
+### What Moves to Tests — 73 .py files
+
+All files in `tests/poc/` → `tests/k1/concierge/` with import path rewrite.
+
+### Target Directory Conflicts
+
+| Target path | Existing | Source | Resolution |
+|---|---|---|---|
+| `k1/concierge/__init__.py` | 0 bytes (empty) | No source file | Keep empty or add concierge package docstring |
+| `k1/concierge/tools/` | Empty `__init__.py` + `README.md` | POC `tools/` (7 .py) | **Overwrite** — POC tools/ replaces empty stub |
+| `k1/concierge/affective/` | Empty `__init__.py` | No POC counterpart | **Keep** — future K1 stub |
+| `k1/concierge/empathy/` | Empty `__init__.py` | No POC counterpart | **Keep** — future K1 stub |
+| `k1/concierge/rhythm/` | Empty `__init__.py` | No POC counterpart | **Keep** — future K1 stub |
+| `k1/concierge/README.md` | 8.6 KB | No source file | **Keep** — existing K1 doc |
+| `k1/concierge/concierge.md` | 605 KB | No source file | **Keep** — existing K1 design doc |
+| `k1/concierge/concierge.mmd` | 93 KB | No source file | **Keep** — existing K1 diagram |
+| `k1/concierge/concierge_fsm_flows.md` | 132 KB | No source file | **Keep** — existing K1 flows doc |
+
+### Import Path Rewrite Rules
+
+| Old pattern | New pattern | Scope |
+|---|---|---|
+| `from poc.k1_poc.` | `from k1.concierge.` | All source + test files |
+| `import poc.k1_poc.` | `import k1.concierge.` | All source + test files |
+| `poc.k1_poc.` (string refs in docstrings/comments) | `k1.concierge.` | Best-effort, non-blocking |
+
+**Special cases**:
+1. `from k1.bus.*` — **NO CHANGE** (already imports K1 bus directly)
+2. `from poc.k1_poc.config import get_config` — rewrites to `from k1.concierge.config import get_config` (M4 E4.3 already decoupled these)
+3. FlatBuffer paths: `from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState` → `from k1.concierge.sessionstate.generated.flatbuffers.K1.SessionState`
+4. `pyproject.toml` — no change needed (`packages = ["k0", "k1", "services"]` — `k1.concierge` is already under `k1`)
+5. Logger names: `poc.k1_poc.sessionstate` → `k1.concierge.sessionstate` (in `logging.py` defaults)
+6. CLI module paths: `python -m poc.k1_poc.sessionstate.cli` → `python -m k1.concierge.sessionstate.cli`
+
+### K1 SessionState Shim (from M4 decision)
+
+After the copy, `k1/sessionstate/` becomes a re-export shim pointing to `k1/concierge/sessionstate/`:
+- `k1/sessionstate/__init__.py` → `from k1.concierge.sessionstate import *`
+- 70+ K1 sessionstate tests continue importing `from k1.sessionstate` → resolved by shim
+- K1 external consumers (fabric, planner, memory_writer) are unaffected — they never import `k1.sessionstate`
 
 ### Epics
-<!-- TBD -->
 
-### Issues
-<!-- TBD -->
+#### E5.1 — Create Target Directory Structure
+
+Set up `k1/concierge/` subdirectories before the copy.
+
+**E5.1.1** — Create all 22 target subdirectories under `k1/concierge/`
+- Create: `actors/`, `bus/`, `compression/`, `config/`, `delta/`, `docs/`, `events/`, `experience/`, `fabric/`, `fsm/`, `identity/`, `kernel/`, `ledger/`, `llm/`, `obs/`, `orchestrator/`, `prompt/`, `protocols/`, `react/`, `scheduler/`, `sessionstate/`, `task/`
+- Nested dirs: `sessionstate/ports/`, `sessionstate/adapters/`, `sessionstate/sections/`, `sessionstate/tiers/`, `sessionstate/generated/`, `sessionstate/docs/`, `sessionstate/scripts/`, `tools/`, `protocols/opp/`, `protocols/hitl/`, etc.
+- Preserve existing stubs: `affective/`, `empathy/`, `rhythm/`
+- Preserve existing docs: `README.md`, `concierge.md`, `concierge.mmd`, `concierge_fsm_flows.md`
+
+**E5.1.2** — Create `tests/k1/concierge/` directory + `__init__.py` + `conftest.py`
+- Mirror test structure from `tests/poc/`
+
+---
+
+#### E5.2 — Mechanical File Copy
+
+Copy all 277+ .py files and 24 non-.py files from `poc/k1_poc/` → `k1/concierge/`.
+
+**E5.2.1** — Copy all 22 production directories
+- Use `git mv` or `cp` + `git add` for each directory
+- DECISION: **Use `cp -r` (copy), not `git mv`** — POC stays behind as reference + demo/ and testing/ still need it
+- Command per dir: `cp -r poc/k1_poc/<dir>/* k1/concierge/<dir>/`
+- Skip: `demo/`, `testing/`, `main.py`, `concierge_poc_architecture.mmd`
+- Special: `concierge_poc_architecture.mmd` → `k1/concierge/docs/concierge_poc_architecture.mmd`
+- Total: 277 .py + 24 non-.py = **301 files**
+
+**E5.2.2** — Copy test files
+- `tests/poc/*.py` (73 files) → `tests/k1/concierge/`
+- Copy `tests/poc/conftest.py` if exists
+
+**E5.2.3** — Verify file counts match
+- `find k1/concierge -name "*.py" | wc -l` should equal 277 + existing stubs (4)
+- `find tests/k1/concierge -name "*.py" | wc -l` should equal 73 + new init/conftest
+
+---
+
+#### E5.3 — Mass Import Path Rewrite
+
+Rewrite all 3,303 `poc.k1_poc` references to `k1.concierge`.
+
+**E5.3.1** — Rewrite source files (2,072 references across 277 files)
+- Use `sed` or Python script: `find k1/concierge -name "*.py" -exec sed -i 's/poc\.k1_poc/k1.concierge/g' {} +`
+- Verify: `grep -r "poc\.k1_poc" k1/concierge/ --include="*.py"` should return 0 results
+- **WARNING**: Do NOT use blind string replacement. The pattern `poc.k1_poc` could appear in:
+  - Import statements: `from poc.k1_poc.X import Y` → `from k1.concierge.X import Y` ✅
+  - Docstrings: `"""See poc.k1_poc.X"""` → `"""See k1.concierge.X"""` ✅
+  - Logger names: `"poc.k1_poc.sessionstate"` → `"k1.concierge.sessionstate"` ✅
+  - CLI module paths: `"poc.k1_poc.sessionstate.cli"` → `"k1.concierge.sessionstate.cli"` ✅
+- All replacements are safe — `poc.k1_poc` always means the module path
+
+**E5.3.2** — Rewrite test files (1,231 references across 73 files)
+- Same `sed` pattern on `tests/k1/concierge/`
+- Verify: `grep -r "poc\.k1_poc" tests/k1/concierge/ --include="*.py"` should return 0 results
+
+**E5.3.3** — Rewrite `k1/concierge/__init__.py`
+- Add concierge package docstring and version
+- Ensure any re-exports use `k1.concierge.*` paths
+
+**E5.3.4** — Update logger name defaults
+- File: `k1/concierge/sessionstate/logging.py` L227
+- `name: str = "poc.k1_poc.sessionstate"` → `name: str = "k1.concierge.sessionstate"`
+- Already handled by E5.3.1 sed, but verify explicitly
+
+---
+
+#### E5.4 — K1 SessionState Shim
+
+Make `k1/sessionstate/` a re-export facade pointing to `k1/concierge/sessionstate/`.
+
+**E5.4.1** — Replace `k1/sessionstate/__init__.py` with re-export shim
+- Content: `from k1.concierge.sessionstate import *; from k1.concierge.sessionstate import __all__`
+- This preserves all existing `from k1.sessionstate import X` imports in K1 tests (70+ files)
+
+**E5.4.2** — Replace `k1/sessionstate/ports/__init__.py` with re-export shim
+- Content: `from k1.concierge.sessionstate.ports import *`
+- K1 fabric/planner adapters that import `k1.sessionstate.ports.*` continue working
+
+**E5.4.3** — Replace `k1/sessionstate/factory.py` with re-export shim
+- Content: `from k1.concierge.sessionstate.factory import *`
+
+**E5.4.4** — Replace `k1/sessionstate/manager.py` with re-export shim
+- Content: `from k1.concierge.sessionstate.manager import *`
+
+**E5.4.5** — Replace remaining `k1/sessionstate/*.py` files with shims
+- All adapter, tier, section, and utility files → re-export from `k1.concierge.sessionstate.*`
+- Alternative: delete K1 copies entirely if grep confirms zero external imports (K1 modules use own ports, not k1.sessionstate — confirmed in M4)
+- DECISION: Shim approach is safer — keeps 70+ K1 tests green with zero changes
+
+---
+
+#### E5.5 — Fix Cross-Module Import Integrity
+
+After the copy, verify no broken cross-references.
+
+**E5.5.1** — Verify `k1.bus.*` imports still resolve
+- Files in `k1/concierge/bus/setup.py`, `actors/`, `fsm/controller.py` import `from k1.bus.*`
+- These should still work (k1.bus is a sibling package)
+- Run: `python -c "from k1.concierge.bus.setup import create_poc_bus"` — must not ImportError
+
+**E5.5.2** — Verify no circular imports
+- `k1.concierge.sessionstate` ← `k1.sessionstate` (shim)
+- `k1.concierge.bus.setup` → `k1.bus.factory` (cross-package, OK)
+- `k1.concierge.config` → standalone (no circular risk)
+- Run `python -c "import k1.concierge"` — must not raise
+
+**E5.5.3** — Verify FlatBuffer generated imports resolve
+- 80 generated files under `k1/concierge/sessionstate/generated/`
+- All use `from k1.concierge.sessionstate.generated.flatbuffers.K1.SessionState import ...` after rewrite
+- Run: `python -c "from k1.concierge.sessionstate.sections.control import ControlSection"` — must not ImportError
+
+**E5.5.4** — Verify `demo/` and `testing/` still work from `poc/k1_poc/`
+- `demo/coordinator.py` imports from `poc.k1_poc.*` — these still point to the original (un-moved) POC files
+- `testing/harness/engine.py` imports from `poc.k1_poc.*` — same
+- The original `poc/k1_poc/` source files are NOT deleted — demo/testing can still function
+- Alternative: update demo/testing to import from `k1.concierge.*` — **DEFERRED** (demo stays as-is for POC reference)
+
+---
+
+#### E5.6 — Test Migration
+
+Ensure all tests run from their new locations.
+
+**E5.6.1** — Run migrated test suite from `tests/k1/concierge/`
+- `pytest tests/k1/concierge/ -v` — all 73 files, ~3,054 tests
+- Every test must pass — import paths are the only change
+
+**E5.6.2** — Run K1 sessionstate tests via shim
+- `pytest tests/k1/sessionstate/ -v` — all 70+ files
+- Tests import `from k1.sessionstate.*` → shim resolves to `k1.concierge.sessionstate.*`
+- Must be 100% green
+
+**E5.6.3** — Run POC internal harness tests
+- `pytest poc/k1_poc/testing/harness/ -v` — 10 files, 207 tests
+- These import from `poc.k1_poc.*` (original path) — must still work since original files remain
+
+**E5.6.4** — Run full test suite (all ~3,261+ tests)
+- Everything green — migrated tests + K1 tests + original POC harness
+
+---
+
+#### E5.7 — Cleanup + Tag
+
+**E5.7.1** — Add `k1/concierge/` to any linting/CI configurations
+- Check `.github/workflows/` for test path patterns
+- Check `pyproject.toml` `[tool.pytest.ini_options]` testpaths (currently just `["tests"]` — already covers `tests/k1/concierge/`)
+- Check coverage config if applicable
+
+**E5.7.2** — Update `pyproject.toml` if needed
+- `packages = ["k0", "k1", "services"]` — already covers `k1.concierge` (it's under `k1`)
+- No change needed ✅
+
+**E5.7.3** — Git commit + tag `m5-big-copy-complete`
+- Single large commit: "feat: Copy POC concierge to k1/concierge — 301 files, 3,303 import rewrites"
+
+### Risk Register
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Import path rewrite misses edge case | Tests fail | E5.3 verification grep ensures zero `poc.k1_poc` remnants |
+| FlatBuffer generated code has hardcoded paths | ImportError in sections | E5.5.3 explicit verification |
+| K1 sessionstate shim introduces circular import | ImportError | E5.5.2 circular import check |
+| `demo/` breaks because underlying modules moved | Demo stops working | Original `poc/k1_poc/` files NOT deleted — demo still works |
+| Merge conflict with other branches | Git conflict | Run on clean `POC_Migration` branch, rebase before merge |
+| Large commit hard to review | Review fatigue | Mechanical-only changes (copy + sed) — no logic changes |
+
+### Summary Metrics
+
+| Metric | Count |
+|---|--:|
+| Directories to copy | 22 |
+| .py files to copy | 277 |
+| Non-.py files to copy | 24 |
+| Test files to move | 73 |
+| Import references to rewrite | 3,303 |
+| K1 sessionstate shim files | ~15 |
+| Target conflicts to resolve | 1 (tools/ — safe overwrite) |
+| External consumer breakage | 0 |
+| Expected test changes | 0 (import paths only) |
+| pyproject.toml changes | 0 |
 
 ---
 
