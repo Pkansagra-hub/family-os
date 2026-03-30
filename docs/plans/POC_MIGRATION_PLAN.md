@@ -2884,8 +2884,8 @@ Touch point: Conditional DELETE of 1-2 files in `k1/concierge/llm/`
 | `budget: Budget` (max_fabric_calls, max_planner_tokens, timeout_ms) | `timeout_ms: int` + `constraints: dict` | `budget.timeout_ms` → `timeout_ms`, budget fields → `constraints` |
 | `session_id: str` | `caller_id: str` | Repurpose (K1 uses caller_id for routing) |
 | `trace_id: str` | `trace_id: str` | Direct copy |
-| _(not in POC)_ | `capabilities: list[str]` | **NEW** — must be populated from intent/tool resolution |
-| _(not in POC)_ | `params: dict[str, dict]` | **NEW** — per-capability params |
+| *(not in POC)* | `capabilities: list[str]` | **NEW** — must be populated from intent/tool resolution |
+| *(not in POC)* | `params: dict[str, dict]` | **NEW** — per-capability params |
 
 ### What Gets Built vs Deferred
 
@@ -2956,6 +2956,7 @@ class IDispatchPort(Protocol):
 ```
 
 Types used:
+
 - `CapabilityRequest`, `CapabilityResult` from `k1.fabric.types`
 - `TaskEnvelope` from `k1.orchestrator.types`
 
@@ -3054,9 +3055,9 @@ Adapter wiring:
 | `delta` | `DeltaEmitAdapter(bus)` | K1 `k1/orchestrator/adapters/delta_emit_adapter.py` — emits via K1 bus |
 | `event` | `EventSubscriptionAdapter(bus)` | K1 `k1/orchestrator/adapters/event_subscription_adapter.py` — subscribes via K1 bus |
 | `state` | `StateReadAdapter(session_state)` | K1 `k1/orchestrator/adapters/state_read_adapter.py` — reads SessionState |
-| `planner` | _(test adapter from factory)_ | Mock — real Planner is M9 |
-| `bridge` | _(test adapter from factory)_ | Mock — real K0 Bridge deferred |
-| `storage` | _(test adapter from factory)_ | Mock — workflow storage deferred |
+| `planner` | *(test adapter from factory)* | Mock — real Planner is M9 |
+| `bridge` | *(test adapter from factory)* | Mock — real K0 Bridge deferred |
+| `storage` | *(test adapter from factory)* | Mock — workflow storage deferred |
 
 Implementation:
 
@@ -3106,6 +3107,7 @@ Key changes:
 - Replace `from poc.k1_poc.orchestrator.types import Budget, TaskEnvelope` → `from k1.orchestrator.types import TaskEnvelope`
 - Replace `from poc.k1_poc.task.complexity import ComplexityTier` → `from k1.concierge.task.complexity import ComplexityTier`
 - `_route_medium_sync()`: Build K1 `TaskEnvelope` instead of POC `TaskEnvelope`:
+
   ```python
   envelope = TaskEnvelope(
       intent=intent,
@@ -3119,6 +3121,7 @@ Key changes:
       timeout_ms=budget_timeout_ms,
   )
   ```
+
 - `_route_high_sync()`: Same K1 `TaskEnvelope` with `tier="HIGH"`, empty `capabilities` (Planner decides)
 - `_extract_capabilities(task: TaskDispatch) -> list[str]`: derive capability names from task intents/tools
   - If task has explicit tool names → use those as capabilities
@@ -3138,6 +3141,7 @@ Search for all imports of POC routing in `k1/concierge/`:
 - `from poc.k1_poc.orchestrator.routing import route_task_sync` → `from k1.concierge.dispatch.routing import route_task_sync`
 
 Callers to find and update:
+
 - FSM handlers in `k1/concierge/fsm/` that call `route_task()` or `route_task_sync()`
 - Front actor that may reference routing
 - Bootstrap if it references routing
@@ -3446,24 +3450,887 @@ Touch point: NEW tests in `tests/k1/concierge/test_medium_tier_e2e.py` or existi
 
 ---
 
-## M9 — K1 Planner Wiring (Future)
+## M9 — K1 Planner Wiring
 
-> HIGH tier tasks route through `k1/planner/` 4-stage pipeline before Orchestrator execution.
+> K1 Planner is **FULLY IMPLEMENTED** — 33 Python files, ~10,566 lines across 7 subdirectories.
+> Core service: `PlannerAgent` (733 lines) + `PipelineController` (1,301 lines), 4 stage services
+> (`SketchService` 1,132, `ExpandService` 1,357, `ValidateService` 1,063, `CommitService` 454),
+> `ToolCallRouter` (352 lines), `HILCoordinator` (482 lines), `PlanStateMachine` (11 states, 23 edges).
+> 7 hexagonal ports, 7 production adapters, 7 test adapters, 4 factory creation modes via `PlannerFactory`.
+> 40 test files, ~23,742 lines of existing test coverage.
+>
+> The POC has **ZERO planner code** — planning is purely a K1 concept. LOW/MEDIUM tasks go
+> directly to Fabric without planning; only HIGH tier routes through the Planner's 4-stage
+> pipeline: Sketch → Expand → Validate → Commit.
+>
+> M8 wired `MockPlannerAdapter` into `OrchestratorFactory.create_for_testing()` and deferred
+> real Planner to M9. M8 also built `FabricOrchestratorAdapter` with simplified tier degradation
+> (no real CB_PLANNER). This milestone **replaces `MockPlannerAdapter`** with real
+> `PlannerAdapter(planner.mailbox, cb_planner)`, creates the `PlannerAgent` via
+> `PlannerFactory.create_production()` with 7 real adapter ports, builds the Concierge-side
+> HIL Response Routing for Planner's human-in-the-loop events, upgrades CB_PLANNER to a real
+> `CircuitBreaker`, and verifies HIGH tier E2E: complex multi-step task → Planner 4-stage
+> → CommittedPlan → Orchestrator DAGExecutor → Fabric → AggregatedResult → DELIVERING.
 
-**Work**:
+**K1 Planner status**: FULLY IMPLEMENTED (33 .py, ~10,566 lines)
+**K1 Planner factory**: `PlannerFactory` — `create_standalone()`, `create_for_testing(overrides)`, `create_with_ports(**ports)`, `create_production(**ports)`
+**K1 Planner key types** (`k1/planner/types.py`, 807 lines): `RoughStep`, `SketchResult`, `ExpandedPlan`, `ValidationIssue`, `ValidationVerdict`, `StageContext`, `DeltaPayload`, `StagePhase` (SKETCH/EXPAND/VALIDATE/COMMIT), `ToolCallStatus`, `RequestConstraints`, `HubRequest`, `HubResponse`, `RecallResponse`, `TokenUsageRecord`, `HealthStatus` + 14 custom exceptions
+**K1 Planner shared types** (from `k1/orchestrator/types.py`): `PlanRequest`, `PlanAck`, `CommittedPlan`, `PlanStep` (14 fields), `MicroReplanRequest`, `StepResult` — Planner imports these, does NOT redefine them
+**K1 Planner 7 ports** (`k1/planner/ports/`): `IMailboxPort`, `ILLMPort`, `IFabricRetrievalPort`, `IStateReadPort`, `IBridgePort`, `IDeltaEmitPort`, `IEventPort`
+**K1 Planner 7+7 adapters** (`k1/planner/adapters/`): production (`MailboxAdapter`, `LLMGatewayAdapter`, `FabricRetrievalAdapter`, `SessionStateReadAdapter`, `BridgeAdapter`, `DeltaBusAdapter`, `EventBusAdapter`) + 7 test adapters
+**K1 Planner pipeline**: `PlannerAgent` → `PipelineController` → `SketchService` → `ExpandService` → `ValidateService` → `CommitService`
+**K1 Planner events** (`k1/planner/events.py`): Published: `k1.planner.plan.ready.v1`, `k1.planner.plan.failed.v1`, `k1.planner.plan.cancelled.v1`, `k1.planner.micro_replan.ready.v1`, `k1.planner.delta.v1`, `k1.hil.clarification.v1`, `k1.hil.approval_request.v1`; Subscribed: `k1.hil.clarification_response.v1`, `k1.hil.approval_response.v1`
+**Orchestrator contract** (`k1/orchestrator/adapters/planner_adapter.py`): `PlannerAdapter(planner_mailbox: IPlannerMailbox, cb_planner: CircuitBreaker)` — `request_plan()` CB gate → enqueue, `cancel_plan()` best-effort, `micro_replan()` synchronous 10s timeout
+**Connection point**: Orchestrator's `IPlannerMailbox` protocol (enqueue, send_cancel, micro_replan) is structurally identical to Planner's `IMailboxPort` — `planner.mailbox` property returns the `IMailboxPort` instance, which is passed as `planner_mailbox` to `PlannerAdapter`
+**Concierge .mmd ref**: CB_PLANNER (L607) — 45s timeout, 2/min, fallback: skip planning direct execution, owner: FabricOrchestratorAdapter; HIL_RESPONSE_ROUTING (L208-213) — HILResponseDetector checks PENDING_CLARIFICATIONS, routes user responses to Planner (clarification_response.v1, approval_response.v1)
+**Bootstrap ref** (`k1/kernel/kernel.md`): Phase 5 creates PlannerAgent, Phase 5b cross-wires `orchestrator._planner_port = PlannerAdapter(planner.mailbox, cb_planner)`
 
-- Planner 4-stage pipeline: Sketch → Expand → Validate → Commit
-- Planner discovery tools: `discover_capabilities()`, `recall_for_planning()`, `query_planning_context()`
-- CommittedPlan → Orchestrator → Fabric DAG execution
-- Verify HIGH tier E2E: complex multi-step task → plan → execute → deliver
+### Architecture: What M9 Builds
 
-**Note**: This milestone is future. Defer until M8 is stable.
+```text
+┌──────────────────────── k1/concierge/ ─────────────────────────┐
+│                                                                  │
+│  FabricOrchestratorAdapter (from M8, UPGRADED in M9)             │
+│   ├── CB_PLANNER — real CircuitBreaker(45s, 2/min)              │
+│   ├── HIGH: dispatch_envelope → Orchestrator mailbox             │
+│   │   └── Orchestrator.dispatch_high() → IPlannerPort            │
+│   └── tier degradation: CB_PLANNER OPEN → degrade HIGH→MED      │
+│                                                                  │
+│  HIL Response Routing (NEW in M9, per concierge.mmd L208-213)   │
+│   ├── subscribe k1.hil.clarification.v1 → user prompt            │
+│   ├── subscribe k1.hil.approval_request.v1 → user approval       │
+│   ├── PENDING_CLARIFICATIONS[request_id] = {originator, ...}    │
+│   ├── HILResponseDetector: user input → match request_id         │
+│   │   → emit k1.hil.clarification_response.v1 (to Planner)      │
+│   │   → emit k1.hil.approval_response.v1 (to Planner)           │
+│   └── clear PENDING_CLARIFICATIONS entry after response          │
+│                                                                  │
+└────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────── k1/orchestrator/ ────────────────────────┐
+│                                                                   │
+│  OrchestratorService.dispatch_high(envelope)                      │
+│   → PlannerAdapter.request_plan(PlanRequest) — CB gate            │
+│   → Planner mailbox enqueue (fire-and-forget)                     │
+│   → PlanAck(ACCEPTED) returned immediately                        │
+│                                                                   │
+│  EventSubscriptionAdapter subscriptions:                          │
+│   → k1.planner.plan.ready.v1: receive CommittedPlan              │
+│     → DAGExecutor.execute_plan(committed_plan) → Fabric steps    │
+│   → k1.planner.plan.failed.v1: mark task FAILED, emit to bus     │
+│   → k1.planner.plan.cancelled.v1: mark task CANCELLED            │
+│                                                                   │
+│  Mid-DAG micro-replan:                                            │
+│   → PlannerAdapter.micro_replan(MicroReplanRequest) — 10s sync   │
+│   → Planner returns updated CommittedPlan or None (timeout)       │
+│                                                                   │
+└──────────────────│────────────────────────────────────────────────┘
+                   │ (in-process, shared IMailboxPort)
+                   ▼
+┌──────────────────────── k1/planner/ ─────────────────────────────┐
+│                                                                   │
+│  PlannerAgent._run_loop()                                         │
+│   → mailbox.dequeue() → PlanRequest                               │
+│   → PipelineController.execute(request)                           │
+│       │                                                           │
+│       ├── SKETCH (SketchService, agentic, ~3-8s, ≤2048 tok)     │
+│       │   ├── LLM receives 4 tool definitions                    │
+│       │   │   (discover_capabilities, query_session_context,      │
+│       │   │    recall_long_term_memory, find_prompts)             │
+│       │   ├── ToolCallRouter routes tool calls → 3 backend ports │
+│       │   ├── HILCoordinator → clarification if ambiguous         │
+│       │   └── Output: SketchResult(rough_steps, candidates)       │
+│       │                                                           │
+│       ├── EXPAND (ExpandService, agentic, ~2-5s, ≤1024 tok)     │
+│       │   ├── LLM with tool-use + post-LLM deterministic enrich  │
+│       │   ├── 6 infrastructure fields from CapabilityContract     │
+│       │   └── Output: ExpandedPlan(steps: PlanStep[14-field])     │
+│       │                                                           │
+│       ├── VALIDATE (ValidateService, non-agentic, ~1-3s, ≤500t) │
+│       │   ├── Phase 1: deterministic (DAG cycle, capability, …)  │
+│       │   ├── Phase 2: LLM arbiter (coherence, safety, …)        │
+│       │   ├── Revise loop → back to EXPAND (max 1 loop)          │
+│       │   ├── HILCoordinator → approval if high-risk              │
+│       │   └── Output: ValidationVerdict(approved|revise|reject)   │
+│       │                                                           │
+│       └── COMMIT (CommitService, deterministic, <100ms, 0 tok)   │
+│           ├── ZERO LLM calls (PLAN-03: structural enforcement)   │
+│           ├── 11-step assembly: plan_id, steps, deps, WAL, event │
+│           └── Output: CommittedPlan → k1.planner.plan.ready.v1   │
+│                                                                   │
+│  PlannerAgent.micro_replan(MicroReplanRequest)                    │
+│   → micro_sketch → micro_expand → micro_validate → commit        │
+│   → CommittedPlan returned synchronously (≤10s)                  │
+│                                                                   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### What Gets Built vs What Exists
+
+| Component | M9 Scope | Notes |
+|---|---|---|
+| PlannerAgent + pipeline (33 .py) | ✅ EXISTS | Zero new service code needed |
+| PlannerFactory (4 modes) | ✅ EXISTS | Use `create_production()` or `create_for_testing()` |
+| 7 Planner ports | ✅ EXISTS | All `@runtime_checkable Protocol` |
+| 7 production adapters | ✅ EXISTS | MailboxAdapter, LLMGatewayAdapter, FabricRetrievalAdapter, SessionStateReadAdapter, BridgeAdapter, DeltaBusAdapter, EventBusAdapter |
+| 7 test adapters | ✅ EXISTS | TestMailboxAdapter, TestLLMAdapter, TestFabricRetrievalAdapter, TestStateReadAdapter, TestBridgeAdapter, TestDeltaAdapter, TestEventAdapter |
+| PlannerAdapter (Orchestrator side) | ✅ EXISTS | `k1/orchestrator/adapters/planner_adapter.py` (199 lines) |
+| Planner wiring helper | ✅ BUILD | `k1/concierge/dispatch/planner_wiring.py` — PlannerFactory wrapper for Concierge |
+| Cross-wire PlannerAdapter | ✅ WIRE | Replace MockPlannerAdapter with `PlannerAdapter(planner.mailbox, cb_planner)` |
+| CB_PLANNER creation | ✅ BUILD | `CircuitBreaker("CB_PLANNER", failure_threshold=2, reset_timeout_s=45)` |
+| FabricOrchestratorAdapter CB_PLANNER upgrade | ✅ UPGRADE | Add real CB_PLANNER health check for tier degradation |
+| HIL Response Routing | ✅ BUILD | HILResponseDetector + PENDING_CLARIFICATIONS + event subscriptions/emissions |
+| HIL event subscriptions | ✅ WIRE | Subscribe `k1.hil.clarification.v1` + `k1.hil.approval_request.v1` |
+| HIL response emissions | ✅ WIRE | Emit `k1.hil.clarification_response.v1` + `k1.hil.approval_response.v1` |
+| Planner lifecycle (start/stop) | ✅ WIRE | `asyncio.create_task(planner.start())` + `planner.stop()` at shutdown |
+| Bootstrap Phase 5 integration | ✅ REWRITE | Add Planner creation + cross-wire to `bootstrap.py` |
+| HIGH tier E2E verification | ✅ TEST | Complex task → Planner → CommittedPlan → DAG → Fabric → deliver |
+| Planner 40 test files (23,742 lines) | ✅ EXISTS | Already built — just verify they pass |
+| Workflow subsystem activation | ❌ DEFER | Needs real WorkflowStoragePort (separate milestone) |
+| Real LLMGatewayAdapter for Planner | ⚠️ PHASE 2 | Phase 1 uses TestLLMAdapter; Phase 2 uses real Model Hub (post-M7 stable) |
+| Real BridgeAdapter for Planner | ⚠️ PHASE 2 | Phase 1 uses TestBridgeAdapter; Phase 2 uses real K0 Bridge |
+
+### Key Invariants Verified (from planner.mmd + kernel.md)
+
+| ID | Invariant | How M9 Satisfies |
+|---|---|---|
+| PLAN-01 | Planner NEVER writes SessionState | `IStateReadPort` is read-only — no write methods structurally |
+| PLAN-03 | CommitService makes ZERO LLM calls | `CommitService` constructor has NO `ILLMPort` parameter — enforced structurally |
+| PLAN-05 | Tool call budget ≤ config.max_tool_calls_per_plan | `ToolCallRouter` enforces budget; `BudgetExhaustedError` on exceed |
+| PLAN-10 | Max 2 HIL clarification rounds per plan | `HILCoordinator` enforces; `HILBudgetExceededError` on exceed |
+| ORCH-11 | HIGH requires CommittedPlan | `dispatch_high()` calls `IPlannerPort.request_plan()` — now real PlannerAdapter |
+| PROTOCOL-3 | micro_replan synchronous 10s timeout | `PlannerAdapter.micro_replan()` uses `asyncio.wait_for(…, timeout=10.0)` |
+| INV-04 | Orchestrator/Planner/Agents NEVER write SessionState | Both Orchestrator and Planner have read-only state ports — verified in M8 and M9 |
 
 ### Epics
-<!-- TBD -->
 
-### Issues
-<!-- TBD -->
+#### E9.1 — Create PlannerAgent via PlannerFactory (Phase 5 Wiring)
+
+> Per `k1/kernel/kernel.md` Phase 5: create `PlannerAgent` via `PlannerFactory.create_production()`
+> with 7 real infrastructure adapter ports wired to existing Bus, Fabric, and SessionState instances.
+> The PlannerFactory validates all ports via `@runtime_checkable isinstance` checks and runs the
+> 10-step wiring sequence (ToolCallRouter → HILCoordinator → 4 stages → PipelineController → PlannerAgent).
+
+**Issue E9.1.1** — Create `k1/concierge/dispatch/planner_wiring.py` — planner factory helper
+
+Helper function that creates and configures the `PlannerAgent` with appropriate adapters:
+
+```python
+from k1.planner.factory import PlannerFactory
+from k1.planner.config import PlannerConfig
+from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
+from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter as PlannerStateAdapter
+from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter as PlannerDeltaAdapter
+from k1.planner.adapters.event_bus_adapter import EventBusAdapter as PlannerEventAdapter
+from k1.planner.adapters.mailbox_adapter import MailboxAdapter as PlannerMailboxAdapter
+# Phase 1 stubs (replaced in Phase 2 when Model Hub and Bridge are stable):
+from tests.k1.planner.adapters import TestLLMAdapter, TestBridgeAdapter
+
+async def create_concierge_planner(
+    *,
+    fabric: Any,           # real K1 Fabric (from M6)
+    fabric_bus: Any,       # FabricBusAdapter (from Phase 3)
+    state_reader: Any,     # SessionStateReaderAdapter (from Phase 3)
+    config: dict | None = None,
+) -> PlannerAgent:
+    """Create PlannerAgent wired for Concierge use.
+
+    Returns the agent instance. Caller must:
+    1. Call ``planner.mailbox`` to extract IMailboxPort for cross-wiring
+    2. Spawn ``asyncio.create_task(planner.start())`` to begin dequeue loop
+    """
+    planner_config = PlannerConfig() if config is None else PlannerConfig.from_dict(config)
+
+    planner = await PlannerFactory.create_production(
+        llm_port=TestLLMAdapter(),                            # Phase 1 stub
+        fabric_port=FabricRetrievalAdapter(fabric),           # wraps Fabric facade from M6
+        state_port=PlannerStateAdapter(state_reader),         # wraps SessionStateReaderAdapter
+        bridge_port=TestBridgeAdapter(),                      # Phase 1 stub
+        delta_port=PlannerDeltaAdapter(fabric_bus),           # wraps FabricBusAdapter delta bus
+        event_port=PlannerEventAdapter(fabric_bus),           # wraps FabricBusAdapter event port
+        mailbox_port=PlannerMailboxAdapter(
+            max_depth=planner_config.mailbox_max_depth,
+        ),
+        config=planner_config,
+    )
+    return planner
+```
+
+Adapter wiring:
+
+| Port Slot | Adapter | Source | Status |
+|---|---|---|---|
+| `llm_port` | `TestLLMAdapter()` | `tests.k1.planner.adapters` | Phase 1 stub — Phase 2: `LLMGatewayAdapter(model_hub)` |
+| `fabric_port` | `FabricRetrievalAdapter(fabric)` | `k1.planner.adapters.fabric_retrieval_adapter` | Real — wraps M6 Fabric |
+| `state_port` | `SessionStateReadAdapter(state_reader)` | `k1.planner.adapters.session_state_adapter` | Real — wraps SessionStateReaderAdapter |
+| `bridge_port` | `TestBridgeAdapter()` | `tests.k1.planner.adapters` | Phase 1 stub — Phase 2: `BridgeAdapter(bridge_client)` |
+| `delta_port` | `DeltaBusAdapter(fabric_bus)` | `k1.planner.adapters.delta_bus_adapter` | Real — wraps FabricBusAdapter |
+| `event_port` | `EventBusAdapter(fabric_bus)` | `k1.planner.adapters.event_bus_adapter` | Real — wraps FabricBusAdapter |
+| `mailbox_port` | `MailboxAdapter(max_depth=5)` | `k1.planner.adapters.mailbox_adapter` | Real — standalone FIFO queue |
+
+Touch point: NEW file `k1/concierge/dispatch/planner_wiring.py` (~80 lines)
+Depends on: K1 Planner factory + adapters (all existing), M6 (Fabric), M3 (bus)
+
+---
+
+#### E9.2 — Cross-wire Orchestrator.IPlannerPort (Phase 5b)
+
+> Per `k1/kernel/kernel.md` Phase 5b: extract Planner's `IMailboxPort` via `planner.mailbox` property,
+> create a real `CircuitBreaker("CB_PLANNER")`, construct `PlannerAdapter(planner.mailbox, cb_planner)`,
+> and hot-swap `orchestrator._planner_port` from `MockPlannerAdapter` to real `PlannerAdapter`.
+>
+> M8 (E8.2.1) created `create_concierge_orchestrator()` which left the `planner` port key using the
+> factory's built-in test adapter (MockPlannerAdapter). M9 replaces this with the real PlannerAdapter
+> after the PlannerAgent is created in E9.1.
+
+**Issue E9.2.1** — Create CB_PLANNER CircuitBreaker instance
+
+Per concierge.mmd L607 and kernel.md L326-330:
+
+```python
+from k1.fabric.circuit_breaker.breaker import CircuitBreaker
+
+cb_planner = CircuitBreaker(
+    "CB_PLANNER",
+    failure_threshold=2,          # 2 failures per window → OPEN
+    reset_timeout_s=45.0,         # 45s OPEN window before HALF-OPEN probe
+)
+```
+
+Configuration source: `OrchestratorConfig.cb_planner_failure_threshold` (default 2), `OrchestratorConfig.cb_planner_reset_timeout_ms` (default 45000).
+
+Touch point: NEW code in `k1/concierge/dispatch/planner_wiring.py` or `k1/concierge/dispatch/orchestrator_wiring.py` (~10 lines)
+Depends on: `k1.fabric.circuit_breaker.breaker.CircuitBreaker` (existing)
+
+**Issue E9.2.2** — Build `PlannerAdapter` and hot-swap into Orchestrator
+
+Per kernel.md Phase 5b:
+
+```python
+from k1.orchestrator.adapters.planner_adapter import PlannerAdapter
+
+planner_mailbox = planner.mailbox    # PlannerAgent.mailbox property → IMailboxPort
+planner_adapter = PlannerAdapter(planner_mailbox, cb_planner)
+orchestrator._planner_port = planner_adapter  # hot-swap MockPlannerAdapter → real
+```
+
+The `IPlannerMailbox` protocol (defined in `planner_adapter.py` L59-73) requires:
+- `enqueue(request: PlanRequest) -> None`
+- `send_cancel(request_id: str) -> None`
+- `micro_replan(request: MicroReplanRequest) -> CommittedPlan`
+
+Planner's `IMailboxPort` (from `k1/planner/ports/mailbox_port.py`) provides all three plus `dequeue()` and `drain()`. Since `IPlannerMailbox` is a structural protocol, `IMailboxPort` satisfies it via duck typing — no adapter needed.
+
+Verification: `isinstance(planner.mailbox, IPlannerMailbox)` must pass (or at minimum structural match since IPlannerMailbox is not `@runtime_checkable` — verify at test time by calling all 3 methods).
+
+Touch point: EDIT `k1/concierge/dispatch/orchestrator_wiring.py` (from M8) — add cross-wire function (~30 lines)
+Depends on: E9.1.1 (planner created), E9.2.1 (CB_PLANNER created), M8 E8.2.1 (orchestrator created)
+
+**Issue E9.2.3** — Update `create_concierge_orchestrator()` to accept optional planner override
+
+M8's `create_concierge_orchestrator()` in `k1/concierge/dispatch/orchestrator_wiring.py` uses `MockPlannerAdapter` by default. Add an optional `planner_adapter` parameter so M9 can pass the real `PlannerAdapter`:
+
+```python
+async def create_concierge_orchestrator(
+    *,
+    fabric: Fabric,
+    bus: Any,
+    session_state: Any,
+    planner_adapter: Any = None,   # NEW: pass real PlannerAdapter from E9.2.2
+    config: dict | None = None,
+) -> tuple[OrchestratorService, IMailboxPort]:
+```
+
+If `planner_adapter` is provided, use it as the `planner` override in `OrchestratorFactory.create_for_testing(overrides={..., "planner": planner_adapter})`. If not provided, factory uses built-in MockPlannerAdapter (backward-compatible with M8 tests).
+
+Touch point: EDIT `k1/concierge/dispatch/orchestrator_wiring.py` — add parameter + conditional override (~15 lines changed)
+Depends on: M8 E8.2.1 (existing function)
+
+---
+
+#### E9.3 — Upgrade FabricOrchestratorAdapter CB_PLANNER
+
+> M8 (E8.1.2) built `FabricOrchestratorAdapter` with simplified tier degradation (no real CB_PLANNER).
+> Per concierge.mmd L285 and L607, `FabricOrchestratorAdapter` OWNS `CB_PLANNER` and uses it for
+> tier degradation: when CB_PLANNER is OPEN, HIGH tier degrades to MEDIUM (skip planning, direct execution).
+>
+> M9 adds the real CB_PLANNER reference and health check to `FabricOrchestratorAdapter`.
+
+**Issue E9.3.1** — Add CB_PLANNER to FabricOrchestratorAdapter constructor
+
+M8's `FabricOrchestratorAdapter.__init__` takes `(fabric, orchestrator_mailbox)`. Add `cb_planner`:
+
+```python
+class FabricOrchestratorAdapter:
+    def __init__(
+        self,
+        fabric: Fabric,
+        orchestrator_mailbox: IMailboxPort,
+        cb_planner: CircuitBreaker | None = None,  # NEW: optional for backward compat
+    ):
+        self._fabric = fabric
+        self._orchestrator_mailbox = orchestrator_mailbox
+        self._cb_planner = cb_planner
+```
+
+`cb_planner=None` keeps M8 tests backward-compatible (simplified degradation when no CB).
+
+Touch point: EDIT `k1/concierge/dispatch/fabric_orchestrator_adapter.py` — constructor + field (~5 lines)
+Depends on: E9.2.1 (CB_PLANNER instance)
+
+**Issue E9.3.2** — Implement CB_PLANNER tier degradation in `dispatch_envelope()`
+
+In `FabricOrchestratorAdapter.dispatch_envelope()`, before enqueuing HIGH tier envelopes:
+
+```python
+async def dispatch_envelope(self, envelope: TaskEnvelope) -> None:
+    if envelope.tier == "HIGH" and self._cb_planner is not None:
+        if self._cb_planner.state == CircuitBreakerState.OPEN:
+            logger.warning(
+                "CB_PLANNER OPEN — degrading HIGH→MEDIUM for envelope=%s",
+                envelope.envelope_id,
+            )
+            # Degrade: rewrite tier to MEDIUM, strip Planner-dependent fields
+            envelope = TaskEnvelope(
+                intent=envelope.intent,
+                trace_id=envelope.trace_id,
+                caller_id=envelope.caller_id,
+                envelope_id=envelope.envelope_id,
+                context=envelope.context,
+                tier="MEDIUM",                    # DEGRADED
+                capabilities=envelope.capabilities,
+                params=envelope.params,
+                timeout_ms=envelope.timeout_ms,
+            )
+    # ... existing enqueue to orchestrator mailbox
+```
+
+This matches concierge.mmd L607: "CB: Planner → Fallback: skip planning, direct execution" and the tier degradation cascade "HIGH→MED→LOW→canned".
+
+Touch point: EDIT `k1/concierge/dispatch/fabric_orchestrator_adapter.py` — `dispatch_envelope()` method (~20 lines added)
+Depends on: E9.3.1
+
+---
+
+#### E9.4 — Build HIL Response Routing (Concierge → Planner)
+
+> Per concierge.mmd L208-213: the Concierge has an `HIL_RESPONSE_ROUTING` subgraph.
+> When Planner's `HILCoordinator` emits `k1.hil.clarification.v1` or `k1.hil.approval_request.v1`,
+> the Concierge receives these events, stores them in `PENDING_CLARIFICATIONS`, presents the
+> question/approval to the user, and when the user responds, the `HILResponseDetector` matches
+> the `request_id` in `PENDING_CLARIFICATIONS` and emits the corresponding response event back
+> to Planner (`k1.hil.clarification_response.v1` or `k1.hil.approval_response.v1`).
+>
+> The POC has NO HIL for Planner — this is new Concierge-side code.
+
+**Issue E9.4.1** — Create `k1/concierge/hil/__init__.py` + `types.py` — HIL types
+
+Per concierge.mmd L248 (`PENDING_CLARIFICATIONS`) and L209 (`HILResponseDetector`):
+
+```python
+@dataclass(frozen=True)
+class PendingHILRequest:
+    """Active HIL request stored in PENDING_CLARIFICATIONS."""
+    request_id: str               # correlation key from Planner's HIL event
+    originator: str               # "planner" | "orchestrator" | "agent:{agent_id}"
+    event_type: str               # "clarification" | "approval" | "fallback"
+    question: str                 # question/prompt text for user
+    context: dict                 # additional context from originator
+    trace_id: str                 # tracing correlation
+    created_at_ms: int            # timestamp for timeout tracking
+```
+
+Touch point: NEW file `k1/concierge/hil/__init__.py` (empty) + NEW file `k1/concierge/hil/types.py` (~40 lines)
+
+**Issue E9.4.2** — Create `k1/concierge/hil/pending_store.py` — PENDING_CLARIFICATIONS store
+
+In-memory store for active HIL requests, keyed by `request_id`:
+
+```python
+class PendingClarificationStore:
+    """In-memory store for active HIL requests (concierge.mmd L248).
+
+    PENDING_CLARIFICATIONS: Active HIL requests from Planner, Orchestrator, Sub-agents.
+    Keyed by request_id. Cleared on user response or timeout (5min default).
+    """
+    def __init__(self, timeout_ms: int = 300_000):
+        self._store: dict[str, PendingHILRequest] = {}
+        self._timeout_ms = timeout_ms
+
+    def add(self, request: PendingHILRequest) -> None: ...
+    def match(self, request_id: str) -> PendingHILRequest | None: ...
+    def has_active(self) -> bool: ...
+    def remove(self, request_id: str) -> bool: ...
+    def get_active_for_user(self) -> list[PendingHILRequest]: ...
+    def expire_stale(self, now_ms: int) -> list[PendingHILRequest]: ...
+```
+
+Touch point: NEW file `k1/concierge/hil/pending_store.py` (~80 lines)
+Depends on: E9.4.1
+
+**Issue E9.4.3** — Create `k1/concierge/hil/hil_response_detector.py` — HILResponseDetector
+
+Per concierge.mmd L209: checks `PENDING_CLARIFICATIONS` for active HIL request when user input arrives during active HIL. If matched, routes as HIL response (NOT new turn).
+
+```python
+class HILResponseDetector:
+    """Detects if user input is a response to an active HIL request.
+
+    Per concierge.mmd L209: checks PENDING_CLARIFICATIONS for active HIL.
+    If active: route as HIL response, NOT new turn.
+    Correlation: request_id from HIL request.
+    """
+    def __init__(
+        self,
+        pending_store: PendingClarificationStore,
+        event_port: Any,   # bus/event emission
+    ):
+        self._store = pending_store
+        self._event = event_port
+
+    async def check_and_route(
+        self, user_input: str, trace_id: str,
+    ) -> PendingHILRequest | None:
+        """Check if user_input is a response to active HIL.
+
+        Returns the matched PendingHILRequest if routed as HIL response,
+        or None if this is a normal new turn.
+        """
+        active = self._store.get_active_for_user()
+        if not active:
+            return None
+        # Match first active request (FIFO — oldest pending)
+        pending = active[0]
+        # Emit appropriate response event based on originator + event_type
+        if pending.originator == "planner" and pending.event_type == "clarification":
+            await self._event.emit("k1.hil.clarification_response.v1", {
+                "request_id": pending.request_id,
+                "user_response": user_input,
+                "trace_id": trace_id,
+            })
+        elif pending.originator == "planner" and pending.event_type == "approval":
+            await self._event.emit("k1.hil.approval_response.v1", {
+                "request_id": pending.request_id,
+                "response_type": "approved",  # or "rejected" based on user input parsing
+                "modifications": {},
+                "trace_id": trace_id,
+            })
+        # Clear matched entry (concierge.mmd L880)
+        self._store.remove(pending.request_id)
+        return pending
+```
+
+Touch point: NEW file `k1/concierge/hil/hil_response_detector.py` (~100 lines)
+Depends on: E9.4.2
+
+**Issue E9.4.4** — Create `k1/concierge/hil/hil_event_handler.py` — subscribe to Planner HIL events
+
+Subscribe to `k1.hil.clarification.v1` and `k1.hil.approval_request.v1` on the K1 bus. On receipt, store in `PENDING_CLARIFICATIONS` and present to user via output port:
+
+```python
+class HILEventHandler:
+    """Handles inbound HIL events from Planner and Orchestrator.
+
+    Subscribes to:
+    - k1.hil.clarification.v1 (from Planner HILCoordinator)
+    - k1.hil.approval_request.v1 (from Planner HILCoordinator)
+
+    On receipt: stores in PendingClarificationStore, presents to user via IOutputPort.
+    """
+    def __init__(
+        self,
+        pending_store: PendingClarificationStore,
+        event_port: Any,   # for subscriptions
+        output_port: Any,  # for presenting to user
+    ): ...
+
+    async def setup_subscriptions(self) -> None:
+        """Subscribe to HIL event topics."""
+        await self._event.subscribe(
+            "k1.hil.clarification.v1", self._on_clarification
+        )
+        await self._event.subscribe(
+            "k1.hil.approval_request.v1", self._on_approval_request
+        )
+
+    async def _on_clarification(self, payload: dict) -> None:
+        """Handle clarification request from Planner's HILCoordinator."""
+        pending = PendingHILRequest(
+            request_id=payload["request_id"],
+            originator="planner",
+            event_type="clarification",
+            question=payload["question"],
+            context=payload.get("context", {}),
+            trace_id=payload.get("trace_id", ""),
+            created_at_ms=_now_ms(),
+        )
+        self._store.add(pending)
+        await self._output.send_to_user(pending.question, message_type="hil_clarification")
+
+    async def _on_approval_request(self, payload: dict) -> None:
+        """Handle approval request from Planner's HILCoordinator."""
+        pending = PendingHILRequest(
+            request_id=payload["request_id"],
+            originator="planner",
+            event_type="approval",
+            question=payload.get("question", "Approve this plan?"),
+            context=payload.get("context", {}),
+            trace_id=payload.get("trace_id", ""),
+            created_at_ms=_now_ms(),
+        )
+        self._store.add(pending)
+        await self._output.send_to_user(pending.question, message_type="hil_approval")
+
+    async def teardown_subscriptions(self) -> None:
+        """Unsubscribe all HIL event subscriptions at shutdown."""
+        ...
+```
+
+Touch point: NEW file `k1/concierge/hil/hil_event_handler.py` (~120 lines)
+Depends on: E9.4.1, E9.4.2, M3 (bus), existing IOutputPort
+
+---
+
+#### E9.5 — Wire Planner Lifecycle (start/stop/shutdown)
+
+> `PlannerAgent.start()` enters an infinite dequeue loop. The kernel must spawn it as a background
+> `asyncio.Task` and cancel/stop it during shutdown. Per kernel.md Phase 5 and Shutdown Sequence.
+
+**Issue E9.5.1** — Spawn planner background task in bootstrap
+
+After creating PlannerAgent (E9.1.1), spawn its dequeue loop:
+
+```python
+planner_task = asyncio.create_task(planner.start())
+```
+
+Store the task in `KernelRuntime` for shutdown reference:
+
+```python
+@dataclass
+class KernelRuntime:
+    ...
+    planner: Any = None          # PlannerAgent instance
+    planner_task: Any = None     # asyncio.Task for planner.start()
+```
+
+Touch point: EDIT `k1/concierge/kernel/bootstrap.py` — add planner_task field to KernelRuntime + spawn task (~5 lines)
+Depends on: E9.1.1, M8 E8.4.1 (bootstrap)
+
+**Issue E9.5.2** — Wire planner shutdown sequence
+
+Per kernel.md Shutdown Sequence:
+
+1. `planner.stop()` — sets `_running=False`, drains mailbox (emits `plan.cancelled` for each), cancels in-flight plan (grace period), unsubscribes 4 events, logs `shutdown.complete`
+2. `planner_task.cancel()` — cancel the background asyncio task
+
+Add to existing shutdown handler in bootstrap:
+
+```python
+async def shutdown(runtime: KernelRuntime) -> None:
+    ...  # existing M8 shutdown
+    if runtime.planner is not None:
+        await runtime.planner.stop()
+    if runtime.planner_task is not None:
+        runtime.planner_task.cancel()
+        try:
+            await runtime.planner_task
+        except asyncio.CancelledError:
+            pass
+```
+
+Touch point: EDIT `k1/concierge/kernel/bootstrap.py` — shutdown section (~10 lines added)
+Depends on: E9.5.1
+
+---
+
+#### E9.6 — Bootstrap Integration (Concierge Kernel Phase 5)
+
+> Tie together E9.1-E9.5 in the Concierge bootstrap: create PlannerAgent, cross-wire
+> PlannerAdapter, create CB_PLANNER, upgrade FabricOrchestratorAdapter, set up HIL routing,
+> spawn planner background task.
+
+**Issue E9.6.1** — Add Planner section to `k1/concierge/kernel/bootstrap.py`
+
+After the existing Orchestrator section (from M8 E8.4.1), add Planner section:
+
+```python
+# === Phase 5: Planner ===
+if cfg.enable_planner:
+    from k1.concierge.dispatch.planner_wiring import create_concierge_planner
+    from k1.orchestrator.adapters.planner_adapter import PlannerAdapter
+    from k1.fabric.circuit_breaker.breaker import CircuitBreaker
+
+    # 5a. Create PlannerAgent
+    planner = await create_concierge_planner(
+        fabric=fabric,
+        fabric_bus=fabric_bus,
+        state_reader=state_reader,
+        config=cfg.planner_overrides,
+    )
+    runtime.planner = planner
+
+    # 5b. Cross-wire Orchestrator.IPlannerPort
+    cb_planner = CircuitBreaker(
+        "CB_PLANNER",
+        failure_threshold=2,
+        reset_timeout_s=45.0,
+    )
+    planner_adapter = PlannerAdapter(planner.mailbox, cb_planner)
+    runtime.orchestrator._planner_port = planner_adapter
+
+    # 5c. Upgrade FabricOrchestratorAdapter with CB_PLANNER
+    runtime.dispatch_port._cb_planner = cb_planner
+
+    # 5d. Spawn planner dequeue loop
+    runtime.planner_task = asyncio.create_task(planner.start())
+```
+
+Touch point: EDIT `k1/concierge/kernel/bootstrap.py` — add Phase 5 section after Orchestrator (~30 lines)
+Depends on: E9.1.1, E9.2.1, E9.2.2, E9.3.1, E9.5.1
+
+**Issue E9.6.2** — Wire HIL event handler in bootstrap
+
+After planner is created and bus is available:
+
+```python
+# === Phase 5e: HIL Response Routing ===
+if cfg.enable_planner:
+    from k1.concierge.hil.pending_store import PendingClarificationStore
+    from k1.concierge.hil.hil_event_handler import HILEventHandler
+    from k1.concierge.hil.hil_response_detector import HILResponseDetector
+
+    pending_store = PendingClarificationStore(timeout_ms=300_000)
+    hil_handler = HILEventHandler(
+        pending_store=pending_store,
+        event_port=fabric_bus,      # FabricBusAdapter from Phase 3
+        output_port=runtime.output_port,
+    )
+    await hil_handler.setup_subscriptions()
+
+    runtime.hil_detector = HILResponseDetector(
+        pending_store=pending_store,
+        event_port=fabric_bus,
+    )
+    runtime.hil_handler = hil_handler
+    runtime.pending_clarification_store = pending_store
+```
+
+Touch point: EDIT `k1/concierge/kernel/bootstrap.py` — add HIL section after Planner (~20 lines)
+Depends on: E9.4.1, E9.4.2, E9.4.3, E9.4.4, E9.6.1
+
+**Issue E9.6.3** — Wire HILResponseDetector into FSM ACKING state
+
+Per concierge.mmd L868: during ACKING, if there's an active HIL request, user input is routed as HIL response (not new turn).
+
+In the FSM ACKING handler (or front actor), before classification:
+
+```python
+# Check if user input is a response to active HIL
+if runtime.hil_detector is not None:
+    hil_match = await runtime.hil_detector.check_and_route(
+        user_input=user_message,
+        trace_id=trace_id,
+    )
+    if hil_match is not None:
+        # This was a HIL response, not a new turn
+        logger.info("HIL response routed: request_id=%s", hil_match.request_id)
+        return  # skip normal ACKING → DISPATCHING flow
+```
+
+Touch point: EDIT 1-2 files in `k1/concierge/fsm/` or `k1/concierge/actors/` — add HIL check before classification (~10 lines)
+Depends on: E9.6.2, E9.4.3
+
+**Issue E9.6.4** — Add `enable_planner` to Concierge config
+
+Add configuration flag to control Planner wiring (default `False` for safe rollout):
+
+- `enable_planner: bool = False` — when True, Phase 5 creates real PlannerAgent
+- `planner_overrides: dict = {}` — passed to `PlannerConfig.from_dict()` for custom config
+
+Touch point: EDIT config class in `k1/concierge/config/` (~5 lines added)
+Depends on: None (config change)
+
+---
+
+#### E9.7 — Unit Tests
+
+**Issue E9.7.1** — Create `tests/k1/concierge/test_planner_wiring.py`
+
+Tests for `create_concierge_planner()`:
+
+- Returns `PlannerAgent` instance
+- `PlannerAgent.mailbox` returns `IMailboxPort` satisfying structural protocol
+- Planner has 7 ports wired (fabric_port is real FabricRetrievalAdapter, not test)
+- `PlannerAgent.mailbox.enqueue(PlanRequest)` succeeds without error
+- Config overrides are applied (e.g., custom `mailbox_max_depth`)
+
+Touch point: NEW file `tests/k1/concierge/test_planner_wiring.py` (~15 tests)
+
+**Issue E9.7.2** — Create `tests/k1/concierge/test_planner_crosswire.py`
+
+Tests for Phase 5b cross-wiring:
+
+- `PlannerAdapter(planner.mailbox, cb_planner)` constructs successfully
+- `planner_adapter.request_plan(PlanRequest)` enqueues to Planner's mailbox
+- `planner_adapter.cancel_plan(request_id)` calls mailbox.send_cancel
+- `planner_adapter.micro_replan(MicroReplanRequest)` returns CommittedPlan or None on timeout
+- CB_PLANNER OPEN → `request_plan()` raises AdapterException(DEGRADED)
+- CB_PLANNER CLOSED → `request_plan()` returns PlanAck(ACCEPTED)
+- Hot-swap `orchestrator._planner_port = planner_adapter` replaces MockPlannerAdapter
+
+Touch point: NEW file `tests/k1/concierge/test_planner_crosswire.py` (~20 tests)
+
+**Issue E9.7.3** — Create `tests/k1/concierge/test_cb_planner_degradation.py`
+
+Tests for FabricOrchestratorAdapter CB_PLANNER tier degradation:
+
+- HIGH tier envelope + CB_PLANNER CLOSED → dispatches as HIGH (no degradation)
+- HIGH tier envelope + CB_PLANNER OPEN → degrades to MEDIUM
+- MEDIUM tier envelope + CB_PLANNER OPEN → no change (MEDIUM unaffected)
+- LOW tier + CB_PLANNER OPEN → no change (LOW uses dispatch_direct)
+- CB_PLANNER=None (M8 backward compat) → no degradation check
+- After CB_PLANNER trips → subsequent HIGH calls degrade
+- CB_PLANNER reset → HIGH calls go through normally
+
+Touch point: NEW file `tests/k1/concierge/test_cb_planner_degradation.py` (~15 tests)
+
+**Issue E9.7.4** — Create `tests/k1/concierge/test_hil_pending_store.py`
+
+Tests for `PendingClarificationStore`:
+
+- `add()` stores request, `match(request_id)` retrieves it
+- `has_active()` returns True when store non-empty
+- `remove(request_id)` clears entry, returns True
+- `remove()` returns False for unknown request_id
+- `get_active_for_user()` returns all active requests sorted by created_at_ms
+- `expire_stale()` removes entries older than timeout_ms
+- Concurrent add/remove is safe
+
+Touch point: NEW file `tests/k1/concierge/test_hil_pending_store.py` (~15 tests)
+
+**Issue E9.7.5** — Create `tests/k1/concierge/test_hil_response_detector.py`
+
+Tests for `HILResponseDetector`:
+
+- No active HIL → `check_and_route()` returns None (normal turn)
+- Active clarification → user input → emits `k1.hil.clarification_response.v1` with correct payload
+- Active approval → user input → emits `k1.hil.approval_response.v1` with correct payload
+- After routing → pending entry is removed from store
+- Multiple active → routes to oldest (FIFO)
+- Expired pending → not matched
+
+Touch point: NEW file `tests/k1/concierge/test_hil_response_detector.py` (~15 tests)
+
+**Issue E9.7.6** — Create `tests/k1/concierge/test_hil_event_handler.py`
+
+Tests for `HILEventHandler`:
+
+- `setup_subscriptions()` subscribes to 2 topics
+- `_on_clarification()` stores PendingHILRequest with originator="planner", event_type="clarification"
+- `_on_clarification()` sends question to user via output_port
+- `_on_approval_request()` stores PendingHILRequest with originator="planner", event_type="approval"
+- `_on_approval_request()` sends approval prompt to user via output_port
+- `teardown_subscriptions()` unsubscribes all handles
+
+Touch point: NEW file `tests/k1/concierge/test_hil_event_handler.py` (~15 tests)
+
+---
+
+#### E9.8 — Integration Tests + HIGH Tier E2E Verification
+
+**Issue E9.8.1** — HIGH tier E2E smoke test
+
+Create `tests/k1/concierge/test_high_tier_e2e.py`:
+
+Full path test with in-memory components (all test adapters for external deps):
+
+1. Create `Fabric` via `FabricFactory.create_for_testing()` with 3+ test capabilities registered
+2. Create `PlannerAgent` via `create_concierge_planner(fabric, fabric_bus, state_reader)`
+3. Create `OrchestratorService` via `create_concierge_orchestrator(fabric, bus, session_state, planner_adapter=real_planner_adapter)`
+4. Create `FabricOrchestratorAdapter(fabric, orch_mailbox, cb_planner=real_cb)`
+5. Create `CB_PLANNER` CircuitBreaker
+6. Cross-wire: `PlannerAdapter(planner.mailbox, cb_planner)` → `orchestrator._planner_port`
+7. Spawn `asyncio.create_task(planner.start())`
+8. Build a HIGH tier `TaskEnvelope` via `route_task_sync()` with `tier="HIGH"`
+9. Call `adapter.dispatch_envelope(envelope)`
+10. Wait for events on bus:
+    - `k1.planner.plan.ready.v1` → CommittedPlan delivered to Orchestrator
+    - `k1.orchestration.dag.completed.v1` → AggregatedResult from Orchestrator
+11. Verify `AggregatedResult.success == True`
+12. Verify plan went through all 4 stages (check delta events for SKETCH/EXPAND/VALIDATE/COMMIT)
+13. Verify `CommittedPlan.steps` maps to `AggregatedResult.step_results`
+
+Note: Uses `TestLLMAdapter` (scripted LLM responses) — real LLM integration is Phase 2.
+
+Touch point: NEW file `tests/k1/concierge/test_high_tier_e2e.py` (~30 tests)
+
+**Issue E9.8.2** — CB_PLANNER degradation E2E test
+
+Test the full degradation cascade:
+
+1. Setup: same as E9.8.1 but with CB_PLANNER configured with `failure_threshold=1`
+2. Trip CB_PLANNER by failing a plan request (e.g., mailbox full)
+3. Send HIGH tier task → verify it degrades to MEDIUM (no planning)
+4. Wait for `k1.orchestration.dag.completed.v1` → verify MEDIUM-path execution (no CommittedPlan)
+5. Reset CB_PLANNER → send another HIGH tier → verify it goes through Planner normally
+
+Touch point: NEW tests in `tests/k1/concierge/test_high_tier_e2e.py` (~10 tests)
+
+**Issue E9.8.3** — HIL round-trip integration test
+
+Test the full HIL flow:
+
+1. Setup: create Planner with `TestLLMAdapter` that triggers clarification (sets `needs_clarification=true`)
+2. Send HIGH tier task → Planner enters SKETCH stage
+3. Planner emits `k1.hil.clarification.v1` → HILEventHandler receives it
+4. Verify `PendingClarificationStore.has_active() == True`
+5. Simulate user response → `HILResponseDetector.check_and_route(user_input)`
+6. Verify `k1.hil.clarification_response.v1` emitted to bus
+7. Planner's HILCoordinator receives response → SKETCH continues
+8. Pipeline completes → `k1.planner.plan.ready.v1` → CommittedPlan
+
+Touch point: NEW file `tests/k1/concierge/test_hil_integration.py` (~15 tests)
+
+**Issue E9.8.4** — MEDIUM tier regression (unchanged path)
+
+Verify MEDIUM tier still works after M9 wiring changes (no regression from M8):
+
+- MEDIUM tier envelope → Orchestrator dispatches via MEDIUM path (no Planner)
+- `FabricOrchestratorAdapter.dispatch_envelope(medium_envelope)` → mailbox enqueue
+- `OrchestratorService.dispatch_medium()` → ConstraintResolver → StepRunner → Fabric → AggregatedResult
+- Bus event `k1.orchestration.dag.completed.v1` → DeltaAggregator → DELIVERING
+
+Touch point: NEW tests in existing `tests/k1/concierge/test_medium_tier_e2e.py` (from M8) or separate file (~5 tests)
+
+**Issue E9.8.5** — Run full Planner + Orchestrator + Concierge test suites
+
+- Command: `python -m pytest tests/k1/planner/ tests/k1/orchestrator/ tests/k1/concierge/ --tb=short -q`
+- Gate: ALL tests pass (existing Planner 23,742 lines + Orchestrator + new Concierge tests)
+- Focus: existing planner tests still green, new cross-wire tests green, M8 tests unbroken
+
+**Issue E9.8.6** — Git tag `m9-planner-wired`
+
+- Tag commit after all tests green
+- Gate metrics:
+
+| Metric | Value |
+|---|---|
+| New Concierge files | 7 (`planner_wiring.py`, `hil/__init__.py`, `hil/types.py`, `hil/pending_store.py`, `hil/hil_response_detector.py`, `hil/hil_event_handler.py`) |
+| Edited Concierge files | 3 (`orchestrator_wiring.py`, `fabric_orchestrator_adapter.py`, `bootstrap.py`) |
+| New test files | 8 |
+| New tests | ~140 |
+| K1 Planner services built | 0 (all 33 .py already exist) |
+| K1 Planner tests verified | 40 files, ~23,742 lines (existing, must all pass) |
+| MockPlannerAdapter replaced | Yes — real `PlannerAdapter(planner.mailbox, cb_planner)` |
+| PlannerFactory mode used | `create_production()` with 7 real adapter ports |
+| CB_PLANNER created | Yes — `CircuitBreaker("CB_PLANNER", failure_threshold=2, reset_timeout_s=45)` |
+| FabricOrchestratorAdapter upgraded | Yes — CB_PLANNER tier degradation (HIGH→MED when OPEN) |
+| HIL Response Routing built | Yes — HILEventHandler, HILResponseDetector, PendingClarificationStore |
+| Planner lifecycle wired | Yes — `asyncio.create_task(planner.start())` + `planner.stop()` |
+| HIGH tier E2E verified | Yes — task → Planner 4-stage → CommittedPlan → DAG → Fabric → deliver |
+| MEDIUM tier regression | Verified — no changes to MEDIUM path |
+| Phase 1 stubs | `TestLLMAdapter` (llm_port), `TestBridgeAdapter` (bridge_port) — replaced in Phase 2 |
 
 ---
 
