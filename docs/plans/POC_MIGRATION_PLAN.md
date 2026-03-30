@@ -2237,8 +2237,9 @@ Touch point: NEW file `tests/k1/concierge/test_tool_fabric_live.py` (~30 tests)
 Class: `GeminiProviderPlugin` implements `IProviderPlugin`
 
 Constructor: `__init__(self, api_key: str, model_overrides: dict[str, str] | None = None)`
-  - Internally creates `GeminiConciergeAdapter(api_key=api_key)` from `k1.concierge.llm.gemini_adapter`
-  - `model_overrides` allows per-capability model mapping (default: all → `gemini-2.5-flash-lite`)
+
+- Internally creates `GeminiConciergeAdapter(api_key=api_key)` from `k1.concierge.llm.gemini_adapter`
+- `model_overrides` allows per-capability model mapping (default: all → `gemini-2.5-flash-lite`)
 
 Methods:
 
@@ -2794,21 +2795,654 @@ Touch point: Conditional DELETE of 1-2 files in `k1/concierge/llm/`
 
 ## M8 — K1 Orchestrator Wiring
 
-> MEDIUM tier tasks route through `k1/orchestrator/` instead of direct Front→Back dispatch.
+> K1 Orchestrator is **FULLY IMPLEMENTED** — 66 Python files, ~14,500 lines across 6 subdirectories.
+> Central service: `OrchestratorService` (2,257 lines), `DAGExecutor` (1,289 lines), `StepRunner` (362),
+> `ConstraintResolver` (708), `ErrorRouter` (208), complete workflow subsystem, MCP connectors.
+> 9 hexagonal ports, 10 production adapters, 7 test adapters, 4 factory construction modes.
+>
+> The POC uses `OrchestratorStub` (185 lines, MEDIUM-only, 1-2 Fabric calls) with 3 bootstrap
+> adapters (`_FabricGatewayAdapter`, `_StateReadAdapter`, `_DeltaEmitAdapter`). After M5,
+> callers are at `k1/concierge/`. The POC orchestrator stays at `poc/k1_poc/orchestrator/`
+> — it was NOT copied because the K1 Orchestrator is a separate K1 module.
+>
+> This milestone **replaces `OrchestratorStub`** with the real `OrchestratorService` via
+> `OrchestratorFactory.create_for_testing()` + real adapter overrides, builds the Concierge-side
+> `IDispatchPort` + `FabricOrchestratorAdapter` from `concierge.mmd` (L264, L285), and wires
+> the MEDIUM tier E2E path: FSM DISPATCHING → dispatch_envelope → Orchestrator mailbox →
+> Fabric → AggregatedResult → DeltaAggregator → DELIVERING.
 
-**Work**:
+**K1 Orchestrator status**: FULLY IMPLEMENTED (66 .py, ~14,500 lines)
+**K1 Orchestrator factory**: `OrchestratorFactory` — `create_standalone()`, `create_for_testing(overrides)`, `create_with_ports(**ports)`, `create_production(config, **ports)`
+**K1 Orchestrator key types** (`k1/orchestrator/types.py`, 1,197 lines): `TaskEnvelope` (frozen, 10 fields: intent, trace_id, caller_id, envelope_id, context, tier, capabilities, params, constraints, timeout_ms), `AggregatedResult` (factory methods: `.from_medium()`, `.from_dag()`), `StepResult`, `ProcessingContext`, `CommittedPlan`, `PlanStep`, enums (`StepStatus`, `TriggerType`, `ProcessResult`, `ErrorSeverity`)
+**K1 Orchestrator 9 ports** (`k1/orchestrator/ports/`): `IMailboxPort`, `IFabricGatewayPort`, `IPlannerPort`, `IStateReadPort`, `IDeltaEmitPort`, `IBridgeWritePort`, `IEventSubscriptionPort`, `IWorkflowStoragePort`, `IAdminPort`
+**K1 Orchestrator 10+7 adapters** (`k1/orchestrator/adapters/`): production (`MailboxAdapter`, `FabricGatewayAdapter`, `PlannerAdapter`, `StateReadAdapter`, `DeltaEmitAdapter`, `BridgeWriteAdapter`, `EventSubscriptionAdapter`, `WorkflowStorageAdapter`, `AdminHttpAdapter`) + 7 test adapters
+**POC Orchestrator status**: `OrchestratorStub` (185 lines), `route_task()` (216 lines), `degradation.py` (123 lines), POC-local types (352 lines), POC-local ports (170 lines)
+**Concierge .mmd ref**: `IDispatchPort` (L264) — `dispatch_direct(CapReq)→CapResult`, `dispatch_envelope(TaskEnv)→void`; `FabricOrchestratorAdapter` (L285) — routes by tier, CB_ORCHESTRATOR + CB_PLANNER + CB_FABRIC + CB_MCP, tier degradation HIGH→MED→LOW→canned
+**Bootstrap status (post-M5)**: `_create_model()` returns via ILLMPort (M7), `FabricPOCBridge` replaced by real `Fabric` (M6), `OrchestratorStub` still wired with POC `_FabricGatewayAdapter`/`_StateReadAdapter`/`_DeltaEmitAdapter`
 
-- FSM DISPATCHING emits `TaskEnvelope` to Orchestrator for MEDIUM tier
-- Orchestrator resolves capabilities through Fabric (via its own `FabricGatewayPort`)
-- Results flow back through `k1.orchestration.dag.completed.v1`
-- LOW tier remains direct Front→Back (unchanged)
-- Verify MEDIUM tier E2E: user input → orchestrator → fabric → result → delivery
+### Architecture: What M8 Builds
+
+```text
+┌──────────────────────── k1/concierge/ ─────────────────────────┐
+│                                                                  │
+│  FSM DISPATCHING                                                 │
+│   ├── LOW:  react_loop → ILLMPort → tool_call →                 │
+│   │         IDispatchPort.dispatch_direct(CapReq) → Fabric      │
+│   └── MED/HIGH: route_task() → TaskEnvelope →                   │
+│         IDispatchPort.dispatch_envelope(TaskEnv) → [fire&forget] │
+│                │                                                 │
+│  FabricOrchestratorAdapter (IDispatchPort impl)                  │
+│   ├── dispatch_direct() → Fabric.execute() directly [LOW]       │
+│   ├── dispatch_envelope() → Orchestrator mailbox [MED/HIGH]     │
+│   └── tier degradation: HIGH→MED→LOW→canned                    │
+│                │                                                 │
+│  MockDispatchAdapter (IDispatchPort test impl)                   │
+│   └── captures envelopes + requests for assertions              │
+│                                                                  │
+└────────────────│─────────────────────────────────────────────────┘
+                 │ (in-process enqueue to mailbox)
+                 ▼
+┌──────────────────────── k1/orchestrator/ ────────────────────────┐
+│                                                                   │
+│  OrchestratorService._mailbox_loop()                              │
+│   → dequeue TaskEnvelope                                          │
+│   → route_task(envelope) [MEDIUM or HIGH]                         │
+│       │                                                           │
+│       ├── MEDIUM: dispatch_medium(envelope)                       │
+│       │   → ConstraintResolver.resolve()                          │
+│       │   → StepRunner.run() × 1-2                               │
+│       │   → FabricGatewayAdapter.execute(CapReq) → Fabric         │
+│       │   → AggregatedResult.from_medium(step_results)            │
+│       │                                                           │
+│       └── HIGH: dispatch_high(envelope) [needs Planner — M9]     │
+│           → MockPlannerAdapter (returns mock plan for now)         │
+│           → DAGExecutor.execute_plan(committed_plan)              │
+│                                                                   │
+│  → IDeltaEmitPort.emit("k1.orchestration.dag.completed.v1",      │
+│                         AggregatedResult)                         │
+│                                                                   │
+└──────────────────│────────────────────────────────────────────────┘
+                   │ (K1 bus delta lane)
+                   ▼
+┌──────────────────────── k1/concierge/ ─────────────────────────┐
+│                                                                  │
+│  DeltaAggregator → "k1.orchestration.dag.completed.v1"          │
+│   → FSM COMPANIONING → DELIVERING                               │
+│   → Tool Result Buffer → ILLMPort → final response              │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Type Bridging: POC TaskEnvelope → K1 TaskEnvelope
+
+| POC Field (`poc.k1_poc.orchestrator.types`) | K1 Field (`k1.orchestrator.types`) | Translation |
+|---|---|---|
+| `intent: str` | `intent: str` | Direct copy |
+| `task_id: str` | `envelope_id: str` | Rename (K1 auto-generates if empty) |
+| `context: dict` | `context: dict` | Direct copy |
+| `tier: ComplexityTier` (enum) | `tier: str` (`"MEDIUM"` or `"HIGH"`) | `tier.value` (ComplexityTier → str) |
+| `budget: Budget` (max_fabric_calls, max_planner_tokens, timeout_ms) | `timeout_ms: int` + `constraints: dict` | `budget.timeout_ms` → `timeout_ms`, budget fields → `constraints` |
+| `session_id: str` | `caller_id: str` | Repurpose (K1 uses caller_id for routing) |
+| `trace_id: str` | `trace_id: str` | Direct copy |
+| _(not in POC)_ | `capabilities: list[str]` | **NEW** — must be populated from intent/tool resolution |
+| _(not in POC)_ | `params: dict[str, dict]` | **NEW** — per-capability params |
+
+### What Gets Built vs Deferred
+
+| Component | M8 Scope | Notes |
+|---|---|---|
+| IDispatchPort (concierge port) | ✅ BUILD | New Concierge port per concierge.mmd L264 |
+| FabricOrchestratorAdapter | ✅ BUILD | Concierge adapter: IDispatchPort → Fabric (LOW) + Orchestrator mailbox (MED/HIGH) |
+| MockDispatchAdapter | ✅ BUILD | Test adapter for IDispatchPort per concierge.mmd ADAPTERS_TEST |
+| OrchestratorService wiring | ✅ WIRE | Via `OrchestratorFactory.create_for_testing()` + real adapter overrides |
+| K1 FabricGatewayAdapter injection | ✅ WIRE | Real K1 `FabricGatewayAdapter(fabric)` replaces POC `_FabricGatewayAdapter` |
+| K1 DeltaEmitAdapter injection | ✅ WIRE | Real K1 `DeltaEmitAdapter(bus)` replaces POC `_DeltaEmitAdapter` |
+| K1 EventSubscriptionAdapter injection | ✅ WIRE | Real K1 `EventSubscriptionAdapter(bus)` for orchestrator event subscriptions |
+| K1 MailboxAdapter injection | ✅ WIRE | Real K1 `MailboxAdapter` for WFQ priority mailbox |
+| route_task() migration | ✅ MIGRATE | POC `route_task()` → produce K1 `TaskEnvelope` instead of POC `TaskEnvelope` |
+| Bootstrap rewrite | ✅ REWRITE | Replace `OrchestratorStub` creation with `OrchestratorFactory` wiring |
+| FSM result flow integration | ✅ WIRE | K1 `AggregatedResult` from bus → DeltaAggregator → FSM DELIVERING |
+| HIGH tier (Planner integration) | ⚠️ PARTIAL | Wire `MockPlannerAdapter` — real Planner is M9 |
+| Workflow subsystem | ❌ DEFER | Fully built but needs real `IWorkflowStoragePort` + Planner |
+| MCP Connectors | ❌ DEFER | Fully built but no MCP servers in POC yet |
+| Admin API | ❌ DEFER | Not needed for POC |
+| Bridge writes (K0 WAL) | ❌ DEFER | Use `MockBridgeAdapter` (no real K0 Bridge yet) |
+| Crash recovery | ❌ DEFER | Needs WAL infrastructure |
+| Tier degradation cascade (full CB) | ⚠️ SIMPLIFIED | FabricOrchestratorAdapter implements simple retry; full CB deferred |
+
+### Key Invariants Verified (from orchestrator.mmd)
+
+| ID | Invariant | How M8 Satisfies |
+|---|---|---|
+| ORCH-01 | Orchestrator NEVER writes SessionState | `OrchestratorService` has no `IStateWritePort` — enforced structurally |
+| ORCH-02 | Orchestrator makes NO LLM calls | No `ILLMPort` — enforced structurally |
+| ORCH-04 | Every step goes through Fabric | `StepRunner` → `IFabricGatewayPort.execute()` → real `Fabric` |
+| ORCH-10 | MEDIUM: max 2 Fabric calls | `TaskEnvelope.__post_init__` validates `len(capabilities) <= 2` |
+| ORCH-11 | HIGH: requires CommittedPlan | `dispatch_high()` calls `IPlannerPort.request_plan()` first |
 
 ### Epics
-<!-- TBD -->
 
-### Issues
-<!-- TBD -->
+#### E8.1 — Build IDispatchPort + Concierge Adapters
+
+> Per `concierge.mmd` (L264): `IDispatchPort` is the Concierge's outbound dispatch port.
+> `FabricOrchestratorAdapter` (L285) is the production adapter that routes by tier:
+> LOW → Fabric directly, MED/HIGH → Orchestrator mailbox.
+> `MockDispatchAdapter` is the test adapter that captures dispatches for assertions.
+
+**Issue E8.1.1** — Create `k1/concierge/dispatch/__init__.py` + `ports.py` — IDispatchPort protocol
+
+From concierge.mmd L264:
+
+```python
+@runtime_checkable
+class IDispatchPort(Protocol):
+    async def dispatch_direct(
+        self, request: CapabilityRequest
+    ) -> CapabilityResult:
+        """LOW tier: execute capability directly via Fabric (bypass Orchestrator)."""
+        ...
+
+    async def dispatch_envelope(
+        self, envelope: TaskEnvelope
+    ) -> None:
+        """MED/HIGH tier: fire-and-forget enqueue to Orchestrator mailbox."""
+        ...
+
+    async def cancel_dispatch(
+        self, envelope_id: str
+    ) -> bool:
+        """Cancel an in-flight envelope. Returns True if cancelled."""
+        ...
+```
+
+Types used:
+- `CapabilityRequest`, `CapabilityResult` from `k1.fabric.types`
+- `TaskEnvelope` from `k1.orchestrator.types`
+
+Touch point: NEW file `k1/concierge/dispatch/__init__.py` (empty) + NEW file `k1/concierge/dispatch/ports.py` (~40 lines)
+Depends on: `k1.fabric.types` (M2/M6), `k1.orchestrator.types` (existing)
+
+**Issue E8.1.2** — Create `k1/concierge/dispatch/fabric_orchestrator_adapter.py` — FabricOrchestratorAdapter
+
+From concierge.mmd L285 + concierge.md L5443-5530. Implements `IDispatchPort`.
+
+Class: `FabricOrchestratorAdapter`
+
+Constructor:
+
+```python
+__init__(
+    self,
+    fabric: Fabric,                    # real K1 Fabric (from M6)
+    orchestrator_mailbox: IMailboxPort, # Orchestrator's WFQ mailbox
+)
+```
+
+Methods:
+
+- `dispatch_direct(request: CapabilityRequest) -> CapabilityResult`:
+  - LOW tier: call `self._fabric.execute(request)` directly
+  - Retry once on timeout/error (L1 of concierge.mmd LLM_CASCADE pattern)
+  - On all attempts failed: return `CapabilityResult.failure_result(...)` with error detail
+
+- `dispatch_envelope(envelope: TaskEnvelope) -> None`:
+  - MED/HIGH tier: `self._orchestrator_mailbox.enqueue(envelope, priority="INTERACTIVE")`
+  - Fire-and-forget: returns immediately after enqueue
+  - Log: `"Dispatched envelope=%s tier=%s to orchestrator mailbox", envelope.envelope_id, envelope.tier`
+
+- `cancel_dispatch(envelope_id: str) -> bool`:
+  - Attempt to remove from mailbox: `self._orchestrator_mailbox.cancel(envelope_id)`
+  - Return True if found and cancelled, False if already processing
+
+Tier degradation (simplified for M8, full CB deferred):
+
+- On `dispatch_envelope` failure (mailbox full/unavailable):
+  - Log warning
+  - Degrade MEDIUM → execute capabilities directly via `dispatch_direct()` sequentially
+  - Degrade HIGH → degrade to MEDIUM path (ignore Planner)
+
+Touch point: NEW file `k1/concierge/dispatch/fabric_orchestrator_adapter.py` (~150 lines)
+Depends on: E8.1.1 (IDispatchPort), M6 (real Fabric), K1 `IMailboxPort`
+
+**Issue E8.1.3** — Create `k1/concierge/dispatch/mock_dispatch_adapter.py` — MockDispatchAdapter
+
+From concierge.mmd ADAPTERS_TEST (`ADAPT_TEST_DISPATCH["MockDispatchAdapter: Captures envelopes + requests"]`):
+
+- `MockDispatchAdapter` implements `IDispatchPort`
+- `dispatched_requests: list[CapabilityRequest]` — captures dispatch_direct calls
+- `dispatched_envelopes: list[TaskEnvelope]` — captures dispatch_envelope calls
+- `set_direct_result(result: CapabilityResult)` — scripted response for dispatch_direct
+- `set_direct_results(results: list[CapabilityResult])` — response sequence
+- `cancel_log: list[str]` — captures cancel_dispatch calls
+
+Touch point: NEW file `k1/concierge/dispatch/mock_dispatch_adapter.py` (~80 lines)
+Depends on: E8.1.1
+
+---
+
+#### E8.2 — Wire OrchestratorService via Factory
+
+> Replace POC `OrchestratorStub` with real K1 `OrchestratorService`.
+> Use `OrchestratorFactory.create_for_testing(overrides={...})` with real adapters for
+> `fabric`, `delta`, `event`, `mailbox` and mock adapters for deferred ports
+> (`planner`, `bridge`, `storage`).
+
+**Issue E8.2.1** — Create `k1/concierge/dispatch/orchestrator_wiring.py` — orchestrator factory helper
+
+Helper function that creates and configures the `OrchestratorService` with appropriate adapters:
+
+```python
+async def create_concierge_orchestrator(
+    *,
+    fabric: Fabric,
+    bus: Any,
+    session_state: Any,
+    config: dict | None = None,
+) -> tuple[OrchestratorService, IMailboxPort]:
+    """Create OrchestratorService wired for Concierge use.
+
+    Returns (orchestrator, mailbox) so FabricOrchestratorAdapter can reference the mailbox.
+    """
+```
+
+Adapter wiring:
+
+| Port Key | Adapter | Source |
+|---|---|---|
+| `fabric` | `FabricGatewayAdapter(fabric)` | K1 `k1/orchestrator/adapters/fabric_gateway_adapter.py` — wraps real `Fabric` |
+| `mailbox` | `MailboxAdapter()` | K1 `k1/orchestrator/adapters/mailbox_adapter.py` — WFQ priority queue |
+| `delta` | `DeltaEmitAdapter(bus)` | K1 `k1/orchestrator/adapters/delta_emit_adapter.py` — emits via K1 bus |
+| `event` | `EventSubscriptionAdapter(bus)` | K1 `k1/orchestrator/adapters/event_subscription_adapter.py` — subscribes via K1 bus |
+| `state` | `StateReadAdapter(session_state)` | K1 `k1/orchestrator/adapters/state_read_adapter.py` — reads SessionState |
+| `planner` | _(test adapter from factory)_ | Mock — real Planner is M9 |
+| `bridge` | _(test adapter from factory)_ | Mock — real K0 Bridge deferred |
+| `storage` | _(test adapter from factory)_ | Mock — workflow storage deferred |
+
+Implementation:
+
+```python
+from k1.orchestrator.factory import OrchestratorFactory
+from k1.orchestrator.adapters.fabric_gateway_adapter import FabricGatewayAdapter
+from k1.orchestrator.adapters.mailbox_adapter import MailboxAdapter
+from k1.orchestrator.adapters.delta_emit_adapter import DeltaEmitAdapter
+from k1.orchestrator.adapters.event_subscription_adapter import EventSubscriptionAdapter
+from k1.orchestrator.adapters.state_read_adapter import StateReadAdapter
+
+mailbox = MailboxAdapter()
+orchestrator = await OrchestratorFactory.create_for_testing(
+    overrides={
+        "fabric": FabricGatewayAdapter(fabric),
+        "mailbox": mailbox,
+        "delta": DeltaEmitAdapter(bus),
+        "event": EventSubscriptionAdapter(bus),
+        "state": StateReadAdapter(session_state),
+    },
+)
+await orchestrator.init()
+return orchestrator, mailbox
+```
+
+Touch point: NEW file `k1/concierge/dispatch/orchestrator_wiring.py` (~80 lines)
+Depends on: K1 Orchestrator factory + adapters (all existing), M6 (Fabric), M3 (bus)
+
+---
+
+#### E8.3 — Migrate route_task() to Produce K1 TaskEnvelope
+
+> POC `route_task()` in `k1/concierge/orchestrator/routing.py` (post-M5 copy) creates
+> POC `TaskEnvelope`. Must produce K1 `TaskEnvelope` from `k1.orchestrator.types` instead.
+>
+> NOTE: The POC orchestrator was NOT copied to `k1/concierge/` at M5 because it's a separate
+> K1 module. The routing logic still lives at `poc/k1_poc/orchestrator/routing.py` and is called
+> from the POC FSM/actors. After M5, the concierge callers are at `k1/concierge/` but they
+> import routing from `poc.k1_poc.orchestrator.routing`. This must be resolved.
+
+**Issue E8.3.1** — Create `k1/concierge/dispatch/routing.py` — migrated route_task()
+
+Port `poc/k1_poc/orchestrator/routing.py` (216 lines) to `k1/concierge/dispatch/routing.py`.
+
+Key changes:
+
+- Replace `from poc.k1_poc.orchestrator.types import Budget, TaskEnvelope` → `from k1.orchestrator.types import TaskEnvelope`
+- Replace `from poc.k1_poc.task.complexity import ComplexityTier` → `from k1.concierge.task.complexity import ComplexityTier`
+- `_route_medium_sync()`: Build K1 `TaskEnvelope` instead of POC `TaskEnvelope`:
+  ```python
+  envelope = TaskEnvelope(
+      intent=intent,
+      trace_id=trace_id,
+      caller_id=f"concierge.{session_id}",
+      envelope_id=task.task_id,
+      context=task.context_snapshot or {},
+      tier="MEDIUM",
+      capabilities=_extract_capabilities(task),  # NEW: extract from intent/tools
+      params=_extract_params(task),               # NEW: per-capability params
+      timeout_ms=budget_timeout_ms,
+  )
+  ```
+- `_route_high_sync()`: Same K1 `TaskEnvelope` with `tier="HIGH"`, empty `capabilities` (Planner decides)
+- `_extract_capabilities(task: TaskDispatch) -> list[str]`: derive capability names from task intents/tools
+  - If task has explicit tool names → use those as capabilities
+  - Else → infer from intent classification (e.g., "schedule meeting" → `["tool.calendar.create"]`)
+  - Fallback: `[f"tool.{intent}"]` for unknown
+- `_extract_params(task: TaskDispatch) -> dict[str, dict]`: derive per-capability params
+  - Key: capability_name, value: params dict from task context
+
+Touch point: NEW file `k1/concierge/dispatch/routing.py` (~200 lines)
+Depends on: `k1.orchestrator.types.TaskEnvelope`, `k1.concierge.task.complexity.ComplexityTier`
+
+**Issue E8.3.2** — Migrate callers of `poc.k1_poc.orchestrator.routing` → `k1.concierge.dispatch.routing`
+
+Search for all imports of POC routing in `k1/concierge/`:
+
+- `from poc.k1_poc.orchestrator.routing import route_task` → `from k1.concierge.dispatch.routing import route_task`
+- `from poc.k1_poc.orchestrator.routing import route_task_sync` → `from k1.concierge.dispatch.routing import route_task_sync`
+
+Callers to find and update:
+- FSM handlers in `k1/concierge/fsm/` that call `route_task()` or `route_task_sync()`
+- Front actor that may reference routing
+- Bootstrap if it references routing
+
+Touch point: EDIT 2-4 files in `k1/concierge/` — import path changes
+Depends on: E8.3.1
+
+---
+
+#### E8.4 — Rewrite Bootstrap Orchestrator Wiring
+
+> Replace the POC bootstrap section that creates `OrchestratorStub` with real
+> `OrchestratorService` + `FabricOrchestratorAdapter` wiring.
+
+**Issue E8.4.1** — Rewrite `k1/concierge/kernel/bootstrap.py` — orchestrator section
+
+Current code (post-M5, lines ~318-328):
+
+```python
+if cfg.enable_orchestrator:
+    from poc.k1_poc.orchestrator.stub import OrchestratorStub  # DEAD import after M8
+    runtime.orchestrator = OrchestratorStub(
+        fabric_gateway=_FabricGatewayAdapter(capability_registry),
+        state_read=_StateReadAdapter(session_state),
+        delta_emit=_DeltaEmitAdapter(...),
+    )
+    if hasattr(runtime.fsm, "set_orchestrator"):
+        runtime.fsm.set_orchestrator(runtime.orchestrator)
+```
+
+New code:
+
+```python
+if cfg.enable_orchestrator:
+    from k1.concierge.dispatch.orchestrator_wiring import create_concierge_orchestrator
+    from k1.concierge.dispatch.fabric_orchestrator_adapter import FabricOrchestratorAdapter
+
+    orchestrator, orchestrator_mailbox = await create_concierge_orchestrator(
+        fabric=fabric,           # real Fabric from M6
+        bus=bus,                  # K1 bus from M3
+        session_state=session_state,
+    )
+    runtime.orchestrator = orchestrator
+    runtime.dispatch_port = FabricOrchestratorAdapter(
+        fabric=fabric,
+        orchestrator_mailbox=orchestrator_mailbox,
+    )
+    if hasattr(runtime.fsm, "set_dispatch_port"):
+        runtime.fsm.set_dispatch_port(runtime.dispatch_port)
+```
+
+Additional changes:
+
+- Add `dispatch_port: Any = None` to `KernelRuntime` dataclass
+- Remove `_FabricGatewayAdapter` class (847-870) — replaced by K1 `FabricGatewayAdapter`
+- Remove `_StateReadAdapter` class (874-904) — replaced by K1 `StateReadAdapter`
+- Keep `_DeltaEmitAdapter` temporarily if still used elsewhere; else remove
+
+Imports to add:
+
+- `from k1.concierge.dispatch.orchestrator_wiring import create_concierge_orchestrator`
+- `from k1.concierge.dispatch.fabric_orchestrator_adapter import FabricOrchestratorAdapter`
+
+Imports to remove:
+
+- `from poc.k1_poc.orchestrator.stub import OrchestratorStub`
+
+Touch point: EDIT `k1/concierge/kernel/bootstrap.py` — orchestrator section (~30 lines rewritten), `KernelRuntime` (add field), delete `_FabricGatewayAdapter`/`_StateReadAdapter` classes (~60 lines removed)
+Depends on: E8.1.2, E8.2.1
+
+**Issue E8.4.2** — Wire FSM DISPATCHING → IDispatchPort
+
+The FSM's DISPATCHING state handler needs to call `IDispatchPort` instead of directly calling `OrchestratorStub`:
+
+- Current: FSM calls `runtime.orchestrator.handle_task(envelope)` for MEDIUM tier
+- After M8: FSM calls `runtime.dispatch_port.dispatch_envelope(k1_envelope)` for MEDIUM/HIGH tier
+- Current: FSM calls tools → `ToolContext.invoke_fn()` for LOW tier
+- After M8: FSM calls `runtime.dispatch_port.dispatch_direct(cap_request)` for LOW tier (via ToolDispatcher)
+
+Changes:
+
+- FSM handler (in `k1/concierge/fsm/` or `k1/concierge/actors/`) that invokes orchestrator:
+  - Replace `runtime.orchestrator.handle_task(poc_envelope)` → `runtime.dispatch_port.dispatch_envelope(k1_envelope)`
+  - The `k1_envelope` comes from `route_task_sync()` (E8.3.1) which now returns K1 `TaskEnvelope`
+
+Touch point: EDIT 1-2 files in `k1/concierge/fsm/` or `k1/concierge/actors/`
+Depends on: E8.3.1, E8.4.1
+
+---
+
+#### E8.5 — Wire Result Flow (Orchestrator → Concierge)
+
+> K1 Orchestrator emits `AggregatedResult` on `k1.orchestration.dag.completed.v1` via K1 bus.
+> The Concierge's DeltaAggregator must subscribe to this topic and route the result to the
+> FSM for transition to DELIVERING.
+
+**Issue E8.5.1** — Subscribe DeltaAggregator to orchestration completion events
+
+The DeltaAggregator (or bus subscription handler) in `k1/concierge/` must subscribe to:
+
+- `k1.orchestration.dag.completed.v1` — MEDIUM/HIGH task completed
+- `k1.orchestration.task.accepted.v1` — Orchestrator accepted the task (for FSM state tracking)
+- `k1.orchestration.step.completed.v1` — individual step completed (for progress updates)
+- `k1.orchestration.step.failed.v1` — step failed (for error handling)
+
+On receiving `k1.orchestration.dag.completed.v1`:
+
+1. Deserialize `AggregatedResult` from event payload
+2. Convert K1 `AggregatedResult` to the format expected by the FSM's DELIVERING handler:
+   - Extract `step_results[].result.data` → build `tool_results[]` for the Tool Result Buffer
+   - `aggregated_result.success` → determines response tone
+   - `aggregated_result.trace_id` → link back to original turn
+3. Buffer results in Tool Result Buffer
+4. Trigger FSM transition: COMPANIONING → DELIVERING (or BACKGROUND_WORKING → DELIVERING per concierge.mmd L640)
+
+Touch point: EDIT `k1/concierge/bus/setup.py` or `k1/concierge/delta/` — add subscription handler (~50 lines)
+Depends on: E8.2.1 (Orchestrator emits events), M3 (bus subscriptions)
+
+**Issue E8.5.2** — Create `k1/concierge/dispatch/result_converter.py` — AggregatedResult → tool_results
+
+Converts K1 `AggregatedResult` (from `k1.orchestrator.types`) to the format the Concierge's DELIVERING state expects (tool_results list for the LLM context window):
+
+```python
+def aggregated_to_tool_results(result: AggregatedResult) -> list[dict]:
+    """Convert AggregatedResult to tool_results[] for DELIVERING LLM context."""
+    tool_results = []
+    for step in result.step_results:
+        if step.status == StepStatus.COMPLETED and step.result:
+            tool_results.append({
+                "tool_name": step.capability_name,
+                "result": step.result.data,
+                "success": step.result.success,
+                "duration_ms": step.duration_ms,
+            })
+        elif step.status == StepStatus.FAILED:
+            tool_results.append({
+                "tool_name": step.capability_name,
+                "result": {"error": step.error_detail or "step_failed"},
+                "success": False,
+                "duration_ms": step.duration_ms,
+            })
+    return tool_results
+```
+
+Touch point: NEW file `k1/concierge/dispatch/result_converter.py` (~50 lines)
+Depends on: `k1.orchestrator.types` (AggregatedResult, StepResult, StepStatus)
+
+---
+
+#### E8.6 — Clean Up POC Orchestrator References
+
+> After wiring the real K1 Orchestrator, remove all remaining references to the POC
+> orchestrator module from `k1/concierge/`.
+
+**Issue E8.6.1** — Remove POC orchestrator imports from `k1/concierge/`
+
+Search and replace:
+
+- `from poc.k1_poc.orchestrator.stub import OrchestratorStub` → remove
+- `from poc.k1_poc.orchestrator.types import ...` → `from k1.orchestrator.types import ...`
+- `from poc.k1_poc.orchestrator.routing import ...` → `from k1.concierge.dispatch.routing import ...`
+- `from poc.k1_poc.orchestrator.ports import IDispatchPort` → `from k1.concierge.dispatch.ports import IDispatchPort`
+- `from poc.k1_poc.orchestrator.degradation import ...` → remove (degradation logic now in FabricOrchestratorAdapter)
+
+Verification: `grep -r "poc.k1_poc.orchestrator" k1/concierge/` → must return 0 results
+
+Touch point: EDIT 3-6 files in `k1/concierge/` — import path changes
+Depends on: E8.3, E8.4, E8.5
+
+**Issue E8.6.2** — Delete bootstrap helper classes
+
+After E8.4.1, these bootstrap helper classes are dead code:
+
+- `_FabricGatewayAdapter` (bootstrap.py L847-870) — replaced by K1 `FabricGatewayAdapter`
+- `_StateReadAdapter` (bootstrap.py L874-904) — replaced by K1 `StateReadAdapter`
+- `_DeltaEmitAdapter` (if no other consumers) — replaced by K1 `DeltaEmitAdapter`
+
+Verification before delete: `grep -r "_FabricGatewayAdapter\|_StateReadAdapter\|_DeltaEmitAdapter" k1/` → only bootstrap.py
+
+Touch point: EDIT `k1/concierge/kernel/bootstrap.py` — delete 3 helper classes (~70 lines removed)
+Depends on: E8.4.1
+
+---
+
+#### E8.7 — Unit Tests
+
+**Issue E8.7.1** — Create `tests/k1/concierge/test_dispatch_port.py`
+
+Tests for `IDispatchPort` + `FabricOrchestratorAdapter`:
+
+- `dispatch_direct()` calls `Fabric.execute()` and returns `CapabilityResult`
+- `dispatch_direct()` retries once on failure
+- `dispatch_direct()` returns failure result when all retries exhausted
+- `dispatch_envelope()` enqueues `TaskEnvelope` to mailbox
+- `dispatch_envelope()` fire-and-forget: returns immediately
+- `cancel_dispatch()` removes envelope from mailbox
+- `cancel_dispatch()` returns False if envelope already processing
+- Tier degradation: MEDIUM envelope enqueue fails → falls back to direct execution
+- `IDispatchPort` is `runtime_checkable`, `FabricOrchestratorAdapter` satisfies it
+
+Touch point: NEW file `tests/k1/concierge/test_dispatch_port.py` (~25 tests)
+
+**Issue E8.7.2** — Create `tests/k1/concierge/test_mock_dispatch_adapter.py`
+
+Tests for `MockDispatchAdapter`:
+
+- Satisfies `IDispatchPort` (isinstance check)
+- `dispatch_direct()` returns scripted result
+- `dispatch_envelope()` records envelope in `dispatched_envelopes`
+- `dispatched_requests` captures all dispatch_direct calls
+- `cancel_log` captures cancel_dispatch calls
+
+Touch point: NEW file `tests/k1/concierge/test_mock_dispatch_adapter.py` (~10 tests)
+
+**Issue E8.7.3** — Create `tests/k1/concierge/test_routing_k1.py`
+
+Tests for migrated `route_task()` producing K1 `TaskEnvelope`:
+
+- LOW tier: returns `DispatchRecord` with topic, no envelope
+- MEDIUM tier: returns `DispatchRecord` with K1 `TaskEnvelope`, `tier="MEDIUM"`, `capabilities` non-empty, `len <= 2`
+- HIGH tier: returns `DispatchRecord` with K1 `TaskEnvelope`, `tier="HIGH"`
+- K1 `TaskEnvelope` passes `__post_init__` validation (intent non-empty, trace_id non-empty, tier valid)
+- `_extract_capabilities()` extracts tool names from TaskDispatch
+- `_extract_params()` builds per-capability params dict
+
+Touch point: NEW file `tests/k1/concierge/test_routing_k1.py` (~20 tests)
+
+**Issue E8.7.4** — Create `tests/k1/concierge/test_result_converter.py`
+
+Tests for `aggregated_to_tool_results()`:
+
+- Converts successful steps to tool_results with success=True
+- Converts failed steps to tool_results with error detail
+- Handles mixed results (some success, some failed, some skipped)
+- Empty AggregatedResult → empty tool_results
+- Preserves capability_name and duration_ms
+
+Touch point: NEW file `tests/k1/concierge/test_result_converter.py` (~10 tests)
+
+**Issue E8.7.5** — Create `tests/k1/concierge/test_orchestrator_wiring.py`
+
+Tests for `create_concierge_orchestrator()`:
+
+- Returns `(OrchestratorService, IMailboxPort)` tuple
+- `OrchestratorService` has real `FabricGatewayAdapter` (not test adapter)
+- `OrchestratorService` has real `MailboxAdapter`
+- `OrchestratorService` has mock `PlannerAdapter` (HIGH tier deferred)
+- Mailbox accepts TaskEnvelope enqueue
+
+Touch point: NEW file `tests/k1/concierge/test_orchestrator_wiring.py` (~10 tests)
+
+---
+
+#### E8.8 — Integration Tests + E2E Verification
+
+**Issue E8.8.1** — MEDIUM tier E2E smoke test
+
+Create `tests/k1/concierge/test_medium_tier_e2e.py`:
+
+Full path test with in-memory components:
+
+1. Create `Fabric` via `FabricFactory.create_for_testing()` with test capabilities registered
+2. Create `OrchestratorService` via `create_concierge_orchestrator(fabric, bus, session_state)`
+3. Create `FabricOrchestratorAdapter(fabric, mailbox)`
+4. Build a MEDIUM tier `TaskEnvelope` via `route_task_sync()` with `capabilities=["tool.test.echo"]`
+5. Call `adapter.dispatch_envelope(envelope)`
+6. Wait for `k1.orchestration.dag.completed.v1` event on bus
+7. Verify `AggregatedResult.success == True`
+8. Verify `AggregatedResult.step_results[0].result.data` matches test capability output
+9. Verify `aggregated_to_tool_results()` produces correct tool_results format
+
+Touch point: NEW file `tests/k1/concierge/test_medium_tier_e2e.py` (~20 tests)
+
+**Issue E8.8.2** — LOW tier regression (unchanged path)
+
+Verify LOW tier still works after wiring changes:
+
+- `route_task_sync(task, ComplexityTier.LOW)` → `DispatchRecord` with topic, no envelope
+- `FabricOrchestratorAdapter.dispatch_direct(cap_request)` → `CapabilityResult` from Fabric
+- React loop → tool_call → dispatch_direct → Fabric → tool_result (end-to-end)
+
+Touch point: NEW tests in `tests/k1/concierge/test_medium_tier_e2e.py` or existing LOW tier tests (~5 tests)
+
+**Issue E8.8.3** — Run full Concierge + Orchestrator test suites
+
+- Command: `python -m pytest tests/k1/concierge/ tests/k1/orchestrator/ --tb=short -q`
+- Gate: ALL tests pass
+- Focus: existing orchestrator tests still green, new concierge dispatch tests green
+
+**Issue E8.8.4** — Git tag `m8-orchestrator-wired`
+
+- Tag commit after all tests green
+- Gate metrics:
+
+| Metric | Value |
+|---|---|
+| New Concierge dispatch files | 6 (`ports.py`, `fabric_orchestrator_adapter.py`, `mock_dispatch_adapter.py`, `orchestrator_wiring.py`, `routing.py`, `result_converter.py`) |
+| New test files | 6 |
+| New tests | ~100 |
+| Bootstrap classes removed | 2-3 (`_FabricGatewayAdapter`, `_StateReadAdapter`, optionally `_DeltaEmitAdapter`) |
+| POC OrchestratorStub replaced | Yes — real `OrchestratorService` via factory |
+| K1 adapters injected | 5 (FabricGateway, Mailbox, DeltaEmit, EventSubscription, StateRead) |
+| Callers migrated to IDispatchPort | FSM dispatching, ToolDispatcher |
+| POC orchestrator imports removed from k1/concierge/ | All |
+| HIGH tier status | Wired with MockPlannerAdapter — real Planner is M9 |
 
 ---
 
