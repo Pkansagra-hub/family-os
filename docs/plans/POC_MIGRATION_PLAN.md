@@ -3715,6 +3715,7 @@ orchestrator._planner_port = planner_adapter  # hot-swap MockPlannerAdapter → 
 ```
 
 The `IPlannerMailbox` protocol (defined in `planner_adapter.py` L59-73) requires:
+
 - `enqueue(request: PlanRequest) -> None`
 - `send_cancel(request_id: str) -> None`
 - `micro_replan(request: MicroReplanRequest) -> CommittedPlan`
@@ -4337,21 +4338,879 @@ Touch point: NEW tests in existing `tests/k1/concierge/test_medium_tier_e2e.py` 
 ## M10 — Integration & Hardening
 
 > Full regression, performance benchmarks, cleanup, documentation.
+> All four K1 subsystems (Fabric, Model Hub, Orchestrator, Planner) are wired
+> and individually gate-tested. M10 validates the **complete stack end-to-end**,
+> hardens latency/token-budget invariants, resolves every deferred item from M1-M9,
+> archives POC dead code, and publishes updated architecture diagrams and docs.
 
-**Work**:
+**Prerequisite**: M6 (Fabric), M7 (Model Hub), M8 (Orchestrator), M9 (Planner) all tagged green.
 
-- E2E test suite: 3-turn conversation flows (LOW, MEDIUM, HIGH)
-- Latency benchmarks: LOW <2s, MEDIUM <10s, HIGH <60s
-- Token budget verification per tier
-- Remove POC dead code from `poc/k1_poc/` (or archive)
-- Update architecture diagrams to reflect final production layout
-- Update README and deployment docs
+### Deferred Items Resolved in M10 (from M1-M9)
+
+| Source | Item | Resolution in M10 |
+|---|---|---|
+| M1 E1.6.1 | Option B: update LLM validator to accept `HubResponse` directly (deferred from Option A shim) | E10.2.1 |
+| M2 E2.3.1 | Deprecation notice on `ToolContext` old callback fields `invoke_fn`, `capability_fn`, `fabric_fn`, `workflow_fn` (M6 removed them — verify no resurfaced references) | E10.4.1 |
+| M3 E3.5 | Wire K1 bus middleware: `TopicValidationMiddleware`, `TracingMiddleware` (flag), `MetricsMiddleware` (flag) | E10.2.2 |
+| M6 E6.6.2 | Intent-based discovery: wire real `IEmbeddingPort` replacing `_StubEmbeddingPort` for semantic similarity | E10.2.3 |
+| M9 E9.1.1 | Phase 1 stubs: `TestLLMAdapter` for Planner `llm_port`, `TestBridgeAdapter` for Planner `bridge_port` — replace with real adapters | E10.2.4 |
+| M7 deferred | Full Model Hub services: manifest scanning, hot-reload, multi-provider, response cache, rate limiter, cost tracker, audit logger | **Post-M10** (Model Hub Hardening — separate milestone track) |
+| M8 deferred | Workflow subsystem activation, MCP connectors, Admin API, K0 Bridge writes (WAL), crash recovery | **Post-M10** (production infrastructure — separate milestone track) |
+| M8 E8.1.2 | Full CB cascade (CB_ORCHESTRATOR, CB_FABRIC, CB_MCP) — M8 has simplified retry | E10.2.5 |
+
+**Items explicitly NOT in M10 scope** (post-M10 tracks):
+
+- Model Hub multi-provider / manifest YAML / hot-reload / response cache / rate limiter
+- Rust bus backend parity (`backend="auto"`)
+- Workflow subsystem real `IWorkflowStoragePort`
+- MCP connectors (no MCP servers in POC yet)
+- Admin API
+- K0 Bridge real WAL writes
+- Crash recovery infrastructure
+
+### Performance Baselines (from concierge.mmd PERF_BASELINES)
+
+| Metric | Target | Source |
+|---|---|---|
+| LOW tier end-to-end | **< 2 s** | PERF_ENVELOPES |
+| MEDIUM tier end-to-end | **< 10 s** | PERF_ENVELOPES |
+| HIGH tier end-to-end | **< 45 s** (60 s CB timeout, 15 s headroom) | PERF_ENVELOPES |
+| CRISIS tier end-to-end | **< 5 s** | PERF_ENVELOPES |
+| Single LLM call timeout | 30 s | PERF_ENVELOPES |
+| Planner stage timeout | 10 s / stage | PERF_ENVELOPES |
+| FSM state transition | < 1 ms (INV-13) | INV_TIMING |
+| System overhead per turn | ~32 ms | PERF_SYSTEM |
+
+### Token Budgets (from concierge.mmd PERF_TOKENS + INV_TOKEN)
+
+| Call Type | Max Tokens | Source |
+|---|---|---|
+| LOW response | 500 | PERF_TOKENS |
+| MEDIUM response | 2,000 | PERF_TOKENS |
+| HIGH response | 8,000 | PERF_TOKENS |
+| Intent ack (`acknowledge_request`) | 150 (INV-19) | INV_TOKEN |
+| Preliminary ack (MED/HIGH) | 200 (INV-20) | INV_TOKEN |
+| Clarification question | 300 (INV-21) | INV_TOKEN |
+| LLM context window per call | 128K (INV-18) | INV_TOKEN |
+
+### Loop Budget Limits (from concierge.mmd LoopBudget)
+
+| Tier | max_tools | timeout | max_tokens |
+|---|---|---|---|
+| LOW | 6 | 2 s | 500 |
+| MEDIUM | 10 | 10 s | 2,000 |
+| HIGH | 15 | 45 s | 8,000 |
+
+### Rate Limits (from concierge.mmd INV_RATE)
+
+| Invariant | Limit |
+|---|---|
+| INV-08: Tool calls per turn | 20 (hard cap) |
+| INV-09: Clarification rounds per intent | 3 |
+| INV-10: Output queue depth | 50 |
+| INV-11: Workflow execution depth | 3 |
+| INV-12: Concurrent active turns per session | 1 |
 
 ### Epics
-<!-- TBD -->
 
-### Issues
-<!-- TBD -->
+#### E10.1 — E2E Test Suite: 3-Turn Conversation Flows
+
+> Validate the complete Concierge stack with multi-turn conversations for each tier.
+> Each test boots the full kernel (`bootstrap.py` → Fabric + Model Hub + Orchestrator + Planner),
+> sends 3 user messages, and verifies the FSM traversal, tool execution, result delivery, and
+> SessionState mutations at each turn.
+
+**Issue E10.1.1** — Create `tests/k1/concierge/test_e2e_low_tier.py` — LOW tier 3-turn conversation
+
+Full-stack test with `MockLLMAdapter` (scripted responses) + real Fabric (40 POC capabilities):
+
+- **Turn 1** — User: "What's the weather in Seattle?"
+  1. Boot kernel via `bootstrap.py` (TEST mode — `MockLLMAdapter`, real Fabric, real bus)
+  2. Inject user message via `TestInputAdapter`
+  3. Verify FSM: LISTENING → ACKING → DISPATCHING
+  4. Verify ACKING: complexity classified as LOW
+  5. Verify DISPATCHING: react loop executes `invoke_capability("tool.execute.weather_forecast", {"location": "Seattle"})`
+  6. Verify Fabric pipeline: 9-step execution, `BridgeProvider` → `POCMockBridgeAdapter` → handler
+  7. Verify `CapabilityResult.success == True`
+  8. Verify FSM: DISPATCHING → DELIVERING → LISTENING
+  9. Capture output via `TestOutputAdapter`: response contains weather data
+  10. Verify SessionState mutations: `intent`, `safety_band`, `history_active` updated
+
+- **Turn 2** — User: "What about Portland?"
+  1. Verify context carryover: LLM receives history from Turn 1
+  2. Verify `invoke_capability("tool.execute.weather_forecast", {"location": "Portland"})`
+  3. Verify output contains Portland weather
+  4. Verify `history_active` now has 2 turns
+
+- **Turn 3** — User: "Compare them for me"
+  1. Verify LLM receives context from both prior turns
+  2. Verify LLM generates comparison text (no tool call needed — CHAT capability)
+  3. Verify `history_active` has 3 turns
+  4. Verify SessionState checkpoint triggered (turn 3 → checkpoint threshold)
+
+Assertions:
+
+- All 3 turns complete within LoopBudget(LOW): `max_tools=6`, `timeout=2s`, `tokens=500`
+- Zero Orchestrator/Planner involvement (LOW tier bypasses)
+- Bus events captured: 3× `turn.complete.v1`
+- Fabric events captured: 2× `capability.executed`
+
+Touch point: NEW file `tests/k1/concierge/test_e2e_low_tier.py` (~60 tests)
+
+**Issue E10.1.2** — Create `tests/k1/concierge/test_e2e_medium_tier.py` — MEDIUM tier 3-turn conversation
+
+Full-stack test with `MockLLMAdapter` + real Fabric + real Orchestrator (test adapters for Planner):
+
+- **Turn 1** — User: "Book me a hotel in Paris and find a restaurant nearby"
+  1. Boot kernel (TEST mode — full stack, `enable_orchestrator=True`)
+  2. Verify ACKING: complexity classified as MEDIUM (2 capabilities)
+  3. Verify `route_task_sync()` produces K1 `TaskEnvelope(tier="MEDIUM", capabilities=["tool.execute.hotel_booking", "tool.execute.restaurant_search"])`
+  4. Verify `FabricOrchestratorAdapter.dispatch_envelope()` enqueues to Orchestrator mailbox
+  5. Verify Orchestrator `dispatch_medium()` → `ConstraintResolver` → `StepRunner` × 2 → Fabric × 2
+  6. Verify bus event `k1.orchestration.dag.completed.v1` emitted
+  7. Verify `AggregatedResult.success == True` with 2 step results
+  8. Verify `aggregated_to_tool_results()` converts to 2 tool_results
+  9. Verify FSM: DISPATCHING → COMPANIONING → (wait for result) → DELIVERING → LISTENING
+  10. Capture output: response synthesizes both hotel and restaurant results
+  11. Verify SessionState: `intent`, `entities`, `history_active` updated
+
+- **Turn 2** — User: "What about a cheaper hotel?"
+  1. Verify context carryover: original Paris search context carried
+  2. Verify MEDIUM tier: `capabilities=["tool.execute.hotel_search"]` (1 capability with constraints)
+  3. Verify Orchestrator MEDIUM path (1 step)
+  4. Verify output contains cheaper hotel options
+
+- **Turn 3** — User: "Book the second one"
+  1. Verify entity resolution from Turn 2 context (which hotel is "the second one")
+  2. Verify MEDIUM tier: `capabilities=["tool.execute.hotel_booking"]` (side-effect tool)
+  3. Verify Orchestrator MEDIUM path completes
+  4. Verify output confirms booking
+  5. Verify `history_active` has 3 turns
+
+Assertions:
+
+- All 3 turns complete within LoopBudget(MEDIUM): `max_tools=10`, `timeout=10s`, `tokens=2000`
+- Orchestrator used for all 3 turns (MEDIUM bypasses Planner)
+- Total Fabric calls: 4 (2 + 1 + 1)
+- Bus events: 3× `turn.complete.v1`, 3× `k1.orchestration.dag.completed.v1`
+
+Touch point: NEW file `tests/k1/concierge/test_e2e_medium_tier.py` (~60 tests)
+
+**Issue E10.1.3** — Create `tests/k1/concierge/test_e2e_high_tier.py` — HIGH tier 3-turn conversation
+
+Full-stack test with `TestLLMAdapter` (scripted Planner LLM) + real Fabric + real Orchestrator + real Planner:
+
+- **Turn 1** — User: "Plan a family weekend trip — find flights, book a hotel, find restaurants, check weather, and create a calendar event"
+  1. Boot kernel (TEST mode — full stack, `enable_orchestrator=True`, `enable_planner=True`)
+  2. Verify ACKING: complexity classified as HIGH (5+ capabilities, multi-step)
+  3. Verify `route_task_sync()` produces K1 `TaskEnvelope(tier="HIGH")`
+  4. Verify `FabricOrchestratorAdapter.dispatch_envelope()` enqueues to Orchestrator
+  5. Verify Orchestrator `dispatch_high()` → `PlannerAdapter.request_plan()` → Planner mailbox
+  6. Verify Planner 4-stage pipeline:
+     - SKETCH: `TestLLMAdapter` returns rough steps (5 capabilities)
+     - EXPAND: `TestLLMAdapter` returns expanded plan with `PlanStep[14-field]` for each
+     - VALIDATE: deterministic checks pass (DAG acyclic, capabilities valid, budget OK)
+     - COMMIT: `CommittedPlan` assembled, `k1.planner.plan.ready.v1` emitted
+  7. Verify Orchestrator receives `CommittedPlan` via event subscription
+  8. Verify `DAGExecutor.execute_plan()` → 5 Fabric steps (some parallel, some sequential per DAG deps)
+  9. Verify `AggregatedResult.success == True` with 5 step results
+  10. Verify FSM: DISPATCHING → COMPANIONING → BACKGROUND_WORKING → DELIVERING → LISTENING
+  11. Capture output: response summarizes all 5 results (flights, hotel, restaurants, weather, calendar)
+
+- **Turn 2** — User: "Actually, change the hotel to something closer to the beach"
+  1. Verify Orchestrator `micro_replan` path (not full re-plan — only hotel step changes)
+  2. Verify Planner `micro_replan()` returns updated `CommittedPlan` (only hotel step re-expanded)
+  3. Verify `DAGExecutor` re-runs only the hotel step
+  4. Verify output confirms new hotel
+
+- **Turn 3** — User: "Looks great, send the itinerary to the family group chat"
+  1. Verify LOW or MEDIUM tier (simple send_message — no planning needed)
+  2. Verify `invoke_capability("tool.execute.send_group_message", {...})`
+  3. Verify output confirms message sent
+  4. Verify full 3-turn `history_active`
+
+Assertions:
+
+- Turn 1 within LoopBudget(HIGH): `max_tools=15`, `timeout=45s`, `tokens=8000`
+- Turns 2-3 within their respective tier budgets
+- Planner used only for Turn 1 (HIGH), micro_replan for Turn 2
+- Total Fabric calls: ~7 (5 + 1 + 1)
+- Bus events: 3× `turn.complete.v1`, `k1.planner.plan.ready.v1`, `k1.orchestration.dag.completed.v1`
+
+Touch point: NEW file `tests/k1/concierge/test_e2e_high_tier.py` (~80 tests)
+
+**Issue E10.1.4** — Create `tests/k1/concierge/test_e2e_tier_degradation.py` — degradation cascade
+
+Test the full tier degradation path from concierge.mmd:
+
+- **Scenario 1**: HIGH → MEDIUM degradation (CB_PLANNER OPEN)
+  1. Trip CB_PLANNER by failing 2 plan requests
+  2. Send HIGH tier task → verify downgrade to MEDIUM (Orchestrator MEDIUM path, no Planner)
+  3. Verify output still delivered (degraded but functional)
+
+- **Scenario 2**: MEDIUM → LOW degradation (Orchestrator mailbox unavailable)
+  1. Fill Orchestrator mailbox to capacity
+  2. Send MEDIUM tier task → FabricOrchestratorAdapter falls back to `dispatch_direct()`
+  3. Verify capabilities execute directly via Fabric (LOW path)
+
+- **Scenario 3**: LOW → canned response (Fabric unavailable)
+  1. Trip CB_FABRIC (all providers OPEN)
+  2. Send LOW tier task → Fabric `execute()` fails
+  3. Verify canned response from `CANNED_RESPONSES` store
+
+- **Scenario 4**: LLM → canned response (CB_MODEL OPEN, concierge.mmd LLM_CASCADE L3)
+  1. `MockLLMAdapter` configured to fail all calls
+  2. Verify `ModelGatewayAdapter` LLM cascade: RETRY (L1) → CB HALF-OPEN (L2) → CANNED_RESPONSE (L3)
+  3. Verify canned response per capability type (CHAT / TOOL_CALL / STRUCTURED)
+
+Assertions:
+
+- Each degradation preserves some response to user (never silent failure)
+- Correct canned response text for each call type (concierge.mmd `CANNED_RESPONSES`)
+- CB recovery: after reset timeout, traffic resumes normally
+
+Touch point: NEW file `tests/k1/concierge/test_e2e_tier_degradation.py` (~40 tests)
+
+**Issue E10.1.5** — Create `tests/k1/concierge/test_e2e_crisis.py` — CRISIS path
+
+Test the hardcoded CRISIS keyword path (concierge.mmd HEURISTIC_FALLBACK):
+
+- User: "I'm thinking about hurting myself"
+  1. Verify UltraBERT or heuristic fallback detects CRISIS keywords
+  2. Verify `safety_band = RED` (highest urgency)
+  3. Verify CRISIS tier: timeout 5 s, response is immediate safety resource
+  4. Verify CRISIS canned response is a **hardcoded string constant** (zero LLM dependency)
+  5. Verify no tool execution (CRISIS bypasses Fabric/Orchestrator/Planner entirely)
+  6. Verify `SessionState.safety_band` written as `RED`
+
+Touch point: NEW file `tests/k1/concierge/test_e2e_crisis.py` (~10 tests)
+
+---
+
+#### E10.2 — Resolve Deferred Items from M1-M9
+
+> Address every Phase 2 stub, deferred Option B, and optional wiring that was postponed.
+
+**Issue E10.2.1** — Resolve M1 Option B: update LLM validator to accept `HubResponse` directly
+
+- File: `k1/concierge/llm/validator.py`
+- M1 E1.6.1 chose Option A (shim — validator still expects old fields, `_hub_to_legacy()` converts)
+- M10 applies Option B: change `validate()` to accept `HubResponse` directly
+- Update field access: `response.text` → `response.result.text`, `response.tool_calls` → `response.result.tool_calls`, etc.
+- Remove `_hub_to_legacy()` shim
+- Update all callers (react/loop.py passes `HubResponse` directly instead of converting)
+- Verify: `grep -r "_hub_to_legacy" k1/concierge/` → 0 results after cleanup
+
+Touch point: EDIT `k1/concierge/llm/validator.py` (~30 lines changed), EDIT `k1/concierge/react/loop.py` (remove shim call)
+
+**Issue E10.2.2** — Resolve M3 E3.5: wire K1 bus middleware
+
+M3 E3.5 was "optional but recommended." With full E2E suite now validating correctness, middleware can be safely wired:
+
+- **TopicValidationMiddleware** (SOFT — warns, never drops):
+  - File: `k1/concierge/bus/setup.py` → `create_poc_bus()`
+  - Create `TopicRegistry`, register all 47 `ALL_TOPICS`
+  - Build `TopicValidationMiddleware(registry)`, add to `MiddlewareChain`
+  - Import: `from k1.bus.middleware.topic_validation import TopicRegistry, TopicValidationMiddleware`
+  - Verify: existing tests still green (SOFT validation = no drops)
+
+- **TracingMiddleware** (behind flag):
+  - Add `bus_tracing_enabled: bool = false` to concierge config
+  - Conditionally prepend `TracingMiddleware(enabled=config.bus_tracing_enabled)` to chain
+  - Import: `from k1.bus.middleware.tracing import TracingMiddleware`
+
+- **MetricsMiddleware** (behind flag):
+  - Add `bus_metrics_enabled: bool = false` to concierge config
+  - Conditionally append `MetricsMiddleware(enabled=config.bus_metrics_enabled)` to chain
+  - Import: `from k1.bus.middleware.metrics import MetricsMiddleware`
+
+Touch point: EDIT `k1/concierge/bus/setup.py` (~30 lines), EDIT config (~5 lines)
+
+**Issue E10.2.3** — Resolve M6 E6.6.2: wire real `IEmbeddingPort` for intent-based discovery
+
+M6 used `_StubEmbeddingPort` (zero vectors) — intent-based `discover_capabilities()` returned nothing useful. Wire a real embedding port:
+
+- Assess K1 embedding infra: check if `k1/fabric/adapters/embedding_adapter.py` exists
+- If exists: wire `EmbeddingAdapter` into `FabricFactory.create_with_ports()` replacing `_StubEmbeddingPort`
+- If not: use a lightweight sentence-transformer (e.g., `SentenceTransformerEmbeddingPort`) or defer to post-M10
+- Verify: `fabric.discover_capabilities(intent="book a hotel")` returns travel capabilities (semantic match)
+- Verify: domain-filtered discovery still works (regression)
+
+Touch point: EDIT `k1/concierge/kernel/bootstrap.py` `_create_fabric()` (~10 lines), potentially NEW adapter file
+
+**Issue E10.2.4** — Resolve M9 Phase 1 stubs: replace `TestLLMAdapter` and `TestBridgeAdapter` in Planner
+
+M9 E9.1.1 wired Phase 1 stubs:
+
+- `llm_port=TestLLMAdapter()` — Planner stages SKETCH/EXPAND/VALIDATE use scripted LLM responses
+- `bridge_port=TestBridgeAdapter()` — Planner bridge operations return canned results
+
+Replace with real adapters:
+
+- **Planner `llm_port`**: Wire `LLMGatewayAdapter(model_hub)` from `k1/planner/adapters/llm_gateway_adapter.py`
+  - `model_hub` is the `ModelHubService` from M7
+  - Planner LLM calls route through Model Hub → GeminiProviderPlugin → real Gemini API
+  - Config: `planner.llm_model` defaults to `gemini-2.5-flash-lite` (same as Concierge)
+  - Budget: Planner has own `consumer_id="planner"` for Model Hub budget tracking
+
+- **Planner `bridge_port`**: Wire `BridgeAdapter(bridge_client)` from `k1/planner/adapters/bridge_adapter.py`
+  - Assess: does a real bridge client exist? If not, keep `TestBridgeAdapter` — document as **post-M10 dependency on K0 Bridge**
+  - If POC bridge exists: wire `POCMockBridgeAdapter` (from M6) as the bridge client for Planner too
+
+Touch point: EDIT `k1/concierge/dispatch/planner_wiring.py` (~20 lines — replace TestLLMAdapter + optionally TestBridgeAdapter)
+
+**Issue E10.2.5** — Resolve M8 simplified CB: wire full CB cascade
+
+M8 `FabricOrchestratorAdapter` has simplified retry. Wire full circuit breakers per concierge.mmd L285:
+
+- **CB_ORCHESTRATOR**: `CircuitBreaker("CB_ORCHESTRATOR", failure_threshold=3, reset_timeout_s=30)`
+  - In `dispatch_envelope()`: gate MED/HIGH enqueue through CB_ORCHESTRATOR
+  - OPEN → degrade MED→LOW (direct Fabric)
+- **CB_FABRIC**: `CircuitBreaker("CB_FABRIC", failure_threshold=3, reset_timeout_s=30)`
+  - In `dispatch_direct()`: gate LOW execution through CB_FABRIC
+  - OPEN → canned response
+- **CB_MCP**: `CircuitBreaker("CB_MCP", failure_threshold=2, reset_timeout_s=60)`
+  - Per MCP provider (no MCP servers in POC → stub creation, actual wiring post-M10)
+
+Touch point: EDIT `k1/concierge/dispatch/fabric_orchestrator_adapter.py` (~40 lines — add 2-3 CB instances + gate logic)
+
+---
+
+#### E10.3 — Latency Benchmarks
+
+> Validate that each tier meets its budget envelope from concierge.mmd PERF_ENVELOPES.
+> Benchmarks use `TestProviderPlugin` (zero-latency LLM) to isolate system overhead from
+> LLM provider latency. LLM-inclusive benchmarks are informational (provider-dependent).
+
+**Issue E10.3.1** — Create `tests/k1/concierge/benchmarks/test_latency_low.py` — LOW tier latency
+
+Benchmark: 10 LOW-tier turns, measure P50/P95/P99 system-overhead latency.
+
+Setup: full kernel boot with `TestProviderPlugin` (returns instantly) + real Fabric (40 POC mock capabilities — instant handlers)
+
+Per turn:
+
+- Inject message → measure wall-clock time from injection to output delivery
+- Subtract mock LLM response time (known ~0 ms) → pure system overhead
+- Expected system overhead: ~32 ms (PERF_SYSTEM)
+- Budget: total < 2 s (PERF_ENVELOPES) — with 0 ms LLM, should be < 100 ms
+
+Assertions:
+
+- P99 system overhead < 200 ms (generous margin for CI environment)
+- P50 system overhead < 100 ms
+- No turn exceeds 2 s total
+- Tool calls per turn ≤ 6 (LoopBudget LOW)
+- Output tokens per turn ≤ 500
+
+Touch point: NEW file `tests/k1/concierge/benchmarks/test_latency_low.py` (~20 tests)
+
+**Issue E10.3.2** — Create `tests/k1/concierge/benchmarks/test_latency_medium.py` — MEDIUM tier latency
+
+Benchmark: 5 MEDIUM-tier turns, measure system-overhead latency (excluding Orchestrator queue wait).
+
+Setup: full kernel + Orchestrator with `TestProviderPlugin`
+
+Per turn:
+
+- Measure: dispatch → Orchestrator dequeue → Fabric × 1-2 → AggregatedResult → DELIVERING
+- Expected: < 500 ms system overhead (Orchestrator adds envelope processing + StepRunner)
+- Budget: total < 10 s (with 0 ms LLM)
+
+Assertions:
+
+- P99 system overhead < 1 s
+- Orchestrator dispatch latency < 50 ms (envelope creation + enqueue)
+- Fabric execution × 2 < 100 ms (mock handlers)
+- No turn exceeds 10 s total
+- Tool calls per turn ≤ 10 (LoopBudget MEDIUM)
+- Output tokens per turn ≤ 2,000
+
+Touch point: NEW file `tests/k1/concierge/benchmarks/test_latency_medium.py` (~15 tests)
+
+**Issue E10.3.3** — Create `tests/k1/concierge/benchmarks/test_latency_high.py` — HIGH tier latency
+
+Benchmark: 3 HIGH-tier turns, measure system-overhead latency (excluding Planner LLM + Orchestrator queue).
+
+Setup: full kernel + Orchestrator + Planner with `TestLLMAdapter` (scripted, instant responses)
+
+Per turn:
+
+- Measure: dispatch → Orchestrator → Planner 4-stage → DAGExecutor → Fabric × 3-5 → AggregatedResult
+- Expected: < 2 s system overhead (Planner pipeline + DAG execution + result flow)
+- Budget: total < 45 s (with 0 ms LLM) — should be < 5 s
+
+Assertions:
+
+- P99 system overhead < 5 s
+- Planner pipeline (4 stages) < 2 s with instant LLM
+- DAGExecutor (5 steps) < 500 ms with mock Fabric
+- No turn exceeds 45 s total
+- Tool calls per turn ≤ 15 (LoopBudget HIGH)
+- Output tokens per turn ≤ 8,000
+
+Touch point: NEW file `tests/k1/concierge/benchmarks/test_latency_high.py` (~15 tests)
+
+**Issue E10.3.4** — Create `tests/k1/concierge/benchmarks/test_token_budgets.py` — token budget enforcement
+
+Verify each tier respects its token budget from concierge.mmd PERF_TOKENS + INV_TOKEN:
+
+- LOW: `MockLLMAdapter` configured to return exactly 500 tokens → verify accepted. 501 tokens → verify LoopBudget exhaustion warning.
+- MEDIUM: 2,000 tokens accepted, 2,001 triggers exhaustion.
+- HIGH: 8,000 tokens accepted, 8,001 triggers exhaustion.
+- Intent ack: 150 tokens max (INV-19). Verify `acknowledge_request()` output ≤ 150 tokens.
+- Preliminary ack: 200 tokens max (INV-20). Verify COMPANIONING ack ≤ 200 tokens.
+- Clarification: 300 tokens max (INV-21). Verify clarification question ≤ 300 tokens.
+- Context window: verify `HubRequest.constraints.max_context_tokens ≤ 128_000` (INV-18)
+
+Touch point: NEW file `tests/k1/concierge/benchmarks/test_token_budgets.py` (~25 tests)
+
+**Issue E10.3.5** — Create `tests/k1/concierge/benchmarks/test_rate_limits.py` — rate limit invariants
+
+Verify rate limits from concierge.mmd INV_RATE:
+
+- INV-08: 20 tool calls per turn hard cap. Configure `MockLLMAdapter` to request 21 tool calls → verify 20th succeeds, 21st is blocked.
+- INV-09: 3 clarification rounds per intent. Simulate 4 clarification cycles → verify 3rd completes, 4th is rejected.
+- INV-10: Output queue depth 50. Queue 51 messages → verify 50 delivered, 51st blocked or dropped.
+- INV-11: Workflow execution depth 3. Trigger nested workflows → verify depth 3 succeeds, depth 4 blocked.
+- INV-12: 1 concurrent active turn per session. Attempt 2 concurrent turns → verify second is queued/rejected.
+
+Touch point: NEW file `tests/k1/concierge/benchmarks/test_rate_limits.py` (~15 tests)
+
+---
+
+#### E10.4 — POC Dead Code Cleanup
+
+> After M5 (Big Copy), all 22 production directories exist in BOTH `poc/k1_poc/` (original) and
+> `k1/concierge/` (production home). The original POC files are dead code — only `demo/` and
+> `testing/` should remain. Archive or delete the copied directories.
+
+**Issue E10.4.1** — Verify no lingering `poc.k1_poc` imports in `k1/`
+
+Before archival, ensure zero `poc.k1_poc` references remain in production code:
+
+- `grep -r "poc\.k1_poc" k1/ --include="*.py"` → must return 0 results
+- `grep -r "poc\.k1_poc" tests/k1/ --include="*.py"` → must return 0 results
+- `grep -r "from poc" k1/ --include="*.py"` → must return 0 results
+
+If any found:
+
+- Fix each reference (likely leftover from M5 rewrite)
+- Common offenders: docstrings, comments, logger names, test fixtures
+
+Touch point: VERIFY + fix 0-5 files in `k1/` or `tests/k1/`
+
+**Issue E10.4.2** — Archive POC production directories
+
+The 22 copied directories in `poc/k1_poc/` are dead code after M5. Archive them:
+
+**Strategy**: Move to `poc/k1_poc/_archived/` with a README explaining the archive.
+
+```
+poc/k1_poc/
+├── _archived/          # NEW — archived production code (live at k1/concierge/)
+│   ├── README.md       # "Archived at M10. Production code at k1/concierge/."
+│   ├── actors/
+│   ├── bus/
+│   ├── compression/
+│   ├── config/
+│   ├── delta/
+│   ├── events/
+│   ├── experience/
+│   ├── fabric/
+│   ├── fsm/
+│   ├── identity/
+│   ├── kernel/
+│   ├── ledger/
+│   ├── llm/
+│   ├── obs/
+│   ├── orchestrator/
+│   ├── prompt/
+│   ├── protocols/
+│   ├── react/
+│   ├── scheduler/
+│   ├── sessionstate/
+│   ├── task/
+│   └── tools/
+├── demo/               # STAYS — Smith family demo (references _archived/ or k1.concierge)
+├── testing/            # STAYS — internal test harness
+├── main.py             # STAYS — demo launcher
+├── __init__.py         # STAYS
+└── concierge_poc_architecture.mmd  # STAYS — historical reference
+```
+
+Commands:
+
+```powershell
+mkdir poc/k1_poc/_archived
+# Move each of the 22 directories
+foreach ($dir in @("actors","bus","compression","config","delta","events","experience","fabric","fsm","identity","kernel","ledger","llm","obs","orchestrator","prompt","protocols","react","scheduler","sessionstate","task","tools")) {
+    git mv "poc/k1_poc/$dir" "poc/k1_poc/_archived/$dir"
+}
+```
+
+Touch point: `git mv` 22 directories → `poc/k1_poc/_archived/`
+
+**Issue E10.4.3** — Create `poc/k1_poc/_archived/README.md`
+
+```markdown
+# Archived POC Production Code
+
+These directories were the original POC implementation of the K1 Concierge.
+They were copied to `k1/concierge/` during M5 (Big Copy) and are no longer
+the canonical source.
+
+**Production code**: `k1/concierge/`
+**Archived at**: M10 — Integration & Hardening
+**Archive date**: <commit date>
+
+The `demo/` and `testing/` directories remain active in `poc/k1_poc/` — they
+are not production code and reference the archived modules or `k1.concierge`.
+```
+
+Touch point: NEW file `poc/k1_poc/_archived/README.md`
+
+**Issue E10.4.4** — Update `demo/` and `testing/` imports
+
+After archival, `demo/coordinator.py` and `testing/harness/engine.py` import from `poc.k1_poc.*` — these paths still resolve because `_archived/` is under `poc/k1_poc/`:
+
+- Option A: Update demo/testing imports to `from k1.concierge.*` (clean — demo uses production path)
+- Option B: Keep as-is (imports resolve via `_archived/` sub-package path — `poc.k1_poc._archived.actors` ≠ `poc.k1_poc.actors`)
+- **Decision**: Option A — update to `k1.concierge.*`. This ensures demo exercises the real production code.
+- Rewrite: `sed -i 's/poc\.k1_poc/k1.concierge/g'` on `poc/k1_poc/demo/*.py` and `poc/k1_poc/testing/**/*.py`
+- Exception: `poc/k1_poc/main.py` — update its imports too, or mark as deprecated
+- Verify: `python -m pytest poc/k1_poc/testing/harness/ --tb=short -q` → all 207 tests pass from new imports
+
+Touch point: EDIT ~25 files in `poc/k1_poc/demo/` and `poc/k1_poc/testing/` (import rewrite)
+
+**Issue E10.4.5** — Delete stale test files in `tests/poc/`
+
+After M5, tests were copied to `tests/k1/concierge/`. The original `tests/poc/` files are stale:
+
+- Verify `tests/k1/concierge/` has all 73 migrated test files (from M5 E5.2.2)
+- Archive: `git mv tests/poc/ tests/poc_archived/` (or delete if confident)
+- **Decision**: Archive (safer — can verify diff later)
+- Create `tests/poc_archived/README.md`: "Archived at M10. Active tests at tests/k1/concierge/."
+
+Touch point: `git mv tests/poc/ tests/poc_archived/`
+
+---
+
+#### E10.5 — Architecture Diagram Updates
+
+> 13 concierge flow diagrams exist at `architecture_diagrams/k1/conceriege_flows/`.
+> These were created pre-migration and reference `poc/k1_poc/` paths, POC class names
+> (e.g., `FabricPOCBridge`, `ModelHubPOCBridge`, `OrchestratorStub`), and POC-era
+> wiring. Update to reflect the production layout after M6-M9.
+
+**Issue E10.5.1** — Update `01_concierge_context_and_boundaries.mmd`
+
+- Replace `poc/k1_poc/` paths with `k1/concierge/` paths
+- Update boundary references: `FabricPOCBridge` → `Fabric` (direct), `ModelHubPOCBridge` → `ModelGatewayAdapter(ModelHubService)`, `OrchestratorStub` → `OrchestratorService`
+- Add Planner subsystem to the boundary context
+
+Touch point: EDIT `architecture_diagrams/k1/conceriege_flows/01_concierge_context_and_boundaries.mmd`
+
+**Issue E10.5.2** — Update `05_dispatching_low_tier_llm_tool_loop_execution.mmd`
+
+- LOW tier path: react loop → `ILLMPort` → `ModelGatewayAdapter` → `ModelHubService` → `GeminiProviderPlugin`
+- Tool execution: `IDispatchPort.dispatch_direct()` → `Fabric.execute()` (not `FabricPOCBridge`)
+- Update capability dispatch chain to show 9-step pipeline
+
+Touch point: EDIT `architecture_diagrams/k1/conceriege_flows/05_dispatching_low_tier_llm_tool_loop_execution.mmd`
+
+**Issue E10.5.3** — Update `06_dispatching_medium_high_orchestrator_planner_fabric_path.mmd`
+
+- MEDIUM path: `IDispatchPort.dispatch_envelope()` → `FabricOrchestratorAdapter` → Orchestrator mailbox → `dispatch_medium()` → StepRunner → Fabric
+- HIGH path: Orchestrator → `PlannerAdapter` → Planner mailbox → 4-stage pipeline → `CommittedPlan` → `DAGExecutor` → Fabric
+- Add Planner 4-stage sub-diagram (SKETCH → EXPAND → VALIDATE → COMMIT)
+- Add CB_PLANNER degradation arrow (HIGH → MEDIUM when OPEN)
+
+Touch point: EDIT `architecture_diagrams/k1/conceriege_flows/06_dispatching_medium_high_orchestrator_planner_fabric_path.mmd`
+
+**Issue E10.5.4** — Update `08_interrupt_handling_and_hil_roundtrip_routing.mmd`
+
+- Add HIL Response Routing subgraph (from M9 E9.4): `k1.hil.clarification.v1` → `HILEventHandler` → `PendingClarificationStore` → user → `HILResponseDetector` → `k1.hil.clarification_response.v1` → Planner
+- Show `PENDING_CLARIFICATIONS` data store
+- Update with Planner HILCoordinator event flow
+
+Touch point: EDIT `architecture_diagrams/k1/conceriege_flows/08_interrupt_handling_and_hil_roundtrip_routing.mmd`
+
+**Issue E10.5.5** — Update `12_resilience_circuit_breakers_error_recovery_degradation.mmd`
+
+- Add all 4 circuit breakers: CB_MODEL (M7), CB_ORCHESTRATOR (M10), CB_PLANNER (M9), CB_FABRIC (M10), CB_MCP (stub)
+- Add tier degradation cascade: HIGH → MED → LOW → canned
+- Add LLM cascade: RETRY → CB HALF-OPEN → CANNED_RESPONSE
+- Show recovery arrows (CB reset → traffic resumes)
+
+Touch point: EDIT `architecture_diagrams/k1/conceriege_flows/12_resilience_circuit_breakers_error_recovery_degradation.mmd`
+
+**Issue E10.5.6** — Update remaining flow diagrams (batch)
+
+Review and update if stale references found:
+
+- `02_fsm_state_machine_and_transition_rules.mmd` — verify BACKGROUND_WORKING state present
+- `03_acking_ultrabert_phase1_deterministic_pipeline.mmd` — verify complexity routing references 3 tiers
+- `04_clarifying_entropy_minimization_and_hil_detection.mmd` — add Planner HIL awareness
+- `07_companioning_progressing_delivering_output_contracts.mmd` — verify Orchestrator result flow
+- `09_tool_dispatcher_allowlists_schema_gates_mutation_guard.mmd` — verify `fabric_port` path only (no old callbacks)
+- `10_k1_bus_lanes_topics_publish_subscribe_map.mmd` — add Planner/Orchestrator topics (`k1.planner.*`, `k1.orchestration.*`, `k1.hil.*`)
+- `11_sessionstate_single_writer_two_phase_write_paths.mmd` — verify no changes needed
+- `13_concierge_real_life_step_by_step_how_it_works.mmd` — update E2E flow to show real subsystem names
+
+Touch point: EDIT 8 `.mmd` files in `architecture_diagrams/k1/conceriege_flows/` (batch review, ~5-20 lines each)
+
+**Issue E10.5.7** — Update `poc/k1_poc/concierge_poc_architecture.mmd` — mark as historical
+
+Add header comment:
+
+```
+%% HISTORICAL — Original POC architecture diagram. Production layout at k1/concierge/.
+%% See architecture_diagrams/k1/conceriege_flows/ for current diagrams.
+```
+
+Touch point: EDIT `poc/k1_poc/concierge_poc_architecture.mmd` (~3 lines added)
+
+---
+
+#### E10.6 — README & Deployment Docs
+
+> Update documentation to reflect the post-migration production layout.
+
+**Issue E10.6.1** — Update `k1/concierge/README.md`
+
+Current README describes the ConciergeAgent pattern and meta-intents. After M6-M9:
+
+- Add **Architecture** section showing the 4-subsystem stack:
+  ```
+  k1/concierge/ (ConciergeAgent — FSM + React Loop + tools)
+  ├── k1/fabric/     (Capability Fabric — 9-step pipeline)
+  ├── k1/model_hub/  (Model Hub — LLM orchestration)
+  ├── k1/orchestrator/ (Orchestrator — MEDIUM/HIGH task execution)
+  └── k1/planner/    (Planner — HIGH tier 4-stage planning)
+  ```
+- Add **Port Map** section listing all 8 Concierge outbound ports:
+  - `ILLMPort` → `ModelGatewayAdapter` → `ModelHubService`
+  - `IDispatchPort` → `FabricOrchestratorAdapter` → Fabric / Orchestrator / Planner
+  - `IFabricPort` → `Fabric` (direct, M6)
+  - `IBus` / `IMailboxRouter` / `IMailbox` → K1 Bus (M3)
+  - `IStoragePort` et al. → SessionState adapters (M4)
+  - Plus `IInputPort`, `IOutputPort`, `IClassificationPort`, `IDeltaPort`, `IMemoryPort`
+- Add **Test Adapters** section listing the 8 test adapters from concierge.mmd
+- Add **Configuration** section referencing config flags (`enable_orchestrator`, `enable_planner`, `bus_tracing_enabled`, `bus_metrics_enabled`)
+- Add **Performance Targets** section with the budget envelopes table
+
+Touch point: EDIT `k1/concierge/README.md` (~100 lines added)
+
+**Issue E10.6.2** — Update root `readme.md` — add migration status
+
+Add a brief section under the existing architecture description:
+
+- "K1 Concierge POC successfully migrated to production layout at `k1/concierge/`"
+- Link to `docs/plans/POC_MIGRATION_PLAN.md` for full migration details
+- Note the 4-subsystem integration (Fabric, Model Hub, Orchestrator, Planner)
+
+Touch point: EDIT `readme.md` (~10 lines added)
+
+**Issue E10.6.3** — Create `docs/deployment/concierge_deployment.md` — deployment guide
+
+Document how to deploy the K1 Concierge after migration:
+
+- **Prerequisites**: Python 3.11+, `google-genai` (lazy-loaded), K1 bus, K1 Fabric, K1 Model Hub, K1 Orchestrator, K1 Planner
+- **Configuration**: Config flags, `defaults.yaml` parameters (59 tunable), environment variables for API keys
+- **Boot sequence**: Kernel bootstrap Phase 1-5 (Bus → SessionState → Fabric → Model Hub → Orchestrator → Planner)
+- **Health checks**: Model Hub health, Fabric health, Orchestrator health, Planner health
+- **Monitoring**: bus middleware (tracing, metrics), circuit breaker states, budget enforcement
+- **Tier degradation**: document the cascade and canned response behavior
+- **Docker**: reference existing `Dockerfile` + note any new environment variables
+
+Touch point: NEW file `docs/deployment/concierge_deployment.md` (~150 lines)
+
+**Issue E10.6.4** — Update `docs/deployment/docker-envelope-submission-guide.md` — reflect new paths
+
+- Replace `poc/k1_poc/` references with `k1/concierge/`
+- Update any Docker commands or paths that reference the old POC location
+- Verify Dockerfile still builds correctly with new layout
+
+Touch point: EDIT `docs/deployment/docker-envelope-submission-guide.md` (if stale references found)
+
+---
+
+#### E10.7 — Full Regression Suite + Final Gate
+
+> Run every test suite across all K1 modules and verify zero regressions.
+> This is the final gate before the migration is declared complete.
+
+**Issue E10.7.1** — Run K1 Concierge test suite (migrated from POC)
+
+- Command: `python -m pytest tests/k1/concierge/ --tb=short -q`
+- Expected: ~3,054+ tests (original POC tests migrated at M5) + all new M6-M10 tests
+- Gate: 100% green
+
+**Issue E10.7.2** — Run K1 Fabric test suite
+
+- Command: `python -m pytest tests/k1/fabric/ --tb=short -q`
+- Expected: 183+ tests
+- Gate: 100% green, zero regressions from Concierge wiring
+
+**Issue E10.7.3** — Run K1 Model Hub test suite
+
+- Command: `python -m pytest tests/k1/model_hub/ --tb=short -q`
+- Expected: ~110 tests (from M7) + existing
+- Gate: 100% green
+
+**Issue E10.7.4** — Run K1 Orchestrator test suite
+
+- Command: `python -m pytest tests/k1/orchestrator/ --tb=short -q`
+- Expected: existing orchestrator tests (~14,500 lines)
+- Gate: 100% green, zero regressions from Concierge cross-wiring
+
+**Issue E10.7.5** — Run K1 Planner test suite
+
+- Command: `python -m pytest tests/k1/planner/ --tb=short -q`
+- Expected: 40 test files (~23,742 lines)
+- Gate: 100% green, zero regressions from Concierge cross-wiring
+
+**Issue E10.7.6** — Run K1 Bus test suite
+
+- Command: `python -m pytest tests/k1/bus/ --tb=short -q`
+- Gate: 100% green, middleware additions did not break anything
+
+**Issue E10.7.7** — Run K1 SessionState test suite
+
+- Command: `python -m pytest tests/k1/sessionstate/ --tb=short -q`
+- Gate: 100% green (shim from M5 still resolves)
+
+**Issue E10.7.8** — Run POC internal harness (via updated imports)
+
+- Command: `python -m pytest poc/k1_poc/testing/harness/ --tb=short -q`
+- Expected: 207 tests
+- Gate: 100% green (E10.4.4 updated imports to `k1.concierge.*`)
+
+**Issue E10.7.9** — Run full test suite (aggregate)
+
+- Command: `python -m pytest tests/ poc/k1_poc/testing/harness/ --tb=short -q`
+- Expected total: **3,261 (M0 baseline) + ~600 new tests (M6-M10)** = ~3,861+ tests
+- Gate: 100% green
+- Record final test count for migration completion report
+
+**Issue E10.7.10** — Run new E2E + benchmark suites specifically
+
+- Command: `python -m pytest tests/k1/concierge/test_e2e_*.py tests/k1/concierge/benchmarks/ --tb=short -q`
+- Expected: ~280 tests (E10.1 + E10.3)
+- Gate: 100% green, all latency assertions pass, all token budget assertions pass
+
+---
+
+#### E10.8 — Git Tag + Migration Completion
+
+**Issue E10.8.1** — Final commit and tag
+
+- Commit message: `feat: M10 Integration & Hardening — E2E tests, benchmarks, deferred item resolution, POC archival, diagram updates`
+- Tag: `m10-integration-hardening-complete`
+- This tag marks the **completion of the POC → K1 migration**.
+
+**Issue E10.8.2** — Create migration completion report
+
+Create `docs/plans/POC_MIGRATION_COMPLETION_REPORT.md`:
+
+```markdown
+# POC → K1 Concierge Migration — Completion Report
+
+## Timeline
+
+| Milestone | Scope | Tag |
+|---|---|---|
+| M0 | Pre-Flight | `m0-preflight-complete` |
+| M1 | IModelPort | `m1-imodelport-complete` |
+| M2 | ICapabilityPort | `m2-icapabilityport-complete` |
+| M3 | IBusPort | `m3-ibusport-complete` |
+| M4 | IStoragePort Audit | `m4-istorageport-audit-complete` |
+| M5 | Big Copy | `m5-big-copy-complete` |
+| M6 | Fabric Wiring | `m6-fabric-wiring-complete` |
+| M7 | Model Hub Wiring | `m7-model-hub-wired` |
+| M8 | Orchestrator Wiring | `m8-orchestrator-wired` |
+| M9 | Planner Wiring | `m9-planner-wired` |
+| M10 | Integration & Hardening | `m10-integration-hardening-complete` |
+
+## Final Metrics
+
+| Metric | Value |
+|---|---|
+| Total test count (M0 baseline) | 3,261 |
+| Total test count (M10 final) | ~3,861+ |
+| New tests added (M6-M10) | ~600 |
+| Production files migrated | 277 .py + 24 non-.py |
+| Import paths rewritten | 3,303+ |
+| K1 subsystems wired | 4 (Fabric, Model Hub, Orchestrator, Planner) |
+| POC bridges removed | 3 (FabricPOCBridge, ModelHubPOCBridge, OrchestratorStub) |
+| New K1 services built | ModelHubService, GeminiProviderPlugin, ModelSelector, BudgetEnforcer |
+| New Concierge ports | 3 (ILLMPort, IDispatchPort, IFabricPort) |
+| New Concierge adapters | 5 (ModelGatewayAdapter, FabricOrchestratorAdapter, MockDispatchAdapter, HILResponseDetector, HILEventHandler) |
+| Circuit breakers | 4 (CB_MODEL, CB_ORCHESTRATOR, CB_PLANNER, CB_FABRIC) |
+| Architecture diagrams updated | 13 |
+| POC dead code archived | 22 directories |
+| Deferred items resolved | 5 (LLM validator, bus middleware, embeddings, Planner stubs, CB cascade) |
+
+## Post-Migration Tracks (Not in Scope)
+
+- Model Hub Hardening: multi-provider, manifest scanning, response cache, rate limiter
+- Workflow subsystem activation (real IWorkflowStoragePort)
+- MCP connector integration
+- K0 Bridge real WAL writes
+- Crash recovery infrastructure
+- Admin API
+- Rust bus backend parity
+```
+
+Touch point: NEW file `docs/plans/POC_MIGRATION_COMPLETION_REPORT.md` (~80 lines)
+
+### Structural Gap Analysis
+
+| Aspect | Before M10 (Post-M9) | After M10 | Impact |
+|---|---|---|---|
+| E2E tests | Per-milestone unit/integration only | 3-turn conversation flows for LOW, MEDIUM, HIGH + CRISIS + degradation | Full-stack validation across all tiers |
+| Latency verification | No benchmarks | P50/P95/P99 system overhead measured, budget envelope assertions | Performance regression detection |
+| Token budget enforcement | Configured but untested E2E | Per-tier budget tests (500/2K/8K + ack/prelim/clarification limits) | Invariant compliance verified |
+| Rate limits | Configured but untested E2E | INV-08 through INV-12 verified | Safety invariants enforced |
+| LLM validator | Option A shim (_hub_to_legacy) | Option B: direct HubResponse acceptance, shim removed | Cleaner contract, less translation |
+| Bus middleware | Zero (POC default) | TopicValidation (soft) + Tracing (flag) + Metrics (flag) | Observable bus, topic safety net |
+| Fabric discovery | Domain-only (stub embeddings) | Real embeddings (if infra ready) or documented gap | Intent-based search quality |
+| Planner stubs | TestLLMAdapter + TestBridgeAdapter | Real LLMGatewayAdapter + real/POC BridgeAdapter | Planner uses real LLM for planning |
+| Circuit breakers | CB_PLANNER only (M9) | CB_ORCHESTRATOR + CB_FABRIC + CB_MCP added | Full resilience cascade |
+| POC dead code | 22 dirs in poc/k1_poc/ (duplicated) | Archived to poc/k1_poc/_archived/ | Clean separation, no confusion |
+| Demo/testing imports | `poc.k1_poc.*` (original path) | Updated to `k1.concierge.*` (production path) | Demo exercises production code |
+| Architecture diagrams | Pre-migration references | All 13 flow diagrams updated to production layout | Accurate documentation |
+| Deployment docs | 2 files, basic | + concierge_deployment.md (comprehensive) | Deployable |
+| Completion report | None | POC_MIGRATION_COMPLETION_REPORT.md | Audit trail |
+
+### Risk Register
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| E2E tests reveal integration bug between subsystems | HIGH | Per-milestone unit tests already cover individual boundaries; E2E catches composition issues |
+| Latency benchmarks fail in CI (different hardware) | MEDIUM | Use generous margins (2× expected); document baseline hardware; mark as "informational" not "blocking" |
+| POC archival breaks demo scripts | MEDIUM | E10.4.4 updates demo/testing imports before archival; verify harness still runs |
+| Embedding port not available → discovery regression | LOW | Domain-based filtering still works (M6 verified); intent-based deferred gracefully |
+| Planner with real LLM exposes latency issues | MEDIUM | Budget enforcer caps spend; Planner timeout is 10s/stage; TestLLMAdapter path preserved for fast CI |
+| CB cascade introduces flaky tests (timing-dependent) | MEDIUM | Use deterministic failure injection (not timeouts); CB reset before each test |
+| Diagram updates miss a stale reference | LOW | `grep -r "poc.k1_poc\|FabricPOCBridge\|ModelHubPOCBridge\|OrchestratorStub" architecture_diagrams/` before commit |
+
+### Summary Metrics
+
+| Metric | Count |
+|---|--:|
+| New E2E test files | 5 (`test_e2e_low_tier.py`, `test_e2e_medium_tier.py`, `test_e2e_high_tier.py`, `test_e2e_tier_degradation.py`, `test_e2e_crisis.py`) |
+| New benchmark test files | 3 (`test_latency_low.py`, `test_latency_medium.py`, `test_latency_high.py`, `test_token_budgets.py`, `test_rate_limits.py`) |
+| New documentation files | 2 (`concierge_deployment.md`, `POC_MIGRATION_COMPLETION_REPORT.md`) |
+| Files edited (deferred items) | ~8 (`validator.py`, `loop.py`, `setup.py`, `bootstrap.py`, `planner_wiring.py`, `fabric_orchestrator_adapter.py`, config) |
+| Architecture diagrams updated | 13 + 1 historical marker |
+| POC directories archived | 22 |
+| POC test directory archived | 1 (`tests/poc/` → `tests/poc_archived/`) |
+| Demo/testing files rewritten | ~25 (import path updates) |
+| New tests (E10 total) | ~350 (E2E ~250 + benchmarks ~90 + rate limits ~15) |
+| Deferred items resolved | 5 of 8 (3 remain post-M10) |
+| Final total test count | ~3,861+ (M0 baseline 3,261 + ~600 M6-M10) |
 
 ---
 
