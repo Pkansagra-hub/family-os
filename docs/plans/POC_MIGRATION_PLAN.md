@@ -5214,6 +5214,1076 @@ Touch point: NEW file `docs/plans/POC_MIGRATION_COMPLETION_REPORT.md` (~80 lines
 
 ---
 
+## M11 — Native Family Tools (Fabric Tool Onboarding)
+
+**Goal**: Build and register all native family tools into K1 Fabric. These are tools FamilyOS owns end-to-end — the data lives in local SQLite (future: K0 CRDT), the logic runs locally, no external service dependency. Each tool follows the proven MCP server pattern (Calendar, Notes, Recipes, Weather) with zero Fabric core changes.
+
+**Depends on**: M10 (integration verified), M6 (Fabric wiring complete), M5 (code in k1/)
+
+**Architecture principle**: Family Data Sovereignty — families' daily data (calendar, lists, chores, budgets) must work offline, sync between devices, and never depend on an external service. External services (Google Calendar import, Instacart ordering) augment via IFL adapters; they do NOT own the data.
+
+**Tool onboarding pattern** (proven in fabric_tool_implementation_plan.md):
+1. Create YAML contract(s) in `k1/contracts/tools/<name>.yaml` — defines capability name, inputs, outputs, safety band, domain
+2. Create MCP server in `k1/tools/mcp_servers/<name>/` — models.py, storage.py, handlers.py, server.py (or FastMCP server.py)
+3. `AutoDiscoveryMCPTransport` auto-discovers server at startup — zero Fabric code changes
+4. `ModuleLoader.scan_directory()` auto-loads contracts — zero Fabric code changes
+5. Create E2E test in `tests/k1/fabric/tools/test_<name>_e2e.py` — follows test_calendar_e2e.py pattern
+
+**Server pattern choice**:
+- JSON-RPC style (CalendarMCPServer, WeatherMCPServer): for tools needing custom request routing
+- FastMCP style (NotesMCPServer, RecipesMCPServer): for straightforward CRUD tools — less boilerplate
+
+**Safety band assignments** (per concierge.mmd safety model):
+- GREEN: read-only queries (list, search, view)
+- AMBER: writes within family context (create event, assign chore, send message)
+- RED: sensitive writes with consequences (medication changes, financial transactions)
+
+**Provider type**: ALL tools in M11 use `provider_type: MCP` (local stdio). WASM reserved for pure computation (date_calc, unit_convert). Bridge reserved for K0 memory ops. IFL reserved for external services.
+
+**Storage**: Each MCP server uses its own SQLite database (same pattern as CalendarStorage). Production path: `~/.familyos/<name>.db`. Testing: `:memory:`.
+
+### Naming Convention (FAB-11 compliant)
+
+```
+tool.read.<domain>_<action>     — read-only queries (GREEN band)
+tool.write.<domain>_<action>    — create/update operations (AMBER band)
+tool.execute.<domain>_<action>  — operations with side effects (AMBER/RED band)
+tool.delete.<domain>_<action>   — delete operations (AMBER band)
+```
+
+### Tier Overview
+
+| Tier | Domain | New MCP Server | Contracts | Safety Bands | Priority |
+|------|--------|----------------|-----------|--------------|----------|
+| **T1** | Calendar (enhance) | Existing (enhance) | +2 (update, recurring) | GREEN/AMBER | Day-1 |
+| **T1** | Tasks & Lists | `k1/tools/mcp_servers/tasks/` | 6 | GREEN/AMBER | Day-1 |
+| **T1** | Family Messaging | `k1/tools/mcp_servers/messaging/` | 4 | GREEN/AMBER | Day-1 |
+| **T1** | Reminders & Timers | `k1/tools/mcp_servers/reminders/` | 5 | GREEN/AMBER | Day-1 |
+| **T1** | Chore Manager | `k1/tools/mcp_servers/chores/` | 5 | GREEN/AMBER | Day-1 |
+| **T2** | Meal Planner (enhance) | Existing (enhance recipes) | +2 | GREEN/AMBER | Week-1 |
+| **T2** | Family Budget | `k1/tools/mcp_servers/budget/` | 5 | GREEN/AMBER/RED | Week-1 |
+| **T2** | School Hub | `k1/tools/mcp_servers/school/` | 5 | GREEN/AMBER | Week-1 |
+| **T3** | Health & Medication | `k1/tools/mcp_servers/health/` | 6 | GREEN/AMBER/RED | Month-1 |
+| **T3** | Transport & Pickup | `k1/tools/mcp_servers/transport/` | 4 | GREEN/AMBER | Month-1 |
+| | **Totals** | **8 new + 2 enhanced** | **~44 new** | | |
+
+---
+
+### E11.1 — Calendar Enhancement (Tier 1)
+
+**Goal**: Extend the existing Calendar MCP server with update capability, recurring event support, multi-member views, and conflict detection.
+
+**Existing**: `k1/tools/mcp_servers/calendar/` — models.py, storage.py, handlers.py, server.py + 3 contracts (create, list, delete)
+
+**Issue E11.1.1** — Add `tool.write.calendar_update_event` contract + handler
+
+New contract YAML: `k1/contracts/tools/calendar_update_event.yaml`
+```yaml
+tool_contract:
+  name: "tool.write.calendar_update_event"
+  version: "1.0.0"
+  domain: ["CALENDAR", "FAMILY"]
+  description: "Update an existing calendar event by ID. Partial update — only provided fields are changed."
+  safety_band_min: "AMBER"
+  provider_type: "MCP"
+  required_inputs:
+    - name: "event_id"
+      type: "STRING"
+      description: "Event identifier to update"
+  optional_inputs:
+    - name: "title"
+      type: "STRING"
+    - name: "start_time"
+      type: "STRING"
+    - name: "end_time"
+      type: "STRING"
+    - name: "location"
+      type: "STRING"
+    - name: "description"
+      type: "STRING"
+    - name: "attendees"
+      type: "ARRAY[STRING]"
+  output:
+    type: "object"
+    properties:
+      event_id: { type: "string" }
+      status: { type: "string", enum: ["updated", "not_found", "failed"] }
+    required: ["event_id", "status"]
+```
+
+Touch points:
+- NEW file: `k1/contracts/tools/calendar_update_event.yaml`
+- EDIT: `k1/tools/mcp_servers/calendar/storage.py` — add `update_event(event_id, **fields)` method
+- EDIT: `k1/tools/mcp_servers/calendar/handlers.py` — add `async def update_event(self, arguments)` handler
+- EDIT: `k1/tools/mcp_servers/calendar/server.py` — add tool entry in TOOLS list + route in handle_message
+
+**Issue E11.1.2** — Add recurring event support to Calendar
+
+Extend CalendarEvent model with recurrence fields. Storage generates occurrences on query.
+
+Touch points:
+- EDIT: `k1/tools/mcp_servers/calendar/models.py` — add fields to CalendarEvent:
+  ```python
+  recurrence_rule: Optional[str] = None   # "WEEKLY", "DAILY", "MONTHLY", "YEARLY"
+  recurrence_end: Optional[str] = None    # ISO 8601 end date for recurrence
+  recurrence_parent_id: Optional[str] = None  # links occurrence to parent
+  ```
+- EDIT: `k1/tools/mcp_servers/calendar/storage.py` — add `_expand_recurring(event, start_date, end_date)` that generates occurrences within the query range
+- EDIT: `k1/tools/mcp_servers/calendar/handlers.py` — `create_event` accepts `recurrence_rule` and `recurrence_end` as optional inputs
+- EDIT: `k1/contracts/tools/calendar_create_event.yaml` — add `recurrence_rule` and `recurrence_end` to optional_inputs
+
+**Issue E11.1.3** — Add multi-member calendar views
+
+Filter events by family member. Each event has an `owner` field (who created it) and `attendees` (who's involved).
+
+Touch points:
+- EDIT: `k1/tools/mcp_servers/calendar/models.py` — add `owner: str = ""` field
+- EDIT: `k1/tools/mcp_servers/calendar/storage.py` — add `owner` column, add `owner` filter to `list_events()`
+- EDIT: `k1/contracts/tools/calendar_list_events.yaml` — add optional input `owner` (STRING)
+- EDIT: `k1/tools/mcp_servers/calendar/handlers.py` — pass `owner` filter to storage
+
+**Issue E11.1.4** — Add conflict detection to Calendar
+
+When creating/updating an event, check for time overlaps with existing events for the same owner/attendees.
+
+Touch points:
+- EDIT: `k1/tools/mcp_servers/calendar/storage.py` — add `check_conflicts(owner, start_time, end_time, exclude_event_id=None) -> list[CalendarEvent]`
+- EDIT: `k1/tools/mcp_servers/calendar/handlers.py` — call `check_conflicts()` in `create_event()` and `update_event()`, return `conflicts` list in response
+- EDIT: contract output schemas — add optional `conflicts` array to create/update responses
+
+**Issue E11.1.5** — Calendar E2E test expansion
+
+Extend `tests/k1/fabric/tools/test_calendar_e2e.py` with tests for update, recurring, multi-member, and conflict detection.
+
+Touch points:
+- EDIT: `tests/k1/fabric/tools/test_calendar_e2e.py` — add ~60 new tests:
+  - `TestCalendarUpdate` — partial update, not_found, all-fields update
+  - `TestCalendarRecurring` — weekly recurrence, monthly, expansion within range, recurrence_end boundary
+  - `TestCalendarMultiMember` — filter by owner, attendees overlap
+  - `TestCalendarConflicts` — overlapping events detected, non-overlapping pass, exclude self on update
+
+---
+
+### E11.2 — Tasks & Lists Manager (Tier 1)
+
+**Goal**: Unified list engine — grocery lists, todo lists, packing lists, shopping lists. Shared family state, any member can read/write.
+
+**New MCP server**: `k1/tools/mcp_servers/tasks/` (FastMCP pattern, following notes server)
+
+**Issue E11.2.1** — Create TaskItem model + TaskStorage
+
+```
+k1/tools/mcp_servers/tasks/
+├── __init__.py
+├── models.py      — TaskItem, TaskList frozen dataclasses
+├── storage.py     — TaskStorage (SQLite, same pattern as CalendarStorage)
+└── server.py      — FastMCP server with 6 tools
+```
+
+`models.py`:
+```python
+@dataclass(frozen=True)
+class TaskItem:
+    item_id: str = ""          # UUID
+    list_name: str = ""        # "grocery", "todo", "packing", custom
+    title: str = ""            # "Buy milk", "Pack sunscreen"
+    completed: bool = False
+    assigned_to: str = ""      # family member name (optional)
+    due_date: Optional[str] = None   # ISO 8601 (optional)
+    priority: str = "normal"   # "low", "normal", "high"
+    created_by: str = ""       # who added it
+    created_at: str = ""       # ISO 8601
+```
+
+`storage.py` — SQLite schema:
+```sql
+CREATE TABLE IF NOT EXISTS task_items (
+    item_id     TEXT PRIMARY KEY,
+    list_name   TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    completed   INTEGER DEFAULT 0,
+    assigned_to TEXT DEFAULT '',
+    due_date    TEXT,
+    priority    TEXT DEFAULT 'normal',
+    created_by  TEXT DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_list ON task_items(list_name);
+CREATE INDEX IF NOT EXISTS idx_task_assigned ON task_items(assigned_to);
+```
+
+Methods: `add_item()`, `list_items(list_name, include_completed?)`, `complete_item(item_id)`, `delete_item(item_id)`, `get_lists()`, `search_items(query)`
+
+Touch points:
+- NEW: `k1/tools/mcp_servers/tasks/__init__.py`
+- NEW: `k1/tools/mcp_servers/tasks/models.py` (~60 lines)
+- NEW: `k1/tools/mcp_servers/tasks/storage.py` (~120 lines)
+
+**Issue E11.2.2** — Create Tasks FastMCP server with 6 tools
+
+`server.py` (FastMCP pattern, following notes):
+```python
+mcp = FastMCP("tasks-mcp", instructions="Family task and list management.")
+
+@mcp.tool()
+async def tasks_add_item(list_name: str, title: str, assigned_to: str = "",
+                         due_date: str = "", priority: str = "normal") -> dict: ...
+
+@mcp.tool()
+async def tasks_list_items(list_name: str, include_completed: bool = False,
+                           assigned_to: str = "", max_results: int = 50) -> dict: ...
+
+@mcp.tool()
+async def tasks_complete_item(item_id: str) -> dict: ...
+
+@mcp.tool()
+async def tasks_delete_item(item_id: str) -> dict: ...
+
+@mcp.tool()
+async def tasks_get_lists() -> dict: ...
+
+@mcp.tool()
+async def tasks_search(query: str, list_name: str = "") -> dict: ...
+```
+
+Touch point: NEW file `k1/tools/mcp_servers/tasks/server.py` (~120 lines)
+
+**Issue E11.2.3** — Create 6 contract YAMLs for Tasks
+
+| Contract | Name | Band | Verb |
+|----------|------|------|------|
+| `tasks_add_item.yaml` | `tool.write.tasks_add_item` | AMBER | write |
+| `tasks_list_items.yaml` | `tool.read.tasks_list_items` | GREEN | read |
+| `tasks_complete_item.yaml` | `tool.write.tasks_complete_item` | AMBER | write |
+| `tasks_delete_item.yaml` | `tool.delete.tasks_delete_item` | AMBER | delete |
+| `tasks_get_lists.yaml` | `tool.read.tasks_get_lists` | GREEN | read |
+| `tasks_search.yaml` | `tool.read.tasks_search` | GREEN | read |
+
+Touch points:
+- NEW: 6 files in `k1/contracts/tools/` (~50 lines each)
+
+**Issue E11.2.4** — Tasks E2E tests
+
+Following `test_calendar_e2e.py` pattern — NO MOCKS, all real components with in-memory SQLite.
+
+Touch point: NEW file `tests/k1/fabric/tools/test_tasks_e2e.py` (~200 lines, ~40 tests)
+- `TestTaskItemModel` — frozen, to_dict, from_dict
+- `TestTaskStorage` — add, list, complete, delete, search, filter by assigned_to
+- `TestTasksHandlers` — argument validation, all 6 handlers
+- `TestTasksMCPServer` — FastMCP tool routing, contract validation
+
+---
+
+### E11.3 — Family Messaging & Notifications (Tier 1)
+
+**Goal**: In-family notification channel. Parent→child, broadcast, system-generated alerts. NOT a chat replacement — this is FamilyOS's internal message bus for humans.
+
+**New MCP server**: `k1/tools/mcp_servers/messaging/` (FastMCP pattern)
+
+**Issue E11.3.1** — Create Message model + MessageStorage
+
+`models.py`:
+```python
+@dataclass(frozen=True)
+class FamilyMessage:
+    message_id: str = ""       # UUID
+    sender: str = ""           # family member or "system"
+    recipients: Tuple[str, ...] = ()  # family members; empty = broadcast
+    subject: str = ""          # short summary
+    body: str = ""             # message content
+    priority: str = "normal"   # "low", "normal", "urgent"
+    read_by: Tuple[str, ...] = ()    # members who read it
+    source_tool: str = ""      # originating tool (e.g., "chores", "reminders")
+    created_at: str = ""       # ISO 8601
+```
+
+`storage.py` — SQLite schema:
+```sql
+CREATE TABLE IF NOT EXISTS messages (
+    message_id  TEXT PRIMARY KEY,
+    sender      TEXT NOT NULL,
+    recipients  TEXT NOT NULL,     -- JSON array
+    subject     TEXT DEFAULT '',
+    body        TEXT NOT NULL,
+    priority    TEXT DEFAULT 'normal',
+    read_by     TEXT DEFAULT '[]', -- JSON array
+    source_tool TEXT DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_msg_sender ON messages(sender);
+CREATE INDEX IF NOT EXISTS idx_msg_created ON messages(created_at);
+```
+
+Touch points:
+- NEW: `k1/tools/mcp_servers/messaging/__init__.py`
+- NEW: `k1/tools/mcp_servers/messaging/models.py` (~60 lines)
+- NEW: `k1/tools/mcp_servers/messaging/storage.py` (~100 lines)
+
+**Issue E11.3.2** — Create Messaging FastMCP server with 4 tools
+
+```python
+mcp = FastMCP("messaging-mcp", instructions="Family messaging and notifications.")
+
+@mcp.tool()
+async def messaging_send(sender: str, body: str, recipients: str = "",
+                         subject: str = "", priority: str = "normal",
+                         source_tool: str = "") -> dict: ...
+
+@mcp.tool()
+async def messaging_inbox(member: str, unread_only: bool = False,
+                          max_results: int = 50) -> dict: ...
+
+@mcp.tool()
+async def messaging_mark_read(message_id: str, member: str) -> dict: ...
+
+@mcp.tool()
+async def messaging_search(query: str, member: str = "",
+                           max_results: int = 20) -> dict: ...
+```
+
+Touch point: NEW file `k1/tools/mcp_servers/messaging/server.py` (~100 lines)
+
+**Issue E11.3.3** — Create 4 contract YAMLs for Messaging
+
+| Contract | Name | Band | Verb |
+|----------|------|------|------|
+| `messaging_send.yaml` | `tool.execute.messaging_send` | AMBER | execute (side-effect: notification) |
+| `messaging_inbox.yaml` | `tool.read.messaging_inbox` | GREEN | read |
+| `messaging_mark_read.yaml` | `tool.write.messaging_mark_read` | GREEN | write (own messages only) |
+| `messaging_search.yaml` | `tool.read.messaging_search` | GREEN | read |
+
+Touch points: NEW 4 files in `k1/contracts/tools/` (~50 lines each)
+
+**Issue E11.3.4** — Messaging E2E tests
+
+Touch point: NEW file `tests/k1/fabric/tools/test_messaging_e2e.py` (~180 lines, ~35 tests)
+- `TestFamilyMessageModel` — frozen, to_dict, recipients tuple
+- `TestMessageStorage` — send, inbox, mark_read, search, broadcast (empty recipients)
+- `TestMessagingHandlers` — validation, all 4 handlers
+- `TestMessagingMCPServer` — FastMCP tool routing
+
+---
+
+### E11.4 — Reminders & Timers (Tier 1)
+
+**Goal**: Temporal engine for one-time reminders, recurring reminders, countdown timers. Critical for medication reminders (safety), homework timers, "leave in 15 minutes" alerts.
+
+**New MCP server**: `k1/tools/mcp_servers/reminders/` (FastMCP pattern)
+
+**Issue E11.4.1** — Create Reminder model + ReminderStorage
+
+`models.py`:
+```python
+@dataclass(frozen=True)
+class Reminder:
+    reminder_id: str = ""      # UUID
+    title: str = ""            # "Take medication", "Soccer pickup in 15min"
+    due_at: str = ""           # ISO 8601 datetime when reminder fires
+    recurrence_rule: Optional[str] = None  # "DAILY", "WEEKLY", "MONTHLY", None
+    recurrence_end: Optional[str] = None   # ISO 8601
+    assigned_to: str = ""      # family member
+    category: str = "general"  # "medication", "school", "household", "general"
+    priority: str = "normal"   # "low", "normal", "urgent"
+    status: str = "active"     # "active", "snoozed", "completed", "expired"
+    snooze_until: Optional[str] = None  # ISO 8601 (if snoozed)
+    created_by: str = ""
+    created_at: str = ""
+
+@dataclass(frozen=True)
+class Timer:
+    timer_id: str = ""         # UUID
+    label: str = ""            # "Nap timer", "Homework timer"
+    duration_seconds: int = 0  # countdown duration
+    started_at: str = ""       # ISO 8601 when started
+    status: str = "running"    # "running", "paused", "completed", "cancelled"
+    assigned_to: str = ""
+```
+
+`storage.py` — two SQLite tables: `reminders` + `timers`
+
+Touch points:
+- NEW: `k1/tools/mcp_servers/reminders/__init__.py`
+- NEW: `k1/tools/mcp_servers/reminders/models.py` (~80 lines)
+- NEW: `k1/tools/mcp_servers/reminders/storage.py` (~140 lines)
+
+**Issue E11.4.2** — Create Reminders FastMCP server with 5 tools
+
+```python
+mcp = FastMCP("reminders-mcp", instructions="Family reminders and countdown timers.")
+
+@mcp.tool()
+async def reminders_create(title: str, due_at: str, assigned_to: str = "",
+                           category: str = "general", priority: str = "normal",
+                           recurrence_rule: str = "", recurrence_end: str = "") -> dict: ...
+
+@mcp.tool()
+async def reminders_list(assigned_to: str = "", category: str = "",
+                         status: str = "active", max_results: int = 50) -> dict: ...
+
+@mcp.tool()
+async def reminders_complete(reminder_id: str) -> dict: ...
+
+@mcp.tool()
+async def reminders_snooze(reminder_id: str, snooze_minutes: int = 15) -> dict: ...
+
+@mcp.tool()
+async def timers_start(label: str, duration_minutes: int,
+                       assigned_to: str = "") -> dict: ...
+```
+
+Touch point: NEW file `k1/tools/mcp_servers/reminders/server.py` (~120 lines)
+
+**Issue E11.4.3** — Create 5 contract YAMLs for Reminders
+
+| Contract | Name | Band | Verb |
+|----------|------|------|------|
+| `reminders_create.yaml` | `tool.write.reminders_create` | AMBER | write |
+| `reminders_list.yaml` | `tool.read.reminders_list` | GREEN | read |
+| `reminders_complete.yaml` | `tool.write.reminders_complete` | AMBER | write |
+| `reminders_snooze.yaml` | `tool.write.reminders_snooze` | AMBER | write |
+| `timers_start.yaml` | `tool.execute.timers_start` | AMBER | execute (starts countdown) |
+
+Note: `reminders_create` with `category: "medication"` gets elevated attention in the safety model — medication reminders are flagged in the audit trail per health governance policy.
+
+Touch points: NEW 5 files in `k1/contracts/tools/`
+
+**Issue E11.4.4** — Reminders E2E tests
+
+Touch point: NEW file `tests/k1/fabric/tools/test_reminders_e2e.py` (~200 lines, ~40 tests)
+- `TestReminderModel` — frozen, to_dict, category validation
+- `TestTimerModel` — frozen, duration calculation
+- `TestReminderStorage` — create, list, complete, snooze, filter by category/assigned_to, recurring expansion
+- `TestTimerStorage` — start, status transitions
+- `TestRemindersHandlers` — all 5 handlers
+- `TestRemindersMCPServer` — FastMCP routing
+
+---
+
+### E11.5 — Chore Manager (Tier 1)
+
+**Goal**: Chore assignment, rotation, completion tracking, streak gamification for kids. Linked to Calendar (chore has a due date) and Messaging (overdue notifications).
+
+**New MCP server**: `k1/tools/mcp_servers/chores/` (FastMCP pattern)
+
+**Issue E11.5.1** — Create Chore model + ChoreStorage
+
+`models.py`:
+```python
+@dataclass(frozen=True)
+class Chore:
+    chore_id: str = ""         # UUID
+    title: str = ""            # "Take out trash", "Clean room"
+    assigned_to: str = ""      # family member
+    recurrence_rule: str = ""  # "DAILY", "WEEKLY", "ONCE"
+    due_date: Optional[str] = None   # ISO 8601 (for ONCE) or next occurrence
+    status: str = "pending"    # "pending", "completed", "overdue", "skipped"
+    completed_at: Optional[str] = None  # ISO 8601
+    streak: int = 0            # consecutive completions
+    points: int = 0            # gamification points per completion
+    created_by: str = ""       # parent who assigned
+    created_at: str = ""
+```
+
+`storage.py` — SQLite table `chores`, methods: `assign_chore()`, `list_chores(assigned_to?, status?)`, `complete_chore(chore_id)`, `get_schedule(family_member)`, `get_streaks(assigned_to)`
+
+Touch points:
+- NEW: `k1/tools/mcp_servers/chores/__init__.py`
+- NEW: `k1/tools/mcp_servers/chores/models.py` (~50 lines)
+- NEW: `k1/tools/mcp_servers/chores/storage.py` (~130 lines)
+
+**Issue E11.5.2** — Create Chores FastMCP server with 5 tools
+
+```python
+mcp = FastMCP("chores-mcp", instructions="Family chore management with gamification.")
+
+@mcp.tool()
+async def chores_assign(title: str, assigned_to: str, recurrence_rule: str = "ONCE",
+                        due_date: str = "", points: int = 10) -> dict: ...
+
+@mcp.tool()
+async def chores_list(assigned_to: str = "", status: str = "",
+                      max_results: int = 50) -> dict: ...
+
+@mcp.tool()
+async def chores_complete(chore_id: str) -> dict: ...
+
+@mcp.tool()
+async def chores_schedule(family_member: str = "") -> dict: ...
+
+@mcp.tool()
+async def chores_streaks(assigned_to: str = "") -> dict: ...
+```
+
+Touch point: NEW file `k1/tools/mcp_servers/chores/server.py` (~110 lines)
+
+**Issue E11.5.3** — Create 5 contract YAMLs for Chores
+
+| Contract | Name | Band | Verb |
+|----------|------|------|------|
+| `chores_assign.yaml` | `tool.write.chores_assign` | AMBER | write (parent-only by convention) |
+| `chores_list.yaml` | `tool.read.chores_list` | GREEN | read |
+| `chores_complete.yaml` | `tool.write.chores_complete` | AMBER | write |
+| `chores_schedule.yaml` | `tool.read.chores_schedule` | GREEN | read |
+| `chores_streaks.yaml` | `tool.read.chores_streaks` | GREEN | read |
+
+Touch points: NEW 5 files in `k1/contracts/tools/`
+
+**Issue E11.5.4** — Chores E2E tests
+
+Touch point: NEW file `tests/k1/fabric/tools/test_chores_e2e.py` (~180 lines, ~35 tests)
+- `TestChoreModel` — frozen, to_dict, streak, points
+- `TestChoreStorage` — assign, list, complete, schedule, streak increments, overdue detection
+- `TestChoresHandlers` — all 5 handlers
+- `TestChoresMCPServer` — FastMCP routing, contract validation
+
+---
+
+### E11.6 — Meal Planner Enhancement (Tier 2)
+
+**Goal**: Extend existing Recipes MCP server with meal plan persistence, auto grocery list generation from meal plans, and dietary profile storage.
+
+**Existing**: `k1/tools/mcp_servers/recipes/` + contracts `recipe_search.yaml`, `recipe_meal_plan.yaml`
+
+**Issue E11.6.1** — Add meal plan persistence to Recipes server
+
+Currently `recipe_meal_plan` generates a plan but doesn't persist it. Add storage for saved meal plans with `plan_id`.
+
+Touch points:
+- EDIT: `k1/tools/mcp_servers/recipes/models.py` — add `MealPlan` dataclass:
+  ```python
+  @dataclass(frozen=True)
+  class MealPlan:
+      plan_id: str = ""       # UUID
+      days: Tuple[MealDay, ...] = ()
+      servings: int = 4
+      dietary: str = "none"
+      created_at: str = ""
+  
+  @dataclass(frozen=True)
+  class MealDay:
+      day: int = 1            # 1-7
+      breakfast: str = ""
+      lunch: str = ""
+      dinner: str = ""
+      snacks: Tuple[str, ...] = ()
+  ```
+- NEW: `k1/tools/mcp_servers/recipes/storage.py` — MealPlanStorage (SQLite, `meal_plans` + `meal_days` tables)
+- EDIT: `k1/tools/mcp_servers/recipes/server.py` — add `recipe_save_meal_plan`, `recipe_list_meal_plans` tools
+
+**Issue E11.6.2** — Add `tool.execute.recipes_generate_grocery_list` contract + handler
+
+Given a saved meal plan, extract all ingredients and generate a grocery list. Creates items in the Tasks MCP server (E11.2 dependency).
+
+```python
+@mcp.tool()
+async def recipes_generate_grocery_list(plan_id: str, list_name: str = "grocery") -> dict:
+    """Generate grocery list items from a saved meal plan.
+    Returns: {"items_created": int, "list_name": str, "items": [...]}
+    """
+```
+
+Touch points:
+- NEW: `k1/contracts/tools/recipes_generate_grocery_list.yaml` — `tool.execute.recipes_generate_grocery_list`, AMBER, domain: ["RECIPES", "SHOPPING", "FAMILY"]
+- NEW: `k1/contracts/tools/recipes_save_meal_plan.yaml` — `tool.write.recipes_save_meal_plan`, AMBER
+- EDIT: `k1/tools/mcp_servers/recipes/server.py` — add 2 new tools
+
+**Issue E11.6.3** — Meal Planner E2E test expansion
+
+Touch point: EDIT `tests/k1/fabric/tools/test_recipes_e2e.py` — add ~30 new tests:
+- `TestMealPlanPersistence` — save, list, retrieve
+- `TestGroceryListGeneration` — extract ingredients, create task items
+
+---
+
+### E11.7 — Family Budget & Allowance (Tier 2)
+
+**Goal**: Family ledger — track expenses, kid allowances, spending categories. Financial data NEVER leaves the family. K0 encrypted storage in future; MCP server with SQLite for M11.
+
+**New MCP server**: `k1/tools/mcp_servers/budget/` (FastMCP pattern)
+
+**Issue E11.7.1** — Create Budget models + BudgetStorage
+
+`models.py`:
+```python
+@dataclass(frozen=True)
+class Transaction:
+    transaction_id: str = ""   # UUID
+    amount: float = 0.0        # positive = income/credit, negative = expense
+    category: str = ""         # "groceries", "dining", "transport", "allowance", "chore_reward"
+    description: str = ""
+    member: str = ""           # family member
+    date: str = ""             # ISO 8601
+    source: str = "manual"     # "manual", "chore_reward", "allowance_auto", "ifl_import"
+    created_at: str = ""
+
+@dataclass(frozen=True)
+class AllowanceRule:
+    rule_id: str = ""
+    member: str = ""           # child name
+    amount: float = 0.0        # weekly/monthly amount
+    frequency: str = "weekly"  # "weekly", "monthly"
+    linked_to_chores: bool = False   # if True, only credited when chores completed
+    active: bool = True
+```
+
+`storage.py` — SQLite tables: `transactions`, `allowance_rules`
+
+Touch points:
+- NEW: `k1/tools/mcp_servers/budget/__init__.py`
+- NEW: `k1/tools/mcp_servers/budget/models.py` (~70 lines)
+- NEW: `k1/tools/mcp_servers/budget/storage.py` (~150 lines)
+
+**Issue E11.7.2** — Create Budget FastMCP server with 5 tools
+
+```python
+mcp = FastMCP("budget-mcp", instructions="Family budget and allowance tracking.")
+
+@mcp.tool()
+async def budget_add_transaction(amount: float, category: str, member: str,
+                                  description: str = "", date: str = "") -> dict: ...
+
+@mcp.tool()
+async def budget_summary(member: str = "", period: str = "month",
+                         category: str = "") -> dict: ...
+
+@mcp.tool()
+async def budget_allowance_balance(member: str) -> dict: ...
+
+@mcp.tool()
+async def budget_set_allowance_rule(member: str, amount: float,
+                                     frequency: str = "weekly",
+                                     linked_to_chores: bool = False) -> dict: ...
+
+@mcp.tool()
+async def budget_list_transactions(member: str = "", category: str = "",
+                                    period: str = "month",
+                                    max_results: int = 50) -> dict: ...
+```
+
+Touch point: NEW file `k1/tools/mcp_servers/budget/server.py` (~130 lines)
+
+**Issue E11.7.3** — Create 5 contract YAMLs for Budget
+
+| Contract | Name | Band | Verb |
+|----------|------|------|------|
+| `budget_add_transaction.yaml` | `tool.write.budget_add_transaction` | AMBER | write |
+| `budget_summary.yaml` | `tool.read.budget_summary` | GREEN | read |
+| `budget_allowance_balance.yaml` | `tool.read.budget_allowance_balance` | GREEN | read |
+| `budget_set_allowance_rule.yaml` | `tool.write.budget_set_allowance_rule` | RED | write (financial rule — parent-only, double confirm) |
+| `budget_list_transactions.yaml` | `tool.read.budget_list_transactions` | GREEN | read |
+
+Note: `budget_set_allowance_rule` is RED band — financial governance requires parent authority + confirmation. `budget_add_transaction` is AMBER because it modifies the ledger but individual entries are low-risk.
+
+Touch points: NEW 5 files in `k1/contracts/tools/`
+
+**Issue E11.7.4** — Budget E2E tests
+
+Touch point: NEW file `tests/k1/fabric/tools/test_budget_e2e.py` (~200 lines, ~40 tests)
+- `TestTransactionModel` — frozen, positive/negative amounts, categories
+- `TestAllowanceRuleModel` — frozen, frequency, linked_to_chores
+- `TestBudgetStorage` — add transaction, summary aggregation by period/category/member, allowance balance calculation, allowance rule CRUD
+- `TestBudgetHandlers` — all 5 handlers
+- `TestBudgetMCPServer` — FastMCP routing, RED band contract validation
+
+---
+
+### E11.8 — School Hub (Tier 2)
+
+**Goal**: School schedule, homework tracker, pickup coordinator. "Who's picking up Emma?" is a daily family coordination problem.
+
+**New MCP server**: `k1/tools/mcp_servers/school/` (FastMCP pattern)
+
+**Issue E11.8.1** — Create School models + SchoolStorage
+
+`models.py`:
+```python
+@dataclass(frozen=True)
+class SchoolSchedule:
+    schedule_id: str = ""
+    student: str = ""          # child name
+    school_name: str = ""
+    day_of_week: int = 0       # 0=Mon, 6=Sun
+    start_time: str = ""       # "08:00"
+    end_time: str = ""         # "15:00"
+    notes: str = ""            # "Early release Wednesday"
+
+@dataclass(frozen=True)
+class HomeworkItem:
+    homework_id: str = ""
+    student: str = ""
+    subject: str = ""
+    description: str = ""
+    due_date: str = ""         # ISO 8601
+    status: str = "pending"    # "pending", "in_progress", "completed"
+    completed_at: Optional[str] = None
+
+@dataclass(frozen=True)
+class PickupAssignment:
+    pickup_id: str = ""
+    student: str = ""
+    date: str = ""             # ISO 8601 date
+    pickup_by: str = ""        # family member / carpool parent
+    pickup_time: str = ""      # "15:15"
+    status: str = "scheduled"  # "scheduled", "en_route", "completed"
+    notes: str = ""            # "Use back entrance"
+```
+
+Touch points:
+- NEW: `k1/tools/mcp_servers/school/__init__.py`
+- NEW: `k1/tools/mcp_servers/school/models.py` (~80 lines)
+- NEW: `k1/tools/mcp_servers/school/storage.py` (~160 lines, 3 SQLite tables)
+
+**Issue E11.8.2** — Create School FastMCP server with 5 tools
+
+```python
+mcp = FastMCP("school-mcp", instructions="School schedule, homework, and pickup coordination.")
+
+@mcp.tool()
+async def school_schedule(student: str = "", day_of_week: int = -1) -> dict: ...
+
+@mcp.tool()
+async def school_homework_list(student: str = "", status: str = "",
+                               max_results: int = 20) -> dict: ...
+
+@mcp.tool()
+async def school_homework_update(homework_id: str, status: str) -> dict: ...
+
+@mcp.tool()
+async def school_pickup_today(student: str = "") -> dict: ...
+
+@mcp.tool()
+async def school_pickup_assign(student: str, date: str, pickup_by: str,
+                                pickup_time: str = "", notes: str = "") -> dict: ...
+```
+
+Touch point: NEW file `k1/tools/mcp_servers/school/server.py` (~120 lines)
+
+**Issue E11.8.3** — Create 5 contract YAMLs for School
+
+| Contract | Name | Band | Verb |
+|----------|------|------|------|
+| `school_schedule.yaml` | `tool.read.school_schedule` | GREEN | read |
+| `school_homework_list.yaml` | `tool.read.school_homework_list` | GREEN | read |
+| `school_homework_update.yaml` | `tool.write.school_homework_update` | AMBER | write |
+| `school_pickup_today.yaml` | `tool.read.school_pickup_today` | GREEN | read |
+| `school_pickup_assign.yaml` | `tool.write.school_pickup_assign` | AMBER | write (involves children — parent-only) |
+
+Touch points: NEW 5 files in `k1/contracts/tools/`
+
+**Issue E11.8.4** — School E2E tests
+
+Touch point: NEW file `tests/k1/fabric/tools/test_school_e2e.py` (~200 lines, ~40 tests)
+- `TestSchoolScheduleModel` — frozen, day_of_week, time format
+- `TestHomeworkItemModel` — frozen, status transitions
+- `TestPickupAssignmentModel` — frozen, status transitions
+- `TestSchoolStorage` — all 3 tables CRUD, filter by student/date/status
+- `TestSchoolHandlers` — all 5 handlers
+- `TestSchoolMCPServer` — FastMCP routing
+
+---
+
+### E11.9 — Health & Medication Tracker (Tier 3)
+
+**Goal**: Appointment calendar, medication schedules, pharmacy refill tracking. Health data is the MOST private — RED band for medication changes, encrypted storage priority.
+
+**New MCP server**: `k1/tools/mcp_servers/health/` (FastMCP pattern)
+
+**Issue E11.9.1** — Create Health models + HealthStorage
+
+`models.py`:
+```python
+@dataclass(frozen=True)
+class Appointment:
+    appointment_id: str = ""
+    member: str = ""           # family member (or "Max" for vet)
+    provider_name: str = ""    # "Dr. Smith", "PetVet Clinic"
+    appointment_type: str = "" # "doctor", "dentist", "vet", "specialist", "pharmacy"
+    date: str = ""             # ISO 8601
+    time: str = ""             # "14:30"
+    location: str = ""
+    notes: str = ""
+    status: str = "scheduled"  # "scheduled", "completed", "cancelled"
+    created_at: str = ""
+
+@dataclass(frozen=True)
+class Medication:
+    medication_id: str = ""
+    member: str = ""
+    name: str = ""             # "Amoxicillin", "Vitamin D"
+    dosage: str = ""           # "500mg", "1 tablet"
+    frequency: str = ""        # "DAILY", "TWICE_DAILY", "WEEKLY"
+    time_of_day: Tuple[str, ...] = ()  # ("08:00", "20:00")
+    start_date: str = ""
+    end_date: Optional[str] = None     # None = ongoing
+    prescriber: str = ""
+    pharmacy: str = ""
+    refill_date: Optional[str] = None  # next refill due
+    active: bool = True
+```
+
+`storage.py` — SQLite tables: `appointments`, `medications`
+
+Touch points:
+- NEW: `k1/tools/mcp_servers/health/__init__.py`
+- NEW: `k1/tools/mcp_servers/health/models.py` (~80 lines)
+- NEW: `k1/tools/mcp_servers/health/storage.py` (~160 lines)
+
+**Issue E11.9.2** — Create Health FastMCP server with 6 tools
+
+```python
+mcp = FastMCP("health-mcp", instructions="Family health: appointments and medication tracking.")
+
+@mcp.tool()
+async def health_schedule_appointment(member: str, provider_name: str,
+                                       appointment_type: str, date: str,
+                                       time: str = "", location: str = "",
+                                       notes: str = "") -> dict: ...
+
+@mcp.tool()
+async def health_list_appointments(member: str = "", status: str = "scheduled",
+                                    max_results: int = 20) -> dict: ...
+
+@mcp.tool()
+async def health_add_medication(member: str, name: str, dosage: str,
+                                 frequency: str, time_of_day: str = "",
+                                 prescriber: str = "", pharmacy: str = "") -> dict: ...
+
+@mcp.tool()
+async def health_list_medications(member: str = "",
+                                   active_only: bool = True) -> dict: ...
+
+@mcp.tool()
+async def health_medication_due(member: str = "") -> dict: ...
+    # Returns medications due now/today — feeds reminder system
+
+@mcp.tool()
+async def health_pharmacy_refills(member: str = "") -> dict: ...
+    # Returns medications needing refill (refill_date <= today + 7d)
+```
+
+Touch point: NEW file `k1/tools/mcp_servers/health/server.py` (~140 lines)
+
+**Issue E11.9.3** — Create 6 contract YAMLs for Health
+
+| Contract | Name | Band | Verb |
+|----------|------|------|------|
+| `health_schedule_appointment.yaml` | `tool.write.health_schedule_appointment` | AMBER | write |
+| `health_list_appointments.yaml` | `tool.read.health_list_appointments` | GREEN | read |
+| `health_add_medication.yaml` | `tool.write.health_add_medication` | RED | write (medication — double confirm, audit trail) |
+| `health_list_medications.yaml` | `tool.read.health_list_medications` | GREEN | read |
+| `health_medication_due.yaml` | `tool.read.health_medication_due` | GREEN | read |
+| `health_pharmacy_refills.yaml` | `tool.read.health_pharmacy_refills` | GREEN | read |
+
+Note: `health_add_medication` is **RED band** — adding/modifying medication schedules is safety-critical. Must be parent-authorized and produces an audit event on K1 Bus: `k1.health.medication.changed.v1`.
+
+Touch points: NEW 6 files in `k1/contracts/tools/`
+
+**Issue E11.9.4** — Health E2E tests
+
+Touch point: NEW file `tests/k1/fabric/tools/test_health_e2e.py` (~220 lines, ~45 tests)
+- `TestAppointmentModel` — frozen, appointment_type validation
+- `TestMedicationModel` — frozen, frequency, time_of_day, active flag
+- `TestHealthStorage` — appointment CRUD, medication CRUD, medication_due query, pharmacy_refills query
+- `TestHealthHandlers` — all 6 handlers, RED band medication handler validation
+- `TestHealthMCPServer` — FastMCP routing
+
+---
+
+### E11.10 — Transport & Pickup Coordinator (Tier 3)
+
+**Goal**: Carpool schedule, "who's driving today?", ETA sharing, pickup confirmation. Coordination logic is native; actual ride services go through IFL.
+
+**New MCP server**: `k1/tools/mcp_servers/transport/` (FastMCP pattern)
+
+**Issue E11.10.1** — Create Transport models + TransportStorage
+
+`models.py`:
+```python
+@dataclass(frozen=True)
+class CarpoolEntry:
+    entry_id: str = ""
+    route_name: str = ""       # "Morning school run", "Soccer practice"
+    driver: str = ""           # family member or carpool parent
+    passengers: Tuple[str, ...] = ()  # kids being transported
+    day_of_week: int = 0       # 0=Mon, 6=Sun
+    pickup_time: str = ""      # "07:30"
+    dropoff_time: str = ""     # "08:00"
+    pickup_location: str = ""
+    dropoff_location: str = ""
+    status: str = "active"     # "active", "cancelled_today", "inactive"
+    notes: str = ""
+
+@dataclass(frozen=True)
+class TripStatus:
+    trip_id: str = ""
+    entry_id: str = ""         # links to CarpoolEntry
+    date: str = ""             # ISO 8601
+    driver: str = ""
+    status: str = "scheduled"  # "scheduled", "en_route", "arrived", "completed"
+    eta_minutes: Optional[int] = None
+    updated_at: str = ""
+```
+
+Touch points:
+- NEW: `k1/tools/mcp_servers/transport/__init__.py`
+- NEW: `k1/tools/mcp_servers/transport/models.py` (~60 lines)
+- NEW: `k1/tools/mcp_servers/transport/storage.py` (~130 lines)
+
+**Issue E11.10.2** — Create Transport FastMCP server with 4 tools
+
+```python
+mcp = FastMCP("transport-mcp", instructions="Family carpool and transport coordination.")
+
+@mcp.tool()
+async def transport_carpool_schedule(day_of_week: int = -1,
+                                      route_name: str = "") -> dict: ...
+
+@mcp.tool()
+async def transport_carpool_set(route_name: str, driver: str, passengers: str,
+                                 day_of_week: int, pickup_time: str,
+                                 dropoff_time: str = "", pickup_location: str = "",
+                                 dropoff_location: str = "") -> dict: ...
+
+@mcp.tool()
+async def transport_trip_status(date: str = "") -> dict: ...
+
+@mcp.tool()
+async def transport_update_trip(trip_id: str, status: str,
+                                 eta_minutes: int = -1) -> dict: ...
+```
+
+Touch point: NEW file `k1/tools/mcp_servers/transport/server.py` (~100 lines)
+
+**Issue E11.10.3** — Create 4 contract YAMLs for Transport
+
+| Contract | Name | Band | Verb |
+|----------|------|------|------|
+| `transport_carpool_schedule.yaml` | `tool.read.transport_carpool_schedule` | GREEN | read |
+| `transport_carpool_set.yaml` | `tool.write.transport_carpool_set` | AMBER | write (involves children) |
+| `transport_trip_status.yaml` | `tool.read.transport_trip_status` | GREEN | read |
+| `transport_update_trip.yaml` | `tool.write.transport_update_trip` | AMBER | write |
+
+Touch points: NEW 4 files in `k1/contracts/tools/`
+
+**Issue E11.10.4** — Transport E2E tests
+
+Touch point: NEW file `tests/k1/fabric/tools/test_transport_e2e.py` (~160 lines, ~30 tests)
+- `TestCarpoolEntryModel` — frozen, day_of_week, passengers tuple
+- `TestTripStatusModel` — frozen, status transitions, eta
+- `TestTransportStorage` — carpool CRUD, trip status updates, filter by day/route
+- `TestTransportHandlers` — all 4 handlers
+- `TestTransportMCPServer` — FastMCP routing
+
+---
+
+### E11.11 — Integration: Auto-Discovery Smoke Test
+
+**Goal**: Verify ALL 8 new MCP servers + 2 enhanced servers are auto-discovered by `AutoDiscoveryMCPTransport` at startup, and all ~44 new contracts are loaded by `ModuleLoader.scan_directory()`.
+
+**Issue E11.11.1** — Auto-discovery integration test
+
+Touch point: EDIT `tests/k1/fabric/tools/test_auto_discovery.py` — add assertions for all new servers:
+```python
+def test_all_family_tools_discovered():
+    """All M11 MCP servers appear in AutoDiscoveryMCPTransport registry."""
+    transport = AutoDiscoveryMCPTransport()
+    registered = transport.list_registered_tools()
+    
+    # Tier 1
+    assert "tool.write.tasks_add_item" in registered
+    assert "tool.execute.messaging_send" in registered
+    assert "tool.write.reminders_create" in registered
+    assert "tool.write.chores_assign" in registered
+    
+    # Tier 2
+    assert "tool.write.recipes_save_meal_plan" in registered
+    assert "tool.write.budget_add_transaction" in registered
+    assert "tool.read.school_schedule" in registered
+    
+    # Tier 3
+    assert "tool.write.health_add_medication" in registered
+    assert "tool.write.transport_carpool_set" in registered
+```
+
+**Issue E11.11.2** — Contract loading validation test
+
+Touch point: EDIT `tests/k1/fabric/tools/test_auto_discovery.py` — add contract count assertions:
+```python
+def test_all_family_contracts_loaded():
+    """ModuleLoader loads all M11 contracts + existing contracts."""
+    loader = ModuleLoader(contracts_dir=CONTRACTS_DIR, registry=registry, validator=validator)
+    result = loader.scan_directory()
+    
+    # Pre-M11: 15 contracts. M11 adds ~44. Total: ~59
+    assert result.registered >= 55  # Allow margin for exact count
+    assert result.failed == 0
+```
+
+**Issue E11.11.3** — Cross-tool composition test (batch execution)
+
+Verify Fabric `execute_batch()` works across multiple tool domains in a single call — simulating a Planner-generated DAG step that touches Calendar + Tasks + Messaging.
+
+Touch point: EDIT `tests/k1/fabric/tools/test_batch_composition.py` — add family tool batch test:
+```python
+async def test_family_tool_batch():
+    """Batch: create calendar event + add grocery item + send notification."""
+    results = await fabric.execute_batch([
+        CapabilityRequest(name="tool.write.calendar_create_event", params={...}),
+        CapabilityRequest(name="tool.write.tasks_add_item", params={...}),
+        CapabilityRequest(name="tool.execute.messaging_send", params={...}),
+    ])
+    assert all(r.success for r in results)
+```
+
+---
+
+### Structural Gap Analysis
+
+| Aspect | Before M11 (Post-M10) | After M11 | Impact |
+|---|---|---|---|
+| Native tool contracts | 15 | ~59 (+44) | Family-facing capabilities available |
+| MCP servers | 4 (calendar, weather, notes, recipes) | 12 (+ tasks, messaging, reminders, chores, budget, school, health, transport) | Full family tool coverage |
+| Tool domains covered | 4 (calendar, weather, notes, recipes) | 14 (+ tasks, messaging, reminders, chores, budget, school, health, transport, shopping, family) | All daily family workflows |
+| Safety band coverage | GREEN + AMBER only | GREEN + AMBER + RED (medication, allowance rules) | Full safety model exercised |
+| Fabric code changes | — | ZERO (auto-discovery handles everything) | Architecture validated |
+| Calendar capabilities | 3 (create, list, delete) | 5 (+ update, recurring/multi-member/conflicts) | Complete calendar management |
+| Recipes capabilities | 2 (search, meal_plan) | 4 (+ save plan, generate grocery list) | Meal planning pipeline |
+
+### Risk Register
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| 8 new MCP servers overwhelm startup time | LOW | AutoDiscovery is O(n) scan; 8 more dirs add ~50ms. Validated by smoke test. |
+| SQLite file proliferation (~12 .db files per family) | MEDIUM | Future: consolidate into K0 storage via Bridge. M11 keeps per-tool SQLite for isolation + simplicity. |
+| Cross-tool references (meal plan → grocery list) create coupling | MEDIUM | Tools remain independent; cross-tool orchestration goes through Fabric execute_batch() and Planner DAGs — no direct server-to-server calls. |
+| RED band tools (medication, allowance) need audit trail | HIGH | Emit K1 Bus events: `k1.health.medication.changed.v1`, `k1.budget.allowance.rule.changed.v1`. Audit trail in K0 via Memory Writer. |
+| FastMCP version incompatibility | LOW | Pin `fastmcp` version in requirements.txt. All existing FastMCP servers (notes, recipes) already work. |
+| 44 new contracts cause naming collisions | LOW | FAB-11 name convention + ModuleLoader duplicate detection. All names verified in E11.11.2. |
+| Recurring event expansion causes slow list_events | MEDIUM | Cap expansion to 90-day window (existing limitation). Index on start_time. |
+
+### Summary Metrics
+
+| Metric | Count |
+|---|--:|
+| New MCP servers | 8 (tasks, messaging, reminders, chores, budget, school, health, transport) |
+| Enhanced MCP servers | 2 (calendar, recipes) |
+| New contract YAML files | ~44 |
+| New model files | 8 (`models.py` per new server) |
+| New storage files | 9 (8 new + 1 recipes storage) |
+| New server files | 8 (`server.py` per new server) |
+| New `__init__.py` files | 8 |
+| New E2E test files | 8 (`test_<domain>_e2e.py`) |
+| Enhanced E2E test files | 2 (`test_calendar_e2e.py`, `test_recipes_e2e.py`) |
+| Enhanced integration test files | 2 (`test_auto_discovery.py`, `test_batch_composition.py`) |
+| Total new tests | ~345 (8 domains × ~40 avg + integration ~25) |
+| Total new Python files | ~35 (8 servers × 4 files + 3 __init__) |
+| Total new YAML files | ~44 |
+| Fabric core files changed | 0 |
+| Post-M11 total test count | ~4,206+ (M10: 3,861 + M11: ~345) |
+| Post-M11 total tool contracts | ~59 (15 existing + 44 new) |
+
+---
+
 ## Dependency Graph
 
 ```
@@ -5236,6 +6306,9 @@ M5 (The Big Copy) ← requires M1-M4 all green
       │
       ▼
 M10 (Integration & Hardening) ← requires M6-M9
+      │
+      ▼
+M11 (Native Family Tools) ← requires M10 + M6 (Fabric) + M5 (code in k1/)
 ```
 
 ## Risk Register
