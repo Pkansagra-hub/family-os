@@ -1667,6 +1667,7 @@ After M6, `IFabricPort` is the **second port** fully wired to production K1 (aft
 ### K1 Fabric Architecture (from research)
 
 **`Fabric`** (`k1/fabric/fabric.py` L1257) is a `@dataclass` container holding three sub-APIs:
+
 - `CapabilityFabric` — 9-step execution pipeline (resolve → policy → circuit-break → dispatch → validate → emit)
 - `FabricRetrieval` — 5-stage discovery pipeline (embed → hard-filter → soft-rank → top-k → score)
 - `CapabilityRegistryAPI` — register/unregister/lookup/list contracts
@@ -1715,6 +1716,7 @@ After M6, `IFabricPort` is the **second port** fully wired to production K1 (aft
 | `ConciergeProvider` | CONCIERGE | `concierge.state.*` → FSM handlers | No (reverse direction — Fabric calls INTO concierge) |
 
 **`BridgeProvider`** is the correct provider for POC capabilities because:
+
 1. All 40 POC capabilities use `tool.execute.*` naming
 2. `BridgeProvider._classify_operation()` passes `tool.execute.*` through as-is (not limited to `memory.*` / IFL)
 3. `BridgeProvider` delegates to `IBridgePort.send_command(operation, payload)` — our `POCMockBridgeAdapter` wraps POC mock handlers behind this interface
@@ -1757,6 +1759,7 @@ After M6, `IFabricPort` is the **second port** fully wired to production K1 (aft
 **Problem**: `BridgeProvider` calls `IBridgePort.send_command(operation, payload, *, trace_id, timeout_ms) -> BridgeCommandResult`. POC mock handlers are `async (params: dict) -> dict` (simple callables returning result dicts). Need a bridge between these two shapes.
 
 **Solution**: Create `POCMockBridgeAdapter` implementing `IBridgePort`:
+
 - Holds reference to POC `CapabilityRegistry` (or handler map)
 - `send_command(operation, payload, *, trace_id, ...) -> BridgeCommandResult`:
   - Look up handler from `CapabilityRegistry._handlers[operation]`
@@ -1770,6 +1773,7 @@ After M6, `IFabricPort` is the **second port** fully wired to production K1 (aft
 - `get_health() -> BridgeHealth(available=True, mode="K0_FULL")`
 
 **Alternative considered**: Use `TestBridgeAdapter.add_handler()` to register each POC handler. Rejected because:
+
 - `add_handler` expects `(operation, payload, trace_id) -> BridgeCommandResult` (synchronous), POC handlers are `async (params) -> dict`
 - Would require 40 wrapper lambdas
 - Custom adapter is cleaner and properly typed
@@ -1779,6 +1783,7 @@ After M6, `IFabricPort` is the **second port** fully wired to production K1 (aft
 K1 `FabricRetrieval` uses FAISS semantic similarity with `_StubEmbeddingPort` (zero vectors) in test mode — returns zero similarity for everything, so discovery returns nothing useful.
 
 **Resolution**: Two-phase approach:
+
 - **Phase 1 (M6)**: Use K1's `HardFilter` domain-based filtering (works without embeddings). Discovery via `domain` + `intent` keyword matching returns results from `CapabilityRegistry.list_by_domain()`.
 - **Phase 2 (M10)**: Wire real `IEmbeddingPort` for semantic similarity when K1 embedding infra is available.
 
@@ -1802,6 +1807,7 @@ Function: `poc_dict_to_contract(cap_dict: dict) -> CapabilityContract`
 - Handles `estimated_cost` → `cost_per_call` float parse
 
 Function: `convert_all_poc_capabilities() -> list[CapabilityContract]`
+
 - Imports `DEMO_CAPABILITIES` from `demo_capabilities.py` (7)
 - Imports `FAMILY_CAPABILITIES` from `family_capabilities.py` (31)
 - Imports `WEB_CAPABILITIES` from `web_capabilities.py` (2)
@@ -1822,6 +1828,7 @@ Depends on: M5 (capability files at `k1/concierge/fabric/`)
 Class: `POCMockBridgeAdapter` satisfies `IBridgePort` (structural — no inheritance)
 
 Constructor: `__init__(self, registry: CapabilityRegistry)`
+
 - Stores reference to `CapabilityRegistry` which holds the handler map
 
 Methods:
@@ -1868,7 +1875,7 @@ from k1.concierge.fabric.contract_converter import convert_all_poc_capabilities
 def _create_fabric(registry: CapabilityRegistry) -> Fabric:
     """Boot a real K1 Fabric with POC mock handlers behind BridgeProvider."""
     poc_bridge = POCMockBridgeAdapter(registry)
-    
+
     fabric = FabricFactory.create_with_ports(
         state_reader=TestSessionStateReaderAdapter(),  # M8 wires real
         event_port=LocalEventAdapter(capture_mode=True),
@@ -1879,11 +1886,11 @@ def _create_fabric(registry: CapabilityRegistry) -> Fabric:
         production_mode=False,
         contracts_dir=None,  # No YAML scan — register programmatically
     )
-    
+
     # Register all 40 POC capabilities
     for contract in convert_all_poc_capabilities():
         fabric.register(contract)
-    
+
     return fabric
 ```
 
@@ -1945,6 +1952,7 @@ Depends on: E6.3.2 (fabric always wired)
 > steps fire correctly for POC capabilities.
 
 The 9 steps (from `k1/fabric/fabric.py` `CapabilityFabric.execute()`):
+
 1. **Resolve** — `ProviderMatcher` + `ProviderSelector` → find provider for capability
 2. **Policy** — `PolicyEngine` evaluates safety band, affective routing, QoS
 3. **Context Build** — `ContextBuilder` reads SessionState sections (via `ISessionStateReader`)
@@ -2144,20 +2152,643 @@ Touch point: NEW file `tests/k1/concierge/test_tool_fabric_live.py` (~30 tests)
 
 ## M7 — K1 Model Hub Wiring
 
-> Swap `IModelPort` POC adapter → `k1/model_hub/` adapter. LLM calls route through Model Hub with proper model selection, token budgets, and fallback.
+> K1 Model Hub has ZERO Python — only `k1/model_hub/model_hub.mmd` (~700 line production spec).
+> M1 built the contract layer (`types.py`, `ports.py`, `plugins/base.py`) and a POC bridge (`ModelHubPOCBridge`)
+> that wraps `GeminiConciergeAdapter` behind `IModelHubPort`. After M5 Big Copy, the Concierge
+> at `k1/concierge/` still routes LLM calls through this bridge.
+>
+> This milestone **builds the real Model Hub service** per the `.mmd` spec (Option B — Lightweight Hub),
+> wires it into the Concierge via the production `ModelGatewayAdapter` (from `concierge.mmd`),
+> and removes the POC bridge. Defers the full 13-service architecture (manifest scanning, hot-reload,
+> multi-provider, response cache, rate limiter, cost tracker) to a post-M10 Model Hub Hardening milestone.
 
-**Work**:
+**K1 Model Hub status (post-M1)**: `types.py` (HubRequest, HubResponse, ~250 lines), `ports.py` (IModelHubPort + 6 ports, ~120 lines), `plugins/base.py` (IProviderPlugin + internal types, ~150 lines), `plugins/test_plugin.py` (TestProviderPlugin, ~100 lines)
+**Bridge status (post-M5)**: `k1/concierge/llm/model_hub_bridge.py` — `ModelHubPOCBridge(inner: GeminiConciergeAdapter)` implements `IModelHubPort`, translates HubRequest ↔ ConciergeModelRequest
+**Caller status (post-M5)**: `k1/concierge/react/loop.py`, `actors/front.py`, `actors/back.py` all use `IModelHubPort` + `HubRequest`/`HubResponse`
+**Bootstrap status (post-M5)**: `k1/concierge/kernel/bootstrap.py` `_create_model()` returns `ModelHubPOCBridge(GeminiConciergeAdapter(api_key=...))`
+**Concierge .mmd (production arch)**: Defines `ILLMPort` (outbound, line 262) with `execute(HubRequest)→HubResponse` + `stream_execute(HubRequest)→AsyncIterator[HubChunk]`, adapted by `ModelGatewayAdapter` (line 283) which routes to Model Hub with LLM cascade (RETRY → CB HALF-OPEN → CANNED_RESPONSE)
 
-- Implement `ModelHubAdapter` behind `IModelPort`
-- Model selection table: Front/Back × streaming/non-streaming
-- Token budget enforcement at Model Hub level
-- Fallback chains (pro → flash → canned)
+### Architecture: What M7 Builds
+
+```
+┌─────────────────────────── k1/concierge/ ────────────────────────────┐
+│                                                                       │
+│  react/loop.py → ILLMPort.execute() / .stream_execute()              │
+│       │                                                               │
+│       ▼                                                               │
+│  ModelGatewayAdapter (ILLMPort impl)                                  │
+│   • tags capability (CHAT/TOOL_CALL/STRUCTURED/REASON)               │
+│   • LLM cascade: RETRY → CB HALF-OPEN → CANNED_RESPONSE             │
+│       │                                                               │
+└───────│───────────────────────────────────────────────────────────────┘
+        │ (in-process call, bus deferred)
+        ▼
+┌─────────────────────────── k1/model_hub/ ────────────────────────────┐
+│                                                                       │
+│  ModelHubService (IModelHubPort impl)                                 │
+│   ├── validate request (capability, constraints)                      │
+│   ├── BudgetEnforcer.check(consumer_id, estimated_cost)               │
+│   ├── ModelSelector.select(capability, constraints) → fallback chain  │
+│   ├── dispatch to IProviderPlugin.execute() or .stream_execute()      │
+│   ├── on failure → next in fallback chain                             │
+│   └── post-dispatch: record spend, build ResponseMetadata             │
+│                                                                       │
+│  GeminiProviderPlugin (IProviderPlugin impl)                          │
+│   • wraps GeminiConciergeAdapter internally                           │
+│   • translates NormalizedRequest ↔ ConciergeModelRequest              │
+│   • supports: CHAT, TOOL_CALL, STRUCTURED, REASON                    │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+### What Gets Built vs Deferred
+
+| Component | M7 Scope | Notes |
+|---|---|---|
+| GeminiProviderPlugin | ✅ BUILD | Wraps GeminiConciergeAdapter as IProviderPlugin |
+| ModelSelector | ✅ BUILD (simplified) | Single-provider, fallback chain (3 alternatives) |
+| BudgetEnforcer | ✅ BUILD | Daily budget per consumer_id ($5/day default from .mmd MH-07) |
+| ModelHubService | ✅ BUILD | Implements IModelHubPort, orchestrates pipeline |
+| ILLMPort | ✅ BUILD | Concierge's outbound LLM port (concierge.mmd L262) |
+| ModelGatewayAdapter | ✅ BUILD | Concierge adapter: ILLMPort → IModelHubPort with LLM cascade |
+| MockLLMAdapter | ✅ BUILD | Test adapter for ILLMPort (concierge.mmd ADAPTERS_TEST) |
+| ProviderRegistry (manifest scanning + hot-reload) | ❌ DEFER | Not needed until multi-provider |
+| CapabilityRouter (multi-provider) | ❌ DEFER | Single provider in M7 |
+| ResponseCache | ❌ DEFER | Optimization |
+| CircuitBreakerManager | ❌ DEFER | Full CB deferred; adapter has simple retry |
+| RateLimiter | ❌ DEFER | Provider handles own limiting |
+| CostTracker | ❌ DEFER | Monitoring |
+| ProviderHealthMonitor | ❌ DEFER | Single provider |
+| AuditLogger | ❌ DEFER | Observability milestone |
+| NormalizationLayer | ❌ DEFER | Plugin handles own normalization for now |
+| Manifest YAML system | ❌ DEFER | Until second provider |
+| LLM Request Bus (async request-reply) | ❌ DEFER | In-process call sufficient |
 
 ### Epics
-<!-- TBD -->
 
-### Issues
-<!-- TBD -->
+#### E7.1 — Build GeminiProviderPlugin
+
+> Wraps the existing `GeminiConciergeAdapter` (664 lines of real Gemini API code) as an `IProviderPlugin`
+> from M1's `k1/model_hub/plugins/base.py`. The adapter stays intact; the plugin translates between
+> `NormalizedRequest` ↔ `ConciergeModelRequest` and `ConciergeModelResponse` ↔ `ProviderResponse`.
+
+**Issue E7.1.1** — Create `k1/model_hub/plugins/gemini_plugin.py` — GeminiProviderPlugin
+
+Class: `GeminiProviderPlugin` implements `IProviderPlugin`
+
+Constructor: `__init__(self, api_key: str, model_overrides: dict[str, str] | None = None)`
+  - Internally creates `GeminiConciergeAdapter(api_key=api_key)` from `k1.concierge.llm.gemini_adapter`
+  - `model_overrides` allows per-capability model mapping (default: all → `gemini-2.5-flash-lite`)
+
+Methods:
+
+- `initialize(manifest: ProviderManifest) -> None` — no-op (adapter is ready at construction)
+- `supports(capability: CapabilityType) -> bool` — returns `True` for CHAT, TOOL_CALL, STRUCTURED, REASON (the 4 POC-day-1 capabilities). `False` for EMBED, VISION, AUDIO_IN, etc.
+- `execute(request: NormalizedRequest) -> ProviderResponse`:
+  - `_normalized_to_poc(request: NormalizedRequest) -> ConciergeModelRequest` — translate:
+    - `request.capability` → `Capability` enum mapping (M1 E1.4.1 reverse of hub→poc mapping)
+    - `request.messages` → `ModelMessage` list
+    - `request.system_prompt` → `ConciergeModelRequest.system_prompt`
+    - `request.tools` → `ToolSchema` list (if TOOL_CALL)
+    - `request.max_tokens/timeout_ms/temperature` → request fields
+    - `request.consumer_id` → actor (parse `"concierge.front"` → `"front"`)
+    - `request.model_id` → `model_hint`
+    - `request.stream` → forced `False` for execute
+  - Call `self._adapter.generate(poc_request)`
+  - `_poc_to_provider_response(poc_resp: ConciergeModelResponse) -> ProviderResponse` — translate:
+    - `.text` / `.tool_calls` / `.json_output` → `ProviderResponse.result`
+    - `.tokens_in` / `.tokens_out` → `ProviderResponse.usage`
+    - `.latency_ms` / `.model_id` / `.finish_reason` → metadata fields
+- `stream_execute(request: NormalizedRequest) -> AsyncIterator[ProviderChunk]`:
+  - Same `_normalized_to_poc()` translation with `stream` forced `True`
+  - Call `self._adapter.generate_stream(poc_request)`
+  - Map `StreamChunk` → `ProviderChunk` on each yield
+- `estimate_tokens(messages: list[Message]) -> int` — rough estimate: `sum(len(m.content) for m in messages) // 4` (4 chars/token approximation)
+- `health_check() -> ProviderHealth` — always `HEALTHY` (no circuit breaker in plugin itself)
+- `close() -> None` — no-op (adapter has no persistent connections)
+
+Touch point: NEW file `k1/model_hub/plugins/gemini_plugin.py` (~200 lines)
+Depends on: M1 E1.3.1 (`plugins/base.py`), M5 (`k1/concierge/llm/gemini_adapter.py`)
+
+**Issue E7.1.2** — Update `k1/model_hub/plugins/test_plugin.py` — align with GeminiProviderPlugin
+
+Review M1's `TestProviderPlugin` to ensure it exercises the same `NormalizedRequest` → `ProviderResponse` contract.
+Add: `set_execute_response()`, `set_stream_chunks()`, `set_health_status()`, `call_log` recording if not already present.
+
+Touch point: EDIT `k1/model_hub/plugins/test_plugin.py` (~20 lines added)
+Depends on: M1 E1.3.2
+
+---
+
+#### E7.2 — Build Model Selection Engine
+
+> From .mmd: `ModelSelector` scores eligible providers by (cost 0.3, latency 0.25, preference 0.2,
+> placement 0.15, health 0.1) and returns top-3 as a fallback chain. For M7 with a single provider,
+> the selector is a thin wrapper that always returns GeminiProviderPlugin as rank-1, with configured
+> fallback models.
+
+**Issue E7.2.1** — Create `k1/model_hub/selection.py` — ModelSelector
+
+Class: `ModelSelector`
+
+Constructor: `__init__(self, plugins: dict[str, IProviderPlugin], config: SelectionConfig)`
+
+Types:
+
+- `SelectionConfig` dataclass — `default_model: str`, `model_map: dict[str, str]` (consumer_id → model_id), `fallback_chain: list[str]` (model_ids in priority order), `weights: ScoringWeights | None` (deferred, all 1.0 for now)
+- `FallbackChain` dataclass — `models: list[str]`, `current_index: int`, `next() -> str | None`
+
+Methods:
+
+- `select(capability: CapabilityType, constraints: RequestConstraints) -> FallbackChain`:
+  - If `constraints.model_preference` specified → use that model as rank-1
+  - Else if `constraints.consumer_id` in `config.model_map` → use mapped model
+  - Else → `config.default_model`
+  - Append `config.fallback_chain` entries (excluding selected model) as rank-2, rank-3
+  - Return `FallbackChain` with up to 3 models
+- `get_plugin_for_model(model_id: str) -> IProviderPlugin | None` — lookup provider by model
+  - For M7: single plugin handles all models (GeminiProviderPlugin routes via model_hint)
+
+Configuration for POC migration (from `poc/k1_poc/llm/model_selection.py` + `defaults.yaml`):
+
+```python
+SelectionConfig(
+    default_model="gemini-2.5-flash-lite",
+    model_map={
+        "concierge.front": "gemini-2.5-flash-lite",
+        "concierge.back": "gemini-2.5-flash-lite",
+    },
+    fallback_chain=["gemini-2.5-flash", "gemini-2.5-pro"],
+)
+```
+
+Touch point: NEW file `k1/model_hub/selection.py` (~120 lines)
+Depends on: M1 E1.1.1 (types), M1 E1.3.1 (IProviderPlugin)
+
+---
+
+#### E7.3 — Build Budget Enforcer
+
+> From .mmd invariant MH-07: "Budget enforcement MUST reject requests exceeding daily budget."
+> Default: $5/day (from .mmd BudgetEnforcer spec). Tracks spend per `consumer_id`.
+> In-memory tracking for M7 (persistent tracking deferred to CostTracker service).
+
+**Issue E7.3.1** — Create `k1/model_hub/budget.py` — BudgetEnforcer
+
+Class: `BudgetEnforcer`
+
+Constructor: `__init__(self, daily_limit_usd: float = 5.0, per_consumer_limits: dict[str, float] | None = None)`
+
+Types:
+
+- `BudgetConfig` dataclass — `daily_limit_usd: float`, `per_consumer_limits: dict[str, float]`, `reset_hour_utc: int` (0 = midnight UTC)
+- `BudgetCheckResult` dataclass — `allowed: bool`, `remaining_usd: float`, `reason: str | None`
+
+Methods:
+
+- `check(consumer_id: str, estimated_cost_usd: float) -> BudgetCheckResult`:
+  - Track daily spend per consumer_id in `dict[str, float]`
+  - Auto-reset when day changes (compare against `_current_day`)
+  - If `daily_spend + estimated_cost > daily_limit` → reject with `BudgetCheckResult(allowed=False, ...)`
+  - Else → allow
+- `record_spend(consumer_id: str, actual_cost_usd: float) -> None`:
+  - Called post-dispatch to record actual cost
+  - Updates `_daily_spend[consumer_id]`
+- `get_remaining(consumer_id: str) -> float` — query remaining budget
+- `reset() -> None` — manual reset (for testing)
+
+Cost estimation for Gemini (from POC defaults):
+
+- Input: ~$0.000125/1K tokens for flash-lite
+- Output: ~$0.000500/1K tokens for flash-lite
+- Rough per-call estimate: `(prompt_tokens * 0.000125 + max_tokens * 0.000500) / 1000`
+
+Touch point: NEW file `k1/model_hub/budget.py` (~100 lines)
+Depends on: nothing (pure utility)
+
+---
+
+#### E7.4 — Build ModelHubService
+
+> Core service implementing `IModelHubPort`. Orchestrates the pipeline:
+> validate → budget check → select model → dispatch to plugin → fallback on failure → post-dispatch.
+> This is the M7 deliverable that replaces `ModelHubPOCBridge`.
+
+**Issue E7.4.1** — Create `k1/model_hub/service.py` — ModelHubService
+
+Class: `ModelHubService` implements `IModelHubPort`
+
+Constructor:
+
+```python
+__init__(
+    self,
+    plugins: dict[str, IProviderPlugin],   # provider_id → plugin instance
+    selector: ModelSelector,
+    budget: BudgetEnforcer,
+)
+```
+
+Methods:
+
+- `execute(request: HubRequest) -> HubResponse`:
+  1. Validate: `request.capability` must be supported by at least one plugin
+  2. Budget: `self._budget.check(request.constraints.consumer_id, self._estimate_cost(request))` → reject if not allowed
+  3. Select: `self._selector.select(request.capability, request.constraints)` → `FallbackChain`
+  4. Build `NormalizedRequest` from `HubRequest` (one-time translation)
+  5. Dispatch loop (up to `len(fallback_chain)`):
+     - Get plugin for current model: `self._selector.get_plugin_for_model(chain.current)`
+     - Call `plugin.execute(normalized_request)` with `model_id` set
+     - On success: build `HubResponse` from `ProviderResponse`, record spend, return
+     - On failure (exception or error response): log warning, advance fallback chain, retry
+  6. If all fallback attempts fail: raise `ModelHubExhaustedError`
+
+- `stream_execute(request: HubRequest) -> AsyncIterator[HubChunk]`:
+  - Same validate + budget + select steps
+  - Dispatch: `plugin.stream_execute(normalized_request)`
+  - Map `ProviderChunk` → `HubChunk` on each yield
+  - Fallback: if first chunk fails → try next in chain (full restart, not mid-stream)
+
+- `discover_capabilities() -> dict[CapabilityType, list[str]]`:
+  - Aggregate `plugin.supports(cap)` across all plugins for each `CapabilityType`
+  - Return: `{CHAT: ["gemini"], TOOL_CALL: ["gemini"], STRUCTURED: ["gemini"], REASON: ["gemini"]}`
+
+- `discover_models(capability: CapabilityType | None = None) -> list[ModelInfo]`:
+  - Return configured model list, optionally filtered by capability
+
+- `health() -> HubHealthReport`:
+  - Call `plugin.health_check()` for all plugins
+  - Aggregate into `HubHealthReport`
+
+Private helpers:
+
+- `_hub_to_normalized(request: HubRequest, model_id: str) -> NormalizedRequest`:
+  - Extract from `HubRequest`: messages, system_prompt, tools, constraints
+  - Set `model_id` from fallback chain selection
+  - Set `stream = False` (for execute) or `True` (for stream_execute)
+  - Mapping: `HubRequest.payload` (ChatPayload/ToolCallPayload/etc.) → flattened `NormalizedRequest` fields
+- `_provider_to_hub_response(provider_resp: ProviderResponse, request: HubRequest) -> HubResponse`:
+  - Build `ResponseMetadata` from provider response
+  - Build capability-specific `CapabilityResult` from provider result
+  - Package into `HubResponse`
+- `_estimate_cost(request: HubRequest) -> float`:
+  - Rough: `request.constraints.max_tokens * 0.000500 / 1000` (output-side estimate)
+
+Touch point: NEW file `k1/model_hub/service.py` (~300 lines)
+Depends on: M1 E1.1 (types), M1 E1.2 (ports), M1 E1.3 (plugins), E7.1 (GeminiProviderPlugin), E7.2 (ModelSelector), E7.3 (BudgetEnforcer)
+
+**Issue E7.4.2** — Create `k1/model_hub/errors.py` — Hub-specific exceptions
+
+- `ModelHubError` — base exception
+- `ModelHubExhaustedError(ModelHubError)` — all fallback attempts failed
+- `BudgetExceededError(ModelHubError)` — daily budget exceeded
+- `UnsupportedCapabilityError(ModelHubError)` — no plugin supports the requested capability
+
+Touch point: NEW file `k1/model_hub/errors.py` (~30 lines)
+Depends on: nothing
+
+**Issue E7.4.3** — Update `k1/model_hub/__init__.py` — export service + errors
+
+Add exports: `ModelHubService`, `ModelHubError`, `ModelHubExhaustedError`, `BudgetExceededError`, `UnsupportedCapabilityError`, `GeminiProviderPlugin`, `ModelSelector`, `SelectionConfig`, `BudgetEnforcer`, `BudgetConfig`
+
+Touch point: EDIT `k1/model_hub/__init__.py`
+
+---
+
+#### E7.5 — Build ILLMPort + ModelGatewayAdapter
+
+> Per `concierge.mmd` (line 262): the Concierge uses `ILLMPort` (outbound) with methods
+> `execute(HubRequest) → HubResponse` and `stream_execute(HubRequest) → AsyncIterator[HubChunk]`.
+> The production adapter is `ModelGatewayAdapter` (line 283) which routes to Model Hub
+> via LLM Request Bus. For M7, the adapter calls `ModelHubService` directly (in-process).
+>
+> Note: `ILLMPort` is a SUBSET of `IModelHubPort` — no `discover_capabilities()`, `discover_models()`,
+> or `health()`. It is the Concierge's **own** outbound LLM port; the Concierge doesn't need
+> Model Hub management methods.
+
+**Issue E7.5.1** — Create `k1/concierge/llm/llm_port.py` — ILLMPort protocol
+
+From concierge.mmd line 262:
+
+```python
+@runtime_checkable
+class ILLMPort(Protocol):
+    def execute(self, request: HubRequest) -> HubResponse: ...
+    async def stream_execute(self, request: HubRequest) -> AsyncIterator[HubChunk]: ...
+```
+
+Touch point: NEW file `k1/concierge/llm/llm_port.py` (~25 lines)
+Depends on: M1 E1.1 (HubRequest, HubResponse, HubChunk from `k1.model_hub.types`)
+
+**Issue E7.5.2** — Create `k1/concierge/llm/model_gateway_adapter.py` — ModelGatewayAdapter
+
+From concierge.mmd line 283. Implements `ILLMPort`, delegates to `IModelHubPort`.
+
+Class: `ModelGatewayAdapter` implements `ILLMPort`
+
+Constructor: `__init__(self, hub: IModelHubPort, canned_responses: dict[CapabilityType, str] | None = None)`
+
+Methods:
+
+- `execute(request: HubRequest) -> HubResponse`:
+  1. Tag: ensure `request.constraints.consumer_id` is set (from caller context)
+  2. Try: `self._hub.execute(request)`
+  3. LLM Cascade (from concierge.mmd):
+     - L1 RETRY: on timeout or 5xx-equivalent → retry once with same request
+     - L2 CB HALF-OPEN: (deferred — no CB in M7, just log warning)
+     - L3 CANNED_RESPONSE: if all attempts fail → return canned response for capability
+  4. Return `HubResponse`
+
+- `stream_execute(request: HubRequest) -> AsyncIterator[HubChunk]`:
+  1. Tag request
+  2. Try: yield from `self._hub.stream_execute(request)`
+  3. On failure: yield single `HubChunk` with canned response text, then done chunk
+
+Canned responses (degraded mode, from concierge.mmd LLM_CASCADE L3):
+
+- CHAT: `"I'm having trouble thinking right now. Could you try again in a moment?"`
+- TOOL_CALL: return empty tool_calls (caller handles via FallbackChain in react loop)
+- STRUCTURED: return `{"error": "service_degraded"}` as json_output
+
+Touch point: NEW file `k1/concierge/llm/model_gateway_adapter.py` (~120 lines)
+Depends on: E7.5.1 (ILLMPort), M1 E1.2.1 (IModelHubPort), M1 E1.1.1 (types)
+
+**Issue E7.5.3** — Create `k1/concierge/llm/mock_llm_adapter.py` — MockLLMAdapter (test)
+
+From concierge.mmd ADAPTERS_TEST section. Implements `ILLMPort` for tests.
+
+- Scripted responses per capability
+- Records all calls for assertions
+- `set_execute_response(capability, response)`, `set_stream_chunks(capability, chunks)`
+- `call_log: list[HubRequest]` — records all requests received
+- Note: This replaces the M1 `TestModelHubBridge` for the Concierge's test wiring
+
+Touch point: NEW file `k1/concierge/llm/mock_llm_adapter.py` (~80 lines)
+Depends on: E7.5.1 (ILLMPort)
+
+---
+
+#### E7.6 — Wire Bootstrap + Migrate Callers to ILLMPort
+
+> Replace `ModelHubPOCBridge` with `ModelHubService` + `ModelGatewayAdapter` chain.
+> Migrate callers from `IModelHubPort` → `ILLMPort` (the Concierge's own outbound port).
+
+**Issue E7.6.1** — Migrate `k1/concierge/react/loop.py` — IModelHubPort → ILLMPort
+
+Changes:
+
+- Import: `from k1.model_hub.ports import IModelHubPort` → `from k1.concierge.llm.llm_port import ILLMPort`
+- `_streaming_generate()` signature: `model: IModelHubPort` → `model: ILLMPort`
+- `react_loop()` signature: `model: IModelHubPort` → `model: ILLMPort`
+- Method calls unchanged: `.execute()` and `.stream_execute()` have same signatures on both protocols
+- Return types unchanged: `HubResponse`, `HubChunk` stay the same
+
+Touch point: EDIT `k1/concierge/react/loop.py` — imports, 2 function signatures
+Depends on: E7.5.1
+
+**Issue E7.6.2** — Migrate `k1/concierge/actors/front.py` — IModelHubPort → ILLMPort
+
+Changes:
+
+- Import: `from k1.model_hub.ports import IModelHubPort` → `from k1.concierge.llm.llm_port import ILLMPort`
+- `front_handler()` signature: `model: IModelHubPort` → `model: ILLMPort`
+- No internal changes (passes `model` to `react_loop()`)
+
+Touch point: EDIT `k1/concierge/actors/front.py` — import, 1 signature
+Depends on: E7.5.1
+
+**Issue E7.6.3** — Migrate `k1/concierge/actors/back.py` — IModelHubPort → ILLMPort
+
+Changes:
+
+- Import: `from k1.model_hub.ports import IModelHubPort` → `from k1.concierge.llm.llm_port import ILLMPort`
+- 3 handler signatures: `model: IModelHubPort` → `model: ILLMPort`
+- No internal changes (all handlers pass `model` to `react_loop()`)
+
+Touch point: EDIT `k1/concierge/actors/back.py` — import, 3 signatures
+Depends on: E7.5.1
+
+**Issue E7.6.4** — Rewrite `k1/concierge/kernel/bootstrap.py` `_create_model()`
+
+Current (post-M5): returns `ModelHubPOCBridge(GeminiConciergeAdapter(api_key=...))`
+After M7: builds full `ModelHubService` → `ModelGatewayAdapter` chain
+
+Changes to `_create_model()`:
+
+```python
+# LIVE mode:
+gemini_plugin = GeminiProviderPlugin(api_key=api_key)
+selector = ModelSelector(
+    plugins={"gemini": gemini_plugin},
+    config=SelectionConfig(
+        default_model="gemini-2.5-flash-lite",
+        model_map={
+            "concierge.front": "gemini-2.5-flash-lite",
+            "concierge.back": "gemini-2.5-flash-lite",
+        },
+        fallback_chain=["gemini-2.5-flash", "gemini-2.5-pro"],
+    ),
+)
+budget = BudgetEnforcer(daily_limit_usd=config.get("model_hub.budget_daily_usd", 5.0))
+hub = ModelHubService(plugins={"gemini": gemini_plugin}, selector=selector, budget=budget)
+return ModelGatewayAdapter(hub=hub)
+
+# TEST mode:
+test_plugin = TestProviderPlugin()
+selector = ModelSelector(
+    plugins={"test": test_plugin},
+    config=SelectionConfig(
+        default_model="test-model",
+        model_map={},
+        fallback_chain=[],
+    ),
+)
+budget = BudgetEnforcer(daily_limit_usd=999.0)  # no budget limit in tests
+hub = ModelHubService(plugins={"test": test_plugin}, selector=selector, budget=budget)
+return ModelGatewayAdapter(hub=hub)
+```
+
+Imports to add:
+
+- `from k1.model_hub.plugins.gemini_plugin import GeminiProviderPlugin`
+- `from k1.model_hub.service import ModelHubService`
+- `from k1.model_hub.selection import ModelSelector, SelectionConfig`
+- `from k1.model_hub.budget import BudgetEnforcer`
+- `from k1.concierge.llm.model_gateway_adapter import ModelGatewayAdapter`
+
+Imports to remove:
+
+- `from k1.concierge.llm.model_hub_bridge import ModelHubPOCBridge`
+
+Return type annotation: `-> ILLMPort` (was `-> IModelHubPort`)
+
+Touch point: EDIT `k1/concierge/kernel/bootstrap.py` — imports, `_create_model()` (~35 lines rewritten), `KernelRuntime.model` type
+Depends on: E7.1, E7.2, E7.3, E7.4, E7.5
+
+**Issue E7.6.5** — Delete `k1/concierge/llm/model_hub_bridge.py` — remove POC bridge
+
+After E7.6.4, `ModelHubPOCBridge` is no longer referenced anywhere.
+
+Verification before delete:
+
+- `grep -r "ModelHubPOCBridge" k1/ tests/` → must return 0 results
+- `grep -r "model_hub_bridge" k1/ tests/` → must return 0 results (no import)
+
+Touch point: DELETE `k1/concierge/llm/model_hub_bridge.py`
+Touch point: DELETE `k1/concierge/llm/test_model_hub_bridge.py` (M1's test bridge also unused)
+
+**Issue E7.6.6** — Update `k1/concierge/llm/__init__.py` — fix exports
+
+Remove exports for `ModelHubPOCBridge`, `TestModelHubBridge`, `IConciergeModelPort`.
+Add exports for `ILLMPort`, `ModelGatewayAdapter`, `MockLLMAdapter`.
+
+Touch point: EDIT `k1/concierge/llm/__init__.py`
+
+---
+
+#### E7.7 — Unit Tests
+
+**Issue E7.7.1** — Create `tests/k1/model_hub/test_gemini_plugin.py`
+
+Tests for `GeminiProviderPlugin`:
+
+- `supports()` returns True for CHAT, TOOL_CALL, STRUCTURED, REASON; False for EMBED, VISION
+- `execute()` translates NormalizedRequest → ConciergeModelRequest correctly (each field mapping)
+- `execute()` translates ConciergeModelResponse → ProviderResponse correctly
+- `stream_execute()` yields ProviderChunk from StreamChunk
+- `estimate_tokens()` returns reasonable estimate
+- `health_check()` returns HEALTHY
+- Error propagation: adapter exception → plugin raises
+
+Touch point: NEW file `tests/k1/model_hub/test_gemini_plugin.py` (~25 tests)
+
+**Issue E7.7.2** — Create `tests/k1/model_hub/test_selection.py`
+
+Tests for `ModelSelector`:
+
+- Default selection: no preference → default_model
+- Consumer-id mapping: `"concierge.front"` → mapped model
+- Model preference override: `constraints.model_preference` → uses that model
+- Fallback chain: returns 3 models in priority order
+- Fallback chain excludes selected model from alternatives
+- Empty fallback chain → single model, no alternatives
+
+Touch point: NEW file `tests/k1/model_hub/test_selection.py` (~15 tests)
+
+**Issue E7.7.3** — Create `tests/k1/model_hub/test_budget.py`
+
+Tests for `BudgetEnforcer`:
+
+- Under budget: `check()` → `allowed=True`
+- Over budget: `check()` → `allowed=False`, reason set
+- `record_spend()` accumulates correctly
+- Day rollover resets spend
+- Per-consumer limit vs global limit
+- `get_remaining()` reflects recorded spend
+- `reset()` clears all state
+
+Touch point: NEW file `tests/k1/model_hub/test_budget.py` (~15 tests)
+
+**Issue E7.7.4** — Create `tests/k1/model_hub/test_service.py`
+
+Tests for `ModelHubService`:
+
+- Happy path: `execute()` → selects model → dispatches to plugin → returns HubResponse
+- Happy path: `stream_execute()` → yields HubChunks
+- Budget rejection: over-budget request → `BudgetExceededError`
+- Unsupported capability: no plugin supports → `UnsupportedCapabilityError`
+- Fallback: first model fails → second model succeeds → HubResponse from fallback
+- Fallback exhausted: all models fail → `ModelHubExhaustedError`
+- `discover_capabilities()` → aggregated capability map
+- `discover_models()` → model list from config
+- `health()` → aggregated health from plugins
+- Post-dispatch: spend recorded in BudgetEnforcer
+
+Touch point: NEW file `tests/k1/model_hub/test_service.py` (~30 tests)
+
+**Issue E7.7.5** — Create `tests/k1/concierge/test_model_gateway_adapter.py`
+
+Tests for `ModelGatewayAdapter`:
+
+- Happy path: delegates `execute()` to hub
+- Happy path: delegates `stream_execute()` to hub
+- LLM cascade L1: first attempt timeout → retry once → succeed
+- LLM cascade L3: all attempts fail → canned response returned
+- Canned response per capability type (CHAT, TOOL_CALL, STRUCTURED)
+- Stream failure → single canned chunk yielded
+
+Touch point: NEW file `tests/k1/concierge/test_model_gateway_adapter.py` (~15 tests)
+
+**Issue E7.7.6** — Create `tests/k1/concierge/test_mock_llm_adapter.py`
+
+Tests for `MockLLMAdapter`:
+
+- `set_execute_response()` → returns scripted response
+- `set_stream_chunks()` → yields scripted chunks
+- `call_log` records all requests
+- Satisfies `ILLMPort` (`isinstance` check)
+
+Touch point: NEW file `tests/k1/concierge/test_mock_llm_adapter.py` (~10 tests)
+
+---
+
+#### E7.8 — Integration Tests + Cleanup
+
+**Issue E7.8.1** — E2E smoke test: HubRequest → ModelHubService → GeminiProviderPlugin → HubResponse
+
+Create `tests/k1/model_hub/test_hub_e2e.py`:
+
+- Wire `ModelHubService` with `TestProviderPlugin` (not Gemini — fully in-memory)
+- Wrap with `ModelGatewayAdapter`
+- Execute CHAT request → verify HubResponse structure
+- Execute TOOL_CALL request → verify tool_calls in result
+- Execute STRUCTURED request → verify json_output
+- Stream CHAT request → verify HubChunk sequence
+- Fallback chain E2E: first plugin raises, second succeeds
+
+Touch point: NEW file `tests/k1/model_hub/test_hub_e2e.py` (~15 tests)
+
+**Issue E7.8.2** — Run full Concierge test suite from new wiring
+
+- Command: `python -m pytest tests/k1/concierge/ --tb=short -q`
+- Gate: ALL existing tests pass. The migration from `IModelHubPort` → `ILLMPort` and from `ModelHubPOCBridge` → `ModelGatewayAdapter(ModelHubService)` must be transparent.
+- Focus: tests exercising react loop (which constructs `HubRequest` and reads `HubResponse`)
+
+**Issue E7.8.3** — Run new Model Hub test suite
+
+- Command: `python -m pytest tests/k1/model_hub/ --tb=short -q`
+- Gate: ALL new tests pass (~110 tests from E7.7)
+
+**Issue E7.8.4** — Cleanup dead POC LLM code in `k1/concierge/llm/`
+
+After bridge removal (E7.6.5), review `k1/concierge/llm/`:
+
+| File | Decision | Reason |
+|---|---|---|
+| `model_selection.py` | Conditional DELETE | `ModelSelector` in `k1/model_hub/selection.py` replaces it. If no other consumer → delete. Verify: `grep -r "from k1.concierge.llm.model_selection" k1/ tests/` → 0 |
+| `ports.py` (old `IConciergeModelPort`) | Conditional DELETE | Callers migrated to `ILLMPort`. If no other consumer → delete. Verify: `grep -r "from k1.concierge.llm.ports" k1/ tests/` → 0 |
+| `types.py` (ConciergeModelRequest, etc.) | **KEEP** | Still needed by `GeminiProviderPlugin` which wraps `GeminiConciergeAdapter` using these types |
+| `gemini_adapter.py` | **KEEP** | Still needed by `GeminiProviderPlugin` (wraps it internally) |
+| `test_adapter.py` | **KEEP** | Still needed by `TestProviderPlugin` if it wraps this; else delete |
+| `validator.py` | **KEEP** | Still needed by react loop (validates HubResponse after M1 E1.6) |
+
+Touch point: Conditional DELETE of 1-2 files in `k1/concierge/llm/`
+
+**Issue E7.8.5** — Git tag `m7-model-hub-wired`
+
+- Tag commit after all tests green
+- Gate metrics:
+
+| Metric | Value |
+|---|---|
+| New K1 Model Hub files | 5 (`service.py`, `selection.py`, `budget.py`, `errors.py`, `gemini_plugin.py`) |
+| New Concierge adapter files | 3 (`llm_port.py`, `model_gateway_adapter.py`, `mock_llm_adapter.py`) |
+| Deleted bridge files | 2-4 (`model_hub_bridge.py`, `test_model_hub_bridge.py`, + conditionally `model_selection.py`, `ports.py`) |
+| New test files | 7 |
+| New tests | ~110 |
+| Callers migrated IModelHubPort → ILLMPort | 4 (`loop.py`, `front.py`, `back.py`, `bootstrap.py`) |
+| POC bridge removed | `ModelHubPOCBridge`, `TestModelHubBridge` |
+| Production Model Hub service | `ModelHubService` → `GeminiProviderPlugin` → `GeminiConciergeAdapter` |
 
 ---
 
