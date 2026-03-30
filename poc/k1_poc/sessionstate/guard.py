@@ -100,6 +100,9 @@ VALID_OPERATIONS: frozenset[str] = frozenset(
         "push_question",  # Scoreboard QUD push (M4 E4.2.3)
         "pop_question",  # Scoreboard QUD pop (M4 E4.2.3)
         "push_topic",  # Scoreboard topic shift (M4 E4.2.3)
+        "add_commitment",  # Scoreboard commitment creation (M12 commitment tracking)
+        "fulfill_commitment",  # Scoreboard commitment fulfillment (M12 commitment tracking)
+        "cancel_commitment",  # Scoreboard commitment cancellation (M12 commitment tracking)
         "answer",  # Clarifications answer (M4 E4.2.3)
         "request",  # Clarifications request
         "add_compressed",  # History recent compressed turn

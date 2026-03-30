@@ -146,6 +146,44 @@ def _strip_leaked_reasoning(text: str) -> str:
     return text
 
 
+# Patterns matching raw system/HIL blocks that LLMs sometimes pass through
+# instead of rephrasing.  Covers:
+#   [HIL Request] Type: ... Question: ... Options: ... Side effects: ...
+#   Note: The generate_story task is suspended because ...
+#   == WORKER NEEDS USER INPUT ==  (scenario template echoed verbatim)
+_SYSTEM_BLOCK_RE = re.compile(
+    r"(?:"
+    # [HIL Request] block (may span multiple lines)
+    r"\[HIL\s*Request\][^\n]*(?:\n(?:Type|Question|Options|Side\s*effects)[^\n]*)*" r"|"
+    # Note about task suspension
+    r"Note:\s*The\s+\S+\s+task\s+is\s+suspended\b[^\n]*" r"|"
+    # Echoed scenario template header
+    r"==\s*WORKER NEEDS USER INPUT\s*==[^\n]*" r")",
+    re.IGNORECASE,
+)
+
+
+def _strip_leaked_system_blocks(text: str) -> str:
+    """Remove raw HIL/system blocks that leaked into the response text.
+
+    LLMs in HITL_RELAY mode sometimes pass through structured data from
+    the scenario template instead of rephrasing it naturally.  This
+    function strips those blocks so only conversational text remains.
+    """
+    if not text:
+        return text
+    cleaned = _SYSTEM_BLOCK_RE.sub("", text)
+    # Collapse runs of blank lines left by removed blocks
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    if cleaned != text.strip():
+        removed = len(text) - len(cleaned)
+        logger.info(
+            "front_handler: stripped %d chars of leaked system blocks from response",
+            removed,
+        )
+    return cleaned if cleaned else text
+
+
 # =========================================================================
 # _parse_routing_metadata -- M5 E5.3.3
 # =========================================================================
@@ -978,6 +1016,7 @@ async def front_handler(
     #      For STANDARD/PRESENT modes, emit stream chunks first (Epic 4.2).
     if result.text:
         clean_text = _strip_leaked_reasoning(result.text)
+        clean_text = _strip_leaked_system_blocks(clean_text)
         if mode in (PromptMode.STANDARD, PromptMode.PRESENT):
             await _emit_streaming_response(
                 bus=bus,

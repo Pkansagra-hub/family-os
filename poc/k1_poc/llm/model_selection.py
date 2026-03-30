@@ -25,14 +25,16 @@ logger = logging.getLogger(__name__)
 
 MODEL_SELECTION_TABLE: dict[tuple[str, str], str] = {
     # (capability, actor) -> model
+    # Routing: 2.5 flash for tools/reasoning/conversation, 2.5 lite for speed
+    # Moved from Gemini 3.x due to persistent latency spikes
     (
         "CHAT",
         "front",
-    ): "gemini-2.5-flash",  # fast acks, presentations
+    ): "gemini-2.5-flash",  # conversational warmth, fast
     (
         "TOOL_CALL",
         "front",
-    ): "gemini-2.5-flash",  # cognitive tool selection + thinking
+    ): "gemini-2.5-flash",  # cognitive tool selection
     (
         "TOOL_CALL",
         "back",
@@ -48,16 +50,16 @@ MODEL_SELECTION_TABLE: dict[tuple[str, str], str] = {
     (
         "REASON",
         "back",
-    ): "gemini-2.5-flash",  # complex multi-step reasoning
+    ): "gemini-2.5-flash",  # multi-step reasoning
     ("REASON", "front"): "gemini-2.5-flash",  # complex reasoning
     (
         "CHAT",
         "back",
-    ): "gemini-2.5-flash",  # error reports (internal)
+    ): "gemini-2.5-flash-lite",  # error reports (internal, lightweight)
     (
         "STREAM",
         "front",
-    ): "gemini-2.5-flash",  # streaming ack/response
+    ): "gemini-2.5-flash-lite",  # streaming ack/response (speed)
     (
         "TOOL_CALL",
         "planner",
@@ -66,11 +68,11 @@ MODEL_SELECTION_TABLE: dict[tuple[str, str], str] = {
 }
 
 MODEL_HINT_OVERRIDES: dict[str, str] = {
-    "fast": "gemini-2.5-flash",
+    "fast": "gemini-2.5-flash-lite",
     "smart": "gemini-2.5-flash",
-    "cheap": "gemini-2.5-flash",
-    "thinking": "gemini-2.5-flash",  # with thinking
-    "pro": "gemini-2.5-flash",
+    "cheap": "gemini-2.5-flash-lite",
+    "thinking": "gemini-2.5-flash",  # flash with thinking budget
+    "pro": "gemini-2.5-flash",  # best we use — no pro models
     "flash": "gemini-2.5-flash",
 }
 

@@ -4982,6 +4982,7 @@ Touch point: EDIT `poc/k1_poc/concierge_poc_architecture.mmd` (~3 lines added)
 Current README describes the ConciergeAgent pattern and meta-intents. After M6-M9:
 
 - Add **Architecture** section showing the 4-subsystem stack:
+
   ```
   k1/concierge/ (ConciergeAgent — FSM + React Loop + tools)
   ├── k1/fabric/     (Capability Fabric — 9-step pipeline)
@@ -4989,6 +4990,7 @@ Current README describes the ConciergeAgent pattern and meta-intents. After M6-M
   ├── k1/orchestrator/ (Orchestrator — MEDIUM/HIGH task execution)
   └── k1/planner/    (Planner — HIGH tier 4-stage planning)
   ```
+
 - Add **Port Map** section listing all 8 Concierge outbound ports:
   - `ILLMPort` → `ModelGatewayAdapter` → `ModelHubService`
   - `IDispatchPort` → `FabricOrchestratorAdapter` → Fabric / Orchestrator / Planner
@@ -5223,6 +5225,7 @@ Touch point: NEW file `docs/plans/POC_MIGRATION_COMPLETION_REPORT.md` (~80 lines
 **Architecture principle**: Family Data Sovereignty — families' daily data (calendar, lists, chores, budgets) must work offline, sync between devices, and never depend on an external service. External services (Google Calendar import, Instacart ordering) augment via IFL adapters; they do NOT own the data.
 
 **Tool onboarding pattern** (proven in fabric_tool_implementation_plan.md):
+
 1. Create YAML contract(s) in `k1/contracts/tools/<name>.yaml` — defines capability name, inputs, outputs, safety band, domain
 2. Create MCP server in `k1/tools/mcp_servers/<name>/` — models.py, storage.py, handlers.py, server.py (or FastMCP server.py)
 3. `AutoDiscoveryMCPTransport` auto-discovers server at startup — zero Fabric code changes
@@ -5230,10 +5233,12 @@ Touch point: NEW file `docs/plans/POC_MIGRATION_COMPLETION_REPORT.md` (~80 lines
 5. Create E2E test in `tests/k1/fabric/tools/test_<name>_e2e.py` — follows test_calendar_e2e.py pattern
 
 **Server pattern choice**:
+
 - JSON-RPC style (CalendarMCPServer, WeatherMCPServer): for tools needing custom request routing
 - FastMCP style (NotesMCPServer, RecipesMCPServer): for straightforward CRUD tools — less boilerplate
 
 **Safety band assignments** (per concierge.mmd safety model):
+
 - GREEN: read-only queries (list, search, view)
 - AMBER: writes within family context (create event, assign chore, send message)
 - RED: sensitive writes with consequences (medication changes, financial transactions)
@@ -5278,6 +5283,7 @@ tool.delete.<domain>_<action>   — delete operations (AMBER band)
 **Issue E11.1.1** — Add `tool.write.calendar_update_event` contract + handler
 
 New contract YAML: `k1/contracts/tools/calendar_update_event.yaml`
+
 ```yaml
 tool_contract:
   name: "tool.write.calendar_update_event"
@@ -5312,6 +5318,7 @@ tool_contract:
 ```
 
 Touch points:
+
 - NEW file: `k1/contracts/tools/calendar_update_event.yaml`
 - EDIT: `k1/tools/mcp_servers/calendar/storage.py` — add `update_event(event_id, **fields)` method
 - EDIT: `k1/tools/mcp_servers/calendar/handlers.py` — add `async def update_event(self, arguments)` handler
@@ -5322,12 +5329,15 @@ Touch points:
 Extend CalendarEvent model with recurrence fields. Storage generates occurrences on query.
 
 Touch points:
+
 - EDIT: `k1/tools/mcp_servers/calendar/models.py` — add fields to CalendarEvent:
+
   ```python
   recurrence_rule: Optional[str] = None   # "WEEKLY", "DAILY", "MONTHLY", "YEARLY"
   recurrence_end: Optional[str] = None    # ISO 8601 end date for recurrence
   recurrence_parent_id: Optional[str] = None  # links occurrence to parent
   ```
+
 - EDIT: `k1/tools/mcp_servers/calendar/storage.py` — add `_expand_recurring(event, start_date, end_date)` that generates occurrences within the query range
 - EDIT: `k1/tools/mcp_servers/calendar/handlers.py` — `create_event` accepts `recurrence_rule` and `recurrence_end` as optional inputs
 - EDIT: `k1/contracts/tools/calendar_create_event.yaml` — add `recurrence_rule` and `recurrence_end` to optional_inputs
@@ -5337,6 +5347,7 @@ Touch points:
 Filter events by family member. Each event has an `owner` field (who created it) and `attendees` (who's involved).
 
 Touch points:
+
 - EDIT: `k1/tools/mcp_servers/calendar/models.py` — add `owner: str = ""` field
 - EDIT: `k1/tools/mcp_servers/calendar/storage.py` — add `owner` column, add `owner` filter to `list_events()`
 - EDIT: `k1/contracts/tools/calendar_list_events.yaml` — add optional input `owner` (STRING)
@@ -5347,6 +5358,7 @@ Touch points:
 When creating/updating an event, check for time overlaps with existing events for the same owner/attendees.
 
 Touch points:
+
 - EDIT: `k1/tools/mcp_servers/calendar/storage.py` — add `check_conflicts(owner, start_time, end_time, exclude_event_id=None) -> list[CalendarEvent]`
 - EDIT: `k1/tools/mcp_servers/calendar/handlers.py` — call `check_conflicts()` in `create_event()` and `update_event()`, return `conflicts` list in response
 - EDIT: contract output schemas — add optional `conflicts` array to create/update responses
@@ -5356,6 +5368,7 @@ Touch points:
 Extend `tests/k1/fabric/tools/test_calendar_e2e.py` with tests for update, recurring, multi-member, and conflict detection.
 
 Touch points:
+
 - EDIT: `tests/k1/fabric/tools/test_calendar_e2e.py` — add ~60 new tests:
   - `TestCalendarUpdate` — partial update, not_found, all-fields update
   - `TestCalendarRecurring` — weekly recurrence, monthly, expansion within range, recurrence_end boundary
@@ -5381,6 +5394,7 @@ k1/tools/mcp_servers/tasks/
 ```
 
 `models.py`:
+
 ```python
 @dataclass(frozen=True)
 class TaskItem:
@@ -5396,6 +5410,7 @@ class TaskItem:
 ```
 
 `storage.py` — SQLite schema:
+
 ```sql
 CREATE TABLE IF NOT EXISTS task_items (
     item_id     TEXT PRIMARY KEY,
@@ -5415,6 +5430,7 @@ CREATE INDEX IF NOT EXISTS idx_task_assigned ON task_items(assigned_to);
 Methods: `add_item()`, `list_items(list_name, include_completed?)`, `complete_item(item_id)`, `delete_item(item_id)`, `get_lists()`, `search_items(query)`
 
 Touch points:
+
 - NEW: `k1/tools/mcp_servers/tasks/__init__.py`
 - NEW: `k1/tools/mcp_servers/tasks/models.py` (~60 lines)
 - NEW: `k1/tools/mcp_servers/tasks/storage.py` (~120 lines)
@@ -5422,6 +5438,7 @@ Touch points:
 **Issue E11.2.2** — Create Tasks FastMCP server with 6 tools
 
 `server.py` (FastMCP pattern, following notes):
+
 ```python
 mcp = FastMCP("tasks-mcp", instructions="Family task and list management.")
 
@@ -5460,6 +5477,7 @@ Touch point: NEW file `k1/tools/mcp_servers/tasks/server.py` (~120 lines)
 | `tasks_search.yaml` | `tool.read.tasks_search` | GREEN | read |
 
 Touch points:
+
 - NEW: 6 files in `k1/contracts/tools/` (~50 lines each)
 
 **Issue E11.2.4** — Tasks E2E tests
@@ -5467,6 +5485,7 @@ Touch points:
 Following `test_calendar_e2e.py` pattern — NO MOCKS, all real components with in-memory SQLite.
 
 Touch point: NEW file `tests/k1/fabric/tools/test_tasks_e2e.py` (~200 lines, ~40 tests)
+
 - `TestTaskItemModel` — frozen, to_dict, from_dict
 - `TestTaskStorage` — add, list, complete, delete, search, filter by assigned_to
 - `TestTasksHandlers` — argument validation, all 6 handlers
@@ -5483,6 +5502,7 @@ Touch point: NEW file `tests/k1/fabric/tools/test_tasks_e2e.py` (~200 lines, ~40
 **Issue E11.3.1** — Create Message model + MessageStorage
 
 `models.py`:
+
 ```python
 @dataclass(frozen=True)
 class FamilyMessage:
@@ -5498,6 +5518,7 @@ class FamilyMessage:
 ```
 
 `storage.py` — SQLite schema:
+
 ```sql
 CREATE TABLE IF NOT EXISTS messages (
     message_id  TEXT PRIMARY KEY,
@@ -5515,6 +5536,7 @@ CREATE INDEX IF NOT EXISTS idx_msg_created ON messages(created_at);
 ```
 
 Touch points:
+
 - NEW: `k1/tools/mcp_servers/messaging/__init__.py`
 - NEW: `k1/tools/mcp_servers/messaging/models.py` (~60 lines)
 - NEW: `k1/tools/mcp_servers/messaging/storage.py` (~100 lines)
@@ -5557,6 +5579,7 @@ Touch points: NEW 4 files in `k1/contracts/tools/` (~50 lines each)
 **Issue E11.3.4** — Messaging E2E tests
 
 Touch point: NEW file `tests/k1/fabric/tools/test_messaging_e2e.py` (~180 lines, ~35 tests)
+
 - `TestFamilyMessageModel` — frozen, to_dict, recipients tuple
 - `TestMessageStorage` — send, inbox, mark_read, search, broadcast (empty recipients)
 - `TestMessagingHandlers` — validation, all 4 handlers
@@ -5573,6 +5596,7 @@ Touch point: NEW file `tests/k1/fabric/tools/test_messaging_e2e.py` (~180 lines,
 **Issue E11.4.1** — Create Reminder model + ReminderStorage
 
 `models.py`:
+
 ```python
 @dataclass(frozen=True)
 class Reminder:
@@ -5602,6 +5626,7 @@ class Timer:
 `storage.py` — two SQLite tables: `reminders` + `timers`
 
 Touch points:
+
 - NEW: `k1/tools/mcp_servers/reminders/__init__.py`
 - NEW: `k1/tools/mcp_servers/reminders/models.py` (~80 lines)
 - NEW: `k1/tools/mcp_servers/reminders/storage.py` (~140 lines)
@@ -5650,6 +5675,7 @@ Touch points: NEW 5 files in `k1/contracts/tools/`
 **Issue E11.4.4** — Reminders E2E tests
 
 Touch point: NEW file `tests/k1/fabric/tools/test_reminders_e2e.py` (~200 lines, ~40 tests)
+
 - `TestReminderModel` — frozen, to_dict, category validation
 - `TestTimerModel` — frozen, duration calculation
 - `TestReminderStorage` — create, list, complete, snooze, filter by category/assigned_to, recurring expansion
@@ -5668,6 +5694,7 @@ Touch point: NEW file `tests/k1/fabric/tools/test_reminders_e2e.py` (~200 lines,
 **Issue E11.5.1** — Create Chore model + ChoreStorage
 
 `models.py`:
+
 ```python
 @dataclass(frozen=True)
 class Chore:
@@ -5687,6 +5714,7 @@ class Chore:
 `storage.py` — SQLite table `chores`, methods: `assign_chore()`, `list_chores(assigned_to?, status?)`, `complete_chore(chore_id)`, `get_schedule(family_member)`, `get_streaks(assigned_to)`
 
 Touch points:
+
 - NEW: `k1/tools/mcp_servers/chores/__init__.py`
 - NEW: `k1/tools/mcp_servers/chores/models.py` (~50 lines)
 - NEW: `k1/tools/mcp_servers/chores/storage.py` (~130 lines)
@@ -5731,6 +5759,7 @@ Touch points: NEW 5 files in `k1/contracts/tools/`
 **Issue E11.5.4** — Chores E2E tests
 
 Touch point: NEW file `tests/k1/fabric/tools/test_chores_e2e.py` (~180 lines, ~35 tests)
+
 - `TestChoreModel` — frozen, to_dict, streak, points
 - `TestChoreStorage` — assign, list, complete, schedule, streak increments, overdue detection
 - `TestChoresHandlers` — all 5 handlers
@@ -5749,7 +5778,9 @@ Touch point: NEW file `tests/k1/fabric/tools/test_chores_e2e.py` (~180 lines, ~3
 Currently `recipe_meal_plan` generates a plan but doesn't persist it. Add storage for saved meal plans with `plan_id`.
 
 Touch points:
+
 - EDIT: `k1/tools/mcp_servers/recipes/models.py` — add `MealPlan` dataclass:
+
   ```python
   @dataclass(frozen=True)
   class MealPlan:
@@ -5758,7 +5789,7 @@ Touch points:
       servings: int = 4
       dietary: str = "none"
       created_at: str = ""
-  
+
   @dataclass(frozen=True)
   class MealDay:
       day: int = 1            # 1-7
@@ -5767,6 +5798,7 @@ Touch points:
       dinner: str = ""
       snacks: Tuple[str, ...] = ()
   ```
+
 - NEW: `k1/tools/mcp_servers/recipes/storage.py` — MealPlanStorage (SQLite, `meal_plans` + `meal_days` tables)
 - EDIT: `k1/tools/mcp_servers/recipes/server.py` — add `recipe_save_meal_plan`, `recipe_list_meal_plans` tools
 
@@ -5783,6 +5815,7 @@ async def recipes_generate_grocery_list(plan_id: str, list_name: str = "grocery"
 ```
 
 Touch points:
+
 - NEW: `k1/contracts/tools/recipes_generate_grocery_list.yaml` — `tool.execute.recipes_generate_grocery_list`, AMBER, domain: ["RECIPES", "SHOPPING", "FAMILY"]
 - NEW: `k1/contracts/tools/recipes_save_meal_plan.yaml` — `tool.write.recipes_save_meal_plan`, AMBER
 - EDIT: `k1/tools/mcp_servers/recipes/server.py` — add 2 new tools
@@ -5790,6 +5823,7 @@ Touch points:
 **Issue E11.6.3** — Meal Planner E2E test expansion
 
 Touch point: EDIT `tests/k1/fabric/tools/test_recipes_e2e.py` — add ~30 new tests:
+
 - `TestMealPlanPersistence` — save, list, retrieve
 - `TestGroceryListGeneration` — extract ingredients, create task items
 
@@ -5804,6 +5838,7 @@ Touch point: EDIT `tests/k1/fabric/tools/test_recipes_e2e.py` — add ~30 new te
 **Issue E11.7.1** — Create Budget models + BudgetStorage
 
 `models.py`:
+
 ```python
 @dataclass(frozen=True)
 class Transaction:
@@ -5829,6 +5864,7 @@ class AllowanceRule:
 `storage.py` — SQLite tables: `transactions`, `allowance_rules`
 
 Touch points:
+
 - NEW: `k1/tools/mcp_servers/budget/__init__.py`
 - NEW: `k1/tools/mcp_servers/budget/models.py` (~70 lines)
 - NEW: `k1/tools/mcp_servers/budget/storage.py` (~150 lines)
@@ -5879,6 +5915,7 @@ Touch points: NEW 5 files in `k1/contracts/tools/`
 **Issue E11.7.4** — Budget E2E tests
 
 Touch point: NEW file `tests/k1/fabric/tools/test_budget_e2e.py` (~200 lines, ~40 tests)
+
 - `TestTransactionModel` — frozen, positive/negative amounts, categories
 - `TestAllowanceRuleModel` — frozen, frequency, linked_to_chores
 - `TestBudgetStorage` — add transaction, summary aggregation by period/category/member, allowance balance calculation, allowance rule CRUD
@@ -5896,6 +5933,7 @@ Touch point: NEW file `tests/k1/fabric/tools/test_budget_e2e.py` (~200 lines, ~4
 **Issue E11.8.1** — Create School models + SchoolStorage
 
 `models.py`:
+
 ```python
 @dataclass(frozen=True)
 class SchoolSchedule:
@@ -5929,6 +5967,7 @@ class PickupAssignment:
 ```
 
 Touch points:
+
 - NEW: `k1/tools/mcp_servers/school/__init__.py`
 - NEW: `k1/tools/mcp_servers/school/models.py` (~80 lines)
 - NEW: `k1/tools/mcp_servers/school/storage.py` (~160 lines, 3 SQLite tables)
@@ -5973,6 +6012,7 @@ Touch points: NEW 5 files in `k1/contracts/tools/`
 **Issue E11.8.4** — School E2E tests
 
 Touch point: NEW file `tests/k1/fabric/tools/test_school_e2e.py` (~200 lines, ~40 tests)
+
 - `TestSchoolScheduleModel` — frozen, day_of_week, time format
 - `TestHomeworkItemModel` — frozen, status transitions
 - `TestPickupAssignmentModel` — frozen, status transitions
@@ -5991,6 +6031,7 @@ Touch point: NEW file `tests/k1/fabric/tools/test_school_e2e.py` (~200 lines, ~4
 **Issue E11.9.1** — Create Health models + HealthStorage
 
 `models.py`:
+
 ```python
 @dataclass(frozen=True)
 class Appointment:
@@ -6024,6 +6065,7 @@ class Medication:
 `storage.py` — SQLite tables: `appointments`, `medications`
 
 Touch points:
+
 - NEW: `k1/tools/mcp_servers/health/__init__.py`
 - NEW: `k1/tools/mcp_servers/health/models.py` (~80 lines)
 - NEW: `k1/tools/mcp_servers/health/storage.py` (~160 lines)
@@ -6081,6 +6123,7 @@ Touch points: NEW 6 files in `k1/contracts/tools/`
 **Issue E11.9.4** — Health E2E tests
 
 Touch point: NEW file `tests/k1/fabric/tools/test_health_e2e.py` (~220 lines, ~45 tests)
+
 - `TestAppointmentModel` — frozen, appointment_type validation
 - `TestMedicationModel` — frozen, frequency, time_of_day, active flag
 - `TestHealthStorage` — appointment CRUD, medication CRUD, medication_due query, pharmacy_refills query
@@ -6098,6 +6141,7 @@ Touch point: NEW file `tests/k1/fabric/tools/test_health_e2e.py` (~220 lines, ~4
 **Issue E11.10.1** — Create Transport models + TransportStorage
 
 `models.py`:
+
 ```python
 @dataclass(frozen=True)
 class CarpoolEntry:
@@ -6125,6 +6169,7 @@ class TripStatus:
 ```
 
 Touch points:
+
 - NEW: `k1/tools/mcp_servers/transport/__init__.py`
 - NEW: `k1/tools/mcp_servers/transport/models.py` (~60 lines)
 - NEW: `k1/tools/mcp_servers/transport/storage.py` (~130 lines)
@@ -6168,6 +6213,7 @@ Touch points: NEW 4 files in `k1/contracts/tools/`
 **Issue E11.10.4** — Transport E2E tests
 
 Touch point: NEW file `tests/k1/fabric/tools/test_transport_e2e.py` (~160 lines, ~30 tests)
+
 - `TestCarpoolEntryModel` — frozen, day_of_week, passengers tuple
 - `TestTripStatusModel` — frozen, status transitions, eta
 - `TestTransportStorage` — carpool CRUD, trip status updates, filter by day/route
@@ -6183,23 +6229,24 @@ Touch point: NEW file `tests/k1/fabric/tools/test_transport_e2e.py` (~160 lines,
 **Issue E11.11.1** — Auto-discovery integration test
 
 Touch point: EDIT `tests/k1/fabric/tools/test_auto_discovery.py` — add assertions for all new servers:
+
 ```python
 def test_all_family_tools_discovered():
     """All M11 MCP servers appear in AutoDiscoveryMCPTransport registry."""
     transport = AutoDiscoveryMCPTransport()
     registered = transport.list_registered_tools()
-    
+
     # Tier 1
     assert "tool.write.tasks_add_item" in registered
     assert "tool.execute.messaging_send" in registered
     assert "tool.write.reminders_create" in registered
     assert "tool.write.chores_assign" in registered
-    
+
     # Tier 2
     assert "tool.write.recipes_save_meal_plan" in registered
     assert "tool.write.budget_add_transaction" in registered
     assert "tool.read.school_schedule" in registered
-    
+
     # Tier 3
     assert "tool.write.health_add_medication" in registered
     assert "tool.write.transport_carpool_set" in registered
@@ -6208,12 +6255,13 @@ def test_all_family_tools_discovered():
 **Issue E11.11.2** — Contract loading validation test
 
 Touch point: EDIT `tests/k1/fabric/tools/test_auto_discovery.py` — add contract count assertions:
+
 ```python
 def test_all_family_contracts_loaded():
     """ModuleLoader loads all M11 contracts + existing contracts."""
     loader = ModuleLoader(contracts_dir=CONTRACTS_DIR, registry=registry, validator=validator)
     result = loader.scan_directory()
-    
+
     # Pre-M11: 15 contracts. M11 adds ~44. Total: ~59
     assert result.registered >= 55  # Allow margin for exact count
     assert result.failed == 0
@@ -6224,6 +6272,7 @@ def test_all_family_contracts_loaded():
 Verify Fabric `execute_batch()` works across multiple tool domains in a single call — simulating a Planner-generated DAG step that touches Calendar + Tasks + Messaging.
 
 Touch point: EDIT `tests/k1/fabric/tools/test_batch_composition.py` — add family tool batch test:
+
 ```python
 async def test_family_tool_batch():
     """Batch: create calendar event + add grocery item + send notification."""
@@ -6276,7 +6325,7 @@ async def test_family_tool_batch():
 | Enhanced E2E test files | 2 (`test_calendar_e2e.py`, `test_recipes_e2e.py`) |
 | Enhanced integration test files | 2 (`test_auto_discovery.py`, `test_batch_composition.py`) |
 | Total new tests | ~345 (8 domains × ~40 avg + integration ~25) |
-| Total new Python files | ~35 (8 servers × 4 files + 3 __init__) |
+| Total new Python files | ~35 (8 servers × 4 files + 3 **init**) |
 | Total new YAML files | ~44 |
 | Fabric core files changed | 0 |
 | Post-M11 total test count | ~4,206+ (M10: 3,861 + M11: ~345) |

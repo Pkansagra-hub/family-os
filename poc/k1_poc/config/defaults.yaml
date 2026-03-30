@@ -207,7 +207,7 @@ kernel:
 
 llm:
   # Fallback model when selection table has no match (model_selection.py)
-  default_model: "gemini-2.5-flash-lite"
+  default_model: "gemini-2.5-flash"
 
   # Max concurrent requests in generate_batch() (gemini_adapter.py)
   batch_max_concurrency: 5
@@ -215,11 +215,11 @@ llm:
   # Hint string -> model name overrides (model_selection.py)
   model_hint_overrides:
     fast: "gemini-2.5-flash-lite"
-    smart: "gemini-2.5-flash-lite"
+    smart: "gemini-2.5-flash"
     cheap: "gemini-2.5-flash-lite"
-    thinking: "gemini-2.5-flash-lite"
-    pro: "gemini-2.5-flash-lite"
-    flash: "gemini-2.5-flash-lite"
+    thinking: "gemini-2.5-flash"
+    pro: "gemini-2.5-flash"                # best we use — no pro models
+    flash: "gemini-2.5-flash"
 
   # Default max output tokens for LLM requests (llm/types.py)
   default_max_tokens: 65536
@@ -232,22 +232,24 @@ llm:
 
   # Capability + actor -> model routing table (model_selection.py)
   # Nested as capability -> actor -> model
+  # Routing: 2.5 flash for tools/reasoning/conversation, 2.5 lite for speed
+  # Moved from Gemini 3.x due to persistent latency spikes
   model_selection_table:
     CHAT:
-      front: "gemini-2.5-flash-lite"
-      back: "gemini-2.5-flash-lite"
+      front: "gemini-2.5-flash"                # conversational warmth
+      back: "gemini-2.5-flash-lite"            # internal error reports
     TOOL_CALL:
-      front: "gemini-2.5-flash-lite"
-      back: "gemini-2.5-flash-lite"
-      planner: "gemini-2.5-flash-lite"
+      front: "gemini-2.5-flash"                # cognitive tool selection
+      back: "gemini-2.5-flash"                 # action tool execution
+      planner: "gemini-2.5-flash"              # planner reasoning
     STRUCTURED:
-      front: "gemini-2.5-flash-lite"
-      back: "gemini-2.5-flash-lite"
+      front: "gemini-2.5-flash"                # dispatch intent parsing
+      back: "gemini-2.5-flash"                 # final answer formatting
     REASON:
-      front: "gemini-2.5-flash-lite"
-      back: "gemini-2.5-flash-lite"
+      front: "gemini-2.5-flash"                # complex reasoning
+      back: "gemini-2.5-flash"                 # multi-step planning
     STREAM:
-      front: "gemini-2.5-flash-lite"
+      front: "gemini-2.5-flash-lite"           # speed-first streaming
 
 
 # ── orchestrator/ ───────────────────────────────────────────────────────

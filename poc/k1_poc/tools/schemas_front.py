@@ -73,8 +73,10 @@ UPDATE_SCOREBOARD_SCHEMA = ToolSchema(
     name="update_scoreboard",
     description=(
         "Update the conversational scoreboard: Question Under Discussion (QUD), "
-        "referent resolution, salience map, and topic shifts. Call when the user "
-        "changes topic, uses pronouns that need resolution, or asks a new question. "
+        "referent resolution, salience map, topic shifts, and COMMITMENTS. "
+        "Call when the user changes topic, uses pronouns that need resolution, "
+        "asks a new question, or when you make a DEFERRED PROMISE to do something "
+        "later (e.g. 'I'll have X ready when Y happens'). "
         "Phase 1 (UltraBERT) sets initial intents and entities; this tool REFINES them."
     ),
     parameters={
@@ -101,6 +103,42 @@ UPDATE_SCOREBOARD_SCHEMA = ToolSchema(
                 "type": "string",
                 "description": "New topic if user shifted conversation. Null if same topic.",
             },
+            "commitment_add": {
+                "type": "object",
+                "description": (
+                    "Record a deferred promise/commitment. Use when you promise to "
+                    "do something later, contingent on a trigger. E.g. 'I generated "
+                    "an Iron Man story — I'll present it when Riley wakes up.'"
+                ),
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "What you promised to do (e.g. 'tell Iron Man story to Riley').",
+                    },
+                    "trigger_condition": {
+                        "type": "string",
+                        "description": "When to deliver (e.g. 'Riley wakes up', 'user leaves work').",
+                    },
+                    "linked_entities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Entity names/IDs involved (e.g. ['Riley', 'iron-man-story']).",
+                    },
+                    "linked_content_summary": {
+                        "type": "string",
+                        "description": "Brief note about prepared content, if any.",
+                    },
+                },
+                "required": ["description", "trigger_condition"],
+            },
+            "commitment_fulfill": {
+                "type": "string",
+                "description": (
+                    "Commitment ID to mark as fulfilled. Use when the trigger "
+                    "condition for an open commitment has been met and you've "
+                    "delivered on the promise."
+                ),
+            },
         },
         "required": [],
     },
@@ -109,6 +147,7 @@ UPDATE_SCOREBOARD_SCHEMA = ToolSchema(
         "properties": {
             "qud_depth": {"type": "integer"},
             "active_referents": {"type": "integer"},
+            "open_commitments": {"type": "integer"},
         },
     },
     actor="front",

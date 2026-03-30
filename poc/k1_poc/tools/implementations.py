@@ -215,11 +215,13 @@ def execute_update_scoreboard(args: dict, ctx: ToolContext) -> ToolResult:
     Routes each sub-action through writer_port (M4 E4.2.3).
     """
     logger.info(
-        "tool:update_scoreboard  qud_push=%s qud_pop=%s referents=%d topic_shift=%s",
+        "tool:update_scoreboard  qud_push=%s qud_pop=%s referents=%d topic_shift=%s commitment_add=%s commitment_fulfill=%s",
         bool(args.get("qud_push")),
         args.get("qud_pop", False),
         len(args.get("referent_updates", {})),
         bool(args.get("topic_shift")),
+        bool(args.get("commitment_add")),
+        bool(args.get("commitment_fulfill")),
     )
 
     writer_id = f"tool:{ctx.actor}"
@@ -285,6 +287,39 @@ def execute_update_scoreboard(args: dict, ctx: ToolContext) -> ToolResult:
         if not resp.approved:
             return ToolResult(tool_name="update_scoreboard", status="error", error=resp.reason)
 
+    # Add commitment (deferred promise)
+    commitment_add = args.get("commitment_add")
+    if commitment_add:
+        req = MutationRequest.create(
+            section="scoreboard",
+            operation="add_commitment",
+            data={
+                "description": commitment_add["description"],
+                "trigger_condition": commitment_add["trigger_condition"],
+                "linked_entities": commitment_add.get("linked_entities", []),
+                "linked_content_summary": commitment_add.get("linked_content_summary", ""),
+            },
+            writer_id=writer_id,
+            cognitive_trace_id=ctx.cognitive_trace_id,
+        )
+        resp = ctx.writer_port.request_mutation(req)
+        if not resp.approved:
+            return ToolResult(tool_name="update_scoreboard", status="error", error=resp.reason)
+
+    # Fulfill commitment
+    commitment_fulfill = args.get("commitment_fulfill")
+    if commitment_fulfill:
+        req = MutationRequest.create(
+            section="scoreboard",
+            operation="fulfill_commitment",
+            data={"commitment_id": commitment_fulfill},
+            writer_id=writer_id,
+            cognitive_trace_id=ctx.cognitive_trace_id,
+        )
+        resp = ctx.writer_port.request_mutation(req)
+        if not resp.approved:
+            return ToolResult(tool_name="update_scoreboard", status="error", error=resp.reason)
+
     # Read-only access for response counts
     scoreboard = ctx.session_manager.get_section("scoreboard")
     return ToolResult(
@@ -293,6 +328,7 @@ def execute_update_scoreboard(args: dict, ctx: ToolContext) -> ToolResult:
         data={
             "qud_depth": len(scoreboard._qud_stack),
             "active_referents": len(scoreboard._referents),
+            "open_commitments": len(scoreboard.get_open_commitments()),
         },
     )
 
