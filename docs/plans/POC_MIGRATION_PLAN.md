@@ -1150,6 +1150,7 @@ These imports create a coupling to `poc.k1_poc.config` that will break at M5 (Bi
 After M5, sessionstate lives at `k1/concierge/sessionstate/`. The existing `k1/sessionstate/` becomes a **re-export shim** (or is merged). K1 external consumers are unaffected because they never import from `k1.sessionstate` directly.
 
 **Decision**: **Option A — K1 becomes re-export shim** (preferred)
+
 - `k1/sessionstate/__init__.py` re-exports from `k1.concierge.sessionstate`
 - Existing `tests/k1/sessionstate/` tests (70+ files) keep working
 - Zero impact on K1 modules (they don't import k1.sessionstate anyway)
@@ -1170,33 +1171,39 @@ After M5, sessionstate lives at `k1/concierge/sessionstate/`. The existing `k1/s
 Copy POC adapter improvements back to `k1/sessionstate/adapters/` so both copies are in sync before M5.
 
 **E4.1.1** — Back-port `direct_writer.py` (+141 LoC)
+
 - Source: `poc/k1_poc/sessionstate/adapters/direct_writer.py`
 - Target: `k1/sessionstate/adapters/direct_writer.py`
 - Changes: Per-turn mutation audit (`_turn_stats`, `_empty_turn_stats()`, `_record_turn_mutation()`, `snapshot_turn_stats()`, `mutation_stats` property), LLM tool-writer section guard
 - NOTE: The `get_config()` import needs resolution (E4.3) — use `try/except` or parameter injection for now
 
 **E4.1.2** — Back-port `local_events.py` (+4 LoC)
+
 - Source: `poc/k1_poc/sessionstate/adapters/local_events.py`
 - Target: `k1/sessionstate/adapters/local_events.py`
 - Changes: `logger.info()` at init
 
 **E4.1.3** — Back-port `sqlite_storage.py` (+4 LoC)
+
 - Source: `poc/k1_poc/sessionstate/adapters/sqlite_storage.py`
 - Target: `k1/sessionstate/adapters/sqlite_storage.py`
 - Changes: Config-backed `default_db_path` and `sla_storage_ms`
 - NOTE: Same `get_config()` coupling issue — resolve in E4.3
 
 **E4.1.4** — Back-port `standalone_lifecycle.py` (logging upgrades)
+
 - Source: `poc/k1_poc/sessionstate/adapters/standalone_lifecycle.py`
 - Target: `k1/sessionstate/adapters/standalone_lifecycle.py`
 - Changes: `logger.debug` → `logger.info` with richer format strings
 
 **E4.1.5** — Back-port `factory.py` (+9 LoC)
+
 - Source: `poc/k1_poc/sessionstate/factory.py`
 - Target: `k1/sessionstate/factory.py`
 - Changes: Config-backed `default_db_path` and `checkpoint_interval_s`
 
 **E4.1.6** — Back-port `manager.py` (+11 LoC)
+
 - Source: `poc/k1_poc/sessionstate/manager.py`
 - Target: `k1/sessionstate/manager.py`
 - Changes: Logging only — `debug` → `info` with richer format strings
@@ -1206,6 +1213,7 @@ Copy POC adapter improvements back to `k1/sessionstate/adapters/` so both copies
 #### E4.2 — Fix POC `sqlite_storage.py` Bug
 
 **E4.2.1** — Fix duplicate `return` in `__repr__` (POC line ~598)
+
 - File: `poc/k1_poc/sessionstate/adapters/sqlite_storage.py`
 - Reported by audit: duplicate `return` statement in `__repr__` method
 - Fix in POC, then back-port to K1 copy
@@ -1217,16 +1225,19 @@ Copy POC adapter improvements back to `k1/sessionstate/adapters/` so both copies
 The 8 files that import `from poc.k1_poc.config import get_config` will break when moved to `k1/concierge/sessionstate/` in M5. Resolution strategy:
 
 **E4.3.1** — Introduce config parameter injection pattern
+
 - For `factory.py`, `sqlite_storage.py`, `direct_writer.py`: add optional config parameters to constructors/factory methods with fallback to `get_config()` when available
 - Pattern: `def __init__(self, ..., config: Any | None = None): self._config = config or _try_get_config()`
 - Helper: `def _try_get_config()` that wraps the import in `try/except ImportError: return _DEFAULT_CONFIG`
 - This lets the code work from EITHER `poc.k1_poc` or `k1.concierge` path
 
 **E4.3.2** — Apply same pattern to remaining 5 files
+
 - `eviction.py`, `guard.py`, `local_cold.py`, `migration.py`, `reconstruction.py`
 - All use `get_config()` for threshold values — inject via constructor or read from defaults
 
 **E4.3.3** — Update `SessionStateFactory.create_standalone()` and `create_for_testing()` to pass config explicitly
+
 - Factory already has `create_with_ports()` that takes injected ports — extend pattern to config
 - `create_standalone(session_id, config=None)` → passes config to adapters that need it
 
@@ -1237,6 +1248,7 @@ The 8 files that import `from poc.k1_poc.config import get_config` will break wh
 POC's generated FlatBuffers code uses `from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import ...` — K1 uses `from k1.sessionstate.generated.flatbuffers.K1.SessionState import ...`. These section files will break at M5.
 
 **E4.4.1** — Audit all section files for FlatBuffer import paths
+
 - Files: `poc/k1_poc/sessionstate/sections/` — 12+ section files
 - Each has 3-8 FlatBuffer imports with `poc.k1_poc.sessionstate.generated` prefix
 - These become `k1.concierge.sessionstate.generated` after M5
@@ -1249,12 +1261,14 @@ POC's generated FlatBuffers code uses `from poc.k1_poc.sessionstate.generated.fl
 POC has TWO layers of state abstraction: sessionstate ports (5 ABCs) + orchestrator ports (`IStateReadPort`, `IDeltaEmitPort`). Verify alignment.
 
 **E4.5.1** — Audit `IStateReadPort` → `SessionStateManager.get_section()` mapping
+
 - File: `poc/k1_poc/orchestrator/ports.py` L76 — `IStateReadPort(Protocol)`
 - This is the orchestrator's read-only view of session state
 - `SessionStateManager.get_section(name)` (L621 in `manager.py`) satisfies this
 - Verify structural compatibility — SessionStateManager must satisfy `IStateReadPort` without adapters
 
 **E4.5.2** — Audit `IDeltaEmitPort` → bus/delta wiring
+
 - File: `poc/k1_poc/orchestrator/ports.py` L110 — `IDeltaEmitPort(Protocol)`
 - Used by `_DeltaEmitAdapter` in `bootstrap.py` (wraps delta_aggregator + bus)
 - No direct sessionstate dependency — clean abstraction ✅
@@ -1264,6 +1278,7 @@ POC has TWO layers of state abstraction: sessionstate ports (5 ABCs) + orchestra
 #### E4.6 — Contract Tests
 
 **E4.6.1** — Verify K1 sessionstate tests pass against POC copy
+
 - Run `tests/k1/sessionstate/test_all_ports.py` (35 tests covering all 5 port ABCs)
 - Run `tests/k1/sessionstate/test_factory.py` — factory wiring tests
 - Run `tests/k1/sessionstate/test_wiring_contract.py` — DI contract tests
@@ -1271,6 +1286,7 @@ POC has TWO layers of state abstraction: sessionstate ports (5 ABCs) + orchestra
 - After E4.1 back-port, both copies should produce identical results
 
 **E4.6.2** — Add port-protocol compliance tests for POC path
+
 - File: `tests/poc/sessionstate/test_port_compliance.py` (new, ~40 tests)
 - `isinstance(adapter, IStoragePort)` for all storage adapters
 - `isinstance(adapter, IEventPort)` for LocalEventAdapter
@@ -1279,9 +1295,11 @@ POC has TWO layers of state abstraction: sessionstate ports (5 ABCs) + orchestra
 - Verify `SessionStateFactory.create_with_ports()` accepts all injected ports
 
 **E4.6.3** — Regression: POC session bundle test still green
+
 - Run `tests/poc/test_m04_e43_session_bundle.py`
 
 **E4.6.4** — Regression: full K1 sessionstate suite green (70+ files)
+
 - Run full `tests/k1/sessionstate/` — all tests must pass after back-port
 
 ---
@@ -1289,6 +1307,7 @@ POC has TWO layers of state abstraction: sessionstate ports (5 ABCs) + orchestra
 #### E4.7 — Full Suite Green + Tag
 
 **E4.7.1** — Run full test suite (3,261 tests)
+
 - Back-port and config-decoupling changes must not break anything
 - POC tests import `poc.k1_poc.sessionstate` — must still work
 - K1 tests import `k1.sessionstate` — must still work
@@ -1342,14 +1361,15 @@ POC has TWO layers of state abstraction: sessionstate ports (5 ABCs) + orchestra
 | `fabric/` | 5 | Capability port (M2) + POC bridge adapter |
 | `ledger/` | 5 | Idempotency ledger |
 | `obs/` | 4 | Observability |
-| `kernel/` | 3 | **COPIES** — bootstrap.py (wiring), runner.py (CLI), __init__.py |
+| `kernel/` | 3 | **COPIES** — bootstrap.py (wiring), runner.py (CLI), **init**.py |
 | `react/` | 3 | ReAct loop engine + history |
-| `config/` | 2 | defaults.yaml loader + __init__.py |
+| `config/` | 2 | defaults.yaml loader + **init**.py |
 | `compression/` | 2 | Episodic compression |
 | `identity/` | 2 | Persona engine |
 | `scheduler/` | 2 | Proactive scheduler |
 
 **Non-Python files that copy (24 files)**:
+
 - `config/defaults.yaml` — 59 tunable parameters
 - `sessionstate/alerts.yaml` — alert config
 - `sessionstate/sessionstate.mmd` + `sessionstate_internal.mmd` — architecture diagrams
@@ -1365,6 +1385,7 @@ POC has TWO layers of state abstraction: sessionstate ports (5 ABCs) + orchestra
 | `main.py` | 1 | POC entrypoint — replaced by `k1/concierge/kernel/runner.py` |
 
 **Other files that stay**:
+
 - `concierge_poc_architecture.mmd` → copy to `k1/concierge/docs/` as historical reference
 - `demo/web/static/` (app.js, index.html, styles.css) — demo web UI
 
@@ -1395,6 +1416,7 @@ All files in `tests/poc/` → `tests/k1/concierge/` with import path rewrite.
 | `poc.k1_poc.` (string refs in docstrings/comments) | `k1.concierge.` | Best-effort, non-blocking |
 
 **Special cases**:
+
 1. `from k1.bus.*` — **NO CHANGE** (already imports K1 bus directly)
 2. `from poc.k1_poc.config import get_config` — rewrites to `from k1.concierge.config import get_config` (M4 E4.3 already decoupled these)
 3. FlatBuffer paths: `from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState` → `from k1.concierge.sessionstate.generated.flatbuffers.K1.SessionState`
@@ -1405,6 +1427,7 @@ All files in `tests/poc/` → `tests/k1/concierge/` with import path rewrite.
 ### K1 SessionState Shim (from M4 decision)
 
 After the copy, `k1/sessionstate/` becomes a re-export shim pointing to `k1/concierge/sessionstate/`:
+
 - `k1/sessionstate/__init__.py` → `from k1.concierge.sessionstate import *`
 - 70+ K1 sessionstate tests continue importing `from k1.sessionstate` → resolved by shim
 - K1 external consumers (fabric, planner, memory_writer) are unaffected — they never import `k1.sessionstate`
@@ -1416,12 +1439,14 @@ After the copy, `k1/sessionstate/` becomes a re-export shim pointing to `k1/conc
 Set up `k1/concierge/` subdirectories before the copy.
 
 **E5.1.1** — Create all 22 target subdirectories under `k1/concierge/`
+
 - Create: `actors/`, `bus/`, `compression/`, `config/`, `delta/`, `docs/`, `events/`, `experience/`, `fabric/`, `fsm/`, `identity/`, `kernel/`, `ledger/`, `llm/`, `obs/`, `orchestrator/`, `prompt/`, `protocols/`, `react/`, `scheduler/`, `sessionstate/`, `task/`
 - Nested dirs: `sessionstate/ports/`, `sessionstate/adapters/`, `sessionstate/sections/`, `sessionstate/tiers/`, `sessionstate/generated/`, `sessionstate/docs/`, `sessionstate/scripts/`, `tools/`, `protocols/opp/`, `protocols/hitl/`, etc.
 - Preserve existing stubs: `affective/`, `empathy/`, `rhythm/`
 - Preserve existing docs: `README.md`, `concierge.md`, `concierge.mmd`, `concierge_fsm_flows.md`
 
 **E5.1.2** — Create `tests/k1/concierge/` directory + `__init__.py` + `conftest.py`
+
 - Mirror test structure from `tests/poc/`
 
 ---
@@ -1431,6 +1456,7 @@ Set up `k1/concierge/` subdirectories before the copy.
 Copy all 277+ .py files and 24 non-.py files from `poc/k1_poc/` → `k1/concierge/`.
 
 **E5.2.1** — Copy all 22 production directories
+
 - Use `git mv` or `cp` + `git add` for each directory
 - DECISION: **Use `cp -r` (copy), not `git mv`** — POC stays behind as reference + demo/ and testing/ still need it
 - Command per dir: `cp -r poc/k1_poc/<dir>/* k1/concierge/<dir>/`
@@ -1439,10 +1465,12 @@ Copy all 277+ .py files and 24 non-.py files from `poc/k1_poc/` → `k1/concierg
 - Total: 277 .py + 24 non-.py = **301 files**
 
 **E5.2.2** — Copy test files
+
 - `tests/poc/*.py` (73 files) → `tests/k1/concierge/`
 - Copy `tests/poc/conftest.py` if exists
 
 **E5.2.3** — Verify file counts match
+
 - `find k1/concierge -name "*.py" | wc -l` should equal 277 + existing stubs (4)
 - `find tests/k1/concierge -name "*.py" | wc -l` should equal 73 + new init/conftest
 
@@ -1453,6 +1481,7 @@ Copy all 277+ .py files and 24 non-.py files from `poc/k1_poc/` → `k1/concierg
 Rewrite all 3,303 `poc.k1_poc` references to `k1.concierge`.
 
 **E5.3.1** — Rewrite source files (2,072 references across 277 files)
+
 - Use `sed` or Python script: `find k1/concierge -name "*.py" -exec sed -i 's/poc\.k1_poc/k1.concierge/g' {} +`
 - Verify: `grep -r "poc\.k1_poc" k1/concierge/ --include="*.py"` should return 0 results
 - **WARNING**: Do NOT use blind string replacement. The pattern `poc.k1_poc` could appear in:
@@ -1463,14 +1492,17 @@ Rewrite all 3,303 `poc.k1_poc` references to `k1.concierge`.
 - All replacements are safe — `poc.k1_poc` always means the module path
 
 **E5.3.2** — Rewrite test files (1,231 references across 73 files)
+
 - Same `sed` pattern on `tests/k1/concierge/`
 - Verify: `grep -r "poc\.k1_poc" tests/k1/concierge/ --include="*.py"` should return 0 results
 
 **E5.3.3** — Rewrite `k1/concierge/__init__.py`
+
 - Add concierge package docstring and version
 - Ensure any re-exports use `k1.concierge.*` paths
 
 **E5.3.4** — Update logger name defaults
+
 - File: `k1/concierge/sessionstate/logging.py` L227
 - `name: str = "poc.k1_poc.sessionstate"` → `name: str = "k1.concierge.sessionstate"`
 - Already handled by E5.3.1 sed, but verify explicitly
@@ -1482,20 +1514,25 @@ Rewrite all 3,303 `poc.k1_poc` references to `k1.concierge`.
 Make `k1/sessionstate/` a re-export facade pointing to `k1/concierge/sessionstate/`.
 
 **E5.4.1** — Replace `k1/sessionstate/__init__.py` with re-export shim
+
 - Content: `from k1.concierge.sessionstate import *; from k1.concierge.sessionstate import __all__`
 - This preserves all existing `from k1.sessionstate import X` imports in K1 tests (70+ files)
 
 **E5.4.2** — Replace `k1/sessionstate/ports/__init__.py` with re-export shim
+
 - Content: `from k1.concierge.sessionstate.ports import *`
 - K1 fabric/planner adapters that import `k1.sessionstate.ports.*` continue working
 
 **E5.4.3** — Replace `k1/sessionstate/factory.py` with re-export shim
+
 - Content: `from k1.concierge.sessionstate.factory import *`
 
 **E5.4.4** — Replace `k1/sessionstate/manager.py` with re-export shim
+
 - Content: `from k1.concierge.sessionstate.manager import *`
 
 **E5.4.5** — Replace remaining `k1/sessionstate/*.py` files with shims
+
 - All adapter, tier, section, and utility files → re-export from `k1.concierge.sessionstate.*`
 - Alternative: delete K1 copies entirely if grep confirms zero external imports (K1 modules use own ports, not k1.sessionstate — confirmed in M4)
 - DECISION: Shim approach is safer — keeps 70+ K1 tests green with zero changes
@@ -1507,22 +1544,26 @@ Make `k1/sessionstate/` a re-export facade pointing to `k1/concierge/sessionstat
 After the copy, verify no broken cross-references.
 
 **E5.5.1** — Verify `k1.bus.*` imports still resolve
+
 - Files in `k1/concierge/bus/setup.py`, `actors/`, `fsm/controller.py` import `from k1.bus.*`
 - These should still work (k1.bus is a sibling package)
 - Run: `python -c "from k1.concierge.bus.setup import create_poc_bus"` — must not ImportError
 
 **E5.5.2** — Verify no circular imports
+
 - `k1.concierge.sessionstate` ← `k1.sessionstate` (shim)
 - `k1.concierge.bus.setup` → `k1.bus.factory` (cross-package, OK)
 - `k1.concierge.config` → standalone (no circular risk)
 - Run `python -c "import k1.concierge"` — must not raise
 
 **E5.5.3** — Verify FlatBuffer generated imports resolve
+
 - 80 generated files under `k1/concierge/sessionstate/generated/`
 - All use `from k1.concierge.sessionstate.generated.flatbuffers.K1.SessionState import ...` after rewrite
 - Run: `python -c "from k1.concierge.sessionstate.sections.control import ControlSection"` — must not ImportError
 
 **E5.5.4** — Verify `demo/` and `testing/` still work from `poc/k1_poc/`
+
 - `demo/coordinator.py` imports from `poc.k1_poc.*` — these still point to the original (un-moved) POC files
 - `testing/harness/engine.py` imports from `poc.k1_poc.*` — same
 - The original `poc/k1_poc/` source files are NOT deleted — demo/testing can still function
@@ -1535,19 +1576,23 @@ After the copy, verify no broken cross-references.
 Ensure all tests run from their new locations.
 
 **E5.6.1** — Run migrated test suite from `tests/k1/concierge/`
+
 - `pytest tests/k1/concierge/ -v` — all 73 files, ~3,054 tests
 - Every test must pass — import paths are the only change
 
 **E5.6.2** — Run K1 sessionstate tests via shim
+
 - `pytest tests/k1/sessionstate/ -v` — all 70+ files
 - Tests import `from k1.sessionstate.*` → shim resolves to `k1.concierge.sessionstate.*`
 - Must be 100% green
 
 **E5.6.3** — Run POC internal harness tests
+
 - `pytest poc/k1_poc/testing/harness/ -v` — 10 files, 207 tests
 - These import from `poc.k1_poc.*` (original path) — must still work since original files remain
 
 **E5.6.4** — Run full test suite (all ~3,261+ tests)
+
 - Everything green — migrated tests + K1 tests + original POC harness
 
 ---
@@ -1555,15 +1600,18 @@ Ensure all tests run from their new locations.
 #### E5.7 — Cleanup + Tag
 
 **E5.7.1** — Add `k1/concierge/` to any linting/CI configurations
+
 - Check `.github/workflows/` for test path patterns
 - Check `pyproject.toml` `[tool.pytest.ini_options]` testpaths (currently just `["tests"]` — already covers `tests/k1/concierge/`)
 - Check coverage config if applicable
 
 **E5.7.2** — Update `pyproject.toml` if needed
+
 - `packages = ["k0", "k1", "services"]` — already covers `k1.concierge` (it's under `k1`)
 - No change needed ✅
 
 **E5.7.3** — Git commit + tag `m5-big-copy-complete`
+
 - Single large commit: "feat: Copy POC concierge to k1/concierge — 301 files, 3,303 import rewrites"
 
 ### Risk Register
@@ -1596,21 +1644,501 @@ Ensure all tests run from their new locations.
 
 ## M6 — K1 Fabric Wiring
 
-> Swap `ICapabilityPort` POC adapter → real `k1/fabric/` adapter. Capabilities resolve through Fabric provider resolution.
+> Swap `FabricPOCBridge` (M2 adapter wrapping `CapabilityRegistry`) for the real K1 `Fabric` class.
+> After M5 the code lives at `k1/concierge/`. The `Fabric` container class satisfies `IFabricPort`
+> natively — all 4 methods match structurally. The work is: (1) convert 40 POC capability dicts to
+> K1 `CapabilityContract` objects, (2) wire a `POCMockBridgeAdapter` so the `BridgeProvider` can
+> dispatch to POC mock handler functions, (3) boot a real `Fabric` instance in Concierge bootstrap,
+> (4) remove the `FabricPOCBridge` entirely.
 
-**Work**:
+**Prerequisite**: M2 (`IFabricPort` defined), M5 (code at `k1/concierge/`)
 
-- Register POC capabilities as Fabric providers
-- Implement `FabricGatewayAdapter` behind `ICapabilityPort`
-- `discover_capabilities()` routes through Fabric retrieval
-- `invoke_capability()` routes through Fabric execution engine
-- Verify all 40 capabilities resolve correctly
+### End-to-End Port Chain Review (M1–M4 → M5 → M6)
+
+| Milestone | Port Protocol | Defined Where | POC Adapter (Pre-M6) | K1 Real Impl | Swaps At |
+|---|---|---|---|---|---|
+| M1 | `IModelHubPort` | `k1/model_hub/ports.py` (NEW in M1) | `ModelHubPOCBridge` wraps `GeminiConciergeAdapter` | K1 Model Hub service | M7 |
+| M2 | `IFabricPort` | `k1/concierge/fabric/ports.py` (NEW in M2) | `FabricPOCBridge` wraps `CapabilityRegistry` | K1 `Fabric` class → direct injection | **M6 ← THIS** |
+| M3 | `IBus` / `IMailboxRouter` / `IMailbox` | `k1/bus/ports/` (EXISTING) | Already K1 bus directly | K1 bus IS the impl | Done (type hints only) |
+| M4 | 5 ABCs: `IStoragePort`, `IEventPort`, `IWriterPort`, `ILifecyclePort`, `IK0SyncPort` | `k1/sessionstate/ports/` (EXISTING, byte-for-byte identical) | Same impl, config decoupled | Same impl | M5 (shim) |
+
+After M6, `IFabricPort` is the **second port** fully wired to production K1 (after IBus in M3).
+
+### K1 Fabric Architecture (from research)
+
+**`Fabric`** (`k1/fabric/fabric.py` L1257) is a `@dataclass` container holding three sub-APIs:
+- `CapabilityFabric` — 9-step execution pipeline (resolve → policy → circuit-break → dispatch → validate → emit)
+- `FabricRetrieval` — 5-stage discovery pipeline (embed → hard-filter → soft-rank → top-k → score)
+- `CapabilityRegistryAPI` — register/unregister/lookup/list contracts
+
+**Does `Fabric` satisfy `IFabricPort`?**
+
+| IFabricPort method | Fabric method | Match |
+|---|---|---|
+| `execute(CapabilityRequest) -> CapabilityResult` | `execute(CapabilityRequest) -> CapabilityResult` | **Exact** |
+| `execute_batch(list, strategy: str) -> list` | `execute_batch(list, strategy: BatchStrategy)` | **Structural** — `BatchStrategy(str, Enum)` IS a str subclass |
+| `discover_capabilities(domain, intent, safety_band, session_context, top_k) -> RetrievalResult` | Same signature | **Exact** |
+| `find_relevant_prompts(intent, domain, safety_band, top_k) -> RetrievalResult` | Same signature | **Exact** |
+
+**Verdict**: `Fabric` satisfies `IFabricPort` natively. Zero adapter code needed at the Concierge level — just inject the `Fabric` instance directly.
+
+### K1 Fabric Factory — 3 Construction Modes
+
+| Mode | Method | External Deps | Use Case |
+|---|---|---|---|
+| Standalone | `FabricFactory.create_standalone(contracts_dir?, config?)` | None — all test adapters | Dev, examples |
+| Testing | `FabricFactory.create_for_testing(capture_events?, ...)` | None — test adapters + event capture | Integration tests |
+| Production | `FabricFactory.create_with_ports(state_reader, event_port, bridge, model_gateway, prompt_system, delta_bus, ...)` | 6 required ports | Real deployment |
+
+**`create_with_ports` — 6 Required Port Injections**:
+
+| Port | Protocol | What It Provides |
+|---|---|---|
+| `state_reader` | `ISessionStateReader` | Read SessionState sections for context building |
+| `event_port` | `IEventPort` | Emit/subscribe Fabric events on bus |
+| `bridge` | `IBridgePort` | K0 bridge operations (memory, checkpoint, IFL) |
+| `model_gateway` | `IModelGatewayPort` | LLM access for Agent provider |
+| `prompt_system` | `IPromptSystemPort` | Prompt template loading |
+| `delta_bus` | `IDeltaBusPort` | Agent delta emission |
+
+**Strategy for M6**: Start with `create_for_testing()` — zero external deps, gives a fully-wired Fabric with test adapters and event capture. Swap `bridge` arg for our custom `POCMockBridgeAdapter` so POC handler functions execute with real logic. Graduate to `create_with_ports()` when real SessionState, EventBus, and Bridge ports are wired in M8+.
+
+### K1 Fabric Provider Inventory
+
+| Provider | ProviderType | Handles | Relevant for M6? |
+|---|---|---|---|
+| `MCPProvider` | MCP | Remote MCP tools (SSE/stdio) | No — POC tools aren't MCP servers |
+| `WASMProvider` | WASM | Sandboxed WASM modules | No |
+| **`BridgeProvider`** | BRIDGE | K0 bridge ops + IFL device routing | **YES** — routes `tool.execute.*` via IBridgePort |
+| `AgentProvider` | AGENT | LLM-powered sub-agents | No (M8 Orchestrator) |
+| `WorkflowProvider` | WORKFLOW | Frozen DAG execution | No (M9 Planner) |
+| `ConciergeProvider` | CONCIERGE | `concierge.state.*` → FSM handlers | No (reverse direction — Fabric calls INTO concierge) |
+
+**`BridgeProvider`** is the correct provider for POC capabilities because:
+1. All 40 POC capabilities use `tool.execute.*` naming
+2. `BridgeProvider._classify_operation()` passes `tool.execute.*` through as-is (not limited to `memory.*` / IFL)
+3. `BridgeProvider` delegates to `IBridgePort.send_command(operation, payload)` — our `POCMockBridgeAdapter` wraps POC mock handlers behind this interface
+
+### POC Capability Inventory — 40 Capabilities
+
+| Group | Count | Names (pattern) | Domain(s) |
+|---|---|---|---|
+| Demo | 7 | `hotel_search`, `hotel_booking`, `restaurant_search`, `restaurant_booking`, `weather_forecast`, `calendar_create`, `product_search` | travel, productivity, shopping |
+| Family | 31 | `send_message`, `send_group_message`, `send_reminder`, `send_notification`, `get_todo_list`, `add_todo_item`, `complete_todo_item`, `get_grocery_list`, `add_grocery_item`, `grocery_order`, `get_chore_schedule`, `assign_chore`, `log_chore_complete`, `get_school_schedule`, `check_homework`, `school_pickup_status`, `medication_reminder`, `schedule_appointment`, `pharmacy_refill`, `vet_appointment`, `ride_request`, `package_tracking`, `carpool_coordinate`, `smart_home_control`, `set_timer`, `nap_timer`, `home_security_status`, `family_calendar`, `meal_planner`, `family_budget`, `swim_bag_check` | messaging, productivity, shopping, household, school, health, transport, logistics, iot, family, finance |
+| Web | 2 | `web_search`, `web_fetch` | search |
+
+**All named with prefix `tool.execute.*`**
+
+### POC Capability Shape → K1 CapabilityContract Mapping
+
+| POC dict field | K1 `CapabilityContract` field | Transform |
+|---|---|---|
+| `name` (str) | `name` (str) | Direct |
+| `description` (str) | `description` (str) | Direct |
+| `domain` (str) | `domain` (List[str]) | Wrap: `[poc_dict["domain"]]` |
+| `required_inputs` (list of str) | `required_inputs` (list of `InputSpec`) | `InputSpec(name=n, type="STRING", description="")` |
+| `optional_inputs` (list of str) | `optional_inputs` (list of `InputSpec`) | `InputSpec(name=n, type="STRING", description="")` |
+| `has_side_effects` (bool) | `limitations` (list of str) | If True → `["has_side_effects"]` |
+| `estimated_cost` (str) | `cost_per_call` (float) | Parse or 0.0 |
+| *(missing)* | `version` | Default `"1.0.0"` |
+| *(missing)* | `provider_type` | `"BRIDGE"` |
+| *(missing)* | `provider_id` | `"poc-mock-bridge"` |
+| *(missing)* | `provider_endpoint` | `"local://poc-mock-bridge"` |
+| *(missing)* | `safety_band_min` | `"GREEN"` |
+| *(missing)* | `output` | `{}` (no schema) |
+| *(missing)* | `capabilities` | `["tool_execution"]` |
+| *(missing)* | `required_context` | `[]` |
+| *(missing)* | `avg_latency_ms` | `50` (mock) |
+| *(missing)* | `max_latency_ms` | `200` (mock) |
+| *(missing)* | `availability` | `"ONLINE"` |
+
+### POC Mock Handler Dispatch via IBridgePort
+
+**Problem**: `BridgeProvider` calls `IBridgePort.send_command(operation, payload, *, trace_id, timeout_ms) -> BridgeCommandResult`. POC mock handlers are `async (params: dict) -> dict` (simple callables returning result dicts). Need a bridge between these two shapes.
+
+**Solution**: Create `POCMockBridgeAdapter` implementing `IBridgePort`:
+- Holds reference to POC `CapabilityRegistry` (or handler map)
+- `send_command(operation, payload, *, trace_id, ...) -> BridgeCommandResult`:
+  - Look up handler from `CapabilityRegistry._handlers[operation]`
+  - Call `handler(payload)` (the existing mock handler)
+  - Wrap result dict in `BridgeCommandResult.ok(data=result)` or `.fail()`
+- `query(operation, selectors, *, trace_id, ...) -> BridgeCommandResult`:
+  - Same dispatch (POC doesn't distinguish read vs write)
+- `route_ifl(route, payload, *, trace_id) -> BridgeCommandResult`:
+  - Same dispatch via `route.address` (for `home.*`/`device.*`)
+- `is_available() -> True` always
+- `get_health() -> BridgeHealth(available=True, mode="K0_FULL")`
+
+**Alternative considered**: Use `TestBridgeAdapter.add_handler()` to register each POC handler. Rejected because:
+- `add_handler` expects `(operation, payload, trace_id) -> BridgeCommandResult` (synchronous), POC handlers are `async (params) -> dict`
+- Would require 40 wrapper lambdas
+- Custom adapter is cleaner and properly typed
+
+### K1 Fabric Discovery Gap
+
+K1 `FabricRetrieval` uses FAISS semantic similarity with `_StubEmbeddingPort` (zero vectors) in test mode — returns zero similarity for everything, so discovery returns nothing useful.
+
+**Resolution**: Two-phase approach:
+- **Phase 1 (M6)**: Use K1's `HardFilter` domain-based filtering (works without embeddings). Discovery via `domain` + `intent` keyword matching returns results from `CapabilityRegistry.list_by_domain()`.
+- **Phase 2 (M10)**: Wire real `IEmbeddingPort` for semantic similarity when K1 embedding infra is available.
 
 ### Epics
-<!-- TBD -->
 
-### Issues
-<!-- TBD -->
+#### E6.1 — Create POC → K1 Contract Converter
+
+> Converts POC capability dicts into K1 `CapabilityContract` objects so all 40 capabilities
+> can be registered with the Fabric's `CapabilityRegistry`.
+
+**E6.1.1** — Create `k1/concierge/fabric/contract_converter.py`
+
+Function: `poc_dict_to_contract(cap_dict: dict) -> CapabilityContract`
+
+- Import: `from k1.fabric.types import CapabilityContract, InputSpec`
+- Maps 7 POC dict fields to 24+ `CapabilityContract` fields (see mapping table above)
+- Sets `provider_type="BRIDGE"`, `provider_id="poc-mock-bridge"`, `provider_endpoint="local://poc-mock-bridge"`
+- Sets `version="1.0.0"`, `safety_band_min="GREEN"`, `availability="ONLINE"`
+- Sets `ephemeral=True`, `session_scoped=True` (POC capabilities are session-scoped)
+- Handles `has_side_effects` → `limitations=["has_side_effects"]`
+- Handles `estimated_cost` → `cost_per_call` float parse
+
+Function: `convert_all_poc_capabilities() -> list[CapabilityContract]`
+- Imports `DEMO_CAPABILITIES` from `demo_capabilities.py` (7)
+- Imports `FAMILY_CAPABILITIES` from `family_capabilities.py` (31)
+- Imports `WEB_CAPABILITIES` from `web_capabilities.py` (2)
+- Calls `poc_dict_to_contract()` for each → returns 40 `CapabilityContract` objects
+
+Touch point: NEW file `k1/concierge/fabric/contract_converter.py` (~80 lines)
+Depends on: M5 (capability files at `k1/concierge/fabric/`)
+
+---
+
+#### E6.2 — Create POCMockBridgeAdapter
+
+> Implements `IBridgePort` so the `BridgeProvider` can dispatch to POC mock handler functions
+> through the standard Fabric execution pipeline.
+
+**E6.2.1** — Create `k1/concierge/fabric/poc_bridge_adapter.py`
+
+Class: `POCMockBridgeAdapter` satisfies `IBridgePort` (structural — no inheritance)
+
+Constructor: `__init__(self, registry: CapabilityRegistry)`
+- Stores reference to `CapabilityRegistry` which holds the handler map
+
+Methods:
+
+- `async send_command(operation: str, payload: dict, *, trace_id: str = "", timeout_ms: int = 0) -> BridgeCommandResult`:
+  - Look up handler: `handler = self._registry.get_handler(operation)` or `self._registry._handlers.get(operation)`
+  - If handler not found → `BridgeCommandResult.fail("not_found", f"No handler for {operation}")`
+  - Call handler: `result = await handler(payload)` (or `handler(payload)` if sync — check and wrap)
+  - On success → `BridgeCommandResult.ok(data=result, trace_id=trace_id)`
+  - On exception → `BridgeCommandResult.fail("handler_error", str(exc), trace_id=trace_id)`
+
+- `async query(operation: str, selectors: dict, *, trace_id: str = "", timeout_ms: int = 0) -> BridgeCommandResult`:
+  - Delegates to `send_command(operation, selectors, trace_id=trace_id, timeout_ms=timeout_ms)`
+  - POC doesn't distinguish read vs write operations
+
+- `async route_ifl(route: IFLRoute, payload: dict, *, trace_id: str = "") -> BridgeCommandResult`:
+  - Dispatches via `route.address` as operation name
+  - Same handler lookup + call pattern
+
+- `is_available() -> bool`: Always `True`
+
+- `get_health() -> BridgeHealth`: Always `BridgeHealth(available=True, mode="K0_FULL")`
+
+Touch point: NEW file `k1/concierge/fabric/poc_bridge_adapter.py` (~100 lines)
+Depends on: E6.1.1 (for typing), existing `CapabilityRegistry` from `capability_registry.py`
+Import: `from k1.fabric.ports.bridge_port import IBridgePort, BridgeCommandResult, BridgeHealth, IFLRoute`
+
+---
+
+#### E6.3 — Wire Real `Fabric` Instance in Concierge Bootstrap
+
+> Replace `FabricPOCBridge(capability_registry)` with a real `Fabric` instance in
+> `k1/concierge/kernel/bootstrap.py`. The `Fabric` satisfies `IFabricPort` natively.
+
+**E6.3.1** — Create Fabric factory helper in bootstrap
+
+Add to `k1/concierge/kernel/bootstrap.py`:
+
+```python
+from k1.fabric.factory import FabricFactory, FabricConfig
+from k1.concierge.fabric.poc_bridge_adapter import POCMockBridgeAdapter
+from k1.concierge.fabric.contract_converter import convert_all_poc_capabilities
+
+def _create_fabric(registry: CapabilityRegistry) -> Fabric:
+    """Boot a real K1 Fabric with POC mock handlers behind BridgeProvider."""
+    poc_bridge = POCMockBridgeAdapter(registry)
+    
+    fabric = FabricFactory.create_with_ports(
+        state_reader=TestSessionStateReaderAdapter(),  # M8 wires real
+        event_port=LocalEventAdapter(capture_mode=True),
+        bridge=poc_bridge,                             # ← POC mock handlers
+        model_gateway=TestModelGatewayAdapter(),       # M7 wires real
+        prompt_system=TestPromptSystemAdapter(),
+        delta_bus=TestDeltaBusAdapter(),
+        production_mode=False,
+        contracts_dir=None,  # No YAML scan — register programmatically
+    )
+    
+    # Register all 40 POC capabilities
+    for contract in convert_all_poc_capabilities():
+        fabric.register(contract)
+    
+    return fabric
+```
+
+Touch point: EDIT `k1/concierge/kernel/bootstrap.py` — add `_create_fabric()` function, replace `FabricPOCBridge(capability_registry)` with `_create_fabric(capability_registry)`
+Depends on: E6.1.1, E6.2.1, M5 (file at new path)
+
+**E6.3.2** — Replace `ToolContext.fabric_port` assignment
+
+In `k1/concierge/kernel/bootstrap.py` where `ToolContext` is constructed:
+
+- Old (M2): `fabric_port=FabricPOCBridge(capability_registry)`
+- New (M6): `fabric_port=_create_fabric(capability_registry)`
+- The `Fabric` instance satisfies `IFabricPort` — no adapter needed
+- Remove import of `FabricPOCBridge`
+
+Touch point: EDIT `k1/concierge/kernel/bootstrap.py` — ToolContext construction site
+Depends on: E6.3.1
+
+**E6.3.3** — Replace `_FabricGatewayAdapter` (Orchestrator port) wiring
+
+In M2 E2.4.2, `_FabricGatewayAdapter` wraps `FabricPOCBridge` for the Orchestrator. After M6:
+
+- `_FabricGatewayAdapter.__init__` now accepts `Fabric` instance (it already satisfies the same `execute` / `execute_batch` interface)
+- OR: Remove `_FabricGatewayAdapter` entirely — `IFabricGatewayPort` in `orchestrator/ports.py` should be satisfied by the `Fabric` instance directly
+- DECISION: Keep `_FabricGatewayAdapter` as a thin type-narrowing wrapper for now (it translates POC Orchestrator `CapabilityRequest` → K1 `CapabilityRequest`). This gets cleaned up in M8 (Orchestrator Wiring).
+
+Touch point: EDIT `k1/concierge/kernel/bootstrap.py` — `_FabricGatewayAdapter` constructor, change from `FabricPOCBridge` to `Fabric`
+
+---
+
+#### E6.4 — Remove `FabricPOCBridge` (Dead Code)
+
+> After E6.3, `FabricPOCBridge` is no longer used. Remove it.
+
+**E6.4.1** — Delete `k1/concierge/fabric/fabric_bridge.py`
+
+- This file was created in M2 E2.2.1 as the bridge adapter
+- After M6, the real `Fabric` instance replaces it
+- Verify no remaining imports: `grep -r "FabricPOCBridge" k1/concierge/ tests/k1/concierge/`
+
+Touch point: DELETE `k1/concierge/fabric/fabric_bridge.py`
+
+**E6.4.2** — Remove backward-compat callback fields from `ToolContext`
+
+In M2 E2.3.1, `invoke_fn`, `capability_fn`, `fabric_fn`, `workflow_fn` were kept for backward compatibility. After M6, all tool functions use `fabric_port` exclusively:
+
+- Remove deprecated fields from `ToolContext` dataclass in `k1/concierge/tools/implementations.py`
+- Remove fallback branches in `execute_invoke_capability()`, `execute_discover_capabilities()`, `execute_spawn_via_fabric()`, `execute_execute_workflow()`
+- Each function now has only the `fabric_port` path (no `if ctx.fabric_port is not None:` check — it's always set)
+
+Touch point: EDIT `k1/concierge/tools/implementations.py` — `ToolContext` class, 4 tool functions
+Depends on: E6.3.2 (fabric always wired)
+
+---
+
+#### E6.5 — Verify Fabric 9-Step Pipeline Executes
+
+> The real `Fabric` runs a 9-step execution pipeline for every `execute()` call. Verify all 9
+> steps fire correctly for POC capabilities.
+
+The 9 steps (from `k1/fabric/fabric.py` `CapabilityFabric.execute()`):
+1. **Resolve** — `ProviderMatcher` + `ProviderSelector` → find provider for capability
+2. **Policy** — `PolicyEngine` evaluates safety band, affective routing, QoS
+3. **Context Build** — `ContextBuilder` reads SessionState sections (via `ISessionStateReader`)
+4. **Circuit Breaker** — check provider CB state (closed/open/half-open)
+5. **Dispatch** — `BridgeProvider._execute()` → calls `IBridgePort.send_command()`
+6. **Output Validation** — `OutputValidationPipeline` checks result schema
+7. **CB Update** — record success/failure in circuit breaker
+8. **Metrics** — update capability metrics (latency, success rate)
+9. **Event Emit** — emit `capability.executed` event via `EventEmitter`
+
+**E6.5.1** — Verify Step 1 (Resolution) works for all 40 capabilities
+
+- After E6.3.1 registers contracts with `provider_type="BRIDGE"`, `provider_id="poc-mock-bridge"`
+- `_auto_register_providers()` creates a `ProviderConfig(provider_id="poc-mock-bridge", provider_type="BRIDGE")` in `ProviderRegistry`
+- `ProviderMatcher` looks up `provider_id` from contract → `ProviderRegistry` returns config
+- `ProviderSelector` creates `BridgeProvider(config, bridge=poc_bridge)`
+- Test: `await fabric.execute(CapabilityRequest(capability_name="tool.execute.hotel_search", params={...}))` should NOT fail at resolution
+
+Touch point: Test assertion in E6.7
+
+**E6.5.2** — Verify Step 5 (Dispatch) routes through `POCMockBridgeAdapter`
+
+- `BridgeProvider._execute()` calls `self._bridge.send_command(operation="tool.execute.hotel_search", payload={...})`
+- `POCMockBridgeAdapter.send_command()` looks up handler from `CapabilityRegistry`
+- Handler executes mock logic → returns result dict
+- `BridgeProvider._parse_response()` wraps into `CapabilityResult`
+- Test: result should have `success=True`, `data` matching mock handler output
+
+Touch point: Test assertion in E6.7
+
+**E6.5.3** — Verify Step 9 (Event Emit) fires for observability
+
+- `EventEmitter.emit_executed()` fires after every execution
+- With `LocalEventAdapter(capture_mode=True)`, events are captured
+- Test: `fabric.event_port.get_captured()` should contain `capability.executed` events with correct `capability_name`, `trace_id`, `duration_ms`
+
+Touch point: Test assertion in E6.7
+
+---
+
+#### E6.6 — Verify Discovery Pipeline
+
+> K1 `FabricRetrieval` has a 5-stage discovery pipeline. With `_StubEmbeddingPort` (zero vectors),
+> semantic similarity returns nothing. Domain-based filtering via `HardFilter` still works.
+
+**E6.6.1** — Verify domain-filtered discovery works
+
+- `fabric.discover_capabilities(domain=["travel"])` should return 4 capabilities: `hotel_search`, `hotel_booking`, `restaurant_search`, `restaurant_booking`
+- `fabric.discover_capabilities(domain=["messaging"])` should return 4 capabilities
+- NOTE: If `_StubEmbeddingPort` causes empty results even for domain-filtered queries, we may need to use `CapabilityRegistryAPI.list_by_domain()` directly as a fallback
+- Test: discovery by domain returns correct count and names
+
+**E6.6.2** — Assess intent-based discovery quality
+
+- `fabric.discover_capabilities(intent="book a hotel")` — with stub embeddings, this relies on keyword matching
+- If results are empty or poor quality, document the gap and defer to M10 (real embeddings)
+- DECISION: If domain-based discovery works but intent-based doesn't, the Concierge tools should pass `domain` hints alongside intent queries
+
+Touch point: Test + documentation in E6.7
+
+---
+
+#### E6.7 — Unit Tests for Fabric Wiring
+
+> Validate the full Concierge → Fabric → BridgeProvider → POCMockBridgeAdapter → handler pipeline.
+
+**E6.7.1** — Create `tests/k1/concierge/test_contract_converter.py`
+
+Tests for `contract_converter.py`:
+
+- `poc_dict_to_contract()` produces valid `CapabilityContract` for each capability type
+- All 40 capabilities convert without error
+- `domain` is list (not str)
+- `required_inputs` are `InputSpec` objects (not bare strings)
+- `provider_type` is `"BRIDGE"` for all
+- `provider_id` is `"poc-mock-bridge"` for all
+- `has_side_effects=True` → `limitations=["has_side_effects"]`
+- `estimated_cost="free"` → `cost_per_call=0.0`
+- `convert_all_poc_capabilities()` returns exactly 40 contracts
+
+Touch point: NEW file `tests/k1/concierge/test_contract_converter.py` (~25 tests)
+
+**E6.7.2** — Create `tests/k1/concierge/test_poc_bridge_adapter.py`
+
+Tests for `poc_bridge_adapter.py`:
+
+- `POCMockBridgeAdapter` satisfies `IBridgePort` structurally (has all 5 methods)
+- `is_available()` returns True
+- `get_health()` returns `BridgeHealth(available=True, mode="K0_FULL")`
+- `send_command("tool.execute.hotel_search", {"location": "Paris"})` → `BridgeCommandResult` with `success=True`
+- Unknown operation → `BridgeCommandResult` with `success=False`, `error_code="not_found"`
+- Handler exception → `BridgeCommandResult` with `success=False`, `error_code="handler_error"`
+- `query()` delegates to same dispatch as `send_command()`
+- All 40 capabilities dispatch correctly through the adapter
+
+Touch point: NEW file `tests/k1/concierge/test_poc_bridge_adapter.py` (~30 tests)
+
+**E6.7.3** — Create `tests/k1/concierge/test_fabric_wiring_e2e.py`
+
+End-to-end tests for the full Fabric pipeline:
+
+- Boot `Fabric` via `_create_fabric()` with POC registry
+- `fabric.execute(CapabilityRequest(capability_name="tool.execute.hotel_search", params={"location": "Paris"}, ...))`:
+  - Returns `CapabilityResult` with `success=True`
+  - `result.data` matches mock handler output
+  - `result.duration_ms > 0`
+  - Pipeline events captured (step 9)
+- `fabric.execute_batch([req1, req2], "PARALLEL")` — both succeed
+- `fabric.discover_capabilities(domain=["travel"])` — returns 4 capabilities
+- `fabric.discover_capabilities(domain=["messaging"])` — returns 4 capabilities
+- `fabric.discover_capabilities(domain=["health"])` — returns 4 capabilities (medication, schedule, pharmacy, vet)
+- Error case: `fabric.execute(CapabilityRequest(capability_name="tool.execute.nonexistent", ...))` — fails gracefully at resolution
+- Circuit breaker: after repeated failures, provider enters OPEN state (if handler raises)
+
+Touch point: NEW file `tests/k1/concierge/test_fabric_wiring_e2e.py` (~40 tests)
+
+**E6.7.4** — Create `tests/k1/concierge/test_tool_fabric_live.py`
+
+Tests that the tool functions work with the real Fabric (not just `IFabricPort`):
+
+- `execute_invoke_capability()` with real `Fabric` as `fabric_port`:
+  - Builds `CapabilityRequest`, calls `fabric.execute()`, returns `ToolResult`
+  - All 40 capabilities succeed
+- `execute_discover_capabilities()` with real `Fabric`:
+  - Calls `fabric.discover_capabilities()`, returns `ToolResult` with capability list
+- `execute_spawn_via_fabric()` — builds `agent.*` request, dispatches (may fail — no AgentProvider wired, expected)
+- `execute_execute_workflow()` — builds `workflow.*` request, dispatches (may fail — no WorkflowProvider wired, expected)
+- HITL blocking still works with real Fabric path
+
+Touch point: NEW file `tests/k1/concierge/test_tool_fabric_live.py` (~30 tests)
+
+---
+
+#### E6.8 — Integration Tests: Full Suite Green
+
+> Final gate: the real Fabric instance replaces FabricPOCBridge with zero regressions.
+
+**E6.8.1** — Run full Concierge test suite
+
+- `pytest tests/k1/concierge/ -v` — all migrated tests (3,054+) must pass
+- Focus areas: tool execution tests (these use `fabric_port`), orchestrator tests (these use `_FabricGatewayAdapter`)
+- Any failure means E6.3 wiring or E6.4 cleanup broke something — fix before proceeding
+
+**E6.8.2** — Run K1 Fabric test suite
+
+- `pytest tests/k1/fabric/ -v` — all 183+ K1 Fabric tests must pass
+- Concierge changes must NOT affect Fabric internals
+- Gate: 100% green
+
+**E6.8.3** — Run full test suite (all tests)
+
+- All K1 tests + Concierge tests + POC harness
+- Gate: 100% green
+
+**E6.8.4** — Git tag `m6-fabric-wiring-complete`
+
+### Structural Gap Analysis
+
+| Aspect | Before M6 (FabricPOCBridge) | After M6 (Real Fabric) | Impact |
+|---|---|---|---|
+| Execution pipeline | Direct `registry.invoke()` — no policy, no CB, no validation | Full 9-step pipeline — resolve, policy, CB, dispatch, validate, emit | Capabilities now protected by policy engine + circuit breakers |
+| Discovery | Fuzzy word-overlap matching in `CapabilityRegistry.discover()` | `FabricRetrieval` 5-stage pipeline (domain filter works, embeddings stubbed) | More structured discovery, domain-based filtering |
+| Provider resolution | None — direct handler call | `ProviderMatcher` → `ProviderSelector` → `BridgeProvider` | Capabilities routed through standard provider system |
+| Circuit breaking | None | Per-provider CB (timeout, failure threshold) | Automatic failure isolation |
+| Event emission | None | `EventEmitter` fires `capability.executed`, `capability.registered` | Observable execution for tracing |
+| Output validation | None | `OutputValidationPipeline` (if contracts specify output schema) | Type-safe results (when schemas provided) |
+| Batch execution | Sequential `for r in requests` | `BatchStrategy.PARALLEL` or `.SEQUENTIAL` with `FabricDispatcher` | Parallel execution available (production_mode=True) |
+| `IFabricPort` implementation | `FabricPOCBridge` (adapter, ~180 LoC) | `Fabric` (direct, 0 adapter LoC) | Zero adapter overhead |
+
+### Risk Register
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| `BridgeProvider` doesn't route `tool.execute.*` to bridge | Capabilities fail at resolution | E6.5.1 explicit test; `_classify_operation()` passes unknown prefixes through |
+| `_auto_register_providers()` doesn't auto-create provider for `poc-mock-bridge` | Resolution fails — no provider in registry | E6.3.1 registers contracts AFTER factory builds; auto-register scans all contracts |
+| `_StubEmbeddingPort` breaks intent-based discovery | Discovery returns empty | E6.6 tests domain-based filtering separately; intent-based deferred to M10 |
+| POC handlers are async but `BridgeProvider` may not await properly | Runtime error | E6.2.1 adapter handles both sync and async handlers |
+| `FabricConfig.default_timeout_ms` (30s) too long for POC mock handlers | Tests slow | Set `FabricConfig(default_timeout_ms=5000)` for testing |
+| Removing `FabricPOCBridge` breaks tests that mock it | Test failures | E6.4.1 grep before delete; update tests to use real Fabric |
+| Removing deprecated `ToolContext` callbacks breaks tests | Test failures | E6.4.2 update tests that set `invoke_fn`/`capability_fn` to use `fabric_port` |
+
+### Summary Metrics
+
+| Metric | Count |
+|---|--:|
+| New files created | 3 (converter, adapter, 0 YAML) |
+| Files edited | 2 (bootstrap.py, implementations.py) |
+| Files deleted | 1 (fabric_bridge.py) |
+| New test files | 4 |
+| POC capabilities registered | 40 |
+| Fabric pipeline steps exercised | 9 |
+| K1 test adapters used | 5 (state_reader, model_gateway, prompt_system, delta_bus, event_port) |
+| K1 adapter replaced | 1 (bridge → POCMockBridgeAdapter) |
+| Backward-compat callbacks removed | 4 (invoke_fn, capability_fn, fabric_fn, workflow_fn) |
 
 ---
 
