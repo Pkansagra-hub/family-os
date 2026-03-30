@@ -55,7 +55,7 @@
 | Production .py files (`poc/k1_poc/`, excl demo/testing) | ~138 |
 | Demo-only .py files (`poc/k1_poc/demo/`) | ~9 |
 | Test harness .py files | ~21 |
-| Config files (`poc/k1_poc/config/`) | 3 (loader.py, __init__.py, defaults.yaml) |
+| Config files (`poc/k1_poc/config/`) | 3 (loader.py, **init**.py, defaults.yaml) |
 | POC folders (top-level in `poc/k1_poc/`) | 22 |
 | K1 concierge .py files (existing) | 5 (all empty `__init__.py`) |
 | External PyPI dependencies | 1 (google.genai, lazy-loaded) |
@@ -65,77 +65,89 @@
 
 > Verify that the branch merge didn't break anything. Establish the exact green/red/skip baseline.
 
-**Issue E0.1.1** — Run `tests/poc/` full suite, record pass/fail/skip counts  
-- Run: `python -m pytest tests/poc/ -v --tb=short`  
-- Record: total, passed, failed, skipped, errors  
-- File: capture output to `docs/test_results/m0_external_baseline.txt`  
+**Issue E0.1.1** — Run `tests/poc/` full suite, record pass/fail/skip counts
+
+- Run: `python -m pytest tests/poc/ -v --tb=short`
+- Record: total, passed, failed, skipped, errors
+- File: capture output to `docs/test_results/m0_external_baseline.txt`
 - Touch points: none (read-only audit)
 
-**Issue E0.1.2** — Run `poc/k1_poc/testing/harness/` internal suite  
-- Run: `python -m pytest poc/k1_poc/testing/harness/ -v --tb=short`  
-- Record: total, passed, failed, skipped, errors  
-- File: capture output to `docs/test_results/m0_internal_baseline.txt`  
+**Issue E0.1.2** — Run `poc/k1_poc/testing/harness/` internal suite
 
-**Issue E0.1.3** — Document any existing failures as known-issues  
-- If any tests fail, create a `docs/plans/M0_KNOWN_FAILURES.md` listing each failure with root cause  
-- Classify each as: `migration-blocker` (must fix before M1) or `pre-existing` (existed before merge)  
+- Run: `python -m pytest poc/k1_poc/testing/harness/ -v --tb=short`
+- Record: total, passed, failed, skipped, errors
+- File: capture output to `docs/test_results/m0_internal_baseline.txt`
+
+**Issue E0.1.3** — Document any existing failures as known-issues
+
+- If any tests fail, create a `docs/plans/M0_KNOWN_FAILURES.md` listing each failure with root cause
+- Classify each as: `migration-blocker` (must fix before M1) or `pre-existing` (existed before merge)
 
 ### Epic E0.2 — Validate Dependency Map
 
 > Confirm the auto-generated dependency map at `poc/k1_poc/docs/DEPENDENCY_MAP.md` (dated 2026-02-23) is still accurate after recent changes.
 
-**Issue E0.2.1** — Regenerate import graph and diff against existing  
-- Script: walk all `.py` under `poc/k1_poc/`, extract `from poc.k1_poc.X import` lines  
-- Compare against `poc/k1_poc/docs/DEPENDENCY_MAP.md` Section 4 (folder-to-folder matrix)  
-- Touch points: every `.py` file under `poc/k1_poc/` (read-only scan)  
-- Output: updated `DEPENDENCY_MAP.md` if any new cross-folder imports found  
+**Issue E0.2.1** — Regenerate import graph and diff against existing
 
-**Issue E0.2.2** — Verify zero circular dependencies  
-- From the import graph, check that no folder cycle exists (A→B→C→A)  
-- Known safe pattern: `kernel/bootstrap.py` imports everything (hub), but nothing imports `kernel/`  
-- If circular dep found: document and flag as migration-blocker  
+- Script: walk all `.py` under `poc/k1_poc/`, extract `from poc.k1_poc.X import` lines
+- Compare against `poc/k1_poc/docs/DEPENDENCY_MAP.md` Section 4 (folder-to-folder matrix)
+- Touch points: every `.py` file under `poc/k1_poc/` (read-only scan)
+- Output: updated `DEPENDENCY_MAP.md` if any new cross-folder imports found
 
-**Issue E0.2.3** — Document k1.* framework imports  
-- List every `from k1.*` import across POC code  
-- Currently known: `k1.bus.envelope`, `k1.bus.factory`, `k1.bus.impl.local_bus`, `k1.bus.impl.local_mailbox`, `k1.bus.ports.bus`, `k1.bus.ports.mailbox`, `k1.bus.timing.defaults`, `k1.bus.timing.timing_chain`, `k1.bus.adapters`  
-- Touch points: `fsm/controller.py`, `actors/back.py`, `bus/setup.py`, `kernel/bootstrap.py`  
-- Purpose: these are the imports that WON'T change path during the Big Copy (M5) since k1.bus stays at k1.bus  
+**Issue E0.2.2** — Verify zero circular dependencies
+
+- From the import graph, check that no folder cycle exists (A→B→C→A)
+- Known safe pattern: `kernel/bootstrap.py` imports everything (hub), but nothing imports `kernel/`
+- If circular dep found: document and flag as migration-blocker
+
+**Issue E0.2.3** — Document k1.* framework imports
+
+- List every `from k1.*` import across POC code
+- Currently known: `k1.bus.envelope`, `k1.bus.factory`, `k1.bus.impl.local_bus`, `k1.bus.impl.local_mailbox`, `k1.bus.ports.bus`, `k1.bus.ports.mailbox`, `k1.bus.timing.defaults`, `k1.bus.timing.timing_chain`, `k1.bus.adapters`
+- Touch points: `fsm/controller.py`, `actors/back.py`, `bus/setup.py`, `kernel/bootstrap.py`
+- Purpose: these are the imports that WON'T change path during the Big Copy (M5) since k1.bus stays at k1.bus
 
 ### Epic E0.3 — Classify POC Files: Copy vs Stay vs Drop
 
 > Every file in `poc/k1_poc/` must be tagged as one of: COPY (goes to k1/concierge), STAY (remains in poc/ for demo), DROP (dead code).
 
-**Issue E0.3.1** — Tag all `poc/k1_poc/demo/` files as STAY  
-- Files: `coordinator.py`, `coordinator_old.py`, `interactive.py`, `display.py`, `output_channel.py`, `iot_stubs.py`, `smith_family.py`, `preloaded_memories.py`, `runner.py`, `web/` directory  
-- Rationale: demo harness, Smith family data, interactive UI — not production  
-- Touch points: none (classification only)  
+**Issue E0.3.1** — Tag all `poc/k1_poc/demo/` files as STAY
 
-**Issue E0.3.2** — Tag all `poc/k1_poc/testing/` files as STAY  
-- Files: `harness/engine.py`, `harness/test_*.py`, `fixtures/*.py`  
-- Rationale: test utilities — reference tests/poc/ instead after migration  
+- Files: `coordinator.py`, `coordinator_old.py`, `interactive.py`, `display.py`, `output_channel.py`, `iot_stubs.py`, `smith_family.py`, `preloaded_memories.py`, `runner.py`, `web/` directory
+- Rationale: demo harness, Smith family data, interactive UI — not production
+- Touch points: none (classification only)
 
-**Issue E0.3.3** — Tag production files as COPY  
-- Tag the following 22 directories as COPY targets:  
-  `actors/`, `bus/`, `compression/`, `config/`, `delta/`, `events/`, `experience/`, `fabric/`, `fsm/`, `identity/`, `kernel/`, `ledger/`, `llm/`, `obs/`, `orchestrator/`, `prompt/`, `protocols/`, `react/`, `scheduler/`, `sessionstate/`, `task/`, `tools/`  
-- Touch points: none (classification only)  
+**Issue E0.3.2** — Tag all `poc/k1_poc/testing/` files as STAY
 
-**Issue E0.3.4** — Identify dead code candidates for DROP  
-- Scan for files not imported by anything (orphans)  
-- Check `coordinator_old.py` (superseded by `coordinator.py`)  
-- Check any `*.py.bak` or commented-out files  
-- Output: list of DROP candidates with justification  
+- Files: `harness/engine.py`, `harness/test_*.py`, `fixtures/*.py`
+- Rationale: test utilities — reference tests/poc/ instead after migration
+
+**Issue E0.3.3** — Tag production files as COPY
+
+- Tag the following 22 directories as COPY targets:
+  `actors/`, `bus/`, `compression/`, `config/`, `delta/`, `events/`, `experience/`, `fabric/`, `fsm/`, `identity/`, `kernel/`, `ledger/`, `llm/`, `obs/`, `orchestrator/`, `prompt/`, `protocols/`, `react/`, `scheduler/`, `sessionstate/`, `task/`, `tools/`
+- Touch points: none (classification only)
+
+**Issue E0.3.4** — Identify dead code candidates for DROP
+
+- Scan for files not imported by anything (orphans)
+- Check `coordinator_old.py` (superseded by `coordinator.py`)
+- Check any `*.py.bak` or commented-out files
+- Output: list of DROP candidates with justification
 
 ### Epic E0.4 — Audit K1 Concierge Target Structure
 
 > Understand what already exists in `k1/concierge/` and what needs to be created/replaced.
 
-**Issue E0.4.1** — Document existing k1/concierge/ contents  
-- Current state: 5 empty `__init__.py` files in `k1/concierge/`, `k1/concierge/affective/`, `k1/concierge/empathy/`, `k1/concierge/rhythm/`, `k1/concierge/tools/`  
-- Docs: `concierge.md`, `concierge.mmd`, `concierge_fsm_flows.md`, `README.md`  
-- Decision needed: do we keep/merge existing docs or replace entirely from POC?  
+**Issue E0.4.1** — Document existing k1/concierge/ contents
 
-**Issue E0.4.2** — Map POC directories → K1 concierge directories  
-- Create mapping table:  
+- Current state: 5 empty `__init__.py` files in `k1/concierge/`, `k1/concierge/affective/`, `k1/concierge/empathy/`, `k1/concierge/rhythm/`, `k1/concierge/tools/`
+- Docs: `concierge.md`, `concierge.mmd`, `concierge_fsm_flows.md`, `README.md`
+- Decision needed: do we keep/merge existing docs or replace entirely from POC?
+
+**Issue E0.4.2** — Map POC directories → K1 concierge directories
+
+- Create mapping table:
 
   | POC Source | K1 Target | Notes |
   |---|---|---|
@@ -162,62 +174,382 @@
   | `poc/k1_poc/task/` | `k1/concierge/task/` | New |
   | `poc/k1_poc/tools/` | `k1/concierge/tools/` | Replaces empty `k1/concierge/tools/` |
 
-**Issue E0.4.3** — Decide: config merge strategy  
-- POC has `poc/k1_poc/config/defaults.yaml` (59 tunable parameters)  
-- K1 has `k1/config/` (separate config structure)  
-- Decision: Does concierge carry its own config, or merge into k1/config/?  
-- This affects import paths in `config/loader.py` and every file that calls `get_config()`  
+**Issue E0.4.3** — Decide: config merge strategy
+
+- POC has `poc/k1_poc/config/defaults.yaml` (59 tunable parameters)
+- K1 has `k1/config/` (separate config structure)
+- Decision: Does concierge carry its own config, or merge into k1/config/?
+- This affects import paths in `config/loader.py` and every file that calls `get_config()`
 
 ### Epic E0.5 — Audit Smith Family Demo Isolation (Completed)
 
 > Verify POC engine is not contaminated by demo-specific data.
 
-**Issue E0.5.1** — ✅ Confirm engine layer has zero Smith family data  
-- Result: FSM, ReAct, Prompt Builder (builder.py), SessionState, Bus, Delta, OPP, HITL, Weave — all **CLEAN**  
-- `prompt/sections.py` has Smith names in **few-shot examples only** (teaches patterns, not data injection)  
-- `fabric/family_capabilities.py` has mock return values with Smith defaults — replaced entirely by M6 (Fabric Wiring)  
+**Issue E0.5.1** — ✅ Confirm engine layer has zero Smith family data
 
-**Issue E0.5.2** — ✅ Confirm data injection is parameter-driven  
-- `KernelConfig.seed_memories` — accepts any family's data, no hardcoding  
-- `build_persona_from_profile(family_profile)` — accepts any profile dict  
-- `recall_fn` — generic keyword-match engine, receives memories as parameter  
-- Demo data enters ONLY through `demo/coordinator.py` → `KernelConfig`  
+- Result: FSM, ReAct, Prompt Builder (builder.py), SessionState, Bus, Delta, OPP, HITL, Weave — all **CLEAN**
+- `prompt/sections.py` has Smith names in **few-shot examples only** (teaches patterns, not data injection)
+- `fabric/family_capabilities.py` has mock return values with Smith defaults — replaced entirely by M6 (Fabric Wiring)
+
+**Issue E0.5.2** — ✅ Confirm data injection is parameter-driven
+
+- `KernelConfig.seed_memories` — accepts any family's data, no hardcoding
+- `build_persona_from_profile(family_profile)` — accepts any profile dict
+- `recall_fn` — generic keyword-match engine, receives memories as parameter
+- Demo data enters ONLY through `demo/coordinator.py` → `KernelConfig`
 
 ### Epic E0.6 — Integration Test: Branch Health Verification
 
 > Final gate: confirm the POC_Migration branch is healthy and ready for M1.
 
-**Issue E0.6.1** — Run full test suite (external + internal), require 100% pass  
-- Depends on: E0.1.1, E0.1.2, E0.1.3 (any migration-blockers must be fixed first)  
-- Command: `python -m pytest tests/poc/ poc/k1_poc/testing/harness/ --tb=short`  
-- Gate: 3,261 tests pass (or documented known-failures classified as pre-existing)  
+**Issue E0.6.1** — Run full test suite (external + internal), require 100% pass
 
-**Issue E0.6.2** — Run import smoke test  
-- Script: `python -c "from poc.k1_poc.kernel.bootstrap import start_kernel; print('OK')"` 
-- Verifies the full import chain resolves on this branch  
-- Touch points: validates `kernel/bootstrap.py` → all 12 cross-folder deps  
+- Depends on: E0.1.1, E0.1.2, E0.1.3 (any migration-blockers must be fixed first)
+- Command: `python -m pytest tests/poc/ poc/k1_poc/testing/harness/ --tb=short`
+- Gate: 3,261 tests pass (or documented known-failures classified as pre-existing)
 
-**Issue E0.6.3** — Tag baseline  
-- Git tag: `m0-preflight-baseline`  
-- Ensures we can always diff back to the pre-migration state  
+**Issue E0.6.2** — Run import smoke test
+
+- Script: `python -c "from poc.k1_poc.kernel.bootstrap import start_kernel; print('OK')"`
+- Verifies the full import chain resolves on this branch
+- Touch points: validates `kernel/bootstrap.py` → all 12 cross-folder deps
+
+**Issue E0.6.3** — Tag baseline
+
+- Git tag: `m0-preflight-baseline`
+- Ensures we can always diff back to the pre-migration state
 
 ---
 
-## M1 — Port: IModelPort
+## M1 — IModelPort (Build K1 Model Hub Contract + POC Bridge)
 
-> Extract LLM adapter boundary. All callers use `IModelPort` protocol instead of direct `GeminiConciergeAdapter`.
+> K1 Model Hub has ZERO Python code — only `k1/model_hub/model_hub.mmd` (700+ line production spec).
+> This milestone **first builds the K1 Model Hub public contract** (types, ports, plugin interface)
+> per the `.mmd` diagram, then creates a POC bridge adapter so the Concierge speaks Model Hub's
+> language from day one. After M5 (Big Copy), the bridge swaps for the real Model Hub service (M7).
 
-**Boundary**: `poc/k1_poc/llm/adapter.py` → Gemini SDK
-**Callers**: `react/loop.py`, `fsm/controller.py`
-**Port location**: `poc/k1_poc/llm/ports/model_port.py`
-**POC adapter**: `poc/k1_poc/llm/adapters/gemini_direct_adapter.py` (wraps existing code)
-**K1 adapter** (M7): `k1/concierge/llm/adapters/model_hub_adapter.py`
+**K1 Model Hub status**: Only `k1/model_hub/model_hub.mmd` exists. Zero `.py` files.
+**POC LLM layer**: 6 files in `poc/k1_poc/llm/` — `ports.py`, `types.py`, `gemini_adapter.py`, `test_adapter.py`, `model_selection.py`, `validator.py`
+**POC callers**: `react/loop.py` (sole `ConciergeModelRequest` constructor, line 340), `actors/front.py` (passes `model: IConciergeModelPort`), `actors/back.py` (passes `model: IConciergeModelPort`, 3 handler functions), `kernel/bootstrap.py` (`_create_model()` factory + `KernelRuntime.model`)
+**Concierge diagram ref**: `k1/concierge/concierge.mmd` defines `ILLMPort` outbound port using `HubRequest`/`HubResponse` from `k1.model_hub.types`
 
-### Epics
-<!-- TBD -->
+### Mapping: POC types → K1 Model Hub types (from mmd)
 
-### Issues
-<!-- TBD -->
+| POC Type (poc.k1_poc.llm.types) | K1 Model Hub Type (k1.model_hub.types) | Notes |
+|---|---|---|
+| `Capability` enum (CHAT, TOOL_CALL, STRUCTURED, STREAM, REASON) | `CapabilityType` enum (CHAT, TOOL_CALL, STRUCTURED, REASON, EMBED, VISION, + 10 more) | K1 superset; STREAM becomes a flag on HubRequest, not a capability |
+| `ConciergeModelRequest` | `HubRequest` (capability + payload + constraints + trace_id) | Flat → structured (capability-specific payloads) |
+| `ConciergeModelRequest.system_prompt` + `.messages` + `.tools` | `ToolCallPayload.system_prompt` + `.messages` + `.tools` | Payload is polymorphic by capability |
+| `ConciergeModelRequest.max_tokens` / `.timeout_ms` / `.temperature` | `RequestConstraints.max_tokens` / `.timeout_ms` / `.temperature` | Budget moves to constraints |
+| `ConciergeModelRequest.actor` / `.scenario` | `RequestConstraints.consumer_id` (e.g. `"concierge.front"`) + `RequestConstraints.priority` | Actor/scenario collapse to consumer_id + priority enum |
+| `ConciergeModelRequest.model_hint` | `RequestConstraints.model_preference` / `.provider_preference` | Hint string → typed preference |
+| `ConciergeModelRequest.thinking` (ThinkingLevel) | `ReasonPayload.reasoning_effort` (low/medium/high) | Thinking moves into REASON payload |
+| `ConciergeModelResponse` | `HubResponse` (result + metadata) | Flat → structured |
+| `ConciergeModelResponse.text` / `.tool_calls` / `.json_output` | `HubResponse.result` (CapabilityResult, polymorphic) | Result type depends on capability |
+| `ConciergeModelResponse.tokens_in` / `.tokens_out` / `.latency_ms` / `.model_id` | `ResponseMetadata.usage` / `.latency_ms` / `.model_id` | Usage is nested dataclass |
+| `ConciergeModelResponse.finish_reason` (FinishReason) | `ResponseMetadata.finish_reason` | Moves to metadata |
+| `StreamChunk` | `HubChunk` | Same concept, K1 naming |
+| `ToolSchema` | `ToolDefinition` (in ToolCallPayload) | Rename, same schema shape |
+| `ModelMessage` | `Message` (in payload) | Rename, same fields |
+| `IConciergeModelPort` (generate/generate_stream) | `IModelHubPort` (execute/stream_execute) | Method rename + type changes |
+
+### Epic E1.1 — Build K1 Model Hub Public Types
+
+> Create `k1/model_hub/types.py` — the **source of truth** for all Model Hub consumers.
+> Every type comes directly from the mmd diagram specification.
+
+**Issue E1.1.1** — Create `k1/model_hub/types.py` with all public types
+
+From mmd diagram, implement as frozen dataclasses / enums:
+
+- `CapabilityType(str, Enum)` — CHAT, TOOL_CALL, STRUCTURED, REASON, EMBED, VISION, BATCH, MODERATE, TOKEN_COUNT, CACHE_PROMPT, AUDIO_IN, TTS, IMAGE_GEN, WEB_SEARCH, CODE_EXEC
+- `Priority(str, Enum)` — REALTIME, INTERACTIVE, BACKGROUND
+- `ModelPreference` dataclass — `model_id: str | None`, `provider_id: str | None`, `tier: str | None` (FAST/STANDARD/PREMIUM)
+- `RequestConstraints` dataclass — `max_tokens`, `timeout_ms`, `priority`, `temperature`, `model_preference`, `provider_preference`, `cost_limit`, `consumer_id`
+- `HubRequest` dataclass — `capability: CapabilityType`, `payload: CapabilityPayload`, `constraints: RequestConstraints`, `trace_id: str`, `idempotency_key: str | None`
+- `Usage` dataclass — `prompt_tokens`, `completion_tokens`, `total_tokens`
+- `ResponseMetadata` dataclass — `request_id`, `model_id`, `provider_id`, `usage: Usage`, `cost_usd`, `latency_ms`, `cache_hit`, `capability`, `trace_id`, `fallback_used`, `finish_reason`
+- `HubResponse` dataclass — `result: CapabilityResult`, `metadata: ResponseMetadata`
+- `HubChunk` dataclass — `chunk_type` (text_delta/tool_call_delta/thought_delta/done), `text`, `tool_call_partial`, `thought_text`, `response: HubResponse | None`
+- Capability payloads (all frozen dataclasses):
+  - `ChatPayload` — `messages: list[Message]`, `system_prompt: str`
+  - `ToolCallPayload` — `messages`, `system_prompt`, `tools: list[ToolDefinition]`, `tool_choice`, `parallel_tool_calls`
+  - `StructuredOutputPayload` — `messages`, `system_prompt`, `output_schema: dict`, `strict: bool`
+  - `ReasonPayload` — `messages`, `system_prompt`, `reasoning_effort: str`, `include_thinking: bool`
+  - `VisionPayload` — `messages`, `image_inputs: list[ImageInput]`, `detail: str`
+- `Message` dataclass — `role`, `content`, `tool_call_id`, `name`, `tool_calls`
+- `ToolDefinition` dataclass — `name`, `description`, `parameters: dict`
+- `ToolCallResult` dataclass — `id`, `name`, `arguments: dict`
+- `CapabilityPayload` — Union type of all payload classes
+- `CapabilityResult` — Union type of all result classes (ChatResult with .text, ToolCallResult list, StructuredResult with .json_output, etc.)
+
+Touch point: NEW file `k1/model_hub/types.py` (~250 lines)
+Depends on: nothing (leaf module, zero imports from k1.*)
+
+**Issue E1.1.2** — Update `k1/model_hub/__init__.py` with public exports
+
+Touch point: EDIT `k1/model_hub/__init__.py` (currently empty)
+Export all public types from `types.py`
+
+### Epic E1.2 — Build IModelHubPort + All 7 Ports
+
+> Create `k1/model_hub/ports.py` — the hexagonal boundary contracts per mmd.
+> These are `typing.Protocol` classes, no implementation.
+
+**Issue E1.2.1** — Create `k1/model_hub/ports.py` with all 7 ports
+
+From mmd diagram PORTS section, implement as `@runtime_checkable Protocol`:
+
+- `IModelHubPort` (Inbound — THE Single Gateway):
+  - `execute(request: HubRequest) -> HubResponse`
+  - `stream_execute(request: HubRequest) -> AsyncIterator[HubChunk]`
+  - `discover_capabilities() -> dict[CapabilityType, list[str]]`
+  - `discover_models(capability: CapabilityType | None = None) -> list[ModelInfo]`
+  - `health() -> HubHealthReport`
+- `IEventPort` (Both): `publish(topic, payload)`, `subscribe(topics, handler)`
+- `IStateReadPort` (Inbound read-only): `read(sections: list[str]) -> StateSnapshot`
+- `IMetricsPort` (Outbound): `emit(metric_name, value, labels)`
+- `IConfigPort` (Inbound): `get(key)`, `watch(key, callback)`
+- `ICredentialPort` (Inbound): `get_key(provider_id)`, `refresh_key(provider_id)`
+- `IHealthPort` (Outbound): `report_health(component, status)`, `check_health()`
+- Supporting types: `ModelInfo`, `HubHealthReport`, `StateSnapshot`, `ProviderHealthStatus`
+
+Touch point: NEW file `k1/model_hub/ports.py` (~120 lines)
+Depends on: E1.1.1 (imports from `k1.model_hub.types`)
+
+### Epic E1.3 — Build IProviderPlugin Contract
+
+> Create `k1/model_hub/plugins/` — the extensibility contract that ALL providers implement.
+> Per mmd: "ADDING A NEW PROVIDER: 1. Create manifest YAML, 2. Implement IProviderPlugin (5 methods), 3. Place in plugins/, 4. Auto-discovered on startup, 5. DONE."
+
+**Issue E1.3.1** — Create `k1/model_hub/plugins/base.py` with IProviderPlugin + internal types
+
+From mmd diagram PLUGIN_INTERFACE section:
+
+- `IProviderPlugin(Protocol)`:
+  - `initialize(manifest: ProviderManifest) -> None`
+  - `supports(capability: CapabilityType) -> bool`
+  - `execute(request: NormalizedRequest) -> ProviderResponse`
+  - `stream_execute(request: NormalizedRequest) -> AsyncIterator[ProviderChunk]`
+  - `estimate_tokens(messages: list[Message]) -> int`
+  - `health_check() -> ProviderHealth`
+  - `close() -> None`
+- `NormalizedRequest` dataclass — provider-agnostic intermediate form (between HubRequest and provider-native API)
+- `ProviderResponse` dataclass — provider-agnostic response
+- `ProviderChunk` dataclass — streaming chunk from provider
+- `ProviderHealth` dataclass — `status: str` (HEALTHY/DEGRADED/UNHEALTHY), `latency_ms`, `error_rate`
+- `ProviderManifest` dataclass — parsed YAML manifest structure (provider_id, display_name, plugin_class, capabilities, models, circuit_breaker config, etc.)
+
+Touch point: NEW file `k1/model_hub/plugins/__init__.py` (empty) + NEW file `k1/model_hub/plugins/base.py` (~150 lines)
+Depends on: E1.1.1 (imports CapabilityType, Message from types)
+
+**Issue E1.3.2** — Create `k1/model_hub/plugins/test_plugin.py`
+
+From mmd diagram ADAPTERS_TEST section (TestProviderPlugin):
+
+- `TestProviderPlugin(IProviderPlugin)`:
+  - Deterministic responses, configurable per test
+  - Set response for (capability) → ProviderResponse
+  - Set response sequence for multi-call tests
+  - Configurable latency, errors, token counts, streaming chunks
+  - Can be registered as any provider_id for test isolation
+  - Records all calls for assertions
+
+Touch point: NEW file `k1/model_hub/plugins/test_plugin.py` (~100 lines)
+Depends on: E1.3.1 (imports IProviderPlugin, NormalizedRequest, etc.)
+
+### Epic E1.4 — Build POC Bridge Adapter (IModelHubPort → GeminiConciergeAdapter)
+
+> Creates a bridge that implements `IModelHubPort` but internally delegates to the existing
+> `GeminiConciergeAdapter`. This lets POC callers switch to K1 types while the real Model Hub
+> is built (M7). The bridge translates HubRequest ↔ ConciergeModelRequest and
+> ConciergeModelResponse ↔ HubResponse using the mapping table above.
+
+**Issue E1.4.1** — Create `poc/k1_poc/llm/model_hub_bridge.py` — ModelHubPOCBridge
+
+Class: `ModelHubPOCBridge` implements `IModelHubPort`
+
+Constructor: `__init__(self, inner: GeminiConciergeAdapter | TestConciergeAdapter)`
+
+Translation methods (private):
+- `_hub_to_poc_request(hub_req: HubRequest) -> ConciergeModelRequest`:
+  - `hub_req.capability` (CapabilityType) → `Capability` enum mapping
+  - `hub_req.payload.messages` → `ConciergeModelRequest.messages` (Message → ModelMessage)
+  - `hub_req.payload.system_prompt` → `ConciergeModelRequest.system_prompt`
+  - `hub_req.payload.tools` (if ToolCallPayload) → `ConciergeModelRequest.tools` (ToolDefinition → ToolSchema)
+  - `hub_req.payload.tool_choice` → `ConciergeModelRequest.tool_choice`
+  - `hub_req.constraints.max_tokens` → `ConciergeModelRequest.max_tokens`
+  - `hub_req.constraints.timeout_ms` → `ConciergeModelRequest.timeout_ms`
+  - `hub_req.constraints.temperature` → `ConciergeModelRequest.temperature`
+  - `hub_req.constraints.consumer_id` → `ConciergeModelRequest.actor` (parse "concierge.front" → "front")
+  - `hub_req.constraints.priority` → `ConciergeModelRequest.scenario` (derive from priority + capability)
+  - `hub_req.constraints.model_preference` → `ConciergeModelRequest.model_hint`
+  - `hub_req.trace_id` → `ConciergeModelRequest.trace_id`
+  - If `ReasonPayload`: map `reasoning_effort` → `ThinkingLevel`
+
+- `_poc_to_hub_response(poc_resp: ConciergeModelResponse, capability: CapabilityType, trace_id: str) -> HubResponse`:
+  - `poc_resp.text` → `ChatResult.text` (or ToolCallResult)
+  - `poc_resp.tool_calls` → `ToolCallResult` list in result
+  - `poc_resp.json_output` → `StructuredResult.json_output`
+  - `poc_resp.tokens_in`/`.tokens_out` → `ResponseMetadata.usage`
+  - `poc_resp.latency_ms` → `ResponseMetadata.latency_ms`
+  - `poc_resp.model_id` → `ResponseMetadata.model_id`
+  - `poc_resp.finish_reason` → `ResponseMetadata.finish_reason`
+
+Public methods (IModelHubPort):
+- `execute(HubRequest) -> HubResponse` — translate, call `inner.generate()`, translate back
+- `stream_execute(HubRequest) -> AsyncIterator[HubChunk]` — translate, call `inner.generate_stream()`, map `StreamChunk` → `HubChunk`
+- `discover_capabilities()` — hardcoded: CHAT, TOOL_CALL, STRUCTURED, REASON (POC Day 1 set)
+- `discover_models()` — delegates to `model_selection.py` tables
+- `health()` — always HEALTHY (POC has no circuit breakers)
+
+Touch point: NEW file `poc/k1_poc/llm/model_hub_bridge.py` (~200 lines)
+Depends on: E1.1.1 (k1.model_hub.types), E1.2.1 (k1.model_hub.ports), existing `gemini_adapter.py`
+
+**Issue E1.4.2** — Create `poc/k1_poc/llm/test_model_hub_bridge.py` — TestModelHubBridge
+
+Same pattern as E1.4.1 but wraps `TestConciergeAdapter`:
+- `TestModelHubBridge(inner: TestConciergeAdapter)` implements `IModelHubPort`
+- Exposes `inner` for test configuration: `bridge.inner.set_response("front", "user_input", ...)`
+- Alternatively: add `set_response()` / `set_response_sequence()` pass-through methods
+
+Touch point: NEW file `poc/k1_poc/llm/test_model_hub_bridge.py` (~80 lines)
+Depends on: E1.4.1, existing `test_adapter.py`
+
+### Epic E1.5 — Migrate POC Callers to IModelHubPort + K1 Types
+
+> Change all POC callers from `IConciergeModelPort` / `ConciergeModelRequest` / `ConciergeModelResponse`
+> to `IModelHubPort` / `HubRequest` / `HubResponse`. The bridge adapter (E1.4) ensures existing
+> Gemini/test behaviour is preserved. Tests must stay green after each file.
+
+**Issue E1.5.1** — Migrate `poc/k1_poc/react/loop.py`
+
+This is the **only** file that constructs `ConciergeModelRequest` (line 340).
+
+Changes:
+- Import: replace `from poc.k1_poc.llm.ports import IConciergeModelPort` → `from k1.model_hub.ports import IModelHubPort`
+- Import: replace `from poc.k1_poc.llm.types import ConciergeModelRequest, ConciergeModelResponse, ...` → `from k1.model_hub.types import HubRequest, HubResponse, HubChunk, CapabilityType, RequestConstraints, ToolCallPayload, ChatPayload, ...`
+- `_streaming_generate()` signature: `model: IConciergeModelPort` → `model: IModelHubPort`
+- `_streaming_generate()` body: `model.generate_stream(request)` → `model.stream_execute(request)`, `model.generate(request)` → `model.execute(request)`, `StreamChunk` → `HubChunk`
+- `react_loop()` signature: `model: IConciergeModelPort` → `model: IModelHubPort`
+- `react_loop()` line 340: replace `ConciergeModelRequest(...)` constructor with `HubRequest(capability=..., payload=ToolCallPayload(...) or ChatPayload(...), constraints=RequestConstraints(...), trace_id=...)`
+- `react_loop()` response handling: `response.text` → `response.result.text`, `response.tool_calls` → `response.result.tool_calls`, `response.finish_reason` → `response.metadata.finish_reason`, etc.
+- Keep `from poc.k1_poc.llm.types import ModelMessage, ToolSchema` for internal message building (these stay POC types until E1.5.4 internal cleanup)
+- ALTERNATIVE: If response field access is too pervasive, keep a thin `_unwrap(hub_response) -> ConciergeModelResponse` helper inside loop.py to minimise diff
+
+Touch points: EDIT `poc/k1_poc/react/loop.py` — imports (lines 25-35), `_streaming_generate` (lines 168-201), `react_loop` request construction (lines 340-365), response access (~10 sites in react_loop body)
+
+**Issue E1.5.2** — Migrate `poc/k1_poc/actors/front.py`
+
+Changes:
+- Import: replace `from poc.k1_poc.llm.ports import IConciergeModelPort` → `from k1.model_hub.ports import IModelHubPort`
+- `front_handler()` signature (line 619): `model: IConciergeModelPort` → `model: IModelHubPort`
+- All internal calls already pass `model` to `react_loop()` which handles the actual LLM call — no request construction in this file
+- Docstrings: update "IConciergeModelPort" → "IModelHubPort"
+
+Touch point: EDIT `poc/k1_poc/actors/front.py` — import (line 46), signature (line 619), docstring (line 635)
+
+**Issue E1.5.3** — Migrate `poc/k1_poc/actors/back.py`
+
+Changes:
+- Import: replace `from poc.k1_poc.llm.ports import IConciergeModelPort` → `from k1.model_hub.ports import IModelHubPort`
+- 3 handler function signatures:
+  - `back_handler()` (line 409): `model: IConciergeModelPort` → `model: IModelHubPort`
+  - `back_resume_handler()` (line 596): `model: IConciergeModelPort` → `model: IModelHubPort`
+  - 3rd handler (line 891): `model: IConciergeModelPort` → `model: IModelHubPort`
+- All internal calls pass `model` to `react_loop()` — no request construction in this file
+- Docstrings: update references
+
+Touch point: EDIT `poc/k1_poc/actors/back.py` — import (line 55), signatures (lines 409, 596, 891), docstrings
+
+**Issue E1.5.4** — Migrate `poc/k1_poc/kernel/bootstrap.py`
+
+Changes:
+- `_create_model()` (line 643): return type is now `IModelHubPort`
+  - Test mode: `TestConciergeAdapter()` → `TestModelHubBridge(TestConciergeAdapter())`
+  - Live mode: `GeminiConciergeAdapter(api_key=...)` → `ModelHubPOCBridge(GeminiConciergeAdapter(api_key=...))`
+  - Fallback: same wrapping pattern
+- `KernelRuntime.model` (line 92): type annotation `Any` → `IModelHubPort` (or keep Any for now)
+- Imports: add `from poc.k1_poc.llm.model_hub_bridge import ModelHubPOCBridge` and `from poc.k1_poc.llm.test_model_hub_bridge import TestModelHubBridge`
+
+Touch point: EDIT `poc/k1_poc/kernel/bootstrap.py` — imports (top), `_create_model()` (lines 643-657), optionally `KernelRuntime` type (line 92)
+
+### Epic E1.6 — Update LLM Validator for K1 Types
+
+> `LLMOutputValidator` currently validates `ConciergeModelResponse`. After E1.5, the react loop
+> receives `HubResponse`. The validator must accept the new type.
+
+**Issue E1.6.1** — Update `poc/k1_poc/llm/validator.py` to accept HubResponse
+
+Two options (decide during implementation):
+- **Option A** (minimal diff): Add `_unwrap_hub_response(hr: HubResponse) -> ConciergeModelResponse` at the top of `validate()`. Internal validation logic stays unchanged. This is a thin shim.
+- **Option B** (clean): Change `validate()` to accept `HubResponse` directly. Update all field access (`response.text` → `response.result.text`, etc.).
+
+Recommended: **Option A** for M1 (minimal risk, tests stay green). Option B deferred to M10.
+
+Touch point: EDIT `poc/k1_poc/llm/validator.py` — `validate()` method, `_attempt_fix()` method
+Depends on: E1.1.1 (k1.model_hub.types), E1.5.1 (callers pass HubResponse)
+
+### Epic E1.7 — Unit Tests for New K1 Model Hub Types + Ports
+
+> Validate that all new K1 types serialize/deserialize correctly, ports are runtime-checkable,
+> and the bridge adapter faithfully translates between POC and K1 types.
+
+**Issue E1.7.1** — Create `tests/poc/test_model_hub_types.py`
+
+Tests for `k1/model_hub/types.py`:
+- All CapabilityType enum values match mmd table (15 capabilities)
+- HubRequest construction with each payload type
+- RequestConstraints defaults match mmd (timeout per priority tier)
+- HubResponse + ResponseMetadata round-trip
+- HubChunk for each chunk_type
+- Message / ToolDefinition / ToolCallResult immutability (frozen)
+
+Touch point: NEW file `tests/poc/test_model_hub_types.py` (~60 tests)
+
+**Issue E1.7.2** — Create `tests/poc/test_model_hub_ports.py`
+
+Tests for `k1/model_hub/ports.py`:
+- IModelHubPort is runtime_checkable
+- All 7 ports are Protocols with correct method signatures
+- TestProviderPlugin satisfies IProviderPlugin
+
+Touch point: NEW file `tests/poc/test_model_hub_ports.py` (~20 tests)
+
+**Issue E1.7.3** — Create `tests/poc/test_model_hub_bridge.py`
+
+Tests for `poc/k1_poc/llm/model_hub_bridge.py`:
+- ModelHubPOCBridge satisfies IModelHubPort (isinstance check)
+- CHAT capability: HubRequest → ConciergeModelRequest → ConciergeModelResponse → HubResponse round-trip
+- TOOL_CALL capability: tools + tool_choice translate correctly
+- STRUCTURED capability: response_schema → json_output mapping
+- REASON capability: thinking level mapping
+- Streaming: stream_execute() yields HubChunk from StreamChunk
+- Token usage: prompt_tokens + completion_tokens in ResponseMetadata
+- discover_capabilities() returns correct set
+- TestModelHubBridge scripted response pass-through
+
+Touch point: NEW file `tests/poc/test_model_hub_bridge.py` (~40 tests)
+
+### Epic E1.8 — Integration Tests: Full Suite Green
+
+> Final gate: all 3,261 existing tests + new tests pass. Zero regressions from the type migration.
+
+**Issue E1.8.1** — Run full external test suite (3,054 tests)
+
+- Command: `python -m pytest tests/poc/ --tb=short -q`
+- Gate: ALL pass. Any failure means E1.5 translation broke something — fix before proceeding.
+- Focus areas: test files that exercise the react loop (e.g. `test_m08_e85_wiring.py` with 99 tests, `test_m15_experience_layer.py` with 171 tests)
+
+**Issue E1.8.2** — Run full internal harness (207 tests)
+
+- Command: `python -m pytest poc/k1_poc/testing/harness/ --tb=short -q`
+- Gate: ALL pass.
+
+**Issue E1.8.3** — Git tag `m1-imodelport-complete`
+
+- Tag commit after all tests green
+- Ensures we can diff M1 changes vs M0 baseline
 
 ---
 
