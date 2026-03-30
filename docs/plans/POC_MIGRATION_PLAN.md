@@ -601,6 +601,7 @@ Touch point: NEW file `tests/poc/test_model_hub_bridge.py` (~40 tests)
 ### Key Structural Gap
 
 The POC conflates **discovery** and **execution** into one `CapabilityRegistry` class with `discover()` + `invoke()`. K1 separates them into two distinct APIs:
+
 - `FabricRetrieval` (Role 1 — discovery, ranking, read-only)
 - `CapabilityFabric` (Role 2 — 9-step execution pipeline with policy, circuit breaking, output validation)
 
@@ -662,6 +663,7 @@ Translation methods (private):
   - POC capability dict `{name, description, domain, ...}` → `ScoredCapability` fields
 
 Public methods (IFabricPort):
+
 - `execute(CapabilityRequest) -> CapabilityResult`:
   - Extract `capability_name` + `params` + `session_id` from request
   - Call `registry.invoke(name, params, session_id)` (existing POC)
@@ -687,6 +689,7 @@ Depends on: E2.1.1, existing `capability_registry.py`, `k1.fabric.types` (Capabi
 **Issue E2.3.1** — Add `fabric_port: IFabricPort | None` to `ToolContext`
 
 Changes to `poc/k1_poc/tools/implementations.py`:
+
 - Import: add `from poc.k1_poc.fabric.ports import IFabricPort` and `from k1.fabric.types import CapabilityRequest, CapabilityResult`
 - `ToolContext` dataclass (line 55): add field `fabric_port: IFabricPort | None = None`
 - Keep `invoke_fn`, `capability_fn`, `fabric_fn`, `workflow_fn` for backward compatibility (deprecated, still checked as fallback)
@@ -696,6 +699,7 @@ Touch point: EDIT `poc/k1_poc/tools/implementations.py` — import (top), `ToolC
 **Issue E2.3.2** — Migrate `execute_invoke_capability()` to use `fabric_port`
 
 Changes to `poc/k1_poc/tools/implementations.py` line 1099:
+
 - First check: `if ctx.fabric_port is not None:` → build `CapabilityRequest(capability_name=capability_name, params=params, session_id=session_id or "", trace_id=ctx.trace_id or "", caller="concierge", caller_id="concierge.back")` → `result = await ctx.fabric_port.execute(request)` → convert `CapabilityResult` to `ToolResult`
 - Fallback: existing `ctx.invoke_fn` path (for backward compat during transition)
 - HITL checks (L2 defense-in-depth) remain BEFORE the port call — no change to that block
@@ -705,6 +709,7 @@ Touch point: EDIT `poc/k1_poc/tools/implementations.py` — `execute_invoke_capa
 **Issue E2.3.3** — Migrate `execute_discover_capabilities()` to use `fabric_port`
 
 Changes to `poc/k1_poc/tools/implementations.py` line 999:
+
 - First check: `if ctx.fabric_port is not None:` → `result = await ctx.fabric_port.discover_capabilities(intent=intent, domain=[domain] if domain else None, top_k=10)` → convert `RetrievalResult` to `ToolResult` dict with `{capabilities: [...], count: N}`
 - Fallback: existing `ctx.capability_fn` path
 - Cache logic stays — key remains `(intent, domain)`, value is `ToolResult`
@@ -714,6 +719,7 @@ Touch point: EDIT `poc/k1_poc/tools/implementations.py` — `execute_discover_ca
 **Issue E2.3.4** — Migrate `execute_spawn_via_fabric()` to use `fabric_port`
 
 Changes to `poc/k1_poc/tools/implementations.py` line 1321:
+
 - First check: `if ctx.fabric_port is not None:` → build `CapabilityRequest(capability_name=f"agent.{agent_type}", params={"task": task, "constraints": constraints, "capabilities_needed": capabilities_needed}, caller="concierge")` → `result = await ctx.fabric_port.execute(request)` → convert to `ToolResult`
 - Fallback: existing `ctx.fabric_fn` path
 
@@ -722,6 +728,7 @@ Touch point: EDIT `poc/k1_poc/tools/implementations.py` — `execute_spawn_via_f
 **Issue E2.3.5** — Migrate `execute_execute_workflow()` to use `fabric_port`
 
 Changes to `poc/k1_poc/tools/implementations.py` line 1368:
+
 - First check: `if ctx.fabric_port is not None:` → build `CapabilityRequest(capability_name=f"workflow.{workflow_id}", params=params, timeout_ms=timeout_ms, caller="concierge")` → `result = await ctx.fabric_port.execute(request)` → convert to `ToolResult`
 - Fallback: existing `ctx.workflow_fn` path
 
@@ -734,6 +741,7 @@ Touch point: EDIT `poc/k1_poc/tools/implementations.py` — `execute_execute_wor
 **Issue E2.4.1** — Wire `FabricPOCBridge` into `kernel/bootstrap.py`
 
 Changes to `poc/k1_poc/kernel/bootstrap.py`:
+
 - Import: add `from poc.k1_poc.fabric.fabric_bridge import FabricPOCBridge`
 - After `capability_registry = _create_capability_registry()` (line 128):
   - Add: `fabric_bridge = FabricPOCBridge(capability_registry)`
@@ -747,6 +755,7 @@ Touch point: EDIT `poc/k1_poc/kernel/bootstrap.py` — imports, line 128, ToolCo
 **Issue E2.4.2** — Update `_FabricGatewayAdapter` (Orchestrator port) to use K1 types
 
 Changes to `poc/k1_poc/kernel/bootstrap.py` line 847:
+
 - `_FabricGatewayAdapter.__init__`: accept `FabricPOCBridge` instead of raw `CapabilityRegistry`
 - `execute()`: build K1 `CapabilityRequest` from POC `orchestrator.types.CapabilityRequest`, call `bridge.execute()`, convert K1 `CapabilityResult` back to POC `orchestrator.types.CapabilityResult`
 - `execute_batch()`: same pattern, sequential
@@ -763,6 +772,7 @@ Touch point: EDIT `poc/k1_poc/kernel/bootstrap.py` — `_FabricGatewayAdapter` c
 **Issue E2.5.1** — Assess POC `orchestrator/types.py` usage and decide strategy
 
 Two options:
+
 - **Option A** (keep POC types, add translation layer): `_FabricGatewayAdapter` translates between POC Orchestrator types and K1 Fabric types. Tests keep using POC types. Minimal diff.
 - **Option B** (replace POC types with K1 types): Change `IFabricGatewayPort` and `OrchestratorStub` to import from `k1.fabric.types`. Larger diff but cleaner long-term.
 
@@ -779,6 +789,7 @@ Depends on: E2.4.2
 **Issue E2.6.1** — Create `tests/poc/test_fabric_port.py`
 
 Tests for `poc/k1_poc/fabric/ports.py`:
+
 - `IFabricPort` is `runtime_checkable`
 - `FabricPOCBridge` satisfies `IFabricPort` (isinstance check)
 - K1 `Fabric` class (if imported) would satisfy `IFabricPort` — validate signature match
@@ -788,6 +799,7 @@ Touch point: NEW file `tests/poc/test_fabric_port.py` (~10 tests)
 **Issue E2.6.2** — Create `tests/poc/test_fabric_bridge.py`
 
 Tests for `poc/k1_poc/fabric/fabric_bridge.py`:
+
 - `execute()` with each of the 40 POC capabilities:
   - Pass K1 `CapabilityRequest` → get K1 `CapabilityResult` back
   - Verify `success`, `data`, `duration_ms` fields translate correctly
@@ -807,6 +819,7 @@ Touch point: NEW file `tests/poc/test_fabric_bridge.py` (~50 tests)
 **Issue E2.6.3** — Create `tests/poc/test_tool_fabric_port_wiring.py`
 
 Tests for migrated tool implementations:
+
 - `execute_invoke_capability` with `fabric_port` set: builds correct `CapabilityRequest`, returns correct `ToolResult`
 - `execute_discover_capabilities` with `fabric_port` set: calls `discover_capabilities()`, returns correct `ToolResult`
 - `execute_spawn_via_fabric` with `fabric_port` set: builds `agent.*` capability name
@@ -840,18 +853,214 @@ Touch point: NEW file `tests/poc/test_tool_fabric_port_wiring.py` (~35 tests)
 
 ## M3 — Port: IBusPort
 
-> Normalize bus instantiation to match `k1/bus/ports/bus.py` interface.
+> Normalize bus type hints and factory usage to code against `k1/bus/ports/` protocols exclusively.
 
-**Boundary**: `poc/k1_poc/bus/` → direct `LocalBus` + `TimingChain` instantiation
-**Callers**: `kernel/bootstrap.py`, `fsm/controller.py`, `actors/*.py`
-**Port location**: `poc/k1_poc/bus/ports/bus_port.py`
-**Status**: POC bus IS the k1 bus implementation — mostly an import-path alignment
+**Boundary**: `poc/k1_poc/bus/setup.py` → `BusFactory` + concrete `LocalBus` / `LocalMailboxRouter` type hints
+**Callers**: `kernel/bootstrap.py`, `main.py`, `fsm/controller.py`, `actors/*.py`, `tools/dispatcher.py`, `demo/coordinator.py`, `testing/fixtures.py`, `testing/harness/engine.py`
+**Port protocols (K1 — already exist)**: `k1/bus/ports/bus.py` → `IBus` (3 methods: publish, subscribe, unsubscribe), `k1/bus/ports/mailbox.py` → `IMailbox` (2 methods), `IMailboxRouter` (4 methods)
+**Status**: K1 bus is FULLY IMPLEMENTED (28+ source files, 30+ tests). POC already imports `k1.bus.*` directly. Work is type-hint alignment + middleware wiring + contract tests.
+
+### Key finding
+
+The POC **already uses** the K1 bus as its event backbone — `create_poc_bus()` calls `BusFactory.create_local_ordered()`, all builders produce real `Envelope` instances, and the FSM + actors call `bus.publish()` / `bus.subscribe()` which match `IBus` exactly. The only gap is that **setup.py returns concrete types** (`LocalBus`, `LocalMailboxRouter`, `LocalMailbox`) instead of the protocol abstractions (`IBus`, `IMailboxRouter`, `IMailbox`), and the POC runs with **zero middleware** (no tracing, no topic validation, no metrics).
+
+### K1 Bus Protocol Surface (from `k1/bus/ports/`)
+
+| Protocol | Methods | File |
+|---|---|---|
+| `IBus` | `publish(Envelope) → None`, `subscribe(pattern, BusHandler) → SubscriptionHandle`, `unsubscribe(SubscriptionHandle) → bool` | `k1/bus/ports/bus.py` |
+| `IMailbox` | `receive(timeout_ms=0) → Optional[Envelope]`, `pending() → int` | `k1/bus/ports/mailbox.py` |
+| `IMailboxRouter` | `deliver(actor_id, Envelope) → None`, `register(actor_id, MailboxConfig?) → IMailbox`, `unregister(actor_id) → bool`, `registered_actors() → list[str]` | `k1/bus/ports/mailbox.py` |
+
+### POC → K1 Bus Type Mapping
+
+| POC concrete type | K1 protocol | Used in | Change needed |
+|---|---|---|---|
+| `LocalBus` (type hint) | `IBus` | `setup.py` return type, `main.py` | Change return type `→ IBus` |
+| `LocalMailboxRouter` (type hint) | `IMailboxRouter` | `setup.py` return type, `main.py` | Change return type `→ IMailboxRouter` |
+| `LocalMailbox` (type hint) | `IMailbox` | `setup.py` return type, `main.py` | Change return type `→ IMailbox` |
+| `SessionBusAdapter(bus: LocalBus)` | Keep — adapter stays concrete | `setup.py` param type | Change param `bus: IBus` |
+| `bus: Any` | `bus: IBus` | `bootstrap.py` L85, `dispatcher.py` L423/L468 | Replace `Any` with `IBus` |
+| `router: Any` | `router: IMailboxRouter` | `bootstrap.py` L86 | Replace `Any` with `IMailboxRouter` |
+| `bus: Any` in `_DeltaEmitAdapter` | `bus: IBus` | `bootstrap.py` L1001 | Replace `Any` with `IBus` |
+
+### POC Files Importing `k1.bus.*` (complete inventory)
+
+| File | Imports | Role |
+|---|---|---|
+| `bus/setup.py` | `SessionBusAdapter`, `BusFactory`, `LocalBus`, `LocalMailbox`, `LocalMailboxRouter`, `MailboxConfig` | Factory wrappers — **PRIMARY EDIT TARGET** |
+| `bus/builders.py` | `Envelope`, `PayloadFormat`, `Priority` | 47 envelope builder functions — **NO CHANGE** (uses value types only) |
+| `bus/topics.py` | None from k1.bus | 47 topic constants — **NO CHANGE** |
+| `bus/deserialize.py` | None from k1.bus | Payload parser — **NO CHANGE** |
+| `actors/front.py` | `Envelope`, `IBus` | Front actor — already uses `IBus` protocol ✅ |
+| `actors/back.py` | `Envelope`, `IBus` | Back actor — already uses `IBus` protocol ✅ |
+| `actors/shared.py` | `Envelope` | Shared utilities — **NO CHANGE** |
+| `fsm/controller.py` | `Envelope`, `PayloadFormat`, `Priority`, `IBus`, `IMailboxRouter` | FSM — already uses protocols ✅ |
+| `fsm/dead_letter_consumer.py` | `Envelope`, `IBus` | Dead letter consumer — already uses `IBus` ✅ |
+| `fsm/front_lock.py` | `Envelope` | Front lock — **NO CHANGE** |
+| `fsm/turn_state.py` | `Envelope` | Turn tracking — **NO CHANGE** |
+| `kernel/bootstrap.py` | `Envelope`, `PayloadFormat`, `Priority` (lazy imports in closures) | Boot wiring — **EDIT: type hints from `Any` → protocols** |
+| `main.py` | `BusFactory` (only for `--unordered` fallback) | POC entrypoint — **EDIT: type hints + return types** |
+| `tools/dispatcher.py` | None directly (uses `bus: Any`) | Tool dispatch — **EDIT: `Any` → `IBus`** |
+| `demo/iot_stubs.py` | `IBus` | IoT stubs — already uses `IBus` ✅ |
+| `demo/output_channel.py` | `Envelope`, `IBus` | Output channel — already uses `IBus` ✅ |
+| `demo/spinner.py` | `Envelope`, `IBus` | Spinner — already uses `IBus` ✅ |
+| `demo/web/app.py` | `Envelope` (lazy) | Web app — **NO CHANGE** |
+| `testing/harness/engine.py` | `Envelope` | Test engine — **NO CHANGE** (concrete types OK for test infra) |
 
 ### Epics
-<!-- TBD -->
 
-### Issues
-<!-- TBD -->
+#### E3.1 — Widen `setup.py` Return Types to Protocols
+
+Replace concrete type hints in `poc/k1_poc/bus/setup.py` with K1 protocol types so all downstream code receives protocol-typed objects.
+
+**E3.1.1** — Change `create_poc_bus()` return type from `LocalBus` to `IBus`
+- File: `poc/k1_poc/bus/setup.py` L54
+- Current: `def create_poc_bus(*, capture: bool = False) -> LocalBus:`
+- Target: `def create_poc_bus(*, capture: bool = False) -> IBus:`
+- Add import: `from k1.bus.ports.bus import IBus`
+- Internal implementation still calls `BusFactory.create_local_ordered()` — unchanged
+- NOTE: `create_poc_session_adapter(bus: LocalBus)` param type also widens to `IBus` (L88)
+
+**E3.1.2** — Change `create_poc_router()` return type from `LocalMailboxRouter` to `IMailboxRouter`
+- File: `poc/k1_poc/bus/setup.py` L76
+- Current: `def create_poc_router() -> LocalMailboxRouter:`
+- Target: `def create_poc_router() -> IMailboxRouter:`
+- Add import: `from k1.bus.ports.mailbox import IMailboxRouter`
+
+**E3.1.3** — Change `register_poc_actors()` return type from `tuple[LocalMailbox, LocalMailbox]` to `tuple[IMailbox, IMailbox]`
+- File: `poc/k1_poc/bus/setup.py` L107-108
+- Current: `def register_poc_actors(router: LocalMailboxRouter, ...) -> tuple[LocalMailbox, LocalMailbox]:`
+- Target: `def register_poc_actors(router: IMailboxRouter, ...) -> tuple[IMailbox, IMailbox]:`
+- Add import: `from k1.bus.ports.mailbox import IMailbox`
+
+**E3.1.4** — Remove unused concrete imports from `setup.py`
+- After E3.1.1-3, `LocalBus`, `LocalMailbox`, `LocalMailboxRouter` are only needed inside function bodies (factory returns them)
+- Move these imports inside function bodies or keep at module level with `# noqa: used by factory internals` comment
+- `MailboxConfig` stays — it's a value type used in `register_poc_actors`
+
+---
+
+#### E3.2 — Update `__init__.py` Re-exports
+
+Ensure `poc/k1_poc/bus/__init__.py` re-exports the K1 protocols alongside the POC setup functions.
+
+**E3.2.1** — Add protocol re-exports to `poc/k1_poc/bus/__init__.py`
+- Add: `from k1.bus.ports.bus import IBus, BusHandler, SubscriptionHandle`
+- Add: `from k1.bus.ports.mailbox import IMailbox, IMailboxRouter, MailboxConfig`
+- Add to `__all__`: `"IBus"`, `"IMailbox"`, `"IMailboxRouter"`, `"BusHandler"`, `"SubscriptionHandle"`, `"MailboxConfig"`
+- This lets other POC modules import bus protocols from `poc.k1_poc.bus` instead of reaching into `k1.bus.ports.*` directly
+
+---
+
+#### E3.3 — Widen Type Hints in `kernel/bootstrap.py` and `main.py`
+
+Replace `Any` type hints for bus/router/mailbox with protocol types.
+
+**E3.3.1** — Update `KernelConfig` type hints in `bootstrap.py`
+- File: `poc/k1_poc/kernel/bootstrap.py`
+- `bus: Any` (L85) → `bus: IBus`
+- `router: Any` (L86) → `router: IMailboxRouter`
+- `front_mailbox: Any` (L88) → `front_mailbox: IMailbox`
+- `back_mailbox: Any` (L89) → `back_mailbox: IMailbox`
+- Add imports: `from k1.bus.ports.bus import IBus` and `from k1.bus.ports.mailbox import IMailbox, IMailboxRouter`
+- NOTE: The `KernelRuntime` class also has `bus`, `router`, `front_mailbox`, `back_mailbox` fields — these are assigned from `KernelConfig` fields and should also be typed
+
+**E3.3.2** — Update `_DeltaEmitAdapter` type hint in `bootstrap.py`
+- File: `poc/k1_poc/kernel/bootstrap.py` L1001
+- `bus: Any = None` → `bus: IBus | None = None`
+- `self._bus` typed accordingly
+
+**E3.3.3** — Update `_build_delta_applicator` type hint in `bootstrap.py`
+- File: `poc/k1_poc/kernel/bootstrap.py` L899
+- `def _build_delta_applicator(session_state: Any, bus: Any)` → `bus: IBus`
+
+**E3.3.4** — Update `main.py` type hints
+- File: `poc/k1_poc/main.py`
+- Variables `bus`, `router`, `front_mailbox`, `back_mailbox` (L60-67) are currently untyped — add type annotations using protocols
+- Return type of `boot()` currently returns `dict` — consider adding typed `BootResult` dataclass or keep dict
+
+---
+
+#### E3.4 — Widen Type Hints in `tools/dispatcher.py`
+
+**E3.4.1** — Replace `bus: Any | None = None` with `bus: IBus | None = None`
+- File: `poc/k1_poc/tools/dispatcher.py` L423, L468 (in `create_front_dispatcher`, `create_back_dispatcher`)
+- Also check `ToolDispatcher.__init__` for `bus` param type
+- Add import: `from k1.bus.ports.bus import IBus`
+
+---
+
+#### E3.5 — Wire K1 Middleware (Optional but Recommended)
+
+The POC runs with zero middleware — no tracing, no topic validation, no metrics. K1 provides three ready-to-use middleware classes. Wiring them aligns POC with K1 production expectations.
+
+**E3.5.1** — Wire `TopicValidationMiddleware` in `create_poc_bus()`
+- File: `poc/k1_poc/bus/setup.py`
+- Create `TopicRegistry`, register all 47 `ALL_TOPICS`, build `TopicValidationMiddleware(registry)`
+- Pass as `middleware=MiddlewareChain([TopicValidationMiddleware(registry)])` to `BusFactory.create_local_ordered()`
+- Import: `from k1.bus.middleware import MiddlewareChain` + `from k1.bus.middleware.topic_validation import TopicRegistry, TopicValidationMiddleware`
+- NOTE: Topic validation is SOFT (warns but never drops) — safe to add without breaking tests
+
+**E3.5.2** — Wire `TracingMiddleware` (behind config flag)
+- Add `bus.tracing_enabled: bool = false` to `poc/k1_poc/config/defaults.yaml`
+- Conditionally prepend `TracingMiddleware(enabled=config.bus.tracing_enabled)` to middleware chain
+- Import: `from k1.bus.middleware.tracing import TracingMiddleware`
+
+**E3.5.3** — Wire `MetricsMiddleware` (behind config flag)
+- Add `bus.metrics_enabled: bool = false` to `poc/k1_poc/config/defaults.yaml`
+- Conditionally append `MetricsMiddleware(enabled=config.bus.metrics_enabled)` to middleware chain
+- Import: `from k1.bus.middleware.metrics import MetricsMiddleware`
+
+---
+
+#### E3.6 — Contract Tests
+
+Verify protocol compliance and ensure factory-produced instances satisfy protocols at runtime.
+
+**E3.6.1** — Protocol compliance test: `isinstance(bus, IBus)` ✅
+- File: `tests/poc/bus/test_bus_port_compliance.py` (new, ~60 tests)
+- Test `isinstance(create_poc_bus(), IBus)` — must pass (`IBus` is `@runtime_checkable`)
+- Test `isinstance(create_poc_router(), IMailboxRouter)` — must pass
+- Test `isinstance(mailbox, IMailbox)` for registered actor mailbox
+- Test all 3 `IBus` methods work through protocol reference
+- Test all 4 `IMailboxRouter` methods work through protocol reference
+- Test all 2 `IMailbox` methods work through protocol reference
+
+**E3.6.2** — Middleware integration test
+- Test `create_poc_bus()` with topic validation middleware: publish known topic → no warning; publish unknown topic → warning logged
+- Test middleware chain processes envelopes without dropping
+- Test TracingMiddleware and MetricsMiddleware are no-ops when disabled
+
+**E3.6.3** — Regression: existing bus tests still green
+- Run full `tests/poc/bus/` test suite — must be 100% green
+- Run full `tests/k1/bus/` test suite — must be 100% green (K1 bus unchanged)
+
+---
+
+#### E3.7 — Full Suite Green + Tag
+
+**E3.7.1** — Run full test suite (3,261 tests)
+- All POC tests must pass — type narrowing should be transparent
+- Zero test changes expected for actors/FSM/react (they already use `IBus` / `IMailboxRouter`)
+
+**E3.7.2** — Git tag `m3-ibusport-complete`
+
+### Structural Gap Analysis
+
+| Aspect | POC Current | K1 Bus Design | Gap | Resolution |
+|---|---|---|---|---|
+| Type hints | Mixed: actors use `IBus`/`IMailboxRouter`, but setup.py and bootstrap use concrete types or `Any` | All protocols: `IBus`, `IMailbox`, `IMailboxRouter` | **SMALL** — surface-level type annotations | E3.1 + E3.3 + E3.4 |
+| Factory | `BusFactory.create_local_ordered()` | Same factory, same config | **NONE** — already aligned | — |
+| Envelope | Real `Envelope` with `Priority`, `PayloadFormat.JSON` | Same `Envelope` | **NONE** — fully aligned | — |
+| Topics | 47 topic constants, priority sets, subscription sets | TimingConfig has 18 prefix rules | **NONE** — topics map to timing rules | — |
+| Middleware | Zero — no tracing, no validation, no metrics | 3 middleware: tracing, topic validation, metrics | **OPTIONAL** — K1 provides them, POC doesn't use | E3.5 (behind flags) |
+| Builders | 47 builder functions producing typed Envelopes | K1 has no builder layer (consumers build envelopes directly) | **POC-SPECIFIC** — builders stay in concierge | — |
+| TimingChain | Via factory (implicit `default_timing_config()`) | Same `TimingChain` + `TimingConfig` | **NONE** — fully aligned | — |
+| Mailbox routing | `front_half` / `back_half` actors via `register_poc_actors()` | Same `IMailboxRouter.register()` API | **NONE** — fully aligned | — |
+| Rust backend | `backend="python"` forced | `backend="auto"` prefers Rust | **DEFERRED** — Rust parity is separate | — |
+| `SessionBusAdapter` | `SessionBusAdapter(bus: LocalBus)` wrapping concrete type | Same adapter class in `k1/bus/adapters/` | **SMALL** — widen param type | E3.1.1 |
+| `FabricBusAdapter` | Not used in POC | Available in `k1/bus/adapters/` | **DEFERRED** — M6 Fabric wiring | — |
 
 ---
 
