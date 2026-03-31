@@ -38,6 +38,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from k1.fabric.types import CapabilityRequest, CapabilityResult
+from poc.k1_poc.fabric.ports import IFabricPort
 from poc.k1_poc.sessionstate.ports.writer import BatchRequest, MutationRequest
 from poc.k1_poc.task.complexity import ComplexityTier
 from poc.k1_poc.task.dispatch import TaskDispatch
@@ -89,11 +91,12 @@ class ToolContext:
     active_device_id: str | None = None  # M5 E5.5.6: device that triggered the current turn
     hil_coordinator: Any = None  # M6 E6.1.3: HILCoordinator for L2 invoke_capability blocking
     active_task_id: str | None = None  # M6 E6.1.3: task_id for per-task L2 checks
+    fabric_port: IFabricPort | None = None  # M2: typed K1 Fabric port (replaces 4 callbacks below)
     recall_fn: Callable | None = None
-    capability_fn: Callable | None = None
-    invoke_fn: Callable | None = None
-    fabric_fn: Callable | None = None
-    workflow_fn: Callable | None = None
+    capability_fn: Callable | None = None  # deprecated: use fabric_port
+    invoke_fn: Callable | None = None  # deprecated: use fabric_port
+    fabric_fn: Callable | None = None  # deprecated: use fabric_port
+    workflow_fn: Callable | None = None  # deprecated: use fabric_port
     capability_cache: dict | None = None  # Per-session cache for discover_capabilities results
 
 
@@ -1071,6 +1074,44 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
         )
         return ctx.capability_cache[cache_key]
 
+    # M2: K1 Fabric port path (preferred)
+    if ctx.fabric_port is not None:
+        try:
+            retrieval = await ctx.fabric_port.discover_capabilities(
+                intent=intent,
+                domain=[domain] if domain else None,
+                top_k=10,
+            )
+            caps = []
+            for sc in retrieval.capabilities:
+                cap_dict = {
+                    "name": sc.contract.name if sc.contract else "",
+                    "description": sc.contract.description if sc.contract else "",
+                    "domain": sc.contract.domain[0] if sc.contract and sc.contract.domain else "",
+                    "score": sc.score,
+                }
+                caps.append(cap_dict)
+            data = {"capabilities": caps, "count": len(caps)}
+            if not caps:
+                logger.warning(
+                    "discover_capabilities: no match for intent=%s domain=%s",
+                    intent[:60],
+                    domain,
+                )
+            tool_result = ToolResult(
+                tool_name="discover_capabilities",
+                status="ok",
+                data=data,
+            )
+            ctx.capability_cache[cache_key] = tool_result
+            return tool_result
+        except Exception as e:
+            return ToolResult(
+                tool_name="discover_capabilities",
+                status="error",
+                error=str(e),
+            )
+
     if ctx.capability_fn:
         try:
             result = ctx.capability_fn(intent, domain, constraints)
@@ -1220,6 +1261,38 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
 
     start_ms = int(time.time() * 1000)
 
+    # M2: K1 Fabric port path (preferred)
+    if ctx.fabric_port is not None:
+        try:
+            k1_request = CapabilityRequest(
+                capability_name=capability_name,
+                params=params,
+                session_id=session_id or "",
+                trace_id=ctx.cognitive_trace_id or "",
+                caller="concierge",
+                caller_id=f"concierge.{ctx.actor}",
+            )
+            k1_result = await ctx.fabric_port.execute(k1_request)
+            duration = int(time.time() * 1000) - start_ms
+            return ToolResult(
+                tool_name="invoke_capability",
+                status="ok" if k1_result.success else "error",
+                error=k1_result.error.message if k1_result.error else None,
+                data={
+                    "result": k1_result.data or {},
+                    "duration_ms": duration,
+                    "status": "success" if k1_result.success else "error",
+                },
+            )
+        except Exception as e:
+            duration = int(time.time() * 1000) - start_ms
+            return ToolResult(
+                tool_name="invoke_capability",
+                status="error",
+                error=str(e),
+                data={"duration_ms": duration, "status": "error"},
+            )
+
     if ctx.invoke_fn:
         try:
             invoke_result = ctx.invoke_fn(capability_name, params, session_id)
@@ -1355,7 +1428,7 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
 
 
 @_register("spawn_via_fabric")
-def execute_spawn_via_fabric(args: dict, ctx: ToolContext) -> ToolResult:
+async def execute_spawn_via_fabric(args: dict, ctx: ToolContext) -> ToolResult:
     """Spawn a specialized agent via K0 Agent Fabric.
 
     Delegates to ctx.fabric_fn if available (production).
@@ -1372,6 +1445,34 @@ def execute_spawn_via_fabric(args: dict, ctx: ToolContext) -> ToolResult:
             status="error",
             error="agent_type and task are required",
         )
+
+    # M2: K1 Fabric port path (preferred)
+    if ctx.fabric_port is not None:
+        try:
+            k1_request = CapabilityRequest(
+                capability_name=f"agent.{agent_type}",
+                params={
+                    "task": task,
+                    "constraints": constraints,
+                    "capabilities_needed": capabilities_needed,
+                },
+                trace_id=ctx.cognitive_trace_id or "",
+                caller="concierge",
+                caller_id=f"concierge.{ctx.actor}",
+            )
+            k1_result = await ctx.fabric_port.execute(k1_request)
+            return ToolResult(
+                tool_name="spawn_via_fabric",
+                status="ok" if k1_result.success else "error",
+                error=k1_result.error.message if k1_result.error else None,
+                data=k1_result.data or {},
+            )
+        except Exception as e:
+            return ToolResult(
+                tool_name="spawn_via_fabric",
+                status="error",
+                error=str(e),
+            )
 
     if ctx.fabric_fn:
         try:
@@ -1402,7 +1503,7 @@ def execute_spawn_via_fabric(args: dict, ctx: ToolContext) -> ToolResult:
 
 
 @_register("execute_workflow")
-def execute_execute_workflow(args: dict, ctx: ToolContext) -> ToolResult:
+async def execute_execute_workflow(args: dict, ctx: ToolContext) -> ToolResult:
     """Execute a predefined workflow by ID.
 
     Delegates to ctx.workflow_fn if available (production).
@@ -1418,6 +1519,31 @@ def execute_execute_workflow(args: dict, ctx: ToolContext) -> ToolResult:
             status="error",
             error="workflow_id is required",
         )
+
+    # M2: K1 Fabric port path (preferred)
+    if ctx.fabric_port is not None:
+        try:
+            k1_request = CapabilityRequest(
+                capability_name=f"workflow.{workflow_id}",
+                params=params,
+                timeout_ms=timeout_ms,
+                trace_id=ctx.cognitive_trace_id or "",
+                caller="concierge",
+                caller_id=f"concierge.{ctx.actor}",
+            )
+            k1_result = await ctx.fabric_port.execute(k1_request)
+            return ToolResult(
+                tool_name="execute_workflow",
+                status="ok" if k1_result.success else "error",
+                error=k1_result.error.message if k1_result.error else None,
+                data=k1_result.data or {},
+            )
+        except Exception as e:
+            return ToolResult(
+                tool_name="execute_workflow",
+                status="error",
+                error=str(e),
+            )
 
     if ctx.workflow_fn:
         try:

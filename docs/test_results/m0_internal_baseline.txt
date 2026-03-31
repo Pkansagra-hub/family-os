@@ -1,0 +1,349 @@
+[1m============================= test session starts =============================[0m
+platform win32 -- Python 3.13.7, pytest-8.4.2, pluggy-1.6.0 -- C:\Users\princ\AppData\Local\Programs\Python\Python313\python.exe
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: D:\familyos
+configfile: pyproject.toml
+plugins: anyio-4.12.1, hypothesis-6.140.2, asyncio-1.2.0, clarity-1.0.1, cov-7.0.0, emoji-0.2.0, sugar-1.1.1, xdist-3.8.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+[1mcollecting ... [0mcollected 207 items
+
+poc/k1_poc/testing/harness/test_arbiter.py::TestArbiterDecisionTable::test_red_safety_cancels_all [32mPASSED[0m[33m [  0%][0m
+poc/k1_poc/testing/harness/test_arbiter.py::TestArbiterDecisionTable::test_cancel_intent_with_inflight [32mPASSED[0m[33m [  0%][0m
+poc/k1_poc/testing/harness/test_arbiter.py::TestArbiterDecisionTable::test_cancel_intent_no_inflight [32mPASSED[0m[33m [  1%][0m
+poc/k1_poc/testing/harness/test_arbiter.py::TestArbiterDecisionTable::test_no_inflight_parallel_new [32mPASSED[0m[33m [  1%][0m
+poc/k1_poc/testing/harness/test_arbiter.py::TestArbiterDecisionTable::test_inflight_present_parallel_new [32mPASSED[0m[33m [  2%][0m
+poc/k1_poc/testing/harness/test_arbiter.py::TestArbiterDecisionTable::test_defer_pattern [32mPASSED[0m[33m [  2%][0m
+poc/k1_poc/testing/harness/test_arbiter.py::TestArbiterDecisionTable::test_result_has_routing_metadata [32mPASSED[0m[33m [  3%][0m
+poc/k1_poc/testing/harness/test_arbiter.py::TestArbiterSystemLevel::test_interrupt_during_task [31mFAILED[0m[31m [  3%][0m
+poc/k1_poc/testing/harness/test_arbiter.py::TestArbiterSystemLevel::test_simple_turn_no_arbiter [31mFAILED[0m[31m [  4%][0m
+poc/k1_poc/testing/harness/test_delta.py::TestWriterRegistry::test_front_llm_cannot_write_history [32mPASSED[0m[31m [  4%][0m
+poc/k1_poc/testing/harness/test_delta.py::TestWriterRegistry::test_fsm_can_write_history [32mPASSED[0m[31m [  5%][0m
+poc/k1_poc/testing/harness/test_delta.py::TestWriterRegistry::test_phase1_can_write_control [32mPASSED[0m[31m [  5%][0m
+poc/k1_poc/testing/harness/test_delta.py::TestWriterRegistry::test_fsm_can_write_task_state [32mPASSED[0m[31m [  6%][0m
+poc/k1_poc/testing/harness/test_delta.py::TestWriterRegistry::test_unauthorized_write_rejected [32mPASSED[0m[31m [  6%][0m
+poc/k1_poc/testing/harness/test_delta.py::TestSessionDelta::test_create_set_delta [32mPASSED[0m[31m [  7%][0m
+poc/k1_poc/testing/harness/test_delta.py::TestSessionDelta::test_create_append_delta [32mPASSED[0m[31m [  7%][0m
+poc/k1_poc/testing/harness/test_delta.py::TestDeltaAggregator::test_collect_and_flush [32mPASSED[0m[31m [  8%][0m
+poc/k1_poc/testing/harness/test_delta.py::TestDeltaAggregator::test_dedup_same_section_key [32mPASSED[0m[31m [  8%][0m
+poc/k1_poc/testing/harness/test_delta.py::TestDeltaAggregator::test_empty_flush_is_noop [32mPASSED[0m[31m [  9%][0m
+poc/k1_poc/testing/harness/test_e2e.py::TestE2EHappyPath::test_greeting_turn [31mFAILED[0m[31m [  9%][0m
+poc/k1_poc/testing/harness/test_e2e.py::TestE2EHappyPath::test_factual_question [31mFAILED[0m[31m [ 10%][0m
+poc/k1_poc/testing/harness/test_e2e.py::TestE2EHappyPath::test_multi_turn_context_preserved [31mFAILED[0m[31m [ 10%][0m
+poc/k1_poc/testing/harness/test_e2e.py::TestE2ETemporal::test_time_awareness [31mFAILED[0m[31m [ 11%][0m
+poc/k1_poc/testing/harness/test_e2e.py::TestE2ELedger::test_ledger_records_turn [31mFAILED[0m[31m [ 11%][0m
+poc/k1_poc/testing/harness/test_e2e.py::TestE2EResilience::test_empty_input [32mPASSED[0m[31m [ 12%][0m
+poc/k1_poc/testing/harness/test_e2e.py::TestE2EResilience::test_very_long_input [32mPASSED[0m[31m [ 12%][0m
+poc/k1_poc/testing/harness/test_e2e.py::TestE2EResilience::test_rapid_fire_inputs [32mPASSED[0m[31m [ 13%][0m
+poc/k1_poc/testing/harness/test_e2e.py::TestE2EBusTopology::test_event_sequence_basic_turn [31mFAILED[0m[31m [ 13%][0m
+poc/k1_poc/testing/harness/test_e2e.py::TestE2EBusTopology::test_no_orphan_events [31mFAILED[0m[31m [ 14%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestTransitionTable::test_listening_accepts_user_input [32mPASSED[0m[31m [ 14%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestTransitionTable::test_listening_allows_task_complete [32mPASSED[0m[31m [ 14%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestTransitionTable::test_companioning_accepts_task_complete [32mPASSED[0m[31m [ 15%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestTransitionTable::test_progressing_accepts_task_complete [32mPASSED[0m[31m [ 15%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestTransitionTable::test_all_states_handle_user_input [32mPASSED[0m[31m [ 16%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestTransitionTable::test_legal_transitions_are_consistent [32mPASSED[0m[31m [ 16%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestFSMWithComponentRig::test_initial_state_is_listening [32mPASSED[0m[31m [ 17%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestFSMWithComponentRig::test_turn_number_starts_at_zero [32mPASSED[0m[31m [ 17%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestFSMWithComponentRig::test_dead_letter_on_dispatch_in_listening [32mPASSED[0m[31m [ 18%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestFSMWithComponentRig::test_idempotency_dedup [32mPASSED[0m[31m [ 18%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestFSMSystemLevel::test_basic_turn_flow [31mFAILED[0m[31m [ 19%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestFSMSystemLevel::test_multi_turn_conversation [31mFAILED[0m[31m [ 19%][0m
+poc/k1_poc/testing/harness/test_fsm.py::TestFSMSystemLevel::test_greeting_completes_fast [31mFAILED[0m[31m [ 20%][0m
+poc/k1_poc/testing/harness/test_hitl.py::TestHILCoordinatorIsolated::test_handle_needs_human_creates_request [32mPASSED[0m[31m [ 20%][0m
+poc/k1_poc/testing/harness/test_hitl.py::TestHILCoordinatorIsolated::test_handle_user_response_resolves [32mPASSED[0m[31m [ 21%][0m
+poc/k1_poc/testing/harness/test_hitl.py::TestHILCoordinatorIsolated::test_suspension_limit_enforced [32mPASSED[0m[31m [ 21%][0m
+poc/k1_poc/testing/harness/test_hitl.py::TestHILCoordinatorIsolated::test_safety_band_escalation [32mPASSED[0m[31m [ 22%][0m
+poc/k1_poc/testing/harness/test_hitl.py::TestHILCoordinatorIsolated::test_get_pending_request [32mPASSED[0m[31m [ 22%][0m
+poc/k1_poc/testing/harness/test_hitl.py::TestHILCoordinatorIsolated::test_cleanup_task [32mPASSED[0m[31m [ 23%][0m
+poc/k1_poc/testing/harness/test_hitl.py::TestHITLSystemLevel::test_hitl_suspend_and_resume [31mFAILED[0m[31m [ 23%][0m
+poc/k1_poc/testing/harness/test_hitl.py::TestHITLSystemLevel::test_hitl_timeout_returns_to_listening [32mPASSED[0m[31m [ 24%][0m
+poc/k1_poc/testing/harness/test_ledger_deadletter.py::TestLedgerWriter::test_append_event [32mPASSED[0m[31m [ 24%][0m
+poc/k1_poc/testing/harness/test_ledger_deadletter.py::TestLedgerWriter::test_append_multiple_events [32mPASSED[0m[31m [ 25%][0m
+poc/k1_poc/testing/harness/test_ledger_deadletter.py::TestLedgerWriter::test_read_by_type [32mPASSED[0m[31m [ 25%][0m
+poc/k1_poc/testing/harness/test_ledger_deadletter.py::TestLedgerWriter::test_session_scoping [32mPASSED[0m[31m [ 26%][0m
+poc/k1_poc/testing/harness/test_ledger_deadletter.py::TestLedgerWriter::test_idempotent_append [32mPASSED[0m[31m [ 26%][0m
+poc/k1_poc/testing/harness/test_ledger_deadletter.py::TestDeadLetter::test_task_dispatch_in_listening_is_dead_letter [32mPASSED[0m[31m [ 27%][0m
+poc/k1_poc/testing/harness/test_ledger_deadletter.py::TestDeadLetter::test_dead_letter_has_provenance [32mPASSED[0m[31m [ 27%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestPacedDelivery::test_pacing_strategy_none_returns_single_group [32mPASSED[0m[31m [ 28%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestPacedDelivery::test_stagger_creates_one_per_group [32mPASSED[0m[31m [ 28%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestPacedDelivery::test_group_by_domain [32mPASSED[0m[31m [ 28%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestPacedDelivery::test_priority_cascade [32mPASSED[0m[31m [ 29%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestPacedDelivery::test_empty_results_returns_empty_plan [32mPASSED[0m[31m [ 29%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestPacedDelivery::test_pacing_plan_dataclass_fields [32mPASSED[0m[31m [ 30%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestRecencyBiasDecay::test_apply_recency_decay_no_age [32mPASSED[0m[31m [ 30%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestRecencyBiasDecay::test_apply_recency_decay_one_turn [32mPASSED[0m[31m [ 31%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestRecencyBiasDecay::test_apply_recency_decay_five_turns [32mPASSED[0m[31m [ 31%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestRecencyBiasDecay::test_decay_clamps_to_zero [32mPASSED[0m[31m [ 32%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestRecencyBiasDecay::test_is_short_input_true [32mPASSED[0m[31m [ 32%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestRecencyBiasDecay::test_is_short_input_false [32mPASSED[0m[31m [ 33%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestRecencyBiasDecay::test_domain_overlap_decays_with_age [32mPASSED[0m[31m [ 33%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestRecencyBiasDecay::test_entity_overlap_decays_with_age [32mPASSED[0m[31m [ 34%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestAffectHardConstraints::test_crisis_has_hard_caps [32mPASSED[0m[31m [ 34%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestAffectHardConstraints::test_low_has_hard_caps [32mPASSED[0m[31m [ 35%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestAffectHardConstraints::test_neutral_has_no_hard_caps [32mPASSED[0m[31m [ 35%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestAffectHardConstraints::test_positive_allows_rich_vocabulary [32mPASSED[0m[31m [ 36%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestAffectHardConstraints::test_apply_affect_hard_constraints_caps_tokens [32mPASSED[0m[31m [ 36%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestAffectHardConstraints::test_apply_affect_no_caps_for_neutral [32mPASSED[0m[31m [ 37%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestAffectHardConstraints::test_apply_affect_respects_lower_existing_cap [32mPASSED[0m[31m [ 37%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestTrustAccumulator::test_initial_trust [32mPASSED[0m[31m [ 38%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestTrustAccumulator::test_approve_increases_trust [32mPASSED[0m[31m [ 38%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestTrustAccumulator::test_reject_decreases_trust [32mPASSED[0m[31m [ 39%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestTrustAccumulator::test_trust_clamps_to_bounds [32mPASSED[0m[31m [ 39%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestTrustAccumulator::test_auto_approve_only_low_risk [32mPASSED[0m[31m [ 40%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestTrustAccumulator::test_auto_approve_requires_threshold [32mPASSED[0m[31m [ 40%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestTrustAccumulator::test_dynamic_max_rounds_high_trust [32mPASSED[0m[31m [ 41%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestTrustAccumulator::test_dynamic_max_rounds_low_trust [32mPASSED[0m[31m [ 41%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestTrustAccumulator::test_snapshot_and_restore [32mPASSED[0m[31m [ 42%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestTrustAccumulator::test_timeout_no_trust_change [32mPASSED[0m[31m [ 42%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestProactiveScheduler::test_trigger_on_idle [32mPASSED[0m[31m [ 42%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestProactiveScheduler::test_no_trigger_below_threshold [32mPASSED[0m[31m [ 43%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestProactiveScheduler::test_suppress_on_crisis [32mPASSED[0m[31m [ 43%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestProactiveScheduler::test_suppress_on_hitl [32mPASSED[0m[31m [ 44%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestProactiveScheduler::test_max_per_session_cap [32mPASSED[0m[31m [ 44%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestProactiveScheduler::test_disabled_scheduler [32mPASSED[0m[31m [ 45%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestProactiveScheduler::test_context_tip_for_no_inflight [32mPASSED[0m[31m [ 45%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestProactiveScheduler::test_reset_clears_state [32mPASSED[0m[31m [ 46%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestEpisodicCompression::test_no_compression_below_threshold [32mPASSED[0m[31m [ 46%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestEpisodicCompression::test_compression_above_threshold [32mPASSED[0m[31m [ 47%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestEpisodicCompression::test_episodes_have_correct_structure [32mPASSED[0m[31m [ 47%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestEpisodicCompression::test_hitl_turns_preserved [32mPASSED[0m[31m [ 48%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestEpisodicCompression::test_safety_turns_preserved [32mPASSED[0m[31m [ 48%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestEpisodicCompression::test_prompt_block_format [32mPASSED[0m[31m [ 49%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestEpisodicCompression::test_build_compressed_context [32mPASSED[0m[31m [ 49%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_default_identity [32mPASSED[0m[31m [ 50%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_crisis_selects_supporter_role [32mPASSED[0m[31m [ 50%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_high_complexity_selects_expert [32mPASSED[0m[31m [ 51%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_inflight_selects_executor [32mPASSED[0m[31m [ 51%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_domain_expertise_tracking [32mPASSED[0m[31m [ 52%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_formality_decreases_over_turns [32mPASSED[0m[31m [ 52%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_user_info_passed_through [32mPASSED[0m[31m [ 53%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_prompt_block_contains_identity [32mPASSED[0m[31m [ 53%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_context_tags_multitasking [32mPASSED[0m[31m [ 54%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_context_tags_extended_session [32mPASSED[0m[31m [ 54%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_emotional_attunement [32mPASSED[0m[31m [ 55%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDynamicIdentity::test_role_adaptation_disabled [32mPASSED[0m[31m [ 55%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestResultClassification::test_awaited_result_within_3_turns [32mPASSED[0m[31m [ 56%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestResultClassification::test_awaited_but_old_becomes_background [32mPASSED[0m[31m [ 56%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestResultClassification::test_urgent_becomes_time_sensitive [32mPASSED[0m[31m [ 57%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestResultClassification::test_has_expiry_becomes_time_sensitive [32mPASSED[0m[31m [ 57%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestResultClassification::test_chained_becomes_follow_up [32mPASSED[0m[31m [ 57%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestResultClassification::test_low_urgency_becomes_informational [32mPASSED[0m[31m [ 58%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestResultClassification::test_no_context_defaults_to_background [32mPASSED[0m[31m [ 58%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestConversationFlowSignal::test_default_values [32mPASSED[0m[31m [ 59%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestConversationFlowSignal::test_from_session_state_no_ss [32mPASSED[0m[31m [ 59%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestConversationFlowSignal::test_turns_since_dispatch_clamps_to_zero [32mPASSED[0m[31m [ 60%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_d1_awaited_idle_awaiting_gives_direct_present [32mPASSED[0m[31m [ 60%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_d2_awaited_companioning_topic_match_gives_weave [32mPASSED[0m[31m [ 61%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_d3_awaited_companioning_no_topic_gives_direct [32mPASSED[0m[31m [ 61%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_d4_time_sensitive_gives_brief_notify [32mPASSED[0m[31m [ 62%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_d7_follow_up_deep_conversation_gives_defer [32mPASSED[0m[31m [ 62%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_d8_background_natural_pause_gives_inject [32mPASSED[0m[31m [ 63%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_d9_background_deep_conversation_gives_defer [32mPASSED[0m[31m [ 63%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_d12_informational_gives_defer [32mPASSED[0m[31m [ 64%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_d13_default_gives_weave [32mPASSED[0m[31m [ 64%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_suppress_emotional_gate_defers_non_critical [32mPASSED[0m[31m [ 65%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_suppress_gate_allows_time_sensitive [32mPASSED[0m[31m [ 65%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryStrategyEngine::test_weave_suppress_decision_defers [32mPASSED[0m[31m [ 66%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryOnNaturalPause::test_single_deferred_gives_brief_notify [32mPASSED[0m[31m [ 66%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryOnNaturalPause::test_few_deferred_gives_brief_each [32mPASSED[0m[31m [ 67%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryOnNaturalPause::test_many_deferred_gives_digest_inject [32mPASSED[0m[31m [ 67%][0m
+poc/k1_poc/testing/harness/test_opp_patterns.py::TestDeliveryOnNaturalPause::test_empty_deferred_gives_nothing [32mPASSED[0m[31m [ 68%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOppPipelineConstruction::test_default_config_all_enabled [32mPASSED[0m[31m [ 68%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOppPipelineConstruction::test_pipeline_creates_with_no_primitives [32mPASSED[0m[31m [ 69%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOppPipelineConstruction::test_pipeline_attach_trust_accumulator [32mPASSED[0m[31m [ 69%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOppPipelineConstruction::test_pipeline_attach_delivery_engine [32mPASSED[0m[31m [ 70%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOppPipelineConstruction::test_pipeline_config_disables_primitive [32mPASSED[0m[31m [ 70%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnClassify::test_classify_no_tasks_no_decay [32mPASSED[0m[31m [ 71%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnClassify::test_classify_short_input_detected [32mPASSED[0m[31m [ 71%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnClassify::test_classify_with_active_tasks [32mPASSED[0m[31m [ 71%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnClassify::test_classify_disabled_returns_empty [32mPASSED[0m[31m [ 72%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnPrePromptBuild::test_no_primitives_returns_empty [32mPASSED[0m[31m [ 72%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnPrePromptBuild::test_dynamic_identity_attached [32mPASSED[0m[31m [ 73%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnPrePromptBuild::test_episodic_compressor_attached [32mPASSED[0m[31m [ 73%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnPrePromptBuild::test_disabled_identity_skips [32mPASSED[0m[31m [ 74%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnPreLlmCall::test_neutral_affect_no_hard_caps [32mPASSED[0m[31m [ 74%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnPreLlmCall::test_crisis_affect_has_caps [32mPASSED[0m[31m [ 75%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnPreLlmCall::test_disabled_returns_defaults [32mPASSED[0m[31m [ 75%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnTaskComplete::test_no_engine_returns_default [32mPASSED[0m[31m [ 76%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnTaskComplete::test_with_engine_classifies_result [32mPASSED[0m[31m [ 76%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnTaskComplete::test_disabled_returns_default [32mPASSED[0m[31m [ 77%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnHitlOutcome::test_approve_increases_trust [32mPASSED[0m[31m [ 77%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnHitlOutcome::test_reject_decreases_trust [32mPASSED[0m[31m [ 78%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnHitlOutcome::test_no_accumulator_is_noop [32mPASSED[0m[31m [ 78%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnPreInvoke::test_low_trust_no_auto_approve [32mPASSED[0m[31m [ 79%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnPreInvoke::test_high_trust_auto_approves_low_risk [32mPASSED[0m[31m [ 79%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnPreInvoke::test_no_accumulator_returns_defaults [32mPASSED[0m[31m [ 80%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnPreInvoke::test_dynamic_rounds_adjusts_with_trust [32mPASSED[0m[31m [ 80%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnIdleTick::test_no_scheduler_returns_no_trigger [32mPASSED[0m[31m [ 81%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnIdleTick::test_disabled_returns_no_trigger [32mPASSED[0m[31m [ 81%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnWeaveFlush::test_single_result_no_pacing [32mPASSED[0m[31m [ 82%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnWeaveFlush::test_multiple_results_triggers_pacing [32mPASSED[0m[31m [ 82%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnWeaveFlush::test_large_batch_uses_priority_cascade [32mPASSED[0m[31m [ 83%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnWeaveFlush::test_disabled_returns_no_pacing [32mPASSED[0m[31m [ 83%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnNaturalPause::test_no_engine_returns_empty [32mPASSED[0m[31m [ 84%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestOnNaturalPause::test_with_engine_returns_decisions [32mPASSED[0m[31m [ 84%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestStatus::test_full_status_with_all_primitives [32mPASSED[0m[31m [ 85%][0m
+poc/k1_poc/testing/harness/test_opp_pipeline.py::TestStatus::test_status_shows_config_flags [32mPASSED[0m[31m [ 85%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestFrontLock::test_initial_release_returns_none [32mPASSED[0m[31m [ 85%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestFrontLock::test_try_deliver_accepts_first [32mPASSED[0m[31m [ 86%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestFrontLock::test_try_deliver_rejects_while_busy [32mPASSED[0m[31m [ 86%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestFrontLock::test_release_clears_busy_when_empty [32mPASSED[0m[31m [ 87%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestFrontLock::test_clear_resets_state [32mPASSED[0m[31m [ 87%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestIdempotencyLedger::test_first_seen_returns_true [32mPASSED[0m[31m [ 88%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestIdempotencyLedger::test_second_seen_returns_false [32mPASSED[0m[31m [ 88%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestIdempotencyLedger::test_different_ids_not_duplicate [32mPASSED[0m[31m [ 89%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestIdempotencyLedger::test_contains_after_mark [32mPASSED[0m[31m [ 89%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestIdempotencyLedger::test_reset_clears_all [32mPASSED[0m[31m [ 90%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestTurnLock::test_initial_state_not_held [32mPASSED[0m[31m [ 90%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestTurnLock::test_acquire_holds_lock [32mPASSED[0m[31m [ 91%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestTurnLock::test_release_clears_lock [32mPASSED[0m[31m [ 91%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestTurnLock::test_double_acquire_fails [32mPASSED[0m[31m [ 92%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestStubPhase1Pipeline::test_stub_returns_result [32mPASSED[0m[31m [ 92%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestStubPhase1Pipeline::test_stub_result_has_intent [32mPASSED[0m[31m [ 93%][0m
+poc/k1_poc/testing/harness/test_phase1_frontlock.py::TestPhase1SystemLevel::test_phase1_writes_to_ss_before_front [31mFAILED[0m[31m [ 93%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestWeavePolicyDecisions::test_immediate_when_idle_and_listening [32mPASSED[0m[31m [ 94%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestWeavePolicyDecisions::test_immediate_when_critical [32mPASSED[0m[31m [ 94%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestWeavePolicyDecisions::test_batch_when_multiple_pending [32mPASSED[0m[31m [ 95%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestWeavePolicyDecisions::test_defer_when_user_typing [32mPASSED[0m[31m [ 95%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestWeavePolicyDecisions::test_suppress_when_emotional_gate_suppress_all [32mPASSED[0m[31m [ 96%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestWeavePolicyDecisions::test_digest_when_many_pending_and_idle [32mPASSED[0m[31m [ 96%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestWeavePolicyDecisions::test_decision_result_has_reasoning [32mPASSED[0m[31m [ 97%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestWeavePolicyDecisions::test_decision_result_has_window_ms [32mPASSED[0m[31m [ 97%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestUserActivityTracker::test_initial_state_is_idle [32mPASSED[0m[31m [ 98%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestUserActivityTracker::test_typing_signal [32mPASSED[0m[31m [ 98%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestUserActivityTracker::test_idle_after_input [32mPASSED[0m[31m [ 99%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestUserActivityTracker::test_idle_ms_increases [32mPASSED[0m[31m [ 99%][0m
+poc/k1_poc/testing/harness/test_weave.py::TestWeaveSystemLevel::test_single_task_delivers_immediately [31mFAILED[0m[31m [100%][0m
+
+================================== FAILURES ===================================
+[31m[1m______________ TestArbiterSystemLevel.test_interrupt_during_task ______________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_arbiter.py[0m:143: in test_interrupt_during_task
+    [0m[94massert[39;49;00m returned, [33mf[39;49;00m[33m"[39;49;00m[33mFSM stuck in [39;49;00m[33m{[39;49;00mrig.fsm.state.name[33m}[39;49;00m[33m after interrupt[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: FSM stuck in DISPATCHING after interrupt[0m
+[1m[31mE   assert False[0m
+----------------------------- Captured log setup ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+------------------------------ Captured log call ------------------------------
+[33mWARNING [0m poc.k1_poc.fsm.controller:controller.py:945 FSM DEAD-LETTER: state=DISPATCHING topic=k1.session.user.input.v1 reason=user_input_invalid_state envelope_id=5
+[33mWARNING [0m poc.k1_poc.fsm.dead_letter_consumer:dead_letter_consumer.py:84 DeadLetterConsumer: reason=user_input_invalid_state state=DISPATCHING topic=k1.session.user.input.v1 envelope_id=5
+---------------------------- Captured log teardown ----------------------------
+[33mWARNING [0m poc.k1_poc.kernel.bootstrap:bootstrap.py:389 Session dead-letter summary: {'total_dead_letters': 1, 'counts_by_reason': {'user_input_invalid_state': 1}, 'counts_by_state': {'DISPATCHING': 1}, 'counts_by_topic': {'k1.session.user.input.v1': 1}, 'stored_events': 1, 'max_events': 1000}
+[31m[1m_____________ TestArbiterSystemLevel.test_simple_turn_no_arbiter ______________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_arbiter.py[0m:153: in test_simple_turn_no_arbiter
+    [0m[94massert[39;49;00m returned[90m[39;49;00m
+[1m[31mE   assert False[0m
+----------------------------- Captured log setup ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m_____________________ TestE2EHappyPath.test_greeting_turn _____________________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_e2e.py[0m:48: in test_greeting_turn
+    [0m[94massert[39;49;00m returned, [33mf[39;49;00m[33m"[39;49;00m[33mFSM stuck in [39;49;00m[33m{[39;49;00mrig.fsm.state.name[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: FSM stuck in DISPATCHING[0m
+[1m[31mE   assert False[0m
+------------------------------ Captured log call ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m___________________ TestE2EHappyPath.test_factual_question ____________________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_e2e.py[0m:58: in test_factual_question
+    [0m[94massert[39;49;00m returned, [33mf[39;49;00m[33m"[39;49;00m[33mFSM stuck in [39;49;00m[33m{[39;49;00mrig.fsm.state.name[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: FSM stuck in DISPATCHING[0m
+[1m[31mE   assert False[0m
+------------------------------ Captured log call ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m_____________ TestE2EHappyPath.test_multi_turn_context_preserved ______________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_e2e.py[0m:79: in test_multi_turn_context_preserved
+    [0m[94massert[39;49;00m ok1[90m[39;49;00m
+[1m[31mE   assert False[0m
+------------------------------ Captured log call ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m_____________________ TestE2ETemporal.test_time_awareness _____________________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_e2e.py[0m:106: in test_time_awareness
+    [0m[94massert[39;49;00m returned[90m[39;49;00m
+[1m[31mE   assert False[0m
+------------------------------ Captured log call ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m___________________ TestE2ELedger.test_ledger_records_turn ____________________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_e2e.py[0m:135: in test_ledger_records_turn
+    [0m[94massert[39;49;00m returned[90m[39;49;00m
+[1m[31mE   assert False[0m
+------------------------------ Captured log call ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m______________ TestE2EBusTopology.test_event_sequence_basic_turn ______________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_e2e.py[0m:206: in test_event_sequence_basic_turn
+    [0m[94massert[39;49;00m returned[90m[39;49;00m
+[1m[31mE   assert False[0m
+------------------------------ Captured log call ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m__________________ TestE2EBusTopology.test_no_orphan_events ___________________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_e2e.py[0m:217: in test_no_orphan_events
+    [0m[94massert[39;49;00m returned[90m[39;49;00m
+[1m[31mE   assert False[0m
+------------------------------ Captured log call ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m___________________ TestFSMSystemLevel.test_basic_turn_flow ___________________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_fsm.py[0m:135: in test_basic_turn_flow
+    [0m[94massert[39;49;00m returned, ([90m[39;49;00m
+[1m[31mE   AssertionError: FSM did not return to LISTENING within 60s. Current state: DISPATCHING[0m
+[1m[31mE   assert False[0m
+----------------------------- Captured log setup ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m_______________ TestFSMSystemLevel.test_multi_turn_conversation _______________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_fsm.py[0m:151: in test_multi_turn_conversation
+    [0m[94massert[39;49;00m ok1, [33mf[39;49;00m[33m"[39;49;00m[33mTurn 1 did not complete. State: [39;49;00m[33m{[39;49;00mrig.fsm.state.name[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: Turn 1 did not complete. State: DISPATCHING[0m
+[1m[31mE   assert False[0m
+----------------------------- Captured log setup ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m_______________ TestFSMSystemLevel.test_greeting_completes_fast _______________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_fsm.py[0m:173: in test_greeting_completes_fast
+    [0m[94massert[39;49;00m ok, [33mf[39;49;00m[33m"[39;49;00m[33mGreeting did not complete in 30s. State: [39;49;00m[33m{[39;49;00mrig.fsm.state.name[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: Greeting did not complete in 30s. State: DISPATCHING[0m
+[1m[31mE   assert False[0m
+----------------------------- Captured log setup ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m______________ TestHITLSystemLevel.test_hitl_suspend_and_resume _______________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_hitl.py[0m:200: in test_hitl_suspend_and_resume
+    [0m[94massert[39;49;00m returned, [33mf[39;49;00m[33m"[39;49;00m[33mFSM stuck in [39;49;00m[33m{[39;49;00mrig.fsm.state.name[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: FSM stuck in DISPATCHING[0m
+[1m[31mE   assert False[0m
+----------------------------- Captured log setup ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m_________ TestPhase1SystemLevel.test_phase1_writes_to_ss_before_front _________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_phase1_frontlock.py[0m:184: in test_phase1_writes_to_ss_before_front
+    [0m[94massert[39;49;00m returned, [33mf[39;49;00m[33m"[39;49;00m[33mFSM stuck in [39;49;00m[33m{[39;49;00mrig.fsm.state.name[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: FSM stuck in DISPATCHING[0m
+[1m[31mE   assert False[0m
+----------------------------- Captured log setup ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[31m[1m_________ TestWeaveSystemLevel.test_single_task_delivers_immediately __________[0m
+[1m[31mpoc\k1_poc\testing\harness\test_weave.py[0m:173: in test_single_task_delivers_immediately
+    [0m[94massert[39;49;00m returned, [33mf[39;49;00m[33m"[39;49;00m[33mFSM stuck in [39;49;00m[33m{[39;49;00mrig.fsm.state.name[33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: FSM stuck in DISPATCHING[0m
+[1m[31mE   assert False[0m
+----------------------------- Captured log setup ------------------------------
+[33mWARNING [0m familyos_ultrabert.pytorch_inference:pytorch_inference.py:68 Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+[36m[1m=========================== short test summary info ===========================[0m
+[31mFAILED[0m poc/k1_poc/testing/harness/test_arbiter.py::[1mTestArbiterSystemLevel::test_interrupt_during_task[0m - AssertionError: FSM stuck in DISPATCHING after interrupt
+assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_arbiter.py::[1mTestArbiterSystemLevel::test_simple_turn_no_arbiter[0m - assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_e2e.py::[1mTestE2EHappyPath::test_greeting_turn[0m - AssertionError: FSM stuck in DISPATCHING
+assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_e2e.py::[1mTestE2EHappyPath::test_factual_question[0m - AssertionError: FSM stuck in DISPATCHING
+assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_e2e.py::[1mTestE2EHappyPath::test_multi_turn_context_preserved[0m - assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_e2e.py::[1mTestE2ETemporal::test_time_awareness[0m - assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_e2e.py::[1mTestE2ELedger::test_ledger_records_turn[0m - assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_e2e.py::[1mTestE2EBusTopology::test_event_sequence_basic_turn[0m - assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_e2e.py::[1mTestE2EBusTopology::test_no_orphan_events[0m - assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_fsm.py::[1mTestFSMSystemLevel::test_basic_turn_flow[0m - AssertionError: FSM did not return to LISTENING within 60s. Current state: DISPATCHING
+assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_fsm.py::[1mTestFSMSystemLevel::test_multi_turn_conversation[0m - AssertionError: Turn 1 did not complete. State: DISPATCHING
+assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_fsm.py::[1mTestFSMSystemLevel::test_greeting_completes_fast[0m - AssertionError: Greeting did not complete in 30s. State: DISPATCHING
+assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_hitl.py::[1mTestHITLSystemLevel::test_hitl_suspend_and_resume[0m - AssertionError: FSM stuck in DISPATCHING
+assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_phase1_frontlock.py::[1mTestPhase1SystemLevel::test_phase1_writes_to_ss_before_front[0m - AssertionError: FSM stuck in DISPATCHING
+assert False
+[31mFAILED[0m poc/k1_poc/testing/harness/test_weave.py::[1mTestWeaveSystemLevel::test_single_task_delivers_immediately[0m - AssertionError: FSM stuck in DISPATCHING
+assert False
+[31m========== [31m[1m15 failed[0m, [32m192 passed[0m, [33m17 warnings[0m[31m in 1084.42s (0:18:04)[0m[31m ===========[0m

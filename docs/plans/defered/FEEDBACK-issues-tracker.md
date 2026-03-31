@@ -2,7 +2,7 @@
 
 **Epic**: Pipeline-Agnostic Feedback System
 **Plan**: [PLAN-feedback-pipeline-system.md](PLAN-feedback-pipeline-system.md)
-**Wiring Guide**: [k0/ports/FEEDBACK.md](../../k0/ports/FEEDBACK.md)
+**Wiring Guide**: [k0/ports/FEEDBACK.md](../../../k0/ports/FEEDBACK.md)
 **Status**: PLANNING
 **Created**: 2025-12-24
 
@@ -11,7 +11,7 @@
 ## Reality Check
 
 **Current Pipelines**: Only P02 (Write) and P08 (Embeddings) exist.
-**Future Pipelines**: When new pipelines are created, refer to [FEEDBACK.md](../../k0/ports/FEEDBACK.md) wiring guide.
+**Future Pipelines**: When new pipelines are created, refer to [FEEDBACK.md](../../../k0/ports/FEEDBACK.md) wiring guide.
 
 ---
 
@@ -295,7 +295,7 @@ M2 Implicit Signals        M3 Pipeline Integration
 
 When new pipelines (P03, P04, ..., P20+) are created:
 
-1. **Read the wiring guide**: [k0/ports/FEEDBACK.md](../../k0/ports/FEEDBACK.md)
+1. **Read the wiring guide**: [k0/ports/FEEDBACK.md](../../../k0/ports/FEEDBACK.md)
 2. **Register schema**: Add pipeline-specific schema to FeedbackSchemaRegistry
 3. **Subscribe to bus**: Add `feedback.signal.{pipeline_id}` topic
 4. **Implement handler**: Create `P{XX}FeedbackHandler`
@@ -307,6 +307,6 @@ When new pipelines (P03, P04, ..., P20+) are created:
 ## Related Documents
 
 - [PLAN-feedback-pipeline-system.md](PLAN-feedback-pipeline-system.md) — Full plan
-- [Idea-0001: Active Learning Loop](../architecture/ideas/0001-active-learning-loop.md) — Related idea
-- [Feedback Wiring Guide](../../k0/ports/FEEDBACK.md) — How to wire feedback for new pipelines
-- [K0 Source of Truth](../../architecture_diagrams/k0/k0_source_of_truth_postgresql.mmd) — Architecture reference
+- [Idea-0001: Active Learning Loop](../../architecture/ideas/0001-active-learning-loop.md) — Related idea
+- [Feedback Wiring Guide](../../../k0/ports/FEEDBACK.md) — How to wire feedback for new pipelines
+- [K0 Source of Truth](../../../architecture_diagrams/k0/k0_source_of_truth_postgresql.mmd) — Architecture reference

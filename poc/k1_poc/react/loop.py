@@ -21,16 +21,22 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from k1.model_hub.ports import IModelHubPort
+from k1.model_hub.types import CapabilityType, ChatPayload, ChatResult
+from k1.model_hub.types import FinishReason as K1FinishReason
+from k1.model_hub.types import HubChunk, HubRequest, HubResponse
+from k1.model_hub.types import Message as K1Message
+from k1.model_hub.types import ReasonResult, RequestConstraints, StructuredResult, ToolCallPayload
+from k1.model_hub.types import ToolCallResult as K1ToolCallResult
+from k1.model_hub.types import ToolCallResultSet
+from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 from poc.k1_poc.config import get_config
-from poc.k1_poc.llm.ports import IConciergeModelPort
 from poc.k1_poc.llm.types import (
-    Capability,
-    ConciergeModelRequest,
     ConciergeModelResponse,
     FinishReason,
     ModelMessage,
     StreamChunk,
-    ThinkingLevel,
+    ToolCallResult,
     ToolSchema,
 )
 from poc.k1_poc.llm.types import tool_result_to_message as _tool_result_to_msg
@@ -40,6 +46,98 @@ from poc.k1_poc.tools.dispatcher import ToolDispatcher
 from poc.k1_poc.tools.result_protocol import ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+# =========================================================================
+# K1 ↔ POC Type Conversion Helpers (M1 E1.5 — minimal-diff bridge layer)
+# =========================================================================
+
+
+def _to_k1_messages(msgs: list[ModelMessage]) -> list[K1Message]:
+    """Convert POC ModelMessages to K1 Messages for HubRequest payloads."""
+    out: list[K1Message] = []
+    for m in msgs:
+        tc = None
+        if m.tool_calls:
+            tc = [
+                K1ToolCallResult(id=c.id, name=c.name, arguments=c.arguments) for c in m.tool_calls
+            ]
+        out.append(
+            K1Message(
+                role=m.role,
+                content=m.content,
+                tool_call_id=m.tool_call_id,
+                name=m.name,
+                tool_calls=tc,
+            )
+        )
+    return out
+
+
+def _to_k1_tools(tools: list[ToolSchema]) -> list[K1ToolDefinition]:
+    """Convert POC ToolSchemas to K1 ToolDefinitions for HubRequest payloads."""
+    return [
+        K1ToolDefinition(name=t.name, description=t.description, parameters=t.parameters)
+        for t in tools
+    ]
+
+
+def _unwrap_response(hub_resp: HubResponse) -> ConciergeModelResponse:
+    """Convert K1 HubResponse back to POC ConciergeModelResponse.
+
+    Allows all existing response field access (response.text,
+    response.has_tool_calls, etc.) to remain unchanged.
+    """
+    result = hub_resp.result
+    text = getattr(result, "text", "")
+    tool_calls: list[ToolCallResult] = []
+    json_output = None
+    thought_text = ""
+
+    if isinstance(result, ToolCallResultSet):
+        tool_calls = [
+            ToolCallResult(id=tc.id, name=tc.name, arguments=tc.arguments)
+            for tc in result.tool_calls
+        ]
+    elif isinstance(result, StructuredResult):
+        json_output = result.json_output
+    elif isinstance(result, ReasonResult):
+        thought_text = result.thinking
+
+    m = hub_resp.metadata
+    fr = (
+        m.finish_reason.value
+        if isinstance(m.finish_reason, K1FinishReason)
+        else str(m.finish_reason)
+    )
+    return ConciergeModelResponse(
+        text=text,
+        tool_calls=tool_calls,
+        json_output=json_output,
+        thought_text=thought_text,
+        tokens_in=m.usage.prompt_tokens,
+        tokens_out=m.usage.completion_tokens,
+        latency_ms=m.latency_ms,
+        model_id=m.model_id,
+        finish_reason=fr,
+    )
+
+
+def _unwrap_chunk(hub_chunk: HubChunk) -> StreamChunk:
+    """Convert K1 HubChunk to POC StreamChunk for on_stream callbacks."""
+    if hub_chunk.chunk_type == "done" and hub_chunk.response:
+        return StreamChunk(chunk_type="done", response=_unwrap_response(hub_chunk.response))
+    tc_partial = None
+    if hub_chunk.tool_call_partial:
+        tc = hub_chunk.tool_call_partial
+        tc_partial = ToolCallResult(id=tc.id, name=tc.name, arguments=tc.arguments)
+    return StreamChunk(
+        chunk_type=hub_chunk.chunk_type,
+        text=hub_chunk.text,
+        tool_call_partial=tc_partial,
+        thought_text=hub_chunk.thought_text,
+    )
+
 
 # =========================================================================
 # Max iterations constants (Epic 5.5)
@@ -166,39 +264,41 @@ def _result_to_dict(result: ToolResult) -> dict[str, Any]:
 
 
 async def _streaming_generate(
-    model: IConciergeModelPort,
-    request: ConciergeModelRequest,
+    model: IModelHubPort,
+    request: HubRequest,
     on_stream: Callable[[StreamChunk], Awaitable[None]],
 ) -> ConciergeModelResponse:
-    """Call model.generate_stream(), forward chunks, return final response.
+    """Call model.stream_execute(), forward chunks, return final response.
 
-    Consumes the async iterator from generate_stream(), forwards each
-    thinking/text chunk to the on_stream callback, and returns the
-    completed ConciergeModelResponse from the final "done" chunk.
+    Consumes the async iterator from stream_execute(), converts each
+    K1 HubChunk to POC StreamChunk, forwards to the on_stream callback,
+    and returns the completed ConciergeModelResponse (unwrapped from
+    the final "done" chunk's HubResponse).
 
-    Falls back to model.generate() if generate_stream() is not available
+    Falls back to model.execute() if stream_execute() is not available
     or raises an error.
     """
     try:
         response: ConciergeModelResponse | None = None
-        async for chunk in model.generate_stream(request):
+        async for hub_chunk in model.stream_execute(request):
+            chunk = _unwrap_chunk(hub_chunk)
             if chunk.chunk_type == "done":
                 response = chunk.response
             else:
                 await on_stream(chunk)
 
         if response is None:
-            logger.warning("generate_stream ended without done chunk, falling back")
-            return await model.generate(request)
+            logger.warning("stream_execute ended without done chunk, falling back")
+            return _unwrap_response(await model.execute(request))
 
         return response
 
     except (NotImplementedError, AttributeError):
-        logger.info("generate_stream not available, falling back to generate()")
-        return await model.generate(request)
+        logger.info("stream_execute not available, falling back to execute()")
+        return _unwrap_response(await model.execute(request))
     except Exception as exc:
-        logger.warning("generate_stream failed (%s), falling back to generate()", exc)
-        return await model.generate(request)
+        logger.warning("stream_execute failed (%s), falling back to execute()", exc)
+        return _unwrap_response(await model.execute(request))
 
 
 # =========================================================================
@@ -212,7 +312,7 @@ async def react_loop(
     messages: list[ModelMessage],
     tools: list[ToolSchema],
     max_iterations: int,
-    model: IConciergeModelPort,
+    model: IModelHubPort,
     tool_dispatcher: ToolDispatcher,
     on_text_response: Callable[[str], Awaitable[None]],
     cancellation_check: Callable[[], Awaitable[bool]],
@@ -337,21 +437,33 @@ async def react_loop(
                 iteration,
             )
 
-        request = ConciergeModelRequest(
-            capability=(
-                Capability.CHAT
-                if force_text
-                else (Capability.TOOL_CALL if tools else Capability.CHAT)
+        # Build K1 HubRequest (bridge translates to POC adapter internally)
+        _cap = (
+            CapabilityType.CHAT
+            if force_text
+            else (CapabilityType.TOOL_CALL if tools else CapabilityType.CHAT)
+        )
+        _tc = "none" if force_text else _resolve_tool_choice(iteration, actor, tools)
+        if _cap == CapabilityType.TOOL_CALL and effective_tools:
+            _payload = ToolCallPayload(
+                messages=_to_k1_messages(messages),
+                system_prompt=system_prompt,
+                tools=_to_k1_tools(effective_tools),
+                tool_choice=_tc,
+            )
+        else:
+            _payload = ChatPayload(
+                messages=_to_k1_messages(messages),
+                system_prompt=system_prompt,
+            )
+        request = HubRequest(
+            capability=_cap,
+            payload=_payload,
+            constraints=RequestConstraints(
+                max_tokens=65536,
+                consumer_id=f"concierge.{actor}",
             ),
-            system_prompt=system_prompt,
-            messages=messages,
-            tools=effective_tools if effective_tools else None,
-            tool_choice="none" if force_text else _resolve_tool_choice(iteration, actor, tools),
-            max_tokens=65536,
-            actor=actor,
-            scenario=scenario,
             trace_id=trace_id,
-            thinking=ThinkingLevel.LOW if actor == "front" else None,
         )
 
         # ---- LLM CALL (streaming on all Front iterations when on_stream provided) ----
@@ -364,9 +476,11 @@ async def react_loop(
                     timeout=_iter_timeout_s,
                 )
             else:
-                response = await asyncio.wait_for(
-                    model.generate(request),
-                    timeout=_iter_timeout_s,
+                response = _unwrap_response(
+                    await asyncio.wait_for(
+                        model.execute(request),
+                        timeout=_iter_timeout_s,
+                    )
                 )
         except asyncio.TimeoutError:
             logger.error(

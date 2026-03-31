@@ -30,6 +30,7 @@ from typing import Any
 
 from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
+from k1.model_hub.ports import IModelHubPort
 
 # Shared actor utilities (M3 E3.5)
 from poc.k1_poc.actors.shared import never_cancel as _never_cancel
@@ -43,7 +44,6 @@ from poc.k1_poc.bus.builders import (
     build_task_resume,
 )
 from poc.k1_poc.config import get_config
-from poc.k1_poc.llm.ports import IConciergeModelPort
 from poc.k1_poc.llm.types import ModelMessage
 from poc.k1_poc.llm.validator import LLMOutputValidator
 from poc.k1_poc.prompt.affect import compute_affect_band
@@ -654,7 +654,7 @@ def _extract_current_user_text(mode: PromptMode, envelope: Envelope) -> str:
 
 async def front_handler(
     envelope: Envelope,
-    model: IConciergeModelPort,
+    model: IModelHubPort,
     ss: Any,
     bus: IBus,
     tool_dispatcher: ToolDispatcher,
@@ -670,7 +670,7 @@ async def front_handler(
 
     Args:
         envelope: The incoming bus Envelope triggering this invocation.
-        model: LLM adapter implementing IConciergeModelPort.
+        model: LLM adapter implementing IModelHubPort.
         ss: SessionStateManager instance (duck typed for section access).
         bus: IBus instance for publishing response events.
         tool_dispatcher: Front ToolDispatcher for tool execution.

@@ -4,7 +4,7 @@
 **Status**: DRAFT
 **Created**: 2025-12-24
 **Authors**: K0 Architecture Team
-**Related**: [Idea-0001: Active Learning Loop](../architecture/ideas/0001-active-learning-loop.md)
+**Related**: [Idea-0001: Active Learning Loop](../../architecture/ideas/0001-active-learning-loop.md)
 
 ---
 
