@@ -17,10 +17,7 @@ import pytest
 from k1.bus.envelope import Envelope, Priority
 from k1.bus.middleware import Middleware, MiddlewareChain
 from k1.bus.middleware.metrics import MetricsMiddleware
-from k1.bus.middleware.topic_validation import (
-    TopicRegistry,
-    TopicValidationMiddleware,
-)
+from k1.bus.middleware.topic_validation import TopicRegistry, TopicValidationMiddleware
 from k1.bus.middleware.tracing import TracingMiddleware
 from k1.bus.ports.bus import IBus
 from k1.bus.ports.mailbox import IMailbox, IMailboxRouter
@@ -33,7 +30,6 @@ from poc.k1_poc.bus.setup import (
 )
 from poc.k1_poc.bus.topics import ALL_TOPICS
 from poc.k1_poc.config import get_config, reset_config
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -177,17 +173,13 @@ class TestIMailboxMethods:
 
     def test_pending_increments_after_deliver(self, router: IMailboxRouter):
         mailbox = router.register("count_actor")
-        env = Envelope(
-            topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE
-        )
+        env = Envelope(topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE)
         router.deliver("count_actor", env)
         assert mailbox.pending() == 1
 
     def test_receive_decrements_pending(self, router: IMailboxRouter):
         mailbox = router.register("recv_actor")
-        env = Envelope(
-            topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE
-        )
+        env = Envelope(topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE)
         router.deliver("recv_actor", env)
         mailbox.receive()
         assert mailbox.pending() == 0
@@ -249,14 +241,14 @@ class TestMiddlewareIntegration:
         """MiddlewareChain runs all middlewares in sequence."""
         registry = TopicRegistry()
         registry.register("k1.test.v1")
-        chain = MiddlewareChain([
-            TopicValidationMiddleware(registry),
-            TracingMiddleware(enabled=False),
-            MetricsMiddleware(enabled=False),
-        ])
-        env = Envelope(
-            topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE
+        chain = MiddlewareChain(
+            [
+                TopicValidationMiddleware(registry),
+                TracingMiddleware(enabled=False),
+                MetricsMiddleware(enabled=False),
+            ]
         )
+        env = Envelope(topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE)
         result = chain.process(env)
         assert result is not None
         assert result.topic == "k1.test.v1"
@@ -264,18 +256,14 @@ class TestMiddlewareIntegration:
     def test_tracing_noop_when_disabled(self):
         """TracingMiddleware is a no-op when disabled."""
         mw = TracingMiddleware(enabled=False)
-        env = Envelope(
-            topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE
-        )
+        env = Envelope(topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE)
         result = mw.process(env)
         assert result is env
 
     def test_metrics_noop_when_disabled(self):
         """MetricsMiddleware is a no-op when disabled."""
         mw = MetricsMiddleware(enabled=False)
-        env = Envelope(
-            topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE
-        )
+        env = Envelope(topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE)
         result = mw.process(env)
         assert result is env
 
@@ -404,9 +392,7 @@ class TestSetupRegression:
 
     def test_create_poc_bus_capture_mode(self):
         bus = create_poc_bus(capture=True)
-        env = Envelope(
-            topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE
-        )
+        env = Envelope(topic="k1.test.v1", payload=b"{}", priority=Priority.INTERACTIVE)
         bus.publish(env)
         assert len(bus.captured) == 1
 
@@ -448,14 +434,17 @@ class TestReExports:
 
     def test_ibus_importable(self):
         from poc.k1_poc.bus import IBus as IBus_  # noqa: F401
+
         assert IBus_ is IBus
 
     def test_imailbox_importable(self):
         from poc.k1_poc.bus import IMailbox as IMailbox_  # noqa: F401
+
         assert IMailbox_ is IMailbox
 
     def test_imailboxrouter_importable(self):
         from poc.k1_poc.bus import IMailboxRouter as IMailboxRouter_  # noqa: F401
+
         assert IMailboxRouter_ is IMailboxRouter
 
     def test_bushandler_importable(self):

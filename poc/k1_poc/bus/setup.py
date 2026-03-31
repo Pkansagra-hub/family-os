@@ -58,6 +58,7 @@ ACTOR_BACK: str = "back_half"  # V3 E0.2.3: kept for test_m01_e2e compat
 # M3 E3.5: Middleware chain builder
 # ---------------------------------------------------------------------------
 
+
 def _build_middleware_chain(cfg) -> MiddlewareChain | None:
     """Build a MiddlewareChain from bus config flags.
 
