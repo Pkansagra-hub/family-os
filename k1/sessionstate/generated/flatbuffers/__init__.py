@@ -12,8 +12,8 @@ This package provides zero-copy deserializable Python types for the
 SessionState kernel's 12-section tiered memory architecture.
 
 Usage:
-    from k1.sessionstate.generated.flatbuffers import SessionKernel
-    from k1.sessionstate.generated.flatbuffers import ControlSection, MetaSection
+    from poc.k1_poc.sessionstate.generated.flatbuffers import SessionKernel
+    from poc.k1_poc.sessionstate.generated.flatbuffers import ControlSection, MetaSection
 
 Performance:
     - HOT read: <100μs via zero-copy deserialization

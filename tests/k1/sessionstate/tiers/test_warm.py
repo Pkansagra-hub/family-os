@@ -89,9 +89,9 @@ class TestInitialization:
         tier = WarmTier(session_id="abc-123")
         assert tier.session_id == "abc-123"
 
-    def test_init_creates_all_4_sections(self, warm_tier: WarmTier):
-        """WarmTier initializes all 4 sections."""
-        assert len(warm_tier) == 4
+    def test_init_creates_all_5_sections(self, warm_tier: WarmTier):
+        """WarmTier initializes all 5 sections."""
+        assert len(warm_tier) == 5
 
     def test_all_expected_sections_present(self, warm_tier: WarmTier):
         """All expected section names are present."""
@@ -126,7 +126,7 @@ class TestProperties:
 
     def test_section_count(self, warm_tier: WarmTier):
         """section_count returns 4."""
-        assert warm_tier.section_count == 4
+        assert warm_tier.section_count == 5
 
 
 # =============================================================================
@@ -155,7 +155,7 @@ class TestSectionAccess:
     def test_get_all_sections(self, warm_tier: WarmTier):
         """get_all_sections returns all sections."""
         sections = warm_tier.get_all_sections()
-        assert len(sections) == 4
+        assert len(sections) == 5
         assert "telemetry" in sections
         assert "beliefs_history" in sections
         assert "history_recent" in sections
@@ -164,8 +164,14 @@ class TestSectionAccess:
     def test_get_section_names(self, warm_tier: WarmTier):
         """get_section_names returns all names."""
         names = warm_tier.get_section_names()
-        assert len(names) == 4
-        assert set(names) == {"telemetry", "beliefs_history", "history_recent", "persona"}
+        assert len(names) == 5
+        assert set(names) == {
+            "artifacts_warm",
+            "beliefs_history",
+            "history_recent",
+            "persona",
+            "telemetry",
+        }
 
     def test_dict_access(self, warm_tier: WarmTier):
         """Dict-like access works."""
@@ -186,11 +192,11 @@ class TestSectionAccess:
     def test_iteration(self, warm_tier: WarmTier):
         """Iteration over tier yields section names."""
         names = list(warm_tier)
-        assert len(names) == 4
+        assert len(names) == 5
 
     def test_len(self, warm_tier: WarmTier):
         """len() returns section count."""
-        assert len(warm_tier) == 4
+        assert len(warm_tier) == 5
 
 
 # =============================================================================
@@ -218,7 +224,7 @@ class TestSizeTracking:
     def test_get_section_sizes(self, warm_tier: WarmTier):
         """get_section_sizes returns all sizes."""
         sizes = warm_tier.get_section_sizes()
-        assert len(sizes) == 4
+        assert len(sizes) == 5
         for name in WARM_SECTION_NAMES:
             assert name in sizes
 
@@ -317,16 +323,16 @@ class TestEviction:
 
     def test_eviction_order_defined(self):
         """Eviction order is defined."""
-        assert len(EVICTION_ORDER) == 4
+        assert len(EVICTION_ORDER) == 5
         assert EVICTION_ORDER[0] == "telemetry"  # First to evict
         assert EVICTION_ORDER[-1] == "persona"  # Last to evict
 
     def test_eviction_priorities_defined(self):
         """Eviction priorities are defined."""
         assert EVICTION_PRIORITIES["telemetry"] == 1
-        assert EVICTION_PRIORITIES["beliefs_history"] == 2
-        assert EVICTION_PRIORITIES["history_recent"] == 3
-        assert EVICTION_PRIORITIES["persona"] == 4
+        assert EVICTION_PRIORITIES["beliefs_history"] == 3
+        assert EVICTION_PRIORITIES["history_recent"] == 4
+        assert EVICTION_PRIORITIES["persona"] == 5
 
     def test_get_evictable_sections(self, warm_tier: WarmTier):
         """get_evictable_sections returns correct list."""
@@ -472,7 +478,7 @@ class TestSerialization:
     def test_serialize_all(self, warm_tier: WarmTier):
         """serialize_all returns dict of bytes."""
         serialized = warm_tier.serialize_all()
-        assert len(serialized) == 4
+        assert len(serialized) == 5
         for name in WARM_SECTION_NAMES:
             assert name in serialized
             assert isinstance(serialized[name], bytes)
@@ -481,7 +487,7 @@ class TestSerialization:
         """deserialize_all restores sections."""
         # First serialize
         serialized = warm_tier.serialize_all()
-        assert len(serialized) == 4
+        assert len(serialized) == 5
 
         # Note: Full deserialization test requires from_flatbuffer
         # to work consistently across all sections.
@@ -530,7 +536,7 @@ class TestSnapshot:
         assert snapshot.budget_bytes == WARM_BUDGET_BYTES
         assert 0.0 <= snapshot.utilization_pct <= 1.0
         assert isinstance(snapshot.pressure, WarmPressureLevel)
-        assert len(snapshot.section_sizes) == 4
+        assert len(snapshot.section_sizes) == 5
         assert snapshot.timestamp_ms > 0
 
     def test_snapshot_to_dict(self, warm_tier: WarmTier):
@@ -547,7 +553,7 @@ class TestSnapshot:
         """get_statistics returns comprehensive stats."""
         stats = warm_tier.get_statistics()
         assert stats["tier"] == "warm"
-        assert stats["section_count"] == 4
+        assert stats["section_count"] == 5
         assert "sections" in stats
         assert "eviction_order" in stats
         assert stats["eviction_order"] == EVICTION_ORDER
@@ -565,7 +571,7 @@ class TestStringRepresentation:
         """__repr__ returns useful string."""
         repr_str = repr(warm_tier)
         assert "WarmTier" in repr_str
-        assert "sections=4" in repr_str
+        assert "sections=5" in repr_str
 
     def test_str(self, warm_tier: WarmTier):
         """__str__ returns readable string."""
@@ -592,7 +598,7 @@ class TestFactory:
         """create_warm_tier works with defaults."""
         tier = create_warm_tier()
         assert isinstance(tier, WarmTier)
-        assert len(tier) == 4
+        assert len(tier) == 5
 
 
 # =============================================================================
@@ -618,11 +624,11 @@ class TestConstants:
         """Section budgets sum to expected total."""
         total = sum(SECTION_BUDGETS.values())
         # 8 + 12 + 20 + 8 = 48KB
-        assert total == 48 * 1024
+        assert total == 56 * 1024
 
     def test_warm_section_names(self):
-        """WARM_SECTION_NAMES has all 4 sections."""
-        assert len(WARM_SECTION_NAMES) == 4
+        """WARM_SECTION_NAMES has all 5 sections."""
+        assert len(WARM_SECTION_NAMES) == 5
         assert "telemetry" in WARM_SECTION_NAMES
         assert "beliefs_history" in WARM_SECTION_NAMES
         assert "history_recent" in WARM_SECTION_NAMES

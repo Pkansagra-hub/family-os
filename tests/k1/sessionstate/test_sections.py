@@ -421,10 +421,10 @@ class TestHistoryActiveSection:
         section = HistoryActiveSection()
         assert section.tier == "hot"
 
-    def test_budget_is_8kb(self):
+    def test_budget_is_16kb(self):
         """Budget is 8192 bytes."""
         section = HistoryActiveSection()
-        assert section.budget_bytes == 8192
+        assert section.budget_bytes == 16384
 
     def test_can_evict_is_false(self):
         """HistoryActiveSection cannot be evicted."""
@@ -453,15 +453,15 @@ class TestHistoryActiveSection:
         assert recent[-1].turn_number == 5
 
     def test_max_turns_overflow_tracked(self):
-        """Section tracks overflow when exceeding MAX_TURNS (10)."""
+        """Section tracks overflow when exceeding MAX_TURNS (25)."""
         section = HistoryActiveSection()
-        for i in range(15):
+        for i in range(30):
             section.add_turn(f"Message {i}", f"Response {i}")
         # Section stores all turns, overflow is tracked separately
-        assert len(section._turns) == 15
+        assert len(section._turns) == 30
         assert section.has_overflow()
         overflow = section.get_overflow()
-        assert len(overflow) == 5  # 15 - 10 = 5 overflow turns
+        assert len(overflow) == 5  # 30 - 25 = 5 overflow turns
 
     def test_fifo_ordering(self):
         """Turns are in FIFO order."""

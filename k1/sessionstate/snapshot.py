@@ -35,8 +35,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional
 
 if TYPE_CHECKING:
-    from k1.sessionstate.tiers.hot import HotTier
-    from k1.sessionstate.tiers.warm import WarmTier
+    from poc.k1_poc.sessionstate.tiers.hot import HotTier
+    from poc.k1_poc.sessionstate.tiers.warm import WarmTier
+
+from poc.k1_poc.config import get_config
 
 from .sizetracker import (
     HOT_SECTIONS,
@@ -218,7 +220,7 @@ class SessionSnapshot:
         }
 
 
-# Thrash detection thresholds
+# Thrash detection thresholds (config-backed: sessionstate.thrash.*)
 THRASH_MILD_MIGRATIONS = 5
 THRASH_MILD_EVICTIONS = 2
 THRASH_MODERATE_MIGRATIONS = 10
@@ -226,7 +228,7 @@ THRASH_MODERATE_EVICTIONS = 5
 THRASH_SEVERE_MIGRATIONS = 20
 THRASH_SEVERE_EVICTIONS = 10
 
-# Rolling window for thrash detection (60 seconds)
+# Rolling window for thrash detection (config: sessionstate.thrash.window_ms)
 THRASH_WINDOW_MS = 60_000
 
 
@@ -515,14 +517,18 @@ class SnapshotAPI:
         # Determine severity
         severity = 0
         thrash_detected = False
+        _cfg_thrash = get_config().sessionstate.thrash
 
-        if migrations >= THRASH_SEVERE_MIGRATIONS or evictions >= THRASH_SEVERE_EVICTIONS:
+        if migrations >= _cfg_thrash.severe_migrations or evictions >= _cfg_thrash.severe_evictions:
             severity = 3
             thrash_detected = True
-        elif migrations >= THRASH_MODERATE_MIGRATIONS or evictions >= THRASH_MODERATE_EVICTIONS:
+        elif (
+            migrations >= _cfg_thrash.moderate_migrations
+            or evictions >= _cfg_thrash.moderate_evictions
+        ):
             severity = 2
             thrash_detected = True
-        elif migrations >= THRASH_MILD_MIGRATIONS or evictions >= THRASH_MILD_EVICTIONS:
+        elif migrations >= _cfg_thrash.mild_migrations or evictions >= _cfg_thrash.mild_evictions:
             severity = 1
             thrash_detected = True
 
@@ -554,9 +560,9 @@ class SnapshotAPI:
         self._prune_old_timestamps()
 
     def _prune_old_timestamps(self) -> None:
-        """Remove timestamps older than THRASH_WINDOW_MS."""
+        """Remove timestamps older than thrash window."""
         now_ms = int(time.time() * 1000)
-        cutoff = now_ms - THRASH_WINDOW_MS
+        cutoff = now_ms - get_config().sessionstate.thrash.window_ms
 
         # Prune migration timestamps
         while self._migration_timestamps and self._migration_timestamps[0] < cutoff:

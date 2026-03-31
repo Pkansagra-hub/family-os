@@ -50,7 +50,15 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Union
 
-from ..sections import BeliefsHistorySection, HistoryRecentSection, PersonaSection, TelemetrySection
+from poc.k1_poc.config import get_config
+
+from ..sections import (
+    ArtifactsWarmSection,
+    BeliefsHistorySection,
+    HistoryRecentSection,
+    PersonaSection,
+    TelemetrySection,
+)
 
 if TYPE_CHECKING:
     from ..local_cold import LocalColdArchive
@@ -59,11 +67,11 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# CONSTANTS
+# CONSTANTS (config-backed: sessionstate.tiers.*)
 # =============================================================================
 
 # Budget in bytes
-WARM_BUDGET_BYTES: int = 49152  # 48KB
+WARM_BUDGET_BYTES: int = 49152  # config: sessionstate.tiers.warm_budget_bytes
 
 # Section budgets
 SECTION_BUDGETS: Dict[str, int] = {
@@ -71,29 +79,33 @@ SECTION_BUDGETS: Dict[str, int] = {
     "beliefs_history": 12 * 1024,  # 12KB
     "history_recent": 20 * 1024,  # 20KB
     "persona": 8 * 1024,  # 8KB
+    "artifacts_warm": 8 * 1024,  # 8KB (config: artifacts_warm)
 }
 
 # Eviction order (first to evict first, by priority number)
 # Lower priority number = evict first
 EVICTION_ORDER: List[str] = [
     "telemetry",  # Priority 1 - first to evict
-    "beliefs_history",  # Priority 2
-    "history_recent",  # Priority 3
-    "persona",  # Priority 4 - last to evict
+    "artifacts_warm",  # Priority 2 - evict after telemetry
+    "beliefs_history",  # Priority 3
+    "history_recent",  # Priority 4
+    "persona",  # Priority 5 - last to evict
 ]
 
 # Eviction priorities (lower = evict first)
 EVICTION_PRIORITIES: Dict[str, int] = {
     "telemetry": 1,
-    "beliefs_history": 2,
-    "history_recent": 3,
-    "persona": 4,
+    "artifacts_warm": 2,
+    "beliefs_history": 3,
+    "history_recent": 4,
+    "persona": 5,
 }
 
 # Demotion acceptance mapping: HOT section -> WARM section
 DEMOTION_TARGETS: Dict[str, str] = {
     "beliefs_active": "beliefs_history",
     "history_active": "history_recent",
+    "task_artifacts": "artifacts_warm",
 }
 
 # All WARM section names
@@ -102,6 +114,7 @@ WARM_SECTION_NAMES: List[str] = [
     "beliefs_history",
     "history_recent",
     "persona",
+    "artifacts_warm",
 ]
 
 
@@ -114,7 +127,7 @@ class WarmPressureLevel(str, Enum):
     CRITICAL = "critical"  # >95%
 
 
-# Pressure thresholds
+# Pressure thresholds (config-backed: sessionstate.tiers.*_threshold_pct)
 NORMAL_THRESHOLD: float = 0.80
 ELEVATED_THRESHOLD: float = 0.90
 HIGH_THRESHOLD: float = 0.95
@@ -323,7 +336,7 @@ class WarmTier:
         print(snapshot.to_dict())
     """
 
-    BUDGET_BYTES: int = WARM_BUDGET_BYTES
+    BUDGET_BYTES: int = WARM_BUDGET_BYTES  # config: sessionstate.tiers.warm_budget_bytes
     TIER_NAME: str = "warm"
 
     __slots__ = (
@@ -353,17 +366,19 @@ class WarmTier:
         self._eviction_callback = eviction_callback
         self._created_at_ms = int(time.time() * 1000)
 
-        # Initialize all 4 sections
+        # Initialize all 5 sections
         self._sections: Dict[str, SectionType] = {
             "telemetry": TelemetrySection(),
             "beliefs_history": BeliefsHistorySection(),
             "history_recent": HistoryRecentSection(),
             "persona": PersonaSection(),
+            "artifacts_warm": ArtifactsWarmSection(),
         }
 
-        logger.debug(
-            "WarmTier initialized with %d sections (session=%s)",
+        logger.info(
+            "WarmTier initialized: %d sections, budget=%dKB (session=%s)",
             len(self._sections),
+            get_config().sessionstate.tiers.warm_budget_bytes // 1024,
             session_id[:8] if session_id else "none",
         )
 
@@ -541,11 +556,12 @@ class WarmTier:
             CRITICAL: >= 95%
         """
         util = self.get_utilization()
-        if util < NORMAL_THRESHOLD:
+        _cfg_t = get_config().sessionstate.tiers
+        if util < _cfg_t.normal_threshold_pct:
             return WarmPressureLevel.NORMAL
-        elif util < ELEVATED_THRESHOLD:
+        elif util < _cfg_t.elevated_threshold_pct:
             return WarmPressureLevel.ELEVATED
-        elif util < HIGH_THRESHOLD:
+        elif util < _cfg_t.critical_threshold_pct:
             return WarmPressureLevel.HIGH
         else:
             return WarmPressureLevel.CRITICAL
@@ -735,7 +751,7 @@ class WarmTier:
         if target_bytes == 0:
             # Calculate based on pressure
             util = self.get_utilization()
-            if util <= NORMAL_THRESHOLD:
+            if util <= get_config().sessionstate.tiers.normal_threshold_pct:
                 return []  # No eviction needed
             # Target getting back to 70% utilization
             current_size = self.get_total_size()

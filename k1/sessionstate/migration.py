@@ -57,6 +57,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol
 
+from poc.k1_poc.config import get_config
+
 from .sizetracker import (
     ALL_SECTIONS,
     HOT_SECTIONS,
@@ -74,23 +76,23 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# CONSTANTS
+# CONSTANTS (config-backed: sessionstate.migration.*)
 # =============================================================================
 
 # Maximum turns in history_active before demotion
-MAX_HISTORY_ACTIVE_TURNS: int = 10
+MAX_HISTORY_ACTIVE_TURNS: int = 10  # config: sessionstate.migration.max_history_active_turns
 
 # Compression threshold (turns 11-30 are compressed)
-COMPRESSION_TURN_THRESHOLD: int = 30
+COMPRESSION_TURN_THRESHOLD: int = 30  # config: sessionstate.migration.compression_turn_threshold
 
 # Target HOT utilization after pressure demotion
-TARGET_HOT_UTILIZATION: float = 0.70  # 70%
+TARGET_HOT_UTILIZATION: float = 0.70  # config: sessionstate.migration.target_hot_utilization
 
 # Minimum bytes to demote per pass
-MIN_DEMOTE_BYTES: int = 1024  # 1KB
+MIN_DEMOTE_BYTES: int = 1024  # config: sessionstate.migration.min_demote_bytes
 
 # Maximum demote iterations
-MAX_DEMOTE_ITERATIONS: int = 10
+MAX_DEMOTE_ITERATIONS: int = 10  # config: sessionstate.migration.max_demote_iterations
 
 
 class MigrationDirection(str, Enum):
@@ -459,7 +461,11 @@ class MigrationEngine:
         self._compress_fn = compress_fn
         self._summarize_fn = summarize_fn
 
-        logger.debug("MigrationEngine initialized for session %s", self._session_id[:8])
+        logger.info(
+            "MigrationEngine initialized (session=%s, pairs=%s)",
+            self._session_id[:8],
+            ", ".join(f"{k}->{v}" for k, v in MIGRATION_PAIRS.items()),
+        )
 
     # =========================================================================
     # VALIDATION HELPERS
@@ -754,7 +760,7 @@ class MigrationEngine:
         # Get turn number from metadata or key
         turn_number = item.metadata.get("turn_number", 0)
 
-        if turn_number > COMPRESSION_TURN_THRESHOLD:
+        if turn_number > get_config().sessionstate.migration.compression_turn_threshold:
             # Summarize for turns 31+
             summarized = self._summarize_turn(item.data)
             summarized_bytes = len(json.dumps(summarized.to_dict()).encode("utf-8"))
@@ -1110,7 +1116,8 @@ class MigrationEngine:
 
         # Calculate bytes to free
         current_hot = self._size_tracker.get_tier_size("hot")
-        target_hot = int(HOT_SIZE_LIMIT_BYTES * TARGET_HOT_UTILIZATION)
+        _cfg_mig = get_config().sessionstate.migration
+        target_hot = int(HOT_SIZE_LIMIT_BYTES * _cfg_mig.target_hot_utilization)
         bytes_to_free = current_hot - target_hot
 
         if bytes_to_free <= 0:
@@ -1150,7 +1157,7 @@ class MigrationEngine:
             if total_freed >= bytes_to_free:
                 break
 
-            if iterations >= MAX_DEMOTE_ITERATIONS:
+            if iterations >= get_config().sessionstate.migration.max_demote_iterations:
                 logger.warning("Max demote iterations reached")
                 break
 
@@ -1313,11 +1320,12 @@ class MigrationEngine:
             current_size = self._size_tracker.get_section_size(section)
             turn_count = current_size // 1024 + (1 if current_size % 1024 > 0 else 0)
 
-        if turn_count <= MAX_HISTORY_ACTIVE_TURNS:
+        _max_turns = get_config().sessionstate.migration.max_history_active_turns
+        if turn_count <= _max_turns:
             logger.debug(
                 "history_active has %d turns (<= %d), no demotion needed",
                 turn_count,
-                MAX_HISTORY_ACTIVE_TURNS,
+                _max_turns,
             )
             duration_ms = (time.perf_counter() - start_time) * 1000
             return MigrationResult(
@@ -1336,7 +1344,7 @@ class MigrationEngine:
             )
 
         # Calculate how many turns to demote
-        turns_to_demote = turn_count - MAX_HISTORY_ACTIVE_TURNS
+        turns_to_demote = turn_count - _max_turns
 
         logger.info(
             "history_active has %d turns, demoting oldest %d",
@@ -1471,7 +1479,9 @@ class MigrationEngine:
             int: Bytes to demote (0 if pressure is normal)
         """
         current_hot = self._size_tracker.get_tier_size("hot")
-        target_hot = int(HOT_SIZE_LIMIT_BYTES * TARGET_HOT_UTILIZATION)
+        target_hot = int(
+            HOT_SIZE_LIMIT_BYTES * get_config().sessionstate.migration.target_hot_utilization
+        )
 
         if current_hot <= target_hot:
             return 0
@@ -1481,4 +1491,5 @@ class MigrationEngine:
     @property
     def migration_in_progress(self) -> bool:
         """Check if migration is currently in progress."""
+        return self._migration_in_progress
         return self._migration_in_progress

@@ -16,9 +16,9 @@ SPECIFICATION
 
 PURPOSE:
     Manage HOT CORE sections (always in memory).
-    Coordinate 48KB budget across 8 sections.
+    Coordinate 52KB budget across 10 sections.
 
-TOTAL BUDGET: 48KB (49152 bytes)
+TOTAL BUDGET: 52KB (53248 bytes)
 
 SECTIONS (with individual budgets):
     - control:          8KB (NEVER demote)
@@ -29,10 +29,13 @@ SECTIONS (with individual budgets):
     - affective_now:    4KB
     - narrative_active: 4KB
     - meta:             2KB (NEVER demote)
+    - task_state:       4KB (NEVER demote)
+    - task_artifacts:   4KB (demotes to artifacts_warm)
 
 DEMOTION PAIRS:
     beliefs_active -> beliefs_history (WARM)
     history_active -> history_recent (WARM)
+    task_artifacts -> artifacts_warm (WARM)
 
 PRESSURE LEVELS:
     NORMAL:   < 80% utilization
@@ -56,6 +59,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Union
 
+from poc.k1_poc.config import get_config
+
 from ..sections import (
     AffectiveNowSection,
     BeliefsActiveSection,
@@ -66,6 +71,8 @@ from ..sections import (
     NarrativeActiveSection,
     ScoreboardSection,
 )
+from ..sections.task_artifacts import TaskArtifactsSection
+from ..sections.task_state import TaskStateSection
 
 if TYPE_CHECKING:
     from ..migration import MigrationEngine
@@ -74,11 +81,11 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# CONSTANTS
+# CONSTANTS (config-backed: sessionstate.tiers.*)
 # =============================================================================
 
 # Budget in bytes
-HOT_BUDGET_BYTES: int = 49152  # 48KB
+HOT_BUDGET_BYTES: int = 53248  # config: sessionstate.tiers.hot_budget_bytes
 
 # Section budgets (from sizetracker.py)
 SECTION_BUDGETS: Dict[str, int] = {
@@ -90,6 +97,8 @@ SECTION_BUDGETS: Dict[str, int] = {
     "affective_now": 4 * 1024,
     "narrative_active": 4 * 1024,
     "meta": 2 * 1024,
+    "task_state": 4 * 1024,
+    "task_artifacts": 4 * 1024,
 }
 
 # Sections that are ordered for demotion (lower index = demote first)
@@ -97,15 +106,17 @@ DEMOTE_ORDER: List[str] = [
     "history_active",  # 1: Oldest turns first
     "beliefs_active",  # 2: Previous turn facts
     "narrative_active",  # 3: Paused threads
+    "task_artifacts",  # 4: Presented artifacts -> artifacts_warm
 ]
 
 # Sections that can never be demoted
-NEVER_DEMOTE: frozenset[str] = frozenset(["control", "meta"])
+NEVER_DEMOTE: frozenset[str] = frozenset(["control", "meta", "task_state"])
 
 # Demotion target pairs: HOT section -> WARM section
 DEMOTE_TARGETS: Dict[str, str] = {
     "beliefs_active": "beliefs_history",
     "history_active": "history_recent",
+    "task_artifacts": "artifacts_warm",
 }
 
 # All HOT section names
@@ -118,6 +129,8 @@ HOT_SECTION_NAMES: List[str] = [
     "affective_now",
     "narrative_active",
     "meta",
+    "task_state",
+    "task_artifacts",
 ]
 
 
@@ -130,7 +143,7 @@ class HotPressureLevel(str, Enum):
     CRITICAL = "critical"  # >95%
 
 
-# Pressure thresholds
+# Pressure thresholds (config-backed: sessionstate.tiers.*_threshold_pct)
 NORMAL_THRESHOLD: float = 0.80
 ELEVATED_THRESHOLD: float = 0.90
 HIGH_THRESHOLD: float = 0.95
@@ -263,6 +276,8 @@ SectionType = Union[
     AffectiveNowSection,
     NarrativeActiveSection,
     MetaSection,
+    TaskStateSection,
+    TaskArtifactsSection,
 ]
 
 
@@ -270,12 +285,13 @@ class HotTier:
     """
     HOT CORE tier manager.
 
-    Manages 8 HOT sections with a combined 48KB budget.
+    Manages 10 HOT sections with a combined 52KB budget.
     Coordinates demotion to WARM tier when under pressure.
 
-    Budget: 48KB (49152 bytes)
-    Sections: 8 (control, beliefs_active, scoreboard, history_active,
-                 clarifications, affective_now, narrative_active, meta)
+    Budget: 52KB (53248 bytes)
+    Sections: 10 (control, beliefs_active, scoreboard, history_active,
+                  clarifications, affective_now, narrative_active, meta,
+                  task_state, task_artifacts)
 
     Thread Safety:
         - Read operations are safe for concurrent access
@@ -298,7 +314,7 @@ class HotTier:
         print(snapshot.to_dict())
     """
 
-    BUDGET_BYTES: int = HOT_BUDGET_BYTES
+    BUDGET_BYTES: int = HOT_BUDGET_BYTES  # config: sessionstate.tiers.hot_budget_bytes
     TIER_NAME: str = "hot"
 
     __slots__ = (
@@ -314,7 +330,7 @@ class HotTier:
         migration_engine: Optional[MigrationEngine] = None,
     ) -> None:
         """
-        Initialize HotTier with all 8 sections.
+        Initialize HotTier with all 10 sections.
 
         Args:
             session_id: Session UUID (for section initialization)
@@ -324,7 +340,7 @@ class HotTier:
         self._migration_engine = migration_engine
         self._created_at_ms = int(time.time() * 1000)
 
-        # Initialize all 8 sections
+        # Initialize all 10 sections
         self._sections: Dict[str, SectionType] = {
             "control": ControlSection(session_id=session_id),
             "beliefs_active": BeliefsActiveSection(session_id=session_id),
@@ -334,11 +350,14 @@ class HotTier:
             "affective_now": AffectiveNowSection(),
             "narrative_active": NarrativeActiveSection(),
             "meta": MetaSection(session_id=session_id),
+            "task_state": TaskStateSection(),
+            "task_artifacts": TaskArtifactsSection(),
         }
 
-        logger.debug(
-            "HotTier initialized with %d sections (session=%s)",
+        logger.info(
+            "HotTier initialized: %d sections, budget=%dKB (session=%s)",
             len(self._sections),
+            get_config().sessionstate.tiers.hot_budget_bytes // 1024,
             session_id[:8] if session_id else "none",
         )
 
@@ -516,11 +535,12 @@ class HotTier:
             CRITICAL: >= 95%
         """
         util = self.get_utilization()
-        if util < NORMAL_THRESHOLD:
+        _cfg_t = get_config().sessionstate.tiers
+        if util < _cfg_t.normal_threshold_pct:
             return HotPressureLevel.NORMAL
-        elif util < ELEVATED_THRESHOLD:
+        elif util < _cfg_t.elevated_threshold_pct:
             return HotPressureLevel.ELEVATED
-        elif util < HIGH_THRESHOLD:
+        elif util < _cfg_t.critical_threshold_pct:
             return HotPressureLevel.HIGH
         else:
             return HotPressureLevel.CRITICAL
@@ -898,4 +918,5 @@ def create_hot_tier(
     Returns:
         Configured HotTier instance
     """
+    return HotTier(session_id=session_id, migration_engine=migration_engine)
     return HotTier(session_id=session_id, migration_engine=migration_engine)

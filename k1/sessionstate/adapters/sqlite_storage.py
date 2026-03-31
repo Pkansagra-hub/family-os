@@ -52,12 +52,14 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from poc.k1_poc.config import get_config
+
 from ..ports.storage import ArchiveEntry, ArchiveResult, IStoragePort, RestoreResult
 
-# Default database path
+# Default database path (config: sessionstate.storage.default_db_path)
 DEFAULT_DB_PATH = Path.home() / ".familyos" / "k1" / "sessionstate.db"
 
-# SLA threshold for warnings
+# SLA threshold for warnings (config: sessionstate.storage.sla_storage_ms)
 SLA_MS = 50.0
 
 # Logger
@@ -118,7 +120,8 @@ class SQLiteStorageAdapter(IStoragePort):
                      Default: ~/.familyos/k1/sessionstate.db
         """
         if db_path is None:
-            self._db_path = DEFAULT_DB_PATH
+            cfg_path = get_config().sessionstate.storage.default_db_path
+            self._db_path = Path(cfg_path).expanduser()
         elif isinstance(db_path, str):
             self._db_path = Path(db_path)
         else:
@@ -131,6 +134,8 @@ class SQLiteStorageAdapter(IStoragePort):
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
+
+        logger.info("SQLiteStorageAdapter initialized (path=%s)", self._db_path)
 
     def _init_schema(self) -> None:
         """Initialize database schema."""
@@ -364,7 +369,7 @@ class SQLiteStorageAdapter(IStoragePort):
             self._conn.commit()
 
             duration_ms = (time.perf_counter() - start) * 1000
-            if duration_ms > SLA_MS:
+            if duration_ms > get_config().sessionstate.storage.sla_storage_ms:
                 logger.warning(f"Archive SLA breach: {duration_ms:.1f}ms (section={section})")
 
             return ArchiveResult(
@@ -443,7 +448,7 @@ class SQLiteStorageAdapter(IStoragePort):
             row = cursor.fetchone()
             duration_ms = (time.perf_counter() - start) * 1000
 
-            if duration_ms > SLA_MS:
+            if duration_ms > get_config().sessionstate.storage.sla_storage_ms:
                 logger.warning(f"Restore SLA breach: {duration_ms:.1f}ms (section={section})")
 
             if row:
@@ -591,4 +596,5 @@ class SQLiteStorageAdapter(IStoragePort):
 
     def __repr__(self) -> str:
         """String representation."""
+        return f"SQLiteStorageAdapter(db_path={self._db_path})"
         return f"SQLiteStorageAdapter(db_path={self._db_path})"

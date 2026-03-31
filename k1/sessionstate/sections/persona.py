@@ -39,8 +39,10 @@ from typing import Any, Dict, List, Optional
 import flatbuffers
 
 # Generated FlatBuffer types
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import PersonaSection as FBPersonaSection
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.PersonalityProfile import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
+    PersonaSection as FBPersonaSection,
+)
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.PersonalityProfile import (
     PersonalityProfileAddDirectness,
     PersonalityProfileAddFormality,
     PersonalityProfileAddHumor,
@@ -52,13 +54,13 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.PersonalityProfile im
     PersonalityProfileStart,
     PersonalityProfileStartTraitsVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.PersonalityTrait import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.PersonalityTrait import (
     PersonalityTraitAddName,
     PersonalityTraitAddValue,
     PersonalityTraitEnd,
     PersonalityTraitStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.PersonaSection import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.PersonaSection import (
     PersonaSectionAddCalibrationConfidence,
     PersonaSectionAddHeader,
     PersonaSectionAddInteractionStyle,
@@ -72,7 +74,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.PersonaSection import
     PersonaSectionStart,
     PersonaSectionStartVocabularyVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.ProsodyControls import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.ProsodyControls import (
     ProsodyControlsAddAccent,
     ProsodyControlsAddLanguage,
     ProsodyControlsAddPitch,
@@ -82,7 +84,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.ProsodyControls impor
     ProsodyControlsEnd,
     ProsodyControlsStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.ResponsePreferences import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.ResponsePreferences import (
     ResponsePreferencesAddExplainReasoning,
     ResponsePreferencesAddIncludeExamples,
     ResponsePreferencesAddMaxResponseLength,
@@ -92,14 +94,14 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.ResponsePreferences i
     ResponsePreferencesEnd,
     ResponsePreferencesStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
     SectionHeaderAddLastUpdatedMs,
     SectionHeaderAddSectionName,
     SectionHeaderAddSizeBytes,
     SectionHeaderEnd,
     SectionHeaderStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.VocabularyEntry import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.VocabularyEntry import (
     VocabularyEntryAddContext,
     VocabularyEntryAddSystemTerm,
     VocabularyEntryAddUserTerm,
@@ -325,6 +327,8 @@ class PersonaSection:
         self._updated_at_ms: int = int(time.time() * 1000)
         self._integrity_hash: str = ""
         self._fb_cache: Optional[bytes] = None
+        self._preferences: Dict[str, Any] = {}
+        self._frozen: bool = False
 
     # =========================================================================
     # ISection Protocol
@@ -727,9 +731,60 @@ class PersonaSection:
 
     def _mark_personalized(self) -> None:
         """Mark section as personalized."""
+        if self._frozen:
+            raise RuntimeError("PersonaSection is frozen; mutations are rejected after init.")
         self._is_personalized = True
         self._updated_at_ms = int(time.time() * 1000)
         self._invalidate_cache()
+
+    # =========================================================================
+    # Freeze API (Immutability after session init)
+    # =========================================================================
+
+    def freeze(self) -> None:
+        """Freeze the persona. All mutations after this raise RuntimeError."""
+        self._frozen = True
+
+    @property
+    def is_frozen(self) -> bool:
+        """Whether persona is frozen (immutable)."""
+        return self._frozen
+
+    # =========================================================================
+    # Preferences API (for Back LLM capability params)
+    # =========================================================================
+
+    def set_preference(self, key: str, value: Any) -> None:
+        """Store a preference key-value pair.
+
+        Args:
+            key: Preference name (e.g. "payment_method", "dietary", "timezone").
+            value: Preference value (any JSON-serializable type).
+
+        Raises:
+            RuntimeError: If persona is frozen.
+        """
+        if self._frozen:
+            raise RuntimeError("PersonaSection is frozen; mutations are rejected after init.")
+        self._preferences[key] = value
+        self._updated_at_ms = int(time.time() * 1000)
+        self._invalidate_cache()
+
+    def get_preference(self, key: str, default: Any = None) -> Any:
+        """Read a preference value.
+
+        Args:
+            key: Preference name.
+            default: Default value if key not found.
+
+        Returns:
+            Stored value or default.
+        """
+        return self._preferences.get(key, default)
+
+    def get_all_preferences(self) -> Dict[str, Any]:
+        """Return a shallow copy of all preferences."""
+        return dict(self._preferences)
 
     # =========================================================================
     # Query API
@@ -1177,3 +1232,68 @@ def create_persona_section() -> PersonaSection:
         PersonaSection: New section instance
     """
     return PersonaSection()
+
+
+def initialize_persona(
+    family_profile: Dict[str, Any],
+    session_config: Optional[Dict[str, Any]] = None,
+) -> PersonaSection:
+    """Initialize persona from family profile. Called ONCE at session start.
+
+    Args:
+        family_profile: Dict with keys:
+            family_name: str
+            members: List[{name, relation, age, preferences}]
+            default_payment: str
+            dietary_restrictions: List[str]
+            accessibility_needs: List[str] (optional)
+            preferred_language: str (optional, default "en")
+            timezone: str (optional, default "UTC")
+        session_config: Optional dict with keys:
+            tone: str (default "warm")
+            formality: str (default "casual")
+            verbosity: str (default "concise")
+
+    Returns:
+        PersonaSection populated with family context. Call .freeze() to make
+        immutable after return.
+
+    Writer: Session Init (one-time). Not an LLM writer.
+    Readers: Front LLM (tone, personality), Back LLM (preferences for params),
+             ExperienceLayer AffectiveMirror (mirroring style).
+    """
+    if session_config is None:
+        session_config = {}
+
+    persona = PersonaSection()
+
+    # Core personality
+    warmth_map = {"warm": 0.8, "neutral": 0.5, "formal": 0.3}
+    formality_map = {"casual": 0.3, "neutral": 0.5, "formal": 0.8}
+    verbosity_map = {"concise": 0.3, "balanced": 0.5, "detailed": 0.8}
+
+    persona.set_warmth(warmth_map.get(session_config.get("tone", "warm"), 0.5))
+    persona.set_formality(formality_map.get(session_config.get("formality", "casual"), 0.5))
+    persona.set_verbosity(verbosity_map.get(session_config.get("verbosity", "concise"), 0.5))
+
+    # Family members as vocabulary entries
+    for member in family_profile.get("members", []):
+        age = member.get("age", "unknown")
+        relation = member.get("relation", "member")
+        persona.add_vocabulary(
+            user_term=member["name"],
+            system_term=f"{relation} (age {age})",
+            context="family_member",
+        )
+
+    # Preferences for Back LLM capability params
+    persona.set_preference("payment_method", family_profile.get("default_payment", ""))
+    persona.set_preference("dietary", family_profile.get("dietary_restrictions", []))
+    persona.set_preference("accessibility", family_profile.get("accessibility_needs", []))
+    persona.set_preference("language", family_profile.get("preferred_language", "en"))
+    persona.set_preference("timezone", family_profile.get("timezone", "UTC"))
+    persona.set_preference("family_name", family_profile.get("family_name", ""))
+
+    return persona
+
+    return persona

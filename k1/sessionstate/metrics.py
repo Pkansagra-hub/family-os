@@ -18,7 +18,7 @@ All metrics follow the naming convention: sessionstate_<metric_name>
 Labels align with contract specification for consistent observability.
 
 Usage:
-    from k1.sessionstate.metrics import SessionStateMetrics
+    from poc.k1_poc.sessionstate.metrics import SessionStateMetrics
 
     metrics = SessionStateMetrics()
 
@@ -120,8 +120,10 @@ HOT_SECTIONS = frozenset(
         "history_active",
         "narrative_active",
         "beliefs_active",
-        "goals_active",
-        "tools_state",
+        "clarifications",
+        "affective_now",
+        "task_state",
+        "task_artifacts",
     }
 )
 
@@ -131,6 +133,7 @@ WARM_SECTIONS = frozenset(
         "history_recent",
         "beliefs_history",
         "persona",
+        "artifacts_warm",
     }
 )
 

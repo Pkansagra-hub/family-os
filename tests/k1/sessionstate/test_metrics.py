@@ -74,15 +74,15 @@ class TestMetricsConstants:
 
     def test_hot_sections_count(self):
         """HOT tier has 8 sections."""
-        assert len(HOT_SECTIONS) == 8
+        assert len(HOT_SECTIONS) == 10
 
     def test_warm_sections_count(self):
         """WARM tier has 4 sections."""
-        assert len(WARM_SECTIONS) == 4
+        assert len(WARM_SECTIONS) == 5
 
     def test_all_sections_count(self):
         """Total 12 sections."""
-        assert len(ALL_SECTIONS) == 12
+        assert len(ALL_SECTIONS) == 15
 
     def test_tiers_defined(self):
         """Two tiers: hot and warm."""
@@ -471,7 +471,7 @@ class TestBulkUpdate:
         section_sizes = {section: 256 for section in ALL_SECTIONS}
 
         metrics.update_from_snapshot(
-            total_size_bytes=49152,
+            total_size_bytes=53248,
             hot_size_bytes=24576,
             warm_size_bytes=24576,
             hot_utilization_pct=50.0,
@@ -611,9 +611,9 @@ class TestPrometheusExport:
 
     def test_gauge_export_format(self, metrics: SessionStateMetrics):
         """Gauge export shows current value."""
-        metrics.set_total_size(49152)
+        metrics.set_total_size(53248)
         output = metrics.latest().decode("utf-8")
-        assert "49152" in output
+        assert "53248" in output
 
     def test_counter_export_format(self, metrics: SessionStateMetrics):
         """Counter export shows total value."""

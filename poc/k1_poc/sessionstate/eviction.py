@@ -91,8 +91,9 @@ class EvictionPriority(IntEnum):
     """
 
     TELEMETRY = 1  # First to evict (lowest value = highest eviction priority)
-    BELIEFS_HISTORY = 2
-    HISTORY_RECENT = 3
+    ARTIFACTS_WARM = 2  # Evict after telemetry
+    BELIEFS_HISTORY = 3
+    HISTORY_RECENT = 4
     PERSONA = 10  # Last to evict (highest value)
 
 
@@ -102,6 +103,7 @@ EVICTION_PRIORITIES: Dict[str, EvictionPriority] = {
     "beliefs_history": EvictionPriority.BELIEFS_HISTORY,
     "history_recent": EvictionPriority.HISTORY_RECENT,
     "persona": EvictionPriority.PERSONA,
+    "artifacts_warm": EvictionPriority.ARTIFACTS_WARM,
 }
 
 

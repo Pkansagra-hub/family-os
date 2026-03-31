@@ -162,8 +162,8 @@ class StandaloneLifecycle(ILifecyclePort):
         self._lock = threading.RLock()
         self._error_message: Optional[str] = None
 
-        logger.debug(
-            "StandaloneLifecycle initialized (session=%s, interval=%dms)",
+        logger.info(
+            "StandaloneLifecycle initialized (session=%s, checkpoint_interval=%dms)",
             manager.session_id[:8] if manager.session_id else "none",
             self._config.checkpoint_interval_ms,
         )

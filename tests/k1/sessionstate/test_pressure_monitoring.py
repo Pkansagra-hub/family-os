@@ -186,7 +186,7 @@ def get_utilization_from_snapshot(manager: SessionStateManager) -> float:
 
 # Size limits from SessionState constants
 TOTAL_SIZE_LIMIT_BYTES = 96 * 1024  # 96KB
-HOT_SIZE_LIMIT_BYTES = 48 * 1024  # 48KB
+HOT_SIZE_LIMIT_BYTES = 52 * 1024  # 52KB
 WARM_SIZE_LIMIT_BYTES = 48 * 1024  # 48KB
 
 # Pressure thresholds (utilization percentage)

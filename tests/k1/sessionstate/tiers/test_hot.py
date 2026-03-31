@@ -84,8 +84,8 @@ class TestInitialization:
         assert tier.session_id == "abc-123"
 
     def test_init_creates_all_8_sections(self, hot_tier: HotTier):
-        """HotTier initializes all 8 sections."""
-        assert len(hot_tier) == 8
+        """HotTier initializes all 10 sections."""
+        assert len(hot_tier) == 10
 
     def test_all_expected_sections_present(self, hot_tier: HotTier):
         """All expected section names are present."""
@@ -123,13 +123,13 @@ class TestProperties:
         assert hot_tier.tier_name == "hot"
 
     def test_budget_bytes(self, hot_tier: HotTier):
-        """budget_bytes is 48KB."""
-        assert hot_tier.budget_bytes == 49152
-        assert hot_tier.budget_bytes == 48 * 1024
+        """budget_bytes is 52KB."""
+        assert hot_tier.budget_bytes == 53248
+        assert hot_tier.budget_bytes == 52 * 1024
 
     def test_section_count(self, hot_tier: HotTier):
         """section_count is 8."""
-        assert hot_tier.section_count == 8
+        assert hot_tier.section_count == 10
 
 
 # =============================================================================
@@ -159,14 +159,14 @@ class TestSectionAccess:
     def test_get_all_sections(self, hot_tier: HotTier):
         """get_all_sections returns all sections."""
         sections = hot_tier.get_all_sections()
-        assert len(sections) == 8
+        assert len(sections) == 10
         assert "control" in sections
         assert "beliefs_active" in sections
 
     def test_get_section_names(self, hot_tier: HotTier):
         """get_section_names returns list of names."""
         names = hot_tier.get_section_names()
-        assert len(names) == 8
+        assert len(names) == 10
         assert "control" in names
         assert "meta" in names
 
@@ -189,12 +189,12 @@ class TestSectionAccess:
     def test_iteration(self, hot_tier: HotTier):
         """Can iterate over section names."""
         names = list(hot_tier)
-        assert len(names) == 8
+        assert len(names) == 10
         assert "control" in names
 
     def test_len(self, hot_tier: HotTier):
         """len() returns section count."""
-        assert len(hot_tier) == 8
+        assert len(hot_tier) == 10
 
 
 # =============================================================================
@@ -226,7 +226,7 @@ class TestSizeTracking:
     def test_get_section_sizes(self, hot_tier: HotTier):
         """get_section_sizes returns all sizes."""
         sizes = hot_tier.get_section_sizes()
-        assert len(sizes) == 8
+        assert len(sizes) == 10
         assert "control" in sizes
         assert all(isinstance(v, int) for v in sizes.values())
 
@@ -419,7 +419,7 @@ class TestSerialization:
     def test_serialize_all(self, hot_tier: HotTier):
         """serialize_all returns dict of bytes."""
         serialized = hot_tier.serialize_all()
-        assert len(serialized) == 8
+        assert len(serialized) == 10
         assert "control" in serialized
         assert isinstance(serialized["control"], bytes)
 
@@ -427,7 +427,7 @@ class TestSerialization:
         """deserialize_all restores sections."""
         # First serialize
         serialized = hot_tier.serialize_all()
-        assert len(serialized) == 8
+        assert len(serialized) == 10
 
         # Note: Full deserialization test requires from_flatbuffer
         # to work consistently across all sections. Some sections
@@ -450,7 +450,7 @@ class TestLifecycle:
         """clear_all clears all sections."""
         populated_tier.clear_all()
         # All sections should be cleared (but still exist)
-        assert len(populated_tier) == 8
+        assert len(populated_tier) == 10
 
     def test_clear_section(self, hot_tier: HotTier):
         """clear_section clears specific section."""
@@ -475,10 +475,10 @@ class TestSnapshot:
         """get_snapshot returns HotSnapshot."""
         snapshot = hot_tier.get_snapshot()
         assert isinstance(snapshot, HotSnapshot)
-        assert snapshot.budget_bytes == 49152
+        assert snapshot.budget_bytes == 53248
         assert 0.0 <= snapshot.utilization_pct <= 1.0
         assert isinstance(snapshot.pressure, HotPressureLevel)
-        assert len(snapshot.section_sizes) == 8
+        assert len(snapshot.section_sizes) == 10
 
     def test_snapshot_to_dict(self, hot_tier: HotTier):
         """HotSnapshot.to_dict works."""
@@ -493,7 +493,7 @@ class TestSnapshot:
         """get_statistics returns dict."""
         stats = hot_tier.get_statistics()
         assert stats["tier"] == "hot"
-        assert stats["budget_bytes"] == 49152
+        assert stats["budget_bytes"] == 53248
         assert "utilization_pct" in stats
         assert "pressure" in stats
         assert "sections" in stats
@@ -512,7 +512,7 @@ class TestStringRepresentation:
         repr_str = repr(hot_tier)
         assert "HotTier" in repr_str
         assert "session=" in repr_str
-        assert "sections=8" in repr_str
+        assert "sections=10" in repr_str
 
     def test_str(self, hot_tier: HotTier):
         """__str__ returns human-readable string."""
@@ -539,7 +539,7 @@ class TestFactory:
         """create_hot_tier works with defaults."""
         tier = create_hot_tier()
         assert isinstance(tier, HotTier)
-        assert len(tier) == 8
+        assert len(tier) == 10
 
 
 # =============================================================================
@@ -551,9 +551,9 @@ class TestConstants:
     """Tests for module constants."""
 
     def test_hot_budget_bytes(self):
-        """HOT_BUDGET_BYTES is 48KB."""
-        assert HOT_BUDGET_BYTES == 49152
-        assert HOT_BUDGET_BYTES == 48 * 1024
+        """HOT_BUDGET_BYTES is 52KB."""
+        assert HOT_BUDGET_BYTES == 53248
+        assert HOT_BUDGET_BYTES == 52 * 1024
 
     def test_section_budgets(self):
         """SECTION_BUDGETS are correctly defined."""
@@ -569,13 +569,13 @@ class TestConstants:
     def test_section_budgets_sum_correctly(self):
         """Section budgets sum to expected total."""
         total = sum(SECTION_BUDGETS.values())
-        # Actual total: 8+8+6+8+4+4+4+2 = 44KB
-        # HOT tier budget is 48KB but sections use 44KB (4KB headroom)
-        assert total == 44 * 1024
+        # Actual total: 8+8+6+8+4+4+4+2 = 52KB
+        # HOT tier budget is 52KB but sections use 52KB (4KB headroom)
+        assert total == 52 * 1024
 
     def test_hot_section_names(self):
-        """HOT_SECTION_NAMES has 8 sections."""
-        assert len(HOT_SECTION_NAMES) == 8
+        """HOT_SECTION_NAMES has 10 sections."""
+        assert len(HOT_SECTION_NAMES) == 10
 
     def test_demote_order(self):
         """DEMOTE_ORDER is defined."""
@@ -603,8 +603,8 @@ class TestEdgeCases:
         # Modifying one doesn't affect other
         tier1.clear_section("control")
         # Both should still have all sections
-        assert len(tier1) == 8
-        assert len(tier2) == 8
+        assert len(tier1) == 10
+        assert len(tier2) == 10
 
     def test_set_migration_engine(self, hot_tier: HotTier):
         """set_migration_engine accepts engine."""
@@ -615,7 +615,7 @@ class TestEdgeCases:
         """HotTier works with empty session_id."""
         tier = HotTier(session_id="")
         assert tier.session_id == ""
-        assert len(tier) == 8
+        assert len(tier) == 10
 
     def test_get_snapshot_timing(self, hot_tier: HotTier):
         """get_snapshot includes timestamp."""

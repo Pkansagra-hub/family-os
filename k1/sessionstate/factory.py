@@ -41,6 +41,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from poc.k1_poc.config import get_config
+
 from .adapters.direct_writer import DirectWriterAdapter
 from .adapters.local_events import LocalEventAdapter
 from .adapters.memory_storage import InMemoryStorageAdapter
@@ -56,7 +58,7 @@ from .ports.writer import IWriterPort
 
 logger = logging.getLogger(__name__)
 
-# Default paths
+# Default paths (config: sessionstate.storage.default_db_path)
 DEFAULT_DB_PATH = Path.home() / ".familyos" / "k1" / "sessionstate.db"
 
 
@@ -112,7 +114,7 @@ class SessionStateFactory:
     def create_standalone(
         session_id: Optional[str] = None,
         db_path: Optional[Path] = None,
-        checkpoint_interval_s: float = 30.0,
+        checkpoint_interval_s: float | None = None,
     ) -> SessionStateManager:
         """
         Create SessionStateManager for standalone operation.
@@ -148,8 +150,12 @@ class SessionStateFactory:
         if session_id is None:
             session_id = f"session-{uuid.uuid4().hex[:12]}"
 
-        # Resolve database path
-        resolved_path = db_path or DEFAULT_DB_PATH
+        # Resolve database path (config-backed)
+        if db_path is None:
+            cfg_path = get_config().sessionstate.storage.default_db_path
+            resolved_path = Path(cfg_path).expanduser()
+        else:
+            resolved_path = db_path
 
         # Ensure parent directory exists
         resolved_path.parent.mkdir(parents=True, exist_ok=True)
@@ -184,7 +190,11 @@ class SessionStateFactory:
 
         lifecycle_adapter = StandaloneLifecycle(
             manager=manager,
-            checkpoint_interval_s=checkpoint_interval_s,
+            checkpoint_interval_s=(
+                checkpoint_interval_s
+                if checkpoint_interval_s is not None
+                else get_config().sessionstate.storage.checkpoint_interval_s
+            ),
         )
 
         # Inject adapters
@@ -381,7 +391,7 @@ class SessionStateFactory:
 def create_standalone(
     session_id: Optional[str] = None,
     db_path: Optional[Path] = None,
-    checkpoint_interval_s: float = 30.0,
+    checkpoint_interval_s: float | None = None,
 ) -> SessionStateManager:
     """
     Convenience function for creating standalone SessionStateManager.

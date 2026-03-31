@@ -505,8 +505,8 @@ class TestTotalCapacity:
     """Tests for total capacity validation."""
 
     def test_total_capacity_limit(self, guard: MutationGuard) -> None:
-        """Total limit is 96KB (98304 bytes)."""
-        assert TOTAL_SIZE_LIMIT_BYTES == 96 * 1024
+        """Total limit is 96KB (106496 bytes)."""
+        assert TOTAL_SIZE_LIMIT_BYTES == 104 * 1024
 
     def test_rejects_when_total_exceeded(
         self,

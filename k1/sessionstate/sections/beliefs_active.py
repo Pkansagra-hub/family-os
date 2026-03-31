@@ -38,12 +38,12 @@ from typing import Any, Dict, List, Optional
 import flatbuffers
 
 # Generated FlatBuffer types - import class types from package
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     BeliefsActiveSection as FBBeliefsActiveSection,
 )
 
 # Import builder functions from individual files
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.BeliefsActiveSection import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.BeliefsActiveSection import (
     BeliefsActiveSectionAddCurrentTurnFacts,
     BeliefsActiveSectionAddEntityCount,
     BeliefsActiveSectionAddFactCount,
@@ -60,7 +60,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.BeliefsActiveSection 
     BeliefsActiveSectionStartMentionedEntitiesVector,
     BeliefsActiveSectionStartPinnedFactIdsVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.EntityRef import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.EntityRef import (
     EntityRefAddConfidence,
     EntityRefAddDisplayName,
     EntityRefAddId,
@@ -68,7 +68,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.EntityRef import (
     EntityRefEnd,
     EntityRefStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.Fact import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.Fact import (
     FactAddConfidence,
     FactAddId,
     FactAddObject,
@@ -80,7 +80,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.Fact import (
     FactEnd,
     FactStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.MentionedLocation import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.MentionedLocation import (
     MentionedLocationAddConfidence,
     MentionedLocationAddEntityId,
     MentionedLocationAddLocationType,
@@ -88,7 +88,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.MentionedLocation imp
     MentionedLocationEnd,
     MentionedLocationStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.MentionedTime import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.MentionedTime import (
     MentionedTimeAddConfidence,
     MentionedTimeAddIsRelative,
     MentionedTimeAddRawText,
@@ -96,7 +96,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.MentionedTime import 
     MentionedTimeEnd,
     MentionedTimeStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
     SectionHeaderAddLastUpdatedMs,
     SectionHeaderAddSectionName,
     SectionHeaderAddSizeBytes,
@@ -577,6 +577,45 @@ class BeliefsActiveSection:
             self.remove_fact(fact.id)
         return demotable
 
+    def get_demotion_candidates(
+        self,
+        current_turn: int = 0,
+        confidence_threshold: float = 0.5,
+        age_turns: int = 20,
+        turn_duration_ms: int = 30_000,
+    ) -> List[Fact]:
+        """Return facts eligible for demotion to beliefs_history.
+
+        Criteria: confidence < threshold AND estimated turn age > age_turns
+        AND not pinned.
+
+        Args:
+            current_turn: Current conversation turn number.
+            confidence_threshold: Facts below this confidence are candidates.
+            age_turns: Minimum turn age for demotion eligibility.
+            turn_duration_ms: Estimated ms per turn (for age approximation
+                when turn numbers are unavailable; default 30s).
+
+        Returns:
+            List of Fact objects eligible for demotion, sorted by confidence
+            ascending (lowest confidence first).
+        """
+        now_ms = int(time.time() * 1000)
+        age_cutoff_ms = now_ms - (age_turns * turn_duration_ms)
+
+        candidates: List[Fact] = []
+        for fact in self._facts.values():
+            if fact.is_pinned:
+                continue
+            if fact.confidence >= confidence_threshold:
+                continue
+            if fact.timestamp_ms > age_cutoff_ms:
+                continue
+            candidates.append(fact)
+
+        candidates.sort(key=lambda f: f.confidence)
+        return candidates
+
     # =========================================================================
     # Entity Management (mentioned_entities per schema)
     # =========================================================================
@@ -1041,6 +1080,39 @@ class BeliefsActiveSection:
     def touch(self) -> None:
         """Update last_updated_ms timestamp (legacy API)."""
         self._touch()
+
+    def apply(self, operation: str, data: dict) -> Any:
+        """Apply mutation operation dispatched via manager.mutate().
+
+        Supports:
+        - add_fact: Add a new SPO triple
+        - update / update_confidence: Update confidence of existing fact
+        - pin_fact: Pin a fact
+        - unpin_fact: Unpin a fact
+        - clear: Reset all beliefs
+        """
+        if operation == "add_fact":
+            return self.add_fact(
+                subject=data.get("subject", ""),
+                predicate=data.get("predicate", ""),
+                obj=data.get("obj", ""),
+                confidence=data.get("confidence", 1.0),
+                source=data.get("source", ""),
+            )
+        elif operation in ("update", "update_confidence"):
+            return self.update_confidence(
+                fact_id=data.get("id", ""),
+                confidence=data.get("confidence", 1.0),
+            )
+        elif operation == "pin_fact":
+            return self.pin_fact(data.get("id", ""))
+        elif operation == "unpin_fact":
+            return self.unpin_fact(data.get("id", ""))
+        elif operation == "clear":
+            self.clear()
+            return True
+        else:
+            raise ValueError(f"Unknown operation: {operation}")
 
     # =========================================================================
     # Internal Helpers

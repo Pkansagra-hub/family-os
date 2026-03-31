@@ -33,8 +33,10 @@ from typing import Any, Dict, Optional
 import flatbuffers
 
 # Generated FlatBuffer types
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import MetaSection as FBMetaSection
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.MemoryUsage import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
+    MetaSection as FBMetaSection,
+)
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.MemoryUsage import (
     MemoryUsageAddColdReferences,
     MemoryUsageAddEvictionCount,
     MemoryUsageAddHotAffectiveNow,
@@ -61,7 +63,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.MemoryUsage import (
     MemoryUsageEnd,
     MemoryUsageStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.MetaSection import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.MetaSection import (
     MetaSectionAddHeader,
     MetaSectionAddIdentity,
     MetaSectionAddIsActive,
@@ -75,14 +77,14 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.MetaSection import (
     MetaSectionEnd,
     MetaSectionStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
     SectionHeaderAddLastUpdatedMs,
     SectionHeaderAddSectionName,
     SectionHeaderAddSizeBytes,
     SectionHeaderEnd,
     SectionHeaderStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SessionIdentity import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SessionIdentity import (
     SessionIdentityAddDeviceId,
     SessionIdentityAddIsAnonymous,
     SessionIdentityAddIsDemoMode,
@@ -92,7 +94,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.SessionIdentity impor
     SessionIdentityEnd,
     SessionIdentityStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SessionLifecycle import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SessionLifecycle import (
     SessionLifecycleAddIdleTimeoutMs,
     SessionLifecycleAddIsActive,
     SessionLifecycleAddIsExpired,
@@ -102,7 +104,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.SessionLifecycle impo
     SessionLifecycleEnd,
     SessionLifecycleStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.VersionInfo import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.VersionInfo import (
     VersionInfoAddFeatures,
     VersionInfoAddFormat,
     VersionInfoAddMinCompatibleVersion,
@@ -888,6 +890,63 @@ class MetaSection:
         """Set device ID."""
         self._identity.device_id = device_id
         self._touch()
+
+    # ------------------------------------------------------------------
+    # M5 E5.4.1: Multi-device tracking
+    # ------------------------------------------------------------------
+
+    def set_active_device(self, device_id: str, timestamp_ms: int | None = None) -> None:
+        """Record a device interaction for multi-device tracking.
+
+        Maintains a lightweight devices dict on the section:
+        ``{device_id: {"last_active_ms": int, "input_count": int}}``.
+        Also updates the primary ``device_id`` on identity.
+
+        Args:
+            device_id: The device identifier.
+            timestamp_ms: Interaction timestamp (defaults to now).
+        """
+        if not device_id:
+            return
+        ts = timestamp_ms or int(time.time() * 1000)
+        if not hasattr(self, "_devices"):
+            self._devices: Dict[str, Dict[str, Any]] = {}
+        entry = self._devices.get(device_id)
+        if entry is None:
+            self._devices[device_id] = {"last_active_ms": ts, "input_count": 1}
+        else:
+            entry["last_active_ms"] = ts
+            entry["input_count"] = entry.get("input_count", 0) + 1
+        # Update primary identity device_id to the most recent device
+        self._identity.device_id = device_id
+        self._touch()
+
+    def get_active_devices(self) -> list[Dict[str, Any]]:
+        """Return list of active device entries (sorted by most recent first).
+
+        Returns:
+            List of dicts: ``[{"device_id": str, "last_active_ms": int, "input_count": int}]``
+        """
+        if not hasattr(self, "_devices"):
+            self._devices: Dict[str, Dict[str, Any]] = {}
+        result = []
+        for did, entry in self._devices.items():
+            result.append(
+                {
+                    "device_id": did,
+                    "last_active_ms": entry.get("last_active_ms", 0),
+                    "input_count": entry.get("input_count", 0),
+                }
+            )
+        result.sort(key=lambda d: d["last_active_ms"], reverse=True)
+        return result
+
+    @property
+    def active_device_count(self) -> int:
+        """Number of distinct devices that have interacted."""
+        if not hasattr(self, "_devices"):
+            return 0
+        return len(self._devices)
 
     def set_privacy_band(self, band: PrivacyBand) -> None:
         """Set privacy band."""

@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 import flatbuffers
 
 # Generated FlatBuffer types
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     AgentLeaseAddAgentId,
     AgentLeaseAddAgentType,
     AgentLeaseAddCapabilities,
@@ -36,8 +36,10 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
     AgentLeaseStart,
     AgentLeaseStartCapabilitiesVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import ControlSection as FBControlSection
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
+    ControlSection as FBControlSection,
+)
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     ControlSectionAddAgentLeases,
     ControlSectionAddDomains,
     ControlSectionAddFlowState,
@@ -354,6 +356,18 @@ class ControlSection:
         self._intents = IntentClassification()
         self._domains = DomainContext()
         self._safety = SafetyContext()
+
+        # FSM overlay (M4 E4.1.2) -- mirrors ConciergeControlExtension
+        self._fsm_overlay: Dict[str, Any] = {
+            "fsm_state": "",
+            "active_task_ids": [],
+            "complexity_tier": "",
+        }
+
+        # Temporal anchor (sub-field per skeleton.mmd NOTE line 834)
+        # Computed by temporal resolution engine, written during Phase 1.
+        # Port path: moves to Multimodal section (Section 5) during port.
+        self._temporal_anchor: Optional[Dict[str, Any]] = None
 
         # Turn tracking
         self._current_turn_id = str(uuid.uuid4())
@@ -750,6 +764,11 @@ class ControlSection:
         self._intents = IntentClassification()
         self._domains = DomainContext()
         self._safety = SafetyContext()
+        self._fsm_overlay = {
+            "fsm_state": "",
+            "active_task_ids": [],
+            "complexity_tier": "",
+        }
         self._current_turn_id = str(uuid.uuid4())
         self._turn_count = 0
         self._last_updated_ms = now_ms
@@ -758,7 +777,7 @@ class ControlSection:
 
     def get_metadata(self) -> Dict[str, Any]:
         """Get section metadata for telemetry/debugging."""
-        return {
+        meta: Dict[str, Any] = {
             "name": self.name,
             "tier": self.tier,
             "budget_bytes": self.budget_bytes,
@@ -775,6 +794,66 @@ class ControlSection:
             "safety_band": self._safety.band.name,
             "last_updated_ms": self._last_updated_ms,
         }
+        # M4 E4.1.2: include FSM overlay when populated
+        if self._fsm_overlay.get("fsm_state"):
+            meta["fsm_state"] = self._fsm_overlay["fsm_state"]
+            meta["active_task_ids"] = list(self._fsm_overlay["active_task_ids"])
+            meta["complexity_tier"] = self._fsm_overlay["complexity_tier"]
+        # Temporal anchor (sub-field per skeleton.mmd NOTE)
+        if self._temporal_anchor is not None:
+            meta["temporal_anchor"] = self._temporal_anchor
+        return meta
+
+    def set_temporal_anchor(self, anchor_dict: Dict[str, Any]) -> None:
+        """Set temporal anchor computed by Temporal Resolution Engine.
+
+        Architecture ref: skeleton.mmd -> ACKING_CORE -> TIME_RESOLUTION
+        Port path: Multimodal section sub-field (Section 5).
+
+        Args:
+            anchor_dict: TemporalAnchor.to_dict() output with keys:
+                local_time_iso, day_of_week, time_of_day, is_weekend,
+                timezone, hour_24
+        """
+        self._temporal_anchor = anchor_dict
+        self._last_updated_ms = int(time.time() * 1000)
+        self._invalidate_cache()
+
+    def get_temporal_anchor(self) -> Optional[Dict[str, Any]]:
+        """Get current temporal anchor, or None if not yet computed."""
+        return self._temporal_anchor
+
+    def set_fsm_overlay(
+        self,
+        fsm_state: str,
+        active_task_ids: List[str],
+        complexity_tier: str,
+    ) -> None:
+        """Set FSM overlay fields mirrored from ConciergeControlExtension.
+
+        Called by the control extension after every FSM state mutation
+        so that actors reading ControlSection from SessionState see
+        the current FSM state, active task list, and complexity tier.
+
+        M4 E4.1.2 -- avoids FlatBuffer schema churn by storing in a
+        metadata sub-dict rather than adding schema-level fields.
+
+        Args:
+            fsm_state:       Current ConciergeState name.
+            active_task_ids: Currently active task ID list.
+            complexity_tier: "LOW", "MEDIUM", or "HIGH".
+        """
+        self._fsm_overlay = {
+            "fsm_state": fsm_state,
+            "active_task_ids": list(active_task_ids),
+            "complexity_tier": complexity_tier,
+        }
+        self._touch()
+
+    @property
+    def fsm_overlay(self) -> Dict[str, Any]:
+        """Read-only access to the FSM overlay dict."""
+        return dict(self._fsm_overlay)
 
     # =========================================================================
     # Agent Lease Management
@@ -1121,6 +1200,40 @@ class ControlSection:
         self._touch()
 
     # =========================================================================
+    # Intent Management (M10 E10.2.1)
+    # =========================================================================
+
+    def set_intent(self, intent: IntentClassification) -> None:
+        """Set classified intent from Phase 1.
+
+        Args:
+            intent: IntentClassification with primary, all_intents, scores, classifier.
+        """
+        self._intents = intent
+        self._touch()
+
+    def get_intents(self) -> IntentClassification:
+        """Get current intent classification."""
+        return self._intents
+
+    # =========================================================================
+    # Complexity Tier (M10 E10.2.1)
+    # =========================================================================
+
+    def set_complexity_tier(self, tier: str) -> None:
+        """Set complexity tier in FSM overlay.
+
+        Args:
+            tier: "LOW", "MEDIUM", or "HIGH".
+        """
+        self._fsm_overlay["complexity_tier"] = tier
+        self._touch()
+
+    def get_complexity_tier(self) -> str:
+        """Get complexity tier from FSM overlay."""
+        return self._fsm_overlay.get("complexity_tier", "")
+
+    # =========================================================================
     # Session Properties
     # =========================================================================
 
@@ -1232,6 +1345,12 @@ class ControlSection:
             )
         elif operation == "release_lock":
             return self.release_lock(data["holder"])
+        elif operation == "set_fsm_overlay":
+            return self.set_fsm_overlay(
+                data["fsm_state"],
+                data["active_task_ids"],
+                data["complexity_tier"],
+            )
         else:
             raise ValueError(f"Unknown operation: {operation}")
 

@@ -551,10 +551,11 @@ class SessionStateManager:
             session_id=session_id,
         )
 
-        logger.debug(
-            "SessionStateManager initialized (session=%s, state=%s)",
+        logger.info(
+            "SessionStateManager initialized (session=%s, state=%s, sections=hot:%d+warm)",
             session_id[:8] if session_id else "none",
             self._state.value,
+            len(HOT_SECTIONS),
         )
 
     # =========================================================================
@@ -877,12 +878,13 @@ class SessionStateManager:
             new_size = self._size_tracker.get_section_size(section)
             available = self._size_tracker.get_total_available_bytes()
 
-            logger.debug(
-                "Mutation applied: section=%s, op=%s, delta=%d, new_size=%d, trace_id=%s",
+            logger.info(
+                "Mutation applied: section=%s, op=%s, delta=%dB, new_size=%dB, pressure=%s, trace_id=%s",
                 section,
                 operation,
                 actual_bytes,
                 new_size,
+                pressure.value,
                 trace_id,
             )
 
@@ -1108,6 +1110,10 @@ class SessionStateManager:
             )
 
         self._state = ManagerState.STARTING
+        logger.info(
+            "SessionState state transition: CREATED -> STARTING (session=%s)",
+            self._session_id[:8] if self._session_id else "none",
+        )
 
         try:
             restore_source = "fresh"
@@ -1197,6 +1203,11 @@ class SessionStateManager:
             )
 
         self._state = ManagerState.STOPPING
+        logger.info(
+            "SessionState state transition: RUNNING -> STOPPING (session=%s, mutations=%d)",
+            self._session_id[:8] if self._session_id else "none",
+            self._mutation_count,
+        )
 
         checkpoint_id: Optional[str] = None
 
@@ -1321,8 +1332,8 @@ class SessionStateManager:
             sla_met = duration_ms < 50.0
 
             if archive_result.success:
-                logger.debug(
-                    "Checkpoint created: id=%s, size=%d, took=%.2fms, sla_met=%s, trace_id=%s",
+                logger.info(
+                    "Checkpoint created: id=%s, size=%dB, took=%.2fms, sla_met=%s, trace_id=%s",
                     checkpoint_id[:8],
                     size_bytes,
                     duration_ms,

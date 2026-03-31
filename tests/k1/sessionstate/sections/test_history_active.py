@@ -49,9 +49,9 @@ def section_with_turns():
 
 @pytest.fixture
 def full_section():
-    """Create section at max capacity (10 turns)."""
+    """Create section at max capacity (25 turns)."""
     s = HistoryActiveSection(session_id="test-session")
-    for i in range(10):
+    for i in range(25):
         s.add_turn(
             user_message=f"User message {i + 1}",
             assistant_response=f"Assistant response {i + 1}",
@@ -90,7 +90,7 @@ class TestISection:
 
     def test_budget_bytes_property(self, section):
         """Section has 8KB budget."""
-        assert section.budget_bytes == 8192
+        assert section.budget_bytes == 16384
 
     def test_can_evict_property(self, section):
         """Section cannot be evicted (items demote instead)."""
@@ -119,7 +119,7 @@ class TestISection:
         meta = section.get_metadata()
         assert meta["name"] == "history_active"
         assert meta["tier"] == "hot"
-        assert meta["budget_bytes"] == 8192
+        assert meta["budget_bytes"] == 16384
         assert "current_size_bytes" in meta
         assert "utilization_pct" in meta
         assert "turn_count" in meta
@@ -477,7 +477,7 @@ class TestCapacityManagement:
 
     def test_max_turns(self, section):
         """MAX_TURNS is 10."""
-        assert section.MAX_TURNS == 10
+        assert section.MAX_TURNS == 25
 
     def test_is_full_empty(self, section):
         """Empty section is not full."""
@@ -517,11 +517,11 @@ class TestCapacityManagement:
         """Get overflow removes and returns excess turns."""
         full_section.add_turn("Extra 1", "Turn 1")
         full_section.add_turn("Extra 2", "Turn 2")
-        assert full_section.count() == 12
+        assert full_section.count() == 27
 
         overflow = full_section.get_overflow()
         assert len(overflow) == 2
-        assert full_section.count() == 10
+        assert full_section.count() == 25
         assert overflow[0].turn_number == 1
         assert overflow[1].turn_number == 2
 
@@ -559,7 +559,7 @@ class TestCapacityManagement:
 
     def test_get_available_capacity(self, section_with_turns):
         """Get available capacity."""
-        assert section_with_turns.get_available_capacity() == 5
+        assert section_with_turns.get_available_capacity() == 20
 
     def test_get_available_capacity_full(self, full_section):
         """No capacity when full."""

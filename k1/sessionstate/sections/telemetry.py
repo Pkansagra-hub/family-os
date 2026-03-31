@@ -18,7 +18,7 @@ from typing import Any
 
 import flatbuffers
 
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     CostMetricsAddAvgCostPerTurn,
     CostMetricsAddEmbeddingCost,
     CostMetricsAddGenerationCost,
@@ -66,10 +66,10 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
     SectionHeaderEnd,
     SectionHeaderStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     TelemetrySection as FBTelemetrySection,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     TelemetrySectionAddCost,
     TelemetrySectionAddErrors,
     TelemetrySectionAddHeader,

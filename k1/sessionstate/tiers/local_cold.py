@@ -53,6 +53,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from poc.k1_poc.config import get_config
+
 if TYPE_CHECKING:
     from ..local_cold import LocalColdArchive as LocalColdArchiveType
 
@@ -63,10 +65,10 @@ logger = logging.getLogger(__name__)
 # CONSTANTS
 # =============================================================================
 
-# Archive retention (days)
+# Archive retention (config: sessionstate.cold.default_max_age_days)
 DEFAULT_MAX_AGE_DAYS: int = 30
 
-# SLA target
+# SLA target (config: sessionstate.cold.restore_sla_ms)
 RESTORE_SLA_MS: float = 50.0
 
 # Sections that can be archived
@@ -148,7 +150,7 @@ class RestoreResult:
             success=False,
             error=error,
             duration_ms=duration_ms,
-            sla_met=duration_ms <= RESTORE_SLA_MS,
+            sla_met=duration_ms <= get_config().sessionstate.cold.restore_sla_ms,
         )
 
     @classmethod
@@ -158,7 +160,7 @@ class RestoreResult:
             success=False,
             error=f"No archive found for {section} in session {session_id}",
             duration_ms=duration_ms,
-            sla_met=duration_ms <= RESTORE_SLA_MS,
+            sla_met=duration_ms <= get_config().sessionstate.cold.restore_sla_ms,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -271,7 +273,7 @@ class LocalColdTier:
         _total_restores: Total restore count
 
     Example:
-        from k1.sessionstate.local_cold import LocalColdArchive
+        from poc.k1_poc.sessionstate.local_cold import LocalColdArchive
 
         storage = LocalColdArchive()
         tier = LocalColdTier(storage, session_id="abc-123")
@@ -487,7 +489,8 @@ class LocalColdTier:
         )
 
         duration_ms = (time.perf_counter() - start_time) * 1000
-        sla_met = duration_ms <= RESTORE_SLA_MS
+        _cold_sla = get_config().sessionstate.cold.restore_sla_ms
+        sla_met = duration_ms <= _cold_sla
 
         if not sla_met:
             self._restore_sla_violations += 1
@@ -496,7 +499,7 @@ class LocalColdTier:
                 section,
                 self._session_id[:8] if self._session_id else "none",
                 duration_ms,
-                RESTORE_SLA_MS,
+                _cold_sla,
             )
 
         if result.success:
@@ -729,13 +732,13 @@ class LocalColdTier:
 
     def prune_old(
         self,
-        max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+        max_age_days: int | None = None,
     ) -> int:
         """
         Remove old archives.
 
         Args:
-            max_age_days: Max age in days
+            max_age_days: Max age in days (default from config)
 
         Returns:
             int: Number pruned
@@ -748,6 +751,8 @@ class LocalColdTier:
         """
         # LocalColdArchive doesn't have a prune_by_age method yet
         # This would need to be implemented if needed
+        if max_age_days is None:
+            max_age_days = get_config().sessionstate.cold.default_max_age_days
         logger.debug(
             "prune_old called with max_age_days=%d (not implemented)",
             max_age_days,
@@ -861,7 +866,7 @@ class LocalColdTier:
             "bytes_restored": self._bytes_restored,
             "sla_violations": self._restore_sla_violations,
             "sla_compliance_rate": self.sla_compliance_rate,
-            "restore_sla_ms": RESTORE_SLA_MS,
+            "restore_sla_ms": get_config().sessionstate.cold.restore_sla_ms,
             "created_at_ms": self._created_at_ms,
         }
 

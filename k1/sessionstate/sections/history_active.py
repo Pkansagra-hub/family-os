@@ -31,15 +31,15 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import flatbuffers
 
 # Generated FlatBuffer types
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     HistoryActiveSection as FBHistoryActiveSection,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.HistoryActiveSection import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.HistoryActiveSection import (
     HistoryActiveSectionAddAvgTurnDurationMs,
     HistoryActiveSectionAddCurrentTurnNumber,
     HistoryActiveSectionAddHeader,
@@ -53,14 +53,14 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.HistoryActiveSection 
     HistoryActiveSectionStart,
     HistoryActiveSectionStartTurnsVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
     SectionHeaderAddLastUpdatedMs,
     SectionHeaderAddSectionName,
     SectionHeaderAddSizeBytes,
     SectionHeaderEnd,
     SectionHeaderStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.TurnFull import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.TurnFull import (
     TurnFullAddAssistantResponse,
     TurnFullAddDurationMs,
     TurnFullAddEmotion,
@@ -78,7 +78,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.TurnFull import (
     TurnFullStartEntitiesVector,
     TurnFullStartIntentsVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.TurnMetadata import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.TurnMetadata import (
     TurnMetadataAddConfidence,
     TurnMetadataAddEmotion,
     TurnMetadataAddEntities,
@@ -115,6 +115,59 @@ class TurnMetadata:
 
 
 @dataclass
+class TypedHistoryEntry:
+    """Extended history entry for dual-LLM architecture.
+
+    Wraps the existing Turn schema with additional type discrimination.
+
+    Entry types and their sources:
+      user           -- User's raw input. Source: "user".
+      ack            -- Front's acknowledgment (Phase A). Source: "front".
+      final          -- Front's final response. Source: "front".
+      weave          -- Front's async result presentation. Source: "front".
+      clarification  -- Front asking user to clarify. Source: "front".
+      hitl_request   -- Front presenting HITL question. Source: "front".
+      hitl_response  -- User's answer to HITL question. Source: "user".
+      error          -- Front's error explanation. Source: "front".
+      proactive      -- ProactiveAgent fill message during wait. Source: "system".
+    """
+
+    turn_number: int
+    entry_type: Literal[
+        "user",
+        "ack",
+        "final",
+        "weave",
+        "clarification",
+        "hitl_request",
+        "hitl_response",
+        "error",
+        "proactive",
+    ]
+    text: str
+    timestamp_ms: int
+    source: Literal["user", "front", "back", "system"]
+    task_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+# Valid (entry_type, source) combinations enforced at construction
+_VALID_TYPE_SOURCE = frozenset(
+    {
+        ("user", "user"),
+        ("ack", "front"),
+        ("final", "front"),
+        ("weave", "front"),
+        ("clarification", "front"),
+        ("hitl_request", "front"),
+        ("hitl_response", "user"),
+        ("error", "front"),
+        ("proactive", "system"),
+    }
+)
+
+
+@dataclass
 class Turn:
     """
     Full fidelity conversation turn.
@@ -144,6 +197,11 @@ class Turn:
     entities: List[str] = field(default_factory=list)
     intents: List[str] = field(default_factory=list)
     emotion: str = ""
+
+    # Sub-entries for dual-LLM decomposition (POC extension)
+    # Stores intermediate entries: ack, weave, hitl_request, hitl_response, error, proactive
+    # If empty, get_typed_entries() creates a single "final" entry from assistant_response
+    sub_entries: List[TypedHistoryEntry] = field(default_factory=list)
 
     # Computed fields
     user_message_bytes: int = 0
@@ -460,6 +518,63 @@ class HistoryActiveSection:
         self._touch()
 
         return turn
+
+    # =========================================================================
+    # TypedHistoryEntry API (Epic 2.4)
+    # =========================================================================
+
+    def get_typed_entries(self, count: int = 20) -> List[TypedHistoryEntry]:
+        """Return last N typed entries, decomposed from Turn objects.
+
+        Each Turn object is decomposed into multiple TypedHistoryEntry objects:
+        1. Always: a "user" entry from turn.user_message
+        2. If turn has sub_entries: include them (ack, weave, hitl_*, etc.)
+        3. Otherwise: a "final" entry from turn.assistant_response
+
+        Args:
+            count: Maximum number of entries to return (default 20 for Front,
+                   use 5 for Back via history_to_back_context).
+
+        Returns:
+            List of TypedHistoryEntry ordered by timestamp_ms, last N entries.
+
+        Note:
+            Internal storage still uses Turn objects (for FlatBuffer compat).
+            This API provides the TypedHistoryEntry view for LLM context builders.
+        """
+        entries: List[TypedHistoryEntry] = []
+        for turn in self._turns:
+            # User input entry
+            meta: Dict[str, Any] = {}
+            if turn.intents:
+                meta["intent"] = turn.intents
+            if turn.emotion:
+                meta["emotion"] = turn.emotion
+            entries.append(
+                TypedHistoryEntry(
+                    turn_number=turn.turn_number,
+                    entry_type="user",
+                    text=turn.user_message,
+                    timestamp_ms=turn.timestamp_ms,
+                    source="user",
+                    metadata=meta,
+                )
+            )
+            # Sub-entries if present (POC dual-LLM extension)
+            if turn.sub_entries:
+                entries.extend(turn.sub_entries)
+            else:
+                # Default: assistant_response = "final" entry
+                entries.append(
+                    TypedHistoryEntry(
+                        turn_number=turn.turn_number,
+                        entry_type="final",
+                        text=turn.assistant_response,
+                        timestamp_ms=turn.timestamp_ms + turn.duration_ms,
+                        source="front",
+                    )
+                )
+        return entries[-count:]
 
     def get_turn(self, turn_id: str) -> Optional[Turn]:
         """
@@ -1055,3 +1170,67 @@ class HistoryActiveSection:
         if isinstance(value, bytes):
             return value.decode("utf-8")
         return value
+
+
+# =============================================================================
+# TypedHistoryEntry Converters (Epic 2.4.3, 2.4.4)
+# =============================================================================
+
+
+def history_to_front_messages(entries: List[TypedHistoryEntry]) -> List[Dict[str, str]]:
+    """Convert typed history to LLM message format for Front.
+
+    Front sees a continuous conversation. The type discrimination is invisible
+    to the LLM -- it just sees alternating user/assistant messages.
+
+    Mapping:
+        entry_type "user" or "hitl_response"  -> {"role": "user", "content": text}
+        entry_type in ("ack", "final", "weave", "clarification",
+                       "hitl_request", "error", "proactive")  -> {"role": "assistant", "content": text}
+
+    Args:
+        entries: List of TypedHistoryEntry (typically from get_typed_entries(20))
+
+    Returns:
+        List of {"role": "user"|"assistant", "content": str} dicts.
+        Last 20 entries used. Ready for LLM messages array.
+    """
+    messages: List[Dict[str, str]] = []
+    for entry in entries[-20:]:
+        if entry.entry_type in ("user", "hitl_response"):
+            messages.append({"role": "user", "content": entry.text})
+        elif entry.entry_type in (
+            "ack",
+            "final",
+            "weave",
+            "clarification",
+            "hitl_request",
+            "error",
+            "proactive",
+        ):
+            messages.append({"role": "assistant", "content": entry.text})
+    return messages
+
+
+def history_to_back_context(entries: List[TypedHistoryEntry]) -> List[Dict[str, Any]]:
+    """Convert typed history to context for Back. Filtered and condensed.
+
+    Back only needs decision-relevant messages:
+    - "user": what the user said
+    - "final": what was concluded
+    - "hitl_response": what the user chose
+
+    Back does NOT need: ack text, weave bridges, proactive fills, error explanations.
+
+    Args:
+        entries: List of TypedHistoryEntry (typically from get_typed_entries(20))
+
+    Returns:
+        List of {"turn": int, "type": str, "text": str} dicts.
+        Last 5 relevant entries. Text truncated to 500 chars.
+    """
+    relevant_types = {"user", "final", "hitl_response"}
+    filtered = [e for e in entries if e.entry_type in relevant_types]
+    return [
+        {"turn": e.turn_number, "type": e.entry_type, "text": e.text[:500]} for e in filtered[-5:]
+    ]

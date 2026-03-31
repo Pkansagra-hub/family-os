@@ -12,7 +12,7 @@ SessionState provides:
 - FlatBuffer serialization (<100μs)
 
 Quick Start (Standalone Mode):
-    from k1.sessionstate import SessionStateFactory
+    from poc.k1_poc.sessionstate import SessionStateFactory
 
     # Create standalone manager
     manager = SessionStateFactory.create_standalone()

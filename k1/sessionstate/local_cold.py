@@ -49,6 +49,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from poc.k1_poc.config import get_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -116,10 +118,10 @@ class RestoreResult:
     error: Optional[str] = None
 
 
-# Default database path
+# Default database path (config: sessionstate.storage.default_db_path)
 DEFAULT_DB_PATH = Path.home() / ".familyos" / "k1" / "sessionstate.db"
 
-# SLA threshold for restore operations (log warning if exceeded)
+# SLA threshold for restore operations (config: sessionstate.storage.sla_restore_ms)
 SLA_RESTORE_MS = 50.0
 
 # Section to table mapping
@@ -202,7 +204,11 @@ class LocalColdArchive:
             3. Enable WAL mode for concurrency
             4. Initialize schema if needed
         """
-        self._db_path = db_path or DEFAULT_DB_PATH
+        if db_path is not None:
+            self._db_path = db_path
+        else:
+            cfg_path = get_config().sessionstate.storage.default_db_path
+            self._db_path = Path(cfg_path).expanduser()
         self._closed = False
 
         # Create parent directory if needed
@@ -225,7 +231,11 @@ class LocalColdArchive:
         # Initialize schema
         self._init_schema()
 
-        logger.debug("LocalColdArchive initialized at %s", self._db_path)
+        logger.info(
+            "LocalColdArchive initialized (path=%s, tables=%d)",
+            self._db_path,
+            len(ARCHIVE_TABLES),
+        )
 
     def _init_schema(self) -> None:
         """
@@ -647,13 +657,14 @@ class LocalColdArchive:
 
             duration_ms = self._elapsed_ms(start_time)
 
-            if duration_ms > SLA_RESTORE_MS:
+            sla_ms = get_config().sessionstate.storage.sla_restore_ms
+            if duration_ms > sla_ms:
                 logger.warning(
                     "Restore SLA breach: %s for session %s took %.2fms (>%.0fms)",
                     section,
                     session_id[:8],
                     duration_ms,
-                    SLA_RESTORE_MS,
+                    sla_ms,
                 )
 
             if row:

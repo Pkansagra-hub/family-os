@@ -58,7 +58,7 @@ EXAMPLE TESTS:
 class TestHotTier:
     def test_all_8_sections_present(self, hot_tier):
         sections = hot_tier.get_all_sections()
-        assert len(sections) == 8
+        assert len(sections) == 10
         assert "control" in sections
         assert "beliefs_active" in sections
 
@@ -95,7 +95,7 @@ class TestHotTier:
         """All 8 HOT sections are present."""
         # TODO: Implement
         # sections = hot_tier.get_all_sections()
-        # assert len(sections) == 8
+        # assert len(sections) == 10
         # expected = ["control", "beliefs_active", "scoreboard", "history_active",
         #             "clarifications", "affective_now", "narrative_active", "meta"]
         # for name in expected:

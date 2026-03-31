@@ -52,7 +52,13 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional,
 
 from poc.k1_poc.config import get_config
 
-from ..sections import BeliefsHistorySection, HistoryRecentSection, PersonaSection, TelemetrySection
+from ..sections import (
+    ArtifactsWarmSection,
+    BeliefsHistorySection,
+    HistoryRecentSection,
+    PersonaSection,
+    TelemetrySection,
+)
 
 if TYPE_CHECKING:
     from ..local_cold import LocalColdArchive
@@ -360,12 +366,13 @@ class WarmTier:
         self._eviction_callback = eviction_callback
         self._created_at_ms = int(time.time() * 1000)
 
-        # Initialize all 4 sections
+        # Initialize all 5 sections
         self._sections: Dict[str, SectionType] = {
             "telemetry": TelemetrySection(),
             "beliefs_history": BeliefsHistorySection(),
             "history_recent": HistoryRecentSection(),
             "persona": PersonaSection(),
+            "artifacts_warm": ArtifactsWarmSection(),
         }
 
         logger.info(

@@ -357,7 +357,7 @@ class TestSnapshotConsistencyUnderLoad:
                 )
 
                 # All 12 sections should be present
-                assert len(snap.sections) == 12
+                assert len(snap.sections) == 15
         finally:
             manager.stop(checkpoint_before_stop=False)
 
@@ -741,7 +741,7 @@ class TestEdgeCasesUnderLoad:
             # All snapshots should be valid
             for snap in snapshots_during:
                 assert snap.session_id == session_id
-                assert len(snap.sections) == 12
+                assert len(snap.sections) == 15
         finally:
             manager.stop(checkpoint_before_stop=False)
 

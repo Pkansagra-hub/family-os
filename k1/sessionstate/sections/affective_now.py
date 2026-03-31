@@ -39,10 +39,10 @@ from typing import Any, Dict, List, Optional
 import flatbuffers
 
 # Generated FlatBuffer types
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     AffectiveNowSection as FBAffectiveNowSection,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.AffectiveNowSection import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.AffectiveNowSection import (
     AffectiveNowSectionAddCelebrationAppropriate,
     AffectiveNowSectionAddConfidence,
     AffectiveNowSectionAddCurrentEmotion,
@@ -59,14 +59,14 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.AffectiveNowSection i
     AffectiveNowSectionStart,
     AffectiveNowSectionStartRecentEmotionsVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.EmotionDimensions import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.EmotionDimensions import (
     EmotionDimensionsAddArousal,
     EmotionDimensionsAddDominance,
     EmotionDimensionsAddValence,
     EmotionDimensionsEnd,
     EmotionDimensionsStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.EmotionSnapshot import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.EmotionSnapshot import (
     EmotionSnapshotAddArousal,
     EmotionSnapshotAddEmotion,
     EmotionSnapshotAddIntensity,
@@ -76,7 +76,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.EmotionSnapshot impor
     EmotionSnapshotEnd,
     EmotionSnapshotStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
     SectionHeaderAddLastUpdatedMs,
     SectionHeaderAddSectionName,
     SectionHeaderAddSizeBytes,
@@ -520,6 +520,25 @@ class AffectiveNowSection:
             "current_turn": self._current_turn,
             "last_updated_ms": self._last_updated_ms,
             "last_significant_change_ms": self._last_significant_change_ms,
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return current state as dict for prompt builder and affect pipeline.
+
+        Keys match the contract expected by compute_affect_band() and
+        _get_affect_dict() in the front handler.
+        """
+        return {
+            "current_emotion": self._current_emotion,
+            "intensity": self._intensity,
+            "valence": self._dimensions.valence,
+            "arousal": self._dimensions.arousal,
+            "dominance": self._dimensions.dominance,
+            "trajectory": self._trajectory.name,
+            "confidence": self._confidence,
+            "source": self._source,
+            "empathy_needed": self._empathy_needed,
+            "celebration_appropriate": self._celebration_appropriate,
         }
 
     # =========================================================================

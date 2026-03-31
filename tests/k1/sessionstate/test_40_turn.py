@@ -57,7 +57,7 @@ from k1.sessionstate.sizetracker import PressureLevel
 # =============================================================================
 
 # History limits from architecture
-HISTORY_ACTIVE_MAX_TURNS = 10  # MAX_TURNS in history_active
+HISTORY_ACTIVE_MAX_TURNS = 25  # MAX_TURNS in history_active
 HISTORY_RECENT_MAX_COMPRESSED = 20  # Turns 11-30
 HISTORY_RECENT_MAX_SUMMARIZED = 10  # Turns 31-40
 TOTAL_TURNS = 40
@@ -212,12 +212,12 @@ class TestFirst10Turns:
         assert section.count() == 5
 
     def test_add_10_turns_fills_hot(self, session: SessionStateManager) -> None:
-        """10 turns should fill history_active to capacity."""
+        """10 turns should NOT fill history_active (MAX_TURNS=25)."""
         add_turns_via_manager(session, 1, 10, 200)
 
         section = session.get_section("history_active")
         assert section.count() == 10
-        assert section.is_full()
+        assert not section.is_full()
 
     def test_no_demotion_for_first_10(self, session: SessionStateManager) -> None:
         """First 10 turns should not trigger demotion."""
