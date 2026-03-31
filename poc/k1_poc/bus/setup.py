@@ -25,9 +25,12 @@ import logging
 
 from k1.bus.adapters.session_adapter import SessionBusAdapter
 from k1.bus.factory import BusFactory
-from k1.bus.impl.local_bus import LocalBus
-from k1.bus.impl.local_mailbox import LocalMailbox, LocalMailboxRouter
-from k1.bus.ports.mailbox import MailboxConfig
+from k1.bus.middleware import MiddlewareChain
+from k1.bus.middleware.metrics import MetricsMiddleware
+from k1.bus.middleware.topic_validation import TopicRegistry, TopicValidationMiddleware
+from k1.bus.middleware.tracing import TracingMiddleware
+from k1.bus.ports.bus import IBus
+from k1.bus.ports.mailbox import IMailbox, IMailboxRouter, MailboxConfig
 from poc.k1_poc.config import get_config
 
 logger = logging.getLogger(__name__)
@@ -51,29 +54,70 @@ ACTOR_FRONT: str = "front_half"  # V3 E0.2.3: kept for test_m01_e2e compat
 ACTOR_BACK: str = "back_half"  # V3 E0.2.3: kept for test_m01_e2e compat
 
 
-def create_poc_bus(*, capture: bool = False) -> LocalBus:
+# ---------------------------------------------------------------------------
+# M3 E3.5: Middleware chain builder
+# ---------------------------------------------------------------------------
+
+def _build_middleware_chain(cfg) -> MiddlewareChain | None:
+    """Build a MiddlewareChain from bus config flags.
+
+    Order: TopicValidation -> Tracing -> Metrics (matches K1 design doc).
+    Returns None if all middleware are disabled.
+    """
+    from poc.k1_poc.bus.topics import ALL_TOPICS
+
+    middlewares = []
+
+    if cfg.topic_validation_enabled:
+        registry = TopicRegistry()
+        for topic in ALL_TOPICS:
+            registry.register(topic)
+        # Dynamic topics: k1.agent.*.delta.*, k1.session.*
+        registry.register_prefix("k1.agent.")
+        registry.register_prefix("k1.session.")
+        middlewares.append(TopicValidationMiddleware(registry))
+
+    if cfg.tracing_enabled:
+        middlewares.append(TracingMiddleware(enabled=True))
+
+    if cfg.metrics_enabled:
+        middlewares.append(MetricsMiddleware(enabled=True))
+
+    if not middlewares:
+        return None
+    return MiddlewareChain(middlewares)
+
+
+def create_poc_bus(*, capture: bool = False) -> IBus:
     """
     Create an ordered LocalBus with default K1 timing rules.
+
+    M3 E3.5: Optionally wires TopicValidation, Tracing, and Metrics
+    middleware (controlled via config flags in defaults.yaml).
 
     Args:
         capture: If True, record all published envelopes (for testing).
 
     Returns:
-        LocalBus with TimingChain wired in.
+        IBus with TimingChain and middleware wired in.
     """
+    cfg = get_config().bus
+    middleware = _build_middleware_chain(cfg)
     bus = BusFactory.create_local_ordered(
-        timeout_ms=get_config().bus.gap_timeout_ms,
+        timeout_ms=cfg.gap_timeout_ms,
         capture=capture,
+        middleware=middleware,
     )
     logger.info(
-        "create_poc_bus: LocalBus created (ordered=True, capture=%s, gap_timeout_ms=%d)",
+        "create_poc_bus: LocalBus created (ordered=True, capture=%s, gap_timeout_ms=%d, middleware=%d)",
         capture,
-        get_config().bus.gap_timeout_ms,
+        cfg.gap_timeout_ms,
+        len(middleware._middlewares) if middleware else 0,
     )
     return bus
 
 
-def create_poc_router() -> LocalMailboxRouter:
+def create_poc_router() -> IMailboxRouter:
     """
     Create a mailbox router (Python backend).
 
@@ -85,7 +129,7 @@ def create_poc_router() -> LocalMailboxRouter:
     return router
 
 
-def create_poc_session_adapter(bus: LocalBus) -> SessionBusAdapter:
+def create_poc_session_adapter(bus: IBus) -> SessionBusAdapter:
     """
     Create a SessionBusAdapter wired to the given bus.
 
@@ -98,14 +142,14 @@ def create_poc_session_adapter(bus: LocalBus) -> SessionBusAdapter:
     Returns:
         SessionBusAdapter instance.
     """
-    adapter = SessionBusAdapter(bus)
+    adapter = SessionBusAdapter(bus)  # type: ignore[arg-type]  # factory returns LocalBus; IBus protocol is safe here
     logger.info("create_poc_session_adapter: SessionBusAdapter wired to bus")
     return adapter
 
 
 def register_poc_actors(
-    router: LocalMailboxRouter,
-) -> tuple[LocalMailbox, LocalMailbox]:
+    router: IMailboxRouter,
+) -> tuple[IMailbox, IMailbox]:
     """
     Register the Front and Back actors on the mailbox router.
 

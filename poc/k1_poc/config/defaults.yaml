@@ -105,6 +105,14 @@ bus:
   # Off in production (perf), on in tests (catches schema drift).
   validate_canonical_events: false
 
+  # M3 E3.5: Bus middleware flags
+  # Topic validation is SOFT (warns, never drops) -- safe to enable always.
+  topic_validation_enabled: true
+  # OpenTelemetry tracing (no-op when opentelemetry not installed)
+  tracing_enabled: false
+  # Prometheus metrics (no-op when prometheus_client not installed)
+  metrics_enabled: false
+
 
 # ── delta/aggregator.py ─────────────────────────────────────────────────
 

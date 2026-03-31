@@ -17,6 +17,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from k1.bus.ports.bus import IBus
+from k1.bus.ports.mailbox import IMailbox, IMailboxRouter
+
 # Auto-load .env for GOOGLE_API_KEY if not already set
 try:
     from dotenv import load_dotenv
@@ -82,11 +85,11 @@ class KernelRuntime:
     """Live kernel runtime object returned by start_kernel()."""
 
     config: KernelConfig
-    bus: Any
-    router: Any
+    bus: IBus
+    router: IMailboxRouter
     adapter: Any
-    front_mailbox: Any
-    back_mailbox: Any
+    front_mailbox: IMailbox
+    back_mailbox: IMailbox
     session_state: Any
     capability_registry: Any
     model: Any
@@ -928,7 +931,7 @@ class _StateReadAdapter:
             return None
 
 
-def _build_delta_applicator(session_state: Any, bus: Any) -> Any:
+def _build_delta_applicator(session_state: Any, bus: IBus) -> Any:
     """Build a DeltaApplicator wired to session state and bus notification."""
     from poc.k1_poc.delta.applicator import DeltaApplicator
     from poc.k1_poc.delta.topics import STATE_UPDATED
@@ -1030,7 +1033,7 @@ class _DeltaEmitAdapter:
     def __init__(
         self,
         aggregator: Any = None,
-        bus: Any = None,
+        bus: IBus | None = None,
     ) -> None:
         self._aggregator = aggregator
         self._bus = bus

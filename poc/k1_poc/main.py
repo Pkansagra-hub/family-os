@@ -37,24 +37,24 @@ def boot(*, capture: bool = False, ordered: bool = True) -> dict[str, Any]:
     Initialize all POC bus infrastructure.
 
     Creates:
-        - LocalBus (ordered with TimingChain, or unordered)
-        - LocalMailboxRouter
+        - IBus (ordered with TimingChain, or unordered)
+        - IMailboxRouter
         - SessionBusAdapter
         - front_half and back_half actor mailboxes
 
     Args:
         capture: If True, bus records all published envelopes.
         ordered: If True (default), use TimingChain with STRICT/RELAXED
-                 ordering.  If False, use plain LocalBus without
+                 ordering.  If False, use plain IBus without
                  TimingChain (simpler, no causal cascade).
 
     Returns:
         Dict with keys:
-            bus:            LocalBus (with or without TimingChain)
-            router:         LocalMailboxRouter
+            bus:            IBus (with or without TimingChain)
+            router:         IMailboxRouter
             adapter:        SessionBusAdapter
-            front_mailbox:  LocalMailbox (actor_id="front_half")
-            back_mailbox:   LocalMailbox (actor_id="back_half")
+            front_mailbox:  IMailbox (actor_id="front_half")
+            back_mailbox:   IMailbox (actor_id="back_half")
     """
     if ordered:
         bus = create_poc_bus(capture=capture)

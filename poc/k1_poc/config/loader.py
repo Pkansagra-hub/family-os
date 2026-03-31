@@ -89,6 +89,10 @@ class BusConfig:
     priority_wfq: bool = True
     # M1 E1.3: Validate canonical event payloads in builders (off in prod, on in tests)
     validate_canonical_events: bool = False
+    # M3 E3.5: Bus middleware flags
+    topic_validation_enabled: bool = True
+    tracing_enabled: bool = False
+    metrics_enabled: bool = False
 
 
 @dataclass

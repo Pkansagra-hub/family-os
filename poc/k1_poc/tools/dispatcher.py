@@ -27,6 +27,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from k1.bus.ports.bus import IBus
 from poc.k1_poc.config import get_config
 from poc.k1_poc.llm.types import ToolCallResult, ToolSchema
 from poc.k1_poc.tools.implementations import ToolContext, execute_tool
@@ -183,7 +184,7 @@ class ToolDispatcher:
         tool_schemas: dict[str, ToolSchema],
         ctx: ToolContext,
         tier: str = "LOW",
-        bus: Any | None = None,
+        bus: IBus | None = None,
     ):
         self.actor = actor
         self.allowlist = frozenset(allowlist)
@@ -419,7 +420,7 @@ def create_front_dispatcher(
     tier: str,
     ctx: ToolContext,
     schemas: list[ToolSchema] | None = None,
-    bus: Any | None = None,
+    bus: IBus | None = None,
 ) -> ToolDispatcher:
     """Create a Front ToolDispatcher with tier-based allowlist.
 
@@ -456,7 +457,7 @@ def create_back_dispatcher(
     tier: str,
     ctx: ToolContext,
     schemas: list[ToolSchema] | None = None,
-    bus: Any | None = None,
+    bus: IBus | None = None,
 ) -> ToolDispatcher:
     """Create a Back ToolDispatcher with tier-based allowlist.
 
