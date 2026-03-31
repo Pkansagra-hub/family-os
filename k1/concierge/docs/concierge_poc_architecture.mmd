@@ -1,0 +1,1086 @@
+%% ======================================================================================
+%% CONCIERGE POC - BUS-DRIVEN DUAL-LLM CONVERSATIONAL ARCHITECTURE
+%% ======================================================================================
+%% Created: 2026-02-19
+%% Purpose: Ultra-comprehensive architecture diagram for the Concierge POC
+%% Document Ref: poc/k1_poc/concierge_poc_design_v2.md (9218 lines)
+%% K1 Architecture Ref: architecture_diagrams/k1/k1_cognitive_architecture_skeleton.mmd
+
+%% CORE DESIGN PRINCIPLE:
+%%   The Concierge IS Two Minds:
+%%     FRONT LLM (Voice): Warm, empathetic, family-aware. TALKS to user.
+%%     BACK LLM (Worker): Precise, tool-focused, no personality. EXECUTES tasks.
+%%   Neither knows the other exists. Session State is shared memory.
+%%   K1 Event Bus is the communication channel. Events are triggers.
+
+%% ACTOR MODEL:
+%%   Front LLM: Signal(1) + Cognitive(6) + Read(2) + Control(1) = 10 tools
+%%   Back LLM:  Read(2) + Action(3) + Control(1) = 6 tools
+%%   Single Writer Invariant (ADR-0017g): Front writes cognitive SS. FSM writes task SS.
+%%   Back NEVER writes SS directly -- emits deltas to bus -> FSM applies.
+
+%% REACT LOOP:
+%%   Both actors use the SAME shared react_loop() function.
+%%   Front terminates: text response with NO tool calls.
+%%   Back terminates: submit_result() tool call ONLY.
+%%   One tool per iteration. Observation between each.
+
+%% FSM STATES (X-Axis):
+%%   LISTENING -> ACKING -> DISPATCHING -> COMPANIONING -> DELIVERING -> LISTENING
+%%   + PROGRESSING, CLARIFYING_USER, CLARIFYING_WORKER, CANCELLING,
+%%     INTERRUPT_HANDLING, PROACTIVE_WAKE, WEAVING
+
+%% PROMPT MODES (Section 6.1):
+%%   STANDARD, CLARIFY_ASK, CLARIFY_RESOLVE, HITL_RELAY, HITL_RESOLVE,
+%%   PRESENT, WEAVE, CANCEL, INTERRUPT, ERROR
+%%   Each mode selects: tools, SS sections, prompt sections, examples, affect
+
+%% SESSION STATE HOT (52KB = 10 sections):
+%%   beliefs_active(8KB), scoreboard(6KB), affective_now(4KB),
+%%   clarifications(4KB), narrative_active(4KB), control(8KB),
+%%   history_active(8KB), meta(2KB), task_state(4KB), task_artifacts(4KB)
+
+%% COMPLEXITY TIERS:
+%%   LOW:    Front -> task.dispatch -> Back -> invoke_capability() directly
+%%   MEDIUM: Front -> task.dispatch -> Orchestrator (1-2 Fabric calls)
+%%   HIGH:   Front -> TaskEnvelope -> Orchestrator -> Planner 4-stage (future)
+
+%% CAUSAL ORDERING:
+%%   TimingChain enforces parent_id chains for STRICT topics.
+%%   Replaces ALL anti-spin logic (_force_text_only, _cognitive_only, _ack_next_tool).
+
+%% WEAVE PROTOCOL:
+%%   Async task results merge into ongoing conversation via WeaveBatcher.
+%%   500ms batch window. FrontLock serializes all Front events.
+
+%% HITL PROTOCOL:
+%%   Three variants: Clarification, Approval, Selection.
+%%   Back suspends -> Front translates to natural language -> User answers -> Back resumes.
+%%   Max 2 suspensions per task. Timeouts: clarification 60s, selection 90s, approval 120s.
+
+%% EXPERIENCE LAYER (6 stubs):
+%%   EmotionalProcessor (25th turn), AffectiveMirror (after EP),
+%%   NarrativeWeaver (20th turn), AnticipatoryResponder (30th turn),
+%%   ProactiveAgent (COMPANIONING + 5s wait), RhythmController (every output)
+
+%% LLM ADAPTER:
+%%   IConciergeModelPort protocol. GeminiConciergeAdapter (sole provider).
+%%   MODEL_SELECTION_TABLE: (capability, actor) -> model.
+%%   Front acks -> flash. Back ReAct -> pro.
+
+%% OPP KERNEL PRIMITIVES (7 Generalized Patterns):
+%%   OPP-1 Paced Delivery:     PacingStrategy (STAGGER/GROUP_BY_DOMAIN/PRIORITY_CASCADE)
+%%                              WeaveBatcher.flush_paced() delivers in groups with delays
+%%   OPP-2 Recency Bias Decay: Arbiter applies exponential decay raw*(1-decay)^age
+%%                              Short-input penalty (50% reduction, <3 words)
+%%   OPP-3 Affect Hard Caps:   AffectModifiers enforce max_response_tokens, vocabulary_tier,
+%%                              tool_budget_override per affect band
+%%   OPP-4 Trust Accumulator:  TrustAccumulator tracks approve/reject/cancel/modify/timeout
+%%                              Dynamic auto-approve threshold, adaptive HITL rounds
+%%   OPP-5 Proactive Scheduler: Idle detection, cooldown, session cap, affect suppression
+%%                              Replaces naive 5s-wait stub with kernel-level scheduler
+%%   OPP-6 Episodic Compression: Compress old turns into CompressedEpisode summaries
+%%                              Preserves HITL/safety turns, recent_window=10, episode_size=5
+%%   OPP-7 Dynamic Identity:   Role adaptation (EXPERT/PEER/GUIDE/SUPPORTER/EXECUTOR)
+%%                              Domain expertise tracking, formality drift, emotional attunement
+%%   OPP-8 Natural Flow Delivery: Result classification + conversation flow + delivery mode
+%%                              13-rule decision table, natural pause drain, 5 delivery modes
+%%   OPP Pipeline:              OppPipeline wires all 8 primitives into FSM lifecycle hooks
+%%                              set_opp_pipeline() DI, 9 hooks, per-primitive enable/disable
+%% ======================================================================================
+
+graph TB
+    %% ======================================================================================
+    %% USER INPUT LAYER (Top)
+    %% ======================================================================================
+    subgraph USER_LAYER["USER INTERACTION LAYER"]
+        direction LR
+        USER_INPUT["User Input<br/>Text / Voice / Touch"]:::user
+        OUTPUT_CHANNEL["Output Channel<br/>Subscribes to k1.response.*<br/>Streams text to user"]:::user
+        USER_INPUT -->|"raw text"| CONTROLLER
+        OUTPUT_CHANNEL -->|"display"| USER_INPUT
+    end
+
+    %% ======================================================================================
+    %% PHASE 1: DETERMINISTIC PRE-LLM (UltraBERT, 22ms)
+    %% ======================================================================================
+    subgraph PHASE1["PHASE 1: DETERMINISTIC PRE-LLM (UltraBERT, 22ms)"]
+        direction LR
+        ULTRABERT["UltraBERT<br/>Intent Classification<br/>Entity Extraction<br/>Safety Band Assessment<br/>Emotion Classification<br/>Domain Detection"]:::phase1
+
+        subgraph OPP2_RECENCY["OPP-2: Recency Bias Decay"]
+            OPP2_ARBITER["Arbiter.classify()<br/>domain_overlap + entity_overlap<br/>with recency decay"]:::opp
+            OPP2_DECAY["_apply_recency_decay()<br/>raw * (1-decay)^age<br/>decay_per_turn=0.15"]:::opp_detail
+            OPP2_SHORT["is_short_input()<br/>word_count < 3 threshold<br/>50% overlap penalty"]:::opp_detail
+            OPP2_ARBITER --> OPP2_DECAY
+            OPP2_ARBITER --> OPP2_SHORT
+        end
+        P1_SCOREBOARD["Write: scoreboard<br/>intents[], entities[],<br/>salience scores"]:::phase1_write
+        P1_AFFECT["Write: affective_now<br/>Initial emotion<br/>valence, arousal"]:::phase1_write
+        P1_CONTROL["Write: control<br/>Intent classification<br/>Domain context<br/>Safety band"]:::phase1_write
+        ULTRABERT --> P1_SCOREBOARD
+        ULTRABERT --> P1_AFFECT
+        ULTRABERT --> P1_CONTROL
+    end
+
+    %% ======================================================================================
+    %% FSM CONTROLLER (Central Orchestrator)
+    %% ======================================================================================
+    subgraph FSM_CONTROLLER["CONCIERGE FSM CONTROLLER"]
+        direction TB
+
+        CONTROLLER["FSMController<br/>Event Router<br/>Turn Manager<br/>Single Writer for SS"]:::fsm
+
+        subgraph FSM_STATES["FSM States (X-Axis)"]
+            direction LR
+            ST_LISTENING["LISTENING<br/>Idle, awaiting<br/>user input"]:::fsm_state
+            ST_DISPATCHING["DISPATCHING<br/>Phase 1 + Front LLM:<br/>classify, cognitive,<br/>dispatch"]:::fsm_state
+            ST_COMPANIONING["COMPANIONING<br/>Front idle,<br/>Back working.<br/>Can accept<br/>new user input"]:::fsm_state
+            ST_PROGRESSING["PROGRESSING<br/>Back executing<br/>tool calls"]:::fsm_state
+            ST_DELIVERING["DELIVERING<br/>Front presenting<br/>results to user"]:::fsm_state
+        end
+
+        subgraph FSM_INTERRUPT_STATES["Interrupt / Special States"]
+            direction LR
+            ST_CLARIFY_USER["CLARIFYING_USER<br/>Front detected<br/>ambiguity"]:::fsm_interrupt
+            ST_CLARIFY_WORKER["CLARIFYING_WORKER<br/>Back suspended,<br/>needs user input"]:::fsm_interrupt
+            ST_CANCELLING["CANCELLING<br/>Cancel in-flight<br/>task"]:::fsm_interrupt
+            ST_INTERRUPT["INTERRUPT_HANDLING<br/>New user input<br/>during COMPANIONING"]:::fsm_interrupt
+            ST_PROACTIVE["PROACTIVE_WAKE<br/>task.complete while<br/>LISTENING"]:::fsm_interrupt
+            ST_WEAVING["WEAVING<br/>Drain pending_results<br/>queue"]:::fsm_interrupt
+        end
+
+        subgraph GUARD_MODEL["Guard Model (5 Actions)"]
+            direction LR
+            GA_TRANSITION["TRANSITION<br/>Validate + change state"]:::guard_t
+            GA_PASSTHROUGH["PASSTHROUGH<br/>Forward, no state change"]:::guard_p
+            GA_OBSERVE["OBSERVE<br/>Log only, no routing"]:::guard_o
+            GA_QUEUE["QUEUE<br/>Hold in FrontLock<br/>or pending_results"]:::guard_q
+            GA_DEAD_LETTER["DEAD_LETTER<br/>Reject as invalid"]:::guard_d
+        end
+
+        subgraph FSM_TURN_STATE["FSMTurnState (Not LLM-visible)"]
+            PENDING_RESULTS["pending_results: deque<br/>task.complete payloads<br/>queued for Weave"]:::fsm_internal
+            CANCELLED_TASKS["cancelled_tasks: set<br/>For dedup: cancel vs<br/>complete race"]:::fsm_internal
+            CANCEL_FLAG["cancellation_requested<br/>Checked by react_loop<br/>between iterations"]:::fsm_internal
+        end
+
+        subgraph FRONT_LOCK["FrontLock (Concurrency Gate)"]
+            FL_BUSY["busy: bool<br/>True while Front<br/>LLM generating"]:::fsm_internal
+            FL_QUEUE["event_queue: deque<br/>Queued events when<br/>Front is busy"]:::fsm_internal
+            FL_PRIORITY["Priority Order:<br/>1. user.input (URGENT)<br/>2. task.suspended<br/>3. task.complete<br/>4. task.failed<br/>5. findings.ready"]:::fsm_internal
+        end
+    end
+
+    %% ======================================================================================
+    %% K1 EVENT BUS (Central Communication)
+    %% ======================================================================================
+    subgraph K1_BUS["K1 EVENT BUS (k1/bus/)"]
+        direction TB
+
+        subgraph BUS_CORE["Bus Infrastructure"]
+            direction LR
+            LOCAL_BUS["LocalBus<br/>BusFactory.create_local_ordered()"]:::bus
+            TIMING_CHAIN["TimingChain<br/>Causal ordering via parent_id<br/>STRICT: buffer until parent delivered<br/>RELAXED: deliver immediately<br/>gap_timeout: 5s"]:::bus
+            MAILBOX_ROUTER["MailboxRouter<br/>Actor-to-actor routing<br/>WFQ priority scheduling"]:::bus
+        end
+
+        subgraph BUS_TOPICS["Topic Taxonomy (All STRICT except noted)"]
+            direction TB
+
+            subgraph TOPICS_SESSION["Session Events"]
+                T_USER_INPUT["k1.session.user.input.v1<br/>Priority: URGENT<br/>Controller -> Front"]:::topic_strict
+                T_BOOKING["k1.session.booking.confirmed.v1<br/>Priority: REALTIME<br/>Back -> Session State"]:::topic_strict
+                T_ARTIFACT["k1.session.artifact.created.v1<br/>Priority: INTERACTIVE<br/>Back -> FSM -> task_artifacts"]:::topic_strict
+            end
+
+            subgraph TOPICS_RESPONSE["Response Events"]
+                T_ACK["k1.response.ack.v1<br/>Priority: URGENT<br/>Front -> OUTPUT_CHANNEL"]:::topic_strict
+                T_FINAL["k1.response.final.v1<br/>Priority: URGENT<br/>Front -> OUTPUT_CHANNEL"]:::topic_strict
+                T_CLARIFICATION["k1.response.clarification.v1<br/>Priority: URGENT<br/>Front -> OUTPUT_CHANNEL"]:::topic_strict
+            end
+
+            subgraph TOPICS_ORCH["Orchestration Events"]
+                T_DISPATCH["k1.orchestration.task.dispatch.v1<br/>Priority: INTERACTIVE<br/>Front -> Back"]:::topic_strict
+                T_COMPLETE["k1.orchestration.task.complete.v1<br/>Priority: INTERACTIVE<br/>Back -> Front"]:::topic_strict
+                T_FAILED["k1.orchestration.task.failed.v1<br/>Priority: INTERACTIVE<br/>Back -> Front"]:::topic_strict
+                T_CANCEL["k1.orchestration.task.cancel.v1<br/>Priority: URGENT<br/>Front -> Back"]:::topic_strict
+                T_SUSPENDED["k1.orchestration.task.suspended.v1<br/>Priority: INTERACTIVE<br/>Back -> Front"]:::topic_strict
+                T_RESUME["k1.orchestration.task.resume.v1<br/>Priority: INTERACTIVE<br/>Front -> Back"]:::topic_strict
+                T_FINDINGS["k1.orchestration.findings.ready.v1<br/>Priority: INTERACTIVE<br/>Back -> Front"]:::topic_strict
+                T_ACCEPTED["k1.orchestration.task.accepted.v1<br/>Priority: INTERACTIVE<br/>Orchestrator -> FSM"]:::topic_strict
+                T_DELTA["k1.orchestration.delta.v1<br/>Priority: INTERACTIVE<br/>Orchestrator -> FSM (progress)"]:::topic_strict
+                T_DAG_DONE["k1.orchestration.dag.completed.v1<br/>Priority: INTERACTIVE<br/>Orchestrator -> FSM (all tiers)"]:::topic_strict
+            end
+
+            subgraph TOPICS_TOOL["Tool Events (Observability)"]
+                T_TOOL_START["k1.tool.started.v1<br/>Priority: INTERACTIVE<br/>Back -> (obs)"]:::topic_strict
+                T_TOOL_DONE["k1.tool.completed.v1<br/>Priority: INTERACTIVE<br/>Back -> (obs)"]:::topic_strict
+            end
+
+            subgraph TOPICS_CLARIFY["Clarification Events"]
+                T_CLARIFY_REQ["k1.orchestration.clarification.request.v1<br/>Priority: INTERACTIVE<br/>Back -> Front"]:::topic_strict
+                T_CLARIFY_RSP["k1.orchestration.clarification.response.v1<br/>Priority: INTERACTIVE<br/>Front -> Back"]:::topic_strict
+            end
+
+            subgraph TOPICS_RELAXED["Relaxed / Internal Topics"]
+                T_AFFECT["k1.affect.update.v1<br/>RELAXED / BACKGROUND<br/>Front -> Session State"]:::topic_relaxed
+                T_PROACTIVE_FILL["k1.proactive.fill.v1<br/>RELAXED / BACKGROUND<br/>ProactiveAgent -> OUTPUT"]:::topic_relaxed
+                T_WEAVE_BATCH["k1.internal.weave.batch.v1<br/>INTERNAL ONLY<br/>WeaveBatcher -> FSM -> Front"]:::topic_relaxed
+                T_HIL_REQ["k1.hil.request.v1<br/>STRICT / INTERACTIVE<br/>Front -> OUTPUT (HITL relay)"]:::topic_strict
+                T_HIL_RSP["k1.hil.response.v1<br/>STRICT / INTERACTIVE<br/>Front -> FSM (HITL resolve)"]:::topic_strict
+            end
+        end
+
+        subgraph BUS_CAUSAL["Causal Chain (parent_id Enforcement)"]
+            CAUSAL["user.input (#1, parent=0)<br/>  +-- ack (#2, parent=1)<br/>  +-- task.dispatch (#3, parent=1)<br/>        +-- tool.started (#4, parent=3)<br/>        +-- tool.completed (#5, parent=4)<br/>        +-- task.complete (#6, parent=3)<br/>              +-- response.final (#7, parent=6)"]:::causal
+        end
+
+        subgraph BUS_ADAPTERS["Bus Adapters"]
+            SESSION_BUS_ADAPTER["SessionBusAdapter<br/>SS delta events"]:::bus_adapter
+            DELTA_AGGREGATOR["DeltaAggregator<br/>500ms batch window<br/>Dedup by section + key<br/>Order by parent_id<br/>-> FSM.apply_deltas()"]:::bus_adapter
+        end
+    end
+
+    %% ======================================================================================
+    %% FRONT LLM ACTOR (The Voice)
+    %% ======================================================================================
+    subgraph FRONT_ACTOR["FRONT LLM ACTOR (The Concierge Voice)"]
+        direction TB
+
+        FRONT_HANDLER["FrontHandler<br/>ReAct Agent<br/>Warm, empathetic,<br/>family-aware<br/>NEVER executes<br/>functional tools"]:::front
+
+        subgraph FRONT_SUBSCRIBES["Subscribes To"]
+            direction LR
+            FS_INPUT["k1.session.user.input.v1"]:::front_sub
+            FS_COMPLETE["k1.orchestration.task.complete.v1"]:::front_sub
+            FS_FAILED["k1.orchestration.task.failed.v1"]:::front_sub
+            FS_FINDINGS["k1.orchestration.findings.ready.v1"]:::front_sub
+            FS_SUSPENDED["k1.orchestration.task.suspended.v1"]:::front_sub
+        end
+
+        subgraph FRONT_EMITS["Emits"]
+            direction LR
+            FE_ACK["k1.response.ack.v1<br/>URGENT"]:::front_emit
+            FE_DISPATCH["k1.orchestration.task.dispatch.v1<br/>INTERACTIVE"]:::front_emit
+            FE_CANCEL["k1.orchestration.task.cancel.v1<br/>URGENT"]:::front_emit
+            FE_RESUME["k1.orchestration.task.resume.v1<br/>INTERACTIVE"]:::front_emit
+            FE_CLARIFY_RSP["k1.orchestration.clarification.response.v1<br/>INTERACTIVE"]:::front_emit
+            FE_FINAL["k1.response.final.v1<br/>URGENT"]:::front_emit
+        end
+
+        subgraph FRONT_TOOLS["Front Tools (10 total)"]
+            direction TB
+
+            subgraph FT_SIGNAL["Signal (1)"]
+                TOOL_ACK["acknowledge()<br/>ACK-first enforcement<br/>Must fire iteration 1"]:::tool_signal
+            end
+
+            subgraph FT_COGNITIVE["Cognitive (6) -- Write SS HOT via MutationGuard"]
+                TOOL_BELIEFS["update_beliefs()<br/>Fact creation/correction<br/>S-P-O triples + confidence"]:::tool_cognitive
+                TOOL_SCOREBOARD["update_scoreboard()<br/>QUD, referents, salience<br/>Topic shift detection"]:::tool_cognitive
+                TOOL_CLARIFY["update_clarifications()<br/>Semantic gaps: field,<br/>question, severity"]:::tool_cognitive
+                TOOL_NARRATIVE["update_narrative()<br/>Thread switch/resume/close"]:::tool_cognitive
+                TOOL_AFFECT["refine_affect()<br/>Override Phase 1 emotion<br/>Sarcasm, irony, masked<br/>CONDITIONAL: only when<br/>affect confidence < threshold"]:::tool_cognitive
+                TOOL_PROMOTE["promote_belief()<br/>WARM-to-HOT promotion<br/>CONDITIONAL: MEDIUM/HIGH<br/>+ beliefs section non-empty"]:::tool_cognitive
+            end
+
+            subgraph FT_READ["Read (2) -- No mutations, parallel-safe"]
+                TOOL_RECALL_F["recall_memory()<br/>K0 long-term memory<br/>Conversational context"]:::tool_read
+                TOOL_SUMMARIZE["summarize_context()<br/>Token budget management<br/>Compress SS sections"]:::tool_read
+            end
+
+            subgraph FT_CONTROL["Control (1)"]
+                TOOL_DISPATCH["dispatch_task()<br/>FSM intercepts and emits<br/>k1.orchestration.task.dispatch.v1<br/>intents[], depends_on,<br/>reference_context"]:::tool_control
+            end
+        end
+
+        subgraph FRONT_REACT["ReAct Loop (Shared Implementation)"]
+            REACT_FRONT["react_loop(actor='front')<br/>Max iterations: mode + affect driven<br/>Termination: text with NO tool calls<br/>Typical rhythm:<br/>  1. acknowledge()<br/>  2. recall_memory()<br/>  3. update_beliefs()<br/>  4. dispatch_task()<br/>  5. Text response"]:::react
+        end
+    end
+
+    %% ======================================================================================
+    %% REACT LOOP RECOVERY PATTERNS
+    %% ======================================================================================
+    subgraph REACT_RECOVERY["REACT LOOP RECOVERY PATTERNS"]
+        direction TB
+
+        subgraph RECOVERY_ITER_GUARDS["Iteration Guards"]
+            direction LR
+            RG_BUDGET["Budget: max_iterations<br/>per mode/tier"]:::react_guard
+            RG_CANCEL["Cancellation: checked<br/>between iterations"]:::react_guard
+            RG_TIMEOUT["Timeout: per-iteration<br/>LLM call limit"]:::react_guard
+            RG_VALID["Validation: allowlist +<br/>schema + safety check"]:::react_guard
+        end
+
+        subgraph RECOVERY_PATTERNS["Recovery / Nudge Patterns"]
+            direction TB
+            RP_DEGEN["DEGENERATE: Empty response<br/>--> nudge + strip tools (force text)"]:::react_recovery
+            RP_MALFORM["MALFORMED: Invalid tool call JSON<br/>--> nudge to simplify arguments"]:::react_recovery
+            RP_PSEUDO["PSEUDO-CODE: Text mimics tool call<br/>(tool_code, default_api., print())<br/>--> nudge to use real function call"]:::react_recovery
+            RP_TEXT_AFTER["TEXT-AFTER-TOOLS: Back writes text<br/>instead of submit_result after invoke<br/>--> nudge to call submit_result"]:::react_recovery
+            RP_LAST["LAST ITERATION: Back on final iter<br/>--> force submit_result with partials"]:::react_recovery
+        end
+
+        REACT_FRONT -.->|"uses"| RECOVERY_PATTERNS
+        REACT_BACK -.->|"uses"| RECOVERY_PATTERNS
+    end
+
+    %% ======================================================================================
+    %% BACK LLM ACTOR (The Worker)
+    %% ======================================================================================
+    subgraph BACK_ACTOR["BACK LLM ACTOR (The Worker)"]
+        direction TB
+
+        BACK_HANDLER["BackHandler<br/>ReAct Agent<br/>Precise, tool-focused<br/>No personality<br/>NEVER talks to user<br/>NEVER streams text"]:::back
+
+        subgraph BACK_SUBSCRIBES["Subscribes To"]
+            direction LR
+            BS_DISPATCH["k1.orchestration.task.dispatch.v1"]:::back_sub
+            BS_CANCEL["k1.orchestration.task.cancel.v1"]:::back_sub
+            BS_RESUME["k1.orchestration.task.resume.v1"]:::back_sub
+            BS_CLARIFY["k1.orchestration.clarification.response.v1"]:::back_sub
+        end
+
+        subgraph BACK_EMITS["Emits"]
+            direction LR
+            BE_TOOL_START["k1.tool.started.v1"]:::back_emit
+            BE_TOOL_DONE["k1.tool.completed.v1"]:::back_emit
+            BE_COMPLETE["k1.orchestration.task.complete.v1"]:::back_emit
+            BE_FAILED["k1.orchestration.task.failed.v1"]:::back_emit
+            BE_SUSPENDED["k1.orchestration.task.suspended.v1"]:::back_emit
+            BE_FINDINGS["k1.orchestration.findings.ready.v1"]:::back_emit
+            BE_BOOKING["k1.session.booking.confirmed.v1"]:::back_emit
+            BE_ARTIFACT["k1.session.artifact.created.v1"]:::back_emit
+        end
+
+        subgraph BACK_TOOLS["Back Tools (6 total)"]
+            direction TB
+
+            subgraph BT_READ["Read (2)"]
+                TOOL_RECALL_B["recall_memory()<br/>Task-specific history<br/>'What hotel last time?'"]:::tool_read
+                TOOL_DISCOVER["discover_capabilities()<br/>Fabric Registry search<br/>Intent -> capability"]:::tool_read
+            end
+
+            subgraph BT_ACTION["Action (3) -- The Real Work"]
+                TOOL_INVOKE["invoke_capability()<br/>UNIVERSAL EXECUTOR<br/>Any registered Fabric capability<br/>hotel_booking, calendar_create,<br/>web_search, email_draft,<br/>product_search, etc."]:::tool_action
+                TOOL_SPAWN["spawn_via_fabric()<br/>Dynamic specialist agents<br/>MEDIUM/HIGH only"]:::tool_action
+                TOOL_WORKFLOW["execute_workflow()<br/>Multi-step DAG execution<br/>MEDIUM/HIGH only"]:::tool_action
+            end
+
+            subgraph BT_CONTROL["Control (1)"]
+                TOOL_SUBMIT["submit_result()<br/>ONLY way to end a task<br/>result_type='complete'<br/>  -> task done, final answer<br/>result_type='needs_human'<br/>  -> suspend for HITL<br/>  hil_type: clarification /<br/>  approval / selection"]:::tool_control
+            end
+        end
+
+        subgraph BACK_REACT["ReAct Loop (Shared Implementation)"]
+            REACT_BACK["react_loop(actor='back')<br/>Max iterations per tier:<br/>LOW:4, MED:8, HIGH:12<br/>Tool calls per iteration: 1<br/>Termination: submit_result() ONLY<br/>Execution protocol:<br/>  1. ORIENT (read dispatch)<br/>  2. CHECK existing work<br/>  3. ASSESS capability<br/>  4. DISCOVER (if unknown)<br/>  5. SAFETY CHECK<br/>  6. INVOKE<br/>  7. EVALUATE<br/>  8. SUBMIT"]:::react
+        end
+    end
+
+    %% ======================================================================================
+    %% SESSION STATE (Shared Memory -- 52KB HOT)
+    %% ======================================================================================
+    subgraph SESSION_STATE["SESSION STATE (HOT 52KB + WARM 48KB)"]
+        direction TB
+
+        subgraph SS_COGNITIVE["Cognitive Sections (Front LLM Writes)"]
+            SS_BELIEFS["beliefs_active (8KB)<br/>Writer: Front LLM<br/>S-P-O triples + confidence<br/>Evict low-confidence to WARM<br/>after 20 turns"]:::ss_front
+            SS_SCOREBOARD["scoreboard (6KB)<br/>Writers: Phase1 + Front<br/>QUD stack, referents,<br/>salience map, topic shifts<br/>Rewritten per turn"]:::ss_front
+            SS_AFFECT["affective_now (4KB)<br/>Writers: Phase1 + Front + EP<br/>Emotion, valence, arousal,<br/>dominance, trend, confidence<br/>Priority: later write wins"]:::ss_front
+            SS_CLARIFY["clarifications (4KB)<br/>Writer: Front LLM<br/>Semantic gaps: field,<br/>question, severity, depth<br/>Clear resolved after 5 turns"]:::ss_front
+            SS_NARRATIVE["narrative_active (4KB)<br/>Writer: Front LLM<br/>Thread state, switches,<br/>resumptions, summaries<br/>Summarize after 50 turns"]:::ss_front
+        end
+
+        subgraph SS_SYSTEM["System Sections (FSM / Phase1 Writes)"]
+            SS_CONTROL["control (8KB)<br/>Writers: FSM + Phase1<br/>FlowState, TurnLock,<br/>IntentClassification,<br/>DomainContext, SafetyContext,<br/>active_task_ids, complexity_tier"]:::ss_system
+            SS_HISTORY["history_active (8KB)<br/>Writer: FSM<br/>TypedHistoryEntry[]<br/>Types: user, ack, final,<br/>weave, clarification,<br/>hitl_request, hitl_response,<br/>error, proactive<br/>Sliding window: 20 entries"]:::ss_system
+            SS_META["meta (2KB)<br/>Writer: FSM<br/>Turn count, latency,<br/>telemetry, token usage"]:::ss_system
+            SS_TEMPORAL["temporal_context<br/>Writer: FSM<br/>Time-based context,<br/>timezone, location"]:::ss_system
+        end
+
+        subgraph SS_MUTATION["Mutation Guard (3-Tier Validation)"]
+            direction LR
+            MG_SECTION["1. Section capacity<br/>Does mutation fit<br/>section budget?"]:::mutation_guard
+            MG_TIER["2. Tier capacity<br/>Does mutation fit<br/>HOT/WARM budget?"]:::mutation_guard
+            MG_TOTAL["3. Total capacity<br/>Does mutation fit<br/>overall limit?"]:::mutation_guard
+            MG_EMERGENCY["Emergency mode:<br/>>95% pressure<br/>ALL writes rejected"]:::mutation_guard
+            MG_SECTION --> MG_TIER --> MG_TOTAL
+        end
+
+        subgraph SS_TASK["Task Sections (FSM via DeltaAggregator)"]
+            SS_TASK_STATE["task_state (4KB)<br/>Writer: FSM only<br/>TaskStateEntry per task:<br/>task_id, action, status,<br/>progress_pct, depends_on,<br/>pending_hil, hil_count<br/>Status: DISPATCHED /<br/>IN_PROGRESS / SUSPENDED /<br/>COMPLETED / FAILED / CANCELLED"]:::ss_task
+            SS_TASK_ARTIFACTS["task_artifacts (4KB)<br/>Writer: FSM only<br/>Durable outputs:<br/>confirmations, appointments,<br/>documents, purchases<br/>Evict to WARM after 10 turns"]:::ss_task
+        end
+
+        subgraph SS_STATIC["Static Section"]
+            SS_PERSONA["persona (immutable)<br/>Writer: Session Init<br/>Tone, personality, family<br/>members, preferences,<br/>payment, dietary, timezone"]:::ss_static
+        end
+
+        subgraph SS_WARM["WARM Tier (48KB)"]
+            SS_BELIEFS_WARM["beliefs_warm<br/>Evicted low-confidence"]:::ss_warm
+            SS_HISTORY_WARM["history_warm<br/>Entries beyond 20-window"]:::ss_warm
+            SS_ARTIFACTS_WARM["artifacts_warm<br/>Evicted task artifacts"]:::ss_warm
+            SS_NARRATIVE_WARM["narrative_warm<br/>Summarized old threads"]:::ss_warm
+        end
+    end
+
+    %% ======================================================================================
+    %% DYNAMIC PROMPT MODE ARCHITECTURE (Section 6.1)
+    %% ======================================================================================
+    subgraph PROMPT_ARCH["DYNAMIC PROMPT MODE ARCHITECTURE (Section 6.1)"]
+        direction TB
+
+        subgraph PROMPT_MODES["PromptMode Enum (10 Modes)"]
+            direction LR
+            PM_STANDARD["STANDARD<br/>10 tools, ~5500 tokens<br/>Full cognitive processing"]:::mode_full
+            PM_CLARIFY_ASK["CLARIFY_ASK<br/>3 tools, ~2200 tokens<br/>Ask one question"]:::mode_light
+            PM_CLARIFY_RESOLVE["CLARIFY_RESOLVE<br/>7 tools, ~3800 tokens<br/>Resolve + possible dispatch"]:::mode_medium
+            PM_HITL_RELAY["HITL_RELAY<br/>0 tools, ~1200 tokens<br/>Pure text translation"]:::mode_minimal
+            PM_HITL_RESOLVE["HITL_RESOLVE<br/>2 tools, ~2000 tokens<br/>Parse answer, confirm"]:::mode_light
+            PM_PRESENT["PRESENT<br/>2 tools, ~3000 tokens<br/>Deliver task results"]:::mode_medium
+            PM_WEAVE["WEAVE<br/>2 tools, ~3200 tokens<br/>Bridge async results"]:::mode_medium
+            PM_CANCEL["CANCEL<br/>3 tools, ~2000 tokens<br/>Confirm cancellation"]:::mode_light
+            PM_INTERRUPT["INTERRUPT<br/>10 tools, ~5500 tokens<br/>Full processing (new input)"]:::mode_full
+            PM_ERROR["ERROR<br/>1 tool, ~1800 tokens<br/>Graceful explanation"]:::mode_minimal
+        end
+
+        subgraph DETERMINE_MODE["determine_mode() Logic"]
+            DM_FSM["FSM state mappings:<br/>CANCELLING -> CANCEL<br/>INTERRUPT_HANDLING -> INTERRUPT<br/>CLARIFYING_USER -> ASK / RESOLVE<br/>CLARIFYING_WORKER -> HITL variants"]:::prompt_logic
+            DM_TOPIC["Topic mappings:<br/>task.complete -> PRESENT<br/>task.failed -> ERROR<br/>weave.batch -> WEAVE<br/>task.suspended -> HITL_RELAY"]:::prompt_logic
+            DM_SS["SS-signal fallbacks:<br/>Suspended tasks -> HITL_RESOLVE<br/>Blocking gaps -> CLARIFY_RESOLVE<br/>Default -> STANDARD"]:::prompt_logic
+        end
+
+        subgraph PROMPT_COMPONENTS["Composable Prompt Sections (10)"]
+            PS_IDENTITY["IDENTITY (~150 tok)"]:::prompt_section
+
+            subgraph OPP7_IDENTITY["OPP-7: Dynamic Identity"]
+                OPP7_CONTEXT["DynamicIdentityContext<br/>compute() per turn<br/>Returns IdentitySnapshot"]:::opp
+                OPP7_ROLE["ConversationalRole<br/>EXPERT | PEER | GUIDE |<br/>SUPPORTER | EXECUTOR<br/>Adapts to user signals"]:::opp_detail
+                OPP7_EXPERTISE["domain_expertise tracking<br/>formality_level drift<br/>emotional_attunement<br/>context_tags[]"]:::opp_detail
+                OPP7_CONTEXT --> OPP7_ROLE
+                OPP7_CONTEXT --> OPP7_EXPERTISE
+            end
+            PS_REACT["REACT_RHYTHM (~200 tok)<br/>+ REDUCED variant (~80 tok)"]:::prompt_section
+            PS_STATE["STATE_INTERP (~200 tok)<br/>+ CLARIFY / TASK / PRESENT<br/>focused variants (~60 tok)"]:::prompt_section
+            PS_COGNITIVE["COGNITIVE_DISCIPLINE<br/>(~150 tok) + REDUCED"]:::prompt_section
+            PS_DISPATCH["DISPATCH_RULES (~350 tok)"]:::prompt_section
+            PS_EMOTION["EMOTIONAL_CALIB (~100 tok)"]:::prompt_section
+            PS_SAFETY["SAFETY_HITL (~300 tok)"]:::prompt_section
+            PS_WEAVE_P["WEAVE_PROTOCOL (~100 tok)"]:::prompt_section
+            PS_ANTI["ANTI_PATTERNS (~150 tok)<br/>+ per-mode subsets (~60 tok)"]:::prompt_section
+            PS_EXAMPLES["MODE_EXAMPLES<br/>(~200 tok per mode)"]:::prompt_section
+        end
+
+        subgraph AFFECT_MODULATION["Affect Modulation"]
+            AB_CRISIS["CRISIS: valence < -0.5, arousal > 0.7<br/>-1 iter, 1 example, -5 history<br/>'Calm, structured. Lead with action.'"]:::affect_crisis
+            AB_LOW["LOW: valence < -0.3, arousal < 0.4<br/>'Gentle, brief. Don't force cheer.'"]:::affect_low
+            AB_NEUTRAL["NEUTRAL: balanced<br/>(no modifier)"]:::affect_neutral
+            AB_POSITIVE["POSITIVE: valence > 0.5, arousal > 0.6<br/>'Match energy. Celebrate.'"]:::affect_positive
+            AB_ELEVATED["ELEVATED: abs(valence) > 0.3<br/>'Acknowledge feeling first.'"]:::affect_elevated
+
+            subgraph OPP3_HARD_CAPS["OPP-3: Affect Hard Constraints"]
+                OPP3_ENFORCER["apply_affect_hard_constraints()<br/>Enforces per-band limits<br/>on LLM generation params"]:::opp
+                OPP3_CRISIS_CAP["CRISIS: max_tokens=512<br/>vocab=simple, tools=2"]:::opp_detail
+                OPP3_LOW_CAP["LOW: max_tokens=1024<br/>vocab=simple, tools=3"]:::opp_detail
+                OPP3_NEUTRAL_CAP["NEUTRAL: no cap<br/>vocab=standard"]:::opp_detail
+                OPP3_POS_CAP["POSITIVE: max_tokens=2048<br/>vocab=rich"]:::opp_detail
+                OPP3_ELEV_CAP["ELEVATED: max_tokens=1536<br/>vocab=standard"]:::opp_detail
+            end
+        end
+
+        subgraph CLARIFY_DEPTH["Clarification Depth Tracking"]
+            CD_0["Depth 0: First ask<br/>Open-ended single question"]:::clarify_depth
+            CD_1["Depth 1: Re-ask<br/>More specific, offer 2-3 options"]:::clarify_depth
+            CD_2["Depth 2: Final attempt<br/>State best guess, proceed"]:::clarify_depth
+        end
+
+        subgraph DOMAIN_RULES["Domain Rule Injection"]
+            DR_HEALTH["health: AMBER floor<br/>Never diagnose"]:::domain
+            DR_FINANCE["finance: AMBER floor<br/>Exact amounts"]:::domain
+            DR_ELDER["elder_care: Simple language<br/>Max 3 options"]:::domain
+            DR_CHILDREN["children: Route via parent<br/>Filter content"]:::domain
+            DR_EMERGENCY["emergency: RED<br/>Safety first, numbers"]:::domain
+            DR_LEGAL["legal: RED<br/>Never advise"]:::domain
+            DR_TRAVEL["travel: GREEN default<br/>AMBER for bookings"]:::domain
+            DR_PRODUCTIVITY["productivity: GREEN<br/>Standard processing"]:::domain
+        end
+    end
+
+    %% ======================================================================================
+    %% LLM ADAPTER (Universal Port)
+    %% ======================================================================================
+    subgraph LLM_ADAPTER["UNIVERSAL LLM ADAPTER"]
+        direction TB
+
+        ADAPTER_PORT["IConciergeModelPort<br/>generate(ConciergeModelRequest)<br/>  -> ConciergeModelResponse<br/>generate_stream(request)<br/>  -> AsyncIterator[StreamChunk]"]:::adapter_port
+
+        subgraph ADAPTER_TYPES["Request / Response Types"]
+            REQ_TYPE["ConciergeModelRequest<br/>capability: CHAT / TOOL_CALL /<br/>STRUCTURED / REASON<br/>system_prompt, messages,<br/>tools, tool_choice,<br/>max_tokens, timeout_ms,<br/>actor, scenario, model_hint"]:::adapter_type
+            RSP_TYPE["ConciergeModelResponse<br/>text, tool_calls[],<br/>tokens_in/out, latency_ms,<br/>model_id, finish_reason"]:::adapter_type
+        end
+
+        subgraph MODEL_SELECTION["Model Selection Table"]
+            MS_TABLE["(CHAT, front) -> gemini-2.5-flash<br/>(TOOL_CALL, front) -> gemini-2.5-pro<br/>(TOOL_CALL, back) -> gemini-2.5-pro<br/>(STRUCTURED, *) -> gemini-2.5-flash<br/>(REASON, back) -> gemini-2.5-pro<br/>Hints: fast->flash, smart->pro"]:::adapter_select
+        end
+
+        subgraph VALIDATION["LLM Output Validation"]
+            VALIDATOR["LLMOutputValidator<br/>1. Tool in allowlist?<br/>2. Required params present?<br/>3. Param types match?<br/>4. acknowledge() first? (Front)<br/>validated_generate(): retry 1x<br/>with corrective prompt,<br/>lower temp on retry"]:::validator
+        end
+
+        GEMINI_ADAPTER["GeminiConciergeAdapter<br/>SOLE provider class<br/>Imports google.genai<br/>Converts ToolSchema -><br/>FunctionDeclaration<br/>Normalizes response"]:::adapter_impl
+        TEST_ADAPTER["TestConciergeAdapter<br/>Deterministic, no LLM<br/>Keyed by (actor, scenario)"]:::adapter_test
+    end
+
+    %% ======================================================================================
+    %% COMPLEXITY TIERS & ORCHESTRATION
+    %% ======================================================================================
+    subgraph TIERS["COMPLEXITY TIERS & ROUTING"]
+        direction TB
+
+        subgraph TIER_LOW["LOW Tier (<2s)"]
+            LOW_PATH["Front -> dispatch_task<br/>-> Back -> invoke_capability()<br/>-> submit_result<br/>Budget: 4 tool calls (LOW)"]:::tier_low
+        end
+
+        subgraph TIER_MEDIUM["MEDIUM Tier"]
+            MED_PATH["Front -> dispatch_task<br/>-> OrchestratorStub<br/>(1-2 Fabric calls)<br/>-> AggregatedResult<br/>Budget: 8 tool calls (MED)"]:::tier_medium
+            ORCH_STUB["OrchestratorStub<br/>Invariants: ORCH-01 (no SS write)<br/>ORCH-02 (no LLM)<br/>ORCH-03 (no tools)<br/>ORCH-04 (every step via Fabric)<br/>ORCH-10 (max 2 calls)"]:::tier_medium
+        end
+
+        subgraph TIER_HIGH["HIGH Tier (Interface Only)"]
+            HIGH_PATH["Front -> TaskEnvelope<br/>-> Orchestrator<br/>-> PlanRequest<br/>-> Planner 4-stage<br/>  (SKETCH -> EXPAND -><br/>   VALIDATE -> COMMIT)<br/>-> CommittedPlan<br/>-> DAG execution<br/>Budget: 12 tool calls (HIGH)"]:::tier_high
+        end
+
+        subgraph TIER_DEGRADE["Tier Degradation Cascade"]
+            DEGRADE["HIGH (CB_PLANNER open) -> MEDIUM<br/>MEDIUM (CB_ORCH open) -> LOW<br/>LOW (CB_FABRIC open) -> canned response"]:::tier_degrade
+        end
+    end
+
+    %% ======================================================================================
+    %% CAPABILITY FABRIC (Domain-Agnostic Execution)
+    %% ======================================================================================
+    subgraph FABRIC["CAPABILITY FABRIC (Universal Executor)"]
+        direction TB
+
+        FABRIC_REGISTRY["Capability Registry<br/>Domain-agnostic catalog<br/>tool.execute.hotel_booking<br/>tool.execute.calendar_create<br/>tool.execute.web_search<br/>tool.execute.email_draft<br/>tool.execute.product_search<br/>tool.execute.medication_reminder<br/>tool.execute.image_generate<br/>tool.execute.appointment_schedule"]:::fabric
+
+        FABRIC_PIPELINE["9-Step Execution Pipeline<br/>1. Resolve capability<br/>2. Select provider<br/>3. Build context<br/>4. Validate inputs<br/>5. Check safety band<br/>6. Execute<br/>7. Validate output<br/>8. Create artifact (if durable)<br/>9. Return structured result"]:::fabric
+
+        FABRIC_CONTRACTS["CapabilityContract<br/>required_inputs[]<br/>optional_inputs[]<br/>has_side_effects: bool<br/>estimated_cost: string<br/>safety_band_min: string"]:::fabric
+    end
+
+    %% ======================================================================================
+    %% HITL PROTOCOL
+    %% ======================================================================================
+    subgraph HITL["HITL PROTOCOL (Human-in-the-Loop)"]
+        direction TB
+
+        subgraph HITL_TYPES["Three HITL Variants"]
+            HITL_CLARIFY["Clarification<br/>Missing required params<br/>Free-text answer<br/>Timeout: 60s"]:::hitl
+            HITL_APPROVAL["Approval<br/>Side-effect actions<br/>Approve/Modify/Cancel<br/>Safety: AMBER min<br/>Timeout: 120s"]:::hitl
+            HITL_SELECTION["Selection<br/>Ambiguous results<br/>Multi-select from list<br/>Timeout: 90s"]:::hitl
+        end
+
+        HITL_REQUEST["TaskSuspended (bus payload)<br/>task_id, hil_type,<br/>question, options,<br/>side_effects,<br/>safety_band,<br/>findings_so_far[],<br/>max_rounds: 2"]:::hitl
+
+        subgraph HITL_FLOW["HITL Flow"]
+            HF_1["Back detects ambiguity"]:::hitl_flow
+            HF_2["Back: submit_result(needs_human)"]:::hitl_flow
+            HF_3["FSM: SUSPENDED state"]:::hitl_flow
+            HF_4["Front: translate to natural lang"]:::hitl_flow
+            HF_5["User responds"]:::hitl_flow
+            HF_6["Front: parse + task.resume"]:::hitl_flow
+            HF_7["Back: resume from<br/>ReAct message history"]:::hitl_flow
+            HF_1 --> HF_2 --> HF_3 --> HF_4 --> HF_5 --> HF_6 --> HF_7
+        end
+
+        HITL_RULES["Rules:<br/>Max 2 suspensions/task<br/>Approval mandatory for side-effects<br/>Auto-cancel on timeout<br/>ReAct history preserved on suspend<br/>Persisted in task_state.pending_hil"]:::hitl
+
+        subgraph OPP4_TRUST["OPP-4: Trust Accumulator"]
+            OPP4_ACCUM["TrustAccumulator<br/>initial_trust=0.5<br/>Records: APPROVE (+0.05)<br/>REJECT (-0.10), CANCEL (-0.08)<br/>MODIFY (-0.03), TIMEOUT (-0.15)<br/>AUTO_SUCCESS (+0.02)"]:::opp
+            OPP4_AUTO["should_auto_approve()<br/>trust >= 0.85 threshold<br/>AND risk_level <= 0.5<br/>Bypasses HITL for trusted users"]:::opp_detail
+            OPP4_ROUNDS["get_dynamic_max_rounds()<br/>High trust: fewer HITL rounds<br/>Low trust: more rounds<br/>base * (2 - trust_level)"]:::opp_detail
+            OPP4_ACCUM --> OPP4_AUTO
+            OPP4_ACCUM --> OPP4_ROUNDS
+        end
+
+        subgraph HITL_L2_ENFORCE["FSM L2 Defense-in-Depth"]
+            L2_ENFORCER["FSMHITLEnforcer<br/>Validates BEFORE invoke_capability:<br/>RED -> BLOCK (never execute)<br/>has_side_effects -> BLOCK_NEEDS_APPROVAL<br/>No prior approval -> force suspend<br/>Catches Back LLM judgment errors"]:::hitl
+        end
+
+        subgraph HITL_TASK_FAILED["TaskFailed Rich Payload"]
+            TF_PAYLOAD["TaskFailed (7 fields)<br/>task_id, reason,<br/>error_code, tool_history[],<br/>partial_results[],<br/>retries_attempted,<br/>last_error_detail<br/>Front translates to user-friendly"]:::hitl
+        end
+    end
+
+    %% ======================================================================================
+    %% TASK MODEL
+    %% ======================================================================================
+    subgraph TASK_MODEL["TASK MODEL"]
+        direction TB
+
+        TASK_DISPATCH_TYPE["TaskDispatch<br/>task_id, intents[],<br/>tier, budget_hint,<br/>reference_context,<br/>safety_band (AMBER default),<br/>depends_on, context_snapshot"]:::task
+
+        TASK_INTENT["TaskIntent<br/>action (NL or capability),<br/>params, domain, urgency"]:::task
+
+        subgraph TASK_PATTERNS["Task Patterns"]
+            TP_SINGLE["Single Intent<br/>'What's the weather?'<br/>One intent, one invoke"]:::task_pattern
+            TP_BUNDLE["Bundled Intents<br/>'Book hotel AND search food'<br/>Multiple intents, one dispatch"]:::task_pattern
+            TP_CHAIN["Chained Tasks<br/>'Book hotel THEN find nearby'<br/>Two dispatches, depends_on<br/>TaskDependencyQueue hydrates<br/>$prev.result.address"]:::task_pattern
+            TP_CONCURRENT["Concurrent Tasks<br/>Arrive at different times<br/>Single Back: queued mailbox<br/>Future BackPool: parallel"]:::task_pattern
+        end
+    end
+
+    %% ======================================================================================
+    %% WEAVE & BATCHING
+    %% ======================================================================================
+    subgraph WEAVE_SYSTEM["WEAVE & BATCHING PROTOCOL"]
+        direction TB
+
+        WEAVE_BATCHER["WeaveBatcher<br/>500ms batch window<br/>Collect task.complete payloads<br/>Reset timer on new arrival<br/>Flush: invoke Front ONCE<br/>with ALL batched results"]:::weave
+
+        WEAVE_PROMPT["[ASYNC RESULT ARRIVED]<br/>While chatting, N task(s) done.<br/>Results: {summary}<br/>User's topic: {thread}<br/>Respond to topic FIRST,<br/>then present results naturally."]:::weave
+
+        subgraph WEAVE_RULES["Delivery Rules"]
+            WR_IDLE["LISTENING: Deliver directly<br/>(no weave needed)"]:::weave_rule
+            WR_CHAT["COMPANIONING: Queue,<br/>deliver after Front response"]:::weave_rule
+            WR_DISPATCH["DISPATCHING: Queue,<br/>deliver after dispatch"]:::weave_rule
+            WR_DELIVER["DELIVERING: Chain,<br/>present sequentially"]:::weave_rule
+        end
+
+        subgraph OPP1_PACING["OPP-1: Paced Delivery Protocol"]
+            OPP1_STRATEGY["PacingStrategy<br/>NONE | STAGGER |<br/>GROUP_BY_DOMAIN |<br/>PRIORITY_CASCADE"]:::opp
+            OPP1_PLAN["compute_pacing_plan()<br/>Analyzes batch results<br/>Returns PacingPlan:<br/>strategy, groups[],<br/>inter_group_delay_ms"]:::opp
+            OPP1_FLUSH["flush_paced(plan)<br/>Delivers groups with<br/>configurable delays<br/>between each group"]:::opp
+            OPP1_STRATEGY --> OPP1_PLAN
+            OPP1_PLAN --> OPP1_FLUSH
+        end
+
+        WEAVE_BATCHER -->|"pacing"| OPP1_FLUSH
+
+        subgraph OPP8_DELIVERY["OPP-8: Natural Flow Delivery"]
+            OPP8_CLASSIFY["classify_result()<br/>AWAITED | FOLLOW_UP |<br/>BACKGROUND | TIME_SENSITIVE |<br/>INFORMATIONAL"]:::opp
+            OPP8_FLOW["ConversationFlowSignal<br/>topic_match, depth,<br/>natural_pause, awaiting"]:::opp_detail
+            OPP8_ENGINE["DeliveryStrategyEngine<br/>13-rule decision table<br/>(D1-D13)"]:::opp
+            OPP8_MODE["DeliveryMode:<br/>DIRECT_PRESENT |<br/>CONVERSATIONAL_WEAVE |<br/>CONTEXTUAL_INJECT |<br/>BRIEF_NOTIFY |<br/>DEFERRED_QUEUE"]:::opp_detail
+            OPP8_PAUSE["on_natural_pause()<br/>Re-evaluate deferred<br/>results on topic shift"]:::opp
+            OPP8_CLASSIFY --> OPP8_ENGINE
+            OPP8_FLOW --> OPP8_ENGINE
+            OPP8_ENGINE --> OPP8_MODE
+            OPP8_ENGINE --> OPP8_PAUSE
+        end
+
+        subgraph OPP_PIPELINE["OPP Pipeline (Wiring Layer)"]
+            OPP_PIPE["OppPipeline<br/>Holds all 8 primitives<br/>9 lifecycle hooks<br/>Per-primitive enable/disable"]:::opp
+            OPP_HOOKS["Lifecycle Hooks:<br/>on_classify (OPP-2)<br/>on_pre_prompt_build (OPP-6,7)<br/>on_pre_llm_call (OPP-3)<br/>on_task_complete (OPP-8)<br/>on_hitl_outcome (OPP-4)<br/>on_pre_invoke (OPP-4)<br/>on_idle_tick (OPP-5)<br/>on_weave_flush (OPP-1)<br/>on_natural_pause (OPP-8)"]:::opp_detail
+            OPP_PIPE --> OPP_HOOKS
+        end
+    end
+
+    %% ======================================================================================
+    %% EXPERIENCE LAYER (6 Stubs)
+    %% ======================================================================================
+    subgraph EXPERIENCE["EXPERIENCE LAYER (6 Components, All Stubs)"]
+        direction LR
+        EXP_EMOTIONAL["EmotionalProcessor<br/>Every 25th turn<br/>5ms budget<br/>Writes: affective_now"]:::exp
+        EXP_MIRROR["AffectiveMirror<br/>After EmotionalProcessor<br/>2ms budget<br/>Writes: tone envelope"]:::exp
+        EXP_NARRATIVE["NarrativeWeaver<br/>Every 20th turn<br/>10ms budget<br/>Writes: narrative context"]:::exp
+        EXP_ANTICIP["AnticipatoryResponder<br/>Every 30th turn<br/>15ms budget<br/>Writes: anticipation"]:::exp
+        EXP_PROACTIVE["ProactiveScheduler (OPP-5)<br/>Idle detection (5000ms)<br/>Cooldown: 15000ms<br/>Max 10/session<br/>Suppress: crisis, low affect<br/>Triggers: WAIT_STATUS,<br/>PROGRESS_UPDATE,<br/>CONTEXT_TIP, IDLE_CHECK_IN"]:::opp
+        EXP_RHYTHM["RhythmController<br/>Every output<br/>1ms budget<br/>Writes: timing params"]:::exp
+    end
+
+    %% ======================================================================================
+    %% CONTEXT ASSEMBLY
+    %% ======================================================================================
+    subgraph CONTEXT_ASSEMBLY["CONTEXT ASSEMBLY"]
+        direction TB
+
+        subgraph OPP6_COMPRESSION["OPP-6: Episodic Compression"]
+            OPP6_COMPRESSOR["EpisodicCompressor<br/>recent_window=10<br/>episode_size=5<br/>min_turns_to_compress=15"]:::opp
+            OPP6_EPISODE["CompressedEpisode<br/>episode_id, turn_range,<br/>summary, key_facts[],<br/>topic, to_prompt_block()"]:::opp_detail
+            OPP6_RULES["Preservation Rules:<br/>HITL turns: always kept<br/>Safety turns: always kept<br/>Recent window: verbatim"]:::opp_detail
+            OPP6_COMPRESSOR --> OPP6_EPISODE
+            OPP6_COMPRESSOR --> OPP6_RULES
+        end
+
+        DYN_PROMPT_BUILDER["DynamicPromptBuilder<br/>Mode-driven assembly<br/>128K context window<br/>80% safety margin<br/>Pre-call compression<br/>if over budget"]:::builder
+
+        SESSION_TRAJECTORY["SessionTrajectory (assembled view)<br/>session_goal (from narrative + beliefs)<br/>completed_items (from artifacts)<br/>active_items (from task_state)<br/>open_items (from beliefs - dispatched)<br/>emotional_arc (from affective_now)<br/>turn_count, tasks_completed/failed"]:::builder
+
+        CHAT_HISTORY_HELPER["build_chat_history()<br/>Last N typed entries<br/>Front: 5-20 (mode-variable)<br/>Back: 5 (fixed)<br/>Filter: user + final only"]:::builder
+
+        BACK_PROMPT_BUILDER["BackPromptBuilder<br/>3 scenarios:<br/>TaskDispatch, TaskResume,<br/>ReActIteration<br/>Selective SS reads<br/>reference_context resolution"]:::builder
+    end
+
+    %% ======================================================================================
+    %% SAFETY BANDS
+    %% ======================================================================================
+    subgraph SAFETY["SAFETY BAND ENFORCEMENT"]
+        direction LR
+        BAND_GREEN["GREEN (auto-proceed)<br/>Search, lookup, compare,<br/>recall, summarize, check,<br/>read calendar, weather<br/>BUT: has_side_effects=true<br/>auto-escalates to AMBER"]:::band_green
+        BAND_AMBER["AMBER (confirm first)<br/>Book, purchase, send,<br/>create event, place order,<br/>modify schedule, transfer<br/>Back STEP 5 + FSM L2 enforce"]:::band_amber
+        BAND_RED["RED (refuse + explain)<br/>Delete account, transfer<br/>above threshold, share<br/>medical data, override<br/>parental controls"]:::band_red
+    end
+
+    %% ======================================================================================
+    %% DATA FLOWS
+    %% ======================================================================================
+
+    %% User -> Controller -> Phase 1 -> Bus
+    USER_INPUT -->|"text"| CONTROLLER
+    CONTROLLER -->|"classify"| ULTRABERT
+    ULTRABERT -->|"Phase1Result"| CONTROLLER
+    P1_SCOREBOARD -->|"direct write"| SS_SCOREBOARD
+    P1_AFFECT -->|"direct write"| SS_AFFECT
+    P1_CONTROL -->|"direct write"| SS_CONTROL
+    CONTROLLER -->|"emit user.input.v1"| T_USER_INPUT
+
+    %% Bus -> Front
+    T_USER_INPUT -->|"subscribe"| FRONT_HANDLER
+    T_COMPLETE -->|"subscribe"| FRONT_HANDLER
+    T_FAILED -->|"subscribe"| FRONT_HANDLER
+    T_FINDINGS -->|"subscribe"| FRONT_HANDLER
+    T_SUSPENDED -->|"subscribe"| FRONT_HANDLER
+
+    %% Front -> Bus
+    FRONT_HANDLER -->|"emit"| FE_ACK
+    FRONT_HANDLER -->|"emit"| FE_DISPATCH
+    FRONT_HANDLER -->|"emit"| FE_FINAL
+    FRONT_HANDLER -->|"emit"| FE_CANCEL
+    FRONT_HANDLER -->|"emit"| FE_RESUME
+    FE_ACK --> T_ACK
+    FE_DISPATCH --> T_DISPATCH
+    FE_FINAL --> T_FINAL
+    FE_CANCEL --> T_CANCEL
+    FE_RESUME --> T_RESUME
+
+    %% Bus -> Back
+    T_DISPATCH -->|"subscribe"| BACK_HANDLER
+    T_CANCEL -->|"subscribe"| BACK_HANDLER
+    T_RESUME -->|"subscribe"| BACK_HANDLER
+
+    %% Back -> Bus
+    BACK_HANDLER -->|"emit"| BE_COMPLETE
+    BACK_HANDLER -->|"emit"| BE_FAILED
+    BACK_HANDLER -->|"emit"| BE_SUSPENDED
+    BACK_HANDLER -->|"emit"| BE_ARTIFACT
+    BACK_HANDLER -->|"emit"| BE_TOOL_START
+    BACK_HANDLER -->|"emit"| BE_TOOL_DONE
+    BE_COMPLETE --> T_COMPLETE
+    BE_FAILED --> T_FAILED
+    BE_SUSPENDED --> T_SUSPENDED
+    BE_ARTIFACT --> T_ARTIFACT
+    BE_TOOL_START --> T_TOOL_START
+    BE_TOOL_DONE --> T_TOOL_DONE
+
+    %% Bus -> Output
+    T_ACK -->|"stream"| OUTPUT_CHANNEL
+    T_FINAL -->|"display"| OUTPUT_CHANNEL
+    T_CLARIFICATION -->|"display"| OUTPUT_CHANNEL
+
+    %% Front Tools -> SS
+    TOOL_BELIEFS -->|"MutationGuard"| SS_BELIEFS
+    TOOL_SCOREBOARD -->|"MutationGuard"| SS_SCOREBOARD
+    TOOL_CLARIFY -->|"MutationGuard"| SS_CLARIFY
+    TOOL_NARRATIVE -->|"MutationGuard"| SS_NARRATIVE
+    TOOL_AFFECT -->|"MutationGuard"| SS_AFFECT
+    TOOL_PROMOTE -->|"MutationGuard"| SS_BELIEFS
+
+    %% Back Deltas -> DeltaAggregator -> FSM -> SS
+    T_ARTIFACT -->|"delta"| DELTA_AGGREGATOR
+    T_COMPLETE -->|"delta"| DELTA_AGGREGATOR
+    DELTA_AGGREGATOR -->|"FSM.apply_deltas()"| CONTROLLER
+    CONTROLLER -->|"write"| SS_TASK_STATE
+    CONTROLLER -->|"write"| SS_TASK_ARTIFACTS
+    CONTROLLER -->|"append"| SS_HISTORY
+    CONTROLLER -->|"update"| SS_META
+
+    %% Both actors read SS
+    FRONT_HANDLER -.->|"read (lock-free)"| SESSION_STATE
+    BACK_HANDLER -.->|"read (lock-free)"| SESSION_STATE
+
+    %% FSM state transitions
+    ST_LISTENING -->|"user.input"| ST_DISPATCHING
+    ST_DISPATCHING -->|"response.final (no dispatch)"| ST_LISTENING
+    ST_DISPATCHING -->|"task.dispatch"| ST_COMPANIONING
+    ST_COMPANIONING -->|"task.complete"| ST_DELIVERING
+    ST_DELIVERING -->|"response.final"| ST_LISTENING
+    ST_DELIVERING -->|"pending_results?"| ST_WEAVING
+    ST_WEAVING -->|"queue drained"| ST_LISTENING
+    ST_COMPANIONING -->|"new user.input"| ST_INTERRUPT
+    ST_COMPANIONING -->|"cancel intent"| ST_CANCELLING
+    ST_LISTENING -->|"task.complete (idle)"| ST_PROACTIVE
+
+    %% Back -> Fabric
+    TOOL_INVOKE -->|"execute"| FABRIC_PIPELINE
+    TOOL_DISCOVER -->|"search"| FABRIC_REGISTRY
+    TOOL_SPAWN -->|"create agent"| FABRIC_PIPELINE
+    TOOL_WORKFLOW -->|"run DAG"| FABRIC_PIPELINE
+
+    %% Prompt assembly
+    DYN_PROMPT_BUILDER -->|"build context"| FRONT_HANDLER
+    BACK_PROMPT_BUILDER -->|"build context"| BACK_HANDLER
+    DYN_PROMPT_BUILDER -.->|"read"| SESSION_STATE
+    DYN_PROMPT_BUILDER -->|"determine_mode"| PROMPT_MODES
+    DYN_PROMPT_BUILDER -->|"assemble"| PROMPT_COMPONENTS
+    DYN_PROMPT_BUILDER -->|"compute"| AFFECT_MODULATION
+    DYN_PROMPT_BUILDER -->|"inject"| DOMAIN_RULES
+
+    %% LLM calls
+    REACT_FRONT -->|"generate()"| ADAPTER_PORT
+    REACT_BACK -->|"generate()"| ADAPTER_PORT
+    ADAPTER_PORT -->|"validate"| VALIDATOR
+    ADAPTER_PORT -->|"route"| GEMINI_ADAPTER
+
+    %% Weave
+    T_COMPLETE -->|"if Front busy"| WEAVE_BATCHER
+
+    %% Experience Layer
+    CONTROLLER -->|"tick_experience()"| EXPERIENCE
+    EXP_EMOTIONAL -->|"trajectory"| SS_AFFECT
+    EXP_PROACTIVE -->|"fill message"| T_PROACTIVE_FILL
+
+    %% HITL flow
+    TOOL_SUBMIT -->|"needs_human"| T_SUSPENDED
+    T_SUSPENDED -->|"Front translates"| FRONT_HANDLER
+    FRONT_HANDLER -->|"user question"| T_CLARIFICATION
+    FRONT_HANDLER -->|"resume"| T_RESUME
+    T_RESUME -->|"Back resumes"| BACK_HANDLER
+
+    %% Tier routing
+    CONTROLLER -->|"tier decision"| TIERS
+    LOW_PATH -->|"Back direct"| BACK_HANDLER
+    MED_PATH -->|"Orchestrator"| ORCH_STUB
+    ORCH_STUB -->|"Fabric"| FABRIC_PIPELINE
+    ORCH_STUB -->|"emit accepted"| T_ACCEPTED
+    ORCH_STUB -->|"emit delta"| T_DELTA
+    ORCH_STUB -->|"emit dag.completed"| T_DAG_DONE
+    T_DAG_DONE -->|"FSM receives"| CONTROLLER
+
+    %% HITL L2 enforcement
+    L2_ENFORCER -->|"validate"| TOOL_INVOKE
+    L2_ENFORCER -.->|"check"| FABRIC_CONTRACTS
+
+    %% Internal weave routing
+    WEAVE_BATCHER -->|"emit"| T_WEAVE_BATCH
+    T_WEAVE_BATCH -->|"FSM routes"| FRONT_HANDLER
+
+    %% SS eviction
+    SS_BELIEFS -->|"evict"| SS_BELIEFS_WARM
+    SS_HISTORY -->|"evict"| SS_HISTORY_WARM
+    SS_TASK_ARTIFACTS -->|"evict"| SS_ARTIFACTS_WARM
+    SS_NARRATIVE -->|"evict"| SS_NARRATIVE_WARM
+
+    %% Mutation guard
+    TOOL_BELIEFS -->|"validates"| MG_SECTION
+    TOOL_SCOREBOARD -->|"validates"| MG_SECTION
+    TOOL_NARRATIVE -->|"validates"| MG_SECTION
+
+    %% ======================================================================================
+    %% OPP KERNEL PRIMITIVE DATA FLOWS
+    %% ======================================================================================
+
+    %% OPP-1: Paced Delivery
+    OPP1_FLUSH -->|"grouped delivery"| FRONT_HANDLER
+
+    %% OPP-2: Recency Bias Decay
+    ULTRABERT -->|"classify()"| OPP2_ARBITER
+    OPP2_ARBITER -->|"decayed scores"| CONTROLLER
+
+    %% OPP-3: Affect Hard Constraints
+    AFFECT_MODULATION -->|"band"| OPP3_ENFORCER
+    OPP3_ENFORCER -->|"capped params"| ADAPTER_PORT
+
+    %% OPP-4: Trust Accumulator
+    OPP4_ACCUM -.->|"read outcomes"| SS_TASK_STATE
+    OPP4_AUTO -->|"auto-approve gate"| L2_ENFORCER
+    OPP4_ROUNDS -->|"dynamic max_rounds"| HITL_REQUEST
+
+    %% OPP-5: Proactive Scheduler
+    EXP_PROACTIVE -->|"evaluate triggers"| CONTROLLER
+    EXP_PROACTIVE -.->|"check affect"| SS_AFFECT
+
+    %% OPP-6: Episodic Compression
+    OPP6_COMPRESSOR -->|"compressed context"| DYN_PROMPT_BUILDER
+    OPP6_COMPRESSOR -.->|"read history"| SS_HISTORY
+
+    %% OPP-7: Dynamic Identity
+    OPP7_CONTEXT -->|"identity snapshot"| PS_IDENTITY
+    OPP7_CONTEXT -.->|"read affect"| SS_AFFECT
+    OPP7_CONTEXT -.->|"read beliefs"| SS_BELIEFS
+
+    %% OPP-8: Natural Flow Delivery
+    OPP8_ENGINE -->|"delivery decision"| CONTROLLER
+    OPP8_CLASSIFY -.->|"task result"| CONTROLLER
+    OPP8_PAUSE -->|"re-evaluate deferred"| CONTROLLER
+
+    %% OPP Pipeline: Wiring layer
+    CONTROLLER -->|"set_opp_pipeline()"| OPP_PIPE
+    OPP_PIPE -->|"on_task_complete"| OPP8_ENGINE
+    OPP_PIPE -->|"on_weave_flush"| OPP1_PLAN
+    OPP_PIPE -->|"on_hitl_outcome"| OPP4_ACCUM
+    OPP_PIPE -->|"on_pre_prompt_build"| OPP6_COMPRESSOR
+    OPP_PIPE -->|"on_pre_prompt_build"| OPP7_CONTEXT
+    OPP_PIPE -->|"on_pre_llm_call"| OPP3_ENFORCER
+    OPP_PIPE -->|"on_idle_tick"| EXP_PROACTIVE
+
+    %% ======================================================================================
+    %% OUTPUT CHANNEL & STREAMING ARCHITECTURE
+    %% ======================================================================================
+    subgraph OUTPUT_ARCH["OUTPUT CHANNEL & STREAMING"]
+        direction TB
+
+        subgraph STREAM_FLOW["Streaming Architecture"]
+            direction LR
+            SA_GEN["generate_stream()<br/>LLM yields StreamChunk<br/>(text_delta, tool_call_delta,<br/>thought_delta, done)"]:::output_stream
+            SA_EMIT["Front emits<br/>k1.response.stream.v1<br/>per chunk"]:::output_stream
+            SA_RENDER["OutputChannel subscribes<br/>+ renders live to user"]:::output_stream
+            SA_GEN --> SA_EMIT --> SA_RENDER
+        end
+
+        subgraph DELIVERY_MODES["Delivery Modes (OPP-8)"]
+            direction LR
+            DM_DIRECT["DIRECT_PRESENT<br/>Awaited result,<br/>immediate delivery"]:::delivery_mode
+            DM_WEAVE["CONVERSATIONAL_WEAVE<br/>Async result woven<br/>into conversation"]:::delivery_mode
+            DM_INJECT["CONTEXTUAL_INJECT<br/>Background result<br/>on topic match"]:::delivery_mode
+            DM_NOTIFY["BRIEF_NOTIFY<br/>Time-sensitive,<br/>short notification"]:::delivery_mode
+            DM_DEFER["DEFERRED_QUEUE<br/>Low-priority,<br/>hold for pause"]:::delivery_mode
+        end
+
+        PROACTIVE_DELIVERY["Proactive Delivery<br/>OPP-5 idle detection triggers<br/>PROACTIVE_WAKE state<br/>--> Front generates fill message"]:::output_stream
+    end
+
+    %% Output architecture flows
+    OUTPUT_CHANNEL -.->|"renders"| SA_RENDER
+    OPP8_ENGINE -->|"selects mode"| DELIVERY_MODES
+    EXP_PROACTIVE -->|"idle trigger"| PROACTIVE_DELIVERY
+
+    %% ======================================================================================
+    %% STYLE DEFINITIONS
+    %% ======================================================================================
+
+    %% User layer
+    classDef user fill:#e1f5fe,stroke:#0277bd,stroke-width:3px,color:#000,font-weight:bold
+
+    %% Phase 1
+    classDef phase1 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+    classDef phase1_write fill:#e1bee7,stroke:#8e24aa,stroke-width:1px,color:#000
+
+    %% FSM Controller
+    classDef fsm fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#000,font-weight:bold
+    classDef fsm_state fill:#ffe0b2,stroke:#ef6c00,stroke-width:2px,color:#000
+    classDef fsm_interrupt fill:#ffcc80,stroke:#f57c00,stroke-width:2px,color:#000,font-style:italic
+    classDef fsm_internal fill:#fff8e1,stroke:#ffa000,stroke-width:1px,color:#000
+
+    %% K1 Event Bus
+    classDef bus fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+    classDef bus_adapter fill:#c8e6c9,stroke:#388e3c,stroke-width:2px,color:#000
+    classDef topic_strict fill:#a5d6a7,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef topic_relaxed fill:#dcedc8,stroke:#558b2f,stroke-width:1px,color:#000,font-style:italic
+    classDef causal fill:#e8f5e9,stroke:#2e7d32,stroke-width:1px,color:#000,font-family:monospace
+
+    %% Front LLM Actor
+    classDef front fill:#bbdefb,stroke:#1565c0,stroke-width:3px,color:#000,font-weight:bold
+    classDef front_sub fill:#90caf9,stroke:#0d47a1,stroke-width:1px,color:#000
+    classDef front_emit fill:#64b5f6,stroke:#1565c0,stroke-width:2px,color:#000
+
+    %% Back LLM Actor
+    classDef back fill:#ffcdd2,stroke:#c62828,stroke-width:3px,color:#000,font-weight:bold
+    classDef back_sub fill:#ef9a9a,stroke:#b71c1c,stroke-width:1px,color:#000
+    classDef back_emit fill:#e57373,stroke:#c62828,stroke-width:2px,color:#000
+
+    %% Tools
+    classDef tool_signal fill:#fff59d,stroke:#f9a825,stroke-width:2px,color:#000,font-weight:bold
+    classDef tool_cognitive fill:#80deea,stroke:#00838f,stroke-width:2px,color:#000
+    classDef tool_read fill:#a5d6a7,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef tool_action fill:#ef5350,stroke:#b71c1c,stroke-width:2px,color:#fff,font-weight:bold
+    classDef tool_control fill:#ce93d8,stroke:#7b1fa2,stroke-width:2px,color:#000,font-weight:bold
+
+    %% ReAct
+    classDef react fill:#b3e5fc,stroke:#0288d1,stroke-width:2px,color:#000
+
+    %% Session State
+    classDef ss_front fill:#80deea,stroke:#00838f,stroke-width:2px,color:#000
+    classDef ss_system fill:#ffe0b2,stroke:#ef6c00,stroke-width:2px,color:#000
+    classDef ss_task fill:#ce93d8,stroke:#7b1fa2,stroke-width:2px,color:#000
+    classDef ss_static fill:#e0e0e0,stroke:#616161,stroke-width:2px,color:#000
+    classDef ss_warm fill:#d7ccc8,stroke:#795548,stroke-width:1px,color:#000,font-style:italic
+
+    %% Prompt Architecture
+    classDef mode_full fill:#bbdefb,stroke:#1565c0,stroke-width:2px,color:#000
+    classDef mode_medium fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef mode_light fill:#fff9c4,stroke:#f9a825,stroke-width:2px,color:#000
+    classDef mode_minimal fill:#ffccbc,stroke:#e64a19,stroke-width:1px,color:#000
+    classDef prompt_logic fill:#e1bee7,stroke:#8e24aa,stroke-width:1px,color:#000
+    classDef prompt_section fill:#f5f5f5,stroke:#9e9e9e,stroke-width:1px,color:#000
+    classDef affect_crisis fill:#ef5350,stroke:#b71c1c,stroke-width:2px,color:#fff,font-weight:bold
+    classDef affect_low fill:#90a4ae,stroke:#455a64,stroke-width:1px,color:#000
+    classDef affect_neutral fill:#e0e0e0,stroke:#616161,stroke-width:1px,color:#000
+    classDef affect_positive fill:#66bb6a,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef affect_elevated fill:#ffa726,stroke:#ef6c00,stroke-width:2px,color:#000
+    classDef clarify_depth fill:#fff9c4,stroke:#f9a825,stroke-width:1px,color:#000
+    classDef domain fill:#b2dfdb,stroke:#00695c,stroke-width:1px,color:#000
+
+    %% LLM Adapter
+    classDef adapter_port fill:#7e57c2,stroke:#4527a0,stroke-width:3px,color:#fff,font-weight:bold
+    classDef adapter_type fill:#b39ddb,stroke:#512da8,stroke-width:2px,color:#000
+    classDef adapter_select fill:#d1c4e9,stroke:#7b1fa2,stroke-width:1px,color:#000
+    classDef adapter_impl fill:#9575cd,stroke:#4527a0,stroke-width:2px,color:#fff
+    classDef adapter_test fill:#ede7f6,stroke:#9575cd,stroke-width:1px,color:#000,font-style:italic
+    classDef validator fill:#ffab91,stroke:#e64a19,stroke-width:2px,color:#000
+
+    %% Tiers
+    classDef tier_low fill:#a5d6a7,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef tier_medium fill:#fff59d,stroke:#f9a825,stroke-width:2px,color:#000
+    classDef tier_high fill:#ef9a9a,stroke:#c62828,stroke-width:2px,color:#000,font-style:italic
+    classDef tier_degrade fill:#ffccbc,stroke:#e64a19,stroke-width:1px,color:#000
+
+    %% Fabric
+    classDef fabric fill:#26a69a,stroke:#00695c,stroke-width:2px,color:#fff,font-weight:bold
+
+    %% HITL
+    classDef hitl fill:#f8bbd0,stroke:#c2185b,stroke-width:2px,color:#000
+    classDef hitl_flow fill:#fce4ec,stroke:#e91e63,stroke-width:1px,color:#000
+
+    %% Task Model
+    classDef task fill:#b3e5fc,stroke:#0288d1,stroke-width:2px,color:#000
+    classDef task_pattern fill:#e1f5fe,stroke:#0288d1,stroke-width:1px,color:#000
+
+    %% Weave
+    classDef weave fill:#e0f2f1,stroke:#00695c,stroke-width:2px,color:#000
+    classDef weave_rule fill:#b2dfdb,stroke:#00897b,stroke-width:1px,color:#000
+
+    %% Experience
+    classDef exp fill:#fce4ec,stroke:#c2185b,stroke-width:1px,color:#000,font-style:italic
+
+    %% Context Assembly
+    classDef builder fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,color:#000
+
+    %% Safety Bands
+    classDef band_green fill:#a5d6a7,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef band_amber fill:#ffcc80,stroke:#ef6c00,stroke-width:2px,color:#000,font-weight:bold
+    classDef band_red fill:#ef5350,stroke:#b71c1c,stroke-width:2px,color:#fff,font-weight:bold
+
+    %% Guard Actions
+    classDef guard_t fill:#a5d6a7,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef guard_p fill:#b3e5fc,stroke:#0288d1,stroke-width:2px,color:#000
+    classDef guard_o fill:#e0e0e0,stroke:#616161,stroke-width:1px,color:#000
+    classDef guard_q fill:#fff59d,stroke:#f9a825,stroke-width:2px,color:#000
+    classDef guard_d fill:#ef9a9a,stroke:#c62828,stroke-width:2px,color:#000
+
+    %% React Recovery
+    classDef react_guard fill:#fff9c4,stroke:#f9a825,stroke-width:1px,color:#000
+    classDef react_recovery fill:#ffccbc,stroke:#e64a19,stroke-width:1px,color:#000
+
+    %% Mutation Guard
+    classDef mutation_guard fill:#ffab91,stroke:#e64a19,stroke-width:1px,color:#000
+
+    %% Output / Streaming
+    classDef output_stream fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
+    classDef delivery_mode fill:#b3e5fc,stroke:#0288d1,stroke-width:1px,color:#000
+
+    %% OPP Kernel Primitives
+    classDef opp fill:#e8eaf6,stroke:#283593,stroke-width:2px,color:#000,font-weight:bold
+    classDef opp_detail fill:#c5cae9,stroke:#3949ab,stroke-width:1px,color:#000
