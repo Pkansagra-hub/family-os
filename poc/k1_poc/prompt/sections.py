@@ -321,7 +321,8 @@ as resolved. Do not over-tool a simple clarification answer.""",
     "DISPATCH_RULES": """== DISPATCH RULES ==
 Call dispatch_task when user asks to: search, book, create, schedule, send,
 draft, buy, compare, check, look up, find, remind, order, cancel, modify,
-track, set up, configure, or any action verb implying work.
+track, set up, configure, lock, unlock, turn on, turn off, start, stop,
+play, open, close, adjust, dim, brighten, or any action verb implying work.
 
 Do NOT dispatch for: greetings, emotional support, casual chat, opinions,
 clarification questions, or "how are you" messages.

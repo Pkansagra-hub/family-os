@@ -8,22 +8,11 @@ when set, and fall back to legacy callbacks when fabric_port is None.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
-from dataclasses import dataclass, field
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from k1.fabric.types import (
-    CapabilityContract,
-    CapabilityRequest,
-    CapabilityResult,
-    ErrorInfo,
-    RetrievalResult,
-    ScoredCapability,
-)
 from k1.concierge.fabric.ports import IFabricPort
 from k1.concierge.tools.implementations import (
     ToolContext,
@@ -32,6 +21,13 @@ from k1.concierge.tools.implementations import (
     execute_execute_workflow,
     execute_invoke_capability,
     execute_spawn_via_fabric,
+)
+from k1.fabric.types import (
+    CapabilityContract,
+    CapabilityRequest,
+    CapabilityResult,
+    RetrievalResult,
+    ScoredCapability,
 )
 
 # =====================================================================
@@ -48,10 +44,6 @@ def _mock_session_manager() -> MagicMock:
 
 def _make_ctx(
     fabric_port: IFabricPort | None = None,
-    capability_fn=None,
-    invoke_fn=None,
-    fabric_fn=None,
-    workflow_fn=None,
     actor: str = "back",
     hil_coordinator=None,
     active_task_id: str | None = None,
@@ -61,10 +53,6 @@ def _make_ctx(
         cognitive_trace_id=f"test-{uuid.uuid4().hex[:6]}",
         actor=actor,
         fabric_port=fabric_port,
-        capability_fn=capability_fn,
-        invoke_fn=invoke_fn,
-        fabric_fn=fabric_fn,
-        workflow_fn=workflow_fn,
         hil_coordinator=hil_coordinator,
         active_task_id=active_task_id,
     )
@@ -412,34 +400,30 @@ class TestWorkflowWithFabricPort:
 
 
 # =====================================================================
-# Backward compat — fabric_port=None falls through to legacy
+# Backward compat — fabric_port=None falls through to placeholder
 # =====================================================================
 
 
 class TestBackwardCompat:
-    """When fabric_port=None, old callbacks are used."""
+    """When fabric_port=None, tool functions return safe defaults."""
 
     @pytest.mark.asyncio
-    async def test_discover_falls_through_to_capability_fn(self) -> None:
-        async def _cap_fn(intent, domain, constraints):
-            return {"capabilities": [{"name": "legacy_cap"}], "count": 1}
-
-        ctx = _make_ctx(fabric_port=None, capability_fn=_cap_fn)
+    async def test_discover_returns_empty_without_fabric(self) -> None:
+        ctx = _make_ctx(fabric_port=None)
         result = await execute_discover_capabilities({"intent": "test"}, ctx)
         assert result.status == "ok"
+        assert result.data["count"] == 0
 
     @pytest.mark.asyncio
-    async def test_invoke_falls_through_to_invoke_fn(self) -> None:
-        async def _inv_fn(name, params, session_id=None):
-            return {"success": True, "data": {"legacy": True}}
-
-        ctx = _make_ctx(fabric_port=None, invoke_fn=_inv_fn)
+    async def test_invoke_returns_placeholder_without_fabric(self) -> None:
+        ctx = _make_ctx(fabric_port=None)
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert result.status == "ok"
+        assert result.data["result"].get("_poc") is True
 
     @pytest.mark.asyncio
     async def test_spawn_falls_through_to_placeholder(self) -> None:
-        """No fabric_port, no fabric_fn → POC placeholder."""
+        """No fabric_port → POC placeholder."""
         ctx = _make_ctx(fabric_port=None)
         result = await execute_spawn_via_fabric({"agent_type": "test", "task": "go"}, ctx)
         assert result.status == "ok"
@@ -447,7 +431,7 @@ class TestBackwardCompat:
 
     @pytest.mark.asyncio
     async def test_workflow_falls_through_to_placeholder(self) -> None:
-        """No fabric_port, no workflow_fn → POC placeholder."""
+        """No fabric_port → POC placeholder."""
         ctx = _make_ctx(fabric_port=None)
         result = await execute_execute_workflow({"workflow_id": "wf1", "params": {}}, ctx)
         assert result.status == "ok"

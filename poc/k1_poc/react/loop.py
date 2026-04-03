@@ -21,16 +21,20 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from k1.model_hub.ports import IModelHubPort
-from k1.model_hub.types import CapabilityType, ChatPayload, ChatResult
-from k1.model_hub.types import FinishReason as K1FinishReason
-from k1.model_hub.types import HubChunk, HubRequest, HubResponse
-from k1.model_hub.types import Message as K1Message
-from k1.model_hub.types import ReasonResult, RequestConstraints, StructuredResult, ToolCallPayload
-from k1.model_hub.types import ToolCallResult as K1ToolCallResult
-from k1.model_hub.types import ToolCallResultSet
-from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 from poc.k1_poc.config import get_config
+from poc.k1_poc.llm.hub_types import CapabilityType, ChatPayload
+from poc.k1_poc.llm.hub_types import FinishReason as K1FinishReason
+from poc.k1_poc.llm.hub_types import HubChunk, HubRequest, HubResponse, IModelHubPort
+from poc.k1_poc.llm.hub_types import Message as K1Message
+from poc.k1_poc.llm.hub_types import (
+    ReasonResult,
+    RequestConstraints,
+    StructuredResult,
+    ToolCallPayload,
+)
+from poc.k1_poc.llm.hub_types import ToolCallResult as K1ToolCallResult
+from poc.k1_poc.llm.hub_types import ToolCallResultSet
+from poc.k1_poc.llm.hub_types import ToolDefinition as K1ToolDefinition
 from poc.k1_poc.llm.types import (
     ConciergeModelResponse,
     FinishReason,

@@ -38,13 +38,13 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from k1.fabric.types import CapabilityRequest, CapabilityResult
 from k1.concierge.fabric.ports import IFabricPort
-from k1.sessionstate.ports.writer import BatchRequest, MutationRequest
 from k1.concierge.task.complexity import ComplexityTier
 from k1.concierge.task.dispatch import TaskDispatch
 from k1.concierge.task.intent import TaskIntent
 from k1.concierge.tools.result_protocol import ToolResult
+from k1.fabric.types import CapabilityRequest
+from k1.sessionstate.ports.writer import BatchRequest, MutationRequest
 
 logger = logging.getLogger(__name__)
 
@@ -91,12 +91,8 @@ class ToolContext:
     active_device_id: str | None = None  # M5 E5.5.6: device that triggered the current turn
     hil_coordinator: Any = None  # M6 E6.1.3: HILCoordinator for L2 invoke_capability blocking
     active_task_id: str | None = None  # M6 E6.1.3: task_id for per-task L2 checks
-    fabric_port: IFabricPort | None = None  # M2: typed K1 Fabric port (replaces 4 callbacks below)
+    fabric_port: IFabricPort | None = None  # M2: typed K1 Fabric port
     recall_fn: Callable | None = None
-    capability_fn: Callable | None = None  # deprecated: use fabric_port
-    invoke_fn: Callable | None = None  # deprecated: use fabric_port
-    fabric_fn: Callable | None = None  # deprecated: use fabric_port
-    workflow_fn: Callable | None = None  # deprecated: use fabric_port
     capability_cache: dict | None = None  # Per-session cache for discover_capabilities results
 
 
@@ -1038,8 +1034,7 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
 async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolResult:
     """Query K0 capability registry.
 
-    Delegates to ctx.capability_fn if available (production).
-    Returns empty in POC when no capability_fn is wired.
+    Delegates to ctx.fabric_port.discover_capabilities() if available.
 
     Results are cached per-session by (intent, domain) to avoid
     redundant lookups when the LLM calls discover_capabilities
@@ -1052,7 +1047,7 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
         "tool:discover_capabilities  intent=%s domain=%s has_fn=%s",
         intent[:80] if intent else "(empty)",
         domain,
-        ctx.capability_fn is not None,
+        ctx.fabric_port is not None,
     )
 
     if not intent:
@@ -1112,49 +1107,7 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
                 error=str(e),
             )
 
-    if ctx.capability_fn:
-        try:
-            result = ctx.capability_fn(intent, domain, constraints)
-            if _inspect.isawaitable(result):
-                result = await result
-            # result may be a dict with capabilities/count/hint (new)
-            # or a plain list (legacy wiring).
-            if isinstance(result, dict):
-                caps = result.get("capabilities", [])
-                data = {
-                    "capabilities": caps,
-                    "count": len(caps),
-                }
-                if not caps and "hint" in result:
-                    data["hint"] = result["hint"]
-            else:
-                # Legacy: result is a list of capability dicts
-                caps = result if isinstance(result, list) else []
-                data = {
-                    "capabilities": caps,
-                    "count": len(caps),
-                }
-            if not caps:
-                logger.warning(
-                    "discover_capabilities: no match for intent=%s domain=%s",
-                    intent[:60],
-                    domain,
-                )
-            tool_result = ToolResult(
-                tool_name="discover_capabilities",
-                status="ok",
-                data=data,
-            )
-            ctx.capability_cache[cache_key] = tool_result
-            return tool_result
-        except Exception as e:
-            return ToolResult(
-                tool_name="discover_capabilities",
-                status="error",
-                error=str(e),
-            )
-
-    # POC: no capability registry -- return empty
+    # No fabric_port — return empty
     tool_result = ToolResult(
         tool_name="discover_capabilities",
         status="ok",
@@ -1176,8 +1129,7 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
 async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
     """Invoke a K0 capability by name.
 
-    Delegates to ctx.invoke_fn if available (production).
-    Returns a placeholder result in POC when no invoke_fn is wired.
+    Delegates to ctx.fabric_port.execute() if available.
 
     M6 E6.1.3: L2 defense-in-depth -- block side-effect invocations
     when a HITL sub-task is PENDING for this task_id.
@@ -1249,7 +1201,7 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
         "tool:invoke_capability  capability=%s params_keys=%s has_fn=%s",
         capability_name,
         list(params.keys()),
-        ctx.invoke_fn is not None,
+        ctx.fabric_port is not None,
     )
 
     if not capability_name:
@@ -1293,31 +1245,7 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
                 data={"duration_ms": duration, "status": "error"},
             )
 
-    if ctx.invoke_fn:
-        try:
-            invoke_result = ctx.invoke_fn(capability_name, params, session_id)
-            if _inspect.isawaitable(invoke_result):
-                invoke_result = await invoke_result
-            duration = int(time.time() * 1000) - start_ms
-            return ToolResult(
-                tool_name="invoke_capability",
-                status="ok",
-                data={
-                    "result": invoke_result,
-                    "duration_ms": duration,
-                    "status": "success",
-                },
-            )
-        except Exception as e:
-            duration = int(time.time() * 1000) - start_ms
-            return ToolResult(
-                tool_name="invoke_capability",
-                status="error",
-                error=str(e),
-                data={"duration_ms": duration, "status": "error"},
-            )
-
-    # POC: no invoke_fn wired
+    # No fabric_port wired
     duration = int(time.time() * 1000) - start_ms
     return ToolResult(
         tool_name="invoke_capability",
@@ -1337,8 +1265,8 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
     Each invocation in the batch runs independently. This saves tool
     budget: 4 capability invocations cost only 1 tool call instead of 4.
 
-    The implementation delegates to the same invoke_fn used by
-    invoke_capability but processes all invocations in sequence.
+    The implementation delegates to fabric_port.execute() for each
+    invocation in sequence.
     """
     invocations = args.get("invocations", [])
     if not invocations:
@@ -1349,9 +1277,9 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
         )
 
     logger.info(
-        "tool:batch_invoke_capabilities  count=%d has_fn=%s",
+        "tool:batch_invoke_capabilities  count=%d has_fabric=%s",
         len(invocations),
-        ctx.invoke_fn is not None,
+        ctx.fabric_port is not None,
     )
 
     results = []
@@ -1376,21 +1304,34 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
 
         start_ms = int(time.time() * 1000)
 
-        if ctx.invoke_fn:
+        if ctx.fabric_port is not None:
             try:
-                invoke_result = ctx.invoke_fn(cap_name, params, None)
-                if _inspect.isawaitable(invoke_result):
-                    invoke_result = await invoke_result
+                k1_request = CapabilityRequest(
+                    capability_name=cap_name,
+                    params=params,
+                    trace_id=ctx.cognitive_trace_id or "",
+                    caller="concierge",
+                    caller_id=f"concierge.{ctx.actor}",
+                )
+                k1_result = await ctx.fabric_port.execute(k1_request)
                 duration = int(time.time() * 1000) - start_ms
                 results.append(
                     {
                         "capability_name": cap_name,
-                        "status": "success",
-                        "result": invoke_result,
+                        "status": "success" if k1_result.success else "error",
+                        "result": k1_result.data or {},
+                        "error": (
+                            (k1_result.error.message if k1_result.error else "")
+                            if not k1_result.success
+                            else ""
+                        ),
                         "duration_ms": duration,
                     }
                 )
-                succeeded += 1
+                if k1_result.success:
+                    succeeded += 1
+                else:
+                    failed += 1
             except Exception as e:
                 duration = int(time.time() * 1000) - start_ms
                 results.append(
@@ -1403,7 +1344,7 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
                 )
                 failed += 1
         else:
-            # POC: no invoke_fn wired
+            # No fabric_port wired
             duration = int(time.time() * 1000) - start_ms
             results.append(
                 {
@@ -1431,8 +1372,7 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
 async def execute_spawn_via_fabric(args: dict, ctx: ToolContext) -> ToolResult:
     """Spawn a specialized agent via K0 Agent Fabric.
 
-    Delegates to ctx.fabric_fn if available (production).
-    Returns a placeholder result in POC when no fabric_fn is wired.
+    Delegates to ctx.fabric_port.execute() if available.
     """
     agent_type = args.get("agent_type", "")
     task = args.get("task", "")
@@ -1474,22 +1414,7 @@ async def execute_spawn_via_fabric(args: dict, ctx: ToolContext) -> ToolResult:
                 error=str(e),
             )
 
-    if ctx.fabric_fn:
-        try:
-            result = ctx.fabric_fn(agent_type, task, constraints, capabilities_needed)
-            return ToolResult(
-                tool_name="spawn_via_fabric",
-                status="ok",
-                data=result,
-            )
-        except Exception as e:
-            return ToolResult(
-                tool_name="spawn_via_fabric",
-                status="error",
-                error=str(e),
-            )
-
-    # POC: no fabric_fn wired
+    # No fabric_port wired
     agent_id = f"agent-{uuid.uuid4().hex[:12]}"
     return ToolResult(
         tool_name="spawn_via_fabric",
@@ -1506,8 +1431,7 @@ async def execute_spawn_via_fabric(args: dict, ctx: ToolContext) -> ToolResult:
 async def execute_execute_workflow(args: dict, ctx: ToolContext) -> ToolResult:
     """Execute a predefined workflow by ID.
 
-    Delegates to ctx.workflow_fn if available (production).
-    Returns a placeholder result in POC when no workflow_fn is wired.
+    Delegates to ctx.fabric_port.execute() if available.
     """
     workflow_id = args.get("workflow_id", "")
     params = args.get("params", {})
@@ -1545,22 +1469,7 @@ async def execute_execute_workflow(args: dict, ctx: ToolContext) -> ToolResult:
                 error=str(e),
             )
 
-    if ctx.workflow_fn:
-        try:
-            result = ctx.workflow_fn(workflow_id, params, timeout_ms)
-            return ToolResult(
-                tool_name="execute_workflow",
-                status="ok",
-                data=result,
-            )
-        except Exception as e:
-            return ToolResult(
-                tool_name="execute_workflow",
-                status="error",
-                error=str(e),
-            )
-
-    # POC: no workflow_fn wired
+    # No fabric_port wired
     execution_id = f"exec-{uuid.uuid4().hex[:12]}"
     return ToolResult(
         tool_name="execute_workflow",

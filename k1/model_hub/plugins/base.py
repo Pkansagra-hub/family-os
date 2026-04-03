@@ -1,213 +1,222 @@
-"""
-IProviderPlugin -- Single Contract ALL Providers Implement
-===========================================================
+"""Provider plugin interface and supporting types [F20].
 
-ADR: 0001b (Model Hub Architecture & LLM Integration)
-Spec: k1/model_hub/model_hub.mmd — PLUGIN_INTERFACE section
+Defines the single contract (IProviderPlugin) that ALL provider plugins
+implement. This is the extension point for adding new LLM providers with
+zero hub code changes.
 
-Each provider (Gemini, OpenAI, Anthropic, Ollama, local) implements
-this interface. The hub never calls provider-native APIs directly;
-all traffic flows through the NormalizationLayer → IProviderPlugin.
+Import graph (Layer 2 -- imports Layer 0 + Layer 1)
+----------------------------------------------------
+k1.model_hub.plugins.base
+  -> k1.model_hub.types      (CapabilityType, FinishReason, HealthStatus, Message, ToolCallResult)
+  -> k1.model_hub.manifest   (ProviderManifest)
+  -> stdlib only
 
-MH-17: Plugin isolation — one plugin crash does not affect others.
+NEVER import from any service, adapter, or runtime module.
+
+References
+----------
+- model_hub.mmd: PLUGIN_INTERFACE section
+- ADR-0001b: Model Hub Architecture & LLM Integration
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, runtime_checkable
 
-from k1.model_hub.types import CapabilityType, Message
+from k1.model_hub.manifest import ProviderManifest
+from k1.model_hub.types import CapabilityType, FinishReason, HealthStatus, Message, ToolCallResult
 
-# ---------------------------------------------------------------------------
-# NormalizedRequest — provider-agnostic intermediate form
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Plugin Data Types (provider-agnostic intermediate forms)
+# ===========================================================================
 
 
 @dataclass(frozen=True)
 class NormalizedRequest:
-    """Provider-agnostic request after hub normalization.
+    """Provider-agnostic intermediate request form.
 
-    The NormalizationLayer converts HubRequest → NormalizedRequest.
-    Each plugin translates this to its native API format.
-    Hub does NOT know about /chat/completions vs /messages.
+    NormalizationLayer converts HubRequest -> NormalizedRequest.
+    Each plugin translates NormalizedRequest to its native API format.
+    Hub NEVER knows about /chat/completions vs /messages.
     """
 
-    capability: CapabilityType = CapabilityType.CHAT
-    messages: list[Message] = field(default_factory=list)
-    system_prompt: str = ""
-    tools: list[dict[str, Any]] | None = None  # tool definitions as dicts
-    tool_choice: str = "auto"
-    output_schema: dict[str, Any] | None = None
+    capability: CapabilityType
+    messages: List[Message] = field(default_factory=list)
+    system_prompt: Optional[str] = None
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[str] = None
+    output_schema: Optional[Dict[str, Any]] = None
     max_tokens: int = 65536
-    timeout_ms: int = 30_000
+    timeout_ms: int = 30000
     temperature: float = 0.7
     model_id: str = ""
     trace_id: str = ""
     consumer_id: str = ""
-    reasoning_effort: str | None = None  # "low" | "medium" | "high"
-    extra: dict[str, Any] = field(default_factory=dict)  # capability-specific extras
+    reasoning_effort: Optional[str] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
 
 
-# ---------------------------------------------------------------------------
-# ProviderResponse — provider-agnostic response
-# ---------------------------------------------------------------------------
-
-
-@dataclass
+@dataclass(frozen=True)
 class ProviderResponse:
-    """Provider-agnostic response returned by plugin.execute()."""
+    """Response from a provider plugin after execute().
+
+    NormalizationLayer converts ProviderResponse -> HubResponse.
+    """
 
     text: str = ""
-    tool_calls: list[dict[str, Any]] = field(default_factory=list)
-    json_output: dict[str, Any] | None = None
-    thinking_text: str = ""
+    tool_calls: Optional[List[ToolCallResult]] = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    thinking_tokens: int = 0
     model_id: str = ""
-    finish_reason: str = "stop"
-    latency_ms: int = 0
+    finish_reason: FinishReason = FinishReason.STOP
+    raw_response: Optional[Dict[str, Any]] = None
 
 
-# ---------------------------------------------------------------------------
-# ProviderChunk — streaming chunk from provider
-# ---------------------------------------------------------------------------
-
-
-@dataclass
+@dataclass(frozen=True)
 class ProviderChunk:
-    """Single streaming chunk from a provider plugin."""
+    """Streaming response chunk from a provider plugin.
 
-    chunk_type: str = "text_delta"  # "text_delta" | "tool_call_delta" | "thought_delta" | "done"
+    done=True on final chunk.
+    """
+
     text: str = ""
-    tool_call_partial: dict[str, Any] | None = None
-    thought_text: str = ""
-    response: ProviderResponse | None = None  # populated on "done"
-
-
-# ---------------------------------------------------------------------------
-# ProviderHealth — health check result
-# ---------------------------------------------------------------------------
+    done: bool = False
+    tool_calls: Optional[List[ToolCallResult]] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 @dataclass(frozen=True)
 class ProviderHealth:
-    """Health status from a provider health check."""
+    """Health status reported by a provider plugin.
 
-    status: str = "HEALTHY"  # "HEALTHY" | "DEGRADED" | "UNHEALTHY"
-    latency_ms: int = 0
-    error_rate: float = 0.0
-    message: str = ""
-
-
-# ---------------------------------------------------------------------------
-# ProviderManifest — parsed YAML manifest structure
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ModelManifest:
-    """Single model entry in a provider manifest."""
-
-    id: str = ""
-    capabilities: list[CapabilityType] = field(default_factory=list)
-    cost_per_1m_input: float = 0.0
-    cost_per_1m_output: float = 0.0
-    max_context: int = 128_000
-    max_output: int | None = None
-    supports_streaming: bool = True
-    supports_parallel_tools: bool = True
-    embedding_dimensions: int | None = None
-    rate_limit_rpm: int | None = None
-    rate_limit_tpm: int | None = None
-    tier: str = "STANDARD"  # "FAST" | "STANDARD" | "PREMIUM"
-
-
-@dataclass
-class CircuitBreakerConfig:
-    """Circuit breaker settings from provider manifest."""
-
-    failure_threshold: int = 3
-    failure_window_s: int = 60
-    cooldown_s: int = 30
-
-
-@dataclass
-class HealthCheckConfig:
-    """Health check settings from provider manifest."""
-
-    endpoint: str = ""
-    interval_s: int = 30
-    timeout_s: int = 5
-
-
-@dataclass
-class ProviderManifest:
-    """Parsed provider manifest YAML.
-
-    File location: k1/config/providers/{provider_id}.manifest.yaml
+    Status: HEALTHY, DEGRADED, UNHEALTHY.
     """
 
-    provider_id: str = ""
-    display_name: str = ""
-    plugin_class: str = ""
-    api_base: str = ""
-    auth_type: str = "bearer"  # "bearer" | "api_key_header" | "none"
-    credential_key: str = ""
-    auth_header_name: str | None = None
-    capabilities: list[CapabilityType] = field(default_factory=list)
-    models: list[ModelManifest] = field(default_factory=list)
-    circuit_breaker: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)
-    health_check: HealthCheckConfig = field(default_factory=HealthCheckConfig)
-    max_concurrent: int = 10
-    rate_limit_rpm: int = 500
-    rate_limit_tpm: int = 100_000
-    headroom_pct: float = 0.80
-    placement_type: str = "remote"  # "remote" | "local_gpu" | "local_cpu"
-    device_requirements: str | None = None
+    status: HealthStatus = HealthStatus.HEALTHY
+    latency_ms: int = 0
+    error_rate: float = 0.0
+    details: str = ""
 
 
-# ---------------------------------------------------------------------------
-# IProviderPlugin — the contract
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# IProviderPlugin Protocol (the single contract)
+# ===========================================================================
 
 
 @runtime_checkable
 class IProviderPlugin(Protocol):
     """Single contract that ALL provider plugins implement.
 
-    PLUGIN ISOLATION (MH-17):
-      Each plugin runs in its own error boundary.
-      Plugin crash → circuit breaker OPEN → fallback to next provider.
-      Plugin hang → timeout (from manifest) → same fallback.
-      Plugins share NOTHING except this interface.
+    Extension point for adding new LLM providers with zero hub code changes.
+    Plugin isolation (MH-17): each plugin runs in its own error boundary.
+
+    Lifecycle:
+      1. initialize(manifest) -- setup connections, validate keys.
+      2. supports/execute/stream_execute/estimate_tokens/health_check -- runtime.
+      3. close() -- cleanup connections, cancel in-flight.
+
+    References:
+      - model_hub.mmd: PLUGIN_INTERFACE section
+      - Invariant MH-17: Plugin isolation (crash boundary)
+      - Invariant MH-18: Manifest is SOLE capability truth
     """
 
     async def initialize(self, manifest: ProviderManifest) -> None:
-        """Called once on registration. Setup connections, validate keys."""
+        """Initialize plugin with provider manifest.
+
+        Called once on registration. Setup connections, validate API keys.
+
+        Args:
+            manifest: Parsed provider manifest (ProviderManifest).
+        """
         ...
 
     def supports(self, capability: CapabilityType) -> bool:
-        """Check if this provider supports a capability. O(1) from manifest."""
+        """Check if provider supports the given capability.
+
+        O(1) lookup from manifest capabilities.
+
+        Args:
+            capability: Capability type to check.
+
+        Returns:
+            True if provider supports the capability.
+        """
         ...
 
     async def execute(self, request: NormalizedRequest) -> ProviderResponse:
-        """Blocking call. Maps NormalizedRequest → provider API → ProviderResponse."""
+        """Execute a request against the provider's native API.
+
+        Maps NormalizedRequest -> provider-native API -> ProviderResponse.
+
+        Args:
+            request: Provider-agnostic normalized request.
+
+        Returns:
+            ProviderResponse with text, tool_calls, token usage.
+
+        Raises:
+            ProviderError: Provider returned an error.
+            HubTimeoutError: Request exceeded timeout_ms.
+            RateLimitError: Provider rate limited.
+        """
         ...
 
     async def stream_execute(self, request: NormalizedRequest) -> AsyncIterator[ProviderChunk]:
-        """Streaming variant. Yields chunks. Supports backpressure + cancel."""
+        """Streaming variant of execute().
+
+        Yields chunks with backpressure support. Final chunk has done=True.
+
+        Args:
+            request: Provider-agnostic normalized request.
+
+        Yields:
+            ProviderChunk instances. Last chunk has done=True.
+        """
         ...
 
-    async def estimate_tokens(self, messages: list[Message]) -> int:
-        """Fast local token estimate. Provider-specific tokenizer or fallback."""
+    def estimate_tokens(self, messages: List[Message]) -> int:
+        """Estimate token count for messages.
+
+        Fast local estimate. Provider-specific tokenizer or tiktoken fallback.
+
+        Args:
+            messages: List of conversation messages.
+
+        Returns:
+            Estimated token count.
+        """
         ...
 
     async def health_check(self) -> ProviderHealth:
-        """Lightweight probe from manifest.health_check.endpoint."""
+        """Lightweight health probe.
+
+        Uses manifest.health_check.endpoint for probing.
+
+        Returns:
+            ProviderHealth with status, latency, error_rate.
+        """
         ...
 
     async def close(self) -> None:
-        """Cleanup connections, cancel in-flight requests."""
+        """Cleanup connections and cancel in-flight requests.
+
+        Called during shutdown or on provider unregistration.
+        """
         ...
+
+
+# ===========================================================================
+# __all__
+# ===========================================================================
+
+__all__ = [
+    # Plugin interface
+    "IProviderPlugin",
+    # Data types
+    "NormalizedRequest",
+    "ProviderResponse",
+    "ProviderChunk",
+    "ProviderHealth",
+]

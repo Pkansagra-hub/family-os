@@ -1,0 +1,140 @@
+# OpenAI Provider Manifest
+# Verified against: https://platform.openai.com/docs (2026-03-31)
+# MH-18: This manifest is the SOLE source of truth for OpenAI capabilities.
+
+provider_id: openai
+display_name: OpenAI
+plugin_class: k1.model_hub.plugins.openai_plugin.OpenAIPlugin
+api_base: https://api.openai.com/v1
+
+auth:
+  type: bearer
+  credential_key: OPENAI_API_KEY
+
+capabilities:
+  - CHAT
+  - TOOL_CALL
+  - STRUCTURED
+  - REASON
+  - EMBED
+  - VISION
+  - BATCH
+  - MODERATE
+  - AUDIO_IN
+  - TTS
+  - IMAGE_GEN
+  - WEB_SEARCH
+  - TOKEN_COUNT
+  - CACHE_PROMPT
+
+models:
+  - id: gpt-4o
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, VISION, WEB_SEARCH, TOKEN_COUNT, CACHE_PROMPT]
+    cost_per_1m_input: 2.50
+    cost_per_1m_output: 10.00
+    max_context: 128000
+    max_output: 16384
+    supports_streaming: true
+    supports_parallel_tools: true
+    tier: STANDARD
+
+  - id: gpt-4o-mini
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, VISION, TOKEN_COUNT, CACHE_PROMPT]
+    cost_per_1m_input: 0.15
+    cost_per_1m_output: 0.60
+    max_context: 128000
+    max_output: 16384
+    supports_streaming: true
+    supports_parallel_tools: true
+    tier: FAST
+
+  - id: o3
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, WEB_SEARCH, TOKEN_COUNT]
+    cost_per_1m_input: 2.00
+    cost_per_1m_output: 8.00
+    max_context: 200000
+    max_output: 100000
+    supports_streaming: true
+    supports_parallel_tools: true
+    tier: PREMIUM
+
+  - id: o4-mini
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, WEB_SEARCH, TOKEN_COUNT]
+    cost_per_1m_input: 1.10
+    cost_per_1m_output: 4.40
+    max_context: 200000
+    max_output: 100000
+    supports_streaming: true
+    supports_parallel_tools: true
+    tier: STANDARD
+
+  - id: text-embedding-3-small
+    capabilities: [EMBED]
+    cost_per_1m_input: 0.02
+    cost_per_1m_output: 0.0
+    max_context: 8192
+    supports_streaming: false
+    embedding_dimensions: 1536
+    tier: FAST
+
+  - id: text-embedding-3-large
+    capabilities: [EMBED]
+    cost_per_1m_input: 0.13
+    cost_per_1m_output: 0.0
+    max_context: 8192
+    supports_streaming: false
+    embedding_dimensions: 3072
+    tier: STANDARD
+
+  - id: gpt-image-1
+    capabilities: [IMAGE_GEN]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 32000
+    supports_streaming: false
+    tier: STANDARD
+
+  - id: whisper-1
+    capabilities: [AUDIO_IN]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 25000000
+    supports_streaming: false
+    tier: STANDARD
+
+  - id: tts-1
+    capabilities: [TTS]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 4096
+    supports_streaming: false
+    tier: FAST
+
+  - id: tts-1-hd
+    capabilities: [TTS]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 4096
+    supports_streaming: false
+    tier: STANDARD
+
+circuit_breaker:
+  failure_threshold: 3
+  failure_window_s: 60
+  cooldown_s: 30
+
+health_check:
+  endpoint: https://api.openai.com/v1/models
+  interval_s: 30
+  timeout_s: 5
+
+concurrency:
+  max_concurrent: 50
+
+rate_limits:
+  rpm: 500
+  tpm: 200000
+  headroom_pct: 0.80
+
+placement:
+  type: remote

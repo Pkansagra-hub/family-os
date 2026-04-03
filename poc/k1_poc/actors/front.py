@@ -30,7 +30,6 @@ from typing import Any
 
 from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
-from k1.model_hub.ports import IModelHubPort
 
 # Shared actor utilities (M3 E3.5)
 from poc.k1_poc.actors.shared import never_cancel as _never_cancel
@@ -44,6 +43,7 @@ from poc.k1_poc.bus.builders import (
     build_task_resume,
 )
 from poc.k1_poc.config import get_config
+from poc.k1_poc.llm.hub_types import IModelHubPort
 from poc.k1_poc.llm.types import ModelMessage
 from poc.k1_poc.llm.validator import LLMOutputValidator
 from poc.k1_poc.prompt.affect import compute_affect_band
@@ -751,8 +751,11 @@ async def front_handler(
     # 5. Extract domain from Phase 1 classification (V2 Section 6.1 step 3)
     control_section = _safe_get_section(ss, "control")
     domain: str | None = None
-    if control_section and hasattr(control_section, "domain_context"):
-        domain = (control_section.domain_context or {}).get("domain")
+    if control_section and hasattr(control_section, "get_domains"):
+        _dc = control_section.get_domains()
+        _pd = getattr(_dc, "primary_domain", None) or ""
+        if _pd and _pd != "general":
+            domain = _pd
 
     # 5a. Extract affect confidence and tier for conditional tool inclusion
     _front_cfg = get_config().actors.front

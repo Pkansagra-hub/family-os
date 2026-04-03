@@ -13,9 +13,6 @@ from __future__ import annotations
 
 import inspect
 
-import pytest
-
-from k1.fabric.types import CapabilityRequest, CapabilityResult, RetrievalResult
 from k1.concierge.fabric.ports import IFabricPort
 
 # =====================================================================
@@ -89,24 +86,23 @@ class TestIFabricPortSignatures:
 
 
 # =====================================================================
-# FabricPOCBridge isinstance
+# K1 Fabric isinstance (M6: replaces FabricPOCBridge tests)
 # =====================================================================
 
 
-class TestFabricPOCBridgeIsInstance:
-    """FabricPOCBridge satisfies IFabricPort at runtime."""
+class TestFabricIsInstance:
+    """Real K1 Fabric satisfies IFabricPort at runtime."""
 
     def test_isinstance_check(self) -> None:
-        from k1.concierge.fabric.capability_registry import CapabilityRegistry
-        from k1.concierge.fabric.fabric_bridge import FabricPOCBridge
+        from k1.fabric.factory import FabricFactory
 
-        registry = CapabilityRegistry()
-        bridge = FabricPOCBridge(registry)
-        assert isinstance(bridge, IFabricPort)
+        fabric = FabricFactory.create_for_testing()
+        assert isinstance(fabric, IFabricPort)
 
-    def test_bridge_has_all_methods(self) -> None:
-        from k1.concierge.fabric.fabric_bridge import FabricPOCBridge
+    def test_fabric_has_all_methods(self) -> None:
+        from k1.fabric.factory import FabricFactory
 
+        fabric = FabricFactory.create_for_testing()
         for method_name in TestIFabricPortSignatures.EXPECTED_METHODS:
-            assert hasattr(FabricPOCBridge, method_name)
-            assert callable(getattr(FabricPOCBridge, method_name))
+            assert hasattr(fabric, method_name)
+            assert callable(getattr(fabric, method_name))

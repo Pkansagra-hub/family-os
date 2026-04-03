@@ -1,14 +1,23 @@
-"""
-K1 Model Hub Plugins -- Provider Plugin Interface
-===================================================
+"""Model Hub plugins package.
 
-ADR: 0001b (Model Hub Architecture & LLM Integration)
-Spec: k1/model_hub/model_hub.mmd — PLUGIN_INTERFACE section
-
-EXTENSIBILITY CONTRACT:
-  1. Create manifest YAML
-  2. Implement IProviderPlugin (5 methods)
-  3. Place in plugins/
-  4. Auto-discovered on startup
-  5. DONE — zero hub code changes
+Re-exports the IProviderPlugin interface and supporting data types
+for single-import convenience.
 """
+
+from k1.model_hub.plugins.base import (
+    IProviderPlugin,
+    NormalizedRequest,
+    ProviderChunk,
+    ProviderHealth,
+    ProviderResponse,
+)
+from k1.model_hub.plugins.test_plugin import TestProviderPlugin
+
+__all__ = [
+    "IProviderPlugin",
+    "NormalizedRequest",
+    "ProviderChunk",
+    "ProviderHealth",
+    "ProviderResponse",
+    "TestProviderPlugin",
+]

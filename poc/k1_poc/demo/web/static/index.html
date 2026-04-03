@@ -8,7 +8,7 @@
     <title>FamilyOS -- K1 Concierge</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=3">
     <style>
         /* Critical above-fold to prevent FOUC */
         html { background: #000; color: rgba(255,255,255,0.92); }
@@ -52,6 +52,11 @@
                 <button id="btn-dashboard" class="icon-btn" title="Toggle Dashboard" aria-label="Toggle dashboard panel">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+                    </svg>
+                </button>
+                <button id="btn-sessionstate" class="icon-btn" title="Toggle Session State" aria-label="Toggle session state panel">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
                     </svg>
                 </button>
             </div>
@@ -112,6 +117,7 @@
                 <div class="panel-tabs" role="tablist">
                     <button class="panel-tab active" data-panel="timeline" role="tab" aria-selected="true">Timeline</button>
                     <button class="panel-tab" data-panel="dashboard" role="tab" aria-selected="false">Dashboard</button>
+                    <button class="panel-tab" data-panel="sessionstate" role="tab" aria-selected="false">Session State</button>
                 </div>
 
                 <div id="timeline-panel" class="panel-content active" role="tabpanel">
@@ -149,10 +155,41 @@
                         </div>
                     </div>
                 </div>
+
+                <div id="sessionstate-panel" class="panel-content" role="tabpanel">
+                    <div id="ss-loading" class="ss-loading">Loading session state...</div>
+                    <div id="ss-content" class="ss-content" style="display:none">
+                        <!-- Overview -->
+                        <div class="dash-section">
+                            <h4>Overview</h4>
+                            <div id="ss-overview" class="ss-overview"></div>
+                        </div>
+                        <!-- Tier bars -->
+                        <div class="dash-section">
+                            <h4>Tier Utilization</h4>
+                            <div id="ss-tier-bars" class="ss-tier-bars"></div>
+                        </div>
+                        <!-- HOT Sections -->
+                        <div class="dash-section">
+                            <h4>HOT Tier (In-Memory)</h4>
+                            <div id="ss-hot-sections" class="ss-sections"></div>
+                        </div>
+                        <!-- WARM Sections -->
+                        <div class="dash-section">
+                            <h4>WARM Tier (Evictable)</h4>
+                            <div id="ss-warm-sections" class="ss-sections"></div>
+                        </div>
+                        <!-- LOCAL COLD -->
+                        <div class="dash-section">
+                            <h4>LOCAL COLD (Archive)</h4>
+                            <div id="ss-cold-info" class="ss-cold-info"></div>
+                        </div>
+                    </div>
+                </div>
             </aside>
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=3"></script>
 </body>
 </html>

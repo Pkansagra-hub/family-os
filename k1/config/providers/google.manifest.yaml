@@ -1,0 +1,84 @@
+# Google Gemini Provider Manifest
+# Verified against: https://ai.google.dev/gemini-api/docs (2026-03-31)
+# MH-18: This manifest is the SOLE source of truth for Google capabilities.
+
+provider_id: google
+display_name: Google Gemini
+plugin_class: k1.model_hub.plugins.google_plugin.GooglePlugin
+api_base: https://generativelanguage.googleapis.com/v1beta
+
+auth:
+  type: api_key_header
+  credential_key: GOOGLE_API_KEY
+  header_name: x-goog-api-key
+
+capabilities:
+  - CHAT
+  - TOOL_CALL
+  - STRUCTURED
+  - REASON
+  - EMBED
+  - VISION
+  - AUDIO_IN
+  - WEB_SEARCH
+  - TOKEN_COUNT
+  - CACHE_PROMPT
+  - CODE_EXEC
+
+models:
+  - id: gemini-2.5-pro
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, AUDIO_IN, WEB_SEARCH, TOKEN_COUNT, CACHE_PROMPT, CODE_EXEC]
+    cost_per_1m_input: 1.25
+    cost_per_1m_output: 10.00
+    max_context: 1048576
+    max_output: 65536
+    supports_streaming: true
+    tier: PREMIUM
+
+  - id: gemini-2.5-flash
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, AUDIO_IN, WEB_SEARCH, TOKEN_COUNT, CACHE_PROMPT, CODE_EXEC]
+    cost_per_1m_input: 0.30
+    cost_per_1m_output: 2.50
+    max_context: 1048576
+    max_output: 65536
+    supports_streaming: true
+    tier: STANDARD
+
+  - id: gemini-2.5-flash-lite
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, VISION, TOKEN_COUNT]
+    cost_per_1m_input: 0.10
+    cost_per_1m_output: 0.40
+    max_context: 1048576
+    max_output: 65536
+    supports_streaming: true
+    tier: FAST
+
+  - id: gemini-embedding-001
+    capabilities: [EMBED]
+    cost_per_1m_input: 0.15
+    cost_per_1m_output: 0.0
+    max_context: 8192
+    supports_streaming: false
+    embedding_dimensions: 3072
+    tier: STANDARD
+
+circuit_breaker:
+  failure_threshold: 3
+  failure_window_s: 60
+  cooldown_s: 30
+
+health_check:
+  endpoint: https://generativelanguage.googleapis.com/v1beta/models
+  interval_s: 30
+  timeout_s: 5
+
+concurrency:
+  max_concurrent: 50
+
+rate_limits:
+  rpm: 360
+  tpm: 1000000
+  headroom_pct: 0.80
+
+placement:
+  type: remote

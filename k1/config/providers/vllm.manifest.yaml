@@ -1,0 +1,79 @@
+# vLLM Provider Manifest
+# Verified against: https://docs.vllm.ai/en/stable (2026-03-31)
+# MH-18: This manifest is the SOLE source of truth for vLLM capabilities.
+# NOTE: vLLM serves a single model per instance. Model list is configured
+# at deployment time. These are common reference models.
+
+provider_id: vllm
+display_name: vLLM (Local GPU)
+plugin_class: k1.model_hub.plugins.vllm_plugin.VLLMPlugin
+api_base: http://localhost:8000/v1
+
+auth:
+  type: none
+
+capabilities:
+  - CHAT
+  - TOOL_CALL
+  - EMBED
+  - VISION
+  - TOKEN_COUNT
+
+models:
+  - id: meta-llama/Llama-3.3-70B-Instruct
+    capabilities: [CHAT, TOOL_CALL, TOKEN_COUNT]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 131072
+    max_output: 8192
+    supports_streaming: true
+    tier: STANDARD
+
+  - id: mistralai/Mistral-7B-Instruct-v0.3
+    capabilities: [CHAT, TOOL_CALL, TOKEN_COUNT]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 32768
+    max_output: 4096
+    supports_streaming: true
+    tier: FAST
+
+  - id: Qwen/Qwen2.5-72B-Instruct
+    capabilities: [CHAT, TOOL_CALL, TOKEN_COUNT]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 131072
+    max_output: 8192
+    supports_streaming: true
+    tier: STANDARD
+
+  - id: llava-hf/llava-v1.6-mistral-7b-hf
+    capabilities: [CHAT, VISION, TOKEN_COUNT]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 32768
+    max_output: 4096
+    supports_streaming: true
+    tier: FAST
+
+circuit_breaker:
+  failure_threshold: 5
+  failure_window_s: 120
+  cooldown_s: 60
+
+health_check:
+  endpoint: http://localhost:8000/health
+  interval_s: 15
+  timeout_s: 3
+
+concurrency:
+  max_concurrent: 32
+
+rate_limits:
+  rpm: 600
+  tpm: 500000
+  headroom_pct: 0.90
+
+placement:
+  type: local_gpu
+  device_requirements: "CUDA GPU, >= 24GB VRAM for 70B models"

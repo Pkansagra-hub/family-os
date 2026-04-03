@@ -38,7 +38,6 @@ from typing import Any
 
 from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
-from k1.model_hub.ports import IModelHubPort
 
 # Shared actor utilities (M3 E3.5)
 from poc.k1_poc.actors.shared import never_cancel as _never_cancel
@@ -53,6 +52,7 @@ from poc.k1_poc.bus.builders import (
     build_tool_started,
 )
 from poc.k1_poc.config import get_config
+from poc.k1_poc.llm.hub_types import IModelHubPort
 from poc.k1_poc.llm.types import ModelMessage
 from poc.k1_poc.llm.validator import LLMOutputValidator
 from poc.k1_poc.prompt.back_prompt import build_back_prompt

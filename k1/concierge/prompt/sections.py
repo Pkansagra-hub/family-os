@@ -176,8 +176,16 @@ PARALLEL TOOL CALLS (CRITICAL FOR SPEED):
   Independent = the result of one does not affect the arguments of another.
   Dependent = you need the result of tool A to decide what to pass to tool B.
 
+MANDATORY RECALL (CRITICAL -- DO NOT SKIP):
+  On your FIRST iteration you MUST call recall_memory() with a query relevant
+  to what the user just said. This is how you access long-term context,
+  prior commitments, and promises you made. Without it you are guessing.
+  If the user is frustrated or referencing something you should know,
+  recall_memory() is ESSENTIAL -- it tells you what you committed to and
+  whether you followed through. NEVER skip this on non-trivial turns.
+
 Iteration guidelines:
-  - Iteration 1: Call recall_memory() and cognitive tools (update_beliefs,
+  - Iteration 1: ALWAYS call recall_memory() + cognitive tools (update_beliefs,
     update_scoreboard) in a single batch. Do not wait for separate turns.
   - Iteration 2+: Call tools based on observations. Batch when possible.
   - Final iteration: Generate your text response to the user with NO tool calls.

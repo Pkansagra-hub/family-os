@@ -88,9 +88,13 @@ DOMAIN_RULES: dict[str, str] = {
     ),
     "iot": (
         "== DOMAIN: IoT / SMART HOME ==\n"
-        "Confirm device actions before execution: 'Turn on the oven?'\n"
-        "State device name explicitly. Never assume which device.\n"
-        "For safety-critical devices (oven, locks, alarms): always confirm."
+        "ALWAYS dispatch_task for device actions -- the AMBER safety band ensures\n"
+        "the execution layer confirms with the user before side effects.\n"
+        "Do NOT ask clarification questions yourself; dispatch and let the\n"
+        "system handle confirmation. Say 'On it -- locking the front door.'\n"
+        "State device name explicitly when you know it from beliefs/context.\n"
+        "If the specific device is genuinely ambiguous (e.g. 'turn on the light'\n"
+        "when multiple rooms exist), resolve via scoreboard referents or ask ONCE."
     ),
     "communication": (
         "== DOMAIN: COMMUNICATION ==\n"

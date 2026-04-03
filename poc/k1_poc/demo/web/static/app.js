@@ -95,6 +95,7 @@ const dom = {
     rightPanel:     $("#right-panel"),
     btnTimeline:    $("#btn-timeline"),
     btnDashboard:   $("#btn-dashboard"),
+    btnSessionState: $("#btn-sessionstate"),
     timelineEl:     $("#timeline-entries"),
     panelTabs:      $$(".panel-tab"),
     panelContents:  $$(".panel-content"),
@@ -104,6 +105,13 @@ const dom = {
     metricLatency:  $("#metric-latency"),
     metricBytesIn:  $("#metric-bytes-in"),
     metricBytesOut: $("#metric-bytes-out"),
+    ssLoading:      $("#ss-loading"),
+    ssContent:      $("#ss-content"),
+    ssOverview:     $("#ss-overview"),
+    ssTierBars:     $("#ss-tier-bars"),
+    ssHotSections:  $("#ss-hot-sections"),
+    ssWarmSections: $("#ss-warm-sections"),
+    ssColdInfo:     $("#ss-cold-info"),
 };
 
 // ================================================================
@@ -871,6 +879,9 @@ function showStreaming(visible, label = DEFAULT_STREAMING_LABEL) {
 function setupPanelToggles() {
     dom.btnTimeline.addEventListener("click", () => togglePanel("timeline"));
     dom.btnDashboard.addEventListener("click", () => togglePanel("dashboard"));
+    if (dom.btnSessionState) {
+        dom.btnSessionState.addEventListener("click", () => togglePanel("sessionstate"));
+    }
 
     dom.panelTabs.forEach(tab => {
         tab.addEventListener("click", () => {
@@ -880,6 +891,7 @@ function setupPanelToggles() {
                 t.setAttribute("aria-selected", t.dataset.panel === panel);
             });
             dom.panelContents.forEach(p => p.classList.toggle("active", p.id === `${panel}-panel`));
+            if (panel === "sessionstate") fetchSessionState();
         });
     });
 }
@@ -911,6 +923,9 @@ function togglePanel(panel) {
     const activePanel = document.querySelector(".panel-tab.active");
     dom.btnTimeline.classList.toggle("active", isVisible && activePanel?.dataset.panel === "timeline");
     dom.btnDashboard.classList.toggle("active", isVisible && activePanel?.dataset.panel === "dashboard");
+    if (dom.btnSessionState) dom.btnSessionState.classList.toggle("active", isVisible && activePanel?.dataset.panel === "sessionstate");
+
+    if (isVisible && activePanel?.dataset.panel === "sessionstate") fetchSessionState();
 }
 
 // ================================================================
@@ -1054,9 +1069,220 @@ function setupKeyboardShortcuts() {
                 dom.rightPanel.classList.add("hidden");
                 dom.btnTimeline.classList.remove("active");
                 dom.btnDashboard.classList.remove("active");
+                if (dom.btnSessionState) dom.btnSessionState.classList.remove("active");
+                clearTimeout(_ssFetchTimer);
             }
         }
     });
+}
+
+// ================================================================
+// Session State Panel
+// ================================================================
+
+let _ssFetchTimer = null;
+let _ssAutoRefresh = true;
+
+async function fetchSessionState() {
+    console.log("[SS] fetchSessionState called");
+    try {
+        const resp = await fetch("/api/session/state");
+        if (!resp.ok) {
+            console.warn("[SS] API returned", resp.status);
+            dom.ssLoading.textContent = `Session state error (HTTP ${resp.status})`;
+            dom.ssLoading.style.display = "";
+            dom.ssContent.style.display = "none";
+            _scheduleSSRefresh();
+            return;
+        }
+        const data = await resp.json();
+        console.log("[SS] API response:", data.available, Object.keys(data).length, "keys");
+        if (!data.available) {
+            dom.ssLoading.textContent = data.error
+                ? `Session state error: ${data.error}`
+                : "Session state not available (coordinator initializing...)";
+            dom.ssLoading.style.display = "";
+            dom.ssContent.style.display = "none";
+            _scheduleSSRefresh();
+            return;
+        }
+        dom.ssLoading.style.display = "none";
+        dom.ssContent.style.display = "";
+        renderSessionState(data);
+    } catch (e) {
+        console.error("[SS] fetchSessionState error:", e);
+        dom.ssLoading.textContent = "Failed to load session state";
+        dom.ssLoading.style.display = "";
+        dom.ssContent.style.display = "none";
+    }
+    _scheduleSSRefresh();
+}
+
+function _scheduleSSRefresh() {
+    clearTimeout(_ssFetchTimer);
+    const ssPanel = document.getElementById("sessionstate-panel");
+    if (ssPanel && ssPanel.classList.contains("active") && _ssAutoRefresh) {
+        _ssFetchTimer = setTimeout(fetchSessionState, 3000);
+    }
+}
+
+function renderSessionState(data) {
+    // Overview cards
+    // Recalculate totals from section metadata (more accurate than SizeTracker)
+    const sections = data.sections || {};
+    const details = data.section_details || {};
+    let hotBytes = 0, warmBytes = 0, hotCap = 0, warmCap = 0;
+    for (const [sName, sInfo] of Object.entries(sections)) {
+        const d = details[sName] || {};
+        const sz = d.current_size_bytes ?? sInfo.size_bytes;
+        const cap = d.budget_bytes ?? sInfo.budget_bytes;
+        if (sInfo.tier === "hot") { hotBytes += sz; hotCap += cap; }
+        else { warmBytes += sz; warmCap += cap; }
+    }
+    const totalBytes = hotBytes + warmBytes;
+    const totalCap = hotCap + warmCap;
+    const totalKB = (totalBytes / 1024).toFixed(1);
+    const hotKB = (hotBytes / 1024).toFixed(1);
+    const warmKB = (warmBytes / 1024).toFixed(1);
+    const hotCapKB = (hotCap / 1024).toFixed(0);
+    const warmCapKB = (warmCap / 1024).toFixed(0);
+    const totalPct = totalCap > 0 ? (totalBytes / totalCap) * 100 : 0;
+    const hotPct = hotCap > 0 ? (hotBytes / hotCap) * 100 : 0;
+    const warmPct = warmCap > 0 ? (warmBytes / warmCap) * 100 : 0;
+    const pressure = data.pressure || "normal";
+
+    dom.ssOverview.innerHTML = `
+        <div class="ss-overview-card">
+            <div class="ss-card-label">Total Used</div>
+            <div class="ss-card-value">${totalKB} KB</div>
+            <div class="ss-card-sub">${totalPct.toFixed(1)}% utilized</div>
+        </div>
+        <div class="ss-overview-card">
+            <div class="ss-card-label">Pressure</div>
+            <div class="ss-card-value"><span class="ss-pressure-${pressure.toLowerCase()}" style="padding:2px 8px;border-radius:12px;font-size:12px">${pressure.toUpperCase()}</span></div>
+            <div class="ss-card-sub">${data.is_running ? "Running" : "Stopped"}</div>
+        </div>
+        <div class="ss-overview-card">
+            <div class="ss-card-label">Session</div>
+            <div class="ss-card-value" style="font-size:11px;word-break:break-all">${(data.session_id || "").substring(0, 12)}...</div>
+            <div class="ss-card-sub">${Object.keys(data.sections || {}).length} sections</div>
+        </div>
+        <div class="ss-overview-card">
+            <div class="ss-card-label">Local Cold</div>
+            <div class="ss-card-value">${data.local_cold_count || 0}</div>
+            <div class="ss-card-sub">archived items</div>
+        </div>
+    `;
+
+    // Tier bars
+    dom.ssTierBars.innerHTML = `
+        ${_renderTierBar("HOT", hotPct, hotKB, hotCapKB, "var(--brand-blue)")}
+        ${_renderTierBar("WARM", warmPct, warmKB, warmCapKB, "var(--brand-purple)")}
+    `;
+
+    // Section cards by tier
+    const hotSections = [];
+    const warmSections = [];
+
+    for (const [name, info] of Object.entries(sections)) {
+        if (info.tier === "hot") hotSections.push({ name, info, detail: details[name] || {} });
+        else warmSections.push({ name, info, detail: details[name] || {} });
+    }
+
+    dom.ssHotSections.innerHTML = hotSections.map(s => _renderSectionCard(s)).join("");
+    dom.ssWarmSections.innerHTML = warmSections.map(s => _renderSectionCard(s)).join("");
+
+    // Wire expand toggles
+    document.querySelectorAll(".ss-section-header").forEach(header => {
+        header.addEventListener("click", () => {
+            header.closest(".ss-section-card").classList.toggle("expanded");
+        });
+    });
+
+    // Cold info
+    dom.ssColdInfo.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center">
+            <span>SQLite archive: <strong>${data.local_cold_count || 0}</strong> items</span>
+            <span style="color:var(--text-quaternary);font-size:10px">K1 edge storage</span>
+        </div>
+    `;
+}
+
+function _renderTierBar(label, pct, usedKB, totalKB, color) {
+    pct = pct || 0;
+    const barColor = pct > 90 ? "var(--status-red)" : pct > 80 ? "var(--status-orange)" : color;
+    return `
+        <div class="ss-tier-bar">
+            <div class="ss-tier-bar-header">
+                <span class="ss-tier-bar-name">${label}</span>
+                <span class="ss-tier-bar-value">${usedKB} / ${totalKB} KB (${pct.toFixed(1)}%)</span>
+            </div>
+            <div class="ss-tier-bar-track">
+                <div class="ss-tier-bar-fill" style="width:${Math.min(pct, 100)}%;background:${barColor}"></div>
+            </div>
+        </div>
+    `;
+}
+
+function _renderSectionCard({ name, info, detail }) {
+    // Prefer actual section size from metadata over SizeTracker (which may be stale)
+    const realSize = detail.current_size_bytes ?? info.size_bytes;
+    const realBudget = detail.budget_bytes ?? info.budget_bytes;
+    const realPct = realBudget > 0 ? (realSize / realBudget) * 100 : (info.utilization_pct || 0);
+    const sizeKB = (realSize / 1024).toFixed(2);
+    const budgetKB = (realBudget / 1024).toFixed(0);
+    const pct = realPct;
+    const pressure = (info.pressure || "normal").toLowerCase();
+    const barColor = pct > 90 ? "var(--status-red)" : pct > 80 ? "var(--status-orange)" : "var(--brand-blue)";
+
+    // Build detail items from section metadata
+    const detailItems = _buildDetailItems(name, detail);
+
+    return `
+        <div class="ss-section-card">
+            <div class="ss-section-header">
+                <span class="ss-section-name">
+                    <span class="ss-section-chevron">\u25B6</span>
+                    ${escapeHtml(name.replace(/_/g, " "))}
+                </span>
+                <span class="ss-section-stats">
+                    <span class="ss-section-size">${sizeKB} / ${budgetKB}KB</span>
+                    <span class="ss-section-bar"><span class="ss-section-bar-fill" style="width:${Math.min(pct, 100)}%;background:${barColor}"></span></span>
+                    <span class="ss-section-pressure ss-pressure-${pressure}">${pressure}</span>
+                </span>
+            </div>
+            <div class="ss-section-detail">
+                <div class="ss-detail-grid">
+                    ${detailItems}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function _buildDetailItems(name, detail) {
+    if (!detail || detail.error) return `<span style="color:var(--text-quaternary)">No data</span>`;
+
+    // Skip common fields already shown in header
+    const skip = new Set(["name", "tier", "budget_bytes", "current_size_bytes", "utilization_pct", "can_evict"]);
+    let html = "";
+    for (const [key, val] of Object.entries(detail)) {
+        if (skip.has(key)) continue;
+        let display = val;
+        if (typeof val === "boolean") display = val ? "\u2705" : "\u274C";
+        else if (typeof val === "number") display = Number.isInteger(val) ? val : val.toFixed(2);
+        else if (val === null || val === undefined) display = "--";
+        else if (typeof val === "object") display = JSON.stringify(val).substring(0, 60);
+        else display = String(val).substring(0, 60);
+
+        html += `
+            <div class="ss-detail-item">
+                <span class="ss-detail-key">${escapeHtml(key.replace(/_/g, " "))}</span>
+                <span class="ss-detail-val">${escapeHtml(String(display))}</span>
+            </div>
+        `;
+    }
+    return html || `<span style="color:var(--text-quaternary)">Empty</span>`;
 }
 
 // ================================================================

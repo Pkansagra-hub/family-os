@@ -50,10 +50,10 @@ from k1.concierge.bus.builders import (
 )
 from k1.concierge.experience.layer import ExperienceLayer
 from k1.concierge.fsm.controller import ConciergeController
-from poc.k1_poc.main import boot
 from k1.concierge.tools.dispatcher import create_back_dispatcher, create_front_dispatcher
 from k1.concierge.tools.implementations import ToolContext
 from k1.concierge.tools.schemas_front import FRONT_TOOL_SCHEMAS
+from poc.k1_poc.main import boot
 
 logger = logging.getLogger(__name__)
 
@@ -130,10 +130,8 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
     session_state = _create_session_state(cfg)
     capability_registry = _create_capability_registry()
 
-    # M2 E2.4: Create typed FabricPOCBridge wrapping the POC registry
-    from k1.concierge.fabric.fabric_bridge import FabricPOCBridge
-
-    fabric_bridge = FabricPOCBridge(capability_registry)
+    # M6 E6.3: Create real K1 Fabric with POC mock handlers behind BridgeProvider
+    fabric_instance = _create_fabric(capability_registry)
 
     # M1 E1.4.1: Create ledger before FSM so it can be injected
     _ledger_writer = None
@@ -195,9 +193,7 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         cognitive_trace_id=f"k-front-{uuid.uuid4().hex[:6]}",
         actor="front",
         recall_fn=recall_fn,
-        fabric_port=fabric_bridge,
-        capability_fn=_capability_discover(capability_registry),
-        invoke_fn=_capability_invoke(capability_registry),
+        fabric_port=fabric_instance,
         writer_port=_writer_port,
     )
     back_ctx = ToolContext(
@@ -205,9 +201,7 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         cognitive_trace_id=f"k-back-{uuid.uuid4().hex[:6]}",
         actor="back",
         recall_fn=recall_fn,
-        fabric_port=fabric_bridge,
-        capability_fn=_capability_discover(capability_registry),
-        invoke_fn=_capability_invoke(capability_registry),
+        fabric_port=fabric_instance,
         writer_port=_writer_port,
     )
 
@@ -329,7 +323,7 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         from k1.concierge.orchestrator.stub import OrchestratorStub
 
         runtime.orchestrator = OrchestratorStub(
-            fabric_gateway=_FabricGatewayAdapter(fabric_bridge),
+            fabric_gateway=_FabricGatewayAdapter(fabric_instance),
             state_read=_StateReadAdapter(session_state),
             delta_emit=_DeltaEmitAdapter(aggregator=runtime.delta_aggregator, bus=bus),
         )
@@ -690,6 +684,45 @@ def _create_capability_registry() -> Any:
     return create_demo_registry()
 
 
+def _create_fabric(registry: Any) -> Any:
+    """Boot a real K1 Fabric with POC mock handlers behind BridgeProvider.
+
+    M6 E6.3.1: Uses ``FabricFactory.create_with_ports()`` with test
+    adapters for all ports except ``bridge``, which is wired to the
+    ``POCMockBridgeAdapter`` wrapping the POC CapabilityRegistry handlers.
+    All 40 POC capability contracts are registered programmatically.
+    """
+    from k1.concierge.fabric.contract_converter import convert_all_poc_capabilities
+    from k1.concierge.fabric.poc_bridge_adapter import POCMockBridgeAdapter
+    from k1.fabric.adapters.local_event import LocalEventAdapter
+    from k1.fabric.adapters.test_delta_bus import TestDeltaBusAdapter
+    from k1.fabric.adapters.test_model_gateway import TestModelGatewayAdapter
+    from k1.fabric.adapters.test_prompt_system import TestPromptSystemAdapter
+    from k1.fabric.adapters.test_state_reader import TestSessionStateReaderAdapter
+    from k1.fabric.factory import FabricFactory, _auto_register_providers
+
+    poc_bridge = POCMockBridgeAdapter(registry)
+
+    fabric = FabricFactory.create_with_ports(
+        state_reader=TestSessionStateReaderAdapter(),
+        event_port=LocalEventAdapter(capture_mode=True),
+        bridge=poc_bridge,
+        model_gateway=TestModelGatewayAdapter(),
+        prompt_system=TestPromptSystemAdapter(),
+        delta_bus=TestDeltaBusAdapter(),
+        production_mode=False,
+    )
+
+    for contract in convert_all_poc_capabilities():
+        fabric.register(contract)
+
+    # Re-run auto-registration so poc-mock-bridge gets a ProviderConfig
+    provider_registry = fabric.facade._resolver._provider_matcher._provider_registry
+    _auto_register_providers(fabric.registry, provider_registry)
+
+    return fabric
+
+
 def _build_recall_fn(cfg: KernelConfig):
     seed = list(cfg.seed_memories)
 
@@ -874,8 +907,8 @@ class _FabricGatewayAdapter:
         self._bridge = bridge
 
     async def execute(self, request: Any) -> Any:
-        from k1.fabric.types import CapabilityRequest
         from k1.concierge.orchestrator.types import CapabilityResult as POCCapabilityResult
+        from k1.fabric.types import CapabilityRequest
 
         # Translate POC orchestrator request → K1 CapabilityRequest
         k1_request = CapabilityRequest(
@@ -1072,6 +1105,11 @@ class _DeltaEmitAdapter:
             )
             env = Envelope(
                 topic=event_topic,
+                priority=Priority.INTERACTIVE,
+                payload=payload_bytes,
+                payload_format=PayloadFormat.JSON,
+            )
+            self._bus.publish(env)
                 priority=Priority.INTERACTIVE,
                 payload=payload_bytes,
                 payload_format=PayloadFormat.JSON,

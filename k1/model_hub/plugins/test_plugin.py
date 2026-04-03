@@ -1,149 +1,260 @@
-"""
-TestProviderPlugin -- Deterministic Test Provider
-===================================================
+"""TestProviderPlugin -- deterministic test plugin [F26].
 
-Spec: k1/model_hub/model_hub.mmd — ADAPTERS_TEST section
+Implements IProviderPlugin with fully configurable, deterministic behavior.
+Used in all test environments as a stand-in for real provider plugins.
+Records all calls for post-test assertion.
 
-No real LLM calls. Configurable per capability:
-  - Fixed responses
-  - Response sequences for multi-call tests
-  - Configurable latency, errors, token counts
-  - Records all calls for test assertions
+NO real HTTP calls. NO real API keys. NO external dependencies.
 
-Can be registered as any provider_id for test isolation.
+Import graph (Layer 4 -- imports Layer 0 + Layer 2)
+-----------------------------------------------------
+k1.model_hub.plugins.test_plugin
+  -> k1.model_hub.types          (Layer 0)
+  -> k1.model_hub.manifest       (Layer 0)
+  -> k1.model_hub.plugins.base   (Layer 2: IProviderPlugin, dataclasses)
+  -> stdlib only
+
+NEVER import from any adapter, service, or runtime module.
+
+References
+----------
+- model_hub.mmd: TestProviderPlugin (test isolation)
+- Invariant MH-17: Plugin isolation
 """
 
 from __future__ import annotations
 
-from typing import AsyncIterator
+import asyncio
+import time
+from dataclasses import dataclass
+from typing import AsyncIterator, List, Optional
 
+from k1.model_hub.manifest import ProviderManifest
 from k1.model_hub.plugins.base import (
-    IProviderPlugin,
     NormalizedRequest,
     ProviderChunk,
     ProviderHealth,
-    ProviderManifest,
     ProviderResponse,
 )
-from k1.model_hub.types import CapabilityType, Message
+from k1.model_hub.types import (
+    CapabilityType,
+    FinishReason,
+    HealthStatus,
+    Message,
+    ProviderError,
+    ToolCallResult,
+)
+
+# ===========================================================================
+# Call Records (for post-test assertion)
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class ExecuteCall:
+    """Captured execute() call."""
+
+    request: NormalizedRequest
+    timestamp: float
+
+
+@dataclass(frozen=True)
+class StreamCall:
+    """Captured stream_execute() call."""
+
+    request: NormalizedRequest
+    timestamp: float
+
+
+@dataclass(frozen=True)
+class HealthCheckCall:
+    """Captured health_check() call."""
+
+    timestamp: float
+
+
+# ===========================================================================
+# TestProviderPlugin
+# ===========================================================================
 
 
 class TestProviderPlugin:
-    """Deterministic test provider. Satisfies IProviderPlugin.
+    """Deterministic test plugin implementing IProviderPlugin.
 
-    Usage:
-        plugin = TestProviderPlugin()
-        plugin.set_response(CapabilityType.CHAT, ProviderResponse(text="Hello!"))
-        resp = await plugin.execute(NormalizedRequest(capability=CapabilityType.CHAT))
-        assert resp.text == "Hello!"
-        assert plugin.call_count == 1
+    Configurable:
+      - response_text: Text returned from execute() (default "test-response").
+      - prompt_tokens / completion_tokens: Token counts.
+      - model_id: Model ID in response.
+      - finish_reason: FinishReason in response.
+      - tool_calls: Optional tool calls in response.
+      - stream_chunks: List of strings for streaming (default ["chunk-1", "chunk-2"]).
+      - latency_ms: Simulated latency per call (default 0).
+      - fail_count: Number of initial calls that raise ProviderError (default 0).
+      - health_status: Status from health_check() (default HEALTHY).
+      - capabilities: Supported capabilities (default [CHAT]).
+      - token_estimate: Value from estimate_tokens() (default 10).
+
+    Call Recording:
+      - execute_calls: list of ExecuteCall
+      - stream_calls: list of StreamCall
+      - health_calls: list of HealthCheckCall
+      - total_calls: total execute + stream count
+
+    Registered as any provider_id for test isolation.
     """
 
-    def __init__(self, provider_id: str = "test") -> None:
-        self.provider_id = provider_id
-        self._manifest: ProviderManifest | None = None
-        self._capabilities: set[CapabilityType] = set(CapabilityType)
-        self._responses: dict[CapabilityType, ProviderResponse] = {}
-        self._sequences: dict[CapabilityType, list[ProviderResponse]] = {}
-        self._sequence_idx: dict[CapabilityType, int] = {}
-        self._default_response = ProviderResponse(
-            text="test response",
-            model_id="test-model",
-            prompt_tokens=10,
-            completion_tokens=5,
-        )
-        self.calls: list[NormalizedRequest] = []
-
-    # ------------------------------------------------------------------
-    # Configuration
-    # ------------------------------------------------------------------
-
-    def set_response(self, capability: CapabilityType, response: ProviderResponse) -> None:
-        """Set a fixed response for a capability."""
-        self._responses[capability] = response
-
-    def set_response_sequence(
-        self, capability: CapabilityType, responses: list[ProviderResponse]
+    def __init__(
+        self,
+        *,
+        response_text: str = "test-response",
+        prompt_tokens: int = 10,
+        completion_tokens: int = 5,
+        model_id: str = "test-model",
+        finish_reason: FinishReason = FinishReason.STOP,
+        tool_calls: Optional[List[ToolCallResult]] = None,
+        stream_chunks: Optional[List[str]] = None,
+        latency_ms: int = 0,
+        fail_count: int = 0,
+        fail_error: Optional[Exception] = None,
+        health_status: HealthStatus = HealthStatus.HEALTHY,
+        capabilities: Optional[List[CapabilityType]] = None,
+        token_estimate: int = 10,
     ) -> None:
-        """Set a sequence of responses. After exhaustion, last response repeats."""
-        self._sequences[capability] = responses
-        self._sequence_idx[capability] = 0
+        self._response_text = response_text
+        self._prompt_tokens = prompt_tokens
+        self._completion_tokens = completion_tokens
+        self._model_id = model_id
+        self._finish_reason = finish_reason
+        self._tool_calls = tool_calls
+        self._stream_chunks = stream_chunks or ["chunk-1", "chunk-2"]
+        self._latency_ms = latency_ms
+        self._fail_count = fail_count
+        self._fail_error = fail_error
+        self._health_status = health_status
+        self._capabilities = set(capabilities or [CapabilityType.CHAT])
+        self._token_estimate = token_estimate
 
-    def set_default_response(self, response: ProviderResponse) -> None:
-        """Set fallback response when no capability match."""
-        self._default_response = response
+        # Call tracking
+        self._execute_calls: List[ExecuteCall] = []
+        self._stream_calls: List[StreamCall] = []
+        self._health_calls: List[HealthCheckCall] = []
+        self._call_count = 0
+        self._initialized = False
+        self._closed = False
 
-    def set_capabilities(self, caps: set[CapabilityType]) -> None:
-        """Override which capabilities this test plugin reports."""
-        self._capabilities = caps
-
-    # ------------------------------------------------------------------
-    # IProviderPlugin implementation
-    # ------------------------------------------------------------------
+    # -- IProviderPlugin methods -----------------------------------------------
 
     async def initialize(self, manifest: ProviderManifest) -> None:
-        self._manifest = manifest
-        if manifest.capabilities:
-            self._capabilities = set(manifest.capabilities)
+        """Initialize plugin (no-op for test, marks initialized)."""
+        self._initialized = True
 
     def supports(self, capability: CapabilityType) -> bool:
+        """Check if capability is in configured set."""
         return capability in self._capabilities
 
     async def execute(self, request: NormalizedRequest) -> ProviderResponse:
-        self.calls.append(request)
-        cap = request.capability
+        """Return deterministic response, optionally simulating failure/latency."""
+        self._call_count += 1
+        self._execute_calls.append(ExecuteCall(request=request, timestamp=time.monotonic()))
 
-        # Sequence first
-        if cap in self._sequences:
-            seq = self._sequences[cap]
-            idx = self._sequence_idx[cap]
-            resp = seq[min(idx, len(seq) - 1)]
-            self._sequence_idx[cap] = idx + 1
-            return resp
+        # Simulate latency
+        if self._latency_ms > 0:
+            await asyncio.sleep(self._latency_ms / 1000.0)
 
-        # Fixed response
-        if cap in self._responses:
-            return self._responses[cap]
+        # Simulate failure
+        if self._call_count <= self._fail_count:
+            error = self._fail_error or ProviderError(
+                f"Test failure #{self._call_count}",
+                provider_id="test",
+            )
+            raise error
 
-        return self._default_response
+        return ProviderResponse(
+            text=self._response_text,
+            tool_calls=self._tool_calls,
+            prompt_tokens=self._prompt_tokens,
+            completion_tokens=self._completion_tokens,
+            model_id=request.model_id or self._model_id,
+            finish_reason=self._finish_reason,
+        )
 
     async def stream_execute(self, request: NormalizedRequest) -> AsyncIterator[ProviderChunk]:
-        resp = await self.execute(request)
+        """Yield deterministic chunks, optionally simulating failure/latency."""
+        self._call_count += 1
+        self._stream_calls.append(StreamCall(request=request, timestamp=time.monotonic()))
 
-        if resp.text:
-            words = resp.text.split(" ")
-            for i, word in enumerate(words):
-                chunk_text = word if i == len(words) - 1 else word + " "
-                yield ProviderChunk(chunk_type="text_delta", text=chunk_text)
+        # Simulate latency
+        if self._latency_ms > 0:
+            await asyncio.sleep(self._latency_ms / 1000.0)
 
-        yield ProviderChunk(chunk_type="done", response=resp)
+        # Simulate failure
+        if self._call_count <= self._fail_count:
+            error = self._fail_error or ProviderError(
+                f"Test stream failure #{self._call_count}",
+                provider_id="test",
+            )
+            raise error
 
-    async def estimate_tokens(self, messages: list[Message]) -> int:
-        return sum(len(m.content.split()) * 2 for m in messages)
+        for i, text in enumerate(self._stream_chunks):
+            is_last = i == len(self._stream_chunks) - 1
+            yield ProviderChunk(text=text, done=is_last)
+
+    def estimate_tokens(self, messages: List[Message]) -> int:
+        """Return configured token estimate."""
+        return self._token_estimate
 
     async def health_check(self) -> ProviderHealth:
-        return ProviderHealth(status="HEALTHY", latency_ms=1)
+        """Return configured health status."""
+        self._health_calls.append(HealthCheckCall(timestamp=time.monotonic()))
+        return ProviderHealth(status=self._health_status)
 
     async def close(self) -> None:
-        pass
+        """Mark plugin as closed."""
+        self._closed = True
 
-    # ------------------------------------------------------------------
-    # Assertion helpers
-    # ------------------------------------------------------------------
-
-    @property
-    def call_count(self) -> int:
-        return len(self.calls)
+    # -- Test inspection properties --------------------------------------------
 
     @property
-    def last_call(self) -> NormalizedRequest | None:
-        return self.calls[-1] if self.calls else None
+    def execute_calls(self) -> List[ExecuteCall]:
+        """All captured execute() calls."""
+        return list(self._execute_calls)
 
-    def calls_for(self, capability: CapabilityType) -> list[NormalizedRequest]:
-        return [c for c in self.calls if c.capability == capability]
+    @property
+    def stream_calls(self) -> List[StreamCall]:
+        """All captured stream_execute() calls."""
+        return list(self._stream_calls)
+
+    @property
+    def health_calls(self) -> List[HealthCheckCall]:
+        """All captured health_check() calls."""
+        return list(self._health_calls)
+
+    @property
+    def total_calls(self) -> int:
+        """Total execute + stream calls."""
+        return len(self._execute_calls) + len(self._stream_calls)
+
+    @property
+    def initialized(self) -> bool:
+        """Whether initialize() was called."""
+        return self._initialized
+
+    @property
+    def closed(self) -> bool:
+        """Whether close() was called."""
+        return self._closed
 
     def reset(self) -> None:
-        self.calls.clear()
-        self._responses.clear()
-        self._sequences.clear()
-        self._sequence_idx.clear()
+        """Reset all call records and counters."""
+        self._execute_calls.clear()
+        self._stream_calls.clear()
+        self._health_calls.clear()
+        self._call_count = 0
+
+
+__all__ = [
+    "ExecuteCall",
+    "HealthCheckCall",
+    "StreamCall",
+    "TestProviderPlugin",
+]
