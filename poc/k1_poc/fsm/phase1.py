@@ -220,13 +220,36 @@ class StubPhase1Pipeline:
             domain = "health"
             intent = "scheduling"
             complexity = "MEDIUM"
-        elif any(w in lower for w in (
-            "lock", "unlock", "door", "light", "lights", "thermostat",
-            "washing", "dryer", "dishwasher", "oven", "coffee",
-            "speaker", "music", "vacuum", "fan", "heater",
-            "garage", "sprinkler", "camera", "alarm", "device",
-            "turn on", "turn off", "smart home", "iot",
-        )):
+        elif any(
+            w in lower
+            for w in (
+                "lock",
+                "unlock",
+                "door",
+                "light",
+                "lights",
+                "thermostat",
+                "washing",
+                "dryer",
+                "dishwasher",
+                "oven",
+                "coffee",
+                "speaker",
+                "music",
+                "vacuum",
+                "fan",
+                "heater",
+                "garage",
+                "sprinkler",
+                "camera",
+                "alarm",
+                "device",
+                "turn on",
+                "turn off",
+                "smart home",
+                "iot",
+            )
+        ):
             domain = "iot"
             intent = "device_control"
             complexity = "LOW"
