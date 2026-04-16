@@ -63,12 +63,14 @@ class ElaborationDepth(str, Enum):
     DISCUSSED        -- 2-3 turns
     ELABORATED       -- 4-6 turns
     DEEPLY_PROCESSED -- 7+ turns
+    REFLECTED        -- Meta-reflection or opinion about the topic
     """
 
     MENTION = "MENTION"
     DISCUSSED = "DISCUSSED"
     ELABORATED = "ELABORATED"
     DEEPLY_PROCESSED = "DEEPLY_PROCESSED"
+    REFLECTED = "REFLECTED"
 
 
 class TemporalOrientation(str, Enum):
@@ -77,6 +79,7 @@ class TemporalOrientation(str, Enum):
     PAST = "PAST"
     ONGOING = "ONGOING"
     FUTURE_COMMITMENT = "FUTURE_COMMITMENT"
+    HABITUAL = "HABITUAL"  # Recurring pattern ("every morning", "always on Sundays")
 
 
 class TemporalLinkType(str, Enum):
@@ -122,7 +125,7 @@ class SocialIntimacy(str, Enum):
 
 
 class ActivityType(str, Enum):
-    """Activity classification. 20-value enum merged from K1 12-type + legacy 12-type."""
+    """Activity classification. 30-value enum — expanded for global coverage."""
 
     MEAL = "MEAL"
     TASK = "TASK"
@@ -144,6 +147,17 @@ class ActivityType(str, Enum):
     GRATITUDE = "GRATITUDE"
     META = "META"
     MEMORY = "MEMORY"
+    # v2.3 expansion — global coverage
+    COOKING = "COOKING"
+    CHILDCARE = "CHILDCARE"
+    PET_CARE = "PET_CARE"
+    WORSHIP = "WORSHIP"
+    HOBBY = "HOBBY"
+    CAREGIVING = "CAREGIVING"
+    COMMUTE = "COMMUTE"
+    HOME_MAINTENANCE = "HOME_MAINTENANCE"
+    SLEEP = "SLEEP"
+    CONFLICT = "CONFLICT"
 
 
 class RelationshipType(str, Enum):
@@ -160,7 +174,7 @@ class RelationshipType(str, Enum):
 
 
 class LocationType(str, Enum):
-    """Location category. 12 values."""
+    """Location category. 19 values -- expanded for global coverage."""
 
     HOME = "home"
     RESTAURANT = "restaurant"
@@ -174,6 +188,14 @@ class LocationType(str, Enum):
     AIRPORT = "airport"
     HOTEL = "hotel"
     OTHER = "other"
+    # v2.3 expansion -- from POC Gemini outputs
+    CITY = "city"
+    UNIVERSITY = "university"
+    MEDICAL_FACILITY = "medical_facility"
+    RECREATIONAL = "recreational"
+    RESIDENCE = "residence"
+    RELIGIOUS_PLACE = "religious_place"
+    SOCIAL_VENUE = "social_venue"
 
 
 class IdentityDomain(str, Enum):
@@ -193,18 +215,20 @@ class IdentityDomain(str, Enum):
 class SkipReason(str, Enum):
     """Reason why RelevanceFilter skipped a turn.
 
-    R1 DUPLICATE     -- Turn ID seen within dedup window
-    R2 TRIVIAL       -- Turn text < trivial_word_threshold words
-    R3 SYSTEM_TURN   -- Turn role is system/tool (not user or assistant)
-    R4 STALE         -- Turn timestamp older than dedup window
-    R5 EMPTY         -- Turn content is None/empty/whitespace
+    R1 CLARIFICATION -- User clarification + assistant repair turn
+    R2 SYSTEM_TURN   -- System/meta talk, not about life
+    R3 DUPLICATE     -- Entity+topic hash seen within dedup window
+    R4 EMPTY         -- Turn text < trivial_word_threshold words or trivial pattern
+    R5 TRIVIAL       -- Pure continuation phrase ("go on", "what else")
+    STALE            -- DEPRECATED: use CLARIFICATION
     """
 
-    DUPLICATE = "DUPLICATE"
-    TRIVIAL = "TRIVIAL"
+    CLARIFICATION = "CLARIFICATION"
     SYSTEM_TURN = "SYSTEM_TURN"
-    STALE = "STALE"
+    DUPLICATE = "DUPLICATE"
     EMPTY = "EMPTY"
+    TRIVIAL = "TRIVIAL"
+    STALE = "STALE"  # DEPRECATED: use CLARIFICATION
 
 
 class IntentType(str, Enum):
@@ -486,6 +510,9 @@ class ExtractionContext:
 
     # Stable place identity from PlaceResolver (GAP-002 Epic 3.1)
     place_id: Optional[str] = None
+
+    # Tool calls from Turn.metadata["tool_calls"] (Phase P prerequisite)
+    tool_calls_per_turn: Dict[int, List[Dict[str, Any]]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

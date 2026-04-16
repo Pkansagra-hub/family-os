@@ -60,7 +60,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Tuple
 
-from poc.k1_poc.config import get_config
+from .config import SessionStateConfig, TiersConfig
 
 if TYPE_CHECKING:
     pass
@@ -241,15 +241,15 @@ NEVER_EVICT_SECTIONS: FrozenSet[str] = frozenset(
 ALL_SECTIONS: FrozenSet[str] = frozenset(SECTION_BUDGETS.keys())
 
 # =============================================================================
-# SIZE CONSTANTS (config-backed: sessionstate.tiers.*)
+# SIZE CONSTANTS (from TiersConfig defaults)
 # =============================================================================
 
-_ss_tiers = get_config().sessionstate.tiers
+_ss_tiers = TiersConfig()
 TOTAL_SIZE_LIMIT_BYTES: int = _ss_tiers.total_size_limit_bytes
 HOT_SIZE_LIMIT_BYTES: int = _ss_tiers.hot_budget_bytes
 WARM_SIZE_LIMIT_BYTES: int = _ss_tiers.warm_budget_bytes
 
-# Pressure thresholds (config-backed: sessionstate.tiers.*_threshold_pct)
+# Pressure thresholds (from TiersConfig defaults)
 NORMAL_THRESHOLD_PCT: float = _ss_tiers.normal_threshold_pct
 ELEVATED_THRESHOLD_PCT: float = _ss_tiers.elevated_threshold_pct
 CRITICAL_THRESHOLD_PCT: float = _ss_tiers.critical_threshold_pct

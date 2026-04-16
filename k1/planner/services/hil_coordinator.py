@@ -28,7 +28,7 @@ Import graph (Layer 2)
 k1.planner.services.hil_coordinator
   -> k1.planner.ports.llm_port      (ILLMPort)
   -> k1.planner.ports.event_port    (IEventPort)
-  -> k1.planner.types               (HubRequest, HubResponse, RequestConstraints,
+  -> k1.planner.types               (PlannerLLMRequest, PlannerLLMResponse, PlannerConstraints,
                                       HILBudgetExceededError, HILTimeoutError,
                                       PlannerConfig)
   -> k1.planner.events              (TOPIC_HIL_* constants, payload dataclasses)
@@ -55,7 +55,7 @@ from k1.planner.events import (
 )
 from k1.planner.ports.event_port import IEventPort
 from k1.planner.ports.llm_port import ILLMPort
-from k1.planner.types import HILTimeoutError, HubRequest, RequestConstraints
+from k1.planner.types import HILTimeoutError, PlannerConstraints, PlannerLLMRequest
 
 log = logging.getLogger(__name__)
 
@@ -458,10 +458,10 @@ class HILCoordinator:
             },
         ]
 
-        request = HubRequest(
+        request = PlannerLLMRequest(
             capability="CHAT",
             payload={"messages": messages, "temperature": 0.7},
-            constraints=RequestConstraints(
+            constraints=PlannerConstraints(
                 max_tokens=300,
                 timeout_ms=3000,
                 temperature=0.7,
@@ -512,10 +512,10 @@ class HILCoordinator:
             },
         ]
 
-        request = HubRequest(
+        request = PlannerLLMRequest(
             capability="CHAT",
             payload={"messages": messages, "temperature": 0.7},
-            constraints=RequestConstraints(
+            constraints=PlannerConstraints(
                 max_tokens=400,
                 timeout_ms=3000,
                 temperature=0.7,

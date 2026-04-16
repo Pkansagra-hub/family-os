@@ -27,12 +27,14 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from k1.sessionstate.sections.task_artifacts import (
+from k1.sessionstate.public_types import (
     ArtifactType,
     TaskArtifactEntry,
     TaskArtifactsSection,
+    TaskStateEntry,
+    TaskStateSection,
+    TaskStatus,
 )
-from k1.sessionstate.sections.task_state import TaskStateEntry, TaskStateSection, TaskStatus
 
 if TYPE_CHECKING:
     from k1.concierge.ledger.writer import LedgerWriter

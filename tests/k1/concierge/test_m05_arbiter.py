@@ -309,7 +309,7 @@ class TestDomainOverlap:
 
     def test_exact_match_returns_one(self):
         p1 = _phase1(domain="travel")
-        ctx = _ctx([_task(domain="travel")])
+        ctx = _ctx([_task(domain="travel", dispatch_turn=3)])
         assert domain_overlap(p1, ctx) == 1.0
 
     def test_no_match_returns_zero(self):
@@ -319,7 +319,7 @@ class TestDomainOverlap:
 
     def test_related_domain_returns_half(self):
         p1 = _phase1(domain="travel")
-        ctx = _ctx([_task(domain="booking")])
+        ctx = _ctx([_task(domain="booking", dispatch_turn=3)])
         assert domain_overlap(p1, ctx) == 0.5
 
     def test_empty_inflight_returns_zero(self):
@@ -359,12 +359,12 @@ class TestEntityOverlap:
 
     def test_full_overlap(self):
         p1 = _phase1(entities=[{"text": "hotel"}, {"text": "Napa"}])
-        ctx = _ctx([_task(entities=["hotel", "Napa"])])
+        ctx = _ctx([_task(entities=["hotel", "Napa"], dispatch_turn=3)])
         assert entity_overlap(p1, ctx) == 1.0
 
     def test_partial_overlap(self):
         p1 = _phase1(entities=[{"text": "hotel"}, {"text": "Napa"}])
-        ctx = _ctx([_task(entities=["hotel", "Napa", "3 nights"])])
+        ctx = _ctx([_task(entities=["hotel", "Napa", "3 nights"], dispatch_turn=3)])
         score = entity_overlap(p1, ctx)
         # Jaccard: 2/3 ~ 0.667
         assert 0.6 < score < 0.7
@@ -392,12 +392,12 @@ class TestEntityOverlap:
     def test_string_entities(self):
         """Phase1Result entities can be plain strings."""
         p1 = _phase1(entities=["hotel", "Napa"])
-        ctx = _ctx([_task(entities=["hotel", "Napa"])])
+        ctx = _ctx([_task(entities=["hotel", "Napa"], dispatch_turn=3)])
         assert entity_overlap(p1, ctx) == 1.0
 
     def test_case_insensitive(self):
         p1 = _phase1(entities=[{"text": "Hotel"}])
-        ctx = _ctx([_task(entities=["hotel"])])
+        ctx = _ctx([_task(entities=["hotel"], dispatch_turn=3)])
         assert entity_overlap(p1, ctx) == 1.0
 
     def test_bounded_zero_one(self):
@@ -498,7 +498,9 @@ class TestArbiterClassify:
             domain="travel",
             entities=[{"text": "hotel"}, {"text": "Napa"}],
         )
-        ctx = _ctx([_task(domain="travel", entities=["hotel", "Napa", "3 nights"])])
+        ctx = _ctx(
+            [_task(domain="travel", entities=["hotel", "Napa", "3 nights"], dispatch_turn=3)]
+        )
         result = self.arbiter.classify("make it 2 nights instead", p1, ctx)
         assert result.decision is ArbiterDecision.MODIFY_INFLIGHT
         assert result.target_task_id is not None
@@ -856,4 +858,4 @@ class TestEdgeCases:
         """ALL_TOPICS now has 30 topics (29 original + arbiter)."""
         from k1.concierge.bus.topics import ALL_TOPICS
 
-        assert len(ALL_TOPICS) == 40
+        assert len(ALL_TOPICS) == 46

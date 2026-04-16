@@ -89,8 +89,8 @@ class TestMappingConstants:
 
     def test_sentiment_to_valence_has_five_keys(self):
         assert len(SENTIMENT_TO_VALENCE) == 5
-        assert SENTIMENT_TO_VALENCE["very_negative"] == 0.1
-        assert SENTIMENT_TO_VALENCE["very_positive"] == 0.9
+        assert SENTIMENT_TO_VALENCE["very_negative"] == -0.8
+        assert SENTIMENT_TO_VALENCE["very_positive"] == 0.8
 
     def test_high_arousal_emotions(self):
         assert "anger" in HIGH_AROUSAL_EMOTIONS

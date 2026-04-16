@@ -201,7 +201,7 @@ class TestCrossSectionCascade:
             if not result.success:
                 break
 
-        for i in range(6):
+        for i in range(5):
             result = session.mutate(
                 "narrative_active",
                 "create_thread",

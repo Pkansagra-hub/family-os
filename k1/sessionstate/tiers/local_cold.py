@@ -53,7 +53,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from poc.k1_poc.config import get_config
+from ..config import ColdConfig, SessionStateConfig
 
 if TYPE_CHECKING:
     from ..local_cold import LocalColdArchive as LocalColdArchiveType
@@ -150,7 +150,7 @@ class RestoreResult:
             success=False,
             error=error,
             duration_ms=duration_ms,
-            sla_met=duration_ms <= get_config().sessionstate.cold.restore_sla_ms,
+            sla_met=duration_ms <= ColdConfig().restore_sla_ms,
         )
 
     @classmethod
@@ -160,7 +160,7 @@ class RestoreResult:
             success=False,
             error=f"No archive found for {section} in session {session_id}",
             duration_ms=duration_ms,
-            sla_met=duration_ms <= get_config().sessionstate.cold.restore_sla_ms,
+            sla_met=duration_ms <= ColdConfig().restore_sla_ms,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -293,6 +293,7 @@ class LocalColdTier:
     """
 
     __slots__ = (
+        "_ss_cfg",
         "_storage",
         "_session_id",
         "_restore_sla_violations",
@@ -307,6 +308,7 @@ class LocalColdTier:
         self,
         storage: Optional["LocalColdArchiveType"] = None,
         session_id: str = "",
+        config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
         Initialize LocalColdTier.
@@ -314,7 +316,9 @@ class LocalColdTier:
         Args:
             storage: LocalColdArchive instance (optional for testing)
             session_id: Current session ID
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._storage = storage
         self._session_id = session_id
         self._restore_sla_violations = 0
@@ -489,7 +493,7 @@ class LocalColdTier:
         )
 
         duration_ms = (time.perf_counter() - start_time) * 1000
-        _cold_sla = get_config().sessionstate.cold.restore_sla_ms
+        _cold_sla = self._ss_cfg.cold.restore_sla_ms
         sla_met = duration_ms <= _cold_sla
 
         if not sla_met:
@@ -752,7 +756,7 @@ class LocalColdTier:
         # LocalColdArchive doesn't have a prune_by_age method yet
         # This would need to be implemented if needed
         if max_age_days is None:
-            max_age_days = get_config().sessionstate.cold.default_max_age_days
+            max_age_days = self._ss_cfg.cold.default_max_age_days
         logger.debug(
             "prune_old called with max_age_days=%d (not implemented)",
             max_age_days,
@@ -866,7 +870,7 @@ class LocalColdTier:
             "bytes_restored": self._bytes_restored,
             "sla_violations": self._restore_sla_violations,
             "sla_compliance_rate": self.sla_compliance_rate,
-            "restore_sla_ms": get_config().sessionstate.cold.restore_sla_ms,
+            "restore_sla_ms": self._ss_cfg.cold.restore_sla_ms,
             "created_at_ms": self._created_at_ms,
         }
 

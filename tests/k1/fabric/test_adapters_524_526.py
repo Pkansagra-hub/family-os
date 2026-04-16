@@ -511,39 +511,39 @@ class TestModelGatewayAdapterCreateHandle:
 class TestModelGatewayAdapterCatalog:
     """Model catalog operations."""
 
-    def test_add_and_list(self) -> None:
+    async def test_add_and_list(self) -> None:
         adapter = TestGatewayPkg()
         m = ModelInfo(model_id="test", loaded=True)
         adapter.add_model(m)
-        models = adapter.list_models()
+        models = await adapter.list_models()
         assert len(models) == 1
         assert models[0].model_id == "test"
 
-    def test_remove_model(self) -> None:
+    async def test_remove_model(self) -> None:
         adapter = TestGatewayPkg()
         adapter.add_model(ModelInfo(model_id="test", loaded=True))
         adapter.remove_model("test")
-        assert adapter.list_models() == []
+        assert await adapter.list_models() == []
 
     def test_remove_nonexistent(self) -> None:
         adapter = TestGatewayPkg()
         adapter.remove_model("nope")  # no error
 
-    def test_is_model_loaded_true(self) -> None:
+    async def test_is_model_loaded_true(self) -> None:
         adapter = TestGatewayPkg()
         adapter.add_model(ModelInfo(model_id="m", loaded=True))
-        assert adapter.is_model_loaded("m") is True
+        assert await adapter.is_model_loaded("m") is True
 
-    def test_is_model_loaded_false_not_loaded(self) -> None:
+    async def test_is_model_loaded_false_not_loaded(self) -> None:
         adapter = TestGatewayPkg()
         adapter.add_model(ModelInfo(model_id="m", loaded=False))
-        assert adapter.is_model_loaded("m") is False
+        assert await adapter.is_model_loaded("m") is False
 
-    def test_is_model_loaded_false_missing(self) -> None:
+    async def test_is_model_loaded_false_missing(self) -> None:
         adapter = TestGatewayPkg()
-        assert adapter.is_model_loaded("nope") is False
+        assert await adapter.is_model_loaded("nope") is False
 
-    def test_find_model_match(self) -> None:
+    async def test_find_model_match(self) -> None:
         adapter = TestGatewayPkg()
         adapter.add_model(
             ModelInfo(
@@ -552,31 +552,31 @@ class TestModelGatewayAdapterCatalog:
                 loaded=True,
             )
         )
-        result = adapter.find_model(["CHAT", "TOOL_CALL"])
+        result = await adapter.find_model(["CHAT", "TOOL_CALL"])
         assert result == "full"
 
-    def test_find_model_no_match(self) -> None:
+    async def test_find_model_no_match(self) -> None:
         adapter = TestGatewayPkg()
         adapter.add_model(ModelInfo(model_id="m", capabilities=["CHAT"], loaded=True))
-        assert adapter.find_model(["VISION"]) is None
+        assert await adapter.find_model(["VISION"]) is None
 
-    def test_find_model_prefers_loaded(self) -> None:
+    async def test_find_model_prefers_loaded(self) -> None:
         adapter = TestGatewayPkg()
         adapter.add_model(ModelInfo(model_id="unloaded", capabilities=["CHAT"], loaded=False))
         adapter.add_model(ModelInfo(model_id="loaded", capabilities=["CHAT"], loaded=True))
-        assert adapter.find_model(["CHAT"]) == "loaded"
+        assert await adapter.find_model(["CHAT"]) == "loaded"
 
-    def test_find_model_falls_back_to_unloaded(self) -> None:
+    async def test_find_model_falls_back_to_unloaded(self) -> None:
         adapter = TestGatewayPkg()
         adapter.add_model(ModelInfo(model_id="unloaded", capabilities=["CHAT"], loaded=False))
-        assert adapter.find_model(["CHAT"]) == "unloaded"
+        assert await adapter.find_model(["CHAT"]) == "unloaded"
 
-    def test_clear(self) -> None:
+    async def test_clear(self) -> None:
         adapter = TestGatewayPkg()
         adapter.add_model(ModelInfo(model_id="m", loaded=True))
         adapter.create_handle(1000)
         adapter.clear()
-        assert adapter.list_models() == []
+        assert await adapter.list_models() == []
         assert adapter.handle_count == 0
 
     def test_set_default_responses(self) -> None:

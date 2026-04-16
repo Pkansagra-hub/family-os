@@ -41,8 +41,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from poc.k1_poc.config import get_config
-
 from .adapters.direct_writer import DirectWriterAdapter
 from .adapters.local_events import LocalEventAdapter
 from .adapters.memory_storage import InMemoryStorageAdapter
@@ -150,10 +148,9 @@ class SessionStateFactory:
         if session_id is None:
             session_id = f"session-{uuid.uuid4().hex[:12]}"
 
-        # Resolve database path (config-backed)
+        # Resolve database path
         if db_path is None:
-            cfg_path = get_config().sessionstate.storage.default_db_path
-            resolved_path = Path(cfg_path).expanduser()
+            resolved_path = DEFAULT_DB_PATH.expanduser()
         else:
             resolved_path = db_path
 
@@ -171,35 +168,31 @@ class SessionStateFactory:
         event_adapter = LocalEventAdapter(capture_mode=False)
         local_cold_archive = LocalColdArchive(db_path=resolved_path)
 
-        # Create manager first (lifecycle needs it)
-        manager = SessionStateManager(
-            session_id=session_id,
-            storage_port=storage_adapter,
-            event_port=event_adapter,
-            writer_port=None,  # Will be set after creation
-            lifecycle_port=None,  # Will be set after creation
-            local_cold_archive=local_cold_archive,
-        )
-
-        # Create adapters that need manager reference
+        # Create writer/lifecycle adapters unbound (no manager reference yet).
+        # This breaks the circular dependency: manager needs ports, ports need manager.
         writer_adapter = DirectWriterAdapter(
-            manager=manager,
-            guard=manager.mutation_guard,
             writer_id="direct",
         )
 
         lifecycle_adapter = StandaloneLifecycle(
-            manager=manager,
             checkpoint_interval_s=(
-                checkpoint_interval_s
-                if checkpoint_interval_s is not None
-                else get_config().sessionstate.storage.checkpoint_interval_s
+                checkpoint_interval_s if checkpoint_interval_s is not None else 30.0
             ),
         )
 
-        # Inject adapters
-        manager._writer_port = writer_adapter
-        manager._lifecycle_port = lifecycle_adapter
+        # Single-phase construction: manager gets ALL ports at once, never None.
+        manager = SessionStateManager(
+            session_id=session_id,
+            storage_port=storage_adapter,
+            event_port=event_adapter,
+            writer_port=writer_adapter,
+            lifecycle_port=lifecycle_adapter,
+            local_cold_archive=local_cold_archive,
+        )
+
+        # Bind manager back-references on adapters that need it.
+        writer_adapter.bind_manager(manager, manager.mutation_guard)
+        lifecycle_adapter.bind_manager(manager)
 
         logger.debug(
             "Standalone manager created (session=%s, storage=%s, events=%s, writer=%s, lifecycle=%s)",
@@ -259,33 +252,30 @@ class SessionStateFactory:
         storage_adapter = InMemoryStorageAdapter()
         event_adapter = LocalEventAdapter(capture_mode=True)
 
-        # Create manager first
-        manager = SessionStateManager(
-            session_id=session_id,
-            storage_port=storage_adapter,
-            event_port=event_adapter,
-            writer_port=None,
-            lifecycle_port=None,
-            local_cold_archive=None,  # Use default in-memory
-        )
-
-        # Create adapters that need manager reference
+        # Create writer/lifecycle adapters unbound (no manager reference yet).
         writer_adapter = DirectWriterAdapter(
-            manager=manager,
-            guard=manager.mutation_guard,
             writer_id="test",
         )
 
         # Disable periodic checkpoints for deterministic testing
         lifecycle_config = LifecycleConfig.testing()
         lifecycle_adapter = StandaloneLifecycle(
-            manager=manager,
             config=lifecycle_config,
         )
 
-        # Inject adapters
-        manager._writer_port = writer_adapter
-        manager._lifecycle_port = lifecycle_adapter
+        # Single-phase construction: manager gets ALL ports at once, never None.
+        manager = SessionStateManager(
+            session_id=session_id,
+            storage_port=storage_adapter,
+            event_port=event_adapter,
+            writer_port=writer_adapter,
+            lifecycle_port=lifecycle_adapter,
+            local_cold_archive=None,  # Use default in-memory
+        )
+
+        # Bind manager back-references on adapters that need it.
+        writer_adapter.bind_manager(manager, manager.mutation_guard)
+        lifecycle_adapter.bind_manager(manager)
 
         return manager
 
@@ -351,12 +341,8 @@ class SessionStateFactory:
             event_port=events,
             writer_port=writer,
             lifecycle_port=lifecycle,
+            k0_sync_port=k0_sync,
         )
-
-        # K0 sync is stored but not used by manager directly
-        # It's accessed by ReconstructionSLA when LOCAL COLD doesn't have data
-        if k0_sync is not None:
-            manager._k0_sync_port = k0_sync
 
         return manager
 

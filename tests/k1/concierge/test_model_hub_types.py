@@ -18,7 +18,6 @@ import dataclasses
 import pytest
 
 from k1.model_hub.types import (
-    AudioInput,
     AudioInputPayload,
     BatchPayload,
     CachePromptPayload,
@@ -31,7 +30,6 @@ from k1.model_hub.types import (
     HubChunk,
     HubRequest,
     HubResponse,
-    ImageInput,
     Message,
     ModelInfo,
     ModelPreference,
@@ -54,7 +52,6 @@ from k1.model_hub.types import (
     TTSPayload,
     Usage,
     VisionPayload,
-    VoiceConfig,
 )
 
 # =====================================================================
@@ -168,17 +165,17 @@ class TestToolDefinition:
 
 class TestToolCallResult:
     def test_construction(self) -> None:
-        tc = ToolCallResult(id="tc1", name="search", arguments={"q": "test"})
+        tc = ToolCallResult(id="tc1", name="search", arguments='{"q": "test"}')
         assert tc.id == "tc1"
         assert tc.name == "search"
-        assert tc.arguments == {"q": "test"}
+        assert tc.arguments == '{"q": "test"}'
 
-    def test_defaults(self) -> None:
-        tc = ToolCallResult(id="tc1", name="search")
-        assert tc.arguments == {}
+    def test_arguments_is_str(self) -> None:
+        tc = ToolCallResult(id="tc1", name="search", arguments="")
+        assert tc.arguments == ""
 
     def test_frozen(self) -> None:
-        tc = ToolCallResult(id="tc1", name="search")
+        tc = ToolCallResult(id="tc1", name="search", arguments="")
         with pytest.raises(dataclasses.FrozenInstanceError):
             tc.id = "tc2"  # type: ignore[misc]
 
@@ -201,10 +198,10 @@ class TestRequestConstraints:
         assert rc.consumer_id == ""
 
     def test_with_model_preference(self) -> None:
-        pref = ModelPreference(model_id="gemini-2.0-flash", tier="FAST")
+        pref = ModelPreference(preferred_model="gemini-2.0-flash", preferred_tier="FAST")
         rc = RequestConstraints(model_preference=pref)
-        assert rc.model_preference.model_id == "gemini-2.0-flash"
-        assert rc.model_preference.tier == "FAST"
+        assert rc.model_preference.preferred_model == "gemini-2.0-flash"
+        assert rc.model_preference.preferred_tier == "FAST"
 
 
 # =====================================================================
@@ -220,9 +217,8 @@ class TestChatPayload:
         assert p.system_prompt == "You are helpful."
 
     def test_defaults(self) -> None:
-        p = ChatPayload()
-        assert p.messages == []
-        assert p.system_prompt == ""
+        p = ChatPayload(messages=[Message(role="user", content="hi")])
+        assert p.system_prompt is None
 
 
 class TestToolCallPayload:
@@ -238,26 +234,37 @@ class TestToolCallPayload:
         assert p.parallel_tool_calls is True
 
     def test_defaults(self) -> None:
-        p = ToolCallPayload()
+        p = ToolCallPayload(
+            messages=[Message(role="user", content="find")],
+            tools=[ToolDefinition(name="t", description="d")],
+        )
         assert p.tool_choice == "auto"
 
 
 class TestStructuredOutputPayload:
     def test_construction(self) -> None:
         schema = {"type": "object", "properties": {"name": {"type": "string"}}}
-        p = StructuredOutputPayload(output_schema=schema, strict=True)
+        p = StructuredOutputPayload(
+            messages=[Message(role="user", content="extract")],
+            output_schema=schema,
+            strict=True,
+        )
         assert p.output_schema == schema
         assert p.strict is True
 
 
 class TestReasonPayload:
     def test_construction(self) -> None:
-        p = ReasonPayload(reasoning_effort="high", include_thinking=True)
+        p = ReasonPayload(
+            messages=[Message(role="user", content="think")],
+            reasoning_effort="high",
+            include_thinking=True,
+        )
         assert p.reasoning_effort == "high"
         assert p.include_thinking is True
 
     def test_defaults(self) -> None:
-        p = ReasonPayload()
+        p = ReasonPayload(messages=[Message(role="user", content="think")])
         assert p.reasoning_effort == "medium"
         assert p.include_thinking is False
 
@@ -269,14 +276,17 @@ class TestEmbedPayload:
         assert p.dimensions == 768
 
     def test_defaults(self) -> None:
-        p = EmbedPayload()
+        p = EmbedPayload(texts=["hello"])
         assert p.encoding_format == "float"
 
 
 class TestVisionPayload:
     def test_construction(self) -> None:
-        img = ImageInput(data="base64data", media_type="image/jpeg")
-        p = VisionPayload(image_inputs=[img])
+        img = {"data": "base64data", "media_type": "image/jpeg"}
+        p = VisionPayload(
+            messages=[Message(role="user", content="describe")],
+            image_inputs=[img],
+        )
         assert len(p.image_inputs) == 1
         assert p.detail == "auto"
 
@@ -307,18 +317,22 @@ class TestTokenCountPayload:
 
 class TestCachePromptPayload:
     def test_construction(self) -> None:
-        p = CachePromptPayload(cache_key="k1", ttl_s=600)
+        p = CachePromptPayload(
+            cache_key="k1",
+            messages=[Message(role="user", content="cache me")],
+            ttl_s=600,
+        )
         assert p.cache_key == "k1"
         assert p.ttl_s == 600
 
 
 class TestAudioInputPayload:
     def test_construction(self) -> None:
-        audio = AudioInput(data="base64wav", format="wav")
-        voice = VoiceConfig(voice="nova", speed=1.2)
+        audio = {"data": "base64wav", "format": "wav"}
+        voice = {"voice": "nova", "speed": 1.2}
         p = AudioInputPayload(audio=audio, voice_config=voice)
-        assert p.audio.data == "base64wav"
-        assert p.voice_config.voice == "nova"
+        assert p.audio["data"] == "base64wav"
+        assert p.voice_config["voice"] == "nova"
 
 
 class TestTTSPayload:
@@ -335,35 +349,48 @@ class TestTTSPayload:
 # =====================================================================
 
 
+# Helpers for valid construction
+_MSG = [Message(role="user", content="hi")]
+_TOOL = [ToolDefinition(name="t", description="d")]
+_TID = "trace-1"
+
+
 class TestHubRequest:
     def test_chat_request(self) -> None:
         req = HubRequest(
             capability=CapabilityType.CHAT,
-            payload=ChatPayload(messages=[Message(role="user", content="hi")]),
+            payload=ChatPayload(messages=_MSG),
+            trace_id=_TID,
         )
         assert req.capability == CapabilityType.CHAT
         assert isinstance(req.payload, ChatPayload)
-        assert req.trace_id == ""
+        assert req.trace_id == _TID
         assert req.idempotency_key is None
 
     def test_tool_call_request(self) -> None:
         req = HubRequest(
             capability=CapabilityType.TOOL_CALL,
-            payload=ToolCallPayload(tools=[ToolDefinition(name="t", description="d")]),
+            payload=ToolCallPayload(messages=_MSG, tools=_TOOL),
+            trace_id=_TID,
         )
         assert req.capability == CapabilityType.TOOL_CALL
 
     def test_structured_request(self) -> None:
         req = HubRequest(
             capability=CapabilityType.STRUCTURED,
-            payload=StructuredOutputPayload(output_schema={"type": "object"}),
+            payload=StructuredOutputPayload(
+                messages=_MSG,
+                output_schema={"type": "object"},
+            ),
+            trace_id=_TID,
         )
         assert isinstance(req.payload, StructuredOutputPayload)
 
     def test_reason_request(self) -> None:
         req = HubRequest(
             capability=CapabilityType.REASON,
-            payload=ReasonPayload(reasoning_effort="high"),
+            payload=ReasonPayload(messages=_MSG, reasoning_effort="high"),
+            trace_id=_TID,
         )
         assert isinstance(req.payload, ReasonPayload)
 
@@ -371,13 +398,18 @@ class TestHubRequest:
         req = HubRequest(
             capability=CapabilityType.EMBED,
             payload=EmbedPayload(texts=["hello"]),
+            trace_id=_TID,
         )
         assert req.capability == CapabilityType.EMBED
 
     def test_vision_request(self) -> None:
         req = HubRequest(
             capability=CapabilityType.VISION,
-            payload=VisionPayload(image_inputs=[ImageInput(data="x")]),
+            payload=VisionPayload(
+                messages=_MSG,
+                image_inputs=[{"data": "x"}],
+            ),
+            trace_id=_TID,
         )
         assert req.capability == CapabilityType.VISION
 
@@ -385,27 +417,34 @@ class TestHubRequest:
         req = HubRequest(
             capability=CapabilityType.MODERATE,
             payload=ModeratePayload(text="test"),
+            trace_id=_TID,
         )
         assert req.capability == CapabilityType.MODERATE
 
     def test_token_count_request(self) -> None:
         req = HubRequest(
             capability=CapabilityType.TOKEN_COUNT,
-            payload=TokenCountPayload(),
+            payload=TokenCountPayload(messages=_MSG),
+            trace_id=_TID,
         )
         assert req.capability == CapabilityType.TOKEN_COUNT
 
     def test_batch_request(self) -> None:
         req = HubRequest(
             capability=CapabilityType.BATCH,
-            payload=BatchPayload(),
+            payload=BatchPayload(requests=[{"fake": True}]),
+            trace_id=_TID,
         )
         assert req.capability == CapabilityType.BATCH
 
     def test_cache_prompt_request(self) -> None:
         req = HubRequest(
             capability=CapabilityType.CACHE_PROMPT,
-            payload=CachePromptPayload(cache_key="ck"),
+            payload=CachePromptPayload(
+                cache_key="ck",
+                messages=_MSG,
+            ),
+            trace_id=_TID,
         )
         assert req.capability == CapabilityType.CACHE_PROMPT
 
@@ -413,6 +452,7 @@ class TestHubRequest:
         req = HubRequest(
             capability=CapabilityType.AUDIO_IN,
             payload=AudioInputPayload(),
+            trace_id=_TID,
         )
         assert req.capability == CapabilityType.AUDIO_IN
 
@@ -420,6 +460,7 @@ class TestHubRequest:
         req = HubRequest(
             capability=CapabilityType.TTS,
             payload=TTSPayload(text="speak"),
+            trace_id=_TID,
         )
         assert req.capability == CapabilityType.TTS
 
@@ -432,7 +473,7 @@ class TestHubRequest:
         )
         req = HubRequest(
             capability=CapabilityType.CHAT,
-            payload=ChatPayload(),
+            payload=ChatPayload(messages=_MSG),
             constraints=rc,
             trace_id="t-123",
             idempotency_key="idem-1",
@@ -443,7 +484,11 @@ class TestHubRequest:
         assert req.idempotency_key == "idem-1"
 
     def test_frozen(self) -> None:
-        req = HubRequest(capability=CapabilityType.CHAT, payload=ChatPayload())
+        req = HubRequest(
+            capability=CapabilityType.CHAT,
+            payload=ChatPayload(messages=_MSG),
+            trace_id=_TID,
+        )
         with pytest.raises(dataclasses.FrozenInstanceError):
             req.capability = CapabilityType.REASON  # type: ignore[misc]
 
@@ -452,6 +497,7 @@ class TestHubRequest:
         req = HubRequest(
             capability=CapabilityType.IMAGE_GEN,
             payload={"prompt": "draw a cat"},
+            trace_id=_TID,
         )
         assert isinstance(req.payload, dict)
 
@@ -474,16 +520,26 @@ class TestUsage:
 
 
 class TestResponseMetadata:
-    def test_defaults(self) -> None:
-        m = ResponseMetadata()
-        assert m.request_id == ""
-        assert m.model_id == ""
-        assert m.provider_id == ""
+    def test_all_fields(self) -> None:
+        m = ResponseMetadata(
+            request_id="r1",
+            model_id="m1",
+            provider_id="p1",
+            usage=Usage(),
+            cost_usd=0.0,
+            latency_ms=0,
+            cache_hit=False,
+            capability=CapabilityType.CHAT,
+            trace_id="t-1",
+        )
+        assert m.request_id == "r1"
+        assert m.model_id == "m1"
+        assert m.provider_id == "p1"
         assert m.cost_usd == 0.0
         assert m.latency_ms == 0
         assert m.cache_hit is False
         assert m.capability == CapabilityType.CHAT
-        assert m.trace_id == ""
+        assert m.trace_id == "t-1"
         assert m.fallback_used is False
         assert m.finish_reason == FinishReason.STOP
 
@@ -495,7 +551,9 @@ class TestResponseMetadata:
             usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
             cost_usd=0.001,
             latency_ms=234,
+            cache_hit=False,
             capability=CapabilityType.TOOL_CALL,
+            trace_id="t-1",
             finish_reason=FinishReason.TOOL_CALLS,
         )
         assert m.usage.prompt_tokens == 100
@@ -509,7 +567,7 @@ class TestCapabilityResults:
         assert r.text == "hello"
 
     def test_tool_call_result_set(self) -> None:
-        tc = ToolCallResult(id="tc1", name="search", arguments={"q": "test"})
+        tc = ToolCallResult(id="tc1", name="search", arguments='{"q": "test"}')
         r = ToolCallResultSet(text="", tool_calls=[tc])
         assert len(r.tool_calls) == 1
         assert r.tool_calls[0].name == "search"
@@ -542,17 +600,34 @@ class TestCapabilityResults:
 # =====================================================================
 
 
+def _meta(**overrides: object) -> ResponseMetadata:
+    """Build a valid ResponseMetadata with overrides."""
+    defaults = dict(
+        request_id="r1",
+        model_id="m1",
+        provider_id="p1",
+        usage=Usage(),
+        cost_usd=0.0,
+        latency_ms=0,
+        cache_hit=False,
+        capability=CapabilityType.CHAT,
+        trace_id="t-1",
+    )
+    defaults.update(overrides)
+    return ResponseMetadata(**defaults)
+
+
 class TestHubResponse:
-    def test_defaults(self) -> None:
-        r = HubResponse()
+    def test_construction(self) -> None:
+        r = HubResponse(result=ChatResult(text=""), metadata=_meta())
         assert isinstance(r.result, ChatResult)
         assert r.result.text == ""
-        assert r.metadata.model_id == ""
+        assert r.metadata.model_id == "m1"
 
     def test_with_chat_result(self) -> None:
         r = HubResponse(
             result=ChatResult(text="hi"),
-            metadata=ResponseMetadata(model_id="m1", latency_ms=100),
+            metadata=_meta(model_id="m1", latency_ms=100),
         )
         assert r.result.text == "hi"
         assert r.metadata.latency_ms == 100
@@ -560,9 +635,10 @@ class TestHubResponse:
     def test_with_tool_call_result(self) -> None:
         r = HubResponse(
             result=ToolCallResultSet(
-                tool_calls=[ToolCallResult(id="tc1", name="search", arguments={"q": "x"})],
+                text="",
+                tool_calls=[ToolCallResult(id="tc1", name="search", arguments='{"q": "x"}')],
             ),
-            metadata=ResponseMetadata(
+            metadata=_meta(
                 finish_reason=FinishReason.TOOL_CALLS,
                 capability=CapabilityType.TOOL_CALL,
             ),
@@ -573,12 +649,12 @@ class TestHubResponse:
     def test_with_structured_result(self) -> None:
         r = HubResponse(
             result=StructuredResult(json_output={"key": "val"}),
-            metadata=ResponseMetadata(capability=CapabilityType.STRUCTURED),
+            metadata=_meta(capability=CapabilityType.STRUCTURED),
         )
         assert isinstance(r.result, StructuredResult)
 
     def test_frozen(self) -> None:
-        r = HubResponse()
+        r = HubResponse(result=ChatResult(text=""), metadata=_meta())
         with pytest.raises(dataclasses.FrozenInstanceError):
             r.result = ChatResult(text="x")  # type: ignore[misc]
 
@@ -590,33 +666,26 @@ class TestHubResponse:
 
 class TestHubChunk:
     def test_text_delta(self) -> None:
-        c = HubChunk(chunk_type="text_delta", text="hello ")
-        assert c.chunk_type == "text_delta"
-        assert c.text == "hello "
-        assert c.tool_call_partial is None
-        assert c.response is None
+        c = HubChunk(content="hello ")
+        assert c.content == "hello "
+        assert c.done is False
+        assert c.metadata is None
+        assert c.tool_calls is None
 
     def test_tool_call_delta(self) -> None:
-        tc = ToolCallResult(id="tc1", name="search", arguments={})
-        c = HubChunk(chunk_type="tool_call_delta", tool_call_partial=tc)
-        assert c.chunk_type == "tool_call_delta"
-        assert c.tool_call_partial.name == "search"
-
-    def test_thought_delta(self) -> None:
-        c = HubChunk(chunk_type="thought_delta", thought_text="thinking...")
-        assert c.chunk_type == "thought_delta"
-        assert c.thought_text == "thinking..."
+        tc = ToolCallResult(id="tc1", name="search", arguments="")
+        c = HubChunk(tool_calls=[tc])
+        assert c.tool_calls[0].name == "search"
 
     def test_done_chunk(self) -> None:
-        resp = HubResponse(result=ChatResult(text="done!"))
-        c = HubChunk(chunk_type="done", response=resp)
-        assert c.chunk_type == "done"
-        assert c.response.result.text == "done!"
+        c = HubChunk(content="", done=True, metadata=_meta())
+        assert c.done is True
+        assert c.metadata.model_id == "m1"
 
     def test_frozen(self) -> None:
-        c = HubChunk(chunk_type="text_delta", text="x")
+        c = HubChunk(content="x")
         with pytest.raises(dataclasses.FrozenInstanceError):
-            c.text = "y"  # type: ignore[misc]
+            c.content = "y"  # type: ignore[misc]
 
 
 # =====================================================================
@@ -627,17 +696,15 @@ class TestHubChunk:
 class TestModelInfo:
     def test_construction(self) -> None:
         m = ModelInfo(
-            model_id="gemini-2.0-flash",
+            id="gemini-2.0-flash",
             provider_id="google",
             capabilities=[CapabilityType.CHAT, CapabilityType.TOOL_CALL],
             max_context=1_000_000,
-            tier="FAST",
         )
-        assert m.model_id == "gemini-2.0-flash"
+        assert m.id == "gemini-2.0-flash"
         assert len(m.capabilities) == 2
         assert m.supports_streaming is True
 
     def test_defaults(self) -> None:
-        m = ModelInfo()
-        assert m.tier == "STANDARD"
+        m = ModelInfo(id="m1", provider_id="p1")
         assert m.cost_per_1m_input == 0.0

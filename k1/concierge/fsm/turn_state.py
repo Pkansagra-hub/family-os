@@ -303,4 +303,3 @@ class FSMTurnState:
         for item in projected:
             self.pending_results.append(item)
         return len(self.pending_results)
-        return len(self.pending_results)

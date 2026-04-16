@@ -63,13 +63,13 @@ def _handler_503(request: httpx.Request) -> httpx.Response:
 
 
 def _handler_health_200(request: httpx.Request) -> httpx.Response:
-    if request.url.path == "/k0/health":
+    if request.url.path == "/healthz":
         return httpx.Response(200, json={"status": "healthy"})
     return httpx.Response(404)
 
 
 def _handler_health_503(request: httpx.Request) -> httpx.Response:
-    if request.url.path == "/k0/health":
+    if request.url.path == "/healthz":
         return httpx.Response(503)
     return httpx.Response(404)
 
@@ -312,7 +312,7 @@ class TestTransportConfig:
 
     def test_default_values(self) -> None:
         cfg = TransportConfig()
-        assert cfg.base_url == "http://localhost:8000"
+        assert cfg.base_url == "http://localhost:8080"
         assert cfg.connect_timeout_s == 5.0
         assert cfg.read_timeout_s == 30.0
         assert cfg.tls_verify is False

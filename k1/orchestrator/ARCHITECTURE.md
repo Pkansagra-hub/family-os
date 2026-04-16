@@ -333,7 +333,7 @@ POST: ExecutionMonitor lazy init (breaks circular dep) + AdminHttpAdapter (if ad
 
 **5c. Bus:Delta** — `DeltaEmitAdapter` (123 lines) dual-publishes: `k1.hil.*` and `k1.orchestration.*` topics go to BOTH `IEventPort` + `IDeltaBusPort`. All others event-only. ORCH-09: injects trace_id.
 
-**6. Concierge→Orch** — Concierge creates `TaskEnvelope` from POC-local types in `k1.concierge.orchestrator.types` (explicitly NOT from `k1.orchestrator.types`). Fields structurally identical. ⚠️ Must migrate to production types pre-integration.
+**6. Concierge→Orch** — Concierge creates `TaskEnvelope` from POC-local types in `k1.concierge.orchestrator.types` (explicitly NOT from `k1.orchestrator.types`). Fields are structurally INCOMPATIBLE (POC uses task_id/budget/session_id/ComplexityTier enum; production uses envelope_id/timeout_ms/caller_id/tier as str). Translation adapter `_FabricGatewayAdapter` in `k1/concierge/kernel/bootstrap.py` bridges POC→production at dispatch boundary. ✅ Verified E-0.5.5.
 
 **7. Orch→Planner** — All types (`PlanRequest`, `CommittedPlan`, `PlanAck`, `MicroReplanRequest`) defined locally in `k1.orchestrator.types`. Planner satisfies `IPlannerMailbox` protocol via structural typing. Correlation via `request_id` field.
 
@@ -443,7 +443,7 @@ POST: ExecutionMonitor lazy init (breaks circular dep) + AdminHttpAdapter (if ad
 
 | # | Severity | Finding |
 |---|----------|---------|
-| 1 | ⚠️ | **Concierge POC types** — `k1.concierge.orchestrator.types.TaskEnvelope` is a POC copy, not imported from `k1.orchestrator.types`. Must migrate before production integration. |
+| 1 | ✅ | **Concierge POC types** — `k1.concierge.orchestrator.types.TaskEnvelope` is a concierge-local contract layer (NOT structurally identical to `k1.orchestrator.types.TaskEnvelope`). Translation adapter `_FabricGatewayAdapter` bridges POC↔production at dispatch boundary. Verified E-0.5.5. |
 | 2 | 🟡 | **V1 single-DAG limitation** — `ConcurrencyGuard` limits to 1 active DAG. V2 should allow multiple concurrent DAGs with per-session isolation. |
 | 3 | 🟡 | **WAL crash recovery V1** — Partial DAGs re-executed from wave 0 (no resume from last completed wave). WAL entries exist but resume logic is simplified. |
 | 4 | 🟡 | **Planner module not yet implemented** — `PlannerAdapter` defines structural protocol `IPlannerMailbox` but actual Planner module must satisfy it. Types defined locally in orchestrator (good — no circular dep). |

@@ -7,8 +7,8 @@ SketchResult (rough plan with capability references).
 Design
 ------
 - Layer 2 (Section 30.6): imports Layer 1 ports (ILLMPort), Layer 0
-  types (PlanRequest, SketchResult, RoughStep, StageContext, HubRequest,
-  HubResponse, RequestConstraints, SketchFailedError), and shared types
+  types (PlanRequest, SketchResult, RoughStep, StageContext, PlannerLLMRequest,
+  PlannerLLMResponse, PlannerConstraints, SketchFailedError), and shared types
   from Orchestrator (PlanRequest, MicroReplanRequest).
 - Stateless between calls: no per-plan instance state. All per-plan
   state flows through StageContext and method parameters.
@@ -65,9 +65,9 @@ from k1.orchestrator.types import MicroReplanRequest, PlanRequest
 from k1.planner.ports.llm_port import ILLMPort
 from k1.planner.types import (
     HILCoordinatorLike,
-    HubRequest,
-    HubResponse,
-    RequestConstraints,
+    PlannerConstraints,
+    PlannerLLMRequest,
+    PlannerLLMResponse,
     RoughStep,
     SketchFailedError,
     SketchResult,
@@ -634,8 +634,8 @@ class SketchService:
         ctx: StageContext,
         *,
         tools: Optional[Tuple[Dict[str, Any], ...]] = None,
-    ) -> HubRequest:
-        """Build a HubRequest for an LLM call.
+    ) -> PlannerLLMRequest:
+        """Build a PlannerLLMRequest for an LLM call.
 
         Args:
             messages: Conversation messages list.
@@ -643,7 +643,7 @@ class SketchService:
             tools: Optional tool definitions for agentic calls.
 
         Returns:
-            HubRequest ready for ILLMPort.execute().
+            PlannerLLMRequest ready for ILLMPort.execute().
         """
         payload: Dict[str, Any] = {
             "messages": messages,
@@ -652,14 +652,14 @@ class SketchService:
         if tools:
             payload["tools"] = list(tools)
 
-        constraints = RequestConstraints(
+        constraints = PlannerConstraints(
             max_tokens=ctx.stage_budget.max_tokens if ctx.stage_budget else 2048,
             timeout_ms=ctx.stage_budget.timeout_ms if ctx.stage_budget else 8000,
             temperature=0.7,
             consumer_id="planner",
         )
 
-        return HubRequest(
+        return PlannerLLMRequest(
             capability="CHAT",
             payload=payload,
             constraints=constraints,
@@ -885,7 +885,7 @@ class SketchService:
                 )
 
             hub_request = self._build_hub_request(messages, ctx, tools=tools)
-            hub_response: HubResponse = await self._llm_port.execute(hub_request)
+            hub_response: PlannerLLMResponse = await self._llm_port.execute(hub_request)
 
             result = hub_response.result if hub_response.result else {}
             content = result.get("content", "")

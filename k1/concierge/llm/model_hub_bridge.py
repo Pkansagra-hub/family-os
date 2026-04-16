@@ -15,23 +15,6 @@ from __future__ import annotations
 import logging
 from typing import Any, AsyncIterator
 
-from k1.model_hub.ports import HubHealthReport, ProviderHealthStatus
-from k1.model_hub.types import CapabilityResult, CapabilityType, ChatPayload, ChatResult
-from k1.model_hub.types import FinishReason as HubFinishReason
-from k1.model_hub.types import (
-    HubChunk,
-    HubRequest,
-    HubResponse,
-    ModelInfo,
-    ReasonPayload,
-    ReasonResult,
-    ResponseMetadata,
-    StructuredOutputPayload,
-    StructuredResult,
-    ToolCallPayload,
-)
-from k1.model_hub.types import ToolCallResult as HubToolCallResult
-from k1.model_hub.types import ToolCallResultSet, ToolDefinition, Usage
 from k1.concierge.llm.types import (
     Capability,
     ConciergeModelRequest,
@@ -42,6 +25,26 @@ from k1.concierge.llm.types import (
 )
 from k1.concierge.llm.types import ToolCallResult as POCToolCallResult
 from k1.concierge.llm.types import ToolSchema
+from k1.model_hub.types import CapabilityResult, CapabilityType, ChatPayload, ChatResult
+from k1.model_hub.types import FinishReason as HubFinishReason
+from k1.model_hub.types import (
+    HubChunk,
+    HubHealthReport,
+    HubRequest,
+    HubResponse,
+    ModelInfo,
+    ModelTier,
+    ProviderHealthStatus,
+    ReasonPayload,
+    ReasonResult,
+    ResponseMetadata,
+    StructuredOutputPayload,
+    StructuredResult,
+    TokenUsage,
+    ToolCallPayload,
+)
+from k1.model_hub.types import ToolCallResult as HubToolCallResult
+from k1.model_hub.types import ToolCallResultSet, ToolDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -130,10 +133,10 @@ class ModelHubPOCBridge:
                 seen.add(model_id)
                 models.append(
                     ModelInfo(
-                        model_id=model_id,
+                        id=model_id,
                         provider_id="google",
                         capabilities=list(_POC_CAPABILITIES),
-                        tier="STANDARD",
+                        tier=ModelTier.STANDARD,
                     )
                 )
         return models
@@ -173,22 +176,19 @@ class ModelHubPOCBridge:
         thinking: ThinkingLevel | None = None
 
         if isinstance(payload, ChatPayload):
-            system_prompt = payload.system_prompt
+            system_prompt = payload.system_prompt or ""
             messages = [self._k1_msg_to_poc(m) for m in payload.messages]
 
         elif isinstance(payload, ToolCallPayload):
-            system_prompt = payload.system_prompt
             messages = [self._k1_msg_to_poc(m) for m in payload.messages]
             tools = [self._k1_tool_to_poc(t) for t in payload.tools]
             tool_choice = payload.tool_choice
 
         elif isinstance(payload, StructuredOutputPayload):
-            system_prompt = payload.system_prompt
             messages = [self._k1_msg_to_poc(m) for m in payload.messages]
             response_schema = payload.output_schema
 
         elif isinstance(payload, ReasonPayload):
-            system_prompt = payload.system_prompt
             messages = [self._k1_msg_to_poc(m) for m in payload.messages]
             thinking = _EFFORT_TO_THINKING.get(payload.reasoning_effort, ThinkingLevel.MEDIUM)
 
@@ -200,7 +200,10 @@ class ModelHubPOCBridge:
         # Model hint from preference
         model_hint: str | None = None
         if constraints.model_preference:
-            model_hint = constraints.model_preference.model_id or constraints.model_preference.tier
+            model_hint = (
+                constraints.model_preference.preferred_model
+                or constraints.model_preference.preferred_tier
+            )
 
         return ConciergeModelRequest(
             capability=poc_capability,
@@ -233,14 +236,17 @@ class ModelHubPOCBridge:
         finish = _POC_TO_HUB_FINISH.get(poc_resp.finish_reason, HubFinishReason.STOP)
 
         metadata = ResponseMetadata(
+            request_id=trace_id or "bridge-req",
             model_id=poc_resp.model_id,
             provider_id="poc-bridge",
-            usage=Usage(
+            usage=TokenUsage(
                 prompt_tokens=poc_resp.tokens_in,
                 completion_tokens=poc_resp.tokens_out,
                 total_tokens=poc_resp.tokens_in + poc_resp.tokens_out + poc_resp.tokens_thoughts,
             ),
+            cost_usd=0.0,
             latency_ms=poc_resp.latency_ms,
+            cache_hit=False,
             capability=capability,
             trace_id=trace_id,
             finish_reason=finish,
@@ -251,10 +257,20 @@ class ModelHubPOCBridge:
         self, poc_resp: ConciergeModelResponse, capability: CapabilityType
     ) -> CapabilityResult:
         if capability == CapabilityType.TOOL_CALL and poc_resp.has_tool_calls:
+            import json
+
             return ToolCallResultSet(
                 text=poc_resp.text,
                 tool_calls=[
-                    HubToolCallResult(id=tc.id, name=tc.name, arguments=tc.arguments)
+                    HubToolCallResult(
+                        id=tc.id,
+                        name=tc.name,
+                        arguments=(
+                            json.dumps(tc.arguments)
+                            if isinstance(tc.arguments, dict)
+                            else str(tc.arguments)
+                        ),
+                    )
                     for tc in poc_resp.tool_calls
                 ],
             )
@@ -274,22 +290,29 @@ class ModelHubPOCBridge:
         capability: CapabilityType,
         trace_id: str,
     ) -> HubChunk:
+        import json
+
         if chunk.chunk_type == "done" and chunk.response:
             hub_resp = self._poc_to_hub_response(chunk.response, capability, trace_id)
-            return HubChunk(chunk_type="done", response=hub_resp)
+            return HubChunk(content="", done=True, metadata=hub_resp.metadata)
 
         if chunk.chunk_type == "tool_call_delta" and chunk.tool_call_partial:
             tc = chunk.tool_call_partial
             return HubChunk(
-                chunk_type="tool_call_delta",
-                tool_call_partial=HubToolCallResult(id=tc.id, name=tc.name, arguments=tc.arguments),
+                tool_calls=[
+                    HubToolCallResult(
+                        id=tc.id,
+                        name=tc.name,
+                        arguments=(
+                            json.dumps(tc.arguments)
+                            if isinstance(tc.arguments, dict)
+                            else str(tc.arguments)
+                        ),
+                    )
+                ],
             )
 
-        return HubChunk(
-            chunk_type=chunk.chunk_type,
-            text=chunk.text,
-            thought_text=chunk.thought_text,
-        )
+        return HubChunk(content=chunk.text or "")
 
     # ------------------------------------------------------------------
     # Helpers: K1 → POC type conversion

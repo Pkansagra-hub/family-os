@@ -50,8 +50,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
 
-from poc.k1_poc.config import get_config
-
+from .config import SessionStateConfig
 from .sizetracker import (
     NEVER_EVICT_SECTIONS,
     SECTION_BUDGETS,
@@ -320,6 +319,7 @@ class EvictionEngine:
     """
 
     __slots__ = (
+        "_ss_cfg",
         "_size_tracker",
         "_local_cold",
         "_mutation_guard",
@@ -335,6 +335,7 @@ class EvictionEngine:
         mutation_guard: Optional["MutationGuard"] = None,
         section_provider: Optional[ISectionDataProvider] = None,
         session_id: str = "",
+        config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
         Initialize EvictionEngine.
@@ -345,7 +346,9 @@ class EvictionEngine:
             mutation_guard: MutationGuard for section locking (optional for testing)
             section_provider: Provider for section data access (optional)
             session_id: Session ID for archive metadata
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._size_tracker = size_tracker
         self._local_cold = local_cold
         self._mutation_guard = mutation_guard
@@ -356,7 +359,7 @@ class EvictionEngine:
         logger.info(
             "EvictionEngine initialized (session=%s, target_util=%.0f%%)",
             self._session_id[:8],
-            get_config().sessionstate.eviction.target_utilization * 100,
+            self._ss_cfg.eviction.target_utilization * 100,
         )
 
     # =========================================================================
@@ -516,7 +519,7 @@ class EvictionEngine:
             for candidate in candidates:
                 if remaining <= 0:
                     break
-                if iterations >= get_config().sessionstate.eviction.max_eviction_iterations:
+                if iterations >= self._ss_cfg.eviction.max_eviction_iterations:
                     logger.warning("Max eviction iterations reached")
                     break
 
@@ -524,7 +527,7 @@ class EvictionEngine:
 
                 # Calculate how much to evict from this section
                 to_evict = min(candidate.evictable_bytes, remaining)
-                _min_evict = get_config().sessionstate.eviction.min_eviction_bytes
+                _min_evict = self._ss_cfg.eviction.min_eviction_bytes
                 if to_evict < _min_evict and candidate.evictable_bytes >= _min_evict:
                     to_evict = _min_evict
 
@@ -751,7 +754,7 @@ class EvictionEngine:
             return 0
 
         # Target: 70% utilization (gives headroom)
-        _cfg_evict = get_config().sessionstate.eviction
+        _cfg_evict = self._ss_cfg.eviction
         target_bytes = int(TOTAL_SIZE_LIMIT_BYTES * _cfg_evict.target_utilization)
         needed = current_total - target_bytes
 
@@ -765,7 +768,7 @@ class EvictionEngine:
             int: Bytes that should be evicted from WARM
         """
         warm_total = self._size_tracker.get_tier_size("warm")
-        _target_util = get_config().sessionstate.eviction.target_utilization
+        _target_util = self._ss_cfg.eviction.target_utilization
         target = int(WARM_SIZE_LIMIT_BYTES * _target_util)
         return max(0, warm_total - target)
 

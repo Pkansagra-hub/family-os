@@ -22,7 +22,9 @@ The 6-step pipeline:
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -155,6 +157,92 @@ class DispatchRecord:
     result: ToolResult
     timestamp_ms: int
     iteration: int
+
+
+# =========================================================================
+# ToolCallSummary -- lightweight summary for persistence (Phase P)
+# =========================================================================
+
+_SENSITIVE_KEY_PATTERN = re.compile(r"password|token|secret|key|api_key", re.IGNORECASE)
+_MAX_SUMMARY_CHARS = 200
+
+
+@dataclass(frozen=True)
+class ToolCallSummary:
+    """Lightweight summary of a tool dispatch for persistence.
+
+    Designed to survive beyond the ReAct loop lifetime into
+    TypedHistoryEntry.metadata["tool_calls"] where Memory Writer
+    can read it. All string fields are truncated to 200 chars max.
+    Sensitive argument values (password, token, secret, key) are redacted.
+    """
+
+    tool_name: str
+    arguments_summary: str  # JSON-serialized args, truncated ≤200 chars, redacted
+    status: str  # "ok" | "error" | "partial"
+    result_preview: str  # stringified result.data or error, truncated ≤200 chars
+    timestamp_ms: int
+    duration_ms: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tool_name": self.tool_name,
+            "arguments_summary": self.arguments_summary,
+            "status": self.status,
+            "result_preview": self.result_preview,
+            "timestamp_ms": self.timestamp_ms,
+            "duration_ms": self.duration_ms,
+        }
+
+
+def _redact_sensitive(args: dict[str, Any]) -> dict[str, Any]:
+    """Shallow-redact values whose keys match sensitive patterns."""
+    redacted = {}
+    for k, v in args.items():
+        if _SENSITIVE_KEY_PATTERN.search(k):
+            redacted[k] = "***"
+        else:
+            redacted[k] = v
+    return redacted
+
+
+def _truncate(text: str, max_len: int = _MAX_SUMMARY_CHARS) -> str:
+    """Truncate text to max_len characters."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len]
+
+
+def _build_summary(record: DispatchRecord) -> ToolCallSummary:
+    """Build a ToolCallSummary from a DispatchRecord."""
+    # Redact + serialize arguments
+    safe_args = _redact_sensitive(record.arguments) if record.arguments else {}
+    try:
+        args_str = json.dumps(safe_args, default=str, ensure_ascii=False)
+    except (TypeError, ValueError):
+        args_str = str(safe_args)
+    args_summary = _truncate(args_str)
+
+    # Build result preview
+    if record.result.is_error():
+        preview = record.result.error or "unknown error"
+    else:
+        try:
+            preview = json.dumps(record.result.data, default=str, ensure_ascii=False)
+        except (TypeError, ValueError):
+            preview = str(record.result.data)
+    result_preview = _truncate(preview)
+
+    # Duration: next record timestamp - this record timestamp (approx)
+    # We don't have end time, so use 0 as default; caller can improve
+    return ToolCallSummary(
+        tool_name=record.tool_name,
+        arguments_summary=args_summary,
+        status=record.result.status,
+        result_preview=result_preview,
+        timestamp_ms=record.timestamp_ms,
+        duration_ms=0,
+    )
 
 
 # =========================================================================
@@ -404,6 +492,38 @@ class ToolDispatcher:
         """Reset the dispatcher for a new turn (same allowlist/tier)."""
         self.call_count = 0
         self.call_history.clear()
+
+    def get_call_summaries(self) -> list[ToolCallSummary]:
+        """Build lightweight summaries from call_history for persistence.
+
+        Designed for Phase P (MW prerequisite): extracts tool call data
+        before the dispatcher is garbage collected. Summaries are
+        truncated (≤200 chars) and sensitive args are redacted.
+
+        Returns:
+            List of ToolCallSummary, one per dispatch. Duration is
+            estimated from consecutive timestamps.
+        """
+        summaries: list[ToolCallSummary] = []
+        records = self.call_history
+        for i, record in enumerate(records):
+            summary = _build_summary(record)
+            # Estimate duration from next record's timestamp (if available)
+            if i + 1 < len(records):
+                duration = records[i + 1].timestamp_ms - record.timestamp_ms
+            else:
+                duration = 0
+            # Replace the frozen dataclass's duration_ms
+            summary = ToolCallSummary(
+                tool_name=summary.tool_name,
+                arguments_summary=summary.arguments_summary,
+                status=summary.status,
+                result_preview=summary.result_preview,
+                timestamp_ms=summary.timestamp_ms,
+                duration_ms=max(0, duration),
+            )
+            summaries.append(summary)
+        return summaries
 
 
 # =========================================================================

@@ -268,6 +268,29 @@ class Phase1Classified(CanonicalEventMeta):
         d["is_degraded"] = self.is_degraded
         return d
 
+    @classmethod
+    def from_payload(cls, data: dict[str, Any]) -> Phase1Classified:
+        return cls(
+            event_id=data.get("event_id", ""),
+            session_id=data.get("session_id", ""),
+            correlation_id=data.get("correlation_id", ""),
+            causation_id=data.get("causation_id", ""),
+            parent_event_id=data.get("parent_event_id", ""),
+            task_id=data.get("task_id", ""),
+            actor=data.get("actor", ""),
+            ts_utc=data.get("ts_utc", ""),
+            priority=data.get("priority", 1),
+            payload_schema_version=data.get("payload_schema_version", "1.0.0"),
+            turn_number=data.get("turn_number", 0),
+            complexity_tier=data.get("complexity_tier", ""),
+            intent_primary=data.get("intent_primary", ""),
+            domain_primary=data.get("domain_primary", ""),
+            safety_band=data.get("safety_band", ""),
+            emotion_primary=data.get("emotion_primary", ""),
+            classification_latency_ms=data.get("classification_latency_ms", 0.0),
+            is_degraded=data.get("is_degraded", False),
+        )
+
 
 @dataclass
 class TaskRouted(CanonicalEventMeta):
@@ -289,3 +312,21 @@ class TaskRouted(CanonicalEventMeta):
         d["routing_path"] = self.routing_path
         d["budget_limit"] = self.budget_limit
         return d
+
+    @classmethod
+    def from_payload(cls, data: dict[str, Any]) -> TaskRouted:
+        return cls(
+            event_id=data.get("event_id", ""),
+            session_id=data.get("session_id", ""),
+            correlation_id=data.get("correlation_id", ""),
+            causation_id=data.get("causation_id", ""),
+            parent_event_id=data.get("parent_event_id", ""),
+            task_id=data.get("task_id", ""),
+            actor=data.get("actor", ""),
+            ts_utc=data.get("ts_utc", ""),
+            priority=data.get("priority", 1),
+            payload_schema_version=data.get("payload_schema_version", "1.0.0"),
+            assigned_tier=data.get("assigned_tier", ""),
+            routing_path=data.get("routing_path", ""),
+            budget_limit=data.get("budget_limit", 0),
+        )

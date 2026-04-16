@@ -50,8 +50,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Union
 
-from poc.k1_poc.config import get_config
-
+from ..config import SessionStateConfig
 from ..sections import (
     ArtifactsWarmSection,
     BeliefsHistorySection,
@@ -340,6 +339,7 @@ class WarmTier:
     TIER_NAME: str = "warm"
 
     __slots__ = (
+        "_ss_cfg",
         "_session_id",
         "_sections",
         "_created_at_ms",
@@ -352,6 +352,7 @@ class WarmTier:
         session_id: str = "",
         local_cold: Optional[LocalColdArchive] = None,
         eviction_callback: Optional[Callable[[str, bytes], bool]] = None,
+        config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
         Initialize WarmTier with all 4 sections.
@@ -360,7 +361,9 @@ class WarmTier:
             session_id: Session UUID (for section initialization)
             local_cold: Optional LocalColdArchive for eviction
             eviction_callback: Optional callback for eviction (section, data) -> success
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._session_id = session_id
         self._local_cold = local_cold
         self._eviction_callback = eviction_callback
@@ -378,7 +381,7 @@ class WarmTier:
         logger.info(
             "WarmTier initialized: %d sections, budget=%dKB (session=%s)",
             len(self._sections),
-            get_config().sessionstate.tiers.warm_budget_bytes // 1024,
+            self._ss_cfg.tiers.warm_budget_bytes // 1024,
             session_id[:8] if session_id else "none",
         )
 
@@ -556,7 +559,7 @@ class WarmTier:
             CRITICAL: >= 95%
         """
         util = self.get_utilization()
-        _cfg_t = get_config().sessionstate.tiers
+        _cfg_t = self._ss_cfg.tiers
         if util < _cfg_t.normal_threshold_pct:
             return WarmPressureLevel.NORMAL
         elif util < _cfg_t.elevated_threshold_pct:
@@ -751,7 +754,7 @@ class WarmTier:
         if target_bytes == 0:
             # Calculate based on pressure
             util = self.get_utilization()
-            if util <= get_config().sessionstate.tiers.normal_threshold_pct:
+            if util <= self._ss_cfg.tiers.normal_threshold_pct:
                 return []  # No eviction needed
             # Target getting back to 70% utilization
             current_size = self.get_total_size()

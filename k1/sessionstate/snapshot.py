@@ -38,8 +38,7 @@ if TYPE_CHECKING:
     from poc.k1_poc.sessionstate.tiers.hot import HotTier
     from poc.k1_poc.sessionstate.tiers.warm import WarmTier
 
-from poc.k1_poc.config import get_config
-
+from .config import SessionStateConfig
 from .sizetracker import (
     HOT_SECTIONS,
     HOT_SIZE_LIMIT_BYTES,
@@ -268,6 +267,7 @@ class SnapshotAPI:
         warm: Optional[WarmTier] = None,
         session_id: str = "",
         created_at_ms: Optional[int] = None,
+        config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
         Initialize SnapshotAPI.
@@ -278,7 +278,9 @@ class SnapshotAPI:
             warm: WarmTier (optional for testing)
             session_id: Session identifier
             created_at_ms: Session creation timestamp (default: now)
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._size_tracker = size_tracker
         self._hot = hot
         self._warm = warm
@@ -517,7 +519,7 @@ class SnapshotAPI:
         # Determine severity
         severity = 0
         thrash_detected = False
-        _cfg_thrash = get_config().sessionstate.thrash
+        _cfg_thrash = self._ss_cfg.thrash
 
         if migrations >= _cfg_thrash.severe_migrations or evictions >= _cfg_thrash.severe_evictions:
             severity = 3
@@ -562,7 +564,7 @@ class SnapshotAPI:
     def _prune_old_timestamps(self) -> None:
         """Remove timestamps older than thrash window."""
         now_ms = int(time.time() * 1000)
-        cutoff = now_ms - get_config().sessionstate.thrash.window_ms
+        cutoff = now_ms - self._ss_cfg.thrash.window_ms
 
         # Prune migration timestamps
         while self._migration_timestamps and self._migration_timestamps[0] < cutoff:

@@ -251,7 +251,7 @@ class TestBootstrapWiring:
             data = yaml.safe_load(yaml_path.read_text())
             assert "phase1" in data
             assert "pipeline" in data["phase1"]
-            assert data["phase1"]["pipeline"] == "stub"
+            assert data["phase1"]["pipeline"] == "ultrabert"
 
     def test_stub_adapter_used_when_config_stub(self):
         """StubPhase1Pipeline should be used when pipeline=stub."""
@@ -384,7 +384,7 @@ class TestEndToEndIntegration:
         result = pipe.classify("Mom called about grandma's birthday party next Saturday")
 
         assert result.primary_emotion == "joy"
-        assert result.valence > 0.5  # positive sentiment
+        assert result.valence > 0.3  # positive sentiment (symmetric scale: -0.8 to 0.8)
 
     def test_e2e_embedding(self):
         adapter = _make_adapter(self._full_analysis())

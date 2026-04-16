@@ -6,7 +6,7 @@ Validates null adapter satisfies ISessionStateReader and returns empty for all r
 
 from __future__ import annotations
 
-from k1.concierge.adapters.null_state_reader import NullSessionStateReaderAdapter
+from k1.fabric.adapters.null_state_reader import NullSessionStateReaderAdapter
 from k1.fabric.ports.state_reader import ISessionStateReader, SessionSnapshot
 
 

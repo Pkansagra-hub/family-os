@@ -18,6 +18,10 @@ class FabricDispatchAdapter:
 
     LOW tier: dispatch_direct → IFabricPort.execute(CapabilityRequest)
     MED/HIGH: dispatch_envelope → OrchestratorStub.handle_task(TaskEnvelope)
+
+    Also exposes ``execute()`` and ``discover_capabilities()`` as aliases so
+    that ToolContext can use this adapter as a drop-in ``fabric_port`` until
+    P4B.3 migrates tools to ``IDispatchPort.dispatch_direct()``.
     """
 
     def __init__(self, fabric_port: Any, orchestrator: Any = None) -> None:
@@ -34,3 +38,23 @@ class FabricDispatchAdapter:
                 "Enable orchestrator in KernelConfig."
             )
         return await self._orchestrator.handle_task(envelope)
+
+    # -- IFabricPort compat (P4B.2 bridge, removed in P4B.3) --
+
+    async def execute(self, request: CapabilityRequest) -> CapabilityResult:
+        """IFabricPort.execute alias → dispatch_direct."""
+        return await self.dispatch_direct(request)
+
+    async def execute_batch(
+        self, requests: list[CapabilityRequest], strategy: str = "PARALLEL"
+    ) -> list[CapabilityResult]:
+        """IFabricPort.execute_batch alias."""
+        return [await self.dispatch_direct(r) for r in requests]
+
+    async def discover_capabilities(
+        self, intent: str = "", domain: str | None = None, **kwargs: Any
+    ) -> Any:
+        """IFabricPort.discover_capabilities passthrough."""
+        if hasattr(self._fabric, "discover_capabilities"):
+            return await self._fabric.discover_capabilities(intent, domain=domain, **kwargs)
+        return {"capabilities": [], "count": 0}

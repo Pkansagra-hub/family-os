@@ -1,9 +1,10 @@
 %% ======================================================================================
 %% MEMORY WRITER (K1) -- ARCHITECTURE DIAGRAM
 %% ======================================================================================
-%% Created: 2026-02-19 | Updated: 2026-03-01
+%% Created: 2026-02-19 | Updated: 2026-04-06
 %% Purpose: Architecture diagram for K1 Memory Writer module
 %% Design Ref: k1/memory_writer/memory_writer_architecture.md
+%% Plan Ref: docs/plans/MEMORY_WRITER_IMPLEMENTATION_PLAN.md
 %% Contracts: k1/contracts/modules/memory_writer/
 %% Types: k1/memory_writer/types.py (34-field MemoryAtom v2)
 %% Schema: k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json
@@ -11,11 +12,24 @@
 %%   Convert K1 conversation context (SessionState) into K0 long-term memory.
 %%   K1 thinks in conversations. K0 thinks in events. MW is the TRANSLATOR.
 %% POSITION IN K1 STACK:
-%%   L0 Rhythm -> L1 Concierge -> L4 MEMORY_WRITER (background per-turn agent)
-%%   Runs: After each turn completes (turn.complete.v1)
-%%   Reads SessionState (lock-free, 13 of 15 sections)
+%%   L0 Rhythm -> L1 Concierge -> L4 MEMORY_WRITER (background per-session agent)
+%%   Runs: After accumulated turns trigger extraction (NOT every turn)
+%%   Reads SessionState (lock-free, section-agnostic via snapshot_all)
+%%   Reads tool call data from Turn.metadata["tool_calls"] (Option D)
 %%   Emits to: Bridge Command Port only (K0 bound, fire-and-forget)
-%% INVARIANTS (MW-01 through MW-11):
+%% PIPELINE (6 stages):
+%%   S1: Relevance Filter (6 rules, R1-R6, rule-based, <2ms)
+%%   S2: Accumulation Gate (turn-window batching, 0 LLM cost)
+%%   S3: Context Assembly (section-agnostic SS read + tool call extraction)
+%%   S4: LLM Extraction (window-based, 2000 tok budget)
+%%   S5: Envelope Build (deterministic field mapping + privacy)
+%%   S6: Batch Submit (250ms window, dedup, fire-and-forget)
+%% TOOL CALL DATA (Option D):
+%%   ToolDispatcher.call_history -> ToolCallSummary -> TaskComplete
+%%   -> HistoryWriter -> TypedHistoryEntry.metadata["tool_calls"]
+%%   -> MW reads from history_active turns
+%%   Tool-bearing turns auto-PASS filter (R6) and trigger extraction (T6)
+%% INVARIANTS (MW-01 through MW-13):
 %%   MW-01: NEVER writes SessionState (Single Writer = Concierge)
 %%   MW-02: Reads SessionState lock-free (<1ms)
 %%   MW-03: All K0 writes through Bridge Command Port
@@ -27,21 +41,42 @@
 %%   MW-09: Offline-safe: queued in LocalOutbox
 %%   MW-10: All envelopes carry cognitive_trace_id
 %%   MW-11: UltraBERT in K0 P02 validates MW output
+%%   MW-12: Person resolution uses beliefs + scoreboard (never unresolved IDs to K0)
+%%   MW-13: conversation_anchor_ms is gold-standard turn timestamp (NEVER overwritten by K0 M08)
 %% PERFORMANCE BUDGET:
 %%   | Stage                       | P50      | P95      | Budget  |
-%%   | Relevance Filter            | <1ms     | <2ms     | 2ms     |
-%%   | SessionState Read (13 secs) | <1ms     | <1ms     | 1ms     |
-%%   | LLM Extraction (2000 tok)   | ~200ms   | ~500ms   | 500ms   |
-%%   | Envelope Build              | <1ms     | <2ms     | 2ms     |
-%%   | Delta Aggregation (250ms)   | 250ms    | 260ms    | 260ms   |
+%%   | S1 Relevance Filter (R1-R6) | <1ms     | <2ms     | 2ms     |
+%%   | S2 Accumulation Gate        | <0.1ms   | <0.1ms   | 0.1ms   |
+%%   | S3 Context Assembly (all SS)| <1ms     | <1ms     | 1ms     |
+%%   | S4 LLM Extraction (2000tok) | ~200ms   | ~500ms   | 500ms   |
+%%   | S5 Envelope Build           | <1ms     | <2ms     | 2ms     |
+%%   | S6 Delta Aggregation (250ms)| 250ms    | 260ms    | 260ms   |
 %%   | Bridge Submit               | ~20ms    | ~50ms    | 50ms    |
 %%   | TOTAL (end-to-end)          | ~475ms   | ~815ms   | 815ms   |
-%% ENVELOPE BODY: 34-field MemoryAtom v2
+%% ENVELOPE BODY: 37-field MemoryAtom v2.2
 %%   Schema: k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json
 %%   Python: k1/memory_writer/types.py (MemoryAtom frozen dataclass)
-%%   14 required, 16 optional, 12 cognitive dimensions
+%%   14 required, 16 optional, 7 v2.2 (correction signals + observation context)
+%%   12 cognitive dimensions
 %% ULTRABERT: Runs in K0 P02 as VALIDATION safety net (not primary tagger)
-%%   max_length=512 tokens, MW body ~15-30 tokens = sweet spot
+%%   v4.0.7, 149M params, 12 heads, 20ms forward pass
+%%   max_length=8192 tokens, MW body ~15-30 tokens = sweet spot
+%% K0 P02 v2 TRUST-THEN-FILL:
+%%   FAST PATH (~80ms):   MW signals present -> validate + passthrough
+%%   FALLBACK PATH (~140ms): MW absent -> full UltraBERT (same as v1)
+%%   M02 (CA1 Semantic) ALWAYS runs -- primary gap filler
+%%   6 of 16 stages use trust-then-fill (M04 Affect, M07 Social, M08 Temporal,
+%%     M06 Salience, M13 RowBuilder, M02 always)
+%% FIELD MAPPING GAPS (G1-G9) -- FieldMapper derives:
+%%   G1: sentiment_score (from sentiment_label, same mapping as ultrabert_adapter)
+%%   G2: dominant_emotion (emotion_tags[0])
+%%   G3: dominant_emotions_json (reshape emotion_tags with confidence)
+%%   G4: affect_valence (flatten affect.valence)
+%%   G5: geohash_6 (PlaceResolver from location_name)
+%%   G6: place_id (PlaceResolver, geohash-derived)
+%%   G7: ner_entities_json (UltraBERT handles -- MW does NOT extract NER)
+%%   G8: num_participants (len(participants))
+%%   G9: is_duplicate (DeltaAggregator dedup flag)
 %% CROSS-DIAGRAM INTEGRATION POINTS:
 %%   concierge.mmd: Concierge emits turn.complete.v1, single writer to SS
 %%   fabric.mmd: Agent Factory spawns MW per session, registry holds contract
@@ -71,13 +106,14 @@ graph TB
     subgraph STAGE_1["STAGE 1: RELEVANCE FILTER (Rule-Based, <2ms)"]
       direction TB
 
-      FILTER["RelevanceFilter<br/>PASS or SKIP (no LLM, MW-07)<br/>5 skip rules below"]:::gate
+      FILTER["RelevanceFilter<br/>PASS or SKIP (no LLM, MW-07)<br/>6 skip/boost rules below"]:::gate
 
-      subgraph SKIP_RULES["Skip Rules (Any = SKIP)"]
+      subgraph SKIP_RULES["Skip/Boost Rules (evaluated in order)"]
         direction LR
         R1["R1: Clarification<br/>No new facts"]:::validator
         R2["R2: System/Meta<br/>About the system"]:::validator
-        R3["R3: Duplicate<br/>entity+topic <5min"]:::validator
+        R3["R3: Duplicate<br/>turn_id already seen"]:::validator
+        R6["R6: Tool Call Boost<br/>metadata[tool_calls]?<br/>auto-PASS (skip R4/R5)"]:::gate
         R4["R4: Trivial<br/><5 words"]:::validator
         R5["R5: Continuation<br/>'go on'"]:::validator
       end
@@ -86,29 +122,50 @@ graph TB
     end
 
     %% ==================================================================================
-    %% STAGE 2: CONTEXT ASSEMBLY
+    %% STAGE 2: ACCUMULATION GATE (When to Extract)
     %% ==================================================================================
-    subgraph STAGE_2["STAGE 2: CONTEXT ASSEMBLY (SS Read, <1ms)"]
+    subgraph STAGE_1B["STAGE 2: ACCUMULATION GATE (0 LLM cost)"]
       direction TB
 
-      SS_READER["SessionState Reader<br/>Lock-free, snapshot isolation<br/>13 of 15 sections (MW-01)"]:::memory
+      ACCUM_GATE["AccumulationGate<br/>Tracks pass_count<br/>Decides: extract now or wait?"]:::gate
+
+      subgraph TRIGGERS["Extraction Triggers (any one fires)"]
+        direction LR
+        T1["T1: Turn Count<br/>pass_count >= N<br/>(default 3)"]:::validator
+        T2["T2: Arc Complete<br/>narrative_active<br/>→ RESOLUTION"]:::validator
+        T3["T3: Topic Shift<br/>scoreboard.topic_stack<br/>changed significantly"]:::validator
+        T4["T4: Session Ending<br/>Cleanup from Fabric"]:::validator
+        T5["T5: Time Elapsed<br/>>5min since last<br/>extraction"]:::validator
+        T6["T6: Tool Call Done<br/>metadata[tool_calls]<br/>status=success"]:::gate
+      end
+
+      ACCUM_METRIC["Gate Metrics<br/>queued turns, trigger type<br/>Emits: mw.gate.trigger.v1"]:::service
+    end
+
+    %% ==================================================================================
+    %% STAGE 3: CONTEXT ASSEMBLY
+    %% ==================================================================================
+    subgraph STAGE_2["STAGE 3: CONTEXT ASSEMBLY (Section-Agnostic, <1ms)"]
+      direction TB
+
+      SS_READER["SessionState Reader<br/>Lock-free, snapshot_all()<br/>Section-agnostic (MW-01)<br/>Reads ALL minus skip_sections"]:::memory
 
       subgraph SS_SECTIONS["Sections Read"]
         direction LR
-        SS_HOT["HOT (10):<br/>beliefs_active, beliefs_history,<br/>history_active, history_recent,<br/>affective_now, affective_baseline,<br/>narrative_active, scoreboard,<br/>control, persona"]:::memory
-        SS_WARM["WARM (3):<br/>task_state, ifl, meta"]:::memory
-        SS_SKIP["SKIP (2):<br/>telemetry,<br/>artifacts_warm"]:::memory
+        SS_HOT["HOT:<br/>beliefs_active, beliefs_history,<br/>history_active, history_recent,<br/>affective_now, affective_baseline,<br/>narrative_active, scoreboard,<br/>control, persona, task_state,<br/>task_artifacts"]:::memory
+        SS_WARM["WARM:<br/>ifl, meta"]:::memory
+        SS_SKIP["SKIP (configurable):<br/>telemetry,<br/>artifacts_warm,<br/>clarifications"]:::memory
       end
 
-      CTX_BUILDER["Context Builder<br/>13 sections -> ExtractionContext<br/>Token-budgeted for 2000"]:::service
+      CTX_BUILDER["Context Builder<br/>snapshot → ExtractionContext<br/>+ tool_calls_per_turn from<br/>Turn.metadata[tool_calls]<br/>Token-budgeted for 2000"]:::service
 
       PERSON_RESOLVER["Person Resolver<br/>'Mom' -> person_mom<br/>Source: beliefs + scoreboard"]:::service
     end
 
     %% ==================================================================================
-    %% STAGE 3: LLM EXTRACTION
+    %% STAGE 4: LLM EXTRACTION
     %% ==================================================================================
-    subgraph STAGE_3["STAGE 3: LLM EXTRACTION (200-500ms)"]
+    subgraph STAGE_3["STAGE 4: LLM EXTRACTION (200-500ms)"]
       direction TB
 
       WRITER_AGENT["MW Agent (LLM)<br/>Model: cheapest (GPT-4o-mini)<br/>Budget: 2000 tok (MW-06)<br/>Max calls: 6, Time: 5s<br/>Output: 0-6 MemoryAtom[]<br/>12 cognitive dimensions"]:::agent
@@ -129,26 +186,28 @@ graph TB
     end
 
     %% ==================================================================================
-    %% STAGE 4: ENVELOPE BUILD
+    %% STAGE 5: ENVELOPE BUILD
     %% ==================================================================================
-    subgraph STAGE_4["STAGE 4: ENVELOPE BUILD (Deterministic, <2ms)"]
+    subgraph STAGE_4["STAGE 5: ENVELOPE BUILD (Deterministic, <2ms)"]
       direction TB
 
       ENV_BUILDER["Envelope Builder<br/>MemoryAtom -> MWEnvelope<br/>34-field map (no LLM)"]:::service
 
-      subgraph FIELD_MAP["Field Mapping"]
+      subgraph FIELD_MAP["Field Mapping (37-field v2.2)"]
         direction LR
         MAP_BODY["Body: 1:1 field map<br/>operation: UPSERT"]:::contract
         MAP_HEADERS["Headers: trace_id, tenant,<br/>space, topic: memory.delta,<br/>schema, actor, device, band<br/>Signing by Bridge only"]:::contract
+        MAP_DERIVED["FieldMapper Derived (G1-G9):<br/>sentiment_score, dominant_emotion,<br/>dominant_emotions_json, affect_valence,<br/>geohash_6, place_id, num_participants<br/>(NER = UltraBERT, not MW)"]:::contract
+        MAP_V22["v2.2 Signals:<br/>correction_signal, contradiction_signal,<br/>supersedes_concept, correction_source,<br/>session_context_id, conversation_anchor_ms,<br/>temporal_links"]:::contract
       end
 
       PRIVACY["Privacy Enforcer<br/>GREEN: pass all<br/>AMBER: generalize location<br/>RED: strip + mask"]:::safety
     end
 
     %% ==================================================================================
-    %% STAGE 5: BATCH AND SUBMIT
+    %% STAGE 6: BATCH AND SUBMIT
     %% ==================================================================================
-    subgraph STAGE_5["STAGE 5: BATCH + SUBMIT"]
+    subgraph STAGE_5["STAGE 6: BATCH + SUBMIT"]
       direction TB
 
       DELTA_AGG["Delta Aggregator<br/>250ms window (MW-08)<br/>Dedup + causal order"]:::service
@@ -165,7 +224,6 @@ graph TB
         direction LR
         K0_GATE["K0 Gate<br/>PEP + sig verify"]:::k0
         K0_HOT["Hot Path (93ms)<br/>WAL + idem + outbox"]:::k0
-        K0_P02["P02 Pipeline<br/>UltraBERT safety net<br/>-> st_hipp_events"]:::k0
       end
     end
 
@@ -204,7 +262,7 @@ graph TB
 
       P_EVENT["IEventPort<br/>subscribe + publish<br/>Sub: turn.complete.v1<br/>Pub: filter, batch"]:::port
 
-      P_STATE["IStateReadPort<br/>read(sections[])<br/>Lock-free, 13 of 15"]:::port
+      P_STATE["IStateReadPort<br/>snapshot_all()<br/>Lock-free, section-agnostic"]:::port
 
       P_LLM["ILLMPort<br/>execute(HubRequest)<br/>2000 tok, BACKGROUND"]:::port
 
@@ -241,12 +299,13 @@ graph TB
     %% ==================================================================================
     %% INVARIANTS
     %% ==================================================================================
-    subgraph INVARIANTS["INVARIANTS (MW-01 .. MW-11)"]
+    subgraph INVARIANTS["INVARIANTS (MW-01 .. MW-13)"]
       direction LR
       INV_OWN["OWNERSHIP (01-03)<br/>Never write SS<br/>Read <1ms<br/>All K0 via Bridge"]:::invariant
       INV_CONTENT["CONTENT (04-06)<br/>Body <= 50 words<br/>0-6 atoms/turn<br/>2000 tokens total"]:::invariant
       INV_OPS["OPS (07-10)<br/>Filter = no LLM<br/>250ms batch<br/>Offline-safe, trace_id"]:::invariant
       INV_VAL["VALIDATE (11)<br/>UltraBERT in P02"]:::invariant
+      INV_RESOLVE["RESOLVE (12-13)<br/>Person IDs resolved<br/>conv_anchor_ms gold"]:::invariant
     end
 
     %% ==================================================================================
@@ -262,11 +321,12 @@ graph TB
     %% ==================================================================================
     %% SERVICES
     %% ==================================================================================
-    subgraph SERVICES["SERVICES (6, ~240 Tests)"]
+    subgraph SERVICES["SERVICES (7, ~280 Tests)"]
       direction TB
       SVC_DISPATCH["TurnDispatcherService<br/>dispatch(), dedup<br/>Uses: IEventPort (~25t)"]:::service
-      SVC_FILTER["RelevanceFilterService<br/>evaluate() -> FilterDecision<br/>5 rules, no ports (~45t)"]:::service
-      SVC_CONTEXT["ContextAssemblyService<br/>assemble() -> ExtractionContext<br/>13 SS, PersonResolver (~40t)"]:::service
+      SVC_FILTER["RelevanceFilterService<br/>evaluate() -> FilterDecision<br/>6 rules (R1-R6), no ports (~50t)"]:::service
+      SVC_GATE["AccumulationGateService<br/>should_extract() -> bool<br/>Triggers T1-T6, tracks pass_count (~35t)"]:::service
+      SVC_CONTEXT["ContextAssemblyService<br/>assemble() -> ExtractionContext<br/>section-agnostic SS + tool_calls (~45t)"]:::service
       SVC_EXTRACT["ExtractionService<br/>extract() -> MemoryAtom[]<br/>LLM + validate 34f (~55t)"]:::service
       SVC_ENVELOPE["EnvelopeBuildService<br/>build() -> MWEnvelope[]<br/>34f map + privacy (~35t)"]:::service
       SVC_BATCH["BatchSubmitService<br/>aggregate + flush<br/>250ms, dedup (~40t)"]:::service
@@ -277,8 +337,8 @@ graph TB
     %% ==================================================================================
     subgraph LIFECYCLE["LIFECYCLE (Session-Bound)"]
       direction TB
-      LC_INIT["init(session_id)<br/>6 services, 5 ports<br/>Subscribe, start timer"]:::lifecycle
-      LC_TURN["turn_process(TurnEvent)<br/>Filter -> Context -> Extract<br/>-> Envelope -> Batch"]:::lifecycle
+      LC_INIT["init(session_id)<br/>7 services, 5 ports<br/>Subscribe, start timer"]:::lifecycle
+      LC_TURN["turn_process(TurnEvent)<br/>Filter -> Gate -> Context<br/>-> Extract -> Envelope -> Batch"]:::lifecycle
       LC_FLUSH["flush()<br/>Submit 250ms batch"]:::lifecycle
       LC_SHUTDOWN["shutdown()<br/>Force flush, unsub, LIFO"]:::lifecycle
       LC_CRASH["crash_recovery()<br/>Bootstrap, flush partial<br/>Max loss: 1 turn"]:::lifecycle
@@ -302,7 +362,7 @@ graph TB
     direction TB
     TP_CONCIERGE["Concierge<br/>Emits turn.complete.v1<br/>Single SS writer"]:::external
     TP_FABRIC["Capability Fabric<br/>Spawns MW per session<br/>Holds contract"]:::external
-    TP_SS["SessionState<br/>MW reads 13 sections<br/>Never writes (MW-01)"]:::external
+    TP_SS["SessionState<br/>MW reads via snapshot_all()<br/>Section-agnostic (MW-01)<br/>+ tool_calls in Turn.metadata"]:::external
     TP_MODEL["Model Hub<br/>LLM calls, BACKGROUND<br/>2000 tok/turn"]:::external
     TP_LEARNING["Learning Loop<br/>Separate agent<br/>Meta-signals only"]:::external
     TP_BUS["K1 Bus<br/>turn.complete.v1<br/>MW subscribes"]:::external
@@ -322,9 +382,24 @@ graph TB
   %% K0
   %% ======================================================================================
   subgraph EXT_K0["K0 (Via Bridge Only)"]
-    direction LR
+    direction TB
     K0_SUBMIT["POST /k0/command.submit<br/>202 Accepted"]:::k0
-    K0_PIPE["P02 Pipeline<br/>UltraBERT + enrich<br/>-> st_hipp_events"]:::k0
+
+    subgraph K0_P02_DETAIL["P02 v2 Trust-Then-Fill (16 stages)"]
+      direction TB
+      K0_M02["M02: CA1 Semantic<br/>ALWAYS runs (150ms)<br/>NER + embed + temporal<br/>Primary gap filler"]:::k0
+      K0_TF_CHECK{"MW signals<br/>present?"}:::gate
+      K0_FAST["FAST PATH (~80ms)<br/>Validate + passthrough<br/>M04/M07/M08/M06/M13"]:::k0
+      K0_FALL["FALLBACK (~140ms)<br/>Full UltraBERT inference<br/>Same as P02 v1"]:::k0
+      K0_M13["M13: Row Builder<br/>~111 cols, 12 groups<br/>Group 12 = 11 MW cols"]:::k0
+      K0_WRITE["Atomic Writer<br/>-> st_hipp_events"]:::k0
+    end
+
+    subgraph K0_P03_DETAIL["P03 Consolidation (batch 300)"]
+      direction LR
+      K0_URE["URE M9.4 Reconciliation<br/>Tier 1: correction_signal<br/>overrides all similarity"]:::k0
+      K0_OBS["st_observations (32 cols)<br/>Reinforcement loop<br/>14 observation-driven algos"]:::k0
+    end
   end
 
   %% ======================================================================================
@@ -340,31 +415,44 @@ graph TB
   FILTER -->|"check"| R1
   FILTER -->|"check"| R2
   FILTER -->|"check"| R3
+  FILTER -->|"boost?"| R6
   FILTER -->|"check"| R4
   FILTER -->|"check"| R5
-  FILTER -->|"PASS"| SS_READER
+  FILTER -->|"PASS"| ACCUM_GATE
   FILTER -.->|"SKIP"| FILTER_METRIC
 
-  %% Stage 2: Context
+  %% Stage 2: Accumulation Gate
+  ACCUM_GATE -->|"check"| T1
+  ACCUM_GATE -->|"check"| T2
+  ACCUM_GATE -->|"check"| T3
+  ACCUM_GATE -->|"check"| T4
+  ACCUM_GATE -->|"check"| T5
+  ACCUM_GATE -->|"check"| T6
+  ACCUM_GATE -->|"TRIGGER"| SS_READER
+  ACCUM_GATE -.->|"WAIT"| ACCUM_METRIC
+
+  %% Stage 3: Context
   SS_READER -->|"read"| TP_SS
-  TP_SS -.->|"snapshot"| SS_READER
+  TP_SS -.->|"snapshot_all"| SS_READER
   SS_READER -->|"raw sections"| CTX_BUILDER
   CTX_BUILDER -->|"ExtractionContext"| PERSON_RESOLVER
   PERSON_RESOLVER -->|"+ person_ids"| WRITER_AGENT
 
-  %% Stage 3: LLM
+  %% Stage 4: LLM
   WRITER_AGENT -->|"LLM (2000 tok)"| TP_MODEL
   TP_MODEL -.->|"MemoryAtom[]"| WRITER_AGENT
   WRITER_AGENT -->|"raw atoms"| EXT_VALIDATOR
   EXT_VALIDATOR -->|"valid atoms"| ENV_BUILDER
 
-  %% Stage 4: Envelope
+  %% Stage 5: Envelope
   ENV_BUILDER -->|"map fields"| MAP_BODY
   ENV_BUILDER -->|"headers"| MAP_HEADERS
+  ENV_BUILDER -->|"derive G1-G9"| MAP_DERIVED
+  ENV_BUILDER -->|"v2.2 signals"| MAP_V22
   ENV_BUILDER -->|"MWEnvelope[]"| PRIVACY
   PRIVACY -->|"band-safe"| DELTA_AGG
 
-  %% Stage 5: Batch
+  %% Stage 6: Batch
   DELTA_AGG -->|"250ms batch"| BATCH_EMIT
   BATCH_EMIT -->|"envelopes"| BRIDGE_CMD
 
@@ -375,11 +463,18 @@ graph TB
   BRIDGE_CMD -.->|"offline?"| OFFLINE_Q
   OFFLINE_Q -.->|"queue"| BR_OUTBOX
 
-  %% K0
+  %% K0 P02 v2 trust-then-fill
   K0_SUBMIT -->|"gate"| K0_GATE
   K0_GATE -->|"ALLOW"| K0_HOT
-  K0_HOT -->|"P02"| K0_P02
-  K0_P02 -->|"permanent"| K0_PIPE
+  K0_HOT -->|"P02"| K0_M02
+  K0_M02 -->|"NER+embed"| K0_TF_CHECK
+  K0_TF_CHECK -->|"Yes"| K0_FAST
+  K0_TF_CHECK -->|"No"| K0_FALL
+  K0_FAST -->|"validated"| K0_M13
+  K0_FALL -->|"inferred"| K0_M13
+  K0_M13 -->|"111 cols"| K0_WRITE
+  K0_WRITE -->|"batch 300"| K0_URE
+  K0_URE -->|"truth layers"| K0_OBS
 
   %% Fabric
   TP_FABRIC -.->|"spawn"| WRITER_AGENT
@@ -419,6 +514,7 @@ graph TB
 
   LC_INIT -->|"wire"| SVC_DISPATCH
   LC_INIT -->|"create"| SVC_FILTER
+  LC_INIT -->|"create"| SVC_GATE
   LC_INIT -->|"create"| SVC_CONTEXT
   LC_INIT -->|"create"| SVC_EXTRACT
   LC_INIT -->|"create"| SVC_ENVELOPE
@@ -426,6 +522,7 @@ graph TB
 
   LC_TURN -->|"dedup"| SVC_DISPATCH
   LC_TURN -->|"evaluate"| SVC_FILTER
+  LC_TURN -->|"gate"| SVC_GATE
   LC_TURN -->|"assemble"| SVC_CONTEXT
   LC_TURN -->|"extract"| SVC_EXTRACT
   LC_TURN -->|"build"| SVC_ENVELOPE
@@ -444,10 +541,13 @@ graph TB
   %% ======================================================================================
 
   SVC_FILTER -.->|"MW-07"| INV_OPS
+  SVC_GATE -.->|"MW-07"| INV_OPS
   SVC_EXTRACT -.->|"MW-04,05,06"| INV_CONTENT
   SVC_ENVELOPE -.->|"MW-10"| INV_OPS
   SVC_BATCH -.->|"MW-08,09"| INV_OPS
   SVC_CONTEXT -.->|"MW-01,02"| INV_OWN
+  PERSON_RESOLVER -.->|"MW-12"| INV_RESOLVE
+  SVC_ENVELOPE -.->|"MW-13"| INV_RESOLVE
 
   %% ======================================================================================
   %% STYLES

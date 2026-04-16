@@ -54,7 +54,7 @@ class TestBuildersRegistry:
     """Verify BUILDERS dict covers all topics."""
 
     def test_registry_count(self) -> None:
-        assert len(BUILDERS) == 40
+        assert len(BUILDERS) == 46
 
     def test_registry_keys_match_all_topics(self) -> None:
         assert set(BUILDERS.keys()) == ALL_TOPICS

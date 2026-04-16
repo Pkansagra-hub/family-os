@@ -10,8 +10,8 @@ Design
 ------
 - Layer 2 (Section 30.6): imports Layer 1 ports (ILLMPort,
   IFabricRetrievalPort), Layer 0 types (ExpandedPlan, PlanRequest,
-  ValidationVerdict, ValidationIssue, PlanStep, StageContext, HubRequest,
-  HubResponse, RequestConstraints, ValidateRejectedError,
+  ValidationVerdict, ValidationIssue, PlanStep, StageContext, PlannerLLMRequest,
+  PlannerLLMResponse, PlannerConstraints, ValidateRejectedError,
   HILCoordinatorLike), and shared types from Orchestrator (PlanRequest).
 - Stateless between calls: no per-plan instance state.
 - ValidateService does NOT hold a reference to PipelineController.
@@ -90,9 +90,9 @@ from k1.planner.types import (
     VERDICT_REVISE,
     ExpandedPlan,
     HILCoordinatorLike,
-    HubRequest,
-    HubResponse,
-    RequestConstraints,
+    PlannerConstraints,
+    PlannerLLMRequest,
+    PlannerLLMResponse,
     StageContext,
     ValidateRejectedError,
     ValidationIssue,
@@ -892,14 +892,14 @@ class ValidateService:
         max_tokens = _MICRO_ARBITER_MAX_TOKENS if is_micro else _ARBITER_MAX_TOKENS
         timeout_ms = _MICRO_ARBITER_TIMEOUT_MS if is_micro else _ARBITER_TIMEOUT_MS
 
-        constraints = RequestConstraints(
+        constraints = PlannerConstraints(
             max_tokens=max_tokens,
             timeout_ms=timeout_ms,
             temperature=_ARBITER_TEMPERATURE,
             consumer_id="planner.validate",
         )
 
-        hub_request = HubRequest(
+        hub_request = PlannerLLMRequest(
             capability="STRUCTURED",
             payload={
                 "messages": [
@@ -913,7 +913,7 @@ class ValidateService:
             trace_id=ctx.trace_id,
         )
 
-        response: HubResponse = await self._llm_port.execute(hub_request)
+        response: PlannerLLMResponse = await self._llm_port.execute(hub_request)
 
         content = response.result.get("content", "")
         tokens_used = response.metadata.get("usage", {}).get("total_tokens", 0)

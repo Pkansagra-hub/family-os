@@ -505,7 +505,7 @@ def validate_hitl_wiring() -> list[str]:
 
     # Check 16: MetaSection has device tracking methods
     try:
-        from k1.sessionstate.sections.meta import MetaSection
+        from k1.sessionstate.public_types import MetaSection
 
         meta = MetaSection()
         if not hasattr(meta, "set_active_device"):

@@ -1093,7 +1093,7 @@ class TriggerSpec:
 
 
 @dataclass(frozen=True)
-class PlanStep:
+class FabricPlanStep:
     """
     A single step in a CommittedPlan or WorkflowContract.
 
@@ -1140,8 +1140,8 @@ class PlanStep:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PlanStep":
-        """Create PlanStep from dictionary."""
+    def from_dict(cls, data: Dict[str, Any]) -> "FabricPlanStep":
+        """Create FabricPlanStep from dictionary."""
         return cls(
             id=data.get("id", ""),
             capability=data.get("capability", ""),
@@ -1150,6 +1150,10 @@ class PlanStep:
             tools_granted=data.get("tools_granted", []),
             deps=data.get("deps", []),
         )
+
+
+# Backward-compatible alias (P2.4: disambiguate from Orchestrator's PlanStep)
+PlanStep = FabricPlanStep
 
 
 @dataclass(frozen=True)
@@ -1195,7 +1199,7 @@ class WorkflowContract:
     trigger: Optional[TriggerSpec] = None
 
     # ---- Execution Steps (DAG) ----
-    steps: List[PlanStep] = field(default_factory=list)
+    steps: List[FabricPlanStep] = field(default_factory=list)
     dependencies: Dict[str, List[str]] = field(default_factory=dict)
 
     # ---- Recursion & Sub-Workflow Control ----
@@ -1247,7 +1251,7 @@ class WorkflowContract:
             description=data.get("description", ""),
             source_plan_id=data.get("source_plan_id", ""),
             trigger=trigger,
-            steps=[PlanStep.from_dict(s) for s in data.get("steps", [])],
+            steps=[FabricPlanStep.from_dict(s) for s in data.get("steps", [])],
             dependencies=data.get("dependencies", {}),
             max_depth=data.get("max_depth", 3),
             allows_sub_workflows=data.get("allows_sub_workflows", True),

@@ -20,6 +20,10 @@ from __future__ import annotations
 
 import pytest
 
+from k1.concierge.llm.model_hub_bridge import ModelHubPOCBridge
+from k1.concierge.llm.test_model_hub_bridge import TestModelHubBridge
+from k1.concierge.llm.types import ConciergeModelResponse
+from k1.concierge.llm.types import ToolCallResult as POCToolCallResult
 from k1.model_hub.ports import IModelHubPort
 from k1.model_hub.types import (
     CapabilityType,
@@ -33,14 +37,9 @@ from k1.model_hub.types import (
     StructuredOutputPayload,
     StructuredResult,
     ToolCallPayload,
-    ToolCallResult,
     ToolCallResultSet,
     ToolDefinition,
 )
-from k1.concierge.llm.model_hub_bridge import ModelHubPOCBridge
-from k1.concierge.llm.test_model_hub_bridge import TestModelHubBridge
-from k1.concierge.llm.types import ConciergeModelResponse
-from k1.concierge.llm.types import ToolCallResult as POCToolCallResult
 
 # =====================================================================
 # Fixtures
@@ -55,7 +54,7 @@ def bridge() -> TestModelHubBridge:
 def _make_chat_request(
     text: str = "hello",
     actor: str = "front",
-    trace_id: str = "",
+    trace_id: str = "test-trace",
 ) -> HubRequest:
     return HubRequest(
         capability=CapabilityType.CHAT,
@@ -127,6 +126,7 @@ class TestChatRoundTrip:
             capability=CapabilityType.CHAT,
             payload=ChatPayload(messages=[Message(role="user", content="hi")]),
             constraints=RequestConstraints(consumer_id="concierge.back"),
+            trace_id="test-trace",
         )
         resp = await bridge.execute(req)
         assert resp.result.text == "back-reply"
@@ -172,13 +172,14 @@ class TestToolCallRoundTrip:
                 tool_choice="auto",
             ),
             constraints=RequestConstraints(consumer_id="concierge.front"),
+            trace_id="test-trace",
         )
         resp = await bridge.execute(req)
 
         assert isinstance(resp.result, ToolCallResultSet)
         assert len(resp.result.tool_calls) == 2
         assert resp.result.tool_calls[0].name == "search_web"
-        assert resp.result.tool_calls[0].arguments == {"q": "test"}
+        assert resp.result.tool_calls[0].arguments == '{"q": "test"}'
         assert resp.result.tool_calls[1].name == "get_weather"
         assert resp.metadata.finish_reason.value == "tool_calls"
 
@@ -193,6 +194,7 @@ class TestToolCallRoundTrip:
                 tool_choice="required",
             ),
             constraints=RequestConstraints(consumer_id="concierge.front"),
+            trace_id="test-trace",
         )
         # Just verify no error (tool_choice gets passed to POC adapter)
         resp = await bridge.execute(req)
@@ -221,6 +223,7 @@ class TestStructuredRoundTrip:
                 output_schema={"type": "object"},
             ),
             constraints=RequestConstraints(consumer_id="concierge.front"),
+            trace_id="test-trace",
         )
         resp = await bridge.execute(req)
 
@@ -255,6 +258,7 @@ class TestReasonRoundTrip:
                 reasoning_effort="high",
             ),
             constraints=RequestConstraints(consumer_id="concierge.front"),
+            trace_id="test-trace",
         )
         resp = await bridge.execute(req)
 
@@ -290,13 +294,12 @@ class TestStreaming:
         # Should have text deltas + done
         assert len(chunks) >= 2
         # Last chunk is "done"
-        assert chunks[-1].chunk_type == "done"
-        assert chunks[-1].response is not None
-        assert isinstance(chunks[-1].response.result, ChatResult)
-        # At least one text_delta before done
-        text_chunks = [c for c in chunks if c.chunk_type == "text_delta"]
+        assert chunks[-1].done is True
+        assert chunks[-1].metadata is not None
+        # At least one content chunk before done
+        text_chunks = [c for c in chunks if c.content and not c.done]
         assert len(text_chunks) >= 1
-        combined_text = "".join(c.text for c in text_chunks)
+        combined_text = "".join(c.content for c in text_chunks)
         assert combined_text == "Hello world"
 
 
@@ -444,6 +447,7 @@ class TestFinishReasonMapping:
                 tools=[ToolDefinition(name="x", description="d")],
             ),
             constraints=RequestConstraints(consumer_id="concierge.front"),
+            trace_id="test-trace",
         )
         resp = await bridge.execute(req)
         assert resp.metadata.finish_reason.value == "tool_calls"

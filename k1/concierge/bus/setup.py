@@ -59,8 +59,12 @@ ACTOR_BACK: str = "back_half"  # V3 E0.2.3: kept for test_m01_e2e compat
 # ---------------------------------------------------------------------------
 
 
-def _build_middleware_chain(cfg) -> MiddlewareChain | None:
+def build_middleware_chain(cfg) -> MiddlewareChain | None:
     """Build a MiddlewareChain from bus config flags.
+
+    Accepts any object with ``topic_validation_enabled``, ``tracing_enabled``,
+    and ``metrics_enabled`` attributes (e.g. ``BusConfig`` or the POC bus
+    config section).
 
     Order: TopicValidation -> Tracing -> Metrics (matches K1 design doc).
     Returns None if all middleware are disabled.
@@ -87,6 +91,10 @@ def _build_middleware_chain(cfg) -> MiddlewareChain | None:
     if not middlewares:
         return None
     return MiddlewareChain(middlewares)
+
+
+# Backward-compat alias for internal POC callers
+_build_middleware_chain = build_middleware_chain
 
 
 def create_poc_bus(*, capture: bool = False) -> IBus:

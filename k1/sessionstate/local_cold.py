@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from poc.k1_poc.config import get_config
+from .config import SessionStateConfig
 
 logger = logging.getLogger(__name__)
 
@@ -188,15 +188,18 @@ class LocalColdArchive:
         )
     """
 
-    __slots__ = ("_db_path", "_conn", "_closed")
+    __slots__ = ("_ss_cfg", "_db_path", "_conn", "_closed")
 
-    def __init__(self, db_path: Optional[Path] = None) -> None:
+    def __init__(
+        self, db_path: Optional[Path] = None, config: Optional[SessionStateConfig] = None
+    ) -> None:
         """
         Initialize LocalColdArchive.
 
         Args:
             db_path: Path to SQLite database.
                      Default: ~/.familyos/k1/sessionstate.db
+            config: Optional SessionStateConfig (defaults used if None)
 
         Actions:
             1. Create directory if needed
@@ -204,11 +207,11 @@ class LocalColdArchive:
             3. Enable WAL mode for concurrency
             4. Initialize schema if needed
         """
+        self._ss_cfg = config or SessionStateConfig()
         if db_path is not None:
             self._db_path = db_path
         else:
-            cfg_path = get_config().sessionstate.storage.default_db_path
-            self._db_path = Path(cfg_path).expanduser()
+            self._db_path = Path(self._ss_cfg.storage.default_db_path).expanduser()
         self._closed = False
 
         # Create parent directory if needed
@@ -657,7 +660,7 @@ class LocalColdArchive:
 
             duration_ms = self._elapsed_ms(start_time)
 
-            sla_ms = get_config().sessionstate.storage.sla_restore_ms
+            sla_ms = self._ss_cfg.storage.sla_restore_ms
             if duration_ms > sla_ms:
                 logger.warning(
                     "Restore SLA breach: %s for session %s took %.2fms (>%.0fms)",

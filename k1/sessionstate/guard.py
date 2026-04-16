@@ -58,8 +58,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional, Set
 
-from poc.k1_poc.config import get_config
-
+from .config import SessionStateConfig
 from .sizetracker import (
     ALL_SECTIONS,
     HOT_SECTIONS,
@@ -303,20 +302,25 @@ class MutationGuard:
     """
 
     __slots__ = (
+        "_ss_cfg",
         "_size_tracker",
         "_emergency_mode",
         "_locked_sections",
         "_lock",
     )
 
-    def __init__(self, size_tracker: SizeTracker) -> None:
+    def __init__(
+        self, size_tracker: SizeTracker, config: Optional[SessionStateConfig] = None
+    ) -> None:
         """
         Initialize MutationGuard.
 
         Args:
             size_tracker: SizeTracker instance for capacity checks.
                          Must be the same instance used by SessionStateManager.
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._size_tracker = size_tracker
         self._emergency_mode: bool = False
         self._locked_sections: Set[str] = set()
@@ -709,7 +713,7 @@ class MutationGuard:
             return 0
 
         base_size = self._estimate_data_size(data)
-        overhead = get_config().sessionstate.flatbuffer_overhead_factor
+        overhead = self._ss_cfg.flatbuffer_overhead_factor
         return int(base_size * overhead)
 
     def _estimate_data_size(self, data: Any) -> int:

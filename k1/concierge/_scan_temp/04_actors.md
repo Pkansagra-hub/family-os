@@ -26,6 +26,9 @@ The package also provides the **parallel worker pool** (BackPool), **topic-based
 **Purpose**: Re-exports all public API from submodules. Serves as the single import surface for the actors subsystem.
 
 **Exports organized by Epic**:
+
+
+
 - **Epic 6.1-6.6 (Front)**: `front_handler`, `_extract_scenario_data`, `_parse_payload`, `_build_resolution`, `subscribe_front_events`, `emit_task_cancel`, `emit_task_resume`
 - **Epic 7.1-7.4 (Back)**: `back_handler`, `back_resume_handler`, `back_cancel_handler`, `route_back_envelope`, `subscribe_back_events` (deprecated M3), `emit_tool_started`, `emit_tool_completed`, `emit_artifact_created`, `store_pending_context`, `_budget_to_iterations`, `_filter_back_tools`, `_summarize_args`, `_summarize_result`
 - **E3.5 (Shared)**: `parse_envelope_payload`, `safe_get_section`, `never_cancel`
@@ -56,7 +59,10 @@ The package also provides the **parallel worker pool** (BackPool), **topic-based
 
 **Purpose**: The Front Actor entry point. Invoked by the FSM when an event targets the conversational LLM. Handles mode-driven prompt assembly, ReAct loop execution, and bus event emission for responses and task dispatches.
 
+
+
 #### Identity Contract
+
 Front is the **conversationalist**. Has personality, affect-awareness, streams text to user, dispatches tasks to Back. Front NEVER executes tools directly for task work — it only uses front-specific tools (recall_memory, dispatch_task, etc.).
 
 #### Core Function: `front_handler`
@@ -71,10 +77,13 @@ async def front_handler(
     all_tool_schemas: list[Any] | None = None,
     fsm_state: str | None = None,
     opp_pipeline: Any | None = None,
+
 ) -> ReactResult
 ```
 
+
 **10-step flow**:
+
 1. **Guard**: Skip observability-only topics (`turn.started`, `turn.completed`, `tool.started`, `tool.completed`, `state.updated`) to prevent infinite loops
 2. **Resolve FSM state**: Explicit override or from `ss.control.flow_state`
 3. **Determine mode**: `determine_mode()` using FSM state, envelope topic, clarification state, task state, affect, routing metadata
@@ -123,49 +132,70 @@ async def front_handler(
 | `compute_affect_band` | `k1.concierge.prompt.affect` |
 | `DynamicPromptBuilder`, `SS_READ_CONFIGS`, `SECTION_RENDERERS`, `SSReadConfig` | `k1.concierge.prompt.builder` |
 | `PromptMode`, `determine_mode` | `k1.concierge.prompt.mode` |
+
 | `ReactResult`, `react_loop` | `k1.concierge.react.loop` |
 | `build_chat_history` | `k1.concierge.react.history` |
 | `ComplexityTier`, `budget_for_tier` | `k1.concierge.task.complexity` |
+
 | `ToolDispatcher` | `k1.concierge.tools.dispatcher` |
 
+
 #### Concurrency/Thread-Safety
+
 - Front uses `_never_cancel` as its cancellation check — Front is never cancellable.
+
 - Single-threaded async: one `front_handler` invocation per FSM cycle.
+
 - Stream callbacks are closures capturing `_stream_chunk_idx` (mutation-safe within single async task).
 
 #### Error Handling
+
 - `safe_get_section` wraps all SS access with exception swallowing (returns None).
+
 - `parse_envelope_payload` returns `{}` on JSON decode errors.
 - `_strip_leaked_reasoning` and `_strip_leaked_system_blocks` return original text if stripping fails.
 - OPP pipeline failures caught and logged (non-fatal).
 
 #### Key Invariants
+
+
 1. **Emission ordering**: Cancel dispatches → Normal task dispatches → Final response (prevents FSM IllegalTransitionError).
 2. **Observability topic guard**: Observability topics never trigger LLM calls (prevents infinite loops).
 3. **Synthetic envelope parent_id**: Synthetic envelopes (e.g. weave batch) fall back to `envelope.parent_id` to avoid timing chain deadlocks.
+
 4. **No duplicate user turns**: Current user text only appended if not already the last message.
 
 ---
 
+
 ### 2.4 `back.py` (~1,380 lines) — Back Handler (Epic 7.1-7.4)
+
+
 
 **Purpose**: The Back Actor entry point. Invoked by the FSM when a `task.dispatch` event targets the executor LLM. Handles task-focused ReAct loop execution with tier-based tool selection and budget management.
 
 #### Identity Contract (V2 Section 4.2)
+
 Back is the **executor**. Precise, tool-focused, no personality. Back NEVER talks to the user directly. It NEVER streams text. It only consumes and produces structured JSON payloads. Back NEVER writes SessionState directly — all mutations flow as structured deltas via the K1 Bus.
 
 #### SS Read Contract (V3 E0.1.6)
+
+
 - **Snapshot-at-start**: SS is read ONCE via `_read_ss_snapshot()` at handler entry. The snapshot is immutable for the duration of the ReAct loop.
 - **No mid-loop re-reads**: Back MUST NOT access the live SS manager during ReAct iterations.
 - **Re-read on resume**: `back_resume_handler` re-reads SS at resume time to capture state changes during suspension.
 
+
 #### Core Functions
 
 ##### `back_handler`
+
 ```python
 async def back_handler(
     envelope: Envelope,
     model: IModelHubPort,
+
+
     ss: Any,
     bus: IBus,
     tool_dispatcher: ToolDispatcher,
@@ -175,7 +205,10 @@ async def back_handler(
 ```
 
 **7-step flow**:
+
+
 1. Read SS snapshot ONCE at task start via `_read_ss_snapshot()`
+
 2. Build system prompt via `build_back_prompt()` with task context + SS snapshot
 3. Build messages: N-entry history + task JSON as "user" message
 4. Select tools by tier via `_filter_back_tools()`
@@ -184,8 +217,11 @@ async def back_handler(
 7. Emit result to bus (task.complete / task.suspended / task.failed)
 
 ##### `back_resume_handler`
+
 ```python
 async def back_resume_handler(
+
+
     envelope: Envelope,
     model: IModelHubPort,
     ss: Any,
@@ -197,6 +233,9 @@ async def back_resume_handler(
 ```
 
 **10-step resume flow**:
+
+
+
 1. Retrieve original task + prior ReAct messages from envelope-carried `resume_context` (primary) or legacy `_get_pending_context` (fallback, deprecated)
 2. Re-read SS (may have changed during suspension)
 3. Build system prompt (same as original dispatch, fresh SS)
@@ -208,7 +247,10 @@ async def back_resume_handler(
 9. Emit result (same as back_handler)
 10. Clean up pending context
 
+
+
 ##### `back_cancel_handler`
+
 ```python
 def back_cancel_handler(
     envelope: Envelope,
@@ -220,6 +262,8 @@ def back_cancel_handler(
 **Synchronous** (no pool worker needed). Sets `CancellationToken.cancel(USER_REQUESTED)`. Falls back to legacy `fsm_state.cancellation_requested` boolean.
 
 ##### `route_back_envelope`
+
+
 ```python
 async def route_back_envelope(
     envelope: Envelope,
@@ -233,6 +277,7 @@ async def route_back_envelope(
 ```
 
 Central topic-based dispatcher. Routing table:
+
 | Topic | Handler | Notes |
 |---|---|---|
 | `task.dispatch.v1` | `back_handler` | Async |
@@ -273,47 +318,58 @@ Central topic-based dispatcher. Routing table:
 | `beliefs_active` | User facts, constraints, preferences | |
 | `scoreboard` | Referent resolution (pronouns) | |
 | `task_state` | Dependency info, active tasks | |
+
 | `task_artifacts` | What has been done (avoid re-doing) | |
 | `control` | Safety band only | |
 | `history_active` | 5 recent entries | |
 | `persona` | Payment, dietary, accessibility | |
 | | | `affective_now` (Back has no personality) |
+
 | | | `clarifications` (Front's concern) |
 | | | `narrative_active` (Thread tracking is Front's job) |
 | | | `meta` (Irrelevant to task execution) |
 
 #### Cross-Component Imports
 
+
 | Import | Source |
 |---|---|
 | `Envelope` | `k1.bus.envelope` |
 | `IBus` | `k1.bus.ports.bus` |
+
 | `IModelHubPort` | `k1.model_hub.ports` |
 | `build_artifact_created`, `build_task_complete`, `build_task_failed`, `build_task_suspended`, `build_tool_completed`, `build_tool_started`, `build_dead_letter` | `k1.concierge.bus.builders` |
 | `get_config` | `k1.concierge.config` |
+
 | `ModelMessage` | `k1.concierge.llm.types` |
 | `LLMOutputValidator` | `k1.concierge.llm.validator` |
+
 | `build_back_prompt` | `k1.concierge.prompt.back_prompt` |
 | `SECTION_RENDERERS`, `SSReadConfig` | `k1.concierge.prompt.builder` |
 | `CancellationToken`, `CancelReason` | `k1.concierge.protocols.cancellation` |
 | `build_chat_history_for_back` | `k1.concierge.react.history` |
 | `ReactResult`, `react_loop` | `k1.concierge.react.loop` |
 | `ToolDispatcher` | `k1.concierge.tools.dispatcher` |
+
 | `BACK_TIER_ALLOWLISTS`, `BACK_TOOL_SCHEMAS` | `k1.concierge.tools.schemas_back` |
 | Bus topic constants | `k1.concierge.bus.topics` |
 
 #### Concurrency/Thread-Safety
+
 - Per-task `CancellationToken` for cooperative cancellation (M3 E3.2). Token checked between ReAct iterations.
 - `back_cancel_handler` is synchronous — no pool worker needed.
 - M5 E5.5.4: `fsm_state.register_running_task_messages(task_id, messages)` registers the messages list for inter-iteration injection (modify-inflight).
 
+
 #### Error Handling
+
 - `_emit_back_result`: Maps all terminal states to bus events (complete, suspended, cancelled, budget_exhausted).
 - Resume handler emits `task.failed` with `NO_PENDING_CONTEXT` if no resume context is available.
 - Dead-lettering for unknown topics (M3 E3.7.1).
 - `_build_cancellation_check` warns when no token available (Back loop will not be interruptible).
 
 #### Key Invariants
+
 1. **Snapshot-at-start**: SS read ONCE, never re-read during ReAct loop.
 2. **Re-read on resume**: Fresh SS snapshot at resume time.
 3. **Back never emits user text**: `_noop_text` callback enforces this.
@@ -322,7 +378,9 @@ Central topic-based dispatcher. Routing table:
 6. **Budget accounting on resume**: `remaining_budget = original - tools_called`, floor of 2.
 
 #### Constants
+
 - `BACK_MAX_ITERATIONS`: `{"LOW": 4, "MEDIUM": 8, "HIGH": 12}` (compatibility export).
+
 
 ---
 
@@ -343,10 +401,12 @@ class BackPoolConfig:
     reclaim_check_interval_s: float = 30.0
     enable_dependency_ordering: bool = True
     max_renewals: int = 3
+
     lease_grace_period_s: float = 5.0
 ```
 
 Validates all values in `__post_init__` (pool_size >= 1, max_concurrent >= 1, ttl > 0, etc.).
+
 
 ##### `WorkerSlot` (dataclass)
 
@@ -362,10 +422,13 @@ class WorkerSlot:
 ```
 
 Methods:
+
 - `bind_task(task: asyncio.Task, lease: Any = None)` — Bind asyncio.Task and optional lease
+
 - `is_running: bool` (property) — Whether the bound asyncio.Task is still running
 
 ##### `BackPoolExhausted(Exception)`
+
 
 Raised when all worker slots are occupied. Contains `pool_size`, `active_count`, `reason`.
 
@@ -379,30 +442,37 @@ Main worker pool manager. Designed for **single-threaded asyncio** usage (same e
 
 **Worker Lifecycle Methods**:
 
+
 | Method | Signature | Purpose |
 |---|---|---|
 | `acquire_worker` | `(task_id, *, session_id, cancellation_token) -> WorkerSlot` | Acquire a worker slot. Checks pool_size + per-session limits. Idempotent guard (returns existing if task already has worker). Creates `TaskLease`. Warns at >80% utilization. |
 | `release_worker` | `(task_id, *, reason) -> WorkerSlot \| None` | Release worker slot. Updates lease status. Tracks released task_ids for late-envelope discard. Reasons: completed, cancelled, lease_expired, suspended, error. |
+
 | `get_active_workers` | `() -> list[WorkerSlot]` | All active slots (auto-cleans done workers). |
 | `get_worker_for_task` | `(task_id) -> WorkerSlot \| None` | Look up specific task's worker. |
 
 **Pool State Queries**:
+
 - `active_count: int`, `pool_available: int`, `utilization: float`
 - `session_count(session_id) -> int`
+
 - `has_worker(task_id) -> bool`
 - `is_task_released(task_id) -> bool` — For late-envelope discard (E7.3.4)
 
 **Lease Management (E7.2)**:
 
 | Method | Signature | Purpose |
+
 |---|---|---|
 | `get_lease` | `(task_id) -> TaskLease \| None` | Get lease for a task. |
 | `renew_lease` | `(task_id, extension_s=60.0) -> bool` | Renew lease (called between ReAct iterations). |
+
 | `get_expired_leases` | `() -> list[WorkerSlot]` | Find all expired leases. |
 | `start_lease_watcher` | `async (bus) -> asyncio.Task` | Start background lease expiry watcher. |
 | `stop_lease_watcher` | `async () -> None` | Stop the watcher. |
 
 **Lease Expiry Reclamation** (`_reclaim_expired_worker`):
+
 1. Cancel CancellationToken (cooperative, `CancelReason.TIMEOUT`)
 2. Wait grace period for react_loop to exit
 3. Hard-cancel asyncio.Task if still running (`asyncio.wait_for` + `task.cancel()`)
@@ -411,14 +481,17 @@ Main worker pool manager. Designed for **single-threaded asyncio** usage (same e
 
 **Overflow Queue** (for pool-exhausted envelopes):
 
+
 | Method | Purpose |
 |---|---|
 | `enqueue_overflow(envelope)` | Push to FIFO overflow queue. |
 | `dequeue_overflow() -> Any \| None` | Pop next. |
 | `overflow_depth: int` | Queue depth. |
+
 | `drain_overflow() -> list` | Drain all. |
 
 **Observability**:
+
 - `get_pool_state() -> dict` — Full snapshot: active, size, available, utilization, overflow, per-worker details (task_id, worker_id, session_id, is_running, lease_status, remaining_s, renewed_count)
 - Callbacks: `on_worker_acquired(slot)`, `on_worker_released(slot, reason)`
 - `_cleanup_done_workers()` — Defensive auto-release of workers whose asyncio.Task completed without explicit release
@@ -429,17 +502,21 @@ Main worker pool manager. Designed for **single-threaded asyncio** usage (same e
 |---|---|
 | `TaskLease`, `create_task_lease` | `k1.concierge.protocols.task_lease` (deferred/TYPE_CHECKING) |
 | `CancelReason` | `k1.concierge.protocols.cancellation` (deferred in method) |
+
 | `build_task_failed` | `k1.concierge.bus.builders` (deferred in method) |
 
 #### Concurrency/Thread-Safety
+
 - Single-threaded asyncio design. All methods run on the same event loop as the coordinator consumer.
 - Each worker's react_loop runs in its own `asyncio.Task` with its own SS snapshot. Workers do NOT share mutable state.
 - Lease watcher runs as a background `asyncio.Task` with proper cancellation handling.
 - Grace period mechanism: cooperative cancel → wait → hard kill.
 
 #### Key Invariants
+
 1. **Pool size enforced**: `acquire_worker` raises `BackPoolExhausted` if full.
 2. **Per-session limit enforced**: `acquire_worker` raises `SessionLimitReached` if session cap hit.
+
 3. **Workers do NOT share mutable state**: Each gets its own SS snapshot.
 4. **FSM + TaskBridge are single writer**: Workers only READ SS and EMIT events.
 5. **Idempotent acquire**: If task already has worker, returns existing slot.
@@ -453,6 +530,7 @@ Main worker pool manager. Designed for **single-threaded asyncio** usage (same e
 
 #### Class: `BackTopicRouter`
 
+
 ```python
 class BackTopicRouter:
     def __init__(self, back_pool: BackPool | None = None)
@@ -465,6 +543,7 @@ class BackTopicRouter:
 | `task.dispatch.v1` | `back_handler` | Yes (async) |
 | `task.resume.v1` | `back_resume_handler` | Yes (async) |
 | `task.cancel.v1` | `back_cancel_handler` | No (sync) |
+
 | `clarification.response.v1` | `back_resume_handler` | Yes (async) |
 
 **Methods**:
@@ -476,12 +555,15 @@ class BackTopicRouter:
 | `get_cancel_token_for_task` | `(task_id: str) -> CancellationToken \| None` | Extract CancellationToken from task's lease (E7.3.3). |
 | `get_stats` | `() -> dict[str, int]` | Routing statistics: routed, cancel_sync, discarded_late, discarded_unknown. |
 
+
 **Late-Envelope Discard Logic** (`_should_discard`, E7.3.4):
+
 - Checks `BackPool.is_task_released(task_id)` for non-cancel envelopes
 - Cancel envelopes are NEVER discarded (they stop running tasks)
 - Prevents: task.complete arriving after cancel; stale task.resume for completed tasks
 
 #### Cross-Component Imports
+
 
 | Import | Source |
 |---|---|
@@ -489,17 +571,23 @@ class BackTopicRouter:
 | `back_handler`, `back_resume_handler`, `back_cancel_handler` | `k1.concierge.actors.back` (deferred in `__init__`) |
 | `TOPIC_*` constants | `k1.concierge.bus.topics` (deferred in `__init__`) |
 
+
 #### Key Invariants
+
+
 1. **Cancel is synchronous**: No pool worker needed, immediate cooperative termination.
 2. **Late-arriving envelopes discarded**: Prevents wasted worker slots on completed/cancelled tasks.
 3. **Cancel envelopes never discarded**: They are how we stop things.
 4. **Single CancellationToken source**: Extracted from TaskLease (E7.3.3 unification).
 
+
 ---
 
 ### 2.7 `ready_queue.py` (~440 lines) — Dependency-Ordered Ready Queue (M7 E7.4)
 
+
 **Purpose**: Holds Back-bound envelopes with `depends_on` until the dependency task completes. Envelopes without `depends_on` are immediately ready. Polled by the coordinator's consumer loop each cycle.
+
 
 **Distinct from** `task/dependency_queue.py`: TaskDependencyQueue operates on TaskDispatch objects and performs `$ref` parameter hydration. ReadyQueue operates at the envelope/pool layer and controls when Back workers are acquired.
 
@@ -508,26 +596,32 @@ class BackTopicRouter:
 ```python
 @dataclass
 class ReadyQueue:
+
     _ready: list[Any]                           # FIFO ready queue
     _waiting: dict[str, list[tuple[Any, str]]]  # depends_on -> [(envelope, task_id)]
     _completed: dict[str, str]                  # task_id -> status
     _known_tasks: set[str]                      # All seen task_ids
     _dep_graph: dict[str, str]                  # task_id -> depends_on
     _stats: dict[str, int]                      # Counters
+
 ```
 
 **Methods**:
 
+
 | Method | Signature | Purpose |
 |---|---|---|
 | `register_task` | `(task_id: str) -> None` | Register a task_id as known (dispatched). |
+
 | `enqueue` | `(envelope, depends_on: str \| None) -> tuple[str, list[str]]` | Enqueue envelope with optional dependency. Returns (status, failed_task_ids). |
 | `dequeue_ready` | `() -> list` | Drain all ready envelopes in FIFO order. |
 | `notify_completed` | `(task_id, status) -> tuple[list, list[str]]` | Notify task completion. Releases dependents (if completed) or fails them (if failed/cancelled). |
 | `_has_cycle` | `(task_id, depends_on) -> bool` | Cycle detection via graph walk. |
 | `_remove_cycle_participants` | `(task_id, depends_on) -> list[str]` | Remove all cycle participants from waiting queue. |
 
+
 **Enqueue Classification** (return statuses):
+
 - `immediate` — No dependency, placed in ready queue
 - `waiting` — Buffered, waiting for depends_on
 - `dep_failed` — Dependency already failed/cancelled
@@ -535,24 +629,29 @@ class ReadyQueue:
 - `unknown_dep` — depends_on not recognized, placed in ready queue immediately (with warning)
 
 **State Queries**:
+
 - `ready_count`, `waiting_count`, `total_pending`
 - `is_task_completed(task_id)`, `get_task_status(task_id)`
 - `get_stats() -> dict[str, int]`
 - `get_queue_state() -> dict` — Full snapshot with waiting details
 
 #### Cross-Component Imports
+
 - `json`, `logging` only. No external k1 imports. Pure data structure.
 
 #### Concurrency/Thread-Safety
+
 - Single-threaded design (same event loop as coordinator consumer).
 - All state is internal dataclass fields.
 
 #### Error Handling
+
 - **Circular dependencies**: Detected at enqueue time via graph walk. All cycle participants are failed.
 - **Unknown dependencies**: Dispatched immediately with warning (prevents silent stalls).
 - **Failed predecessor propagation**: Dependents auto-fail when predecessor fails/cancels.
 
 #### Key Invariants
+
 1. **FIFO ordering**: Ready envelopes dispatched in enqueue order.
 2. **Circular dependency prevention**: Detected at enqueue, all participants failed.
 3. **Unknown dependency = immediate dispatch**: Prevents silent deadlocks.
@@ -573,6 +672,7 @@ User Input
 │  FSM     │ ─────────────────►   │  front_handler     │
 │          │                      │  (conversational)  │
 └──────────┘                      │  - personality     │
+
                                   │  - affect-aware    │
                                   │  - streams text    │
                                   │  - dispatches tasks│
@@ -581,6 +681,7 @@ User Input
                                         ▼
                               ┌─────────────────────┐
                               │  BackTopicRouter     │
+
                               │  (topic routing)     │
                               └────────┬────────────┘
                                        │
@@ -606,13 +707,17 @@ User Input
                               └──────────────────────┘
 ```
 
+
 ### Message Passing / Queue Mechanisms
 
 1. **Bus (IBus)**: All inter-actor communication via K1 Bus Envelopes. Envelope.payload is JSON bytes.
+
 2. **BackPool overflow queue**: FIFO queue for envelopes when pool is exhausted.
 3. **ReadyQueue**: Dependency-ordered FIFO queue for Back-bound envelopes.
 4. **Bus builders**: All envelope construction via `k1.concierge.bus.builders` (type-safe factories).
 5. **Streaming**: Front emits `response.stream.v1` chunks via bus (sentence-level chunking).
+
+
 
 ### Cancellation Architecture
 
@@ -639,14 +744,18 @@ Cooperative exit → task.failed emitted
 ```
 
 Additional cancel paths:
+
 - **Lease expiry**: Watcher detects expired lease → cooperative cancel → grace period → hard kill
 - **HITL timeout**: CancellationToken propagated from FSM cancel handler through TaskLease
+
 
 ---
 
 ## 4. Configuration Dependencies
 
 The actors subsystem reads from `get_config()`:
+
+
 - `config.actors.front.default_fsm_state` — Default FSM state
 - `config.actors.front.default_affect_confidence` — Default affect confidence
 - `config.actors.front.default_tier` — Default complexity tier
@@ -676,11 +785,13 @@ The actors subsystem reads from `get_config()`:
 ## 6. Cross-Component Dependency Map
 
 ### External (outside k1.concierge)
+
 - `k1.bus.envelope.Envelope` — Message envelope type
 - `k1.bus.ports.bus.IBus` — Bus port interface
 - `k1.model_hub.ports.IModelHubPort` — LLM model port interface
 
 ### Internal (k1.concierge subpackages)
+
 - `bus.builders` — Envelope factory functions (10+ builders)
 - `bus.topics` — Topic constants + subscription lists
 - `config` — `get_config()` for all actor configuration

@@ -50,6 +50,7 @@ from k1.concierge.bus.builders import (  # noqa: F401
 from k1.concierge.bus.setup import (  # noqa: F401; V3 E0.2.3: POC_MAILBOX_CAPACITY and POC_GAP_TIMEOUT_MS removed.; Use get_config().bus.mailbox_capacity / .gap_timeout_ms instead.
     ACTOR_BACK,
     ACTOR_FRONT,
+    build_middleware_chain,
     create_poc_bus,
     create_poc_router,
     create_poc_session_adapter,

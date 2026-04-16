@@ -21,15 +21,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from k1.model_hub.ports import IModelHubPort
-from k1.model_hub.types import CapabilityType, ChatPayload, ChatResult
-from k1.model_hub.types import FinishReason as K1FinishReason
-from k1.model_hub.types import HubChunk, HubRequest, HubResponse
-from k1.model_hub.types import Message as K1Message
-from k1.model_hub.types import ReasonResult, RequestConstraints, StructuredResult, ToolCallPayload
-from k1.model_hub.types import ToolCallResult as K1ToolCallResult
-from k1.model_hub.types import ToolCallResultSet
-from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 from k1.concierge.config import get_config
 from k1.concierge.llm.types import (
     ConciergeModelResponse,
@@ -44,6 +35,15 @@ from k1.concierge.llm.validator import LLMOutputValidator, ValidationResult
 from k1.concierge.task.parallel_safety import classify_tool_batch
 from k1.concierge.tools.dispatcher import ToolDispatcher
 from k1.concierge.tools.result_protocol import ToolResult
+from k1.model_hub.ports import IModelHubPort
+from k1.model_hub.types import CapabilityType, ChatPayload
+from k1.model_hub.types import FinishReason as K1FinishReason
+from k1.model_hub.types import HubChunk, HubRequest, HubResponse
+from k1.model_hub.types import Message as K1Message
+from k1.model_hub.types import ReasonResult, RequestConstraints, StructuredResult, ToolCallPayload
+from k1.model_hub.types import ToolCallResult as K1ToolCallResult
+from k1.model_hub.types import ToolCallResultSet
+from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,13 @@ def _unwrap_response(hub_resp: HubResponse) -> ConciergeModelResponse:
 
     if isinstance(result, ToolCallResultSet):
         tool_calls = [
-            ToolCallResult(id=tc.id, name=tc.name, arguments=tc.arguments)
+            ToolCallResult(
+                id=tc.id,
+                name=tc.name,
+                arguments=(
+                    json.loads(tc.arguments) if isinstance(tc.arguments, str) else tc.arguments
+                ),
+            )
             for tc in result.tool_calls
         ]
     elif isinstance(result, StructuredResult):
@@ -444,16 +450,19 @@ async def react_loop(
             else (CapabilityType.TOOL_CALL if tools else CapabilityType.CHAT)
         )
         _tc = "none" if force_text else _resolve_tool_choice(iteration, actor, tools)
+        _k1_msgs = _to_k1_messages(messages)
+        # Ensure at least one message for payload validation
+        if not _k1_msgs and system_prompt:
+            _k1_msgs = [K1Message(role="system", content=system_prompt)]
         if _cap == CapabilityType.TOOL_CALL and effective_tools:
             _payload = ToolCallPayload(
-                messages=_to_k1_messages(messages),
-                system_prompt=system_prompt,
+                messages=_k1_msgs,
                 tools=_to_k1_tools(effective_tools),
                 tool_choice=_tc,
             )
         else:
             _payload = ChatPayload(
-                messages=_to_k1_messages(messages),
+                messages=_k1_msgs,
                 system_prompt=system_prompt,
             )
         request = HubRequest(
@@ -463,7 +472,7 @@ async def react_loop(
                 max_tokens=65536,
                 consumer_id=f"concierge.{actor}",
             ),
-            trace_id=trace_id,
+            trace_id=trace_id or f"concierge-{actor}-{iteration}",
         )
 
         # ---- LLM CALL (streaming on all Front iterations when on_stream provided) ----
@@ -937,6 +946,14 @@ async def react_loop(
             sequential_tool_calls=_sequential_count,
             iteration_durations_ms=_iteration_durations,
         )
+
+    return ReactResult(
+        status="budget_exhausted",
+        dispatched_tasks=dispatched_tasks,
+        parallel_tool_calls=_parallel_count,
+        sequential_tool_calls=_sequential_count,
+        iteration_durations_ms=_iteration_durations,
+    )
 
     return ReactResult(
         status="budget_exhausted",

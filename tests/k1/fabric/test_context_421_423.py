@@ -349,11 +349,11 @@ class TestContextBudgetL1DropOptional:
 
     def _make_over_budget(self) -> tuple:
         """Create a budget + sections that exceed a tight ceiling."""
-        config = ContextBudgetConfig(ceiling=50, response_headroom=0)
+        config = ContextBudgetConfig(ceiling=20, response_headroom=0)
         budget = ContextBudget(config)
         sections = {
             "control": {"mode": "chat"},
-            "persona": {"trait": "x" * 200},  # big optional
+            "persona": {"trait": "x" * 200},  # big optional (~37 tokens with tiktoken)
         }
         return budget, sections
 

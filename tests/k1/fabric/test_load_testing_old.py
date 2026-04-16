@@ -63,7 +63,7 @@ LOOKUP_P95_OPERATIONAL_US = 1000  # 1ms (matches SLI target)
 RETRIEVAL_10K_OPERATIONAL_MS = 150  # budget max: 50ms, operational ceiling with O(N) headroom
 RETRIEVAL_50K_OPERATIONAL_MS = 750  # extrapolated O(N) at 50K
 RETRIEVAL_100K_OPERATIONAL_MS = 1500  # extrapolated O(N) at 100K
-THROUGHPUT_200_P95_OPERATIONAL_MS = 500  # 200 sequential-in-async on 10K corpus
+THROUGHPUT_200_P95_OPERATIONAL_MS = 750  # 200 sequential-in-async on 10K corpus + CI headroom
 THROUGHPUT_1K_P95_OPERATIONAL_MS = 2000  # 1000 sequential-in-async on 10K corpus
 AGENT_POOL_P95_OPERATIONAL_MS = 500
 

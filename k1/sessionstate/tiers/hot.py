@@ -59,8 +59,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Union
 
-from poc.k1_poc.config import get_config
-
+from ..config import SessionStateConfig
 from ..sections import (
     AffectiveNowSection,
     BeliefsActiveSection,
@@ -318,6 +317,7 @@ class HotTier:
     TIER_NAME: str = "hot"
 
     __slots__ = (
+        "_ss_cfg",
         "_session_id",
         "_sections",
         "_created_at_ms",
@@ -328,6 +328,7 @@ class HotTier:
         self,
         session_id: str = "",
         migration_engine: Optional[MigrationEngine] = None,
+        config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
         Initialize HotTier with all 10 sections.
@@ -335,7 +336,9 @@ class HotTier:
         Args:
             session_id: Session UUID (for section initialization)
             migration_engine: Optional MigrationEngine for demotion operations
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._session_id = session_id
         self._migration_engine = migration_engine
         self._created_at_ms = int(time.time() * 1000)
@@ -357,7 +360,7 @@ class HotTier:
         logger.info(
             "HotTier initialized: %d sections, budget=%dKB (session=%s)",
             len(self._sections),
-            get_config().sessionstate.tiers.hot_budget_bytes // 1024,
+            self._ss_cfg.tiers.hot_budget_bytes // 1024,
             session_id[:8] if session_id else "none",
         )
 
@@ -535,7 +538,7 @@ class HotTier:
             CRITICAL: >= 95%
         """
         util = self.get_utilization()
-        _cfg_t = get_config().sessionstate.tiers
+        _cfg_t = self._ss_cfg.tiers
         if util < _cfg_t.normal_threshold_pct:
             return HotPressureLevel.NORMAL
         elif util < _cfg_t.elevated_threshold_pct:

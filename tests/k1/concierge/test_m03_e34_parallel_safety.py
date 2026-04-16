@@ -199,35 +199,25 @@ class TestConfigToggle:
         verify they are dispatched one at a time (not gathered).
         """
         from k1.concierge.react.loop import react_loop
+        from tests.k1.concierge.conftest import make_hub_text_response, make_hub_tool_response
 
         # Mock model returns 2 tool calls then text
-        tc1 = MagicMock(name="recall_memory")
-        tc1.name = "recall_memory"
-        tc1.arguments = {}
-        tc2 = MagicMock(name="update_beliefs")
-        tc2.name = "update_beliefs"
-        tc2.arguments = {}
-
-        resp_tools = MagicMock()
-        resp_tools.has_text = False
-        resp_tools.has_tool_calls = True
-        resp_tools.tool_calls = [tc1, tc2]
-        resp_tools.text = None
-        resp_tools.finish_reason = "stop"
-
-        resp_text = MagicMock()
-        resp_text.has_text = True
-        resp_text.has_tool_calls = False
-        resp_text.text = "Done"
-        resp_text.tool_calls = []
-        resp_text.finish_reason = "stop"
+        resp_tools = make_hub_tool_response(
+            [
+                {"name": "recall_memory", "arguments": {}},
+                {"name": "update_beliefs", "arguments": {}},
+            ]
+        )
+        resp_text = make_hub_text_response(text="Done")
 
         model = AsyncMock()
-        model.generate = AsyncMock(side_effect=[resp_tools, resp_text])
+        model.execute = AsyncMock(side_effect=[resp_tools, resp_text])
 
         tool_result = MagicMock()
         tool_result.is_error.return_value = False
         tool_result.is_ok.return_value = True
+        tool_result.status = "ok"
+        tool_result.error = None
         tool_result.data = {}
         tool_result.tool_name = "test"
 
@@ -250,6 +240,7 @@ class TestConfigToggle:
             cfg.react.parallel_tools_enabled = False
             cfg.react.front_degenerate_fallback = "fallback"
             cfg.react.front_budget_fallback = "budget"
+            cfg.llm.default_timeout_ms = 30000
             mock_cfg.return_value = cfg
 
             result = await react_loop(
@@ -360,29 +351,27 @@ class TestSubmitResultGuard:
     async def test_submit_result_with_other_tools_logs_warning(self, caplog):
         """When submit_result + other tools returned, warning is logged."""
         from k1.concierge.react.loop import react_loop
+        from tests.k1.concierge.conftest import make_hub_tool_response
 
         # Model returns submit_result AND recall_memory in same response
-        tc_submit = MagicMock()
-        tc_submit.name = "submit_result"
-        tc_submit.arguments = {"result_type": "complete", "final_answer": "done"}
-
-        tc_other = MagicMock()
-        tc_other.name = "recall_memory"
-        tc_other.arguments = {}
-
-        resp = MagicMock()
-        resp.has_text = False
-        resp.has_tool_calls = True
-        resp.tool_calls = [tc_submit, tc_other]
-        resp.text = None
-        resp.finish_reason = "stop"
+        resp = make_hub_tool_response(
+            [
+                {
+                    "name": "submit_result",
+                    "arguments": {"result_type": "complete", "final_answer": "done"},
+                },
+                {"name": "recall_memory", "arguments": {}},
+            ]
+        )
 
         model = AsyncMock()
-        model.generate = AsyncMock(return_value=resp)
+        model.execute = AsyncMock(return_value=resp)
 
         tool_result = MagicMock()
         tool_result.is_error.return_value = False
         tool_result.is_ok.return_value = True
+        tool_result.status = "ok"
+        tool_result.error = None
         tool_result.data = {"result_type": "complete"}
         tool_result.tool_name = "submit_result"
 
@@ -400,6 +389,8 @@ class TestSubmitResultGuard:
                 tool_dispatcher=dispatcher,
                 on_text_response=AsyncMock(),
                 cancellation_check=AsyncMock(return_value=False),
+                trace_id="test-submit-guard",
+                scenario="test",
             )
 
         # submit_result processed first -> complete
@@ -421,35 +412,25 @@ class TestReactLoopClassifiedExecution:
     async def test_parallel_safe_tools_gathered(self):
         """Parallel-safe tools execute via asyncio.gather when enabled."""
         from k1.concierge.react.loop import react_loop
+        from tests.k1.concierge.conftest import make_hub_text_response, make_hub_tool_response
 
         # Two parallel-safe tools
-        tc1 = MagicMock()
-        tc1.name = "recall_memory"
-        tc1.arguments = {}
-        tc2 = MagicMock()
-        tc2.name = "update_beliefs"
-        tc2.arguments = {}
-
-        resp_tools = MagicMock()
-        resp_tools.has_text = False
-        resp_tools.has_tool_calls = True
-        resp_tools.tool_calls = [tc1, tc2]
-        resp_tools.text = None
-        resp_tools.finish_reason = "stop"
-
-        resp_text = MagicMock()
-        resp_text.has_text = True
-        resp_text.has_tool_calls = False
-        resp_text.text = "Done"
-        resp_text.tool_calls = []
-        resp_text.finish_reason = "stop"
+        resp_tools = make_hub_tool_response(
+            [
+                {"name": "recall_memory", "arguments": {}},
+                {"name": "update_beliefs", "arguments": {}},
+            ]
+        )
+        resp_text = make_hub_text_response(text="Done")
 
         model = AsyncMock()
-        model.generate = AsyncMock(side_effect=[resp_tools, resp_text])
+        model.execute = AsyncMock(side_effect=[resp_tools, resp_text])
 
         tool_result = MagicMock()
         tool_result.is_error.return_value = False
         tool_result.is_ok.return_value = True
+        tool_result.status = "ok"
+        tool_result.error = None
         tool_result.data = {}
         tool_result.tool_name = "test"
 
@@ -466,6 +447,8 @@ class TestReactLoopClassifiedExecution:
             tool_dispatcher=dispatcher,
             on_text_response=AsyncMock(),
             cancellation_check=AsyncMock(return_value=False),
+            trace_id="test-parallel",
+            scenario="test",
         )
 
         assert result.status == "complete"
@@ -477,34 +460,24 @@ class TestReactLoopClassifiedExecution:
     async def test_sequential_tools_dispatched_individually(self):
         """Sequential tools are dispatched one at a time."""
         from k1.concierge.react.loop import react_loop
+        from tests.k1.concierge.conftest import make_hub_text_response, make_hub_tool_response
 
-        tc1 = MagicMock()
-        tc1.name = "invoke_capability"
-        tc1.arguments = {}
-        tc2 = MagicMock()
-        tc2.name = "dispatch_task"
-        tc2.arguments = {"task_type": "test"}
-
-        resp_tools = MagicMock()
-        resp_tools.has_text = False
-        resp_tools.has_tool_calls = True
-        resp_tools.tool_calls = [tc1, tc2]
-        resp_tools.text = None
-        resp_tools.finish_reason = "stop"
-
-        resp_text = MagicMock()
-        resp_text.has_text = True
-        resp_text.has_tool_calls = False
-        resp_text.text = "Done"
-        resp_text.tool_calls = []
-        resp_text.finish_reason = "stop"
+        resp_tools = make_hub_tool_response(
+            [
+                {"name": "invoke_capability", "arguments": {}},
+                {"name": "dispatch_task", "arguments": {"task_type": "test"}},
+            ]
+        )
+        resp_text = make_hub_text_response(text="Done")
 
         model = AsyncMock()
-        model.generate = AsyncMock(side_effect=[resp_tools, resp_text])
+        model.execute = AsyncMock(side_effect=[resp_tools, resp_text])
 
         tool_result = MagicMock()
         tool_result.is_error.return_value = False
         tool_result.is_ok.return_value = True
+        tool_result.status = "ok"
+        tool_result.error = None
         tool_result.data = {}
         tool_result.tool_name = "test"
 
@@ -521,6 +494,8 @@ class TestReactLoopClassifiedExecution:
             tool_dispatcher=dispatcher,
             on_text_response=AsyncMock(),
             cancellation_check=AsyncMock(return_value=False),
+            trace_id="test-sequential",
+            scenario="test",
         )
 
         assert result.status == "complete"
@@ -531,34 +506,24 @@ class TestReactLoopClassifiedExecution:
     async def test_mixed_batch_splits_correctly(self):
         """Mixed batch: parallel-safe gathered, sequential one-at-a-time."""
         from k1.concierge.react.loop import react_loop
+        from tests.k1.concierge.conftest import make_hub_text_response, make_hub_tool_response
 
-        tc_parallel = MagicMock()
-        tc_parallel.name = "recall_memory"
-        tc_parallel.arguments = {}
-        tc_seq = MagicMock()
-        tc_seq.name = "invoke_capability"
-        tc_seq.arguments = {}
-
-        resp_tools = MagicMock()
-        resp_tools.has_text = False
-        resp_tools.has_tool_calls = True
-        resp_tools.tool_calls = [tc_parallel, tc_seq]
-        resp_tools.text = None
-        resp_tools.finish_reason = "stop"
-
-        resp_text = MagicMock()
-        resp_text.has_text = True
-        resp_text.has_tool_calls = False
-        resp_text.text = "Done"
-        resp_text.tool_calls = []
-        resp_text.finish_reason = "stop"
+        resp_tools = make_hub_tool_response(
+            [
+                {"name": "recall_memory", "arguments": {}},
+                {"name": "invoke_capability", "arguments": {}},
+            ]
+        )
+        resp_text = make_hub_text_response(text="Done")
 
         model = AsyncMock()
-        model.generate = AsyncMock(side_effect=[resp_tools, resp_text])
+        model.execute = AsyncMock(side_effect=[resp_tools, resp_text])
 
         tool_result = MagicMock()
         tool_result.is_error.return_value = False
         tool_result.is_ok.return_value = True
+        tool_result.status = "ok"
+        tool_result.error = None
         tool_result.data = {}
         tool_result.tool_name = "test"
 
@@ -575,6 +540,8 @@ class TestReactLoopClassifiedExecution:
             tool_dispatcher=dispatcher,
             on_text_response=AsyncMock(),
             cancellation_check=AsyncMock(return_value=False),
+            trace_id="test-mixed",
+            scenario="test",
         )
 
         assert result.status == "complete"
@@ -585,31 +552,23 @@ class TestReactLoopClassifiedExecution:
     async def test_classification_logged(self, caplog):
         """Tool batch classification is logged at INFO level."""
         from k1.concierge.react.loop import react_loop
+        from tests.k1.concierge.conftest import make_hub_text_response, make_hub_tool_response
 
-        tc1 = MagicMock()
-        tc1.name = "recall_memory"
-        tc1.arguments = {}
-
-        resp_tools = MagicMock()
-        resp_tools.has_text = False
-        resp_tools.has_tool_calls = True
-        resp_tools.tool_calls = [tc1]
-        resp_tools.text = None
-        resp_tools.finish_reason = "stop"
-
-        resp_text = MagicMock()
-        resp_text.has_text = True
-        resp_text.has_tool_calls = False
-        resp_text.text = "Done"
-        resp_text.tool_calls = []
-        resp_text.finish_reason = "stop"
+        resp_tools = make_hub_tool_response(
+            [
+                {"name": "recall_memory", "arguments": {}},
+            ]
+        )
+        resp_text = make_hub_text_response(text="Done")
 
         model = AsyncMock()
-        model.generate = AsyncMock(side_effect=[resp_tools, resp_text])
+        model.execute = AsyncMock(side_effect=[resp_tools, resp_text])
 
         tool_result = MagicMock()
         tool_result.is_error.return_value = False
         tool_result.is_ok.return_value = True
+        tool_result.status = "ok"
+        tool_result.error = None
         tool_result.data = {}
         tool_result.tool_name = "test"
 
@@ -627,8 +586,13 @@ class TestReactLoopClassifiedExecution:
                 tool_dispatcher=dispatcher,
                 on_text_response=AsyncMock(),
                 cancellation_check=AsyncMock(return_value=False),
+                trace_id="test-classify-log",
+                scenario="test",
             )
 
+        assert result.status == "complete"
+        info_messages = [r.message for r in caplog.records if r.levelno >= logging.INFO]
+        assert any("tool_batch_classified" in m for m in info_messages)
         assert result.status == "complete"
         info_messages = [r.message for r in caplog.records if r.levelno >= logging.INFO]
         assert any("tool_batch_classified" in m for m in info_messages)

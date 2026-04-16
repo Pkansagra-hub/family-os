@@ -1,0 +1,85 @@
+// ============================================================================
+// task_artifacts_section.fbs - Task Artifacts Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/task_artifacts_section.fbs
+// Purpose: Task output artifacts - confirmations, receipts, summaries
+// Size Budget: 4KB max
+// Tier: HOT CORE
+// Eviction: Demotes to artifacts_warm (WARM) after presentation + 10 turns
+// ADR: ADR-0017 (SessionState Design), M6 Extension
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// ARTIFACT TYPE ENUM
+// ============================================================================
+
+/// Types of task output artifacts
+enum ArtifactType : byte {
+    TEXT = 0,             // Plain text result
+    CONFIRMATION = 1,     // Booking/order confirmation code
+    RECEIPT = 2,          // Transaction receipt
+    SUMMARY = 3,          // Summarized result
+    LIST = 4,             // Structured list (e.g. search results)
+    ERROR = 5,            // Error detail from failed task
+    MEDIA_REF = 6         // Reference/URL to media content
+}
+
+// ============================================================================
+// TASK ARTIFACT ENTRY
+// ============================================================================
+
+/// Single artifact produced by a task
+/// Single Writer: Back LLM (produces artifacts on task completion)
+/// Readers: Front LLM (display to user), Orchestrator (dependency resolution)
+table TaskArtifactEntry {
+    artifact_id: string (required);   // UUID
+    task_id: string;                  // UUID of the producing task
+    artifact_type: ArtifactType = TEXT;
+    content: string;                  // Artifact payload (text, URL, etc.)
+    created_at_ms: int64 = 0;        // Epoch ms when produced
+    presented_at_turn: uint16 = 0;   // Turn # when shown (0 = not yet)
+    size_bytes: uint32 = 0;          // Byte size of content
+    metadata: string;                // JSON-encoded key-value pairs
+}
+
+// ============================================================================
+// TASK ARTIFACTS SECTION ROOT
+// ============================================================================
+
+/// Task Artifacts Section - evicts to artifacts_warm after 10 turns
+/// Stores recent task output artifacts.
+/// Unpresented artifacts (presented_at_turn == 0) are NEVER evicted.
+table TaskArtifactsSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Active artifacts (max 30)
+    artifacts: [TaskArtifactEntry];
+
+    // Section metadata
+    last_updated_ms: int64;
+
+    // Eviction config
+    evict_after_turns: uint16 = 10;
+}
+
+root_type TaskArtifactsSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 4KB (4096 bytes) max
+//
+// Breakdown:
+// - Header: ~100 bytes
+// - TaskArtifactEntry: ~100-200 bytes each (content varies)
+// - Max 30 artifacts x ~130 bytes avg = 3900 bytes
+// - Metadata + overhead: ~200 bytes
+//
+// Typical usage: 1-2KB (5-10 recent artifacts)
+// Max with 30 artifacts: ~4KB
+// ============================================================================

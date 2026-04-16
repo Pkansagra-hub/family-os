@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+# Geohash sentinel: K0 stage_42 geo_metadata will enrich with real coordinates.
+GEOHASH_SENTINEL = "000000"
 
 
 @dataclass(frozen=True)
@@ -78,7 +81,7 @@ class PlaceResolver:
         if not name or not name.strip():
             return None
 
-        key = name.strip().lower()
+        key = _normalize_key(name)
 
         # Exact match (O(1))
         resolved = self._exact_map.get(key)
@@ -92,6 +95,70 @@ class PlaceResolver:
                 return alias_resolved.place_id
 
         return None
+
+    def resolve_with_geohash(
+        self,
+        name: Optional[str],
+        known_geohashes: Optional[Dict[str, str]] = None,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Resolve a location name to (place_id, geohash_6).
+
+        Geohash resolution order:
+          1. Exact case-insensitive match in known_geohashes dict.
+          2. Prefix match in known_geohashes (same logic as resolve()).
+          3. Fallback sentinel "000000" if place_id resolved but no geohash.
+          4. (None, None) if name is None/empty or no place match.
+
+        Args:
+            name: Raw location name from the turn.
+            known_geohashes: Tenant-configured mapping of location names
+                to 6-char geohash strings. Keys are case-insensitive.
+
+        Returns:
+            (place_id, geohash_6) tuple. geohash_6 is a valid 6-char
+            geohash, the sentinel "000000", or None.
+        """
+        if not name or not name.strip():
+            return (None, None)
+
+        place_id = self.resolve(name)
+        if place_id is None:
+            return (None, None)
+
+        geohash = self._lookup_geohash(name, known_geohashes)
+        return (place_id, geohash)
+
+    @staticmethod
+    def _lookup_geohash(
+        name: str,
+        known_geohashes: Optional[Dict[str, str]],
+    ) -> str:
+        """Look up geohash for a location name.
+
+        Returns a 6-char geohash string or the sentinel "000000".
+        """
+        if not known_geohashes:
+            return GEOHASH_SENTINEL
+
+        key = _normalize_key(name)
+
+        # Exact match (O(1))
+        for known_name, ghash in known_geohashes.items():
+            if _normalize_key(known_name) == key:
+                return ghash
+
+        # Prefix match (same logic as resolve())
+        for known_name, ghash in known_geohashes.items():
+            known_key = _normalize_key(known_name)
+            if known_key.startswith(key) or key.startswith(known_key):
+                return ghash
+
+        return GEOHASH_SENTINEL
+
+
+def _normalize_key(name: str) -> str:
+    """Normalize a location name for case-insensitive lookup."""
+    return name.strip().lower()
 
 
 def _to_place_id(canonical_name: str) -> str:

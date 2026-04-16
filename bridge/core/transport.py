@@ -37,7 +37,7 @@ class HttpResult:
 class TransportConfig:
     """Configuration for the K0 HTTP transport layer."""
 
-    base_url: str = "http://localhost:8000"
+    base_url: str = "http://localhost:8080"
     connect_timeout_s: float = 5.0
     read_timeout_s: float = 30.0
     tls_verify: bool = False
@@ -58,7 +58,7 @@ class HttpTransport:
     """
 
     COMMAND_PATH = "/k0/command.submit"
-    HEALTH_PATH = "/k0/health"
+    HEALTH_PATH = "/healthz"
 
     def __init__(self, config: TransportConfig | None = None) -> None:
         self._config = config or TransportConfig()
@@ -125,7 +125,7 @@ class HttpTransport:
             return HttpResult(status_code=0, error=f"http_error: {exc}")
 
     async def check_health(self) -> bool:
-        """Lightweight health probe against ``/k0/health``.
+        """Lightweight health probe against ``/healthz``.
 
         Returns True if K0 responds with 200, False on any failure.
         """

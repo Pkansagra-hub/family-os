@@ -532,7 +532,7 @@ class TestPlannerErrorSubclasses:
                 and getattr(mod, name) is not PlannerError
             )
         ]
-        assert len(subclasses) == 8
+        assert len(subclasses) == 19
 
 
 # ===================================================================

@@ -21,10 +21,21 @@ from k1.concierge.events.base import CanonicalEventMeta
 from k1.concierge.events.conversation import (
     DeadLettered,
     IntentArbitrated,
+    Phase1Classified,
     ResponseFinalDecided,
+    TaskRouted,
     UserInputReceived,
 )
-from k1.concierge.events.hitl import HILRequested, HILResolved, TaskResumed, TaskSuspended
+from k1.concierge.events.hitl import (
+    HILRequested,
+    HILResolved,
+    HITLBlockedRedEvent,
+    HITLRequestedEvent,
+    HITLResolvedEvent,
+    HITLTimedOutEvent,
+    TaskResumed,
+    TaskSuspended,
+)
 from k1.concierge.events.mutation import TurnMutationSummary
 from k1.concierge.events.pool import (
     BackPoolWorkerAcquiredEvent,
@@ -50,7 +61,7 @@ from k1.concierge.events.weave import (
     WeaveMetricsEvent,
 )
 
-# All 16 canonical event types, keyed by event_type string.
+# All canonical event types, keyed by event_type string.
 EVENT_TYPE_REGISTRY: dict[str, type[CanonicalEventMeta]] = {
     # Conversation (3)
     "conversation.user_input.received": UserInputReceived,
@@ -78,6 +89,14 @@ EVENT_TYPE_REGISTRY: dict[str, type[CanonicalEventMeta]] = {
     "metrics.weave.session": WeaveMetricsEvent,
     # Mutation audit (1) -- M4 E4.5.4
     "mutation.turn_summary": TurnMutationSummary,
+    # M10 E10.3.4: Phase 1 + routing observability (2)
+    "k1.phase1.classified.v1": Phase1Classified,
+    "k1.task.routed.v1": TaskRouted,
+    # M6 E6.3: HITL lifecycle observability/audit (4)
+    "hitl.lifecycle.requested": HITLRequestedEvent,
+    "hitl.lifecycle.resolved": HITLResolvedEvent,
+    "hitl.lifecycle.timed_out": HITLTimedOutEvent,
+    "hitl.lifecycle.blocked_red": HITLBlockedRedEvent,
     # BackPool / Lease lifecycle (7) -- M7 E7.5.1, E7.5.4
     "pool.worker.acquired": BackPoolWorkerAcquiredEvent,
     "pool.worker.released": BackPoolWorkerReleasedEvent,

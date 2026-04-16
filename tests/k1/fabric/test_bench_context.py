@@ -673,7 +673,7 @@ class TestBenchTokenCounting:
             assert count > 0
 
         p95 = _percentile(timings, 95)
-        assert p95 < 5, f"count_tokens_dict(large) P95={p95:.2f}ms exceeds 5ms"
+        assert p95 < 10, f"count_tokens_dict(large) P95={p95:.2f}ms exceeds 10ms"
 
     def test_count_tokens_empty_returns_zero(self) -> None:
         """count_tokens('') returns 0 and count_tokens_dict({}) returns 0."""

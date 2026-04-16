@@ -95,7 +95,7 @@ class RustMailboxAdapter:
         self._actor_id = actor_id
         self._capacity = capacity
 
-    def receive(self, *, timeout_ms: int = 0) -> Envelope | None:
+    def receive(self, timeout_ms: int = 0) -> Envelope | None:
         """
         Receive the next envelope, optionally blocking.
 

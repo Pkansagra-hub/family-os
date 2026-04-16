@@ -383,8 +383,20 @@ class ModelHubFactory:
         cfg = config or ModelHubConfig()
 
         credential_port: ICredentialPort = ports["credential_port"]
+        event_port: IEventPort | None = ports.get("event_port")
+        state_read_port: IStateReadPort | None = ports.get("state_read_port")
+        metrics_port: IMetricsPort | None = ports.get("metrics_port")
+        config_port: IConfigPort | None = ports.get("config_port")
+        health_port: IHealthPort | None = ports.get("health_port")
 
-        _validate_ports(credential_port=credential_port)
+        _validate_ports(
+            credential_port=credential_port,
+            event_port=event_port,
+            state_read_port=state_read_port,
+            metrics_port=metrics_port,
+            config_port=config_port,
+            health_port=health_port,
+        )
 
         registry = ProviderRegistry(cfg)
         circuit_mgr = CircuitBreakerManager()
@@ -416,6 +428,7 @@ class ModelHubFactory:
             dispatcher=dispatcher,
             cost_tracker=CostTracker(),
             audit_logger=AuditLogger(),
+            metrics_port=metrics_port,
         )
 
         health_adapter = HealthReportAdapter()

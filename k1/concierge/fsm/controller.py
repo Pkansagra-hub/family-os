@@ -113,11 +113,10 @@ from k1.concierge.protocols.weave_policy import (
     WeaveSignal,
     sort_results_for_delivery,
 )
-from k1.sessionstate.sections.control import IntentClassification, PrivacyBand
-from k1.sessionstate.sections.temporal_context import compute_temporal_anchor
 from k1.concierge.task.complexity import ComplexityTier
 from k1.concierge.task.dispatch import TaskDispatch
 from k1.concierge.task.intent import TaskIntent
+from k1.sessionstate.public_types import IntentClassification, PrivacyBand, compute_temporal_anchor
 
 logger = logging.getLogger(__name__)
 
@@ -2416,7 +2415,10 @@ class ConciergeController:
             source="back",
             task_id=task_id,
             envelope=envelope,
-            metadata={"result_type": payload.get("result_type", "complete")},
+            metadata={
+                "result_type": payload.get("result_type", "complete"),
+                "tool_calls": payload.get("tool_call_summaries", []),
+            },
         )
         self._task_bridge.complete_task(task_id)
         self._suspension_manager.cleanup_task(task_id)
@@ -4275,6 +4277,26 @@ class ConciergeController:
         """Reset all components to their initial state."""
         # Reset control and coordination components
         self._turn_state.reset()
+        self._front_lock.clear()
+        self._cancel_handler.reset()
+        self._control_ext.reset()
+        self._task_bridge.reset()
+        self._turn_lock.reset()
+        self._interrupt_classifier.reset()
+        self._proactive_wake.reset()
+
+        # Clear collection data
+        self._history.clear()
+        self._active_task_ids.clear()
+        self._task_dispatch_turns.clear()
+
+        # Reset to None attributes
+        self._hil_coordinator = None
+        self._weave_batcher = None
+
+        # Reset state variables (BUG-7 FIX: removed duplicate block)
+        self._state = ConciergeState.LISTENING
+        self._turn_number = 0
         self._front_lock.clear()
         self._cancel_handler.reset()
         self._control_ext.reset()

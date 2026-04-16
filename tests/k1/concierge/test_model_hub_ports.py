@@ -11,8 +11,6 @@ Validates:
 
 from __future__ import annotations
 
-import pytest
-
 from k1.model_hub.plugins.base import IProviderPlugin
 from k1.model_hub.plugins.test_plugin import TestProviderPlugin
 from k1.model_hub.ports import (
@@ -141,9 +139,12 @@ class TestProviderPluginProtocol:
         plugin = TestProviderPlugin()
         assert isinstance(plugin, IProviderPlugin)
 
-    def test_custom_provider_id(self) -> None:
-        plugin = TestProviderPlugin(provider_id="custom-test")
-        assert plugin.provider_id == "custom-test"
+    def test_custom_capabilities(self) -> None:
+        from k1.model_hub.types import CapabilityType
+
+        plugin = TestProviderPlugin(capabilities=[CapabilityType.CHAT, CapabilityType.TOOL_CALL])
+        assert plugin.supports(CapabilityType.CHAT)
+        assert plugin.supports(CapabilityType.TOOL_CALL)
 
 
 # =====================================================================
@@ -153,7 +154,7 @@ class TestProviderPluginProtocol:
 
 class TestSupportingTypes:
     def test_hub_health_report_defaults(self) -> None:
-        r = HubHealthReport()
+        r = HubHealthReport(status="HEALTHY")
         assert r.status == "HEALTHY"
         assert r.providers == []
 
@@ -163,16 +164,17 @@ class TestSupportingTypes:
             status="DEGRADED",
             latency_ms=500,
             error_rate=0.05,
-            circuit_state="HALF_OPEN",
+            details="half-open circuit",
         )
         r = HubHealthReport(status="DEGRADED", providers=[prov])
         assert len(r.providers) == 1
-        assert r.providers[0].circuit_state == "HALF_OPEN"
+        assert r.providers[0].details == "half-open circuit"
 
     def test_state_snapshot(self) -> None:
         s = StateSnapshot(sections={"persona": {"model_pref": "fast"}})
         assert s.sections["persona"]["model_pref"] == "fast"
 
-    def test_subscription_cancel(self) -> None:
-        sub = Subscription()
-        sub.cancel()  # should not raise
+    def test_subscription_construction(self) -> None:
+        sub = Subscription(subscription_id="sub-1", topics=["topic-a"])
+        assert sub.subscription_id == "sub-1"
+        assert sub.topics == ["topic-a"]

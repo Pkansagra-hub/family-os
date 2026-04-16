@@ -69,6 +69,9 @@ from .adapters import (
     StandaloneLifecycle,
 )
 
+# Async bridge
+from .async_bridge import AsyncSSMBridge
+
 # Event types
 from .events import (
     EmergencyActivatedEvent,
@@ -239,4 +242,6 @@ __all__ = [
     "HotTier",
     "WarmTier",
     "LocalColdTier",
+    # Async bridge
+    "AsyncSSMBridge",
 ]

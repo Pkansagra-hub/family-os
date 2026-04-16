@@ -43,6 +43,8 @@ Timing:
 """
 
 from k1.bus.adapters import FabricBusAdapter, SessionBusAdapter
+from k1.bus.async_bridge import AsyncBusBridge, AsyncMailboxBridge, AsyncMailboxRouterBridge
+from k1.bus.config import BusConfig, load_bus_config
 from k1.bus.envelope import DeliveryMode, Envelope, PayloadFormat, Priority
 from k1.bus.factory import BusFactory
 from k1.bus.impl.local_bus import BusStats, LocalBus
@@ -52,6 +54,7 @@ from k1.bus.middleware import Middleware, MiddlewareChain
 from k1.bus.middleware.metrics import MetricsMiddleware
 from k1.bus.middleware.topic_validation import TopicRegistry, TopicValidationMiddleware
 from k1.bus.middleware.tracing import TracingMiddleware
+from k1.bus.ports.async_bus import AsyncBusHandler, IAsyncBus, IAsyncMailbox, IAsyncMailboxRouter
 from k1.bus.ports.bus import BusHandler, IBus, SubscriptionHandle
 from k1.bus.ports.mailbox import (
     BackpressureError,
@@ -75,10 +78,19 @@ __all__ = [
     "Priority",
     "DeliveryMode",
     "PayloadFormat",
-    # Bus port
+    # Sync bus port
     "IBus",
     "SubscriptionHandle",
     "BusHandler",
+    # Async bus ports
+    "IAsyncBus",
+    "IAsyncMailbox",
+    "IAsyncMailboxRouter",
+    "AsyncBusHandler",
+    # Async bridge implementations
+    "AsyncBusBridge",
+    "AsyncMailboxBridge",
+    "AsyncMailboxRouterBridge",
     # Bus implementation
     "LocalBus",
     "BusFactory",
@@ -103,6 +115,9 @@ __all__ = [
     # Adapters
     "FabricBusAdapter",
     "SessionBusAdapter",
+    # Config
+    "BusConfig",
+    "load_bus_config",
     # Timing
     "TimingChain",
     "TimingConfig",

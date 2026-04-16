@@ -207,7 +207,7 @@ class TestSectionRenderersTable:
     """SECTION_RENDERERS has 10 entries covering all SS sections (M4 4.4.1)."""
 
     def test_renderers_has_10_entries(self):
-        assert len(SECTION_RENDERERS) == 10
+        assert len(SECTION_RENDERERS) == 11
 
     def test_all_config_sections_have_renderers(self):
         """Every section referenced in SS_READ_CONFIGS has a renderer."""

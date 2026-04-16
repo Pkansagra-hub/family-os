@@ -216,7 +216,7 @@ class IModelGatewayPort(Protocol):
         """
         ...  # pragma: no cover
 
-    def is_model_loaded(self, model_id: str) -> bool:
+    async def is_model_loaded(self, model_id: str) -> bool:
         """
         Check if a model is currently loaded and ready.
 
@@ -228,7 +228,7 @@ class IModelGatewayPort(Protocol):
         """
         ...  # pragma: no cover
 
-    def list_models(self) -> List[ModelInfo]:
+    async def list_models(self) -> List[ModelInfo]:
         """
         List all available models with their capabilities.
 
@@ -237,7 +237,7 @@ class IModelGatewayPort(Protocol):
         """
         ...  # pragma: no cover
 
-    def find_model(self, required_capabilities: List[str]) -> Optional[str]:
+    async def find_model(self, required_capabilities: List[str]) -> Optional[str]:
         """
         Find a model that supports all required capabilities.
 

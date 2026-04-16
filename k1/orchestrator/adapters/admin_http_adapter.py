@@ -57,8 +57,10 @@ from uuid import uuid4
 
 from aiohttp import web
 
+from k1.concierge.orchestrator.degradation import CircuitBreaker
 from k1.orchestrator.types import (
     ActiveDAGInfo,
+    CircuitBreakerConfig,
     CircuitBreakerState,
     DrainResult,
     HealthStatus,
@@ -309,8 +311,16 @@ class AdminHttpAdapter:
         result: Dict[str, CircuitBreakerState] = {}
         planner_adapter = self._service._planner_port
         cb = getattr(planner_adapter, "_cb", None)
-        if cb is not None and isinstance(cb, CircuitBreakerState):
-            result["CB_PLANNER"] = cb
+        if cb is not None and isinstance(cb, CircuitBreaker):
+            result["CB_PLANNER"] = CircuitBreakerState(
+                config=CircuitBreakerConfig(
+                    name=cb.name,
+                    failure_threshold=cb._failure_threshold,
+                    reset_timeout_ms=cb._half_open_after_ms,
+                ),
+                state=cb.state.value,
+                failure_count=cb.failure_count,
+            )
         return result
 
     async def set_cb_state(self, name: str, state: str) -> bool:
@@ -319,28 +329,26 @@ class AdminHttpAdapter:
             return False
         planner_adapter = self._service._planner_port
         cb = getattr(planner_adapter, "_cb", None)
-        if cb is None:
+        if cb is None or not isinstance(cb, CircuitBreaker):
             return False
         if state not in ("OPEN", "CLOSED", "HALF_OPEN"):
             return False
-        cb.state = state
         if state == "CLOSED":
-            cb.failure_count = 0
-            cb.opened_at = None
+            cb.reset()
         elif state == "OPEN":
-            cb.opened_at = time.time()
+            cb.trip()
         return True
 
     async def _handle_list_cbs(self, request: web.Request) -> web.Response:
         cbs = await self.list_circuit_breakers()
         serialized: Dict[str, Any] = {}
-        for name, cb in cbs.items():
+        for name, cb_state in cbs.items():
             serialized[name] = {
-                "state": cb.state,
-                "failure_count": cb.failure_count,
-                "last_failure_at": cb.last_failure_at,
-                "last_success_at": cb.last_success_at,
-                "opened_at": cb.opened_at,
+                "state": cb_state.state,
+                "failure_count": cb_state.failure_count,
+                "last_failure_at": cb_state.last_failure_at,
+                "last_success_at": cb_state.last_success_at,
+                "opened_at": cb_state.opened_at,
             }
         return self._json_response(serialized)
 

@@ -20,6 +20,9 @@ include "meta_section.fbs";
 include "beliefs_history_section.fbs";
 include "persona_section.fbs";
 include "telemetry_section.fbs";
+include "task_state_section.fbs";
+include "task_artifacts_section.fbs";
+include "artifacts_warm_section.fbs";
 
 namespace K1.SessionState;
 
@@ -37,6 +40,8 @@ namespace K1.SessionState;
 // - affective_now: 4KB
 // - narrative_active: 4KB
 // - meta: 2KB (NEVER EVICT)
+// - task_state: 4KB (NEVER EVICT) [M4 extension]
+// - task_artifacts: 4KB (demotes to artifacts_warm) [M6 extension]
 // ============================================================================
 
 /// Hot Core - Always in memory, never paged to disk
@@ -65,6 +70,12 @@ table HotCore {
     // Meta section (NEVER EVICT) - 2KB
     meta: MetaSection;
 
+    // Task state section (NEVER EVICT) - 4KB [M4 extension]
+    task_state: TaskStateSection;
+
+    // Task artifacts section - 4KB [M6 extension]
+    task_artifacts: TaskArtifactsSection;
+
     // Hot tier metadata
     total_size_bytes: uint32;
     budget_bytes: uint32 = 49152;     // 48KB
@@ -81,6 +92,7 @@ table HotCore {
 // - history_recent: 20KB
 // - persona: 8KB (high priority, rarely evict)
 // - telemetry: 8KB (lowest priority, first to evict)
+// - artifacts_warm: 8KB (priority 2) [M6 extension]
 // ============================================================================
 
 /// Warm Tier - In memory but evictable to COLD
@@ -96,6 +108,9 @@ table WarmTier {
 
     // Telemetry section - 8KB (lowest priority)
     telemetry: TelemetrySection;
+
+    // Artifacts warm section - 8KB (priority 2) [M6 extension]
+    artifacts_warm: ArtifactsWarmSection;
 
     // Warm tier metadata
     total_size_bytes: uint32;
@@ -222,16 +237,19 @@ root_type SessionKernel;
 //   affective_now:    4KB
 //   narrative_active: 4KB
 //   meta:             2KB  (NEVER EVICT)
-//   TOTAL:           48KB
+//   task_state:       4KB  (NEVER EVICT) [M4]
+//   task_artifacts:   4KB  [M6]
+//   TOTAL:           52KB
 //
 // WARM TIER (48KB, evictable):
 //   beliefs_history: 12KB
 //   history_recent:  20KB
 //   persona:          8KB  (high priority)
 //   telemetry:        8KB  (lowest priority)
-//   TOTAL:           48KB
+//   artifacts_warm:   8KB  (priority 2) [M6]
+//   TOTAL:           56KB
 //
-// GRAND TOTAL: 96KB hard cap
+// GRAND TOTAL: 108KB (52KB HOT + 56KB WARM)
 //
 // Performance targets:
 //   HOT read: <100μs (zero-copy deserialization)

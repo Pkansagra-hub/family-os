@@ -38,7 +38,7 @@ The kernel was built INSIDE `k1/concierge/kernel/` — one of the 7 components i
 | 4 | ModelHub | 7 | ModelHubFactory (3 methods) | 7 | 0 | ✅ READY |
 | 5 | Orchestrator | 9 | OrchestratorFactory (4 methods) | 9 | 8 | ✅ READY |
 | 6 | Planner | 7 | PlannerFactory (4 methods) | 7 | 0 | ✅ READY |
-| 7 | Concierge | 8 | ❌ NONE | 8+5 null | 8 | ⚠️ NO FACTORY |
+| 7 | Concierge | 8 | ❌ NONE (E-0.5.21 planned) | 6 prod + 5 null | 7 | ⚠️ NO FACTORY (ports+adapters ready) |
 | 8 | MemoryWriter | 5 | ❌ NONE | 0 | 0 | ⚠️ PORTS ONLY |
 
 **Totals: 50 ports, 43 prod adapters, 23 test adapters**
@@ -144,7 +144,7 @@ The kernel was built INSIDE `k1/concierge/kernel/` — one of the 7 components i
 
 ---
 
-## 8 MILESTONES → 47 EPICS → 179 ISSUES
+## 8 MILESTONES → 52 EPICS → 193 ISSUES
 
 ---
 
@@ -346,19 +346,673 @@ Each epic follows the SAME 5-issue pattern. Every issue reads actual source code
 
 ---
 
+## MS-0.5: Architecture Gap Corrections (Post-Scan Fixes)
+
+**Goal:** Resolve every gap, mismatch, missing adapter, type conflict, and structural deficiency discovered during the MS-0 code scan — BEFORE any new wiring begins. Each gap gets exactly one epic. Epics are ordered by dependency (cross-component type fixes first, then adapter gaps, then structural issues).
+**Gating:** All gaps closed. Every cross-component connection verified compatible. No red flags remain in any ARCHITECTURE.md §4/§6.
+**Source:** All 8 `ARCHITECTURE.md` files produced in MS-0.
+
+---
+
+### E-0.5.1: Planner→ModelHub Type Duplication (🔴 Critical)
+
+**Source:** Planner ARCHITECTURE.md §4.2, ModelHub ARCHITECTURE.md §4 Connection #4
+**Problem:** Planner defines its OWN `HubRequest`, `HubResponse`, `RequestConstraints` in `k1/planner/types.py` with a stale migration note. `k1/model_hub/types.py` already exists with incompatible definitions: `capability: str` vs `CapabilityType` (Enum), `payload: Dict[str, Any]` vs typed payloads, missing `ResponseMetadata`, missing `TokenUsage`. 5 type mismatches total.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.1.1 | Delete Planner local HubRequest/HubResponse/RequestConstraints | Remove duplicated types from `k1/planner/types.py`. Replace all imports across Planner with `from k1.model_hub.types import HubRequest, HubResponse, RequestConstraints`. |
+| I-0.5.1.2 | Update LLMGatewayAdapter translation | Update `k1/planner/adapters/llm_gateway_adapter.py` to translate between Planner's `ILLMPort.execute()` and ModelHub's `IModelHubPort.execute()` using real K1 types. |
+| I-0.5.1.3 | Verify Planner→ModelHub round-trip | Integration test: `PlannerFactory.create_for_testing()` → inject real `ModelHubFactory.create_for_testing()` → run a SKETCH stage → verify HubRequest/HubResponse types flow correctly. |
+
+### E-0.5.2: Fabric→ModelHub Missing Bridge Adapter (🔴 Critical)
+
+**Source:** ModelHub ARCHITECTURE.md §4 Connection #5, Fabric ARCHITECTURE.md §1.4
+**Problem:** Fabric defines `IModelGatewayPort` (4 methods: `create_handle`, `is_model_loaded`, `list_models`, `find_model`). ModelHub exposes `IModelHubPort` (5 methods: `execute`, `stream_execute`, `discover_capabilities`, `discover_models`, `health`). Completely different APIs. No bridge adapter exists. `IModelGatewayPort` has no production adapter at all (only `TestModelGatewayAdapter`).
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.2.1 | ModelGatewayBridgeAdapter implementation | `k1/fabric/adapters/model_gateway_bridge.py` — implements `IModelGatewayPort`, wraps `IModelHubPort`. Translates `create_handle()` → `execute()`, `find_model()` → `discover_models()`, etc. |
+| I-0.5.2.2 | ILLMHandle implementation | `k1/fabric/adapters/llm_handle.py` — implements `ILLMHandle` (Protocol from `k1/fabric/ports/model_gateway.py`). Wraps `IModelHubPort.execute()` with budget enforcement. |
+| I-0.5.2.3 | Fabric→ModelHub integration test | Test: create `ModelGatewayBridgeAdapter(model_hub)`, verify all 4 `IModelGatewayPort` methods work through to ModelHub. |
+
+### E-0.5.3: MemoryWriter→ModelHub Incompatible Port (🔴 Critical)
+
+**Source:** ModelHub ARCHITECTURE.md §4 Connection #6, MemoryWriter ARCHITECTURE.md §2
+**Problem:** MemoryWriter defines `IModelHubPort` with `chat(messages, budget_tokens, model_hint) → ChatResponse` — a simplified LLM call. ModelHub's `IModelHubPort` has `execute(HubRequest) → HubResponse` — completely different signature. No translation adapter exists.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.3.1 | MW ModelHub adapter implementation | `k1/memory_writer/adapters/model_hub_adapter.py` — implements MW's `IModelHubPort`, wraps K1's `IModelHubPort`. Translates `chat(messages, budget, hint)` → `execute(HubRequest(ChatPayload))` → `ChatResponse`. |
+| I-0.5.3.2 | MW ModelHub adapter tests | Unit tests: verify translation, token budget enforcement (MW-06: 2000 tokens), model_hint routing. |
+
+### E-0.5.4: Concierge→ModelHub Import Bug (🟡 Medium) ✅ COMPLETE
+
+**Source:** ModelHub ARCHITECTURE.md §4 Connection #3
+**Problem:** `k1/concierge/llm/model_hub_bridge.py` line 18 imports `HubHealthReport` and `ProviderHealthStatus` from `k1.model_hub.ports` — but these symbols are NOT exported from `ports/__init__.py`. They exist in `k1.model_hub.types`. This will fail at runtime.
+
+**Resolution (completed):**
+
+- Fixed import path in `model_hub_bridge.py` (line 18: `ports` → `types`)
+- Added re-export in `k1/model_hub/ports/__init__.py` for backward compatibility
+- Added 13 missing types to `k1/model_hub/types.py` (CapabilityResult, ChatResult, ToolCallResultSet, StructuredResult, ReasonResult, Usage alias, EmbedResult, ModerationCategory, ModerateResult, TokenCountResult, ImageInput, AudioInput, VoiceConfig)
+- Fixed bridge production code: ResponseMetadata construction (added request_id, cost_usd, cache_hit), ModelInfo field names (model_id→id), model_preference field names (model_id→preferred_model), HubChunk fields (chunk_type→content/done/metadata/tool_calls), ToolCallResult.arguments type (dict→str), removed system_prompt access on non-ChatPayload types, removed duplicate method body
+- Fixed 3 test files (test_model_hub_types.py: 84 tests, test_model_hub_bridge.py: 21 tests, test_model_hub_ports.py: 24 tests) to match actual type API
+- 1139 tests pass across ModelHub + bridge/ports/types suites, 0 regressions
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.4.1 | Fix model_hub_bridge.py imports | ✅ Changed `from k1.model_hub.ports import HubHealthReport, ProviderHealthStatus` → `from k1.model_hub.types import HubHealthReport, ProviderHealthStatus`. Added re-exports in ports/**init**.py. Fixed all bridge production code + aligned 3 test files. 1139 tests pass. |
+
+### E-0.5.5: Concierge→Orchestrator POC Type Migration (🟡 Medium) ✅ COMPLETE
+
+**Source:** Orchestrator ARCHITECTURE.md §4 Connection #6, Concierge ARCHITECTURE.md §9.3
+**Problem:** Concierge creates `TaskEnvelope` from POC-local types in `k1.concierge.orchestrator.types` — explicitly NOT from `k1.orchestrator.types`. Original plan assumed "fields structurally identical" but field-by-field analysis revealed **structural incompatibilities** across ALL 10 types (different field names, types, validation, factory method signatures). Simple import swap is not viable.
+
+**Resolution (completed):**
+
+- **I-0.5.5.1 (Map POC→production):** Produced complete field-level mapping for all 10 POC types. Found: TaskEnvelope has 7 field differences (task_id, budget, session_id, tier type, missing capabilities/params/constraints/timeout_ms). CapabilityRequest uses `name` vs production `capability_name`. CapabilityResult.error is `str` vs production `Optional[ErrorInfo]`. AggregatedResult.from_medium() signature incompatible (takes CapabilityResult vs List[StepResult]). StepResult.status is `str` vs production `StepStatus` enum. PlanStep uses `step_id` (8 fields) vs production `id` (14 fields). Budget and CannedResponse have NO production equivalents.
+- **I-0.5.5.2 (Document type boundary):** Updated `k1/concierge/orchestrator/types.py` module docstring with complete architecture note documenting all type differences and production counterpart locations. POC types file RETAINED as legitimate concierge-internal contract layer. The translation adapter (POCFabricGatewayAdapter in `k1/concierge/kernel/bootstrap.py`) correctly bridges POC→production types at the dispatch boundary.
+- **I-0.5.5.3 (Integration test):** `tests/k1/concierge/test_e055_poc_production_boundary.py` — verifies POCFabricGatewayAdapter correctly translates POC CapabilityRequest→production CapabilityRequest and production CapabilityResult→POC CapabilityResult. Verifies POC TaskEnvelope construction, AggregatedResult.from_medium() factory, Budget enforcement, and full stub→adapter→production round-trip. All existing 58 concierge orchestrator tests continue to pass.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.5.1 | Map POC types → production types | ✅ Complete field-level mapping: all 10 types have structural incompatibilities preventing simple import swap. Budget and CannedResponse are POC-only. |
+| I-0.5.5.2 | Document type boundary + verify adapter | ✅ Updated types.py docstring with architecture note. POC types retained as concierge-internal contract. Translation adapter verified correct. |
+| I-0.5.5.3 | Integration test: POC↔production boundary | ✅ `tests/k1/concierge/test_e055_poc_production_boundary.py` — round-trip translation test through POCFabricGatewayAdapter. |
+
+### E-0.5.6: SessionState→MemoryWriter Missing Adapter (🟡 Medium) ✅ COMPLETE
+
+**Source:** SessionState ARCHITECTURE.md §4.2 Connection #4, MemoryWriter ARCHITECTURE.md §9
+**Problem:** MW defines `ISessionReadPort` (async Protocol: `snapshot()`, `read_section()`). SessionState has no adapter implementing this. The adapter directory `k1/memory_writer/adapters/` does not exist.
+
+**Resolution (completed):**
+
+- Created `k1/memory_writer/adapters/session_read_adapter.py` — `SessionReadAdapter` implements `ISessionReadPort`, wraps `SessionStateManager` directly (not through Fabric's reader) for minimal latency.
+- `snapshot(sections)` loops `manager.get_section(name)` → `to_dict()` → collects into dict. Missing/unknown sections omitted.
+- `read_section(name)` → `get_section(name)` → `to_dict()` → returns dict or None.
+- `SectionNotFoundError` (KeyError subclass) caught gracefully → returns None/omits.
+- **Key finding:** MW config lists 13 sections but 2 are phantom (`affective_baseline`, `ifl`) — not in SS's 15 real sections. Adapter handles these gracefully via KeyError catch. 11 of 13 MW sections are real SS sections.
+- Updated `k1/memory_writer/adapters/__init__.py` to export `SessionReadAdapter`.
+- MW-01 enforced: read-only, no write methods. MW-02 target: <1ms lock-free reads verified.
+- 28 new tests in `tests/k1/memory_writer/test_session_read_adapter_056.py`. 208 total MW tests pass, 0 regressions.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.6.1 | SessionReadAdapter for MemoryWriter | ✅ `k1/memory_writer/adapters/session_read_adapter.py` — implements `ISessionReadPort`, wraps `SessionStateManager`. Async wrapper around sync `get_section()` → `to_dict()`. Catches `SectionNotFoundError` for phantom sections (affective_baseline, ifl). Exported via `adapters/__init__.py`. |
+| I-0.5.6.2 | SessionReadAdapter tests | ✅ 28 tests: Protocol conformance (isinstance, no write methods), read_section (9 tests: existing/unknown/phantom/custom data/copy semantics/edge cases), snapshot (7 tests: all sections/phantom omission/empty/mixed/duplicates), latency (3 tests: single <1ms, 13-section <1ms, 100x stability), edge cases (5 tests: empty data/nested/slots/None manager). |
+
+### E-0.5.7: Concierge Direct SS Import Leakage (🟡 Medium) ✅ COMPLETE
+
+**Source:** SessionState ARCHITECTURE.md §4.3
+**Problem:** Concierge bypasses `IStatePort` boundary with 6 direct imports from `k1.sessionstate` internals: `MutationRequest`, `BatchRequest`, `TaskStateEntry`, `IntentClassification`, `PrivacyBand`, `compute_temporal_anchor`, `SessionStateFactory`. If SS section schemas change, Concierge breaks.
+
+**Resolution (completed):**
+
+- **I-0.5.7.1 (Inventory):** Full grep found 35 `from k1.sessionstate` imports across Concierge: 6 production files (7 unique import statements), 10 test files (26 imports). Test imports kept as-is (tests legitimately need deep section access). Production imports classified as: (b) type imports (BatchRequest, MutationRequest, IntentClassification, PrivacyBand, TaskStatus, TaskStateEntry, TaskStateSection, ArtifactType, TaskArtifactEntry, TaskArtifactsSection, MetaSection), (b) function import (compute_temporal_anchor ×3), (c) factory import (SessionStateFactory).
+- **I-0.5.7.2 (Facade):** Created `k1/sessionstate/public_types.py` — re-exports 16 symbols from 5 internal modules (ports.writer, sections.control, sections.task_state, sections.task_artifacts, sections.temporal_context, sections.meta, factory). Pure re-exports, no new logic. Grouped by source with `__all__` declaration.
+- **I-0.5.7.3 (Redirect):** Updated 6 production files (7 import statements total):
+  - `k1/concierge/tools/implementations.py` — BatchRequest, MutationRequest
+  - `k1/concierge/fsm/task_bridge.py` — ArtifactType, TaskArtifactEntry, TaskArtifactsSection, TaskStateEntry, TaskStateSection, TaskStatus (consolidated from 2 imports to 1)
+  - `k1/concierge/fsm/controller.py` — IntentClassification, PrivacyBand, compute_temporal_anchor (consolidated from 2 imports to 1)
+  - `k1/concierge/protocols/hitl_wiring.py` — MetaSection (lazy import inside function)
+  - `k1/concierge/kernel/bootstrap.py` — SessionStateFactory (lazy import inside function)
+  - `k1/concierge/prompt/builder.py` — compute_temporal_anchor (2× lazy imports inside functions)
+- 19 new tests in `tests/k1/sessionstate/test_public_types_057.py`: facade importability (3), re-export identity (15 — each symbol is `is` identical to deep import), boundary enforcement (1 — AST scan of all production Concierge .py files for deep SS imports).
+- 2906 Concierge tests pass (46 pre-existing failures unrelated to changes), 4059 SS tests pass (5 pre-existing load test failures), 0 regressions.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.7.1 | Inventory all direct SS imports in Concierge | ✅ 35 imports found (6 production files, 10 test files). Production: 16 unique symbols from 5 SS internal modules. Tests: kept as-is. |
+| I-0.5.7.2 | Create SS type re-export facade | ✅ `k1/sessionstate/public_types.py` — 16 symbols re-exported from 5 internal modules with `__all__` declaration. |
+| I-0.5.7.3 | Redirect Concierge imports to facade | ✅ 6 production files updated (7 import statements). Zero deep SS imports remain in production Concierge code. AST-based boundary enforcement test verifies. |
+
+### E-0.5.8: ModelHub ResponseCache Thread-Safety (🟡 Medium)
+
+**Source:** ModelHub ARCHITECTURE.md §2 — ResponseCache
+**Problem:** Docstring claims "lock-free reads, write lock for put + eviction" but NO actual locks exist in implementation. `OrderedDict` ops are not thread-safe. Under concurrent requests, cache corruption is possible.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.8.1 | Add threading.Lock to ResponseCache | ✅ Added `threading.Lock` to `ResponseCache.__init__`. Wrapped `get()`, `put()`, `invalidate()`, `clear()` with `self._lock`. All 38 existing tests pass. |
+| I-0.5.8.2 | ResponseCache concurrency tests | ✅ `tests/k1/model_hub/test_response_cache_concurrency.py` — 8 stress tests: 100 concurrent puts, 100 concurrent gets, mixed R/W, eviction under contention, concurrent invalidate, stats consistency, clear+read, lock attribute check. All pass. Full suite: 1018 passed, 0 failed. |
+
+### E-0.5.9: ModelHub→Bus Envelope Deserialization Gap (🟡 Medium)
+
+**Source:** ModelHub ARCHITECTURE.md §4 Connection #1
+**Problem:** `LLMRequestBusAdapter` wraps `IModelHubPort` and expects bus envelope delivery. But no code in `k1/bus/` deserializes bus envelopes into `HubRequest`. The bus-to-ModelHub pipeline is broken.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.9.1 | Bus→ModelHub envelope deserializer | ✅ `k1/model_hub/adapters/bus_envelope_deserializer.py` — `BusEnvelopeDeserializer` subscribes to `TOPIC_HUB_EXECUTE` (`k1.model_hub.execute.v1`), deserializes JSON `Envelope.payload` → `HubRequest` via `deserialize_hub_request()`, dispatches to `LLMRequestBusAdapter.execute()`, serializes `HubResponse` back → `Envelope` on `TOPIC_HUB_RESPONSE`. Handles non-JSON drop, malformed JSON, bad HubRequest fields. Async dispatch via `run_coroutine_threadsafe`. Exported from `adapters/__init__.py`. |
+| I-0.5.9.2 | Bus→ModelHub round-trip test | ✅ `tests/k1/model_hub/test_bus_envelope_deserializer.py` — 18 tests: 7 deserialization unit tests (chat, tool_call, missing capability, empty trace_id, defaults, unknown capability, fallback payload), 2 serialization tests, 9 integration tests (subscribe/close lifecycle, non-JSON drop, malformed JSON drop, invalid HubRequest drop, full round-trip with LocalBus + background event loop, error resilience, response parent_id linking, topic constant verification). Full suite: 1036 passed, 0 failed. |
+
+### E-0.5.10: ModelHub→SessionState Stub Binding (🟡 Medium) ✅ DONE
+
+**Source:** ModelHub ARCHITECTURE.md §4 Connection #2
+**Problem:** `SessionStateReadAdapter` in ModelHub is a stub using in-memory `Dict[str, Any]`. No production binding to real SessionState. Reads `persona` + `control` sections but never connects to actual SS.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.10.1 | ModelHub SS production adapter | ✅ `k1/model_hub/adapters/session_state_prod.py` — `SessionStateProdAdapter` implements `IStateReadPort`, wraps `SessionStateManager`. Uses `to_dict()` for WARM/COLD sections and `get_metadata()` for HOT sections (control, task_state, etc.). SectionNotFoundError → omit; catastrophic error → empty StateSnapshot. MH-01 enforced (no writes). Lock-free, `__slots__`. |
+| I-0.5.10.2 | ModelHub SS adapter integration test | ✅ `tests/k1/model_hub/test_session_state_prod.py` — 16 tests across 7 classes: protocol conformance (3), persona read (2), control read (2), multi-section read (2), unknown sections (2), degraded mode (3), slot efficiency (2). Uses `SessionStateFactory.create_for_testing()` with real SS manager. Full suite: 1052 passed, 0 failed. |
+
+### E-0.5.11: SessionState Missing Production Adapters ✅ DONE
+
+**Source:** SessionState ARCHITECTURE.md §1.5
+**Problem:** 5 production adapters referenced in architecture diagrams do not exist: `BridgeStorageAdapter`, `DeltaBusAdapter`, `ConciergeWriterAdapter`, `FabricLifecycleAdapter`, `BridgeSyncAdapter`. These are needed for MS-2+ but should be stubbed now.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.11.1 | SS production adapter stubs (5) | ✅ Created 5 stub adapters in `k1/sessionstate/adapters/`: `bridge_storage.py` (BridgeStorageAdapter→IStoragePort), `delta_bus.py` (DeltaBusAdapter→IEventPort), `concierge_writer.py` (ConciergeWriterAdapter→IWriterPort), `fabric_lifecycle.py` (FabricLifecycleAdapter→ILifecyclePort), `bridge_sync.py` (BridgeSyncAdapter→IK0SyncPort). All methods raise `NotImplementedError` with blocking message referencing MS-2+. Properties return safe defaults. `__init__.py` updated to export all 10 adapters. |
+| I-0.5.11.2 | SS adapter stub tests | ✅ `tests/k1/sessionstate/test_production_adapter_stubs_0511.py` — 52 tests across 7 classes: per-adapter tests (instantiation, ABC isinstance, property defaults, NotImplementedError on all methods with message match), package export tests (2), slot efficiency tests (5). Full SS suite: 4116 passed, 0 failures. |
+
+### E-0.5.12: SessionState Two-Phase Construction Smell ✅ DONE
+
+**Source:** SessionState ARCHITECTURE.md §3.2
+**Problem:** `create_standalone()` and `create_for_testing()` use two-phase construction — manager created with `None` ports, then private attributes mutated. Fragile and error-prone.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.12.1 | Refactor SS factory to single-phase | ✅ Refactored `create_standalone()` and `create_for_testing()` to single-phase: adapters created unbound → manager constructed with ALL ports (never None) → `bind_manager()` sets back-references. Added `bind_manager()` to `DirectWriterAdapter` and `StandaloneLifecycle`. Fixed `create_with_ports()` latent bug: `_k0_sync_port` added to `__slots__` and constructor param. All 35 existing factory tests pass. |
+| I-0.5.12.2 | SS factory refactor tests | ✅ `tests/k1/sessionstate/test_single_phase_construction_0512.py` — 22 tests across 5 classes: no-None ports verification (6), DirectWriter bind_manager (4), StandaloneLifecycle bind_manager (4), single-phase end-to-end flow (8: correct binding, guard identity, start/stop, mutation). Full SS suite: 4138 passed, 0 regressions. |
+
+### E-0.5.13: Fabric Missing Production Adapters (✅ DONE)
+
+**Source:** Fabric ARCHITECTURE.md §1.4
+**Problem:** 3 ports lack production adapters: `IModelGatewayPort` (covered by E-0.5.2), `IPromptSystemPort`, `IDeltaBusPort`. `LocalEventAdapter` serves dual production/test role.
+
+| Issue | Title | Deliverable | Status |
+|-------|-------|-------------|--------|
+| I-0.5.13.1 | PromptSystem production adapter | `k1/fabric/adapters/prompt_system_prod.py` — implements `IPromptSystemPort`, loads prompt templates from configurable YAML directory. | ✅ DONE |
+| I-0.5.13.2 | DeltaBus production adapter | `k1/fabric/adapters/delta_bus_prod.py` — implements `IDeltaBusPort`, wraps IBus for delta emission with JSON serialization. | ✅ DONE |
+| I-0.5.13.3 | Separate production IEventPort adapter | `k1/fabric/adapters/event_port_prod.py` — dedicated production `IEventPort` adapter wrapping IBus. Removes dual-role from `LocalEventAdapter`. | ✅ DONE |
+
+**Resolution:** Created 3 production adapters + 54-test suite (`tests/k1/fabric/test_adapters_prod_510_512.py`). All satisfy port protocols via structural subtyping, are thread-safe (RLock), and use `__slots__`. Updated `k1/fabric/adapters/__init__.py` with 3 new exports (5.2.10, 5.2.11, 5.2.12). Existing 263 adapter tests pass with no regressions.
+
+### E-0.5.14: Fabric CapabilityRegistry Not Injectable (✅ DONE)
+
+**Source:** Fabric ARCHITECTURE.md §3.5 (SIM-GAP-48)
+**Problem:** `FabricFactory` always constructs `CapabilityRegistry` internally. There is no parameter to inject a pre-built registry. Per SIM-D-36, the registry should be shared across all per-session Fabric instances.
+
+| Issue | Title | Deliverable | Status |
+|-------|-------|-------------|--------|
+| I-0.5.14.1 | Add capability_registry param to FabricFactory | Added optional `capability_registry` param to `create_with_ports()` and `_construct_fabric()`. If provided, uses it; if None, creates new (backward-compatible). | ✅ DONE |
+| I-0.5.14.2 | FabricFactory shared-registry test | `tests/k1/fabric/test_capability_registry_injectable_0514.py` — 13 tests: backward-compat (6), shared registry cross-instance (7: identity, visibility, unregister, 3-instance, mixed, pre-populated). | ✅ DONE |
+
+**Resolution:** Added `capability_registry: Optional[Any] = None` param to `FabricFactory.create_with_ports()` and `_construct_fabric()`. Step 3 uses injected registry if provided, else creates new. 13 tests pass. 110 existing factory-consuming tests pass with no regressions (2 pre-existing perf flakes excluded).
+
+### E-0.5.15: Concierge Missing Observability Submodules (🟢 Low) ✅ DONE
+
+**Source:** Concierge ARCHITECTURE.md §10.3
+**Problem:** `obs/__init__.py` docstring references 6 submodules (`alerts`, `fsm_metrics`, `hitl_metrics`, `arbiter_metrics`, `weave_metrics`, `phase1_metrics`) that do not exist.
+**Resolution:** Created all 6 stub files with functional placeholder classes (AlertRule, AlertEngine, AlertEvent, FSMMetricsSubscriber, HITLMetricsSubscriber, ArbiterMetricsSubscriber, WeaveMetricsSubscriber, Phase1MetricsSubscriber). Updated `obs/__init__.py` with imports and `__all__` exports. 23 tests pass (`test_e0515_obs_stubs.py`).
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.15.1 | Create obs submodule stubs | ✅ Created 6 stub files in `k1/concierge/obs/` with placeholder classes matching the docstring references. Each stub has functional methods that emit metrics via MetricsCollector. |
+
+### E-0.5.16: Concierge POC Circuit Breakers Need HALF_OPEN (🟢 Low) ✅ DONE
+
+**Source:** Concierge ARCHITECTURE.md §9.3 — Degradation Cascade
+**Problem:** POC circuit breakers are simplified (open/closed only). Production needs HALF_OPEN + failure counting per `k1.fabric.circuit_breaker` pattern.
+**Resolution:** Replaced POC CircuitBreaker in `degradation.py` with 3-state (CLOSED/OPEN/HALF_OPEN) implementation using `CircuitBreakerState` from `k1.fabric.circuit_breaker`. Added sliding-window failure counting, automatic OPEN→HALF_OPEN transition after timeout, probe success/failure handling. Thread-safe via `threading.Lock`. Backward-compatible `is_open()`/`force_open()`/`force_closed()` preserved. 23 tests pass (`test_e0516_circuit_breakers.py`). 520 existing concierge tests pass.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.16.1 | Replace POC CBs with Fabric CBs | ✅ Replaced `k1/concierge/orchestrator/degradation.py` CircuitBreaker (was in `degradation.py`, not `orchestrator_stub.py` as originally referenced) with 3-state circuit breaker using `CircuitBreakerState` from `k1.fabric.circuit_breaker`. |
+| I-0.5.16.2 | CB state transition tests | ✅ Test: failure threshold → OPEN, timeout → HALF_OPEN, probe success → CLOSED, probe failure → OPEN. |
+
+### E-0.5.17: Bus Configuration Gaps (🟢 Low) ✅ DONE
+
+**Source:** Bus ARCHITECTURE.md §3.5
+**Problem:** No `K1_BUS_BACKEND` env var support. No YAML/JSON config loading. Hardcoded-only configuration.
+**Resolution:** Added `K1_BUS_BACKEND` env var override to `_resolve_backend()` in `k1/bus/factory.py` — case-insensitive, invalid values logged and ignored, empty/whitespace ignored. Created `k1/bus/config.py` with `BusConfig` frozen dataclass and `load_bus_config()` YAML loader. Created `k1/config/bus.yaml` with 18 timing rules matching hardcoded defaults. Fallback to `defaults.py` on missing file, invalid YAML, or missing PyYAML. Exported `BusConfig` + `load_bus_config` from `k1/bus/__init__.py`. 26 tests pass (`test_e0517_bus_config.py`). 604 existing bus tests pass with 0 regressions.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.17.1 | K1_BUS_BACKEND env var support | ✅ `_resolve_backend()` reads `K1_BUS_BACKEND` env var (highest priority). Valid values: `"auto"`, `"python"`, `"rust"` (case-insensitive). Invalid/empty values logged and ignored. 10 tests. |
+| I-0.5.17.2 | Bus config file support | ✅ `k1/bus/config.py` — `BusConfig` dataclass + `load_bus_config(path?)` loads `k1/config/bus.yaml`. Parses timing_rules + default_mode. Falls back to hardcoded defaults on missing file, bad YAML, or missing PyYAML. 16 tests. |
+
+### E-0.5.18: SessionState FlatBuffer Schema Drift (🟢 Low) ✅ DONE
+
+**Source:** SessionState ARCHITECTURE.md §2.5
+**Problem:** Generated FlatBuffers have 8 HOT + 4 WARM section types (12 total). Python code has 10 HOT + 5 WARM sections (15 total). The 3 additions (`task_state`, `task_artifacts`, `artifacts_warm`) were M4/M6 extensions without FlatBuffer schema updates.
+**Resolution:** Created 3 new `.fbs` schemas (`task_state_section.fbs`, `task_artifacts_section.fbs`, `artifacts_warm_section.fbs`) in `k1/contracts/flatbuffers/sessionstate/`. Updated `session_kernel.fbs` with new includes and HotCore/WarmTier fields. Generated 7 Python FlatBuffer classes (`TaskStatus.py`, `ArtifactType.py`, `TaskStateEntry.py`, `TaskArtifactEntry.py`, `TaskStateSection.py`, `TaskArtifactsSection.py`, `ArtifactsWarmSection.py`) in `k1/sessionstate/generated/flatbuffers/K1/SessionState/`. Updated `HotCore.py` and `WarmTier.py` with new section accessors + builder functions. Updated `__init__.py` with all new exports. 28 tests pass (`test_e0518_flatbuffer_drift.py`).
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.18.1 | Add missing FlatBuffer schemas | ✅ Created 3 `.fbs` schemas + 7 generated Python classes. Updated `session_kernel.fbs`, `HotCore.py`, `WarmTier.py`, and package `__init__.py`. Schema now covers all 15 sections (10 HOT + 5 WARM). |
+| I-0.5.18.2 | FlatBuffer round-trip tests for new sections | ✅ 28 tests across 6 classes: empty/populated round-trips for all 3 sections, field preservation, HOT→WARM demotion pipeline, schema drift verification (field counts, enum values, .fbs file existence). |
+
+### E-0.5.19: MemoryWriter Empty `__init__.py` (🟢 Low) ✅ COMPLETE
+
+**Source:** MemoryWriter ARCHITECTURE.md §10, §12 Gap G-5
+**Problem:** `module.contract.yaml` claims 25+ exports from `k1.memory_writer.__init__`. The file is empty. Any import from `k1.memory_writer` for types, ports, or services will fail.
+
+**Resolution (completed):**
+
+- Populated `k1/memory_writer/__init__.py` with 78 exports across all MW modules: types, ports, enums, config, events, adapters, pipeline, factory, service, and circuit breaker.
+- Full MW subsystem built through Phases 1–5 (E-MW-1.x through E-MW-5.x): types, invariants, config, context_assembly, place_resolver, pipeline stages, TurnDispatcher, Factory, Service, CircuitBreaker, 5 adapters (SessionRead, BridgeCommand, EventSubscription, ModelHub, Health), FabricRegistration.
+- 773 MW tests passing.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.19.1 | Populate MW `__init__.py` | ✅ 78 exports covering all types, ports, enums, config, events, adapters, pipeline, factory, service, and circuit breaker symbols. |
+
+### E-0.5.20: MemoryWriter Zero Test Coverage (🟢 Low) ✅ COMPLETE
+
+**Source:** MemoryWriter ARCHITECTURE.md §11
+**Problem:** Zero test files exist for memory_writer. Types, invariants, config, context_assembly, and place_resolver are all untested.
+
+**Resolution (completed):**
+
+- 773 MW tests across 20+ test files covering all MW modules:
+  - Phase 1 (E-MW-1.x): types, invariants (MW-01..MW-11), config, context_assembly, place_resolver, events
+  - Phase 2 (E-MW-2.x): pipeline stages (Extract, Transform, Validate, Emit), stage contracts
+  - Phase 3 (E-MW-3.x): TurnDispatcher, turn lifecycle, error handling
+  - Phase 4 (E-MW-4.x): Pipeline integration, Factory, Service, CircuitBreaker
+  - Phase 5 (E-MW-5.x): Production adapters (28 tests), test adapters (20 tests), CB tests (22 tests), FabricRegistration integration (18 tests)
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.20.1 | MW types + invariants tests | ✅ Full coverage: MemoryAtom, enums, frozen enforcement, all 11 invariant assertion helpers (MW-01..MW-11). |
+| I-0.5.20.2 | MW context_assembly + place_resolver tests | ✅ Full coverage: temporal/spatial resolution, exact/prefix match, slug generation, edge cases. |
+| I-0.5.20.3 | MW config + events tests | ✅ Full coverage: MWConfig construction, defaults, properties, event payload construction, topic constants. |
+
+### E-0.5.21: ConciergeFactory — Port-Injected Component Factory (🟡 Medium)
+
+**Source:** Concierge ARCHITECTURE.md §16, `k1_wiring_whiteboard.md` D-1..D-16, `k1_wiring_simulation.md` Step 3
+**Problem:** Concierge has NO `ConciergeFactory`. Bootstrap is hard-wired in `k1/concierge/kernel/bootstrap.py` — a 28-step monolith that creates its OWN Bus, SessionState, Fabric, ModelHub by importing `poc.k1_poc.main.boot()`. This violates the hexagonal boundary: **Concierge is NOT a kernel — it is a COMPONENT that receives 8 external ports from the kernel.** No `create(PortBundle)` pattern exists, blocking Tier 2 kernel bootstrap.
+
+**Existing infrastructure (Phase C1 ~85% done):**
+
+- `k1/concierge/ports.py` — all 8 external port Protocols: `IInputPort`, `IOutputPort`, `IClassificationPort` (=Phase1Pipeline), `ILLMPort` (=IModelHubPort), `IStatePort`, `IDispatchPort`, `IDeltaPort` (=IBus), `IMemoryPort`
+- `k1/concierge/adapters/` — 21 adapter files (7 test, 6 production, 5 null for two-tier boot, 3 support)
+- `tests/k1/concierge/test_c1_port_protocols.py` + `tests/k1/concierge/ports/` — port protocol compliance tests
+
+**Existing draft implementations (restored, ~60% of E-0.5.21 — imports clean ✅):**
+
+- `k1/concierge/config/kernel.py` (37 lines) — `KernelConfig` dataclass extracted from `bootstrap.py` to break circular import. Identical 14 fields. Zero dependencies. Factory imports from here.
+- `k1/concierge/factory.py` (497 lines) — `ConciergeFactory` class (instance-based, NOT static pattern yet). Has `create_session(**8 ports)` with 16-step wiring. Contains 3 internal adapter classes (`_FabricGatewayAdapter`, `_StateReadAdapter`, `_DeltaEmitAdapter`) already moved from bootstrap.py. 3 HITL callback helpers extracted.
+- `k1/concierge/session.py` (435 lines) — `ConciergeSession` lifecycle wrapper with `start()`/`stop()`/`inject()`. `_mailbox_consumer()`, `_tick_experience()`, `_build_experience_context()` already moved from bootstrap.py. Properties for fsm, bus, model, session_state, started, etc.
+
+**Gaps in restored drafts (still needed for E-0.5.21 completion):**
+
+- `PortBundle` frozen dataclass — factory takes 8 loose kwargs instead of a typed bundle
+- `ConciergeRuntime` dataclass — session.py uses `ConciergeSession` class (different approach: class vs dataclass)
+- `ConciergeConfig` frozen dataclass — uses `KernelConfig` directly (works but not the clean separation planned)
+- Static factory pattern (OrchestratorFactory convention) — current is instance-based factory
+- `create_standalone()` / `create_for_testing(overrides)` / `create_with_ports()` — only `create_session()` exists
+- `_ALL_PORT_KEYS` frozenset validation — missing
+- No tests — zero test files exist
+- `from k1.concierge.kernel.bootstrap import _build_delta_applicator` — circular dependency (factory imports from the thing it replaces)
+
+**Convention to follow: `k1/orchestrator/factory.py` (OrchestratorFactory)**
+
+- Static methods only, NO constructor (raises `TypeError` if instantiated)
+- 4 public methods: `create_standalone()`, `create_for_testing(overrides)`, `create_with_ports(**ports)`, `create_production(config)`
+- Private `_construct_concierge(config, adapters)` does all N-step wiring (numbered steps, explicit injection)
+- Private `_build_test_adapters()` returns dict of all port→mock-adapter mappings
+- `_ALL_PORT_KEYS` frozenset for upfront validation of required adapter keys
+- Design: NO service locator, NO default args silently used, every dependency visible
+
+**Precise bootstrap→factory decomposition (from `k1/concierge/kernel/bootstrap.py` L62→L380):**
+
+The existing `start_kernel()` does 28 steps. The factory takes ownership of steps that wire Concierge internals (Layers 1-5). Steps that create INFRASTRUCTURE (Bus, SessionState, ModelHub, Fabric, CapabilityRegistry) stay in `start_kernel()` — those are the KERNEL's job, NOT the component factory's.
+
+```
+STAYS IN start_kernel()                    MOVES TO ConciergeFactory
+────────────────────────                   ──────────────────────────
+boot() → bus, router, adapter,             Layer 1 (Sync): LedgerStore, LedgerWriter
+  front_mailbox, back_mailbox              Layer 2 (Sync): ConciergeController(bus, router)
+_create_model(cfg) → model                 Layer 2 (Sync): Phase1Pipeline wiring → fsm._phase1_pipeline
+_create_session_state(cfg) → ss            Layer 2 (Sync): fsm.set_ledger(), set_history_sink(),
+_create_capability_registry() → registry                    set_session_state()
+_create_fabric(registry) → fabric          Layer 3 (Sync): 2× ToolContext (front_ctx, back_ctx)
+_build_recall_fn(cfg) → recall_fn          Layer 3 (Sync): front_dispatcher, back_dispatcher
+                                           Layer 4 (Async): ExperienceLayer, DeltaAggregator/Applicator,
+                                             HILCoordinator (3 bus callbacks), WeaveBatcher,
+                                             WeavePolicy, UserActivityTracker, DeadLetterConsumer,
+                                             OrchestratorStub (3 internal adapters)
+                                           Layer 4 (Async): 10 FSM setters (set_hitl_coordinator,
+                                             set_weave_batcher, set_weave_policy,
+                                             set_activity_tracker, set_orchestrator)
+                                           Layer 5 (Async): subscribe_front_events(), consumer task
+```
+
+**ConciergeConfig fields (extracted from `KernelConfig` L62-82, only Concierge-relevant):**
+
+```python
+@dataclass(frozen=True)
+class ConciergeConfig:
+    tool_tier: str = "LOW"                    # from KernelConfig.tool_tier — dispatchers use this
+    enable_experience: bool = True            # from KernelConfig.enable_experience
+    enable_delta: bool = True                 # from KernelConfig.enable_delta
+    enable_hitl: bool = True                  # from KernelConfig.enable_hitl
+    enable_orchestrator: bool = True          # from KernelConfig.enable_orchestrator
+    auto_start_consumer: bool = True          # from KernelConfig.auto_start_consumer
+    enable_ledger: bool = True                # from KernelConfig.enable_ledger
+    enable_dead_letter_consumer: bool = True  # from KernelConfig.enable_dead_letter_consumer
+    session_id: str | None = None             # from KernelConfig.session_id — ledger uses this
+    seed_memories: list = field(default_factory=list)  # from KernelConfig.seed_memories
+    phase1_pipeline: str = "stub"             # from get_config().phase1.pipeline (config/loader.py)
+    phase1_warmup: bool = False               # from get_config().phase1.warmup_on_startup
+    delta_batch_window_ms: int = 100          # from get_config().delta.batch_window_ms
+    dead_letter_enabled: bool = False         # from get_config().fsm.dead_letter_enabled
+    # EXCLUDED: ordered_bus, capture_bus, test_mode, session_mode — these are kernel/infra concerns
+```
+
+**PortBundle fields (mapped from ports.py 8 Protocols + bootstrap.py actual usage):**
+
+```python
+@dataclass(frozen=True)
+class PortBundle:
+    # REQUIRED — factory raises if None
+    delta: IDeltaPort          # IBus — used for publish/subscribe (bus in bootstrap.py L125)
+    input_: IInputPort         # Wraps front_mailbox (bootstrap.py L129)
+    output: IOutputPort        # Wraps bus.publish for response emission
+    state: IStatePort          # SessionState duck-type (bootstrap.py L181, session_state)
+    llm: ILLMPort              # IModelHubPort (bootstrap.py L131, model)
+    # OPTIONAL — default to null adapters (two-tier boot)
+    classification: IClassificationPort | None = None  # Phase1Pipeline (bootstrap.py L155-168)
+    dispatch: IDispatchPort | None = None              # Fabric+Orchestrator (bootstrap.py L199)
+    memory: IMemoryPort | None = None                  # recall_fn closure (bootstrap.py L186)
+```
+
+**ConciergeRuntime fields (mapped from `KernelRuntime` L84-116, Concierge-owned subset):**
+
+```python
+@dataclass
+class ConciergeRuntime:
+    config: ConciergeConfig
+    fsm: ConciergeController                     # from KernelRuntime.fsm
+    front_dispatcher: Any                         # from KernelRuntime.front_dispatcher
+    back_dispatcher: Any                          # from KernelRuntime.back_dispatcher
+    front_ctx: ToolContext                        # NOT in KernelRuntime — new, exposed for session scoping
+    back_ctx: ToolContext                          # NOT in KernelRuntime — new, exposed for session scoping
+    # Optional subsystems (created in Layer 4, gated by ConciergeConfig flags)
+    experience_layer: ExperienceLayer | None = None       # from KernelRuntime.experience_layer
+    delta_aggregator: DeltaAggregator | None = None       # from KernelRuntime.delta_aggregator
+    delta_applicator: Any | None = None                   # from KernelRuntime.delta_applicator
+    hitl_coordinator: HILCoordinator | None = None        # from KernelRuntime.hitl_coordinator
+    orchestrator: OrchestratorStub | None = None          # from KernelRuntime.orchestrator
+    weave_batcher: WeaveBatcher | None = None             # in KernelRuntime as dynamic attr
+    weave_policy: WeavePolicy | None = None               # in KernelRuntime as dynamic attr
+    activity_tracker: UserActivityTracker | None = None   # in KernelRuntime as dynamic attr
+    dead_letter_consumer: DeadLetterConsumer | None = None # from KernelRuntime.dead_letter_consumer
+    ledger: LedgerWriter | None = None                    # from KernelRuntime.ledger
+    ledger_store: InMemoryLedgerStore | None = None       # from KernelRuntime.ledger_store
+    # Lifecycle state
+    front_subscriptions: list[Any] = field(default_factory=list)  # from KernelRuntime.front_subscriptions
+    consumer_task: asyncio.Task | None = None                     # from KernelRuntime.consumer_task
+    started: bool = False                                         # from KernelRuntime.started
+    # Injected refs (needed for lifecycle but NOT owned)
+    _bus_ref: IDeltaPort | None = field(default=None, repr=False)       # back-ref for stop() teardown
+    _state_ref: IStatePort | None = field(default=None, repr=False)     # back-ref for stop() teardown
+```
+
+**3 internal adapter classes that MOVE from bootstrap.py → factory.py (bootstrap.py L900-1100):**
+
+```python
+class _FabricGatewayAdapter:
+    """Translates POC CapabilityRequest ↔ K1 CapabilityRequest for OrchestratorStub.
+    Constructor: __init__(self, fabric_instance: IFabricPort)
+    Method: async execute(k1_request) → K1 CapabilityResult
+    Used by: OrchestratorStub(fabric_gateway=_FabricGatewayAdapter(fabric))"""
+
+class _StateReadAdapter:
+    """Wraps SessionState for OrchestratorStub read surface.
+    Constructor: __init__(self, session_state: IStatePort)
+    Methods: get_snapshot() → dict, read_section(name) → Any
+    Used by: OrchestratorStub(state_read=_StateReadAdapter(ss))"""
+
+class _DeltaEmitAdapter:
+    """Routes deltas to DeltaAggregator, non-deltas to bus.
+    Constructor: __init__(self, aggregator: DeltaAggregator | None, bus: IDeltaPort)
+    Method: async emit(envelope) → None
+    Used by: OrchestratorStub(delta_emit=_DeltaEmitAdapter(aggregator, bus))"""
+```
+
+**`_construct_concierge()` exact 15-step wiring (mirrors OrchestratorFactory._construct_orchestrator pattern):**
+
+```
+Step 1:  Validate PortBundle — assert 5 required ports non-None, default 3 optional to null adapters
+Step 2:  Create LedgerStore + LedgerWriter (if config.enable_ledger, session_id from config)
+Step 3:  Create ConciergeController(bus=ports.delta, router=<IMailboxRouter from ports.input_>)
+Step 4:  Wire Phase1Pipeline: if config.phase1_pipeline=="ultrabert", create UltraBERTPhase1Pipeline
+           else use StubPhase1Pipeline. Set fsm._phase1_pipeline.
+           If ports.classification provided, use that instead.
+Step 5:  Wire fsm.set_ledger(ledger_writer)
+Step 6:  Wire fsm.set_history_sink(ports.state.get_section("history_active"))
+Step 7:  Wire fsm.set_session_state(ports.state)
+Step 8:  Extract _writer_port = getattr(ports.state, "_writer_port", None)
+Step 9:  Build recall_fn from ports.memory (or _build_recall_fn(config.seed_memories))
+Step 10: Create front_ctx = ToolContext(session_manager=ports.state, actor="front",
+           recall_fn=recall_fn, fabric_port=ports.dispatch, writer_port=_writer_port)
+Step 11: Create back_ctx = ToolContext(session_manager=ports.state, actor="back",
+           recall_fn=recall_fn, fabric_port=ports.dispatch, writer_port=_writer_port)
+Step 12: Create front_dispatcher = create_front_dispatcher(tier=config.tool_tier, ctx=front_ctx, bus=ports.delta)
+Step 13: Create back_dispatcher = create_back_dispatcher(tier=config.tool_tier, ctx=back_ctx, bus=ports.delta)
+Step 14: Construct ConciergeRuntime with all sync-created fields
+Step 15: Return runtime (NOT started — caller must await runtime.start())
+```
+
+**`ConciergeRuntime.start()` exact 10-step async wiring (bootstrap.py L245-370):**
+
+```
+Step 1: If config.enable_experience → runtime.experience_layer = ExperienceLayer()
+Step 2: If config.enable_delta → create DeltaAggregator + _build_delta_applicator(state, bus)
+Step 3: If config.enable_hitl → create HILCoordinator with 3 bus callbacks
+          (_on_suspended → build_task_suspended → bus.publish,
+           _on_resume → build_task_resume → bus.publish,
+           _on_timeout → build_task_failed → bus.publish)
+          → fsm.set_hitl_coordinator(coordinator)
+Step 4: Create WeaveBatcher(flush_fn) → fsm.set_weave_batcher(batcher)
+Step 5: Create WeavePolicy() → fsm.set_weave_policy(policy)
+Step 6: Create UserActivityTracker() → fsm.set_activity_tracker(tracker)
+Step 7: If config.enable_dead_letter_consumer && config.dead_letter_enabled
+          → DeadLetterConsumer(bus=self._bus_ref)
+Step 8: If config.enable_orchestrator → OrchestratorStub(
+          fabric_gateway=_FabricGatewayAdapter(ports.dispatch),
+          state_read=_StateReadAdapter(ports.state),
+          delta_emit=_DeltaEmitAdapter(aggregator, bus))
+          → fsm.set_orchestrator(orchestrator)
+Step 9: subscribe_front_events(bus, _route_front_subscription) → store handles
+Step 10: If config.auto_start_consumer → asyncio.create_task(_mailbox_consumer(runtime))
+          → self.started = True
+```
+
+**`ConciergeRuntime.stop()` exact 7-step teardown (bootstrap.py L370-420):**
+
+```
+Step 1: Cancel consumer_task (if running)
+Step 2: Flush ledger (if enabled)
+Step 3: Log dead-letter summary (if dead_letter_consumer active)
+Step 4: Flush delta_aggregator (if enabled)
+Step 5: fsm.teardown()
+Step 6: Close session_state via _state_ref (if set)
+Step 7: Close model via _llm_ref (if set) — self.started = False
+```
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.21.1 | `PortBundle` + `ConciergeRuntime` + `ConciergeConfig` dataclasses | ✅ `ConciergeConfig` frozen dataclass (12 fields), `PortBundle` frozen dataclass (5 required + 3 optional ports), `@classmethod` factory pattern per SIM-D-09. In `k1/concierge/factory.py` (~850 lines). |
+| I-0.5.21.2 | `ConciergeFactory` static class + `_construct_concierge()` 16-step sync wiring | ✅ `ConciergeFactory` @classmethod pattern: `create_standalone()`, `create_for_testing(overrides)`, `create_with_ports(**8 ports)`, `_construct_concierge()` 16-step wiring. 3 internal adapters, `_build_delta_applicator` inlined, `_seed_minimal_state()`, `_build_test_adapters()`, `_ALL_PORT_KEYS` frozenset. |
+| I-0.5.21.3 | `ConciergeRuntime.start()` / `.stop()` async lifecycle | ✅ Already aligned in `session.py`. Lifecycle verified: `start()` creates consumer task, `stop()` 7-step teardown. No changes needed — session.py already correct. |
+| I-0.5.21.4 | Bridge `start_kernel()` → `ConciergeFactory` | ✅ `bootstrap.py` imports `KernelConfig` from `config.kernel` (single source). 4 symbols re-exported from `factory.py` for backward compat: `_FabricGatewayAdapter`, `_StateReadAdapter`, `_DeltaEmitAdapter`, `_build_delta_applicator`. All 3036 existing tests pass unchanged. |
+| I-0.5.21.5 | ConciergeFactory integration tests | ✅ `tests/k1/concierge/test_concierge_factory.py` — 52 tests across 11 classes: TestCreateStandalone, TestCreateForTesting, TestCreateWithPorts, TestLifecycle, TestPortBundle, TestConfigFlagGating, TestWiringVerification, TestToolContextWiring, TestNoInstantiation, TestConciergeConfig, TestBackwardCompatExports. All passing. |
+
+### E-0.5.22: MemoryWriter No Factory (🟡 Medium) — ⏭️ SKIPPED
+
+**Source:** MemoryWriter ARCHITECTURE.md §10, §12 Gap G-3
+**Problem:** No `MemoryWriterFactory`. `__init__.py` is empty. Cannot be instantiated by Tier 2 bootstrap.
+**Resolution:** Skipped — memory writer module is complete end-to-end. Factory pattern not needed at this stage.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.22.1 | MemoryWriterFactory skeleton | ⏭️ Skipped (memory writer complete end-to-end) |
+| I-0.5.22.2 | MemoryWriterFactory wiring tests | ⏭️ Skipped (memory writer complete end-to-end) |
+
+### E-0.5.23: Concierge 6 Unregistered Event Types (🔴 Critical)
+
+**Source:** Concierge ARCHITECTURE.md §16.1 Gap G-3
+**Problem:** 6 event types are defined as classes but NOT registered in `EVENT_TYPE_REGISTRY` (`k1/concierge/events/registry.py`). `deserialize_event()` will fail silently for these types — any bus replay, ledger replay, or delta deserialization involving them produces `None`. This is a **runtime bug**.
+
+**Missing registrations:**
+
+- `Phase1Classified` (`k1.phase1.classified.v1`) — from `events/conversation.py`, M10 E10.3.4
+- `TaskRouted` (`k1.task.routed.v1`) — from `events/conversation.py`, M10 E10.3.4
+- `HITLRequestedEvent` — from `events/hitl.py`, M6 lifecycle
+- `HITLResolvedEvent` — from `events/hitl.py`, M6 lifecycle
+- `HITLTimedOutEvent` — from `events/hitl.py`, M6 lifecycle
+- `HITLBlockedRedEvent` — from `events/hitl.py`, M6 lifecycle
+
+**Note:** `Phase1Classified` and `TaskRouted` also lack `from_payload()` overrides — base class `from_payload()` will lose domain-specific fields.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.23.1 | Register 6 missing event types in EVENT_TYPE_REGISTRY | ✅ Added 6 imports + 6 registry entries to `registry.py` (32 total). Added `from_payload()` to `Phase1Classified` (8 domain fields) and `TaskRouted` (3 domain fields) in `conversation.py`. HITL events already had `from_payload()`. Round-trip verified. |
+| I-0.5.23.2 | Event registry completeness test | ✅ `tests/k1/concierge/test_event_registry_completeness.py` — 25 tests: `__subclasses__()` recursive completeness check, no duplicates, round-trip tests for all 6 types (type assertion, domain field preservation, double-roundtrip idempotence), edge cases (unknown/missing/empty event_type). Also updated `test_m01_event_validator.py` ALL_EVENT_CLASSES to include 6 new types. 3113 total concierge tests passing. |
+
+### E-0.5.24: Concierge Kernel Bootstrap Zero Tests (🔴 Critical) ✅ COMPLETE
+
+**Source:** Concierge ARCHITECTURE.md §16.1 Gap G-1
+**Problem:** `k1/concierge/kernel/bootstrap.py` (32-step `start_kernel()`) and `k1/concierge/kernel/runner.py` (CLI entry point) have ZERO test coverage. This is the single most critical untested code path in K1 — every wiring error only surfaces at runtime. The factory (E-0.5.21) will eventually replace `start_kernel()`, but the existing bootstrap must be tested to validate the bridge from old → new.
+
+**Resolution:** 68 tests across 2 files. Bootstrap smoke (48 tests): runtime fields populated, stop lifecycle, FSM wiring (ledger, session_state, hitl_coordinator, weave_batcher, weave_policy, activity_tracker, orchestrator), subsystem gating (5 disable flags), bus subscriptions, consumer task, session ID, model creation, KernelRuntime/KernelConfig field inventory. Runner CLI (20 tests):_parse_args defaults/explicit/invalid, config construction,_run lifecycle mock, signal handler registration. 3181 total concierge tests passing.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.24.1 | Bootstrap smoke test | ✅ `tests/k1/concierge/test_bootstrap_smoke.py` — 48 tests across 10 classes: TestBootstrapSmoke (14 runtime field assertions), TestStopKernel (3: started→false, idempotent, consumer cancel), TestFSMWiring (7: ledger, session_state, hitl_coordinator, weave_batcher, weave_policy, activity_tracker, orchestrator), TestSubsystemGating (8: enabled + 5 disable flags), TestBusSubscriptions (2), TestConsumerTask (2), TestSessionID (2: auto + custom), TestModelCreation (1), TestKernelRuntimeFields (2), TestKernelConfigDefaults (7). |
+| I-0.5.24.2 | Bootstrap port wiring verification | ✅ Covered in TestFSMWiring (7 tests verifying FSM internal attributes: _ledger,_task_bridge,_hil_coordinator,_weave_batcher,_weave_policy,_activity_tracker,_orchestrator) + TestSubsystemGating (5 disable-flag tests). |
+| I-0.5.24.3 | Runner CLI test | ✅ `tests/k1/concierge/test_runner_cli.py` — 20 tests across 6 classes: TestParseArgsDefaults (5), TestParseArgsExplicit (7: individual flags + combined), TestParseArgsInvalid (3: invalid session_mode/tool_tier/log_level), TestConfigFromArgs (2), TestRunLifecycle (2: start/stop mock, config passthrough), TestSignalHandling (1: SIGINT + SIGTERM registered). |
+
+### E-0.5.25: Concierge Orchestrator Subsystem Untested (🔴 Critical)
+
+**Source:** Concierge ARCHITECTURE.md §16.1 Gap G-2
+**Problem:** All 6 files in `k1/concierge/orchestrator/` (degradation, interfaces, ports, routing, stub, types) have ZERO test coverage. `OrchestratorStub` is the gateway for MED/HIGH tier task execution — it bridges Concierge to K1 Fabric/Orchestrator. Untested routing logic means tier misroutes go undetected.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.25.1 | OrchestratorStub + routing tests | ✅ `tests/k1/concierge/test_orchestrator_stub.py` — 40 tests across 7 classes: TestHandleTask (10: 6-step flow, fabric execution, delta emit acceptance/completion, snapshot read, trace_id, step_results, fabric failure), TestHandleMultiStep (5: two caps, single, budget exceeded, emit events, partial failure), TestBudgetEnforcement (3: within budget, error fields, 1-call limit), TestStructuralInvariants (5: ORCH-01..04, port protocol compliance), TestRouteTaskSync (5: LOW/MEDIUM/HIGH dispatch records, budget, planner tokens), TestRouteTaskAsync (3: LOW emit_fn, MEDIUM dispatch_fn, no emit_fn ok), TestDispatchRecord (2: defaults, tier budget constants). |
+| I-0.5.25.2 | Orchestrator degradation + interfaces tests | ✅ `tests/k1/concierge/test_orchestrator_stub.py` TestDegradationCascade (7 tests: no degradation all closed, HIGH→MEDIUM, MEDIUM→LOW, LOW→None, full cascade HIGH→None, canned response on CB open, normal dispatch record). `tests/k1/concierge/test_orchestrator_types.py` TestPortProtocols (7: runtime-checkable, count, separate core ports, execute/snapshot/emit/dispatch_envelope members), TestABCInterfaces (3: ABC subclasses, not instantiable, count), TestHighTierEvents (4: dict, count≥6, string values, k1. naming). |
+| I-0.5.25.3 | Orchestrator type conformance tests | ✅ `tests/k1/concierge/test_orchestrator_types.py` — 59 tests across 13 classes: TestBudget (5: defaults, frozen, negative rejected ×2, custom), TestTaskEnvelope (6: construction, empty intent, LOW rejected, frozen, HIGH accepted, custom fields), TestCapabilityRequest (3: construction, empty name, frozen), TestCapabilityResult (3: success, failure, frozen), TestStepResult (4: construction, to_dict, failed status, frozen), TestAggregatedResult (7: basic, from_medium success/failure, from_multi_step success/mixed, to_dict, frozen), TestCannedResponse (3: defaults, custom, frozen), TestPlanRequest (3: construction, empty intent, frozen), TestPlanStep (5: construction, empty step_id/capability, to_dict, frozen), TestCommittedPlan (6: construction, empty plan_id/request_id, cycle detected, no cycle ok, frozen). |
+
+### E-0.5.26: Concierge OPP Primitives Test Coverage (🟡 Medium)
+
+**Source:** Concierge ARCHITECTURE.md §16.2 Risks R-5, R-6, R-7
+**Problem:** Three OPP (Orchestral Prompt Protocol) primitives have zero test coverage:
+
+- **R-5:** `TrustAccumulator` (OPP-4) — auto-approve logic (≥0.85 trust AND ≤0.5 risk). Incorrect trust scores could auto-approve dangerous operations.
+- **R-6:** `EpisodicCompressor` (OPP-6) — wired via `on_pre_prompt_build`. Incorrect compression could drop important context.
+- **R-7:** `DynamicIdentityContext` (OPP-7) — computes per-turn identity snapshots for prompt injection.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.26.1 | TrustAccumulator tests | ✅ `tests/k1/concierge/test_trust_accumulator.py` — 40 tests across 7 classes: TestInitialState (5: default trust, zero interactions, custom initial, config defaults), TestRecordOutcome (8: all 6 event types + unknown + interaction count), TestTrustClamping (4: clamped max/min, repeated approvals/rejections), TestShouldAutoApprove (9: boundary 0.84/0.85/0.86 × low/medium/high risk, default risk, max/zero trust, custom threshold), TestDynamicMaxRounds (7: default/high/very-high/low/mid trust, exactly 0.9/0.2 boundaries), TestSnapshotRestore (4: fields, round-trip recovery, auto_approvals counted, last_event_ns), TestAccumulationSequences (4: gradual buildup to 0.85, erosion, mixed sequence, timeout preserves). |
+| I-0.5.26.2 | EpisodicCompressor tests | ✅ `tests/k1/concierge/test_episodic_compressor.py` — 38 tests across 7 classes: TestCompressionConfig (3: strategy constants, default config, custom config), TestShouldCompress (5: below/at/above threshold, zero turns, custom threshold), TestIdentifyCompressible (6: empty, fewer than window, segment grouping, HITL preservation, safety preservation, recent window intact), TestCompressSegment (10: basic, custom id, empty, key_facts extraction, string/dict entities, facts cap ≤5, topic from intent, default topic, compression count), TestCompressAll (4: below threshold, above threshold, episode count, empty), TestCompressedEpisode (5: to_prompt_block structure, no topic, no facts, token_estimate, compressed_at_ns), TestBuildCompressedContext (5: episodes+recent, empty episodes, empty recent, both empty, truncation). |
+| I-0.5.26.3 | DynamicIdentityContext tests | ✅ `tests/k1/concierge/test_dynamic_identity.py` — 53 tests across 9 classes: TestInitialState (4: zero turns, empty expertise, config defaults, role constants), TestCompute (4: returns snapshot, user fields, turn count, relationship turns), TestRoleSelection (8: crisis→SUPPORTER, low→SUPPORTER, HIGH→EXPERT, inflight→EXECUTOR, early→GUIDE, >10→PEER, crisis overrides HIGH, HIGH overrides inflight), TestRoleAdaptationDisabled (2: always default, custom default), TestDomainExpertise (7: accumulates, capped at 1.0, multiple domains, no domain, tracking disabled, in snapshot, snapshot is copy), TestFormalityDrift (5: early formal, mid decrease, late casual, floor ≥0.2, disabled), TestEmotionalAttunement (6: crisis/low/neutral/positive/elevated/unknown bands), TestContextTags (5: multitasking, extended_session, domain, returning_topic, baseline), TestToPromptBlock (12: header/footer, user name present/absent, role, expertise, formal/casual/balanced register, attunement present/absent, tags present/absent). |
+
+### E-0.5.27: Concierge InMemoryLedgerStore Production Path (🟡 Medium — Defer Candidate)
+
+**Source:** Concierge ARCHITECTURE.md §16.2 Risk R-2
+**Problem:** `InMemoryLedgerStore` is the only implementation. Thread-safe but not persistent — crash recovery works within process but data lost on restart. `_find_existing_seq()` is O(n). No `SqliteLedgerStore` exists. This is acceptable for MS-0.5 but needs a persistent path before MS-2.
+
+**Recommendation:** Defer to MS-1 or MS-2. Document the gap. Add `SqliteLedgerStore` when Bridge persistence (MS-2) is built.
+
+| Issue | Title | Deliverable |
+|-------|-------|-------------|
+| I-0.5.27.1 | LedgerStore persistence interface + test | Add `ILedgerStore.flush()` and `ILedgerStore.load()` to the Protocol (with default no-op implementations for backward compat). Add performance regression test for `_find_existing_seq()` at 10K events to document O(n) baseline. |
+
+---
+
+**MS-0.5 Summary:**
+
+| Severity | Epics | Issues |
+|----------|-------|--------|
+| 🔴 Critical | 6 (E-0.5.1, E-0.5.2, E-0.5.3, E-0.5.23, E-0.5.24, E-0.5.25) | 16 |
+| 🟡 Medium | 13 (E-0.5.4–E-0.5.14, E-0.5.21, E-0.5.22, E-0.5.26, E-0.5.27) | 35 |
+| 🟢 Low | 8 (E-0.5.15–E-0.5.20) | 11 |
+| **TOTAL** | **27 epics** | **62 issues** |
+
+**Execution order:** 🔴 Critical first (E-0.5.1→E-0.5.3, then E-0.5.23→E-0.5.25), then 🟡 Medium (E-0.5.4→E-0.5.14, E-0.5.21→E-0.5.22, E-0.5.26→E-0.5.27), then 🟢 Low (E-0.5.15→E-0.5.20).
+
+**Concierge-specific execution order (recommended):**
+
+1. **E-0.5.23** (G-3: event registry — 10 min runtime bug fix, unblocks ledger/delta replay)
+2. **E-0.5.21** (ConciergeFactory — the big one, 5 issues, creates the component factory)
+3. **E-0.5.24** (G-1: bootstrap tests — validates old→new bridge from E-0.5.21.4)
+4. **E-0.5.25** (G-2: orchestrator tests — validates tier routing through factory)
+5. **E-0.5.26** (R-5/R-6/R-7: OPP primitives — lower risk, but needed before MS-1)
+6. **E-0.5.27** (R-2: ledger persistence — defer candidate to MS-2)
+
+---
+
 ## MS-1: Concierge + MemoryWriter Hexagonal Completion
 
 **Goal:** Both remaining components get factories, session wrappers, and full adapter coverage.
 **Gating:** `ConciergeFactory.create_session()` and `MemoryWriterFactory.create_session()` return working instances.
 
-### E-1.1: ConciergeFactory + Session (4 issues)
+### E-1.1: ConciergeFactory Hardening + ConciergeSession Wrapper (4 issues)
+
+**Dependency:** E-0.5.21 (factory skeleton + runtime lifecycle), E-0.5.23 (event registry), E-0.5.24 (bootstrap tests)
+**Note:** E-0.5.21 delivers `ConciergeFactory.create_*()` + `ConciergeRuntime.start()/stop()`. MS-1 E-1.1 hardens the factory with `ConciergeSession` (per-request scope), config extraction, and stress tests.
+
+**What `session.py` does (based on codebase analysis):**
+
+The current `bootstrap.py` creates 2× `ToolContext` at boot time (front_ctx, back_ctx) with FIXED `cognitive_trace_id` values (e.g., `k-front-abcdef`). In production, each user REQUEST needs its own trace ID, writer_port scope, and potentially device-specific context. `ConciergeSession` wraps `ConciergeRuntime` to provide per-request scoping:
+
+```python
+# k1/concierge/session.py
+@dataclass
+class ConciergeSession:
+    """Per-request scope wrapper around ConciergeRuntime.
+
+    Created by: ConciergeFactory.create_session(runtime, request_ctx)
+    Lifetime: one user turn (request → response)
+    """
+    runtime: ConciergeRuntime              # Shared long-lived runtime
+    trace_id: str                          # Per-request cognitive_trace_id (uuid per turn)
+    front_ctx: ToolContext                  # Scoped copy: runtime.front_ctx with overridden trace_id
+    back_ctx: ToolContext                   # Scoped copy: runtime.back_ctx with overridden trace_id
+    active_device_id: str | None = None    # Per-request device (from ToolContext.active_device_id)
+    active_task_id: str | None = None      # Per-request task (from ToolContext.active_task_id)
+
+    def inject(self, *, hitl_coordinator=None, dispatch=None, memory=None) -> None:
+        """Late-bind optional ports into this session's ToolContext.
+        Maps to ToolContext fields: hil_coordinator, fabric_port, recall_fn.
+        Used for two-tier boot: kernel creates session, then injects real ports."""
+
+    async def close(self) -> None:
+        """Cleanup per-request state. Does NOT stop the runtime."""
+```
+
+**Scoped ToolContext creation (from `ToolContext` 11 fields in `k1/concierge/tools/implementations.py` L57):**
+
+```python
+# Per-request ToolContext is a shallow copy of runtime.front_ctx / back_ctx with overrides:
+ToolContext(
+    session_manager=runtime.front_ctx.session_manager,   # SHARED — same SessionState
+    cognitive_trace_id=request_trace_id,                  # SCOPED — new uuid per request
+    actor=runtime.front_ctx.actor,                        # SHARED — "front" or "back"
+    writer_port=runtime.front_ctx.writer_port,            # SHARED — same MutationRequest port
+    bundle_idempotency_cache={},                          # SCOPED — fresh dict per request
+    active_device_id=request_device_id,                   # SCOPED — from request metadata
+    hil_coordinator=runtime.front_ctx.hil_coordinator,    # SHARED (or injected via inject())
+    active_task_id=request_task_id,                       # SCOPED — from request metadata
+    fabric_port=runtime.front_ctx.fabric_port,            # SHARED (or injected via inject())
+    recall_fn=runtime.front_ctx.recall_fn,                # SHARED (or injected via inject())
+    capability_cache=None,                                # SCOPED — fresh per request
+)
+```
 
 | Issue | Title | Deliverable |
 |-------|-------|-------------|
-| I-1.1.1 | ConciergeFactory skeleton | `k1/concierge/factory.py` — `create_session(8 ports) → ConciergeSession`. Wires FSM, dispatchers, experience, delta, HITL. Pattern matches OrchestratorFactory. |
-| I-1.1.2 | ConciergeSession lifecycle | `k1/concierge/session.py` — `start()`, `stop()`, `inject()`. Consumer loop, teardown, flush. |
-| I-1.1.3 | ConciergeConfig extraction | `k1/concierge/config/concierge.py` — frozen dataclass. `from_legacy(KernelConfig)`. `with_overrides()` for tests. |
-| I-1.1.4 | ConciergeFactory tests | Unit tests: factory wiring, session start/stop, port injection, config override. |
+| I-1.1.1 | `ConciergeSession` per-request wrapper | `k1/concierge/session.py` — `ConciergeSession` dataclass wrapping `ConciergeRuntime`. Creates scoped `ToolContext` copies (overrides `cognitive_trace_id`, `bundle_idempotency_cache`, `active_device_id`, `active_task_id`, `capability_cache` per request; shares `session_manager`, `writer_port`, `actor`, `fabric_port`, `recall_fn`, `hil_coordinator`). `inject()` method for late-binding optional ports (`hil_coordinator`, `fabric_port`/`dispatch`, `recall_fn`/`memory`). `close()` for per-request cleanup. Add `ConciergeFactory.create_session(runtime, *, trace_id, device_id, task_id)` static method. |
+| I-1.1.2 | `ConciergeConfig` extraction from `KernelConfig` | `k1/concierge/config/concierge.py` — move `ConciergeConfig` from `factory.py` to dedicated config module. Add `from_legacy(kc: KernelConfig)` classmethod (maps 10 KernelConfig fields + reads 4 fields from `get_config()` loader). Add `with_overrides(**kwargs)` for test flexibility (returns new frozen instance with overrides). Add `from_dict(d: dict)` classmethod. Validate: `tool_tier` in `{"LOW","MED","HIGH"}`, `delta_batch_window_ms > 0`, `phase1_pipeline` in `{"stub","ultrabert"}`. |
+| I-1.1.3 | Factory stress tests | `tests/k1/concierge/test_concierge_factory_stress.py` — (a) Concurrent session creation: 10 `ConciergeSession` from same `ConciergeRuntime`, verify `cognitive_trace_id` uniqueness, `bundle_idempotency_cache` isolation (mutate one, others unaffected). (b) Session isolation: `inject()` on one session does NOT affect sibling sessions. (c) Memory cleanup: after `session.close()` + `runtime.stop()`, no dangling asyncio tasks, no subscription leaks (assert `len(runtime.front_subscriptions) == 0`). (d) Rapid start/stop: 5 cycles of `runtime.start()` / `runtime.stop()` — no resource leaks. |
+| I-1.1.4 | Delete old bootstrap after migration | Once all callers use factory: remove `start_kernel()` wiring logic from `kernel/bootstrap.py` (keep as thin delegate to `ConciergeFactory`), remove `_FabricGatewayAdapter` / `_StateReadAdapter` / `_DeltaEmitAdapter` classes (moved to factory.py in E-0.5.21.2), remove `KernelConfig` / `KernelRuntime` dataclasses (replaced by `ConciergeConfig` / `ConciergeRuntime`), remove `from poc.k1_poc.main import boot` dependency (kernel caller builds `PortBundle` directly). Gated on all E-0.5.24 bootstrap tests passing through factory path. |
 
 ### E-1.2: Concierge Adapter Hardening (3 issues)
 
@@ -377,6 +1031,21 @@ Each epic follows the SAME 5-issue pattern. Every issue reads actual source code
 | I-1.3.3 | MemoryWriter 5 adapters | Implement all 5 port adapters: SessionRead, BridgeCommand, EventSubscription, ModelHub, Health. |
 | I-1.3.4 | MemoryWriter config | `k1/memory_writer/config.py` — frozen dataclass, 11 invariants (MW-01..MW-11). |
 | I-1.3.5 | MemoryWriter tests | Factory wiring, pipeline service, adapter conformance, invariant enforcement. |
+
+> **⚠️ GOTCHA — MemoryWriter 3-Layer Bootstrap Architecture**
+>
+> MW uses three distinct layers that may appear redundant but each solves a different problem:
+>
+> | Layer | Module | Responsibility |
+> |-------|--------|----------------|
+> | **Adapters** | `adapters/*.py` | Pure protocol translation — each adapter wraps one K1 infrastructure object and exposes it as an MW `IPort`. No wiring logic, no lifecycle. |
+> | **Factory** | `factory.py` | Internal assembly — takes 5 **ready-made** port instances, validates them (protocol conformance + MW-01..MW-11 invariants), constructs all pipeline internals (TurnDispatcher, stages, circuit breaker bindings), returns an **un-started** `MemoryWriterService`. |
+> | **FabricRegistration** | `fabric_registration.py` | Bootstrap orchestration — the only layer that **creates** infrastructure. Creates `CircuitBreaker`, creates `HealthAdapter` with a forward-reference lambda (`get_started=lambda: service.is_started`), calls `Factory.create()`, then calls `service.start()`. |
+>
+> **Why FabricRegistration can't be folded into Factory:**
+> `HealthAdapter` needs both the `CircuitBreaker` (created during bootstrap) AND `service.is_started` (but the service doesn't exist yet — it's the Factory's output). This circular dependency is resolved by FabricRegistration using a forward-reference lambda that captures `service` after Factory returns it. The Factory's contract is "give me 5 ready-made ports" — it cannot create its own inputs.
+>
+> **Rule of thumb:** Adapters translate. Factory wires. FabricRegistration orchestrates the chicken-and-egg bootstrap sequence.
 
 **MS-1 TOTALS: 3 epics, 12 issues**
 
@@ -971,6 +1640,7 @@ Parallel tracks:
 | D-1..D-16 | All whiteboard design decisions |
 | ORCH-02 | No LLM in Orchestrator (rule-based only) |
 | MW-01..MW-11 | MemoryWriter 11 invariants |
+| MW-BOOT | MemoryWriter 3-layer bootstrap: Adapters (translate) → Factory (wire) → FabricRegistration (orchestrate). FabricRegistration resolves HealthAdapter circular dependency via forward-ref lambda. See E-1.3 gotcha note. |
 | ADR-0017 | Single Writer (Concierge), Multi-Reader for SessionState |
 | ADR-0018 | Memory limits: HOT 48KB + WARM 48KB = 96KB hard boundary |
 

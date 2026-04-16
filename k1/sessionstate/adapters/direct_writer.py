@@ -35,6 +35,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
+from ..config import SessionStateConfig
 from ..ports.writer import (
     BatchRequest,
     BatchResult,
@@ -89,6 +90,7 @@ class DirectWriterAdapter(IWriterPort):
     """
 
     __slots__ = (
+        "_ss_cfg",
         "_manager",
         "_guard",
         "_writer_id",
@@ -99,20 +101,23 @@ class DirectWriterAdapter(IWriterPort):
 
     def __init__(
         self,
-        manager: SessionStateManager,
-        guard: MutationGuard,
+        manager: Optional[SessionStateManager] = None,
+        guard: Optional[MutationGuard] = None,
         writer_id: str = "direct",
         authorized_writers: Optional[Set[str]] = None,
+        config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
         Initialize DirectWriterAdapter.
 
         Args:
-            manager: SessionStateManager to mutate
-            guard: MutationGuard for preflight validation
+            manager: SessionStateManager to mutate (can be bound later via bind_manager)
+            guard: MutationGuard for preflight validation (can be bound later via bind_manager)
             writer_id: Writer identifier for this adapter
             authorized_writers: Set of allowed writer IDs (None = all allowed)
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._manager = manager
         self._guard = guard
         self._writer_id = writer_id
@@ -129,9 +134,34 @@ class DirectWriterAdapter(IWriterPort):
         # M4 E4.5.4: Per-turn mutation tracking for audit events
         self._turn_stats: Dict[str, Any] = self._empty_turn_stats()
 
+        if manager is not None:
+            logger.info(
+                "DirectWriterAdapter initialized (writer_id=%s, session=%s)",
+                writer_id,
+                manager.session_id[:8] if manager.session_id else "none",
+            )
+
+    def bind_manager(self, manager: SessionStateManager, guard: MutationGuard) -> None:
+        """
+        Bind manager reference after construction (single-phase factory pattern).
+
+        Called by SessionStateFactory to break the circular dependency between
+        manager and writer adapter without leaving the manager with None ports.
+
+        Args:
+            manager: SessionStateManager to mutate
+            guard: MutationGuard for preflight validation
+
+        Raises:
+            RuntimeError: If manager is already bound
+        """
+        if self._manager is not None:
+            raise RuntimeError("DirectWriterAdapter already bound to a manager")
+        self._manager = manager
+        self._guard = guard
         logger.info(
-            "DirectWriterAdapter initialized (writer_id=%s, session=%s)",
-            writer_id,
+            "DirectWriterAdapter bound (writer_id=%s, session=%s)",
+            self._writer_id,
             manager.session_id[:8] if manager.session_id else "none",
         )
 
@@ -240,9 +270,7 @@ class DirectWriterAdapter(IWriterPort):
             # 2b. M4 E4.2.4: LLM tool writers may only write to
             #     llm_writable_sections; reject system-owned sections.
             if request.writer_id.startswith("tool:"):
-                from poc.k1_poc.config import get_config
-
-                allowlist = get_config().sessionstate.llm_writable_sections
+                allowlist = self._ss_cfg.llm_writable_sections
                 if request.section not in allowlist:
                     duration_ms = (time.perf_counter() - start_time) * 1000
                     self._stats["rejected_count"] += 1

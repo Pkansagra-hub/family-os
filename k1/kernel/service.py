@@ -1,0 +1,1346 @@
+"""KernelService — central lifecycle manager for K1 kernel (Issue 2.1.1).
+
+Composition root that owns:
+  - 8-phase Tier 1 startup  (S1→S7 + S6b cross-wire)
+  - Per-session create/destroy  (P1→P7 / reverse)
+  - Aggregated health check
+  - Reverse-order shutdown
+
+Implements ``ILifecyclePort`` + ``ISessionManagerPort`` so consumers
+can depend on the abstract protocols.
+
+Issue 2.4.3: Error recovery for partial startup / session creation,
+health_check implementation, shutdown timeouts, idempotency, structured
+error reporting, planner watchdog, graceful drain.
+
+See: ADR-0095, 09_wiring_plan Issue 2.1.1
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+# Issue 2.4.3: Default timeout for component teardown (seconds).
+_TEARDOWN_TIMEOUT: float = 10.0
+
+# Issue 2.3.5: MemoryWriter factory + adapters (per-session)
+from k1.bus.adapters.fabric_adapter import FabricBusAdapter
+from k1.bus.async_bridge import AsyncBusBridge
+from k1.bus.factory import BusFactory
+
+# Issue 2.3.4: Concierge factory + adapters (per-session)
+from k1.concierge.adapters.bus_input import BusInputAdapter
+from k1.concierge.adapters.bus_output import BusOutputAdapter
+from k1.concierge.adapters.fabric_dispatch import FabricDispatchAdapter
+from k1.concierge.adapters.ssm_state import SSMStateAdapter
+from k1.concierge.config.concierge import ConciergeConfig
+from k1.concierge.config.kernel import KernelConfig
+from k1.concierge.factory import ConciergeFactory, PortBundle
+from k1.fabric.adapters.bridge_connection import BridgeConnectionAdapter
+from k1.fabric.adapters.delta_bus_prod import DeltaBusProdAdapter
+from k1.fabric.adapters.event_port_prod import EventPortProdAdapter
+from k1.fabric.adapters.model_gateway_bridge import ModelGatewayBridgeAdapter
+from k1.fabric.adapters.prompt_system_prod import PromptSystemProdAdapter
+
+# Issue 2.3.3: Per-session Fabric state reader
+from k1.fabric.adapters.sessionstate_reader import SessionStateReaderAdapter
+from k1.fabric.circuit_breaker.breaker import CircuitBreaker, CircuitBreakerConfig
+from k1.fabric.factory import FabricFactory
+from k1.kernel.adapters.bridge_adapter import OfflineBridgeAdapter, SinkBridgeAdapter
+
+# Issue 2.2.6: Planner adapters + factory
+from k1.kernel.adapters.model_hub_llm_bus import ModelHubRequestBus
+
+# Issue P1.1: Session-routing state reader for shared Tier 1 components
+from k1.kernel.adapters.session_routing_reader import SessionRoutingStateReader
+from k1.kernel.ports import HealthStatus
+from k1.kernel.session import SessionInstance
+from k1.memory_writer.adapters.bridge_command_adapter import BridgeCommandAdapter
+from k1.memory_writer.adapters.event_subscription_adapter import (
+    EventSubscriptionAdapter as MWEventSubscriptionAdapter,
+)
+from k1.memory_writer.adapters.health_adapter import HealthAdapter
+
+# Issue 2.1.5: MW ModelHubAdapter — anti-corruption layer.
+# MW's IModelHubPort.chat() ≠ K1's IModelHubPort.execute().
+from k1.memory_writer.adapters.model_hub_adapter import ModelHubAdapter
+from k1.memory_writer.adapters.session_read_adapter import SessionReadAdapter
+from k1.memory_writer.config import MWConfig
+from k1.memory_writer.factory import MemoryWriterFactory
+from k1.memory_writer.health.circuit_breaker import CircuitBreaker as MWCircuitBreaker
+from k1.model_hub.adapters.config_adapter import ConfigAdapter
+from k1.model_hub.adapters.credential_store_adapter import CredentialStoreAdapter
+from k1.model_hub.adapters.event_bus_adapter import EventBusAdapter as MHEventBusAdapter
+from k1.model_hub.adapters.prometheus_adapter import PrometheusAdapter
+from k1.model_hub.adapters.session_state_read_adapter import (
+    SessionStateReadAdapter as MHStateReadAdapter,
+)
+from k1.model_hub.factory import ModelHubFactory
+
+# Issue 2.2.5: Orchestrator adapters + factory
+from k1.orchestrator.adapters.bridge_client_shim import BridgeClientShim
+from k1.orchestrator.adapters.bridge_write_adapter import BridgeWriteAdapter
+from k1.orchestrator.adapters.delta_emit_adapter import DeltaEmitAdapter
+from k1.orchestrator.adapters.event_subscription_adapter import EventSubscriptionAdapter
+from k1.orchestrator.adapters.fabric_gateway_adapter import FabricGatewayAdapter
+from k1.orchestrator.adapters.mailbox_adapter import MailboxAdapter
+from k1.orchestrator.adapters.mock_bridge_adapter import MockBridgeAdapter
+from k1.orchestrator.adapters.mock_planner_adapter import MockPlannerAdapter
+from k1.orchestrator.adapters.planner_adapter import PlannerAdapter
+from k1.orchestrator.adapters.state_read_adapter import StateReadAdapter
+from k1.orchestrator.adapters.workflow_storage_adapter import WorkflowStorageAdapter
+from k1.orchestrator.config import OrchestratorConfig
+from k1.orchestrator.factory import OrchestratorFactory
+from k1.orchestrator.workflows.persistence import SQLiteWorkflowAdapter
+from k1.planner.adapters.bridge_adapter import BridgeAdapter as PlannerBridgeAdapter
+from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter as PlannerDeltaBusAdapter
+from k1.planner.adapters.event_bus_adapter import EventBusAdapter as PlannerEventBusAdapter
+from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
+from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter
+from k1.planner.adapters.mailbox_adapter import MailboxAdapter as PlannerMailboxAdapter
+from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter as PlannerStateAdapter
+from k1.planner.factory import PlannerFactory
+
+# Issue 2.3.2: SessionState adapters + factory
+from k1.sessionstate.adapters.direct_writer import DirectWriterAdapter
+from k1.sessionstate.adapters.local_events import LocalEventAdapter
+from k1.sessionstate.adapters.sqlite_storage import SQLiteStorageAdapter
+from k1.sessionstate.adapters.standalone_lifecycle import StandaloneLifecycle
+from k1.sessionstate.async_bridge import AsyncSSMBridge
+from k1.sessionstate.factory import SessionStateFactory
+
+logger = logging.getLogger(__name__)
+
+
+class KernelService:
+    """Central lifecycle manager for the K1 kernel.
+
+    Plain class (not dataclass) — has mutable lifecycle state.
+    Satisfies both ``ILifecyclePort`` and ``ISessionManagerPort``.
+    """
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
+    def __init__(self, config: KernelConfig) -> None:
+        # configuration
+        self._config: KernelConfig = config
+
+        # Tier 1 shared components (populated during startup)
+        self._bus: Any | None = None  # IBus (sync LocalBus)
+        # Issue 2.1.4: async wrapper for direct async bus access.
+        # Layer 1 adapters (FabricBusAdapter, SessionBusAdapter) get _bus (sync).
+        # _async_bus is for components needing direct async bus operations.
+        self._async_bus: Any | None = None  # AsyncBusBridge
+        self._router: Any | None = None  # IMailboxRouter
+        self._model_hub: Any | None = None  # ModelHub
+        self._shared_fabric: Any | None = None
+        self._bridge: Any | None = None
+        self._orchestrator: Any | None = None
+        self._planner: Any | None = None
+        self._planner_task: asyncio.Task[Any] | None = None
+
+        # P1.1: Shared routing reader (resolves session_id → SSM)
+        self._session_routing_reader: SessionRoutingStateReader | None = None
+
+        # Tier 2 per-session components
+        self._sessions: dict[str, SessionInstance] = {}
+
+        # lifecycle flag
+        self._running: bool = False
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def is_running(self) -> bool:
+        """Whether the kernel has completed startup."""
+        return self._running
+
+    @property
+    def session_count(self) -> int:
+        """Number of active sessions."""
+        return len(self._sessions)
+
+    @property
+    def config(self) -> KernelConfig:
+        """The kernel configuration."""
+        return self._config
+
+    @property
+    def async_bus(self) -> Any | None:
+        """The async bus bridge (``AsyncBusBridge``), or ``None`` before startup."""
+        return self._async_bus
+
+    # ------------------------------------------------------------------
+    # ILifecyclePort
+    # ------------------------------------------------------------------
+
+    async def startup(self) -> None:
+        """Execute the 8-phase Tier 1 bootstrap (S1→S7 + S6b).
+
+        Issue 2.4.3: If _startup_tier1() fails partway through, any
+        already-created components are cleaned up before re-raising.
+        ``_running`` is never set to True on failure.
+
+        Raises:
+            RuntimeError: If already running, or if startup fails
+                (original exception is re-raised after cleanup).
+        """
+        if self._running:
+            raise RuntimeError("Already running")
+        try:
+            await self._startup_tier1()
+        except Exception:
+            # Partial startup — clean up whatever was created.
+            await self._cleanup_tier1_partial()
+            raise
+
+    async def shutdown(self) -> None:
+        """Reverse teardown: destroy all sessions, then shared components.
+
+        Issue 2.4.3 enhancements:
+            - Idempotency guard: no-op if already shut down (#6).
+            - Per-step timeouts: each async teardown step has a
+              ``_TEARDOWN_TIMEOUT`` second deadline (#7).
+            - Structured error reporting: raises ``RuntimeError`` with
+              aggregated messages when teardown has failures (#8).
+
+        Sequence (reverse of startup):
+            1. Destroy all active sessions (reverse P6→P1 each)
+            2. Reverse S7: Stop Planner agent + cancel background task
+            3. Reverse S6b: (cross-wire cleanup — no action needed)
+            4. Reverse S5: Shutdown Orchestrator
+            5. Reverse S4: Disconnect Bridge
+            6. Reverse S3: Shutdown Fabric
+            7. Reverse S2: (ModelHub has no teardown)
+            8. Reverse S1: Close shared Bus + Router
+
+        Each step is individually guarded — teardown continues even if
+        one step fails.  ``_running`` is always set to ``False`` at the end.
+        """
+        # Issue 2.4.3 #6: Idempotency — early return if not running.
+        if not self._running:
+            return
+
+        errors: list[Exception] = []
+
+        # ── 1. Destroy all sessions ──────────────────────────
+        for sid in list(self._sessions):
+            try:
+                await asyncio.wait_for(
+                    self.destroy_session(sid),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: destroy_session(%s) failed: %s", sid, exc)
+
+        # ── Reverse S7: Stop Planner + cancel task ────────────
+        if self._planner is not None:
+            try:
+                await asyncio.wait_for(
+                    self._planner.stop(),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: Planner stop failed: %s", exc)
+
+        if self._planner_task is not None:
+            try:
+                self._planner_task.cancel()
+                try:
+                    await self._planner_task
+                except (asyncio.CancelledError, Exception):
+                    pass  # expected after cancel
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: Planner task cancel failed: %s", exc)
+            self._planner_task = None
+
+        # ── Reverse S6b: (no action needed) ───────────────────
+
+        # ── Reverse S5: Shutdown Orchestrator ─────────────────
+        if self._orchestrator is not None:
+            try:
+                await asyncio.wait_for(
+                    self._orchestrator.shutdown(),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: Orchestrator shutdown failed: %s", exc)
+
+        # ── Reverse S4: Disconnect Bridge ─────────────────────
+        if self._bridge is not None:
+            try:
+                await asyncio.wait_for(
+                    self._bridge.disconnect(),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: Bridge disconnect failed: %s", exc)
+
+        # ── Reverse S3: Shutdown Fabric ───────────────────────
+        if self._shared_fabric is not None:
+            try:
+                await asyncio.wait_for(
+                    self._shared_fabric.shutdown(),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: Fabric shutdown failed: %s", exc)
+
+        # ── Reverse S2: (ModelHub has no teardown) ────────────
+
+        # ── Reverse S1: Close shared Bus + Router ─────────────
+        if self._bus is not None:
+            try:
+                self._bus.close()
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: Bus close failed: %s", exc)
+
+        if self._router is not None:
+            try:
+                self._router.close()
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: Router close failed: %s", exc)
+
+        # ── Always mark as not running ────────────────────────
+        self._running = False
+
+        # Issue 2.4.3 #8: Structured error reporting.
+        if errors:
+            msg = f"shutdown: {len(errors)} error(s) during teardown"
+            logger.error(msg)
+            raise RuntimeError(f"{msg}: {'; '.join(str(e) for e in errors)}")
+
+    async def health_check(self) -> HealthStatus:
+        """Aggregate health from all Tier 1 components.
+
+        Issue 2.4.3 #4: Real implementation replacing stub.
+
+        Checks:
+            - ``_running`` flag
+            - ``_bus`` not closed
+            - ``_router`` not closed
+            - ``_model_hub`` exists
+            - ``_shared_fabric`` exists
+            - ``_bridge`` exists
+            - ``_orchestrator`` exists
+            - ``_planner`` exists
+            - ``_planner_task`` alive (not done/cancelled)
+
+        Returns:
+            ``HealthStatus`` with per-component breakdown.
+        """
+        components: dict[str, bool] = {}
+        details: dict[str, str] = {}
+
+        # Core lifecycle flag
+        components["running"] = self._running
+        if not self._running:
+            details["running"] = "Kernel not running"
+
+        # S1: Bus
+        if self._bus is not None:
+            bus_closed = getattr(self._bus, "_closed", False)
+            components["bus"] = not bus_closed
+            if bus_closed:
+                details["bus"] = "Bus is closed"
+        else:
+            components["bus"] = False
+            details["bus"] = "Bus not initialised"
+
+        # S1: Router
+        if self._router is not None:
+            router_closed = getattr(self._router, "_closed", False)
+            components["router"] = not router_closed
+            if router_closed:
+                details["router"] = "Router is closed"
+        else:
+            components["router"] = False
+            details["router"] = "Router not initialised"
+
+        # S2: ModelHub
+        components["model_hub"] = self._model_hub is not None
+        if self._model_hub is None:
+            details["model_hub"] = "ModelHub not initialised"
+
+        # S3: Fabric
+        components["shared_fabric"] = self._shared_fabric is not None
+        if self._shared_fabric is None:
+            details["shared_fabric"] = "Shared Fabric not initialised"
+
+        # S4: Bridge
+        components["bridge"] = self._bridge is not None
+        if self._bridge is None:
+            details["bridge"] = "Bridge not initialised"
+
+        # S5: Orchestrator
+        components["orchestrator"] = self._orchestrator is not None
+        if self._orchestrator is None:
+            details["orchestrator"] = "Orchestrator not initialised"
+
+        # S6: Planner
+        components["planner"] = self._planner is not None
+        if self._planner is None:
+            details["planner"] = "Planner not initialised"
+
+        # S7: Planner task
+        if self._planner_task is not None:
+            task_alive = not self._planner_task.done()
+            components["planner_task"] = task_alive
+            if not task_alive:
+                exc = self._planner_task.exception() if not self._planner_task.cancelled() else None
+                detail = f"crashed: {exc}" if exc else "stopped"
+                details["planner_task"] = f"Planner task {detail}"
+        else:
+            components["planner_task"] = False
+            details["planner_task"] = "Planner task not started"
+
+        # Sessions
+        components["sessions"] = True  # sessions existing is OK
+        session_count = len(self._sessions)
+        if session_count > 0:
+            details["sessions"] = f"{session_count} active session(s)"
+
+        healthy = all(components.values())
+        return HealthStatus(
+            healthy=healthy,
+            components=components,
+            details=details,
+        )
+
+    # ------------------------------------------------------------------
+    # ISessionManagerPort
+    # ------------------------------------------------------------------
+
+    async def create_session(
+        self,
+        session_id: str,
+        device_id: str | None = None,
+    ) -> SessionInstance:
+        """Create a new session with all Tier 2 components (P1→P6).
+
+        Issue 2.4.3 #5: If ``_validate_session()`` fails after the session
+        is registered, the zombie session is destroyed before re-raising.
+
+        Args:
+            session_id: Unique identifier for the session.
+            device_id: Optional device identifier.
+
+        Returns:
+            The newly created ``SessionInstance``.
+
+        Raises:
+            RuntimeError: If the kernel is not running.
+            ValueError: If a session with the given ID already exists.
+            TypeError: If the session fails port validation (after cleanup).
+        """
+        if not self._running:
+            raise RuntimeError("Kernel not running")
+        if session_id in self._sessions:
+            raise ValueError(f"Session '{session_id}' already exists")
+        session = await self._create_session_tier2(session_id, device_id)
+        try:
+            self._validate_session(session)
+        except Exception:
+            # Issue 2.4.3 #5: Zombie session cleanup.
+            try:
+                await self.destroy_session(session_id)
+            except Exception:
+                logger.warning(
+                    "create_session(%s): cleanup after validation failure also failed",
+                    session_id,
+                )
+            raise
+        return session
+
+    async def destroy_session(self, session_id: str) -> None:
+        """Destroy a session, tearing down Tier 2 components in reverse order.
+
+        Issue 2.4.3 enhancements:
+            - #7: Per-step timeouts on async teardown operations.
+            - #10: Short drain period before closing the session bus.
+
+        Sequence (reverse P6→P1):
+            1. Remove from registry (``_sessions.pop``)
+            2. Reverse P5: Stop MemoryWriter
+            3. Reverse P4: Stop Concierge (FSM + consumer tasks)
+            4. Reverse P3: (per-session Fabric has no explicit teardown)
+            5. Reverse P2: Checkpoint + stop SessionState
+            6. Reverse P1: Close per-session Bus + Router
+
+        Each step is individually guarded — teardown continues even if
+        one step fails.  All errors are collected and logged.
+
+        Args:
+            session_id: The session to destroy.
+
+        Raises:
+            KeyError: If no session with that ID exists.
+        """
+        session = self._sessions.pop(session_id)  # KeyError if missing
+        errors: list[Exception] = []
+
+        # Reverse P5: Stop MemoryWriter
+        try:
+            await asyncio.wait_for(
+                session.memory_writer.stop(),
+                timeout=_TEARDOWN_TIMEOUT,
+            )
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning("destroy_session(%s): MemoryWriter stop failed: %s", session_id, exc)
+
+        # Reverse P4: Stop Concierge
+        try:
+            await asyncio.wait_for(
+                session.concierge.stop(),
+                timeout=_TEARDOWN_TIMEOUT,
+            )
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning("destroy_session(%s): Concierge stop failed: %s", session_id, exc)
+
+        # Reverse P3: Per-session Fabric has no explicit teardown
+
+        # Reverse P2: Stop SessionState
+        try:
+            session.session_state.stop()
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning("destroy_session(%s): SessionState stop failed: %s", session_id, exc)
+
+        # Issue 2.4.3 #10: Graceful drain — yield to event loop so any
+        # in-flight bus callbacks complete before closing the bus.
+        await asyncio.sleep(0)
+
+        # Reverse P1: Close per-session Bus + Router
+        try:
+            session.bus.close()
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning("destroy_session(%s): Bus close failed: %s", session_id, exc)
+
+        try:
+            session.router.close()
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning("destroy_session(%s): Router close failed: %s", session_id, exc)
+
+        if errors:
+            logger.error(
+                "destroy_session(%s): %d error(s) during teardown",
+                session_id,
+                len(errors),
+            )
+
+    def get_session(self, session_id: str) -> SessionInstance | None:
+        """Look up a session by ID."""
+        return self._sessions.get(session_id)
+
+    def list_sessions(self) -> list[str]:
+        """Return all active session IDs."""
+        return list(self._sessions.keys())
+
+    # ------------------------------------------------------------------
+    # Private helpers (stubs)
+    # ------------------------------------------------------------------
+
+    def _validate_ports(self) -> None:
+        """Validate Tier 1 shared components satisfy their port protocols.
+
+        Issue 2.1.6: construction-time port type validation.
+        Collects ALL failures and reports them together.
+
+        Checks performed (when component is not None):
+        - ``_bus``: duck-type ``publish`` + ``subscribe`` (IBus)
+        - ``_router``: duck-type ``register`` (IMailboxRouter)
+        - ``_model_hub``: duck-type ``execute`` (K1 ModelHub)
+        - ``_shared_fabric``: duck-type ``execute`` (CapabilityFabric)
+        - ``_bridge``: duck-type ``is_connected`` (Bridge client)
+        - ``_orchestrator``: duck-type ``process`` (OrchestratorService)
+        - ``_planner``: duck-type ``start`` (PlannerAgent)
+
+        Raises:
+            TypeError: If any component fails validation.  Message lists
+                every failing component.
+        """
+        checks: list[tuple[str, object, str]] = [
+            # (field_name, value, required_attr)
+            ("_bus", self._bus, "publish"),
+            ("_bus", self._bus, "subscribe"),
+            ("_router", self._router, "register"),
+            ("_model_hub", self._model_hub, "execute"),
+            ("_shared_fabric", self._shared_fabric, "execute"),
+            ("_bridge", self._bridge, "is_connected"),
+            ("_orchestrator", self._orchestrator, "process"),
+            ("_planner", self._planner, "start"),
+        ]
+        failures: list[str] = []
+        for field_name, value, attr in checks:
+            if value is not None and not hasattr(value, attr):
+                failures.append(
+                    f"Port validation failed: {field_name} "
+                    f"({type(value).__name__}) missing required "
+                    f"attribute '{attr}'"
+                )
+        if failures:
+            raise TypeError("KernelService port validation failed:\n" + "\n".join(failures))
+
+    def _validate_session(self, session: SessionInstance) -> None:
+        """Validate a Tier 2 SessionInstance's components.
+
+        Called after ``_create_session_tier2()`` to ensure all per-session
+        adapters satisfy their expected interfaces.
+
+        Args:
+            session: The newly created ``SessionInstance`` to validate.
+
+        Raises:
+            TypeError: If any session component fails validation.
+        """
+        checks: list[tuple[str, object, str]] = [
+            ("bus", session.bus, "publish"),
+            ("bus", session.bus, "subscribe"),
+            ("router", session.router, "register"),
+            ("session_state", session.session_state, "get_section"),
+            ("fabric", session.fabric, "execute"),
+        ]
+        failures: list[str] = []
+        for field_name, value, attr in checks:
+            if value is not None and not hasattr(value, attr):
+                failures.append(
+                    f"Session port validation failed: {field_name} "
+                    f"({type(value).__name__}) missing required "
+                    f"attribute '{attr}'"
+                )
+        if failures:
+            raise TypeError(
+                f"SessionInstance '{session.session_id}' validation "
+                f"failed:\n" + "\n".join(failures)
+            )
+
+    def _verify_orchestrator_monitor_binding(self) -> None:
+        """Issue 2.1.7: Verify ExecutionMonitor late-binding completed.
+
+        B-OR-3: ``OrchestratorFactory._construct_orchestrator()`` creates
+        ``ExecutionMonitor(delta, service_ref=None)`` in ``_build_guards()``
+        (factory L189), then patches ``monitor._service_ref = service``
+        post-construction (factory L453).  This happens INSIDE the factory
+        — ``KernelService`` does NOT do it manually.
+
+        This method verifies the factory completed the late-binding.
+        Call after ``OrchestratorFactory.create_production()`` returns.
+
+        Guard pipeline (4 guards at ``_dag_executor._guards``):
+            [0] OutputSchemaGuard
+            [1] ConditionalEdgeEvaluator
+            [2] MicroReplanCheckpoint
+            [3] ExecutionMonitor  ← ``_service_ref`` must be set
+
+        NOTE: Plan originally stated guards=[CostGuard, ConcurrencyGuard,
+        CircuitBreakerGuard, ExecutionMonitor].  Code audit proved this
+        WRONG — actual guards are above.  ConcurrencyGuard wraps
+        ``_process_one``, not a DAGGuard.
+
+        Raises:
+            RuntimeError: If ``_orchestrator`` is None or the monitor's
+                ``_service_ref`` is not set.
+        """
+        if self._orchestrator is None:
+            raise RuntimeError(
+                "Cannot verify ExecutionMonitor: _orchestrator is None. "
+                "Tier 1 startup (Issue 2.2.5) must run first."
+            )
+        dag_executor = getattr(self._orchestrator, "_dag_executor", None)
+        if dag_executor is None:
+            raise RuntimeError(
+                "Cannot verify ExecutionMonitor: " "_orchestrator._dag_executor is None."
+            )
+        guards = getattr(dag_executor, "_guards", None)
+        if not guards or len(guards) < 4:
+            raise RuntimeError(
+                "Cannot verify ExecutionMonitor: "
+                f"_dag_executor._guards has {len(guards) if guards else 0} "
+                f"entries, expected >= 4."
+            )
+        monitor = guards[3]
+        service_ref = getattr(monitor, "_service_ref", None)
+        if service_ref is None:
+            raise RuntimeError(
+                "ExecutionMonitor._service_ref is None after factory "
+                "construction.  B-OR-3 late-binding failed."
+            )
+
+    def _verify_planner_mailbox_binding(self) -> None:
+        """Issue 2.1.8: Verify Planner MailboxAdapter has PipelineController.
+
+        PL-B2: ``MailboxAdapter`` (``k1/planner/adapters/mailbox_adapter.py``)
+        wraps an ``asyncio.Queue`` for inbound ``PlanRequest`` messages.  It
+        also exposes ``micro_replan()`` which delegates to a
+        ``PipelineController``.  The controller is injected via
+        ``set_pipeline_controller(controller)`` — a two-phase init pattern.
+
+        **CRITICAL**: ``PlannerFactory._wire()`` does **NOT** call
+        ``set_pipeline_controller()`` (verified by code audit — zero matches
+        in ``factory.py``).  The factory's docstring on ``MailboxAdapter``
+        claims it does, but it doesn't.  ``KernelService._startup_tier1()``
+        **MUST** call it explicitly::
+
+            planner._mailbox.set_pipeline_controller(planner._pipeline)
+
+        Without this, ``micro_replan()`` always raises
+        ``RuntimeError("PipelineController not set")``.
+
+        Traversal path (code-verified attribute names):
+            ``_planner``                → ``PlannerAgent``
+            ``_planner._mailbox``       → ``MailboxAdapter`` (IMailboxPort)
+            ``_planner._pipeline``      → ``PipelineController``
+            ``._mailbox._pipeline_controller`` → must equal ``._pipeline``
+
+        NOTE: Plan originally said attribute was ``_mailbox_adapter`` — actual
+        attribute is ``_mailbox``.  Plan said ``_controller`` — actual is
+        ``_pipeline_controller``.
+
+        Raises:
+            RuntimeError: If ``_planner`` is None, ``_mailbox`` is missing,
+                or ``_pipeline_controller`` is not set on the mailbox.
+        """
+        if self._planner is None:
+            raise RuntimeError(
+                "Cannot verify MailboxAdapter binding: _planner is None. "
+                "Tier 1 startup (Issue 2.2.6) must run first."
+            )
+        mailbox = getattr(self._planner, "_mailbox", None)
+        if mailbox is None:
+            raise RuntimeError(
+                "Cannot verify MailboxAdapter binding: " "_planner._mailbox is None."
+            )
+        pipeline_controller = getattr(mailbox, "_pipeline_controller", None)
+        if pipeline_controller is None:
+            raise RuntimeError(
+                "MailboxAdapter._pipeline_controller is None after "
+                "Planner construction.  PL-B2 two-phase init incomplete — "
+                "call mailbox.set_pipeline_controller(planner._pipeline) "
+                "in _startup_tier1()."
+            )
+
+    def _verify_planner_task_running(self) -> None:
+        """Issue 2.1.9: Verify PlannerAgent background task is alive.
+
+        PL-B1: ``PlannerFactory.create_production()`` returns a fully wired
+        but **IDLE** agent.  The factory explicitly does NOT call
+        ``agent.start()`` (confirmed by code audit — factory comments state
+        "Caller must invoke ``asyncio.create_task(agent.start())``").
+
+        ``KernelService._startup_tier1()`` **MUST**::
+
+            self._planner_task = asyncio.create_task(
+                planner.start(), name="planner-agent"
+            )
+
+        ``start()`` (``planner_agent.py`` L569) is a long-running coroutine:
+        INIT → subscribe 4 event topics → ``pipeline.reset()`` → set
+        ``_running = True`` → CRASH_RECOVERY (V1 no-op) → ``_run_loop()``
+        (infinite ``while _running`` dequeue loop).
+
+        GOTCHA: ``start()`` MUST be wrapped in ``asyncio.create_task()``,
+        **NOT** awaited directly — that would block startup forever.
+
+        Graceful shutdown uses ``PlannerAgent.stop()`` (L654):
+        sets ``_running = False``, drains mailbox, unsubscribes events.
+        Alternatively, ``task.cancel()`` raises ``CancelledError`` in the
+        dequeue/execute await.
+
+        Raises:
+            RuntimeError: If ``_planner_task`` is None, done, or cancelled.
+        """
+        if self._planner_task is None:
+            raise RuntimeError(
+                "Planner background task not started: _planner_task is None. "
+                "Call asyncio.create_task(planner.start()) in _startup_tier1()."
+            )
+        if self._planner_task.done():
+            exc = self._planner_task.exception() if not self._planner_task.cancelled() else None
+            detail = f" (exception: {exc})" if exc else ""
+            raise RuntimeError(
+                f"Planner background task is no longer running{detail}. "
+                "PL-B1: agent.start() should run indefinitely."
+            )
+
+    def _verify_planner_orchestrator_crosswire(self) -> None:
+        """Issue 2.1.9 (S6b): Verify Orchestrator↔Planner cross-wire.
+
+        ``OrchestratorFactory`` defaults to ``MockPlannerAdapter()`` as the
+        planner port (``k1/orchestrator/adapters/mock_planner_adapter.py``).
+        After both Orchestrator and Planner are created, ``_startup_tier1()``
+        must replace it with a real ``PlannerAdapter``::
+
+            from k1.orchestrator.adapters.planner_adapter import PlannerAdapter
+            orchestrator._planner_port = PlannerAdapter(
+                planner.get_mailbox(), cb_planner=circuit_breaker
+            )
+
+        ``PlannerAdapter.__slots__`` = ``("_mailbox", "_cb")`` — no setter,
+        but ``OrchestratorService._planner_port`` is in ``__slots__`` and
+        reassignable via direct attribute assignment.
+
+        NOTE: Plan said constructor kwarg is ``circuit_breaker``.  Actual
+        constructor parameter name is ``cb_planner``.
+
+        Raises:
+            RuntimeError: If ``_orchestrator`` is None or ``_planner_port``
+                is still a ``MockPlannerAdapter``.
+        """
+        if self._orchestrator is None:
+            raise RuntimeError(
+                "Cannot verify Planner cross-wire: _orchestrator is None. "
+                "Tier 1 startup (Issue 2.2.5) must run first."
+            )
+        planner_port = getattr(self._orchestrator, "_planner_port", None)
+        if planner_port is None:
+            raise RuntimeError(
+                "Cannot verify Planner cross-wire: " "_orchestrator._planner_port is None."
+            )
+        # MockPlannerAdapter is the factory default — must be replaced.
+        port_type_name = type(planner_port).__name__
+        if port_type_name == "MockPlannerAdapter":
+            raise RuntimeError(
+                "Orchestrator still has MockPlannerAdapter as _planner_port. "
+                "S6b cross-wire not completed — replace with real "
+                "PlannerAdapter(planner.get_mailbox(), cb_planner=cb)."
+            )
+
+    async def _startup_tier1(self) -> None:
+        """Execute S1→S7 + S6b shared component bootstrap.
+
+        Issue 2.4.3 #1: Each phase is wrapped so that failure at step N
+        triggers reverse-order cleanup of steps 1..N-1.  ``_running`` is
+        never set to True on failure.
+
+        Issue 2.4.3 #9: Planner task gets a done-callback watchdog that
+        logs if the task crashes after startup.
+
+        Boot order enforced by data dependency:
+        S1 → S2 → S3 → S4 → S5 → S6 → S6b → S7
+        """
+        # ── S1: Bus + AsyncBusBridge + MailboxRouter ──────────
+        bus = BusFactory.create_local_ordered(
+            capture=self._config.capture_bus,
+        )
+        self._bus = bus
+        self._router = BusFactory.create_mailbox_router()
+        self._async_bus = AsyncBusBridge(bus)
+
+        # ── S2: ModelHub (with auxiliary ports) ───────────
+        try:
+            self._model_hub = ModelHubFactory.create_with_ports(
+                ports={
+                    "credential_port": CredentialStoreAdapter(),
+                    "event_port": MHEventBusAdapter(),
+                    "state_read_port": MHStateReadAdapter(),
+                    "metrics_port": PrometheusAdapter(),
+                    "config_port": ConfigAdapter(),
+                },
+            )
+        except Exception:
+            # S1 created — clean up.
+            self._bus.close()
+            self._router.close()
+            raise
+
+        # ── S4: Bridge (kernel-level IBridgePort) ─────────
+        # S4 before S3 because Fabric needs a bridge adapter.
+        try:
+            if self._config.bridge_enabled:
+                self._bridge = SinkBridgeAdapter(
+                    outbox_path=self._config.bridge_outbox_path,
+                )
+            else:
+                self._bridge = OfflineBridgeAdapter()
+        except Exception:
+            self._bus.close()
+            self._router.close()
+            raise
+
+        # ── P1.1/P1.4: SessionRoutingStateReader (shared by S3, S5, S6) ──
+        session_routing_reader = SessionRoutingStateReader(
+            session_lookup=lambda sid: (
+                self._sessions[sid].session_state if sid in self._sessions else None
+            ),
+        )
+        self._session_routing_reader = session_routing_reader
+
+        # ── S3: Shared Fabric ─────────────────────────────
+        try:
+            event_port = EventPortProdAdapter(bus)
+            delta_bus = DeltaBusProdAdapter(bus)
+            model_gateway = ModelGatewayBridgeAdapter(hub=self._model_hub)
+            prompt_system = PromptSystemProdAdapter(prompts_dir="k1/contracts/prompts")
+            bridge_client = self._bridge.get_client()
+            bridge_adapter = BridgeConnectionAdapter(client=bridge_client)
+
+            self._shared_fabric = FabricFactory.create_shared(
+                event_port=event_port,
+                bridge=bridge_adapter,
+                model_gateway=model_gateway,
+                prompt_system=prompt_system,
+                delta_bus=delta_bus,
+                state_reader=session_routing_reader,
+            )
+        except Exception:
+            await self._bridge.disconnect()
+            self._bus.close()
+            self._router.close()
+            raise
+
+        # ── S5: Orchestrator ─────────────────────────────
+        try:
+            orch_config = OrchestratorConfig.from_dict(
+                {
+                    "workflow_db_path": self._config.workflow_db_path,
+                    "admin_enabled": False,
+                }
+            )
+            orch_mailbox = MailboxAdapter()
+            orch_fabric = FabricGatewayAdapter(fabric=self._shared_fabric)
+            orch_planner = MockPlannerAdapter()
+            # P1.2: Reuse shared SessionRoutingStateReader (created before S3)
+            orch_state = StateReadAdapter(state_reader=session_routing_reader)
+            orch_delta = DeltaEmitAdapter(
+                event_port=event_port,
+                delta_bus=delta_bus,
+            )
+            orch_bridge_client = self._bridge.get_client()
+            orch_bridge = (
+                BridgeWriteAdapter(
+                    bridge_client=BridgeClientShim(orch_bridge_client),
+                )
+                if orch_bridge_client is not None
+                else MockBridgeAdapter()
+            )
+            orch_event = EventSubscriptionAdapter(event_port=event_port)
+            orch_storage = WorkflowStorageAdapter(
+                storage=SQLiteWorkflowAdapter(db_path=self._config.workflow_db_path),
+            )
+
+            self._orchestrator = await OrchestratorFactory.create_production(
+                config=orch_config,
+                mailbox=orch_mailbox,
+                fabric=orch_fabric,
+                planner=orch_planner,
+                state=orch_state,
+                delta=orch_delta,
+                bridge=orch_bridge,
+                event=orch_event,
+                storage=orch_storage,
+            )
+        except Exception:
+            await self._shared_fabric.shutdown()
+            await self._bridge.disconnect()
+            self._bus.close()
+            self._router.close()
+            raise
+
+        # ── S6: Planner ──────────────────────────────────
+        try:
+            pl_llm = LLMGatewayAdapter(
+                llm_request_bus=ModelHubRequestBus(self._model_hub),
+            )
+            pl_fabric = FabricRetrievalAdapter(
+                fabric_retrieval=self._shared_fabric.retrieval,
+            )
+            # P1.3: Wire real session-routing reader (was reader=None)
+            pl_state = PlannerStateAdapter(
+                reader=self._session_routing_reader,
+                session_id="__shared__",
+            )
+            pl_bridge = PlannerBridgeAdapter(bridge_port=bridge_adapter)
+            pl_delta = PlannerDeltaBusAdapter(delta_bus=delta_bus)
+            pl_event = PlannerEventBusAdapter(event_port=event_port)
+            pl_mailbox = PlannerMailboxAdapter()
+
+            self._planner = await PlannerFactory.create_production(
+                llm_port=pl_llm,
+                fabric_port=pl_fabric,
+                state_port=pl_state,
+                bridge_port=pl_bridge,
+                delta_port=pl_delta,
+                event_port=pl_event,
+                mailbox_port=pl_mailbox,
+            )
+        except Exception:
+            await self._orchestrator.shutdown()
+            await self._shared_fabric.shutdown()
+            await self._bridge.disconnect()
+            self._bus.close()
+            self._router.close()
+            raise
+
+        # ── S6b: Cross-wire Orchestrator↔Planner ─────────
+        planner_cb = CircuitBreaker(
+            provider_id="planner",
+            config=CircuitBreakerConfig(),
+        )
+        self._orchestrator._planner_port = PlannerAdapter(
+            planner_mailbox=self._planner.get_mailbox(),
+            cb_planner=planner_cb,
+        )
+
+        # ── S7: Start Planner Background Task ─────────────
+        try:
+            self._planner._mailbox.set_pipeline_controller(
+                self._planner._pipeline,
+            )
+            self._planner_task = asyncio.create_task(
+                self._planner.start(),
+                name="planner-agent",
+            )
+
+            # Issue 2.4.3 #9: Planner task crash watchdog.
+            self._planner_task.add_done_callback(self._on_planner_task_done)
+
+            # ── Final: Post-wire verifications ────────────────
+            self._validate_ports()
+            self._verify_orchestrator_monitor_binding()
+            self._verify_planner_orchestrator_crosswire()
+            self._verify_planner_mailbox_binding()
+            self._verify_planner_task_running()
+        except Exception:
+            # S7 or verification failed — tear down S6 through S1.
+            if self._planner_task is not None:
+                self._planner_task.cancel()
+                try:
+                    await self._planner_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self._planner_task = None
+            await self._planner.stop()
+            await self._orchestrator.shutdown()
+            await self._shared_fabric.shutdown()
+            await self._bridge.disconnect()
+            self._bus.close()
+            self._router.close()
+            raise
+
+        self._running = True
+        logger.info("Tier 1 startup complete — all shared components wired")
+
+    async def _cleanup_tier1_partial(self) -> None:
+        """Issue 2.4.3 #3: Clean up any Tier 1 components assigned to self.
+
+        Called by ``startup()`` when ``_startup_tier1()`` fails partway.
+        Uses the same reverse order as ``shutdown()`` but checks each
+        field for None before attempting teardown.  Swallows all errors
+        to ensure every component gets a cleanup attempt.
+        """
+        if self._planner_task is not None:
+            try:
+                self._planner_task.cancel()
+                try:
+                    await self._planner_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            except Exception:
+                pass
+            self._planner_task = None
+
+        if self._planner is not None:
+            try:
+                await self._planner.stop()
+            except Exception:
+                pass
+
+        if self._orchestrator is not None:
+            try:
+                await self._orchestrator.shutdown()
+            except Exception:
+                pass
+
+        if self._shared_fabric is not None:
+            try:
+                await self._shared_fabric.shutdown()
+            except Exception:
+                pass
+
+        if self._bridge is not None:
+            try:
+                await self._bridge.disconnect()
+            except Exception:
+                pass
+
+        if self._bus is not None:
+            try:
+                self._bus.close()
+            except Exception:
+                pass
+
+        if self._router is not None:
+            try:
+                self._router.close()
+            except Exception:
+                pass
+
+        # Reset all fields so the instance is clean for a retry.
+        self._bus = None
+        self._async_bus = None
+        self._router = None
+        self._model_hub = None
+        self._shared_fabric = None
+        self._bridge = None
+        self._orchestrator = None
+        self._planner = None
+
+    def _on_planner_task_done(self, task: asyncio.Task[Any]) -> None:
+        """Issue 2.4.3 #9: Watchdog callback for planner background task.
+
+        Attached via ``task.add_done_callback()``.  Fires when the planner
+        task finishes — normally only during shutdown (via cancel).  If it
+        finishes unexpectedly (crash), log an error.
+        """
+        if task.cancelled():
+            return  # Normal shutdown path.
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "Planner background task crashed: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+        else:
+            logger.warning("Planner background task exited unexpectedly (no exception)")
+
+    def _create_memory_writer_hub_adapter(self) -> ModelHubAdapter:
+        """Issue 2.1.5: Build MW's ModelHubAdapter (anti-corruption layer).
+
+        K1 ModelHub exposes ``execute(HubRequest) → HubResponse``.
+        MemoryWriter expects ``chat(messages, budget, hint) → ChatResponse``.
+        ``ModelHubAdapter`` bridges the two: translates ``chat()`` calls into
+        ``execute(HubRequest(CHAT, ChatPayload))`` calls.
+
+        Adapter chain:
+            MemoryWriter → MW.IModelHubPort.chat()
+            → ModelHubAdapter → K1.ModelHub.execute(HubRequest)
+            → LLM provider
+
+        WRONG wiring: passing ``self._model_hub`` directly to
+        ``MemoryWriterFactory.create(model_hub_port=...)`` — K1 ModelHub
+        lacks ``chat()`` and would fail at MW's isinstance() validation.
+
+        Returns:
+            A ``ModelHubAdapter`` wrapping ``self._model_hub``.
+
+        Raises:
+            RuntimeError: If ``_model_hub`` is not yet initialised (Tier 1
+                startup must run first — depends on Issue 2.2.2).
+        """
+        if self._model_hub is None:
+            raise RuntimeError(
+                "Cannot create MW ModelHubAdapter: _model_hub is None. "
+                "Tier 1 startup (Issue 2.2.2) must run first."
+            )
+        return ModelHubAdapter(hub=self._model_hub)
+
+    async def _create_session_tier2(
+        self,
+        session_id: str,
+        device_id: str | None = None,
+    ) -> SessionInstance:
+        """Execute P1→P7 per-session component creation.
+
+        Issue 2.4.3 #2: Each phase is wrapped so that failure at step N
+        triggers reverse-order cleanup of steps 1..N-1.  The session is
+        NOT added to ``_sessions`` until fully assembled.
+
+        Steps:
+            P1: Per-session Bus + MailboxRouter + front/back Mailboxes
+            P2–P7: Remaining session components (Epic 2.3 issues)
+        """
+        # ── P1: Per-session Bus + Mailboxes ───────────────────
+        session_bus = BusFactory.create_local_ordered(capture=False)
+        session_router = BusFactory.create_mailbox_router()
+        front_mailbox = session_router.register(f"front_{session_id}")
+        back_mailbox = session_router.register(f"back_{session_id}")
+
+        # ── P2: SessionState (per-session) ─────────────────────
+        ssm = None
+        try:
+            ss_storage = SQLiteStorageAdapter(db_path=self._config.sessionstate_db_path)
+            ss_events = LocalEventAdapter(capture_mode=False)
+            ss_writer = DirectWriterAdapter(writer_id="direct")
+            ss_lifecycle = StandaloneLifecycle()
+            ssm = SessionStateFactory.create_with_ports(
+                session_id=session_id,
+                storage=ss_storage,
+                events=ss_events,
+                writer=ss_writer,
+                lifecycle=ss_lifecycle,
+                k0_sync=None,
+            )
+            ss_writer.bind_manager(ssm, ssm.mutation_guard)
+            ss_lifecycle.bind_manager(ssm)
+            ssm.start()
+            async_ssm = AsyncSSMBridge(ssm)
+        except Exception:
+            session_bus.close()
+            session_router.close()
+            raise
+
+        # ── P3: Per-session Fabric ────────────────────────────
+        try:
+            session_state_reader = SessionStateReaderAdapter(ssm, session_id)
+            session_event_port = EventPortProdAdapter(session_bus)
+            session_delta_bus = DeltaBusProdAdapter(session_bus)
+            session_model_gw = ModelGatewayBridgeAdapter(hub=self._model_hub)
+            session_prompt_sys = PromptSystemProdAdapter(prompts_dir="k1/contracts/prompts")
+            session_bridge_client = self._bridge.get_client()
+            session_bridge_adapter = BridgeConnectionAdapter(client=session_bridge_client)
+
+            session_fabric = FabricFactory.create_with_ports(
+                state_reader=session_state_reader,
+                event_port=session_event_port,
+                bridge=session_bridge_adapter,
+                model_gateway=session_model_gw,
+                prompt_system=session_prompt_sys,
+                delta_bus=session_delta_bus,
+                production_mode=True,
+            )
+        except Exception:
+            ssm.stop()
+            session_bus.close()
+            session_router.close()
+            raise
+
+        # ── P4: Concierge (per-session) ──────────────────────
+        session_concierge = None
+        try:
+            concierge_config = ConciergeConfig.from_kernel_config(self._config)
+            session_input = BusInputAdapter(session_bus)
+            session_output = BusOutputAdapter(session_bus)
+            session_state_port = SSMStateAdapter(ssm)
+            session_dispatch = FabricDispatchAdapter(
+                fabric_port=session_fabric,
+                orchestrator=self._orchestrator,
+            )
+            port_bundle = PortBundle(
+                delta=session_bus,
+                input_=session_input,
+                output=session_output,
+                state=session_state_port,
+                llm=self._model_hub,
+                classification=None,
+                dispatch=session_dispatch,
+                memory=None,
+            )
+            session_concierge = ConciergeFactory.create_with_ports(
+                bus=session_bus,
+                router=session_router,
+                front_mailbox=front_mailbox,
+                back_mailbox=back_mailbox,
+                ports=port_bundle,
+                config=concierge_config,
+            )
+        except Exception:
+            # P3 Fabric has no teardown; clean up P2 + P1.
+            ssm.stop()
+            session_bus.close()
+            session_router.close()
+            raise
+
+        # ── P5: MemoryWriter (per-session) ─────────────────────
+        session_memory_writer = None
+        try:
+            mw_config = MWConfig()
+            mw_session_read = SessionReadAdapter(manager=ssm)
+            mw_model_hub = self._create_memory_writer_hub_adapter()
+            mw_bridge = BridgeCommandAdapter(command_port=self._bridge.get_client())
+            mw_bus_adapter = FabricBusAdapter(session_bus)
+            mw_events = MWEventSubscriptionAdapter(bus_adapter=mw_bus_adapter)
+            mw_cb = MWCircuitBreaker(
+                failure_threshold=mw_config.circuit_breaker_failure_threshold,
+                recovery_probe_seconds=mw_config.circuit_breaker_recovery_probe_seconds,
+            )
+            mw_health = HealthAdapter(
+                circuit_breaker=mw_cb,
+                get_pending_count=lambda: 0,
+                get_started=lambda: False,
+            )
+            session_memory_writer = MemoryWriterFactory.create(
+                session_read_port=mw_session_read,
+                model_hub_port=mw_model_hub,
+                bridge_command_port=mw_bridge,
+                event_subscription_port=mw_events,
+                health_port=mw_health,
+                config=mw_config,
+            )
+        except Exception:
+            # P4 Concierge not started yet — no stop needed.
+            # P3 Fabric no teardown.  Clean up P2 + P1.
+            ssm.stop()
+            session_bus.close()
+            session_router.close()
+            raise
+
+        # ── P6: Assemble SessionInstance + Start Lifecycle ────
+        try:
+            await session_concierge.start()
+        except Exception:
+            # Concierge start failed — clean up P2 + P1.
+            ssm.stop()
+            session_bus.close()
+            session_router.close()
+            raise
+
+        try:
+            await session_memory_writer.start()
+        except Exception:
+            # MW start failed — stop Concierge, then P2 + P1.
+            await session_concierge.stop()
+            ssm.stop()
+            session_bus.close()
+            session_router.close()
+            raise
+
+        session = SessionInstance(
+            session_id=session_id,
+            member_id=None,
+            bus=session_bus,
+            router=session_router,
+            front_mailbox=front_mailbox,
+            back_mailbox=back_mailbox,
+            session_state=ssm,
+            fabric=session_fabric,
+            concierge=session_concierge,
+            memory_writer=session_memory_writer,
+            front_dispatcher=session_concierge._front_dispatcher,
+            back_dispatcher=session_concierge._back_dispatcher,
+            experience_layer=session_concierge.experience_layer,
+            delta_aggregator=session_concierge.delta_aggregator,
+            delta_applicator=None,
+            hitl_coordinator=session_concierge.hitl_coordinator,
+            consumer_task=session_concierge._consumer_task,
+            dead_letter_consumer=session_concierge.dead_letter_consumer,
+            created_at=datetime.now(timezone.utc),
+            front_ctx=session_concierge.front_ctx,
+            back_ctx=session_concierge.back_ctx,
+            ledger=session_concierge.ledger,
+            ledger_store=getattr(session_concierge, "_ledger_store", None),
+            concierge_task=session_concierge._consumer_task,
+        )
+        self._sessions[session_id] = session
+        return session
+        self._sessions[session_id] = session
+        return session

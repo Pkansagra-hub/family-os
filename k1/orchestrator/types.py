@@ -36,9 +36,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from k1.fabric.ports.state_reader import SessionSnapshot
-from k1.fabric.types import CapabilityResult
-from k1.fabric.types import PlanStep as FabricPlanStep
-from k1.fabric.types import Tier
+from k1.fabric.types import CapabilityResult, FabricPlanStep, Tier
 
 # ===========================================================================
 # Layer 1 -- Enums (1.2.9, 1.2.10, 1.2.12 partial, 1.2.24 partial)
@@ -472,6 +470,7 @@ class RegistryEntry:
     """Capability registry entry from IFabricGatewayPort.query_registry().
 
     estimated_duration_ms used by BUDGET-1 time estimation.
+    P2.5: added required_inputs, output, cost_per_call for V2 constraint scoring.
     """
 
     name: str
@@ -480,6 +479,9 @@ class RegistryEntry:
     availability: str
     compensation_capability: Optional[str] = None
     estimated_duration_ms: Optional[int] = None
+    required_inputs: List[str] = field(default_factory=list)
+    output: Dict[str, Any] = field(default_factory=dict)
+    cost_per_call: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -707,6 +709,8 @@ class PlanStep:
             result["timeout_ms"] = self.timeout_ms
         if self.required_context is not None:
             result["required_context"] = list(self.required_context)
+        if self.safety_band_min is not None:
+            result["safety_band_min"] = self.safety_band_min
         return result
 
     @classmethod

@@ -8,6 +8,7 @@ Three factory methods:
   create_standalone()    -- All test adapters, no external deps.
   create_for_testing()   -- Test adapters + event capture mode.
   create_with_ports()    -- Custom adapter injection (production).
+  create_shared()        -- Shared Fabric, no session state (kernel-level).
 
 Construction order (20 steps, dependency-safe):
   1. Adapters (ports first, no dependencies)
@@ -302,6 +303,8 @@ class FabricFactory:
                                For integration tests with event assertions.
       create_with_ports()   -- Custom adapter injection.
                                For production deployment.
+      create_shared()       -- No session state, production ports.
+                               For kernel-level shared components.
 
     Thread Safety:
         Factory methods are stateless (static). The returned Fabric
@@ -412,6 +415,7 @@ class FabricFactory:
         contracts_dir: Optional[str] = None,
         config: Optional[FabricConfig] = None,
         embedding_port: Optional[Any] = None,
+        capability_registry: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with custom adapter injection.
@@ -430,6 +434,11 @@ class FabricFactory:
             contracts_dir: Directory to scan for capability contracts.
             config: Optional FabricConfig override.
             embedding_port: Optional IEmbeddingPort for real vector search.
+            capability_registry: Optional pre-built CapabilityRegistry.
+                If provided, this registry is used instead of creating
+                a new one.  Enables sharing a single registry across
+                multiple per-session Fabric instances (SIM-D-36).
+                If None, a fresh registry is constructed (backward-compatible).
 
         Returns:
             Fully wired Fabric instance.
@@ -445,6 +454,78 @@ class FabricFactory:
             contracts_dir=contracts_dir,
             config=config,
             embedding_port=embedding_port,
+            capability_registry=capability_registry,
+        )
+
+    @staticmethod
+    def create_shared(
+        event_port: Any,
+        bridge: Any,
+        model_gateway: Any,
+        prompt_system: Any,
+        delta_bus: Any,
+        *,
+        state_reader: Optional[Any] = None,
+        production_mode: bool = True,
+        contracts_dir: Optional[str] = None,
+        config: Optional[FabricConfig] = None,
+        embedding_port: Optional[Any] = None,
+        capability_registry: Optional[Any] = None,
+    ) -> Fabric:
+        """
+        Create a shared Fabric instance.
+
+        For kernel-level components (Orchestrator, Planner) that operate
+        outside a user session.  Uses ``NullSessionStateReaderAdapter``
+        internally when no ``state_reader`` is provided, so no
+        ``session_id`` is required.
+
+        When a ``state_reader`` *is* supplied (e.g. a
+        ``SessionRoutingStateReader``), the shared Fabric can access
+        per-session context for capabilities that carry a ``session_id``.
+
+        WORKFLOW and CONCIERGE providers are still registered but will
+        raise ``ValueError`` at instantiation time if invoked — this is
+        expected because shared Fabric serves AGENT, BRIDGE, and MCP
+        provider types only.
+
+        Args:
+            event_port: IEventPort implementation.
+            bridge: IBridgePort implementation.
+            model_gateway: IModelGatewayPort implementation.
+            prompt_system: IPromptSystemPort implementation.
+            delta_bus: IDeltaBusPort implementation.
+            state_reader: Optional ISessionStateReader implementation.
+                When provided, replaces the default null reader so the
+                shared Fabric can read per-session state.
+            production_mode: Enable FabricDispatcher for bounded
+                parallelism (default True for shared Fabric).
+            contracts_dir: Directory to scan for capability contracts.
+            config: Optional FabricConfig override.
+            embedding_port: Optional IEmbeddingPort for real vector search.
+            capability_registry: Optional pre-built CapabilityRegistry
+                for sharing across Fabric instances (SIM-D-36).
+
+        Returns:
+            Fully wired Fabric instance.
+        """
+        if state_reader is None:
+            from k1.fabric.adapters.null_state_reader import NullSessionStateReaderAdapter
+
+            state_reader = NullSessionStateReaderAdapter()
+
+        return _construct_fabric(
+            state_reader=state_reader,
+            event_port=event_port,
+            bridge=bridge,
+            model_gateway=model_gateway,
+            prompt_system=prompt_system,
+            delta_bus=delta_bus,
+            production_mode=production_mode,
+            contracts_dir=contracts_dir,
+            config=config,
+            embedding_port=embedding_port,
+            capability_registry=capability_registry,
         )
 
 
@@ -466,6 +547,7 @@ def _construct_fabric(
     embedding_port: Optional[Any] = None,
     mcp_transport: Optional[Any] = None,
     wasm_runtime: Optional[Any] = None,
+    capability_registry: Optional[Any] = None,
 ) -> Fabric:
     """
     Internal: Build a Fabric instance in dependency-safe order.
@@ -505,10 +587,15 @@ def _construct_fabric(
     validator = ContractValidator()
 
     # ===== STEP 3: CapabilityRegistry (validator + event_port) =====
-    registry = CapabilityRegistry(
-        validator=validator,
-        event_port=event_port,
-    )
+    # If a pre-built registry was injected, use it (SIM-D-36: shared
+    # registry across per-session Fabric instances).  Otherwise create new.
+    if capability_registry is not None:
+        registry = capability_registry
+    else:
+        registry = CapabilityRegistry(
+            validator=validator,
+            event_port=event_port,
+        )
 
     # ===== STEP 4: ModuleLoader (registry + contracts_dir + event_port) =====
     module_loader = ModuleLoader(

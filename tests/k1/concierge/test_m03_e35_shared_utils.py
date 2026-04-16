@@ -156,16 +156,15 @@ class TestNeverCancel:
     """D3: never_cancel extracted from front.py / back.py."""
 
     def test_returns_false(self) -> None:
-        result = asyncio.get_event_loop().run_until_complete(never_cancel())
+        result = asyncio.run(never_cancel())
         assert result is False
 
     def test_is_coroutine_function(self) -> None:
         assert asyncio.iscoroutinefunction(never_cancel)
 
     def test_callable_multiple_times(self) -> None:
-        loop = asyncio.get_event_loop()
         for _ in range(5):
-            assert loop.run_until_complete(never_cancel()) is False
+            assert asyncio.run(never_cancel()) is False
 
     @pytest.mark.asyncio
     async def test_async_invocation(self) -> None:

@@ -47,6 +47,7 @@ from .tiers.warm import WarmTier
 
 if TYPE_CHECKING:
     from .ports.events import IEventPort
+    from .ports.k0_sync import IK0SyncPort
     from .ports.lifecycle import ILifecyclePort
     from .ports.storage import IStoragePort
     from .ports.writer import IWriterPort
@@ -468,6 +469,7 @@ class SessionStateManager:
         "_event_port",
         "_writer_port",
         "_lifecycle_port",
+        "_k0_sync_port",
         "_hot",
         "_warm",
         "_local_cold",
@@ -491,6 +493,7 @@ class SessionStateManager:
         writer_port: IWriterPort,
         lifecycle_port: ILifecyclePort,
         local_cold_archive: Optional[LocalColdArchive] = None,
+        k0_sync_port: Optional[IK0SyncPort] = None,
     ) -> None:
         """
         Initialize SessionStateManager with injected ports.
@@ -502,6 +505,7 @@ class SessionStateManager:
             writer_port: Writer adapter (DirectWriterAdapter for standalone)
             lifecycle_port: Lifecycle adapter (StandaloneLifecycle for standalone)
             local_cold_archive: Optional LocalColdArchive instance (for testing)
+            k0_sync_port: Optional K0 sync port for cross-device sync
 
         Note:
             Does NOT start lifecycle here. Call start() explicitly after construction.
@@ -511,6 +515,7 @@ class SessionStateManager:
         self._event_port = event_port
         self._writer_port = writer_port
         self._lifecycle_port = lifecycle_port
+        self._k0_sync_port = k0_sync_port
 
         # State
         self._state = ManagerState.CREATED

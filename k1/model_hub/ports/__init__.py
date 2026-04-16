@@ -11,6 +11,9 @@ from k1.model_hub.ports.hub_port import IModelHubPort
 from k1.model_hub.ports.metrics_port import IMetricsPort
 from k1.model_hub.ports.state_read_port import IStateReadPort, StateSnapshot
 
+# Re-export health types from k1.model_hub.types for convenience
+from k1.model_hub.types import HubHealthReport, ProviderHealthStatus
+
 __all__ = [
     # Ports
     "IModelHubPort",
@@ -25,4 +28,6 @@ __all__ = [
     "StateSnapshot",
     "ConfigSubscription",
     "HealthReport",
+    "HubHealthReport",
+    "ProviderHealthStatus",
 ]

@@ -189,6 +189,7 @@ class TaskComplete:
     artifacts_created: list[dict[str, Any]] = field(default_factory=list)
     completed_before_cancel: bool = False
     tool_calls: int = 0
+    tool_call_summaries: list[dict[str, Any]] = field(default_factory=list)
 
     def to_payload(self) -> bytes:
         """Serialize to JSON bytes for bus envelope payload."""
@@ -207,6 +208,8 @@ class TaskComplete:
             d["artifacts_created"] = self.artifacts_created
         if self.completed_before_cancel:
             d["completed_before_cancel"] = True
+        if self.tool_call_summaries:
+            d["tool_call_summaries"] = self.tool_call_summaries
         return d
 
     @classmethod
@@ -219,6 +222,7 @@ class TaskComplete:
             artifacts_created=data.get("artifacts_created", []),
             completed_before_cancel=data.get("completed_before_cancel", False),
             tool_calls=data.get("tool_calls", 0),
+            tool_call_summaries=data.get("tool_call_summaries", []),
         )
 
     @classmethod

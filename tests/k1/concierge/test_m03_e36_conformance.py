@@ -35,6 +35,7 @@ from k1.concierge.protocols.cancellation import CancellationToken, CancelReason
 from k1.concierge.react.loop import ReactResult, react_loop
 from k1.concierge.task.parallel_safety import classify_tool_batch
 from k1.concierge.tools.result_protocol import ToolResult
+from tests.k1.concierge.conftest import make_hub_text_response, make_hub_tool_response
 
 # =========================================================================
 # Helpers
@@ -134,20 +135,23 @@ class TestFrontEmissionOrdering:
         model = AsyncMock()
         tool_dispatcher = AsyncMock()
 
-        # Iteration 0: tool call -> dispatch_task
-        dispatch_call = _make_tool_call(
-            "dispatch_task",
-            {
-                "task_description": "do something",
-                "intents": [{"action": "execute"}],
-            },
+        model.execute = AsyncMock(
+            side_effect=[
+                make_hub_tool_response(
+                    [
+                        {
+                            "id": "call_dispatch_task",
+                            "name": "dispatch_task",
+                            "arguments": {
+                                "task_description": "do something",
+                                "intents": [{"action": "execute"}],
+                            },
+                        }
+                    ]
+                ),
+                make_hub_text_response(text="I've dispatched the task for you."),
+            ]
         )
-        tool_response = _make_tool_response([dispatch_call])
-
-        # Iteration 1: text response (final)
-        text_response = _make_text_response("I've dispatched the task for you.")
-
-        model.generate = AsyncMock(side_effect=[tool_response, text_response])
 
         # Tool dispatcher returns ok result with task_id
         tool_dispatcher.dispatch = AsyncMock(
@@ -205,27 +209,31 @@ class TestFrontEmissionOrdering:
         model = AsyncMock()
         tool_dispatcher = AsyncMock()
 
-        # Single iteration: two tool calls -- cancel + dispatch
-        cancel_call = _make_tool_call(
-            "dispatch_task",
-            {
-                "task_description": "cancel old task",
-                "intents": [{"action": "cancel", "target_task_id": "old-task"}],
-            },
-            call_id="call_cancel",
+        model.execute = AsyncMock(
+            side_effect=[
+                make_hub_tool_response(
+                    [
+                        {
+                            "id": "call_cancel",
+                            "name": "dispatch_task",
+                            "arguments": {
+                                "task_description": "cancel old task",
+                                "intents": [{"action": "cancel", "target_task_id": "old-task"}],
+                            },
+                        },
+                        {
+                            "id": "call_normal",
+                            "name": "dispatch_task",
+                            "arguments": {
+                                "task_description": "new task",
+                                "intents": [{"action": "execute"}],
+                            },
+                        },
+                    ]
+                ),
+                make_hub_text_response(text="Done."),
+            ]
         )
-        normal_call = _make_tool_call(
-            "dispatch_task",
-            {
-                "task_description": "new task",
-                "intents": [{"action": "execute"}],
-            },
-            call_id="call_normal",
-        )
-
-        tool_response = _make_tool_response([cancel_call, normal_call])
-        text_response = _make_text_response("Done.")
-        model.generate = AsyncMock(side_effect=[tool_response, text_response])
 
         tool_dispatcher.dispatch = AsyncMock(
             return_value=ToolResult(
@@ -268,7 +276,7 @@ class TestFrontEmissionOrdering:
         from k1.concierge.actors.front import front_handler
 
         model = AsyncMock()
-        model.generate = AsyncMock(return_value=_make_text_response("Hello!"))
+        model.execute = AsyncMock(return_value=make_hub_text_response(text="Hello!"))
 
         bus = MagicMock()
         published_topics: list[str] = []
@@ -487,7 +495,7 @@ class TestCancelPropagation:
 
         assert result.status == "cancelled"
         # Model should never be called since cancel fires first
-        model.generate.assert_not_called()
+        model.execute.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cancel_after_first_tool_call(self) -> None:
@@ -502,11 +510,12 @@ class TestCancelPropagation:
         tool_dispatcher = AsyncMock()
 
         # First iteration: model returns a tool call
-        tool_call = _make_tool_call("recall_memory", {"query": "test"})
-        iter0_response = _make_tool_response([tool_call])
+        iter0_response = make_hub_tool_response(
+            [{"name": "recall_memory", "arguments": {"query": "test"}}]
+        )
         # Second iteration would be text but cancel fires first
-        iter1_response = _make_text_response("Done")
-        model.generate = AsyncMock(side_effect=[iter0_response, iter1_response])
+        iter1_response = make_hub_text_response(text="Done")
+        model.execute = AsyncMock(side_effect=[iter0_response, iter1_response])
 
         async def _dispatch(tc: Any) -> ToolResult:
             nonlocal call_count
@@ -547,7 +556,7 @@ class TestCancelPropagation:
             return False
 
         model = AsyncMock()
-        model.generate = AsyncMock(return_value=_make_text_response("Hello user"))
+        model.execute = AsyncMock(return_value=make_hub_text_response(text="Hello user"))
 
         result = await react_loop(
             actor="front",
@@ -661,19 +670,24 @@ class TestParallelToolSafety:
         model = AsyncMock()
         tool_dispatcher = AsyncMock()
 
-        # Model returns 2 parallel-safe tool calls
-        tool_calls = [
-            _make_tool_call("recall_memory", {"query": "a"}),
-            _make_tool_call("update_beliefs", {"fact": "b"}),
-        ]
-        tool_response = _make_tool_response(tool_calls)
-        # After tools: submit_result to terminate
-        submit_call = _make_tool_call(
-            "submit_result", {"result_type": "complete", "final_answer": "done"}
+        model.execute = AsyncMock(
+            side_effect=[
+                make_hub_tool_response(
+                    [
+                        {"name": "recall_memory", "arguments": {"query": "a"}},
+                        {"name": "update_beliefs", "arguments": {"fact": "b"}},
+                    ]
+                ),
+                make_hub_tool_response(
+                    [
+                        {
+                            "name": "submit_result",
+                            "arguments": {"result_type": "complete", "final_answer": "done"},
+                        },
+                    ]
+                ),
+            ]
         )
-        submit_response = _make_tool_response([submit_call])
-
-        model.generate = AsyncMock(side_effect=[tool_response, submit_response])
 
         async def _dispatch(tc: Any) -> ToolResult:
             execution_log.append((tc.name, "start", time.monotonic()))
@@ -688,6 +702,7 @@ class TestParallelToolSafety:
             mock_cfg.react.parallel_tools_enabled = True
             mock_cfg.react.front_degenerate_fallback = "sorry"
             mock_cfg.react.front_budget_fallback = "out of budget"
+            mock_cfg.llm.default_timeout_ms = 30000
             mock_config.return_value = mock_cfg
 
             result = await react_loop(
@@ -732,16 +747,24 @@ class TestParallelToolSafety:
         tool_dispatcher = AsyncMock()
 
         # Model returns: 1 parallel + 1 sequential tool
-        tool_calls = [
-            _make_tool_call("recall_memory", {"query": "a"}),
-            _make_tool_call("invoke_capability", {"cap": "x"}),
-        ]
-        tool_response = _make_tool_response(tool_calls)
-        submit_call = _make_tool_call(
-            "submit_result", {"result_type": "complete", "final_answer": "done"}
+        model.execute = AsyncMock(
+            side_effect=[
+                make_hub_tool_response(
+                    [
+                        {"name": "recall_memory", "arguments": {"query": "a"}},
+                        {"name": "invoke_capability", "arguments": {"cap": "x"}},
+                    ]
+                ),
+                make_hub_tool_response(
+                    [
+                        {
+                            "name": "submit_result",
+                            "arguments": {"result_type": "complete", "final_answer": "done"},
+                        },
+                    ]
+                ),
+            ]
         )
-        submit_response = _make_tool_response([submit_call])
-        model.generate = AsyncMock(side_effect=[tool_response, submit_response])
 
         async def _dispatch(tc: Any) -> ToolResult:
             execution_log.append((tc.name, "start", time.monotonic()))
@@ -756,6 +779,7 @@ class TestParallelToolSafety:
             mock_cfg.react.parallel_tools_enabled = True
             mock_cfg.react.front_degenerate_fallback = "sorry"
             mock_cfg.react.front_budget_fallback = "out of budget"
+            mock_cfg.llm.default_timeout_ms = 30000
             mock_config.return_value = mock_cfg
 
             result = await react_loop(
@@ -801,16 +825,24 @@ class TestParallelToolSafety:
         model = AsyncMock()
         tool_dispatcher = AsyncMock()
 
-        tool_calls = [
-            _make_tool_call("recall_memory", {"query": "a"}),
-            _make_tool_call("update_beliefs", {"fact": "b"}),
-        ]
-        tool_response = _make_tool_response(tool_calls)
-        submit_call = _make_tool_call(
-            "submit_result", {"result_type": "complete", "final_answer": "done"}
+        model.execute = AsyncMock(
+            side_effect=[
+                make_hub_tool_response(
+                    [
+                        {"name": "recall_memory", "arguments": {"query": "a"}},
+                        {"name": "update_beliefs", "arguments": {"fact": "b"}},
+                    ]
+                ),
+                make_hub_tool_response(
+                    [
+                        {
+                            "name": "submit_result",
+                            "arguments": {"result_type": "complete", "final_answer": "done"},
+                        },
+                    ]
+                ),
+            ]
         )
-        submit_response = _make_tool_response([submit_call])
-        model.generate = AsyncMock(side_effect=[tool_response, submit_response])
 
         async def _dispatch(tc: Any) -> ToolResult:
             execution_log.append((tc.name, "start", time.monotonic()))
@@ -825,6 +857,7 @@ class TestParallelToolSafety:
             mock_cfg.react.parallel_tools_enabled = False
             mock_cfg.react.front_degenerate_fallback = "sorry"
             mock_cfg.react.front_budget_fallback = "out of budget"
+            mock_cfg.llm.default_timeout_ms = 30000
             mock_config.return_value = mock_cfg
 
             result = await react_loop(
@@ -860,5 +893,7 @@ class TestParallelToolSafety:
     def test_submit_result_always_sequential(self) -> None:
         """submit_result is always classified as sequential."""
         parallel, sequential = classify_tool_batch(["submit_result", "recall_memory"])
+        assert "submit_result" in sequential
+        assert "recall_memory" in parallel
         assert "submit_result" in sequential
         assert "recall_memory" in parallel

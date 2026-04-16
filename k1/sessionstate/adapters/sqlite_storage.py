@@ -52,8 +52,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from poc.k1_poc.config import get_config
-
+from ..config import SessionStateConfig
 from ..ports.storage import ArchiveEntry, ArchiveResult, IStoragePort, RestoreResult
 
 # Default database path (config: sessionstate.storage.default_db_path)
@@ -111,17 +110,20 @@ class SQLiteStorageAdapter(IStoragePort):
         )
     """
 
-    def __init__(self, db_path: Optional[Path | str] = None) -> None:
+    def __init__(
+        self, db_path: Optional[Path | str] = None, config: Optional[SessionStateConfig] = None
+    ) -> None:
         """
         Initialize SQLiteStorageAdapter.
 
         Args:
             db_path: Path to SQLite database (Path or str).
                      Default: ~/.familyos/k1/sessionstate.db
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         if db_path is None:
-            cfg_path = get_config().sessionstate.storage.default_db_path
-            self._db_path = Path(cfg_path).expanduser()
+            self._db_path = Path(self._ss_cfg.storage.default_db_path).expanduser()
         elif isinstance(db_path, str):
             self._db_path = Path(db_path)
         else:
@@ -369,7 +371,7 @@ class SQLiteStorageAdapter(IStoragePort):
             self._conn.commit()
 
             duration_ms = (time.perf_counter() - start) * 1000
-            if duration_ms > get_config().sessionstate.storage.sla_storage_ms:
+            if duration_ms > self._ss_cfg.storage.sla_storage_ms:
                 logger.warning(f"Archive SLA breach: {duration_ms:.1f}ms (section={section})")
 
             return ArchiveResult(
@@ -448,7 +450,7 @@ class SQLiteStorageAdapter(IStoragePort):
             row = cursor.fetchone()
             duration_ms = (time.perf_counter() - start) * 1000
 
-            if duration_ms > get_config().sessionstate.storage.sla_storage_ms:
+            if duration_ms > self._ss_cfg.storage.sla_storage_ms:
                 logger.warning(f"Restore SLA breach: {duration_ms:.1f}ms (section={section})")
 
             if row:

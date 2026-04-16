@@ -1,0 +1,51 @@
+// ============================================================================
+// artifacts_warm_section.fbs - Artifacts Warm Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/artifacts_warm_section.fbs
+// Purpose: Demoted task artifacts from HOT task_artifacts section
+// Size Budget: 8KB max
+// Tier: WARM
+// Eviction: LRU to COLD (archive oldest first by created_at_ms)
+// ADR: ADR-0017 (SessionState Design), M6 Extension
+// ============================================================================
+
+include "common.fbs";
+include "task_artifacts_section.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// ARTIFACTS WARM SECTION ROOT
+// ============================================================================
+
+/// Artifacts Warm Section - receives demoted artifacts from HOT tier
+/// LRU-ordered storage. Oldest artifacts evicted first to COLD.
+/// Eviction priority 2 (after telemetry, before beliefs_history).
+table ArtifactsWarmSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Archived artifacts (max 50)
+    // Reuses TaskArtifactEntry from task_artifacts_section.fbs
+    artifacts: [TaskArtifactEntry];
+
+    // Section metadata
+    last_updated_ms: int64;
+}
+
+root_type ArtifactsWarmSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 8KB (8192 bytes) max
+//
+// Breakdown:
+// - Header: ~100 bytes
+// - TaskArtifactEntry: ~100-200 bytes each (content varies)
+// - Max 50 artifacts x ~160 bytes avg = 8000 bytes
+// - Metadata + overhead: ~200 bytes
+//
+// Typical usage: 2-4KB (10-20 archived artifacts)
+// Max with 50 artifacts: ~8KB
+// ============================================================================

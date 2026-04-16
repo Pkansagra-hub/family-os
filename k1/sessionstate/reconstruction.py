@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
-from poc.k1_poc.config import get_config
+from .config import SessionStateConfig
 
 if TYPE_CHECKING:
     from poc.k1_poc.sessionstate.local_cold import LocalColdArchive
@@ -207,6 +207,7 @@ class ReconstructionSLA:
         hot: Optional[HotTier] = None,
         warm: Optional[WarmTier] = None,
         deserializer: Optional[Callable[[str, bytes], Any]] = None,
+        config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
         Initialize ReconstructionSLA.
@@ -217,7 +218,9 @@ class ReconstructionSLA:
             hot: HotTier to hydrate (optional for testing)
             warm: WarmTier to hydrate (optional for testing)
             deserializer: Function to deserialize section data (section_name, bytes) -> object
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._local_cold = local_cold
         self._k0_sync_port = k0_sync_port
         self._hot = hot
@@ -238,7 +241,7 @@ class ReconstructionSLA:
             "ReconstructionSLA initialized (local_cold=%s, k0=%s, sla_target=%.0fms)",
             "available" if local_cold else "none",
             "available" if k0_sync_port else "none",
-            get_config().sessionstate.reconstruction.sla_local_cold_ms,
+            self._ss_cfg.reconstruction.sla_local_cold_ms,
         )
 
     @property
@@ -352,7 +355,7 @@ class ReconstructionSLA:
         sla_met = self._check_sla(source, total_duration_ms)
         if not sla_met:
             self._sla_breaches += 1
-            _cfg_recon = get_config().sessionstate.reconstruction
+            _cfg_recon = self._ss_cfg.reconstruction
             logger.warning(
                 "SLA breach: %s reconstruction took %.2fms (limit: %.2fms)",
                 source.value,
@@ -492,11 +495,11 @@ class ReconstructionSLA:
             restore_result = self._k0_sync_port.restore_from_k0(session_id)
             elapsed_ms = (time.perf_counter() - start) * 1000
 
-            if elapsed_ms > get_config().sessionstate.reconstruction.k0_timeout_ms:
+            if elapsed_ms > self._ss_cfg.reconstruction.k0_timeout_ms:
                 logger.warning(
                     "K0 restore took %.2fms (timeout: %.2fms)",
                     elapsed_ms,
-                    get_config().sessionstate.reconstruction.k0_timeout_ms,
+                    self._ss_cfg.reconstruction.k0_timeout_ms,
                 )
 
             if not restore_result.success:
@@ -675,9 +678,9 @@ class ReconstructionSLA:
         if source == ReconstructionSource.FRESH:
             return True
         elif source == ReconstructionSource.LOCAL_COLD:
-            return duration_ms < get_config().sessionstate.reconstruction.sla_local_cold_ms
+            return duration_ms < self._ss_cfg.reconstruction.sla_local_cold_ms
         elif source == ReconstructionSource.K0:
-            return duration_ms < get_config().sessionstate.reconstruction.sla_k0_fallback_ms
+            return duration_ms < self._ss_cfg.reconstruction.sla_k0_fallback_ms
         else:
             return True  # Unknown source, assume OK
 
@@ -712,7 +715,7 @@ class ReconstructionSLA:
                 if archives:
                     # Calculate total size
                     total_size_kb = sum(a.size_bytes for a in archives) / 1024
-                    _cfg_r = get_config().sessionstate.reconstruction
+                    _cfg_r = self._ss_cfg.reconstruction
                     return (
                         _cfg_r.estimate_local_cold_base_ms
                         + total_size_kb * _cfg_r.estimate_local_cold_per_kb_ms
@@ -725,7 +728,7 @@ class ReconstructionSLA:
             try:
                 if self._k0_sync_port.is_available:
                     # Assume average session size (~50KB)
-                    _cfg_r = get_config().sessionstate.reconstruction
+                    _cfg_r = self._ss_cfg.reconstruction
                     return _cfg_r.estimate_k0_base_ms + 50 * _cfg_r.estimate_k0_per_kb_ms
             except Exception:
                 pass

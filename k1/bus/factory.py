@@ -39,6 +39,7 @@ Backend selection (V2-M9):
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional, Union
 
 from k1.bus.impl.local_bus import LocalBus
@@ -72,9 +73,33 @@ MailboxRouterType = Union[LocalMailboxRouter, "RustMailboxRouterAdapter"]  # typ
 
 _VALID_BACKENDS = ("auto", "rust", "python")
 
+_ENV_BUS_BACKEND = "K1_BUS_BACKEND"
+
 
 def _resolve_backend(backend: str) -> str:
-    """Resolve 'auto' to a concrete backend and validate the parameter."""
+    """Resolve 'auto' to a concrete backend and validate the parameter.
+
+    If the ``K1_BUS_BACKEND`` environment variable is set to a valid value
+    (``"auto"``, ``"python"``, ``"rust"``), it **overrides** the programmatic
+    *backend* parameter.  An invalid env var value is logged and ignored.
+    """
+    # Env var override (highest priority)
+    env_val = os.environ.get(_ENV_BUS_BACKEND, "").strip().lower()
+    if env_val:
+        if env_val in _VALID_BACKENDS:
+            logger.debug(
+                "K1_BUS_BACKEND=%r overrides programmatic backend=%r",
+                env_val,
+                backend,
+            )
+            backend = env_val
+        else:
+            logger.warning(
+                "K1_BUS_BACKEND=%r is invalid (must be one of %r), ignoring",
+                env_val,
+                _VALID_BACKENDS,
+            )
+
     if backend not in _VALID_BACKENDS:
         raise ValueError(f"Invalid backend {backend!r}. Must be one of {_VALID_BACKENDS!r}")
     if backend == "auto":

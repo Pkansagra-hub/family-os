@@ -388,18 +388,22 @@ class TestHealthReportAdapter:
 
 
 class TestAdaptersReExport:
-    """All 7 production adapters re-exported from k1.model_hub.adapters."""
+    """All 9 production adapters re-exported from k1.model_hub.adapters."""
 
     def test_all_importable(self) -> None:
         from k1.model_hub.adapters import __all__
 
         expected = {
+            "BusEnvelopeDeserializer",
             "ConfigAdapter",
             "CredentialStoreAdapter",
             "EventBusAdapter",
             "HealthReportAdapter",
             "LLMRequestBusAdapter",
             "PrometheusAdapter",
+            "SessionStateProdAdapter",
             "SessionStateReadAdapter",
+            "TOPIC_HUB_EXECUTE",
+            "TOPIC_HUB_RESPONSE",
         }
         assert set(__all__) == expected

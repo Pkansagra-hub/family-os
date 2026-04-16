@@ -117,7 +117,7 @@ class StandaloneLifecycle(ILifecyclePort):
 
     def __init__(
         self,
-        manager: SessionStateManager,
+        manager: Optional[SessionStateManager] = None,
         config: Optional[LifecycleConfig] = None,
         checkpoint_interval_s: Optional[float] = None,
     ) -> None:
@@ -125,7 +125,7 @@ class StandaloneLifecycle(ILifecyclePort):
         Initialize StandaloneLifecycle.
 
         Args:
-            manager: SessionStateManager to manage
+            manager: SessionStateManager to manage (can be bound later via bind_manager)
             config: Lifecycle configuration (optional)
             checkpoint_interval_s: Override checkpoint interval in seconds
                                    (for backward compatibility)
@@ -162,8 +162,31 @@ class StandaloneLifecycle(ILifecyclePort):
         self._lock = threading.RLock()
         self._error_message: Optional[str] = None
 
+        if manager is not None:
+            logger.info(
+                "StandaloneLifecycle initialized (session=%s, checkpoint_interval=%dms)",
+                manager.session_id[:8] if manager.session_id else "none",
+                self._config.checkpoint_interval_ms,
+            )
+
+    def bind_manager(self, manager: SessionStateManager) -> None:
+        """
+        Bind manager reference after construction (single-phase factory pattern).
+
+        Called by SessionStateFactory to break the circular dependency between
+        manager and lifecycle adapter without leaving the manager with None ports.
+
+        Args:
+            manager: SessionStateManager to manage
+
+        Raises:
+            RuntimeError: If manager is already bound
+        """
+        if self._manager is not None:
+            raise RuntimeError("StandaloneLifecycle already bound to a manager")
+        self._manager = manager
         logger.info(
-            "StandaloneLifecycle initialized (session=%s, checkpoint_interval=%dms)",
+            "StandaloneLifecycle bound (session=%s, checkpoint_interval=%dms)",
             manager.session_id[:8] if manager.session_id else "none",
             self._config.checkpoint_interval_ms,
         )

@@ -1,25 +1,47 @@
 """
-k1.concierge.orchestrator.types -- Orchestrator types for tier routing and execution.
+k1.concierge.orchestrator.types -- Concierge-local orchestrator types.
 
 V2 Design Ref: Section 11.2.1 (ComplexityTier, TaskEnvelope, Budget)
 V2 Design Ref: Section 11.3 (OrchestratorStub types: CapabilityRequest, CapabilityResult)
 V2 Design Ref: Section 11.4.2 (PlanRequest, CommittedPlan, PlanStep)
 V2 Design Ref: Section 11.7 (AggregatedResult -- universal result type)
 
-Production Reference: k1/orchestrator/types.py (frozen dataclasses, validation,
-    factory classmethods on AggregatedResult).
+ARCHITECTURE NOTE (E-0.5.5 / I-0.5.5.1):
+    These types are the Concierge-internal orchestrator contract layer.
+    They are intentionally SEPARATE from k1.orchestrator.types because:
 
-Simplified POC versions that do NOT import from k1.fabric or k1.orchestrator.
-These types mirror the production structure but remain self-contained within
-the POC package.
+    1. Field differences -- POC TaskEnvelope uses task_id, budget: Budget,
+       tier: ComplexityTier, session_id. Production uses envelope_id,
+       timeout_ms (no Budget class), tier: str, caller_id, capabilities,
+       params, constraints. NOT a drop-in replacement.
 
-Key design decisions:
-    - TaskEnvelope is frozen (immutable after creation) per production pattern
-    - Budget is frozen with sensible defaults per design doc
-    - AggregatedResult is frozen with from_medium() factory classmethod
-    - CapabilityRequest/CapabilityResult are POC-local (not imported from k1.fabric)
-    - PlanRequest, CommittedPlan, PlanStep are interface-only (HIGH tier deferred)
-    - All types use __post_init__ validation where the production code does
+    2. Simplified Fabric types -- POC CapabilityRequest uses `name` (production
+       uses `capability_name`). POC CapabilityResult.error is str (production
+       is Optional[ErrorInfo]). POC CapabilityResult has capability_name
+       (production does not).
+
+    3. Factory method differences -- POC AggregatedResult.from_medium() takes
+       a single CapabilityResult. Production takes List[StepResult]. POC has
+       from_multi_step(); production does not.
+
+    4. POC-only types -- Budget and CannedResponse have NO production
+       equivalents.
+
+    The boundary translation adapter (POCFabricGatewayAdapter in
+    k1/concierge/kernel/bootstrap.py) correctly bridges POC→production
+    types at the dispatch boundary.
+
+    Production type locations for reference:
+        TaskEnvelope      -> k1.orchestrator.types
+        StepResult        -> k1.orchestrator.types (status: StepStatus enum)
+        AggregatedResult  -> k1.orchestrator.types (from_medium takes List[StepResult])
+        PlanRequest       -> k1.orchestrator.types (trace_id required, context: SessionSnapshot)
+        PlanStep          -> k1.orchestrator.types (14 fields, id not step_id)
+        CommittedPlan     -> k1.orchestrator.types (intent + trace_id required)
+        CapabilityRequest -> k1.fabric.types (capability_name, 16 fields)
+        CapabilityResult  -> k1.fabric.types (error: ErrorInfo, no capability_name)
+        Budget            -> (no production equivalent)
+        CannedResponse    -> (no production equivalent)
 """
 
 from __future__ import annotations

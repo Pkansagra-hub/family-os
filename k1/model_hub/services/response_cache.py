@@ -21,6 +21,7 @@ References
 from __future__ import annotations
 
 import hashlib
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -109,6 +110,7 @@ class ResponseCache:
         self._max_entries = config.cache_max_entries
         self._default_ttl_s = config.cache_ttl_s
         self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._lock = threading.Lock()
         self._total_hits = 0
         self._total_misses = 0
 
@@ -183,28 +185,29 @@ class ResponseCache:
         Returns:
             CacheResult with hit/miss status.
         """
-        entry = self._cache.get(cache_key)
+        with self._lock:
+            entry = self._cache.get(cache_key)
 
-        if entry is None:
-            self._total_misses += 1
-            return CacheResult(hit=False, cache_key=cache_key)
+            if entry is None:
+                self._total_misses += 1
+                return CacheResult(hit=False, cache_key=cache_key)
 
-        if entry.is_expired:
-            del self._cache[cache_key]
-            self._total_misses += 1
-            return CacheResult(hit=False, cache_key=cache_key)
+            if entry.is_expired:
+                del self._cache[cache_key]
+                self._total_misses += 1
+                return CacheResult(hit=False, cache_key=cache_key)
 
-        # LRU: move to end
-        self._cache.move_to_end(cache_key)
-        entry.hit_count += 1
-        self._total_hits += 1
+            # LRU: move to end
+            self._cache.move_to_end(cache_key)
+            entry.hit_count += 1
+            self._total_hits += 1
 
-        return CacheResult(
-            hit=True,
-            response=entry.response,
-            cache_key=cache_key,
-            age_ms=entry.age_ms,
-        )
+            return CacheResult(
+                hit=True,
+                response=entry.response,
+                cache_key=cache_key,
+                age_ms=entry.age_ms,
+            )
 
     # -- Put -------------------------------------------------------------------
 
@@ -225,20 +228,21 @@ class ResponseCache:
         """
         effective_ttl = ttl_s if ttl_s is not None else self._default_ttl_s
 
-        # If key exists, remove it first (will re-add at end)
-        if cache_key in self._cache:
-            del self._cache[cache_key]
+        with self._lock:
+            # If key exists, remove it first (will re-add at end)
+            if cache_key in self._cache:
+                del self._cache[cache_key]
 
-        # Evict LRU entries if at capacity
-        while len(self._cache) >= self._max_entries:
-            self._cache.popitem(last=False)  # Remove oldest
+            # Evict LRU entries if at capacity
+            while len(self._cache) >= self._max_entries:
+                self._cache.popitem(last=False)  # Remove oldest
 
-        self._cache[cache_key] = _CacheEntry(
-            response=response,
-            created_at=time.monotonic(),
-            ttl_s=effective_ttl,
-            cache_key=cache_key,
-        )
+            self._cache[cache_key] = _CacheEntry(
+                response=response,
+                created_at=time.monotonic(),
+                ttl_s=effective_ttl,
+                cache_key=cache_key,
+            )
 
     # -- Invalidate / Clear ----------------------------------------------------
 
@@ -247,14 +251,16 @@ class ResponseCache:
 
         Returns True if the entry was found and removed.
         """
-        if cache_key in self._cache:
-            del self._cache[cache_key]
-            return True
-        return False
+        with self._lock:
+            if cache_key in self._cache:
+                del self._cache[cache_key]
+                return True
+            return False
 
     def clear(self) -> None:
         """Remove all entries from the cache."""
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
 
     # -- Stats -----------------------------------------------------------------
 

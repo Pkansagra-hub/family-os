@@ -57,8 +57,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol
 
-from poc.k1_poc.config import get_config
-
+from .config import SessionStateConfig
 from .sizetracker import (
     ALL_SECTIONS,
     HOT_SECTIONS,
@@ -424,6 +423,7 @@ class MigrationEngine:
     """
 
     __slots__ = (
+        "_ss_cfg",
         "_size_tracker",
         "_mutation_guard",
         "_section_provider",
@@ -441,6 +441,7 @@ class MigrationEngine:
         session_id: str = "",
         compress_fn: Optional[Callable[[Any], CompressedTurn]] = None,
         summarize_fn: Optional[Callable[[Any], SummarizedTurn]] = None,
+        config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
         Initialize MigrationEngine.
@@ -452,7 +453,9 @@ class MigrationEngine:
             session_id: Session ID for migration metadata
             compress_fn: Custom compression function (optional)
             summarize_fn: Custom summarization function (optional)
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._size_tracker = size_tracker
         self._mutation_guard = mutation_guard
         self._section_provider = section_provider
@@ -760,7 +763,7 @@ class MigrationEngine:
         # Get turn number from metadata or key
         turn_number = item.metadata.get("turn_number", 0)
 
-        if turn_number > get_config().sessionstate.migration.compression_turn_threshold:
+        if turn_number > self._ss_cfg.migration.compression_turn_threshold:
             # Summarize for turns 31+
             summarized = self._summarize_turn(item.data)
             summarized_bytes = len(json.dumps(summarized.to_dict()).encode("utf-8"))
@@ -1116,7 +1119,7 @@ class MigrationEngine:
 
         # Calculate bytes to free
         current_hot = self._size_tracker.get_tier_size("hot")
-        _cfg_mig = get_config().sessionstate.migration
+        _cfg_mig = self._ss_cfg.migration
         target_hot = int(HOT_SIZE_LIMIT_BYTES * _cfg_mig.target_hot_utilization)
         bytes_to_free = current_hot - target_hot
 
@@ -1157,7 +1160,7 @@ class MigrationEngine:
             if total_freed >= bytes_to_free:
                 break
 
-            if iterations >= get_config().sessionstate.migration.max_demote_iterations:
+            if iterations >= self._ss_cfg.migration.max_demote_iterations:
                 logger.warning("Max demote iterations reached")
                 break
 
@@ -1320,7 +1323,7 @@ class MigrationEngine:
             current_size = self._size_tracker.get_section_size(section)
             turn_count = current_size // 1024 + (1 if current_size % 1024 > 0 else 0)
 
-        _max_turns = get_config().sessionstate.migration.max_history_active_turns
+        _max_turns = self._ss_cfg.migration.max_history_active_turns
         if turn_count <= _max_turns:
             logger.debug(
                 "history_active has %d turns (<= %d), no demotion needed",
@@ -1479,9 +1482,7 @@ class MigrationEngine:
             int: Bytes to demote (0 if pressure is normal)
         """
         current_hot = self._size_tracker.get_tier_size("hot")
-        target_hot = int(
-            HOT_SIZE_LIMIT_BYTES * get_config().sessionstate.migration.target_hot_utilization
-        )
+        target_hot = int(HOT_SIZE_LIMIT_BYTES * self._ss_cfg.migration.target_hot_utilization)
 
         if current_hot <= target_hot:
             return 0

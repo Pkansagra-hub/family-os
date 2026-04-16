@@ -38,7 +38,6 @@ from typing import Any
 
 from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
-from k1.model_hub.ports import IModelHubPort
 
 # Shared actor utilities (M3 E3.5)
 from k1.concierge.actors.shared import never_cancel as _never_cancel
@@ -61,6 +60,7 @@ from k1.concierge.react.history import build_chat_history_for_back
 from k1.concierge.react.loop import ReactResult, react_loop
 from k1.concierge.tools.dispatcher import ToolDispatcher
 from k1.concierge.tools.schemas_back import BACK_TIER_ALLOWLISTS, BACK_TOOL_SCHEMAS
+from k1.model_hub.ports import IModelHubPort
 
 logger = logging.getLogger(__name__)
 
@@ -324,6 +324,7 @@ def _emit_back_result(
     result: ReactResult,
     react_history: list[ModelMessage] | None = None,
     original_task: dict[str, Any] | None = None,
+    tool_call_summaries: list[dict[str, Any]] | None = None,
 ) -> None:
     """Emit the appropriate bus event based on ReactResult status.
 
@@ -350,15 +351,18 @@ def _emit_back_result(
 
     if result.status == "complete":
         data = result.data or {}
+        complete_payload: dict[str, Any] = {
+            "task_id": task_id,
+            "action": task_action,
+            "result_type": "complete",
+            "final_answer": data.get("final_answer", ""),
+            "results": data.get("results", []),
+            "artifacts_created": data.get("artifacts_created", []),
+        }
+        if tool_call_summaries:
+            complete_payload["tool_call_summaries"] = tool_call_summaries
         env = build_task_complete(
-            payload={
-                "task_id": task_id,
-                "action": task_action,
-                "result_type": "complete",
-                "final_answer": data.get("final_answer", ""),
-                "results": data.get("results", []),
-                "artifacts_created": data.get("artifacts_created", []),
-            },
+            payload=complete_payload,
             parent_id=parent_id,
         )
         bus.publish(env)
@@ -554,6 +558,8 @@ async def back_handler(
 
     # 7. Emit result to bus (Epic 7.3)
     # M3 E3.3.4: Pass react history + original task for suspended payloads
+    # Phase P: Extract tool call summaries for MW persistence
+    call_summaries = [s.to_dict() for s in tool_dispatcher.get_call_summaries()]
     _emit_back_result(
         bus,
         envelope,
@@ -561,6 +567,7 @@ async def back_handler(
         result,
         react_history=messages,
         original_task=task,
+        tool_call_summaries=call_summaries,
     )
 
     logger.info(
@@ -791,6 +798,8 @@ async def back_resume_handler(
 
     # 9. Emit result (same as back_handler)
     # M3 E3.3.4: Pass react history + original task for re-suspension
+    # Phase P: Extract tool call summaries for MW persistence
+    resume_call_summaries = [s.to_dict() for s in tool_dispatcher.get_call_summaries()]
     _emit_back_result(
         bus,
         envelope,
@@ -798,6 +807,7 @@ async def back_resume_handler(
         result,
         react_history=messages,
         original_task=original_task,
+        tool_call_summaries=resume_call_summaries,
     )
 
     # 10. Clean up pending context

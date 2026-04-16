@@ -12,12 +12,10 @@ CRITICAL INVARIANT (MW-02):
   Reads MUST be lock-free and complete in <1ms P99. Implementations
   must use the latest committed snapshot without triggering reconstruction.
 
-SessionState sections read by MW (13 of 15, skip telemetry + artifacts_warm):
-  Hot (10):  beliefs_active, beliefs_history, history_active, history_recent,
-             affective_now, affective_baseline, narrative_active, scoreboard,
-             control, persona
-  Warm (3):  task_state, ifl, meta
-  Skipped:   telemetry, artifacts_warm
+SessionState sections read by MW (section-agnostic via snapshot_all):
+  All sections from SessionState.ALL_SECTIONS are read EXCEPT those
+  in MWConfig.skip_sections (default: telemetry, artifacts_warm).
+  New sections are automatically included without config changes.
 
 Production adapter: SessionReadAdapter in adapters/session_read_adapter.py
 Test adapter: In adapters/test_adapters.py
@@ -30,7 +28,7 @@ References:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, FrozenSet, List, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -87,5 +85,40 @@ class ISessionReadPort(Protocol):
 
         Raises:
             AdapterError: If SessionState is unreachable.
+        """
+        ...  # pragma: no cover
+
+    async def list_sections(self) -> FrozenSet[str]:
+        """
+        Return the authoritative set of all SessionState section names.
+
+        Delegates to ALL_SECTIONS at the adapter level. MW uses this
+        to discover sections dynamically instead of hardcoding names.
+
+        Returns:
+            FrozenSet of section name strings.
+        """
+        ...  # pragma: no cover
+
+    async def snapshot_all(
+        self,
+        exclude: FrozenSet[str] = frozenset(),
+    ) -> Dict[str, Any]:
+        """
+        Read ALL SessionState sections in one call, minus excluded ones.
+
+        This is the section-agnostic replacement for snapshot(sections).
+        MW no longer enumerates section names — it reads everything except
+        the skip list (default: telemetry, artifacts_warm).
+
+        New sections added to SessionState are automatically included
+        without MW config changes.
+
+        Args:
+            exclude: Section names to skip (e.g. {"telemetry", "artifacts_warm"}).
+
+        Returns:
+            Dict mapping section name -> section data.
+            Missing or unavailable sections are omitted.
         """
         ...  # pragma: no cover

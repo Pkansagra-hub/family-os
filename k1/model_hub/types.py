@@ -575,6 +575,103 @@ class CodeExecPayload:
 
 
 # ===========================================================================
+# Capability Result Types (one per CapabilityType)
+# ===========================================================================
+
+# Union type for all capability-specific results
+CapabilityResult = Any  # Union of ChatResult, ToolCallResultSet, etc.
+
+
+@dataclass(frozen=True)
+class ChatResult:
+    """CHAT capability result."""
+
+    text: str = ""
+
+
+@dataclass(frozen=True)
+class ToolCallResultSet:
+    """TOOL_CALL capability result (text + tool calls)."""
+
+    text: str = ""
+    tool_calls: List[ToolCallResult] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class StructuredResult:
+    """STRUCTURED capability result (JSON output)."""
+
+    json_output: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ReasonResult:
+    """REASON capability result (text + thinking trace)."""
+
+    text: str = ""
+    thinking: str = ""
+
+
+# Backward-compat alias: Usage → TokenUsage
+Usage = TokenUsage
+
+
+@dataclass(frozen=True)
+class EmbedResult:
+    """EMBED capability result (list of embedding vectors)."""
+
+    embeddings: List[List[float]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ModerationCategory:
+    """Single moderation category flag."""
+
+    category: str = ""
+    flagged: bool = False
+    score: float = 0.0
+
+
+@dataclass(frozen=True)
+class ModerateResult:
+    """MODERATE capability result (content safety flags)."""
+
+    flagged: bool = False
+    categories: List[ModerationCategory] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TokenCountResult:
+    """TOKEN_COUNT capability result."""
+
+    count: int = 0
+
+
+@dataclass(frozen=True)
+class ImageInput:
+    """Image input for VisionPayload."""
+
+    data: str = ""
+    media_type: str = "image/jpeg"
+
+
+@dataclass(frozen=True)
+class AudioInput:
+    """Audio input for AudioInputPayload."""
+
+    data: str = ""
+    format: str = "wav"
+
+
+@dataclass(frozen=True)
+class VoiceConfig:
+    """Voice configuration for AudioInputPayload."""
+
+    voice: str = "alloy"
+    speed: float = 1.0
+
+
+# ===========================================================================
 # Health Report
 # ===========================================================================
 
@@ -745,6 +842,20 @@ __all__ = [
     "ImageGenPayload",
     "WebSearchPayload",
     "CodeExecPayload",
+    # Capability Results
+    "CapabilityResult",
+    "ChatResult",
+    "ToolCallResultSet",
+    "StructuredResult",
+    "ReasonResult",
+    "EmbedResult",
+    "ModerationCategory",
+    "ModerateResult",
+    "TokenCountResult",
+    "ImageInput",
+    "AudioInput",
+    "VoiceConfig",
+    "Usage",
     # Health
     "ProviderHealthStatus",
     "HubHealthReport",

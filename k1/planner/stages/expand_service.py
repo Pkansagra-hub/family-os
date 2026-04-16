@@ -10,7 +10,7 @@ Design
 ------
 - Layer 2 (Section 30.6): imports Layer 1 ports (ILLMPort), Layer 0
   types (SketchResult, ExpandedPlan, PlanStep, PlanRequest, StageContext,
-  HubRequest, HubResponse, RequestConstraints, ExpandFailedError), and
+  PlannerLLMRequest, PlannerLLMResponse, PlannerConstraints, ExpandFailedError), and
   shared types from Orchestrator (PlanStep, StepResult, PlanRequest,
   MicroReplanRequest).
 - Stateless between calls: no per-plan instance state. All per-plan
@@ -68,9 +68,9 @@ from k1.planner.ports.llm_port import ILLMPort
 from k1.planner.types import (
     ExpandedPlan,
     ExpandFailedError,
-    HubRequest,
-    HubResponse,
-    RequestConstraints,
+    PlannerConstraints,
+    PlannerLLMRequest,
+    PlannerLLMResponse,
     SketchResult,
     StageContext,
 )
@@ -633,7 +633,7 @@ class ExpandService:
         return EXPAND_TOOL_DEFINITIONS
 
     # ------------------------------------------------------------------
-    # HubRequest construction
+    # PlannerLLMRequest construction
     # ------------------------------------------------------------------
 
     def _build_hub_request(
@@ -642,8 +642,8 @@ class ExpandService:
         ctx: StageContext,
         *,
         tools: Optional[Tuple[Dict[str, Any], ...]] = None,
-    ) -> HubRequest:
-        """Build a HubRequest for an LLM call.
+    ) -> PlannerLLMRequest:
+        """Build a PlannerLLMRequest for an LLM call.
 
         Key difference from SKETCH: temperature 0.3 (precision).
 
@@ -653,7 +653,7 @@ class ExpandService:
             tools: Optional tool definitions for agentic calls.
 
         Returns:
-            HubRequest ready for ILLMPort.execute().
+            PlannerLLMRequest ready for ILLMPort.execute().
         """
         payload: Dict[str, Any] = {
             "messages": messages,
@@ -662,14 +662,14 @@ class ExpandService:
         if tools:
             payload["tools"] = list(tools)
 
-        constraints = RequestConstraints(
+        constraints = PlannerConstraints(
             max_tokens=ctx.stage_budget.max_tokens if ctx.stage_budget else 1024,
             timeout_ms=ctx.stage_budget.timeout_ms if ctx.stage_budget else 5000,
             temperature=0.3,
             consumer_id="planner.expand",
         )
 
-        return HubRequest(
+        return PlannerLLMRequest(
             capability="CHAT",
             payload=payload,
             constraints=constraints,
@@ -1058,7 +1058,7 @@ class ExpandService:
                 )
 
             hub_request = self._build_hub_request(messages, ctx, tools=tools)
-            hub_response: HubResponse = await self._llm_port.execute(hub_request)
+            hub_response: PlannerLLMResponse = await self._llm_port.execute(hub_request)
 
             result = hub_response.result if hub_response.result else {}
             content = result.get("content", "")

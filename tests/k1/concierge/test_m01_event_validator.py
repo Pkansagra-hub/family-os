@@ -29,7 +29,11 @@ from k1.concierge.events.task import (
     TaskLeased,
     TaskProgressed,
 )
-from k1.concierge.events.validator import EVENT_SCHEMA_REGISTRY, validate_event, validate_event_chain
+from k1.concierge.events.validator import (
+    EVENT_SCHEMA_REGISTRY,
+    validate_event,
+    validate_event_chain,
+)
 from k1.concierge.events.weave import WeaveCandidateArrived, WeaveDecisionMade, WeaveEmitted
 
 # =========================================================================
@@ -55,8 +59,15 @@ ALL_16_EVENT_CLASSES: list[type[CanonicalEventMeta]] = [
     WeaveEmitted,
 ]
 
+# E-0.5.23 added 6 previously unregistered event types (27th-32nd)
 # M2 E2.5.4 added ResponseFinalDecided (17th event type)
-from k1.concierge.events.conversation import ResponseFinalDecided
+from k1.concierge.events.conversation import Phase1Classified, ResponseFinalDecided, TaskRouted
+from k1.concierge.events.hitl import (
+    HITLBlockedRedEvent,
+    HITLRequestedEvent,
+    HITLResolvedEvent,
+    HITLTimedOutEvent,
+)
 
 # M4 E4.5.4 added TurnMutationSummary (18th event type)
 from k1.concierge.events.mutation import TurnMutationSummary
@@ -72,6 +83,9 @@ from k1.concierge.events.pool import (
     TaskLeaseRenewedEvent,
 )
 
+# M8 E8.5 added WeaveMetricsEvent (26th event type)
+from k1.concierge.events.weave import WeaveMetricsEvent
+
 ALL_EVENT_CLASSES: list[type[CanonicalEventMeta]] = ALL_16_EVENT_CLASSES + [
     ResponseFinalDecided,
     TurnMutationSummary,
@@ -82,6 +96,13 @@ ALL_EVENT_CLASSES: list[type[CanonicalEventMeta]] = ALL_16_EVENT_CLASSES + [
     TaskLeaseRenewedEvent,
     TaskDeferredEvent,
     DependencyFailedEvent,
+    WeaveMetricsEvent,
+    Phase1Classified,
+    TaskRouted,
+    HITLRequestedEvent,
+    HITLResolvedEvent,
+    HITLTimedOutEvent,
+    HITLBlockedRedEvent,
 ]
 
 
@@ -445,6 +466,23 @@ class TestValidateCanonicalMetadataCompat:
 
     def test_validate_event_catches_same_errors(self) -> None:
         """When canonical fields are missing, both validators agree."""
+        payload = _make_valid_payload(TaskCompleted)
+        del payload["actor"]
+
+        meta_ok, meta_errs = validate_canonical_metadata(payload)
+        event_ok, event_errs = validate_event(payload)
+
+        assert not meta_ok
+        assert not event_ok
+        # validate_event includes all meta errors
+        for err in meta_errs:
+            assert err in event_errs
+
+        assert not meta_ok
+        assert not event_ok
+        # validate_event includes all meta errors
+        for err in meta_errs:
+            assert err in event_errs
         payload = _make_valid_payload(TaskCompleted)
         del payload["actor"]
 

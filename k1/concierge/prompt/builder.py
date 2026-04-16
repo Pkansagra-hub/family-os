@@ -561,9 +561,7 @@ def _render_temporal_context_full(section: Any, cfg: SSReadConfig) -> str:
         anchor = section.get_temporal_anchor()
     if anchor is None:
         # Lazy fallback: compute from Persona timezone if Phase 1 not run
-        from k1.sessionstate.sections.temporal_context import (
-            compute_temporal_anchor,
-        )
+        from k1.sessionstate.public_types import compute_temporal_anchor
 
         tz = "UTC"
         if hasattr(section, "get_all_preferences"):
@@ -598,9 +596,7 @@ def _render_temporal_context_slim(section: Any, cfg: SSReadConfig) -> str:
     if hasattr(section, "get_temporal_anchor"):
         anchor = section.get_temporal_anchor()
     if anchor is None:
-        from k1.sessionstate.sections.temporal_context import (
-            compute_temporal_anchor,
-        )
+        from k1.sessionstate.public_types import compute_temporal_anchor
 
         anchor = compute_temporal_anchor("UTC").to_dict()
     if not anchor:

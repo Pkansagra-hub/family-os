@@ -641,10 +641,10 @@ class TestE52TopicAndBuilderIntegration:
         """ALL_TOPICS has 31 topics (29 orig + intent_arbitrated + task_modify)."""
         from k1.concierge.bus.topics import ALL_TOPICS
 
-        assert len(ALL_TOPICS) == 40
+        assert len(ALL_TOPICS) == 46
 
     def test_builders_count(self) -> None:
         """BUILDERS dict has 31 entries."""
         from k1.concierge.bus.builders import BUILDERS
 
-        assert len(BUILDERS) == 40
+        assert len(BUILDERS) == 46

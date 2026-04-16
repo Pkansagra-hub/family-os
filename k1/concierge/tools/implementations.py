@@ -44,7 +44,7 @@ from k1.concierge.task.dispatch import TaskDispatch
 from k1.concierge.task.intent import TaskIntent
 from k1.concierge.tools.result_protocol import ToolResult
 from k1.fabric.types import CapabilityRequest
-from k1.sessionstate.ports.writer import BatchRequest, MutationRequest
+from k1.sessionstate.public_types import BatchRequest, MutationRequest
 
 logger = logging.getLogger(__name__)
 

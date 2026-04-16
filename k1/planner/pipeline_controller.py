@@ -21,7 +21,7 @@ Invariants enforced
 -------------------
 - PLAN-03: CommitService is last stage; no LLM call in commit path.
 - PLAN-04: Checks elapsed time at each stage transition (45s default).
-- PLAN-11: Injects per-stage budget into HubRequest.constraints.
+- PLAN-11: Injects per-stage budget into PlannerLLMRequest.constraints.
 - PLAN-12: Wraps execute() in try/except; uncaught -> FAILED + emit.
 
 Import graph (Layer 5)
@@ -82,8 +82,8 @@ from k1.planner.types import (
     DeltaPayload,
     ExpandedPlan,
     PlanCancelledError,
+    PlannerConstraints,
     PlannerError,
-    RequestConstraints,
     StageContext,
     StagePhase,
     ValidateRejectedError,
@@ -912,10 +912,10 @@ class PipelineController:
     def _get_stage_budget(
         self,
         stage: StagePhase,
-    ) -> Optional[RequestConstraints]:
+    ) -> Optional[PlannerConstraints]:
         """Return per-stage LLM budget from PlannerConfig (PLAN-11).
 
-        Returns ``RequestConstraints`` for LLM-calling stages (SKETCH,
+        Returns ``PlannerConstraints`` for LLM-calling stages (SKETCH,
         EXPAND, VALIDATE) and ``None`` for COMMIT (PLAN-03: no LLM calls
         in commit path).
 
@@ -929,7 +929,7 @@ class PipelineController:
 
         Returns
         -------
-        Optional[RequestConstraints]
+        Optional[PlannerConstraints]
             Per-stage LLM constraints, or ``None`` for COMMIT.
 
         References
@@ -939,19 +939,19 @@ class PipelineController:
         """
         cfg = self._config
         if stage == StagePhase.SKETCH:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.sketch_max_tokens,
                 timeout_ms=cfg.sketch_timeout_ms,
                 temperature=cfg.sketch_temperature,
             )
         if stage == StagePhase.EXPAND:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.expand_max_tokens,
                 timeout_ms=cfg.expand_timeout_ms,
                 temperature=cfg.expand_temperature,
             )
         if stage == StagePhase.VALIDATE:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.validate_max_tokens,
                 timeout_ms=cfg.validate_timeout_ms,
                 temperature=cfg.validate_temperature,
@@ -962,7 +962,7 @@ class PipelineController:
     def _get_micro_stage_budget(
         self,
         stage: StagePhase,
-    ) -> Optional[RequestConstraints]:
+    ) -> Optional[PlannerConstraints]:
         """Return per-stage LLM budget for micro-replan (Section 10.3.6).
 
         Micro-replan uses a separate, tighter budget table.  Temperatures
@@ -975,24 +975,24 @@ class PipelineController:
 
         Returns
         -------
-        Optional[RequestConstraints]
+        Optional[PlannerConstraints]
             Per-stage micro-replan constraints, or ``None`` for COMMIT.
         """
         cfg = self._config
         if stage == StagePhase.SKETCH:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.micro_sketch_max_tokens,
                 timeout_ms=cfg.micro_sketch_timeout_ms,
                 temperature=cfg.sketch_temperature,
             )
         if stage == StagePhase.EXPAND:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.micro_expand_max_tokens,
                 timeout_ms=cfg.micro_expand_timeout_ms,
                 temperature=cfg.expand_temperature,
             )
         if stage == StagePhase.VALIDATE:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.micro_validate_max_tokens,
                 timeout_ms=cfg.micro_validate_timeout_ms,
                 temperature=cfg.validate_temperature,
@@ -1008,7 +1008,7 @@ class PipelineController:
         """Record token usage from an LLM response (Section 13.3.3).
 
         Updates ``_stage_token_usage``, ``_total_plan_tokens``, and
-        ``_stage_latency`` from the HubResponse metadata.
+        ``_stage_latency`` from the PlannerLLMResponse metadata.
 
         Expected metadata structure (dict):
             ``{"usage": {"total_tokens": int}, "latency_ms": int}``
@@ -1017,7 +1017,7 @@ class PipelineController:
         ----------
         stage : StagePhase
             The pipeline stage that made the LLM call.
-        response : HubResponse
+        response : PlannerLLMResponse
             Model Hub response containing ``metadata`` dict with
             ``usage.total_tokens`` and ``latency_ms``.
         """
@@ -1025,7 +1025,7 @@ class PipelineController:
         if metadata is None:
             return
 
-        # HubResponse.metadata is Dict[str, Any]
+        # PlannerLLMResponse.metadata is Dict[str, Any]
         if isinstance(metadata, dict):
             usage = metadata.get("usage", {})
             total_tokens = usage.get("total_tokens", 0) if isinstance(usage, dict) else 0

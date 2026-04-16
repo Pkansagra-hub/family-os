@@ -75,6 +75,7 @@ from k1.concierge.orchestrator.types import (
     StepResult,
     TaskEnvelope,
 )
+from k1.fabric.circuit_breaker import CircuitBreakerState
 
 __all__ = [
     # Types
@@ -106,6 +107,7 @@ __all__ = [
     "route_task",
     # Degradation
     "CircuitBreaker",
+    "CircuitBreakerState",
     "cb_fabric",
     "cb_orchestrator",
     "cb_planner",
