@@ -223,7 +223,8 @@ class TestFullFlow:
     def test_session_to_bus_to_subscriber(self, bus: LocalBus, session: SessionBusAdapter) -> None:
         """Session emits event -> bus -> raw subscriber receives."""
         raw_received: list[Envelope] = []
-        bus.subscribe("k1.session.>", raw_received.append)
+        # P6.9: sessionstate.* events now flatten to k1.sessionstate.*
+        bus.subscribe("k1.sessionstate.>", raw_received.append)
 
         session.emit("sessionstate.mutation.approved", {"section": "plan"})
 
@@ -361,7 +362,7 @@ class TestMultiAdapterCoexistence:
         assert len(all_envelopes) == 3
         topics = {e.topic for e in all_envelopes}
         assert "k1.fabric.test" in topics
-        assert "k1.session.sessionstate.test" in topics
+        assert "k1.sessionstate.test" in topics
         assert "k1.agent.agent-1.delta.v1" in topics
 
     def test_bus_stats_count_all_adapter_events(

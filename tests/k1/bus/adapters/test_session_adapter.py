@@ -90,7 +90,7 @@ class TestSessionAdapterEmit:
     def test_emit_maps_topic(self, bus: LocalBus, adapter: SessionBusAdapter) -> None:
         adapter.emit("sessionstate.mutation.approved", {"section": "plan"})
         assert len(bus.captured) == 1
-        assert bus.captured[0].topic == "k1.session.sessionstate.mutation.approved"
+        assert bus.captured[0].topic == "k1.sessionstate.mutation.approved"
 
     def test_emit_serializes_payload(self, bus: LocalBus, adapter: SessionBusAdapter) -> None:
         adapter.emit("test.event", {"key": "value"})

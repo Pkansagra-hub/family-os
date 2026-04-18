@@ -149,6 +149,10 @@ class BusFactory:
         timing_chain: Optional[TimingChain] = None,
         middleware: list[Middleware] | MiddlewareChain | None = None,
         backend: str = "auto",
+        async_dispatch: bool = False,
+        subscription_mailbox_capacity: int = 1024,
+        retry_resolver: object | None = None,
+        dlq_callback: object | None = None,
     ) -> BusType:
         """
         Create an in-process bus.
@@ -164,6 +168,23 @@ class BusFactory:
             middleware:     Optional middleware chain or list of Middleware.
                            Runs after stamping, before dispatch.
             backend:       "auto" (default) / "rust" / "python".
+            async_dispatch:
+                Phase 6 / P6.5.  When True, each subscription gets a bounded
+                mailbox + worker thread; publish enqueues and returns
+                immediately.  Forces Python backend (Rust path keeps
+                synchronous semantics).  Default False preserves legacy
+                synchronous-on-publisher-thread behavior.
+            subscription_mailbox_capacity:
+                Per-subscription mailbox capacity when async_dispatch=True.
+                Default 1024.
+            retry_resolver:
+                Phase 6 / P6.6.  Optional ``(topic) -> RetryPolicy | None``
+                callable consulted when a handler raises.  No-op without
+                async_dispatch.
+            dlq_callback:
+                Phase 6 / P6.7.  Optional ``(envelope, exc, attempts) -> None``
+                callable invoked after retry exhaustion.  No-op without
+                async_dispatch.
 
         Returns:
             A ready-to-use bus instance (LocalBus or RustBusAdapter).
@@ -177,6 +198,12 @@ class BusFactory:
             logger.debug("TimingChain requested -- falling back to Python backend")
             resolved = "python"
 
+        # async_dispatch requires Python backend (per-sub mailboxes are
+        # implemented in Python LocalBus only).
+        if async_dispatch and resolved == "rust":
+            logger.debug("async_dispatch requested -- falling back to Python backend")
+            resolved = "python"
+
         if resolved == "rust":
             return RustBusAdapter(
                 capture=capture,
@@ -188,6 +215,10 @@ class BusFactory:
             capture=capture,
             timing_chain=timing_chain,
             middleware=mw_chain,
+            async_dispatch=async_dispatch,
+            subscription_mailbox_capacity=subscription_mailbox_capacity,
+            retry_resolver=retry_resolver,
+            dlq_callback=dlq_callback,
         )
 
     @staticmethod
@@ -231,7 +262,11 @@ class BusFactory:
 
         chain = TimingChain(config=config, timeout_ms=timeout_ms)
         mw_chain = _to_chain(middleware)
-        return LocalBus(capture=capture, timing_chain=chain, middleware=mw_chain)
+        return LocalBus(
+            capture=capture,
+            timing_chain=chain,
+            middleware=mw_chain,
+        )
 
     @staticmethod
     def create_for_testing(

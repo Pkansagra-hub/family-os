@@ -256,6 +256,17 @@ class RustBusAdapter:
         """
         return 0
 
+    def flush(self, timeout_ms: int = 5000) -> bool:
+        """
+        Phase 6 / P6.5.  No-op for the Rust backend.
+
+        The Rust bus dispatches synchronously on the publisher's thread
+        (no per-subscription mailboxes), so by the time ``publish()``
+        returns, every handler has already been invoked.  Returns True
+        immediately.
+        """
+        return True
+
     def close(self) -> None:
         """Close the bus."""
         self._bus.close()

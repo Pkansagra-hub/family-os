@@ -34,10 +34,7 @@ __all__ = [
 # Rust crate isn't built, only the Python implementations are re-exported.
 try:
     from k1.bus.impl.rust_bus_adapter import RustBusAdapter
-    from k1.bus.impl.rust_mailbox_adapter import (
-        RustMailboxAdapter,
-        RustMailboxRouterAdapter,
-    )
+    from k1.bus.impl.rust_mailbox_adapter import RustMailboxAdapter, RustMailboxRouterAdapter
 except ImportError:  # pragma: no cover - exercised only when Rust unavailable
     pass
 else:
