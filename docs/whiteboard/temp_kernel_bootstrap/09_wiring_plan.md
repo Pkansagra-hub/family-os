@@ -1879,67 +1879,240 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 
 ---
 
-#### Phase 6: Bus Hardening (MEDIUM — ~200 LOC)
+#### Phase 6: Bus Production Hardening (MEDIUM — ~1500 LOC, internal-only refactor)
 
-**Why sixth:** Bus is the nervous system. Hardening it prevents class-of-bugs for all components.
+**Why sixth:** Bus is the nervous system. Today it is in-memory fire-and-forget at-most-once. Production needs backpressure, retry/DLQ, schema validation, idempotency, and durability for critical topics. This phase delivers all of that **behind the existing public API** so no consumer code (`k1/concierge`, `k1/orchestrator`, `k1/model_hub`, `k1/memory_writer`, `k1/sessionstate`, `bridge/`) requires changes — only 2 specific topic strings get renamed.
 
-**Findings killed:** M-1, M-2, M-3, M-8, M-84, M-85, M-86, I-16, I-19
+**Hard constraint — API IMPACT: NONE.** The following surfaces are FROZEN byte-for-byte:
 
-📖 **Read before starting:** `10_bus_audit.md` (sync threading, async gap), `26_bus_api_mapping.md` (RustMailbox, middleware chain), `27_bus_cross_reference.md` (topic naming, timing rules, namespace conventions)
+- `IBus`, `IAsyncBus`, `Envelope`, `Priority`, `DeliveryMode`, `PayloadFormat`, `SubscriptionHandle`
+- `BusFactory.create_local()`, `create_local_ordered()`, `create_for_testing()`, `create_mailbox_router()`
+- `AsyncBusBridge`, `AsyncMailboxBridge`, `AsyncMailboxRouterBridge`
+- `Middleware`, `MiddlewareChain`, all built-in middlewares, `TopicRegistry`
+- `TimingChain`, `TimingConfig`, `TimingStats`, `default_timing_config()`, `DEFAULT_RULES`, `DEFAULT_MODE`
+- `BusConfig`, `load_bus_config()`
 
-##### Issue P6.1 — Build async bus bridge (`AsyncBusBridge`)
+**One additive Protocol method:** `IBus.flush()` (duck-typed, backward-compatible — no existing implementer breaks).
+
+**Findings killed:** M-1, M-2, M-3, M-8, M-84, M-85, M-86, I-16, I-19, plus unmapped findings A (drain Rust/Python diff), B (impl re-export), F-D (DLQ topic has no publisher). Defer F-G (BridgeConnectionAdapter naming) to Phase 7.
+
+**TimingChain decision:** KEEP UNTOUCHED. Causal + gap buffering still meaningful, especially after we add per-subscription mailboxes (Tier 3) — gap buffering preserves per-topic ordering, dispatch-time causal ordering preserved, handler-completion-causal ordering was never a documented guarantee. See doc note in P6.7.
+
+**Topic renames in this phase:** Only 2.
+
+1. `turn.complete.v1` → `k1.session.turn.complete.v1` (M-84) — single topic missing `k1.` prefix
+2. `SessionBusAdapter` internal mapping flattens `k1.session.sessionstate.*` → `k1.sessionstate.*` (M-86) — adapter behavior, not a string per topic
+
+All other topic names in the codebase are unchanged.
+
+📖 **Read before starting:** `10_bus_audit.md` (sync threading, async gap), `26_bus_api_mapping.md` (RustMailbox, middleware chain), `27_bus_cross_reference.md` (topic naming, timing rules, namespace conventions). Plus `bus end-to-end audit` (the consolidated finding inventory from session memory).
+
+**Phase 6 is organised in 7 tiers + branch/test bookends:**
+
+```text
+P6.0   Branch from POC_Migration → bus-hardening                 (workflow)
+P6.1–P6.4   Tier 2: Async + observability fixes (pure internal, ~150 LOC)
+P6.5        Tier 3: Per-subscription bounded mailbox (~250 LOC)
+P6.6–P6.7   Tier 4: Retry policy + DeadLetterMiddleware (~200 LOC)
+P6.8–P6.9   Tier 5: 2 topic renames (~50 LOC across publishers/subscribers)
+P6.10       Add k1.model_hub STRICT rule (~5 LOC)
+P6.11–P6.13 Tier 6: Opt-in extensions — schema, idempotency, durability (~700 LOC)
+P6.14  End-to-end bus integration test before PR                 (workflow)
+```
+
+##### Issue P6.0 — Create `bus-hardening` branch from `POC_Migration`
 
 | Field | Detail |
 |-------|--------|
-| **What** | Bus uses `threading.Lock/RLock/Condition`. Async kernel needs `asyncio.to_thread()` wrapping for all bus operations. Build `AsyncBusBridge` that wraps sync bus for async callers. |
-| **Findings addressed** | M-1, M-3, M-8 |
-| **📖 Ref docs** | `10_bus_audit.md` (M-1 sync threading, M-3 async gap, M-8 lock contention) |
+| **What** | Cut a working branch off `POC_Migration` for the entire Phase 6 effort. All P6.1–P6.13 commits land on this branch; P6.14 verifies before opening PR back to `POC_Migration`. |
+| **Commands** | `git checkout POC_Migration && git pull origin POC_Migration && git checkout -b bus-hardening` |
+| **Why** | Phase 6 is 1500 LOC across the bus internals. Bundling on a feature branch keeps `POC_Migration` clean during the multi-issue effort and gives one PR review surface. |
+| **Files** | (none — git workflow only) |
 | **Status** | ☐ |
 
-##### Issue P6.2 — Add `k1.model_hub` STRICT timing rule
+---
+
+##### Issue P6.1 — Async handler Future error logging (I-16)
 
 | Field | Detail |
 |-------|--------|
-| **What** | `k1.model_hub.execute.v1` used for bus RPC but has no timing rule (RELAXED default). Add STRICT rule to prevent out-of-order delivery breaking request/response correlation. |
-| **Findings addressed** | M-85 |
-| **📖 Ref docs** | `27_bus_cross_reference.md` (M-85 STRICT timing rule missing) |
-| **Status** | ☐ |
-
-##### Issue P6.3 — Fix `turn.complete.v1` namespace prefix
-
-| Field | Detail |
-|-------|--------|
-| **What** | Rename `turn.complete.v1` → `k1.session.turn.complete.v1` to match namespace convention. Update all publishers and subscribers. |
-| **Findings addressed** | M-84 |
-| **📖 Ref docs** | `27_bus_cross_reference.md` (M-84 namespace convention violation) |
-| **Status** | ☐ |
-
-##### Issue P6.4 — Fix SessionBusAdapter double-nested topic naming
-
-| Field | Detail |
-|-------|--------|
-| **What** | `sessionstate.mutation.requested` maps to `k1.session.sessionstate.mutation.requested` (double-nested). Flatten to `k1.sessionstate.mutation.requested.v1`. |
-| **Findings addressed** | M-86 |
-| **📖 Ref docs** | `27_bus_cross_reference.md` (M-86 double-nested topic naming) |
-| **Status** | ☐ |
-
-##### Issue P6.5 — Fix Rust adapter middleware bypass
-
-| Field | Detail |
-|-------|--------|
-| **What** | `RustBusAdapter` stores `TimingChain` and `MiddlewareChain` but does NOT wire them into Rust dispatch. Middleware bypassed with Rust backend. Wire or document as intentional. |
-| **Findings addressed** | I-19 |
-| **📖 Ref docs** | `26_bus_api_mapping.md` (I-19 Rust middleware bypass) |
-| **Status** | ☐ |
-
-##### Issue P6.6 — Fix async handler fire-and-forget
-
-| Field | Detail |
-|-------|--------|
-| **What** | `_wrap_async_handler` Future never awaited — async handler exceptions silently lost. Add error callback or log. |
+| **What** | `AsyncBusBridge._wrap_async_handler` schedules user coroutine via `asyncio.run_coroutine_threadsafe` but never inspects the returned `Future`, so async handler exceptions are silently swallowed. Add `Future.add_done_callback` that logs exceptions and increments a new `BusStats.async_handler_errors` counter. |
+| **API impact** | None — internal change inside `_wrap_async_handler`. Public callback signature unchanged. |
+| **Approach** | In [k1/bus/async_bridge.py](k1/bus/async_bridge.py), the `_sync_shim` already calls `run_coroutine_threadsafe`. Capture the returned `Future` and attach `lambda fut: _log_handler_exception(fut, env)`. Helper logs via `logger.exception` and bumps stats. |
 | **Findings addressed** | I-16 |
-| **📖 Ref docs** | `26_bus_api_mapping.md` (I-16 fire-and-forget async handlers) |
+| **📖 Ref docs** | `26_bus_api_mapping.md` §4 |
 | **Status** | ☐ |
+
+##### Issue P6.2 — Wire MiddlewareChain into `RustBusAdapter` dispatch (I-19)
+
+| Field | Detail |
+|-------|--------|
+| **What** | `RustBusAdapter` stores `TimingChain` and `MiddlewareChain` references but does NOT invoke them — Rust backend silently bypasses tracing/metrics/topic-validation. Run Python `MiddlewareChain.process(env)` before calling Rust dispatch (accept the PyO3 callback overhead — observability matters more than the last microsecond). For TimingChain: route `RustBus.publish()` output through Python TimingChain when one is configured (same pattern as `LocalBus`), or document Rust = "unordered, observability-only via Python middleware" if integration is too slow. |
+| **API impact** | None — `RustBusAdapter` public methods unchanged; behavior simply matches `LocalBus` now. |
+| **Approach** | In [k1/bus/impl/rust_bus_adapter.py](k1/bus/impl/rust_bus_adapter.py), `publish()`: `stamped = self._stamp(env); processed = self._middleware.process(stamped); if processed is None: return; if self._timing_chain: self._timing_chain.process(processed, self._rust_dispatch) else: self._rust_dispatch(processed)`. Add parity test in `tests/k1/bus/impl/test_rust_bus_parity.py` proving middleware fires identically across backends. |
+| **Findings addressed** | I-19 |
+| **📖 Ref docs** | `26_bus_api_mapping.md` §3.4 |
+| **Status** | ☐ |
+
+##### Issue P6.3 — Fix `RustBusAdapter.drain()` to clear (finding A)
+
+| Field | Detail |
+|-------|--------|
+| **What** | `LocalBus.drain()` returns captured envelopes AND clears the buffer. `RustBusAdapter.drain()` returns cumulative captures without clearing. Tests using `drain()` as a reset point behave differently between backends. |
+| **API impact** | None — semantics align to existing `LocalBus` contract. |
+| **Approach** | In [k1/bus/impl/rust_bus_adapter.py](k1/bus/impl/rust_bus_adapter.py), `drain()` calls underlying Rust `drain_captured()` (add to Rust crate if missing) or local `_captured.clear()` after read. Update `test_rust_bus_parity.py` with explicit drain-then-publish-then-drain assertion. |
+| **Findings addressed** | finding A (unmapped, audit doc) |
+| **📖 Ref docs** | `26_bus_api_mapping.md` §12 |
+| **Status** | ☐ |
+
+##### Issue P6.4 — Fix `k1/bus/impl/__init__.py` re-export consistency (finding B)
+
+| Field | Detail |
+|-------|--------|
+| **What** | `k1/bus/impl/__init__.py` does not re-export `LocalMailbox`, `LocalMailboxRouter`, or Rust adapters; they are exported only from `k1.bus.__init__`. Inconsistent layering. Add the missing re-exports so `from k1.bus.impl import LocalMailbox` works. |
+| **API impact** | None — purely additive. |
+| **Approach** | Add 3-line `__all__` extension in [k1/bus/impl/**init**.py](k1/bus/impl/__init__.py). |
+| **Findings addressed** | finding B (unmapped, audit doc) |
+| **📖 Ref docs** | `26_bus_api_mapping.md` §12 |
+| **Status** | ☐ |
+
+---
+
+##### Issue P6.5 — Per-subscription bounded mailbox + worker drain (M-1, M-2, M-3, M-8)
+
+| Field | Detail |
+|-------|--------|
+| **What** | Today `LocalBus._dispatch()` invokes every matching handler synchronously on the publisher's thread. Slow or blocking handlers stall ALL publishers. Async handlers via `AsyncBusBridge` enqueue Futures unboundedly (OOM risk under load). Replace with: each subscription owns a bounded `LocalMailbox` (reuse the existing WFQ primitive). Publish enqueues to all matching mailboxes; one drain worker per subscription invokes the handler. Mailbox full → metric increment + DLQ (if topic durable) or drop. |
+| **API impact** | `IBus.subscribe()`/`unsubscribe()`/`publish()` signatures unchanged. **Additive Protocol method:** `IBus.flush()` for tests that need "wait until all queued envelopes have been dispatched". Existing implementations duck-type — no break. |
+| **Caveat** | Dispatch becomes asynchronous to publish. Tests that assert "after `bus.publish(env)`, handler has been called" must call `bus.flush()` first. Document in test conventions. |
+| **TimingChain interaction** | TimingChain still runs on publisher's thread BEFORE mailbox enqueue. Per-topic gap buffering preserved (sequence ordering at enqueue). Causal buffering: `_CausalTracker` marks parent "delivered" at enqueue, not at handler completion — this matches Kafka/NATS semantics and is the correct guarantee. **Add docstring note** to [k1/bus/timing/timing_chain.py](k1/bus/timing/timing_chain.py) and a section in [k1/bus/ARCHITECTURE.md](k1/bus/ARCHITECTURE.md). |
+| **Approach** | In [k1/bus/impl/local_bus.py](k1/bus/impl/local_bus.py): `_Subscription` dataclass gains a `mailbox: LocalMailbox` and `worker: threading.Thread`. `subscribe()` creates both; `unsubscribe()` joins worker and discards mailbox. `_dispatch_fn(env)` iterates matching subscriptions and calls `sub.mailbox.try_put(env)`. Worker loop: `while not closed: env = mailbox.receive(timeout_ms=100); try: handler(env) except: log + retry-or-DLQ (P6.6/P6.7)`. New stats: `mailbox_full_drops`, `mailbox_high_water_mark`. Mailbox capacity from new `BusConfig.subscription_mailbox_capacity` (default 1024). |
+| **Findings addressed** | M-1 (sync blocks async), M-3 (no async path), M-8 (lock contention — per-sub mailbox eliminates global handler lock contention), M-2 (PortBundle/SessionBusAdapter type tightening folded in here as a small adjacent fix — change concrete `LocalBus` annotations to `IBus` Protocol where they appear) |
+| **📖 Ref docs** | `10_bus_audit.md` §"Concurrency Model"; `26_bus_api_mapping.md` §7.1 Lock Hierarchy |
+| **Status** | ☐ |
+
+---
+
+##### Issue P6.6 — Per-topic RetryPolicy in TopicRegistry
+
+| Field | Detail |
+|-------|--------|
+| **What** | When a handler raises, today the exception is logged and the envelope dropped. Add an opt-in `RetryPolicy(max_attempts: int = 0, base_ms: int = 100, jitter: bool = True, backoff: Literal["fixed","exponential"] = "exponential")` field on `TopicRegistry` entries. Default `max_attempts=0` = preserve current behavior (no retry, no consumer impact). |
+| **API impact** | None for existing callers — `TopicRegistry.register(topic, ...)` gains optional `retry=None` kwarg. Topics without `retry=` get default no-retry. |
+| **Approach** | Inside the per-subscription mailbox worker (P6.5), wrap handler call in retry loop reading the topic's `RetryPolicy` from the registry. Sleep with jitter between attempts. On exhausted attempts, hand off to DLQ (P6.7) if topic is durable, else log + drop + metric. |
+| **Findings addressed** | (no formal finding ID; addresses missing reliability primitive) |
+| **📖 Ref docs** | `26_bus_api_mapping.md` §"Future Work" |
+| **Status** | ☐ |
+
+##### Issue P6.7 — `DeadLetterMiddleware` and `k1.internal.dead_letter.v1` publisher (finding F-D)
+
+| Field | Detail |
+|-------|--------|
+| **What** | Topic `k1.internal.dead_letter.v1` is registered as published by "Bus middleware" but no publisher exists today. After P6.6 retry exhaustion, publish a `DLQRecord(original_topic, original_envelope_id, original_payload, error_class, error_msg, attempts, first_failure_ts, last_failure_ts)` to the DLQ topic. The DLQ topic itself is durable (Tier 6 / P6.13) so failures survive crash. |
+| **API impact** | None — DLQ is internal observability surface. |
+| **Approach** | New `k1/bus/middleware/dead_letter.py`: `DeadLetterMiddleware` is misnamed — it's actually a **DLQ publisher invoked by the mailbox worker**, not a middleware in the publish path. Real implementation: a small helper `_publish_to_dlq(bus, original_env, exc, attempts)` called from the mailbox worker on retry exhaustion. The publish goes through normal bus path (re-uses middleware/timing/durability). |
+| **Findings addressed** | finding F-D (unmapped, audit doc) |
+| **📖 Ref docs** | `27_bus_cross_reference.md` §9 Gap #4; `26_bus_api_mapping.md` §10.13 |
+| **Status** | ☐ |
+
+---
+
+##### Issue P6.8 — Rename `turn.complete.v1` → `k1.session.turn.complete.v1` (M-84)
+
+| Field | Detail |
+|-------|--------|
+| **What** | This is the **only** topic in the entire registry missing the `k1.` namespace prefix. Without it, no `TimingConfig` rule matches → falls to RELAXED default → MemoryWriter `TurnDispatcher` trigger can be reordered. Renaming to `k1.session.turn.complete.v1` matches the existing `k1.session` STRICT rule automatically. |
+| **API impact** | Topic string changes at 1 publisher + 1 subscriber. Atomic find-replace in same PR. |
+| **Approach** | Grep `"turn.complete.v1"` and `TOPIC_TURN_COMPLETE`; update both publisher (FSM in `k1/concierge`) and subscriber (`k1/memory_writer/kernel/turn_dispatcher.py`). Update topic registry entry. Add migration note to changelog. |
+| **Findings addressed** | M-84 |
+| **📖 Ref docs** | `27_bus_cross_reference.md` §9 Gap #1 |
+| **Status** | ☐ |
+
+##### Issue P6.9 — Flatten `SessionBusAdapter` double-nested topics (M-86)
+
+| Field | Detail |
+|-------|--------|
+| **What** | `SessionBusAdapter._map_topic(event_type)` prefixes with `"k1.session."`, so `sessionstate.mutation.requested` becomes `k1.session.sessionstate.mutation.requested` — double-nested. Change adapter to map directly: `sessionstate.*` → `k1.sessionstate.*`, leave other prefixes alone. |
+| **API impact** | Adapter callers (sessionstate publishers) keep their current `event_type=` strings unchanged. Only the wire topic string changes. Subscribers must update their pattern from `k1.session.sessionstate.*` → `k1.sessionstate.*`. |
+| **Approach** | Change `_map_topic()` in [k1/bus/adapters/session_adapter.py](k1/bus/adapters/session_adapter.py). Grep subscribers for `"k1.session.sessionstate"` — update patterns. Update topic registry entries. |
+| **Findings addressed** | M-86 |
+| **📖 Ref docs** | `27_bus_cross_reference.md` §9 Gap #3; `26_bus_api_mapping.md` §10.17 |
+| **Status** | ☐ |
+
+##### Issue P6.10 — Add `k1.model_hub` STRICT timing rule (M-85)
+
+| Field | Detail |
+|-------|--------|
+| **What** | `k1.model_hub.execute.v1` is used for synchronous bus RPC (request/response correlation). Has no timing rule → falls to RELAXED → out-of-order delivery can route response to wrong waiter. Add `"k1.model_hub": STRICT` to `DEFAULT_RULES`. |
+| **API impact** | None — adding a rule to a frozen dict that consumers don't read directly. |
+| **Approach** | One-line addition in [k1/bus/timing/defaults.py](k1/bus/timing/defaults.py) `DEFAULT_RULES`. Test in `test_timing_config.py` confirming `resolve("k1.model_hub.execute.v1") == STRICT`. |
+| **Findings addressed** | M-85 |
+| **📖 Ref docs** | `27_bus_cross_reference.md` §5, §9 Gap #2 |
+| **Status** | ☐ |
+
+---
+
+##### Issue P6.11 — Schema validation on `TopicRegistry` (opt-in, additive)
+
+| Field | Detail |
+|-------|--------|
+| **What** | `TopicValidationMiddleware` today only validates that the topic *name* is registered. Add optional `schema: type[Pydantic\|msgspec.Struct] | None = None` field on `TopicRegistry` entries. When set, middleware validates the envelope payload against schema (decode + structural check). Two modes: `permissive` (default — log + metric on schema violation, deliver anyway) and `strict` (drop on violation). |
+| **API impact** | None — `register(topic, ...)` gains optional `schema=` kwarg. Topics without schema get current behavior (name-only validation). |
+| **Approach** | Pick `msgspec.Struct` (~30× faster than Pydantic for high-volume topics; tiny dependency footprint). Extend `TopicRegistry.Entry` dataclass. `TopicValidationMiddleware.process()` checks schema if present, decodes via `msgspec.msgpack.decode(env.payload, type=schema)`. Mode controlled by `BusConfig.schema_validation_mode` (default `"permissive"`). |
+| **Findings addressed** | (extension — not a previously logged finding) |
+| **📖 Ref docs** | (none — new functionality) |
+| **Status** | ☐ |
+
+##### Issue P6.12 — `IdempotencyMiddleware` for command topics (opt-in, additive)
+
+| Field | Detail |
+|-------|--------|
+| **What** | Command topics with caller-provided `request_id` need idempotency: re-publishing the same command must NOT re-execute. Add a new `IdempotencyMiddleware` that maintains an LRU cache (default 10K entries, 5-minute TTL) keyed by `(topic, request_id)`. Duplicate within window → drop + metric. NOT in default chain — sites that publish commands wire it in explicitly. |
+| **API impact** | None — new middleware. Sites that don't use it see no change. |
+| **Approach** | New file [k1/bus/middleware/idempotency.py](k1/bus/middleware/idempotency.py). Use `cachetools.TTLCache` (already in deps). Document recommended placement: AFTER topic validation, BEFORE tracing. |
+| **Findings addressed** | (extension) |
+| **📖 Ref docs** | (none — new functionality) |
+| **Status** | ☐ |
+
+##### Issue P6.13 — Durability outbox + replay (opt-in per topic)
+
+| Field | Detail |
+|-------|--------|
+| **What** | Today every envelope lives only in RAM. Process crash = total event loss for in-flight commands/responses. Add per-topic `durable: bool = False` flag in `TopicRegistry`. When true, `LocalBus.publish()` appends `(envelope_id, topic, payload, ts, ack_offset=NULL)` to a SQLite WAL outbox BEFORE dispatch. Per-consumer ack tracking: durable subscriptions get a stable `consumer_id`; mailbox worker calls `outbox.ack(consumer_id, envelope_id)` after successful handler completion. On startup, `bus.replay_durable_topics()` re-publishes un-acked envelopes per consumer (at-least-once). |
+| **API impact** | `subscribe()` gains optional `consumer_id: str \| None = None` kwarg for durable topics. Without it, durable topics behave at-most-once (current behavior preserved). With it, at-least-once delivery; **handlers must be idempotent** (P6.12 idempotency middleware available for the publish-side). |
+| **Approach** | New `k1/bus/outbox/sqlite_outbox.py` with `BusOutbox` class wrapping SQLite WAL connection. Schema: `envelopes(envelope_id PK, topic, payload BLOB, ts_ns, deleted INT)` + `acks(consumer_id, last_acked_envelope_id, PRIMARY KEY (consumer_id))`. Reuse pattern from existing `k0/outbox/local_outbox.py`. Outbox path from `BusConfig.durable_outbox_path` (default `~/.familyos/bus_outbox.db`). |
+| **Topics to flag durable** | `k1.session.turn.complete.v1`, `k1.orchestration.task.dispatch.v1`, `k1.orchestration.task.result.v1`, `k1.memory.write.requested.v1`, `k1.bridge.command.*`, `k1.internal.dead_letter.v1`. Topics that stay non-durable: `k1.affect.*`, `k1.k0.sse.*`, `k1.fabric.learning.*`, `k1.mw.*` telemetry. |
+| **Replay semantics** | At-least-once for durable. Subscribers must idempotently handle duplicates. Document this in `ARCHITECTURE.md` and add a runtime check (warn if durable topic subscribed without consumer_id). |
+| **Findings addressed** | (extension — closes the biggest production-readiness gap) |
+| **📖 Ref docs** | (none — new functionality; reference k0 outbox pattern) |
+| **Status** | ☐ |
+
+---
+
+##### Issue P6.14 — End-to-end bus integration test before PR
+
+| Field | Detail |
+|-------|--------|
+| **What** | Before opening PR `bus-hardening` → `POC_Migration`, run a curated suite that exercises every Phase 6 change end-to-end with both Python and Rust backends. Must all pass before PR. |
+| **Test matrix (each backend)** | 1) **Smoke**: Full `tests/k1/bus/` suite (~600 tests). 2) **Regression**: `tests/k1/concierge`, `tests/k1/orchestrator`, `tests/k1/memory_writer`, `tests/k1/model_hub`, `tests/k1/sessionstate` — proves no consumer broke. 3) **New behavior**: `tests/k1/bus/test_phase6_e2e.py` (new file) — backpressure (P6.5), retry+DLQ (P6.6/P6.7), topic-rename traffic (P6.8/P6.9), strict timing for `k1.model_hub` (P6.10), schema validation (P6.11), idempotency (P6.12), durability replay across simulated process restart (P6.13). 4) **Async**: `pytest tests/k1/bus/test_async_bridge.py` confirms `AsyncBusBridge` still works after `flush()` was added. 5) **Lifecycle**: `KernelService.startup() → create_session() → publish-traffic → destroy_session() → shutdown()` smoke. |
+| **Manual sanity** | `chat_repl.py` boot, send 3 turns, verify SSE responses arrive, kill mid-turn, restart, confirm durable replay completes. |
+| **Acceptance criteria** | All test files pass with both `K1_BUS_BACKEND=python` and `K1_BUS_BACKEND=rust`. No new pytest warnings. `mypy k1/bus` clean. `ruff check k1/bus` clean. |
+| **PR commands** | `git push -u origin bus-hardening && gh pr create --base POC_Migration --title "Phase 6: Bus Production Hardening" --body-file docs/whiteboard/temp_kernel_bootstrap/phase6_pr_summary.md` |
+| **Files** | `tests/k1/bus/test_phase6_e2e.py` (new), short PR summary at `docs/whiteboard/temp_kernel_bootstrap/phase6_pr_summary.md` (new) |
+| **Status** | ☐ |
+
+---
+
+**Phase 6 explicitly defers (out of scope):**
+
+| Item | Why deferred | Target |
+|------|-------------|--------|
+| `BridgeConnectionAdapter` method-name mismatch (`send/query/route_ifl` vs `submit_command/query/execute_connector`) | Bridge layer concern, not bus internals. Already noted in Phase 7 plan. | Phase 7 |
+| Cross-process bus transport (NATS/Redis backend) | Single-process scope today. Bridge handles K0↔K1 transport. | Out of roadmap |
+| Consumer groups / load balancing across replicas | Single-process scope. | Out of roadmap |
+| Encryption / SASL / mTLS on bus | Single-process trust boundary. | Out of roadmap |
+| `k1.mw` RELAXED-fallthrough confirmation comment | Cosmetic. | Fold into P6.10 if convenient |
+| `RustBusAdapter.sweep()` no-op documentation | Doc-only; add to ARCHITECTURE.md note during P6.2 | Fold into P6.2 |
 
 ---
 
