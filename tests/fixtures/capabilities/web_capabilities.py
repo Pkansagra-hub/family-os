@@ -1,5 +1,5 @@
 """
-k1.concierge.fabric.web_capabilities -- Web Search & Fetch via DuckDuckGo + httpx.
+tests.fixtures.capabilities.web_capabilities -- Web Search & Fetch via DuckDuckGo + httpx.
 
 Adds real web capabilities to the Concierge's tool fabric:
 

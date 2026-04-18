@@ -179,11 +179,11 @@ class _FakeOrchestrator:
     """Fake OrchestratorStub: records handle_task() calls."""
 
     def __init__(self, result: Any = None) -> None:
-        from k1.concierge.orchestrator.types import AggregatedResult
+        # Use a simple namespace stub since dispatch adapter does not
+        # introspect the AggregatedResult; only ``.success`` is asserted.
+        from types import SimpleNamespace
 
-        self._result = result or AggregatedResult(
-            total_steps=1, completed=1, failed=0, success=True
-        )
+        self._result = result or SimpleNamespace(success=True)
         self.calls: list = []
 
     async def handle_task(self, envelope: Any) -> Any:
@@ -238,31 +238,27 @@ class TestFabricDispatchEnvelope:
     """dispatch_envelope() delegates to OrchestratorStub.handle_task()."""
 
     def test_delegates_to_orchestrator(self) -> None:
-        from k1.concierge.orchestrator.types import TaskEnvelope
-
         orch = _FakeOrchestrator()
         adapter = FabricDispatchAdapter(fabric_port=None, orchestrator=orch)
-        env = TaskEnvelope(intent="schedule", task_id="t1")
+        env = object()  # adapter does not introspect envelope
         result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
         assert len(orch.calls) == 1
         assert orch.calls[0] is env
         assert result.success is True
 
     def test_raises_without_orchestrator(self) -> None:
-        from k1.concierge.orchestrator.types import TaskEnvelope
-
         adapter = FabricDispatchAdapter(fabric_port=None, orchestrator=None)
-        env = TaskEnvelope(intent="test", task_id="t1")
+        env = object()
         with pytest.raises(RuntimeError, match="no orchestrator"):
             asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
 
     def test_returns_orchestrator_result(self) -> None:
-        from k1.concierge.orchestrator.types import AggregatedResult, TaskEnvelope
+        from types import SimpleNamespace
 
-        expected = AggregatedResult(total_steps=1, completed=0, failed=1, success=False)
+        expected = SimpleNamespace(success=False)
         orch = _FakeOrchestrator(result=expected)
         adapter = FabricDispatchAdapter(fabric_port=None, orchestrator=orch)
-        env = TaskEnvelope(intent="x", task_id="t2")
+        env = object()
         result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
         assert result is expected
 

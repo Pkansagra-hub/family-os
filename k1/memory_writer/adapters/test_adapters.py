@@ -15,7 +15,7 @@ Design goals:
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, FrozenSet
 
 from k1.memory_writer.types import ChatResponse, HealthStatus, Subscription
 
@@ -51,6 +51,24 @@ class FakeSessionReadPort:
         if name in self._fail_on:
             raise RuntimeError(f"FakeSessionReadPort: configured failure for {name}")
         return self._sections.get(name)
+
+    async def list_sections(self) -> FrozenSet[str]:
+        """P5.6: Return all known section names. ISessionReadPort contract."""
+        return frozenset(self._sections.keys())
+
+    async def snapshot_all(self, exclude: FrozenSet[str] = frozenset()) -> dict[str, Any]:
+        """P5.6: Return every section except those in ``exclude``.
+
+        Honours configured ``fail_on`` so error paths can still be exercised.
+        """
+        result: dict[str, Any] = {}
+        for name, data in self._sections.items():
+            if name in exclude:
+                continue
+            if name in self._fail_on:
+                raise RuntimeError(f"FakeSessionReadPort: configured failure for {name}")
+            result[name] = data
+        return result
 
 
 class FakeModelHubPort:

@@ -57,7 +57,7 @@ from uuid import uuid4
 
 from aiohttp import web
 
-from k1.concierge.orchestrator.degradation import CircuitBreaker
+from k1.orchestrator.degradation import CircuitBreaker
 from k1.orchestrator.types import (
     ActiveDAGInfo,
     CircuitBreakerConfig,

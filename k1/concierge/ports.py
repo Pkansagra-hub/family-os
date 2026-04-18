@@ -114,7 +114,7 @@ class IDispatchPort(Protocol):
     """Unifies Fabric (LOW tier) + Orchestrator (MED/HIGH tier) dispatch.
 
     Reality:
-      LOW:  ctx.fabric_port.execute(CapabilityRequest) → CapabilityResult
+      LOW:  ctx.dispatch.dispatch_direct(CapabilityRequest) → CapabilityResult
       MED+: OrchestratorStub.handle_task(TaskEnvelope) → AggregatedResult
     Source: k1/concierge/fabric/ports.py, k1/concierge/orchestrator/stub.py
     """

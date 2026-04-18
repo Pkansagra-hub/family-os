@@ -1,5 +1,5 @@
 """
-k1.concierge.fabric.poc_bridge_adapter -- POCMockBridgeAdapter.
+tests.fixtures.capabilities.poc_bridge_adapter -- POCMockBridgeAdapter.
 
 Implements IBridgePort so the K1 BridgeProvider can dispatch capability
 requests to POC mock handler functions through the standard Fabric
@@ -19,8 +19,8 @@ import logging
 import time
 from typing import Any, Dict
 
-from k1.concierge.fabric.capability_registry import CapabilityRegistry
 from k1.fabric.ports.bridge_port import BridgeCommandResult, BridgeHealth, IFLRoute
+from tests.fixtures.capabilities.registry import CapabilityRegistry
 
 logger = logging.getLogger(__name__)
 

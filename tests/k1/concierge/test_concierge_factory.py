@@ -470,31 +470,15 @@ class TestConciergeConfig:
 
 
 class TestBackwardCompatExports:
-    """bootstrap.py re-exports canonical definitions from factory.py."""
+    """bootstrap.py re-exports canonical definitions from config/factory.
 
-    def test_fabric_gateway_adapter_re_export(self):
-        from k1.concierge.factory import _FabricGatewayAdapter as FromFactory
-        from k1.concierge.kernel.bootstrap import _FabricGatewayAdapter as FromBootstrap
-
-        assert FromFactory is FromBootstrap
-
-    def test_state_read_adapter_re_export(self):
-        from k1.concierge.factory import _StateReadAdapter as FromFactory
-        from k1.concierge.kernel.bootstrap import _StateReadAdapter as FromBootstrap
-
-        assert FromFactory is FromBootstrap
-
-    def test_delta_emit_adapter_re_export(self):
-        from k1.concierge.factory import _DeltaEmitAdapter as FromFactory
-        from k1.concierge.kernel.bootstrap import _DeltaEmitAdapter as FromBootstrap
-
-        assert FromFactory is FromBootstrap
-
-    def test_build_delta_applicator_re_export(self):
-        from k1.concierge.factory import _build_delta_applicator as FromFactory
-        from k1.concierge.kernel.bootstrap import _build_delta_applicator as FromBootstrap
-
-        assert FromFactory is FromBootstrap
+    P4B.4 + P4B.5: The OrchestratorStub adapter trinity
+    (`_FabricGatewayAdapter`, `_StateReadAdapter`, `_DeltaEmitAdapter`) and
+    `_build_delta_applicator` re-exports were removed from
+    ``k1.concierge.kernel.bootstrap`` once the stub itself was deleted. Only
+    ``KernelConfig`` / ``KernelRuntime`` / ``start_kernel`` / ``stop_kernel``
+    remain re-exported.
+    """
 
     def test_kernel_config_re_export(self):
         """bootstrap.py KernelConfig is the same as config.kernel KernelConfig."""

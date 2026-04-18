@@ -136,6 +136,10 @@ class K1UltraBERTAdapter:
         self,
         *,
         warmup: bool = False,
+        warmup_rounds: int = 3,
+        lazy_load: bool = True,
+        backend: str = "auto",
+        device: str = "auto",
         cache_size: int = 64,
         cache_ttl_s: float = 30.0,
     ) -> None:
@@ -145,7 +149,15 @@ class K1UltraBERTAdapter:
         self._total_latency_ms = 0.0
         self._fallback_count = 0
         self._available: bool | None = None
-        self._init_client()
+        self._backend = backend
+        self._device = device
+        self._warmup_rounds = warmup_rounds
+        # Construct the underlying Client. We always pass warmup=False to
+        # Client because K1 owns its own warmup() so that metrics
+        # (call_count, latency) reflect the warmup analyze() call.
+        # lazy_load=True (default) defers the ~20s familyos_ultrabert model
+        # load to first analyze() call so process boot is fast.
+        self._init_client(lazy_load=lazy_load)
         if warmup and self._client is not None:
             self.warmup()
 
@@ -153,13 +165,26 @@ class K1UltraBERTAdapter:
     # Client init
     # ------------------------------------------------------------------
 
-    def _init_client(self) -> None:
+    def _init_client(self, *, lazy_load: bool) -> None:
         try:
             from familyos_ultrabert import Client  # type: ignore[import-untyped]
 
-            self._client = Client(backend="auto")
+            self._client = Client(
+                backend=self._backend,
+                device=self._device,
+                warmup=False,  # K1 owns its own warmup() (see __init__)
+                warmup_rounds=self._warmup_rounds,
+                lazy_load=lazy_load,
+            )
             self._available = True
-            logger.info("K1UltraBERTAdapter: client initialized (backend=auto)")
+            logger.info(
+                "K1UltraBERTAdapter: client initialized (backend=%s, device=%s, "
+                "lazy_load=%s, warmup_rounds=%d)",
+                self._backend,
+                self._device,
+                lazy_load,
+                self._warmup_rounds,
+            )
         except ImportError:
             logger.warning("K1UltraBERTAdapter: familyos_ultrabert not installed")
             self._client = None
@@ -259,6 +284,10 @@ class K1UltraBERTAdapter:
         cls,
         *,
         warmup: bool = False,
+        warmup_rounds: int = 3,
+        lazy_load: bool = True,
+        backend: str = "auto",
+        device: str = "auto",
         cache_size: int = 64,
         cache_ttl_s: float = 30.0,
     ) -> K1UltraBERTAdapter:
@@ -268,6 +297,10 @@ class K1UltraBERTAdapter:
                 if cls._instance is None:
                     cls._instance = cls(
                         warmup=warmup,
+                        warmup_rounds=warmup_rounds,
+                        lazy_load=lazy_load,
+                        backend=backend,
+                        device=device,
                         cache_size=cache_size,
                         cache_ttl_s=cache_ttl_s,
                     )
@@ -309,12 +342,20 @@ class StubUltraBERTAdapter:
 def get_ultrabert_adapter(
     *,
     warmup: bool = False,
+    warmup_rounds: int = 3,
+    lazy_load: bool = True,
+    backend: str = "auto",
+    device: str = "auto",
     cache_size: int = 64,
     cache_ttl_s: float = 30.0,
 ) -> K1UltraBERTAdapter:
     """Singleton factory for production use."""
     return K1UltraBERTAdapter.get_instance(
         warmup=warmup,
+        warmup_rounds=warmup_rounds,
+        lazy_load=lazy_load,
+        backend=backend,
+        device=device,
         cache_size=cache_size,
         cache_ttl_s=cache_ttl_s,
     )

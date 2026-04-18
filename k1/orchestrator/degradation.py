@@ -1,22 +1,24 @@
 """
-k1.concierge.orchestrator.degradation -- Tier degradation cascade.
+k1.orchestrator.degradation -- Tier-level circuit breakers for the orchestrator.
 
-V2 Design Ref: Section 11.6 (degradation cascade: HIGH->MEDIUM->LOW->canned)
+Provides the per-tier ``CircuitBreaker`` (3-state CLOSED/OPEN/HALF_OPEN
+state machine) used by orchestrator adapters (planner, fabric gateway,
+admin) for degradation-aware dispatch.
 
-When circuit breakers trip, the system degrades gracefully through tiers:
-
-    HIGH  (CB_PLANNER open)       -> degrade to MEDIUM
-    MEDIUM (CB_ORCHESTRATOR open) -> degrade to LOW
-    LOW   (CB_FABRIC open)        -> canned response
-
-The cascade is TRANSPARENT to the user. The FSM receives the same result
-events regardless of which tier executed. Degradation affects execution
-quality (fewer optimization steps), not the system's ability to respond.
-
-Uses Fabric's 3-state circuit breaker pattern:
+State machine:
     CLOSED    -- Normal operation; requests pass through.
     OPEN      -- Failing; reject ALL requests immediately.
     HALF_OPEN -- Trying ONE request to test recovery.
+
+Reuses the ``CircuitBreakerState`` enum from ``k1.fabric.circuit_breaker``
+to keep the state vocabulary consistent across the system.
+
+Module-level singletons (``cb_planner``, ``cb_orchestrator``, ``cb_fabric``)
+are provided for the canonical tier breakers per V2 Design Section 11.6.
+
+Relocated from the deleted ``k1.concierge.orchestrator.degradation`` (and
+the brief intermediate location ``k1.concierge.degradation``) as part of
+P4B.4 (concierge orchestrator extraction).
 """
 
 from __future__ import annotations
@@ -24,12 +26,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import List, Optional
+from typing import List
 
-from k1.concierge.orchestrator.routing import DispatchRecord, EmitFn, route_task
-from k1.concierge.orchestrator.types import CannedResponse
-from k1.concierge.task.complexity import ComplexityTier
-from k1.concierge.task.dispatch import TaskDispatch
 from k1.fabric.circuit_breaker import CircuitBreakerState
 
 log = logging.getLogger(__name__)
@@ -200,91 +198,10 @@ cb_orchestrator = CircuitBreaker("CB_ORCHESTRATOR")
 cb_fabric = CircuitBreaker("CB_FABRIC")
 
 
-# =========================================================================
-# Degradation-aware routing
-# =========================================================================
-
-
-async def route_task_with_degradation(
-    task: TaskDispatch,
-    tier: ComplexityTier,
-    *,
-    emit_fn: Optional[EmitFn] = None,
-    dispatch_fn=None,
-) -> DispatchRecord | CannedResponse:
-    """Route a task with automatic tier degradation on circuit breaker trip.
-
-    V2 Design Ref: Section 11.6
-
-    Degradation cascade:
-      HIGH  (CB_PLANNER open)       -> MEDIUM
-      MEDIUM (CB_ORCHESTRATOR open) -> LOW
-      LOW   (CB_FABRIC open)        -> CannedResponse
-
-    Args:
-        task: The TaskDispatch payload.
-        tier: Original complexity tier before degradation.
-        emit_fn: Bus emit function for LOW tier.
-        dispatch_fn: Dispatch function for MEDIUM/HIGH tier.
-
-    Returns:
-        DispatchRecord if task was routed, CannedResponse if all tiers failed.
-    """
-    effective_tier = tier
-
-    # HIGH -> MEDIUM degradation
-    if effective_tier == ComplexityTier.HIGH and cb_planner.is_open():
-        log.warning(
-            "CB_PLANNER open, degrading HIGH -> MEDIUM (task_id=%s)",
-            task.task_id,
-        )
-        effective_tier = ComplexityTier.MEDIUM
-
-    # MEDIUM -> LOW degradation
-    if effective_tier == ComplexityTier.MEDIUM and cb_orchestrator.is_open():
-        log.warning(
-            "CB_ORCHESTRATOR open, degrading MEDIUM -> LOW (task_id=%s)",
-            task.task_id,
-        )
-        effective_tier = ComplexityTier.LOW
-
-    # LOW -> canned response
-    if effective_tier == ComplexityTier.LOW and cb_fabric.is_open():
-        from k1.concierge.config import get_config
-
-        log.warning(
-            "CB_FABRIC open, returning canned response (task_id=%s)",
-            task.task_id,
-        )
-        return CannedResponse(
-            text=get_config().orchestrator.canned_response_text,
-            reason="CB_FABRIC_OPEN",
-        )
-
-    return await route_task(
-        task,
-        effective_tier,
-        emit_fn=emit_fn,
-        dispatch_fn=dispatch_fn,
-    )
-
-
-def get_effective_tier(tier: ComplexityTier) -> ComplexityTier | None:
-    """Determine the effective tier after degradation checks.
-
-    Returns None if all tiers are exhausted (canned response needed).
-
-    V2 Design Ref: Section 11.6
-    """
-    effective = tier
-
-    if effective == ComplexityTier.HIGH and cb_planner.is_open():
-        effective = ComplexityTier.MEDIUM
-
-    if effective == ComplexityTier.MEDIUM and cb_orchestrator.is_open():
-        effective = ComplexityTier.LOW
-
-    if effective == ComplexityTier.LOW and cb_fabric.is_open():
-        return None  # All tiers exhausted
-
-    return effective
+__all__ = [
+    "CircuitBreaker",
+    "CircuitBreakerState",
+    "cb_planner",
+    "cb_orchestrator",
+    "cb_fabric",
+]

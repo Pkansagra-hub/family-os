@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from k1.concierge.fabric.capability_registry import CapabilityRegistry
-from k1.concierge.fabric.poc_bridge_adapter import POCMockBridgeAdapter
+from tests.fixtures.capabilities.registry import CapabilityRegistry
+from tests.fixtures.capabilities.poc_bridge_adapter import POCMockBridgeAdapter
 from k1.fabric.ports.bridge_port import BridgeCommandResult, BridgeHealth, IBridgePort, IFLRoute
 
 # =====================================================================

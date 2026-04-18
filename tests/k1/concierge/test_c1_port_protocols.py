@@ -208,18 +208,14 @@ class TestDispatchAdapterCompliance:
         assert result.success is True
 
     def test_dispatch_envelope_records_call(self) -> None:
-        from k1.concierge.orchestrator.types import TaskEnvelope
-
         adapter = MockDispatchAdapter()
-        env = TaskEnvelope(intent="test", task_id="t1")
+        env = object()  # adapter does not introspect envelope
         asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
         assert len(adapter.envelope_calls) == 1
 
     def test_dispatch_envelope_returns_aggregated(self) -> None:
-        from k1.concierge.orchestrator.types import TaskEnvelope
-
         adapter = MockDispatchAdapter()
-        env = TaskEnvelope(intent="test", task_id="t1")
+        env = object()
         result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
         assert result.success is True
 

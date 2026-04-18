@@ -1,9 +1,9 @@
 """
-E2.6.3 — Unit Tests for Tool ↔ FabricPort Wiring
+E2.6.3 — Unit Tests for Tool ↔ IDispatchPort Wiring
 ===================================================
 
-Validates that the 4 migrated tool functions correctly use fabric_port
-when set, and fall back to legacy callbacks when fabric_port is None.
+Validates that the 5 Back tool functions correctly use IDispatchPort
+when set, and fall back to legacy callbacks when dispatch is None.
 """
 
 from __future__ import annotations
@@ -13,7 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from k1.concierge.fabric.ports import IFabricPort
+from k1.concierge.adapters.fabric_dispatch import FabricDispatchAdapter
+from k1.concierge.ports import IDispatchPort
 from k1.concierge.tools.implementations import (
     ToolContext,
     ToolResult,
@@ -43,7 +44,7 @@ def _mock_session_manager() -> MagicMock:
 
 
 def _make_ctx(
-    fabric_port: IFabricPort | None = None,
+    dispatch: IDispatchPort | None = None,
     actor: str = "back",
     hil_coordinator=None,
     active_task_id: str | None = None,
@@ -52,7 +53,7 @@ def _make_ctx(
         session_manager=_mock_session_manager(),
         cognitive_trace_id=f"test-{uuid.uuid4().hex[:6]}",
         actor=actor,
-        fabric_port=fabric_port,
+        dispatch=dispatch,
         hil_coordinator=hil_coordinator,
         active_task_id=active_task_id,
     )
@@ -100,54 +101,54 @@ class TestDiscoverWithFabricPort:
 
     @pytest.mark.asyncio
     async def test_calls_fabric_port_discover(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.return_value = _retrieval_result(
             ["tool.execute.send_message"]
         )
-        ctx = _make_ctx(fabric_port=mock_port)
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_discover_capabilities({"intent": "send message"}, ctx)
         mock_port.discover_capabilities.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_returns_ok_tool_result(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.return_value = _retrieval_result(
             ["tool.execute.send_message"]
         )
-        ctx = _make_ctx(fabric_port=mock_port)
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_discover_capabilities({"intent": "send message"}, ctx)
         assert isinstance(result, ToolResult)
         assert result.status == "ok"
 
     @pytest.mark.asyncio
     async def test_result_contains_capabilities(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.return_value = _retrieval_result(
             ["tool.execute.send_message", "tool.execute.check_calendar"]
         )
-        ctx = _make_ctx(fabric_port=mock_port)
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_discover_capabilities({"intent": "send message"}, ctx)
         assert "capabilities" in result.data
         assert len(result.data["capabilities"]) == 2
 
     @pytest.mark.asyncio
     async def test_capability_dict_has_name(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.return_value = _retrieval_result(
             ["tool.execute.send_message"]
         )
-        ctx = _make_ctx(fabric_port=mock_port)
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_discover_capabilities({"intent": "send message"}, ctx)
         cap = result.data["capabilities"][0]
         assert cap["name"] == "tool.execute.send_message"
 
     @pytest.mark.asyncio
     async def test_capability_dict_has_score(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.return_value = _retrieval_result(
             ["tool.execute.send_message"]
         )
-        ctx = _make_ctx(fabric_port=mock_port)
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_discover_capabilities({"intent": "send message"}, ctx)
         cap = result.data["capabilities"][0]
         assert "score" in cap
@@ -155,9 +156,9 @@ class TestDiscoverWithFabricPort:
 
     @pytest.mark.asyncio
     async def test_domain_passed_as_list(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.return_value = _retrieval_result()
-        ctx = _make_ctx(fabric_port=mock_port)
+        ctx = _make_ctx(dispatch=mock_port)
         await execute_discover_capabilities({"intent": "send", "domain": "messaging"}, ctx)
         call_kwargs = mock_port.discover_capabilities.call_args
         assert call_kwargs.kwargs.get("domain") == ["messaging"] or call_kwargs[1].get(
@@ -166,25 +167,25 @@ class TestDiscoverWithFabricPort:
 
     @pytest.mark.asyncio
     async def test_empty_intent_returns_error(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_discover_capabilities({"intent": ""}, ctx)
         assert result.status == "error"
 
     @pytest.mark.asyncio
     async def test_exception_returns_error(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.side_effect = RuntimeError("network down")
-        ctx = _make_ctx(fabric_port=mock_port)
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_discover_capabilities({"intent": "test"}, ctx)
         assert result.status == "error"
         assert "network down" in result.error
 
     @pytest.mark.asyncio
     async def test_result_cached_per_session(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.return_value = _retrieval_result()
-        ctx = _make_ctx(fabric_port=mock_port)
+        ctx = _make_ctx(dispatch=mock_port)
         r1 = await execute_discover_capabilities({"intent": "send message"}, ctx)
         r2 = await execute_discover_capabilities({"intent": "send message"}, ctx)
         # Second call should use cache, not call fabric_port again
@@ -202,23 +203,23 @@ class TestInvokeWithFabricPort:
 
     @pytest.mark.asyncio
     async def test_calls_fabric_port_execute(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result()
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_invoke_capability(
             {"capability_name": "tool.execute.send_message", "params": {}}, ctx
         )
-        mock_port.execute.assert_awaited_once()
+        mock_port.dispatch_direct.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_builds_correct_capability_request(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result()
-        ctx = _make_ctx(fabric_port=mock_port, actor="back")
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, actor="back")
         await execute_invoke_capability(
             {"capability_name": "tool.execute.test", "params": {"key": "val"}}, ctx
         )
-        call_args = mock_port.execute.call_args[0][0]
+        call_args = mock_port.dispatch_direct.call_args[0][0]
         assert isinstance(call_args, CapabilityRequest)
         assert call_args.capability_name == "tool.execute.test"
         assert call_args.params == {"key": "val"}
@@ -227,54 +228,54 @@ class TestInvokeWithFabricPort:
 
     @pytest.mark.asyncio
     async def test_success_returns_ok(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result(data={"result": "done"})
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result(data={"result": "done"})
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert result.status == "ok"
         assert result.data["result"] == {"result": "done"}
 
     @pytest.mark.asyncio
     async def test_failure_returns_error(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _failure_result(error_message="not found")
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _failure_result(error_message="not found")
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert result.status == "error"
         assert "not found" in result.error
 
     @pytest.mark.asyncio
     async def test_exception_returns_error(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.side_effect = RuntimeError("kaboom")
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.side_effect = RuntimeError("kaboom")
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert result.status == "error"
         assert "kaboom" in result.error
 
     @pytest.mark.asyncio
     async def test_empty_name_returns_error(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_invoke_capability({"capability_name": "", "params": {}}, ctx)
         assert result.status == "error"
 
     @pytest.mark.asyncio
     async def test_session_id_forwarded(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result()
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port)
         await execute_invoke_capability(
             {"capability_name": "cap1", "params": {}, "session_id": "sess-123"}, ctx
         )
-        call_args = mock_port.execute.call_args[0][0]
+        call_args = mock_port.dispatch_direct.call_args[0][0]
         assert call_args.session_id == "sess-123"
 
     @pytest.mark.asyncio
     async def test_has_duration_in_data(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result()
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert "duration_ms" in result.data
 
@@ -289,53 +290,53 @@ class TestSpawnWithFabricPort:
 
     @pytest.mark.asyncio
     async def test_calls_fabric_port_execute(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result(data={"agent_id": "a1"})
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result(data={"agent_id": "a1"})
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_spawn_via_fabric(
             {"agent_type": "researcher", "task": "find info"}, ctx
         )
-        mock_port.execute.assert_awaited_once()
+        mock_port.dispatch_direct.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_builds_agent_capability_name(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result()
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port)
         await execute_spawn_via_fabric({"agent_type": "researcher", "task": "find"}, ctx)
-        call_args = mock_port.execute.call_args[0][0]
+        call_args = mock_port.dispatch_direct.call_args[0][0]
         assert call_args.capability_name == "agent.researcher"
 
     @pytest.mark.asyncio
     async def test_success_returns_ok(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result(data={"agent_id": "a1"})
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result(data={"agent_id": "a1"})
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_spawn_via_fabric({"agent_type": "researcher", "task": "go"}, ctx)
         assert result.status == "ok"
 
     @pytest.mark.asyncio
     async def test_failure_returns_error(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _failure_result(error_message="no agent")
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _failure_result(error_message="no agent")
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_spawn_via_fabric({"agent_type": "researcher", "task": "go"}, ctx)
         assert result.status == "error"
 
     @pytest.mark.asyncio
     async def test_missing_args_returns_error(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_spawn_via_fabric({"agent_type": "", "task": "go"}, ctx)
         assert result.status == "error"
 
     @pytest.mark.asyncio
     async def test_params_include_task(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result()
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port)
         await execute_spawn_via_fabric({"agent_type": "researcher", "task": "find docs"}, ctx)
-        call_args = mock_port.execute.call_args[0][0]
+        call_args = mock_port.dispatch_direct.call_args[0][0]
         assert call_args.params["task"] == "find docs"
 
 
@@ -349,74 +350,74 @@ class TestWorkflowWithFabricPort:
 
     @pytest.mark.asyncio
     async def test_calls_fabric_port_execute(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result(data={"workflow_done": True})
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result(data={"workflow_done": True})
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_execute_workflow({"workflow_id": "wf_cleanup", "params": {}}, ctx)
-        mock_port.execute.assert_awaited_once()
+        mock_port.dispatch_direct.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_builds_workflow_capability_name(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result()
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port)
         await execute_execute_workflow({"workflow_id": "wf_cleanup", "params": {}}, ctx)
-        call_args = mock_port.execute.call_args[0][0]
+        call_args = mock_port.dispatch_direct.call_args[0][0]
         assert call_args.capability_name == "workflow.wf_cleanup"
 
     @pytest.mark.asyncio
     async def test_timeout_forwarded(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result()
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port)
         await execute_execute_workflow(
             {"workflow_id": "wf1", "params": {}, "timeout_ms": 15000}, ctx
         )
-        call_args = mock_port.execute.call_args[0][0]
+        call_args = mock_port.dispatch_direct.call_args[0][0]
         assert call_args.timeout_ms == 15000
 
     @pytest.mark.asyncio
     async def test_success_returns_ok(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result(data={"done": True})
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result(data={"done": True})
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_execute_workflow({"workflow_id": "wf1", "params": {}}, ctx)
         assert result.status == "ok"
 
     @pytest.mark.asyncio
     async def test_failure_returns_error(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _failure_result(error_message="wf failed")
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _failure_result(error_message="wf failed")
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_execute_workflow({"workflow_id": "wf1", "params": {}}, ctx)
         assert result.status == "error"
 
     @pytest.mark.asyncio
     async def test_missing_workflow_id(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        ctx = _make_ctx(fabric_port=mock_port)
+        mock_port = AsyncMock(spec=IDispatchPort)
+        ctx = _make_ctx(dispatch=mock_port)
         result = await execute_execute_workflow({"workflow_id": "", "params": {}}, ctx)
         assert result.status == "error"
 
 
 # =====================================================================
-# Backward compat — fabric_port=None falls through to placeholder
+# Backward compat — dispatch=None falls through to placeholder
 # =====================================================================
 
 
 class TestBackwardCompat:
-    """When fabric_port=None, tool functions return safe defaults."""
+    """When dispatch=None, tool functions return safe defaults."""
 
     @pytest.mark.asyncio
     async def test_discover_returns_empty_without_fabric(self) -> None:
-        ctx = _make_ctx(fabric_port=None)
+        ctx = _make_ctx(dispatch=None)
         result = await execute_discover_capabilities({"intent": "test"}, ctx)
         assert result.status == "ok"
         assert result.data["count"] == 0
 
     @pytest.mark.asyncio
     async def test_invoke_returns_placeholder_without_fabric(self) -> None:
-        ctx = _make_ctx(fabric_port=None)
+        ctx = _make_ctx(dispatch=None)
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert result.status == "ok"
         assert result.data["result"].get("_poc") is True
@@ -424,7 +425,7 @@ class TestBackwardCompat:
     @pytest.mark.asyncio
     async def test_spawn_falls_through_to_placeholder(self) -> None:
         """No fabric_port → POC placeholder."""
-        ctx = _make_ctx(fabric_port=None)
+        ctx = _make_ctx(dispatch=None)
         result = await execute_spawn_via_fabric({"agent_type": "test", "task": "go"}, ctx)
         assert result.status == "ok"
         assert "agent_id" in result.data
@@ -432,7 +433,7 @@ class TestBackwardCompat:
     @pytest.mark.asyncio
     async def test_workflow_falls_through_to_placeholder(self) -> None:
         """No fabric_port → POC placeholder."""
-        ctx = _make_ctx(fabric_port=None)
+        ctx = _make_ctx(dispatch=None)
         result = await execute_execute_workflow({"workflow_id": "wf1", "params": {}}, ctx)
         assert result.status == "ok"
         assert "execution_id" in result.data
@@ -448,52 +449,52 @@ class TestHITLBlockingWithFabricPort:
 
     @pytest.mark.asyncio
     async def test_hitl_pending_blocks_invoke(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result()
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
 
         hil = MagicMock()
         hil.get_pending_request.return_value = MagicMock()  # pending request exists
 
         ctx = _make_ctx(
-            fabric_port=mock_port,
+            dispatch=mock_port,
             hil_coordinator=hil,
             active_task_id="task-001",
         )
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert result.status == "blocked"
-        mock_port.execute.assert_not_awaited()
+        mock_port.dispatch_direct.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_hitl_no_pending_allows_invoke(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
-        mock_port.execute.return_value = _success_result()
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
 
         hil = MagicMock()
         hil.get_pending_request.return_value = None
         hil.validate_before_invoke.return_value = "allow"
 
         ctx = _make_ctx(
-            fabric_port=mock_port,
+            dispatch=mock_port,
             hil_coordinator=hil,
             active_task_id="task-001",
         )
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert result.status == "ok"
-        mock_port.execute.assert_awaited_once()
+        mock_port.dispatch_direct.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_hitl_red_band_blocks(self) -> None:
-        mock_port = AsyncMock(spec=IFabricPort)
+        mock_port = AsyncMock(spec=IDispatchPort)
 
         hil = MagicMock()
         hil.get_pending_request.return_value = None
         hil.validate_before_invoke.return_value = "block_red"
 
         ctx = _make_ctx(
-            fabric_port=mock_port,
+            dispatch=mock_port,
             hil_coordinator=hil,
             active_task_id="task-001",
         )
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert result.status == "blocked"
-        mock_port.execute.assert_not_awaited()
+        mock_port.dispatch_direct.assert_not_awaited()

@@ -467,7 +467,7 @@ class ConciergeSession:
     Holds scoped ``ToolContext`` copies that override per-request fields
     (cognitive_trace_id, bundle_idempotency_cache, active_device_id,
     active_task_id, capability_cache) while sharing long-lived references
-    (session_manager, actor, writer_port, hil_coordinator, fabric_port,
+    (session_manager, actor, writer_port, hil_coordinator, dispatch,
     recall_fn) from the runtime's ToolContext.
     """
 
@@ -490,7 +490,7 @@ class ConciergeSession:
 
         Maps:
             hil_coordinator → ToolContext.hil_coordinator
-            dispatch        → ToolContext.fabric_port
+            dispatch        → ToolContext.dispatch
             memory          → ToolContext.recall_fn
         """
         if self._closed:
@@ -501,7 +501,7 @@ class ConciergeSession:
             if hil_coordinator is not None:
                 ctx.hil_coordinator = hil_coordinator
             if dispatch is not None:
-                ctx.fabric_port = dispatch
+                ctx.dispatch = dispatch
             if memory is not None:
                 ctx.recall_fn = memory
 

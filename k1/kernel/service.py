@@ -35,6 +35,7 @@ from k1.bus.factory import BusFactory
 from k1.concierge.adapters.bus_input import BusInputAdapter
 from k1.concierge.adapters.bus_output import BusOutputAdapter
 from k1.concierge.adapters.fabric_dispatch import FabricDispatchAdapter
+from k1.concierge.adapters.recall_memory import RecallMemoryAdapter, build_recall_fn
 from k1.concierge.adapters.ssm_state import SSMStateAdapter
 from k1.concierge.config.concierge import ConciergeConfig
 from k1.concierge.config.kernel import KernelConfig
@@ -75,9 +76,7 @@ from k1.model_hub.adapters.config_adapter import ConfigAdapter
 from k1.model_hub.adapters.credential_store_adapter import CredentialStoreAdapter
 from k1.model_hub.adapters.event_bus_adapter import EventBusAdapter as MHEventBusAdapter
 from k1.model_hub.adapters.prometheus_adapter import PrometheusAdapter
-from k1.model_hub.adapters.session_state_read_adapter import (
-    SessionStateReadAdapter as MHStateReadAdapter,
-)
+from k1.model_hub.adapters.session_state_prod import SessionStateProdAdapter
 from k1.model_hub.factory import ModelHubFactory
 
 # Issue 2.2.5: Orchestrator adapters + factory
@@ -115,6 +114,36 @@ from k1.sessionstate.factory import SessionStateFactory
 logger = logging.getLogger(__name__)
 
 
+class _FirstSessionSSMShim:
+    """P5.5: Adapt the multi-session ``self._sessions`` map to the
+    ``manager.get_section(name)`` shape that ``SessionStateProdAdapter``
+    expects.
+
+    ModelHub builds its ``IStateReadPort`` once at S2, before any session
+    exists. ModelHub uses the port for hub-level reads (``persona``,
+    ``control``) to drive routing/policy decisions. We pick the first
+    active session's SSM as a degraded but useful default. If no session
+    is active yet, ``get_section()`` returns ``None`` and the prod adapter
+    yields an empty ``StateSnapshot`` — which the hub already tolerates.
+    """
+
+    __slots__ = ("_sessions",)
+
+    def __init__(self, sessions: dict[str, Any]) -> None:
+        self._sessions = sessions
+
+    def get_section(self, name: str) -> Any | None:
+        for session in self._sessions.values():
+            ssm = getattr(session, "session_state", None)
+            if ssm is None:
+                continue
+            try:
+                return ssm.get_section(name)
+            except KeyError:
+                return None
+        return None
+
+
 class KernelService:
     """Central lifecycle manager for the K1 kernel.
 
@@ -143,6 +172,12 @@ class KernelService:
         self._orchestrator: Any | None = None
         self._planner: Any | None = None
         self._planner_task: asyncio.Task[Any] | None = None
+
+        # P4B.8: Shared Phase1 (UltraBERT) classification pipeline.
+        # Built once during _startup_tier1, reused across every session.
+        # familyos_ultrabert.Client is loaded lazily on first analyze() call
+        # so process boot does not pay the ~20s model load cost.
+        self._phase1_pipeline: Any | None = None
 
         # P1.1: Shared routing reader (resolves session_id → SSM)
         self._session_routing_reader: SessionRoutingStateReader | None = None
@@ -850,8 +885,16 @@ class KernelService:
             self._model_hub = ModelHubFactory.create_with_ports(
                 ports={
                     "credential_port": CredentialStoreAdapter(),
-                    "event_port": MHEventBusAdapter(),
-                    "state_read_port": MHStateReadAdapter(),
+                    # P5.4: bind ModelHub IEventPort to K1 bus.
+                    "event_port": MHEventBusAdapter(bus=self._bus),
+                    # P5.5: real per-session SS via shim. ModelHub reads
+                    # ``persona``/``control`` for routing decisions; the shim
+                    # picks the first active session's SSM (or returns None
+                    # if no session is active yet, which the prod adapter
+                    # handles by yielding an empty StateSnapshot).
+                    "state_read_port": SessionStateProdAdapter(
+                        manager=_FirstSessionSSMShim(self._sessions),
+                    ),
                     "metrics_port": PrometheusAdapter(),
                     "config_port": ConfigAdapter(),
                 },
@@ -1019,6 +1062,12 @@ class KernelService:
             self._verify_planner_orchestrator_crosswire()
             self._verify_planner_mailbox_binding()
             self._verify_planner_task_running()
+
+            # ── P4B.8: Shared Phase1 pipeline ────────────────
+            # Built after S7 because it does not depend on any earlier
+            # tier 1 component. Construction is cheap (lazy_load defers
+            # the ~20s familyos_ultrabert model load to first analyze()).
+            self._phase1_pipeline = self._build_shared_phase1_pipeline()
         except Exception:
             # S7 or verification failed — tear down S6 through S1.
             if self._planner_task is not None:
@@ -1038,6 +1087,58 @@ class KernelService:
 
         self._running = True
         logger.info("Tier 1 startup complete — all shared components wired")
+
+    def _build_shared_phase1_pipeline(self) -> Any:
+        """Build the process-wide Phase1 classification pipeline (P4B.8).
+
+        Called once from ``_startup_tier1``. The returned pipeline is shared
+        across every session via ``PortBundle.classification``.
+
+        Selection by ``KernelConfig.phase1_pipeline``:
+          * ``"stub"``  → ``StubPhase1Pipeline`` (keyword-based, no model load)
+          * ``"ultrabert"`` → ``UltraBERTPhase1Pipeline`` wrapping the
+            singleton ``K1UltraBERTAdapter``. The adapter forwards
+            ``lazy_load=True`` (default) to ``familyos_ultrabert.Client`` so
+            the ~20s model load happens on first ``analyze()`` call, not at
+            boot. ``warmup_on_startup=True`` triggers the (cheap, in-process)
+            warmup path that ``Client`` runs after first load.
+        """
+        from k1.concierge.config.loader import get_config
+        from k1.concierge.fsm.phase1 import StubPhase1Pipeline
+
+        pipeline_kind = getattr(self._config, "phase1_pipeline", "stub").lower()
+        if pipeline_kind != "ultrabert":
+            logger.info("Phase1 pipeline: stub (keyword-based)")
+            return StubPhase1Pipeline()
+
+        # ultrabert path
+        from k1.concierge.fsm.ultrabert_adapter import K1UltraBERTAdapter
+        from k1.concierge.fsm.ultrabert_phase1 import UltraBERTPhase1Pipeline
+
+        phase1_cfg = get_config().phase1
+        adapter = K1UltraBERTAdapter.get_instance(
+            warmup=bool(getattr(self._config, "phase1_warmup_on_startup", False))
+            or phase1_cfg.warmup_on_startup,
+            warmup_rounds=phase1_cfg.warmup_rounds,
+            lazy_load=phase1_cfg.lazy_load,
+            backend=phase1_cfg.backend,
+            device=phase1_cfg.device,
+            cache_size=phase1_cfg.cache_size,
+            cache_ttl_s=phase1_cfg.cache_ttl_s,
+        )
+        pipeline = UltraBERTPhase1Pipeline(
+            adapter=adapter,
+            fallback=StubPhase1Pipeline() if phase1_cfg.degradation_fallback_enabled else None,
+            config=phase1_cfg,
+        )
+        logger.info(
+            "Phase1 pipeline: ultrabert (singleton, lazy_load=%s, warmup=%s, "
+            "adapter_available=%s)",
+            phase1_cfg.lazy_load,
+            phase1_cfg.warmup_on_startup,
+            adapter.is_available(),
+        )
+        return pipeline
 
     async def _cleanup_tier1_partial(self) -> None:
         """Issue 2.4.3 #3: Clean up any Tier 1 components assigned to self.
@@ -1103,6 +1204,7 @@ class KernelService:
         self._bridge = None
         self._orchestrator = None
         self._planner = None
+        self._phase1_pipeline = None
 
     def _on_planner_task_done(self, task: asyncio.Task[Any]) -> None:
         """Issue 2.4.3 #9: Watchdog callback for planner background task.
@@ -1241,9 +1343,14 @@ class KernelService:
                 output=session_output,
                 state=session_state_port,
                 llm=self._model_hub,
-                classification=None,
+                classification=self._phase1_pipeline,
                 dispatch=session_dispatch,
-                memory=None,
+                # P5.2: Wire recall through Bridge query path. SinkBridgeClient
+                # returns RecallBundle.empty() when offline, so the adapter
+                # gracefully yields [] without falling back to _null_recall.
+                memory=RecallMemoryAdapter(build_recall_fn(self._bridge.get_client())),
+                # P4B.6: pass IWriterPort explicitly (was reach-through in factory step 7)
+                writer=ss_writer,
             )
             session_concierge = ConciergeFactory.create_with_ports(
                 bus=session_bus,
@@ -1276,7 +1383,11 @@ class KernelService:
             mw_health = HealthAdapter(
                 circuit_breaker=mw_cb,
                 get_pending_count=lambda: 0,
-                get_started=lambda: False,
+                # P5.3: forward-reference; service is assigned right below.
+                # Reflects actual MW lifecycle state instead of constant False.
+                get_started=lambda: (
+                    session_memory_writer.is_started if session_memory_writer is not None else False
+                ),
             )
             session_memory_writer = MemoryWriterFactory.create(
                 session_read_port=mw_session_read,

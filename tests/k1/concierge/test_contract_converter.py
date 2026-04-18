@@ -6,7 +6,7 @@ Validates POC capability dict → K1 CapabilityContract conversion.
 
 from __future__ import annotations
 
-from k1.concierge.fabric.contract_converter import (
+from tests.fixtures.capabilities.contract_converter import (
     convert_all_poc_capabilities,
     poc_dict_to_contract,
 )

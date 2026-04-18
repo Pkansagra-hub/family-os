@@ -35,19 +35,17 @@ class TestMockDispatchAdapterBehaviour:
 
     def test_dispatch_envelope_records_call(self) -> None:
         from k1.concierge.adapters.test_dispatch import MockDispatchAdapter
-        from k1.concierge.orchestrator.types import TaskEnvelope
 
         adapter = MockDispatchAdapter()
-        env = TaskEnvelope(intent="test", task_id="t1")
+        env = object()  # adapter does not introspect envelope
         asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
         assert len(adapter.envelope_calls) == 1
 
     def test_dispatch_envelope_returns_aggregated(self) -> None:
         from k1.concierge.adapters.test_dispatch import MockDispatchAdapter
-        from k1.concierge.orchestrator.types import TaskEnvelope
 
         adapter = MockDispatchAdapter()
-        env = TaskEnvelope(intent="test", task_id="t1")
+        env = object()
         result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
         assert result.success is True
 
@@ -63,9 +61,8 @@ class TestFabricDispatchAdapterBehaviour:
         import pytest
 
         from k1.concierge.adapters.fabric_dispatch import FabricDispatchAdapter
-        from k1.concierge.orchestrator.types import TaskEnvelope
 
         adapter = FabricDispatchAdapter(fabric_port=None, orchestrator=None)
-        env = TaskEnvelope(intent="test", task_id="t1")
+        env = object()
         with pytest.raises(RuntimeError, match="no orchestrator"):
             asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))

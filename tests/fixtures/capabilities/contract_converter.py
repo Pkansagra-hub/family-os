@@ -1,5 +1,5 @@
 """
-k1.concierge.fabric.contract_converter -- POC dict → K1 CapabilityContract.
+tests.fixtures.capabilities.contract_converter -- POC dict → K1 CapabilityContract.
 
 Converts the 40 POC capability definition dicts (from demo_capabilities,
 family_capabilities, web_capabilities) into K1 CapabilityContract objects
@@ -82,9 +82,9 @@ def poc_dict_to_contract(cap_dict: dict[str, Any]) -> CapabilityContract:
 
 def convert_all_poc_capabilities() -> list[CapabilityContract]:
     """Convert all 40 POC capabilities to K1 CapabilityContract objects."""
-    from k1.concierge.fabric.demo_capabilities import DEMO_CAPABILITIES
-    from k1.concierge.fabric.family_capabilities import FAMILY_CAPABILITIES
-    from k1.concierge.fabric.web_capabilities import WEB_CAPABILITIES
+    from tests.fixtures.capabilities.demo_capabilities import DEMO_CAPABILITIES
+    from tests.fixtures.capabilities.family_capabilities import FAMILY_CAPABILITIES
+    from tests.fixtures.capabilities.web_capabilities import WEB_CAPABILITIES
 
     contracts: list[CapabilityContract] = []
     for cap_dict in DEMO_CAPABILITIES + FAMILY_CAPABILITIES + WEB_CAPABILITIES:

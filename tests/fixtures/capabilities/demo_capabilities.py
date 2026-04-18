@@ -1,5 +1,5 @@
 """
-k1.concierge.fabric.demo_capabilities -- 7 Demo Capability Definitions + Handlers.
+tests.fixtures.capabilities.demo_capabilities -- 7 Demo Capability Definitions + Handlers.
 
 V2 Design Ref: Section 14 item 3, Section 15.4 (demo capabilities)
 

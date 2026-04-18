@@ -1811,7 +1811,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **File** | `k1/kernel/service.py` — `_startup_tier1()` S5 block |
 | **Findings addressed** | Absorbed from MS-3 issue 3.10.3 (MOCK-2) |
 | **📖 Ref docs** | `15_orchestrator_api_mapping.md` (MOCK-2 BridgeWriteAdapter), `18_bridge_audit.md` (SinkBridgeClient offline pattern) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE — S5 already wires `BridgeWriteAdapter(bridge_client=BridgeClientShim(orch_bridge_client))` when `bridge_enabled=True`; `MockBridgeAdapter()` retained as fallback for `OfflineBridgeAdapter` (`bridge_enabled=False` mode). |
 
 ##### Issue P5.2 — Wire Concierge `RecallMemoryAdapter` (replace memory=None)
 
@@ -1821,7 +1821,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **Impact** | `recall_memory` tool no longer dead. When bridge comes online, recall works automatically. |
 | **Findings addressed** | H-24 |
 | **📖 Ref docs** | `21_concierge_cross_reference.md` (H-24 recall memory dead), `25_memorywriter_cross_reference.md` (recall loop broken) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE — added `build_recall_fn(bridge_client)` helper in `k1/concierge/adapters/recall_memory.py` that maps `(query, memory_types, max_results)` → `bridge.query(QueryEnvelope([RecallSelector(type=t, query=query, limit=max_results) for t in memory_types]))` and flattens `RecallBundle` items to dicts. Wired `memory=RecallMemoryAdapter(build_recall_fn(self._bridge.get_client()))` in `service.py` PortBundle. `SinkBridgeClient` returns `RecallBundle.empty()` offline so closure yields `[]` cleanly; defensive try/except returns `[]` on bridge errors. |
 
 ##### Issue P5.3 — Fix MW `HealthAdapter` `get_started` lambda
 
@@ -1830,7 +1830,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **What** | `HealthAdapter(get_started=lambda: False)` at P5. Should bind to actual MW running state. Change to `get_started=lambda: memory_writer.is_running`. |
 | **Findings addressed** | H-25, M-82 |
 | **📖 Ref docs** | `24_memorywriter_api_mapping.md` (H-25 hardcoded False, M-82 health gap), `25_memorywriter_cross_reference.md` (health adapter wiring) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE — in `service.py` P5 block, `HealthAdapter(get_started=...)` now uses forward-reference pattern: `lambda: session_memory_writer.is_started if session_memory_writer is not None else False`. Mirrors the existing `fabric_registration.py` wiring. |
 
 ##### Issue P5.4 — Wire ModelHub `IEventPort` to K1 Bus
 
@@ -1839,7 +1839,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **What** | Switch S2 from `ModelHubFactory.create_standalone()` to `create_with_ports()`. Wire `EventBusAdapter(bus=self._bus)` for `IEventPort`. |
 | **Findings addressed** | M-16, M-75. Absorbed from MS-3 issue 3.10.5 / 3.4.4 |
 | **📖 Ref docs** | `13_modelhub_audit.md` (M-16 dev/test adapters), `22_modelhub_api_mapping.md` (M-75 IEventPort mapping), `19_modelhub_services_adapters_audit.md` (MH port wiring detail) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE — extended `EventBusAdapter.__init__` with optional `bus=` kwarg. When `bus` is set: `publish()` JSON-encodes payload into `Envelope` and calls `bus.publish(env)`; `subscribe()` registers a sync handler that JSON-decodes and dispatches the async user handler via `run_coroutine_threadsafe`. S2 wires `MHEventBusAdapter(bus=self._bus)`. Stub `MHStateReadAdapter` import removed (replaced by P5.5 wiring). |
 
 ##### Issue P5.5 — Wire ModelHub `IStateReadPort` to session routing reader
 
@@ -1848,7 +1848,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **What** | Wire `SessionStateProdAdapter(manager=session_routing_reader)` for ModelHub. Enables model selection based on user preferences. |
 | **Findings addressed** | M-16. Absorbed from MS-3 issue 3.4.5 |
 | **📖 Ref docs** | `13_modelhub_audit.md` (M-16 IStateReadPort stub), `19_modelhub_services_adapters_audit.md` (SessionStateProdAdapter) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE — ModelHub is process-singleton built at S2 (before any session exists); `SessionStateProdAdapter` expects a per-session `manager.get_section(name)`. Resolved via `_FirstSessionSSMShim(self._sessions)` in `service.py` that picks the first active session's SSM. When no session active yet, `get_section()` returns `None` → prod adapter yields empty `StateSnapshot` (already its degraded mode). Good enough for `persona`/`control` reads used by routing. |
 
 ##### Issue P5.6 — Fix MW `FakeSessionReadPort` missing methods
 
@@ -1857,7 +1857,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **What** | Add `list_sections()` and `snapshot_all()` to `FakeSessionReadPort`. |
 | **Findings addressed** | M-53 |
 | **📖 Ref docs** | `17_memorywriter_audit.md` (M-53 FakeSessionReadPort missing methods) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE — added `list_sections() -> FrozenSet[str]` and `snapshot_all(exclude=frozenset()) -> Dict[str, Any]` to `FakeSessionReadPort` in `k1/memory_writer/adapters/test_adapters.py`. Honours configured `fail_on` set so error paths still exercise. |
 
 ##### Issue P5.7 — Fix MW `PlaceResolver` empty entity list
 
@@ -1866,7 +1866,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **What** | `MemoryWriterFactory` passes `PlaceResolver([])`. Wire to entity list from session state at session start. |
 | **Findings addressed** | M-81 |
 | **📖 Ref docs** | `24_memorywriter_api_mapping.md` (M-81 PlaceResolver empty), `25_memorywriter_cross_reference.md` (entity resolution gap) |
-| **Status** | ☐ |
+| **Status** | ☐ DEFERRED — `17_memorywriter_audit.md` rates this LOW; entities are populated per-turn from NER at runtime, so the empty initial seed has no functional impact. Wiring an async `read_section("beliefs_active")` at session start (in `factory.create_for_session`) gains us 0–1 location entries before the first turn — not worth the lifecycle complexity now. Revisit when persona-warm-start matters. |
 
 ##### Issue P5.8 — ~~Wire Concierge `FabricDispatchAdapter` in factory~~ ABSORBED → P4B.2
 

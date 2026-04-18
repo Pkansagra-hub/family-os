@@ -439,7 +439,14 @@ class Phase1Config:
         default_factory=lambda: {"low_max": 0, "medium_max": 2}
     )
     degradation_fallback_enabled: bool = True
-    warmup_on_startup: bool = True
+    # Lazy load defers the ~20s familyos_ultrabert model load until first
+    # analyze() call. Combined with warmup_on_startup=False this means the
+    # process boots fast and only pays the load cost on first user input.
+    lazy_load: bool = True
+    warmup_on_startup: bool = False
+    warmup_rounds: int = 3
+    backend: str = "auto"
+    device: str = "auto"
     cache_size: int = 64
     cache_ttl_s: float = 30.0
     target_latency_ms: int = 25
@@ -1131,9 +1138,15 @@ def _build_phase1(raw: dict[str, Any]) -> Phase1Config:
         cfg.complexity_thresholds = {
             str(k): int(v) for k, v in raw["complexity_thresholds"].items()
         }
-    for attr in ("degradation_fallback_enabled", "warmup_on_startup"):
+    for attr in ("degradation_fallback_enabled", "warmup_on_startup", "lazy_load"):
         if attr in raw:
             setattr(cfg, attr, bool(raw[attr]))
+    if "warmup_rounds" in raw:
+        cfg.warmup_rounds = int(raw["warmup_rounds"])
+    if "backend" in raw:
+        cfg.backend = str(raw["backend"])
+    if "device" in raw:
+        cfg.device = str(raw["device"])
     if "cache_size" in raw:
         cfg.cache_size = int(raw["cache_size"])
     if "cache_ttl_s" in raw:

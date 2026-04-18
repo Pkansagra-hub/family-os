@@ -24,11 +24,11 @@ from typing import Any, Callable, Dict, List, Optional
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from k1.concierge.orchestrator.degradation import CircuitBreaker
 from k1.fabric.ports.event_port import SubscriptionHandle
 from k1.orchestrator.adapters.admin_http_adapter import AdminHttpAdapter
 from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.connectors.mcp_registrar import RegistrationResult
+from k1.orchestrator.degradation import CircuitBreaker
 from k1.orchestrator.orchestration.orchestrator_service import OrchestratorService
 from k1.orchestrator.ports.admin_port import IAdminPort
 from k1.orchestrator.types import (

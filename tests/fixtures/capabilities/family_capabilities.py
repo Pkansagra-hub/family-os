@@ -1,5 +1,5 @@
 """
-k1.concierge.fabric.family_capabilities -- Family-Domain Capability Definitions + Handlers.
+tests.fixtures.capabilities.family_capabilities -- Family-Domain Capability Definitions + Handlers.
 
 Comprehensive capability set for a family operating system. Covers the
 domains a real household needs: messaging, reminders, todo/grocery lists,

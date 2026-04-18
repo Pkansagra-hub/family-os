@@ -11,9 +11,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from k1.concierge.fabric.capability_registry import create_demo_registry
-from k1.concierge.fabric.contract_converter import convert_all_poc_capabilities
-from k1.concierge.fabric.poc_bridge_adapter import POCMockBridgeAdapter
+from tests.fixtures.capabilities.registry import create_demo_registry
+from tests.fixtures.capabilities.contract_converter import convert_all_poc_capabilities
+from tests.fixtures.capabilities.poc_bridge_adapter import POCMockBridgeAdapter
 from k1.concierge.tools.implementations import (
     ToolContext,
     execute_batch_invoke_capabilities,

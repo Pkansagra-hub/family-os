@@ -46,6 +46,7 @@ from k1.concierge.ports import (
     IStatePort,
 )
 from k1.concierge.session import ConciergeRuntime, ConciergeSession
+from k1.sessionstate.ports.writer import IWriterPort
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,8 @@ class PortBundle:
     classification: IClassificationPort | None = None
     dispatch: IDispatchPort | None = None
     memory: IMemoryPort | None = None
+    # P4B.6: writer is passed explicitly (was reach-through into ssm._writer_port)
+    writer: IWriterPort | None = None
 
     def validate_required(self) -> None:
         """Raise ValueError if any required port is None."""
@@ -273,122 +276,11 @@ class _DispatchPortFSMAdapter:
         return await self._dispatch.dispatch_envelope(envelope)
 
 
-class _FabricGatewayAdapter:
-    """Capability registry adapter for OrchestratorStub fabric port.
-
-    M2 E2.4 / E2.5 Option A: Accepts a FabricPOCBridge and translates
-    between POC orchestrator types and K1 fabric types.  The POC
-    orchestrator still emits/consumes its own CapabilityRequest/Result;
-    the adapter converts to K1 types for the bridge call and converts
-    the K1 result back to the POC type.
-    """
-
-    def __init__(self, bridge: Any) -> None:
-        self._bridge = bridge
-
-    async def execute(self, request: Any) -> Any:
-        from k1.concierge.orchestrator.types import CapabilityResult as POCCapabilityResult
-        from k1.fabric.types import CapabilityRequest
-
-        k1_request = CapabilityRequest(
-            capability_name=request.name,
-            params=request.params or {},
-            session_id=request.session_id or "",
-            trace_id=getattr(request, "trace_id", "") or "",
-            caller="orchestrator",
-            caller_id="orchestrator.stub",
-        )
-        k1_result = await self._bridge.execute(k1_request)
-
-        return POCCapabilityResult(
-            success=k1_result.success,
-            data=k1_result.data if k1_result.success else {},
-            error=(
-                ""
-                if k1_result.success
-                else (k1_result.error.message if k1_result.error else "invoke_failed")
-            ),
-            capability_name=k1_request.capability_name,
-            duration_ms=k1_result.duration_ms,
-        )
-
-    async def execute_batch(self, requests: list[Any]) -> list[Any]:
-        return [await self.execute(req) for req in requests]
-
-
-class _StateReadAdapter:
-    """SessionState adapter for OrchestratorStub state read port."""
-
-    def __init__(self, session_state: Any) -> None:
-        self._ss = session_state
-
-    async def snapshot(self, sections: list[str]) -> dict[str, Any]:
-        snapshot: dict[str, Any] = {}
-        for section_name in sections:
-            try:
-                section = self._ss.get_section(section_name)
-                snapshot[section_name] = (
-                    section.to_dict() if hasattr(section, "to_dict") else section
-                )
-            except Exception:
-                snapshot[section_name] = {}
-        return snapshot
-
-    async def read_section(self, session_id: str, section: str) -> dict[str, Any] | None:
-        try:
-            value = self._ss.get_section(section)
-            return value.to_dict() if hasattr(value, "to_dict") else value
-        except Exception:
-            return None
-
-
-class _DeltaEmitAdapter:
-    """Delta emitter adapter that routes events through the aggregator."""
-
-    def __init__(
-        self,
-        aggregator: Any = None,
-        bus: IBus | None = None,
-    ) -> None:
-        self._aggregator = aggregator
-        self._bus = bus
-
-    async def emit(self, event_topic: str, payload: Any, trace_id: str = "") -> None:
-        from k1.concierge.delta.topics import ARTIFACT_CREATED, TASK_STATE_CHANGED
-
-        if self._aggregator is not None and event_topic in (
-            ARTIFACT_CREATED,
-            TASK_STATE_CHANGED,
-        ):
-            from k1.concierge.delta.session_delta import SessionDelta
-
-            if isinstance(payload, SessionDelta):
-                await self._aggregator.collect(payload)
-            elif isinstance(payload, dict):
-                try:
-                    delta = SessionDelta.from_dict(payload)
-                    await self._aggregator.collect(delta)
-                except Exception as exc:
-                    logger.warning("Failed to parse delta from payload: %s", exc)
-            return
-
-        if self._bus is not None:
-            import json as _json
-
-            from k1.bus.envelope import Envelope, PayloadFormat, Priority
-
-            payload_bytes = (
-                _json.dumps(payload, separators=(",", ":")).encode("utf-8")
-                if isinstance(payload, dict)
-                else str(payload).encode("utf-8")
-            )
-            env = Envelope(
-                topic=event_topic,
-                priority=Priority.INTERACTIVE,
-                payload=payload_bytes,
-                payload_format=PayloadFormat.JSON,
-            )
-            self._bus.publish(env)
+# P4B.5: _DeltaEmitAdapter deleted. It was only used by the deleted
+# OrchestratorStub trinity (alongside _FabricGatewayAdapter / _StateReadAdapter,
+# both removed in P4B.4). Concierge now emits deltas through the
+# DeltaAggregator + DeltaApplicator path wired in factory step 10, and
+# external dispatch goes through IDispatchPort (P4B.2 / P4B.3).
 
 
 # ---------------------------------------------------------------------------
@@ -559,7 +451,7 @@ class ConciergeFactory:
         ``cognitive_trace_id``, ``bundle_idempotency_cache``, ``active_device_id``,
         ``active_task_id``, and ``capability_cache``.  Shared fields
         (``session_manager``, ``actor``, ``writer_port``, ``hil_coordinator``,
-        ``fabric_port``, ``recall_fn``) reference the runtime's ToolContext.
+        ``dispatch``, ``recall_fn``) reference the runtime's ToolContext.
 
         Args:
             runtime: Long-lived ConciergeRuntime (must already be started
@@ -709,13 +601,15 @@ class ConciergeFactory:
         recall_fn = ports.memory.recall if ports.memory is not None else _null_recall
 
         # Step 7: ToolContext for front + back
-        writer_port = getattr(ports.state, "_writer_port", None)
+        # P4B.6: writer is now an explicit port on PortBundle (no more reach-through
+        # into the IStatePort adapter's private _writer_port attribute).
+        writer_port = ports.writer
         front_ctx = ToolContext(
             session_manager=ports.state,
             cognitive_trace_id=f"k-front-{uuid.uuid4().hex[:6]}",
             actor="front",
             recall_fn=recall_fn,
-            fabric_port=ports.dispatch,
+            dispatch=ports.dispatch,
             writer_port=writer_port,
         )
         back_ctx = ToolContext(
@@ -723,7 +617,7 @@ class ConciergeFactory:
             cognitive_trace_id=f"k-back-{uuid.uuid4().hex[:6]}",
             actor="back",
             recall_fn=recall_fn,
-            fabric_port=ports.dispatch,
+            dispatch=ports.dispatch,
             writer_port=writer_port,
         )
 
@@ -799,7 +693,7 @@ class ConciergeFactory:
 
         # Step 14: Orchestrator wiring via IDispatchPort (P4B.2)
         orchestrator = None
-        if ports.dispatch is not None:
+        if ports.dispatch is not None and config.enable_orchestrator:
             orchestrator = _DispatchPortFSMAdapter(ports.dispatch)
             fsm.set_orchestrator(orchestrator)
 

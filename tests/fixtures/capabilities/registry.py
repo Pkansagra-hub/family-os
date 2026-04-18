@@ -1,5 +1,5 @@
 """
-k1.concierge.fabric.capability_registry -- In-Memory Capability Registry.
+tests.fixtures.capabilities.registry -- In-Memory Capability Registry.
 
 V2 Design Ref: Section 6.2 (invoke_capability routes through Fabric)
 
@@ -338,8 +338,8 @@ def create_demo_registry() -> CapabilityRegistry:
     Returns:
         CapabilityRegistry with all capabilities registered.
     """
-    from k1.concierge.fabric.demo_capabilities import DEMO_CAPABILITIES, DEMO_HANDLERS
-    from k1.concierge.fabric.family_capabilities import register_family_capabilities
+    from tests.fixtures.capabilities.demo_capabilities import DEMO_CAPABILITIES, DEMO_HANDLERS
+    from tests.fixtures.capabilities.family_capabilities import register_family_capabilities
 
     registry = CapabilityRegistry()
     for cap in DEMO_CAPABILITIES:
@@ -356,7 +356,7 @@ def create_demo_registry() -> CapabilityRegistry:
     family_count = register_family_capabilities(registry)
 
     # Load real web search capability (DuckDuckGo)
-    from k1.concierge.fabric.web_capabilities import register_web_capabilities
+    from tests.fixtures.capabilities.web_capabilities import register_web_capabilities
 
     web_count = register_web_capabilities(registry)
 

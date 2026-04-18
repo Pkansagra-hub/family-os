@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from k1.concierge.fabric.capability_registry import create_demo_registry
-from k1.concierge.fabric.contract_converter import convert_all_poc_capabilities
-from k1.concierge.fabric.poc_bridge_adapter import POCMockBridgeAdapter
+from tests.fixtures.capabilities.registry import create_demo_registry
+from tests.fixtures.capabilities.contract_converter import convert_all_poc_capabilities
+from tests.fixtures.capabilities.poc_bridge_adapter import POCMockBridgeAdapter
 from k1.fabric.adapters.local_event import LocalEventAdapter
 from k1.fabric.adapters.test_delta_bus import TestDeltaBusAdapter
 from k1.fabric.adapters.test_model_gateway import TestModelGatewayAdapter

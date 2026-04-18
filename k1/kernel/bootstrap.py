@@ -99,7 +99,7 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         delta_aggregator=session.delta_aggregator,
         delta_applicator=session.delta_applicator,
         hitl_coordinator=session.hitl_coordinator,
-        orchestrator=concierge.orchestrator,
+        orchestrator=svc._orchestrator,
         front_subscriptions=concierge.front_subscriptions,
         consumer_task=session.consumer_task,
         ledger=session.ledger,
@@ -131,12 +131,7 @@ async def stop_kernel(runtime: KernelRuntime) -> None:
     logger.info("stop_kernel: kernel stopped")
 
 
-# ---------------------------------------------------------------------------
-# Backward-compat re-exports: canonical definitions now live in factory.py
-# ---------------------------------------------------------------------------
-from k1.concierge.factory import (  # noqa: E402, F401
-    _build_delta_applicator,
-    _DeltaEmitAdapter,
-    _FabricGatewayAdapter,
-    _StateReadAdapter,
-)
+# P4B.5: Backward-compat re-exports of _FabricGatewayAdapter / _StateReadAdapter /
+# _DeltaEmitAdapter / _build_delta_applicator removed. The three internal adapter
+# classes were deleted (they only existed to feed the deleted OrchestratorStub).
+# _build_delta_applicator remains importable from k1.concierge.factory directly.
