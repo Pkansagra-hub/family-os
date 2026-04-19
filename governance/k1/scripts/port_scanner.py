@@ -1,19 +1,12 @@
 """
-K1 Port Scanner - Extract port interfaces and adapter implementations from K1 codebase.
+K1 Port Scanner - Extract port interfaces and adapter implementations.
 
 Scans K1 modules for hexagonal architecture compliance:
 - Port interface definitions (ABC/Protocol-based I*Port, I*Provider classes)
-- Adapter implementations (classes implementing port interfaces)
-- Port-adapter mapping (which adapters satisfy which ports)
-- Null/mock adapters for testing
+- Nominal (inheritance) and structural (Protocol duck-typing) adapter linkage
+- Null/mock adapter classification
 
-This scanner is K1-specific: K0 does not use the hexagonal port/adapter pattern.
-
-Usage:
-    from governance.k1.scripts.port_scanner import scan_ports
-    ports = scan_ports()
-    for p in ports:
-        print(f"{p.port_name} ({p.module}): {len(p.adapters)} adapters")
+K1-specific: K0 does not use the hexagonal port/adapter pattern.
 """
 
 from __future__ import annotations
@@ -39,13 +32,13 @@ class AdapterInfo:
 class K1PortInfo:
     """Extracted K1 port interface information."""
 
-    port_name: str  # IEventPort, IStoragePort, IK0SyncPort
-    module: str  # sessionstate, fabric
-    file_path: str  # k1/sessionstate/ports/events.py
+    port_name: str
+    module: str
+    file_path: str
     line_number: int
-    base_class: str  # ABC, Protocol
-    method_count: int  # Number of abstract methods
-    methods: list[str] = field(default_factory=list)  # Method names
+    base_class: str  # ABC or Protocol
+    method_count: int
+    methods: list[str] = field(default_factory=list)
     adapters: list[AdapterInfo] = field(default_factory=list)
     status: str = "Active"
 
@@ -88,8 +81,8 @@ def _scan_port_definitions(k1_path: Path) -> list[K1PortInfo]:
                     if base_class not in ("ABC", "Protocol"):
                         continue
 
-                    # Count abstract methods
-                    methods = _extract_abstract_methods(lines, i)
+                    # Count abstract methods (Protocol-aware)
+                    methods = _extract_abstract_methods(lines, i, base_class)
 
                     ports.append(
                         K1PortInfo(
@@ -109,71 +102,161 @@ def _scan_port_definitions(k1_path: Path) -> list[K1PortInfo]:
     return ports
 
 
-def _extract_abstract_methods(lines: list[str], class_start: int) -> list[str]:
-    """
-    Extract abstract method names from a class definition.
-
-    Scans from class_start until next class or end of indented block.
-    """
-    methods: list[str] = []
-    # Determine class indentation
+def _iter_class_body_def_indices(lines: list[str], class_start: int) -> list[int]:
+    """Yield indices of `def`/`async def` lines at the class body indent."""
     class_indent = len(lines[class_start]) - len(lines[class_start].lstrip())
-
-    in_class = False
-    for i in range(class_start + 1, min(class_start + 200, len(lines))):
+    body_indent: int | None = None
+    out: list[int] = []
+    for i in range(class_start + 1, len(lines)):
         line = lines[i]
         stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        curr_indent = len(line) - len(line.lstrip())
+        if curr_indent <= class_indent:
+            break
+        if body_indent is None:
+            body_indent = curr_indent
+        if curr_indent != body_indent:
+            continue
+        if stripped.startswith("def ") or stripped.startswith("async def "):
+            out.append(i)
+    return out
 
+
+def _method_body_is_trivial(lines: list[str], def_idx: int) -> bool:
+    """True if method body contains only docstring(s), `...`, and/or `pass`."""
+    sig_end = def_idx
+    while sig_end < len(lines) and not lines[sig_end].rstrip().endswith(":"):
+        sig_end += 1
+        if sig_end - def_idx > 20:
+            return False
+    def_line = lines[def_idx]
+    def_indent = len(def_line) - len(def_line.lstrip())
+    i = sig_end + 1
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i >= len(lines):
+        return False
+    first_body = lines[i]
+    body_indent = len(first_body) - len(first_body.lstrip())
+    if body_indent <= def_indent:
+        return False
+    in_docstring = False
+    docstring_quote = ""
+    for j in range(i, len(lines)):
+        line = lines[j]
+        stripped = line.strip()
         if not stripped:
             continue
-
         curr_indent = len(line) - len(line.lstrip())
+        if in_docstring:
+            if docstring_quote in line:
+                in_docstring = False
+            continue
+        if curr_indent < body_indent:
+            return True
+        if stripped.startswith("#"):
+            continue
+        code_part = stripped.split("#", 1)[0].rstrip() if "#" in stripped else stripped
+        if code_part in ("...", "pass", ""):
+            continue
+        if code_part.startswith('"""') or code_part.startswith("'''"):
+            quote = code_part[:3]
+            rest = code_part[3:]
+            if quote in rest:
+                continue
+            in_docstring = True
+            docstring_quote = quote
+            continue
+        if code_part[:1] in ('"', "'"):
+            q = code_part[0]
+            if code_part.endswith(q) and len(code_part) >= 2:
+                continue
+        return False
+    return True
 
-        # Check if we've left the class
-        if curr_indent <= class_indent and stripped and not stripped.startswith("#"):
+
+def _extract_abstract_methods(
+    lines: list[str], class_start: int, base_class: str = ""
+) -> list[str]:
+    """
+    Extract abstract / Protocol-required method names from a class definition.
+
+    For ABC: counts methods decorated with @abstractmethod.
+    For Protocol: counts public methods whose body is only docstring/.../pass.
+    For everything else: also applies the Protocol rule (best effort).
+    """
+    methods: list[str] = []
+    def_indices = _iter_class_body_def_indices(lines, class_start)
+
+    # Pre-compute decorator presence by walking back from each def.
+    for di in def_indices:
+        line = lines[di].strip()
+        match = re.match(r"(?:async\s+)?def\s+(\w+)", line)
+        if not match:
+            continue
+        name = match.group(1)
+
+        # Walk back across decorators / blank lines to detect @abstractmethod
+        has_abstract = False
+        k = di - 1
+        while k >= 0:
+            s = lines[k].strip()
+            if not s:
+                k -= 1
+                continue
+            if s.startswith("@"):
+                if "abstractmethod" in s:
+                    has_abstract = True
+                k -= 1
+                continue
             break
 
-        in_class = True
+        if base_class == "ABC":
+            if has_abstract and name not in methods:
+                methods.append(name)
+            continue
 
-        # Check for @abstractmethod decorator or abstract def
-        if "@abstractmethod" in stripped:
-            # Next non-empty line should be the method def
-            for j in range(i + 1, min(i + 5, len(lines))):
-                method_line = lines[j].strip()
-                if method_line.startswith("def ") or method_line.startswith("async def "):
-                    match = re.match(r"(?:async\s+)?def\s+(\w+)", method_line)
-                    if match:
-                        methods.append(match.group(1))
-                    break
-
-        # Also match abstract methods without decorator (Protocol-based)
-        if in_class and (stripped.startswith("def ") or stripped.startswith("async def ")):
-            # Check if it has ... body (Protocol style)
-            match = re.match(r"(?:async\s+)?def\s+(\w+)", stripped)
-            if match:
-                method_name = match.group(1)
-                if method_name.startswith("_") and not method_name.startswith("__"):
-                    continue  # Skip private methods
-                # Check next non-empty line for ...
-                for j in range(i + 1, min(i + 3, len(lines))):
-                    body_line = lines[j].strip()
-                    if body_line == "...":
-                        if method_name not in methods:
-                            methods.append(method_name)
-                        break
-                    elif body_line:
-                        break
+        # Protocol (or unknown): public methods with trivial body
+        if name.startswith("_") and not name.startswith("__"):
+            continue
+        if has_abstract or _method_body_is_trivial(lines, di):
+            if name not in methods:
+                methods.append(name)
 
     return methods
 
 
+def _extract_class_public_methods(lines: list[str], class_start: int) -> list[str]:
+    """
+    Return the set of public method names defined at the body-indent of the class.
+
+    Used by the structural adapter scan to check whether a class duck-types a Protocol.
+    """
+    out: list[str] = []
+    for di in _iter_class_body_def_indices(lines, class_start):
+        match = re.match(r"(?:async\s+)?def\s+(\w+)", lines[di].strip())
+        if not match:
+            continue
+        name = match.group(1)
+        if name.startswith("_"):
+            continue
+        if name not in out:
+            out.append(name)
+    return out
+
+
 def _scan_adapter_implementations(k1_path: Path, ports: list[K1PortInfo]) -> None:
     """
-    Scan K1 Python files for adapter implementations and link to ports.
+    Nominal (inheritance-based) adapter scan.
 
-    Detects classes that inherit from port interfaces:
-    - class FileStorageAdapter(IStoragePort):
-    - class NullSyncPort(IK0SyncPort):
+    Detects classes that inherit from a known port interface, e.g.
+    ``class FileStorageAdapter(IStoragePort):``. Required for ABC-based ports
+    and still catches inheritance-based Protocol adapters.
+
+    Structural (duck-typed) Protocol satisfaction is handled by
+    :func:`_scan_structural_adapters`, which runs afterwards.
     """
     port_names = {p.port_name for p in ports}
     port_by_name = {p.port_name: p for p in ports}
@@ -259,6 +342,82 @@ def _scan_adapter_implementations(k1_path: Path, ports: list[K1PortInfo]) -> Non
                 continue
 
 
+def _scan_structural_adapters(k1_path: Path, ports: list[K1PortInfo]) -> None:
+    """
+    Structural (duck-typed) adapter scan for ``@runtime_checkable`` Protocol ports.
+
+    For each Protocol port, look in ``k1/<module>/adapters/**/*.py`` for top-level
+    classes whose public method set is a superset of the port's required methods.
+    Classes that already inherit a known port (caught by the nominal pass) and
+    pytest test classes are skipped.
+    """
+    protocol_ports: dict[str, list[K1PortInfo]] = {}
+    for p in ports:
+        if p.base_class == "Protocol" and p.methods:
+            protocol_ports.setdefault(p.module, []).append(p)
+    if not protocol_ports:
+        return
+
+    all_port_names = {p.port_name for p in ports}
+
+    for module, mod_ports in protocol_ports.items():
+        adapters_dir = k1_path / module / "adapters"
+        if not adapters_dir.exists():
+            continue
+        for py_file in adapters_dir.rglob("*.py"):
+            if "__pycache__" in str(py_file):
+                continue
+            try:
+                lines = py_file.read_text(encoding="utf-8").split("\n")
+            except Exception:
+                continue
+            rel_path = str(py_file.relative_to(k1_path.parent))
+            path_str = str(py_file).replace("\\", "/")
+            in_test_path = "/test_" in path_str or "/tests/" in path_str
+            fname_lower = py_file.name.lower()
+
+            for i, line in enumerate(lines):
+                m = re.match(r"^class\s+(\w+)\s*(?:\(([^)]*)\))?\s*:", line)
+                if not m:
+                    continue
+                class_name = m.group(1)
+                bases = (m.group(2) or "").strip()
+                if class_name.startswith("Test") or class_name.endswith("TestCase"):
+                    continue
+                if bases and any(pn in bases for pn in all_port_names):
+                    continue  # nominal pass owns it
+                public_methods = set(_extract_class_public_methods(lines, i))
+                if not public_methods:
+                    continue
+                name_lower = class_name.lower()
+                is_null = name_lower.startswith("null") or "noop" in name_lower
+                is_mock = (
+                    "mock" in name_lower
+                    or "fake" in name_lower
+                    or "stub" in name_lower
+                    or fname_lower.startswith("test_")
+                    or in_test_path
+                )
+                for port in mod_ports:
+                    required = set(port.methods)
+                    if not required or not required.issubset(public_methods):
+                        continue
+                    if any(
+                        a.class_name == class_name and a.file_path == rel_path
+                        for a in port.adapters
+                    ):
+                        continue
+                    port.adapters.append(
+                        AdapterInfo(
+                            class_name=class_name,
+                            file_path=rel_path,
+                            line_number=i + 1,
+                            is_null=is_null,
+                            is_mock=is_mock,
+                        )
+                    )
+
+
 def _infer_module(py_file: Path, k1_path: Path) -> str:
     """Infer module name from file path."""
     try:
@@ -277,8 +436,9 @@ def scan_ports(k1_path: Path | None = None) -> list[K1PortInfo]:
 
     Steps:
     1. Find all port interface definitions (I*Port, I*Provider)
-    2. Find all adapter implementations that inherit from ports
-    3. Link adapters to their port interfaces
+    2. Find all adapter implementations that inherit from ports (nominal pass)
+    3. Find duck-typed adapters that satisfy Protocol ports structurally
+    4. Link adapters to their port interfaces
 
     Args:
         k1_path: Path to k1/ directory
@@ -296,8 +456,11 @@ def scan_ports(k1_path: Path | None = None) -> list[K1PortInfo]:
     # 1. Scan for port definitions
     ports = _scan_port_definitions(k1_path)
 
-    # 2. Scan for adapters and link to ports
+    # 2. Nominal (inheritance) adapter pass
     _scan_adapter_implementations(k1_path, ports)
+
+    # 3. Structural (duck-typed) adapter pass for Protocol ports
+    _scan_structural_adapters(k1_path, ports)
 
     # Sort by module then port name
     ports.sort(key=lambda p: (p.module, p.port_name))

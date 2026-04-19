@@ -34,6 +34,12 @@ NON_MODULE_DIRS: set[str] = {
     "contracts",
 }
 
+# Module names that are legitimate dependencies even though they don't live
+# under ``k1/``. ``bridge/`` is at the repo root; ``k0`` is the sibling
+# kernel package; ``kernel`` and ``bus`` are k1-internal infrastructure
+# packages that the module scanner doesn't surface as top-level modules.
+EXTERNAL_KNOWN_DEPS: frozenset[str] = frozenset({"k0", "kernel", "bus", "bridge"})
+
 
 @dataclass
 class K1ModuleInfo:
@@ -357,9 +363,11 @@ def diff_with_registry(modules: list[K1ModuleInfo]) -> dict[str, Any]:
         if m.status == "Active" and m.test_count == 0:
             issues.append(f"{m.name}: Active module has no tests")
 
-        # Check dependencies
+        # Check dependencies. ``EXTERNAL_KNOWN_DEPS`` lists modules that live
+        # outside the ``k1/`` tree but are legitimate dependencies — most
+        # notably ``bridge/`` which sits at the repo root.
         for dep in m.dependencies:
-            if dep not in module_names and dep not in ("k0", "kernel", "bus"):
+            if dep not in module_names and dep not in EXTERNAL_KNOWN_DEPS:
                 issues.append(f"{m.name}: depends on unknown module '{dep}'")
 
     return {

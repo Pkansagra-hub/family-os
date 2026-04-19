@@ -398,7 +398,7 @@ adrs:
     title: "K0 Knowledge Graph Architecture"
     status: ACCEPTED
     file_path: "06-layer5-infrastructure\0081-k0-knowledge-graph-architecture\0081.md"
-    summary: "LLMs need **explicit graph structure** for: 1. **Relationship Queries:** "Who is Alice?" → structured response, not fuzzy text matching 2. **Temporal Queries:** "Who got married last year?" → event-ba"
+    summary: 'LLMs need **explicit graph structure** for: 1. **Relationship Queries:** "Who is Alice?" → structured response, not fuzzy text matching 2. **Temporal Queries:** "Who got married last year?" → event-ba'
     affected_layers: ['layer1_input', 'layer2_orchestration', 'layer3_execution', 'layer4_runtime', 'layer5_infrastructure']
     affected_modules: ['k0.kernel.knowledge_graph', 'k0.storage.graph', 'k0.query.graph_api', 'k1.l4_runtime.session_state']
     concerns: ['architecture', 'cost', 'modularity', 'observability', 'performance', 'privacy', 'reliability', 'scalability', 'security', 'testing']

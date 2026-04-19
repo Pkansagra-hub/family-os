@@ -161,7 +161,7 @@ adrs:
     concerns: ['architecture', 'observability', 'performance', 'reliability', 'testing']
 
   - adr_number: "0055b"
-    title: "Switch Prompt ("new/continue/go back")"
+    title: 'Switch Prompt ("new/continue/go back")'
     status: ACCEPTED
     file_path: "08-user-interaction\0055-context-switch-detection\0055b-switch-prompt.md"
     summary: "---"
