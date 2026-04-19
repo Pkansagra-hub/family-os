@@ -550,6 +550,10 @@ class LocalBus:
         "_async_subs_lock",
         "_retry_resolver",
         "_dlq_callback",
+        "_outbox",
+        "_durable_topics",
+        "_durable_consumers",
+        "_durable_consumers_lock",
     )
 
     def __init__(
@@ -562,6 +566,8 @@ class LocalBus:
         subscription_mailbox_capacity: int = 1024,
         retry_resolver: object | None = None,
         dlq_callback: object | None = None,
+        outbox: object | None = None,
+        durable_topics: set[str] | None = None,
     ) -> None:
         """
         Create a new LocalBus.
@@ -600,6 +606,18 @@ class LocalBus:
                 ``(envelope, exception, attempts) -> None`` invoked by the
                 async-dispatch worker after retry exhaustion.  Used by the
                 DLQ publisher.  Ignored when async_dispatch=False.
+            outbox:
+                Phase 6 / P6.13.  Optional ``BusOutbox`` instance.  When
+                provided together with ``durable_topics``, every published
+                envelope on a durable topic is appended to the outbox
+                BEFORE dispatch, and durable subscribers (those that pass
+                ``consumer_id=`` to ``subscribe``) ack envelopes after
+                their handler returns successfully.
+            durable_topics:
+                Phase 6 / P6.13.  Set of exact topic strings whose
+                envelopes must be persisted to ``outbox`` before
+                dispatch.  Topics not listed here behave as before
+                (RAM-only).  Ignored when ``outbox`` is None.
         """
         self._trie: TopicTrie[BusHandler] = TopicTrie()
         self._rw_lock = _ReadWriteLock()
@@ -618,6 +636,12 @@ class LocalBus:
         self._async_subs_lock = threading.Lock()
         self._retry_resolver = retry_resolver
         self._dlq_callback = dlq_callback
+        # P6.13 durability state
+        self._outbox = outbox
+        self._durable_topics: set[str] = set(durable_topics) if durable_topics else set()
+        # consumer_id -> list of (topic_pattern, raw_handler)
+        self._durable_consumers: dict[str, list[tuple[str, BusHandler]]] = {}
+        self._durable_consumers_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # IBus.publish
@@ -663,6 +687,20 @@ class LocalBus:
         if topic not in self._topics_seen:
             self._topics_seen.add(topic)
             self._stats.topics_seen = len(self._topics_seen)
+
+        # P6.13: durability append BEFORE dispatch.  If a crash happens
+        # between the outbox write and the handler invocation, replay
+        # will redeliver on next startup (at-least-once for durable topics).
+        if self._outbox is not None and topic in self._durable_topics:
+            try:
+                self._outbox.append(stamped)  # type: ignore[attr-defined]
+            except Exception:
+                logger.exception(
+                    "Outbox append failed for topic=%s envelope_id=%d "
+                    "-- continuing with in-memory dispatch only",
+                    topic,
+                    stamped.envelope_id,
+                )
 
         # Run middleware chain (after stamping, before dispatch).
         # Middleware sees headers only.  None return = drop the envelope.
@@ -716,7 +754,13 @@ class LocalBus:
     # IBus.subscribe
     # ------------------------------------------------------------------
 
-    def subscribe(self, pattern: str, handler: BusHandler) -> SubscriptionHandle:
+    def subscribe(
+        self,
+        pattern: str,
+        handler: BusHandler,
+        *,
+        consumer_id: str | None = None,
+    ) -> SubscriptionHandle:
         """
         Subscribe a handler to a topic pattern.
 
@@ -727,10 +771,52 @@ class LocalBus:
 
         Thread-safe: takes WRITE lock on the trie (exclusive).
 
+        Args:
+            pattern:     Topic / pattern to subscribe to.
+            handler:     User callback.
+            consumer_id: Phase 6 / P6.13.  When the bus has an
+                ``outbox`` configured and ``pattern`` matches a durable
+                topic, supplying ``consumer_id`` opts in to at-least-once
+                delivery: the bus auto-acks the consumer's last seen
+                envelope_id on every successful handler return, and
+                ``replay_durable_topics()`` re-emits any envelope whose
+                id exceeds that watermark.  Without ``consumer_id``,
+                durable topics behave at-most-once for this subscriber.
+
         Returns:
             SubscriptionHandle for later unsubscribe().
         """
         sub_id = f"sub-{uuid.uuid4().hex[:12]}"
+
+        # P6.13: if a consumer_id is supplied AND the bus has an outbox,
+        # wrap the user handler so successful invocations ack to the outbox.
+        # The wrapper preserves exception propagation so retry/DLQ behavior
+        # in the async path remains unchanged.
+        effective_handler = handler
+        if consumer_id is not None and self._outbox is not None:
+            outbox = self._outbox
+            cid = consumer_id
+
+            def _acking_handler(env: Envelope, _user=handler, _cid=cid, _ob=outbox) -> None:
+                _user(env)
+                # Only acked on successful return -- exceptions skip ack.
+                try:
+                    _ob.ack(_cid, env.topic, env.envelope_id)  # type: ignore[attr-defined]
+                except Exception:
+                    logger.exception(
+                        "Outbox ack failed for consumer=%s topic=%s envelope_id=%d",
+                        _cid,
+                        env.topic,
+                        env.envelope_id,
+                    )
+
+            effective_handler = _acking_handler
+
+            # Track for replay_durable_topics()
+            with self._durable_consumers_lock:
+                self._durable_consumers.setdefault(cid, []).append(
+                    (pattern, _acking_handler)
+                )
 
         # Async-dispatch path: wrap handler in a per-sub mailbox + worker.
         # The trie sees the mailbox-enqueue closure as the "handler".
@@ -738,7 +824,7 @@ class LocalBus:
             async_sub = _AsyncSubscription(
                 subscription_id=sub_id,
                 pattern=pattern,
-                handler=handler,
+                handler=effective_handler,
                 capacity=self._async_capacity,
                 bus_stats=self._stats,
                 retry_policy=self._retry_resolver,
@@ -748,7 +834,7 @@ class LocalBus:
                 self._async_subs[sub_id] = async_sub
             trie_handler: BusHandler = async_sub.enqueue
         else:
-            trie_handler = handler
+            trie_handler = effective_handler
 
         self._rw_lock.acquire_write()
         try:
@@ -934,6 +1020,78 @@ class LocalBus:
     def closed(self) -> bool:
         """True if the bus has been closed."""
         return self._closed
+
+    # ------------------------------------------------------------------
+    # Durability replay (P6.13)
+    # ------------------------------------------------------------------
+
+    def replay_durable_topics(self, *, consumer_id: str | None = None) -> int:
+        """
+        Replay un-acked envelopes from the outbox to durable subscribers.
+
+        For each ``(consumer_id, pattern)`` registered via
+        ``subscribe(..., consumer_id=...)``, this method walks the
+        outbox for every durable topic that the pattern would match
+        (currently exact-topic patterns only) and re-invokes the
+        ack-wrapping handler with each envelope whose ``envelope_id``
+        is greater than the consumer's last ack watermark.
+
+        At-least-once semantics: handlers MUST be idempotent.  Use
+        ``IdempotencyMiddleware`` (P6.12) on the publish side and
+        application-level dedup on the consume side.
+
+        Args:
+            consumer_id: Optional filter -- replay only this consumer.
+                If None, replay all registered durable consumers.
+
+        Returns:
+            Total number of envelopes replayed.
+        """
+        if self._outbox is None:
+            return 0
+
+        with self._durable_consumers_lock:
+            if consumer_id is not None:
+                items = [
+                    (consumer_id, list(self._durable_consumers.get(consumer_id, [])))
+                ]
+            else:
+                items = [(cid, list(subs)) for cid, subs in self._durable_consumers.items()]
+
+        replayed = 0
+        for cid, subs in items:
+            for pattern, acking_handler in subs:
+                # Only exact-topic durable replay is supported; wildcard
+                # subscribers don't get replay (they'd need a topic-list
+                # discovery mechanism out of scope here).
+                if pattern not in self._durable_topics:
+                    continue
+                for record in self._outbox.unacked(cid, pattern):  # type: ignore[attr-defined]
+                    envelope = record.to_envelope()
+                    try:
+                        acking_handler(envelope)
+                        replayed += 1
+                    except Exception:
+                        logger.exception(
+                            "Replay handler error consumer=%s topic=%s envelope_id=%d",
+                            cid,
+                            pattern,
+                            record.envelope_id,
+                        )
+                        # Stop replay for this (consumer, topic) on error
+                        # so we don't skip past unprocessed envelopes.
+                        break
+        return replayed
+
+    @property
+    def durable_topics(self) -> set[str]:
+        """Read-only view of durable topic names."""
+        return frozenset(self._durable_topics)  # type: ignore[return-value]
+
+    @property
+    def outbox(self) -> object | None:
+        """The configured BusOutbox, if any (P6.13)."""
+        return self._outbox
 
     # ------------------------------------------------------------------
     # Observability

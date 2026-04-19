@@ -153,6 +153,8 @@ class BusFactory:
         subscription_mailbox_capacity: int = 1024,
         retry_resolver: object | None = None,
         dlq_callback: object | None = None,
+        outbox: object | None = None,
+        durable_topics: set[str] | None = None,
     ) -> BusType:
         """
         Create an in-process bus.
@@ -185,6 +187,14 @@ class BusFactory:
                 Phase 6 / P6.7.  Optional ``(envelope, exc, attempts) -> None``
                 callable invoked after retry exhaustion.  No-op without
                 async_dispatch.
+            outbox:
+                Phase 6 / P6.13.  Optional ``BusOutbox`` instance for
+                durable persistence of envelopes on ``durable_topics``.
+                Forces Python backend (Rust adapter has no outbox path).
+            durable_topics:
+                Phase 6 / P6.13.  Set of exact topic strings persisted
+                to ``outbox`` before dispatch.  Ignored when ``outbox``
+                is None.
 
         Returns:
             A ready-to-use bus instance (LocalBus or RustBusAdapter).
@@ -204,6 +214,11 @@ class BusFactory:
             logger.debug("async_dispatch requested -- falling back to Python backend")
             resolved = "python"
 
+        # P6.13: outbox / durable_topics also require Python backend.
+        if outbox is not None and resolved == "rust":
+            logger.debug("outbox requested -- falling back to Python backend")
+            resolved = "python"
+
         if resolved == "rust":
             return RustBusAdapter(
                 capture=capture,
@@ -219,6 +234,8 @@ class BusFactory:
             subscription_mailbox_capacity=subscription_mailbox_capacity,
             retry_resolver=retry_resolver,
             dlq_callback=dlq_callback,
+            outbox=outbox,
+            durable_topics=durable_topics,
         )
 
     @staticmethod
