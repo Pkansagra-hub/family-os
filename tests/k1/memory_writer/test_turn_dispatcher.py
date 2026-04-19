@@ -127,7 +127,7 @@ class TestTurnDispatcherLifecycle:
         d, _, ep = _dispatcher()
         await d.start()
         assert len(ep.subscriptions) == 1
-        assert ep.subscriptions[0][0] == "turn.complete.v1"
+        assert ep.subscriptions[0][0] == "k1.session.turn.complete.v1"
 
     @pytest.mark.asyncio
     async def test_stop_unsubscribes(self) -> None:

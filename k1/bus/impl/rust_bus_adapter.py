@@ -109,6 +109,7 @@ class RustBusAdapter:
         "_sub_patterns",
         "_timing_chain",
         "_middleware",
+        "_drain_offset",
     )
 
     def __init__(
@@ -123,10 +124,19 @@ class RustBusAdapter:
 
         Args:
             capture:       If True, enable capture mode on the Rust bus.
-            timing_chain:  Optional TimingChain (stored but not wired into
-                           Rust dispatch -- timing chain remains Python-side).
-            middleware:     Optional MiddlewareChain (stored but not wired into
-                           Rust dispatch -- middleware remains Python-side).
+            timing_chain:  Optional TimingChain. Stored for ``.timing_chain``
+                           accessor parity with ``LocalBus``. Rust backend uses
+                           its own internal ``RustTimingConfig`` for ordering;
+                           the Python TimingChain is **not** invoked here
+                           because Rust stamps envelopes inside ``publish()``
+                           and TimingChain requires pre-stamped envelopes.
+                           See ``ARCHITECTURE.md`` for the rationale.
+            middleware:    Optional MiddlewareChain. P6.2 (I-19): now wired
+                           into ``publish()``. Middleware sees the unstamped
+                           envelope (Rust stamps internally); a returned
+                           ``None`` drops the envelope before it reaches Rust,
+                           matching ``LocalBus`` semantics for headers-only
+                           middleware (Tracing, Metrics, TopicValidation).
         """
         if not _HAS_RUST:
             raise ImportError("k1_bus_core is not available")
@@ -135,13 +145,42 @@ class RustBusAdapter:
         self._sub_patterns: dict[str, str] = {}
         self._timing_chain = timing_chain
         self._middleware = middleware
+        # P6.3 (finding A): track how many captured envelopes have already
+        # been returned by ``drain()`` so subsequent drains return only
+        # newly-published envelopes (matching ``LocalBus.drain()`` semantics).
+        self._drain_offset: int = 0
 
     # ------------------------------------------------------------------
     # IBus.publish
     # ------------------------------------------------------------------
 
     def publish(self, envelope: Envelope) -> None:
-        """Publish Envelope, converting to RustEnvelope internally."""
+        """Publish Envelope, converting to RustEnvelope internally.
+
+        P6.2 (I-19): runs the configured ``MiddlewareChain`` before handing
+        the envelope to Rust so observability hooks (Tracing, Metrics,
+        TopicValidation) fire identically across backends. A middleware
+        returning ``None`` drops the envelope and Rust never sees it.
+        Middleware exceptions are logged and the envelope is dropped,
+        matching ``LocalBus`` behaviour.
+        """
+        # P6.2: run middleware chain before Rust dispatch.
+        # Note: envelope is *unstamped* here (Rust stamps inside publish()).
+        # Header-only middlewares (Tracing/Metrics/TopicValidation) do not
+        # depend on bus-stamped fields, so this is safe.
+        if self._middleware is not None:
+            try:
+                result = self._middleware.process(envelope)
+            except Exception:
+                logger.exception(
+                    "Middleware chain error for topic=%s -- envelope dropped",
+                    envelope.topic,
+                )
+                return
+            if result is None:
+                return
+            envelope = result
+
         renv = _envelope_to_rust(envelope)
         try:
             self._bus.publish(renv)
@@ -182,18 +221,27 @@ class RustBusAdapter:
 
     @property
     def captured(self) -> list[Envelope]:
-        """Convert captured RustEnvelopes to Envelopes."""
-        return [_rust_to_envelope(r) for r in self._bus.captured]
+        """Captured envelopes since the last :meth:`drain` (capture mode only).
+
+        P6.3 (finding A): semantics aligned with ``LocalBus.captured`` —
+        envelopes returned by a previous ``drain()`` call are excluded.
+        """
+        all_captured = self._bus.captured
+        if self._drain_offset:
+            all_captured = all_captured[self._drain_offset :]
+        return [_rust_to_envelope(r) for r in all_captured]
 
     def drain(self) -> list[Envelope]:
-        """Return and clear captured envelopes."""
-        result = self.captured
-        # RustBus doesn't have drain -- but captured returns a snapshot
-        # and we can't clear the Rust side.  For testing, the important
-        # property is that each drain() returns what was published *since
-        # the last drain*.  Since RustBus returns all captured, we note
-        # that this is a behavioral difference -- but for factory testing
-        # with capture mode, callers typically check cumulative count.
+        """Return captured envelopes since last drain and reset the cursor.
+
+        P6.3 (finding A): matches ``LocalBus.drain()`` — each call returns
+        only envelopes captured since the previous drain. The Rust crate's
+        underlying capture buffer cannot be cleared from Python, so we
+        track a Python-side offset (``_drain_offset``) instead.
+        """
+        all_captured = self._bus.captured
+        result = [_rust_to_envelope(r) for r in all_captured[self._drain_offset :]]
+        self._drain_offset = len(all_captured)
         return result
 
     # ------------------------------------------------------------------
@@ -207,6 +255,17 @@ class RustBusAdapter:
         Returns 0 (no Python-side releases).
         """
         return 0
+
+    def flush(self, timeout_ms: int = 5000) -> bool:
+        """
+        Phase 6 / P6.5.  No-op for the Rust backend.
+
+        The Rust bus dispatches synchronously on the publisher's thread
+        (no per-subscription mailboxes), so by the time ``publish()``
+        returns, every handler has already been invoked.  Returns True
+        immediately.
+        """
+        return True
 
     def close(self) -> None:
         """Close the bus."""

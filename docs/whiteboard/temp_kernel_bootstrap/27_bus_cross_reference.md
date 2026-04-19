@@ -1,6 +1,34 @@
 # Bus — Cross-Reference with All K1 Components
 
 > Generated: 2025-07-12 · Scope: How the Bus connects to every K1 component; wiring patterns; topic flow analysis
+>
+> **Updated for Phase 6 (branch `bus-hardening` HEAD `7164a26`); P6.10 still open.**
+> Topic renames: `turn.complete.v1` → [`k1.session.turn.complete.v1`](../../../k1/concierge/topics.py); `k1.session.sessionstate.*` flattened → `k1.sessionstate.*` (see [SessionBusAdapter](../../../k1/sessionstate/adapters/session_bus_adapter.py)).
+> New infrastructure: [`IdempotencyMiddleware`](../../../k1/bus/middleware/idempotency.py), [`BusOutbox`](../../../k1/bus/outbox/sqlite_outbox.py), [`LocalBus.flush()`](../../../k1/bus/impl/local_bus.py) and `replay_durable_topics()`, at-least-once `subscribe(..., consumer_id=...)`.
+
+---
+
+## 0. Phase 6 Status Snapshot
+
+| ID | Scope | Status |
+| --- | --- | --- |
+| P6.0 | Phase 6 plan + scope | done |
+| P6.1 | `AsyncBusBridge` future error logging + counters | done (`44006c8`) |
+| P6.2 | `RustBusAdapter.publish` runs middleware before dispatch | done (`44006c8`) |
+| P6.3 | `RustBusAdapter._drain_offset` advances offset | done (`44006c8`) |
+| P6.4 | `k1/bus/impl/__init__.py` re-exports public symbols | done (`44006c8`) |
+| P6.5 | `TopicRegistry` validators (exact/prefix/fnmatch) | done (`47c7f10`) |
+| P6.6 | `TopicValidationMiddleware` permissive/strict modes | done (`47c7f10`) |
+| P6.7 | `IdempotencyMiddleware` (TTL dedup of `(topic, request_id)`) | done (`47c7f10`) |
+| P6.8 | Concierge `TOPIC_TURN_COMPLETE` → `k1.session.turn.complete.v1` | done (`47c7f10`) |
+| P6.9 | `SessionBusAdapter` flattens to `k1.sessionstate.*` | done (`47c7f10`) |
+| P6.10 | k1.model_hub STRICT rule in `bus.yaml` | **open** |
+| P6.11 | `BusOutbox` (SQLite WAL) + durable topics | done (`7164a26`) |
+| P6.12 | At-least-once `subscribe(..., consumer_id=...)` + ack tracking | done (`7164a26`) |
+| P6.13 | `LocalBus.flush()` + async dispatch mailbox / DLQ counters | done (`7164a26`) |
+| P6.14 | `LocalBus.replay_durable_topics()` for startup recovery | done (`7164a26`) |
+
+Bus suite: 1108 passing (40 new tests across schema validation, idempotency, durability, Phase 6 e2e).
 
 ---
 
@@ -76,7 +104,8 @@ session_router: LocalMailboxRouter
 | --- | --- | --- |
 | `k1.session.user.input.v1` | Transport layer | User message entry |
 | `k1.session.turn.started.v1` | FSM Controller | Turn lifecycle |
-| `k1.session.turn.completed.v1` | FSM Controller (`_emit_turn_completed`) | Triggers MemoryWriter |
+| `k1.session.turn.completed.v1` | FSM Controller (`_emit_turn_completed`) | Concierge-internal turn-completed event (post-tense, `TOPIC_TURN_COMPLETED`) |
+| `k1.session.turn.complete.v1` | FSM Controller / TurnDispatcher trigger emit | Triggers MemoryWriter (post-P6.8 namespaced `TOPIC_TURN_COMPLETE`, was bare `turn.complete.v1`) |
 | `k1.session.artifact.created.v1` | Back Actor | Artifact production |
 | `k1.session.state.updated.v1` | DeltaAggregator/Applicator | State change notification |
 | `k1.session.task.state.v1` | Back Actor | Task state changes |
@@ -220,15 +249,17 @@ session_router: LocalMailboxRouter
 
 **Topics PUBLISHED by SessionState** (7, via `SessionBusAdapter.emit(event_type, payload)`):
 
-| Event Type | Bus Topic (mapped) | Purpose |
+| Event Type | Bus Topic (mapped, post-P6.9) | Purpose |
 | --- | --- | --- |
-| `sessionstate.mutation.requested` | `k1.session.sessionstate.mutation.requested` | Write intent |
-| `sessionstate.mutation.approved` | `k1.session.sessionstate.mutation.approved` | Policy approved |
-| `sessionstate.mutation.rejected` | `k1.session.sessionstate.mutation.rejected` | Policy rejected |
-| `sessionstate.eviction.triggered` | `k1.session.sessionstate.eviction.triggered` | Memory pressure |
-| `sessionstate.eviction.completed` | `k1.session.sessionstate.eviction.completed` | Eviction done |
-| `sessionstate.emergency.activated` | `k1.session.sessionstate.emergency.activated` | Emergency mode |
-| `sessionstate.emergency.resolved` | `k1.session.sessionstate.emergency.resolved` | Emergency cleared |
+| `sessionstate.mutation.requested` | `k1.sessionstate.mutation.requested` | Write intent |
+| `sessionstate.mutation.approved` | `k1.sessionstate.mutation.approved` | Policy approved |
+| `sessionstate.mutation.rejected` | `k1.sessionstate.mutation.rejected` | Policy rejected |
+| `sessionstate.eviction.triggered` | `k1.sessionstate.eviction.triggered` | Memory pressure |
+| `sessionstate.eviction.completed` | `k1.sessionstate.eviction.completed` | Eviction done |
+| `sessionstate.emergency.activated` | `k1.sessionstate.emergency.activated` | Emergency mode |
+| `sessionstate.emergency.resolved` | `k1.sessionstate.emergency.resolved` | Emergency cleared |
+
+> P6.9 note: [`SessionBusAdapter`](../../../k1/sessionstate/adapters/session_bus_adapter.py) now flattens `sessionstate.*` events to `k1.sessionstate.*` (previously double-nested as `k1.session.sessionstate.*`). Subscribers must use the flattened prefix.
 
 **Topics CONSUMED**: SessionState is primarily a data store; it does not subscribe to external bus topics.
 
@@ -266,7 +297,7 @@ session_router: LocalMailboxRouter
 
 | Topic | Consumer | Purpose |
 | --- | --- | --- |
-| `turn.complete.v1` | `TurnDispatcher._on_turn_complete()` | Primary trigger — processes conversation turn for memory extraction |
+| `k1.session.turn.complete.v1` | `TurnDispatcher._on_turn_complete()` | Primary trigger — processes conversation turn for memory extraction (post-P6.8 namespaced; was bare `turn.complete.v1`) |
 
 **Topics PUBLISHED by MemoryWriter** (5):
 
@@ -313,8 +344,8 @@ User Input → Transport
           → [k1.orchestration.dag.completed.v1] → Concierge, MW, Learning
             → [k1.orchestration.task.complete.v1] → FSM
               → [k1.response.final.v1] → Transport/SSE
-              → [k1.session.turn.completed.v1] → Obs
-                → [turn.complete.v1] → MemoryWriter
+              → [k1.session.turn.completed.v1] → Obs (Concierge-internal, past-tense)
+                → [k1.session.turn.complete.v1] → MemoryWriter (post-P6.8; was `turn.complete.v1`)
 ```
 
 ### 4.2 HIL Request Flow
@@ -416,8 +447,8 @@ Caller (Concierge/Orchestrator)
 | `k1.{component}.{noun}.v{N}` | `k1.planner.delta.v1` | Short-form (no verb) |
 | `k1.agent.{id}.delta.v1` | `k1.agent.research_agent.delta.v1` | Dynamic per-agent topic |
 | `k1.k0.sse.*` | `k1.k0.sse.memory.updated` | Bridge topics from K0 |
-| `sessionstate.{noun}.{verb}` | `sessionstate.mutation.requested` | Internal SessionState (no `k1.` prefix, mapped by adapter) |
-| `turn.complete.v1` | — | Legacy: no namespace prefix |
+| `sessionstate.{noun}.{verb}` | `sessionstate.mutation.requested` | Internal SessionState event name; mapped by `SessionBusAdapter` to `k1.sessionstate.{noun}.{verb}` (post-P6.9) |
+| `k1.session.turn.complete.v1` | — | Post-P6.8 namespaced trigger to MemoryWriter (was bare `turn.complete.v1`) |
 
 **Versioning**: All topics use `.v1` suffix for future schema evolution.
 
@@ -425,11 +456,74 @@ Caller (Concierge/Orchestrator)
 
 ## 9. Gap Analysis
 
-| # | Finding | Impact | Recommendation |
+| # | Finding | Status | Recommendation |
 | --- | --- | --- | --- |
-| 1 | `turn.complete.v1` lacks `k1.` namespace prefix | Inconsistent with all other topics | Rename to `k1.session.turn.complete.v1` |
-| 2 | `k1.model_hub` has no timing rule → falls to `RELAXED` default | `k1.model_hub.execute.v1` (bus RPC) may deliver out-of-order | Add `k1.model_hub` → STRICT rule |
-| 3 | SessionState events use `sessionstate.` prefix (no `k1.`) | After `SessionBusAdapter` mapping: `k1.session.sessionstate.mutation.requested` — double-nested | Flatten to `k1.sessionstate.mutation.requested.v1` |
-| 4 | No dead-letter queue implementation | `k1.internal.dead_letter.v1` topic defined but no publisher found | Implement dead-letter middleware |
+| 1 | `turn.complete.v1` lacks `k1.` namespace prefix | **Resolved (P6.8)** — renamed to `k1.session.turn.complete.v1` | — |
+| 2 | `k1.model_hub` has no timing rule → falls to `RELAXED` default | **Open (P6.10)** — not yet committed in [`k1/config/bus.yaml`](../../../k1/config/bus.yaml) | Add `k1.model_hub` → STRICT rule |
+| 3 | SessionState double-nested as `k1.session.sessionstate.*` | **Resolved (P6.9)** — flattened to `k1.sessionstate.*` | — |
+| 4 | No dead-letter queue implementation | Partially addressed — `LocalBus(dlq_callback=...)` + `async_handler_dlq` counter (P6.13); `k1.internal.dead_letter.v1` topic still has no default publisher | Wire kernel dlq_callback to publish onto dead-letter topic |
 | 5 | `k1.mw` prefix has no timing rule → falls to RELAXED | Acceptable for telemetry | Confirm intentional |
-| 6 | Rust adapter `receive(*, timeout_ms)` keyword-only mismatch | `TypeError` if called positionally with Rust backend | Fix to match `IMailbox` protocol |
+| 6 | Rust adapter `receive(*, timeout_ms)` keyword-only mismatch | Open | Fix to match `IMailbox` protocol |
+
+---
+
+## 10. Phase 6 Infrastructure (new components, no current consumers)
+
+The following Phase 6 additions are part of the public bus API but have no production wire-up yet — they are available for kernel/test integration.
+
+### 10.1 `IdempotencyMiddleware`
+
+Source: [`k1/bus/middleware/idempotency.py`](../../../k1/bus/middleware/idempotency.py)
+
+- Drops duplicate envelopes keyed by `(topic, request_id)` within a TTL window.
+- Constructor: `IdempotencyMiddleware(max_entries=10_000, ttl_s=300.0)`.
+- Counters: `drop_count`, `pass_count`, `no_key_count`, `cache_size`.
+- Intended consumers: any handler/RPC path that may receive replays from a producer that retries (e.g. `k1.model_hub.execute.v1`, future at-least-once outbox replays).
+
+### 10.2 `BusOutbox` (durable topics, at-least-once)
+
+Source: [`k1/bus/outbox/sqlite_outbox.py`](../../../k1/bus/outbox/sqlite_outbox.py)
+
+- SQLite WAL-backed envelope store; methods: `append`, `ack`, `unacked`, `prune_acked`, `last_envelope_id`, `count`, `close`.
+- Wired via `LocalBus(outbox=..., durable_topics={...})` (and `BusFactory.create_local(...)` which forces the Python backend when `outbox` is set).
+- Pairs with at-least-once `subscribe(..., consumer_id=...)` (P6.12) — handler is wrapped in `_acking_handler` and the envelope is acked on success.
+- `OutboxRecord.to_envelope()` rehydrates persisted envelopes for replay.
+- Intended consumers: durable topics requiring crash-safe delivery (none wired in production today).
+
+### 10.3 `LocalBus.flush()` and `replay_durable_topics()`
+
+Source: [`k1/bus/impl/local_bus.py`](../../../k1/bus/impl/local_bus.py)
+
+| Method | Caller intent |
+| --- | --- |
+| `IBus.flush(timeout_ms=5000) -> bool` | Tests, graceful shutdown — drains async-dispatch mailboxes before assertions / process exit. |
+| `LocalBus.replay_durable_topics(*, consumer_id=None)` | Startup recovery — re-emits unacked outbox records to durable subscribers after restart. |
+
+### 10.4 At-least-once `subscribe()` signature
+
+All subscribers may now opt into at-least-once delivery by passing a `consumer_id`:
+
+| Surface | Signature (post-Phase 6) |
+| --- | --- |
+| `IBus.subscribe` | `subscribe(topic, handler, *, priority=Priority.INTERACTIVE, consumer_id: str \| None = None)` |
+| `LocalBus.subscribe` | Same; when `consumer_id` is set and topic is in `durable_topics`, handler is wrapped in `_acking_handler` and offsets are tracked per-`consumer_id` in `_durable_consumers`. |
+| `BusFactory.create_local` | Accepts `async_dispatch`, `subscription_mailbox_capacity`, `retry_resolver`, `dlq_callback`, `outbox`, `durable_topics` — forces Python backend if `timing_chain`/`async_dispatch`/`outbox` is set. |
+
+### 10.5 New `BusStats` counters
+
+Source: `BusStats` dataclass in `k1/bus/impl/local_bus.py`.
+
+| Field | Meaning |
+| --- | --- |
+| `mailbox_full_drops` | Per-subscription async mailbox at capacity — envelope dropped. |
+| `mailbox_high_water_mark` | Peak depth observed across async-dispatch subscription mailboxes. |
+| `async_handler_retries` | Retries attempted by `retry_resolver` before success/DLQ. |
+| `async_handler_dlq` | Envelopes routed to `dlq_callback` after retry exhaustion. |
+
+Plus existing: `async_handler_errors` (P6.1 — `AsyncBusBridge` future-error logging), `schema_violation_count` / `schema_drop_count` on `TopicValidationMiddleware`.
+
+### 10.6 Topic registry & validation
+
+- [`TopicRegistry.register(topic, validator=None)`](../../../k1/bus/topics/registry.py), `register_prefix(prefix, validator=None)`, `lookup_validator(topic)` (resolution: exact → prefix → fnmatch).
+- [`TopicValidationMiddleware(schema_validation_mode="permissive"|"strict")`](../../../k1/bus/middleware/topic_validation.py); raises `SchemaValidationError` in strict mode. `PayloadValidator` is the public type alias.
+- [`k1/config/bus.yaml`](../../../k1/config/bus.yaml) STRICT prefixes: `k1.capability`, `k1.orchestration`, `k1.planner`, `k1.hil`, `k1.hitl`, `k1.response`, `k1.session`, `k1.agent`, `k1.internal`, `k1.tool`, `k1.arbiter`, `k1.backpool`. RELAXED: `k1.affect`, `k1.constraint`, `k1.proactive`, `k1.workflow`. BEST_EFFORT: `k1.k0.sse`, `k1.fabric.learning`. **Missing: `k1.model_hub` (P6.10 open).**

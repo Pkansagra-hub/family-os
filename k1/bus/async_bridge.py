@@ -61,7 +61,7 @@ class AsyncBusBridge:
         Defaults to the running loop at construction time.
     """
 
-    __slots__ = ("_sync", "_loop")
+    __slots__ = ("_sync", "_loop", "_async_handler_errors")
 
     def __init__(
         self,
@@ -70,6 +70,15 @@ class AsyncBusBridge:
     ) -> None:
         self._sync = sync_bus
         self._loop = loop or asyncio.get_running_loop()
+        # P6.1 (I-16): track async handler exceptions surfaced via
+        # ``Future.add_done_callback`` so callers can observe failures
+        # that would otherwise be silently swallowed.
+        self._async_handler_errors: int = 0
+
+    @property
+    def async_handler_errors(self) -> int:
+        """Cumulative count of exceptions raised by async handlers (P6.1 / I-16)."""
+        return self._async_handler_errors
 
     # -- IAsyncBus ---------------------------------------------------------
 
@@ -103,11 +112,47 @@ class AsyncBusBridge:
 
         The sync bus dispatches handlers on its own thread; this shim
         bridges back to async-land without blocking the dispatch thread.
+
+        P6.1 (I-16): the scheduled ``Future`` is observed via
+        ``add_done_callback`` so exceptions raised by the async handler are
+        logged and counted instead of being silently swallowed.
         """
         loop = self._loop
+        bridge = self  # capture for the done callback
+
+        def _on_done(fut: "asyncio.Future[None]", env: Envelope) -> None:
+            try:
+                exc = fut.exception()
+            except asyncio.CancelledError:
+                logger.warning(
+                    "Async bus handler cancelled for topic=%s envelope_id=%s",
+                    env.topic,
+                    env.envelope_id,
+                )
+                bridge._async_handler_errors += 1
+                return
+            except Exception:  # pragma: no cover - defensive
+                logger.exception(
+                    "Failed to inspect async handler future for topic=%s envelope_id=%s",
+                    env.topic,
+                    env.envelope_id,
+                )
+                bridge._async_handler_errors += 1
+                return
+            if exc is not None:
+                logger.error(
+                    "Async bus handler raised %s for topic=%s envelope_id=%s: %s",
+                    type(exc).__name__,
+                    env.topic,
+                    env.envelope_id,
+                    exc,
+                    exc_info=exc,
+                )
+                bridge._async_handler_errors += 1
 
         def _sync_shim(envelope: Envelope) -> None:
-            asyncio.run_coroutine_threadsafe(handler(envelope), loop)
+            fut = asyncio.run_coroutine_threadsafe(handler(envelope), loop)
+            fut.add_done_callback(lambda f, env=envelope: _on_done(f, env))
 
         return _sync_shim
 

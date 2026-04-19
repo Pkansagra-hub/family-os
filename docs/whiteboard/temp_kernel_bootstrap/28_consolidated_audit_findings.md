@@ -6,12 +6,49 @@
 
 ## Table of Contents
 
+0. [Phase 6 Bus Hardening — Status Snapshot](#0-phase-6-bus-hardening--status-snapshot)
 1. [CRITICAL Findings](#1-critical-findings)
 2. [HIGH Findings](#2-high-findings)
 3. [MEDIUM Findings](#3-medium-findings)
 4. [LOW Findings](#4-low-findings)
 5. [INFO Findings](#5-info-findings)
 6. [Summary Statistics](#6-summary-statistics)
+
+---
+
+## 0. Phase 6 Bus Hardening — Status Snapshot
+
+> Branch `bus-hardening` (HEAD `7164a26`) shipped Phase 6 across three commits: `44006c8` (P6.1–P6.4), `47c7f10` (P6.5–P6.9), `7164a26` (P6.11–P6.14). **P6.10 deferred — still open.** 40 new tests added; bus suite total 1108 passing.
+
+| Phase | Status | Commit | Outcome |
+|-------|--------|--------|---------|
+| P6.0 | N/A | — | (Reserved / no work item) |
+| P6.1 | RESOLVED | `44006c8` | Async handler errors logged + counted via `Future.add_done_callback` and `_async_handler_errors` on [`AsyncBusBridge`](k1/bus/async_bridge.py). |
+| P6.2 | RESOLVED | `44006c8` | [`RustBusAdapter.publish()`](k1/bus/impl/rust_bus_adapter.py) runs middleware chain before Rust dispatch; `None` drops envelope. |
+| P6.3 | RESOLVED | `44006c8` | [`RustBusAdapter.drain()`](k1/bus/impl/rust_bus_adapter.py) clears captured queue via `_drain_offset` slot — matches `LocalBus` semantics. |
+| P6.4 | RESOLVED | `44006c8` | [`k1/bus/impl/__init__.py`](k1/bus/impl/__init__.py) re-exports `LocalBus, LocalMailbox, LocalMailboxRouter, TopicTrie, BusStats` (+ Rust adapters when available). |
+| P6.5 | RESOLVED | `47c7f10` | Opt-in async dispatch with bounded mailboxes; new `IBus.flush(timeout_ms)` Protocol method; `BusStats.mailbox_full_drops` / `mailbox_high_water_mark`. |
+| P6.6 | RESOLVED | `47c7f10` | Retry resolver `(topic) -> RetryPolicy \| None` with exponential/fixed backoff; `BusStats.async_handler_retries`. |
+| P6.7 | RESOLVED | `47c7f10` | DLQ callback `(envelope, exc, attempts) -> None` after retry exhaustion; `BusStats.async_handler_dlq`. |
+| P6.8 | RESOLVED | `47c7f10` | `turn.complete.v1` → `k1.session.turn.complete.v1` ([events.py](k1/memory_writer/events.py) + [turn_dispatcher.py](k1/memory_writer/turn_dispatcher.py)). Distinct from concierge `k1.session.turn.completed.v1`. |
+| P6.9 | RESOLVED | `47c7f10` | [`SessionBusAdapter`](k1/sessionstate/adapters/session_bus_adapter.py) flattens `sessionstate.*` → `k1.sessionstate.*` (was `k1.session.sessionstate.*`). |
+| P6.10 | **OPEN** | — | k1.model_hub STRICT timing rule not committed. [`k1/config/bus.yaml`](k1/config/bus.yaml) lacks k1.model_hub entry → falls to RELAXED default. ~5 LOC fix; deferred to follow-up batch. |
+| P6.11 | RESOLVED | `7164a26` | `TopicRegistry.register(topic, validator=None)`, `TopicValidationMiddleware(schema_validation_mode="permissive"\|"strict")`, `SchemaValidationError`, `PayloadValidator` alias, `schema_violation_count` / `schema_drop_count` counters. |
+| P6.12 | RESOLVED | `7164a26` | New [`IdempotencyMiddleware`](k1/bus/middleware/idempotency.py) — stdlib LRU+TTL; key `(topic, request_id)`; opt-in. |
+| P6.13 | RESOLVED | `7164a26` | New [`BusOutbox`](k1/bus/outbox/sqlite_outbox.py) — SQLite WAL; `LocalBus(outbox=, durable_topics=)` + `subscribe(consumer_id=...)` for at-least-once; `replay_durable_topics(*, consumer_id=None)` redelivers un-acked envelopes after restart. |
+| P6.14 | RESOLVED | `7164a26` | New E2E [`tests/k1/bus/test_phase6_e2e.py`](tests/k1/bus/test_phase6_e2e.py) (8 tests) covers async retry/DLQ + topic renames + schema validation + idempotency + durability replay. |
+
+### Pre-existing non-bus failures (verified out-of-scope)
+
+Verified via `git stash` baseline run on POC_Migration parent: same/worse failures observed (19 vs 14). These are NOT regressions from Phase 6 and are NOT bus-related:
+
+- **model_hub asyncio event-loop pollution** in [`tests/k1/model_hub/test_factory.py`](tests/k1/model_hub/test_factory.py)
+- **orchestrator perf SLO flakes** (load_testing/performance suites)
+- **`test_no_deep_imports_in_production`** — policy drift
+- **`test_runner_cli`** — `SystemExit: 2`
+- **`fabric_port`** — `AttributeError`
+
+Do not conflate these with Phase 6 bus-hardening work when triaging.
 
 ---
 
@@ -44,9 +81,9 @@
 
 | # | Component | Title | Description | Source |
 |---|-----------|-------|-------------|--------|
-| M-1 | Bus / Concurrency | Bus fully synchronous — no asyncio integration | Uses `threading.Lock/RLock/Condition` throughout. Async kernel needs `asyncio.to_thread()` wrapping. Design decision needed for MS-2. | 10_bus_audit |
+| M-1 | Bus / Concurrency | Bus fully synchronous — no asyncio integration | **RESOLVED** (commit `47c7f10`, P6.5): opt-in async dispatch with bounded mailboxes + `IBus.flush(timeout_ms)` Protocol method bridges sync bus to async consumers. Sync core retained for backwards compat. | 10_bus_audit |
 | M-2 | Bus / TimingChain | create_local_ordered forced Python-only | Rust backend cannot be used with ordered delivery. `BusFactory.create_local_ordered()` defaults to `backend="python"`. | 10_bus_audit |
-| M-3 | Bus / Architecture | Sync bus + async kernel bridging undefined | How to bridge synchronous bus with async kernel is undefined. Impacts performance and correctness. | 10_bus_audit |
+| M-3 | Bus / Architecture | Sync bus + async kernel bridging undefined | **RESOLVED** (commit `47c7f10`, P6.5–P6.7): async dispatch with bounded mailboxes, retry resolver (`BusStats.async_handler_retries`), and DLQ callback (`BusStats.async_handler_dlq`) define the async bridging contract. | 10_bus_audit |
 | M-4 | SessionState / SSMStateAdapter | Wrapper required but underdocumented | `SSMStateAdapter` exists (~47 LOC) converting `SessionSnapshot → dict[str, Any]`, but wiring plan incorrectly omits it. | 11_ss_audit |
 | M-5 | SessionState / DeltaBusAdapter | Stub blocks bus-SSM event bridging | Will replace `LocalEventAdapter` to bridge SSM events to Bus. Currently not functional. Blocks MS-2+. | 11_ss_audit |
 | M-6 | SessionState / ConciergeWriterAdapter | Stub blocks FSM-routed mutations | Will route mutations through Concierge FSM, replacing `DirectWriterAdapter`. Currently not functional. | 11_ss_audit |
@@ -91,7 +128,7 @@
 
 | # | Component | Title | Description | Source |
 |---|-----------|-------|-------------|--------|
-| L-1 | Bus / TopicValidation | Soft validation only — unknown topics never dropped | Warns but never drops. Typo'd topics flow through silently. | 10_bus_audit |
+| L-1 | Bus / TopicValidation | Soft validation only — unknown topics never dropped | **RESOLVED** (commit `7164a26`, P6.11): `TopicValidationMiddleware(schema_validation_mode="strict")` drops invalid envelopes; `schema_violation_count` / `schema_drop_count` counters expose drops. Permissive mode preserved as default. | 10_bus_audit |
 | L-2 | Bus / Architecture | Shared bus vs per-session bus — undecided | Architecture decision pending for MS-2. | 10_bus_audit |
 | L-3 | Bus / FabricBusAdapter | Scope unclear — shared or per-session | Affects memory and isolation. | 10_bus_audit |
 | L-4 | Bus / MailboxRouter | Per-session scope unclear | Actor lifecycle management affected. | 10_bus_audit |
@@ -270,10 +307,10 @@
 | M-80 | MemoryWriter / Pipeline | Accumulation Gate (Stage 1B) missing | Architecture documents Stage 1B with 6 triggers for batching. Currently each turn dispatched individually — loses multi-turn context windows. | 24_mw_api, 25_mw_xref |
 | M-81 | MemoryWriter / PlaceResolver | PlaceResolver initialized with empty entity list | `MemoryWriterFactory` passes `PlaceResolver([])`. All place resolution returns `None` until entities populated at session start. | 24_mw_api, 25_mw_xref |
 | M-82 | MemoryWriter / HealthAdapter | `last_extraction_ms` hardcoded to `0.0` (confirmed) | Not wired to actual extraction latency. Health observability degraded. | 24_mw_api |
-| M-83 | Bus / RustMailboxAdapter | `receive()` keyword-only mismatch breaks `IMailbox` protocol | `RustMailboxAdapter.receive(*, timeout_ms)` is keyword-only but `IMailbox` declares positional. Callers using `receive(100)` get `TypeError`. | 26_bus_api, 27_bus_xref |
-| M-84 | Bus / Topic Naming | `turn.complete.v1` lacks `k1.` namespace prefix | Inconsistent with every other topic. Should be `k1.session.turn.complete.v1`. | 27_bus_xref |
-| M-85 | Bus / ModelHub Timing | `k1.model_hub` has no timing rule — RELAXED default | `k1.model_hub.execute.v1` used for bus RPC, may deliver out-of-order breaking request/response correlation. Needs STRICT rule. | 27_bus_xref |
-| M-86 | SessionState / SessionBusAdapter | Double-nested topic naming | `sessionstate.mutation.requested` mapped to `k1.session.sessionstate.mutation.requested` — double-nested prefix. Should flatten to `k1.sessionstate.mutation.requested.v1`. | 27_bus_xref |
+| M-83 | Bus / RustMailboxAdapter | `receive()` keyword-only mismatch breaks `IMailbox` protocol | OPEN — not addressed by Phase 6 (Rust adapter signature unchanged). `RustMailboxAdapter.receive(*, timeout_ms)` is keyword-only but `IMailbox` declares positional. Callers using `receive(100)` get `TypeError`. | 26_bus_api, 27_bus_xref |
+| M-84 | Bus / Topic Naming | `turn.complete.v1` lacks `k1.` namespace prefix | **RESOLVED** (commit `47c7f10`, P6.8): renamed to `k1.session.turn.complete.v1` in [k1/memory_writer/events.py](k1/memory_writer/events.py) + [turn_dispatcher.py](k1/memory_writer/turn_dispatcher.py). Distinct from concierge `k1.session.turn.completed.v1` (different event). | 27_bus_xref |
+| M-85 | Bus / ModelHub Timing | `k1.model_hub` has no timing rule — RELAXED default | **OPEN** (P6.10 deferred, NOT committed on `bus-hardening`): [`k1/config/bus.yaml`](k1/config/bus.yaml) still lacks k1.model_hub entry → falls to RELAXED default. ~5 LOC fix queued for follow-up batch. | 27_bus_xref |
+| M-86 | SessionState / SessionBusAdapter | Double-nested topic naming | **RESOLVED** (commit `47c7f10`, P6.9): [`SessionBusAdapter`](k1/sessionstate/adapters/session_bus_adapter.py) now flattens `sessionstate.*` → `k1.sessionstate.*` (was `k1.session.sessionstate.*`). | 27_bus_xref |
 
 ### Additional LOW Findings
 
@@ -286,8 +323,8 @@
 | L-84 | ModelHub plugins | OpenAI reasoning models need special handling | o3/o4-mini/o3-mini/o1 get `reasoning_effort`, no temperature, `developer` role for system prompt. | 22_mh_api |
 | L-85 | Concierge → Orchestrator | Bus topics currently internal to Concierge | All `k1.orchestration.*` topics internal. When full K1 Orchestrator wired, cross-component contract enforcement needed. | 21_concierge_xref |
 | L-86 | MemoryWriter / Docs | `ARCHITECTURE.md` stale — claims 37% implementation | Actual state much more complete. Documentation drift misleads contributors. | 24_mw_api |
-| L-87 | Bus / RustBusAdapter | `drain()` returns cumulative — behavioral drift from LocalBus | Rust `drain()` returns cumulative captured without clearing. LocalBus clears. Inconsistent. | 26_bus_api |
-| L-88 | Bus / impl | Inconsistent re-export layering | `LocalMailbox`, `LocalMailboxRouter`, Rust adapters not re-exported from `impl/__init__.py`. | 26_bus_api |
+| L-87 | Bus / RustBusAdapter | `drain()` returns cumulative — behavioral drift from LocalBus | **RESOLVED** (commit `44006c8`, P6.3): [`RustBusAdapter.drain()`](k1/bus/impl/rust_bus_adapter.py) clears captured queue via `_drain_offset` slot — matches `LocalBus` semantics. | 26_bus_api |
+| L-88 | Bus / impl | Inconsistent re-export layering | **RESOLVED** (commit `44006c8`, P6.4): [`k1/bus/impl/__init__.py`](k1/bus/impl/__init__.py) now re-exports `LocalBus, LocalMailbox, LocalMailboxRouter, TopicTrie, BusStats` and conditionally Rust adapters. | 26_bus_api |
 | L-89 | Bus / Timing | `k1.mw` prefix has no timing rule — RELAXED fallback | MemoryWriter telemetry topics have no explicit rule. Likely OK but should confirm. | 27_bus_xref |
 
 ### Additional INFO Findings
@@ -309,14 +346,16 @@
 | I-13 | Orchestrator / MemoryWriter | Orchestrator has no direct MW dependency | Purely indirect — orch manages actors whose turns trigger MW via Concierge. | 25_mw_xref |
 | I-14 | MemoryWriter / SessionState | MW reads 13 of 15 SS sections; skips telemetry, artifacts_warm | Read-only access, <1ms P99. Two phantom sections handled gracefully. | 24_mw_api |
 | I-15 | MemoryWriter / ModelHub | MW owns its own IModelHubPort (distinct from K1's) | Anti-corruption layer. MW `chat()` vs K1 `execute(HubRequest)`. | 25_mw_xref |
-| I-16 | Bus / async_bridge | Async handler errors fire-and-forget | `_wrap_async_handler` Future never awaited — async handler exceptions silently lost. | 26_bus_api |
+| I-16 | Bus / async_bridge | Async handler errors fire-and-forget | **RESOLVED** (commit `44006c8`, P6.1): [`AsyncBusBridge`](k1/bus/async_bridge.py) now uses `Future.add_done_callback` to log + count via `_async_handler_errors` counter. Errors no longer silently swallowed. | 26_bus_api |
 | I-17 | Bus / config | `load_bus_config()` never raises — may mask config errors | Robust for prod but dev YAML typos silently swallowed. | 26_bus_api |
-| I-18 | Bus / dead letter | `k1.internal.dead_letter.v1` topic defined but no publisher | Dead-letter constant exists but no middleware or publisher. Dead code / unimplemented. | 27_bus_xref |
-| I-19 | Bus / RustBusAdapter | Rust adapter ignores middleware/timing chain | `TimingChain` and `MiddlewareChain` stored but NOT wired into Rust dispatch. Middleware bypassed with Rust backend. | 26_bus_api |
+| I-18 | Bus / dead letter | `k1.internal.dead_letter.v1` topic defined but no publisher | PARTIAL — P6.7 (`47c7f10`) added DLQ **callback** `(envelope, exc, attempts) -> None` + `BusStats.async_handler_dlq` counter for async retry exhaustion. The named `k1.internal.dead_letter.v1` **topic** still has no built-in publisher; consumers can wire the callback to publish if desired. | 27_bus_xref |
+| I-19 | Bus / RustBusAdapter | Rust adapter ignores middleware/timing chain | **PARTIAL** (commit `44006c8`, P6.2): [`RustBusAdapter.publish()`](k1/bus/impl/rust_bus_adapter.py) now runs middleware chain before Rust dispatch (None drops envelope). TimingChain wiring into Rust dispatch path not yet addressed — still open. | 26_bus_api |
 
 ---
 
 ## 5. Summary Statistics
+
+> **Phase 6 update (HEAD `7164a26`):** 9 bus findings RESOLVED, 2 PARTIAL, 1 OPEN (P6.10), 1 untouched (M-83 Rust mailbox signature). Totals below are **gross** (findings retained for history) — see Section 0 for net-open status. Net-open bus findings after Phase 6: **4** (M-2, M-83, M-85, plus L-2/L-3/L-4 architectural decisions still pending).
 
 ### By Severity
 

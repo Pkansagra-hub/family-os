@@ -34,7 +34,7 @@ class TurnDispatcher:
     replaced (newest wins — older context is stale anyway).
     """
 
-    TOPIC = "turn.complete.v1"
+    TOPIC = "k1.session.turn.complete.v1"
     MAX_QUEUE_DEPTH = 2  # processing + 1 queued
 
     def __init__(

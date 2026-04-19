@@ -18,7 +18,7 @@ Classification sets for testing and introspection:
     RELAXED_TOPICS       -- topics with DeliveryMode.RELAXED (2)
     URGENT_TOPICS        -- topics with Priority.URGENT (4)
 
-SessionState events (k1.session.sessionstate.*) are NOT defined here.
+SessionState events (k1.sessionstate.*) are NOT defined here.
 They flow dynamically via SessionBusAdapter which maps event_type strings
 to k1.session.{event_type} topics at runtime.
 

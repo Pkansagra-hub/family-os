@@ -293,9 +293,9 @@ class TestFabricRegistrationCreate:
         svc = await MemoryWriterFabricRegistration.create_for_session(
             sp, mh, bp, ep, config=_NO_DEDUP_CONFIG
         )
-        # Dispatcher subscribes to "turn.complete.v1"
+        # Dispatcher subscribes to "k1.session.turn.complete.v1" (post-P6.8 rename)
         assert len(ep.subscriptions) >= 1
-        assert any(s.topic == "turn.complete.v1" for s in ep.subscriptions)
+        assert any(s.topic == "k1.session.turn.complete.v1" for s in ep.subscriptions)
         await svc.stop()
 
 

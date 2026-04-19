@@ -34,7 +34,7 @@ from typing import Optional
 # ===========================================================================
 
 # --- Consumed ---
-TOPIC_TURN_COMPLETE = "turn.complete.v1"
+TOPIC_TURN_COMPLETE = "k1.session.turn.complete.v1"
 
 # --- Produced (observability) ---
 TOPIC_FILTER_DECISION = "k1.mw.filter.decision.v1"
