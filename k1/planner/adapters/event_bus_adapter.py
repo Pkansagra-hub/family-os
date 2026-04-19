@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from k1.fabric.ports.event_port import SubscriptionHandle
+from k1.fabric.ports.event_port import IEventPort, SubscriptionHandle
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class EventBusAdapter:
 
     __slots__ = ("_bus",)
 
-    def __init__(self, event_port: Any) -> None:
+    def __init__(self, event_port: IEventPort) -> None:
         """Initialize EventBusAdapter.
 
         Args:

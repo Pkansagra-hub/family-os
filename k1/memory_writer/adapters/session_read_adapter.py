@@ -32,9 +32,16 @@ References:
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, FrozenSet, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _ISessionStateManager(Protocol):
+    """Minimal local Protocol for SessionStateManager dependency (MW-01)."""
+
+    def get_section(self, name: str) -> Any: ...
 
 
 class SessionReadAdapter:
@@ -55,7 +62,7 @@ class SessionReadAdapter:
 
     __slots__ = ("_manager",)
 
-    def __init__(self, manager: Any) -> None:
+    def __init__(self, manager: _ISessionStateManager) -> None:
         self._manager = manager
 
     async def snapshot(

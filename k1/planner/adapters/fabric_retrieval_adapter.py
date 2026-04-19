@@ -27,6 +27,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
+from k1.fabric.fabric import IRetrievalEngine
 from k1.fabric.types import RetrievalResult
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class FabricRetrievalAdapter:
 
     def __init__(
         self,
-        fabric_retrieval: Any,
+        fabric_retrieval: IRetrievalEngine,
         timeout_ms: int = 50,
         max_retries: int = 1,
     ) -> None:

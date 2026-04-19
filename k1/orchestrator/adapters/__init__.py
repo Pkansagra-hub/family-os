@@ -1,8 +1,8 @@
 """
 k1.orchestrator.adapters -- Adapter layer for the Orchestrator hexagonal ports.
 
-Re-exports all 16 production and test adapters (Issue 6.1 in
-orchestrator-implementation-plan.md):
+Re-exports all 17 production and test adapters (Issue 6.1 in
+orchestrator-implementation-plan.md, plus AdminHttpAdapter added post-plan):
   - MailboxAdapter (6.1.1) -- IMailboxPort adapter (WFQ priority mailbox)
   - FabricGatewayAdapter (6.1.2) -- IFabricGatewayPort adapter (Fabric facade wrapper)
   - PlannerAdapter (6.1.3) -- IPlannerPort adapter (Planner mailbox + CB_PLANNER)
@@ -19,6 +19,7 @@ orchestrator-implementation-plan.md):
   - TestEventAdapter (6.1.14) -- IEventSubscriptionPort test adapter (wildcard)
   - WorkflowStorageAdapter (6.1.15) -- IWorkflowStoragePort adapter (SQLite wrapper)
   - TestWorkflowStorageAdapter (6.1.16) -- IWorkflowStoragePort test adapter (in-memory)
+  - AdminHttpAdapter (post-plan) -- HTTP wrapper around IAdminPort for ops endpoints
 """
 
 from k1.orchestrator.adapters.admin_http_adapter import AdminHttpAdapter

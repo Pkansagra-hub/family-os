@@ -23,11 +23,23 @@ k1.model_hub.adapters.session_state_prod
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from k1.model_hub.ports.state_read_port import StateSnapshot
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _ISessionStateManager(Protocol):
+    """Minimal local Protocol for SessionStateManager dependency.
+
+    Avoids cross-module import coupling (MH-01) while still giving
+    type-checkers an explicit contract for the only method this
+    adapter calls.
+    """
+
+    def get_section(self, name: str) -> Any: ...
 
 
 class SessionStateProdAdapter:
@@ -40,14 +52,15 @@ class SessionStateProdAdapter:
     Error handling: return empty snapshot on failure, never crash hub.
 
     Args:
-        manager: A ``SessionStateManager`` instance.  Typed as ``Any``
-                 to avoid import coupling with the sessionstate module
+        manager: A ``SessionStateManager`` instance.  Typed via the
+                 minimal local ``_ISessionStateManager`` Protocol to
+                 avoid import coupling with the sessionstate module
                  (same pattern as MW's ``SessionReadAdapter``).
     """
 
     __slots__ = ("_manager",)
 
-    def __init__(self, manager: Any) -> None:
+    def __init__(self, manager: _ISessionStateManager) -> None:
         self._manager = manager
 
     async def read(self, sections: List[str]) -> StateSnapshot:

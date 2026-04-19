@@ -5,7 +5,7 @@ SessionState Package - K1 Session Memory Management
 IMPLEMENTATION PLAN: docs/plans/sessionstate-implementation-plan.md
 
 SessionState provides:
-- 96KB session memory (48KB HOT + 48KB WARM)
+- 100KB session memory (52KB HOT + 48KB WARM)
 - 40-turn conversation retention
 - Edge-first offline support (LOCAL COLD)
 - Single-writer pattern (Concierge)
@@ -42,7 +42,7 @@ Architecture:
     │                   SessionStateManager                    │
     │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────────────┐│
     │  │ HotTier │ │WarmTier │ │LocalCold│ │ MutationGuard   ││
-    │  │  48KB   │ │  48KB   │ │ SQLite  │ │ SizeTracker     ││
+    │  │  52KB   │ │  48KB   │ │ SQLite  │ │ SizeTracker     ││
     │  └─────────┘ └─────────┘ └─────────┘ │ EvictionEngine  ││
     │       ↓           ↓           ↓      │ MigrationEngine ││
     │    8 sections  4 sections  Archive   └─────────────────┘│

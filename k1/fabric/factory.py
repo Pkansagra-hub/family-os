@@ -76,6 +76,14 @@ from k1.fabric.policy.cognitive_load_routing import CognitiveLoadRouting
 from k1.fabric.policy.policy_engine import PolicyEngine
 from k1.fabric.policy.qos_integration import QoSIntegration
 from k1.fabric.policy.security_context import SecurityContext
+from k1.fabric.ports import (
+    IBridgePort,
+    IDeltaBusPort,
+    IEventPort,
+    IModelGatewayPort,
+    IPromptSystemPort,
+    ISessionStateReader,
+)
 from k1.fabric.provider_resolution.provider_factory import ProviderFactory
 from k1.fabric.provider_resolution.provider_matcher import ProviderMatcher
 from k1.fabric.provider_resolution.provider_registry import ProviderRegistry
@@ -404,18 +412,18 @@ class FabricFactory:
 
     @staticmethod
     def create_with_ports(
-        state_reader: Any,
-        event_port: Any,
-        bridge: Any,
-        model_gateway: Any,
-        prompt_system: Any,
-        delta_bus: Any,
+        state_reader: ISessionStateReader,
+        event_port: IEventPort,
+        bridge: IBridgePort,
+        model_gateway: IModelGatewayPort,
+        prompt_system: IPromptSystemPort,
+        delta_bus: IDeltaBusPort,
         *,
         production_mode: bool = False,
         contracts_dir: Optional[str] = None,
         config: Optional[FabricConfig] = None,
-        embedding_port: Optional[Any] = None,
-        capability_registry: Optional[Any] = None,
+        embedding_port: Optional[Any] = None,  # No IEmbeddingPort Protocol defined yet (M-10/TD-3.1)
+        capability_registry: Optional[CapabilityRegistry] = None,
     ) -> Fabric:
         """
         Create Fabric with custom adapter injection.

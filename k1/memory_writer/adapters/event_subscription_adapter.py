@@ -25,11 +25,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, Protocol, runtime_checkable
 
 from k1.memory_writer.types import Subscription
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _IFabricBus(Protocol):
+    """Minimal local Protocol for FabricBusAdapter dependency."""
+
+    def subscribe(self, topic: str, handler: Callable[..., Any]) -> Any: ...
+
+    def unsubscribe(self, handle: Any) -> None: ...
+
+    def emit(self, topic: str, payload: dict) -> None: ...
 
 
 class EventSubscriptionAdapter:
@@ -42,7 +53,7 @@ class EventSubscriptionAdapter:
 
     __slots__ = ("_bus", "_subscriptions")
 
-    def __init__(self, bus_adapter: Any) -> None:
+    def __init__(self, bus_adapter: _IFabricBus) -> None:
         self._bus = bus_adapter
         self._subscriptions: dict[str, Any] = {}  # sub_id -> (handle, topic)
 

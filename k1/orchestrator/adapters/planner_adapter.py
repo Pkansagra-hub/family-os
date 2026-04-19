@@ -104,7 +104,7 @@ class PlannerAdapter:
 
     def __init__(
         self,
-        planner_mailbox: Any,
+        planner_mailbox: IPlannerMailbox,
         cb_planner: CircuitBreaker,
     ) -> None:
         self._mailbox = planner_mailbox

@@ -11,9 +11,17 @@ References:
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from k1.memory_writer.types import HealthStatus
+
+
+@runtime_checkable
+class _ICircuitBreaker(Protocol):
+    """Minimal local Protocol for CircuitBreaker dependency."""
+
+    @property
+    def is_open(self) -> bool: ...
 
 
 class HealthAdapter:
@@ -29,7 +37,7 @@ class HealthAdapter:
 
     def __init__(
         self,
-        circuit_breaker: Any,
+        circuit_breaker: _ICircuitBreaker,
         get_pending_count: Callable[[], int],
         get_started: Callable[[], bool],
     ) -> None:

@@ -32,7 +32,7 @@ k1/
 │   ├── hot_reload.py                    # class HotReloadEngine: File watcher for dev mode
 │   └── registries/                      # Module Registries
 │       ├── __init__.py                  # Exports: ToolRegistry, PromptRegistry, AgentRegistry
-│       ├── tool_registry.py             # class ToolRegistry: Install + lookup + versions
+│       ├── tool_registry.py             # class ToolRegistry: Install + lookup (versioning not yet implemented)
 │       ├── prompt_registry.py           # class PromptRegistry: Markdown prompt assets
 │       └── agent_registry.py            # class AgentRegistry: YAML agent templates
 ├── modules/                            # Plugin Modules (User-Installable)

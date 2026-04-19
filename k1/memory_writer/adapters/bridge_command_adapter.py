@@ -20,9 +20,24 @@ References:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _IKernelCommandPort(Protocol):
+    """Minimal local Protocol for Bridge KernelCommandPort dependency (MW-03)."""
+
+    async def submit_command(
+        self,
+        topic: str,
+        body: dict,
+        schema_uri: str,
+        trace_id: str,
+    ) -> Any: ...
+
+    async def submit_command_batch(self, envelopes: list[dict]) -> Any: ...
 
 
 class BridgeCommandAdapter:
@@ -35,7 +50,7 @@ class BridgeCommandAdapter:
 
     __slots__ = ("_command_port",)
 
-    def __init__(self, command_port: Any) -> None:
+    def __init__(self, command_port: _IKernelCommandPort) -> None:
         self._command_port = command_port
 
     async def submit(

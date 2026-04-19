@@ -36,7 +36,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from k1.concierge.ports import IDispatchPort
 from k1.concierge.task.complexity import ComplexityTier
@@ -45,6 +45,10 @@ from k1.concierge.task.intent import TaskIntent
 from k1.concierge.tools.result_protocol import ToolResult
 from k1.fabric.types import CapabilityRequest
 from k1.sessionstate.public_types import BatchRequest, MutationRequest
+
+if TYPE_CHECKING:
+    from k1.planner.types import HILCoordinatorLike
+    from k1.sessionstate.ports.writer import IWriterPort
 
 logger = logging.getLogger(__name__)
 
@@ -86,10 +90,10 @@ class ToolContext:
     session_manager: Any  # SessionStateManager (avoid circular import)
     cognitive_trace_id: str = ""
     actor: str = "front"
-    writer_port: Any = None  # IWriterPort -- M4 E4.2.1 write-path enforcement
+    writer_port: "IWriterPort | None" = None  # M4 E4.2.1 write-path enforcement
     bundle_idempotency_cache: dict = None  # M4 E4.3.1 per-session dedup for update_session_bundle
     active_device_id: str | None = None  # M5 E5.5.6: device that triggered the current turn
-    hil_coordinator: Any = None  # M6 E6.1.3: HILCoordinator for L2 invoke_capability blocking
+    hil_coordinator: "HILCoordinatorLike | None" = None  # M6 E6.1.3: HILCoordinator for L2 invoke_capability blocking
     active_task_id: str | None = None  # M6 E6.1.3: task_id for per-task L2 checks
     dispatch: IDispatchPort | None = None  # P4B.3: typed IDispatchPort (Fabric + Orchestrator)
     recall_fn: Callable | None = None

@@ -12,11 +12,19 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from k1.bus.ports.bus import IBus
 from k1.bus.ports.mailbox import IMailbox, IMailboxRouter
 from k1.concierge.config.kernel import KernelConfig
+
+if TYPE_CHECKING:
+    # Type-only imports keep runtime dep graph unchanged while still
+    # giving static type-checkers proper coverage on KernelRuntime.
+    from k1.concierge.ledger.store import ILedgerStore
+    from k1.concierge.ports import ILLMPort, IStatePort
+    from k1.kernel.ports.orchestrator_port import IOrchestratorPort
+    from k1.planner.types import HILCoordinatorLike
 
 logger = logging.getLogger(__name__)
 
@@ -35,22 +43,22 @@ class KernelRuntime:
     adapter: Any = None
     front_mailbox: IMailbox | None = None
     back_mailbox: IMailbox | None = None
-    session_state: Any = None
+    session_state: "IStatePort | None" = None
     capability_registry: Any = None
-    model: Any = None
+    model: "ILLMPort | None" = None
     fsm: Any = None
     front_dispatcher: Any = None
     back_dispatcher: Any = None
     experience_layer: Any = None
     delta_aggregator: Any = None
     delta_applicator: Any = None
-    hitl_coordinator: Any = None
-    orchestrator: Any = None
+    hitl_coordinator: "HILCoordinatorLike | None" = None
+    orchestrator: "IOrchestratorPort | None" = None
     front_subscriptions: list[Any] = field(default_factory=list)
     back_subscriptions: list[Any] = field(default_factory=list)
     consumer_task: asyncio.Task | None = None
     ledger: Any = None
-    ledger_store: Any = None
+    ledger_store: "ILedgerStore | None" = None
     dead_letter_consumer: Any = None
     started: bool = False
     weave_batcher: Any = None
