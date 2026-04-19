@@ -1,8 +1,34 @@
 # Epic 1.1: Bus Audit — Complete Findings
 
-**Date:** 2026-04-11
-**Status:** ✅ COMPLETE — All 6 issues audited
-**Verdict:** Bus is **PRODUCTION READY** — zero stubs, full dual-backend (Python+Rust), rich middleware, causal ordering
+**Date:** 2026-04-11 (original) · 2026-04-18 (Phase 6 hardening update)
+**Status:** ✅ COMPLETE — All 6 issues audited; Phase 6 hardening landed on `bus-hardening` (HEAD `7164a26`)
+**Verdict:** Bus is **PRODUCTION READY** — zero stubs, full dual-backend (Python+Rust), rich middleware, causal ordering, async dispatch + retry/DLQ + durability
+
+---
+
+## Phase 6 Hardening — Status
+
+Branch `bus-hardening` cut from `POC_Migration`. Three commits land P6.1–P6.14; P6.10 remains open.
+
+| ID | Scope | Status | Commit | Notes |
+|----|-------|--------|--------|-------|
+| P6.0 | Branch cut from POC_Migration | ✅ Done | — | `bus-hardening` |
+| P6.1 | Async bridge swallowed handler errors → counter + log | ✅ Done | `44006c8` | `_async_handler_errors` counter; `Future.add_done_callback` |
+| P6.2 | RustBusAdapter bypassed middleware on publish | ✅ Done | `44006c8` | Middleware runs before Rust dispatch; `None` drops |
+| P6.3 | RustBusAdapter `drain()` non-advancing | ✅ Done | `44006c8` | `_drain_offset` slot; advances on read |
+| P6.4 | `flush()` semantics on `IBus` | ✅ Done | `44006c8` | New `flush(timeout_ms=5000) -> bool` on `IBus`; Rust returns `True` (sync) |
+| P6.5 | Async dispatch path for slow handlers | ✅ Done | `47c7f10` | `LocalBus(async_dispatch=True)`, `_AsyncSubscription` daemon thread + `LocalMailbox` |
+| P6.6 | Retry policy resolver per topic | ✅ Done | `47c7f10` | `retry_resolver(topic) -> RetryPolicy \| None` |
+| P6.7 | Dead-letter callback after retry exhaustion | ✅ Done | `47c7f10` | `dlq_callback(envelope, exc, attempts)` |
+| P6.8 | Memory-writer turn-complete topic rename | ✅ Done | `47c7f10` | `TOPIC_TURN_COMPLETE = "k1.session.turn.complete.v1"` (distinct from concierge `…turn.completed.v1`) |
+| P6.9 | SessionBusAdapter prefix flatten for `sessionstate.*` | ✅ Done | `47c7f10` | `_FLATTEN_PREFIXES = ("sessionstate.",)`; no double-nesting |
+| P6.10 | k1.model_hub STRICT rule in `bus.yaml` | ⚠️ **OPEN** | — | Not present in `k1/config/bus.yaml`; falls to default RELAXED |
+| P6.11 | Schema-validation mode (permissive/strict) | ✅ Done | `7164a26` | `TopicValidationMiddleware(schema_validation_mode=...)`, `SchemaValidationError` |
+| P6.12 | Idempotency middleware | ✅ Done | `7164a26` | `IdempotencyMiddleware` (new file, stdlib only, opt-in) |
+| P6.13 | Durable topics + SQLite outbox + replay | ✅ Done | `7164a26` | `BusOutbox` (WAL), `LocalBus(durable_topics=…, outbox=…)`, `replay_durable_topics()` |
+| P6.14 | End-to-end Phase 6 test suite | ✅ Done | `7164a26` | 40 new tests (schema 11 / idem 9 / durability 13 / e2e 8); bus suite 1108 passing |
+
+**Open item:** P6.10 — add `k1.model_hub` to STRICT in [k1/config/bus.yaml](k1/config/bus.yaml). All other Phase 6 risks called out by this audit are resolved.
 
 ---
 
@@ -39,10 +65,16 @@ Alias:    BusHandler = Callable[[Envelope], None]
 | Method | Signature | Return |
 |--------|-----------|--------|
 | `publish` | `(self, envelope: Envelope) -> None` | None |
-| `subscribe` | `(self, pattern: str, handler: BusHandler) -> SubscriptionHandle` | SubscriptionHandle |
+| `subscribe` | `(self, pattern: str, handler: BusHandler, *, consumer_id: str \| None = None) -> SubscriptionHandle` | SubscriptionHandle |
 | `unsubscribe` | `(self, handle: SubscriptionHandle) -> bool` | bool |
+| `flush` | `(self, timeout_ms: int = 5000) -> bool` | bool |
 
 **SubscriptionHandle** (frozen dataclass): `subscription_id: str`, `pattern: str`
+
+**Phase 6 additions** (commit `44006c8` for `flush`; `47c7f10` for `consumer_id`):
+
+- `flush(timeout_ms)` drains async-dispatch worker mailboxes; returns `True` on full drain, `False` on timeout. Rust adapter is sync and always returns `True`. See [k1/bus/ports/bus.py](k1/bus/ports/bus.py).
+- `subscribe(..., consumer_id=…)` enables at-least-once delivery via the durable-outbox path; `LocalBus` wraps the handler in `_acking_handler` so the outbox `ack` only fires on successful return. Required when the topic is in `durable_topics`.
 
 **Topic model:** Dot-separated hierarchical strings (e.g. `k1.capability.completed.v1`). Supports exact match, `*` (single-segment wildcard), `>` (greedy trailing wildcard) via TopicTrie.
 
@@ -101,6 +133,8 @@ Backend:  "auto" | "rust" | "python" — env K1_BUS_BACKEND overrides
 - `_to_chain()` helper normalizes `list[Middleware]` → `MiddlewareChain`
 - No async — all synchronous construction
 
+**Phase 6 additions** ([k1/bus/factory.py](k1/bus/factory.py), commits `47c7f10`/`7164a26`): `create_local()` accepts new kwargs `async_dispatch`, `subscription_mailbox_capacity`, `retry_resolver`, `dlq_callback`, `outbox`, `durable_topics`. If any of `timing_chain`, `async_dispatch`, or `outbox` is set, the factory forces the Python backend; `backend="rust"` with Rust missing now raises `ImportError` (was a silent fallback).
+
 **Verdict 1.1.2:** ✅ Factory is complete. 4 methods cover all bus creation scenarios. Backend selection is clean.
 
 ---
@@ -126,7 +160,8 @@ Purpose:   Adapts LocalBus → SessionState's IEventPort interface
 
 **Translation layer:**
 
-- `event_type` string → `"k1.session.{event_type}"` bus topic
+- `event_type` string → `"k1.session.{event_type}"` bus topic by default
+- **P6.9 (commit `47c7f10`):** `_FLATTEN_PREFIXES = ("sessionstate.",)` — event types already prefixed with `sessionstate.` are mapped to `k1.sessionstate.X` (no double-nesting under `k1.session.`); all other event types still get `k1.session.X`. See `_map_topic` in [k1/bus/adapters/session_adapter.py](k1/bus/adapters/session_adapter.py).
 - `Any` payload → JSON `{"payload": value}` → bytes
 - Reverse on subscribe: bytes → JSON → unwrap `"payload"` key → handler
 
@@ -232,16 +267,49 @@ Companion:  TopicRegistry
 2. **Prefix:** `"k1.agent."` (matches anything starting with prefix)
 3. **Wildcard:** `"k1.agent.*.delta.*"` (fnmatch glob)
 
-| Method | Signature |
-|--------|-----------|
-| `register` | `(self, topic: str) -> None` |
-| `register_prefix` | `(self, prefix: str) -> None` |
-| `is_known` | `(self, topic: str) -> bool` |
-| `unregister` | `(self, topic: str) -> bool` |
+| Method | Signature | Notes |
+|--------|-----------|-------|
+| `register` | `(self, topic: str, validator: PayloadValidator \| None = None) -> None` | P6.11: optional validator |
+| `register_prefix` | `(self, prefix: str, validator: PayloadValidator \| None = None) -> None` | P6.11: optional validator |
+| `lookup_validator` | `(self, topic: str) -> PayloadValidator \| None` | P6.11: exact → longest-prefix → first-wildcard fnmatch |
+| `is_known` | `(self, topic: str) -> bool` | |
+| `unregister` | `(self, topic: str) -> bool` | Also drops associated validator |
+| `clear` | `(self) -> None` | Drops all validators |
 
-**CRITICAL: SOFT validation only.** Unknown topics produce `logger.warning()` but are **NEVER dropped**. Envelope is always returned. This preserves bus liveness.
+**Phase 6.11 — schema validation (commit `7164a26`)**, [k1/bus/middleware/topic_validation.py](k1/bus/middleware/topic_validation.py):
 
-**Verdict 1.1.6:** ✅ Both are real, production implementations. MetricsMiddleware has proper Prometheus histograms. TopicValidation is deliberately soft (warn-only). Both gracefully degrade when deps missing.
+- `TopicValidationMiddleware(schema_validation_mode: str = "permissive")` — modes are `"permissive"` (warn + pass) and `"strict"` (raise `SchemaValidationError` and drop the envelope by returning `None`).
+- New type alias: `PayloadValidator = Callable[[bytes, Envelope], None]` — a validator raises to indicate failure.
+- New exception: `SchemaValidationError(ValueError)`.
+- New counters on the middleware: `schema_violation_count`, `schema_drop_count` (in addition to the original soft-validation warn counter).
+- New slot on `TopicRegistry`: `_validators` (mapping by exact / prefix / wildcard buckets).
+
+**Topic-known validation** remains SOFT (warn-only) for backward compat; only schema validation can drop in `"strict"` mode.
+
+**Verdict 1.1.6:** ✅ Both are real, production implementations. MetricsMiddleware has proper Prometheus histograms. TopicValidation is now two-layered (soft topic-known + opt-in strict schema). Both gracefully degrade when deps missing.
+
+---
+
+## Issue 1.1.7 (P6.12): IdempotencyMiddleware ✅ NEW
+
+### IdempotencyMiddleware ([k1/bus/middleware/idempotency.py](k1/bus/middleware/idempotency.py)) — new file, commit `7164a26`
+
+```
+Implements: Middleware protocol (structural)
+Dependency: stdlib only (collections.OrderedDict, time.monotonic)
+Opt-in:     Not added to default chain; callers wire it explicitly
+```
+
+| Constructor | Default |
+|-------------|---------|
+| `IdempotencyMiddleware(max_entries=10_000, ttl_s=300.0)` | LRU + TTL |
+
+- **Key:** `(envelope.topic, envelope.request_id)`. Empty `request_id` bypasses the cache entirely (counted in `no_key_count`).
+- **Storage:** `OrderedDict` LRU bounded by `max_entries`; per-entry expiry by `time.monotonic()` against `ttl_s`. Opportunistic GC on access.
+- **Drop semantics:** Duplicate hit → middleware returns `None`, envelope is dropped by `MiddlewareChain`.
+- **Counters:** `drop_count`, `pass_count`, `no_key_count`, `cache_size`.
+
+**Verdict 1.1.7:** ✅ Real, stdlib-only, opt-in middleware. 9 dedicated tests in `tests/k1/bus/middleware/test_idempotency.py`.
 
 ---
 
@@ -289,7 +357,7 @@ Frozen dataclass with **12 fields**:
 
 ## Concrete Implementation Details
 
-### LocalBus (`k1/bus/impl/local_bus.py`, ~610 LOC)
+### LocalBus ([k1/bus/impl/local_bus.py](k1/bus/impl/local_bus.py), ~610 LOC + Phase 6 additions)
 
 **Publish happy path:**
 
@@ -297,11 +365,23 @@ Frozen dataclass with **12 fields**:
 2. Stamp: `envelope_id` (global monotonic), `sequence` (per-topic), `created_ns`
 3. Run `MiddlewareChain.process()` — drop if returns None
 4. Capture (if enabled)
-5. TopicTrie match → collect handlers
-6. Dispatch to handlers (error-isolated per handler)
-7. Optional: TimingChain for ordering enforcement
+5. **P6.13:** if `topic in durable_topics`, append the stamped envelope to `outbox` before dispatch
+6. TopicTrie match → collect handlers
+7. Dispatch to handlers (error-isolated per handler) — sync inline OR (P6.5) push to per-subscription `_AsyncSubscription` mailbox
+8. Optional: TimingChain for ordering enforcement
 
 **Concurrency:** `_ReadWriteLock` — publish = read lock, subscribe/unsubscribe = write lock. Zero contention between concurrent publishes.
+
+**Phase 6 additions on `LocalBus`** (commits `47c7f10`, `7164a26`):
+
+- New `__init__` kwargs: `async_dispatch: bool`, `subscription_mailbox_capacity: int`, `retry_resolver: Callable[[str], RetryPolicy | None] | None`, `dlq_callback: Callable[[Envelope, BaseException, int], None] | None`, `outbox: BusOutbox | None`, `durable_topics: Iterable[str] | None`.
+- New `__slots__`: `_async_dispatch`, `_async_capacity`, `_async_subs`, `_async_subs_lock`, `_retry_resolver`, `_dlq_callback`, `_outbox`, `_durable_topics`, `_durable_consumers`, `_durable_consumers_lock`.
+- New methods: `flush(timeout_ms=5000) -> bool` (P6.4), `replay_durable_topics(*, consumer_id=None)` (P6.13).
+- New properties: `durable_topics: frozenset[str]`, `outbox: BusOutbox | None`.
+- `subscribe(..., consumer_id=...)`: keyword-only; when set on a durable topic, the handler is wrapped in `_acking_handler` so the outbox `ack` only fires on a successful return (at-least-once semantics).
+- Inner class `_AsyncSubscription` (P6.5): spawns a daemon thread `bus-sub-{id}` consuming from a `LocalMailbox`; the retry loop calls `retry_resolver(topic)` and, on exhaustion, invokes `dlq_callback(envelope, exc, attempts)`.
+
+**`BusStats` ([k1/bus/impl/local_bus.py L952](k1/bus/impl/local_bus.py#L952))** — new fields: `mailbox_full_drops`, `mailbox_high_water_mark`, `async_handler_retries`, `async_handler_dlq`.
 
 ### TopicTrie (`k1/bus/impl/topic_trie.py`, ~260 LOC)
 
@@ -317,6 +397,36 @@ Generic radix trie for O(k) topic matching where k = segment count.
 - `BackpressureError` on full, `UnknownActorError` on unregistered actor
 - `Condition.wait(timeout)` for blocking receive
 
+### RustBusAdapter ([k1/bus/impl/rust_bus_adapter.py](k1/bus/impl/rust_bus_adapter.py))
+
+**Phase 6 fixes (commit `44006c8`):**
+
+- **P6.2:** `publish()` now runs the middleware chain *before* Rust dispatch; a `None` return from middleware drops the envelope (previously bypassed).
+- **P6.3:** new `_drain_offset` slot; `drain()` returns the unread tail and advances the offset (previously re-returned the full backlog).
+- **P6.4:** `flush()` returns `True` immediately (Rust dispatch is synchronous).
+
+### BusOutbox ([k1/bus/outbox/sqlite_outbox.py](k1/bus/outbox/sqlite_outbox.py)) — NEW (P6.13, commit `7164a26`)
+
+SQLite-backed durable buffer for at-least-once topics. Opened in WAL mode: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`.
+
+**Schema:**
+
+- `envelopes(envelope_id PK, topic, payload BLOB, priority, created_ns, request_id, session_id, deleted)` + index `(topic, envelope_id)`
+- `acks((consumer_id, topic) PK, last_acked_envelope_id)`
+
+**API:**
+
+| Method | Purpose |
+|--------|---------|
+| `append(envelope)` | `INSERT OR IGNORE` by `envelope_id` |
+| `ack(consumer_id, topic, envelope_id)` | UPSERT with `MAX(...)` so acks are monotonic |
+| `unacked(consumer_id, topic) -> Iterator[OutboxRecord]` | Replay backlog |
+| `prune_acked(retain_below=0)` | Tombstone old rows |
+| `last_envelope_id() / count(topic=None)` | Diagnostics |
+| `close()` | Close connection |
+
+`OutboxRecord` is a frozen dataclass with `to_envelope()`. `LocalBus.replay_durable_topics(*, consumer_id=None)` iterates `unacked()` for each `consumer_id` registered against a durable topic and re-publishes through the normal dispatch path (re-running middleware and respecting retry/DLQ).
+
 ---
 
 ## Timing Subsystem
@@ -328,13 +438,20 @@ Two ordering enforcement mechanisms:
 1. **CausalTracker** — buffers envelopes whose `parent_id` hasn't been delivered yet
 2. **GapBuffer** — buffers envelopes when per-topic sequence gaps detected
 
-**Default rules** (16 topic prefixes):
+**Default rules** (16 topic prefixes, from [k1/config/bus.yaml](k1/config/bus.yaml)):
 
 - **STRICT (12):** `k1.capability`, `k1.orchestration`, `k1.planner`, `k1.hil`, `k1.hitl`, `k1.response`, `k1.session`, `k1.agent`, `k1.internal`, `k1.tool`, `k1.arbiter`, `k1.backpool`
 - **RELAXED (4):** `k1.affect`, `k1.constraint`, `k1.proactive`, `k1.workflow`
 - **BEST_EFFORT (2):** `k1.k0.sse`, `k1.fabric.learning`
+- **Default for unmapped prefixes:** RELAXED
+- **⚠️ Open (P6.10):** `k1.model_hub` is **not** present in `bus.yaml` and falls through to the RELAXED default. Adding it under STRICT is the single remaining Phase 6 item.
 
 Safety nets: 5000ms timeout sweep, buffer overflow (50K causal / 10K gap per-topic) → force-release oldest 10%.
+
+### Topic renames (Phase 6.8 / 6.9, commit `47c7f10`)
+
+- **P6.8** — [k1/memory_writer/events.py](k1/memory_writer/events.py): `TOPIC_TURN_COMPLETE = "k1.session.turn.complete.v1"`; `TurnDispatcher.TOPIC` matches. **Distinct** from concierge's `TOPIC_TURN_COMPLETED = "k1.session.turn.completed.v1"` (past-tense; separate event with separate consumers).
+- **P6.9** — [k1/bus/adapters/session_adapter.py](k1/bus/adapters/session_adapter.py): `_FLATTEN_PREFIXES = ("sessionstate.",)`; `_map_topic` flattens `sessionstate.X` → `k1.sessionstate.X` (avoids the previous `k1.session.sessionstate.X` double-nesting). All other event types continue to map to `k1.session.X`.
 
 ---
 
@@ -354,14 +471,18 @@ Safety nets: 5000ms timeout sweep, buffer overflow (50K causal / 10K gap per-top
 
 ## Concurrency Model
 
-**Important discovery: Bus is fully synchronous/threaded. No asyncio anywhere.**
+**Important discovery: Bus core is fully synchronous/threaded. No asyncio anywhere.**
 
 - `threading.Lock`, `threading.RLock`, `threading.Condition` throughout
-- Handler dispatch is synchronous on publisher's thread
+- Default handler dispatch is synchronous on publisher's thread
 - `LocalMailbox.receive()` blocks via `Condition.wait(timeout)` — NOT `await`
 - No `async def`, no `await`, no `asyncio` in any bus code
 
-**Implication for kernel wiring:** If the rest of K1 is async (asyncio event loop), bus operations will need to be called from sync context or wrapped in `asyncio.to_thread()` / `run_in_executor()`. This is a design decision that needs attention during MS-2 wiring.
+**Phase 6.5 addition — opt-in async dispatch:** when `LocalBus(async_dispatch=True)`, each subscription gets a daemon thread (`bus-sub-{id}`) with its own bounded `LocalMailbox`. Publishes enqueue and return; the worker thread invokes the handler with retry (`retry_resolver`) and DLQ (`dlq_callback`). `flush(timeout_ms)` drains those mailboxes. The publisher thread is *still* sync — this just decouples slow handlers from publishers, it does not introduce asyncio.
+
+**`async_bridge.py` fix (P6.1, commit `44006c8`):** the bridge previously swallowed handler exceptions silently when adapting sync handlers via `Future`. It now installs `Future.add_done_callback` to log the exception and increment a new `_async_handler_errors` counter.
+
+**Implication for kernel wiring:** If the rest of K1 is async (asyncio event loop), bus operations will still need to be called from sync context or wrapped in `asyncio.to_thread()` / `run_in_executor()`. Async dispatch only changes *handler* execution context, not the publisher API.
 
 ---
 
@@ -400,9 +521,13 @@ Based on this audit, here's what the kernel needs to do with Bus:
 
 | Issue | Status | Verdict |
 |-------|--------|---------|
-| 1.1.1 | ✅ | All 3 ports complete, `@runtime_checkable`, well-typed |
-| 1.1.2 | ✅ | Factory complete, 4 methods, dual-backend |
-| 1.1.3 | ✅ | SessionBusAdapter real (~235 LOC), adapts IEventPort |
+| 1.1.1 | ✅ | All 3 ports complete, `@runtime_checkable`, well-typed; `flush()` added (P6.4) |
+| 1.1.2 | ✅ | Factory complete, 4 methods, dual-backend; new P6 kwargs (`async_dispatch`, `outbox`, `durable_topics`, `retry_resolver`, `dlq_callback`) |
+| 1.1.3 | ✅ | SessionBusAdapter real (~235 LOC), adapts IEventPort; P6.9 prefix flatten for `sessionstate.*` |
 | 1.1.4 | ✅ | FabricBusAdapter real (~245 LOC), dual-role IEventPort + IDeltaBusPort |
 | 1.1.5 | ✅ | TracingMiddleware real (~133 LOC), OpenTelemetry, read-only (does NOT stamp) |
-| 1.1.6 | ✅ | MetricsMiddleware real (~175 LOC), TopicValidation real (~240 LOC), soft validation |
+| 1.1.6 | ✅ | MetricsMiddleware real (~175 LOC); TopicValidation real (~240 LOC) — soft topic-known + opt-in strict schema (P6.11) |
+| 1.1.7 | ✅ | IdempotencyMiddleware (P6.12) — stdlib-only, opt-in, LRU+TTL |
+| 1.1.8 | ✅ | BusOutbox + durable topics + replay (P6.13) |
+| 1.1.9 | ✅ | Phase 6 E2E suite (P6.14) — 40 new tests; bus suite 1108 passing |
+| P6.10 | ⚠️ Open | `k1.model_hub` STRICT rule still missing from `k1/config/bus.yaml` |

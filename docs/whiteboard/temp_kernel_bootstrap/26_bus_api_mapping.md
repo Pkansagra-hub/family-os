@@ -1,6 +1,10 @@
 # Bus — Formal API Mapping
 
 > Generated: 2025-07-12 · Scope: Every port, implementation, adapter, middleware, envelope, timing, and factory surface in `k1/bus/`
+>
+> **Updated for Phase 6 (branch `bus-hardening`, HEAD `7164a26`); P6.10 (model_hub timing rules in YAML) still open.**
+>
+> Phase 6 additions covered below: `IBus.flush`, async dispatch + DLQ on `LocalBus`, durable replay via `BusOutbox`, payload validators on `TopicRegistry`, strict schema mode on `TopicValidationMiddleware`, new `IdempotencyMiddleware`, P6.1/P6.2/P6.3 fixes for `AsyncBusBridge` and `RustBusAdapter`, P6.8 / P6.9 topic renames.
 
 ---
 
@@ -110,13 +114,26 @@ k1/bus/
 @runtime_checkable
 class IBus(Protocol):
     def publish(self, envelope: Envelope) -> None: ...
-    def subscribe(self, pattern: str, handler: BusHandler) -> SubscriptionHandle: ...
+    def subscribe(
+        self,
+        pattern: str,
+        handler: BusHandler,
+        *,
+        consumer_id: str | None = None,
+    ) -> SubscriptionHandle: ...
     def unsubscribe(self, handle: SubscriptionHandle) -> bool: ...
+    def flush(self, timeout_ms: int = 5000) -> bool: ...  # P6
 ```
+
+See [k1/bus/ports/bus.py](k1/bus/ports/bus.py).
 
 **Type alias**: `BusHandler = Callable[[Envelope], None]`
 
 **`SubscriptionHandle`** (frozen dataclass): `subscription_id: str`, `pattern: str`
+
+**`flush(timeout_ms=5000) -> bool`** (Phase 6): Block until in-flight envelopes have been delivered to all subscribed handlers. Sync implementations may return `True` immediately; async-dispatch / Rust implementations drain their internal queues. Returns `False` on timeout. MUST NOT raise for normal payloads.
+
+**`subscribe(..., consumer_id=...)`** (Phase 6): Optional keyword-only argument. When set on a `LocalBus` configured with an outbox + durable topic, the bus wraps the handler in an `_acking_handler` shim that calls `outbox.ack(consumer_id, topic, envelope_id)` after the handler returns successfully — providing at-least-once semantics with replay support.
 
 **Invariants:**
 
@@ -193,9 +210,50 @@ class IAsyncMailboxRouter(Protocol):
 
 ### 3.1 `LocalBus`
 
-In-memory bus with read-write lock, topic trie, optional timing chain and middleware.
+In-memory bus with read-write lock, topic trie, optional timing chain, middleware, async dispatch, DLQ, and durable outbox replay. See [k1/bus/impl/local_bus.py](k1/bus/impl/local_bus.py).
 
-**Constructor**: `LocalBus(*, capture: bool = False, timing_chain: TimingChain | None = None, middleware: MiddlewareChain | None = None)`
+**Constructor** (Phase 6, all keyword-only):
+
+```python
+LocalBus(
+    *,
+    capture: bool = False,
+    timing_chain: TimingChain | None = None,
+    middleware: MiddlewareChain | None = None,
+    async_dispatch: bool = False,                  # P6: per-subscription daemon thread + LocalMailbox
+    subscription_mailbox_capacity: int = 1024,     # P6: capacity for async-dispatch mailbox
+    retry_resolver: Callable[[str], RetryPolicy | None] | None = None,  # P6
+    dlq_callback: Callable[[Envelope, BaseException, int], None] | None = None,  # P6
+    outbox: BusOutbox | None = None,               # P6: durable persistence
+    durable_topics: Iterable[str] | None = None,   # P6: topics persisted to outbox
+)
+```
+
+**New constructor kwargs (Phase 6)**:
+
+| Kwarg | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `async_dispatch` | `bool` | `False` | Run each subscription on its own daemon thread fed by a `LocalMailbox`. Decouples slow handlers from publishers. |
+| `subscription_mailbox_capacity` | `int` | `1024` | Bound for the per-subscription mailbox when `async_dispatch=True`. Overflow → `mailbox_full_drops++`. |
+| `retry_resolver` | `Callable[[str], RetryPolicy \| None] \| None` | `None` | Returns retry policy per topic for async-dispatch handlers. None = no retries. |
+| `dlq_callback` | `Callable[[Envelope, BaseException, int], None] \| None` | `None` | Invoked after retries are exhausted; signature `(envelope, exc, attempts)`. Increments `async_handler_dlq`. |
+| `outbox` | `BusOutbox \| None` | `None` | SQLite-backed durable store. Envelopes for durable topics are appended before dispatch. |
+| `durable_topics` | `Iterable[str] \| None` | `None` | Topics whose envelopes are persisted to `outbox`. Frozen at construction. |
+
+**New `__slots__` (Phase 6)**: `_async_dispatch`, `_async_capacity`, `_async_subs`, `_async_subs_lock`, `_retry_resolver`, `_dlq_callback`, `_outbox`, `_durable_topics`, `_durable_consumers`, `_durable_consumers_lock`.
+
+**IBus methods**: `publish()`, `subscribe(pattern, handler, *, consumer_id=None)`, `unsubscribe()`, `flush(timeout_ms=5000)` (P6)
+
+**`subscribe(..., consumer_id=...)`** (Phase 6): When `consumer_id` is provided AND the topic is in `durable_topics` AND an outbox is configured, the handler is wrapped by `_acking_handler` which calls `outbox.ack(consumer_id, topic, envelope.envelope_id)` on successful return. The consumer_id is also recorded in `_durable_consumers` for `replay_durable_topics()` to target.
+
+**New methods (Phase 6)**:
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `flush` | `(timeout_ms: int = 5000) → bool` | Drains all per-subscription async mailboxes; returns `False` on timeout. No-op (returns `True`) when `async_dispatch=False`. |
+| `replay_durable_topics` | `(*, consumer_id: str \| None = None) → int` | Re-dispatches unacked envelopes from the outbox to their durable subscriptions. Returns count replayed. If `consumer_id` is given, only that consumer is replayed. |
+
+**Async dispatch internals**: `_AsyncSubscription` (inner class) owns a daemon thread and a `LocalMailbox` of `subscription_mailbox_capacity`. On publish, the envelope is enqueued; the worker dequeues and invokes the handler with retry policy from `retry_resolver(topic)`. After exhausting retries, `dlq_callback(envelope, exc, attempts)` is invoked and `async_handler_dlq` is incremented.
 
 **IBus methods**: `publish()`, `subscribe()`, `unsubscribe()`
 
@@ -213,12 +271,14 @@ validate topic → stamp (envelope_id, sequence, created_ns)
 
 | Property / Method | Returns | Description |
 | --- | --- | --- |
-| `stats` | `BusStats` | 7-field mutable stats snapshot |
+| `stats` | `BusStats` | 11-field mutable stats snapshot (P6: +4) |
 | `subscription_count` | `int` | Active subscription count |
 | `topic_sequence(topic)` | `int` | Current sequence for topic |
 | `last_envelope_id` | `int` | Last assigned global ID |
 | `timing_chain` | `TimingChain \| None` | Configured timing chain |
 | `middleware` | `MiddlewareChain \| None` | Configured middleware |
+| `durable_topics` | `frozenset[str]` | P6: Topics persisted to outbox (frozen at construction) |
+| `outbox` | `object \| None` | P6: Configured `BusOutbox` instance, if any |
 
 **Testing helpers**: `captured` (property → `list[Envelope]`), `drain() → list[Envelope]`
 
@@ -226,15 +286,19 @@ validate topic → stamp (envelope_id, sequence, created_ns)
 
 **`BusStats`** (mutable dataclass):
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `envelopes_published` | `int` | 0 |
-| `envelopes_delivered` | `int` | 0 |
-| `handler_errors` | `int` | 0 |
-| `subscriptions_active` | `int` | 0 |
-| `subscriptions_total` | `int` | 0 |
-| `unsubscribe_count` | `int` | 0 |
-| `topics_seen` | `int` | 0 |
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `envelopes_published` | `int` | 0 | |
+| `envelopes_delivered` | `int` | 0 | |
+| `handler_errors` | `int` | 0 | |
+| `subscriptions_active` | `int` | 0 | |
+| `subscriptions_total` | `int` | 0 | |
+| `unsubscribe_count` | `int` | 0 | |
+| `topics_seen` | `int` | 0 | |
+| `mailbox_full_drops` | `int` | 0 | **P6** — async-dispatch mailbox at capacity; envelope dropped |
+| `mailbox_high_water_mark` | `int` | 0 | **P6** — max observed depth across async-dispatch mailboxes |
+| `async_handler_retries` | `int` | 0 | **P6** — retries triggered by `retry_resolver` policy |
+| `async_handler_dlq` | `int` | 0 | **P6** — envelopes routed to DLQ after retry exhaustion |
 
 **Internal concurrency primitives:**
 
@@ -300,18 +364,23 @@ Generic trie for hierarchical dot-separated topic matching.
 
 #### `RustBusAdapter`
 
-Drop-in `IBus` replacement backed by `k1_bus_core` Rust native extension. Raises `ImportError` if Rust unavailable.
+Drop-in `IBus` replacement backed by `k1_bus_core` Rust native extension. Raises `ImportError` if Rust unavailable. See [k1/bus/impl/rust_bus_adapter.py](k1/bus/impl/rust_bus_adapter.py).
 
 **Same interface as LocalBus** plus:
 
 - `handler_circuits() → dict[str, str]` — circuit breaker state per pattern
 - `reset_circuit(pattern) → bool` — reset circuit breaker
+- `flush(timeout_ms: int = 5000) → bool` (**P6**) — returns `True` immediately (Rust dispatches synchronously)
 
-**Behavioral differences from LocalBus:**
+**Phase 6 fixes:**
+
+- **P6.2** — `publish()` now runs `self._middleware.process(envelope)` before `_envelope_to_rust()`. If middleware returns `None`, the envelope is dropped and never crosses the Python→Rust boundary. Previously middleware was stored but never invoked on the Rust path.
+- **P6.3** — New slot `_drain_offset: int = 0`. `drain()` returns `captured[_drain_offset:]` and advances `_drain_offset = len(captured)`; the `captured` property slices the same way. This restores LocalBus-equivalent semantics where successive `drain()` calls return only newly captured envelopes (without requiring a Rust-side clear).
+
+**Behavioral differences from LocalBus (post-P6):**
 
 - `sweep()` is a no-op (Rust handles internally)
-- `drain()` returns cumulative captured (no Rust-side clear)
-- Timing chain / middleware stored but NOT wired into Rust dispatch
+- Timing chain stored but NOT wired into Rust dispatch (middleware now IS wired — P6.2)
 
 #### `RustMailboxRouterAdapter`
 
@@ -339,8 +408,9 @@ Wraps sync `IBus` / `IMailbox` / `IMailboxRouter` for async callers.
 
 - Write/blocking calls offloaded via `asyncio.to_thread`
 - Lock-free reads (`pending`, `registered_actors`) are direct pass-throughs
-- Async handler exceptions are fire-and-forget (the `Future` from `run_coroutine_threadsafe` is never awaited)
 - Event loop captured at construction time
+
+**Phase 6 fix (P6.1):** Async handler exceptions are no longer silently swallowed. `AsyncBusBridge` registers a `Future.add_done_callback` on the `run_coroutine_threadsafe` result that logs the exception and increments `_async_handler_errors`. Exposed via the new property `async_handler_errors → int`. See [k1/bus/async_bridge.py](k1/bus/async_bridge.py).
 
 ---
 
@@ -379,21 +449,85 @@ Returns envelope to continue chain, `None` to drop.
 
 ### 5.4 `TopicValidationMiddleware`
 
-**Constructor**: `TopicValidationMiddleware(registry: TopicRegistry)`
+**Constructor** (Phase 6):
 
-**`TopicRegistry`** methods:
+```python
+TopicValidationMiddleware(
+    registry: TopicRegistry,
+    *,
+    schema_validation_mode: str = "permissive",  # "permissive" | "strict"
+)
+```
+
+Any value other than `"permissive"` or `"strict"` raises `ValueError` from the constructor. See [k1/bus/middleware/topic_validation.py](k1/bus/middleware/topic_validation.py).
+
+**New type alias (P6)**: `PayloadValidator = Callable[[bytes, Envelope], None]` — validators raise `SchemaValidationError` (or any `Exception`) to signal failure.
+
+**New exception (P6)**: `class SchemaValidationError(ValueError)` — raised by validators registered with `TopicRegistry`.
+
+**Counters (instance properties)**:
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `warning_count` | `int` | Unknown-topic warnings (existing) |
+| `schema_violation_count` | `int` | **P6** — validator raised in `permissive` mode (logged + passed through) |
+| `schema_drop_count` | `int` | **P6** — validator raised in `strict` mode (envelope dropped) |
+
+**`TopicRegistry`** methods (Phase 6 — payload validators):
 
 | Method | Signature | Description |
 | --- | --- | --- |
-| `register` | `(topic) → None` | Exact or wildcard (`*`/`?`). Thread-safe. |
-| `register_prefix` | `(prefix) → None` | Prefix match. Thread-safe. |
+| `register` | `(topic: str, validator: PayloadValidator \| None = None) → None` | Exact or wildcard (`*`/`?`). **P6**: optional `validator` stored and resolved by `lookup_validator`. |
+| `register_prefix` | `(prefix: str, validator: PayloadValidator \| None = None) → None` | Prefix match. **P6**: optional `validator` (longest-prefix wins). |
 | `is_known` | `(topic) → bool` | Checks exact → prefix → wildcard (short-circuit) |
-| `unregister` | `(topic) → bool` | Removes from any category |
-| `clear` | `() → None` | Removes all |
+| `lookup_validator` | `(topic: str) → PayloadValidator \| None` | **P6** — Resolution order: exact → longest-prefix → first wildcard `fnmatch`. |
+| `unregister` | `(topic) → bool` | Removes from any category. **P6**: also removes the associated validator. |
+| `clear` | `() → None` | Removes all topics. **P6**: also clears all validators. |
 
-**`process()`**: SOFT validation — warns on unknown topic, **never drops**. Always returns envelope. Increments `warning_count`.
+New slot **`_validators`** stores validator functions keyed parallel to topic/prefix/wildcard registries.
 
-### 5.5 `TracingMiddleware`
+**`process(envelope)` behavior (Phase 6)**:
+
+1. **Unknown topic** → log a warning, increment `warning_count`. Envelope still proceeds to validator lookup.
+2. **Validator lookup** via `registry.lookup_validator(topic)`. If a validator exists, invoke it.
+3. **Validator raises** in `"strict"` mode → log error, increment `schema_drop_count`, **return `None` (drop envelope)**.
+4. **Validator raises** in `"permissive"` mode → log warning, increment `schema_violation_count`, **return envelope (pass through)**.
+5. **Validator returns normally** → envelope passes through unchanged.
+
+### 5.5 `IdempotencyMiddleware` (Phase 6 — NEW)
+
+Opt-in middleware that drops duplicate envelopes by `(topic, request_id)` within a TTL window. **Stdlib only** (no external dependencies — `OrderedDict` + `threading.Lock` + `time.monotonic`). NOT included in the default middleware chain. See [k1/bus/middleware/idempotency.py](k1/bus/middleware/idempotency.py).
+
+**Constructor**:
+
+```python
+IdempotencyMiddleware(max_entries: int = 10_000, ttl_s: float = 300.0)
+```
+
+**Methods**:
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `process` | `(envelope) → Envelope \| None` | Drops duplicates by `(topic, request_id)` within TTL. Empty `request_id` bypasses dedup and always passes through. |
+| `clear` | `() → None` | Test helper — empties the cache. |
+
+**Counters (properties)**:
+
+| Property | Description |
+| --- | --- |
+| `drop_count` | Envelopes dropped as duplicates |
+| `pass_count` | Envelopes that passed through (key not yet seen or TTL expired) |
+| `no_key_count` | Envelopes that bypassed dedup due to empty `request_id` |
+| `cache_size` | Current entries in the LRU cache |
+
+**Behavior**:
+
+- Cache is a bounded `OrderedDict` of size `max_entries`; oldest entry evicted on insert when full.
+- Each entry stores the insertion `monotonic()` time; on lookup, entries older than `ttl_s` are treated as misses (and overwritten).
+- All mutations protected by a single `threading.Lock`.
+- Empty `request_id` (`""`) is the documented bypass — used for events that legitimately fan out (e.g., metrics) and must never be deduplicated.
+
+### 5.6 `TracingMiddleware`
 
 **Constructor**: `TracingMiddleware(*, tracer_name: str = "k1.bus", enabled: bool = True)` — no-op if `opentelemetry` missing.
 
@@ -480,12 +614,27 @@ Ends span immediately. **Never drops**.
 
 ## 7. BusFactory — Static Creation Methods
 
+See [k1/bus/factory.py](k1/bus/factory.py).
+
 | Method | Signature | Returns | Notes |
 | --- | --- | --- | --- |
-| `create_local` | `(*, capture, timing_chain, middleware, backend="auto")` | `LocalBus \| RustBusAdapter` | TimingChain forces Python backend |
+| `create_local` | `(*, capture, timing_chain, middleware, backend="auto", async_dispatch=False, subscription_mailbox_capacity=1024, retry_resolver=None, dlq_callback=None, outbox=None, durable_topics=None)` | `LocalBus \| RustBusAdapter` | **P6**: forwards new kwargs to `LocalBus`; forces Python backend if `timing_chain`, `async_dispatch`, or `outbox` is set |
 | `create_local_ordered` | `(*, config, timeout_ms=5000, capture, middleware, backend="python")` | `LocalBus` | `backend="rust"` raises `ValueError` |
 | `create_for_testing` | `(*, ordered, middleware, backend="auto")` | `LocalBus \| RustBusAdapter` | `ordered=True` forces Python + capture + TimingChain |
 | `create_mailbox_router` | `(*, backend="auto")` | `LocalMailboxRouter \| RustMailboxRouterAdapter` | — |
+
+**`create_local` Phase 6 kwargs** (forwarded verbatim to `LocalBus.__init__`):
+
+| Kwarg | Default | Forces Python backend? |
+| --- | --- | --- |
+| `async_dispatch` | `False` | **Yes** when `True` |
+| `subscription_mailbox_capacity` | `1024` | No (only meaningful with `async_dispatch=True`) |
+| `retry_resolver` | `None` | No (only meaningful with `async_dispatch=True`) |
+| `dlq_callback` | `None` | No (only meaningful with `async_dispatch=True`) |
+| `outbox` | `None` | **Yes** when not `None` |
+| `durable_topics` | `None` | No (only meaningful with `outbox`) |
+
+**Backend forcing rules (post-P6):** If any of `timing_chain`, `async_dispatch`, or `outbox` is set, the factory forces `backend="python"` regardless of the requested backend (these features are not implemented in the Rust core). Explicit `backend="rust"` combined with these features is silently downgraded.
 
 **Backend resolution** (`_resolve_backend`):
 
@@ -510,6 +659,89 @@ Ends span immediately. **Never drops**.
 
 **`load_bus_config(path?)`**: Loads from YAML at `k1/config/bus.yaml`. **NEVER raises** — all errors fall back to defaults with logged warnings. Uses `yaml.safe_load`.
 
+**`k1/config/bus.yaml` (post-Phase 6 snapshot)** — see [k1/config/bus.yaml](k1/config/bus.yaml):
+
+| Mode | Prefixes |
+| --- | --- |
+| Default | `RELAXED` |
+| `STRICT` | `k1.capability`, `k1.orchestration`, `k1.planner`, `k1.hil`, `k1.hitl`, `k1.response`, `k1.session`, `k1.agent`, `k1.internal`, `k1.tool`, `k1.arbiter`, `k1.backpool` |
+| `RELAXED` | `k1.affect`, `k1.constraint`, `k1.proactive`, `k1.workflow` |
+| `BEST_EFFORT` | `k1.k0.sse`, `k1.fabric.learning` |
+
+> **P6.10 (open):** `k1.model_hub` is missing from the YAML and falls through to the default (`RELAXED`). The 13 `k1.model_hub.*` topics in [§10.11](#1011-model-hub-prefix-k1model_hub-13-topics) currently have no explicit timing rule. Tracked as P6.10 — unimplemented.
+
+---
+
+## 8a. BusOutbox — Durable Persistence (Phase 6 — NEW)
+
+SQLite-backed durable store for at-least-once delivery and replay. Used by `LocalBus` when `outbox=` is configured. See [k1/bus/outbox/sqlite_outbox.py](k1/bus/outbox/sqlite_outbox.py).
+
+**Constructor**: `BusOutbox(path: str | Path)` — opens (or creates) a SQLite DB in WAL mode at `path`.
+
+**SQL pragmas applied at open**:
+
+```sql
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA busy_timeout = 5000;
+```
+
+**Schema**:
+
+```sql
+CREATE TABLE envelopes (
+    envelope_id  INTEGER PRIMARY KEY,
+    topic        TEXT,
+    payload      BLOB,
+    priority     INTEGER,
+    created_ns   INTEGER,
+    request_id   TEXT,
+    session_id   TEXT,
+    deleted      INTEGER
+);
+CREATE INDEX idx_envelopes_topic ON envelopes(topic, envelope_id);
+
+CREATE TABLE acks (
+    consumer_id              TEXT,
+    topic                    TEXT,
+    last_acked_envelope_id   INTEGER,
+    PRIMARY KEY (consumer_id, topic)
+);
+```
+
+**Methods**:
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `append` | `(envelope: Envelope) → None` | `INSERT OR IGNORE` on `envelope_id` (idempotent on replay). |
+| `ack` | `(consumer_id: str, topic: str, envelope_id: int) → None` | UPSERT into `acks` taking `MAX(last_acked_envelope_id, envelope_id)`. Monotonic — replays cannot rewind acks. |
+| `unacked` | `(consumer_id: str, topic: str) → Iterator[OutboxRecord]` | Yields `envelopes` rows where `envelope_id > last_acked_envelope_id` for this consumer/topic. |
+| `prune_acked` | `(retain_below: int = 0) → int` | Deletes envelopes with `envelope_id ≤ min(last_acked across consumers per topic)`. Returns rows deleted. |
+| `last_envelope_id` | `() → int` | Current MAX `envelope_id` (0 if empty). |
+| `count` | `(topic: str \| None = None) → int` | Row count, optionally filtered by topic. |
+| `close` | `() → None` | Closes the SQLite connection. |
+
+**`OutboxRecord`** (frozen dataclass):
+
+| Field | Type |
+| --- | --- |
+| `envelope_id` | `int` |
+| `topic` | `str` |
+| `payload` | `bytes` |
+| `priority` | `int` |
+| `created_ns` | `int` |
+| `request_id` | `str` |
+| `session_id` | `str` |
+
+Method **`to_envelope() → Envelope`** rebuilds an `Envelope` from the record (used by `LocalBus.replay_durable_topics`).
+
+**Invariants**:
+
+- `append` is idempotent: re-inserting the same `envelope_id` is a no-op.
+- `ack` is monotonic: a stale ack with an older `envelope_id` is silently ignored.
+- `prune_acked` only deletes envelopes that have been acked by **every** consumer subscribed to that topic.
+- All operations are thread-safe via SQLite's own locking + the `busy_timeout=5000` retry window.
+
 ---
 
 ## 9. Adapters — Component-Facing Wrappers
@@ -527,14 +759,23 @@ Bridges Fabric's `IEventPort(Dict)` + `IDeltaBusPort` to `LocalBus`.
 
 ### 9.2 `SessionBusAdapter`
 
-Bridges SessionState's `IEventPort` ABC to `LocalBus`. Prefixes all topics with `k1.session.`.
+Bridges SessionState's `IEventPort` ABC to `LocalBus`. **P6.9**: only event types prefixed `sessionstate.` are flattened by stripping the leading `sessionstate.` and re-prefixing `k1.`; other event types receive the legacy `k1.session.` prefix.
 
 | Method | Signature | Description |
 | --- | --- | --- |
-| `emit` | `(event_type, payload: Any) → None` | Maps to `k1.session.{event_type}`, serializes, `Priority.INTERACTIVE` |
-| `subscribe` | `(event_type, handler: Callable[[Any], None]) → str` | Maps topic, wraps handler, returns `subscription_id` |
+| `emit` | `(event_type, payload: Any) → None` | Topic via `_map_topic`, serializes, `Priority.INTERACTIVE` |
+| `subscribe` | `(event_type, handler: Callable[[Any], None]) → str` | Maps topic via `_map_topic`, wraps handler, returns `subscription_id` |
 | `unsubscribe` | `(subscription_id) → bool` | Looks up handle from internal dict |
 | `is_connected` | (property) → `bool` | `not self._bus.closed` |
+
+**`_FLATTEN_PREFIXES = ("sessionstate.",)`** (P6.9). **`_map_topic`** behavior:
+
+| Input event_type | Mapped topic |
+| --- | --- |
+| `sessionstate.mutation.requested` | `k1.sessionstate.mutation.requested` (no double-nesting) |
+| `turn.started` (no flatten prefix) | `k1.session.turn.started` |
+
+This fixes the previous bug where `sessionstate.X` events became `k1.session.sessionstate.X`. See [k1/bus/adapters/session_bus_adapter.py](k1/bus/adapters/session_bus_adapter.py).
 
 ---
 
@@ -701,12 +942,14 @@ Bridges SessionState's `IEventPort` ABC to `LocalBus`. Prefixes all topics with 
 
 | Topic | Constant | Publisher | Subscriber |
 | --- | --- | --- | --- |
-| `turn.complete.v1` | `TOPIC_TURN_COMPLETE` | Concierge FSM | MW TurnDispatcher |
+| `k1.session.turn.complete.v1` | `TOPIC_TURN_COMPLETE` | Concierge FSM | MW `TurnDispatcher` (matches `TurnDispatcher.TOPIC`) |
 | `k1.mw.filter.decision.v1` | `TOPIC_FILTER_DECISION` | MW Pipeline | Obs |
 | `k1.mw.extraction.complete.v1` | `TOPIC_EXTRACTION_COMPLETE` | MW Pipeline | Obs |
 | `k1.mw.batch.submitted.v1` | `TOPIC_BATCH_SUBMITTED` | MW Pipeline | Obs |
 | `k1.mw.pipeline.error.v1` | `TOPIC_PIPELINE_ERROR` | MW Pipeline | Obs |
 | `k1.mw.circuit.open.v1` | `TOPIC_CIRCUIT_OPEN` | MW Pipeline | Obs |
+
+> **P6.8 — distinct topics:** `TOPIC_TURN_COMPLETE = "k1.session.turn.complete.v1"` (memory writer; see [k1/memory_writer/events.py](k1/memory_writer/events.py)) is **distinct from** the concierge `TOPIC_TURN_COMPLETED = "k1.session.turn.completed.v1"` (§10.1). The renamed `TurnDispatcher.TOPIC` matches the new `complete` form; do not collapse them.
 
 ### 10.13 Internal / Bus Mechanics (prefix: `k1.internal` — STRICT)
 
@@ -744,17 +987,19 @@ Bridges SessionState's `IEventPort` ABC to `LocalBus`. Prefixes all topics with 
 | `k1.metrics.alert.v1` | `TOPIC_METRIC_ALERT` | RELAXED | Alert Engine |
 | `k1.metrics.session_summary.v1` | `TOPIC_METRIC_SESSION_SUMMARY` | RELAXED | MetricsCollector |
 
-### 10.17 SessionState Internal Events (mapped via SessionBusAdapter → `k1.session.*`)
+### 10.17 SessionState Internal Events (mapped via SessionBusAdapter → `k1.sessionstate.*`)
 
-| Event | Constant | Publisher | Subscriber |
-| --- | --- | --- | --- |
-| `sessionstate.mutation.requested` | `MUTATION_REQUESTED` | Writer | Policy Engine |
-| `sessionstate.mutation.approved` | `MUTATION_APPROVED` | Policy Engine | DeltaAggregator |
-| `sessionstate.mutation.rejected` | `MUTATION_REJECTED` | Policy Engine | Obs |
-| `sessionstate.eviction.triggered` | `EVICTION_TRIGGERED` | EvictionEngine | Obs |
-| `sessionstate.eviction.completed` | `EVICTION_COMPLETED` | EvictionEngine | Obs |
-| `sessionstate.emergency.activated` | `EMERGENCY_ACTIVATED` | Emergency handler | Obs |
-| `sessionstate.emergency.resolved` | `EMERGENCY_RESOLVED` | Emergency handler | Obs |
+**P6.9**: events with the `sessionstate.` prefix are flattened to `k1.sessionstate.X` (no double-nesting under `k1.session.sessionstate.X`).
+
+| Event | Mapped topic | Constant | Publisher | Subscriber |
+| --- | --- | --- | --- | --- |
+| `sessionstate.mutation.requested` | `k1.sessionstate.mutation.requested` | `MUTATION_REQUESTED` | Writer | Policy Engine |
+| `sessionstate.mutation.approved` | `k1.sessionstate.mutation.approved` | `MUTATION_APPROVED` | Policy Engine | DeltaAggregator |
+| `sessionstate.mutation.rejected` | `k1.sessionstate.mutation.rejected` | `MUTATION_REJECTED` | Policy Engine | Obs |
+| `sessionstate.eviction.triggered` | `k1.sessionstate.eviction.triggered` | `EVICTION_TRIGGERED` | EvictionEngine | Obs |
+| `sessionstate.eviction.completed` | `k1.sessionstate.eviction.completed` | `EVICTION_COMPLETED` | EvictionEngine | Obs |
+| `sessionstate.emergency.activated` | `k1.sessionstate.emergency.activated` | `EMERGENCY_ACTIVATED` | Emergency handler | Obs |
+| `sessionstate.emergency.resolved` | `k1.sessionstate.emergency.resolved` | `EMERGENCY_RESOLVED` | Emergency handler | Obs |
 
 ### 10.18 Bridge / Cross-Boundary (K0↔K1)
 
@@ -788,7 +1033,9 @@ Bridges SessionState's `IEventPort` ABC to `LocalBus`. Prefixes all topics with 
 | # | Severity | Location | Finding |
 | --- | --- | --- | --- |
 | 1 | **Medium** | `rust_mailbox_adapter.py` | `RustMailboxAdapter.receive(*, timeout_ms)` is keyword-only but `IMailbox` protocol declares it positional. Callers using `receive(100)` will get `TypeError` with Rust adapter. |
-| 2 | **Low** | `rust_bus_adapter.py` | `drain()` returns cumulative captured (no Rust-side clear). Behavioral difference vs `LocalBus.drain()` which clears. |
-| 3 | **Low** | `impl/__init__.py` | Does not re-export `LocalMailbox`, `LocalMailboxRouter`, Rust adapters. They're exported from `k1.bus.__init__` directly. Inconsistent layering. |
-| 4 | **Info** | `async_bridge.py` | `_wrap_async_handler` uses `run_coroutine_threadsafe` — the returned `Future` is never awaited. Async handler errors are fire-and-forget. |
-| 5 | **Info** | `config.py` | `load_bus_config()` never raises — robust for production but may mask config errors in development. |
+| 2 | **Open (P6.10)** | `k1/config/bus.yaml` | `k1.model_hub` prefix is missing from the YAML; the 13 `k1.model_hub.*` topics inherit the default `RELAXED` mode. Tracked as P6.10. |
+| 3 | **Resolved (P6.3)** | `rust_bus_adapter.py` | `drain()` previously returned cumulative captured (no Rust-side clear). Now uses `_drain_offset` to return only newly captured envelopes. |
+| 4 | **Resolved (P6.2)** | `rust_bus_adapter.py` | `publish()` previously skipped middleware. Now runs `self._middleware.process(envelope)` before crossing into Rust; `None` drops. |
+| 5 | **Resolved (P6.1)** | `async_bridge.py` | `_wrap_async_handler`'s `Future` was never awaited — errors were fire-and-forget. Now uses `Future.add_done_callback` to log + count via `async_handler_errors`. |
+| 6 | **Low** | `impl/__init__.py` | Does not re-export `LocalMailbox`, `LocalMailboxRouter`, Rust adapters. They're exported from `k1.bus.__init__` directly. Inconsistent layering. |
+| 7 | **Info** | `config.py` | `load_bus_config()` never raises — robust for production but may mask config errors in development. |
