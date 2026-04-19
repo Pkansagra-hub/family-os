@@ -173,7 +173,7 @@ def check_ports() -> SyncReport:
     diff = diff_with_registry(ports)
     summary = generate_summary(ports)
 
-    warnings: list[str] = []
+    warnings: list[str] = list(diff.get("warnings", []))
     if summary["unimplemented"]:
         warnings.append(f"{len(summary['unimplemented'])} ports have no production adapter")
 

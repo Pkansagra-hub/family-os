@@ -325,7 +325,7 @@ class MigrationResult:
 # =============================================================================
 
 
-class ISectionDataProvider(Protocol):
+class IMigrationSectionProvider(Protocol):
     """
     Protocol for accessing section data for migration.
 
@@ -437,7 +437,7 @@ class MigrationEngine:
         self,
         size_tracker: SizeTracker,
         mutation_guard: Optional["MutationGuard"] = None,
-        section_provider: Optional[ISectionDataProvider] = None,
+        section_provider: Optional[IMigrationSectionProvider] = None,
         session_id: str = "",
         compress_fn: Optional[Callable[[Any], CompressedTurn]] = None,
         summarize_fn: Optional[Callable[[Any], SummarizedTurn]] = None,

@@ -232,7 +232,7 @@ class EvictionResult:
 # =============================================================================
 
 
-class ISectionDataProvider(Protocol):
+class IEvictionSectionProvider(Protocol):
     """
     Protocol for accessing section data for eviction.
 
@@ -264,6 +264,11 @@ class ISectionDataProvider(Protocol):
     def remove_evicted_data(self, section: str, bytes_to_remove: int) -> int:
         """Remove data after archiving, return actual bytes freed."""
         ...
+
+
+# Deprecated alias for backward compatibility (was named ISectionDataProvider
+# before TD-cleanup; collided with sessionstate.migration.ISectionDataProvider).
+ISectionDataProvider = IEvictionSectionProvider
 
 
 # =============================================================================
@@ -333,7 +338,7 @@ class EvictionEngine:
         size_tracker: SizeTracker,
         local_cold: "LocalColdArchive",
         mutation_guard: Optional["MutationGuard"] = None,
-        section_provider: Optional[ISectionDataProvider] = None,
+        section_provider: Optional[IEvictionSectionProvider] = None,
         session_id: str = "",
         config: Optional[SessionStateConfig] = None,
     ) -> None:
@@ -896,7 +901,8 @@ __all__ = [
     "EvictionReason",
     "EvictionResult",
     "EvictedItem",
-    "ISectionDataProvider",
+    "IEvictionSectionProvider",
+    "ISectionDataProvider",  # Deprecated alias for backward compat
     "TARGET_UTILIZATION_AFTER_EVICTION",
     "MIN_EVICTION_BYTES",
     "MAX_EVICTION_ITERATIONS",

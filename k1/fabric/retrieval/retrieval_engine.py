@@ -30,20 +30,15 @@ from typing import Any, Dict, FrozenSet, List, Optional, Protocol, Sequence
 import numpy as np
 
 from k1.fabric.metrics import get_default_metrics
+from k1.fabric.retrieval.embedding_index import IEmbeddingPort
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Protocols -- declared locally to avoid circular imports
+# (IEmbeddingPort is the canonical declaration in embedding_index.py;
+#  re-exported here for backward-compatible imports.)
 # ---------------------------------------------------------------------------
-
-
-class IEmbeddingPort(Protocol):
-    """Port for computing text embeddings."""
-
-    def embed(self, text: str) -> np.ndarray:
-        """Return a 1-D float32 embedding vector for *text*."""
-        ...  # pragma: no cover
 
 
 class IRegistryPort(Protocol):

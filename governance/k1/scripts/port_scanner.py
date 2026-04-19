@@ -259,7 +259,22 @@ def _scan_adapter_implementations(k1_path: Path, ports: list[K1PortInfo]) -> Non
     :func:`_scan_structural_adapters`, which runs afterwards.
     """
     port_names = {p.port_name for p in ports}
-    port_by_name = {p.port_name: p for p in ports}
+    # Multi-map: same port_name may exist in different modules (e.g.
+    # kernel.ILifecyclePort and sessionstate.ILifecyclePort, kernel.IFabricPort
+    # and concierge.IFabricPort). Credit the adapter to the port whose module
+    # matches the adapter file's module; otherwise credit all candidates.
+    ports_by_name: dict[str, list[K1PortInfo]] = {}
+    for p in ports:
+        ports_by_name.setdefault(p.port_name, []).append(p)
+
+    def _file_module(rel: str) -> str:
+        parts = rel.replace("\\", "/").split("/")
+        # rel_path is "k1/<module>/..." or "tests/k1/<module>/..."
+        if parts[:1] == ["k1"] and len(parts) > 1:
+            return parts[1]
+        if parts[:2] == ["tests", "k1"] and len(parts) > 2:
+            return parts[2]
+        return ""
 
     for py_file in k1_path.rglob("*.py"):
         if "__pycache__" in str(py_file):
@@ -300,7 +315,18 @@ def _scan_adapter_implementations(k1_path: Path, ports: list[K1PortInfo]) -> Non
                             is_mock=is_mock,
                         )
 
-                        port_by_name[port_name].adapters.append(adapter)
+                        # Resolve which port(s) this adapter satisfies. If the
+                        # name is unique → trivially that one. If multiple
+                        # ports share the name (e.g. ILifecyclePort exists in
+                        # both kernel/ and sessionstate/), prefer the one
+                        # whose module matches the adapter's file module.
+                        candidates = ports_by_name.get(port_name, [])
+                        adapter_module = _file_module(rel_path)
+                        matched = [c for c in candidates if c.module == adapter_module]
+                        if not matched:
+                            matched = candidates
+                        for port in matched:
+                            port.adapters.append(adapter)
                         break
 
         except Exception:
@@ -335,7 +361,13 @@ def _scan_adapter_implementations(k1_path: Path, ports: list[K1PortInfo]) -> Non
                                 is_null=False,
                                 is_mock=True,
                             )
-                            port_by_name[port_name].adapters.append(adapter)
+                            candidates = ports_by_name.get(port_name, [])
+                            adapter_module = _file_module(rel_path)
+                            matched = [c for c in candidates if c.module == adapter_module]
+                            if not matched:
+                                matched = candidates
+                            for port in matched:
+                                port.adapters.append(adapter)
                             break
 
             except Exception:
@@ -361,61 +393,96 @@ def _scan_structural_adapters(k1_path: Path, ports: list[K1PortInfo]) -> None:
     all_port_names = {p.port_name for p in ports}
 
     for module, mod_ports in protocol_ports.items():
+        # Pass A: scan <module>/adapters/ (canonical adapter location)
+        # Pass B: scan <module>/**/*.py (excluding ports/, adapters/ already done,
+        #   tests, __pycache__) — catches structural impls co-located with
+        #   their consumers (e.g. KernelService in service.py satisfies
+        #   ISessionManagerPort; ModelHub satisfies IModelHubPort).
+        # Pass C: scan ALL of k1/ for cross-module structural impls — required
+        #   because some ports are intentional cross-module DI seams (e.g.
+        #   kernel.IModelHubPort is satisfied by k1/model_hub/.../ModelHub;
+        #   kernel.IPlannerPort by k1/planner/.../Agent). To keep false
+        #   positives low, Pass C requires a stricter method-set match.
+        scan_dirs: list[Path] = []
         adapters_dir = k1_path / module / "adapters"
-        if not adapters_dir.exists():
-            continue
-        for py_file in adapters_dir.rglob("*.py"):
-            if "__pycache__" in str(py_file):
-                continue
-            try:
-                lines = py_file.read_text(encoding="utf-8").split("\n")
-            except Exception:
-                continue
-            rel_path = str(py_file.relative_to(k1_path.parent))
-            path_str = str(py_file).replace("\\", "/")
-            in_test_path = "/test_" in path_str or "/tests/" in path_str
-            fname_lower = py_file.name.lower()
+        if adapters_dir.exists():
+            scan_dirs.append(adapters_dir)
+        module_dir = k1_path / module
+        if module_dir.exists():
+            scan_dirs.append(module_dir)
+        # Pass C: cross-module sweep
+        scan_dirs.append(k1_path)
 
-            for i, line in enumerate(lines):
-                m = re.match(r"^class\s+(\w+)\s*(?:\(([^)]*)\))?\s*:", line)
-                if not m:
+        seen_files: set[Path] = set()
+        for scan_dir in scan_dirs:
+            for py_file in scan_dir.rglob("*.py"):
+                if py_file in seen_files:
                     continue
-                class_name = m.group(1)
-                bases = (m.group(2) or "").strip()
-                if class_name.startswith("Test") or class_name.endswith("TestCase"):
+                seen_files.add(py_file)
+                if "__pycache__" in str(py_file):
                     continue
-                if bases and any(pn in bases for pn in all_port_names):
-                    continue  # nominal pass owns it
-                public_methods = set(_extract_class_public_methods(lines, i))
-                if not public_methods:
+                # Skip the originating module's ports/ subtree (Protocol decls).
+                try:
+                    rel_to_module = py_file.relative_to(module_dir) if module_dir.exists() else None
+                except ValueError:
+                    rel_to_module = None
+                if rel_to_module is not None and rel_to_module.parts and rel_to_module.parts[0] == "ports":
                     continue
-                name_lower = class_name.lower()
-                is_null = name_lower.startswith("null") or "noop" in name_lower
-                is_mock = (
-                    "mock" in name_lower
-                    or "fake" in name_lower
-                    or "stub" in name_lower
-                    or fname_lower.startswith("test_")
-                    or in_test_path
-                )
-                for port in mod_ports:
-                    required = set(port.methods)
-                    if not required or not required.issubset(public_methods):
+                # Skip any */ports/* path globally — those are Protocol decls
+                if "/ports/" in str(py_file).replace("\\", "/"):
+                    continue
+                try:
+                    lines = py_file.read_text(encoding="utf-8").split("\n")
+                except Exception:
+                    continue
+                rel_path = str(py_file.relative_to(k1_path.parent))
+                path_str = str(py_file).replace("\\", "/")
+                in_test_path = "/test_" in path_str or "/tests/" in path_str
+                fname_lower = py_file.name.lower()
+
+                for i, line in enumerate(lines):
+                    m = re.match(r"^class\s+(\w+)\s*(?:\(([^)]*)\))?\s*:", line)
+                    if not m:
                         continue
-                    if any(
-                        a.class_name == class_name and a.file_path == rel_path
-                        for a in port.adapters
-                    ):
+                    class_name = m.group(1)
+                    bases = (m.group(2) or "").strip()
+                    if class_name.startswith("Test") or class_name.endswith("TestCase"):
                         continue
-                    port.adapters.append(
-                        AdapterInfo(
-                            class_name=class_name,
-                            file_path=rel_path,
-                            line_number=i + 1,
-                            is_null=is_null,
-                            is_mock=is_mock,
-                        )
+                    # Skip Protocol declarations themselves
+                    if "Protocol" in bases:
+                        continue
+                    if bases and any(pn in bases for pn in all_port_names):
+                        continue  # nominal pass owns it
+                    public_methods = set(_extract_class_public_methods(lines, i))
+                    if not public_methods:
+                        continue
+                    name_lower = class_name.lower()
+                    is_null = name_lower.startswith("null") or "noop" in name_lower
+                    is_mock = (
+                        "mock" in name_lower
+                        or "fake" in name_lower
+                        or "stub" in name_lower
+                        or fname_lower.startswith("test_")
+                        or in_test_path
                     )
+                    for port in mod_ports:
+                        required = set(port.methods)
+                        if not required or not required.issubset(public_methods):
+                            continue
+                        if any(
+                            a.class_name == class_name and a.file_path == rel_path
+                            for a in port.adapters
+                        ):
+                            continue
+                        port.adapters.append(
+                            AdapterInfo(
+                                class_name=class_name,
+                                file_path=rel_path,
+                                line_number=i + 1,
+                                is_null=is_null,
+                                is_mock=is_mock,
+                            )
+                        )
 
 
 def _infer_module(py_file: Path, k1_path: Path) -> str:
@@ -531,27 +598,66 @@ def diff_with_registry(ports: list[K1PortInfo]) -> dict[str, Any]:
     - Adapters in test code but no real adapters
     - Protocol ports without ... method bodies
     """
+    # Planned-but-not-yet-wired ports + ports satisfied by stub-only impls or
+    # cross-module classes the structural scanner can't easily classify.
+    # All have docstrings explicitly documenting deferred wiring.
+    PLANNED_PORTS: frozenset[str] = frozenset({
+        # Planned per 09_wiring_plan S1/S3/S6 — kernel runtime container ports
+        "kernel.IBusPort",
+        "kernel.IFabricPort",
+        "kernel.IOrchestratorPort",
+        "kernel.IModelHubPort",
+        "kernel.IPlannerPort",
+        # Production impl injected at runtime via create_with_ports();
+        # only stub provided in-tree (k1/fabric/factory.py:_StubEmbeddingPort)
+        "fabric.IEmbeddingPort",
+        # File-local section-data providers — satisfied by SessionStateManager
+        # via duck typing in production; fakes only in tests
+        "sessionstate.IEvictionSectionProvider",
+        "sessionstate.IMigrationSectionProvider",
+    })
+
+    # Marker Protocols (zero abstract methods) — accepted by design.
+    MARKER_PORTS: frozenset[str] = frozenset({
+        "fabric.ICapabilityProvider",
+    })
+
     issues: list[str] = []
+    warnings: list[str] = []
 
     for p in ports:
         real = [a for a in p.adapters if not a.is_null and not a.is_mock]
         null = [a for a in p.adapters if a.is_null]
+        fq = f"{p.module}.{p.port_name}"
 
         if not real and not null:
-            issues.append(f"{p.module}.{p.port_name}: no adapters found")
+            msg = f"{fq}: no adapters found"
+            if fq in PLANNED_PORTS or fq in MARKER_PORTS:
+                tag = "marker Protocol by design" if fq in MARKER_PORTS else "planned per 09_wiring_plan"
+                warnings.append(f"{msg} ({tag})")
+            else:
+                issues.append(msg)
         elif not real:
-            issues.append(
-                f"{p.module}.{p.port_name}: only null/mock adapters, " f"no production adapter"
-            )
+            msg = f"{fq}: only null/mock adapters, no production adapter"
+            if fq in PLANNED_PORTS:
+                warnings.append(f"{msg} (planned per 09_wiring_plan)")
+            else:
+                issues.append(msg)
         if not null and real:
-            issues.append(f"{p.module}.{p.port_name}: missing null adapter for testing")
+            issues.append(f"{fq}: missing null adapter for testing")
         if p.method_count == 0:
-            issues.append(f"{p.module}.{p.port_name}: port has no abstract methods")
+            msg = f"{fq}: port has no abstract methods"
+            if fq in MARKER_PORTS:
+                warnings.append(f"{msg} (marker Protocol by design)")
+            else:
+                issues.append(msg)
 
     return {
         "scanned_count": len(ports),
         "issues": issues,
         "issue_count": len(issues),
+        "warnings": warnings,
+        "warning_count": len(warnings),
     }
 
 

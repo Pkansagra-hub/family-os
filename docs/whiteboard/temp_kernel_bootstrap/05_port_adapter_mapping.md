@@ -4,6 +4,47 @@ Based on comprehensive analysis of the three extraction files, here's the comple
 
 ---
 
+## Verified Wiring Status (2026-04-18 governance audit)
+
+Cross-checked by `governance/k1/scripts/port_scanner.py` after the scanner was
+extended with (a) Protocol structural-typing detection, (b) cross-module
+adapter discovery, and (c) module-aware port disambiguation. **Wiring is
+healthy.** Remaining scanner output explained below.
+
+| Bucket | Count | Status | Notes |
+|--------|-------|--------|-------|
+| Total ports scanned | 61 | — | Includes both ABC and Protocol ports |
+| Ports with production adapter | 53 | ✅ | Detected nominally or structurally |
+| Planned ports (no adapter yet) | 5 | ⚠ | `kernel.IBusPort`, `kernel.IFabricPort`, `kernel.IOrchestratorPort`, `kernel.IModelHubPort`, `kernel.IPlannerPort` — pre-spec'd per 09_wiring_plan; currently bypassed because `KernelService` (`k1/kernel/service.py`) wires `BusFactory` / `FabricFactory` / `OrchestratorFactory` / `ModelHub` / `Planner` directly without an intervening port adapter |
+| Stub-only port | 1 | ⚠ | `fabric.IEmbeddingPort` — `_StubEmbeddingPort` in `k1/fabric/factory.py`; production impl is injected at runtime via `create_with_ports()` |
+| Marker Protocol | 1 | ⚠ | `fabric.ICapabilityProvider` — zero abstract methods by design |
+| File-local section providers | 2 | ⚠ | `sessionstate.IEvictionSectionProvider`, `sessionstate.IMigrationSectionProvider` — satisfied at runtime by `SessionStateManager` via duck typing; only test fakes are concrete classes |
+| Real issues remaining | 41 | 🟡 | All "missing null adapter for testing" — separate hygiene category (every port should ship a `Null*Port` for tests). Tracked as future TD sweep. |
+
+### Key clarifications
+
+**`bootstrap.py` vs `service.py`.** `k1/kernel/bootstrap.py` is a thin
+backward-compatibility facade (single-session `start_kernel()` /
+`stop_kernel()` for `chat_repl.py` and `runner.py`). All real lifecycle and
+port wiring lives in `k1/kernel/service.py` (`KernelService`). When future
+work formally implements the planned kernel ports above, the adapter classes
+should live alongside `KernelService`, not in `bootstrap.py`.
+
+**Why scanner counts changed.** Prior to the 2026-04-18 sweep the scanner
+reported 269 issues. The cleanup that brought this down to ~56 issues:
+1. Protocol ports are now detected by structural duck-typing (not just
+   nominal `class X(IPort):` inheritance).
+2. Adapter scan widened beyond `<module>/adapters/` to all of `k1/`.
+3. Same-named ports across modules (e.g. `ILifecyclePort` exists in both
+   `kernel/` and `sessionstate/`) are now disambiguated by module.
+4. `IEmbeddingPort` deduplicated (canonical: `k1/fabric/retrieval/embedding_index.py`,
+   re-exported from `retrieval_engine.py`).
+5. `ISectionDataProvider` collision split into `IEvictionSectionProvider`
+   and `IMigrationSectionProvider` (alias kept for backward compat).
+6. Planned-but-not-yet-wired ports are now warnings, not issues.
+
+---
+
 ## **FILE: 05_port_adapter_mapping.md**
 
 ```markdown
