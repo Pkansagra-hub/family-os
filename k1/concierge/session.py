@@ -231,6 +231,26 @@ class ConciergeRuntime:
     def front_subscriptions(self) -> list[Any]:
         return self._front_subscriptions
 
+    @property
+    def front_dispatcher(self) -> Any:
+        """Front-side tool dispatcher (read-only)."""
+        return self._front_dispatcher
+
+    @property
+    def back_dispatcher(self) -> Any:
+        """Back-side tool dispatcher (read-only)."""
+        return self._back_dispatcher
+
+    @property
+    def consumer_task(self) -> asyncio.Task[None] | None:
+        """Mailbox consumer asyncio.Task, or None before start()."""
+        return self._consumer_task
+
+    @property
+    def ledger_store(self) -> Any | None:
+        """Ledger store, or None if not configured."""
+        return self._ledger_store
+
     # ------------------------------------------------------------------
     # Mailbox consumer (extracted from bootstrap._mailbox_consumer)
     # ------------------------------------------------------------------

@@ -25,11 +25,12 @@ from typing import Any
 
 # Issue 2.4.3: Default timeout for component teardown (seconds).
 _TEARDOWN_TIMEOUT: float = 10.0
-
 # Issue 2.3.5: MemoryWriter factory + adapters (per-session)
 from k1.bus.adapters.fabric_adapter import FabricBusAdapter
 from k1.bus.async_bridge import AsyncBusBridge
 from k1.bus.factory import BusFactory
+from k1.bus.ports.bus import IBus
+from k1.bus.ports.mailbox import IMailboxRouter
 
 # Issue 2.3.4: Concierge factory + adapters (per-session)
 from k1.concierge.adapters.bus_input import BusInputAdapter
@@ -160,17 +161,22 @@ class KernelService:
         self._config: KernelConfig = config
 
         # Tier 1 shared components (populated during startup)
-        self._bus: Any | None = None  # IBus (sync LocalBus)
+        # Fields stay ``Any | None`` to keep partial-startup cleanup paths
+        # type-clean. Real enforcement happens at runtime in
+        # ``_validate_ports()`` via ``isinstance(...)`` against the bus
+        # subsystem Protocols and structural ``hasattr`` checks for the
+        # subsystems that have no Protocol surface here yet.
+        self._bus: Any | None = None  # IBus (sync LocalBus / RustBusAdapter)
         # Issue 2.1.4: async wrapper for direct async bus access.
         # Layer 1 adapters (FabricBusAdapter, SessionBusAdapter) get _bus (sync).
         # _async_bus is for components needing direct async bus operations.
         self._async_bus: Any | None = None  # AsyncBusBridge
         self._router: Any | None = None  # IMailboxRouter
         self._model_hub: Any | None = None  # ModelHub
-        self._shared_fabric: Any | None = None
-        self._bridge: Any | None = None
-        self._orchestrator: Any | None = None
-        self._planner: Any | None = None
+        self._shared_fabric: Any | None = None  # Fabric
+        self._bridge: Any | None = None  # IBridgeClient | None
+        self._orchestrator: Any | None = None  # OrchestratorService
+        self._planner: Any | None = None  # PlannerAgent
         self._planner_task: asyncio.Task[Any] | None = None
 
         # P4B.8: Shared Phase1 (UltraBERT) classification pipeline.
@@ -211,6 +217,16 @@ class KernelService:
     def async_bus(self) -> Any | None:
         """The async bus bridge (``AsyncBusBridge``), or ``None`` before startup."""
         return self._async_bus
+
+    @property
+    def orchestrator(self) -> Any | None:
+        """Shared OrchestratorService instance, or ``None`` before S5.
+
+        Public accessor for the Tier-1 orchestrator. Replaces external
+        reads of the ``_orchestrator`` private slot (e.g. the
+        ``start_kernel`` backward-compat facade in ``bootstrap.py``).
+        """
+        return self._orchestrator
 
     # ------------------------------------------------------------------
     # ILifecyclePort
@@ -389,7 +405,7 @@ class KernelService:
 
         # S1: Bus
         if self._bus is not None:
-            bus_closed = getattr(self._bus, "_closed", False)
+            bus_closed = bool(getattr(self._bus, "is_closed", False))
             components["bus"] = not bus_closed
             if bus_closed:
                 details["bus"] = "Bus is closed"
@@ -399,7 +415,7 @@ class KernelService:
 
         # S1: Router
         if self._router is not None:
-            router_closed = getattr(self._router, "_closed", False)
+            router_closed = bool(getattr(self._router, "is_closed", False))
             components["router"] = not router_closed
             if router_closed:
                 details["router"] = "Router is closed"
@@ -600,32 +616,43 @@ class KernelService:
         Issue 2.1.6: construction-time port type validation.
         Collects ALL failures and reports them together.
 
-        Checks performed (when component is not None):
-        - ``_bus``: duck-type ``publish`` + ``subscribe`` (IBus)
-        - ``_router``: duck-type ``register`` (IMailboxRouter)
-        - ``_model_hub``: duck-type ``execute`` (K1 ModelHub)
-        - ``_shared_fabric``: duck-type ``execute`` (CapabilityFabric)
-        - ``_bridge``: duck-type ``is_connected`` (Bridge client)
-        - ``_orchestrator``: duck-type ``process`` (OrchestratorService)
-        - ``_planner``: duck-type ``start`` (PlannerAgent)
+        Real ``isinstance()`` enforcement is used for components that
+        already publish a ``@runtime_checkable`` Protocol
+        (``IBus``, ``IMailboxRouter``). Components without a single
+        consolidated subsystem Protocol (ModelHub has 4 distinct
+        consumer-side Protocols, Fabric/Orchestrator/Planner are
+        concrete classes) fall back to structural ``hasattr`` checks
+        on the public methods the kernel itself calls.
 
         Raises:
             TypeError: If any component fails validation.  Message lists
                 every failing component.
         """
-        checks: list[tuple[str, object, str]] = [
-            # (field_name, value, required_attr)
-            ("_bus", self._bus, "publish"),
-            ("_bus", self._bus, "subscribe"),
-            ("_router", self._router, "register"),
+        failures: list[str] = []
+
+        # Strict isinstance() against published bus subsystem Protocols.
+        if self._bus is not None and not isinstance(self._bus, IBus):
+            failures.append(
+                f"Port validation failed: _bus ({type(self._bus).__name__}) "
+                f"does not satisfy k1.bus.ports.bus.IBus"
+            )
+        if self._router is not None and not isinstance(self._router, IMailboxRouter):
+            failures.append(
+                f"Port validation failed: _router "
+                f"({type(self._router).__name__}) does not satisfy "
+                f"k1.bus.ports.mailbox.IMailboxRouter"
+            )
+
+        # Structural checks for components without a unified Protocol.
+        # Each tuple is (field_name, value, required_attr).
+        structural_checks: list[tuple[str, object, str]] = [
             ("_model_hub", self._model_hub, "execute"),
             ("_shared_fabric", self._shared_fabric, "execute"),
             ("_bridge", self._bridge, "is_connected"),
             ("_orchestrator", self._orchestrator, "process"),
             ("_planner", self._planner, "start"),
         ]
-        failures: list[str] = []
-        for field_name, value, attr in checks:
+        for field_name, value, attr in structural_checks:
             if value is not None and not hasattr(value, attr):
                 failures.append(
                     f"Port validation failed: {field_name} "
@@ -721,56 +748,38 @@ class KernelService:
             )
 
     def _verify_planner_mailbox_binding(self) -> None:
-        """Issue 2.1.8: Verify Planner MailboxAdapter has PipelineController.
+        """Verify PlannerAgent's mailbox has its PipelineController bound.
 
-        PL-B2: ``MailboxAdapter`` (``k1/planner/adapters/mailbox_adapter.py``)
-        wraps an ``asyncio.Queue`` for inbound ``PlanRequest`` messages.  It
-        also exposes ``micro_replan()`` which delegates to a
-        ``PipelineController``.  The controller is injected via
-        ``set_pipeline_controller(controller)`` — a two-phase init pattern.
+        ``PlannerFactory._wire()`` (Step 8b) calls
+        ``mailbox_port.set_pipeline_controller(pipeline)`` so this verification
+        normally passes by construction. Kept as a defensive post-wire check
+        in case a custom factory or test harness builds the agent without
+        going through the standard wire path.
 
-        **CRITICAL**: ``PlannerFactory._wire()`` does **NOT** call
-        ``set_pipeline_controller()`` (verified by code audit — zero matches
-        in ``factory.py``).  The factory's docstring on ``MailboxAdapter``
-        claims it does, but it doesn't.  ``KernelService._startup_tier1()``
-        **MUST** call it explicitly::
-
-            planner._mailbox.set_pipeline_controller(planner._pipeline)
-
-        Without this, ``micro_replan()`` always raises
-        ``RuntimeError("PipelineController not set")``.
-
-        Traversal path (code-verified attribute names):
-            ``_planner``                → ``PlannerAgent``
-            ``_planner._mailbox``       → ``MailboxAdapter`` (IMailboxPort)
-            ``_planner._pipeline``      → ``PipelineController``
-            ``._mailbox._pipeline_controller`` → must equal ``._pipeline``
-
-        NOTE: Plan originally said attribute was ``_mailbox_adapter`` — actual
-        attribute is ``_mailbox``.  Plan said ``_controller`` — actual is
-        ``_pipeline_controller``.
+        Uses the public ``mailbox`` property on ``PlannerAgent`` and
+        ``has_pipeline_controller()`` if available, otherwise duck-types
+        for ``_pipeline_controller`` attribute existence.
 
         Raises:
-            RuntimeError: If ``_planner`` is None, ``_mailbox`` is missing,
-                or ``_pipeline_controller`` is not set on the mailbox.
+            RuntimeError: If ``_planner`` is None or the controller is
+                not bound on the mailbox.
         """
         if self._planner is None:
             raise RuntimeError(
                 "Cannot verify MailboxAdapter binding: _planner is None. "
                 "Tier 1 startup (Issue 2.2.6) must run first."
             )
-        mailbox = getattr(self._planner, "_mailbox", None)
-        if mailbox is None:
+        mailbox = self._planner.mailbox
+        bound = False
+        if hasattr(mailbox, "has_pipeline_controller"):
+            bound = bool(mailbox.has_pipeline_controller())
+        else:
+            bound = getattr(mailbox, "_pipeline_controller", None) is not None
+        if not bound:
             raise RuntimeError(
-                "Cannot verify MailboxAdapter binding: " "_planner._mailbox is None."
-            )
-        pipeline_controller = getattr(mailbox, "_pipeline_controller", None)
-        if pipeline_controller is None:
-            raise RuntimeError(
-                "MailboxAdapter._pipeline_controller is None after "
-                "Planner construction.  PL-B2 two-phase init incomplete — "
-                "call mailbox.set_pipeline_controller(planner._pipeline) "
-                "in _startup_tier1()."
+                "MailboxAdapter pipeline controller not bound after "
+                "Planner construction. PlannerFactory._wire() Step 8b "
+                "should have called set_pipeline_controller()."
             )
 
     def _verify_planner_task_running(self) -> None:
@@ -1038,16 +1047,17 @@ class KernelService:
             provider_id="planner",
             config=CircuitBreakerConfig(),
         )
-        self._orchestrator._planner_port = PlannerAdapter(
-            planner_mailbox=self._planner.get_mailbox(),
-            cb_planner=planner_cb,
+        self._orchestrator.bind_planner(
+            PlannerAdapter(
+                planner_mailbox=self._planner.get_mailbox(),
+                cb_planner=planner_cb,
+            )
         )
 
         # ── S7: Start Planner Background Task ─────────────
+        # Note: PlannerFactory now wires mailbox.set_pipeline_controller()
+        # internally (Step 8b). Kernel only needs to spawn the task.
         try:
-            self._planner._mailbox.set_pipeline_controller(
-                self._planner._pipeline,
-            )
             self._planner_task = asyncio.create_task(
                 self._planner.start(),
                 name="planner-agent",
@@ -1436,22 +1446,20 @@ class KernelService:
             fabric=session_fabric,
             concierge=session_concierge,
             memory_writer=session_memory_writer,
-            front_dispatcher=session_concierge._front_dispatcher,
-            back_dispatcher=session_concierge._back_dispatcher,
+            front_dispatcher=session_concierge.front_dispatcher,
+            back_dispatcher=session_concierge.back_dispatcher,
             experience_layer=session_concierge.experience_layer,
             delta_aggregator=session_concierge.delta_aggregator,
             delta_applicator=None,
             hitl_coordinator=session_concierge.hitl_coordinator,
-            consumer_task=session_concierge._consumer_task,
+            consumer_task=session_concierge.consumer_task,
             dead_letter_consumer=session_concierge.dead_letter_consumer,
             created_at=datetime.now(timezone.utc),
             front_ctx=session_concierge.front_ctx,
             back_ctx=session_concierge.back_ctx,
             ledger=session_concierge.ledger,
-            ledger_store=getattr(session_concierge, "_ledger_store", None),
-            concierge_task=session_concierge._consumer_task,
+            ledger_store=session_concierge.ledger_store,
+            concierge_task=session_concierge.consumer_task,
         )
-        self._sessions[session_id] = session
-        return session
         self._sessions[session_id] = session
         return session

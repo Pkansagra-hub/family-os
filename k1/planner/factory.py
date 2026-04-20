@@ -558,6 +558,13 @@ class PlannerFactory:
             config=config,
         )
 
+        # Step 8b: Bind pipeline into mailbox so micro_replan() can dispatch
+        # back into the running pipeline. Previously this was done by the
+        # kernel reaching into agent._mailbox / agent._pipeline; now the
+        # factory owns this wiring step.
+        if hasattr(mailbox_port, "set_pipeline_controller"):
+            mailbox_port.set_pipeline_controller(pipeline)
+
         # Note: start() is NOT called here.  It enters an infinite
         # dequeue loop (_run_loop) and would block forever.  The caller
         # must spawn start() as a background task:

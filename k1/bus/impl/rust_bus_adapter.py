@@ -276,6 +276,11 @@ class RustBusAdapter:
         """True if the bus has been closed."""
         return self._bus.is_closed
 
+    @property
+    def is_closed(self) -> bool:
+        """Public alias of ``closed`` to satisfy ``IBus.is_closed``."""
+        return self._bus.is_closed
+
     # ------------------------------------------------------------------
     # Observability
     # ------------------------------------------------------------------

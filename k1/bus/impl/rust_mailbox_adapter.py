@@ -241,6 +241,11 @@ class RustMailboxRouterAdapter:
         return self._router.closed
 
     @property
+    def is_closed(self) -> bool:
+        """Public alias of ``closed`` to satisfy ``IMailboxRouter.is_closed``."""
+        return self._router.closed
+
+    @property
     def actor_count(self) -> int:
         """Number of registered actors."""
         return self._router.actor_count

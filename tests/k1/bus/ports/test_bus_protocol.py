@@ -63,6 +63,13 @@ class _ConformingBus:
     def flush(self, timeout_ms: int = 5000) -> bool:
         return True
 
+    def close(self) -> None:
+        pass
+
+    @property
+    def is_closed(self) -> bool:
+        return False
+
 
 class _NonConformingBus:
     """Class that does NOT satisfy IBus -- missing unsubscribe."""

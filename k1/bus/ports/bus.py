@@ -167,3 +167,20 @@ class IBus(Protocol):
             should define it explicitly.
         """
         ...
+
+    def close(self) -> None:
+        """Shut the bus down. Subsequent ``publish`` calls MUST be rejected.
+
+        Idempotent: a second call MUST be a no-op.
+        """
+        ...
+
+    @property
+    def is_closed(self) -> bool:
+        """Public closed-state accessor.
+
+        Replaces external reads of the impl-private ``_closed`` slot so
+        callers (kernel health-check, tests) do not have to reach into
+        adapter internals.
+        """
+        ...

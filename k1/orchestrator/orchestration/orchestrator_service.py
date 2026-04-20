@@ -377,6 +377,32 @@ class OrchestratorService:
         return self._running
 
     # ======================================================================
+    # Cross-wiring (S6b)
+    # ======================================================================
+
+    def bind_planner(self, planner_port: IPlannerPort) -> None:
+        """Replace the planner port (S6b cross-wire).
+
+        Construction-time default is ``MockPlannerAdapter``. After the
+        real Planner has started, the kernel calls ``bind_planner()``
+        with a live ``PlannerAdapter`` so HIGH-tier requests are routed
+        to the real Planner mailbox.
+
+        Args:
+            planner_port: The new ``IPlannerPort`` implementation.
+
+        Raises:
+            TypeError: If ``planner_port`` does not satisfy
+                ``IPlannerPort`` (runtime-checked Protocol).
+        """
+        if not isinstance(planner_port, IPlannerPort):
+            raise TypeError(
+                f"bind_planner: expected IPlannerPort, got "
+                f"{type(planner_port).__name__}"
+            )
+        self._planner_port = planner_port
+
+    # ======================================================================
     # Lifecycle: init() -- 10-step startup sequence (6.2.2)
     # ======================================================================
 

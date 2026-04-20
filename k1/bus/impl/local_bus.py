@@ -814,9 +814,7 @@ class LocalBus:
 
             # Track for replay_durable_topics()
             with self._durable_consumers_lock:
-                self._durable_consumers.setdefault(cid, []).append(
-                    (pattern, _acking_handler)
-                )
+                self._durable_consumers.setdefault(cid, []).append((pattern, _acking_handler))
 
         # Async-dispatch path: wrap handler in a per-sub mailbox + worker.
         # The trie sees the mailbox-enqueue closure as the "handler".
@@ -1021,6 +1019,11 @@ class LocalBus:
         """True if the bus has been closed."""
         return self._closed
 
+    @property
+    def is_closed(self) -> bool:
+        """Public alias of ``closed`` to satisfy ``IBus.is_closed``."""
+        return self._closed
+
     # ------------------------------------------------------------------
     # Durability replay (P6.13)
     # ------------------------------------------------------------------
@@ -1052,9 +1055,7 @@ class LocalBus:
 
         with self._durable_consumers_lock:
             if consumer_id is not None:
-                items = [
-                    (consumer_id, list(self._durable_consumers.get(consumer_id, [])))
-                ]
+                items = [(consumer_id, list(self._durable_consumers.get(consumer_id, [])))]
             else:
                 items = [(cid, list(subs)) for cid, subs in self._durable_consumers.items()]
 

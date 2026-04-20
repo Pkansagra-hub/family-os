@@ -426,21 +426,24 @@ class TestPortValidation:
         svc._validate_ports()  # no raise
 
     def test_correct_bus_passes(self) -> None:
-        """Bus with publish + subscribe passes."""
+        """Bus satisfying IBus Protocol passes isinstance check."""
+        from k1.bus.ports.bus import IBus
+
         svc = KernelService(config=KernelConfig())
-        mock_bus = MagicMock(spec=["publish", "subscribe", "unsubscribe"])
-        svc._bus = mock_bus
+        # MagicMock(spec=IBus) auto-supplies every IBus method so the
+        # @runtime_checkable Protocol isinstance() succeeds.
+        svc._bus = MagicMock(spec=IBus)
         svc._validate_ports()
 
     def test_bus_missing_publish_fails(self) -> None:
-        """Bus without publish raises TypeError."""
+        """Bus that does not satisfy IBus raises TypeError."""
         svc = KernelService(config=KernelConfig())
-        svc._bus = object()  # no publish/subscribe
-        with pytest.raises(TypeError, match="_bus.*missing.*publish"):
+        svc._bus = object()  # raw object — fails isinstance(IBus)
+        with pytest.raises(TypeError, match="_bus.*does not satisfy"):
             svc._validate_ports()
 
     def test_bus_missing_subscribe_fails(self) -> None:
-        """Bus without subscribe raises TypeError."""
+        """Bus exposing only publish still fails IBus isinstance."""
         svc = KernelService(config=KernelConfig())
 
         class FakeBus:
@@ -449,13 +452,13 @@ class TestPortValidation:
             # no subscribe
 
         svc._bus = FakeBus()
-        with pytest.raises(TypeError, match="_bus.*missing.*subscribe"):
+        with pytest.raises(TypeError, match="_bus.*does not satisfy"):
             svc._validate_ports()
 
     def test_router_missing_register_fails(self) -> None:
         svc = KernelService(config=KernelConfig())
         svc._router = object()
-        with pytest.raises(TypeError, match="_router.*missing.*register"):
+        with pytest.raises(TypeError, match="_router.*does not satisfy"):
             svc._validate_ports()
 
     def test_model_hub_missing_execute_fails(self) -> None:
@@ -503,9 +506,12 @@ class TestPortValidation:
 
     def test_correct_components_all_pass(self) -> None:
         """All Tier 1 components with correct attributes pass."""
+        from k1.bus.ports.bus import IBus
+        from k1.bus.ports.mailbox import IMailboxRouter
+
         svc = KernelService(config=KernelConfig())
-        svc._bus = MagicMock(spec=["publish", "subscribe"])
-        svc._router = MagicMock(spec=["register"])
+        svc._bus = MagicMock(spec=IBus)
+        svc._router = MagicMock(spec=IMailboxRouter)
         svc._model_hub = MagicMock(spec=["execute"])
         svc._shared_fabric = MagicMock(spec=["execute"])
         svc._bridge = MagicMock(spec=["is_connected"])
@@ -612,22 +618,28 @@ class TestPlannerMailboxBinding:
 
     def test_raises_when_mailbox_attr_missing(self) -> None:
         svc = KernelService(config=KernelConfig())
-        svc._planner = object()  # no _mailbox attr
-        with pytest.raises(RuntimeError, match="_planner._mailbox is None"):
+        svc._planner = object()  # no mailbox property
+        with pytest.raises(AttributeError):
             svc._verify_planner_mailbox_binding()
 
     def test_raises_when_pipeline_controller_none(self) -> None:
         svc = KernelService(config=KernelConfig())
-        mailbox = MagicMock(_pipeline_controller=None)
-        svc._planner = MagicMock(_mailbox=mailbox)
-        with pytest.raises(RuntimeError, match="two-phase init incomplete"):
+        # Mailbox without has_pipeline_controller and with
+        # _pipeline_controller=None must be reported as not bound.
+        mailbox = MagicMock(spec=["_pipeline_controller"])
+        mailbox._pipeline_controller = None
+        svc._planner = MagicMock(spec=["mailbox"])
+        svc._planner.mailbox = mailbox
+        with pytest.raises(RuntimeError, match="not bound"):
             svc._verify_planner_mailbox_binding()
 
     def test_passes_when_pipeline_controller_set(self) -> None:
         svc = KernelService(config=KernelConfig())
         controller = MagicMock()
-        mailbox = MagicMock(_pipeline_controller=controller)
-        svc._planner = MagicMock(_mailbox=mailbox)
+        mailbox = MagicMock(spec=["_pipeline_controller"])
+        mailbox._pipeline_controller = controller
+        svc._planner = MagicMock(spec=["mailbox"])
+        svc._planner.mailbox = mailbox
         svc._verify_planner_mailbox_binding()  # no raise
 
     def test_method_exists_and_is_sync(self) -> None:
@@ -638,13 +650,14 @@ class TestPlannerMailboxBinding:
         """Verify traversal uses code-verified names, not plan's wrong names."""
         svc = KernelService(config=KernelConfig())
         controller = MagicMock()
-        mailbox = MagicMock(_pipeline_controller=controller)
-        planner = MagicMock(_mailbox=mailbox)
+        mailbox = MagicMock(spec=["_pipeline_controller"])
+        mailbox._pipeline_controller = controller
+        planner = MagicMock(spec=["mailbox"])
+        planner.mailbox = mailbox
         svc._planner = planner
         svc._verify_planner_mailbox_binding()
-        # Ensure it accessed _mailbox (not _mailbox_adapter)
-        # and _pipeline_controller (not _controller)
-        assert getattr(planner, "_mailbox") is mailbox
+        # Ensure it accessed mailbox (public property) and _pipeline_controller
+        assert getattr(planner, "mailbox") is mailbox
         assert getattr(mailbox, "_pipeline_controller") is controller
 
 
@@ -3126,7 +3139,7 @@ class TestDestroySession:
         session = await kernel.create_session("test-1")
         router = session.router
         await kernel.destroy_session("test-1")
-        assert getattr(router, "_closed", None) is True
+        assert getattr(router, "is_closed", None) is True
 
     # -- Error cases --
 
@@ -3262,7 +3275,7 @@ class TestShutdown:
         router = kernel._router
         assert router is not None
         await kernel.shutdown()
-        assert getattr(router, "_closed", None) is True
+        assert getattr(router, "is_closed", None) is True
 
     # -- Full lifecycle --
 

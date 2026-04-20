@@ -81,6 +81,14 @@ class ILifecyclePort(Protocol):
         """
         ...  # pragma: no cover
 
+    @property
     def is_running(self) -> bool:
-        """Check whether the kernel has completed startup."""
+        """Check whether the kernel has completed startup.
+
+        Exposed as a ``@property`` so callers can use plain attribute
+        access (``svc.is_running``) without the parentheses footgun.
+        ``KernelService`` matches this shape; alternative implementations
+        SHOULD also expose ``is_running`` as a property to preserve a
+        single calling convention.
+        """
         ...  # pragma: no cover
