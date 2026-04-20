@@ -543,17 +543,35 @@ class SessionStateManager:
         )
 
         # Initialize engines with dependencies
+        # NOTE: section_provider=None is a known production gap (Audit Fix J).
+        # Both EvictionEngine and MigrationEngine will fall back to placeholder
+        # behavior in this state — eviction emits stub bytes and migration
+        # cannot move real data between HOT and WARM tiers. Closing this gap
+        # requires a SectionDataAdapter that implements both
+        # IEvictionSectionProvider and IMigrationSectionProvider against the
+        # HotTier / WarmTier / LocalColdTier objects below. Until then, any
+        # CRITICAL/EMERGENCY pressure path will only log + free metadata.
         self._eviction_engine = EvictionEngine(
             size_tracker=self._size_tracker,
             local_cold=self._local_cold_archive,
             mutation_guard=self._mutation_guard,
             session_id=session_id,
+            section_provider=None,  # TODO(audit-J): wire SectionDataAdapter
         )
 
         self._migration_engine = MigrationEngine(
             size_tracker=self._size_tracker,
             mutation_guard=self._mutation_guard,
             session_id=session_id,
+            section_provider=None,  # TODO(audit-J): wire SectionDataAdapter
+        )
+
+        logger.warning(
+            "SessionStateManager(session=%s): tier engines constructed without "
+            "section_provider — HOT->WARM migration and CRITICAL eviction will "
+            "operate in placeholder mode (no real section data movement). "
+            "See audit Fix J in docs/edge_enhancement_opportunities.md.",
+            session_id[:8] if session_id else "none",
         )
 
         logger.info(
