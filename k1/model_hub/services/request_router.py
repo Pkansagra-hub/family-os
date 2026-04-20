@@ -44,6 +44,7 @@ from k1.model_hub.types import (
     BudgetDecision,
     BudgetExceededError,
     CapabilityType,
+    FinishReason,
     HubChunk,
     HubRequest,
     HubResponse,
@@ -422,6 +423,7 @@ class RequestRouter:
         fallback_ids = [f.provider_id for f in choice.fallback_chain]
 
         accumulated_text = ""
+        accumulated_tool_calls: list[Any] = []
         async for chunk in self._dispatcher.stream(
             normalized,
             choice.provider_id,
@@ -429,8 +431,10 @@ class RequestRouter:
             token_estimate=request.constraints.max_tokens,
         ):
             accumulated_text += chunk.text
+            if chunk.tool_calls:
+                accumulated_tool_calls.extend(chunk.tool_calls)
             if chunk.done:
-                # Final chunk -- build metadata
+                # Final chunk -- build metadata with accumulated content
                 metadata = ResponseMetadata(
                     request_id=request.request_id,
                     model_id=choice.model_id,
@@ -441,12 +445,17 @@ class RequestRouter:
                     cache_hit=False,
                     capability=request.capability,
                     trace_id=request.trace_id,
+                    finish_reason=(
+                        FinishReason.TOOL_CALLS
+                        if accumulated_tool_calls
+                        else FinishReason.STOP
+                    ),
                 )
                 yield HubChunk(
-                    content=chunk.text,
+                    content=accumulated_text,
                     done=True,
                     metadata=metadata,
-                    tool_calls=chunk.tool_calls,
+                    tool_calls=accumulated_tool_calls or None,
                 )
             else:
                 yield HubChunk(content=chunk.text, done=False)

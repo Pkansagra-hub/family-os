@@ -825,6 +825,58 @@ class KernelService:
                 "PL-B1: agent.start() should run indefinitely."
             )
 
+    async def _register_model_hub_plugins_from_env(self) -> None:
+        """Register Model Hub provider plugins based on env-var credentials.
+
+        Pragmatic bootstrapping shim. The Model Hub factory accepts a
+        ``plugins`` dict but only wires it into the dispatcher — the
+        provider registry (which drives capability routing) is left empty.
+        Until a cleaner factory API exists, reach into ``_registry`` and
+        ``_router._dispatcher`` after construction and register each plugin
+        whose API key is present in the environment.
+
+        Supported today: Google (``GOOGLE_API_KEY``).
+        """
+        import os
+        from pathlib import Path
+
+        from k1.model_hub.manifest import load_manifest
+
+        hub = self._model_hub
+        if hub is None:
+            return
+        registry = getattr(hub, "_registry", None)
+        router = getattr(hub, "_router", None)
+        dispatcher = getattr(router, "_dispatcher", None) if router else None
+        if registry is None or dispatcher is None:
+            logger.warning(
+                "ModelHub plugin registration skipped: registry/dispatcher "
+                "not reachable on hub instance (type=%s)",
+                type(hub).__name__,
+            )
+            return
+
+        manifest_dir = Path(__file__).resolve().parents[1] / "config" / "providers"
+
+        google_key = os.environ.get("GOOGLE_API_KEY")
+        if google_key:
+            try:
+                from k1.model_hub.plugins.google_plugin import GooglePlugin
+
+                manifest = load_manifest(manifest_dir / "google.manifest.yaml")
+                plugin = GooglePlugin()
+                await plugin.initialize(manifest)
+                plugin.set_api_key(google_key)
+                registry.register(manifest, plugin)
+                dispatcher.register_plugin(manifest.provider_id, plugin)
+                logger.info(
+                    "ModelHub: registered Google plugin (provider=%s, models=%d)",
+                    manifest.provider_id,
+                    len(manifest.models),
+                )
+            except Exception as exc:  # pragma: no cover -- best-effort wiring
+                logger.warning("Failed to register Google plugin: %s", exc)
+
     def _verify_planner_orchestrator_crosswire(self) -> None:
         """Issue 2.1.9 (S6b): Verify Orchestrator↔Planner cross-wire.
 
@@ -908,6 +960,13 @@ class KernelService:
                     "config_port": ConfigAdapter(),
                 },
             )
+            # ── Register provider plugins driven by environment keys ──
+            # TODO(wiring): replace env-var probing with ``cfg.model_hub_plugins``
+            # once a per-plugin manifest/credential map exists. For now this
+            # unblocks --model-hub by registering Google when GOOGLE_API_KEY
+            # is present (and OpenAI/Anthropic analogously if their keys exist).
+            if self._config.model_mode == "hub":
+                await self._register_model_hub_plugins_from_env()
         except Exception:
             # S1 created — clean up.
             self._bus.close()
@@ -1284,8 +1343,13 @@ class KernelService:
         # ── P1: Per-session Bus + Mailboxes ───────────────────
         session_bus = BusFactory.create_local_ordered(capture=False)
         session_router = BusFactory.create_mailbox_router()
-        front_mailbox = session_router.register(f"front_{session_id}")
-        back_mailbox = session_router.register(f"back_{session_id}")
+        # Use canonical ACTOR_FRONT / ACTOR_BACK constants: the router is
+        # already per-session (so names don't need a session_id suffix),
+        # and ConciergeController._deliver_to_{front,back} hard-codes
+        # these names via k1.concierge.bus.setup.
+        from k1.concierge.bus.setup import ACTOR_BACK, ACTOR_FRONT
+        front_mailbox = session_router.register(ACTOR_FRONT)
+        back_mailbox = session_router.register(ACTOR_BACK)
 
         # ── P2: SessionState (per-session) ─────────────────────
         ssm = None

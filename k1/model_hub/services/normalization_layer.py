@@ -30,6 +30,7 @@ from k1.model_hub.types import (
     CachePromptPayload,
     CapabilityType,
     ChatPayload,
+    ChatResult,
     CodeExecPayload,
     EmbedPayload,
     HubRequest,
@@ -38,11 +39,14 @@ from k1.model_hub.types import (
     Message,
     ModeratePayload,
     ReasonPayload,
+    ReasonResult,
     ResponseMetadata,
     StructuredOutputPayload,
+    StructuredResult,
     TokenCountPayload,
     TokenUsage,
     ToolCallPayload,
+    ToolCallResultSet,
     TTSPayload,
     VisionPayload,
     WebSearchPayload,
@@ -366,18 +370,25 @@ class NormalizationLayer:
     ) -> Any:
         """Build capability-appropriate result from provider response.
 
-        For most capabilities, the result is the text. For TOOL_CALL,
-        it includes tool_calls. Extensible per capability.
+        Emits typed result dataclasses (``ChatResult``/``ToolCallResultSet``/
+        ``StructuredResult``/``ReasonResult``) expected by downstream
+        consumers (concierge ``_unwrap_response``).
         """
-        if capability == CapabilityType.TOOL_CALL and response.tool_calls:
-            return {
-                "text": response.text,
-                "tool_calls": [
-                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-                    for tc in response.tool_calls
-                ],
-            }
-        return response.text
+        if capability == CapabilityType.TOOL_CALL:
+            return ToolCallResultSet(
+                text=response.text or "",
+                tool_calls=list(response.tool_calls or []),
+            )
+        if capability == CapabilityType.STRUCTURED:
+            raw = response.raw_response or {}
+            return StructuredResult(json_output=raw.get("json_output", {}))
+        if capability == CapabilityType.REASON:
+            raw = response.raw_response or {}
+            return ReasonResult(
+                text=response.text or "",
+                thinking=raw.get("thought_text", ""),
+            )
+        return ChatResult(text=response.text or "")
 
 
 __all__ = [

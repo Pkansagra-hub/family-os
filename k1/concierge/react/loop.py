@@ -36,11 +36,11 @@ from k1.concierge.task.parallel_safety import classify_tool_batch
 from k1.concierge.tools.dispatcher import ToolDispatcher
 from k1.concierge.tools.result_protocol import ToolResult
 from k1.model_hub.ports import IModelHubPort
-from k1.model_hub.types import CapabilityType, ChatPayload
+from k1.model_hub.types import CapabilityType, ChatPayload, ChatResult
 from k1.model_hub.types import FinishReason as K1FinishReason
 from k1.model_hub.types import HubChunk, HubRequest, HubResponse
 from k1.model_hub.types import Message as K1Message
-from k1.model_hub.types import ReasonResult, RequestConstraints, StructuredResult, ToolCallPayload
+from k1.model_hub.types import ReasonResult, RequestConstraints, ResponseMetadata, StructuredResult, TokenUsage, ToolCallPayload
 from k1.model_hub.types import ToolCallResult as K1ToolCallResult
 from k1.model_hub.types import ToolCallResultSet
 from k1.model_hub.types import ToolDefinition as K1ToolDefinition
@@ -130,19 +130,55 @@ def _unwrap_response(hub_resp: HubResponse) -> ConciergeModelResponse:
 
 
 def _unwrap_chunk(hub_chunk: HubChunk) -> StreamChunk:
-    """Convert K1 HubChunk to POC StreamChunk for on_stream callbacks."""
-    if hub_chunk.chunk_type == "done" and hub_chunk.response:
-        return StreamChunk(chunk_type="done", response=_unwrap_response(hub_chunk.response))
-    tc_partial = None
-    if hub_chunk.tool_call_partial:
-        tc = hub_chunk.tool_call_partial
-        tc_partial = ToolCallResult(id=tc.id, name=tc.name, arguments=tc.arguments)
-    return StreamChunk(
-        chunk_type=hub_chunk.chunk_type,
-        text=hub_chunk.text,
-        tool_call_partial=tc_partial,
-        thought_text=hub_chunk.thought_text,
-    )
+    """Convert K1 HubChunk to POC StreamChunk for on_stream callbacks.
+
+    HubChunk has fields ``content``, ``done``, ``metadata``, ``tool_calls``
+    (see ``k1/model_hub/types.py``). The concierge ``StreamChunk`` has a
+    richer ``chunk_type`` taxonomy (``text_delta``/``tool_call_delta``/
+    ``done``), so we derive chunk_type from the HubChunk shape:
+
+    - ``done=True``                → build a full ConciergeModelResponse
+    - ``tool_calls`` non-empty     → ``tool_call_delta`` with first call
+    - otherwise (text present)     → ``text_delta`` with ``content``
+    """
+    if hub_chunk.done:
+        # Build a synthetic HubResponse so we can reuse _unwrap_response.
+        tool_calls = hub_chunk.tool_calls or []
+        if tool_calls:
+            result: Any = ToolCallResultSet(text=hub_chunk.content, tool_calls=tool_calls)
+        else:
+            result = ChatResult(text=hub_chunk.content)
+        metadata = hub_chunk.metadata
+        if metadata is None:
+            # Synthesize a minimal metadata block. _unwrap_response reads
+            # finish_reason, model_id, usage.* and latency_ms.
+            metadata = ResponseMetadata(
+                request_id="",
+                model_id="",
+                provider_id="",
+                usage=TokenUsage(),
+                cost_usd=0.0,
+                latency_ms=0,
+                cache_hit=False,
+                capability=CapabilityType.CHAT,
+                trace_id="",
+                finish_reason=(
+                    K1FinishReason.TOOL_CALLS if tool_calls else K1FinishReason.STOP
+                ),
+            )
+        hub_resp = HubResponse(result=result, metadata=metadata)
+        return StreamChunk(chunk_type="done", response=_unwrap_response(hub_resp))
+
+    if hub_chunk.tool_calls:
+        tc = hub_chunk.tool_calls[0]
+        return StreamChunk(
+            chunk_type="tool_call_delta",
+            tool_call_partial=ToolCallResult(
+                id=tc.id, name=tc.name, arguments=tc.arguments
+            ),
+        )
+
+    return StreamChunk(chunk_type="text_delta", text=hub_chunk.content)
 
 
 # =========================================================================

@@ -2549,8 +2549,9 @@ class TestP4ConciergeWiring:
             # P1
             s_bus = BusFactory.create_local_ordered(capture=False)
             s_router = BusFactory.create_mailbox_router()
-            front_mb = s_router.register(f"front_{session_id}")
-            back_mb = s_router.register(f"back_{session_id}")
+            from k1.concierge.bus.setup import ACTOR_BACK, ACTOR_FRONT
+            front_mb = s_router.register(ACTOR_FRONT)
+            back_mb = s_router.register(ACTOR_BACK)
 
             # P2
             ss_storage = SQLiteStorageAdapter(db_path=self._config.sessionstate_db_path)
