@@ -927,36 +927,21 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
             depends_on,
         )
         depends_on = None
-    tier_raw = args.get("tier", "AUTO")
-    # M10 E10.3.1: AUTO reads tier from SS control section
-    if str(tier_raw).upper() == "AUTO" and ctx.session_manager is not None:
-        try:
-            control = ctx.session_manager.get_section("control")
-            if control is not None and hasattr(control, "get_complexity_tier"):
-                ss_tier = control.get_complexity_tier()
-                if ss_tier:
-                    tier_raw = ss_tier
-                else:
-                    tier_raw = "LOW"
-                    logger.warning(
-                        "tool:dispatch_task  no complexity_tier in SS, defaulting to LOW"
-                    )
-            else:
-                tier_raw = "LOW"
-        except Exception:
-            logger.warning(
-                "tool:dispatch_task  failed to read SS tier, defaulting to LOW",
-                exc_info=True,
-            )
-            tier_raw = "LOW"
-    elif str(tier_raw).upper() == "AUTO":
-        tier_raw = "LOW"
-        logger.warning("tool:dispatch_task  AUTO tier but no session_manager, defaulting to LOW")
+
+    # P3.3: Derive complexity tier from `plan: bool` arg + structural signals.
+    # Replaces the old AUTO-from-SS path (M10 E10.3.1). The LLM sets `plan=true`
+    # when multi-step coordination is required; multi-intent and depends_on
+    # auto-escalate to plan tier even without an explicit flag.
+    explicit_plan = bool(args.get("plan", False))
+    needs_plan = explicit_plan or len(intents) > 1 or depends_on is not None
+    tier = ComplexityTier.MEDIUM if needs_plan else ComplexityTier.LOW
+
     logger.info(
-        "tool:dispatch_task  intents=%d urgency=%s tier=%s safety=%s",
+        "tool:dispatch_task  intents=%d urgency=%s tier=%s plan=%s safety=%s",
         len(intents),
         urgency,
-        tier_raw,
+        tier.value,
+        needs_plan,
         safety_band,
     )
 
@@ -971,15 +956,6 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
             tool_name="dispatch_task",
             status="error",
             error="intents array is required and must not be empty",
-        )
-
-    try:
-        tier = ComplexityTier(str(tier_raw).upper())
-    except ValueError:
-        return ToolResult(
-            tool_name="dispatch_task",
-            status="error",
-            error=f"invalid tier '{tier_raw}' (expected LOW, MEDIUM, or HIGH)",
         )
 
     normalized_intents: list[TaskIntent] = []
@@ -1016,6 +992,8 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
         if idx < len(normalized_intents):
             intent_payload.setdefault("urgency", normalized_intents[idx].urgency)
     dispatch_payload["urgency"] = urgency
+    # P3.3: surface the derived plan flag for downstream telemetry/observers.
+    dispatch_payload["plan"] = needs_plan
 
     return ToolResult(
         tool_name="dispatch_task",

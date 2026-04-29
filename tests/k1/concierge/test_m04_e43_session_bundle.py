@@ -11,13 +11,13 @@ Test count target: ~20 tests.
 
 from __future__ import annotations
 
-from k1.sessionstate.factory import SessionStateFactory
 from k1.concierge.tools.implementations import (
     TOOL_REGISTRY,
     ToolContext,
     execute_update_session_bundle,
 )
 from k1.concierge.tools.schemas_front import FRONT_TOOL_SCHEMAS, UPDATE_SESSION_BUNDLE_SCHEMA
+from k1.sessionstate.factory import SessionStateFactory
 
 # =========================================================================
 # Helpers
@@ -70,8 +70,8 @@ class TestBundleToolRegistration:
         assert "update_session_bundle" in names
 
     def test_schema_front_tool_count(self) -> None:
-        """FRONT_TOOL_SCHEMAS now has 10 schemas (9 original + 1 bundle)."""
-        assert len(FRONT_TOOL_SCHEMAS) == 10
+        """FRONT_TOOL_SCHEMAS has 12 schemas (9 original + 1 bundle + 2 P1.1 Fabric)."""
+        assert len(FRONT_TOOL_SCHEMAS) == 12
 
     def test_schema_is_cognitive_category(self) -> None:
         """Bundle tool is in the cognitive category."""

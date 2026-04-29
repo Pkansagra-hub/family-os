@@ -24,12 +24,18 @@ References
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from k1.model_hub.loader import ProviderConfig, ProviderLoadResult
 
 from k1.model_hub.adapters.credential_store_adapter import CredentialStoreAdapter
 from k1.model_hub.adapters.health_report_adapter import HealthReportAdapter
 from k1.model_hub.config import ModelHubConfig
+from k1.model_hub.manifest import ProviderManifest
 from k1.model_hub.plugins.base import IProviderPlugin
 from k1.model_hub.ports.config_port import IConfigPort
 from k1.model_hub.ports.credential_port import ICredentialPort
@@ -39,10 +45,8 @@ from k1.model_hub.ports.hub_port import IModelHubPort
 from k1.model_hub.ports.metrics_port import IMetricsPort
 from k1.model_hub.ports.state_read_port import IStateReadPort
 from k1.model_hub.services.audit_logger import AuditLogger
-from k1.model_hub.services.budget_enforcer import BudgetEnforcer
 from k1.model_hub.services.capability_router import CapabilityRouter
 from k1.model_hub.services.circuit_breaker_manager import CircuitBreakerManager
-from k1.model_hub.services.cost_tracker import CostTracker
 from k1.model_hub.services.model_selector import ModelSelector
 from k1.model_hub.services.normalization_layer import NormalizationLayer
 from k1.model_hub.services.provider_dispatcher import ProviderDispatcher
@@ -61,6 +65,10 @@ from k1.model_hub.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Per-plugin timeout for ``_HubCore.shutdown`` plugin draining.
+_PLUGIN_CLOSE_TIMEOUT_S: float = 5.0
 
 
 # ===========================================================================
@@ -106,6 +114,26 @@ class _HubCore:
         self._registry = registry
         self._health = health_adapter
 
+    def register_plugin(
+        self,
+        manifest: ProviderManifest,
+        plugin: IProviderPlugin,
+    ) -> None:
+        """Register a provider plugin with both registry and dispatcher.
+
+        P0.1 minimal shim: the public ``ModelHubFactory.create_with_ports``
+        ``plugins=`` argument only populates the dispatcher's plugin map and
+        leaves the registry's capability index empty, which causes
+        ``NoEligibleProviderError`` for every request. This method does both
+        sides of the registration in one call so callers (currently only
+        ``k1.kernel.service._register_model_hub_plugins_from_env``) do not
+        have to reach into private attributes.
+
+        Superseded by P2's declarative ``ProviderLoader`` + ``from_config``.
+        """
+        self._registry.register(manifest, plugin)
+        self._router._dispatcher.register_plugin(manifest.provider_id, plugin)
+
     async def execute(self, request: HubRequest) -> HubResponse:
         return await self._router.route(request)
 
@@ -143,6 +171,34 @@ class _HubCore:
     async def health(self) -> HubHealthReport:
         report = self._health.check_health()
         return HubHealthReport(status=report.status)
+
+    async def shutdown(self) -> None:
+        """Drain registered plugins. Idempotent. Never raises.
+
+        Iterates the dispatcher's plugin store, calls ``await plugin.close()``
+        on each under a per-plugin timeout, gathers with ``return_exceptions``,
+        logs exceptions at WARNING. Safe to call multiple times -- each
+        plugin's ``close()`` is idempotent (guards with ``_session.closed``
+        or ``_client is None``).
+
+        NOTE: reaches into ``self._router._dispatcher._plugins`` directly.
+        Same private-attr seam as ``register_plugin``; cleaned up in P2.3.
+        """
+        plugins = list(self._router._dispatcher._plugins.values())
+        if not plugins:
+            return
+        results = await asyncio.gather(
+            *[asyncio.wait_for(p.close(), timeout=_PLUGIN_CLOSE_TIMEOUT_S) for p in plugins],
+            return_exceptions=True,
+        )
+        for plugin, outcome in zip(plugins, results, strict=True):
+            if isinstance(outcome, BaseException):
+                logger.warning(
+                    "ModelHub plugin close failed: %s (%s: %s)",
+                    type(plugin).__name__,
+                    type(outcome).__name__,
+                    outcome,
+                )
 
 
 # ===========================================================================
@@ -202,10 +258,8 @@ class ModelHubFactory:
             default_headroom_pct=cfg.rate_limit_headroom_pct,
         )
 
-        # Step 5: Cost/cache/budget
-        cost_tracker = CostTracker()
+        # Step 5: Cache
         response_cache = ResponseCache(cfg)
-        budget_enforcer = BudgetEnforcer(cfg)
 
         # Step 6: Routing services
         health_adapter = HealthReportAdapter()
@@ -233,11 +287,9 @@ class ModelHubFactory:
         router = RequestRouter(
             capability_router=capability_router,
             model_selector=model_selector,
-            budget_enforcer=budget_enforcer,
             response_cache=response_cache,
             normalization_layer=normalization,
             dispatcher=dispatcher,
-            cost_tracker=cost_tracker,
             audit_logger=AuditLogger(),
         )
 
@@ -261,11 +313,15 @@ class ModelHubFactory:
                       "health_port".
         """
         from tests.k1.model_hub.adapters.test_config_adapter import TestConfigAdapter
-        from tests.k1.model_hub.adapters.test_credential_adapter import TestCredentialAdapter
+        from tests.k1.model_hub.adapters.test_credential_adapter import (
+            TestCredentialAdapter,
+        )
         from tests.k1.model_hub.adapters.test_event_adapter import TestEventAdapter
         from tests.k1.model_hub.adapters.test_health_adapter import TestHealthAdapter
         from tests.k1.model_hub.adapters.test_metrics_adapter import TestMetricsAdapter
-        from tests.k1.model_hub.adapters.test_state_read_adapter import TestStateReadAdapter
+        from tests.k1.model_hub.adapters.test_state_read_adapter import (
+            TestStateReadAdapter,
+        )
 
         ov = overrides or {}
         cfg: ModelHubConfig = ov.get("config", ModelHubConfig())
@@ -294,9 +350,7 @@ class ModelHubFactory:
         rate_limiter = RateLimiter(
             default_headroom_pct=cfg.rate_limit_headroom_pct,
         )
-        cost_tracker = CostTracker()
         response_cache = ResponseCache(cfg)
-        budget_enforcer = BudgetEnforcer(cfg)
 
         health_query = _DefaultHealthQuery()
         capability_router = CapabilityRouter(
@@ -320,11 +374,9 @@ class ModelHubFactory:
         router = RequestRouter(
             capability_router=capability_router,
             model_selector=model_selector,
-            budget_enforcer=budget_enforcer,
             response_cache=response_cache,
             normalization_layer=normalization,
             dispatcher=dispatcher,
-            cost_tracker=cost_tracker,
             audit_logger=audit_logger,
             metrics_port=metrics_port,
         )
@@ -347,9 +399,7 @@ class ModelHubFactory:
             "registry": registry,
             "circuit_mgr": circuit_mgr,
             "rate_limiter": rate_limiter,
-            "cost_tracker": cost_tracker,
             "response_cache": response_cache,
-            "budget_enforcer": budget_enforcer,
             "capability_router": capability_router,
             "model_selector": model_selector,
             "normalization": normalization,
@@ -422,11 +472,9 @@ class ModelHubFactory:
         router = RequestRouter(
             capability_router=capability_router,
             model_selector=ModelSelector(),
-            budget_enforcer=BudgetEnforcer(cfg),
             response_cache=ResponseCache(cfg),
             normalization_layer=NormalizationLayer(),
             dispatcher=dispatcher,
-            cost_tracker=CostTracker(),
             audit_logger=AuditLogger(),
             metrics_port=metrics_port,
         )
@@ -437,6 +485,47 @@ class ModelHubFactory:
             registry=registry,
             health_adapter=health_adapter,
         )
+
+    @staticmethod
+    async def from_config(
+        config: "ProviderConfig",
+        ports: Dict[str, Any] | None = None,
+        *,
+        hub_config: ModelHubConfig | None = None,
+        manifest_root: Path | None = None,
+    ) -> Tuple[IModelHubPort, "ProviderLoadResult"]:
+        """Recommended production entry point. Builds a hub via
+        ``create_with_ports`` (or ``create_standalone`` when ``ports`` is
+        ``None``), then runs ``ProviderLoader(hub).load(config)`` so the
+        returned hub is already populated with every provider whose
+        env-var resolved.
+
+        Returns ``(hub, ProviderLoadResult)``. Never raises on partial
+        provider failure -- inspect ``result.failed`` / ``result.skipped``
+        to decide. Caller owns the hub's lifecycle; call
+        ``await hub.shutdown()`` on teardown to drain plugin sessions.
+
+        Only ``credential_port`` is consumed from ``ports``;
+        ``metrics_port`` flows into the ``RequestRouter``. Other accepted
+        keys (``event_port``, ``state_read_port``, ``config_port``,
+        ``health_port``) are validated but not yet wired into any service
+        -- pre-existing factory behavior; not addressed by P2.2.
+
+        Idempotency: calling ``from_config`` twice on the same hub is
+        not supported. The loader will record every entry as ``failed``
+        on the second call (registry raises ``ValueError`` on duplicate
+        ``provider_id``); the hub stays functional with the first call's
+        plugins. Construct a new hub for re-registration.
+        """
+        from k1.model_hub.loader import ProviderLoader  # local import: avoid cycle
+
+        if ports is None:
+            hub = ModelHubFactory.create_standalone(config=hub_config)
+        else:
+            hub = ModelHubFactory.create_with_ports(ports, config=hub_config)
+        loader = ProviderLoader(hub, manifest_root=manifest_root)  # type: ignore[arg-type]
+        result = await loader.load(config)
+        return hub, result
 
 
 # ===========================================================================

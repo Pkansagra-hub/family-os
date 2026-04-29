@@ -40,7 +40,6 @@ def _phase1(
     entities: list | None = None,
     emotion: str = "neutral",
     emotion_conf: float = 0.5,
-    complexity: str = "LOW",
 ) -> Phase1Result:
     """Create a Phase1Result with sensible defaults."""
     return Phase1Result(
@@ -50,7 +49,6 @@ def _phase1(
         entities=entities or [],
         primary_emotion=emotion,
         emotion_confidence=emotion_conf,
-        complexity_tier=complexity,
     )
 
 
@@ -608,7 +606,7 @@ class TestArbiterClassify:
         assert "domain_overlap_score" in meta
         assert "entity_overlap_score" in meta
         assert "safety_band" in meta
-        assert "complexity_tier" in meta
+        assert "complexity_tier" not in meta  # P3.1: removed
         assert "inflight_task_count" in meta
         assert "pending_result_count" in meta
         assert "arbiter_reason" in meta

@@ -57,6 +57,11 @@ class FakeSessionReadPort:
             raise RuntimeError("session read failed")
         return {k: v for k, v in self._snapshot_data.items() if k not in exclude}
 
+    async def read_archived_history(
+        self, session_id: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        return []
+
 
 class FakeModelHubPort:
     """Programmable model hub. Returns configurable LLM responses."""

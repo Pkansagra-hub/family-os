@@ -34,7 +34,7 @@ class KernelConfig:
     capture_bus: bool = False
     test_mode: bool = False
     model_mode: str = "test"  # "test" | "hub" — controls _create_model()
-    tool_tier: str = "LOW"
+    # P3.4c: tool_tier removed; tier is per-task derived in dispatch_task.
     session_mode: str = "standalone"  # standalone | testing
     session_id: str | None = None
     enable_experience: bool = True
@@ -69,3 +69,9 @@ class KernelConfig:
     otel_enabled: bool = True  # OpenTelemetry tracing
     workflow_db_path: str = "./data/workflows.db"  # Orchestrator SQLite
     sessionstate_db_path: str = "./data/k1/sessionstate.db"  # Per-session SSM SQLite
+    # W2: Bus durability (P6.13). When bus_outbox_path is set, the shared
+    # bus persists envelopes on bus_durable_topics to a SQLite WAL outbox
+    # before dispatch, enabling at-least-once delivery across restarts.
+    # Defaults to None (disabled) to preserve current behavior.
+    bus_outbox_path: str | None = None  # e.g. "./data/k1/bus_outbox.db"
+    bus_durable_topics: tuple[str, ...] = ()  # e.g. ("k1.session.turn.complete.v1",)

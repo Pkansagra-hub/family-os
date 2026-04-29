@@ -77,6 +77,7 @@ ARCHIVABLE_SECTIONS: List[str] = [
     "history_recent",
     "persona",
     "telemetry",
+    "artifacts_warm",  # W6: WARM eviction target
     "narrative_active",
     "checkpoint",
 ]

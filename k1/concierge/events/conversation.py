@@ -248,24 +248,26 @@ class Phase1Classified(CanonicalEventMeta):
 
     event_type: str = field(default="k1.phase1.classified.v1", init=False)
     turn_number: int = 0
-    complexity_tier: str = ""
+    # P3.4a: complexity_tier removed; replaced by derived_plan.
     intent_primary: str = ""
     domain_primary: str = ""
     safety_band: str = ""
     emotion_primary: str = ""
     classification_latency_ms: float = 0.0
     is_degraded: bool = False
+    # P3.4c: derived "needs plan" flag computed at FSM/Phase 1 time.
+    derived_plan: bool = False
 
     def to_payload(self) -> dict[str, Any]:
         d = super().to_payload()
         d["turn_number"] = self.turn_number
-        d["complexity_tier"] = self.complexity_tier
         d["intent_primary"] = self.intent_primary
         d["domain_primary"] = self.domain_primary
         d["safety_band"] = self.safety_band
         d["emotion_primary"] = self.emotion_primary
         d["classification_latency_ms"] = self.classification_latency_ms
         d["is_degraded"] = self.is_degraded
+        d["derived_plan"] = self.derived_plan
         return d
 
     @classmethod
@@ -282,13 +284,13 @@ class Phase1Classified(CanonicalEventMeta):
             priority=data.get("priority", 1),
             payload_schema_version=data.get("payload_schema_version", "1.0.0"),
             turn_number=data.get("turn_number", 0),
-            complexity_tier=data.get("complexity_tier", ""),
             intent_primary=data.get("intent_primary", ""),
             domain_primary=data.get("domain_primary", ""),
             safety_band=data.get("safety_band", ""),
             emotion_primary=data.get("emotion_primary", ""),
             classification_latency_ms=data.get("classification_latency_ms", 0.0),
             is_degraded=data.get("is_degraded", False),
+            derived_plan=bool(data.get("derived_plan", False)),
         )
 
 

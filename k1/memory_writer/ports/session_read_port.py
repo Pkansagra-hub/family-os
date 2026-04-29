@@ -122,3 +122,41 @@ class ISessionReadPort(Protocol):
             Missing or unavailable sections are omitted.
         """
         ...  # pragma: no cover
+
+    async def read_archived_history(
+        self,
+        session_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """
+        Read archived ``history_active`` turns from the LOCAL COLD tier.
+
+        This is the **enriched** read path for Memory Writer. It is
+        EXPLICITLY NOT bound by MW-02 (<1ms P99). The hot path already
+        delivers the live in-tier history via ``snapshot()`` /
+        ``snapshot_all()``; this method exists so the session-batch
+        extractor can recover archived turns that have been demoted
+        out of the 16KB ``history_active`` window into LOCAL COLD
+        SQLite, without bloating the hot/warm tier budgets.
+
+        Returned dicts have the same shape as
+        ``HistoryActiveSection.to_dict()["turns"][i]`` (turn_id,
+        turn_number, user_message, assistant_response, timestamp_ms,
+        ...). Order: oldest first. Duplicates across archive entries
+        are de-duplicated by ``turn_id``.
+
+        Implementations may return ``[]`` when no cold archive is
+        configured (test/standalone mode). Callers MUST treat this
+        path as best-effort and never fail on it.
+
+        Args:
+            session_id: Session whose archived history to fetch.
+            limit: Soft cap on the number of turns returned
+                (default 50, large enough for typical session-batch
+                extraction without going wild on memory).
+
+        Returns:
+            List of turn dicts, oldest first. Empty list if no
+            archive is available or the session has no archived turns.
+        """
+        ...  # pragma: no cover

@@ -6,32 +6,24 @@ No unittest.mock imports.
 
 Pipeline steps tested:
   1. Validate envelope
-  2. Budget check (MH-04, MH-08)
-  3. Priority timeout
-  4. Capability routing (MH-06, MH-18)
-  5. Model selection (MH-13)
-  6. Cache check (MH-09)
-  7. Normalize request
-  8. Dispatch to plugin (MH-16, MH-17)
-  9. Post-process (cost tracking MH-07, audit MH-11)
+  2. Priority timeout
+  3. Capability routing (MH-06, MH-18)
+  4. Model selection (MH-13)
+  5. Cache check (MH-09)
+  6. Normalize request
+  7. Dispatch to plugin (MH-16, MH-17)
+  8. Post-process (audit MH-11)
 """
 
 from __future__ import annotations
 
-import time
 from typing import AsyncIterator
 
 import pytest
 
 from k1.model_hub.config import ModelHubConfig
 from k1.model_hub.factory import ModelHubFactory
-from k1.model_hub.manifest import (
-    CircuitBreakerConfig,
-    ModelSpec,
-    PlacementConfig,
-    ProviderManifest,
-    RateLimitConfig,
-)
+from k1.model_hub.manifest import ModelSpec, PlacementConfig, ProviderManifest
 from k1.model_hub.plugins.base import (
     NormalizedRequest,
     ProviderChunk,
@@ -39,14 +31,11 @@ from k1.model_hub.plugins.base import (
     ProviderResponse,
 )
 from k1.model_hub.services.audit_logger import AuditLogger
-from k1.model_hub.services.budget_enforcer import BudgetEnforcer
 from k1.model_hub.services.circuit_breaker_manager import CircuitBreakerManager
-from k1.model_hub.services.cost_tracker import CostTracker
 from k1.model_hub.services.provider_registry import ProviderRegistry
 from k1.model_hub.services.rate_limiter import RateLimiter
 from k1.model_hub.services.response_cache import ResponseCache
 from k1.model_hub.types import (
-    BudgetExceededError,
     CapabilityType,
     ChatPayload,
     CircuitState,
@@ -61,10 +50,7 @@ from k1.model_hub.types import (
     PlacementType,
     Priority,
     RequestConstraints,
-    TokenUsage,
-    ToolCallPayload,
     ToolCallResult,
-    ToolDefinition,
 )
 
 # ===========================================================================
@@ -262,12 +248,6 @@ class TestHappyPath:
         assert meta.usage.prompt_tokens >= 0
         assert meta.latency_ms >= 0
 
-    async def test_response_cost_computed(self) -> None:
-        """Response includes cost tracking (MH-07)."""
-        facade, adapters = _wire()
-        resp = await facade.execute(_make_request())
-        assert resp.metadata.cost_usd >= 0.0
-
     async def test_audit_logged(self) -> None:
         """Request is fully audited (MH-11)."""
         facade, adapters = _wire()
@@ -345,33 +325,7 @@ class TestStreamingPipeline:
 # ===========================================================================
 
 
-class TestBudgetIntegration:
-    """Budget enforcement across full pipeline (MH-04, MH-08)."""
-
-    async def test_exhausted_budget_rejects(self) -> None:
-        """With exhausted budget, execute raises BudgetExceededError."""
-        cfg = ModelHubConfig(daily_budget_usd=0.001)
-        facade, adapters = _wire(config=cfg)
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-        enforcer._daily_spent_usd = 0.001
-        with pytest.raises(BudgetExceededError):
-            await facade.execute(_make_request())
-
-    async def test_budget_allows_when_under_limit(self) -> None:
-        """With budget available, request succeeds."""
-        cfg = ModelHubConfig(daily_budget_usd=100.0)
-        facade, adapters = _wire(config=cfg)
-        resp = await facade.execute(_make_request())
-        assert resp.result is not None
-
-    async def test_budget_tracks_after_request(self) -> None:
-        """After a successful request, budget is decremented."""
-        cfg = ModelHubConfig(daily_budget_usd=100.0)
-        facade, adapters = _wire(config=cfg)
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-        initial = enforcer._daily_spent_usd
-        await facade.execute(_make_request())
-        assert enforcer._daily_spent_usd >= initial
+# RIP-OUT: BudgetEnforcer/CostTracker deleted (family-os).
 
 
 # ===========================================================================
@@ -606,9 +560,7 @@ class TestFactoryWiring:
             "registry",
             "circuit_mgr",
             "rate_limiter",
-            "cost_tracker",
             "response_cache",
-            "budget_enforcer",
             "capability_router",
             "model_selector",
             "normalization",
@@ -631,6 +583,6 @@ class TestFactoryWiring:
         assert required.issubset(adapters.keys())
 
     def test_custom_config_propagates(self) -> None:
-        cfg = ModelHubConfig(daily_budget_usd=42.0)
+        cfg = ModelHubConfig(cache_max_entries=42)
         _, adapters = ModelHubFactory.create_for_testing(overrides={"config": cfg})
-        assert adapters["config"].daily_budget_usd == 42.0
+        assert adapters["config"].cache_max_entries == 42

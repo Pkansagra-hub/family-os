@@ -220,7 +220,8 @@ class TestControlExtensionBind:
         meta = section.get_metadata()
         assert meta["fsm_state"] == ConciergeState.LISTENING.name
         assert meta["active_task_ids"] == []
-        assert meta["complexity_tier"] == "LOW"
+        # P3.4a: complexity_tier in overlay defaults to "" (legacy shim).
+        assert meta["complexity_tier"] == ""
 
     def test_set_fsm_state_syncs_to_section(self) -> None:
         """set_fsm_state mirrors the new state into the section overlay."""
@@ -255,14 +256,11 @@ class TestControlExtensionBind:
         assert meta["active_task_ids"] == ["task-2"]
 
     def test_set_complexity_tier_syncs_to_section(self) -> None:
-        """set_complexity_tier mirrors the tier into the section overlay."""
-        ext = ConciergeControlExtension()
+        """P3.4a: set_complexity_tier removed from extension; SS shim retained
+        but no longer exercised end-to-end. Test reduced to method-existence check.
+        """
         section = ControlSection()
-        ext.bind_control_section(section)
-
-        ext.set_complexity_tier("HIGH")
-        meta = section.get_metadata()
-        assert meta["complexity_tier"] == "HIGH"
+        assert hasattr(section, "set_complexity_tier")
 
     def test_multiple_mutations_all_sync(self) -> None:
         """Multiple mutations accumulate correctly in the section overlay."""
@@ -273,19 +271,16 @@ class TestControlExtensionBind:
         ext.set_fsm_state(ConciergeState.COMPANIONING)
         ext.add_active_task("t1")
         ext.add_active_task("t2")
-        ext.set_complexity_tier("MEDIUM")
 
         meta = section.get_metadata()
         assert meta["fsm_state"] == "COMPANIONING"
         assert meta["active_task_ids"] == ["t1", "t2"]
-        assert meta["complexity_tier"] == "MEDIUM"
 
     def test_unbound_mutations_do_not_crash(self) -> None:
         """Mutations before binding silently skip section sync."""
         ext = ConciergeControlExtension()
         ext.set_fsm_state(ConciergeState.DISPATCHING)
         ext.add_active_task("t1")
-        ext.set_complexity_tier("HIGH")
         # No crash -- local state updated, no section to sync to
         assert ext.fsm_state == "DISPATCHING"
 

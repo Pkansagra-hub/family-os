@@ -46,6 +46,7 @@ Usage::
 from k1.kernel.ports.bridge_port import IBridgePort
 from k1.kernel.ports.bus_port import IBusPort
 from k1.kernel.ports.fabric_port import IFabricPort
+from k1.kernel.ports.hil_port import IHILPort
 from k1.kernel.ports.lifecycle_port import HealthStatus, ILifecyclePort
 from k1.kernel.ports.model_hub_port import IModelHubPort
 from k1.kernel.ports.orchestrator_port import IOrchestratorPort
@@ -57,6 +58,7 @@ __all__ = [
     "IBridgePort",
     "IBusPort",
     "IFabricPort",
+    "IHILPort",
     "ILifecyclePort",
     "IModelHubPort",
     "IOrchestratorPort",

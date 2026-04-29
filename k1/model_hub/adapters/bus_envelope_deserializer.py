@@ -42,6 +42,7 @@ from k1.model_hub.types import (
     HubResponse,
     Message,
     RequestConstraints,
+    StructuredOutputPayload,
     ToolCallPayload,
 )
 
@@ -74,6 +75,11 @@ _PAYLOAD_BUILDERS: Dict[CapabilityType, Any] = {
         tools=d.get("tools", []),
         tool_choice=d.get("tool_choice", "auto"),
         parallel_tool_calls=d.get("parallel_tool_calls", True),
+    ),
+    CapabilityType.STRUCTURED: lambda d: StructuredOutputPayload(
+        messages=[Message(**m) for m in d.get("messages", [])],
+        output_schema=d.get("output_schema", {}),
+        strict=d.get("strict", True),
     ),
     # Other capability types pass the raw dict through as payload.
     # Production wiring for additional types can be added here.

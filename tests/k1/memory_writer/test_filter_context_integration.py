@@ -41,6 +41,11 @@ class FakeSessionReadPort:
     async def snapshot_all(self, exclude: FrozenSet[str] = frozenset()) -> Dict[str, Any]:
         return {k: v for k, v in self._data.items() if k not in exclude}
 
+    async def read_archived_history(
+        self, session_id: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        return []
+
 
 def _payload(
     turn_id: str = "turn-1",

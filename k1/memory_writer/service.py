@@ -23,6 +23,7 @@ import logging
 from k1.memory_writer.config import MWConfig
 from k1.memory_writer.health.circuit_breaker import CircuitBreaker
 from k1.memory_writer.pipeline.pipeline import MemoryWriterPipeline
+from k1.memory_writer.pipeline.session_batch_dispatcher import SessionBatchDispatcher
 from k1.memory_writer.pipeline.turn_dispatcher import TurnDispatcher
 from k1.memory_writer.ports.health_port import IHealthPort
 from k1.memory_writer.types import HealthStatus
@@ -40,7 +41,7 @@ class MemoryWriterService:
     def __init__(
         self,
         pipeline: MemoryWriterPipeline,
-        dispatcher: TurnDispatcher,
+        dispatcher: TurnDispatcher | SessionBatchDispatcher,
         circuit_breaker: CircuitBreaker,
         health_port: IHealthPort,
         config: MWConfig,

@@ -43,24 +43,49 @@ except ImportError:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 # =========================================================================
-# Budget limits per tier
+# P3.2: Tier alias map -- maps legacy LOW/MEDIUM/HIGH/CRISIS strings to
+# the two canonical buckets (simple / plan) used by the dispatcher.
+# P3.3 will update all callers to pass "simple"/"plan" natively and
+# remove this map.
+# =========================================================================
+
+_TIER_ALIAS: dict[str, str] = {
+    "LOW": "simple",
+    "MEDIUM": "plan",
+    "HIGH": "plan",
+    "CRISIS": "crisis",
+    # Canonical keys pass through unchanged
+    "simple": "simple",
+    "plan": "plan",
+    "crisis": "crisis",
+}
+
+# =========================================================================
+# Budget limits per tier (P3.2: collapsed to 2 buckets + crisis)
 # Kept as module-level constant for backward compatibility.
 # Runtime code reads from get_config().tools.budget_limits.
 # =========================================================================
 
 BUDGET_LIMITS: dict[str, int] = {
+    "simple": 5,
+    "plan": 15,
+    "crisis": 3,
+    # Legacy aliases kept so any direct reader of this constant still works
     "LOW": 5,
-    "MEDIUM": 10,
-    "HIGH": 20,
+    "MEDIUM": 15,
+    "HIGH": 15,
     "CRISIS": 3,
 }
 
 # =========================================================================
-# Front tier allowlists (V2 Section 15.3)
+# Front tier allowlists (P3.2: collapsed from 3 tiers to 2 buckets)
+# simple  ≈ old LOW
+# plan    ≈ old MEDIUM/HIGH  (+promote_belief)
+# crisis  = empty set (Front doesn't run ReAct in CRISIS)
 # =========================================================================
 
-FRONT_TIER_ALLOWLISTS: dict[str, set[str]] = {
-    "LOW": {
+_FRONT_SIMPLE: frozenset[str] = frozenset(
+    {
         "update_beliefs",
         "update_scoreboard",
         "update_clarifications",
@@ -69,51 +94,44 @@ FRONT_TIER_ALLOWLISTS: dict[str, set[str]] = {
         "recall_memory",
         "summarize_context",
         "dispatch_task",
-    },
-    "MEDIUM": {
-        "update_beliefs",
-        "update_scoreboard",
-        "update_clarifications",
-        "update_narrative",
-        "refine_affect",
-        "promote_belief",
-        "recall_memory",
-        "summarize_context",
-        "dispatch_task",
-    },
-    "HIGH": {
-        "update_beliefs",
-        "update_scoreboard",
-        "update_clarifications",
-        "update_narrative",
-        "refine_affect",
-        "promote_belief",
-        "recall_memory",
-        "summarize_context",
-        "dispatch_task",
-    },
-    "CRISIS": set(),  # Front doesn't run ReAct in CRISIS
+        "discover_capabilities",
+        "invoke_capability",
+    }
+)
+
+FRONT_TIER_ALLOWLISTS: dict[str, frozenset[str]] = {
+    "simple": _FRONT_SIMPLE,
+    "plan": _FRONT_SIMPLE | {"promote_belief"},
+    "crisis": frozenset(),
+    # Legacy aliases for callers that still pass LOW/MEDIUM/HIGH
+    "LOW": _FRONT_SIMPLE,
+    "MEDIUM": _FRONT_SIMPLE | {"promote_belief"},
+    "HIGH": _FRONT_SIMPLE | {"promote_belief"},
+    "CRISIS": frozenset(),
 }
 
-# Back tier allowlists (imported from schemas_back.py at factory level)
-BACK_TIER_ALLOWLISTS: dict[str, set[str]] = {
-    "LOW": {"recall_memory", "discover_capabilities", "invoke_capability", "submit_result"},
-    "MEDIUM": {
+# =========================================================================
+# Back tier allowlists (P3.2: collapsed from 3 tiers to 2 buckets)
+# simple  ≈ old LOW  (no fabric/workflow tools)
+# plan    ≈ old MEDIUM/HIGH  (+spawn_via_fabric, +execute_workflow)
+# =========================================================================
+
+_BACK_SIMPLE: frozenset[str] = frozenset(
+    {
         "recall_memory",
         "discover_capabilities",
         "invoke_capability",
-        "spawn_via_fabric",
-        "execute_workflow",
         "submit_result",
-    },
-    "HIGH": {
-        "recall_memory",
-        "discover_capabilities",
-        "invoke_capability",
-        "spawn_via_fabric",
-        "execute_workflow",
-        "submit_result",
-    },
+    }
+)
+
+BACK_TIER_ALLOWLISTS: dict[str, frozenset[str]] = {
+    "simple": _BACK_SIMPLE,
+    "plan": _BACK_SIMPLE | {"spawn_via_fabric", "execute_workflow"},
+    # Legacy aliases
+    "LOW": _BACK_SIMPLE,
+    "MEDIUM": _BACK_SIMPLE | {"spawn_via_fabric", "execute_workflow"},
+    "HIGH": _BACK_SIMPLE | {"spawn_via_fabric", "execute_workflow"},
 }
 
 
@@ -194,7 +212,10 @@ class ToolDispatcher:
         self._bus = bus
         self.call_count: int = 0
         self.call_history: list[DispatchRecord] = []
-        self._budget_limit = get_config().tools.budget_limits.get(tier, 5)
+        self._budget_limit = get_config().tools.budget_limits.get(
+            _TIER_ALIAS.get(tier, tier),
+            get_config().tools.budget_limits.get(tier, 5),
+        )
         logger.info(
             "ToolDispatcher initialized (actor=%s, tier=%s, budget=%d, allowlist=%d tools)",
             actor,

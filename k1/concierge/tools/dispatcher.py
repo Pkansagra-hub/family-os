@@ -45,78 +45,62 @@ except ImportError:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 # =========================================================================
-# Budget limits per tier
-# Kept as module-level constant for backward compatibility.
+# Budget limits per tier (P3.4b: collapsed to canonical {simple, plan, crisis}
+# with legacy {LOW, MEDIUM, HIGH, CRISIS} aliases preserved for backward compat).
 # Runtime code reads from get_config().tools.budget_limits.
 # =========================================================================
 
+_TIER_ALIAS: dict[str, str] = {
+    "LOW": "simple",
+    "MEDIUM": "plan",
+    "HIGH": "plan",
+    "CRISIS": "crisis",
+    "simple": "simple",
+    "plan": "plan",
+    "crisis": "crisis",
+}
+
 BUDGET_LIMITS: dict[str, int] = {
+    "simple": 5,
+    "plan": 15,
+    "crisis": 3,
+    # Legacy aliases:
     "LOW": 5,
-    "MEDIUM": 10,
-    "HIGH": 20,
+    "MEDIUM": 15,
+    "HIGH": 15,
     "CRISIS": 3,
 }
 
 # =========================================================================
-# Front tier allowlists (V2 Section 15.3)
+# Front tier allowlists (P3.4b: collapsed to {simple, plan} with legacy aliases)
 # =========================================================================
 
-FRONT_TIER_ALLOWLISTS: dict[str, set[str]] = {
-    "LOW": {
-        "update_beliefs",
-        "update_scoreboard",
-        "update_clarifications",
-        "update_narrative",
-        "refine_affect",
-        "recall_memory",
-        "summarize_context",
-        "dispatch_task",
-    },
-    "MEDIUM": {
-        "update_beliefs",
-        "update_scoreboard",
-        "update_clarifications",
-        "update_narrative",
-        "refine_affect",
-        "promote_belief",
-        "recall_memory",
-        "summarize_context",
-        "dispatch_task",
-    },
-    "HIGH": {
-        "update_beliefs",
-        "update_scoreboard",
-        "update_clarifications",
-        "update_narrative",
-        "refine_affect",
-        "promote_belief",
-        "recall_memory",
-        "summarize_context",
-        "dispatch_task",
-    },
-    "CRISIS": set(),  # Front doesn't run ReAct in CRISIS
+_FRONT_SIMPLE: set[str] = {
+    "update_beliefs",
+    "update_scoreboard",
+    "update_clarifications",
+    "update_narrative",
+    "refine_affect",
+    "recall_memory",
+    "summarize_context",
+    "dispatch_task",
+    "discover_capabilities",
+    "invoke_capability",
 }
 
-# Back tier allowlists (imported from schemas_back.py at factory level)
-BACK_TIER_ALLOWLISTS: dict[str, set[str]] = {
-    "LOW": {"recall_memory", "discover_capabilities", "invoke_capability", "submit_result"},
-    "MEDIUM": {
-        "recall_memory",
-        "discover_capabilities",
-        "invoke_capability",
-        "spawn_via_fabric",
-        "execute_workflow",
-        "submit_result",
-    },
-    "HIGH": {
-        "recall_memory",
-        "discover_capabilities",
-        "invoke_capability",
-        "spawn_via_fabric",
-        "execute_workflow",
-        "submit_result",
-    },
+FRONT_TIER_ALLOWLISTS: dict[str, set[str]] = {
+    "simple": _FRONT_SIMPLE,
+    "plan": _FRONT_SIMPLE | {"promote_belief"},
+    "crisis": set(),
+    # Legacy aliases:
+    "LOW": _FRONT_SIMPLE,
+    "MEDIUM": _FRONT_SIMPLE | {"promote_belief"},
+    "HIGH": _FRONT_SIMPLE | {"promote_belief"},
+    "CRISIS": set(),
 }
+
+# P3.4b: BACK_TIER_ALLOWLISTS authoritative copy lives in schemas_back.py.
+# The duplicate previously here was dead code (back actor imports from schemas_back).
 
 
 # =========================================================================
@@ -596,7 +580,9 @@ def create_back_dispatcher(
 
         schemas = BACK_TOOL_SCHEMAS
 
-    allowlist = BACK_TIER_ALLOWLISTS.get(tier, set())
+    from k1.concierge.tools.schemas_back import BACK_TIER_ALLOWLISTS
+
+    allowlist = BACK_TIER_ALLOWLISTS.get(tier, [])
     schema_map = _build_schema_map(schemas)
     ctx.actor = "back"
 

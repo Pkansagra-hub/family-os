@@ -1,14 +1,12 @@
 """M3 Routing & Selection -- Test ModelSelector [F42].
 
-Tests multi-dimension scoring, fallback chain construction,
-cost optimization rules, and placement cascade.
+Tests preference + placement + health scoring, fallback chain construction,
+and placement cascade. Cost/latency/budget scoring removed (family-os).
 
 Covers:
   - ModelChoice & FallbackEntry: construction, defaults, frozen, validation
-  - 5-dimension scoring: cost, latency, preference, placement, health
-  - Priority-specific weights: REALTIME, INTERACTIVE, BACKGROUND
+  - 3-dimension scoring: preference, placement, health
   - Fallback chain: top 3 (MH-06)
-  - Cost optimization rules: BACKGROUND cheapest, budget thresholds
   - Placement cascade (MH-13)
   - ModelPreference: preferred_provider, preferred_model, avoid_providers
   - Edge cases: empty providers, single candidate, no models
@@ -22,7 +20,11 @@ import pytest
 
 from k1.model_hub.manifest import ModelSpec
 from k1.model_hub.services.capability_router import EligibleProvider
-from k1.model_hub.services.model_selector import FallbackEntry, ModelChoice, ModelSelector
+from k1.model_hub.services.model_selector import (
+    FallbackEntry,
+    ModelChoice,
+    ModelSelector,
+)
 from k1.model_hub.services.provider_registry import ProviderInfo
 from k1.model_hub.types import (
     CapabilityType,
@@ -182,12 +184,6 @@ class TestModelSelectorBasic:
 
         assert isinstance(result, ModelChoice)
 
-    def test_budget_usage_property(self) -> None:
-        selector = ModelSelector(budget_usage_pct=50.0)
-        assert selector.budget_usage_pct == 50.0
-        selector.budget_usage_pct = 80.0
-        assert selector.budget_usage_pct == 80.0
-
 
 # ===========================================================================
 # Fallback Chain Tests (MH-06)
@@ -242,82 +238,12 @@ class TestFallbackChain:
 
 
 # ===========================================================================
-# 5-Dimension Scoring Tests
+# 3-Dimension Scoring Tests
 # ===========================================================================
 
 
 class TestScoringDimensions:
-    """Tests for the 5 scoring dimensions."""
-
-    def test_cheaper_model_scores_higher_on_cost(self) -> None:
-        """Cost dimension: cheaper = higher score."""
-        selector = ModelSelector()
-        cheap = _eligible_provider(
-            "cheap",
-            models=[
-                ModelSpec(
-                    id="cheap-model",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=0.5,
-                    cost_per_1m_output=1.0,
-                    tier=ModelTier.STANDARD,
-                )
-            ],
-        )
-        expensive = _eligible_provider(
-            "expensive",
-            models=[
-                ModelSpec(
-                    id="exp-model",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=50.0,
-                    cost_per_1m_output=100.0,
-                    tier=ModelTier.STANDARD,
-                )
-            ],
-        )
-        # BACKGROUND priority weights cost heavily (0.5)
-        result = selector.select(
-            [cheap, expensive],
-            _hub_request(priority=Priority.BACKGROUND),
-        )
-        assert result is not None
-        assert result.provider_id == "cheap"
-
-    def test_faster_tier_scores_higher_on_latency(self) -> None:
-        """Latency dimension: FAST tier > PREMIUM tier."""
-        selector = ModelSelector()
-        fast = _eligible_provider(
-            "fast-provider",
-            models=[
-                ModelSpec(
-                    id="fast-model",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=10.0,
-                    cost_per_1m_output=10.0,
-                    tier=ModelTier.FAST,
-                )
-            ],
-        )
-        slow = _eligible_provider(
-            "slow-provider",
-            models=[
-                ModelSpec(
-                    id="slow-model",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=10.0,
-                    cost_per_1m_output=10.0,
-                    tier=ModelTier.PREMIUM,
-                )
-            ],
-        )
-        # REALTIME priority weights latency heavily (0.5)
-        result = selector.select(
-            [fast, slow],
-            _hub_request(priority=Priority.REALTIME),
-        )
-        assert result is not None
-        assert result.provider_id == "fast-provider"
+    """Tests for the 3 scoring dimensions."""
 
     def test_healthy_scores_higher_than_degraded(self) -> None:
         """Health dimension: HEALTHY > DEGRADED."""
@@ -399,205 +325,6 @@ class TestScoringDimensions:
         )
         assert result is not None
         assert result.provider_id == "other-provider"
-
-
-# ===========================================================================
-# Priority Weight Tests
-# ===========================================================================
-
-
-class TestPriorityWeights:
-    """Tests that priority changes scoring weights."""
-
-    def test_realtime_prefers_fast(self) -> None:
-        """REALTIME: latency=0.5, so FAST tier wins."""
-        selector = ModelSelector()
-        fast = _eligible_provider(
-            "fast",
-            models=[
-                ModelSpec(
-                    id="fast-m",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=20.0,
-                    cost_per_1m_output=20.0,
-                    tier=ModelTier.FAST,
-                )
-            ],
-        )
-        cheap = _eligible_provider(
-            "cheap",
-            models=[
-                ModelSpec(
-                    id="cheap-m",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=0.5,
-                    cost_per_1m_output=0.5,
-                    tier=ModelTier.PREMIUM,
-                )
-            ],
-        )
-        result = selector.select(
-            [fast, cheap],
-            _hub_request(priority=Priority.REALTIME),
-        )
-        assert result is not None
-        assert result.provider_id == "fast"
-
-    def test_background_prefers_cheap(self) -> None:
-        """BACKGROUND: cost=0.5, so cheapest model wins."""
-        selector = ModelSelector()
-        expensive_fast = _eligible_provider(
-            "expensive",
-            models=[
-                ModelSpec(
-                    id="exp-m",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=50.0,
-                    cost_per_1m_output=100.0,
-                    tier=ModelTier.FAST,
-                )
-            ],
-        )
-        cheap_slow = _eligible_provider(
-            "cheap",
-            models=[
-                ModelSpec(
-                    id="cheap-m",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=0.1,
-                    cost_per_1m_output=0.2,
-                    tier=ModelTier.PREMIUM,
-                )
-            ],
-        )
-        result = selector.select(
-            [expensive_fast, cheap_slow],
-            _hub_request(priority=Priority.BACKGROUND),
-        )
-        assert result is not None
-        assert result.provider_id == "cheap"
-
-
-# ===========================================================================
-# Cost Optimization Rules Tests
-# ===========================================================================
-
-
-class TestCostOptimization:
-    """Tests for cost optimization rules."""
-
-    def test_background_always_cheapest(self) -> None:
-        """BACKGROUND priority forces cheapest model."""
-        selector = ModelSelector()
-        expensive = _eligible_provider(
-            "expensive",
-            models=[
-                ModelSpec(
-                    id="exp-m",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=100.0,
-                    cost_per_1m_output=200.0,
-                    tier=ModelTier.FAST,
-                )
-            ],
-        )
-        cheap = _eligible_provider(
-            "cheap",
-            models=[
-                ModelSpec(
-                    id="cheap-m",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=0.1,
-                    cost_per_1m_output=0.2,
-                    tier=ModelTier.PREMIUM,
-                )
-            ],
-        )
-        result = selector.select(
-            [expensive, cheap],
-            _hub_request(priority=Priority.BACKGROUND),
-        )
-        assert result is not None
-        # Should pick cheapest due to BACKGROUND force-cheapest rule
-        assert result.provider_id == "cheap"
-
-    def test_budget_above_95_forces_cheapest_all_priorities(self) -> None:
-        """Budget > 95%: cheapest for ALL priorities including REALTIME."""
-        selector = ModelSelector(budget_usage_pct=96.0)
-        expensive_fast = _eligible_provider(
-            "expensive",
-            models=[
-                ModelSpec(
-                    id="exp-m",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=100.0,
-                    cost_per_1m_output=200.0,
-                    tier=ModelTier.FAST,
-                )
-            ],
-        )
-        cheap_slow = _eligible_provider(
-            "cheap",
-            models=[
-                ModelSpec(
-                    id="cheap-m",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=0.1,
-                    cost_per_1m_output=0.2,
-                    tier=ModelTier.PREMIUM,
-                )
-            ],
-        )
-        result = selector.select(
-            [expensive_fast, cheap_slow],
-            _hub_request(priority=Priority.REALTIME),
-        )
-        assert result is not None
-        # Even REALTIME should be overridden at >95% budget
-
-    def test_budget_above_80_forces_cheapest_interactive(self) -> None:
-        """Budget > 80%: cheapest for non-REALTIME (INTERACTIVE)."""
-        selector = ModelSelector(budget_usage_pct=85.0)
-        result = selector.select(
-            [_eligible_provider("p1"), _eligible_provider("p2")],
-            _hub_request(priority=Priority.INTERACTIVE),
-        )
-        assert result is not None
-
-    def test_budget_above_80_does_not_affect_realtime(self) -> None:
-        """Budget > 80%: REALTIME not forced to cheapest."""
-        selector = ModelSelector(budget_usage_pct=85.0)
-        fast = _eligible_provider(
-            "fast",
-            models=[
-                ModelSpec(
-                    id="fast-m",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=20.0,
-                    cost_per_1m_output=20.0,
-                    tier=ModelTier.FAST,
-                )
-            ],
-        )
-        cheap = _eligible_provider(
-            "cheap",
-            models=[
-                ModelSpec(
-                    id="cheap-m",
-                    capabilities=[CapabilityType.CHAT],
-                    cost_per_1m_input=0.5,
-                    cost_per_1m_output=0.5,
-                    tier=ModelTier.PREMIUM,
-                )
-            ],
-        )
-        result = selector.select(
-            [fast, cheap],
-            _hub_request(priority=Priority.REALTIME),
-        )
-        assert result is not None
-        # REALTIME at 85% budget should NOT force cheapest
-        assert result.provider_id == "fast"
 
 
 # ===========================================================================

@@ -346,7 +346,6 @@ class OppPipeline:
         *,
         turns: list[dict[str, Any]] | None = None,
         affect_band: str = "neutral",
-        complexity_tier: str = "LOW",
         active_domains: list[str] | None = None,
         active_user_id: str = "",
         active_user_name: str = "",
@@ -370,7 +369,6 @@ class OppPipeline:
         Args:
             turns:            List of conversation turn dicts (from SS).
             affect_band:      Current affect band string.
-            complexity_tier:  Current tier (LOW/MEDIUM/HIGH).
             active_domains:   Domains detected in recent turns.
             active_user_id:   Current user identifier.
             active_user_name: Current user display name.
@@ -410,7 +408,6 @@ class OppPipeline:
             try:
                 snapshot = self._dynamic_identity.compute(
                     affect_band=affect_band,
-                    complexity_tier=complexity_tier,
                     domain=(active_domains or [""])[0] if active_domains else "",
                     user_id=active_user_id,
                     user_name=active_user_name,

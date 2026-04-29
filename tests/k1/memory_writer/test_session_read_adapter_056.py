@@ -466,7 +466,13 @@ class TestEdgeCases:
         """Adapter exposes only read methods (MW-01)."""
         adapter = SessionReadAdapter(FakeSessionStateManager())
         public = [m for m in dir(adapter) if not m.startswith("_")]
-        assert set(public) == {"snapshot", "read_section", "list_sections", "snapshot_all"}
+        assert set(public) == {
+            "snapshot",
+            "read_section",
+            "list_sections",
+            "snapshot_all",
+            "read_archived_history",
+        }
 
     def test_adapter_uses_slots(self) -> None:
         """Adapter uses __slots__ for memory efficiency."""
@@ -486,3 +492,107 @@ class TestEdgeCases:
         adapter = SessionReadAdapter(NoneManager())
         result = await adapter.read_section("anything")
         assert result is None
+
+
+# =============================================================================
+# B1+B2: read_archived_history (cold-archive enriched read for MW)
+# =============================================================================
+
+
+class TestReadArchivedHistory:
+    """Tests for the enriched cold-archive read path (B1+B2)."""
+
+    @pytest.mark.asyncio
+    async def test_no_cold_archive_returns_empty(self) -> None:
+        """When ``cold_archive`` is None the method returns []."""
+        adapter = SessionReadAdapter(FakeSessionStateManager())
+        assert await adapter.read_archived_history("sess-1") == []
+
+    @pytest.mark.asyncio
+    async def test_archive_failure_returns_empty(self) -> None:
+        """If the archive raises, the method swallows and returns []."""
+
+        class BoomArchive:
+            def restore_all(self, *_args: Any, **_kwargs: Any) -> None:
+                raise RuntimeError("disk")
+
+        adapter = SessionReadAdapter(
+            FakeSessionStateManager(), cold_archive=BoomArchive()
+        )
+        assert await adapter.read_archived_history("sess-1") == []
+
+    @pytest.mark.asyncio
+    async def test_returns_dedup_oldest_first(self) -> None:
+        """End-to-end: archived FlatBuffer turns are restored, deduped, sorted."""
+        from k1.sessionstate.sections.history_active import HistoryActiveSection
+
+        # Build two archive blobs that overlap on turn-2.
+        # Use explicit timestamps to ensure ordering survives the per-blob
+        # turn_number counters (each section starts counting from 1).
+        sec_a = HistoryActiveSection(session_id="sess-x")
+        sec_a.add_turn("U1", "A1", turn_id="t-1", timestamp_ms=1_000)
+        sec_a.add_turn("U2", "A2", turn_id="t-2", timestamp_ms=2_000)
+
+        sec_b = HistoryActiveSection(session_id="sess-x")
+        sec_b.add_turn("U2dup", "A2dup", turn_id="t-2", timestamp_ms=2_000)  # dup
+        sec_b.add_turn("U3", "A3", turn_id="t-3", timestamp_ms=3_000)
+
+        from dataclasses import dataclass
+
+        @dataclass
+        class _Result:
+            success: bool
+            data: bytes
+
+        class StubArchive:
+            def restore_all(
+                self, section: str, session_id: str, limit: int = 100
+            ) -> List[Any]:
+                assert section == "history_active"
+                assert session_id == "sess-x"
+                return [
+                    _Result(success=True, data=sec_b.to_flatbuffer()),
+                    _Result(success=True, data=sec_a.to_flatbuffer()),
+                ]
+
+        adapter = SessionReadAdapter(
+            FakeSessionStateManager(), cold_archive=StubArchive()
+        )
+        result = await adapter.read_archived_history("sess-x", limit=50)
+        # Three unique turns (t-1, t-2, t-3) ordered oldest-first.
+        ids = [t["turn_id"] for t in result]
+        assert ids == ["t-1", "t-2", "t-3"]
+        # Each has both user_message AND assistant_response (A1+A2 fix).
+        for t in result:
+            assert "user_message" in t
+            assert "assistant_response" in t
+
+    @pytest.mark.asyncio
+    async def test_failed_results_skipped(self) -> None:
+        """Failed RestoreResult entries are skipped, successful ones return."""
+        from dataclasses import dataclass
+
+        from k1.sessionstate.sections.history_active import HistoryActiveSection
+
+        sec = HistoryActiveSection(session_id="sess-y")
+        sec.add_turn("U", "A", turn_id="t-1")
+
+        @dataclass
+        class _Result:
+            success: bool
+            data: Optional[bytes]
+
+        class MixedArchive:
+            def restore_all(self, section: str, session_id: str, limit: int = 100):
+                return [
+                    _Result(success=False, data=None),
+                    _Result(success=True, data=sec.to_flatbuffer()),
+                    _Result(success=True, data=None),
+                ]
+
+        adapter = SessionReadAdapter(
+            FakeSessionStateManager(), cold_archive=MixedArchive()
+        )
+        result = await adapter.read_archived_history("sess-y")
+        assert len(result) == 1
+        assert result[0]["turn_id"] == "t-1"

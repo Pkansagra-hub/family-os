@@ -40,7 +40,14 @@ from k1.model_hub.types import CapabilityType, ChatPayload, ChatResult
 from k1.model_hub.types import FinishReason as K1FinishReason
 from k1.model_hub.types import HubChunk, HubRequest, HubResponse
 from k1.model_hub.types import Message as K1Message
-from k1.model_hub.types import ReasonResult, RequestConstraints, ResponseMetadata, StructuredResult, TokenUsage, ToolCallPayload
+from k1.model_hub.types import (
+    ReasonResult,
+    RequestConstraints,
+    ResponseMetadata,
+    StructuredResult,
+    TokenUsage,
+    ToolCallPayload,
+)
 from k1.model_hub.types import ToolCallResult as K1ToolCallResult
 from k1.model_hub.types import ToolCallResultSet
 from k1.model_hub.types import ToolDefinition as K1ToolDefinition
@@ -162,9 +169,7 @@ def _unwrap_chunk(hub_chunk: HubChunk) -> StreamChunk:
                 cache_hit=False,
                 capability=CapabilityType.CHAT,
                 trace_id="",
-                finish_reason=(
-                    K1FinishReason.TOOL_CALLS if tool_calls else K1FinishReason.STOP
-                ),
+                finish_reason=(K1FinishReason.TOOL_CALLS if tool_calls else K1FinishReason.STOP),
             )
         hub_resp = HubResponse(result=result, metadata=metadata)
         return StreamChunk(chunk_type="done", response=_unwrap_response(hub_resp))
@@ -173,9 +178,7 @@ def _unwrap_chunk(hub_chunk: HubChunk) -> StreamChunk:
         tc = hub_chunk.tool_calls[0]
         return StreamChunk(
             chunk_type="tool_call_delta",
-            tool_call_partial=ToolCallResult(
-                id=tc.id, name=tc.name, arguments=tc.arguments
-            ),
+            tool_call_partial=ToolCallResult(id=tc.id, name=tc.name, arguments=tc.arguments),
         )
 
     return StreamChunk(chunk_type="text_delta", text=hub_chunk.content)
@@ -991,6 +994,13 @@ async def react_loop(
         iteration_durations_ms=_iteration_durations,
     )
 
+    return ReactResult(
+        status="budget_exhausted",
+        dispatched_tasks=dispatched_tasks,
+        parallel_tool_calls=_parallel_count,
+        sequential_tool_calls=_sequential_count,
+        iteration_durations_ms=_iteration_durations,
+    )
     return ReactResult(
         status="budget_exhausted",
         dispatched_tasks=dispatched_tasks,

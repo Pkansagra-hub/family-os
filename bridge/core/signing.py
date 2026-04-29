@@ -13,7 +13,7 @@ import hashlib
 import hmac
 import logging
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ class SigningResult:
 # ---------------------------------------------------------------------------
 
 
+@runtime_checkable
 class SigningBackend(Protocol):
     """Protocol for envelope signing backends."""
 

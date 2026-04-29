@@ -36,6 +36,11 @@ class FakeSessionReadPort:
     async def snapshot_all(self, exclude: FrozenSet[str] = frozenset()) -> Dict[str, Any]:
         return {}
 
+    async def read_archived_history(
+        self, session_id: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        return []
+
 
 class FakeModelHubPort:
     async def chat(

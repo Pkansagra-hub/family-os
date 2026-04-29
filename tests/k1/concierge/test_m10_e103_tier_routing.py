@@ -23,103 +23,44 @@ from k1.sessionstate.sections.control import ControlSection
 
 
 class TestAutoTierDispatch:
-    """dispatch_task reads complexity_tier from SS when tier=AUTO."""
+    """P3.4c: dispatch_task derives tier from `plan: bool` + signals (no SS read)."""
 
-    def _tool_ctx(self, ss: Any = None) -> MagicMock:
+    def _tool_ctx(self) -> MagicMock:
         ctx = MagicMock()
-        ctx.session_manager = ss
+        ctx.session_manager = MagicMock()
         return ctx
 
-    def _mock_ss_with_tier(self, tier: str) -> MagicMock:
-        ss = MagicMock()
-        control = ControlSection(session_id="test")
-        control.set_complexity_tier(tier)
-        ss.get_section = lambda name: control if name == "control" else None
-        return ss
-
-    def test_auto_reads_medium_from_ss(self):
+    def test_default_routes_low(self):
         from k1.concierge.tools.implementations import execute_dispatch_task
 
-        ss = self._mock_ss_with_tier("MEDIUM")
-        ctx = self._tool_ctx(ss)
-        result = execute_dispatch_task(
-            {"intents": [{"action": "test"}], "tier": "AUTO"},
-            ctx,
-        )
-        assert result.status == "ok"
-        dispatch = result.data.get("_dispatch", {})
-        # Tier in the dispatch should be MEDIUM (from SS)
-        assert dispatch.get("tier", "").upper() == "MEDIUM"
-
-    def test_auto_reads_high_from_ss(self):
-        from k1.concierge.tools.implementations import execute_dispatch_task
-
-        ss = self._mock_ss_with_tier("HIGH")
-        ctx = self._tool_ctx(ss)
-        result = execute_dispatch_task(
-            {"intents": [{"action": "test"}], "tier": "AUTO"},
-            ctx,
-        )
-        assert result.status == "ok"
-        dispatch = result.data.get("_dispatch", {})
-        assert dispatch.get("tier", "").upper() == "HIGH"
-
-    def test_explicit_tier_overrides_ss(self):
-        """LLM provides explicit LOW -> dispatch uses LOW, not SS HIGH."""
-        from k1.concierge.tools.implementations import execute_dispatch_task
-
-        ss = self._mock_ss_with_tier("HIGH")
-        ctx = self._tool_ctx(ss)
-        result = execute_dispatch_task(
-            {"intents": [{"action": "test"}], "tier": "LOW"},
-            ctx,
-        )
-        assert result.status == "ok"
-        dispatch = result.data.get("_dispatch", {})
-        assert dispatch.get("tier", "").upper() == "LOW"
-
-    def test_auto_defaults_low_when_ss_empty(self):
-        """SS has empty complexity_tier -> default to LOW."""
-        from k1.concierge.tools.implementations import execute_dispatch_task
-
-        ss = MagicMock()
-        control = ControlSection(session_id="test")
-        ss.get_section = lambda name: control if name == "control" else None
-        ctx = self._tool_ctx(ss)
-        result = execute_dispatch_task(
-            {"intents": [{"action": "test"}], "tier": "AUTO"},
-            ctx,
-        )
-        assert result.status == "ok"
-        dispatch = result.data.get("_dispatch", {})
-        assert dispatch.get("tier", "").upper() == "LOW"
-
-    def test_auto_defaults_low_when_no_ss(self):
-        """No session_state -> default to LOW."""
-        from k1.concierge.tools.implementations import execute_dispatch_task
-
-        ctx = self._tool_ctx(None)
-        result = execute_dispatch_task(
-            {"intents": [{"action": "test"}], "tier": "AUTO"},
-            ctx,
-        )
-        assert result.status == "ok"
-        dispatch = result.data.get("_dispatch", {})
-        assert dispatch.get("tier", "").upper() == "LOW"
-
-    def test_omitted_tier_defaults_to_auto(self):
-        """tier omitted -> defaults to AUTO behavior."""
-        from k1.concierge.tools.implementations import execute_dispatch_task
-
-        ss = self._mock_ss_with_tier("MEDIUM")
-        ctx = self._tool_ctx(ss)
         result = execute_dispatch_task(
             {"intents": [{"action": "test"}]},
-            ctx,
+            self._tool_ctx(),
         )
         assert result.status == "ok"
-        dispatch = result.data.get("_dispatch", {})
-        assert dispatch.get("tier", "").upper() == "MEDIUM"
+        assert result.data["_dispatch"]["tier"] == "LOW"
+        assert result.data["_dispatch"]["plan"] is False
+
+    def test_explicit_plan_routes_medium(self):
+        from k1.concierge.tools.implementations import execute_dispatch_task
+
+        result = execute_dispatch_task(
+            {"intents": [{"action": "test"}], "plan": True},
+            self._tool_ctx(),
+        )
+        assert result.status == "ok"
+        assert result.data["_dispatch"]["tier"] == "MEDIUM"
+        assert result.data["_dispatch"]["plan"] is True
+
+    def test_legacy_tier_arg_ignored(self):
+        from k1.concierge.tools.implementations import execute_dispatch_task
+
+        result = execute_dispatch_task(
+            {"intents": [{"action": "test"}], "tier": "HIGH"},
+            self._tool_ctx(),
+        )
+        assert result.status == "ok"
+        assert result.data["_dispatch"]["tier"] == "LOW"
 
 
 # =========================================================================
@@ -226,17 +167,17 @@ class TestObservabilityEvents:
     def test_phase1_classified_event_schema(self):
         evt = Phase1Classified(
             turn_number=5,
-            complexity_tier="MEDIUM",
             intent_primary="log_memory",
             domain_primary="FAMILY",
             safety_band="GREEN",
             emotion_primary="joy",
             classification_latency_ms=18.5,
             is_degraded=False,
+            derived_plan=True,
         )
         payload = evt.to_payload()
         assert payload["turn_number"] == 5
-        assert payload["complexity_tier"] == "MEDIUM"
+        assert payload["derived_plan"] is True
         assert payload["intent_primary"] == "log_memory"
         assert payload["is_degraded"] is False
 
@@ -255,7 +196,7 @@ class TestObservabilityEvents:
 
     def test_phase1_classified_builder_produces_envelope(self):
         env = build_phase1_classified(
-            payload={"complexity_tier": "LOW"},
+            payload={"derived_plan": False},
             parent_id=10,
         )
         assert env.topic == "k1.phase1.classified.v1"

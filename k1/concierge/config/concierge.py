@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-_VALID_TOOL_TIERS = frozenset({"LOW", "MED", "HIGH"})
+# P3.4c: tool_tier removed; canonical tiers live in dispatcher.
 _VALID_PHASE1_PIPELINES = frozenset({"stub", "ultrabert"})
 
 
@@ -25,7 +25,6 @@ class ConciergeConfig:
     are excluded -- those belong to KernelService.
     """
 
-    tool_tier: str = "LOW"
     enable_experience: bool = True
     enable_delta: bool = True
     enable_hitl: bool = True
@@ -41,10 +40,6 @@ class ConciergeConfig:
     dead_letter_enabled: bool = False
 
     def __post_init__(self) -> None:
-        if self.tool_tier not in _VALID_TOOL_TIERS:
-            raise ValueError(
-                f"tool_tier must be one of {sorted(_VALID_TOOL_TIERS)}, got {self.tool_tier!r}"
-            )
         if self.delta_batch_window_ms <= 0:
             raise ValueError(f"delta_batch_window_ms must be > 0, got {self.delta_batch_window_ms}")
         if self.phase1_pipeline not in _VALID_PHASE1_PIPELINES:
@@ -61,7 +56,6 @@ class ConciergeConfig:
     def from_kernel_config(cls, kc: Any) -> ConciergeConfig:
         """Create from a KernelConfig instance (backward compatibility)."""
         return cls(
-            tool_tier=getattr(kc, "tool_tier", "LOW"),
             enable_experience=getattr(kc, "enable_experience", True),
             enable_delta=getattr(kc, "enable_delta", True),
             enable_hitl=getattr(kc, "enable_hitl", True),

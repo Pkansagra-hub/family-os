@@ -330,7 +330,12 @@ class PlannerAgent:
             if isinstance(payload, PlanRequest):
                 request = payload
             elif isinstance(payload, dict):
-                request = PlanRequest(**payload)
+                # PlanRequest envelopes ride the bus through
+                # EventPortProdAdapter, which JSON-encodes them. Use
+                # PlanRequest.from_dict so nested SessionSnapshot survives
+                # the round trip; ``PlanRequest(**payload)`` would silently
+                # explode on missing dataclass fields.
+                request = PlanRequest.from_dict(payload)
             else:
                 logger.warning(
                     "planner_agent.plan_request_invalid_payload",

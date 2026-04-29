@@ -90,7 +90,19 @@ class ContextBuilder:
         snapshot: Dict[str, Any],
         payload: TurnCompletePayload,
     ) -> Tuple[CompressedTurn, List[CompressedTurn], Dict[int, List[Dict[str, Any]]]]:
-        """Extract full conversation window from history_active."""
+        """Extract full conversation window from history_active.
+
+        For every Turn in ``history_active.turns`` we emit a *pair* of
+        :class:`CompressedTurn` rows: one with ``role="user"`` carrying
+        ``user_message`` and one with ``role="assistant"`` carrying
+        ``assistant_response``. This restores the dialogue the
+        WriterAgent needs -- previously only the user side was loaded
+        and the assistant response was silently dropped, leaving the
+        LLM to extract atoms from a user-only monologue.
+
+        Empty assistant responses are skipped so the prompt isn't
+        polluted with blank turns.
+        """
         history = snapshot.get("history_active", {})
         turns_raw = history.get("turns", []) if isinstance(history, dict) else []
 
@@ -108,27 +120,41 @@ class ContextBuilder:
         for t in turns_raw:
             if isinstance(t, dict):
                 tid = t.get("turn_id", "")
-                text = t.get("user_message", "")
+                user_text = t.get("user_message", "")
+                assistant_text = t.get("assistant_response", "")
                 ts = t.get("timestamp_ms", 0)
                 tn = t.get("turn_number", 0)
             else:
                 tid = getattr(t, "turn_id", "")
-                text = getattr(t, "user_message", "")
+                user_text = getattr(t, "user_message", "")
+                assistant_text = getattr(t, "assistant_response", "")
                 ts = getattr(t, "timestamp_ms", 0)
                 tn = getattr(t, "turn_number", 0)
 
-            ct = CompressedTurn(
-                turn_id=tid,
-                role="user",
-                text=text,
-                timestamp_ms=ts,
-                turn_number=tn,
-            )
-            recent_turns.append(ct)
+            if user_text:
+                recent_turns.append(
+                    CompressedTurn(
+                        turn_id=tid,
+                        role="user",
+                        text=user_text,
+                        timestamp_ms=ts,
+                        turn_number=tn,
+                    )
+                )
+            if assistant_text:
+                recent_turns.append(
+                    CompressedTurn(
+                        turn_id=f"{tid}:a" if tid else "",
+                        role="assistant",
+                        text=assistant_text,
+                        timestamp_ms=ts,
+                        turn_number=tn,
+                    )
+                )
 
             tc = ContextBuilder._extract_tool_calls_from_turn(t)
             if tc:
-                tool_calls[ct.turn_number] = tc
+                tool_calls[tn] = tc
 
         return current_turn, recent_turns, tool_calls
 

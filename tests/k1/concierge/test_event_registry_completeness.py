@@ -102,13 +102,13 @@ class TestPhase1ClassifiedRoundTrip:
             causation_id="cause-1",
             actor="classifier",
             turn_number=5,
-            complexity_tier="HIGH",
             intent_primary="book_flight",
             domain_primary="travel",
             safety_band="GREEN",
             emotion_primary="neutral",
             classification_latency_ms=12.5,
             is_degraded=False,
+            derived_plan=False,
         )
 
     def test_roundtrip_type(self, evt: Phase1Classified) -> None:
@@ -119,7 +119,7 @@ class TestPhase1ClassifiedRoundTrip:
         result = deserialize_event(evt.to_payload())
         assert result is not None
         assert result.turn_number == 5
-        assert result.complexity_tier == "HIGH"
+        assert result.derived_plan is False
         assert result.intent_primary == "book_flight"
         assert result.domain_primary == "travel"
         assert result.safety_band == "GREEN"

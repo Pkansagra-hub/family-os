@@ -731,12 +731,12 @@ class TestRecordBackMetrics:
             tier="HIGH",
             status="complete",
             iterations_used=6,
-            budget_limit=0,  # Will default to TIER_BUDGET_LIMITS["HIGH"] = 12
+            budget_limit=0,  # Will default to TIER_BUDGET_LIMITS["HIGH"] = 15 (P3.2)
         )
         alerts = record_back_metrics(mc, outcome)
 
         util = mc.get_histogram("back.tier.budget_utilization", {"tier": "HIGH"})
-        assert util == [0.5]  # 6/12
+        assert abs(util[0] - 6 / 15) < 1e-9  # 6/15 (P3.2 HIGH -> plan budget)
 
     def test_multiple_tiers_tracked_separately(self) -> None:
         mc = self._mc()
@@ -812,7 +812,13 @@ class TestClassifyBudgetUtilization:
         assert classify_budget_utilization(1.1) == "exhausted"
 
     def test_tier_budget_limits_defined(self) -> None:
-        assert TIER_BUDGET_LIMITS == {"LOW": 4, "MEDIUM": 8, "HIGH": 12}
+        assert TIER_BUDGET_LIMITS["simple"] == 5
+        assert TIER_BUDGET_LIMITS["plan"] == 15
+        assert TIER_BUDGET_LIMITS["crisis"] == 3
+        # Legacy aliases kept until P3.3
+        assert TIER_BUDGET_LIMITS["LOW"] == 5
+        assert TIER_BUDGET_LIMITS["MEDIUM"] == 15
+        assert TIER_BUDGET_LIMITS["HIGH"] == 15
 
 
 # =====================================================================

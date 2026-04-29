@@ -1,8 +1,9 @@
-"""Model selection with multi-dimension scoring [F42].
+"""Model selection (capability + preference + placement + health) [F42].
 
 Selects optimal (provider, model) pair from eligible providers using
-5-dimension weighted scoring with priority-specific weights, plus
-fallback chain construction and placement cascade.
+4 dimensions: preference, placement, health, plus an explicit fallback
+chain. Cost/latency/budget scoring removed (family-os: provider cost
+tables are not enforced; capability routing is enough).
 
 Import graph (Layer 3 -- imports Layer 0 + Layer 1 + Layer 2)
 --------------------------------------------------------------
@@ -19,7 +20,6 @@ References
 ----------
 - model_hub.mmd: ModelSelector service
 - Invariant MH-06: Fallback is CAPABILITY-AWARE (top 3)
-- Invariant MH-07: Cost from manifest model cost table
 - Invariant MH-13: Placement cascade (Local -> Remote -> Cached -> Template)
 """
 
@@ -31,13 +31,10 @@ from typing import Dict, List, Optional
 from k1.model_hub.manifest import ModelSpec
 from k1.model_hub.services.capability_router import EligibleProvider
 from k1.model_hub.types import (
-    CapabilityType,
     HealthStatus,
     HubRequest,
     ModelPreference,
-    ModelTier,
     PlacementType,
-    Priority,
 )
 
 # ===========================================================================
@@ -72,39 +69,14 @@ class FallbackEntry:
 
 
 # ===========================================================================
-# Scoring weights per priority tier
+# Scoring weights (family-os: simple, capability-first)
 # ===========================================================================
 
-# Weights: (cost, latency, preference, placement, health)
-_PRIORITY_WEIGHTS: Dict[Priority, Dict[str, float]] = {
-    Priority.REALTIME: {
-        "cost": 0.1,
-        "latency": 0.5,
-        "preference": 0.2,
-        "placement": 0.0,
-        "health": 0.2,
-    },
-    Priority.INTERACTIVE: {
-        "cost": 0.2,
-        "latency": 0.3,
-        "preference": 0.3,
-        "placement": 0.0,
-        "health": 0.2,
-    },
-    Priority.BACKGROUND: {
-        "cost": 0.5,
-        "latency": 0.1,
-        "preference": 0.1,
-        "placement": 0.0,
-        "health": 0.3,
-    },
-}
-
-# Tier-to-latency score mapping (faster = higher)
-_TIER_LATENCY_SCORES: Dict[ModelTier, float] = {
-    ModelTier.FAST: 1.0,
-    ModelTier.STANDARD: 0.6,
-    ModelTier.PREMIUM: 0.3,
+# Preference + placement + health, weights sum to 1.0
+_WEIGHTS: Dict[str, float] = {
+    "preference": 0.5,
+    "placement": 0.2,
+    "health": 0.3,
 }
 
 # Placement type scores (local > remote, MH-13)
@@ -131,51 +103,22 @@ _MAX_FALLBACK_DEPTH = 3
 
 
 class ModelSelector:
-    """Multi-dimension weighted scoring to select optimal (provider, model).
+    """Capability-first selection: preference + placement + health.
 
-    5 scoring dimensions:
-      1. cost_score:      Cheaper = higher (from manifest cost table, MH-07).
-      2. latency_score:   Faster tier = higher.
-      3. preference_score: User/consumer preference match.
-      4. placement_score: Local > remote (MH-13).
-      5. health_score:    HEALTHY > DEGRADED.
-
-    Weighted sum per priority tier:
-      REALTIME:    latency 0.5, cost 0.1, pref 0.2, health 0.2
-      INTERACTIVE: latency 0.3, cost 0.2, pref 0.3, health 0.2
-      BACKGROUND:  cost 0.5, latency 0.1, pref 0.1, health 0.3
+    3 scoring dimensions:
+      1. preference_score: User/consumer preferred provider/model match.
+      2. placement_score:  Local > remote (MH-13).
+      3. health_score:     HEALTHY > DEGRADED > UNHEALTHY.
 
     Builds fallback chain of top 3 choices (MH-06).
 
-    Cost optimization rules:
-      - BACKGROUND: always cheapest model.
-      - Budget > 80%: cheapest for non-REALTIME.
-      - Budget > 95%: cheapest for ALL.
-
-    Placement cascade (MH-13):
-      (1) Local GPU -> (2) Local CPU -> (3) Remote -> (4) Cached -> (5) Template.
+    Cost-based ranking and budget pressure removed -- family-os runs
+    on provider-supplied cost (recorded passively elsewhere) and does
+    not need to outsmart the provider's own pricing.
     """
 
-    def __init__(
-        self,
-        *,
-        budget_usage_pct: float = 0.0,
-    ) -> None:
-        """Initialize ModelSelector.
-
-        Args:
-            budget_usage_pct: Current daily budget usage percentage (0-100).
-                              Updated externally by BudgetEnforcer.
-        """
-        self._budget_usage_pct = budget_usage_pct
-
-    @property
-    def budget_usage_pct(self) -> float:
-        return self._budget_usage_pct
-
-    @budget_usage_pct.setter
-    def budget_usage_pct(self, value: float) -> None:
-        self._budget_usage_pct = value
+    def __init__(self) -> None:
+        """Initialize ModelSelector. No state."""
 
     def select(
         self,
@@ -188,7 +131,7 @@ class ModelSelector:
 
         Args:
             eligible_providers: Pre-filtered providers from CapabilityRouter.
-            request: Original HubRequest for priority, capability context.
+            request: Original HubRequest (currently unused beyond context).
             preference: Optional model preference from SessionState persona.
 
         Returns:
@@ -198,19 +141,16 @@ class ModelSelector:
         if not eligible_providers:
             return None
 
-        priority = request.constraints.priority
-        capability = request.capability
+        # If caller did not pass an explicit preference, fall back to the
+        # constraints-bound preference from the request envelope.
+        if preference is None:
+            preference = request.constraints.model_preference
 
         # Score all (provider, model) candidates
-        candidates = self._score_all_candidates(
-            eligible_providers, priority, capability, preference
-        )
+        candidates = self._score_all_candidates(eligible_providers, preference)
 
         if not candidates:
             return None
-
-        # Apply cost optimization rules
-        candidates = self._apply_cost_rules(candidates, priority, capability)
 
         # Sort by score descending
         candidates.sort(key=lambda c: c[2], reverse=True)
@@ -238,34 +178,23 @@ class ModelSelector:
     def _score_all_candidates(
         self,
         eligible_providers: List[EligibleProvider],
-        priority: Priority,
-        capability: CapabilityType,
         preference: Optional[ModelPreference],
     ) -> List[tuple]:
         """Score all (provider, model) pairs.
 
-        Returns list of (provider_id, model_id, score, total_cost) tuples.
+        Returns list of (provider_id, model_id, score) tuples.
         """
-        weights = _PRIORITY_WEIGHTS[priority]
         candidates: List[tuple] = []
 
-        # Collect max cost for normalization
-        all_costs: List[float] = []
         for ep in eligible_providers:
             for model in ep.eligible_models:
-                all_costs.append(model.cost_per_1m_input + model.cost_per_1m_output)
-        max_cost = max(all_costs) if all_costs else 1.0
-
-        for ep in eligible_providers:
-            for model in ep.eligible_models:
-                score = self._score_candidate(ep, model, weights, preference, max_cost)
-                total_cost = model.cost_per_1m_input + model.cost_per_1m_output
-                candidates.append((ep.provider_info.provider_id, model.id, score, total_cost))
+                score = self._score_candidate(ep, model, preference)
+                candidates.append((ep.provider_info.provider_id, model.id, score))
 
             # If no specific models, score provider with empty model
             if not ep.eligible_models:
-                score = self._score_provider_only(ep, weights, preference)
-                candidates.append((ep.provider_info.provider_id, "", score, 0.0))
+                score = self._score_provider_only(ep, preference)
+                candidates.append((ep.provider_info.provider_id, "", score))
 
         return candidates
 
@@ -273,46 +202,27 @@ class ModelSelector:
         self,
         ep: EligibleProvider,
         model: ModelSpec,
-        weights: Dict[str, float],
         preference: Optional[ModelPreference],
-        max_cost: float,
     ) -> float:
-        """Score a single (provider, model) candidate across 5 dimensions."""
-        # 1. Cost score (cheaper = higher, normalized 0-1)
-        total_cost = model.cost_per_1m_input + model.cost_per_1m_output
-        cost_score = 1.0 - (total_cost / max_cost) if max_cost > 0 else 1.0
-
-        # 2. Latency score (faster tier = higher)
-        latency_score = _TIER_LATENCY_SCORES.get(model.tier, 0.5)
-
-        # 3. Preference score
+        """Score a single (provider, model) candidate across 3 dimensions."""
         preference_score = self._compute_preference_score(
             ep.provider_info.provider_id, model.id, preference
         )
-
-        # 4. Placement score (local > remote, MH-13)
         placement_score = _PLACEMENT_SCORES.get(ep.provider_info.placement_type, 0.4)
-
-        # 5. Health score
         health_score = _HEALTH_SCORES.get(ep.health_status, 0.5)
 
         return (
-            weights["cost"] * cost_score
-            + weights["latency"] * latency_score
-            + weights["preference"] * preference_score
-            + weights["placement"] * placement_score
-            + weights["health"] * health_score
+            _WEIGHTS["preference"] * preference_score
+            + _WEIGHTS["placement"] * placement_score
+            + _WEIGHTS["health"] * health_score
         )
 
     def _score_provider_only(
         self,
         ep: EligibleProvider,
-        weights: Dict[str, float],
         preference: Optional[ModelPreference],
     ) -> float:
         """Score a provider with no specific model information."""
-        cost_score = 0.5  # Unknown cost, neutral
-        latency_score = 0.5  # Unknown tier, neutral
         preference_score = self._compute_preference_score(
             ep.provider_info.provider_id, "", preference
         )
@@ -320,11 +230,9 @@ class ModelSelector:
         health_score = _HEALTH_SCORES.get(ep.health_status, 0.5)
 
         return (
-            weights["cost"] * cost_score
-            + weights["latency"] * latency_score
-            + weights["preference"] * preference_score
-            + weights["placement"] * placement_score
-            + weights["health"] * health_score
+            _WEIGHTS["preference"] * preference_score
+            + _WEIGHTS["placement"] * placement_score
+            + _WEIGHTS["health"] * health_score
         )
 
     @staticmethod
@@ -346,48 +254,6 @@ class ModelSelector:
             score = 0.0  # Hard avoid
 
         return min(score, 1.0)
-
-    # -- Cost optimization rules -----------------------------------------------
-
-    def _apply_cost_rules(
-        self,
-        candidates: List[tuple],
-        priority: Priority,
-        capability: CapabilityType,
-    ) -> List[tuple]:
-        """Apply cost optimization rules based on budget and priority.
-
-        Rules:
-          - BACKGROUND: always cheapest model.
-          - Budget > 80%: cheapest for non-REALTIME.
-          - Budget > 95%: cheapest for ALL.
-          - BATCH capability: 50% cost discount in scoring.
-        """
-        if not candidates:
-            return candidates
-
-        force_cheapest = False
-
-        # Budget > 95%: cheapest for ALL
-        if self._budget_usage_pct > 95.0:
-            force_cheapest = True
-        # Budget > 80%: cheapest for non-REALTIME
-        elif self._budget_usage_pct > 80.0 and priority != Priority.REALTIME:
-            force_cheapest = True
-        # BACKGROUND: always cheapest
-        elif priority == Priority.BACKGROUND:
-            force_cheapest = True
-
-        if force_cheapest:
-            # Find cheapest candidate by total_cost (index 3)
-            cheapest = min(candidates, key=lambda c: c[3])
-            best_score = max(c[2] for c in candidates)
-            # Boost cheapest to top; leave rest in original order
-            return [(cheapest[0], cheapest[1], best_score + 0.1, cheapest[3])] + [
-                c for c in candidates if c is not cheapest
-            ]
-
-        return candidates
 
 
 __all__ = [

@@ -27,12 +27,6 @@ def _parse_args() -> argparse.Namespace:
         help="SessionStateFactory mode",
     )
     parser.add_argument(
-        "--tool-tier",
-        choices=["LOW", "MED", "HIGH"],
-        default="LOW",
-        help="Default tool dispatcher tier (matches ConciergeConfig validation)",
-    )
-    parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
@@ -53,7 +47,6 @@ async def _run() -> None:
         ordered_bus=not args.unordered,
         test_mode=args.test_mode,
         session_mode=args.session_mode,
-        tool_tier=args.tool_tier,
     )
 
     runtime = await start_kernel(cfg)

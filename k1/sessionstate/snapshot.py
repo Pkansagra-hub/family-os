@@ -218,6 +218,60 @@ class SessionSnapshot:
             "created_at_ms": self.created_at_ms,
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SessionSnapshot":
+        """Reconstruct ``SessionSnapshot`` from its ``to_dict`` form.
+
+        Used by ``PlanRequest.from_dict`` so that a plan-request envelope
+        round-trips through the bus serializer without data loss.
+        """
+        sections: Dict[str, SectionSnapshot] = {}
+        for name, sec in (data.get("sections") or {}).items():
+            sections[name] = SectionSnapshot(
+                name=sec.get("name", name),
+                tier=sec.get("tier", ""),
+                size_bytes=int(sec.get("size_bytes", 0)),
+                budget_bytes=int(sec.get("budget_bytes", 0)),
+                utilization_pct=float(sec.get("utilization_pct", 0.0)),
+                pressure=PressureLevel(sec.get("pressure", PressureLevel.NORMAL.value)),
+                last_mutation_ms=int(sec.get("last_mutation_ms", 0)),
+                eviction_priority=sec.get("eviction_priority"),
+            )
+
+        tiers: Dict[str, TierSnapshot] = {}
+        for name, tier in (data.get("tiers") or {}).items():
+            tiers[name] = TierSnapshot(
+                name=tier.get("name", name),
+                sections=list(tier.get("sections", [])),
+                size_bytes=int(tier.get("size_bytes", 0)),
+                limit_bytes=int(tier.get("limit_bytes", 0)),
+                utilization_pct=float(tier.get("utilization_pct", 0.0)),
+                pressure=PressureLevel(tier.get("pressure", PressureLevel.NORMAL.value)),
+            )
+
+        thrash_raw = data.get("thrash_metrics") or {}
+        thrash = ThrashMetrics(
+            migrations_last_minute=int(thrash_raw.get("migrations_last_minute", 0)),
+            evictions_last_minute=int(thrash_raw.get("evictions_last_minute", 0)),
+            thrash_detected=bool(thrash_raw.get("thrash_detected", False)),
+            thrash_severity=int(thrash_raw.get("thrash_severity", 0)),
+        )
+
+        return cls(
+            session_id=data.get("session_id", ""),
+            total_size_bytes=int(data.get("total_size_bytes", 0)),
+            hot_size_bytes=int(data.get("hot_size_bytes", 0)),
+            warm_size_bytes=int(data.get("warm_size_bytes", 0)),
+            utilization_pct=float(data.get("utilization_pct", 0.0)),
+            pressure=PressureLevel(data.get("pressure", PressureLevel.NORMAL.value)),
+            sections=sections,
+            tiers=tiers,
+            thrash_metrics=thrash,
+            last_mutation_ms=int(data.get("last_mutation_ms", 0)),
+            last_checkpoint_ms=int(data.get("last_checkpoint_ms", 0)),
+            created_at_ms=int(data.get("created_at_ms", 0)),
+        )
+
 
 # Thrash detection thresholds (config-backed: sessionstate.thrash.*)
 THRASH_MILD_MIGRATIONS = 5

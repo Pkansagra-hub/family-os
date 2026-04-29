@@ -827,21 +827,26 @@ class ControlSection:
         self,
         fsm_state: str,
         active_task_ids: List[str],
-        complexity_tier: str,
+        complexity_tier: str = "",
     ) -> None:
         """Set FSM overlay fields mirrored from ConciergeControlExtension.
 
         Called by the control extension after every FSM state mutation
         so that actors reading ControlSection from SessionState see
-        the current FSM state, active task list, and complexity tier.
+        the current FSM state and active task list.
 
         M4 E4.1.2 -- avoids FlatBuffer schema churn by storing in a
         metadata sub-dict rather than adding schema-level fields.
 
+        P3.4a: ``complexity_tier`` is now optional (default ``""``); the
+        FSM extension no longer passes it. The overlay key is preserved
+        as a backward-compat shim because fabric policy code still reads
+        ``cognitive.complexity_tier`` from SS.
+
         Args:
             fsm_state:       Current ConciergeState name.
             active_task_ids: Currently active task ID list.
-            complexity_tier: "LOW", "MEDIUM", or "HIGH".
+            complexity_tier: Optional legacy tier label; default empty.
         """
         self._fsm_overlay = {
             "fsm_state": fsm_state,

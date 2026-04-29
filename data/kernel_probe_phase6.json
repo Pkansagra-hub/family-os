@@ -1,0 +1,263 @@
+{
+  "boot_seconds": 10.089232700003777,
+  "counts": {
+    "OK": 15,
+    "WARN": 5,
+    "FAIL": 0,
+    "INFO": 16
+  },
+  "probes": [
+    {
+      "layer": "SessionState wiring",
+      "name": "session_id",
+      "status": "INFO",
+      "value": "'kernel-e5c9fe2a'",
+      "note": ""
+    },
+    {
+      "layer": "SessionState wiring",
+      "name": "session_state",
+      "status": "OK",
+      "value": "'SessionStateManager'",
+      "note": ""
+    },
+    {
+      "layer": "SessionState wiring",
+      "name": "EvictionEngine",
+      "status": "OK",
+      "value": "'EvictionEngine'",
+      "note": ""
+    },
+    {
+      "layer": "SessionState wiring",
+      "name": "MigrationEngine",
+      "status": "OK",
+      "value": "'MigrationEngine'",
+      "note": ""
+    },
+    {
+      "layer": "SessionState wiring",
+      "name": "EvictionEngine._section_provider",
+      "status": "WARN",
+      "value": "None",
+      "note": "audit Fix J: placeholder mode (expected today)"
+    },
+    {
+      "layer": "SessionState wiring",
+      "name": "MigrationEngine._section_provider",
+      "status": "WARN",
+      "value": "None",
+      "note": "audit Fix J: placeholder mode (expected today)"
+    },
+    {
+      "layer": "SessionState wiring",
+      "name": "SessionStateManager._event_port",
+      "status": "INFO",
+      "value": "'LocalEventAdapter'",
+      "note": ""
+    },
+    {
+      "layer": "SessionState wiring",
+      "name": "LocalColdArchive unmapped WARM sections",
+      "status": "WARN",
+      "value": "['artifacts_warm']",
+      "note": "production gap: archive() raises ValueError for these"
+    },
+    {
+      "layer": "Emergency event wiring",
+      "name": "kernel_event_bus",
+      "status": "OK",
+      "value": "'LocalBus'",
+      "note": ""
+    },
+    {
+      "layer": "Emergency event wiring",
+      "name": "warm_pressure_forced",
+      "status": "INFO",
+      "value": "'emergency'",
+      "note": ""
+    },
+    {
+      "layer": "Emergency event wiring",
+      "name": "events_observed_after_emergency",
+      "status": "INFO",
+      "value": "{}",
+      "note": ""
+    },
+    {
+      "layer": "Emergency event wiring",
+      "name": "EMERGENCY_ACTIVATED published",
+      "status": "WARN",
+      "value": "0",
+      "note": "production gap: factory exists but no code path publishes it"
+    },
+    {
+      "layer": "Emergency event wiring",
+      "name": "EVICTION_TRIGGERED published",
+      "status": "WARN",
+      "value": "0",
+      "note": "production gap: SessionStateManager._event_port is never invoked"
+    },
+    {
+      "layer": "Eviction (placeholder)",
+      "name": "warm_sizes",
+      "status": "INFO",
+      "value": "{'telemetry': 7946, 'beliefs_history': 11919, 'history_recent': 19865, 'persona': 7946}",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (placeholder)",
+      "name": "warm_pressure",
+      "status": "INFO",
+      "value": "'emergency'",
+      "note": "warm_total=47676/49152"
+    },
+    {
+      "layer": "Eviction (placeholder)",
+      "name": "candidates",
+      "status": "OK",
+      "value": "['telemetry', 'beliefs_history', 'history_recent', 'persona']",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (placeholder)",
+      "name": "evict.success",
+      "status": "OK",
+      "value": "True",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (placeholder)",
+      "name": "evict.bytes_freed",
+      "status": "INFO",
+      "value": "13270",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (placeholder)",
+      "name": "evict.bytes_archived",
+      "status": "INFO",
+      "value": "204",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (placeholder)",
+      "name": "evict.sections",
+      "status": "INFO",
+      "value": "['telemetry', 'beliefs_history']",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (placeholder)",
+      "name": "evict.new_pressure",
+      "status": "INFO",
+      "value": "'normal'",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (placeholder)",
+      "name": "warm_total_after",
+      "status": "OK",
+      "value": "34406",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (provider injected)",
+      "name": "evict.success",
+      "status": "OK",
+      "value": "True",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (provider injected)",
+      "name": "evict.bytes_freed",
+      "status": "INFO",
+      "value": "13270",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (provider injected)",
+      "name": "evict.bytes_archived",
+      "status": "INFO",
+      "value": "13270",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (provider injected)",
+      "name": "evict.bytes_archived>0",
+      "status": "OK",
+      "value": "13270",
+      "note": "real bytes should flow through provider->LocalColdArchive"
+    },
+    {
+      "layer": "Eviction (provider injected)",
+      "name": "provider.calls",
+      "status": "INFO",
+      "value": "{'get_section_data': 0, 'clear_section': 0, 'get_evictable_data': 2, 'remove_evicted_data': 2}",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (provider injected)",
+      "name": "provider.get_evictable_data called",
+      "status": "OK",
+      "value": "2",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (provider injected)",
+      "name": "provider.remove_evicted_data called",
+      "status": "OK",
+      "value": "2",
+      "note": ""
+    },
+    {
+      "layer": "Eviction (provider injected)",
+      "name": "warm_total_after",
+      "status": "OK",
+      "value": "34406",
+      "note": "should drop near 70% target after eviction"
+    },
+    {
+      "layer": "Migration HOT->WARM (provider injected)",
+      "name": "hot_sizes_seeded",
+      "status": "INFO",
+      "value": "{'beliefs_active': 7946, 'narrative_active': 3973, 'clarifications': 3973, 'history_active': 7946, 'scoreboard': 5959, 'affective_now': 3973}",
+      "note": ""
+    },
+    {
+      "layer": "Migration HOT->WARM (provider injected)",
+      "name": "hot_pressure",
+      "status": "INFO",
+      "value": "'emergency'",
+      "note": ""
+    },
+    {
+      "layer": "Migration HOT->WARM (provider injected)",
+      "name": "demote_on_pressure.results",
+      "status": "OK",
+      "value": "1",
+      "note": "total=1 success=1"
+    },
+    {
+      "layer": "Migration HOT->WARM (provider injected)",
+      "name": "provider.calls",
+      "status": "INFO",
+      "value": "{'get_items': 2, 'add_items': 2, 'remove_items': 2, 'clear_section': 0, 'get_turn_count': 0, 'get_oldest_turns': 0}",
+      "note": ""
+    },
+    {
+      "layer": "Migration HOT->WARM (provider injected)",
+      "name": "hot_total_decreased",
+      "status": "OK",
+      "value": "'51648->35758'",
+      "note": ""
+    },
+    {
+      "layer": "Migration HOT->WARM (provider injected)",
+      "name": "warm_total_increased_or_same",
+      "status": "OK",
+      "value": "'0->8829'",
+      "note": "demote moves bytes; some shrink via summarization"
+    }
+  ]
+}

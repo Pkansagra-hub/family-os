@@ -830,10 +830,6 @@ class LLMTimeoutError(PlannerError):
     """Model Hub timed out processing an LLM request (Section 13, SS16.1.2)."""
 
 
-class BudgetExceededError(PlannerError):
-    """Model Hub rejected the request -- token budget exceeded (MH-04)."""
-
-
 class AdapterException(PlannerError):
     """Production adapter infrastructure failure (SS16.1).
 

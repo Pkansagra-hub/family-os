@@ -12,15 +12,15 @@ Milestone: MS-2 Epic 2.9
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from bridge.client import IBridgeClient, SinkBridgeClient, StubBridgeClient
+from bridge.client import IBridgeClient, SinkBridgeClient
 from bridge.core.health import K0AvailabilityStatus
 from bridge.ports.obs_port_protocol import FeedbackEnvelope
 from bridge.ports.query_port_protocol import QueryEnvelope, RecallBundle, RecallSelector
 from bridge.sync.local_outbox import LocalOutbox
+from bridge.testing import StubBridgeClient
 
 # ---------------------------------------------------------------------------
 # Protocol conformance

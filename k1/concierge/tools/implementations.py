@@ -93,7 +93,9 @@ class ToolContext:
     writer_port: "IWriterPort | None" = None  # M4 E4.2.1 write-path enforcement
     bundle_idempotency_cache: dict = None  # M4 E4.3.1 per-session dedup for update_session_bundle
     active_device_id: str | None = None  # M5 E5.5.6: device that triggered the current turn
-    hil_coordinator: "HILCoordinatorLike | None" = None  # M6 E6.1.3: HILCoordinator for L2 invoke_capability blocking
+    hil_coordinator: "HILCoordinatorLike | None" = (
+        None  # M6 E6.1.3: HILCoordinator for L2 invoke_capability blocking
+    )
     active_task_id: str | None = None  # M6 E6.1.3: task_id for per-task L2 checks
     dispatch: IDispatchPort | None = None  # P4B.3: typed IDispatchPort (Fabric + Orchestrator)
     recall_fn: Callable | None = None
@@ -927,36 +929,19 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
             depends_on,
         )
         depends_on = None
-    tier_raw = args.get("tier", "AUTO")
-    # M10 E10.3.1: AUTO reads tier from SS control section
-    if str(tier_raw).upper() == "AUTO" and ctx.session_manager is not None:
-        try:
-            control = ctx.session_manager.get_section("control")
-            if control is not None and hasattr(control, "get_complexity_tier"):
-                ss_tier = control.get_complexity_tier()
-                if ss_tier:
-                    tier_raw = ss_tier
-                else:
-                    tier_raw = "LOW"
-                    logger.warning(
-                        "tool:dispatch_task  no complexity_tier in SS, defaulting to LOW"
-                    )
-            else:
-                tier_raw = "LOW"
-        except Exception:
-            logger.warning(
-                "tool:dispatch_task  failed to read SS tier, defaulting to LOW",
-                exc_info=True,
-            )
-            tier_raw = "LOW"
-    elif str(tier_raw).upper() == "AUTO":
-        tier_raw = "LOW"
-        logger.warning("tool:dispatch_task  AUTO tier but no session_manager, defaulting to LOW")
+    # P3.4c: Tier is derived from `plan: bool` + multi-intent + depends_on
+    # signals. The legacy `tier` arg is silently ignored. AUTO-from-SS path
+    # has been removed (no SS read on dispatch).
+    explicit_plan = bool(args.get("plan", False))
+    needs_plan = explicit_plan or len(intents) > 1 or depends_on is not None
+    tier = ComplexityTier.MEDIUM if needs_plan else ComplexityTier.LOW
+    tier_raw = tier.value
     logger.info(
-        "tool:dispatch_task  intents=%d urgency=%s tier=%s safety=%s",
+        "tool:dispatch_task  intents=%d urgency=%s tier=%s plan=%s safety=%s",
         len(intents),
         urgency,
         tier_raw,
+        needs_plan,
         safety_band,
     )
 
@@ -974,7 +959,10 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
         )
 
     try:
-        tier = ComplexityTier(str(tier_raw).upper())
+        # tier already a ComplexityTier from plan derivation above; legacy
+        # path retained for safety in case future callers pass tier_raw differently.
+        if not isinstance(tier, ComplexityTier):  # pragma: no cover
+            tier = ComplexityTier(str(tier_raw).upper())
     except ValueError:
         return ToolResult(
             tool_name="dispatch_task",
@@ -1016,6 +1004,8 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
         if idx < len(normalized_intents):
             intent_payload.setdefault("urgency", normalized_intents[idx].urgency)
     dispatch_payload["urgency"] = urgency
+    # P3.4c: surface derived plan flag on the dispatch payload.
+    dispatch_payload["plan"] = needs_plan
 
     return ToolResult(
         tool_name="dispatch_task",

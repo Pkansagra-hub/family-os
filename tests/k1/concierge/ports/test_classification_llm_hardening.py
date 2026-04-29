@@ -564,7 +564,8 @@ class TestUltraBERTPhase1PipelineComplexity:
         adapter = _FakeUltraBERTAdapter(result=_minimal_analysis())
         pipeline = UltraBERTPhase1Pipeline(adapter)
         result = pipeline.classify("hi")
-        assert result.complexity_tier == "LOW"
+        # P3.4a: complexity_tier removed from Phase1Result.
+        assert result is not None
 
     def test_safety_override_red_forces_low(self) -> None:
         analysis = _minimal_analysis(
@@ -574,7 +575,8 @@ class TestUltraBERTPhase1PipelineComplexity:
         adapter = _FakeUltraBERTAdapter(result=analysis)
         pipeline = UltraBERTPhase1Pipeline(adapter)
         result = pipeline.classify("emergency")
-        assert result.complexity_tier == "LOW"
+        # P3.4a: complexity_tier removed from Phase1Result.
+        assert result.safety_band == "RED"
 
     def test_multi_intent_bumps_complexity(self) -> None:
         analysis = _minimal_analysis(
@@ -584,8 +586,9 @@ class TestUltraBERTPhase1PipelineComplexity:
         adapter = _FakeUltraBERTAdapter(result=analysis)
         pipeline = UltraBERTPhase1Pipeline(adapter)
         result = pipeline.classify("hi, schedule something")
-        # Multi-intent adds +1 to score
-        assert result.complexity_tier in ("LOW", "MEDIUM")
+        # P3.4a: complexity_tier removed; multi-intent now drives plan derivation
+        # at dispatch_task time, not in Phase1Result.
+        assert result is not None
 
 
 class TestUltraBERTPhase1PipelineEntityMerge:

@@ -58,7 +58,7 @@ from k1.concierge.prompt.back_prompt import build_back_prompt
 from k1.concierge.protocols.cancellation import CancellationToken, CancelReason
 from k1.concierge.react.history import build_chat_history_for_back
 from k1.concierge.react.loop import ReactResult, react_loop
-from k1.concierge.tools.dispatcher import ToolDispatcher
+from k1.concierge.tools.dispatcher import ToolDispatcher, create_back_dispatcher
 from k1.concierge.tools.schemas_back import BACK_TIER_ALLOWLISTS, BACK_TOOL_SCHEMAS
 from k1.model_hub.ports import IModelHubPort
 
@@ -90,11 +90,49 @@ def _budget_to_iterations(budget_hint: int) -> int:
 def _filter_back_tools(tier: str) -> list[Any]:
     """Return Back tool schemas filtered by tier allowlist.
 
-    LOW tier gets only 3 tools: recall_memory, invoke_capability, submit_result.
-    MEDIUM/HIGH get all 6.
+    P3.4b: tier may be 'simple', 'plan', or any legacy alias (LOW/MEDIUM/HIGH).
     """
-    allowed = set(BACK_TIER_ALLOWLISTS.get(tier, BACK_TIER_ALLOWLISTS["LOW"]))
+    allowed = set(BACK_TIER_ALLOWLISTS.get(tier, ["submit_result"]))
     return [t for t in BACK_TOOL_SCHEMAS if t.name in allowed]
+
+
+# =========================================================================
+# P3.4c: Per-task back dispatcher tier rebind
+# =========================================================================
+
+
+def _resolve_back_tier_bucket(task_tier: str) -> str:
+    """Map a task tier (legacy or canonical) to its back-dispatcher bucket."""
+    upper = str(task_tier).upper()
+    if upper in ("MEDIUM", "HIGH"):
+        return "plan"
+    return "simple"
+
+
+def _maybe_rebind_back_dispatcher(
+    tool_dispatcher: ToolDispatcher,
+    task_tier: str,
+    bus: IBus,
+) -> ToolDispatcher:
+    """Return an equal-or-upgraded back ToolDispatcher for the given task tier.
+
+    Per-task rebind: avoids a global tool_tier config by spinning up a fresh
+    dispatcher when the task requires the larger 'plan' allowlist.
+    """
+    desired_bucket = _resolve_back_tier_bucket(task_tier)
+    if tool_dispatcher.tier == desired_bucket:
+        return tool_dispatcher
+    logger.info(
+        "back_handler: rebinding dispatcher tier %s -> %s for task tier %s",
+        tool_dispatcher.tier,
+        desired_bucket,
+        task_tier,
+    )
+    return create_back_dispatcher(
+        tier=desired_bucket,
+        ctx=tool_dispatcher.ctx,
+        bus=bus,
+    )
 
 
 # =========================================================================
@@ -459,6 +497,8 @@ async def back_handler(
     task = _parse_payload(envelope)
     task_id = task.get("task_id", "")
     tier = task.get("tier", "LOW")
+    # P3.4c: Per-task tier rebind for the back dispatcher.
+    tool_dispatcher = _maybe_rebind_back_dispatcher(tool_dispatcher, tier, bus)
 
     logger.info(
         "back_handler: task_id=%s tier=%s trace=%s",
@@ -708,6 +748,8 @@ async def back_resume_handler(
             return ReactResult(status="cancelled", data={"reason": "no_pending_context"})
 
     tier = original_task.get("tier", "LOW")
+    # P3.4c: Per-task tier rebind for the back dispatcher.
+    tool_dispatcher = _maybe_rebind_back_dispatcher(tool_dispatcher, tier, bus)
 
     # 2. Re-read SS at resume time (may have changed during suspension)
     snapshot = _read_ss_snapshot(ss)

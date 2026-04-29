@@ -56,6 +56,7 @@ DEFAULT_RULES: dict[str, DeliveryMode] = {
     "k1.tool": DeliveryMode.STRICT,
     "k1.arbiter": DeliveryMode.STRICT,
     "k1.backpool": DeliveryMode.STRICT,
+    "k1.model_hub": DeliveryMode.STRICT,  # P6.10: model selection / routing decisions must be ordered
     # RELAXED: order-preferred
     "k1.affect": DeliveryMode.RELAXED,
     "k1.constraint": DeliveryMode.RELAXED,

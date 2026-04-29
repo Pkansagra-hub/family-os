@@ -33,10 +33,7 @@ if _ENV.exists():
             os.environ.setdefault(k, v)
 
 from k1.concierge.bus.builders import build_user_input
-from k1.concierge.bus.topics import (
-    TOPIC_FINAL_RESPONSE,
-    TOPIC_RESPONSE_STREAM,
-)
+from k1.concierge.bus.topics import TOPIC_FINAL_RESPONSE, TOPIC_RESPONSE_STREAM
 from k1.concierge.config.kernel import KernelConfig
 from k1.kernel.bootstrap import start_kernel, stop_kernel
 
@@ -110,6 +107,7 @@ async def run_tier(tier: str, prompt: str, timeout_s: float = 45.0) -> dict:
     def _mk_tier_observer(topic: str):
         def _h(env):
             tier_events.append((topic, _decode(env)))
+
         return _h
 
     bus = runtime.bus
@@ -144,7 +142,11 @@ async def run_tier(tier: str, prompt: str, timeout_s: float = 45.0) -> dict:
     print(f"    Stream chunks: {len(stream_chunks)}")
     print(f"    Tier events observed: {len(tier_events)}")
     for topic, payload in tier_events[:10]:
-        short = {k: v for k, v in (payload or {}).items() if k in {"tier", "task_id", "intent", "capability", "status"}}
+        short = {
+            k: v
+            for k, v in (payload or {}).items()
+            if k in {"tier", "task_id", "intent", "capability", "status"}
+        }
         print(f"      - {topic}  {short}")
 
     preview = final_text.strip().replace("\n", " ")

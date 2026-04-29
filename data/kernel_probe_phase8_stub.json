@@ -1,0 +1,265 @@
+{
+  "title": "K1 Kernel Probe \u2014 Phase 8 (Model Hub) [test]",
+  "counts": {
+    "OK": 24,
+    "WARN": 1,
+    "FAIL": 0,
+    "INFO": 4
+  },
+  "probes": [
+    {
+      "layer": "Hub wiring",
+      "name": "svc._model_hub",
+      "status": "OK",
+      "value": "_HubCore",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "router",
+      "status": "OK",
+      "value": "RequestRouter",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "registry",
+      "status": "OK",
+      "value": "ProviderRegistry",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "health adapter",
+      "status": "OK",
+      "value": "HealthReportAdapter",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "router.dispatcher",
+      "status": "OK",
+      "value": "ProviderDispatcher",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "router.cost_tracker",
+      "status": "OK",
+      "value": "CostTracker",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "router.budget_enforcer",
+      "status": "OK",
+      "value": "BudgetEnforcer",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "router.audit_logger",
+      "status": "OK",
+      "value": "AuditLogger",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "router.response_cache",
+      "status": "OK",
+      "value": "ResponseCache",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "router.normalization",
+      "status": "OK",
+      "value": "NormalizationLayer",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "router.capability_router",
+      "status": "OK",
+      "value": "CapabilityRouter",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "router.model_selector",
+      "status": "OK",
+      "value": "ModelSelector",
+      "note": ""
+    },
+    {
+      "layer": "Hub wiring",
+      "name": "router.metrics_port",
+      "status": "OK",
+      "value": "PrometheusAdapter",
+      "note": ""
+    },
+    {
+      "layer": "Providers",
+      "name": "provider_count",
+      "status": "OK",
+      "value": 1,
+      "note": ""
+    },
+    {
+      "layer": "Providers",
+      "name": "registered provider_ids",
+      "status": "OK",
+      "value": [
+        "stub"
+      ],
+      "note": ""
+    },
+    {
+      "layer": "Providers",
+      "name": "capability_index",
+      "status": "INFO",
+      "value": {
+        "AUDIO_IN": [
+          "stub"
+        ],
+        "BATCH": [
+          "stub"
+        ],
+        "CACHE_PROMPT": [
+          "stub"
+        ],
+        "CHAT": [
+          "stub"
+        ],
+        "CODE_EXEC": [
+          "stub"
+        ],
+        "EMBED": [
+          "stub"
+        ],
+        "IMAGE_GEN": [
+          "stub"
+        ],
+        "MODERATE": [
+          "stub"
+        ],
+        "REASON": [
+          "stub"
+        ],
+        "STRUCTURED": [
+          "stub"
+        ],
+        "TOKEN_COUNT": [
+          "stub"
+        ],
+        "TOOL_CALL": [
+          "stub"
+        ],
+        "TTS": [
+          "stub"
+        ],
+        "VISION": [
+          "stub"
+        ],
+        "WEB_SEARCH": [
+          "stub"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "layer": "Providers",
+      "name": "expected:stub",
+      "status": "OK",
+      "value": "registered",
+      "note": ""
+    },
+    {
+      "layer": "Stub execute",
+      "name": "hub.execute(stub)",
+      "status": "OK",
+      "value": "0ms",
+      "note": ""
+    },
+    {
+      "layer": "Stub execute",
+      "name": "response.metadata",
+      "status": "OK",
+      "value": "ResponseMetadata",
+      "note": ""
+    },
+    {
+      "layer": "Stub execute",
+      "name": "metadata.provider_id",
+      "status": "OK",
+      "value": "stub",
+      "note": ""
+    },
+    {
+      "layer": "Stub execute",
+      "name": "metadata.model_id",
+      "status": "OK",
+      "value": "stub-canned-v1",
+      "note": ""
+    },
+    {
+      "layer": "Stub execute",
+      "name": "metadata.usage",
+      "status": "INFO",
+      "value": {
+        "prompt": 10,
+        "completion": 2
+      },
+      "note": ""
+    },
+    {
+      "layer": "Stub execute",
+      "name": "metadata.cost_usd",
+      "status": "OK",
+      "value": 0.0,
+      "note": ""
+    },
+    {
+      "layer": "Stub execute",
+      "name": "metadata.latency_ms",
+      "status": "OK",
+      "value": 0,
+      "note": ""
+    },
+    {
+      "layer": "Stub execute",
+      "name": "metadata.cache_hit",
+      "status": "INFO",
+      "value": false,
+      "note": ""
+    },
+    {
+      "layer": "Stub execute",
+      "name": "metadata.trace_id",
+      "status": "OK",
+      "value": "probe-phase8-8b4d8950",
+      "note": ""
+    },
+    {
+      "layer": "Stub execute",
+      "name": "cost_tracker delta records",
+      "status": "WARN",
+      "value": 0,
+      "note": "production gap: RequestRouter holds CostTracker but never calls .track() \u2014 cost ledger is dead-wired"
+    },
+    {
+      "layer": "Stub execute",
+      "name": "cost_tracker.total_cost_usd delta",
+      "status": "INFO",
+      "value": 0,
+      "note": ""
+    },
+    {
+      "layer": "Stub execute",
+      "name": "audit_logger delta records",
+      "status": "OK",
+      "value": 1,
+      "note": ""
+    }
+  ]
+}

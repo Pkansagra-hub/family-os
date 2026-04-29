@@ -906,6 +906,66 @@ class TestSearchAndQuery:
 
 
 # =============================================================================
+# CLASS: TestToDict - dict serialization for SessionReadAdapter / MW
+# =============================================================================
+
+
+class TestToDict:
+    """Tests for to_dict() consumed by SessionReadAdapter / Memory Writer."""
+
+    def test_to_dict_empty_section(self, section):
+        """Empty section serializes with zero turns."""
+        d = section.to_dict()
+        assert d["turns"] == []
+        assert d["turn_count"] == 0
+        assert d["max_turns"] == 25
+
+    def test_to_dict_includes_assistant_response(self, section):
+        """Each turn dict carries both user_message AND assistant_response."""
+        section.add_turn(
+            user_message="What's the weather?",
+            assistant_response="Sunny and 72.",
+            turn_id="turn-x",
+        )
+        d = section.to_dict()
+        assert len(d["turns"]) == 1
+        t = d["turns"][0]
+        assert t["turn_id"] == "turn-x"
+        assert t["user_message"] == "What's the weather?"
+        assert t["assistant_response"] == "Sunny and 72."
+
+    def test_to_dict_preserves_order(self, section_with_turns):
+        """Turn order matches insertion."""
+        d = section_with_turns.to_dict()
+        nums = [t["turn_number"] for t in d["turns"]]
+        assert nums == sorted(nums)
+
+    def test_to_dict_includes_metadata_fields(self, section):
+        """Per-turn intents, entities, emotion, and metadata round-trip."""
+        section.add_turn(
+            user_message="Hi mom",
+            assistant_response="Hello!",
+            entities=["mom"],
+            intents=["greet"],
+            emotion="warm",
+        )
+        d = section.to_dict()
+        t = d["turns"][0]
+        assert t["entities"] == ["mom"]
+        assert t["intents"] == ["greet"]
+        assert t["emotion"] == "warm"
+
+    def test_to_dict_aggregates(self, section_with_turns):
+        """Aggregate counters reflect populated turns."""
+        d = section_with_turns.to_dict()
+        assert d["turn_count"] == 5
+        assert d["total_user_tokens"] > 0
+        assert d["total_response_tokens"] > 0
+        assert d["current_turn_number"] == 5
+        assert d["oldest_turn_number"] == 1
+
+
+# =============================================================================
 # CLASS: TestStatistics
 # =============================================================================
 

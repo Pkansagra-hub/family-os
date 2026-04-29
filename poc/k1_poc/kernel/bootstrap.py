@@ -65,7 +65,6 @@ class KernelConfig:
     ordered_bus: bool = True
     capture_bus: bool = False
     test_mode: bool = False
-    tool_tier: str = "LOW"
     session_mode: str = "standalone"  # standalone | testing
     session_id: str | None = None
     enable_experience: bool = True
@@ -211,8 +210,10 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         writer_port=_writer_port,
     )
 
-    front_dispatcher = create_front_dispatcher(tier=cfg.tool_tier, ctx=front_ctx, bus=bus)
-    back_dispatcher = create_back_dispatcher(tier=cfg.tool_tier, ctx=back_ctx, bus=bus)
+    # P3.3: dispatchers boot at canonical 'simple' tier; back upgrades to 'plan'
+    # per-task inside back_handler based on TaskDispatch.tier (MEDIUM/HIGH -> plan).
+    front_dispatcher = create_front_dispatcher(tier="simple", ctx=front_ctx, bus=bus)
+    back_dispatcher = create_back_dispatcher(tier="simple", ctx=back_ctx, bus=bus)
 
     runtime = KernelRuntime(
         config=cfg,
@@ -361,10 +362,9 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
     runtime.started = True
 
     logger.info(
-        "Kernel started (ordered=%s, session_mode=%s, tool_tier=%s)",
+        "Kernel started (ordered=%s, session_mode=%s)",
         cfg.ordered_bus,
         cfg.session_mode,
-        cfg.tool_tier,
     )
     return runtime
 

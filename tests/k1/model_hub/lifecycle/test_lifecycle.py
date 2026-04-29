@@ -14,8 +14,7 @@ No unittest.mock imports.
 
 from __future__ import annotations
 
-import asyncio
-from typing import AsyncIterator, Dict, List
+from typing import AsyncIterator
 
 import pytest
 
@@ -26,7 +25,6 @@ from k1.model_hub.manifest import (
     ModelSpec,
     PlacementConfig,
     ProviderManifest,
-    RateLimitConfig,
 )
 from k1.model_hub.plugins.base import (
     NormalizedRequest,
@@ -35,31 +33,24 @@ from k1.model_hub.plugins.base import (
     ProviderResponse,
 )
 from k1.model_hub.services.audit_logger import AuditLogger
-from k1.model_hub.services.budget_enforcer import BudgetEnforcer
 from k1.model_hub.services.circuit_breaker_manager import CircuitBreakerManager
-from k1.model_hub.services.cost_tracker import CostTracker
 from k1.model_hub.services.provider_registry import ProviderRegistry
 from k1.model_hub.services.rate_limiter import RateLimiter
 from k1.model_hub.services.response_cache import ResponseCache
 from k1.model_hub.types import (
-    BudgetDecision,
-    BudgetExceededError,
     CapabilityType,
     ChatPayload,
     CircuitState,
     FinishReason,
     HealthStatus,
-    HubChunk,
     HubRequest,
     HubResponse,
     Message,
     ModelTier,
     NoEligibleProviderError,
     PlacementType,
-    Priority,
     ProviderError,
     RequestConstraints,
-    TokenUsage,
 )
 
 # ===========================================================================
@@ -247,9 +238,7 @@ class TestInit:
             "registry",
             "circuit_mgr",
             "rate_limiter",
-            "cost_tracker",
             "response_cache",
-            "budget_enforcer",
             "capability_router",
             "model_selector",
             "normalization",
@@ -275,9 +264,9 @@ class TestInit:
 
     def test_factory_accepts_config_override(self) -> None:
         """Custom config is used by factory."""
-        cfg = ModelHubConfig(daily_budget_usd=99.0)
+        cfg = ModelHubConfig(cache_max_entries=99)
         _, adapters = ModelHubFactory.create_for_testing(overrides={"config": cfg})
-        assert adapters["config"].daily_budget_usd == 99.0
+        assert adapters["config"].cache_max_entries == 99
 
     def test_factory_accepts_plugin_override(self) -> None:
         """Custom plugins are wired into dispatcher."""
@@ -427,11 +416,8 @@ class TestRunning:
         assert any(r.trace_id == "lc-audit" for r in audit.records)
 
     async def test_cost_tracked_during_running(self) -> None:
-        """Cost tracker accumulates cost during RUNNING phase."""
-        facade, adapters, _ = _wire()
-        cost_tracker: CostTracker = adapters["cost_tracker"]
-        await facade.execute(_make_request())
-        assert cost_tracker.total_cost_usd >= 0.0
+        """RIP-OUT: CostTracker deleted (family-os)."""
+        pytest.skip("CostTracker deleted in RIP-OUT")
 
     async def test_cache_populated_during_running(self) -> None:
         """Cache stores responses for identical requests."""
@@ -478,27 +464,12 @@ class TestDegraded:
         assert state in (CircuitState.OPEN, CircuitState.HALF_OPEN)
 
     async def test_budget_exhaustion_rejects(self) -> None:
-        """Budget exhaustion causes REJECT decision."""
-        cfg = ModelHubConfig(daily_budget_usd=0.001)
-        facade, adapters, _ = _wire(config=cfg)
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-
-        # Exhaust budget by setting spent amount
-        enforcer._daily_spent_usd = cfg.daily_budget_usd + 1.0
-
-        with pytest.raises(BudgetExceededError):
-            await facade.execute(_make_request(trace_id="budget-exhaust"))
+        """RIP-OUT: BudgetEnforcer deleted (family-os)."""
+        pytest.skip("BudgetEnforcer deleted in RIP-OUT")
 
     async def test_budget_degraded_mode(self) -> None:
-        """When budget >= 80%, hub allows degraded mode."""
-        cfg = ModelHubConfig(daily_budget_usd=10.0)
-        facade, adapters, _ = _wire(config=cfg)
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-
-        # Set budget to 85% consumed -> ALLOW_DEGRADED
-        enforcer._daily_spent_usd = 8.5
-        result = enforcer.check(_make_request(trace_id="degrade-budget"))
-        assert result.decision in (BudgetDecision.ALLOW_DEGRADED, BudgetDecision.REJECT)
+        """RIP-OUT: BudgetEnforcer deleted (family-os)."""
+        pytest.skip("BudgetEnforcer deleted in RIP-OUT")
 
     async def test_fallback_on_primary_failure(self) -> None:
         """Hub falls back when primary provider fails."""
@@ -675,22 +646,5 @@ class TestFullLifecycle:
             await p.close()
 
     async def test_lifecycle_budget_phases(self) -> None:
-        """Budget transitions through ALLOW -> ALLOW_DEGRADED -> REJECT."""
-        cfg = ModelHubConfig(daily_budget_usd=10.0)
-        facade, adapters, _ = _wire(config=cfg)
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-        req = _make_request(trace_id="budget-phase")
-
-        # Phase 1: ALLOW (budget healthy)
-        d1 = enforcer.check(req)
-        assert d1.decision == BudgetDecision.ALLOW
-
-        # Phase 2: ALLOW_DEGRADED (budget >= 80%)
-        enforcer._daily_spent_usd = 8.5
-        d2 = enforcer.check(req)
-        assert d2.decision in (BudgetDecision.ALLOW_DEGRADED, BudgetDecision.REJECT)
-
-        # Phase 3: REJECT (budget exceeded)
-        enforcer._daily_spent_usd = 11.0
-        d3 = enforcer.check(req)
-        assert d3.decision == BudgetDecision.REJECT
+        """RIP-OUT: BudgetEnforcer deleted (family-os)."""
+        pytest.skip("BudgetEnforcer deleted in RIP-OUT")

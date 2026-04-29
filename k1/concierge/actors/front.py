@@ -30,7 +30,6 @@ from typing import Any
 
 from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
-from k1.model_hub.ports import IModelHubPort
 
 # Shared actor utilities (M3 E3.5)
 from k1.concierge.actors.shared import never_cancel as _never_cancel
@@ -52,6 +51,7 @@ from k1.concierge.prompt.mode import PromptMode, determine_mode
 from k1.concierge.react.loop import ReactResult, react_loop
 from k1.concierge.task.complexity import ComplexityTier, budget_for_tier
 from k1.concierge.tools.dispatcher import ToolDispatcher
+from k1.model_hub.ports import IModelHubPort
 
 logger = logging.getLogger(__name__)
 
@@ -805,7 +805,6 @@ async def front_handler(
             opp_enrichment = opp_pipeline.on_pre_prompt_build(
                 turns=turns_for_opp,
                 affect_band=affect_band,
-                complexity_tier=tier,
                 active_domains=[domain] if domain else [],
             )
             if opp_enrichment.compressed_context:

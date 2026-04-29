@@ -28,6 +28,7 @@ from k1.memory_writer.filter.relevance_filter import RelevanceFilter
 from k1.memory_writer.health.circuit_breaker import CircuitBreaker
 from k1.memory_writer.invariants import validate_init_invariants
 from k1.memory_writer.pipeline.pipeline import MemoryWriterPipeline
+from k1.memory_writer.pipeline.session_batch_dispatcher import SessionBatchDispatcher
 from k1.memory_writer.pipeline.turn_dispatcher import TurnDispatcher
 from k1.memory_writer.place_resolver import PlaceResolver
 from k1.memory_writer.ports.bridge_command_port import IBridgeCommandPort
@@ -147,7 +148,15 @@ class MemoryWriterFactory:
         )
 
         # ── Create dispatcher + service ──
-        dispatcher = TurnDispatcher(pipeline, event_subscription_port)
+        if config.extraction_mode == "per_turn":
+            dispatcher = TurnDispatcher(pipeline, event_subscription_port)
+        else:
+            dispatcher = SessionBatchDispatcher(
+                pipeline,
+                event_subscription_port,
+                flush_turn_threshold=config.flush_turn_threshold,
+                flush_idle_seconds=config.flush_idle_seconds,
+            )
 
         return MemoryWriterService(
             pipeline=pipeline,

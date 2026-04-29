@@ -439,14 +439,13 @@ class TestConciergeConfig:
     def test_frozen(self):
         cfg = ConciergeConfig()
         with pytest.raises(AttributeError):
-            cfg.tool_tier = "HIGH"  # type: ignore[misc]
+            cfg.enable_experience = False  # type: ignore[misc]
 
     def test_from_kernel_config(self):
         from k1.concierge.config.kernel import KernelConfig
 
-        kc = KernelConfig(tool_tier="HIGH", enable_experience=False, session_id="s1")
+        kc = KernelConfig(enable_experience=False, session_id="s1")
         cc = ConciergeConfig.from_kernel_config(kc)
-        assert cc.tool_tier == "HIGH"
         assert cc.enable_experience is False
         assert cc.session_id == "s1"
 
@@ -454,13 +453,11 @@ class TestConciergeConfig:
         """Missing attributes on kernel config fall back to defaults."""
         kc = SimpleNamespace()  # empty object — no attrs
         cc = ConciergeConfig.from_kernel_config(kc)
-        assert cc.tool_tier == "LOW"
         assert cc.enable_experience is True
 
     def test_for_testing_overrides(self):
-        cfg = ConciergeConfig.for_testing(enable_ledger=True, tool_tier="HIGH")
+        cfg = ConciergeConfig.for_testing(enable_ledger=True)
         assert cfg.enable_ledger is True
-        assert cfg.tool_tier == "HIGH"
         assert cfg.enable_experience is False  # still disabled by for_testing default
 
 

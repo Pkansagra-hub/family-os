@@ -369,7 +369,6 @@ class K1DemoCoordinator:
                 ordered_bus=True,
                 capture_bus=False,
                 test_mode=self._test_mode,
-                tool_tier="LOW",
                 session_mode="testing",
                 session_id=f"demo-{uuid.uuid4().hex[:8]}",
                 enable_experience=True,

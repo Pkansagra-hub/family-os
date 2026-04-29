@@ -22,7 +22,6 @@ from k1.model_hub.config import ModelHubConfig  # noqa: F401
 
 # -- Events (source of truth: k1/model_hub/events.py [F04]) --
 from k1.model_hub.events import (  # noqa: F401
-    TOPIC_BUDGET_ALERT,
     TOPIC_CACHE_HIT,
     TOPIC_CAPABILITY_AVAILABLE,
     TOPIC_CIRCUIT_STATE,
@@ -51,8 +50,6 @@ from k1.model_hub.ports import (  # noqa: F401
 
 # -- Domain types (source of truth: k1/model_hub/types.py [F01]) --
 from k1.model_hub.types import (  # noqa: F401; Enums; Conversation primitives; Core types; Health; Errors
-    BudgetDecision,
-    BudgetExceededError,
     CapabilityType,
     CircuitOpenError,
     CircuitState,

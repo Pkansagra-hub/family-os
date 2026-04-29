@@ -79,6 +79,7 @@ from k1.model_hub.adapters.event_bus_adapter import EventBusAdapter as MHEventBu
 from k1.model_hub.adapters.prometheus_adapter import PrometheusAdapter
 from k1.model_hub.adapters.session_state_prod import SessionStateProdAdapter
 from k1.model_hub.factory import ModelHubFactory
+from k1.model_hub.loader import ProviderConfig
 
 # Issue 2.2.5: Orchestrator adapters + factory
 from k1.orchestrator.adapters.bridge_client_shim import BridgeClientShim
@@ -96,12 +97,18 @@ from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.workflows.persistence import SQLiteWorkflowAdapter
 from k1.planner.adapters.bridge_adapter import BridgeAdapter as PlannerBridgeAdapter
-from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter as PlannerDeltaBusAdapter
-from k1.planner.adapters.event_bus_adapter import EventBusAdapter as PlannerEventBusAdapter
+from k1.planner.adapters.delta_bus_adapter import (
+    DeltaBusAdapter as PlannerDeltaBusAdapter,
+)
+from k1.planner.adapters.event_bus_adapter import (
+    EventBusAdapter as PlannerEventBusAdapter,
+)
 from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
 from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter
 from k1.planner.adapters.mailbox_adapter import MailboxAdapter as PlannerMailboxAdapter
-from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter as PlannerStateAdapter
+from k1.planner.adapters.session_state_adapter import (
+    SessionStateReadAdapter as PlannerStateAdapter,
+)
 from k1.planner.factory import PlannerFactory
 
 # Issue 2.3.2: SessionState adapters + factory
@@ -350,7 +357,16 @@ class KernelService:
                 errors.append(exc)
                 logger.warning("shutdown: Fabric shutdown failed: %s", exc)
 
-        # ── Reverse S2: (ModelHub has no teardown) ────────────
+        # ── Reverse S2: ModelHub plugin drain (P2.3) ──────────
+        if self._model_hub is not None:
+            try:
+                await asyncio.wait_for(
+                    self._model_hub.shutdown(),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: ModelHub shutdown failed: %s", exc)
 
         # ── Reverse S1: Close shared Bus + Router ─────────────
         if self._bus is not None:
@@ -825,58 +841,6 @@ class KernelService:
                 "PL-B1: agent.start() should run indefinitely."
             )
 
-    async def _register_model_hub_plugins_from_env(self) -> None:
-        """Register Model Hub provider plugins based on env-var credentials.
-
-        Pragmatic bootstrapping shim. The Model Hub factory accepts a
-        ``plugins`` dict but only wires it into the dispatcher — the
-        provider registry (which drives capability routing) is left empty.
-        Until a cleaner factory API exists, reach into ``_registry`` and
-        ``_router._dispatcher`` after construction and register each plugin
-        whose API key is present in the environment.
-
-        Supported today: Google (``GOOGLE_API_KEY``).
-        """
-        import os
-        from pathlib import Path
-
-        from k1.model_hub.manifest import load_manifest
-
-        hub = self._model_hub
-        if hub is None:
-            return
-        registry = getattr(hub, "_registry", None)
-        router = getattr(hub, "_router", None)
-        dispatcher = getattr(router, "_dispatcher", None) if router else None
-        if registry is None or dispatcher is None:
-            logger.warning(
-                "ModelHub plugin registration skipped: registry/dispatcher "
-                "not reachable on hub instance (type=%s)",
-                type(hub).__name__,
-            )
-            return
-
-        manifest_dir = Path(__file__).resolve().parents[1] / "config" / "providers"
-
-        google_key = os.environ.get("GOOGLE_API_KEY")
-        if google_key:
-            try:
-                from k1.model_hub.plugins.google_plugin import GooglePlugin
-
-                manifest = load_manifest(manifest_dir / "google.manifest.yaml")
-                plugin = GooglePlugin()
-                await plugin.initialize(manifest)
-                plugin.set_api_key(google_key)
-                registry.register(manifest, plugin)
-                dispatcher.register_plugin(manifest.provider_id, plugin)
-                logger.info(
-                    "ModelHub: registered Google plugin (provider=%s, models=%d)",
-                    manifest.provider_id,
-                    len(manifest.models),
-                )
-            except Exception as exc:  # pragma: no cover -- best-effort wiring
-                logger.warning("Failed to register Google plugin: %s", exc)
-
     def _verify_planner_orchestrator_crosswire(self) -> None:
         """Issue 2.1.9 (S6b): Verify Orchestrator↔Planner cross-wire.
 
@@ -934,39 +898,90 @@ class KernelService:
         S1 → S2 → S3 → S4 → S5 → S6 → S6b → S7
         """
         # ── S1: Bus + AsyncBusBridge + MailboxRouter ──────────
+        # W2: Optionally wire a SQLite WAL outbox for durable topics.
+        bus_outbox = None
+        durable_topics = None
+        if self._config.bus_outbox_path and self._config.bus_durable_topics:
+            from k1.bus.outbox import BusOutbox
+
+            bus_outbox = BusOutbox(self._config.bus_outbox_path)
+            durable_topics = set(self._config.bus_durable_topics)
         bus = BusFactory.create_local_ordered(
             capture=self._config.capture_bus,
+            outbox=bus_outbox,
+            durable_topics=durable_topics,
         )
         self._bus = bus
         self._router = BusFactory.create_mailbox_router()
         self._async_bus = AsyncBusBridge(bus)
 
-        # ── S2: ModelHub (with auxiliary ports) ───────────
+        # ── S2: ModelHub (with auxiliary ports + declarative provider load) ──
+        # P2.3: replaces the prior ``create_with_ports`` + private
+        # ``_register_model_hub_plugins_from_env`` two-step with the single
+        # declarative ``ModelHubFactory.from_config`` entry point. The
+        # ``model_mode == "hub"`` gate is preserved at the call site so
+        # non-hub modes still construct the hub without loading plugins.
         try:
-            self._model_hub = ModelHubFactory.create_with_ports(
-                ports={
-                    "credential_port": CredentialStoreAdapter(),
-                    # P5.4: bind ModelHub IEventPort to K1 bus.
-                    "event_port": MHEventBusAdapter(bus=self._bus),
-                    # P5.5: real per-session SS via shim. ModelHub reads
-                    # ``persona``/``control`` for routing decisions; the shim
-                    # picks the first active session's SSM (or returns None
-                    # if no session is active yet, which the prod adapter
-                    # handles by yielding an empty StateSnapshot).
-                    "state_read_port": SessionStateProdAdapter(
-                        manager=_FirstSessionSSMShim(self._sessions),
-                    ),
-                    "metrics_port": PrometheusAdapter(),
-                    "config_port": ConfigAdapter(),
-                },
-            )
-            # ── Register provider plugins driven by environment keys ──
-            # TODO(wiring): replace env-var probing with ``cfg.model_hub_plugins``
-            # once a per-plugin manifest/credential map exists. For now this
-            # unblocks --model-hub by registering Google when GOOGLE_API_KEY
-            # is present (and OpenAI/Anthropic analogously if their keys exist).
+            mh_ports = {
+                "credential_port": CredentialStoreAdapter(),
+                # P5.4: bind ModelHub IEventPort to K1 bus.
+                "event_port": MHEventBusAdapter(bus=self._bus),
+                # P5.5: real per-session SS via shim. ModelHub reads
+                # ``persona``/``control`` for routing decisions; the shim
+                # picks the first active session's SSM (or returns None
+                # if no session is active yet, which the prod adapter
+                # handles by yielding an empty StateSnapshot).
+                "state_read_port": SessionStateProdAdapter(
+                    manager=_FirstSessionSSMShim(self._sessions),
+                ),
+                "metrics_port": PrometheusAdapter(),
+                "config_port": ConfigAdapter(),
+            }
             if self._config.model_mode == "hub":
-                await self._register_model_hub_plugins_from_env()
+                self._model_hub, load_result = await ModelHubFactory.from_config(
+                    ProviderConfig.default(),
+                    ports=mh_ports,
+                )
+                logger.info(
+                    "ModelHub provider load: registered=%s skipped=%s failed=%s",
+                    load_result.registered,
+                    load_result.skipped,
+                    load_result.failed,
+                )
+            elif self._config.model_mode == "test":
+                # ── TEST-ONLY PATH ─────────────────────────────────────
+                # Hub starts with zero providers; register an in-process
+                # StubProviderPlugin so the Concierge ReAct loop has a
+                # provider that satisfies every capability (TOOL_CALL,
+                # CHAT, ...). Without this, the router throws
+                # NoEligibleProviderError on the first turn and the FSM
+                # jams in DISPATCHING. NEVER select model_mode="test"
+                # for production deployments — the stub returns a
+                # canned "OK" string and does no real reasoning.
+                self._model_hub = ModelHubFactory.create_with_ports(ports=mh_ports)
+                from k1.model_hub.plugins.stub_plugin import (
+                    StubProviderPlugin,
+                    build_stub_manifest,
+                )
+
+                stub_manifest = build_stub_manifest()
+                stub_plugin = StubProviderPlugin()
+                await stub_plugin.initialize(stub_manifest)
+                self._model_hub.register_plugin(stub_manifest, stub_plugin)
+                logger.warning(
+                    "ModelHub: TEST MODE — registered StubProviderPlugin "
+                    "(provider=%s, model=%s). This is NOT a production "
+                    "configuration.",
+                    stub_manifest.provider_id,
+                    stub_manifest.models[0].id,
+                )
+            else:
+                # Fail loudly on unknown modes rather than silently
+                # booting with no providers and dying on the first turn.
+                raise ValueError(
+                    f"KernelConfig.model_mode must be 'hub' or 'test', "
+                    f"got {self._config.model_mode!r}"
+                )
         except Exception:
             # S1 created — clean up.
             self._bus.close()
@@ -1246,6 +1261,19 @@ class KernelService:
             except Exception:
                 pass
 
+        # P2.3: drain ModelHub plugin connections before nulling the field.
+        # Pre-P2.2 there was no shutdown() to call; post-P2.2 omitting this
+        # leaks aiohttp ClientSessions on partial-boot recovery. Errors are
+        # swallowed because we are already in error-recovery flow.
+        if self._model_hub is not None:
+            try:
+                await asyncio.wait_for(
+                    self._model_hub.shutdown(),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                logger.warning("_cleanup_tier1_partial: ModelHub shutdown failed: %s", exc)
+
         if self._bridge is not None:
             try:
                 await self._bridge.disconnect()
@@ -1348,6 +1376,7 @@ class KernelService:
         # and ConciergeController._deliver_to_{front,back} hard-codes
         # these names via k1.concierge.bus.setup.
         from k1.concierge.bus.setup import ACTOR_BACK, ACTOR_FRONT
+
         front_mailbox = session_router.register(ACTOR_FRONT)
         back_mailbox = session_router.register(ACTOR_BACK)
 
@@ -1445,7 +1474,10 @@ class KernelService:
         session_memory_writer = None
         try:
             mw_config = MWConfig()
-            mw_session_read = SessionReadAdapter(manager=ssm)
+            mw_session_read = SessionReadAdapter(
+                manager=ssm,
+                cold_archive=ssm.get_local_cold_archive(),
+            )
             mw_model_hub = self._create_memory_writer_hub_adapter()
             mw_bridge = BridgeCommandAdapter(command_port=self._bridge.get_client())
             mw_bus_adapter = FabricBusAdapter(session_bus)
@@ -1514,7 +1546,7 @@ class KernelService:
             back_dispatcher=session_concierge.back_dispatcher,
             experience_layer=session_concierge.experience_layer,
             delta_aggregator=session_concierge.delta_aggregator,
-            delta_applicator=None,
+            delta_applicator=session_concierge.delta_applicator,
             hitl_coordinator=session_concierge.hitl_coordinator,
             consumer_task=session_concierge.consumer_task,
             dead_letter_consumer=session_concierge.dead_letter_consumer,

@@ -4,8 +4,8 @@ Tests all enums, dataclasses, frozen immutability, field validation,
 and error hierarchy defined in k1.model_hub.types.
 
 Covers:
-  - 8 Enums: CapabilityType(15), Priority(3), FinishReason(5), HealthStatus(3),
-    CircuitState(3), BudgetDecision(3), PlacementType(3), ModelTier(3)
+  - 7 Enums: CapabilityType(15), Priority(3), FinishReason(5), HealthStatus(3),
+    CircuitState(3), PlacementType(3), ModelTier(3)
   - Conversation primitives: Message, ToolDefinition, ToolCallResult
   - TokenUsage, ModelPreference, ModelInfo
   - RequestConstraints, HubRequest (MH-03 trace_id), ResponseMetadata, HubResponse, HubChunk
@@ -25,8 +25,6 @@ import pytest
 from k1.model_hub.types import (  # Enums; Conversation Primitives; Token & Cost; Model Discovery; Request Envelope; Response Envelope; Capability Payloads; Health; Errors
     AudioInputPayload,
     BatchPayload,
-    BudgetDecision,
-    BudgetExceededError,
     CachePromptPayload,
     CapabilityType,
     ChatPayload,
@@ -167,12 +165,6 @@ class TestCircuitState:
     def test_members(self) -> None:
         assert len(CircuitState) == 3
         assert {m.value for m in CircuitState} == {"CLOSED", "OPEN", "HALF_OPEN"}
-
-
-class TestBudgetDecision:
-    def test_members(self) -> None:
-        assert len(BudgetDecision) == 3
-        assert {m.value for m in BudgetDecision} == {"ALLOW", "ALLOW_DEGRADED", "REJECT"}
 
 
 class TestPlacementType:
@@ -687,14 +679,6 @@ class TestProviderError:
         e = ProviderError("api error", provider_id="openai", status_code=429)
         assert e.provider_id == "openai"
         assert e.status_code == 429
-        assert isinstance(e, ModelHubError)
-
-
-class TestBudgetExceededError:
-    def test_construction(self) -> None:
-        e = BudgetExceededError("over budget", budget_pct=95.0, daily_limit=5.0)
-        assert e.budget_pct == 95.0
-        assert e.daily_limit == 5.0
         assert isinstance(e, ModelHubError)
 
 

@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from .adapters.section_data_adapter import SectionDataAdapter
+from .events import EmergencyLevel, EventType, SessionStateEvents
 from .eviction import EvictionEngine
 from .guard import MutationGuard
 from .local_cold import LocalColdArchive
@@ -478,6 +480,8 @@ class SessionStateManager:
         "_mutation_guard",
         "_eviction_engine",
         "_migration_engine",
+        "_section_provider",
+        "_emergency_active",
         "_state",
         "_write_lock",
         "_last_mutation_ms",
@@ -543,36 +547,27 @@ class SessionStateManager:
         )
 
         # Initialize engines with dependencies
-        # NOTE: section_provider=None is a known production gap (Audit Fix J).
-        # Both EvictionEngine and MigrationEngine will fall back to placeholder
-        # behavior in this state — eviction emits stub bytes and migration
-        # cannot move real data between HOT and WARM tiers. Closing this gap
-        # requires a SectionDataAdapter that implements both
-        # IEvictionSectionProvider and IMigrationSectionProvider against the
-        # HotTier / WarmTier / LocalColdTier objects below. Until then, any
-        # CRITICAL/EMERGENCY pressure path will only log + free metadata.
+        # W5 (audit Fix J): SectionDataAdapter wires the live HOT + WARM tier
+        # objects into both engines so eviction can serialize+clear real
+        # section bytes and migration can move payloads between tiers.
+        self._section_provider = SectionDataAdapter(self._hot, self._warm)
         self._eviction_engine = EvictionEngine(
             size_tracker=self._size_tracker,
             local_cold=self._local_cold_archive,
             mutation_guard=self._mutation_guard,
             session_id=session_id,
-            section_provider=None,  # TODO(audit-J): wire SectionDataAdapter
+            section_provider=self._section_provider,
         )
 
         self._migration_engine = MigrationEngine(
             size_tracker=self._size_tracker,
             mutation_guard=self._mutation_guard,
             session_id=session_id,
-            section_provider=None,  # TODO(audit-J): wire SectionDataAdapter
+            section_provider=self._section_provider,
         )
 
-        logger.warning(
-            "SessionStateManager(session=%s): tier engines constructed without "
-            "section_provider — HOT->WARM migration and CRITICAL eviction will "
-            "operate in placeholder mode (no real section data movement). "
-            "See audit Fix J in docs/edge_enhancement_opportunities.md.",
-            session_id[:8] if session_id else "none",
-        )
+        # W7: emergency activation tracking — only emit on rising edge.
+        self._emergency_active: bool = False
 
         logger.info(
             "SessionStateManager initialized (session=%s, state=%s, sections=hot:%d+warm)",
@@ -677,7 +672,7 @@ class SessionStateManager:
 
     def get_hot(self) -> HotTier:
         """
-        Get the HOT tier (8 sections, 48KB max).
+        Get the HOT tier (8 sections, 52KB max).
 
         Returns:
             HotTier: HOT tier manager with all 8 sections
@@ -730,6 +725,15 @@ class SessionStateManager:
             LocalColdTier: LOCAL COLD tier manager
         """
         return self._local_cold
+
+    def get_local_cold_archive(self) -> LocalColdArchive:
+        """Return the underlying LocalColdArchive (raw storage layer).
+
+        Used by Memory Writer's enriched read path to fetch archived
+        ``history_active`` blobs across an arbitrary session_id without
+        needing the per-session ``LocalColdTier`` wrapper.
+        """
+        return self._local_cold_archive
 
     def get_snapshot(self) -> SessionSnapshot:
         """
@@ -890,12 +894,19 @@ class SessionStateManager:
             pressure = self._size_tracker.get_pressure()
 
             if pressure in (PressureLevel.CRITICAL, PressureLevel.EMERGENCY):
+                # W7: emit EmergencyActivated on rising edge.
+                if not self._emergency_active:
+                    self._emergency_active = True
+                    self._emit_emergency_activated(pressure, trace_id)
                 # Trigger eviction for WARM sections
                 if section in WARM_SECTIONS:
-                    self._trigger_eviction_if_needed()
+                    self._trigger_eviction_if_needed(trace_id=trace_id)
                 # Trigger migration for HOT sections
                 elif section in HOT_SECTIONS:
                     self._trigger_migration_if_needed()
+            elif self._emergency_active and pressure == PressureLevel.NORMAL:
+                # Pressure cleared; allow re-arming the emergency edge.
+                self._emergency_active = False
 
             # Get new size
             new_size = self._size_tracker.get_section_size(section)
@@ -1049,7 +1060,7 @@ class SessionStateManager:
             new_size = 0
         return new_size - old_size
 
-    def _trigger_eviction_if_needed(self) -> None:
+    def _trigger_eviction_if_needed(self, trace_id: str = "") -> None:
         """Trigger eviction if WARM tier is under pressure."""
         warm_pressure = self._size_tracker.get_pressure("warm")
         if warm_pressure in (PressureLevel.CRITICAL, PressureLevel.EMERGENCY):
@@ -1059,7 +1070,72 @@ class SessionStateManager:
             current = self._size_tracker.get_tier_size("warm")
             bytes_to_free = current - target_bytes
             if bytes_to_free > 0:
-                self._eviction_engine.evict(target_bytes=bytes_to_free)
+                # W7: emit EvictionTriggered before doing the work.
+                candidates = sorted(WARM_SECTIONS)
+                self._safe_emit(
+                    EventType.EVICTION_TRIGGERED.value,
+                    SessionStateEvents.eviction_triggered(
+                        session_id=self._session_id,
+                        cognitive_trace_id=trace_id,
+                        target_reduction_bytes=bytes_to_free,
+                        pressure_level=warm_pressure,
+                        candidates=candidates,
+                    ),
+                )
+                start_ms = time.perf_counter() * 1000.0
+                result = self._eviction_engine.evict(target_bytes=bytes_to_free)
+                duration_ms = (time.perf_counter() * 1000.0) - start_ms
+                # W7: emit EvictionCompleted with whatever the engine reports.
+                bytes_freed = getattr(result, "bytes_freed", 0) or 0
+                bytes_archived = getattr(result, "bytes_archived", 0) or 0
+                sections_evicted = getattr(result, "sections_evicted", []) or []
+                self._safe_emit(
+                    EventType.EVICTION_COMPLETED.value,
+                    SessionStateEvents.eviction_completed(
+                        session_id=self._session_id,
+                        cognitive_trace_id=trace_id,
+                        sections_evicted=list(sections_evicted),
+                        bytes_freed=int(bytes_freed),
+                        bytes_archived=int(bytes_archived),
+                        new_pressure_level=self._size_tracker.get_pressure("warm"),
+                        duration_ms=duration_ms,
+                    ),
+                )
+
+    def _emit_emergency_activated(self, pressure: PressureLevel, trace_id: str) -> None:
+        """W7: publish EmergencyActivatedEvent on rising-edge pressure."""
+        try:
+            level = (
+                EmergencyLevel.CRITICAL
+                if pressure == PressureLevel.EMERGENCY
+                else EmergencyLevel.WARNING
+            )
+            hot_size = self._size_tracker.get_tier_size("hot")
+            warm_size = self._size_tracker.get_tier_size("warm")
+            self._safe_emit(
+                EventType.EMERGENCY_ACTIVATED.value,
+                SessionStateEvents.emergency_activated(
+                    session_id=self._session_id,
+                    cognitive_trace_id=trace_id,
+                    level=level,
+                    total_size_bytes=hot_size + warm_size,
+                    hot_size_bytes=hot_size,
+                    warm_size_bytes=warm_size,
+                    writes_blocked=False,
+                ),
+            )
+        except Exception:  # pragma: no cover - never let observability break mutate()
+            logger.debug("EmergencyActivated emit failed", exc_info=True)
+
+    def _safe_emit(self, event_type: str, payload: Any) -> None:
+        """Fire-and-forget event emission; swallows errors."""
+        port = self._event_port
+        if port is None:
+            return
+        try:
+            port.emit(event_type, payload)
+        except Exception:  # pragma: no cover - emit must never raise upward
+            logger.debug("Event emit failed for %s", event_type, exc_info=True)
 
     def _trigger_migration_if_needed(self) -> None:
         """Trigger migration if HOT tier is under pressure."""

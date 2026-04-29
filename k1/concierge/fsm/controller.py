@@ -1614,9 +1614,9 @@ class ConciergeController:
             )
         )
 
-        # Phase 1 already ran -- update control ext and history metadata
+        # Phase 1 already ran -- update history metadata
         result = arbiter_result.phase1
-        self._control_ext.set_complexity_tier(result.complexity_tier)
+        # P3.4a: complexity_tier removed from Phase1Result.
         self._turn_lock.acquire("phase1")
         if self._history:
             last = self._history[-1]
@@ -1681,7 +1681,8 @@ class ConciergeController:
                     band=band,
                     reason="phase1_classification",
                 )
-                control.set_complexity_tier(result.complexity_tier)
+                # P3.4a: complexity_tier write removed; SS shim retained
+                # for backward-compat reads (cognitive_load_routing).
                 # Temporal Resolution Engine: compute + write anchor (skeleton.mmd -> TIME_RESOLUTION)
                 self._write_temporal_anchor(control)
         except Exception:
@@ -1784,8 +1785,7 @@ class ConciergeController:
         # Run Phase 1 classification
         result: Phase1Result = self._phase1_pipeline.classify(text)
 
-        # Update ConciergeControlExtension with complexity tier
-        self._control_ext.set_complexity_tier(result.complexity_tier)
+        # P3.4a: complexity_tier removed from Phase1Result.
 
         # M10 E10.2: Write Phase 1 results to 3 SS sections
         self._write_phase1_to_ss(result)
@@ -1849,8 +1849,7 @@ class ConciergeController:
         # 1. Phase 1 classification
         phase1_result: Phase1Result = self._phase1_pipeline.classify(text)
 
-        # Update ConciergeControlExtension with complexity tier
-        self._control_ext.set_complexity_tier(phase1_result.complexity_tier)
+        # P3.4a: complexity_tier removed from Phase1Result.
 
         # M10 E10.2: Write Phase 1 results to 3 SS sections
         self._write_phase1_to_ss(phase1_result)
@@ -1918,7 +1917,8 @@ class ConciergeController:
         """Build a new envelope with Arbiter metadata merged into payload.
 
         M5 E5.3.2: Front can read arbiter_decision, routing_metadata,
-        complexity_tier, and safety_band from the enriched payload.
+        and safety_band from the enriched payload.
+        # P3.4a: complexity_tier removed from payload.
 
         M8 E8.5.4: Injects async_results_context from deferred results
         so the Front STANDARD prompt can weave background task results
@@ -1927,7 +1927,7 @@ class ConciergeController:
         payload = _parse_payload(envelope)
         payload["arbiter_decision"] = arbiter_result.decision.value
         payload["routing_metadata"] = arbiter_result.routing_metadata
-        payload["complexity_tier"] = arbiter_result.phase1.complexity_tier
+        # P3.4a: complexity_tier no longer attached to envelope.
         payload["safety_band"] = arbiter_result.phase1.safety_band
 
         # M8 E8.5.4: Inject deferred async results context so Front LLM
@@ -3465,9 +3465,43 @@ class ConciergeController:
         # M4 E4.5.4: Emit TurnMutationSummary to ledger at turn boundary
         self._emit_turn_mutation_summary(envelope)
 
+        # ── Build a payload that MemoryWriter's SessionBatchDispatcher
+        # can actually consume. Without these fields the MW dispatcher
+        # logs "missing turn_id" and drops every turn.
+        session_id = getattr(self._ledger, "session_id", "") if self._ledger else ""
+        cognitive_trace_id = getattr(envelope, "cognitive_trace_id", "") or ""
+
+        # Extract assistant text from the response_final envelope payload.
+        assistant_response = ""
+        try:
+            raw = envelope.payload
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", errors="replace")
+            if isinstance(raw, str) and raw:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    assistant_response = str(parsed.get("text", "") or "")
+            elif isinstance(raw, dict):
+                assistant_response = str(raw.get("text", "") or "")
+        except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
+            assistant_response = ""
+
+        # Stable, dedup-friendly turn_id (session-scoped, monotonic).
+        turn_id = (
+            f"{session_id}:{self._turn_number}"
+            if session_id
+            else f"turn:{self._turn_number}"
+        )
+
         self._bus.publish(
             build_turn_completed(
                 payload={
+                    "turn_id": turn_id,
+                    "session_id": session_id,
+                    "cognitive_trace_id": cognitive_trace_id,
+                    "user_message": self._current_turn_user_text,
+                    "assistant_response": assistant_response,
+                    "timestamp_ms": int(time.time() * 1000),
                     "turn_number": self._turn_number,
                 },
                 parent_id=envelope.envelope_id,

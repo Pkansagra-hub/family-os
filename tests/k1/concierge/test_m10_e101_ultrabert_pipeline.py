@@ -176,10 +176,9 @@ class TestMapping:
         r = p.classify("hi")
         assert "greeting" in r.intents
 
-    def test_complexity_tier_present(self):
-        p = _pipeline(_analysis())
-        r = p.classify("test")
-        assert r.complexity_tier in ("LOW", "MEDIUM", "HIGH")
+    # P3.4: complexity_tier removed from Phase1Result. Tier is now derived
+    # in the dispatcher from intent count + explicit `plan` flag, not from
+    # Phase1 classification. Test removed.
 
 
 # =========================================================================
@@ -237,83 +236,17 @@ class TestExtraHeads:
 
 
 # =========================================================================
-# E10.1.2 -- Multi-factor complexity classifier
+# E10.1.2 -- Multi-factor complexity classifier  [REMOVED in P3.4]
 # =========================================================================
-
-
-class TestComplexityClassifier:
-    """_compute_complexity() scoring logic."""
-
-    def test_single_intent_single_domain_is_low(self):
-        p = _pipeline(_analysis(intent="greeting", ingress="GENERAL"))
-        r = p.classify("hi")
-        assert r.complexity_tier == "LOW"
-
-    def test_multi_intent_bumps_to_medium(self):
-        """Two intents -> score 1 -> MEDIUM."""
-        p = _pipeline(
-            _analysis(
-                intent="booking",
-                intent_scores={"booking": 0.8, "scheduling": 0.5},
-            )
-        )
-        r = p.classify("book hotel and schedule doctor")
-        assert r.complexity_tier == "MEDIUM"
-
-    def test_safety_red_forces_low(self):
-        """RED safety overrides all factors to LOW."""
-        p = _pipeline(
-            _analysis(
-                safety="RED",
-                intent_scores={"a": 0.9, "b": 0.8, "c": 0.7},
-            )
-        )
-        r = p.classify("unsafe multi-intent")
-        assert r.complexity_tier == "LOW"
-
-    def test_safety_crisis_forces_low(self):
-        p = _pipeline(_analysis(safety="CRISIS"))
-        r = p.classify("crisis")
-        assert r.complexity_tier == "LOW"
-
-    def test_safety_green_allows_medium(self):
-        p = _pipeline(
-            _analysis(
-                safety="GREEN",
-                intent_scores={"booking": 0.8, "scheduling": 0.5},
-            )
-        )
-        r = p.classify("book and schedule")
-        assert r.complexity_tier in ("MEDIUM", "HIGH")
-
-    def test_temporal_ambiguity_adds_score(self):
-        """scheduling intent + DATE_REL entity -> +1 score.
-
-        _compute_complexity checks *entities* (merged) for temporal labels,
-        so the DATE_REL entry must appear in entities or general_entities.
-        """
-        p = _pipeline(
-            _analysis(
-                intent="scheduling",
-                intent_scores={"scheduling": 0.9, "booking": 0.5},
-                entities=[],
-                general_entities=[{"text": "Saturday", "label": "DATE_REL", "start": 0, "end": 8}],
-            )
-        )
-        r = p.classify("schedule something Saturday")
-        # multi-intent (+1) + temporal (+1) = 2 -> MEDIUM
-        assert r.complexity_tier == "MEDIUM"
-
-    def test_configurable_thresholds(self):
-        """Custom thresholds change tier boundaries."""
-        cfg = Phase1Config(complexity_thresholds={"low_max": 1, "medium_max": 3})
-        p = _pipeline(
-            _analysis(intent_scores={"a": 0.9, "b": 0.8}),
-            config=cfg,
-        )
-        r = p.classify("multi intent")
-        # score 1 (multi-intent) -> <= low_max(1) -> LOW
-        assert r.complexity_tier == "LOW"
+#
+# `complexity_tier` was removed from `Phase1Result`. Tier (`simple` / `plan` /
+# `crisis`) is now derived in the dispatcher from intent count + explicit
+# `plan` flag, not from Phase1 classification. The whole `TestComplexityClassifier`
+# block was deleted as dead spec.
+#
+# Coverage of the new derivation rule lives in:
+#   tests/k1/concierge/tools/test_dispatch_task_plan_derivation.py
+#
 
 
 # =========================================================================
@@ -368,9 +301,10 @@ class TestGracefulDegradation:
         adapter = StubUltraBERTAdapter()
         p = UltraBERTPhase1Pipeline(adapter=adapter)
         r = p.classify("hello")
-        # Should get a valid Phase1Result from the stub
+        # Should get a valid Phase1Result from the stub (P3.4: tier no longer
+        # carried on the result; presence of intents is the new contract).
         assert isinstance(r, Phase1Result)
-        assert r.complexity_tier in ("LOW", "MEDIUM", "HIGH")
+        assert isinstance(r.intents, list)
 
     def test_degraded_count_increments(self):
         adapter = StubUltraBERTAdapter()

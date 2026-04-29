@@ -83,7 +83,7 @@ class ArbiterResult:
             safety_band=phase1_meta.get("safety_band", "GREEN"),
             primary_emotion=phase1_meta.get("emotion", "neutral"),
             emotion_confidence=phase1_meta.get("emotion_confidence", 0.5),
-            complexity_tier=phase1_meta.get("complexity_tier", "LOW"),
+            # P3.4a: complexity_tier removed from Phase1Result.
             entities=phase1_meta.get("entities", []),
         )
         return cls(
@@ -577,7 +577,7 @@ class ConversationArbiter:
             "domain_overlap_score": round(d_overlap, 3),
             "entity_overlap_score": round(e_overlap, 3),
             "safety_band": phase1.safety_band,
-            "complexity_tier": phase1.complexity_tier,
+            # P3.4a: complexity_tier removed from routing_metadata.
             "inflight_task_count": len(inflight.tasks),
             "pending_result_count": inflight.pending_results,
         }

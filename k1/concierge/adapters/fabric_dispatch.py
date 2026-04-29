@@ -53,27 +53,12 @@ class FabricDispatchAdapter:
     async def discover_capabilities(
         self, intent: str = "", domain: str | None = None, **kwargs: Any
     ) -> Any:
-        """IFabricPort.discover_capabilities passthrough."""
+        """IFabricPort.discover_capabilities passthrough.
+
+        Fabric.discover_capabilities has ``domain`` as the FIRST positional
+        parameter, so always pass ``intent`` as a keyword to avoid
+        "multiple values for argument 'domain'" collisions.
+        """
         if hasattr(self._fabric, "discover_capabilities"):
-            return await self._fabric.discover_capabilities(intent, domain=domain, **kwargs)
-        return {"capabilities": [], "count": 0}
-
-    # -- IFabricPort compat (P4B.2 bridge, removed in P4B.3) --
-
-    async def execute(self, request: CapabilityRequest) -> CapabilityResult:
-        """IFabricPort.execute alias → dispatch_direct."""
-        return await self.dispatch_direct(request)
-
-    async def execute_batch(
-        self, requests: list[CapabilityRequest], strategy: str = "PARALLEL"
-    ) -> list[CapabilityResult]:
-        """IFabricPort.execute_batch alias."""
-        return [await self.dispatch_direct(r) for r in requests]
-
-    async def discover_capabilities(
-        self, intent: str = "", domain: str | None = None, **kwargs: Any
-    ) -> Any:
-        """IFabricPort.discover_capabilities passthrough."""
-        if hasattr(self._fabric, "discover_capabilities"):
-            return await self._fabric.discover_capabilities(intent, domain=domain, **kwargs)
+            return await self._fabric.discover_capabilities(intent=intent, domain=domain, **kwargs)
         return {"capabilities": [], "count": 0}

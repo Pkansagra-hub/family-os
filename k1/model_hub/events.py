@@ -35,7 +35,6 @@ TOPIC_CACHE_HIT: str = "k1.model_hub.cache.hit.v1"
 TOPIC_PROVIDER_FAILURE: str = "k1.model_hub.provider.failure.v1"
 TOPIC_FALLBACK_TRIGGERED: str = "k1.model_hub.fallback.triggered.v1"
 TOPIC_CIRCUIT_STATE: str = "k1.model_hub.circuit.state.v1"
-TOPIC_BUDGET_ALERT: str = "k1.model_hub.budget.alert.v1"
 TOPIC_PROVIDER_HEALTH: str = "k1.model_hub.provider.health.v1"
 TOPIC_PROVIDER_REGISTERED: str = "k1.model_hub.provider.registered.v1"
 TOPIC_CAPABILITY_AVAILABLE: str = "k1.model_hub.capability.available.v1"
@@ -128,20 +127,6 @@ class CircuitStatePayload:
 
 
 @dataclass(frozen=True)
-class BudgetAlertPayload:
-    """Payload for TOPIC_BUDGET_ALERT."""
-
-    tenant_id: str = "default"
-    level: str = "WARNING"
-    pct: float = 0.0
-    action: str = ""
-
-    def __post_init__(self) -> None:
-        if self.level not in ("WARNING", "EXCEEDED"):
-            raise ValueError(f"BudgetAlertPayload.level must be WARNING|EXCEEDED, got {self.level}")
-
-
-@dataclass(frozen=True)
 class ProviderHealthPayload:
     """Payload for TOPIC_PROVIDER_HEALTH."""
 
@@ -182,7 +167,6 @@ __all__ = [
     "TOPIC_PROVIDER_FAILURE",
     "TOPIC_FALLBACK_TRIGGERED",
     "TOPIC_CIRCUIT_STATE",
-    "TOPIC_BUDGET_ALERT",
     "TOPIC_PROVIDER_HEALTH",
     "TOPIC_PROVIDER_REGISTERED",
     "TOPIC_CAPABILITY_AVAILABLE",
@@ -194,7 +178,6 @@ __all__ = [
     "ProviderFailurePayload",
     "FallbackTriggeredPayload",
     "CircuitStatePayload",
-    "BudgetAlertPayload",
     "ProviderHealthPayload",
     "ProviderRegisteredPayload",
     "CapabilityAvailablePayload",

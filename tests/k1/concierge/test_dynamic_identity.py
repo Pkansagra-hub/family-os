@@ -118,8 +118,12 @@ class TestRoleSelection:
         assert snap.conversational_role == ConversationalRole.SUPPORTER
 
     def test_high_complexity_returns_expert(self, dic: DynamicIdentityContext) -> None:
-        snap = dic.compute(complexity_tier="HIGH")
-        assert snap.conversational_role == ConversationalRole.EXPERT
+        """P3.4a: complexity_tier removed; HIGH→EXPERT branch deleted.
+
+        With no complexity signal, default GUIDE role is returned (early turns).
+        """
+        snap = dic.compute()
+        assert snap.conversational_role == ConversationalRole.GUIDE
 
     def test_inflight_tasks_returns_executor(self, dic: DynamicIdentityContext) -> None:
         snap = dic.compute(has_inflight_tasks=True)
@@ -136,14 +140,14 @@ class TestRoleSelection:
         assert snap.conversational_role == ConversationalRole.PEER
 
     def test_crisis_overrides_high_complexity(self, dic: DynamicIdentityContext) -> None:
-        """Crisis affect takes precedence over HIGH complexity."""
-        snap = dic.compute(affect_band="crisis", complexity_tier="HIGH")
+        """Crisis affect takes precedence in role selection."""
+        snap = dic.compute(affect_band="crisis")
         assert snap.conversational_role == ConversationalRole.SUPPORTER
 
     def test_high_complexity_overrides_inflight(self, dic: DynamicIdentityContext) -> None:
-        """HIGH complexity takes precedence over inflight tasks."""
-        snap = dic.compute(complexity_tier="HIGH", has_inflight_tasks=True)
-        assert snap.conversational_role == ConversationalRole.EXPERT
+        """P3.4a: complexity_tier removed; inflight tasks now win."""
+        snap = dic.compute(has_inflight_tasks=True)
+        assert snap.conversational_role == ConversationalRole.EXECUTOR
 
 
 # =========================================================================
@@ -153,7 +157,7 @@ class TestRoleSelection:
 
 class TestRoleAdaptationDisabled:
     def test_always_default_role(self, dic_no_adapt: DynamicIdentityContext) -> None:
-        snap = dic_no_adapt.compute(affect_band="crisis", complexity_tier="HIGH")
+        snap = dic_no_adapt.compute(affect_band="crisis")
         assert snap.conversational_role == ConversationalRole.PEER
 
     def test_custom_default_role(self) -> None:

@@ -22,6 +22,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Protocol, runtime_checkable
 
+from bridge.core.envelope_builder import CommandEnvelope
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,7 +39,9 @@ class _IKernelCommandPort(Protocol):
         trace_id: str,
     ) -> Any: ...
 
-    async def submit_command_batch(self, envelopes: list[dict]) -> Any: ...
+    async def submit_command_batch(
+        self, envelopes: list[CommandEnvelope | dict[str, Any]]
+    ) -> Any: ...
 
 
 class BridgeCommandAdapter:

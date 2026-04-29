@@ -117,9 +117,9 @@ class TestSessionIsolation:
         s1.inject(dispatch=sentinel)
 
         if s1.front_ctx is not None:
-            assert s1.front_ctx.fabric_port is sentinel
+            assert s1.front_ctx.dispatch is sentinel
         if s2.front_ctx is not None:
-            assert s2.front_ctx.fabric_port is not sentinel
+            assert s2.front_ctx.dispatch is not sentinel
 
     def test_inject_memory_isolated(self):
         runtime = ConciergeFactory.create_standalone()
@@ -233,10 +233,6 @@ class TestRapidStartStop:
 class TestConciergeConfigValidation:
     """ConciergeConfig rejects invalid field values."""
 
-    def test_invalid_tool_tier_raises(self):
-        with pytest.raises(ValueError, match="tool_tier"):
-            ConciergeConfig(tool_tier="ULTRA")
-
     def test_invalid_phase1_pipeline_raises(self):
         with pytest.raises(ValueError, match="phase1_pipeline"):
             ConciergeConfig(phase1_pipeline="gpt4")
@@ -248,11 +244,6 @@ class TestConciergeConfigValidation:
     def test_negative_delta_batch_window_raises(self):
         with pytest.raises(ValueError, match="delta_batch_window_ms"):
             ConciergeConfig(delta_batch_window_ms=-1)
-
-    def test_valid_tool_tiers_accepted(self):
-        for tier in ("LOW", "MED", "HIGH"):
-            cfg = ConciergeConfig(tool_tier=tier)
-            assert cfg.tool_tier == tier
 
     def test_valid_pipelines_accepted(self):
         for pipeline in ("stub", "ultrabert"):
@@ -269,39 +260,35 @@ class TestConciergeConfigMethods:
     """from_dict, with_overrides, from_legacy classmethods."""
 
     def test_from_dict_round_trip(self):
-        d = {"tool_tier": "HIGH", "enable_delta": False, "session_id": "s42"}
+        d = {"enable_delta": False, "session_id": "s42"}
         cfg = ConciergeConfig.from_dict(d)
-        assert cfg.tool_tier == "HIGH"
         assert cfg.enable_delta is False
         assert cfg.session_id == "s42"
 
     def test_from_dict_ignores_unknown_keys(self):
-        d = {"tool_tier": "LOW", "unknown_field": 999}
+        d = {"unknown_field": 999}
         cfg = ConciergeConfig.from_dict(d)
-        assert cfg.tool_tier == "LOW"
+        assert cfg.enable_delta is True
 
     def test_with_overrides_returns_new_instance(self):
         cfg = ConciergeConfig()
-        cfg2 = cfg.with_overrides(tool_tier="HIGH", enable_delta=False)
-        assert cfg2.tool_tier == "HIGH"
+        cfg2 = cfg.with_overrides(enable_delta=False)
         assert cfg2.enable_delta is False
-        # Original unchanged
-        assert cfg.tool_tier == "LOW"
         assert cfg.enable_delta is True
 
     def test_from_legacy_is_alias(self):
         from k1.concierge.config.kernel import KernelConfig
 
-        kc = KernelConfig(tool_tier="MED")
+        kc = KernelConfig()
         c1 = ConciergeConfig.from_kernel_config(kc)
         c2 = ConciergeConfig.from_legacy(kc)
-        assert c1.tool_tier == c2.tool_tier == "MED"
+        assert c1.enable_delta == c2.enable_delta
 
     def test_from_dict_validates(self):
-        with pytest.raises(ValueError, match="tool_tier"):
-            ConciergeConfig.from_dict({"tool_tier": "INVALID"})
+        with pytest.raises(ValueError, match="phase1_pipeline"):
+            ConciergeConfig.from_dict({"phase1_pipeline": "INVALID"})
 
     def test_with_overrides_validates(self):
         cfg = ConciergeConfig()
-        with pytest.raises(ValueError, match="tool_tier"):
-            cfg.with_overrides(tool_tier="INVALID")
+        with pytest.raises(ValueError, match="phase1_pipeline"):
+            cfg.with_overrides(phase1_pipeline="INVALID")

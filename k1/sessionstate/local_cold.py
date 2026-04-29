@@ -133,6 +133,7 @@ SECTION_TABLE_MAP: Dict[str, str] = {
     "narrative_active": "st_narrative_archive",
     "telemetry": "st_telemetry_archive",  # WARM eviction target
     "persona": "st_persona_archive",  # WARM eviction target
+    "artifacts_warm": "st_artifacts_archive",  # W6: WARM eviction target
     "checkpoint": "st_session_checkpoints",
 }
 
@@ -144,6 +145,7 @@ ARCHIVE_TABLES = [
     "st_narrative_archive",
     "st_telemetry_archive",
     "st_persona_archive",
+    "st_artifacts_archive",
 ]
 
 
@@ -400,6 +402,27 @@ class LocalColdArchive:
         """
         )
 
+        # W6: st_artifacts_archive - Evicted artifacts_warm data (WARM tier)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS st_artifacts_archive (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                section TEXT NOT NULL,
+                data BLOB NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                metadata TEXT
+            )
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_artifacts_session
+            ON st_artifacts_archive(session_id)
+        """
+        )
+
         self._conn.commit()
         logger.debug("LocalColdArchive schema initialized")
 
@@ -538,8 +561,13 @@ class LocalColdArchive:
                         metadata_json,
                     ),
                 )
-            elif table in ("st_telemetry_archive", "st_persona_archive"):
-                # Generic archive for telemetry and persona (WARM eviction targets)
+            elif table in (
+                "st_telemetry_archive",
+                "st_persona_archive",
+                "st_artifacts_archive",
+            ):
+                # Generic archive for telemetry / persona / artifacts
+                # (WARM eviction targets, identical schema).
                 self._conn.execute(
                     f"""
                     INSERT INTO {table}

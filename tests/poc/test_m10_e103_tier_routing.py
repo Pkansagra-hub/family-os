@@ -38,31 +38,38 @@ class TestAutoTierDispatch:
         return ss
 
     def test_auto_reads_medium_from_ss(self):
+        # P3.3: AUTO-from-SS path is GONE. SS-tier is ignored;
+        # only `plan: bool` + signals (multi-intent / depends_on) drive tier.
         from poc.k1_poc.tools.implementations import execute_dispatch_task
 
         ss = self._mock_ss_with_tier("MEDIUM")
         ctx = self._tool_ctx(ss)
         result = execute_dispatch_task(
-            {"intents": [{"action": "test"}], "tier": "AUTO"},
+            {"intents": [{"action": "test"}], "plan": True},
             ctx,
         )
         assert result.status == "ok"
         dispatch = result.data.get("_dispatch", {})
-        # Tier in the dispatch should be MEDIUM (from SS)
+        # plan=True -> MEDIUM (regardless of SS tier)
         assert dispatch.get("tier", "").upper() == "MEDIUM"
 
     def test_auto_reads_high_from_ss(self):
+        # P3.3: AUTO-from-SS path is GONE. SS HIGH tier no longer routes to HIGH.
+        # Plan-derivation tops out at MEDIUM; HIGH is set only by other code paths.
         from poc.k1_poc.tools.implementations import execute_dispatch_task
 
         ss = self._mock_ss_with_tier("HIGH")
         ctx = self._tool_ctx(ss)
         result = execute_dispatch_task(
-            {"intents": [{"action": "test"}], "tier": "AUTO"},
+            {"intents": [{"action": "a"}, {"action": "b"}]},
             ctx,
         )
         assert result.status == "ok"
         dispatch = result.data.get("_dispatch", {})
-        assert dispatch.get("tier", "").upper() == "HIGH"
+        # Multi-intent auto-escalates to MEDIUM; SS-tier HIGH is ignored.
+        assert dispatch.get("tier", "").upper() == "MEDIUM"
+        # SS must NOT be read during dispatch under P3.3.
+        assert not ss.get_section.called if hasattr(ss.get_section, "called") else True
 
     def test_explicit_tier_overrides_ss(self):
         """LLM provides explicit LOW -> dispatch uses LOW, not SS HIGH."""
@@ -108,7 +115,8 @@ class TestAutoTierDispatch:
         assert dispatch.get("tier", "").upper() == "LOW"
 
     def test_omitted_tier_defaults_to_auto(self):
-        """tier omitted -> defaults to AUTO behavior."""
+        # P3.3: omitted `plan` defaults to False; single intent stays LOW
+        # regardless of SS tier (AUTO-from-SS path deleted).
         from poc.k1_poc.tools.implementations import execute_dispatch_task
 
         ss = self._mock_ss_with_tier("MEDIUM")
@@ -119,7 +127,7 @@ class TestAutoTierDispatch:
         )
         assert result.status == "ok"
         dispatch = result.data.get("_dispatch", {})
-        assert dispatch.get("tier", "").upper() == "MEDIUM"
+        assert dispatch.get("tier", "").upper() == "LOW"
 
 
 # =========================================================================
@@ -226,7 +234,6 @@ class TestObservabilityEvents:
     def test_phase1_classified_event_schema(self):
         evt = Phase1Classified(
             turn_number=5,
-            complexity_tier="MEDIUM",
             intent_primary="log_memory",
             domain_primary="FAMILY",
             safety_band="GREEN",
@@ -236,7 +243,7 @@ class TestObservabilityEvents:
         )
         payload = evt.to_payload()
         assert payload["turn_number"] == 5
-        assert payload["complexity_tier"] == "MEDIUM"
+        assert "complexity_tier" not in payload  # P3.1: removed
         assert payload["intent_primary"] == "log_memory"
         assert payload["is_degraded"] is False
 

@@ -621,14 +621,15 @@ class ConciergeFactory:
             writer_port=writer_port,
         )
 
-        # Step 8: Tool dispatchers
+        # Step 8: Tool dispatchers (P3.4c: defaults to 'simple'; back actor
+        # rebinds per-task via _maybe_rebind_back_dispatcher).
         front_dispatcher = create_front_dispatcher(
-            tier=config.tool_tier,
+            tier="simple",
             ctx=front_ctx,
             bus=bus,
         )
         back_dispatcher = create_back_dispatcher(
-            tier=config.tool_tier,
+            tier="simple",
             ctx=back_ctx,
             bus=bus,
         )
@@ -642,12 +643,13 @@ class ConciergeFactory:
 
         # Step 10: Delta aggregator + applicator (optional)
         delta_aggregator = None
+        delta_applicator = None
         if config.enable_delta:
             from k1.concierge.delta.aggregator import DeltaAggregator
 
-            applicator = _build_delta_applicator(ports.state, bus)
+            delta_applicator = _build_delta_applicator(ports.state, bus)
             delta_aggregator = DeltaAggregator(
-                flush_fn=applicator.apply,
+                flush_fn=delta_applicator.apply,
                 batch_window_ms=config.delta_batch_window_ms,
             )
 
@@ -729,6 +731,7 @@ class ConciergeFactory:
             back_ctx=back_ctx,
             experience_layer=experience,
             delta_aggregator=delta_aggregator,
+            delta_applicator=delta_applicator,
             hitl_coordinator=hitl,
             orchestrator=orchestrator,
             ledger=ledger,

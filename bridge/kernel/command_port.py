@@ -11,10 +11,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..core.envelope_builder import CommandEnvelope, EnvelopeBuilder
 from ..core.transport import HttpTransport
+
+if TYPE_CHECKING:
+    from ..ports.command_port_protocol import IKernelCommandPort
 
 logger = logging.getLogger(__name__)
 
@@ -220,3 +223,11 @@ class KernelCommandPort:
     def _extract_priority(envelope: dict[str, Any]) -> int:
         """Extract numeric priority from envelope (default NORMAL=2)."""
         return 2
+
+
+# P7.7: Static structural-conformance check. KernelCommandPort implements
+# IKernelCommandPort (declared in bridge/ports/command_port_protocol.py).
+# The assignment below is a no-op at runtime but causes mypy/pyright to
+# verify the class satisfies the Protocol.
+if TYPE_CHECKING:
+    _proto_check: type[IKernelCommandPort] = KernelCommandPort  # type: ignore[assignment]

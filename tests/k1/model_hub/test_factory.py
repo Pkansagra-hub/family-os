@@ -60,7 +60,7 @@ class TestCreateStandalone:
         assert isinstance(hub, IModelHubPort)
 
     def test_with_custom_config(self) -> None:
-        cfg = ModelHubConfig(daily_budget_usd=10.0)
+        cfg = ModelHubConfig()
         hub = ModelHubFactory.create_standalone(config=cfg)
         assert isinstance(hub, IModelHubPort)
 
@@ -120,9 +120,7 @@ class TestCreateForTesting:
             "registry",
             "circuit_mgr",
             "rate_limiter",
-            "cost_tracker",
             "response_cache",
-            "budget_enforcer",
             "capability_router",
             "model_selector",
             "normalization",
@@ -138,9 +136,9 @@ class TestCreateForTesting:
         assert isinstance(adapters["config"], ModelHubConfig)
 
     def test_custom_config_override(self) -> None:
-        cfg = ModelHubConfig(daily_budget_usd=99.0)
+        cfg = ModelHubConfig(cache_max_entries=500)
         _, adapters = ModelHubFactory.create_for_testing(overrides={"config": cfg})
-        assert adapters["config"].daily_budget_usd == 99.0
+        assert adapters["config"].cache_max_entries == 500
 
     def test_facade_health(self) -> None:
         facade, _ = ModelHubFactory.create_for_testing()
@@ -163,16 +161,20 @@ class TestCreateWithPorts:
     """create_with_ports() uses caller-supplied ports."""
 
     def test_with_credential_port(self) -> None:
-        from tests.k1.model_hub.adapters.test_credential_adapter import TestCredentialAdapter
+        from tests.k1.model_hub.adapters.test_credential_adapter import (
+            TestCredentialAdapter,
+        )
 
         cred = TestCredentialAdapter()
         hub = ModelHubFactory.create_with_ports(ports={"credential_port": cred})
         assert isinstance(hub, IModelHubPort)
 
     def test_with_custom_config(self) -> None:
-        from tests.k1.model_hub.adapters.test_credential_adapter import TestCredentialAdapter
+        from tests.k1.model_hub.adapters.test_credential_adapter import (
+            TestCredentialAdapter,
+        )
 
-        cfg = ModelHubConfig(daily_budget_usd=50.0)
+        cfg = ModelHubConfig()
         hub = ModelHubFactory.create_with_ports(
             ports={"credential_port": TestCredentialAdapter()},
             config=cfg,
@@ -206,7 +208,9 @@ class TestValidatePorts:
 
     def test_accepts_valid_ports(self) -> None:
         from k1.model_hub.factory import _validate_ports
-        from tests.k1.model_hub.adapters.test_credential_adapter import TestCredentialAdapter
+        from tests.k1.model_hub.adapters.test_credential_adapter import (
+            TestCredentialAdapter,
+        )
         from tests.k1.model_hub.adapters.test_event_adapter import TestEventAdapter
 
         # Should not raise

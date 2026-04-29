@@ -33,16 +33,12 @@ from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
 from k1.model_hub.plugins.base import NormalizedRequest
 from k1.model_hub.services.audit_logger import AuditLogger
-from k1.model_hub.services.budget_enforcer import BudgetEnforcer
 from k1.model_hub.services.capability_router import CapabilityRouter
-from k1.model_hub.services.cost_tracker import CostTracker
 from k1.model_hub.services.model_selector import ModelSelector
 from k1.model_hub.services.normalization_layer import NormalizationLayer
 from k1.model_hub.services.provider_dispatcher import ProviderDispatcher
 from k1.model_hub.services.response_cache import ResponseCache
 from k1.model_hub.types import (
-    BudgetDecision,
-    BudgetExceededError,
     CapabilityType,
     FinishReason,
     HubChunk,
@@ -77,16 +73,14 @@ class _MetricsEmitter(Protocol):
 class RequestRouter:
     """THE single entry point for all Model Hub traffic (MH-16).
 
-    9-step request pipeline:
+    7-step request pipeline (family-os: no budget enforcement):
       1. Validate envelope (schema, trace_id MH-03).
-      2. Check daily budget (MH-04, MH-08).
-      3. Classify priority -> set timeout (MH-15).
-      4. CapabilityRouter -> eligible providers.
-      5. ModelSelector -> provider + model + fallback chain.
-      6. Check cache (MH-09).
-      7. NormalizationLayer -> NormalizedRequest.
-      8. ProviderDispatcher -> execute/stream.
-      9. Post-process: cache, cost, audit, metrics.
+      2. Classify priority -> set timeout (MH-15).
+      3. CapabilityRouter -> eligible providers.
+      4. ModelSelector -> provider + model + fallback chain.
+      5. Check cache (MH-09).
+      6. NormalizationLayer -> NormalizedRequest.
+      7. ProviderDispatcher -> execute/stream + post-process (cache, audit).
 
     Constructor: all internal service dependencies injected.
 
@@ -100,21 +94,17 @@ class RequestRouter:
         *,
         capability_router: CapabilityRouter,
         model_selector: ModelSelector,
-        budget_enforcer: BudgetEnforcer,
         response_cache: ResponseCache,
         normalization_layer: NormalizationLayer,
         dispatcher: ProviderDispatcher,
-        cost_tracker: Optional[CostTracker] = None,
         audit_logger: Optional[AuditLogger] = None,
         metrics_port: Optional[_MetricsEmitter] = None,
     ) -> None:
         self._capability_router = capability_router
         self._model_selector = model_selector
-        self._budget_enforcer = budget_enforcer
         self._response_cache = response_cache
         self._normalization = normalization_layer
         self._dispatcher = dispatcher
-        self._cost_tracker = cost_tracker
         self._audit_logger = audit_logger
         self._metrics = metrics_port
         self._active_requests = 0
@@ -122,7 +112,7 @@ class RequestRouter:
     # -- route() (MH-16) ------------------------------------------------------
 
     async def route(self, request: HubRequest) -> HubResponse:
-        """Execute the 9-step request pipeline.
+        """Execute the 7-step request pipeline.
 
         Args:
             request: Hub-canonical request envelope.
@@ -132,7 +122,6 @@ class RequestRouter:
 
         Raises:
             ValidationError: Invalid request (missing trace_id, etc.).
-            BudgetExceededError: Budget exceeded (MH-04).
             NoEligibleProviderError: No provider supports capability.
         """
         # Step 1: Validate envelope
@@ -155,17 +144,6 @@ class RequestRouter:
 
         try:
             return await self._route_inner(request, std_labels)
-        except BudgetExceededError:
-            self._emit(
-                "model_hub.budget_rejections_total",
-                1,
-                {
-                    "capability": request.capability.value,
-                    "consumer": request.constraints.consumer_id,
-                },
-            )
-            self._emit("model_hub.errors_total", 1, {**std_labels, "error_type": "budget_exceeded"})
-            raise
         except NoEligibleProviderError:
             self._emit(
                 "model_hub.errors_total", 1, {**std_labels, "error_type": "no_eligible_provider"}
@@ -187,22 +165,10 @@ class RequestRouter:
     ) -> HubResponse:
         """Inner route logic (extracted for metric wrapping)."""
 
-        # Step 2: Check budget (MH-04, MH-08)
-        budget_result = self._budget_enforcer.check(request)
-        if budget_result.decision == BudgetDecision.REJECT:
-            raise BudgetExceededError(
-                budget_result.reason,
-                budget_pct=budget_result.usage_pct,
-                daily_limit=budget_result.daily_budget_usd,
-                request_id=request.request_id,
-                trace_id=request.trace_id,
-                capability=request.capability,
-            )
-
-        # Step 3: Priority -> timeout (MH-15) -- already in constraints
+        # Step 2: Priority -> timeout (MH-15) -- already in constraints
         # (timeout_ms set by caller or defaults from Priority tier)
 
-        # Step 4: CapabilityRouter -> eligible providers
+        # Step 3: CapabilityRouter -> eligible providers
         eligible = self._capability_router.route(
             request.capability,
             request.constraints,
@@ -215,9 +181,7 @@ class RequestRouter:
                 capability=request.capability,
             )
 
-        # Step 5: ModelSelector -> provider + model + fallback chain
-        # Update budget usage for cost-aware selection
-        self._model_selector.budget_usage_pct = self._budget_enforcer.usage_pct
+        # Step 4: ModelSelector -> provider + model + fallback chain
         choice = self._model_selector.select(eligible, request)
         if choice is None:
             raise NoEligibleProviderError(
@@ -299,7 +263,7 @@ class RequestRouter:
                 },
             )
 
-        # Step 9: Post-process -- denormalize, cache, cost, audit
+        # Step 9: Post-process -- denormalize, cache, audit
         response = self._normalization.denormalize(
             dispatch_result.response,
             request,
@@ -308,9 +272,6 @@ class RequestRouter:
             cache_hit=False,
             fallback_used=dispatch_result.fallback_used,
         )
-
-        # Track budget
-        self._budget_enforcer.track(response)
 
         # Cache response if cacheable
         if self._response_cache.should_cache(request):
@@ -330,7 +291,7 @@ class RequestRouter:
                 fallback_chain=dispatch_result.attempts,
             )
 
-        # Metrics: tokens used, cost, budget gauge
+        # Metrics: tokens used
         result_labels = {
             **std_labels,
             "provider": dispatch_result.provider_id,
@@ -340,8 +301,6 @@ class RequestRouter:
             response.metadata.usage.prompt_tokens + response.metadata.usage.completion_tokens
         )
         self._emit("model_hub.tokens_used", total_tokens, result_labels)
-        self._emit("model_hub.cost_usd", response.metadata.cost_usd, result_labels)
-        self._emit("model_hub.budget_pct", self._budget_enforcer.usage_pct)
 
         return response
 
@@ -350,7 +309,7 @@ class RequestRouter:
     async def stream_route(self, request: HubRequest) -> AsyncIterator[HubChunk]:
         """Streaming variant of the request pipeline.
 
-        Steps 1-7 same as route(). Step 8 delegates to
+        Steps 1-6 same as route(). Step 7 delegates to
         ProviderDispatcher.stream(). Post-processing on final chunk.
 
         Args:
@@ -361,22 +320,10 @@ class RequestRouter:
 
         Raises:
             ValidationError: Invalid request.
-            BudgetExceededError: Budget exceeded.
             NoEligibleProviderError: No eligible provider.
         """
-        # Steps 1-5 same as route()
+        # Steps 1-4 same as route()
         self._validate(request)
-
-        budget_result = self._budget_enforcer.check(request)
-        if budget_result.decision == BudgetDecision.REJECT:
-            raise BudgetExceededError(
-                budget_result.reason,
-                budget_pct=budget_result.usage_pct,
-                daily_limit=budget_result.daily_budget_usd,
-                request_id=request.request_id,
-                trace_id=request.trace_id,
-                capability=request.capability,
-            )
 
         eligible = self._capability_router.route(
             request.capability,
@@ -390,7 +337,6 @@ class RequestRouter:
                 capability=request.capability,
             )
 
-        self._model_selector.budget_usage_pct = self._budget_enforcer.usage_pct
         choice = self._model_selector.select(eligible, request)
         if choice is None:
             raise NoEligibleProviderError(
@@ -446,9 +392,7 @@ class RequestRouter:
                     capability=request.capability,
                     trace_id=request.trace_id,
                     finish_reason=(
-                        FinishReason.TOOL_CALLS
-                        if accumulated_tool_calls
-                        else FinishReason.STOP
+                        FinishReason.TOOL_CALLS if accumulated_tool_calls else FinishReason.STOP
                     ),
                 )
                 yield HubChunk(

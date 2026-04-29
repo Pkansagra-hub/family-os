@@ -71,7 +71,7 @@ class Phase1Result:
         "intent_classification",
         "domain_context",
         "safety_band",
-        "complexity_tier",
+        # P3.4a: complexity_tier removed; tier derivation moved to dispatch_task.
         "temporal_expressions",
         "relations",
         "_degraded",
@@ -89,7 +89,6 @@ class Phase1Result:
         intent_classification: str = "general",
         domain_context: str = "general",
         safety_band: str = "GREEN",
-        complexity_tier: str = "LOW",
         temporal_expressions: list[dict[str, Any]] | None = None,
         relations: list[str] | None = None,
     ) -> None:
@@ -103,7 +102,6 @@ class Phase1Result:
         self.intent_classification = intent_classification
         self.domain_context = domain_context
         self.safety_band = safety_band
-        self.complexity_tier = complexity_tier
         self.temporal_expressions = temporal_expressions or []
         self.relations = relations or []
         self._degraded = False
@@ -122,7 +120,7 @@ class Phase1Result:
             "entities": self.entities,
             "safety_band": self.safety_band,
             "domain": self.domain_context,
-            "complexity_tier": self.complexity_tier,
+            # P3.4a: complexity_tier removed.
             "temporal_expressions": self.temporal_expressions,
             "relations": self.relations,
         }
@@ -144,7 +142,7 @@ class Phase1Pipeline(Protocol):
       - Emotion classification (primary emotion, valence, arousal)
       - Domain context (travel, health, finance, etc.)
       - Safety band (GREEN/AMBER/RED)
-      - Complexity tier (LOW/MEDIUM/HIGH)
+      # P3.4a: complexity_tier removed; tier derivation moved to dispatch_task.
     """
 
     def classify(self, text: str) -> Phase1Result:
@@ -210,16 +208,13 @@ class StubPhase1Pipeline:
         # Basic keyword-based classification (POC only)
         domain = "general"
         intent = "general"
-        complexity = "LOW"
 
         if any(w in lower for w in ("hotel", "flight", "travel", "book", "trip")):
             domain = "travel"
             intent = "booking"
-            complexity = "MEDIUM"
         elif any(w in lower for w in ("doctor", "dentist", "health", "appointment")):
             domain = "health"
             intent = "scheduling"
-            complexity = "MEDIUM"
         elif any(w in lower for w in ("weather", "forecast")):
             domain = "information"
             intent = "query"
@@ -239,7 +234,6 @@ class StubPhase1Pipeline:
             intent_classification=intent,
             domain_context=domain,
             safety_band="GREEN",
-            complexity_tier=complexity,
         )
 
         self._last_result = result

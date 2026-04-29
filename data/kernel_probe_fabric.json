@@ -1,0 +1,88 @@
+{
+  "boot_seconds": 9.134732800004713,
+  "counts": {
+    "OK": 3,
+    "WARN": 1,
+    "FAIL": 2,
+    "INFO": 5
+  },
+  "probes": [
+    {
+      "layer": "Fabric Wiring",
+      "name": "_port_deps[mcp_transport].pre_inject",
+      "status": "FAIL",
+      "value": "None",
+      "note": "audit F101\u2013F103 confirmed: mcp_transport is None at boot"
+    },
+    {
+      "layer": "Fabric Wiring",
+      "name": "_port_deps[mcp_transport].post_inject",
+      "status": "OK",
+      "value": "'TestMCPTransport'",
+      "note": ""
+    },
+    {
+      "layer": "Policy Engine",
+      "name": "_cognitive",
+      "status": "OK",
+      "value": "'CognitiveLoadRouting'",
+      "note": ""
+    },
+    {
+      "layer": "Capability Registry",
+      "name": "registered_contracts",
+      "status": "INFO",
+      "value": "15",
+      "note": ""
+    },
+    {
+      "layer": "Capability Registry",
+      "name": "by_prefix",
+      "status": "INFO",
+      "value": "{'tool': 15}",
+      "note": ""
+    },
+    {
+      "layer": "Fabric Execute",
+      "name": "selected_capability",
+      "status": "INFO",
+      "value": "'tool.write.build_agent'",
+      "note": ""
+    },
+    {
+      "layer": "Fabric Execute",
+      "name": "execute",
+      "status": "WARN",
+      "value": "'success=False provider=build_agent_handler (210ms)'",
+      "note": "error=ErrorInfo(code='output_validation_failed', message=\"Schema validation failed: $: missing required property 'agent_name'; $: missing required property 'status'; $: missing required property 'errors'\", retriable=False)"
+    },
+    {
+      "layer": "Fabric Execute",
+      "name": "events.invoked_captured",
+      "status": "FAIL",
+      "value": "0",
+      "note": ""
+    },
+    {
+      "layer": "Fabric Execute",
+      "name": "events.failed_captured",
+      "status": "INFO",
+      "value": "0",
+      "note": ""
+    },
+    {
+      "layer": "Fabric Execute",
+      "name": "mcp_transport.call_count",
+      "status": "INFO",
+      "value": "1",
+      "note": ""
+    },
+    {
+      "layer": "Fabric Failure Path",
+      "name": "execute_unknown_cap",
+      "status": "OK",
+      "value": "'success=False error=ErrorInfo(code=\\'resolution_failed\\', message=\"Failed to resolve provider for \\'tool.nonexistent.e61be0\\'\", retriable=True)'",
+      "note": "graceful failure (audit-correct)"
+    }
+  ]
+}

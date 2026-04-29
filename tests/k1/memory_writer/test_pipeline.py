@@ -77,9 +77,22 @@ class FakeSessionReader:
         self.snapshot_data = snapshot or {}
         self.raises = raises
         self.call_count = 0
+        self.enriched_call_count = 0
+        self.last_enriched_session_id: Optional[str] = None
 
     async def read_snapshot(self) -> Dict[str, Any]:
         self.call_count += 1
+        if self.raises:
+            raise self.raises
+        return self.snapshot_data
+
+    async def read_snapshot_enriched(
+        self,
+        session_id: str,
+        history_limit: int = 50,
+    ) -> Dict[str, Any]:
+        self.enriched_call_count += 1
+        self.last_enriched_session_id = session_id
         if self.raises:
             raise self.raises
         return self.snapshot_data

@@ -841,6 +841,48 @@ class PlanRequest:
         if not self.trace_id:
             raise ValueError("PlanRequest.trace_id is required")
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for event bus transport.
+
+        Required so EventPortProdAdapter does not fall through to its
+        ``{"value": repr(payload)}`` fallback when serialising the
+        ``k1.planner.plan.request.v1`` envelope.
+
+        ``context`` is serialised via ``SessionSnapshot.to_dict()`` when
+        present; receivers reconstruct it through ``from_dict``.
+        """
+        ctx = self.context.to_dict() if self.context is not None else None
+        return {
+            "intent": self.intent,
+            "trace_id": self.trace_id,
+            "context": ctx,
+            "request_id": self.request_id,
+            "constraints": dict(self.constraints),
+            "timeout_ms": self.timeout_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PlanRequest":
+        """Reconstruct ``PlanRequest`` from a dict produced by ``to_dict``.
+
+        Tolerates ``context`` being either ``None``, a dict, or an already
+        constructed ``SessionSnapshot`` (helper-call ergonomics).
+        """
+        ctx_raw = data.get("context")
+        if ctx_raw is None or isinstance(ctx_raw, SessionSnapshot):
+            context = ctx_raw
+        else:
+            context = SessionSnapshot.from_dict(ctx_raw)
+
+        return cls(
+            intent=data["intent"],
+            trace_id=data["trace_id"],
+            context=context,
+            request_id=data.get("request_id") or str(uuid.uuid4()),
+            constraints=dict(data.get("constraints") or {}),
+            timeout_ms=int(data.get("timeout_ms", 45_000)),
+        )
+
 
 @dataclass(frozen=True)
 class CommittedPlan:

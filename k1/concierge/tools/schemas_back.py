@@ -18,116 +18,18 @@ from __future__ import annotations
 
 from k1.concierge.llm.types import ToolSchema
 
+# P1.1: discover_capabilities + invoke_capability live in schemas_fabric
+# so they can be shared with Front without a schemas_front <-> schemas_back
+# import cycle. Re-exported here to preserve the historical public surface
+# (`from k1.concierge.tools.schemas_back import DISCOVER_CAPABILITIES_SCHEMA`).
+from k1.concierge.tools.schemas_fabric import DISCOVER_CAPABILITIES_SCHEMA, INVOKE_CAPABILITY_SCHEMA
+
 # Import shared schema -- recall_memory is actor="both"
 from k1.concierge.tools.schemas_front import RECALL_MEMORY_SCHEMA
 
 # ===================================================================
-# READ (1 exclusive + 1 shared = 2)
+# ACTION (continued -- batch invocation)
 # ===================================================================
-
-DISCOVER_CAPABILITIES_SCHEMA = ToolSchema(
-    name="discover_capabilities",
-    description=(
-        "Query the K0 capability registry to find services, agents, or workflows "
-        "that can handle a given intent. Returns ranked matches with confidence "
-        "scores. Call BEFORE invoke_capability or spawn_via_fabric to find "
-        "available options. Available in ALL tiers."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "intent": {
-                "type": "string",
-                "description": (
-                    "What you need to accomplish "
-                    "(e.g. 'search hotels', 'book flight', 'create workout plan')"
-                ),
-            },
-            "domain": {
-                "type": "string",
-                "description": "Domain hint to narrow search (travel, health, etc.)",
-            },
-            "constraints": {
-                "type": "object",
-                "description": (
-                    "Capability requirements " "(e.g. {'real_time': true, 'max_latency_ms': 5000})"
-                ),
-            },
-        },
-        "required": ["intent"],
-    },
-    returns={
-        "type": "object",
-        "properties": {
-            "capabilities": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "description": {"type": "string"},
-                        "confidence": {"type": "number"},
-                        "provider": {"type": "string"},
-                    },
-                },
-            },
-            "count": {"type": "integer"},
-        },
-    },
-    actor="back",
-    category="read",
-    side_effects=False,
-)
-
-# ===================================================================
-# ACTION (3)
-# ===================================================================
-
-INVOKE_CAPABILITY_SCHEMA = ToolSchema(
-    name="invoke_capability",
-    description=(
-        "Invoke a known K0 capability by name with parameters. "
-        "Use after discover_capabilities identifies the right service, "
-        "or when you already know the capability name from prior tasks. "
-        "Available at all tiers. For invoking MULTIPLE independent "
-        "capabilities, prefer batch_invoke_capabilities to save budget."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "capability_name": {
-                "type": "string",
-                "description": "Exact name of the capability to invoke",
-            },
-            "params": {
-                "type": "object",
-                "description": (
-                    "Parameters for the capability, matching its schema "
-                    "(e.g. {'destination': 'Napa', 'dates': {'start': '2025-06-15', 'end': '2025-06-17'}})"
-                ),
-            },
-            "session_id": {
-                "type": "string",
-                "description": "Session ID for stateful capabilities. Optional.",
-            },
-        },
-        "required": ["capability_name", "params"],
-    },
-    returns={
-        "type": "object",
-        "properties": {
-            "result": {"type": "object", "description": "Capability output"},
-            "duration_ms": {"type": "integer"},
-            "status": {
-                "type": "string",
-                "enum": ["success", "partial", "error"],
-            },
-        },
-    },
-    actor="back",
-    category="action",
-    side_effects=True,
-)
 
 BATCH_INVOKE_CAPABILITIES_SCHEMA = ToolSchema(
     name="batch_invoke_capabilities",
@@ -378,33 +280,24 @@ BACK_TOOL_SCHEMAS: list[ToolSchema] = [
 ]
 
 # ===================================================================
-# Tier-based allowlists (V2 Section 6.2)
+# Tier-based allowlists (P3.4b: collapsed to {simple, plan} with legacy aliases)
 # ===================================================================
 
+_BACK_SIMPLE_LIST: list[str] = [
+    "recall_memory",
+    "discover_capabilities",
+    "invoke_capability",
+    "batch_invoke_capabilities",
+    "submit_result",
+]
+
+_BACK_PLAN_EXTRA: list[str] = ["spawn_via_fabric", "execute_workflow"]
+
 BACK_TIER_ALLOWLISTS: dict[str, list[str]] = {
-    "LOW": [
-        "recall_memory",
-        "discover_capabilities",
-        "invoke_capability",
-        "batch_invoke_capabilities",
-        "submit_result",
-    ],
-    "MEDIUM": [
-        "recall_memory",
-        "discover_capabilities",
-        "invoke_capability",
-        "batch_invoke_capabilities",
-        "spawn_via_fabric",
-        "execute_workflow",
-        "submit_result",
-    ],
-    "HIGH": [
-        "recall_memory",
-        "discover_capabilities",
-        "invoke_capability",
-        "batch_invoke_capabilities",
-        "spawn_via_fabric",
-        "execute_workflow",
-        "submit_result",
-    ],
+    "simple": _BACK_SIMPLE_LIST,
+    "plan": _BACK_SIMPLE_LIST + _BACK_PLAN_EXTRA,
+    # Legacy aliases:
+    "LOW": _BACK_SIMPLE_LIST,
+    "MEDIUM": _BACK_SIMPLE_LIST + _BACK_PLAN_EXTRA,
+    "HIGH": _BACK_SIMPLE_LIST + _BACK_PLAN_EXTRA,
 }

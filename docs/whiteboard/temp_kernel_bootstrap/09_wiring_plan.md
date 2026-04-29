@@ -17,11 +17,74 @@
 
 **Done:** P6.0–P6.9, P6.11–P6.14 (14 of 15 issues).
 
-**Open:** **P6.10 only** — `k1.model_hub` STRICT timing rule was NOT committed. `k1/config/bus.yaml` has no `k1.model_hub` entry; topic falls to default RELAXED. To be picked up in a follow-up batch.
+**Open:** ~~**P6.10 only**~~ ✅ DONE 2026-04-22 — `k1.model_hub: STRICT` added to `k1/config/bus.yaml` AND `k1/bus/timing/defaults.py` `DEFAULT_RULES` (test enforces parity). Bus suite 1108/1108 still green.
+
+---
+
+## Sequential Execution Roadmap (2026-04-22 — post P3.4 / post P6.10)
+
+> Items marked **DEFERRED-N** below are ordered by dependency. Pick them up one at a time in numeric order. Each is a self-contained commit-sized unit. ☐ = not started, ⏳ = in progress, ✅ = done.
+
+| # | Item | Scope | Blocker / Depends |
+|---|------|-------|-------------------|
+| **DEFERRED-1** ✅ DONE 2026-04-22 | Test cleanup: `test_m10_e101_ultrabert_pipeline.py` — dropped `complexity_tier` assertions (P3.4 carry-over). Removed `test_complexity_tier_present` + entire `TestComplexityClassifier` block (7 tests) + relaxed `test_fallback_when_adapter_returns_none`. 31/31 pass. | ~30 LOC, 8 tests | done |
+| **DEFERRED-2** ✅ DONE 2026-04-22 | Test cleanup: `test_tool_fabric_live.py` — replaced `fabric_port=` kwarg with `dispatch=FabricDispatchAdapter(fabric)` (P4B.3 carry-over). Also fixed pre-existing bug in `FabricDispatchAdapter.discover_capabilities` (positional/kwarg collision on `domain`) and removed duplicate compat block. 17/17 pass. | ~17 tests + 1 adapter fix | done |
+| **DEFERRED-3** ✅ DONE 2026-04-22 | TD-2.3 / TD-2.4 / TD-2.5 — three stale doc-string fixes: `k1/structure.md` tool_registry comment now flags P3.1 removal; `k1/memory_writer/ARCHITECTURE.md` "16 of 43" section flagged stale (now 46 .py files); `k1/sessionstate/manager.py` `get_hot()` docstring corrected 48KB → 52KB. | 3 doc edits | done |
+| **DEFERRED-4** ✅ DONE 2026-04-22 (audit) | P4B.4 — `CircuitBreaker` already relocated to `k1/orchestrator/degradation.py` (per `k1.concierge.orchestrator.__init__` docstring + `k1.orchestrator.degradation` header). `OrchestratorStub` + HIGH-tier interfaces + port protocols already deleted. `route_task` / `route_task_sync` intentionally remain in `k1/concierge/orchestrator/routing.py` because they operate on POC types (TaskEnvelope/Budget/ComplexityTier) per ARCHITECTURE.md R-1 — moving them to `k1/orchestrator/` would conflict with the documented POC↔production type split (production already has its own `_route_task` over different fields). NO code change needed. | audit only | done |
+| **DEFERRED-5** ✅ DONE 2026-04-22 (audit) | P4B.5 — `_FabricGatewayAdapter`, `_StateReadAdapter`, `_DeltaEmitAdapter` already deleted from `k1/concierge/factory.py` (only `_DispatchPortFSMAdapter` remains, which is the P4B.2 replacement). Backward-compat re-exports from `k1/concierge/kernel/bootstrap.py` and `k1/kernel/bootstrap.py` already removed (verified by `TestBackwardCompatExports` in `tests/k1/concierge/test_concierge_factory.py`). NO code change needed. | audit only | done |
+| **DEFERRED-6** ✅ DONE 2026-04-22 (audit) | P4B.7 — `k1/concierge/fabric/` already contains only `ports.py` (`IFabricPort` Protocol) + `__init__.py` (with P4B.7 docstring). All 6 demo-capability files (registry.py, demo_capabilities.py, family_capabilities.py, web_capabilities.py, contract_converter.py, poc_bridge_adapter.py) already moved to `tests/fixtures/capabilities/`. Only one test file (`tests/k1/concierge/test_fabric_port.py`) imports `IFabricPort` from production. NO code change needed. | audit only | done |
+| **DEFERRED-7** ✅ DONE 2026-04-22 | MS-4 Epic 4.1 — Replaced obsolete `Phase1Result.complexity_tier` spec (line 2938) with post-P3.4-correct cross-component coverage: new file `tests/k1/integration/test_dispatch_task_bus_hop.py` with 3 parametrized tests (LOW/MEDIUM/HIGH) exercising `dispatch_task(intents_raw, tier=...)` → real `BusFactory.create_local()` → `TOPIC_TASK_DISPATCH` subscriber → `TaskDispatch.from_payload()`. Asserts tier propagation, task_id round-trip, envelope routing fields, JSON payload_format, auto-derived budget_hint. 3/3 pass in 1.06s. | 3 tests | done |
+| **DEFERRED-8** | MS-4 Epic 4.2 — Tier routing & dispatch (4 tests; 4.2.5 STRETCH) → `test_tier_routing.py` | 4 tests | DEFERRED-7 |
+| **DEFERRED-9** | MS-4 Epic 4.3.1 — Wire `route_task_with_degradation()` into FSM (PREREQUISITE for 4.3.2-5) | activate dead code | DEFERRED-4 |
+| **DEFERRED-10** | MS-4 Epic 4.3.2-4.3.6 — CB degradation cascade (5 tests) → `test_cb_degradation.py` | 5 tests | DEFERRED-9 |
+| **DEFERRED-11** | MS-4 Epic 4.4 — Cross-component data flow (6 tests) → `test_data_flow.py` | 6 tests | DEFERRED-7 |
+| **DEFERRED-12** | MS-4 Epic 4.5 — Full turn cycle (LOW + MEDIUM, multi-turn, concurrent — 4 tests) → `test_turn_cycle.py` | 4 tests | DEFERRED-7..11 |
+| **DEFERRED-13** | MS-3 TD-1 — Type Safety Sweep (~10 items, ~150 LOC) | ~150 LOC across multiple components | none |
+| **DEFERRED-14** | MS-3 TD-3 — Architectural Improvements (TD-3.10 KernelRuntime/ConciergeRuntime convergence highest impact) | ~18 items | DEFERRED-13 ideally |
+| **DEFERRED-15** | MS-3 TD-5 — 48 LOW items (correctness-risk first: TD-5.34 WARM 52KB vs 48KB limit, TD-5.36 eviction boolean→lock) | 48 items | none (parallel) |
+| **DEFERRED-16** | MS-3 TD-6 — 19 INFO items (observational only) | docs | none |
+| **DEFERRED-17** | MS-2.5 Phase 7 — Bridge adapters (KernelQueryPort, KernelSSEPort, KernelObsPort, HttpBridgeClient) | ~800 LOC | **BLOCKED on K0 HTTP API availability** |
+| **DEFERRED-18** | MS-3 TD-4 — 11 future-scope stubs (UltraBERT, Prometheus, DeltaBusAdapter, config watcher) | as deps unblock | BLOCKED on external milestones |
+| **DEFERRED-19** | MS-4 4.2.5 (STRETCH) — HIGH → real Planner via `IPlannerService` / `IDAGExecutor` | requires real Planner impl | BLOCKED — interfaces-only today |
+
+**Critical-path subset (kernel "done" gate):** DEFERRED-1 → 2 → 4 → 5 → 9 → 7 → 8 → 10 → 11 → 12. Items 3, 6, 13–16 parallelizable. 17–19 are external-blocked.
 
 **Tests:** Bus suite **1108 passing** (baseline 1069, +39 new across schema validation, idempotency, durability, and E2E). Pre-existing unrelated failures on POC_Migration (perf SLO flakes, `test_no_deep_imports_in_production`, model_hub asyncio loop pollution, `runner_cli` SystemExit:2) verified out-of-scope for Phase 6.
 
 **PR summary:** [docs/whiteboard/temp_kernel_bootstrap/phase6_pr_summary.md](docs/whiteboard/temp_kernel_bootstrap/phase6_pr_summary.md)
+
+---
+
+## MS-2.5 Status Snapshot — 2026-04-22 Subagent Code Audit
+
+> **READ THIS FIRST.** Per-issue ☐/☑ checkboxes below were stale until this audit. The summary here reflects what is actually true in code (verified by 7 parallel read-only subagents with file:line citations). When any per-issue table conflicts with this snapshot, this snapshot wins.
+
+| Phase | Done | Total | Verdict |
+|-------|------|-------|---------|
+| **Phase 1** Session-State Wiring | 6 | 6 | ✅ COMPLETE |
+| **Phase 2** Serialization & Type Safety | 7 | 8 | ⚠️ NEAR — only P2.6 MW Protocol-stub mirror remaining (1-line cosmetic; runtime fine) |
+| **Phase 3** Dead Code & Package Cleanup | 4 | 4 | ✅ COMPLETE |
+| **Phase 4** POC Layer Decoupling | 5 | 5 | ✅ COMPLETE |
+| **Phase 4B** Concierge Port Wiring | 8 | 8 | ✅ COMPLETE (P4B.4 done-by-design — see DEFERRED-4) |
+| **Phase 5** Production Adapter Stubs → Real | 7 | 8 | ✅ COMPLETE (P5.7 PlaceResolver explicitly DEFERRED as LOW) |
+| **Phase 6** Bus Production Hardening | 15 | 15 | ✅ COMPLETE |
+| **Phase 7** Bridge Adapter Completion | 0 | 7 | ❌ NOT STARTED — P7.4 BLOCKED on K0 HTTP API; P7.1/P7.2/P7.3/P7.5/P7.6/P7.7 actionable |
+| **TOTAL** | **52** | **61** | **85% — only Phase 7 + P2.6 actionable** |
+
+**Real remaining work (excluding deferred/blocked):**
+
+| Item | Effort | File:line |
+|------|--------|-----------|
+| P2.6 — fix MW local Protocol stub `list[dict]` → `list[CommandEnvelope \| dict[str, Any]]` | trivial (1 line) | [k1/memory_writer/adapters/bridge_command_adapter.py:40](k1/memory_writer/adapters/bridge_command_adapter.py#L40) |
+| P7.5 — add `@runtime_checkable` to `SigningBackend` | trivial (1 line) | [bridge/core/signing.py:40](bridge/core/signing.py#L40) |
+| P7.7 — add Protocol conformance to `KernelCommandPort` | small | [bridge/kernel/command_port.py:47](bridge/kernel/command_port.py#L47) |
+| P7.6 — move `StubBridgeClient` from prod to test module | small | [bridge/client.py:128](bridge/client.py#L128) |
+| P7.1 — build `KernelQueryPort` offline adapter | small (~150 LOC) | `bridge/adapters/` (empty) — protocol [bridge/ports/query_port_protocol.py:115](bridge/ports/query_port_protocol.py#L115) |
+| P7.2 — build `KernelSSEPort` offline adapter | small (~150 LOC) | protocol [bridge/ports/sse_port_protocol.py:73](bridge/ports/sse_port_protocol.py#L73) |
+| P7.3 — build `KernelObsPort` offline adapter (also fix `emit_obs` drop bug for NORMAL/HIGH) | medium (~200 LOC) | protocol [bridge/ports/obs_port_protocol.py:78](bridge/ports/obs_port_protocol.py#L78) |
+| P7.4 — `HttpBridgeClient` | medium (~300 LOC) | **BLOCKED on K0 HTTP API** |
+
+**Audit method:** 7 parallel `Explore` subagents (one per phase) with thoroughness=medium/thorough. All findings backed by file:line evidence. See per-issue Status rows below for individual citations dated `2026-04-22 (audit)`.
 
 ---
 
@@ -1422,7 +1485,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 
 ---
 
-#### Phase 1: Session-State Wiring (CRITICAL — ~200 LOC)
+#### Phase 1: Session-State Wiring (CRITICAL — ~200 LOC) — ✅ COMPLETE 2026-04-22 (audit, 6/6)
 
 **Why first:** Three components (Orchestrator, Planner, Fabric) operate session-blind. This is the #1 compound gap. Safety gates are bypassed. Context-free planning produces garbage plans.
 
@@ -1495,7 +1558,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 
 ---
 
-#### Phase 2: Serialization & Type Safety Bugs (CRITICAL/HIGH — ~50 LOC)
+#### Phase 2: Serialization & Type Safety Bugs (CRITICAL/HIGH — ~50 LOC) — ⚠️ NEAR 2026-04-22 (audit, 7/8 — P2.6 partial)
 
 **Why second:** These are code bugs that crash at runtime. Quick fixes, high impact.
 
@@ -1512,7 +1575,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **File** | `k1/orchestrator/types.py` |
 | **Findings addressed** | C-1, M-33 |
 | **📖 Ref docs** | `15_planner_api_mapping.md` (C-1 safety_band_min gap), `15_orchestrator_planner_cross_reference.md` (serialization mismatch) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `k1/orchestrator/types.py` L711-L713 emits `safety_band_min`; field declared L671; round-trip via `from_dict` L744 |
 
 ##### Issue P2.2 — Fix `compensation_capability` AttributeError in FabricGatewayAdapter
 
@@ -1522,7 +1585,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **File** | `k1/orchestrator/adapters/fabric_gateway_adapter.py` |
 | **Findings addressed** | C-3 |
 | **📖 Ref docs** | `17_fabric_orchestrator_planner_cross_reference.md` (C-3 compound gap), `14_orchestrator_audit.md` (FabricGatewayAdapter) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `k1/orchestrator/adapters/fabric_gateway_adapter.py` L273 hardcodes `compensation_capability=None` (CapabilityContract has no such field; AttributeError prevented) |
 
 ##### Issue P2.3 — Fix `isinstance` bug in `list_circuit_breakers()`
 
@@ -1532,7 +1595,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **File** | `k1/orchestrator/adapters/admin_http_adapter.py` |
 | **Findings addressed** | H-6 |
 | **📖 Ref docs** | `14_orchestrator_audit.md` (H-6 isinstance bug detail) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `k1/orchestrator/adapters/admin_http_adapter.py` L314 now `if cb is not None and isinstance(cb, CircuitBreaker):` after `getattr(planner_adapter, '_cb', None)` |
 
 ##### Issue P2.4 — Fix PlanStep type collision (Fabric vs Orchestrator)
 
@@ -1541,7 +1604,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **What** | Fabric `PlanStep` (6 fields) vs Orchestrator `PlanStep` (14 fields). Rename Fabric's to `FabricPlanStep` or use qualified imports everywhere. |
 | **Findings addressed** | M-49 |
 | **📖 Ref docs** | `17_fabric_orchestrator_planner_cross_reference.md` (M-49 type collision), `12_fabric_audit.md` (Fabric PlanStep definition) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `k1/fabric/types.py` L1096 renamed to `FabricPlanStep` (alias `PlanStep = FabricPlanStep` L1156 for back-compat); `k1/orchestrator/types.py` L39 imports `FabricPlanStep` by name |
 
 ##### Issue P2.5 — Fix `RegistryEntry` lossy mapping (26→6 fields)
 
@@ -1550,7 +1613,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **What** | `_contract_to_entry()` drops 20 fields. Add `required_inputs`, `output`, `cost_per_call` to `RegistryEntry`. |
 | **Findings addressed** | M-50 |
 | **📖 Ref docs** | `17_fabric_orchestrator_planner_cross_reference.md` (M-50 lossy mapping) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `k1/orchestrator/types.py` L469-L487: `RegistryEntry` extended to 9 fields (`required_inputs`, `output`, `cost_per_call` added with explicit P2.5 comment); `_contract_to_entry()` maps all three via `getattr` |
 
 ##### Issue P2.6 — Fix `submit_command_batch` type mismatch
 
@@ -1559,7 +1622,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **What** | `submit_command_batch` takes `list[dict]` but port protocol takes `list[CommandEnvelope]`. Align types. |
 | **Findings addressed** | M-55 |
 | **📖 Ref docs** | `18_bridge_audit.md` (M-55 type mismatch detail) |
-| **Status** | ☑ DONE — `IBridgeClient`, `StubBridgeClient`, `SinkBridgeClient` updated to `list[CommandEnvelope or dict]`; SinkBridgeClient handles both types |
+| **Status** | ⚠️ PARTIAL 2026-04-22 (audit) — Bridge side fixed (`bridge/client.py` L155 + L282 accept `list[CommandEnvelope \| dict]`). REMAINING: `k1/memory_writer/adapters/bridge_command_adapter.py` L40 local `_IKernelCommandPort` Protocol stub still declares `list[dict]`. 1-line cosmetic fix; runtime is fine. |
 
 ##### Issue P2.7 — Fix `RustMailboxAdapter.receive()` keyword-only mismatch
 
@@ -1582,7 +1645,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 
 ---
 
-#### Phase 3: Dead Code & Package Cleanup (HIGH — -100 LOC net)
+#### Phase 3: Dead Code & Package Cleanup (HIGH — -100 LOC net) — ✅ COMPLETE 2026-04-22 (audit, 4/4)
 
 **Why third:** Remove confusion. Dead code misleads developers and hides real composition root.
 
@@ -1629,7 +1692,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 
 ---
 
-#### Phase 4: POC Layer Decoupling (HIGH — 5 issues)
+#### Phase 4: POC Layer Decoupling (HIGH — 5 issues) — ✅ COMPLETE 2026-04-22 (audit, 5/5)
 
 **Why fourth:** 98 `from poc.*` import lines remain in `k1/`. They violate clean architecture boundaries and block production deployment. Phase 1 delivered real state readers so the POC state path is no longer needed.
 
@@ -1711,7 +1774,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 
 ---
 
-#### Phase 4B: Concierge Port Wiring & Bootstrap Reduction (HIGH — ~800 LOC)
+#### Phase 4B: Concierge Port Wiring & Bootstrap Reduction (HIGH — ~800 LOC) — ✅ COMPLETE 2026-04-22 (audit, 8/8; P4B.4 done-by-design per DEFERRED-4)
 
 **Why before Phase 5:** Phase 5 fixes adapters in `service.py`. If we do P5 first, `bootstrap.py` remains a divergent legacy copy and the factory still ignores `IDispatchPort`. This phase makes the concierge consume external systems (Fabric, Orchestrator, ModelHub) through proper ports injected via `service.py`, and eliminates the legacy `bootstrap.py` wiring that duplicates `factory.py`.
 
@@ -1728,7 +1791,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **Why first** | Every subsequent issue in this phase modifies `factory.py` and `service.py`. If bootstrap.py still has its own divergent copy, changes must be made twice. After this issue, there is ONE boot path. |
 | **Files** | `k1/kernel/bootstrap.py` (~960→~150 LOC), `k1/kernel/chat_repl.py`, `k1/kernel/runner.py`, `k1/kernel/__init__.py` (re-exports) |
 | **Findings addressed** | N1 from `29_concierge_findings.md` |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `k1/concierge/kernel/bootstrap.py` is now 9 lines: tombstone docstring + single re-export of `KernelConfig`/`KernelRuntime`/`start_kernel`/`stop_kernel` from `k1.kernel.bootstrap`. All concierge wiring lives in `k1/kernel/service.py`. |
 
 ##### Issue P4B.2 — Wire `IDispatchPort` through factory (replace `fabric_port`/`orchestrator` kwargs)
 
@@ -1739,7 +1802,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **Impact** | Concierge no longer has internal access to raw Fabric or Orchestrator objects. All external dispatch goes through the `IDispatchPort` contract. |
 | **Files** | `k1/concierge/factory.py` (step 14 rewrite, remove kwargs), `k1/kernel/service.py` (remove kwargs from P4 call) |
 | **Findings addressed** | M-64, M-69, supersedes old P5.8 |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `k1/concierge/factory.py` L88 `PortBundle.dispatch: IDispatchPort \| None`; `create_with_ports(ports)` only — no `fabric_port`/`orchestrator` kwargs. L695-L699 step 14 wires orchestrator via `_DispatchPortFSMAdapter(ports.dispatch)`. |
 
 ##### Issue P4B.3 — Wire tools through `IDispatchPort` (remove `ctx.fabric_port`)
 
@@ -1750,7 +1813,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **Depends on** | P4B.2 (IDispatchPort wired in factory) |
 | **Files** | `k1/concierge/tools/implementations.py`, `k1/concierge/tools/dispatcher.py` |
 | **Findings addressed** | Part of N1, N4 from `29_concierge_findings.md` |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `k1/concierge/factory.py` L607-L622 builds `front_ctx`/`back_ctx` with `dispatch=ports.dispatch`; no `fabric_port:` kwarg in any `ToolContext` construction. |
 
 ##### Issue P4B.4 — Delete `k1/concierge/orchestrator/` (move `route_task` to `k1/orchestrator/`)
 
@@ -1761,7 +1824,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **Depends on** | P4B.2 + P4B.3 (no more internal references to OrchestratorStub) |
 | **Files** | Delete `k1/concierge/orchestrator/` (7 files). Move routing+degradation to `k1/orchestrator/`. Update imports in tests. |
 | **Findings addressed** | N2 from `29_concierge_findings.md` |
-| **Status** | ☐ |
+| **Status** | ☑ DONE-BY-DESIGN 2026-04-22 (audit) — `OrchestratorStub` + `CircuitBreaker` + HIGH-tier interfaces + port protocols already removed (CircuitBreaker → `k1/orchestrator/degradation.py`). `k1/concierge/orchestrator/{routing.py,types.py,__init__.py}` directory **intentionally retained** because `route_task`/`route_task_sync`/`DispatchRecord` operate on POC types (TaskEnvelope/Budget/ComplexityTier) per ARCHITECTURE.md R-1 (POC↔production type split). Production has its own `_route_task` over different fields. Treating as DONE-by-design. |
 
 ##### Issue P4B.5 — Delete internal adapter trinity from factory
 
@@ -1772,7 +1835,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **Depends on** | P4B.2 + P4B.4 |
 | **Files** | `k1/concierge/factory.py` (delete classes + step 14 adapter wiring), `k1/kernel/bootstrap.py` (delete re-exports — may already be gone from P4B.1) |
 | **Findings addressed** | Part of N2 |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `_FabricGatewayAdapter`, `_StateReadAdapter`, `_DeltaEmitAdapter` absent from `k1/concierge/factory.py`; only tombstone comment at L279-L283. `_build_delta_applicator` correctly retained (migrated, not deleted). Re-exports gone from `k1/concierge/kernel/bootstrap.py` and `k1/kernel/bootstrap.py` (enforced by `TestBackwardCompatExports` in `tests/k1/concierge/test_concierge_factory.py`). |
 
 ##### Issue P4B.6 — Fix `writer_port` reach-through in factory
 
@@ -1782,7 +1845,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **Approach** | Option A: Add `writer: IStateWriterPort | None` field to `PortBundle`.`service.py` passes the writer explicitly. Option B: Extend `IStatePort` protocol with a `get_writer()` method. Option A preferred — explicit is better than implicit. |
 | **Files** | `k1/concierge/factory.py` (step 7), `k1/concierge/ports.py` (PortBundle or IStatePort), `k1/kernel/service.py` (pass writer) |
 | **Findings addressed** | N5 (reach-through) from `29_concierge_findings.md` |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `k1/concierge/factory.py` L606 `writer_port = ports.writer` (explicit port from `PortBundle.writer`); L613 + L621 pass it to `ToolContext`. Comment L604 confirms old `ssm._writer_port` reach-through removed. |
 
 ##### Issue P4B.7 — Move demo capabilities to test fixtures
 
@@ -1793,7 +1856,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **Depends on** | P4B.1 (bootstrap.py no longer calls `_create_fabric()` / `create_demo_registry()`) |
 | **Files** | `k1/concierge/fabric/` (6 files moved/deleted), `tests/fixtures/` (new), test files that import capabilities |
 | **Findings addressed** | N4 from `29_concierge_findings.md` |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `k1/concierge/fabric/` contains only `ports.py` + `__init__.py` (with P4B.7 docstring). All 6 demo files (registry.py, demo_capabilities.py, family_capabilities.py, web_capabilities.py, contract_converter.py, poc_bridge_adapter.py) live under `tests/fixtures/capabilities/`. |
 
 ##### Issue P4B.8 — Wire `IClassificationPort` in service.py
 
@@ -1803,7 +1866,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 | **Approach** | 1) In `_create_session_tier2()` P4 block, create `Phase1Pipeline` (or `Phase1Factory.create()` if factory exists) and pass as `classification=pipeline`. 2) If Phase1 needs config, pass from `ConciergeConfig`. |
 | **Files** | `k1/kernel/service.py` (P4 block) |
 | **Findings addressed** | N6 (partial — classification port dead in production) |
-| **Status** | ☐ |
+| **Status** | ☑ DONE 2026-04-22 (audit) — `k1/kernel/service.py` L1401 `classification=self._phase1_pipeline` in `PortBundle`; L1128 `_build_phase1_pipeline()` builds process-wide UltraBERT pipeline shared across sessions. |
 
 **Items explicitly deferred from Phase 4B:**
 
@@ -1815,7 +1878,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 
 ---
 
-#### Phase 5: Production Adapter Stubs → Real (MEDIUM — ~500 LOC)
+#### Phase 5: Production Adapter Stubs → Real (MEDIUM — ~500 LOC) — ✅ COMPLETE 2026-04-22 (audit, 7/8; P5.7 PlaceResolver explicitly DEFERRED LOW)
 
 **Why fifth:** With state wiring (Phase 1) and POC removal (Phase 4) done, these stubs can now be replaced with real adapters.
 
@@ -1899,7 +1962,7 @@ All reference documents live in `docs/whiteboard/temp_kernel_bootstrap/`. File n
 
 ---
 
-#### Phase 6: Bus Production Hardening (MEDIUM — ~1500 LOC, internal-only refactor)
+#### Phase 6: Bus Production Hardening (MEDIUM — ~1500 LOC, internal-only refactor) — ✅ COMPLETE 2026-04-22 (audit, 15/15)
 
 **Why sixth:** Bus is the nervous system. Today it is in-memory fire-and-forget at-most-once. Production needs backpressure, retry/DLQ, schema validation, idempotency, and durability for critical topics. This phase delivers all of that **behind the existing public API** so no consumer code (`k1/concierge`, `k1/orchestrator`, `k1/model_hub`, `k1/memory_writer`, `k1/sessionstate`, `bridge/`) requires changes — only 2 specific topic strings get renamed.
 
@@ -2186,7 +2249,7 @@ P6.14  End-to-end bus integration test before PR                 (workflow)
 
 ---
 
-#### Phase 7: Bridge Adapter Completion (DEFERRED — ~800 LOC)
+#### Phase 7: Bridge Adapter Completion (DEFERRED — ~800 LOC) — ❌ NOT STARTED 2026-04-22 (audit, 0/7; P7.4 BLOCKED on K0 HTTP API)
 
 **Why last:** Bridge requires K0 API availability. Build adapters for offline queueing pattern but defer real HTTP transport until K0 API is ready.
 
@@ -2201,7 +2264,7 @@ P6.14  End-to-end bus integration test before PR                 (workflow)
 | **What** | `IKernelQueryPort` protocol defined (`query()`, `query_single()`). Build offline adapter that queues queries, returns empty results when disconnected. |
 | **Findings addressed** | H-12 (partial). Absorbed from MS-3 issue 3.9.3 |
 | **📖 Ref docs** | `18_bridge_audit.md` (H-12 port protocol definition, §3.9.3 KernelQueryPort) |
-| **Status** | ☐ |
+| **Status** | ☐ NOT DONE 2026-04-22 (audit) — protocol exists at [bridge/ports/query_port_protocol.py:115](bridge/ports/query_port_protocol.py#L115) but `bridge/adapters/` contains only `__init__.py`. No offline adapter implemented. |
 
 ##### Issue P7.2 — Build `KernelSSEPort` adapter
 
@@ -2210,7 +2273,7 @@ P6.14  End-to-end bus integration test before PR                 (workflow)
 | **What** | `IKernelSSEPort` protocol defined (`subscribe()`, `ack()`, `close()`). Build offline adapter that no-ops when disconnected. |
 | **Findings addressed** | H-12 (partial). Absorbed from MS-3 issue 3.9.4 |
 | **📖 Ref docs** | `18_bridge_audit.md` (H-12 port protocol definition, §3.9.4 KernelSSEPort) |
-| **Status** | ☐ |
+| **Status** | ☐ NOT DONE 2026-04-22 (audit) — protocol exists at [bridge/ports/sse_port_protocol.py:73](bridge/ports/sse_port_protocol.py#L73); no offline adapter in `bridge/adapters/`. |
 
 ##### Issue P7.3 — Build `KernelObsPort` adapter
 
@@ -2219,7 +2282,7 @@ P6.14  End-to-end bus integration test before PR                 (workflow)
 | **What** | `IKernelObsPort` protocol defined (`emit()`, `emit_feedback()`). Build offline adapter that queues to `LocalOutbox`. Fix: `emit_obs` currently drops NORMAL/HIGH despite docstring saying it queues. |
 | **Findings addressed** | H-12 (partial), M-54. Absorbed from MS-3 issue 3.9.5 |
 | **📖 Ref docs** | `18_bridge_audit.md` (H-12 port protocol, M-54 emit_obs drops, §3.9.5 KernelObsPort) |
-| **Status** | ☐ |
+| **Status** | ☐ NOT DONE 2026-04-22 (audit) — protocol exists at [bridge/ports/obs_port_protocol.py:78](bridge/ports/obs_port_protocol.py#L78); no offline adapter in `bridge/adapters/`. Includes `emit_obs` NORMAL/HIGH drop bug fix. |
 
 ##### Issue P7.4 — Build `HttpBridgeClient` (deferred — K0 API required)
 
@@ -2237,7 +2300,7 @@ P6.14  End-to-end bus integration test before PR                 (workflow)
 | **What** | `SigningBackend` Protocol not decorated with `@runtime_checkable`. Add for isinstance() checks. |
 | **Findings addressed** | L-56 |
 | **📖 Ref docs** | `18_bridge_audit.md` (L-56 SigningBackend protocol) |
-| **Status** | ☐ |
+| **Status** | ☐ NOT DONE 2026-04-22 (audit) — [bridge/core/signing.py:40](bridge/core/signing.py#L40) `class SigningBackend(Protocol):` has no `@runtime_checkable` decorator. 1-line fix. |
 
 ##### Issue P7.6 — Move `StubBridgeClient` from prod to test module
 
@@ -2246,7 +2309,7 @@ P6.14  End-to-end bus integration test before PR                 (workflow)
 | **What** | `StubBridgeClient` lives in `bridge/client.py` (production). Move to test module. |
 | **Findings addressed** | L-60 |
 | **📖 Ref docs** | `18_bridge_audit.md` (L-60 StubBridgeClient in prod code) |
-| **Status** | ☐ |
+| **Status** | ☐ NOT DONE 2026-04-22 (audit) — `StubBridgeClient` still in production module at [bridge/client.py:128](bridge/client.py#L128). |
 
 ##### Issue P7.7 — Add Protocol conformance to `KernelCommandPort`
 
@@ -2255,7 +2318,7 @@ P6.14  End-to-end bus integration test before PR                 (workflow)
 | **What** | `KernelCommandPort` uses structural subtyping but doesn't declare protocol conformance explicitly. Add for clarity. |
 | **Findings addressed** | L-61 |
 | **📖 Ref docs** | `18_bridge_audit.md` (L-61 KernelCommandPort protocol conformance) |
-| **Status** | ☐ |
+| **Status** | ☐ NOT DONE 2026-04-22 (audit) — [bridge/kernel/command_port.py:47](bridge/kernel/command_port.py#L47) `class KernelCommandPort:` is a plain class with no explicit Protocol conformance declaration. |
 
 ---
 
@@ -3274,10 +3337,10 @@ Before writing tests, document what the code ACTUALLY does today:
 | **MS-1 Issues** | 42 | All ✅ |
 | **MS-2 Epic 2.0** | 13 | All ✅ (pre-requisites) |
 | **MS-2 Epic 2.1** | 10 | All ✅ (KernelService skeleton, 96 tests) |
-| **MS-2 Epic 2.2** | 10 | ☐ (Tier-1 startup: S1–S7 + method bodies) |
-| **MS-2 Epic 2.3** | 8 | ☐ (Tier-2 session: P1–P6 + method bodies) |
-| **MS-2 Epic 2.4** | 3 | ☐ (Shutdown: per-session, shared, error recovery) |
-| **MS-2 Epic 2.5** | 5 | ☐ (Integration tests: real components, no mocks) |
+| **MS-2 Epic 2.2** | 10 | All ✅ (Tier-1 startup: S1–S7 + method bodies) |
+| **MS-2 Epic 2.3** | 8 | All ✅ (Tier-2 session: P1–P6 + method bodies) |
+| **MS-2 Epic 2.4** | 3 | All ✅ (Shutdown: per-session, shared, error recovery) |
+| **MS-2 Epic 2.5** | 5 | All ✅ (Integration tests: real components, no mocks) |
 | **MS-2 Total** | 49 | 23 ✅ + 26 ☐ |
 | **MS-2.5 Phase 1** | 6 | ☐ (Session-state wiring — CRITICAL) |
 | **MS-2.5 Phase 2** | 8 | ☐ (Serialization & type bugs — CRITICAL/HIGH) |

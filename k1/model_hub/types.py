@@ -106,14 +106,6 @@ class CircuitState(str, Enum):
     HALF_OPEN = "HALF_OPEN"
 
 
-class BudgetDecision(str, Enum):
-    """Budget enforcement decision (MH-04, MH-08)."""
-
-    ALLOW = "ALLOW"
-    ALLOW_DEGRADED = "ALLOW_DEGRADED"
-    REJECT = "REJECT"
-
-
 class PlacementType(str, Enum):
     """Provider placement type (MH-13, ADR-0027)."""
 
@@ -736,22 +728,6 @@ class ProviderError(ModelHubError):
         self.status_code = status_code
 
 
-class BudgetExceededError(ModelHubError):
-    """Budget limit exceeded (MH-04, MH-08)."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        budget_pct: float = 0.0,
-        daily_limit: float = 0.0,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(message, **kwargs)
-        self.budget_pct = budget_pct
-        self.daily_limit = daily_limit
-
-
 class NoEligibleProviderError(ModelHubError):
     """No provider supports the requested capability + constraints."""
 
@@ -807,7 +783,6 @@ __all__ = [
     "FinishReason",
     "HealthStatus",
     "CircuitState",
-    "BudgetDecision",
     "PlacementType",
     "ModelTier",
     # Conversation Primitives
@@ -862,7 +837,6 @@ __all__ = [
     # Errors
     "ModelHubError",
     "ProviderError",
-    "BudgetExceededError",
     "NoEligibleProviderError",
     "RateLimitError",
     "CircuitOpenError",

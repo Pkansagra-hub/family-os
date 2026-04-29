@@ -52,18 +52,27 @@ class SessionReadAdapter:
         read_section(name) -> get_section(name) -> to_dict() -> return
 
     MW-01 enforced: this class exposes NO write methods.
-    MW-02 target: all reads lock-free, <1ms P99.
+    MW-02 target: all hot reads lock-free, <1ms P99.
 
     Constructor Args:
         manager: A SessionStateManager instance (typed as Any to avoid
             import coupling with the sessionstate module, matching the
             pattern used by Fabric's SessionStateReaderAdapter).
+        cold_archive: Optional LocalColdArchive for the enriched
+            ``read_archived_history`` path. When ``None`` the enriched
+            method returns ``[]`` (graceful fallback for test /
+            standalone modes).
     """
 
-    __slots__ = ("_manager",)
+    __slots__ = ("_manager", "_cold_archive")
 
-    def __init__(self, manager: _ISessionStateManager) -> None:
+    def __init__(
+        self,
+        manager: _ISessionStateManager,
+        cold_archive: Optional[Any] = None,
+    ) -> None:
         self._manager = manager
+        self._cold_archive = cold_archive
 
     async def snapshot(
         self,
@@ -154,3 +163,89 @@ class SessionReadAdapter:
         all_sections = await self.list_sections()
         sections_to_read = sorted(all_sections - exclude)
         return await self.snapshot(sections_to_read)
+
+    async def read_archived_history(
+        self,
+        session_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Recover archived ``history_active`` turns from LOCAL COLD.
+
+        Enriched (NON-SLA) read used by the session-batch extractor to
+        recover turns that have been demoted out of the live 16KB
+        ``history_active`` window into K1 SQLite. The hot path NEVER
+        calls this — it is best-effort and may take >1ms.
+
+        Behaviour:
+          * If no ``cold_archive`` was injected, returns ``[]``.
+          * Calls ``LocalColdArchive.restore_all("history_active",
+            session_id)`` to fetch all archive blobs (newest first).
+          * Each blob is a serialized ``HistoryActiveSection``
+            FlatBuffer; we deserialize, extract its ``turns``, and
+            de-duplicate across blobs by ``turn_id``.
+          * Returns turns sorted oldest-first, capped at ``limit``.
+          * Any exception is caught and logged; the method returns
+            ``[]`` rather than propagating (callers must not fail).
+        """
+        if self._cold_archive is None:
+            return []
+
+        try:
+            results = self._cold_archive.restore_all(
+                "history_active", session_id, limit=limit
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "read_archived_history: restore_all failed for session %s: %s",
+                session_id,
+                exc,
+            )
+            return []
+
+        if not results:
+            return []
+
+        # Lazy import to avoid module-load coupling with sessionstate.
+        try:
+            from k1.sessionstate.sections.history_active import HistoryActiveSection
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("read_archived_history: cannot import HistoryActiveSection: %s", exc)
+            return []
+
+        seen_ids: set[str] = set()
+        merged: List[Dict[str, Any]] = []
+        for r in results:
+            if not getattr(r, "success", False):
+                continue
+            data = getattr(r, "data", None)
+            if not data:
+                continue
+            try:
+                section = HistoryActiveSection(session_id=session_id)
+                section.from_flatbuffer(data)
+                turns_dict = section.to_dict().get("turns", [])
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("read_archived_history: deserialize failed: %s", exc)
+                continue
+            for t in turns_dict:
+                tid = t.get("turn_id", "")
+                if tid and tid in seen_ids:
+                    continue
+                if tid:
+                    seen_ids.add(tid)
+                merged.append(t)
+
+        # Oldest-first ordering. Cross-blob ``turn_number`` may overlap
+        # (each evicted section started its own counter at 1), so we sort
+        # by ``timestamp_ms`` first and fall back to ``turn_number`` when
+        # timestamps are missing/equal.
+        merged.sort(
+            key=lambda t: (
+                int(t.get("timestamp_ms", 0)),
+                int(t.get("turn_number", 0)),
+            )
+        )
+        if len(merged) > limit:
+            # Keep the most recent ``limit`` archived turns when over budget.
+            merged = merged[-limit:]
+        return merged

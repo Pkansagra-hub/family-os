@@ -43,11 +43,6 @@ class TestParseArgsDefaults:
             args = _parse_args()
         assert args.session_mode == "standalone"
 
-    def test_default_tool_tier(self) -> None:
-        with patch("sys.argv", ["runner"]):
-            args = _parse_args()
-        assert args.tool_tier == "LOW"
-
     def test_default_log_level(self) -> None:
         with patch("sys.argv", ["runner"]):
             args = _parse_args()
@@ -77,17 +72,6 @@ class TestParseArgsExplicit:
             args = _parse_args()
         assert args.session_mode == "testing"
 
-    def test_tool_tier_high(self) -> None:
-        with patch("sys.argv", ["runner", "--tool-tier", "HIGH"]):
-            args = _parse_args()
-        assert args.tool_tier == "HIGH"
-
-    def test_tool_tier_crisis_rejected(self) -> None:
-        """CRISIS is no longer a valid tier (P4.5)."""
-        with patch("sys.argv", ["runner", "--tool-tier", "CRISIS"]):
-            with pytest.raises(SystemExit):
-                _parse_args()
-
     def test_log_level_debug(self) -> None:
         with patch("sys.argv", ["runner", "--log-level", "DEBUG"]):
             args = _parse_args()
@@ -102,8 +86,6 @@ class TestParseArgsExplicit:
                 "--unordered",
                 "--session-mode",
                 "testing",
-                "--tool-tier",
-                "MEDIUM",
                 "--log-level",
                 "WARNING",
             ],
@@ -112,7 +94,6 @@ class TestParseArgsExplicit:
         assert args.test_mode is True
         assert args.unordered is True
         assert args.session_mode == "testing"
-        assert args.tool_tier == "MEDIUM"
         assert args.log_level == "WARNING"
 
 
@@ -126,11 +107,6 @@ class TestParseArgsInvalid:
 
     def test_invalid_session_mode(self) -> None:
         with patch("sys.argv", ["runner", "--session-mode", "invalid"]):
-            with pytest.raises(SystemExit):
-                _parse_args()
-
-    def test_invalid_tool_tier(self) -> None:
-        with patch("sys.argv", ["runner", "--tool-tier", "NONE"]):
             with pytest.raises(SystemExit):
                 _parse_args()
 
@@ -155,12 +131,10 @@ class TestConfigFromArgs:
             ordered_bus=not args.unordered,
             test_mode=args.test_mode,
             session_mode=args.session_mode,
-            tool_tier=args.tool_tier,
         )
         assert cfg.ordered_bus is True
         assert cfg.test_mode is False
         assert cfg.session_mode == "standalone"
-        assert cfg.tool_tier == "LOW"
 
     def test_config_from_explicit_args(self) -> None:
         with patch(
@@ -171,8 +145,6 @@ class TestConfigFromArgs:
                 "--unordered",
                 "--session-mode",
                 "testing",
-                "--tool-tier",
-                "HIGH",
             ],
         ):
             args = _parse_args()
@@ -180,12 +152,10 @@ class TestConfigFromArgs:
             ordered_bus=not args.unordered,
             test_mode=args.test_mode,
             session_mode=args.session_mode,
-            tool_tier=args.tool_tier,
         )
         assert cfg.ordered_bus is False
         assert cfg.test_mode is True
         assert cfg.session_mode == "testing"
-        assert cfg.tool_tier == "HIGH"
 
 
 # =========================================================================
@@ -227,7 +197,7 @@ class TestRunLifecycle:
         mock_stop = AsyncMock()
 
         with (
-            patch("sys.argv", ["runner", "--test-mode", "--tool-tier", "HIGH"]),
+            patch("sys.argv", ["runner", "--test-mode"]),
             patch("k1.kernel.runner.start_kernel", mock_start),
             patch("k1.kernel.runner.stop_kernel", mock_stop),
             patch("asyncio.Event") as mock_event_cls,
@@ -244,7 +214,6 @@ class TestRunLifecycle:
             cfg = call_args[0][0] if call_args[0] else call_args[1].get("config") or call_args[0][0]
             assert isinstance(cfg, KernelConfig)
             assert cfg.test_mode is True
-            assert cfg.tool_tier == "HIGH"
 
 
 # =========================================================================

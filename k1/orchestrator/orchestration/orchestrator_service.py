@@ -397,8 +397,7 @@ class OrchestratorService:
         """
         if not isinstance(planner_port, IPlannerPort):
             raise TypeError(
-                f"bind_planner: expected IPlannerPort, got "
-                f"{type(planner_port).__name__}"
+                f"bind_planner: expected IPlannerPort, got " f"{type(planner_port).__name__}"
             )
         self._planner_port = planner_port
 
@@ -1811,7 +1810,8 @@ class OrchestratorService:
                 extra={
                     "trace_id": ctx.trace_id,
                     "plan_id": plan.plan_id,
-                    "issues": validation.issues,
+                    "errors": validation.errors,
+                    "warnings": validation.warnings,
                 },
             )
             return ProcessResult.FAILED

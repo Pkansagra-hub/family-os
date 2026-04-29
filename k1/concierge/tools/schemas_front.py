@@ -18,6 +18,11 @@ from __future__ import annotations
 
 from k1.concierge.llm.types import ToolSchema
 
+# P1.1 -- Front gains direct Fabric access for LOW-tier single-step lookups.
+# Both schemas live in schemas_fabric to avoid a cycle with schemas_back
+# (which imports RECALL_MEMORY_SCHEMA from this module).
+from k1.concierge.tools.schemas_fabric import DISCOVER_CAPABILITIES_SCHEMA, INVOKE_CAPABILITY_SCHEMA
+
 # ===================================================================
 # COGNITIVE (6)
 # ===================================================================
@@ -518,6 +523,15 @@ DISPATCH_TASK_SCHEMA = ToolSchema(
                     "intents array instead -- do NOT use depends_on."
                 ),
             },
+            "plan": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "P3.4c: Set true when the task requires multi-step planning. "
+                    "Multi-intent and depends_on auto-escalate to plan tier even "
+                    "when this flag is False."
+                ),
+            },
         },
         "required": ["intents"],
     },
@@ -624,7 +638,7 @@ UPDATE_SESSION_BUNDLE_SCHEMA = ToolSchema(
 )
 
 # ===================================================================
-# Aggregated list -- all 10 Front tools
+# Aggregated list -- all 12 Front tools (P1.1: +discover/invoke capability)
 # ===================================================================
 
 FRONT_TOOL_SCHEMAS: list[ToolSchema] = [
@@ -642,4 +656,7 @@ FRONT_TOOL_SCHEMAS: list[ToolSchema] = [
     SUMMARIZE_CONTEXT_SCHEMA,
     # Control
     DISPATCH_TASK_SCHEMA,
+    # Fabric (P1.1) -- Front direct capability access for LOW-tier lookups
+    DISCOVER_CAPABILITIES_SCHEMA,
+    INVOKE_CAPABILITY_SCHEMA,
 ]

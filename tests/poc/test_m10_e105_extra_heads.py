@@ -108,7 +108,6 @@ class TestTemporalHead:
             intent_classification="log_memory",
             domain_context="FAMILY",
             safety_band="GREEN",
-            complexity_tier="LOW",
             temporal_expressions=[
                 {"text": "next Saturday", "label": "DATE_REL", "start": 10, "end": 23}
             ],
@@ -371,12 +370,12 @@ class TestEndToEndIntegration:
         assert result.safety_band == "GREEN"
 
     def test_e2e_complexity_medium_or_higher(self):
-        """Multi-intent + temporal -> complexity >= MEDIUM."""
+        """P3.1: complexity_tier no longer produced -> attribute is gone."""
         adapter = _make_adapter(self._full_analysis())
         pipe = UltraBERTPhase1Pipeline(adapter=adapter)
         result = pipe.classify("Mom called about grandma's birthday party next Saturday")
 
-        assert result.complexity_tier in ("MEDIUM", "HIGH")
+        assert not hasattr(result, "complexity_tier")
 
     def test_e2e_emotion(self):
         adapter = _make_adapter(self._full_analysis())
@@ -421,9 +420,9 @@ class TestEndToEndIntegration:
         ctrl._ss.get_section = get_sec
         ctrl._write_phase1_to_ss(result)
 
-        # Control: intent set, domain set, complexity set
+        # Control: intent set, domain set; complexity_tier no longer written from Phase1
         assert control.get_intents() is not None
-        assert control.get_complexity_tier() in ("MEDIUM", "HIGH")
+        assert control.get_complexity_tier() == ""
 
         # Scoreboard: referents for entities + temporal
         referents = list(scoreboard._referents.values())
@@ -446,5 +445,5 @@ class TestEndToEndIntegration:
         assert "temporal_expressions" in meta
         assert "relations" in meta
         assert "safety_band" in meta
-        assert "complexity_tier" in meta
+        assert "complexity_tier" not in meta  # P3.1: removed
         assert "emotion" in meta

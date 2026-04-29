@@ -278,7 +278,9 @@ def check_adr_port_xrefs() -> SyncReport:
     for adr in adrs:
         for port_ref in adr.related_ports:
             if port_ref not in port_names:
-                warnings.append(f"{adr.adr_id}: references port '{port_ref}' " f"which was not found")
+                warnings.append(
+                    f"{adr.adr_id}: references port '{port_ref}' " f"which was not found"
+                )
 
     return SyncReport(
         category="ADR-Port XRefs",

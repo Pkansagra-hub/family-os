@@ -86,6 +86,16 @@ class MWConfig:
     # --- 7. Model Hub Routing ---
     model_hint: str = "cheapest"
 
+    # --- 7b. Session-Batch Extraction (Option B) ---
+    # Replaces per-turn LLM call with buffered + threshold + idle flush.
+    # extraction_mode="session_batch" = SessionBatchDispatcher (default, prod path)
+    # extraction_mode="per_turn"      = legacy TurnDispatcher (kept for back-compat tests)
+    extraction_mode: str = "session_batch"
+    flush_turn_threshold: int = 20      # flush buffer when N turns accumulated
+    flush_idle_seconds: int = 300       # flush buffer after N seconds of inactivity
+    max_atoms_per_session: int = 30     # hard cap on atoms returned by one session-batch LLM call
+    llm_token_budget_session: int = 4000  # token budget for session-batch extraction call
+
     # --- 8. Known Location Geohashes (K0 G5/G6) ---
     # Per-tenant mapping of location names to 6-char geohash strings.
     # Default empty — populated from deployment config.

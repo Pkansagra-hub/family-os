@@ -28,6 +28,7 @@ timing_rules:
   k1.tool: STRICT
   k1.arbiter: STRICT
   k1.backpool: STRICT
+  k1.model_hub: STRICT  # P6.10: model selection / routing decisions must be ordered
 
   # RELAXED: order-preferred but not critical
   k1.affect: RELAXED

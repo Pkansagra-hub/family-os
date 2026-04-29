@@ -808,7 +808,6 @@ async def front_handler(
             opp_enrichment = opp_pipeline.on_pre_prompt_build(
                 turns=turns_for_opp,
                 affect_band=affect_band,
-                complexity_tier=tier,
                 active_domains=[domain] if domain else [],
             )
             if opp_enrichment.compressed_context:

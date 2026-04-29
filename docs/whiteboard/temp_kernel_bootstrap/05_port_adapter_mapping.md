@@ -621,7 +621,7 @@ INTERNAL SUBSYSTEMS
          │          │        │        │          │          │
     SessionState  Fabric  Concierge  Planner  Orchestrator  External
     (session)     (shared) (session) (shared)  (shared)
-         │          │        │        │          │          
+         │          │        │        │          │
          └──────────┴────────┴────────┴──────────┴──────────┘
          (All components subscribe to topic subsets)
 ```
@@ -705,7 +705,7 @@ PHASE 6 (P4): Session Turn
         HIGH: Send to Orchestrator.receive(TaskEnvelope)
         MED: Orchestrator.dispatch() direct to Fabric
         LOW: Fabric direct
-    
+
     If tier=HIGH → Orchestrator._planner_port.request_plan()
     → Routes to planner.mailbox via PlannerAdapter
     → Planner processes in background
@@ -1138,7 +1138,7 @@ class FabricBusAdapter:
     SINGLE instance for both IEventPort + IDeltaBusPort.
     Dual-role adapter bridges Dict ↔ bytes.
     """
-    
+
     def __init__(self, bus: IBus):
         self.bus = bus
         self._delta_topics = [
@@ -1147,7 +1147,7 @@ class FabricBusAdapter:
             "k1.fabric.delta",
             "k1.session.delta"
         ]
-    
+
     # IEventPort methods
     async def emit(self, topic: str, payload: Dict) -> None:
         envelope = Envelope(
@@ -1158,13 +1158,13 @@ class FabricBusAdapter:
             cognitive_trace_id=None
         )
         self.bus.publish(envelope)
-    
+
     async def subscribe(self, topic: str, handler: Callable) -> SubscriptionHandle:
         return self.bus.subscribe(topic, lambda env: handler(deserialize(env.payload)))
-    
+
     async def unsubscribe(self, handle: SubscriptionHandle) -> bool:
         return self.bus.unsubscribe(handle)
-    
+
     # IDeltaBusPort methods
     async def emit_delta(self, agent_id: str, delta_type: str, section: str, data: Dict) -> None:
         delta_topic = f"k1.agent.{agent_id}.delta.v1"
@@ -1192,11 +1192,11 @@ class SessionBusAdapter(IEventPort):
     Per-session adapter, extends IEventPort ABC.
     Wires session-local bus events to optional shared bus.
     """
-    
+
     def __init__(self, session_bus: IBus, shared_bus: Optional[IBus] = None):
         self.session_bus = session_bus
         self.shared_bus = shared_bus
-    
+
     async def emit(self, topic: str, payload: Dict) -> None:
         # Always emit to session bus
         envelope = Envelope(
@@ -1207,7 +1207,7 @@ class SessionBusAdapter(IEventPort):
             cognitive_trace_id=self.cognitive_trace_id
         )
         self.session_bus.publish(envelope)
-        
+
         # Optionally relay to shared bus for cross-session awareness
         if self.shared_bus:
             shared_envelope = Envelope(
@@ -1215,7 +1215,7 @@ class SessionBusAdapter(IEventPort):
                 ...
             )
             self.shared_bus.publish(shared_envelope)
-    
+
     async def subscribe(self, topic: str, handler: Callable) -> SubscriptionHandle:
         return self.session_bus.subscribe(topic, lambda env: handler(deserialize(env.payload)))
 ```
@@ -1231,15 +1231,15 @@ class DeltaBusAdapter:
     Pre-stamps agent_id (e.g., "concierge", "planner").
     Wraps per-session bus.
     """
-    
+
     def __init__(self, bus: IBus, agent_id_stamp: str):
         self.bus = bus
         self.agent_id_stamp = agent_id_stamp
-    
+
     async def emit_delta(self, agent_id: str, delta_type: str, section: str, data: Dict) -> None:
         # Use pre-stamped agent_id if provided, else use parameter
         effective_agent_id = self.agent_id_stamp or agent_id
-        
+
         topic = f"k1.agent.{effective_agent_id}.delta.v1"
         envelope = Envelope(
             topic=topic,
@@ -1265,10 +1265,10 @@ class TracingMiddleware:
     Middleware that stamps session_id + cognitive_trace_id on every envelope.
     Runs BEFORE dispatch to handlers.
     """
-    
+
     def __init__(self, spans_enabled: bool = True):
         self.spans_enabled = spans_enabled
-    
+
     async def __call__(self, envelope: Envelope, handler: Callable) -> None:
         if self.spans_enabled:
             # Create OTel span
@@ -1276,7 +1276,7 @@ class TracingMiddleware:
                 span.set_attribute("session_id", envelope.session_id)
                 span.set_attribute("cognitive_trace_id", envelope.cognitive_trace_id)
                 span.set_attribute("priority", str(envelope.priority))
-                
+
                 # Call handler with traced context
                 await handler(envelope)
         else:
@@ -1297,18 +1297,18 @@ class DeltaEmitAdapter(IDeltaEmitPort):
     Takes TWO constructor parameters: event_port + delta_bus.
     Routes deltas through Fabric's dual-role FabricBusAdapter.
     """
-    
+
     def __init__(self, event_port: IEventPort, delta_bus: IDeltaBusPort):
         self.event_port = event_port
         self.delta_bus = delta_bus
-    
+
     async def emit(self, delta: Dict) -> None:
         # Extract delta fields
         agent_id = delta.get("agent_id", "orchestrator")
         delta_type = delta.get("type", "unknown")
         section = delta.get("section", "meta")
         data = delta.get("data", {})
-        
+
         # Emit through both ports
         await self.event_port.emit(f"k1.orchestration.delta", delta)
         await self.delta_bus.emit_delta(agent_id, delta_type, section, data)

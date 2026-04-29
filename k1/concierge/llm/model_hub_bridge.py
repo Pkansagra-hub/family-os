@@ -22,12 +22,14 @@ from k1.concierge.llm.types import (
     ModelMessage,
     StreamChunk,
     ThinkingLevel,
+    ToolSchema,
 )
 from k1.concierge.llm.types import ToolCallResult as POCToolCallResult
-from k1.concierge.llm.types import ToolSchema
-from k1.model_hub.types import CapabilityResult, CapabilityType, ChatPayload, ChatResult
-from k1.model_hub.types import FinishReason as HubFinishReason
 from k1.model_hub.types import (
+    CapabilityResult,
+    CapabilityType,
+    ChatPayload,
+    ChatResult,
     HubChunk,
     HubHealthReport,
     HubRequest,
@@ -42,9 +44,11 @@ from k1.model_hub.types import (
     StructuredResult,
     TokenUsage,
     ToolCallPayload,
+    ToolCallResultSet,
+    ToolDefinition,
 )
+from k1.model_hub.types import FinishReason as HubFinishReason
 from k1.model_hub.types import ToolCallResult as HubToolCallResult
-from k1.model_hub.types import ToolCallResultSet, ToolDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -200,10 +204,7 @@ class ModelHubPOCBridge:
         # Model hint from preference
         model_hint: str | None = None
         if constraints.model_preference:
-            model_hint = (
-                constraints.model_preference.preferred_model
-                or constraints.model_preference.preferred_tier
-            )
+            model_hint = constraints.model_preference.preferred_model
 
         return ConciergeModelRequest(
             capability=poc_capability,

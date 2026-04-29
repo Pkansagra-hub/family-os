@@ -215,19 +215,19 @@ kernel:
 
 llm:
   # Fallback model when selection table has no match (model_selection.py)
-  default_model: "gemini-2.5-flash"
+  default_model: "gemini-3.1-flash-lite-preview"
 
   # Max concurrent requests in generate_batch() (gemini_adapter.py)
   batch_max_concurrency: 5
 
   # Hint string -> model name overrides (model_selection.py)
   model_hint_overrides:
-    fast: "gemini-2.5-flash-lite"
-    smart: "gemini-2.5-flash"
-    cheap: "gemini-2.5-flash-lite"
-    thinking: "gemini-2.5-flash"
-    pro: "gemini-2.5-flash"                # best we use — no pro models
-    flash: "gemini-2.5-flash"
+    fast: "gemini-3.1-flash-lite-preview"
+    smart: "gemini-3.1-flash-lite-preview"
+    cheap: "gemini-3.1-flash-lite-preview"
+    thinking: "gemini-3.1-flash-lite-preview"
+    pro: "gemini-3.1-flash-lite-preview"                # best we use — no pro models
+    flash: "gemini-3.1-flash-lite-preview"
 
   # Default max output tokens for LLM requests (llm/types.py)
   default_max_tokens: 65536
@@ -244,20 +244,20 @@ llm:
   # Moved from Gemini 3.x due to persistent latency spikes
   model_selection_table:
     CHAT:
-      front: "gemini-2.5-flash"                # conversational warmth
-      back: "gemini-2.5-flash-lite"            # internal error reports
+      front: "gemini-3.1-flash-lite-preview"                # conversational warmth
+      back: "gemini-3.1-flash-lite-preview"            # internal error reports
     TOOL_CALL:
-      front: "gemini-2.5-flash"                # cognitive tool selection
-      back: "gemini-2.5-flash"                 # action tool execution
-      planner: "gemini-2.5-flash"              # planner reasoning
+      front: "gemini-3.1-flash-lite-preview"                # cognitive tool selection
+      back: "gemini-3.1-flash-lite-preview"                 # action tool execution
+      planner: "gemini-3.1-flash-lite-preview"              # planner reasoning
     STRUCTURED:
-      front: "gemini-2.5-flash"                # dispatch intent parsing
-      back: "gemini-2.5-flash"                 # final answer formatting
+      front: "gemini-3.1-flash-lite-preview"                # dispatch intent parsing
+      back: "gemini-3.1-flash-lite-preview"                 # final answer formatting
     REASON:
-      front: "gemini-2.5-flash"                # complex reasoning
-      back: "gemini-2.5-flash"                 # multi-step planning
+      front: "gemini-3.1-flash-lite-preview"                # complex reasoning
+      back: "gemini-3.1-flash-lite-preview"                 # multi-step planning
     STREAM:
-      front: "gemini-2.5-flash-lite"           # speed-first streaming
+      front: "gemini-3.1-flash-lite-preview"           # speed-first streaming
 
 
 # ── orchestrator/ ───────────────────────────────────────────────────────
@@ -382,13 +382,42 @@ react:
 tools:
   # Max tool calls per tier per turn (tools/dispatcher.py)
   budget_limits:
-    LOW: 10
-    MEDIUM: 16
-    HIGH: 30
-    CRISIS: 5
-
-  # Front tier allowlists (V2 Section 15.3, tools/dispatcher.py)
+    # Canonical 2-bucket keys (P3.2)
+    simple: 5
+    plan: 15
+    crisis: 3
+    # Legacy tier aliases (kept until P3.3 updates all callers)
+    LOW: 5
+    MEDIUM: 15
+    HIGH: 15
+    CRISIS: 3
+  # Front tier allowlists (P3.2: collapsed to simple/plan/crisis)
   front_tier_allowlists:
+    simple:
+      - update_beliefs
+      - update_scoreboard
+      - update_clarifications
+      - update_narrative
+      - refine_affect
+      - recall_memory
+      - summarize_context
+      - dispatch_task
+      - discover_capabilities
+      - invoke_capability
+    plan:
+      - update_beliefs
+      - update_scoreboard
+      - update_clarifications
+      - update_narrative
+      - refine_affect
+      - promote_belief
+      - recall_memory
+      - summarize_context
+      - dispatch_task
+      - discover_capabilities
+      - invoke_capability
+    crisis: []
+    # Legacy aliases
     LOW:
       - update_beliefs
       - update_scoreboard
@@ -398,6 +427,8 @@ tools:
       - recall_memory
       - summarize_context
       - dispatch_task
+      - discover_capabilities
+      - invoke_capability
     MEDIUM:
       - update_beliefs
       - update_scoreboard
@@ -408,6 +439,8 @@ tools:
       - recall_memory
       - summarize_context
       - dispatch_task
+      - discover_capabilities
+      - invoke_capability
     HIGH:
       - update_beliefs
       - update_scoreboard
@@ -418,10 +451,24 @@ tools:
       - recall_memory
       - summarize_context
       - dispatch_task
+      - discover_capabilities
+      - invoke_capability
     CRISIS: []
-
-  # Back tier allowlists (V2 Section 6.2, tools/schemas_back.py)
+  # Back tier allowlists (P3.2: collapsed to simple/plan)
   back_tier_allowlists:
+    simple:
+      - recall_memory
+      - discover_capabilities
+      - invoke_capability
+      - submit_result
+    plan:
+      - recall_memory
+      - discover_capabilities
+      - invoke_capability
+      - spawn_via_fabric
+      - execute_workflow
+      - submit_result
+    # Legacy aliases
     LOW:
       - recall_memory
       - discover_capabilities
@@ -441,9 +488,11 @@ tools:
       - spawn_via_fabric
       - execute_workflow
       - submit_result
-
-  # Back max ReAct iterations per tier (V2 Section 6.2)
+  # Back max ReAct iterations per tier (P3.2: collapsed)
   back_max_iterations:
+    simple: 6
+    plan: 10
+    # Legacy aliases
     LOW: 6
     MEDIUM: 10
     HIGH: 14

@@ -22,7 +22,6 @@ from k1.model_hub.manifest import (
     ModelSpec,
     PlacementConfig,
     ProviderManifest,
-    RateLimitConfig,
 )
 from k1.model_hub.plugins.base import (
     NormalizedRequest,
@@ -31,19 +30,13 @@ from k1.model_hub.plugins.base import (
     ProviderResponse,
 )
 from k1.model_hub.services.audit_logger import AuditLogger
-from k1.model_hub.services.budget_enforcer import BudgetEnforcer
 from k1.model_hub.services.capability_router import CapabilityRouter
 from k1.model_hub.services.circuit_breaker_manager import CircuitBreakerManager
-from k1.model_hub.services.cost_tracker import CostTracker
-from k1.model_hub.services.model_selector import ModelSelector
 from k1.model_hub.services.provider_dispatcher import ProviderDispatcher
 from k1.model_hub.services.provider_registry import ProviderRegistry
 from k1.model_hub.services.rate_limiter import RateLimiter
-from k1.model_hub.services.request_router import RequestRouter
 from k1.model_hub.services.response_cache import ResponseCache
 from k1.model_hub.types import (
-    BudgetDecision,
-    BudgetExceededError,
     CapabilityType,
     ChatPayload,
     CircuitState,
@@ -53,12 +46,9 @@ from k1.model_hub.types import (
     HubRequest,
     Message,
     ModelTier,
-    NoEligibleProviderError,
     PlacementType,
     Priority,
     RequestConstraints,
-    TokenUsage,
-    ValidationError,
 )
 
 # ===========================================================================
@@ -355,35 +345,7 @@ class TestMH03_TraceIdRequired:
 # ===========================================================================
 
 
-class TestMH04_HardBudgetEnforcement:
-    """MH-04: Request rejected if budget exceeded."""
-
-    def test_budget_reject_when_exceeded(self) -> None:
-        """BudgetEnforcer rejects when daily budget is spent."""
-        cfg = ModelHubConfig(daily_budget_usd=1.0)
-        enforcer = BudgetEnforcer(cfg)
-        # Directly set internal spending counter
-        enforcer._daily_spent_usd = 1.0
-        req = _make_request()
-        result = enforcer.check(req)
-        assert result.decision == BudgetDecision.REJECT
-
-    async def test_router_raises_budget_exceeded(self) -> None:
-        """RequestRouter raises BudgetExceededError when budget exhausted."""
-        cfg = ModelHubConfig(daily_budget_usd=0.001)
-        facade, adapters = _wire_hub(config=cfg)
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-        enforcer._daily_spent_usd = 0.001
-
-        with pytest.raises(BudgetExceededError):
-            await facade.execute(_make_request())
-
-    def test_budget_allow_when_under_limit(self) -> None:
-        cfg = ModelHubConfig(daily_budget_usd=10.0)
-        enforcer = BudgetEnforcer(cfg)
-        req = _make_request()
-        result = enforcer.check(req)
-        assert result.decision == BudgetDecision.ALLOW
+# RIP-OUT: BudgetEnforcer deleted (family-os, not enterprise SaaS).
 
 
 # ===========================================================================
@@ -519,37 +481,7 @@ class TestMH06_CapabilityAwareFallback:
 # ===========================================================================
 
 
-class TestMH07_CostTracking:
-    """MH-07: Cost = token_count * model_cost from manifest."""
-
-    def test_cost_computation_formula(self) -> None:
-        model = ModelSpec(
-            id="gpt-4o",
-            cost_per_1m_input=5.0,
-            cost_per_1m_output=15.0,
-        )
-        usage = TokenUsage(prompt_tokens=1000, completion_tokens=500)
-        input_cost, output_cost = CostTracker.compute_cost(usage, model)
-        assert abs(input_cost - 0.005) < 1e-6
-        assert abs(output_cost - 0.0075) < 1e-6
-
-    def test_cost_tracker_records(self) -> None:
-        tracker = CostTracker()
-        model = ModelSpec(id="gpt-4o", cost_per_1m_input=5.0, cost_per_1m_output=15.0)
-        usage = TokenUsage(prompt_tokens=100, completion_tokens=50)
-        record = tracker.track(
-            usage,
-            model,
-            provider_id="openai",
-            capability=CapabilityType.CHAT,
-        )
-        assert record.cost_usd > 0
-
-    def test_cost_from_manifest(self) -> None:
-        manifest = _make_manifest(cost_input=2.5, cost_output=10.0)
-        model = manifest.models[0]
-        assert model.cost_per_1m_input == 2.5
-        assert model.cost_per_1m_output == 10.0
+# RIP-OUT: CostTracker deleted (family-os, provider-supplied costs only).
 
 
 # ===========================================================================
@@ -557,38 +489,7 @@ class TestMH07_CostTracking:
 # ===========================================================================
 
 
-class TestMH08_DailyBudget:
-    """MH-08: Daily budget $5/day default, configurable."""
-
-    def test_default_budget_is_five(self) -> None:
-        cfg = ModelHubConfig()
-        assert cfg.daily_budget_usd == 5.0
-
-    def test_budget_configurable(self) -> None:
-        cfg = ModelHubConfig(daily_budget_usd=20.0)
-        assert cfg.daily_budget_usd == 20.0
-
-    def test_degraded_at_80_percent(self) -> None:
-        cfg = ModelHubConfig(daily_budget_usd=10.0)
-        enforcer = BudgetEnforcer(cfg)
-        enforcer._daily_spent_usd = 8.0
-        result = enforcer.check(_make_request())
-        assert result.decision == BudgetDecision.ALLOW_DEGRADED
-
-    def test_reject_at_100_percent(self) -> None:
-        cfg = ModelHubConfig(daily_budget_usd=10.0)
-        enforcer = BudgetEnforcer(cfg)
-        enforcer._daily_spent_usd = 10.0
-        result = enforcer.check(_make_request())
-        assert result.decision == BudgetDecision.REJECT
-
-    def test_daily_reset(self) -> None:
-        cfg = ModelHubConfig(daily_budget_usd=10.0)
-        enforcer = BudgetEnforcer(cfg)
-        enforcer._daily_spent_usd = 10.0
-        enforcer.reset_daily()
-        result = enforcer.check(_make_request())
-        assert result.decision == BudgetDecision.ALLOW
+# RIP-OUT: Daily budget enforcement deleted (family-os).
 
 
 # ===========================================================================

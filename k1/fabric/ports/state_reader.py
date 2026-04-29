@@ -84,6 +84,30 @@ class SessionSnapshot:
         """Get a section, or None if not present."""
         return self.sections.get(section)
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialise to a JSON-safe dict.
+
+        Required so envelopes that embed a snapshot (notably
+        ``PlanRequest.context``) round-trip cleanly through the bus
+        serializer instead of falling back to ``{"value": repr(payload)}``.
+        """
+        return {
+            "session_id": self.session_id,
+            "sections": dict(self.sections),
+            "timestamp_ms": self.timestamp_ms,
+            "section_names": list(self.section_names),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SessionSnapshot":
+        """Reconstruct a ``SessionSnapshot`` from its ``to_dict`` form."""
+        return cls(
+            session_id=data.get("session_id", ""),
+            sections=dict(data.get("sections") or {}),
+            timestamp_ms=int(data.get("timestamp_ms", 0)),
+            section_names=list(data.get("section_names") or []),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Port protocol

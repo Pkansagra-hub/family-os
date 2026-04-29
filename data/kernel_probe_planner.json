@@ -1,0 +1,123 @@
+{
+  "boot_seconds": 8.368672500000685,
+  "counts": {
+    "OK": 11,
+    "WARN": 0,
+    "FAIL": 2,
+    "INFO": 3
+  },
+  "probes": [
+    {
+      "layer": "Planner Wiring",
+      "name": "agent_ready_wait",
+      "status": "OK",
+      "value": "'51ms'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Wiring",
+      "name": "agent",
+      "status": "OK",
+      "value": "'PlannerAgent'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Wiring",
+      "name": "task",
+      "status": "OK",
+      "value": "'running'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Wiring",
+      "name": "pipeline",
+      "status": "OK",
+      "value": "'PipelineController'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Wiring",
+      "name": "event_port",
+      "status": "OK",
+      "value": "'EventBusAdapter'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Stages",
+      "name": "sketch",
+      "status": "OK",
+      "value": "'SketchService'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Stages",
+      "name": "expand",
+      "status": "OK",
+      "value": "'ExpandService'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Stages",
+      "name": "validate",
+      "status": "OK",
+      "value": "'ValidateService'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Stages",
+      "name": "commit",
+      "status": "OK",
+      "value": "'CommitService'",
+      "note": ""
+    },
+    {
+      "layer": "Planner E2E",
+      "name": "request",
+      "status": "INFO",
+      "value": "'intent=Probe: book a family trip to Lake Tahoe next wee... rid=89e4709c-d05'",
+      "note": ""
+    },
+    {
+      "layer": "Planner E2E",
+      "name": "emit_plan_request",
+      "status": "OK",
+      "value": "'k1.planner.plan.request.v1'",
+      "note": ""
+    },
+    {
+      "layer": "Planner E2E",
+      "name": "bus_path",
+      "status": "FAIL",
+      "value": "None",
+      "note": "no terminal event via bus emit (payload normalization mismatch?)"
+    },
+    {
+      "layer": "Planner E2E",
+      "name": "fallback",
+      "status": "INFO",
+      "value": "'trying direct mailbox enqueue'",
+      "note": ""
+    },
+    {
+      "layer": "Planner E2E",
+      "name": "direct_enqueue",
+      "status": "OK",
+      "value": "'called _on_plan_request directly'",
+      "note": ""
+    },
+    {
+      "layer": "Planner E2E",
+      "name": "deltas_observed",
+      "status": "INFO",
+      "value": "0",
+      "note": ""
+    },
+    {
+      "layer": "Planner E2E",
+      "name": "terminal_event",
+      "status": "FAIL",
+      "value": "None",
+      "note": "no terminal event within 60s (60026ms elapsed)"
+    }
+  ]
+}

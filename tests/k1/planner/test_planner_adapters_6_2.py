@@ -53,7 +53,6 @@ from k1.planner.adapters import (
 from k1.planner.adapters.llm_gateway_adapter import ILLMRequestBus
 from k1.planner.types import (
     AdapterException,
-    BudgetExceededError,
     DeltaPayload,
     HubRequest,
     HubResponse,
@@ -312,13 +311,6 @@ class TestLLMGatewayAdapterErrorPath:
         adapter = LLMGatewayAdapter(bus)
 
         with pytest.raises(LLMTimeoutError):
-            await adapter.execute(_make_hub_request())
-
-    async def test_budget_error_maps_to_budget_exceeded(self):
-        bus = FakeLLMBus(error=RuntimeError("token budget exceeded for consumer"))
-        adapter = LLMGatewayAdapter(bus)
-
-        with pytest.raises(BudgetExceededError):
             await adapter.execute(_make_hub_request())
 
     async def test_generic_error_maps_to_adapter_exception(self):

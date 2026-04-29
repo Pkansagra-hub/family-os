@@ -332,6 +332,8 @@ The wiring contract specifies **43 required files** across 8 subdirectories. Her
 
 ### Files that EXIST (16 of 43)
 
+> **STALE (2026-04-22 / TD-2.4):** This 16/43 (~37%) snapshot is from M0. The package now ships **46 .py files** and is largely feature-complete. Use the file tree under `k1/memory_writer/` for the current state — the table below is kept only for historical context and is no longer maintained.
+
 | File | Lines | Content |
 |---|---|---|
 | `__init__.py` | ~155 | Re-exports 54 symbols (ports, types, enums, events, config, adapters) |

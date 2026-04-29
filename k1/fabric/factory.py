@@ -43,6 +43,7 @@ Exports:
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -422,8 +423,12 @@ class FabricFactory:
         production_mode: bool = False,
         contracts_dir: Optional[str] = None,
         config: Optional[FabricConfig] = None,
-        embedding_port: Optional[Any] = None,  # No IEmbeddingPort Protocol defined yet (M-10/TD-3.1)
+        embedding_port: Optional[
+            Any
+        ] = None,  # No IEmbeddingPort Protocol defined yet (M-10/TD-3.1)
         capability_registry: Optional[CapabilityRegistry] = None,
+        mcp_transport: Optional[Any] = None,
+        wasm_runtime: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with custom adapter injection.
@@ -463,6 +468,8 @@ class FabricFactory:
             config=config,
             embedding_port=embedding_port,
             capability_registry=capability_registry,
+            mcp_transport=mcp_transport,
+            wasm_runtime=wasm_runtime,
         )
 
     @staticmethod
@@ -479,6 +486,8 @@ class FabricFactory:
         config: Optional[FabricConfig] = None,
         embedding_port: Optional[Any] = None,
         capability_registry: Optional[Any] = None,
+        mcp_transport: Optional[Any] = None,
+        wasm_runtime: Optional[Any] = None,
     ) -> Fabric:
         """
         Create a shared Fabric instance.
@@ -534,6 +543,8 @@ class FabricFactory:
             config=config,
             embedding_port=embedding_port,
             capability_registry=capability_registry,
+            mcp_transport=mcp_transport,
+            wasm_runtime=wasm_runtime,
         )
 
 
@@ -641,7 +652,8 @@ def _construct_fabric(
     # ===== STEP 9: ProviderFactory (port_deps) =====
     # Build test transport/runtime adapters if not in production mode
     # If mcp_transport was injected (e.g. AutoDiscoveryMCPTransport), use it;
-    # otherwise fall back to TestMCPTransport for unit tests.
+    # otherwise fall back to TestMCPTransport for unit tests, or
+    # AutoDiscoveryMCPTransport for production.
     # If wasm_runtime was injected (e.g. AutoDiscoveryWASMRuntime), use it;
     # otherwise fall back to TestWASMRuntime for unit tests.
     effective_mcp_transport: Any = mcp_transport
@@ -651,6 +663,22 @@ def _construct_fabric(
             effective_mcp_transport = TestMCPTransport(connected=True)
         if effective_wasm_runtime is None:
             effective_wasm_runtime = TestWASMRuntime(available=True)
+    else:
+        # F3 fix (audit F101-F103): in production_mode, fall back to
+        # AutoDiscoveryMCPTransport when no explicit transport was
+        # injected. Previously this left mcp_transport=None which
+        # caused MCPProvider construction to raise at first invocation.
+        if effective_mcp_transport is None:
+            try:
+                from k1.fabric.adapters.auto_mcp_transport import AutoDiscoveryMCPTransport
+
+                effective_mcp_transport = AutoDiscoveryMCPTransport()
+            except Exception as exc:  # pragma: no cover -- defensive
+                logger.warning(
+                    "F3 fallback: AutoDiscoveryMCPTransport unavailable (%s); "
+                    "MCP capabilities will fail at invoke time.",
+                    exc,
+                )
 
     provider_factory = ProviderFactory(
         bridge_port=bridge,
@@ -752,6 +780,80 @@ def _construct_fabric(
 
     # ===== STEP 19: CapabilityRegistryAPI =====
     registry_api = CapabilityRegistryAPI(registry=registry)
+
+    # ===== STEP 19b: Wire meta-tools (F4) =====
+    # Register BuildAgentHandler as an explicit handler on the MCP transport
+    # so that resolution of ``tool.write.build_agent`` actually executes the
+    # in-process Python handler instead of returning "Unknown tool".
+    # Per fabric-implementation-plan.md Step 20.
+    if effective_mcp_transport is not None and hasattr(effective_mcp_transport, "register_handler"):
+        try:
+            from k1.fabric.core.agent_builder import (
+                BUILD_AGENT_CAPABILITY_NAME,
+                BUILD_AGENT_PROVIDER_ID,
+                AgentComposer,
+                AgentSpecValidator,
+                BuildAgentHandler,
+            )
+            from k1.fabric.providers.mcp_provider import MCPResponse as _MCPResponse
+            from k1.fabric.types import CapabilityRequest as _CapabilityRequest
+            from k1.fabric.types import SafetyBand as _SafetyBand
+
+            spec_validator = AgentSpecValidator(registry=registry, prompt_system=prompt_system)
+            agent_composer = AgentComposer(registry=registry, prompt_system=prompt_system)
+            build_agent_handler = BuildAgentHandler(
+                validator=spec_validator,
+                composer=agent_composer,
+                registry=registry,
+                security=security_context,
+                emitter=event_emitter,
+            )
+
+            async def _build_agent_mcp_adapter(mcp_request: Any) -> Any:
+                """Adapt MCPRequest -> CapabilityRequest -> handler -> MCPResponse."""
+                args = dict(getattr(mcp_request, "arguments", {}) or {})
+                cap_request = _CapabilityRequest(
+                    capability_name=BUILD_AGENT_CAPABILITY_NAME,
+                    params=args,
+                    caller=str(args.get("_caller", "fabric")),
+                    session_id=str(args.get("_session_id", "")),
+                    safety_band=str(args.get("_safety_band", _SafetyBand.AMBER.value)),
+                    trace_id=getattr(mcp_request, "trace_id", "") or "",
+                )
+                result = build_agent_handler.execute(cap_request)
+                payload: Dict[str, Any] = {
+                    "agent_name": "",
+                    "status": "failed",
+                    "errors": [],
+                }
+                if result.success and result.data:
+                    payload.update(result.data)
+                else:
+                    err = result.error
+                    payload["status"] = "failed"
+                    payload["errors"] = [getattr(err, "message", "") or "build_agent failed"]
+                    payload.setdefault("agent_name", str(args.get("agent_name", "")))
+                return _MCPResponse(
+                    success=bool(result.success),
+                    content=[{"type": "text", "text": json.dumps(payload)}],
+                    error_message="" if result.success else getattr(result.error, "message", ""),
+                    latency_ms=int(getattr(result, "duration_ms", 0) or 0),
+                )
+
+            effective_mcp_transport.register_handler(
+                BUILD_AGENT_CAPABILITY_NAME, _build_agent_mcp_adapter
+            )
+            logger.info(
+                "F4: Registered %s handler with MCP transport (provider=%s)",
+                BUILD_AGENT_CAPABILITY_NAME,
+                BUILD_AGENT_PROVIDER_ID,
+            )
+        except Exception as exc:  # pragma: no cover -- defensive
+            logger.warning(
+                "F4: Failed to wire BuildAgentHandler to MCP transport: %s",
+                exc,
+                exc_info=True,
+            )
 
     # ===== STEP 20: Bootstrap + assemble Fabric =====
     # Scan contracts directory if it exists

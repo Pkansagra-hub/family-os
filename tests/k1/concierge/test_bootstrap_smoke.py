@@ -35,7 +35,6 @@ def test_config() -> KernelConfig:
         ordered_bus=True,
         capture_bus=False,
         session_mode="standalone",
-        tool_tier="LOW",
         auto_start_consumer=False,  # Don't launch background task in tests
         enable_experience=True,
         enable_delta=True,
@@ -70,7 +69,6 @@ class TestBootstrapSmoke:
 
     async def test_config_preserved(self, runtime: KernelRuntime) -> None:
         assert runtime.config.test_mode is True
-        assert runtime.config.tool_tier == "LOW"
 
     async def test_bus_not_none(self, runtime: KernelRuntime) -> None:
         assert runtime.bus is not None
@@ -197,9 +195,9 @@ class TestSubsystemGating:
     async def test_delta_aggregator_created(self, runtime: KernelRuntime) -> None:
         assert runtime.delta_aggregator is not None
 
-    async def test_delta_applicator_is_none(self, runtime: KernelRuntime) -> None:
-        # P4B.1: delta_applicator not exposed via SessionInstance
-        assert runtime.delta_applicator is None
+    async def test_delta_applicator_wired(self, runtime: KernelRuntime) -> None:
+        # F1 fix: delta_applicator now exposed via SessionInstance.
+        assert runtime.delta_applicator is not None
 
     async def test_disable_experience(self) -> None:
         cfg = KernelConfig(test_mode=True, auto_start_consumer=False, enable_experience=False)
@@ -388,9 +386,6 @@ class TestKernelConfigDefaults:
 
     def test_default_test_mode(self) -> None:
         assert KernelConfig().test_mode is False
-
-    def test_default_tool_tier(self) -> None:
-        assert KernelConfig().tool_tier == "LOW"
 
     def test_default_session_mode(self) -> None:
         assert KernelConfig().session_mode == "standalone"

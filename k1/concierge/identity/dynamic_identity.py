@@ -145,7 +145,6 @@ class DynamicIdentityContext:
         user_name: str = "",
         affect_band: str = "neutral",
         domain: str = "",
-        complexity_tier: str = "LOW",
         has_inflight_tasks: bool = False,
     ) -> IdentitySnapshot:
         """Compute dynamic identity for the current turn.
@@ -155,7 +154,6 @@ class DynamicIdentityContext:
             user_name:         Active user display name.
             affect_band:       Current affect band.
             domain:            Current conversation domain.
-            complexity_tier:   Task complexity tier.
             has_inflight_tasks: Whether background tasks are running.
 
         Returns:
@@ -164,7 +162,6 @@ class DynamicIdentityContext:
         self._turn_count += 1
 
         role = self._compute_role(
-            complexity_tier=complexity_tier,
             affect_band=affect_band,
             has_inflight=has_inflight_tasks,
         )
@@ -211,7 +208,6 @@ class DynamicIdentityContext:
 
     def _compute_role(
         self,
-        complexity_tier: str,
         affect_band: str,
         has_inflight: bool,
     ) -> str:
@@ -222,8 +218,7 @@ class DynamicIdentityContext:
         if affect_band in ("crisis", "low"):
             return ConversationalRole.SUPPORTER
 
-        if complexity_tier == "HIGH":
-            return ConversationalRole.EXPERT
+        # P3.4a: HIGH-tier EXPERT branch removed.
 
         if has_inflight:
             return ConversationalRole.EXECUTOR

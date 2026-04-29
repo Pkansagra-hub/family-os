@@ -24,19 +24,22 @@ import pytest
 
 from k1.model_hub.config import ModelHubConfig
 from k1.model_hub.factory import ModelHubFactory
-from k1.model_hub.manifest import CircuitBreakerConfig, ModelSpec, PlacementConfig, ProviderManifest
+from k1.model_hub.manifest import (
+    CircuitBreakerConfig,
+    ModelSpec,
+    PlacementConfig,
+    ProviderManifest,
+)
 from k1.model_hub.plugins.base import (
     NormalizedRequest,
     ProviderChunk,
     ProviderHealth,
     ProviderResponse,
 )
-from k1.model_hub.services.budget_enforcer import BudgetEnforcer
 from k1.model_hub.services.circuit_breaker_manager import CircuitBreakerManager
 from k1.model_hub.services.provider_registry import ProviderRegistry
 from k1.model_hub.services.rate_limiter import RateLimiter
 from k1.model_hub.types import (
-    BudgetExceededError,
     CapabilityType,
     ChatPayload,
     CircuitState,
@@ -47,7 +50,6 @@ from k1.model_hub.types import (
     ModelTier,
     NoEligibleProviderError,
     PlacementType,
-    Priority,
     ProviderError,
     RequestConstraints,
 )
@@ -354,50 +356,7 @@ class TestAllProvidersDown:
 # ===========================================================================
 
 
-class TestBudgetExhaustion:
-    """Budget limits enforced during chaotic load."""
-
-    async def test_budget_exceeded_raises(self) -> None:
-        """Budget exceeded immediately raises BudgetExceededError."""
-        cfg = ModelHubConfig(daily_budget_usd=0.001)
-        facade, adapters = _wire({"ok": _OkPlugin()}, config=cfg)
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-        enforcer._daily_spent_usd = 1.0  # well over budget
-
-        with pytest.raises(BudgetExceededError):
-            await facade.execute(_make_request(trace_id="budget-chaos"))
-
-    async def test_budget_exhaustion_during_sequence(self) -> None:
-        """Budget exceeded after successful requests."""
-        cfg = ModelHubConfig(daily_budget_usd=10.0)
-        facade, adapters = _wire({"ok": _OkPlugin()}, config=cfg)
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-
-        # First request succeeds
-        resp = await facade.execute(_make_request(trace_id="budget-1", content="first"))
-        assert resp.result is not None
-
-        # Exhaust budget
-        enforcer._daily_spent_usd = 11.0
-
-        # Next request rejected
-        with pytest.raises(BudgetExceededError):
-            await facade.execute(_make_request(trace_id="budget-2", content="second"))
-
-    async def test_budget_reset_allows_new_requests(self) -> None:
-        """After daily reset, requests proceed."""
-        cfg = ModelHubConfig(daily_budget_usd=10.0)
-        facade, adapters = _wire({"ok": _OkPlugin()}, config=cfg)
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-
-        enforcer._daily_spent_usd = 11.0
-        with pytest.raises(BudgetExceededError):
-            await facade.execute(_make_request(trace_id="pre-reset", content="pre"))
-
-        # Reset daily spending
-        enforcer._daily_spent_usd = 0.0
-        resp = await facade.execute(_make_request(trace_id="post-reset", content="post"))
-        assert resp.result is not None
+# RIP-OUT: BudgetEnforcer deleted (family-os).
 
 
 # ===========================================================================
@@ -509,24 +468,6 @@ class TestConcurrentFailures:
         results = await asyncio.gather(*[send(i) for i in range(10)])
         # At least some should succeed (via "ok" provider)
         assert any(results)
-
-    async def test_budget_exhaustion_under_concurrency(self) -> None:
-        """Budget exhaustion detected even under concurrent requests."""
-        cfg = ModelHubConfig(daily_budget_usd=0.001)
-        facade, adapters = _wire({"ok": _OkPlugin()}, config=cfg)
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-        enforcer._daily_spent_usd = 1.0
-
-        async def send(i: int):
-            try:
-                await facade.execute(_make_request(trace_id=f"bconc-{i}", content=f"bconc-{i}"))
-                return True
-            except BudgetExceededError:
-                return False
-
-        results = await asyncio.gather(*[send(i) for i in range(5)])
-        # All should fail due to budget
-        assert not any(results)
 
 
 # ===========================================================================

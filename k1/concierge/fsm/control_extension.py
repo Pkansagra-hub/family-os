@@ -6,11 +6,11 @@ V2 Design Ref: Section 5 (control HOT section), Section 25.2 (FSM state fields)
 Wraps the existing ControlSection with Concierge FSM fields:
   - fsm_state:       Current ConciergeState (written on every transition)
   - active_task_ids:  List of currently active task IDs
-  - complexity_tier:  Task complexity from Phase 1 classification
+  # P3.4a: complexity_tier removed; tier derivation moved to dispatch_task.
 
 The wrapper does NOT modify ControlSection. It uses the FlowState
-sub-fields for task tracking and adds fsm_state / complexity_tier
-as lightweight in-memory fields that are serialized alongside.
+sub-fields for task tracking and adds fsm_state
+as a lightweight in-memory field that is serialized alongside.
 
 Why a wrapper instead of modifying ControlSection directly:
   1. ControlSection is shared across K1 modules (not just Concierge POC).
@@ -46,20 +46,18 @@ class ConciergeControlExtension:
         self._control_ext.add_active_task(task_id)
         # On task.complete/failed:
         self._control_ext.remove_active_task(task_id)
-        # On Phase 1 classification:
-        self._control_ext.set_complexity_tier(result.complexity_tier)
+        # P3.4a: Phase 1 no longer sets complexity_tier; tier derivation
+        # moved to dispatch_task.
     """
 
     def __init__(self) -> None:
         self._fsm_state: str = ConciergeState.LISTENING.name
         self._active_task_ids: list[str] = []
-        self._complexity_tier: str = "LOW"
         self._update_count: int = 0
         self._control_section: Any | None = None  # M4 E4.1.2: bound SS ControlSection
         logger.info(
-            "ConciergeControlExtension initialized (initial_state=%s, tier=%s)",
+            "ConciergeControlExtension initialized (initial_state=%s)",
             self._fsm_state,
-            self._complexity_tier,
         )
 
     # ------------------------------------------------------------------
@@ -71,8 +69,8 @@ class ConciergeControlExtension:
 
         Called by ``ConciergeController.set_session_state()`` after the
         SessionStateManager is attached.  Once bound, every call to
-        ``set_fsm_state``, ``add_active_task``, ``remove_active_task``,
-        and ``set_complexity_tier`` syncs the overlay into the section.
+        ``set_fsm_state``, ``add_active_task``, and ``remove_active_task``
+        syncs the overlay into the section.
 
         Args:
             section: A ControlSection instance from the SessionState manager.
@@ -92,7 +90,6 @@ class ConciergeControlExtension:
             self._control_section.set_fsm_overlay(
                 fsm_state=self._fsm_state,
                 active_task_ids=list(self._active_task_ids),
-                complexity_tier=self._complexity_tier,
             )
 
     # ------------------------------------------------------------------
@@ -171,28 +168,10 @@ class ConciergeControlExtension:
         return task_id in self._active_task_ids
 
     # ------------------------------------------------------------------
-    # Complexity Tier
+    # Complexity Tier -- removed in P3.4a (mirror of POC P3.1).
+    # Tier derivation moved to dispatch_task (`plan: bool` + multi-intent
+    # + depends_on signals).
     # ------------------------------------------------------------------
-
-    @property
-    def complexity_tier(self) -> str:
-        """Current complexity tier from Phase 1 classification."""
-        return self._complexity_tier
-
-    def set_complexity_tier(self, tier: str) -> None:
-        """Update complexity tier from Phase 1 classification.
-
-        Called by FSM after Phase 1 runs during DISPATCHING.
-
-        Args:
-            tier: One of "LOW", "MEDIUM", "HIGH".
-        """
-        if tier not in ("LOW", "MEDIUM", "HIGH"):
-            logger.warning("ControlExtension: invalid tier '%s', defaulting to LOW", tier)
-            tier = "LOW"
-        self._complexity_tier = tier
-        self._update_count += 1
-        self._sync_to_section()
 
     # ------------------------------------------------------------------
     # Snapshot / observability
@@ -211,13 +190,11 @@ class ConciergeControlExtension:
         return {
             "fsm_state": self._fsm_state,
             "active_task_ids": list(self._active_task_ids),
-            "complexity_tier": self._complexity_tier,
         }
 
     def reset(self) -> None:
         """Reset all extension state. Called on teardown."""
         self._fsm_state = ConciergeState.LISTENING.name
         self._active_task_ids.clear()
-        self._complexity_tier = "LOW"
         self._update_count = 0
         self._control_section = None

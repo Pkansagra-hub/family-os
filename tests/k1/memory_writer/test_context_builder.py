@@ -54,6 +54,11 @@ class FakeSessionReadPort:
                 pass
         return {k: v for k, v in self._data.items() if k not in exclude}
 
+    async def read_archived_history(
+        self, session_id: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        return []
+
 
 def _make_payload(**overrides: Any) -> TurnCompletePayload:
     defaults = dict(
@@ -175,6 +180,97 @@ class TestMWSessionReader:
 
 
 # ===========================================================================
+# TestMWSessionReaderEnriched (B3 — cold-archive merge for session-batch)
+# ===========================================================================
+
+
+class _EnrichedFakePort(FakeSessionReadPort):
+    """Fake that returns canned archived turns from read_archived_history."""
+
+    def __init__(
+        self,
+        snapshot_data: Optional[Dict[str, Any]] = None,
+        archived_turns: Optional[List[Dict[str, Any]]] = None,
+        raise_archive: bool = False,
+    ) -> None:
+        super().__init__(snapshot_data)
+        self._archived = archived_turns or []
+        self._raise_archive = raise_archive
+        self.archived_calls = 0
+        self.last_session_id: Optional[str] = None
+        self.last_limit: Optional[int] = None
+
+    async def read_archived_history(
+        self, session_id: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        self.archived_calls += 1
+        self.last_session_id = session_id
+        self.last_limit = limit
+        if self._raise_archive:
+            raise RuntimeError("cold down")
+        return list(self._archived)
+
+
+class TestMWSessionReaderEnriched:
+    @pytest.mark.asyncio
+    async def test_falls_back_when_no_archive(self):
+        """No archived turns -> returns plain snapshot unchanged."""
+        port = _EnrichedFakePort({"meta": {"session_id": "s1"}}, archived_turns=[])
+        reader = MWSessionReader(port, MWConfig())
+        snap = await reader.read_snapshot_enriched("sess-x")
+        assert snap == {"meta": {"session_id": "s1"}}
+        assert port.last_session_id == "sess-x"
+
+    @pytest.mark.asyncio
+    async def test_archive_failure_returns_plain(self):
+        """If archive fetch raises, the plain snapshot is returned (never raises)."""
+        port = _EnrichedFakePort({"meta": {}}, raise_archive=True)
+        reader = MWSessionReader(port, MWConfig())
+        snap = await reader.read_snapshot_enriched("sess-x")
+        assert "history_active" not in snap or "enriched_from_cold" not in snap.get(
+            "history_active", {}
+        )
+
+    @pytest.mark.asyncio
+    async def test_merges_cold_before_live(self):
+        """Cold-archive turns are placed before live hot turns; deduped by turn_id."""
+        live_turns = [
+            {"turn_id": "t-2", "user_message": "live2", "assistant_response": "a2", "turn_number": 2},
+            {"turn_id": "t-3", "user_message": "live3", "assistant_response": "a3", "turn_number": 3},
+        ]
+        archived_turns = [
+            {"turn_id": "t-1", "user_message": "old1", "assistant_response": "oa1", "turn_number": 1},
+            {"turn_id": "t-2", "user_message": "old2", "assistant_response": "oa2", "turn_number": 2},  # duplicate
+        ]
+        port = _EnrichedFakePort(
+            {"history_active": {"turns": live_turns}},
+            archived_turns=archived_turns,
+        )
+        reader = MWSessionReader(port, MWConfig())
+        snap = await reader.read_snapshot_enriched("sess-x")
+        merged = snap["history_active"]["turns"]
+        ids = [t["turn_id"] for t in merged]
+        # cold t-1, then live t-2 (not dup), then live t-3
+        assert ids == ["t-1", "t-2", "t-3"]
+        # Live wins for dup t-2 (user_message == "live2", not "old2").
+        t2 = next(t for t in merged if t["turn_id"] == "t-2")
+        assert t2["user_message"] == "live2"
+        assert snap["history_active"]["enriched_from_cold"] is True
+
+    @pytest.mark.asyncio
+    async def test_creates_history_section_if_missing(self):
+        """If hot snapshot has no history_active, archived turns still land."""
+        archived_turns = [
+            {"turn_id": "t-1", "user_message": "old1", "assistant_response": "oa1", "turn_number": 1},
+        ]
+        port = _EnrichedFakePort({}, archived_turns=archived_turns)
+        reader = MWSessionReader(port, MWConfig())
+        snap = await reader.read_snapshot_enriched("sess-x")
+        assert snap["history_active"]["turns"][0]["turn_id"] == "t-1"
+        assert snap["history_active"]["enriched_from_cold"] is True
+
+
+# ===========================================================================
 # TestContextBuilderHistory
 # ===========================================================================
 
@@ -222,6 +318,78 @@ class TestContextBuilderHistory:
         builder = ContextBuilder(MWConfig())
         ctx = builder.build(snap, _make_payload())
         assert len(ctx.recent_turns) == 25
+
+    # ------------------------------------------------------------------
+    # A2: assistant_response is loaded as a paired CompressedTurn
+    # ------------------------------------------------------------------
+
+    def test_assistant_response_emits_paired_turn(self):
+        """Each Turn with both sides emits user + assistant CompressedTurns."""
+        snap = {
+            "history_active": {
+                "turns": [
+                    {
+                        "turn_id": "t-1",
+                        "user_message": "Hi",
+                        "assistant_response": "Hello there!",
+                        "timestamp_ms": 1_700_000_000_000,
+                        "turn_number": 1,
+                    },
+                ],
+            },
+        }
+        builder = ContextBuilder(MWConfig())
+        ctx = builder.build(snap, _make_payload())
+        assert len(ctx.recent_turns) == 2
+        assert ctx.recent_turns[0].role == "user"
+        assert ctx.recent_turns[0].text == "Hi"
+        assert ctx.recent_turns[1].role == "assistant"
+        assert ctx.recent_turns[1].text == "Hello there!"
+        # paired ordering: user immediately followed by its assistant
+        assert ctx.recent_turns[1].turn_number == ctx.recent_turns[0].turn_number
+
+    def test_empty_assistant_response_skipped(self):
+        """Turns with no assistant_response yield only the user CompressedTurn."""
+        snap = {
+            "history_active": {
+                "turns": [
+                    {
+                        "turn_id": "t-1",
+                        "user_message": "Just user",
+                        "assistant_response": "",
+                        "timestamp_ms": 1,
+                        "turn_number": 1,
+                    },
+                ],
+            },
+        }
+        builder = ContextBuilder(MWConfig())
+        ctx = builder.build(snap, _make_payload())
+        assert len(ctx.recent_turns) == 1
+        assert ctx.recent_turns[0].role == "user"
+
+    def test_full_dialogue_window(self):
+        """3-turn dialogue → 6 CompressedTurns interleaved user/assistant."""
+        snap = {
+            "history_active": {
+                "turns": [
+                    {
+                        "turn_id": f"t-{i}",
+                        "user_message": f"u{i}",
+                        "assistant_response": f"a{i}",
+                        "timestamp_ms": i,
+                        "turn_number": i,
+                    }
+                    for i in range(1, 4)
+                ],
+            },
+        }
+        builder = ContextBuilder(MWConfig())
+        ctx = builder.build(snap, _make_payload())
+        roles = [ct.role for ct in ctx.recent_turns]
+        texts = [ct.text for ct in ctx.recent_turns]
+        assert roles == ["user", "assistant", "user", "assistant", "user", "assistant"]
+        assert texts == ["u1", "a1", "u2", "a2", "u3", "a3"]
 
 
 # ===========================================================================

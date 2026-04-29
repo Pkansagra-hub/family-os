@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from k1.memory_writer.config import MWConfig
+from k1.memory_writer.events import TurnCompletePayload
 from k1.memory_writer.extraction.raw_extraction import PromptLoader, RawExtraction
 from k1.memory_writer.invariants import assert_mw06_token_budget
 from k1.memory_writer.ports.model_hub_port import IModelHubPort
@@ -96,6 +97,124 @@ class MemoryWriterAgent:
 
         return self._parse_response(response, context, trace_id)
 
+    async def extract_session(
+        self,
+        turns: List[TurnCompletePayload],
+        context: ExtractionContext,
+        trace_id: str,
+    ) -> List[RawExtraction]:
+        """Extract memory atoms from a buffered batch of turns via ONE LLM call (Option B).
+
+        Used by SessionBatchDispatcher. Sees the full transcript, deduplicates
+        naturally across turns, and returns up to ``config.max_atoms_per_session`` atoms.
+
+        Args:
+            turns: Buffered TurnCompletePayloads since last flush.
+            context: ExtractionContext built from the latest snapshot (anchor turn).
+            trace_id: cognitive_trace_id from the anchor turn (MW-10).
+
+        Returns:
+            List of RawExtraction objects (not yet validated). Empty on LLM error.
+        """
+        # MW-06: enforce session-mode budget
+        budget = self._config.llm_token_budget_session
+        if budget < self._config.llm_token_budget:
+            budget = self._config.llm_token_budget
+
+        user_prompt = self._build_session_prompt(turns, context)
+
+        messages: List[Dict[str, str]] = [
+            {"role": "system", "content": self._system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        try:
+            response: ChatResponse = await self._model_hub.chat(
+                messages=messages,
+                budget_tokens=budget,
+                model_hint=self._config.model_hint,
+            )
+        except Exception as exc:
+            log.warning(
+                "MW: session LLM extraction failed",
+                extra={
+                    "trace_id": trace_id,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "turn_count": len(turns),
+                },
+            )
+            return []
+
+        return self._parse_response(
+            response,
+            context,
+            trace_id,
+            max_atoms=self._config.max_atoms_per_session,
+        )
+
+    def _build_session_prompt(
+        self,
+        turns: List[TurnCompletePayload],
+        context: ExtractionContext,
+    ) -> str:
+        """Serialize a buffered batch of turns into the user prompt template.
+
+        Unlike per-turn ``_build_user_prompt``, this dumps the full conversation
+        with both user and (truncated) assistant turns. The LLM deduplicates
+        repeated facts naturally because it sees the whole transcript at once.
+        """
+        transcript_lines: List[str] = []
+        for t in turns:
+            user_text = (t.user_message or "").strip()
+            if user_text:
+                transcript_lines.append(f"  Turn {t.turn_number} User: {user_text}")
+            assistant_text = (t.assistant_response or "").strip()
+            if assistant_text:
+                transcript_lines.append(
+                    f"  Turn {t.turn_number} Assistant: {assistant_text[:200]}"
+                )
+        transcript_text = "\n".join(transcript_lines) if transcript_lines else "  (empty)"
+
+        entities_text = (
+            ", ".join(
+                f"{name} ({info.get('type', 'UNKNOWN')})"
+                for name, info in context.active_persons.items()
+            )
+            if context.active_persons
+            else "none"
+        )
+
+        emotion_text = "unknown"
+        if context.current_affect:
+            emotion_text = (
+                f"valence={context.current_affect.valence:.1f}, "
+                f"arousal={context.current_affect.arousal:.1f}"
+            )
+
+        topics_text = (
+            ", ".join(context.active_topics[:5]) if context.active_topics else "none"
+        )
+
+        band = (
+            context.control_context.get("safety_band", "GREEN")
+            if context.control_context
+            else "GREEN"
+        )
+
+        return (
+            f"CONTEXT:\n"
+            f"  Known entities: {entities_text}\n"
+            f"  Current emotion: {emotion_text}\n"
+            f"  Active topics: {topics_text}\n"
+            f"  Privacy band: {band}\n\n"
+            f"FULL CONVERSATION TRANSCRIPT ({len(turns)} turns):\n{transcript_text}\n\n"
+            f"Extract all memorable content from this conversation \u2014 facts, "
+            f"opinions, feelings, third-party news, ambient mood. Deduplicate naturally: "
+            f"if the same fact appears in multiple turns, emit it once with the "
+            f"highest-confidence framing. Return as JSON array."
+        )
+
     def _build_user_prompt(self, context: ExtractionContext) -> str:
         """Serialize ExtractionContext into the user prompt template.
 
@@ -156,6 +275,7 @@ class MemoryWriterAgent:
         response: ChatResponse,
         context: ExtractionContext,
         trace_id: str,
+        max_atoms: Optional[int] = None,
     ) -> List[RawExtraction]:
         """Parse LLM JSON output into RawExtraction list.
 
@@ -165,6 +285,7 @@ class MemoryWriterAgent:
           - Malformed JSON -> log warning, return empty list
           - Individual item parse failure -> skip item, keep valid ones
         """
+        cap = max_atoms if max_atoms is not None else self._config.max_atoms_per_turn
         content = response.content.strip()
         if not content:
             return []
@@ -200,7 +321,7 @@ class MemoryWriterAgent:
             return []
 
         extractions: List[RawExtraction] = []
-        for i, item in enumerate(raw_list[:6]):  # hard cap at 6 (MW-05)
+        for i, item in enumerate(raw_list[:cap]):  # cap from arg (MW-05 per_turn=6, session=30)
             if not isinstance(item, dict):
                 continue
             try:

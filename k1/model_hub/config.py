@@ -26,16 +26,11 @@ class ModelHubConfig:
     """Model Hub configuration (frozen, validated).
 
     Invariants:
-      MH-08: daily_budget_usd default $5.00.
       MH-09: cache_ttl_s default 300s (5min).
       MH-12: rate_limit_headroom_pct default 0.80 (80%).
       MH-14: health_check_interval_s default 30s.
       MH-15: timeout defaults per priority tier.
     """
-
-    # Budget (MH-04, MH-08)
-    daily_budget_usd: float = 5.0
-    monthly_budget_usd: float = 100.0
 
     # Concurrency
     max_concurrent_requests: int = 50
@@ -62,10 +57,6 @@ class ModelHubConfig:
     shutdown_grace_period_ms: int = 10000
 
     def __post_init__(self) -> None:
-        if self.daily_budget_usd <= 0:
-            raise ValueError(f"daily_budget_usd must be > 0, got {self.daily_budget_usd}")
-        if self.monthly_budget_usd <= 0:
-            raise ValueError(f"monthly_budget_usd must be > 0, got {self.monthly_budget_usd}")
         if self.max_concurrent_requests <= 0:
             raise ValueError(
                 f"max_concurrent_requests must be > 0, got {self.max_concurrent_requests}"

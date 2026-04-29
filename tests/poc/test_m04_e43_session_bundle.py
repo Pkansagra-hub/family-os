@@ -70,8 +70,8 @@ class TestBundleToolRegistration:
         assert "update_session_bundle" in names
 
     def test_schema_front_tool_count(self) -> None:
-        """FRONT_TOOL_SCHEMAS now has 10 schemas (9 original + 1 bundle)."""
-        assert len(FRONT_TOOL_SCHEMAS) == 10
+        """FRONT_TOOL_SCHEMAS has 12 schemas (9 original + 1 bundle + 2 P1.1 Fabric)."""
+        assert len(FRONT_TOOL_SCHEMAS) == 12
 
     def test_schema_is_cognitive_category(self) -> None:
         """Bundle tool is in the cognitive category."""

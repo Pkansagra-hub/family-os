@@ -273,13 +273,11 @@ class TestKernelConfigTier1Fields:
         assert cfg.model_hub_plugins == ["openai", "anthropic"]
 
     def test_backward_compatible_existing_fields(self) -> None:
-        """Existing 22 fields still work with new fields present."""
+        """Existing fields still work with new fields present."""
         cfg = KernelConfig(
-            tool_tier="HIGH",
             enable_experience=False,
             max_sessions=10,
         )
-        assert cfg.tool_tier == "HIGH"
         assert cfg.enable_experience is False
         assert cfg.max_sessions == 10
 
@@ -966,8 +964,13 @@ class TestS2ModelHubWiring:
     # ── Issue 3.10.5: Auxiliary port wiring ──────────────
 
     @pytest.mark.asyncio
-    async def test_model_hub_uses_create_with_ports(self) -> None:
-        """S2 uses create_with_ports(), not create_standalone()."""
+    async def test_model_hub_uses_from_config(self) -> None:
+        """P2.3: S2 wires the hub via ModelHubFactory.from_config().
+
+        Verifies the metrics port still flows through (from_config delegates
+        to create_with_ports internally), confirming the auxiliary-port
+        plumbing was preserved by the P2.3 migration.
+        """
         svc = KernelService(config=KernelConfig())
         await svc._startup_tier1()
         hub = svc._model_hub
@@ -2550,6 +2553,7 @@ class TestP4ConciergeWiring:
             s_bus = BusFactory.create_local_ordered(capture=False)
             s_router = BusFactory.create_mailbox_router()
             from k1.concierge.bus.setup import ACTOR_BACK, ACTOR_FRONT
+
             front_mb = s_router.register(ACTOR_FRONT)
             back_mb = s_router.register(ACTOR_BACK)
 

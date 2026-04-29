@@ -999,3 +999,117 @@ class TestEventPerformance:
         # Drain should be fast
         assert elapsed < 0.1, f"drain() took {elapsed:.3f}s (should be <0.1s)"
         assert len(events) >= 500
+
+
+# =============================================================================
+# TEST CLASS: W7 — Emergency / Eviction Event Emission
+# =============================================================================
+
+
+class TestW7EmergencyAndEvictionEvents:
+    """Verify SessionStateManager emits emergency + eviction events.
+
+    Closes audit gap W7 (kernel_probe_findings.md): _event_port was
+    constructed but never invoked from the pressure / eviction code paths.
+    """
+
+    def test_eviction_triggered_event_emitted_on_warm_pressure(
+        self, session: SessionStateManager
+    ) -> None:
+        """Forcing WARM into CRITICAL and calling _trigger_eviction_if_needed
+        publishes an EVICTION_TRIGGERED event via _event_port."""
+        from k1.sessionstate.events import EventType
+        from k1.sessionstate.sizetracker import WARM_SECTIONS, WARM_SIZE_LIMIT_BYTES
+
+        # Force WARM into emergency by inflating size_tracker directly.
+        per_section = int(WARM_SIZE_LIMIT_BYTES * 0.97 / max(len(WARM_SECTIONS), 1))
+        for sec in WARM_SECTIONS:
+            session.size_tracker.set_section_size(sec, per_section)
+
+        session._event_port.drain()
+        session._trigger_eviction_if_needed(trace_id="t-w7-evict")
+        session._event_port.wait_for_dispatch(timeout=1.0)
+
+        events = session._event_port.get_captured_events()
+        triggered = [e for e in events if e[0] == EventType.EVICTION_TRIGGERED.value]
+        completed = [e for e in events if e[0] == EventType.EVICTION_COMPLETED.value]
+        assert len(triggered) >= 1, f"EVICTION_TRIGGERED not emitted; saw {[e[0] for e in events]}"
+        assert len(completed) >= 1, f"EVICTION_COMPLETED not emitted; saw {[e[0] for e in events]}"
+
+    def test_emergency_activated_event_emitted_via_mutate(
+        self, session: SessionStateManager
+    ) -> None:
+        """When mutate() pushes total pressure into CRITICAL/EMERGENCY,
+        an EMERGENCY_ACTIVATED event is emitted on the rising edge."""
+        from k1.sessionstate.events import EventType
+        from k1.sessionstate.sizetracker import (
+            HOT_SECTIONS,
+            HOT_SIZE_LIMIT_BYTES,
+            WARM_SECTIONS,
+            WARM_SIZE_LIMIT_BYTES,
+        )
+
+        # Pre-load BOTH tiers near full so a small mutation tips total
+        # pressure (HOT+WARM) across the EMERGENCY threshold (>95%).
+        warm_per = int(WARM_SIZE_LIMIT_BYTES * 0.95 / max(len(WARM_SECTIONS), 1))
+        for sec in WARM_SECTIONS:
+            session.size_tracker.set_section_size(sec, warm_per)
+        hot_per = int(HOT_SIZE_LIMIT_BYTES * 0.95 / max(len(HOT_SECTIONS), 1))
+        for sec in HOT_SECTIONS:
+            session.size_tracker.set_section_size(sec, hot_per)
+
+        session._event_port.drain()
+        # Mutate a HOT section that still has capacity; pressure check runs
+        # against the size_tracker which reports global EMERGENCY.
+        session.mutate(
+            section="history_active",
+            operation="append",
+            data=make_turn(1),
+        )
+        session._event_port.wait_for_dispatch(timeout=1.0)
+
+        events = session._event_port.get_captured_events()
+        emergencies = [e for e in events if e[0] == EventType.EMERGENCY_ACTIVATED.value]
+        assert (
+            len(emergencies) >= 1
+        ), f"EMERGENCY_ACTIVATED not emitted; saw {[e[0] for e in events]}"
+
+    def test_emergency_activated_emits_only_once_until_resolved(
+        self, session: SessionStateManager
+    ) -> None:
+        """Repeated mutations under sustained pressure should not re-emit
+        EMERGENCY_ACTIVATED until pressure returns to NORMAL."""
+        from k1.sessionstate.events import EventType
+        from k1.sessionstate.sizetracker import (
+            HOT_SECTIONS,
+            HOT_SIZE_LIMIT_BYTES,
+            WARM_SECTIONS,
+            WARM_SIZE_LIMIT_BYTES,
+        )
+
+        warm_per = int(WARM_SIZE_LIMIT_BYTES * 0.95 / max(len(WARM_SECTIONS), 1))
+        hot_per = int(HOT_SIZE_LIMIT_BYTES * 0.95 / max(len(HOT_SECTIONS), 1))
+        for sec in WARM_SECTIONS:
+            session.size_tracker.set_section_size(sec, warm_per)
+        for sec in HOT_SECTIONS:
+            session.size_tracker.set_section_size(sec, hot_per)
+        # Also pre-arm the manager so it doesn't think we already fired.
+        session._emergency_active = False
+
+        session._event_port.drain()
+        for i in range(3):
+            session.mutate(
+                section="history_active",
+                operation="append",
+                data=make_turn(i + 1),
+            )
+            # Re-inflate after eviction may have run.
+            for sec in WARM_SECTIONS:
+                session.size_tracker.set_section_size(sec, warm_per)
+            for sec in HOT_SECTIONS:
+                session.size_tracker.set_section_size(sec, hot_per)
+        session._event_port.wait_for_dispatch(timeout=1.0)
+
+        events = session._event_port.get_captured_events()
+        emergencies = [e for e in events if e[0] == EventType.EMERGENCY_ACTIVATED.value]
+        assert len(emergencies) == 1, f"Expected exactly 1 rising-edge emit, got {len(emergencies)}"

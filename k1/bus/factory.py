@@ -246,6 +246,8 @@ class BusFactory:
         capture: bool = False,
         middleware: list[Middleware] | MiddlewareChain | None = None,
         backend: str = "python",
+        outbox: object | None = None,
+        durable_topics: set[str] | None = None,
     ) -> LocalBus:
         """
         Create a LocalBus with ordering enforcement (TimingChain).
@@ -262,6 +264,13 @@ class BusFactory:
             capture:    If True, record all published envelopes.
             middleware: Optional middleware chain or list of Middleware.
             backend:    Must be "python" (default).  "rust" raises ValueError.
+            outbox:
+                Phase 6 / P6.13.  Optional ``BusOutbox`` instance for
+                durable persistence of envelopes on ``durable_topics``.
+            durable_topics:
+                Phase 6 / P6.13.  Set of exact topic strings persisted
+                to ``outbox`` before dispatch.  Ignored when ``outbox``
+                is None.
 
         Returns:
             LocalBus wired with a TimingChain.
@@ -283,6 +292,8 @@ class BusFactory:
             capture=capture,
             timing_chain=chain,
             middleware=mw_chain,
+            outbox=outbox,
+            durable_topics=durable_topics,
         )
 
     @staticmethod

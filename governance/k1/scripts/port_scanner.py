@@ -426,7 +426,11 @@ def _scan_structural_adapters(k1_path: Path, ports: list[K1PortInfo]) -> None:
                     rel_to_module = py_file.relative_to(module_dir) if module_dir.exists() else None
                 except ValueError:
                     rel_to_module = None
-                if rel_to_module is not None and rel_to_module.parts and rel_to_module.parts[0] == "ports":
+                if (
+                    rel_to_module is not None
+                    and rel_to_module.parts
+                    and rel_to_module.parts[0] == "ports"
+                ):
                     continue
                 # Skip any */ports/* path globally — those are Protocol decls
                 if "/ports/" in str(py_file).replace("\\", "/"):
@@ -601,26 +605,30 @@ def diff_with_registry(ports: list[K1PortInfo]) -> dict[str, Any]:
     # Planned-but-not-yet-wired ports + ports satisfied by stub-only impls or
     # cross-module classes the structural scanner can't easily classify.
     # All have docstrings explicitly documenting deferred wiring.
-    PLANNED_PORTS: frozenset[str] = frozenset({
-        # Planned per 09_wiring_plan S1/S3/S6 — kernel runtime container ports
-        "kernel.IBusPort",
-        "kernel.IFabricPort",
-        "kernel.IOrchestratorPort",
-        "kernel.IModelHubPort",
-        "kernel.IPlannerPort",
-        # Production impl injected at runtime via create_with_ports();
-        # only stub provided in-tree (k1/fabric/factory.py:_StubEmbeddingPort)
-        "fabric.IEmbeddingPort",
-        # File-local section-data providers — satisfied by SessionStateManager
-        # via duck typing in production; fakes only in tests
-        "sessionstate.IEvictionSectionProvider",
-        "sessionstate.IMigrationSectionProvider",
-    })
+    PLANNED_PORTS: frozenset[str] = frozenset(
+        {
+            # Planned per 09_wiring_plan S1/S3/S6 — kernel runtime container ports
+            "kernel.IBusPort",
+            "kernel.IFabricPort",
+            "kernel.IOrchestratorPort",
+            "kernel.IModelHubPort",
+            "kernel.IPlannerPort",
+            # Production impl injected at runtime via create_with_ports();
+            # only stub provided in-tree (k1/fabric/factory.py:_StubEmbeddingPort)
+            "fabric.IEmbeddingPort",
+            # File-local section-data providers — satisfied by SessionStateManager
+            # via duck typing in production; fakes only in tests
+            "sessionstate.IEvictionSectionProvider",
+            "sessionstate.IMigrationSectionProvider",
+        }
+    )
 
     # Marker Protocols (zero abstract methods) — accepted by design.
-    MARKER_PORTS: frozenset[str] = frozenset({
-        "fabric.ICapabilityProvider",
-    })
+    MARKER_PORTS: frozenset[str] = frozenset(
+        {
+            "fabric.ICapabilityProvider",
+        }
+    )
 
     issues: list[str] = []
     warnings: list[str] = []
@@ -633,7 +641,11 @@ def diff_with_registry(ports: list[K1PortInfo]) -> dict[str, Any]:
         if not real and not null:
             msg = f"{fq}: no adapters found"
             if fq in PLANNED_PORTS or fq in MARKER_PORTS:
-                tag = "marker Protocol by design" if fq in MARKER_PORTS else "planned per 09_wiring_plan"
+                tag = (
+                    "marker Protocol by design"
+                    if fq in MARKER_PORTS
+                    else "planned per 09_wiring_plan"
+                )
                 warnings.append(f"{msg} ({tag})")
             else:
                 issues.append(msg)

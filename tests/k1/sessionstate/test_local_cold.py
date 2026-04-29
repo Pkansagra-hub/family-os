@@ -645,6 +645,43 @@ class TestSizeStats:
 
 
 # =============================================================================
+# TEST CLASS: W6 — artifacts_warm Section Mapping
+# =============================================================================
+
+
+class TestW6ArtifactsWarmArchive:
+    """Verify artifacts_warm is archivable (audit gap W6)."""
+
+    def test_archive_artifacts_warm_section(
+        self,
+        archive: LocalColdArchive,
+        sample_data: bytes,
+        session_id: str,
+    ) -> None:
+        """archive() must accept the artifacts_warm WARM-tier section."""
+        result = archive.archive(
+            section="artifacts_warm",
+            data=sample_data,
+            session_id=session_id,
+            metadata={"reason": "eviction"},
+        )
+        assert result.success, f"archive failed: {result.error}"
+        assert result.archive_id
+
+    def test_artifacts_warm_in_section_table_map(self) -> None:
+        """SECTION_TABLE_MAP routes artifacts_warm to st_artifacts_archive."""
+        from k1.sessionstate.local_cold import SECTION_TABLE_MAP
+
+        assert SECTION_TABLE_MAP.get("artifacts_warm") == "st_artifacts_archive"
+
+    def test_artifacts_warm_table_in_archive_tables(self) -> None:
+        """ARCHIVE_TABLES includes the new artifacts table."""
+        from k1.sessionstate.local_cold import ARCHIVE_TABLES
+
+        assert "st_artifacts_archive" in ARCHIVE_TABLES
+
+
+# =============================================================================
 # TEST CLASS: Maintenance Operations
 # =============================================================================
 

@@ -56,6 +56,7 @@ class ConciergeRuntime:
         back_ctx: Any | None = None,
         experience_layer: Any | None = None,
         delta_aggregator: Any | None = None,
+        delta_applicator: Any | None = None,
         hitl_coordinator: Any | None = None,
         orchestrator: Any | None = None,
         ledger: Any | None = None,
@@ -76,6 +77,7 @@ class ConciergeRuntime:
         self._back_ctx = back_ctx
         self._experience_layer = experience_layer
         self._delta_aggregator = delta_aggregator
+        self._delta_applicator = delta_applicator
         self._hitl_coordinator = hitl_coordinator
         self._orchestrator = orchestrator
         self._ledger = ledger
@@ -202,6 +204,10 @@ class ConciergeRuntime:
     @property
     def delta_aggregator(self) -> Any | None:
         return self._delta_aggregator
+
+    @property
+    def delta_applicator(self) -> Any | None:
+        return self._delta_applicator
 
     @property
     def hitl_coordinator(self) -> Any | None:

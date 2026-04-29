@@ -1,15 +1,14 @@
 """M5 Request Pipeline -- Test RequestRouter [F40].
 
-Tests the 9-step request pipeline: validate -> budget -> priority ->
+Tests the 7-step request pipeline: validate -> priority ->
 route -> select -> cache -> normalize -> dispatch -> post-process.
 
 Covers:
   - Validation: valid/invalid capability, missing trace_id
-  - Budget rejection (MH-04)
   - No eligible providers -> NoEligibleProviderError
   - ModelSelector returns None -> NoEligibleProviderError
   - Cache hit -> short-circuit return
-  - Full pipeline happy path (steps 1-9)
+  - Full pipeline happy path
   - stream_route(): streaming pipeline
   - Audit logger integration
   - Re-exports from services/__init__.py
@@ -30,7 +29,6 @@ from k1.model_hub.plugins.base import (
     ProviderResponse,
 )
 from k1.model_hub.services.audit_logger import AuditLogger
-from k1.model_hub.services.budget_enforcer import BudgetEnforcer
 from k1.model_hub.services.capability_router import CapabilityRouter
 from k1.model_hub.services.circuit_breaker_manager import CircuitBreakerManager
 from k1.model_hub.services.model_selector import ModelSelector
@@ -41,7 +39,6 @@ from k1.model_hub.services.rate_limiter import RateLimiter
 from k1.model_hub.services.request_router import RequestRouter
 from k1.model_hub.services.response_cache import ResponseCache
 from k1.model_hub.types import (
-    BudgetExceededError,
     CapabilityType,
     ChatPayload,
     CircuitState,
@@ -173,12 +170,11 @@ def _make_request(
 
 def _build_router(
     *,
-    daily_budget: float = 5.0,
     with_audit: bool = False,
     plugin_text: str = "response-ok",
 ) -> RequestRouter:
     """Build a fully-wired RequestRouter with all real internal services."""
-    config = ModelHubConfig(daily_budget_usd=daily_budget)
+    config = ModelHubConfig()
     manifest = _make_manifest()
     plugin = FakePlugin(response_text=plugin_text)
 
@@ -199,7 +195,6 @@ def _build_router(
     )
 
     model_selector = ModelSelector()
-    budget_enforcer = BudgetEnforcer(config=config)
     response_cache = ResponseCache(config=config)
     normalization = NormalizationLayer()
 
@@ -221,7 +216,6 @@ def _build_router(
     return RequestRouter(
         capability_router=cap_router,
         model_selector=model_selector,
-        budget_enforcer=budget_enforcer,
         response_cache=response_cache,
         normalization_layer=normalization,
         dispatcher=dispatcher,
@@ -254,40 +248,6 @@ class TestValidation:
 
 
 # ===========================================================================
-# Budget Tests (Step 2)
-# ===========================================================================
-
-
-class TestBudgetCheck:
-    @pytest.mark.asyncio
-    async def test_budget_exceeded_rejects(self) -> None:
-        """MH-04: hard rejection on budget exceeded."""
-        router = _build_router(daily_budget=0.001)
-        # Exhaust budget by tracking a fake response
-        be = router._budget_enforcer  # noqa: SLF001
-        from k1.model_hub.types import HubResponse, ResponseMetadata, TokenUsage
-
-        fake_resp = HubResponse(
-            result="x",
-            metadata=ResponseMetadata(
-                request_id="r-1",
-                model_id="gpt-4o",
-                provider_id="openai",
-                usage=TokenUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
-                cost_usd=0.01,
-                latency_ms=100,
-                cache_hit=False,
-                capability=CapabilityType.CHAT,
-                trace_id="t-1",
-            ),
-        )
-        be.track(fake_resp)
-
-        with pytest.raises(BudgetExceededError):
-            await router.route(_make_request())
-
-
-# ===========================================================================
 # No Eligible Provider Tests (Step 4)
 # ===========================================================================
 
@@ -315,10 +275,10 @@ class TestNoEligibleProvider:
 class TestFullPipeline:
     @pytest.mark.asyncio
     async def test_happy_path(self) -> None:
-        """Full 9-step pipeline: validate -> ... -> response."""
+        """Full 7-step pipeline: validate -> ... -> response."""
         router = _build_router(plugin_text="pipeline-ok")
         response = await router.route(_make_request())
-        assert response.result == "pipeline-ok"
+        assert response.result.text == "pipeline-ok"
         assert response.metadata.provider_id == "openai"
         assert response.metadata.trace_id == "trace-1"
         assert response.metadata.cache_hit is False
@@ -336,14 +296,6 @@ class TestFullPipeline:
         response = await router.route(_make_request())
         assert response.metadata.latency_ms >= 0
 
-    @pytest.mark.asyncio
-    async def test_budget_tracked_after_response(self) -> None:
-        """Budget enforcement tracks spending after dispatch."""
-        router = _build_router()
-        await router.route(_make_request())
-        be = router._budget_enforcer  # noqa: SLF001
-        assert be.daily_spent_usd >= 0.0  # track() was called
-
 
 # ===========================================================================
 # Cache Tests (Step 6)
@@ -359,12 +311,12 @@ class TestCacheIntegration:
 
         # First call fills cache
         resp1 = await router.route(req)
-        assert resp1.result == "cached-text"
+        assert resp1.result.text == "cached-text"
 
         # Second call should hit cache (same capability, payload, model, temp)
         req2 = _make_request(temperature=0.5)
         resp2 = await router.route(req2)
-        assert resp2.result == "cached-text"
+        assert resp2.result.text == "cached-text"
 
     @pytest.mark.asyncio
     async def test_high_temp_not_cached(self) -> None:
@@ -372,7 +324,7 @@ class TestCacheIntegration:
         router = _build_router(plugin_text="not-cached")
         req = _make_request(temperature=1.5)
         resp1 = await router.route(req)
-        assert resp1.result == "not-cached"
+        assert resp1.result.text == "not-cached"
         # ResponseCache skips caching for temp > 0.9
 
 
@@ -424,31 +376,6 @@ class TestStreamRoute:
         assert last is not None
         assert last.metadata is not None
         assert last.metadata.trace_id == "trace-1"
-
-    @pytest.mark.asyncio
-    async def test_stream_budget_reject(self) -> None:
-        router = _build_router(daily_budget=0.001)
-        be = router._budget_enforcer  # noqa: SLF001
-        from k1.model_hub.types import HubResponse, ResponseMetadata, TokenUsage
-
-        fake_resp = HubResponse(
-            result="x",
-            metadata=ResponseMetadata(
-                request_id="r-1",
-                model_id="gpt-4o",
-                provider_id="openai",
-                usage=TokenUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
-                cost_usd=0.01,
-                latency_ms=100,
-                cache_hit=False,
-                capability=CapabilityType.CHAT,
-                trace_id="t-1",
-            ),
-        )
-        be.track(fake_resp)
-        with pytest.raises(BudgetExceededError):
-            async for _ in router.stream_route(_make_request()):
-                pass
 
     @pytest.mark.asyncio
     async def test_stream_no_eligible_raises(self) -> None:

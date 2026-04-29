@@ -763,6 +763,58 @@ class HistoryActiveSection:
         return max(size_pressure, count_pressure)
 
     # =========================================================================
+    # Dict Serialization (for SessionReadAdapter / Memory Writer)
+    # =========================================================================
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return section as a plain dict for snapshot reads.
+
+        Consumed by ``SessionReadAdapter._section_to_dict``. Without this,
+        ``history_active`` is silently dropped from MW snapshots and
+        ``recent_turns`` is always empty.
+
+        Returns full Turn fidelity including ``assistant_response``, intents,
+        entities, and emotion. Tool call metadata (when present on a Turn)
+        is preserved under each turn's ``metadata`` key so the existing
+        ``ContextBuilder._extract_tool_calls_from_turn`` keeps working.
+        """
+
+        def _turn_to_dict(t: Turn) -> Dict[str, Any]:
+            d: Dict[str, Any] = {
+                "turn_id": t.turn_id,
+                "turn_number": t.turn_number,
+                "user_message": t.user_message,
+                "assistant_response": t.assistant_response,
+                "timestamp_ms": t.timestamp_ms,
+                "duration_ms": t.duration_ms,
+                "entities": list(t.entities),
+                "intents": list(t.intents),
+                "emotion": t.emotion,
+            }
+            if t.metadata is not None:
+                meta = t.metadata
+                d["metadata"] = {
+                    "intent": getattr(meta, "intent", ""),
+                    "entities": list(getattr(meta, "entities", [])),
+                    "emotion": getattr(meta, "emotion", ""),
+                    "confidence": float(getattr(meta, "confidence", 0.0)),
+                    "processing_time_ms": int(getattr(meta, "processing_time_ms", 0)),
+                }
+            return d
+
+        return {
+            "turns": [_turn_to_dict(t) for t in self._turns],
+            "current_turn_number": self.current_turn_number,
+            "oldest_turn_number": self.oldest_turn_number,
+            "session_start_ms": self._session_start_ms,
+            "last_activity_ms": self._last_activity_ms,
+            "total_user_tokens": self._total_user_tokens,
+            "total_response_tokens": self._total_response_tokens,
+            "turn_count": len(self._turns),
+            "max_turns": self.MAX_TURNS,
+        }
+
+    # =========================================================================
     # FlatBuffer Serialization
     # =========================================================================
 

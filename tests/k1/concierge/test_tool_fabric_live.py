@@ -11,9 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tests.fixtures.capabilities.registry import create_demo_registry
-from tests.fixtures.capabilities.contract_converter import convert_all_poc_capabilities
-from tests.fixtures.capabilities.poc_bridge_adapter import POCMockBridgeAdapter
+from k1.concierge.adapters.fabric_dispatch import FabricDispatchAdapter
 from k1.concierge.tools.implementations import (
     ToolContext,
     execute_batch_invoke_capabilities,
@@ -29,6 +27,9 @@ from k1.fabric.adapters.test_prompt_system import TestPromptSystemAdapter
 from k1.fabric.adapters.test_state_reader import TestSessionStateReaderAdapter
 from k1.fabric.fabric import Fabric
 from k1.fabric.factory import FabricFactory, _auto_register_providers
+from tests.fixtures.capabilities.contract_converter import convert_all_poc_capabilities
+from tests.fixtures.capabilities.poc_bridge_adapter import POCMockBridgeAdapter
+from tests.fixtures.capabilities.registry import create_demo_registry
 
 # =====================================================================
 # Helpers
@@ -64,11 +65,16 @@ def _create_wired_fabric() -> Fabric:
 
 
 def _make_ctx(fabric: Fabric | None = None) -> ToolContext:
+    # P4B.3: ToolContext now takes a typed IDispatchPort, not a raw Fabric.
+    # Wrap the Fabric in FabricDispatchAdapter for the LOW-tier dispatch path
+    # used by these tool-implementation tests. When fabric is None we leave
+    # ``dispatch=None`` so the "no fabric / fallback" branches trigger.
+    dispatch = FabricDispatchAdapter(fabric) if fabric is not None else None
     return ToolContext(
         session_manager=_mock_session_manager(),
         cognitive_trace_id=f"test-{uuid.uuid4().hex[:6]}",
         actor="back",
-        fabric_port=fabric,
+        dispatch=dispatch,
     )
 
 

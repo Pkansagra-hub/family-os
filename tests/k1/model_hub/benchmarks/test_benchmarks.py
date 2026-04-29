@@ -2,7 +2,7 @@
 
 Targets (excluding LLM inference):
   - Request deserialization < 1ms
-  - Budget check            < 1ms
+  - Budget check            < 1ms (REMOVED: RIP-OUT)
   - Capability routing      < 2ms
   - Model selection         < 5ms
   - Cache lookup            < 2ms
@@ -26,7 +26,6 @@ from k1.model_hub.plugins.base import (
     ProviderHealth,
     ProviderResponse,
 )
-from k1.model_hub.services.budget_enforcer import BudgetEnforcer
 from k1.model_hub.services.capability_router import CapabilityRouter
 from k1.model_hub.services.circuit_breaker_manager import CircuitBreakerManager
 from k1.model_hub.services.model_selector import ModelSelector
@@ -166,27 +165,7 @@ async def _measure_async(fn, iterations: int = _ITERATIONS) -> float:
 # ===========================================================================
 
 
-class TestBudgetCheckPerf:
-    """Budget check overhead benchmark."""
-
-    def test_budget_check_under_1ms(self) -> None:
-        """budget_enforcer.check() < 1ms per call."""
-        _, adapters = _wire()
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-        req = _make_request()
-
-        avg_ms = _measure_sync(lambda: enforcer.check(req))
-        assert avg_ms < 1.0, f"Budget check took {avg_ms:.3f}ms (target < 1ms)"
-
-    def test_budget_check_with_spending(self) -> None:
-        """Budget check < 1ms even with spending history."""
-        _, adapters = _wire()
-        enforcer: BudgetEnforcer = adapters["budget_enforcer"]
-        enforcer._daily_spent_usd = 3.5
-        req = _make_request()
-
-        avg_ms = _measure_sync(lambda: enforcer.check(req))
-        assert avg_ms < 1.0, f"Budget check took {avg_ms:.3f}ms (target < 1ms)"
+# RIP-OUT: BudgetEnforcer deleted (family-os).
 
 
 # ===========================================================================
