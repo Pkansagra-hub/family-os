@@ -159,9 +159,12 @@ class TestFSMWiring:
         assert runtime.fsm._task_bridge is not None
 
     async def test_hitl_coordinator_wired(self, runtime: KernelRuntime) -> None:
-        assert runtime.hitl_coordinator is not None
-        # FSM should have _hil_coordinator reference (note: attribute name uses "hil" not "hitl")
-        assert runtime.fsm._hil_coordinator is not None
+        # E4.M1.4: legacy `HILCoordinator` deleted.  `runtime.hitl_coordinator`
+        # is no longer constructed by the concierge factory; the FSM's
+        # `_hil_port` slot remains None until E4.M1.6 threads the unified
+        # HIL service through the kernel.
+        assert runtime.hitl_coordinator is None
+        assert runtime.fsm._hil_port is None
 
     async def test_weave_batcher_wired(self, runtime: KernelRuntime) -> None:
         assert hasattr(runtime, "weave_batcher")

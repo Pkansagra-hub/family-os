@@ -508,24 +508,25 @@ class ConciergeSession:
     def inject(
         self,
         *,
-        hil_coordinator: Any | None = None,
         dispatch: Any | None = None,
         memory: Any | None = None,
     ) -> None:
         """Late-bind optional ports into this session's scoped ToolContexts.
 
         Maps:
-            hil_coordinator → ToolContext.hil_coordinator
-            dispatch        → ToolContext.dispatch
-            memory          → ToolContext.recall_fn
+            dispatch -> ToolContext.dispatch
+            memory   -> ToolContext.recall_fn
+
+        E4.M1.3: ``hil_coordinator`` parameter removed -- the legacy HIL
+        coordinator field on ``ToolContext`` is gone now that the fabric
+        capability gate (E3) enforces HIL. ``hil_port=`` injection lands
+        in E4.M1.6 once the unified service is wired through the factory.
         """
         if self._closed:
             raise RuntimeError("Cannot inject into a closed ConciergeSession")
         for ctx in (self.front_ctx, self.back_ctx):
             if ctx is None:
                 continue
-            if hil_coordinator is not None:
-                ctx.hil_coordinator = hil_coordinator
             if dispatch is not None:
                 ctx.dispatch = dispatch
             if memory is not None:

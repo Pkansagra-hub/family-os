@@ -19,8 +19,12 @@ import pytest
 from k1.concierge.ledger.projections import project_suspension_state
 from k1.concierge.ledger.store import InMemoryLedgerStore, LedgerEntry
 from k1.concierge.ledger.writer import LedgerWriter
-from k1.concierge.protocols.suspension import SuspensionRequest, SuspensionResolution, SuspensionType
-from k1.concierge.protocols.suspension_manager import SuspensionManager
+from k1.concierge.protocols.suspension import (
+    SuspensionRequest,
+    SuspensionResolution,
+    SuspensionType,
+)
+from k1.hil.suspension import SuspensionManager
 
 # ---------------------------------------------------------------------------
 # Helpers

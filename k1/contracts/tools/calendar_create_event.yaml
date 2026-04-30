@@ -71,3 +71,12 @@ tool_contract:
   avg_latency_ms: 30
   max_latency_ms: 200
   availability: "ONLINE"
+
+  # ---- HIL Policy (E2 -- HIL Unification) ----
+  # Creating an event commits to the family's calendar; ask before write.
+  requires_human_confirmation: true
+  side_effects:
+    - kind: "data_write"
+      target: "calendar.event"
+      reversible: true
+      description: "Inserts a new calendar event into the family calendar."

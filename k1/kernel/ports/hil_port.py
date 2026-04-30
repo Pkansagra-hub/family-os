@@ -1,77 +1,51 @@
-"""
-k1.kernel.ports.hil_port -- IHILPort (F2 audit).
+"""k1.kernel.ports.hil_port -- IHILPort (E1.M1.2).
 
-Kernel-level port for Human-in-the-Loop coordination.
+Kernel-level port for the unified Human-in-the-Loop service.
 
-Design notes
-------------
-There are currently TWO HILCoordinator implementations in the codebase
-that serve different roles:
+After E1, there is ONE HIL implementation: `k1.hil.service.HumanInTheLoopService`.
+The previous two coordinators (`k1.concierge.protocols.hitl_coordinator.HILCoordinator`
+and `k1.planner.services.hil_coordinator.HILCoordinator`) are replaced in
+E4 / E5 respectively.
 
-  - ``k1.concierge.protocols.hitl_coordinator.HILCoordinator`` --
-    FSM-side closed-cycle HITL orchestration for the Concierge runtime
-    (V2 §9.1). Owns suspension manager, ledger persistence, and
-    bus emission for ``task.suspended.v1`` / ``task.resume.v1``.
-
-  - ``k1.planner.services.hil_coordinator.HILCoordinator`` --
-    Planner-side clarification/approval coordination (PLAN-10).
-    Owns LLM-driven question generation and ``hil.*`` bus topics
-    used during SKETCH/VALIDATE stages.
-
-The kernel does NOT need to unify these two classes — they have
-genuinely different responsibilities (suspension management vs.
-plan clarification). This port instead exposes the *minimal* surface
-the kernel cares about: a coordinator can produce a HIL request and
-accept a user response.
-
-Both implementations satisfy this Protocol structurally via
-``handle_*`` methods; the kernel binds the appropriate concrete
-coordinator at construction time (Concierge S10, Planner S?).
-
-Audit reference
----------------
-- F2 (Findings doc): "Unified IHILPort + collapse 2 HILCoordinator
-  classes". The collapse is rejected because the two classes serve
-  distinct subsystems; instead this port documents the kernel-visible
-  contract so that downstream modules depend on the Protocol rather
-  than the concrete classes.
-- W10 (Findings doc): "IHILPort Protocol missing" -- resolved by this
-  module.
-
-Exports:
-  IHILPort
+This Protocol declares the seven async / sync methods every HIL caller
+in the kernel boundary uses. Only `k1.hil.types` is imported (types are
+pure dataclasses with no service deps), so importing this module never
+pulls in `k1.hil.service` -- prevents `kernel.ports -> hil.service ->
+kernel.ports` cycles.
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+
+from k1.hil.types import (
+    ApprovalRequest,
+    ApprovalResponse,
+    CapabilityGateRequest,
+    ClarificationRequest,
+    ClarificationResponse,
+    GateDecision,
+    NeedsHumanRequest,
+    NeedsHumanResponse,
+    OverrideRequest,
+    OverrideResponse,
+)
 
 
 @runtime_checkable
 class IHILPort(Protocol):
-    """Minimal kernel-level Human-in-the-Loop coordinator port.
+    """Kernel-visible Human-in-the-Loop coordinator port."""
 
-    Concrete implementations:
+    async def ask_clarification(self, req: ClarificationRequest) -> ClarificationResponse: ...
 
-      - ``k1.concierge.protocols.hitl_coordinator.HILCoordinator``
-        (FSM-side, suspension + ledger).
-      - ``k1.planner.services.hil_coordinator.HILCoordinator``
-        (planner-side, clarification + approval).
+    async def request_approval(self, req: ApprovalRequest) -> ApprovalResponse: ...
 
-    Both implementations are structurally compatible with this
-    Protocol via their public ``handle_*`` / ``request_*`` /
-    ``submit_*`` methods. The exact method shape is intentionally
-    left to the concrete implementations because the two subsystems
-    have different bus topics and persistence needs.
+    async def needs_human(self, req: NeedsHumanRequest) -> NeedsHumanResponse: ...
 
-    The kernel uses this Protocol only to declare type-safe
-    dependencies on a HIL coordinator without importing concrete
-    classes from concierge or planner subpackages.
-    """
+    async def request_override(self, req: OverrideRequest) -> OverrideResponse: ...
 
-    # No abstract methods are declared here on purpose: the two
-    # concrete coordinators expose different method sets. This
-    # Protocol functions as a *marker* port that downstream code can
-    # use for type annotations (``coordinator: IHILPort``) without
-    # creating a circular import on either subsystem.
-    ...
+    async def gate_capability(self, req: CapabilityGateRequest) -> GateDecision: ...
+
+    def reset_round_budget(self, caller_key: str) -> None: ...
+
+    async def shutdown(self) -> None: ...

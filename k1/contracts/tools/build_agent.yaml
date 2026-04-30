@@ -113,3 +113,13 @@ tool_contract:
     - "meta"
     - "agent_creation"
     - "write_operation"
+
+  # ---- HIL Policy (E2 -- HIL Unification) ----
+  # Meta-level capability: creates a brand-new agent in the registry.
+  # Always confirm before adding new agents to the system.
+  requires_human_confirmation: true
+  side_effects:
+    - kind: "data_write"
+      target: "capability_registry.agent"
+      reversible: true
+      description: "Registers a new agent definition into the capability registry."

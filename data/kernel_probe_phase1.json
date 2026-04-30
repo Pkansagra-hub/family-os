@@ -1,10 +1,10 @@
 {
-  "boot_seconds": 10.886350200002198,
-  "session_id": "kernel-300afb64",
+  "boot_seconds": 16.320042499995907,
+  "session_id": "kernel-2104dacf",
   "counts": {
-    "OK": 42,
+    "OK": 43,
     "WARN": 14,
-    "FAIL": 1,
+    "FAIL": 0,
     "INFO": 12
   },
   "probes": [
@@ -368,9 +368,9 @@
     {
       "layer": "SessionState",
       "name": "eviction_engine.section_provider",
-      "status": "FAIL",
-      "value": null,
-      "note": "audit-J TODO unblocks F70/F71/F77"
+      "status": "OK",
+      "value": "SectionDataAdapter",
+      "note": ""
     },
     {
       "layer": "SessionState",

@@ -37,6 +37,7 @@ from k1.concierge.actors.shared import parse_envelope_payload as _parse_payload
 from k1.concierge.actors.shared import safe_get_section as _safe_get_section
 from k1.concierge.bus.builders import (
     build_final_response,
+    build_hil_response,
     build_response_stream,
     build_task_cancel,
     build_task_dispatch,
@@ -342,11 +343,17 @@ def _extract_scenario_data(
         }
 
     if mode == PromptMode.HITL_RELAY:
+        # E1.M2.1: support new HILEnvelope shape; fall back to legacy
+        # top-level keys if envelope not present.
+        from k1.concierge.actors.front_hil_envelope import unwrap_hil_request_payload
+
+        flat = unwrap_hil_request_payload(payload)
         return {
-            "hil_type": payload.get("hil_type", ""),
-            "hil_question": payload.get("question", ""),
-            "hil_options": payload.get("options", []),
-            "hil_side_effects": payload.get("side_effects", []),
+            "hil_type": flat.get("hil_type", ""),
+            "hil_question": flat.get("question", ""),
+            "hil_options": flat.get("options", []),
+            "hil_side_effects": flat.get("side_effects", []),
+            "_hil_envelope": flat.get("_hil_envelope"),
         }
 
     if mode == PromptMode.HITL_RESOLVE:
@@ -1036,8 +1043,8 @@ async def front_handler(
                 {},
             )
         suspended_task_id = suspended_task.get("task_id", "")
-        if suspended_task_id:
-            resolution = _build_resolution(scenario_data)
+        resolution = _build_resolution(scenario_data) if suspended_task_id else None
+        if suspended_task_id and resolution is not None:
             emit_task_resume(
                 bus=bus,
                 task_id=suspended_task_id,
@@ -1046,6 +1053,38 @@ async def front_handler(
                 parent_id=parent_id,
                 trace_id=trace_id,
             )
+        # E1.M2.1: also emit unified HIL response if the suspended task
+        # was created by the unified HumanInTheLoopService (carries the
+        # original HILEnvelope under pending_hil.envelope).
+        pending_hil = (suspended_task.get("pending_hil") or {}) if suspended_task else {}
+        incoming_envelope = pending_hil.get("envelope")
+        if incoming_envelope:
+            from k1.concierge.actors.front_hil_envelope import (
+                build_hil_response_envelope_dict,
+            )
+
+            try:
+                resp_payload = build_hil_response_envelope_dict(
+                    incoming_envelope,
+                    resolution or _build_resolution(scenario_data),
+                    raw_user_text=scenario_data.get("user_answer"),
+                )
+                bus.publish(build_hil_response(resp_payload, parent_id=parent_id))
+                logger.info(
+                    "front_emit_hil_response hil_request_id=%s kind=%s",
+                    resp_payload.get("hil_request_id"),
+                    resp_payload.get("kind"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "front_emit_hil_response_failed error=%s envelope_keys=%s",
+                    exc,
+                    (
+                        list(incoming_envelope.keys())
+                        if isinstance(incoming_envelope, dict)
+                        else type(incoming_envelope).__name__
+                    ),
+                )
 
     logger.info(
         "front_handler complete: status=%s dispatched=%d cancel=%d trace=%s",

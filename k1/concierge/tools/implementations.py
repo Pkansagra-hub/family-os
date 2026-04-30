@@ -47,7 +47,10 @@ from k1.fabric.types import CapabilityRequest
 from k1.sessionstate.public_types import BatchRequest, MutationRequest
 
 if TYPE_CHECKING:
-    from k1.planner.types import HILCoordinatorLike
+    # E4.M1.3: HILCoordinatorLike import removed -- the L2 HIL enforcement
+    # block in `execute_invoke_capability` was deleted in favour of the
+    # fabric-level capability gate (E3), which guards every invocation
+    # uniformly regardless of caller.
     from k1.sessionstate.ports.writer import IWriterPort
 
 logger = logging.getLogger(__name__)
@@ -93,9 +96,9 @@ class ToolContext:
     writer_port: "IWriterPort | None" = None  # M4 E4.2.1 write-path enforcement
     bundle_idempotency_cache: dict = None  # M4 E4.3.1 per-session dedup for update_session_bundle
     active_device_id: str | None = None  # M5 E5.5.6: device that triggered the current turn
-    hil_coordinator: "HILCoordinatorLike | None" = (
-        None  # M6 E6.1.3: HILCoordinator for L2 invoke_capability blocking
-    )
+    # E4.M1.3: `hil_coordinator` field removed -- replaced by the fabric
+    # capability gate (E3). `active_task_id` is preserved for telemetry /
+    # future per-task observability use.
     active_task_id: str | None = None  # M6 E6.1.3: task_id for per-task L2 checks
     dispatch: IDispatchPort | None = None  # P4B.3: typed IDispatchPort (Fabric + Orchestrator)
     recall_fn: Callable | None = None
@@ -1132,64 +1135,10 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
     params = args.get("params", {})
     session_id = args.get("session_id")
 
-    # M6 E6.1.3: L2 side-effect blocking when HITL pending for this task.
-    # validate_before_invoke exists on HILCoordinator but was never called.
-    # Cognitive tools (update_beliefs, etc.) go through writer_port, NOT here.
-    if ctx.hil_coordinator is not None and ctx.active_task_id:
-        # Check if there's a pending HITL for this task (defense-in-depth).
-        # Normal flow should never reach here while suspended (Back's loop
-        # already terminated via submit_result), but stale/replayed calls
-        # could arrive.
-        pending_req = None
-        try:
-            pending_req = ctx.hil_coordinator.get_pending_request(ctx.active_task_id)
-        except Exception:
-            pass
-        if pending_req is not None:
-            logger.warning(
-                "tool:invoke_capability BLOCKED (HITL pending) capability=%s task=%s",
-                capability_name,
-                ctx.active_task_id,
-            )
-            return ToolResult(
-                tool_name="invoke_capability",
-                status="blocked",
-                error="HITL pending for task -- capability execution blocked",
-                data={"reason": "block_needs_approval", "capability": capability_name},
-            )
-        # Also check capability contract via validate_before_invoke
-        try:
-            contract = {"name": capability_name, "has_side_effects": True, "safety_band": "AMBER"}
-            decision = ctx.hil_coordinator.validate_before_invoke(
-                task_id=ctx.active_task_id,
-                capability_contract=contract,
-            )
-        except Exception:
-            decision = "allow"
-        if decision == "block_red":
-            logger.warning(
-                "tool:invoke_capability BLOCKED (RED) capability=%s task=%s",
-                capability_name,
-                ctx.active_task_id,
-            )
-            return ToolResult(
-                tool_name="invoke_capability",
-                status="blocked",
-                error="RED safety band -- execution blocked entirely",
-                data={"reason": "block_red", "capability": capability_name},
-            )
-        if decision == "block_needs_approval":
-            logger.warning(
-                "tool:invoke_capability BLOCKED (needs_approval) capability=%s task=%s",
-                capability_name,
-                ctx.active_task_id,
-            )
-            return ToolResult(
-                tool_name="invoke_capability",
-                status="blocked",
-                error="Side effects require approval -- capability execution blocked",
-                data={"reason": "block_needs_approval", "capability": capability_name},
-            )
+    # E4.M1.3: legacy `ctx.hil_coordinator` L2 blocking removed. The fabric
+    # capability gate (E3) now enforces HIL pre-execution for every
+    # invocation regardless of caller, so this defense-in-depth is no
+    # longer this tool's responsibility.
 
     logger.info(
         "tool:invoke_capability  capability=%s params_keys=%s has_fn=%s",

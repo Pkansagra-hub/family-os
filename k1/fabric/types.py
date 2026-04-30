@@ -725,6 +725,12 @@ class CapabilityContract:
     created_at_iso: str = ""
     session_scoped: bool = True
 
+    # ---- HIL Policy Metadata (E2 -- HIL Unification) ----
+    # None = inferred from safety_band_min + side_effects via SafetyBandPolicy.
+    # True/False = explicit override (RED contracts still always ask).
+    requires_human_confirmation: Optional[bool] = None
+    side_effects: List[Dict[str, Any]] = field(default_factory=list)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -755,6 +761,8 @@ class CapabilityContract:
             "created_by": self.created_by,
             "created_at_iso": self.created_at_iso,
             "session_scoped": self.session_scoped,
+            "requires_human_confirmation": self.requires_human_confirmation,
+            "side_effects": [dict(se) for se in self.side_effects],
         }
 
     @classmethod
@@ -788,6 +796,8 @@ class CapabilityContract:
             created_by=data.get("created_by", ""),
             created_at_iso=data.get("created_at_iso", ""),
             session_scoped=data.get("session_scoped", True),
+            requires_human_confirmation=data.get("requires_human_confirmation"),
+            side_effects=list(data.get("side_effects", [])),
         )
 
 
@@ -878,6 +888,9 @@ class AgentContract(CapabilityContract):
             created_by=data.get("created_by", ""),
             created_at_iso=data.get("created_at_iso", ""),
             session_scoped=data.get("session_scoped", True),
+            # ---- HIL policy metadata (E2) ----
+            requires_human_confirmation=data.get("requires_human_confirmation"),
+            side_effects=list(data.get("side_effects", [])),
             # ---- Agent-specific fields ----
             prompt_template=data.get("prompt_template", ""),
             tools_granted=data.get("tools_granted", []),

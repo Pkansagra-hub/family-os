@@ -97,18 +97,12 @@ from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.workflows.persistence import SQLiteWorkflowAdapter
 from k1.planner.adapters.bridge_adapter import BridgeAdapter as PlannerBridgeAdapter
-from k1.planner.adapters.delta_bus_adapter import (
-    DeltaBusAdapter as PlannerDeltaBusAdapter,
-)
-from k1.planner.adapters.event_bus_adapter import (
-    EventBusAdapter as PlannerEventBusAdapter,
-)
+from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter as PlannerDeltaBusAdapter
+from k1.planner.adapters.event_bus_adapter import EventBusAdapter as PlannerEventBusAdapter
 from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
 from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter
 from k1.planner.adapters.mailbox_adapter import MailboxAdapter as PlannerMailboxAdapter
-from k1.planner.adapters.session_state_adapter import (
-    SessionStateReadAdapter as PlannerStateAdapter,
-)
+from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter as PlannerStateAdapter
 from k1.planner.factory import PlannerFactory
 
 # Issue 2.3.2: SessionState adapters + factory
@@ -1027,6 +1021,21 @@ class KernelService:
                 delta_bus=delta_bus,
                 state_reader=session_routing_reader,
             )
+            # W8: opt-in module loader hot-reload watcher. Off by default
+            # (factory called start(watch=False)); flip on for prod
+            # profiles via KernelConfig.module_loader_watch=True. Stop is
+            # already wired through Fabric.shutdown() → module_loader.stop().
+            if self._config.module_loader_watch:
+                ml = getattr(self._shared_fabric, "module_loader", None)
+                if ml is not None and not ml.is_running:
+                    try:
+                        ml.start_watching()
+                        logger.info("ModuleLoader watcher started (W8)")
+                    except Exception:
+                        logger.warning(
+                            "ModuleLoader watcher failed to start",
+                            exc_info=True,
+                        )
         except Exception:
             await self._bridge.disconnect()
             self._bus.close()

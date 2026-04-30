@@ -69,7 +69,7 @@ class TestSuspensionManagerSingleOwner:
 
     def test_suspension_manager_has_store_context(self):
         """SuspensionManager.store_context exists and stores data."""
-        from k1.concierge.protocols.suspension_manager import SuspensionManager
+        from k1.hil.suspension import SuspensionManager
 
         mgr = SuspensionManager()
         mgr.store_context("t1", {"react_history": [], "original_task": {"action": "test"}})
@@ -78,7 +78,7 @@ class TestSuspensionManagerSingleOwner:
 
     def test_suspension_manager_pop_context(self):
         """SuspensionManager.pop_context retrieves and removes."""
-        from k1.concierge.protocols.suspension_manager import SuspensionManager
+        from k1.hil.suspension import SuspensionManager
 
         mgr = SuspensionManager()
         mgr.store_context("t1", {"key": "value"})
@@ -532,7 +532,7 @@ class TestCleanupTaskOnTerminalStates:
 
     def test_cleanup_task_removes_contexts(self):
         """SuspensionManager.cleanup_task removes stored context."""
-        from k1.concierge.protocols.suspension_manager import SuspensionManager
+        from k1.hil.suspension import SuspensionManager
 
         mgr = SuspensionManager()
         mgr.store_context("t1", {"data": "test"})
@@ -543,7 +543,7 @@ class TestCleanupTaskOnTerminalStates:
 
     def test_cleanup_task_removes_suspension_counts(self):
         """SuspensionManager.cleanup_task clears suspension counts."""
-        from k1.concierge.protocols.suspension_manager import SuspensionManager
+        from k1.hil.suspension import SuspensionManager
 
         mgr = SuspensionManager()
         mgr._suspension_counts["t1"] = 2
@@ -552,7 +552,7 @@ class TestCleanupTaskOnTerminalStates:
 
     def test_cleanup_task_idempotent(self):
         """cleanup_task on unknown task does not raise."""
-        from k1.concierge.protocols.suspension_manager import SuspensionManager
+        from k1.hil.suspension import SuspensionManager
 
         mgr = SuspensionManager()
         mgr.cleanup_task("t_nonexistent")  # Should not raise
@@ -569,7 +569,7 @@ class TestResumeFlowIntegration:
     def test_suspended_payload_flows_through_store_and_pop(self):
         """Simulates: Back emits suspended (with history) -> FSM stores -> FSM pops."""
         from k1.concierge.actors.back import _serialize_messages
-        from k1.concierge.protocols.suspension_manager import SuspensionManager
+        from k1.hil.suspension import SuspensionManager
 
         messages = _make_messages()
         serialized = _serialize_messages(messages)

@@ -171,8 +171,10 @@ class CrashRecoveryOrchestrator:
         report.suspensions_restored = fsm._suspension_manager.rebuild_from_events(entries)
 
         # 4. Project HITL state -> rebuild HILCoordinator (if wired)
-        if fsm._hil_coordinator is not None:
-            report.hitl_pending_restored = fsm._hil_coordinator.rebuild_from_events(entries)
+        # E4.M1.4: legacy `_hil_coordinator` removed.  HITL state recovery
+        # is the unified HIL service's responsibility (HILLedgerAdapter,
+        # E1) once it is wired in E4.M1.6 / E5.  Until then no rebuild
+        # happens at this seam.
 
         # 5. Project pending results -> rebuild FSMTurnState
         pending = project_pending_results(entries)

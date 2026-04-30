@@ -46,7 +46,6 @@ def _mock_session_manager() -> MagicMock:
 def _make_ctx(
     dispatch: IDispatchPort | None = None,
     actor: str = "back",
-    hil_coordinator=None,
     active_task_id: str | None = None,
 ) -> ToolContext:
     return ToolContext(
@@ -54,7 +53,6 @@ def _make_ctx(
         cognitive_trace_id=f"test-{uuid.uuid4().hex[:6]}",
         actor=actor,
         dispatch=dispatch,
-        hil_coordinator=hil_coordinator,
         active_task_id=active_task_id,
     )
 
@@ -440,61 +438,32 @@ class TestBackwardCompat:
 
 
 # =====================================================================
-# HITL blocking still works with fabric_port path
+# E4.M1.3: HIL enforcement migrated to fabric capability gate (E3)
 # =====================================================================
 
 
-class TestHITLBlockingWithFabricPort:
-    """HITL L2 blocking still prevents invoke_capability even with fabric_port."""
+class TestInvokeCapabilityPassesThroughToFabric:
+    """E4.M1.3 -- ``execute_invoke_capability`` no longer consults a HIL
+    coordinator.  L2 enforcement was removed in favour of the unified
+    fabric capability gate (Epic E3), which guards every invocation
+    pre-execution regardless of caller.  The two legacy tests for
+    ``validate_before_invoke == "allow"`` and ``"block_red"`` are now
+    duplicated by ``tests/k1/fabric/test_fabric_execute_with_gate.py``
+    and have been removed here.
+    """
 
     @pytest.mark.asyncio
-    async def test_hitl_pending_blocks_invoke(self) -> None:
+    async def test_invoke_capability_passes_through_to_fabric(self) -> None:
+        """With an active task id set, the tool still dispatches straight
+        to the fabric port -- no HIL coordinator is consulted."""
         mock_port = AsyncMock(spec=IDispatchPort)
         mock_port.dispatch_direct.return_value = _success_result()
 
-        hil = MagicMock()
-        hil.get_pending_request.return_value = MagicMock()  # pending request exists
+        ctx = _make_ctx(dispatch=mock_port, active_task_id="task-001")
 
-        ctx = _make_ctx(
-            dispatch=mock_port,
-            hil_coordinator=hil,
-            active_task_id="task-001",
-        )
-        result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
-        assert result.status == "blocked"
-        mock_port.dispatch_direct.assert_not_awaited()
+        # The ToolContext exposes no HIL surface after E4.M1.3.
+        assert not hasattr(ctx, "hil_coordinator")
 
-    @pytest.mark.asyncio
-    async def test_hitl_no_pending_allows_invoke(self) -> None:
-        mock_port = AsyncMock(spec=IDispatchPort)
-        mock_port.dispatch_direct.return_value = _success_result()
-
-        hil = MagicMock()
-        hil.get_pending_request.return_value = None
-        hil.validate_before_invoke.return_value = "allow"
-
-        ctx = _make_ctx(
-            dispatch=mock_port,
-            hil_coordinator=hil,
-            active_task_id="task-001",
-        )
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert result.status == "ok"
         mock_port.dispatch_direct.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_hitl_red_band_blocks(self) -> None:
-        mock_port = AsyncMock(spec=IDispatchPort)
-
-        hil = MagicMock()
-        hil.get_pending_request.return_value = None
-        hil.validate_before_invoke.return_value = "block_red"
-
-        ctx = _make_ctx(
-            dispatch=mock_port,
-            hil_coordinator=hil,
-            active_task_id="task-001",
-        )
-        result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
-        assert result.status == "blocked"
-        mock_port.dispatch_direct.assert_not_awaited()

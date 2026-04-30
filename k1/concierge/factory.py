@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from k1.bus.ports.bus import IBus
 from k1.bus.ports.mailbox import IMailbox, IMailboxRouter
@@ -47,6 +47,9 @@ from k1.concierge.ports import (
 )
 from k1.concierge.session import ConciergeRuntime, ConciergeSession
 from k1.sessionstate.ports.writer import IWriterPort
+
+if TYPE_CHECKING:
+    from k1.kernel.ports.hil_port import IHILPort
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +324,7 @@ class ConciergeFactory:
         back_mailbox: IMailbox,
         ports: PortBundle,
         config: ConciergeConfig | None = None,
+        hil_port: "IHILPort | None" = None,
     ) -> ConciergeRuntime:
         """Create a fully-wired ConciergeRuntime from explicit ports.
 
@@ -331,6 +335,10 @@ class ConciergeFactory:
             back_mailbox: Back mailbox from router.
             ports: PortBundle with 8 hexagonal ports.
             config: ConciergeConfig (defaults to all-enabled).
+            hil_port: Unified HIL service handle (E4.M1.6).  When provided
+                it is attached to the FSM via ``set_hil_port``; when None
+                the controller's HIL gates no-op (test ergonomics + the
+                pre-E7 kernel boot path).
 
         Returns:
             ConciergeRuntime -- wired but NOT started. Call ``await runtime.start()``.
@@ -344,6 +352,7 @@ class ConciergeFactory:
             back_mailbox=back_mailbox,
             ports=ports,
             config=config,
+            hil_port=hil_port,
         )
 
     @classmethod
@@ -385,6 +394,7 @@ class ConciergeFactory:
         *,
         overrides: dict[str, Any] | None = None,
         config: ConciergeConfig | None = None,
+        hil_port: "IHILPort | None" = None,
     ) -> ConciergeRuntime:
         """Create a ConciergeRuntime with test adapters + optional overrides.
 
@@ -431,6 +441,7 @@ class ConciergeFactory:
             back_mailbox=back_mailbox,
             ports=ports,
             config=config or ConciergeConfig.for_testing(),
+            hil_port=hil_port,
         )
 
     # ------------------------------------------------------------------
@@ -560,10 +571,14 @@ class ConciergeFactory:
         back_mailbox: Any,
         ports: PortBundle,
         config: ConciergeConfig,
+        hil_port: "IHILPort | None" = None,
     ) -> ConciergeRuntime:
         """16-step wiring sequence -- returns un-started ConciergeRuntime."""
         from k1.concierge.fsm.controller import ConciergeController
-        from k1.concierge.tools.dispatcher import create_back_dispatcher, create_front_dispatcher
+        from k1.concierge.tools.dispatcher import (
+            create_back_dispatcher,
+            create_front_dispatcher,
+        )
         from k1.concierge.tools.implementations import ToolContext
 
         # Step 1: Create FSM
@@ -654,16 +669,22 @@ class ConciergeFactory:
             )
 
         # Step 11: HITL coordinator (optional)
+        # E4.M1.6: when the kernel constructs a unified HumanInTheLoopService
+        # and passes it through ``hil_port=``, attach it to the FSM here.
+        # Until E7 wires real construction, callers may pass ``None`` and
+        # the FSM HIL gates remain inert.
         hitl = None
-        if config.enable_hitl:
-            from k1.concierge.protocols.hitl_coordinator import HILCoordinator
-
-            hitl = HILCoordinator(
-                on_emit_suspended=_make_suspended_cb(bus),
-                on_emit_resume=_make_resume_cb(bus),
-                on_timeout=_make_timeout_cb(bus),
+        if hil_port is not None:
+            fsm.set_hil_port(hil_port)
+            logger.info(
+                "ConciergeFactory: attached unified HIL port %s to FSM",
+                type(hil_port).__name__,
             )
-            fsm.set_hitl_coordinator(hitl)
+        elif config.enable_hitl:
+            logger.warning(
+                "ConciergeFactory: enable_hitl=True but no hil_port provided; "
+                "HITL gates will no-op until kernel wires HumanInTheLoopService",
+            )
 
         # Step 12: Weave + Activity tracker
         if hasattr(fsm, "set_weave_batcher"):

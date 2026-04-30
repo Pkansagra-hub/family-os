@@ -56,3 +56,13 @@ tool_contract:
   avg_latency_ms: 20
   max_latency_ms: 200
   availability: "ONLINE"
+
+  # ---- HIL Policy (E2 -- HIL Unification) ----
+  # Deleting a calendar event is irreversible from the user's POV;
+  # always confirm before invoking, regardless of safety_band inference.
+  requires_human_confirmation: true
+  side_effects:
+    - kind: "data_delete"
+      target: "calendar.event"
+      reversible: false
+      description: "Permanently removes a calendar event by id."

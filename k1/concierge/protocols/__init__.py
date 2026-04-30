@@ -105,15 +105,27 @@ coordinate between Front and Back during non-linear task execution:
         MAX_CONCURRENT_SUSPENSIONS  -- per-task concurrency limit (1)
 """
 
-from k1.concierge.protocols.cancel_events import TaskCancelEvent, TaskFailedCancelledEvent
-from k1.concierge.protocols.cancel_handler import CancellationHandler
-from k1.concierge.protocols.cancellation import CancellationToken, CancelReason, TaskCancelledError
-from k1.concierge.protocols.hitl import HILRequest, HILResponse, SafetyBand, escalate_safety_band
-from k1.concierge.protocols.hitl_coordinator import (
-    HIL_TO_SUSPENSION,
-    HILCoordinator,
-    HILCoordinatorConfig,
+from k1.concierge.protocols.cancel_events import (
+    TaskCancelEvent,
+    TaskFailedCancelledEvent,
 )
+from k1.concierge.protocols.cancel_handler import CancellationHandler
+from k1.concierge.protocols.cancellation import (
+    CancellationToken,
+    CancelReason,
+    TaskCancelledError,
+)
+from k1.concierge.protocols.hitl import (
+    HILRequest,
+    HILResponse,
+    SafetyBand,
+    escalate_safety_band,
+)
+
+# E4.M1.4: legacy `hitl_coordinator` module deleted as part of the HIL
+# unification hard cutover.  `HILCoordinator`, `HILCoordinatorConfig` and
+# `HIL_TO_SUSPENSION` are no longer exported -- callers consume the
+# unified HIL service from ``k1.hil`` instead.
 from k1.concierge.protocols.hitl_flow import (
     ApprovalContext,
     ClarificationContext,
@@ -162,8 +174,17 @@ from k1.concierge.protocols.suspension import (
     SuspensionType,
 )
 from k1.concierge.protocols.suspension_events import TaskResumeEvent, TaskSuspendedEvent
-from k1.concierge.protocols.suspension_manager import SuspensionManager
-from k1.concierge.protocols.weave_batcher import WEAVE_BATCH_WINDOW_MS, WeaveBatcher, WeaveResult
+
+# E4.M1.5: SuspensionManager relocated to ``k1.hil.suspension``.  No
+# re-export here -- importing it through this package would create a
+# circular dependency (``k1.hil.suspension`` already imports from
+# ``k1.concierge.protocols.suspension``).  Update callers to import
+# directly from ``k1.hil.suspension``.
+from k1.concierge.protocols.weave_batcher import (
+    WEAVE_BATCH_WINDOW_MS,
+    WeaveBatcher,
+    WeaveResult,
+)
 from k1.concierge.protocols.weave_state import (
     STATE_ACTION_TABLE,
     PendingResult,
@@ -194,8 +215,8 @@ __all__ = [
     # Suspension events (Epic 12.3)
     "TaskSuspendedEvent",
     "TaskResumeEvent",
-    # Suspension manager (Epic 12.3)
-    "SuspensionManager",
+    # E4.M1.5: SuspensionManager export removed -- import directly from
+    # ``k1.hil.suspension`` instead.
     # Weave batcher (Epic 12.4)
     "WeaveBatcher",
     "WeaveResult",
@@ -212,10 +233,9 @@ __all__ = [
     "HILResponse",
     # V3 E0.2.1: HIL_TIMEOUTS removed (use config accessor)
     "escalate_safety_band",
-    # HITL coordinator (Epic 13.2)
-    "HILCoordinator",
-    "HILCoordinatorConfig",
-    "HIL_TO_SUSPENSION",
+    # E4.M1.4: HILCoordinator / HILCoordinatorConfig / HIL_TO_SUSPENSION
+    # exports removed -- the legacy coordinator was deleted in favour of
+    # the unified ``HumanInTheLoopService`` (``k1.hil.service``).
     # HITL flow helpers (Epic 13.3)
     "HILFlowType",
     "ClarificationContext",

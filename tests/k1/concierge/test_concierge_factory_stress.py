@@ -95,18 +95,11 @@ class TestConcurrentRequestScopes:
 class TestSessionIsolation:
     """inject() on one session does NOT affect sibling sessions."""
 
-    def test_inject_hil_coordinator_isolated(self):
-        runtime = ConciergeFactory.create_standalone()
-        s1 = ConciergeFactory.create_request_scope(runtime)
-        s2 = ConciergeFactory.create_request_scope(runtime)
-
-        sentinel = object()
-        s1.inject(hil_coordinator=sentinel)
-
-        if s1.front_ctx is not None:
-            assert s1.front_ctx.hil_coordinator is sentinel
-        if s2.front_ctx is not None:
-            assert s2.front_ctx.hil_coordinator is not sentinel
+    # E4.M1.3: `test_inject_hil_coordinator_isolated` removed --
+    # the `hil_coordinator` field is gone from `ToolContext` and the
+    # `inject(hil_coordinator=...)` parameter was dropped.  Per-session
+    # isolation is still exercised by `test_inject_dispatch_isolated`
+    # below.  Re-introduced as `inject(hil_port=...)` in E4.M1.6.
 
     def test_inject_dispatch_isolated(self):
         runtime = ConciergeFactory.create_standalone()
@@ -142,7 +135,7 @@ class TestSessionIsolation:
         asyncio.get_event_loop().run_until_complete(session.close())
 
         with pytest.raises(RuntimeError, match="closed"):
-            session.inject(hil_coordinator=object())
+            session.inject(dispatch=object())
 
 
 # ---------------------------------------------------------------------------

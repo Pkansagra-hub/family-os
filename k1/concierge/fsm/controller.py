@@ -28,7 +28,12 @@ import json
 import logging
 import time
 from collections import deque
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # E4.M1.1 -- unified HIL service contract. Imported under TYPE_CHECKING to
+    # avoid a runtime cycle (k1.kernel.ports -> k1.hil.types pulls async stack).
+    from k1.kernel.ports.hil_port import IHILPort
 
 from k1.bus.envelope import Envelope, PayloadFormat, Priority
 from k1.bus.ports.bus import IBus
@@ -83,7 +88,10 @@ from k1.concierge.fsm.front_lock import FrontLock
 from k1.concierge.fsm.idempotency import IdempotencyLedger
 from k1.concierge.fsm.interrupt_handler import InterruptClassifier, ProactiveWakeHandler
 from k1.concierge.fsm.phase1 import Phase1Result, StubPhase1Pipeline, TurnLock
-from k1.concierge.fsm.response_final_table import ResponseFinalAction, decide_response_final
+from k1.concierge.fsm.response_final_table import (
+    ResponseFinalAction,
+    decide_response_final,
+)
 from k1.concierge.fsm.states import ConciergeState
 from k1.concierge.fsm.task_bridge import TaskBridge
 from k1.concierge.fsm.transition_table import (
@@ -102,7 +110,6 @@ from k1.concierge.protocols.cancel_handler import CancellationHandler
 from k1.concierge.protocols.cancellation import CancellationToken
 from k1.concierge.protocols.hitl_persistence import HILSubTask, scan_for_recovery
 from k1.concierge.protocols.hitl_wiring import build_resume_context
-from k1.concierge.protocols.suspension_manager import SuspensionManager
 from k1.concierge.protocols.weave_batcher import WEAVE_BATCH_WINDOW_MS
 from k1.concierge.protocols.weave_policy import (
     UserActivityTracker,
@@ -116,7 +123,14 @@ from k1.concierge.protocols.weave_policy import (
 from k1.concierge.task.complexity import ComplexityTier
 from k1.concierge.task.dispatch import TaskDispatch
 from k1.concierge.task.intent import TaskIntent
-from k1.sessionstate.public_types import IntentClassification, PrivacyBand, compute_temporal_anchor
+
+# E4.M1.5: SuspensionManager relocated to k1.hil.suspension.
+from k1.hil.suspension import SuspensionManager
+from k1.sessionstate.public_types import (
+    IntentClassification,
+    PrivacyBand,
+    compute_temporal_anchor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +229,18 @@ def _build_canonical_event(
     Lazy imports to avoid circular dependencies.
     """
     from k1.concierge.events.conversation import UserInputReceived
-    from k1.concierge.events.hitl import HILRequested, HILResolved, TaskResumed, TaskSuspended
-    from k1.concierge.events.task import TaskCancelled, TaskCompleted, TaskCreated, TaskFailed
+    from k1.concierge.events.hitl import (
+        HILRequested,
+        HILResolved,
+        TaskResumed,
+        TaskSuspended,
+    )
+    from k1.concierge.events.task import (
+        TaskCancelled,
+        TaskCompleted,
+        TaskCreated,
+        TaskFailed,
+    )
     from k1.concierge.events.weave import WeaveEmitted
 
     if entry_type == "user":
@@ -380,7 +404,10 @@ class ConciergeController:
         self._active_task_ids: set[str] = set()
         self._task_dispatch_turns: dict[str, int] = {}  # task_id -> turn dispatched
         self._orchestrator: Any | None = None
-        self._hil_coordinator: Any | None = None  # HILCoordinator for HITL orchestration
+        # E4.M1.4: legacy `_hil_coordinator` field removed alongside the
+        # `HILCoordinator` class. The unified HIL service is wired via
+        # `_hil_port` (set by `set_hil_port`) and the factory in E4.M1.6.
+        self._hil_port: "IHILPort | None" = None
         self._weave_batcher: Any | None = None  # WeaveBatcher for queue mgmt
         self._subscription_handles: list[Any] = []
         self._idempotency = IdempotencyLedger(
@@ -525,51 +552,19 @@ class ConciergeController:
         self._history_sink = section
         logger.info("ConciergeController.set_history_sink: attached")
 
-    def set_hitl_coordinator(self, coordinator: Any) -> None:
-        """Attach HILCoordinator for suspension limit enforcement, safety
-        band escalation, L2 defense-in-depth, and crash recovery.
+    def set_hil_port(self, hil_port: "IHILPort") -> None:
+        """Attach the unified HIL service (E4.M1.1).
 
-        When set, _on_task_suspended delegates to the coordinator for
-        limit checks instead of using bare SuspensionManager directly.
-        The coordinator's internal SuspensionManager replaces the
-        controller's bare one.
-
-        M6 E6.3.4: Wires on_blocked_red callback to emit
-        hitl.blocked_red.v1 lifecycle event for audit.
+        Wired by the kernel via :class:`ConciergeFactory` in E4.M1.6.
+        Replaces the deleted ``set_hitl_coordinator`` API; the unified
+        service owns round budget, suspension persistence, and bus
+        emission internally, so the FSM no longer patches private
+        coordinator callbacks.
         """
-        self._hil_coordinator = coordinator
-        # Use the coordinator's SuspensionManager so store/pop/get
-        # context calls go through the same instance.
-        if hasattr(coordinator, "_suspension_mgr"):
-            self._suspension_manager = coordinator._suspension_mgr
-
-        # M6 E6.3.4: Wire on_blocked_red callback for bus emission
-        if hasattr(coordinator, "_on_blocked_red"):
-            original_blocked_red = coordinator._on_blocked_red
-
-            async def _emit_blocked_red(task_id: str, question: str) -> None:
-                from k1.concierge.bus.builders import build_hitl_blocked_red
-
-                self._bus.publish(
-                    build_hitl_blocked_red(
-                        payload={
-                            "task_id": task_id,
-                            "capability_name": question,
-                            "safety_band": "RED",
-                            "reason": "red_band_blocked",
-                        },
-                        parent_id=0,
-                    )
-                )
-                logger.warning("FSM: emitted hitl.blocked_red.v1 for task_id=%s", task_id)
-                if original_blocked_red is not None:
-                    await original_blocked_red(task_id, question)
-
-            coordinator._on_blocked_red = _emit_blocked_red
-
+        self._hil_port = hil_port
         logger.info(
-            "ConciergeController.set_hitl_coordinator: attached %s",
-            type(coordinator).__name__,
+            "ConciergeController.set_hil_port: attached %s",
+            type(hil_port).__name__,
         )
 
     def set_session_state(self, ss: Any) -> None:
@@ -2747,43 +2742,13 @@ class ConciergeController:
             self._publish_dead_letter(envelope, "task_suspended_invalid_state")
             return
 
-        # -- HILCoordinator path: limit enforcement + safety band -----
-        # M6 E6.1.5: Consolidated suspension limit — single check point.
-        # SuspensionManager.suspend() and HILCoordinator.handle_needs_human()
-        # each had their own limit checks; now merged here at HILSubTask
-        # creation.  When limit is reached, treat as complete with marker
-        # so the Back LLM's loop exits normally instead of blocking.
-        if self._hil_coordinator is not None:
-            hil_count = self._hil_coordinator.get_hil_count(task_id) + 1
-            max_rounds = self._hil_coordinator._config.max_rounds
-            if hil_count > max_rounds:
-                logger.warning(
-                    "FSM._on_task_suspended: task_id=%s exceeded max HITL "
-                    "rounds %d/%d — treating as complete (max_hil_reached)",
-                    task_id,
-                    hil_count,
-                    max_rounds,
-                )
-                # Mark task as completed with max_hil_reached flag so
-                # downstream consumers know the LLM could not finish with
-                # HITL assistance.  Route through normal complete path.
-                self._task_bridge.complete_task(task_id)
-                self._active_task_ids.discard(task_id)
-                self._remove_running_task(task_id)
-                self._control_ext.remove_active_task(task_id)
-                self._suspension_manager.cleanup_task(task_id)
-                self._write_history(
-                    entry_type="task_complete",
-                    role="system",
-                    text=f"Task {task_id} completed: max HITL rounds reached",
-                    source="back",
-                    task_id=task_id,
-                    envelope=envelope,
-                    metadata={"result_type": "complete", "max_hil_reached": True},
-                )
-                return
-            # Track the count in the coordinator
-            self._hil_coordinator._hil_counts[task_id] = hil_count
+        # E4.M1.2: legacy `_hil_coordinator` round-budget enforcement removed.
+        # Round budget per caller_key now lives in the unified HIL service
+        # (HumanInTheLoopService) and is enforced at the call-site that
+        # initiates a `needs_human` request -- that responsibility moves to
+        # Back/Planner via IHILPort in E5/E6. The FSM's `_on_task_suspended`
+        # is a *reactive* handler that routes the suspension event to Front
+        # for UI rendering; it no longer counts rounds itself.
 
         # M6 E6.1.2: Create HILSubTask as single source of truth.
         # Replaces dual-store: SuspensionManager.store_context + FSMTurnState.
@@ -3067,9 +3032,10 @@ class ConciergeController:
                 resume_ctx.remaining_budget,
             )
 
-        # Notify coordinator of user response (sync bookkeeping)
-        if self._hil_coordinator is not None:
-            self._hil_coordinator._pending_requests.pop(task_id, None)
+        # E4.M1.2: legacy `_hil_coordinator._pending_requests.pop` removed.
+        # The unified HIL service owns the pending-request lifecycle
+        # internally; clearing per-task state on resume is its responsibility,
+        # not the FSM's.
 
         # OPP-4: Record HITL outcome in trust accumulator
         if self._opp_pipeline is not None:
@@ -3487,11 +3453,7 @@ class ConciergeController:
             assistant_response = ""
 
         # Stable, dedup-friendly turn_id (session-scoped, monotonic).
-        turn_id = (
-            f"{session_id}:{self._turn_number}"
-            if session_id
-            else f"turn:{self._turn_number}"
-        )
+        turn_id = f"{session_id}:{self._turn_number}" if session_id else f"turn:{self._turn_number}"
 
         self._bus.publish(
             build_turn_completed(
@@ -3601,7 +3563,10 @@ class ConciergeController:
         """
         from dataclasses import replace as _dc_replace
 
-        from k1.concierge.bus.builders import build_weave_batch, next_synthetic_envelope_id
+        from k1.concierge.bus.builders import (
+            build_weave_batch,
+            next_synthetic_envelope_id,
+        )
 
         env = build_weave_batch(
             payload={
@@ -4325,7 +4290,7 @@ class ConciergeController:
         self._task_dispatch_turns.clear()
 
         # Reset to None attributes
-        self._hil_coordinator = None
+        self._hil_port = None  # E4.M1.4: unified HIL service handle
         self._weave_batcher = None
 
         # Reset state variables (BUG-7 FIX: removed duplicate block)
@@ -4345,7 +4310,7 @@ class ConciergeController:
         self._task_dispatch_turns.clear()
 
         # Reset to None attributes
-        self._hil_coordinator = None
+        self._hil_port = None  # E4.M1.4: unified HIL service handle
         self._weave_batcher = None
 
         # Reset state variables (BUG-7 FIX: removed duplicate block)

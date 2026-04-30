@@ -325,6 +325,7 @@ class FabricFactory:
         *,
         contracts_dir: Optional[str] = None,
         config: Optional[FabricConfig] = None,
+        hil_port: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with all test adapters, no external deps.
@@ -358,6 +359,7 @@ class FabricFactory:
             production_mode=False,
             contracts_dir=contracts_dir,
             config=config,
+            hil_port=hil_port,
         )
 
     @staticmethod
@@ -368,6 +370,7 @@ class FabricFactory:
         config: Optional[FabricConfig] = None,
         mcp_transport: Optional[Any] = None,
         wasm_runtime: Optional[Any] = None,
+        hil_port: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with test adapters + event capture mode.
@@ -409,6 +412,7 @@ class FabricFactory:
             config=config,
             mcp_transport=mcp_transport,
             wasm_runtime=wasm_runtime,
+            hil_port=hil_port,
         )
 
     @staticmethod
@@ -429,6 +433,7 @@ class FabricFactory:
         capability_registry: Optional[CapabilityRegistry] = None,
         mcp_transport: Optional[Any] = None,
         wasm_runtime: Optional[Any] = None,
+        hil_port: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with custom adapter injection.
@@ -470,6 +475,7 @@ class FabricFactory:
             capability_registry=capability_registry,
             mcp_transport=mcp_transport,
             wasm_runtime=wasm_runtime,
+            hil_port=hil_port,
         )
 
     @staticmethod
@@ -488,6 +494,7 @@ class FabricFactory:
         capability_registry: Optional[Any] = None,
         mcp_transport: Optional[Any] = None,
         wasm_runtime: Optional[Any] = None,
+        hil_port: Optional[Any] = None,
     ) -> Fabric:
         """
         Create a shared Fabric instance.
@@ -527,7 +534,9 @@ class FabricFactory:
             Fully wired Fabric instance.
         """
         if state_reader is None:
-            from k1.fabric.adapters.null_state_reader import NullSessionStateReaderAdapter
+            from k1.fabric.adapters.null_state_reader import (
+                NullSessionStateReaderAdapter,
+            )
 
             state_reader = NullSessionStateReaderAdapter()
 
@@ -545,6 +554,7 @@ class FabricFactory:
             capability_registry=capability_registry,
             mcp_transport=mcp_transport,
             wasm_runtime=wasm_runtime,
+            hil_port=hil_port,
         )
 
 
@@ -567,6 +577,7 @@ def _construct_fabric(
     mcp_transport: Optional[Any] = None,
     wasm_runtime: Optional[Any] = None,
     capability_registry: Optional[Any] = None,
+    hil_port: Optional[Any] = None,
 ) -> Fabric:
     """
     Internal: Build a Fabric instance in dependency-safe order.
@@ -625,6 +636,12 @@ def _construct_fabric(
     )
 
     # ===== STEP 5: PolicyEngine subsystem (state_reader) =====
+    # W4 note: SecurityContext and QoSIntegration are intentionally stateless
+    # — Security reads from CapabilityRequest+CapabilityContract; QoS reads
+    # from request.params (budget_remaining_pct, latency_remaining_pct).
+    # Only AffectiveRouting and CognitiveLoadRouting consult SessionState
+    # via state_reader. Do not "fix" by injecting state_reader into the
+    # stateless adapters.
     security_context = SecurityContext()
     affective_routing = AffectiveRouting(state_reader=state_reader)
     cognitive_routing = CognitiveLoadRouting(state_reader=state_reader)
@@ -670,7 +687,9 @@ def _construct_fabric(
         # caused MCPProvider construction to raise at first invocation.
         if effective_mcp_transport is None:
             try:
-                from k1.fabric.adapters.auto_mcp_transport import AutoDiscoveryMCPTransport
+                from k1.fabric.adapters.auto_mcp_transport import (
+                    AutoDiscoveryMCPTransport,
+                )
 
                 effective_mcp_transport = AutoDiscoveryMCPTransport()
             except Exception as exc:  # pragma: no cover -- defensive
@@ -771,6 +790,7 @@ def _construct_fabric(
         circuit_breakers=circuit_breakers,
         dispatcher=_dispatcher,
         config=fabric_config,
+        hil_port=hil_port,
     )
 
     # ===== STEP 18: FabricRetrieval =====

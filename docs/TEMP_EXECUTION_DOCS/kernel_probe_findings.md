@@ -163,14 +163,22 @@ Probe scripts updated to recognise the fixes:
 - **Fix:** Either remove the publish sites or wire the intended
   subscribers (telemetry, learning, affect adapters).
 
-### W4. Fabric policy adapters missing `state_reader`
+### W4. Fabric policy adapters missing `state_reader` — ✅ RESOLVED (was stale)
 - **Phase:** 1 (audit F99/F100)
-- **Symptom:** `policy.qos`, `policy.security` constructed without
+- **Original symptom:** `policy.qos`, `policy.security` constructed without
   `state_reader` injection. `policy.cognitive_load` not wired at all.
-- **Impact:** QoS and security gates cannot read live SessionState →
-  decisions made on stale/empty context.
-- **Fix:** Pass `state_reader` (the per-session SS shim) into the
-  policy adapters at fabric bootstrap.
+- **Verification (2026-04-28):** Re-checked code state.
+  - `CognitiveLoadRouting(state_reader=state_reader)` is wired at
+    [k1/fabric/factory.py L630](k1/fabric/factory.py#L630).
+  - `SecurityContext` is **intentionally stateless** — only accepts
+    `rate_limits`; reads from `CapabilityRequest` + `CapabilityContract`
+    at evaluation time. No `state_reader` needed by design.
+  - `QoSIntegration` is **intentionally stateless** — `__slots__ = ()`,
+    no `__init__`; reads `budget_remaining_pct` /
+    `latency_remaining_pct` from `request.params`. No `state_reader`
+    needed by design.
+- **Action:** Added clarifying comment at the wiring site so future
+  audits don't re-raise this. No functional code change required.
 
 ### W5. SessionState section_provider absent (audit Fix J)
 - **Phases:** 1, 6
@@ -208,12 +216,21 @@ Probe scripts updated to recognise the fixes:
   activation site and the eviction execution site in
   `SessionStateManager`.
 
-### W8. Module loader running without watch
+### W8. Module loader running without watch — ✅ RESOLVED
 - **Phase:** 1 (audit F128)
 - **Symptom:** `module_loader.watch = False`.
 - **Impact:** Hot-reload of module manifests not active in prod.
-- **Fix:** Default `watch=True` for prod profiles; gate via
-  `KernelConfig`.
+- **Fix landed (2026-04-28):**
+  - [k1/concierge/config/kernel.py](k1/concierge/config/kernel.py) — added
+    `module_loader_watch: bool = False` field (opt-in for prod profiles).
+  - [k1/kernel/service.py](k1/kernel/service.py) — at S3, after
+    `FabricFactory.create_shared()`, conditionally calls
+    `self._shared_fabric.module_loader.start_watching()` when the flag
+    is true. Stop is already wired via `Fabric.shutdown()` →
+    `module_loader.stop()`.
+  - Default kept at `False` so existing tests don't leak daemon
+    threads. Production callers enable via `KernelConfig(...,
+    module_loader_watch=True)`.
 
 ### W9. K0 Bridge offline (expected pre-MS-3)
 - **Phase:** 1

@@ -55,7 +55,7 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
 
 from k1.fabric.concurrency.dispatcher import (
     DispatcherOverloadedError,
@@ -65,7 +65,17 @@ from k1.fabric.concurrency.dispatcher import (
 from k1.fabric.events.event_emitter import EventEmitter
 from k1.fabric.logging import get_default_logger as get_fabric_logger
 from k1.fabric.metrics import get_default_metrics
-from k1.fabric.types import CapabilityRequest, CapabilityResult, RetrievalResult, SafetyBand
+from k1.fabric.types import (
+    CapabilityRequest,
+    CapabilityResult,
+    RetrievalResult,
+    SafetyBand,
+)
+
+if TYPE_CHECKING:
+    # Imported only for typing -- runtime import would create a fabric -> kernel
+    # cycle. The actual IHILPort instance is duck-typed at the call site.
+    from k1.kernel.ports.hil_port import IHILPort
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +214,10 @@ class FabricConfig:
     #: Default timeout for execute() in milliseconds.
     default_timeout_ms: int = 30000
 
+    #: Default timeout for the HIL pre-execution gate (E3). Pass-through
+    #: to ``IHILPort.gate_capability``. Ignored when ``hil_port`` is None.
+    hil_gate_timeout_ms: int = 120_000
+
 
 # ---------------------------------------------------------------------------
 # 5.3.2 -- CapabilityFabric (FabricFacade)
@@ -263,6 +277,7 @@ class CapabilityFabric:
         "_circuit_breakers",
         "_dispatcher",
         "_config",
+        "_hil_port",
     )
 
     def __init__(
@@ -277,6 +292,7 @@ class CapabilityFabric:
         circuit_breakers: Optional[Dict[str, Any]] = None,
         dispatcher: Optional[FabricDispatcher] = None,
         config: Optional[FabricConfig] = None,
+        hil_port: Optional["IHILPort"] = None,
     ) -> None:
         self._resolver = resolver
         self._context_builder = context_builder
@@ -287,6 +303,8 @@ class CapabilityFabric:
         self._circuit_breakers: Dict[str, Any] = circuit_breakers or {}
         self._dispatcher = dispatcher
         self._config = config or FabricConfig()
+        # E3.M1.1 -- HIL gate port. None disables the gate (test/legacy harness).
+        self._hil_port: Optional["IHILPort"] = hil_port
 
     # ==================================================================
     # Properties
@@ -467,6 +485,61 @@ class CapabilityFabric:
             provider_id = resolved.provider_config.provider_id
             provider_type = resolved.provider_config.provider_type
             contract = resolved.contract
+
+            # --- Step 2.5: HIL gate (E3.M2.2) ---
+            gate_start = time.perf_counter()
+            gate_failure = await self._run_hil_gate(request, contract, trace_id)
+            gate_ms = (time.perf_counter() - gate_start) * 1000.0
+
+            if gate_failure is not None:
+                elapsed_ms = _elapsed_ms(start_time)
+                # Re-stamp with provider_id + timing now that we know them.
+                gate_failure = CapabilityResult.failure_result(
+                    request_id=request.request_id,
+                    error_code=gate_failure.error.code if gate_failure.error else "hil_unknown",
+                    error_message=(
+                        gate_failure.error.message
+                        if gate_failure.error
+                        else "Capability blocked by Human-in-the-Loop gate"
+                    ),
+                    retriable=False,
+                    provider_id=provider_id,
+                    trace_id=trace_id,
+                    duration_ms=elapsed_ms,
+                    resolution_time_ms=resolve_ms,
+                )
+                self._emit_failure(request, gate_failure, start_time, provider_id)
+                fabric_logger.result_return(
+                    trace_id=trace_id,
+                    request_id=request.request_id,
+                    capability_name=capability_name,
+                    provider_id=provider_id,
+                    duration_ms=elapsed_ms,
+                    success=False,
+                    error_code=gate_failure.error.code if gate_failure.error else "hil_unknown",
+                )
+                self._update_metrics(capability_name, elapsed_ms, success=False)
+                self._emit_learning(
+                    request=request,
+                    provider_id=provider_id,
+                    success=False,
+                    duration_ms=elapsed_ms,
+                    error_code=gate_failure.error.code if gate_failure.error else "hil_unknown",
+                )
+                return self._finalize_execution_metrics(
+                    request=request,
+                    result=gate_failure,
+                    provider_type=provider_type,
+                    exec_start=exec_start,
+                )
+
+            if self._hil_port is not None:
+                logger.info(
+                    "hil_gate trace_id=%s capability=%s duration_ms=%.3f decision=allow",
+                    trace_id,
+                    capability_name,
+                    gate_ms,
+                )
 
             # --- Step 3: Build context ---
             context_start = time.perf_counter()
@@ -664,6 +737,87 @@ class CapabilityFabric:
                 exc,
             )
             return None
+
+    # ==================================================================
+    # Internal: Context building
+    # ==================================================================
+
+    # ==================================================================
+    # Internal: HIL pre-execution gate (E3.M2.1)
+    # ==================================================================
+
+    async def _run_hil_gate(
+        self,
+        request: CapabilityRequest,
+        contract: Any,
+        trace_id: str,
+    ) -> Optional[CapabilityResult]:
+        """Pre-execution HIL gate.
+
+        Returns ``None`` to allow execution to proceed, or a failure
+        ``CapabilityResult`` to short-circuit the pipeline.
+
+        Skips entirely (returns ``None``) when ``self._hil_port is None`` --
+        this preserves the legacy/test harness path where no kernel HIL
+        wiring exists.
+        """
+        if self._hil_port is None:
+            return None  # gate disabled -- allow execution
+
+        # Lazy imports to avoid module-import cycles between
+        # k1.fabric and k1.hil.
+        from k1.hil.types import (
+            CapabilityGateRequest,
+            GateOutcome,
+            view_from_capability_contract,
+        )
+
+        gate_req = CapabilityGateRequest(
+            caller_key=f"fabric:{contract.name}",
+            trace_id=trace_id,
+            capability_name=contract.name,
+            contract=view_from_capability_contract(contract),
+            params=dict(request.params or {}),
+            params_summary=self._summarize_params(request.params),
+            timeout_ms=self._config.hil_gate_timeout_ms,
+        )
+        decision = await self._hil_port.gate_capability(gate_req)
+
+        if decision.outcome in (GateOutcome.ALLOW, GateOutcome.ASK_APPROVED):
+            return None  # proceed to execution
+
+        error_code = {
+            GateOutcome.DENY: "hil_denied",
+            GateOutcome.ASK_REJECTED: "hil_rejected_by_user",
+            GateOutcome.TIMEOUT: "hil_timeout",
+        }.get(decision.outcome, "hil_unknown")
+
+        return CapabilityResult.failure_result(
+            request_id=request.request_id,
+            error_code=error_code,
+            error_message=decision.reason or "Capability blocked by Human-in-the-Loop gate",
+            retriable=False,
+            trace_id=trace_id,
+            duration_ms=0,
+        )
+
+    @staticmethod
+    def _summarize_params(params: Optional[Dict[str, Any]]) -> str:
+        """One-line summary of params for user-facing prompt.
+
+        Truncates long values (>60 chars) and caps key count at 5.
+        """
+        if not params:
+            return "(no parameters)"
+        pairs = []
+        for k, v in params.items():
+            s = str(v)
+            if len(s) > 60:
+                s = s[:57] + "..."
+            pairs.append(f"{k}={s}")
+        truncated = len(pairs) > 5
+        head = pairs[:5]
+        return ", ".join(head) + ("..." if truncated else "")
 
     # ==================================================================
     # Internal: Context building

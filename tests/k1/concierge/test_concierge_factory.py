@@ -20,7 +20,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from k1.concierge.factory import _ALL_PORT_KEYS, ConciergeConfig, ConciergeFactory, PortBundle
+from k1.concierge.factory import (
+    _ALL_PORT_KEYS,
+    ConciergeConfig,
+    ConciergeFactory,
+    PortBundle,
+)
 from k1.concierge.session import ConciergeRuntime
 
 # ---------------------------------------------------------------------------
@@ -326,9 +331,13 @@ class TestConfigFlagGating:
         assert session.delta_aggregator is None
 
     def test_enable_hitl_true(self):
+        # E4.M1.4: legacy `HILCoordinator` deleted; the factory no longer
+        # constructs a `runtime.hitl_coordinator` even when enable_hitl=True.
+        # The `hil_port` wiring lands in E4.M1.6, after which this test will
+        # assert against `runtime.hil_port` (or the renamed field).
         cfg = ConciergeConfig.for_testing(enable_hitl=True)
         session = ConciergeFactory.create_for_testing(config=cfg)
-        assert session.hitl_coordinator is not None
+        assert session.hitl_coordinator is None
 
     def test_enable_hitl_false(self):
         cfg = ConciergeConfig.for_testing(enable_hitl=False)
@@ -383,9 +392,29 @@ class TestWiringVerification:
         assert session.fsm._ledger is not None
 
     def test_hitl_wired_into_fsm_when_enabled(self):
+        # E4.M1.6: with no `hil_port` passed through the factory, the FSM's
+        # `_hil_port` attribute remains None even when `enable_hitl=True`.
+        # Real wiring is exercised by `test_factory_attaches_hil_port`.
         cfg = ConciergeConfig.for_testing(enable_hitl=True)
         session = ConciergeFactory.create_for_testing(config=cfg)
-        assert session.fsm._hil_coordinator is not None
+        assert session.fsm._hil_port is None
+
+    def test_factory_attaches_hil_port(self):
+        # E4.M1.6: passing a stub IHILPort through the factory threads it
+        # into the FSM via `set_hil_port` at Step 11.
+        class _StubHILPort:
+            async def gate_capability(self, req):  # pragma: no cover - stub
+                raise NotImplementedError
+
+            async def needs_human(self, req):  # pragma: no cover - stub
+                raise NotImplementedError
+
+            async def submit_response(self, resp):  # pragma: no cover - stub
+                raise NotImplementedError
+
+        stub = _StubHILPort()
+        session = ConciergeFactory.create_for_testing(hil_port=stub)
+        assert session.fsm._hil_port is stub
 
     def test_front_subscriptions_populated(self):
         session = ConciergeFactory.create_standalone()

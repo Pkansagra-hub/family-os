@@ -1,0 +1,102 @@
+{
+  "boot_seconds": 15.120832300002803,
+  "counts": {
+    "OK": 10,
+    "WARN": 0,
+    "FAIL": 1,
+    "INFO": 2
+  },
+  "probes": [
+    {
+      "layer": "Planner Wiring",
+      "name": "agent_ready_wait",
+      "status": "OK",
+      "value": "'51ms'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Wiring",
+      "name": "agent",
+      "status": "OK",
+      "value": "'PlannerAgent'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Wiring",
+      "name": "task",
+      "status": "OK",
+      "value": "'running'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Wiring",
+      "name": "pipeline",
+      "status": "OK",
+      "value": "'PipelineController'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Wiring",
+      "name": "event_port",
+      "status": "OK",
+      "value": "'EventBusAdapter'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Stages",
+      "name": "sketch",
+      "status": "OK",
+      "value": "'SketchService'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Stages",
+      "name": "expand",
+      "status": "OK",
+      "value": "'ExpandService'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Stages",
+      "name": "validate",
+      "status": "OK",
+      "value": "'ValidateService'",
+      "note": ""
+    },
+    {
+      "layer": "Planner Stages",
+      "name": "commit",
+      "status": "OK",
+      "value": "'CommitService'",
+      "note": ""
+    },
+    {
+      "layer": "Planner E2E",
+      "name": "request",
+      "status": "INFO",
+      "value": "'intent=Probe: book a family trip to Lake Tahoe next wee... rid=0675043f-4f8'",
+      "note": ""
+    },
+    {
+      "layer": "Planner E2E",
+      "name": "emit_plan_request",
+      "status": "OK",
+      "value": "'k1.planner.plan.request.v1'",
+      "note": ""
+    },
+    {
+      "layer": "Planner E2E",
+      "name": "deltas_observed",
+      "status": "INFO",
+      "value": "0",
+      "note": ""
+    },
+    {
+      "layer": "Planner E2E",
+      "name": "terminal_event",
+      "status": "FAIL",
+      "value": "'PLAN_FAILED in 110ms'",
+      "note": "{'value': \"PlanFailedPayload(request_id='0675043f-4f89-4339-8967-83530ef3dda8', stage='SKETCH', error_code='SketchFailedError', error_message='SKETCH failed after retry: LLM output is not valid JSON: Expecting value: line 1 column 1 (char 0)', tokens_used=0, duration_ms=1, trace_id='probe-trace-511aeb9d', partial_state=None)\"}"
+    }
+  ]
+}

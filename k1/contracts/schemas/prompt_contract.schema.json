@@ -100,6 +100,46 @@
           "type": "string",
           "format": "date-time",
           "description": "ISO 8601 timestamp of last update"
+        },
+        "requires_human_confirmation": {
+          "type": ["boolean", "null"],
+          "description": "Explicit override for HIL gating. true -> always ask user; false -> never ask. Omit / null -> infer (prompts have no safety_band, so default is no HIL)."
+        },
+        "side_effects": {
+          "type": "array",
+          "description": "Structured declaration of side effects (rare for prompts; reserved for future prompt-driven side-effecting templates).",
+          "items": {
+            "type": "object",
+            "required": ["kind", "target"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "data_write", "data_delete", "data_modify",
+                  "external_api_call", "payment", "physical_actuation",
+                  "notification_send", "irreversible_op", "third_party_share"
+                ],
+                "description": "Category of side effect"
+              },
+              "target": {
+                "type": "string",
+                "description": "What the side effect targets"
+              },
+              "reversible": {
+                "type": "boolean",
+                "default": false,
+                "description": "Whether this side effect can be undone after execution"
+              },
+              "cost_estimate": {
+                "type": "object",
+                "properties": {
+                  "currency": {"type": "string"},
+                  "amount": {"type": "number", "minimum": 0}
+                }
+              },
+              "description": {"type": "string"}
+            }
+          }
         }
       }
     }

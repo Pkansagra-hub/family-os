@@ -1,5 +1,10 @@
 """
-k1.concierge.protocols.suspension_manager -- FSM-side suspension lifecycle.
+k1.hil.suspension -- FSM-side suspension lifecycle (E4.M1.5 relocation).
+
+Relocated from ``k1.concierge.protocols.suspension_manager`` as part of
+the HIL unification (E4.M1.5).  The ``HumanInTheLoopService`` consumes
+this manager directly; concierge FSM continues to import it from the
+new location.
 
 V2 Design Ref: Section 4 (CLARIFYING_WORKER state management)
 V2 Design Ref: Section 5 (TaskStateEntry.hil_suspensions_count, pending_hil)
@@ -25,17 +30,20 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from k1.concierge.protocols.suspension import (
-    SuspensionLimitExceeded,
-    SuspensionRequest,
-    SuspensionResolution,
-    SuspensionType,
-    _get_max_suspensions_per_task,
-)
+# E4.M1.5: import the suspension dataclasses lazily inside method bodies
+# to avoid an import cycle (``k1.concierge.protocols.suspension`` triggers
+# loading of ``k1.concierge.protocols.__init__`` which transitively loads
+# ``k1.concierge.fsm.controller`` -- which in turn imports
+# :class:`SuspensionManager` from this module).  All type annotations
+# below use string form thanks to ``from __future__ import annotations``.
 
 if TYPE_CHECKING:
     from k1.concierge.ledger.store import LedgerEntry
     from k1.concierge.ledger.writer import LedgerWriter
+    from k1.concierge.protocols.suspension import (
+        SuspensionRequest,
+        SuspensionResolution,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +109,12 @@ class SuspensionManager:
             SuspensionLimitExceeded: If task has exceeded max suspensions.
             ValueError: If task already has an active suspension.
         """
+        # Lazy import to break circular dependency (see module docstring).
+        from k1.concierge.protocols.suspension import (
+            SuspensionLimitExceeded,
+            _get_max_suspensions_per_task,
+        )
+
         task_id = request.task_id
 
         # Check concurrent suspension limit (max 1 per task)
@@ -329,6 +343,12 @@ class SuspensionManager:
             Number of active suspensions restored.
         """
         from k1.concierge.ledger.projections import project_suspension_state
+
+        # Lazy import to break circular dependency (see module docstring).
+        from k1.concierge.protocols.suspension import (
+            SuspensionRequest,
+            SuspensionType,
+        )
 
         active_payloads, counts = project_suspension_state(entries)
 

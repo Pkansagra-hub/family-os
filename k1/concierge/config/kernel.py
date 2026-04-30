@@ -75,3 +75,10 @@ class KernelConfig:
     # Defaults to None (disabled) to preserve current behavior.
     bus_outbox_path: str | None = None  # e.g. "./data/k1/bus_outbox.db"
     bus_durable_topics: tuple[str, ...] = ()  # e.g. ("k1.session.turn.complete.v1",)
+    # W8: When True the Fabric ModuleLoader starts a background daemon
+    # thread that polls contracts_dir for manifest changes and hot-reloads
+    # contracts via EVENT_CONTRACT_HOT_RELOADED. Defaults to False — opt
+    # in for prod profiles that need live contract updates without a
+    # restart. Test profiles should leave it disabled to avoid daemon
+    # threads leaking across test cases.
+    module_loader_watch: bool = False
