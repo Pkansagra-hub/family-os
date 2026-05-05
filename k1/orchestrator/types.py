@@ -33,10 +33,13 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from k1.fabric.ports.state_reader import SessionSnapshot
 from k1.fabric.types import CapabilityResult, FabricPlanStep, Tier
+
+if TYPE_CHECKING:
+    from k1.hil.types import OverrideResponse
 
 # ===========================================================================
 # Layer 1 -- Enums (1.2.9, 1.2.10, 1.2.12 partial, 1.2.24 partial)
@@ -421,6 +424,11 @@ class ValidationResult:
     time_pressure=True when estimated critical-path duration exceeds
     the tier time budget (per BUDGET-1). hil_required=True when
     unresolvable issues require human input.
+
+    hil_response carries the unified HIL service's OverrideResponse when
+    `trigger_hil_fallback` was awaited. Field is `None` when no HIL was
+    consulted. `hil_response.choice == "override"` means the user
+    approved a constraint override; otherwise validation remains failed.
     """
 
     valid: bool
@@ -429,7 +437,7 @@ class ValidationResult:
     alternatives_applied: List[AlternativeMapping] = field(default_factory=list)
     time_pressure: bool = False
     hil_required: bool = False
-    hil_request: Optional["HILRequest"] = None
+    hil_response: Optional["OverrideResponse"] = None
 
 
 @dataclass(frozen=True)
@@ -482,20 +490,6 @@ class RegistryEntry:
     required_inputs: List[str] = field(default_factory=list)
     output: Dict[str, Any] = field(default_factory=dict)
     cost_per_call: float = 0.0
-
-
-@dataclass(frozen=True)
-class HILRequest:
-    """Human-in-the-loop request emitted via IDeltaEmitPort.
-
-    Surfaced by Concierge to the user.
-    """
-
-    request_id: str
-    question: str
-    options: List[str] = field(default_factory=list)
-    context: Dict[str, Any] = field(default_factory=dict)
-    timeout_ms: int = 120_000
 
 
 @dataclass(frozen=True)
@@ -1309,27 +1303,6 @@ class PendingPlanContext:
     timeout_ms: int = 45_000
 
 
-@dataclass
-class PendingHILContext:
-    """Parked DAG state awaiting human-in-the-loop response.
-
-    Stored in OrchestratorService.pending_hil dict keyed by request_id.
-
-    timeout_fallback:
-      "CONTINUE"      -- for user override HIL (silence = proceed).
-      "GRACEFUL_FAIL"  -- for constraint HIL (silence = cannot proceed safely).
-    """
-
-    request_id: str
-    dag_execution_id: str
-    current_wave_index: int
-    completed_waves: List[WaveResult]
-    remaining_waves: List[Wave]
-    question: str
-    options: List[str]
-    timeout_fallback: str
-    created_at: float = field(default_factory=time.time)
-    timeout_ms: int = 120_000
 
 
 # ===========================================================================

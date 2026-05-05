@@ -105,10 +105,6 @@ class FakeDeltaPort:
     ) -> None:
         pass
 
-    async def emit_hil_request(self, hil_request: object, trace_id: str) -> None:
-        pass
-
-
 # ===========================================================================
 # Helpers
 # ===========================================================================

@@ -24,7 +24,7 @@ k1.planner.factory
   -> k1.planner.config               (L0 -- PlannerConfig)
   -> k1.planner.types                (L0 -- errors, HealthStatus)
   -> k1.planner.ports                (L1 -- 7 port Protocols)
-  -> k1.planner.services             (L3 -- ToolCallRouter, HILCoordinator)
+  -> k1.planner.services             (L3 -- ToolCallRouter)
   -> k1.planner.stages               (L4 -- 4 stage services)
   -> k1.planner.pipeline_controller  (L5 -- PipelineController)
   -> k1.planner.planner_agent        (L6 -- PlannerAgent)
@@ -45,6 +45,9 @@ from __future__ import annotations
 import logging
 from itertools import combinations
 from typing import Any, Dict, List, Optional, Tuple, Type
+
+# -- Cross-subsystem unified HIL port ------------------------------------
+from k1.kernel.ports.hil_port import IHILPort
 
 # -- Layer 0: types and config -------------------------------------------
 from k1.planner.config import PlannerConfig
@@ -67,7 +70,6 @@ from k1.planner.ports import (
 )
 
 # -- Layer 3: leaf services ------------------------------------------------
-from k1.planner.services.hil_coordinator import HILCoordinator
 from k1.planner.services.tool_call_router import ToolCallRouter
 
 # -- Layer 4: stage services -----------------------------------------------
@@ -151,6 +153,8 @@ class PlannerFactory:
     @staticmethod
     async def create_standalone(
         config: Optional[PlannerConfig] = None,
+        *,
+        hil_port: Optional[IHILPort] = None,
     ) -> PlannerAgent:
         """Create a planner with all test adapters, zero external deps.
 
@@ -181,6 +185,7 @@ class PlannerFactory:
             TestDeltaAdapter,
             TestEventAdapter,
             TestFabricRetrievalAdapter,
+            TestHILAdapter,
             TestLLMAdapter,
             TestMailboxAdapter,
             TestStateReadAdapter,
@@ -197,10 +202,11 @@ class PlannerFactory:
             "event_port": TestEventAdapter(),
             "mailbox_port": TestMailboxAdapter(),
         }
+        effective_hil = hil_port if hil_port is not None else TestHILAdapter()
 
         logger.info("planner_factory.create_standalone.start")
         PlannerFactory._validate_config(effective_config)
-        agent = await PlannerFactory._wire(ports, effective_config)
+        agent = await PlannerFactory._wire(ports, effective_config, effective_hil)
         logger.info("planner_factory.create_standalone.complete")
         return agent
 
@@ -211,6 +217,8 @@ class PlannerFactory:
     @staticmethod
     async def create_for_testing(
         config: Optional[PlannerConfig] = None,
+        *,
+        hil_port: Optional[IHILPort] = None,
         **overrides: Any,
     ) -> Tuple[PlannerAgent, Dict[str, Any]]:
         """Create a planner wired to test adapters for integration tests.
@@ -251,6 +259,7 @@ class PlannerFactory:
             TestDeltaAdapter,
             TestEventAdapter,
             TestFabricRetrievalAdapter,
+            TestHILAdapter,
             TestLLMAdapter,
             TestMailboxAdapter,
             TestStateReadAdapter,
@@ -280,11 +289,12 @@ class PlannerFactory:
             )
 
         ports = {**defaults, **overrides}
+        effective_hil = hil_port if hil_port is not None else TestHILAdapter()
 
         logger.info("planner_factory.create_for_testing.start")
         PlannerFactory._validate_config(effective_config)
         PlannerFactory._validate_ports(ports)
-        agent = await PlannerFactory._wire(ports, effective_config)
+        agent = await PlannerFactory._wire(ports, effective_config, effective_hil)
         logger.info("planner_factory.create_for_testing.complete")
         return agent, ports
 
@@ -302,6 +312,7 @@ class PlannerFactory:
         delta_port: IDeltaEmitPort,
         event_port: IEventPort,
         mailbox_port: IMailboxPort,
+        hil_port: Optional[IHILPort] = None,
         config: Optional[PlannerConfig] = None,
     ) -> PlannerAgent:
         """Create a planner with explicitly provided typed ports.
@@ -363,7 +374,8 @@ class PlannerFactory:
         logger.info("planner_factory.create_with_ports.start")
         PlannerFactory._validate_config(effective_config)
         PlannerFactory._validate_ports(ports)
-        agent = await PlannerFactory._wire(ports, effective_config)
+        effective_hil = hil_port if hil_port is not None else PlannerFactory._build_default_hil(event_port, llm_port)
+        agent = await PlannerFactory._wire(ports, effective_config, effective_hil)
         logger.info("planner_factory.create_with_ports.complete")
         return agent
 
@@ -381,6 +393,7 @@ class PlannerFactory:
         delta_port: IDeltaEmitPort,
         event_port: IEventPort,
         mailbox_port: IMailboxPort,
+        hil_port: Optional[IHILPort] = None,
         config: Optional[PlannerConfig] = None,
     ) -> PlannerAgent:
         """Create a fully-wired planner for production (kernel Phase 5).
@@ -448,7 +461,8 @@ class PlannerFactory:
         logger.info("planner_factory.create_production.start")
         PlannerFactory._validate_config(effective_config)
         PlannerFactory._validate_ports(ports)
-        agent = await PlannerFactory._wire(ports, effective_config)
+        effective_hil = hil_port if hil_port is not None else PlannerFactory._build_default_hil(event_port, llm_port)
+        agent = await PlannerFactory._wire(ports, effective_config, effective_hil)
         logger.info("planner_factory.create_production.complete")
         return agent
 
@@ -460,6 +474,7 @@ class PlannerFactory:
     async def _wire(
         ports: Dict[str, Any],
         config: PlannerConfig,
+        hil_port: IHILPort,
     ) -> PlannerAgent:
         """Construct the full planner object graph in dependency order.
 
@@ -505,18 +520,14 @@ class PlannerFactory:
             config=config,
         )
 
-        # Step 2: Leaf service -- manages HIL question/approval flow
-        hil_coord = HILCoordinator(
-            llm_port=llm_port,
-            event_port=event_port,
-            config=config,
-        )
+        # Step 2: HIL -- unified Human-in-the-Loop port (k1.hil)
+        # injected from the kernel; no longer constructed by the planner.
 
         # Step 3: Stage -- agentic sketch with tool-use
         sketch = SketchService(
             llm_port=llm_port,
             tool_router=tool_router,
-            hil_coord=hil_coord,
+            hil_port=hil_port,
         )
 
         # Step 4: Stage -- agentic expand with tool-use (no HIL)
@@ -529,7 +540,7 @@ class PlannerFactory:
         validate = ValidateService(
             llm_port=llm_port,
             fabric_retrieval=fabric_port,
-            hil_coord=hil_coord,
+            hil_port=hil_port,
         )
 
         # Step 6: Stage -- zero LLM, deterministic assembly (PLAN-03)
@@ -548,6 +559,7 @@ class PlannerFactory:
             delta_port=delta_port,
             event_port=event_port,
             config=config,
+            hil_port=hil_port,
         )
 
         # Step 8: Top-level agent
@@ -642,6 +654,23 @@ class PlannerFactory:
     # Internal: config validation
     # -----------------------------------------------------------------------
 
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _build_default_hil(event_port: Any, llm_port: Any) -> IHILPort:
+        """Construct a minimal in-process IHILPort when caller passes None.
+
+        E5.M1.4: Until the kernel (E7) explicitly threads its own
+        HumanInTheLoopService into ``create_production`` / ``create_with_ports``,
+        the planner ships with a defensive ``_NullHILAdapter`` whose
+        ``ask_clarification`` and ``request_approval`` immediately return
+        ``timed_out=True`` and (for approval) ``decision="reject"``.
+
+        This preserves PLAN-12 / PLAN-10 semantics: the planner gracefully
+        falls back to the original sketch / verdict when HIL is unavailable.
+        """
+        return _NullHILAdapter()
+
     @staticmethod
     def _validate_config(config: PlannerConfig) -> None:
         """Validate PlannerConfig field values against known bounds.
@@ -673,6 +702,79 @@ class PlannerFactory:
                     value=value,
                     constraint=constraint_desc,
                 )
+
+
+# ---------------------------------------------------------------------------
+# _NullHILAdapter -- defensive fallback when caller does not supply hil_port.
+# Provided here (not in tests) because production paths must remain importable
+# without a tests-tree dependency. Returns timed_out responses so the planner
+# falls back to its non-HIL behaviour gracefully (PLAN-10 / PLAN-12).
+# ---------------------------------------------------------------------------
+
+
+class _NullHILAdapter:
+    """In-process IHILPort that always times out. See _build_default_hil."""
+
+    __slots__ = ()
+
+    async def ask_clarification(self, req: Any) -> Any:
+        from k1.hil.types import ClarificationResponse
+
+        return ClarificationResponse(
+            hil_request_id="",
+            answer=None,
+            timed_out=True,
+            round_budget_exhausted=False,
+        )
+
+    async def request_approval(self, req: Any) -> Any:
+        from k1.hil.types import ApprovalResponse
+
+        return ApprovalResponse(
+            hil_request_id="",
+            decision="reject",
+            modifications=None,
+            timed_out=True,
+        )
+
+    async def needs_human(self, req: Any) -> Any:
+        from k1.hil.types import NeedsHumanResponse
+
+        return NeedsHumanResponse(
+            hil_request_id="",
+            decision="timeout",
+            resolution={},
+            raw_user_text=None,
+            timed_out=True,
+        )
+
+    async def request_override(self, req: Any) -> Any:
+        from k1.hil.types import OverrideResponse
+
+        return OverrideResponse(
+            hil_request_id="",
+            choice="abort",
+            selected_alternative=None,
+            fallback_action=None,
+            timed_out=True,
+        )
+
+    async def gate_capability(self, req: Any) -> Any:
+        from k1.hil.types import GateDecision, GateOutcome
+
+        return GateDecision(
+            outcome=GateOutcome.ALLOW,
+            hil_request_id=None,
+            reason="null_hil_default_allow",
+            user_approved=None,
+            audit_only=False,
+        )
+
+    def reset_round_budget(self, caller_key: str) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        return None
 
 
 __all__ = ["PlannerFactory"]

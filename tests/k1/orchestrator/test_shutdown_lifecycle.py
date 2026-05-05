@@ -40,7 +40,6 @@ from k1.orchestrator.orchestration.orchestrator_service import OrchestratorServi
 from k1.orchestrator.types import (
     AggregatedResult,
     ErrorSeverity,
-    PendingHILContext,
     PendingPlanContext,
     PlanAck,
     ProcessResult,
@@ -411,20 +410,6 @@ def _make_pending_plan(request_id: str, *, expired: bool = False) -> PendingPlan
     )
 
 
-def _make_pending_hil(request_id: str) -> PendingHILContext:
-    """Build PendingHILContext with correct fields."""
-    return PendingHILContext(
-        request_id=request_id,
-        dag_execution_id="dag-1",
-        current_wave_index=0,
-        completed_waves=[],
-        remaining_waves=[],
-        question="approve?",
-        options=["yes", "no"],
-        timeout_fallback="CONTINUE",
-    )
-
-
 async def _init_service(svc: OrchestratorService) -> None:
     """Call init() and allow background tasks to start."""
     await svc.init()
@@ -671,7 +656,7 @@ class TestShutdownStep6GapDetectorAndEvents:
 
         # Detector failed, but events still unsubscribed.
         assert not detector.stopped
-        assert len(event_port.unsubscribed) == 5  # 5 topics from init
+        assert len(event_port.unsubscribed) == 3  # 3 topics from init
 
     @pytest.mark.asyncio
     async def test_all_subscriptions_unsubscribed(self) -> None:
@@ -679,13 +664,13 @@ class TestShutdownStep6GapDetectorAndEvents:
         svc = _build_service(event_port=event_port)
         await _init_service(svc)
 
-        # init() created 5 subscriptions.
-        assert len(event_port.subscriptions) == 5
+        # init() created 3 subscriptions.
+        assert len(event_port.subscriptions) == 3
 
         await svc.shutdown()
 
-        # All 5 unsubscribed.
-        assert len(event_port.unsubscribed) == 5
+        # All 3 unsubscribed.
+        assert len(event_port.unsubscribed) == 3
 
     @pytest.mark.asyncio
     async def test_subscriptions_list_cleared(self) -> None:
@@ -713,7 +698,6 @@ class TestShutdownStep8Audit:
         manifest, trace_id = bridge.audit_calls[0]
         assert manifest["event"] == "orchestrator_shutdown"
         assert "pending_plans" in manifest
-        assert "pending_hil" in manifest
         assert trace_id.startswith("shutdown-")
 
     @pytest.mark.asyncio
@@ -725,13 +709,11 @@ class TestShutdownStep8Audit:
         # Inject orphaned contexts.
         svc._pending_plans["p1"] = _make_pending_plan("p1")
         svc._pending_plans["p2"] = _make_pending_plan("p2")
-        svc._pending_hil["h1"] = _make_pending_hil("h1")
 
         await svc.shutdown()
 
         manifest, _ = bridge.audit_calls[0]
         assert manifest["pending_plans"] == 2
-        assert manifest["pending_hil"] == 1
 
     @pytest.mark.asyncio
     async def test_audit_zero_orphans(self) -> None:
@@ -743,7 +725,6 @@ class TestShutdownStep8Audit:
 
         manifest, _ = bridge.audit_calls[0]
         assert manifest["pending_plans"] == 0
-        assert manifest["pending_hil"] == 0
 
     @pytest.mark.asyncio
     async def test_audit_error_does_not_block_task_cancellation(self) -> None:
@@ -802,20 +783,6 @@ class TestShutdownOrphanedContexts:
         manifest, _ = bridge.audit_calls[0]
         assert manifest["pending_plans"] == 3
 
-    @pytest.mark.asyncio
-    async def test_orphaned_hil_contexts_in_audit(self) -> None:
-        bridge = FakeBridgeWritePort()
-        svc = _build_service(bridge_port=bridge)
-        await _init_service(svc)
-
-        svc._pending_hil["h1"] = _make_pending_hil("h1")
-        svc._pending_hil["h2"] = _make_pending_hil("h2")
-
-        await svc.shutdown()
-
-        manifest, _ = bridge.audit_calls[0]
-        assert manifest["pending_hil"] == 2
-
 
 class TestShutdownFullSequence:
     """End-to-end: all 9 steps execute in order."""
@@ -855,7 +822,7 @@ class TestShutdownFullSequence:
 
         # Step 6: gap detector stopped + events unsubscribed.
         assert detector.stopped
-        assert len(event_port.unsubscribed) == 5
+        assert len(event_port.unsubscribed) == 3
         assert len(svc._subscriptions) == 0
 
         # Step 8: audit written with correct data.
@@ -863,7 +830,6 @@ class TestShutdownFullSequence:
         manifest, trace_id = bridge.audit_calls[0]
         assert manifest["event"] == "orchestrator_shutdown"
         assert manifest["pending_plans"] == 1
-        assert manifest["pending_hil"] == 0
 
         # Step 9: tasks cancelled.
         assert svc._reaper_task is None

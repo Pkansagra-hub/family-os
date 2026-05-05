@@ -99,6 +99,7 @@ class ProviderType(str, Enum):
     AGENT = "AGENT"
     WORKFLOW = "WORKFLOW"
     CONCIERGE = "CONCIERGE"
+    LOCAL_STUB = "LOCAL_STUB"  # M12.E3 storyline / demo capabilities
 
 
 # ---------------------------------------------------------------------------
@@ -731,6 +732,19 @@ class CapabilityContract:
     requires_human_confirmation: Optional[bool] = None
     side_effects: List[Dict[str, Any]] = field(default_factory=list)
 
+    # ---- Conscience Metadata (M9.E1.I1) ----
+    # ``risk_class``  -- per-capability declared risk; consumed by
+    #                    ``IRiskCatalogPort`` in selfmodel. Defaults to
+    #                    "safety_sensitive" so unmigrated contracts
+    #                    fail-closed.
+    # ``social_act``  -- the constitution-level act id this capability
+    #                    manifests (e.g. ``"send_message"``,
+    #                    ``"set_medication"``). ``None`` =
+    #                    infrastructure-only (no social binding); the
+    #                    conscience never gates such calls.
+    risk_class: str = "safety_sensitive"
+    social_act: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -763,6 +777,8 @@ class CapabilityContract:
             "session_scoped": self.session_scoped,
             "requires_human_confirmation": self.requires_human_confirmation,
             "side_effects": [dict(se) for se in self.side_effects],
+            "risk_class": self.risk_class,
+            "social_act": self.social_act,
         }
 
     @classmethod
@@ -798,6 +814,8 @@ class CapabilityContract:
             session_scoped=data.get("session_scoped", True),
             requires_human_confirmation=data.get("requires_human_confirmation"),
             side_effects=list(data.get("side_effects", [])),
+            risk_class=data.get("risk_class", "safety_sensitive"),
+            social_act=data.get("social_act"),
         )
 
 
@@ -891,6 +909,9 @@ class AgentContract(CapabilityContract):
             # ---- HIL policy metadata (E2) ----
             requires_human_confirmation=data.get("requires_human_confirmation"),
             side_effects=list(data.get("side_effects", [])),
+            # ---- Conscience metadata (M9.E1.I1) ----
+            risk_class=data.get("risk_class", "safety_sensitive"),
+            social_act=data.get("social_act"),
             # ---- Agent-specific fields ----
             prompt_template=data.get("prompt_template", ""),
             tools_granted=data.get("tools_granted", []),

@@ -135,6 +135,18 @@ from k1.sessionstate.public_types import (
 logger = logging.getLogger(__name__)
 
 
+class OrchestratorNotWired(RuntimeError):
+    """Raised when HIGH-tier dispatch has no orchestrator and the
+    legacy ``PassthroughPlannerStub`` fallback is disabled.
+
+    M16.E1.I3: production must surface this loudly instead of silently
+    degrading a HIGH-tier task into a 1-step MEDIUM plan. Test/dev
+    contexts that intentionally run without an orchestrator should set
+    ``ConciergeConfig.allow_planner_passthrough=True`` to keep the
+    legacy stub.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Helper: parse JSON payload from Envelope bytes
 # ---------------------------------------------------------------------------
@@ -404,6 +416,11 @@ class ConciergeController:
         self._active_task_ids: set[str] = set()
         self._task_dispatch_turns: dict[str, int] = {}  # task_id -> turn dispatched
         self._orchestrator: Any | None = None
+        # M16.E1.I3: gate for the legacy PassthroughPlannerStub. Default
+        # is False (production-strict): HIGH-tier dispatch with no
+        # orchestrator wired raises OrchestratorNotWired. Tests/dev set
+        # this to True via set_allow_planner_passthrough().
+        self._allow_planner_passthrough: bool = False
         # E4.M1.4: legacy `_hil_coordinator` field removed alongside the
         # `HILCoordinator` class. The unified HIL service is wired via
         # `_hil_port` (set by `set_hil_port`) and the factory in E4.M1.6.
@@ -540,6 +557,19 @@ class ConciergeController:
         logger.info(
             "ConciergeController.set_orchestrator: attached %s",
             type(orchestrator).__name__,
+        )
+
+    def set_allow_planner_passthrough(self, allow: bool) -> None:
+        """M16.E1.I3: enable/disable the legacy PassthroughPlannerStub.
+
+        When False (production default), HIGH-tier dispatch with no
+        orchestrator wired raises ``OrchestratorNotWired`` instead of
+        silently collapsing the task into a 1-step MEDIUM plan.
+        """
+        self._allow_planner_passthrough = bool(allow)
+        logger.info(
+            "ConciergeController.set_allow_planner_passthrough: %s",
+            self._allow_planner_passthrough,
         )
 
     def set_history_sink(self, section: Any) -> None:
@@ -2106,8 +2136,54 @@ class ConciergeController:
         """
         record = route_task_sync(dispatch, dispatch.tier)
 
-        # M10 E10.3.2: HIGH tier -> PassthroughPlannerStub -> route via MEDIUM path
-        if record.tier == ComplexityTier.HIGH:
+        # M10 E10.3.2: HIGH tier path.
+        #
+        # When a real Orchestrator is wired (production / kernel-managed
+        # sessions), keep the HIGH tier and let the orchestrator drive
+        # the planner via _dispatch_high. The orchestrator translates
+        # the envelope and the planner pipeline (SKETCH/EXPAND/VALIDATE/
+        # COMMIT) produces a CommittedPlan that the orchestrator then
+        # executes via DAGExecutor.
+        #
+        # Without an orchestrator (legacy/test contexts), fall back to
+        # the PassthroughPlannerStub: wrap the single intent as a
+        # 1-step plan and re-route as MEDIUM so the existing direct
+        # fabric path can serve it.
+        if record.tier == ComplexityTier.HIGH and self._orchestrator is None:
+            if not self._allow_planner_passthrough:
+                # M16.E1.I3: production-strict path. Surface the missing
+                # orchestrator loudly instead of silently collapsing the
+                # HIGH task into a 1-step MEDIUM plan via the legacy
+                # PassthroughPlannerStub. Publish task.failed so the
+                # FSM/Front observe a deterministic failure, then raise
+                # so boot smoke tests catch the misconfiguration.
+                logger.error(
+                    "FSM._route_via_orchestrator: HIGH tier requested but no "
+                    "orchestrator is wired and allow_planner_passthrough=False; "
+                    "task_id=%s",
+                    dispatch.task_id,
+                )
+                try:
+                    fail_env = build_task_failed(
+                        payload={
+                            "task_id": dispatch.task_id,
+                            "reason": "orchestrator_not_wired",
+                            "error_code": "ORCH_NOT_WIRED",
+                            "error_message": (
+                                "HIGH-tier dispatch requires an OrchestratorService; "
+                                "none is attached and PassthroughPlannerStub fallback "
+                                "is disabled (allow_planner_passthrough=False)."
+                            ),
+                        },
+                        parent_id=envelope.envelope_id,
+                    )
+                    self._bus.publish(fail_env)
+                except Exception:  # pragma: no cover - defensive
+                    logger.exception("FSM._route_via_orchestrator: failed to publish task.failed")
+                raise OrchestratorNotWired(
+                    f"HIGH-tier dispatch task_id={dispatch.task_id!r} has no "
+                    "orchestrator wired and allow_planner_passthrough=False"
+                )
             logger.info(
                 "FSM._route_via_orchestrator: HIGH tier -> PassthroughPlannerStub for task_id=%s",
                 dispatch.task_id,
@@ -2163,17 +2239,19 @@ class ConciergeController:
             parent_id=envelope.envelope_id,
         )
 
-        if record.tier == ComplexityTier.MEDIUM:
+        if record.tier in (ComplexityTier.MEDIUM, ComplexityTier.HIGH):
             if self._orchestrator is None or record.envelope is None:
                 logger.warning(
-                    "FSM._route_via_orchestrator: MEDIUM tier fallback to Back (orchestrator unavailable), task_id=%s",
+                    "FSM._route_via_orchestrator: %s tier fallback to Back (orchestrator unavailable), task_id=%s",
+                    record.tier.value,
                     dispatch.task_id,
                 )
                 self._deliver_to_back(canonical_env)
                 return
 
             logger.info(
-                "FSM._route_via_orchestrator: routing MEDIUM tier task_id=%s via OrchestratorStub",
+                "FSM._route_via_orchestrator: routing %s tier task_id=%s via OrchestratorStub",
+                record.tier.value,
                 dispatch.task_id,
             )
             asyncio.create_task(

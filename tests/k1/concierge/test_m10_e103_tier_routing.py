@@ -131,6 +131,9 @@ class TestHighTierRouting:
         ctrl._active_task_ids = set()
         ctrl._control_ext = MagicMock()
         ctrl._orchestrator = None  # No orchestrator -> MEDIUM falls through to Back
+        # M16.E1.I3: legacy passthrough fallback is opt-in; this test
+        # validates that legacy behaviour, so we explicitly enable it.
+        ctrl._allow_planner_passthrough = True
         ctrl._weave_batcher = None
         ctrl._state = MagicMock(name="EXECUTING")
 

@@ -44,7 +44,6 @@ def _phase1_result(**overrides: Any) -> Phase1Result:
         "intent_classification": "log_memory",
         "domain_context": "FAMILY",
         "safety_band": "GREEN",
-        "complexity_tier": "MEDIUM",
         "temporal_expressions": [{"text": "Saturday", "label": "DATE_REL", "start": 20, "end": 28}],
         "relations": ["parent_of"],
     }
@@ -146,12 +145,6 @@ class TestControlSectionWrites:
         self._run_write(ss, result)
         safety = self._control.get_safety()
         assert safety.band == PrivacyBand.RED
-
-    def test_complexity_tier_written(self):
-        ss = self._mock_ss()
-        result = _phase1_result(complexity_tier="HIGH")
-        self._run_write(ss, result)
-        assert self._control.get_complexity_tier() == "HIGH"
 
     def _run_write(self, ss: MagicMock, result: Phase1Result) -> None:
         """Invoke _write_phase1_to_ss via a minimal controller stub."""
@@ -385,7 +378,6 @@ class TestThreeSectionIntegration:
             intent_classification="scheduling",
             domain_context="HEALTH",
             safety_band="AMBER",
-            complexity_tier="HIGH",
             primary_emotion="worry",
             emotion_confidence=0.88,
             valence=0.3,
@@ -402,7 +394,6 @@ class TestThreeSectionIntegration:
         assert self._control.get_intents().primary == "scheduling"
         assert self._control.get_domains().primary_domain == "HEALTH"
         assert self._control.get_safety().band == PrivacyBand.AMBER
-        assert self._control.get_complexity_tier() == "HIGH"
 
         # Scoreboard
         intent, conf = self._scoreboard.get_user_intent()

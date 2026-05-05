@@ -36,20 +36,16 @@ from k1.orchestrator.types import (  # noqa: F401
 from k1.planner.config import PlannerConfig  # noqa: F401
 
 # -- Event topics and payloads (source of truth: k1/planner/events.py [F06]) --
+# E5 (HIL Unification): TOPIC_HIL_* constants and HIL*Payload dataclasses
+# were removed; the planner consumes the unified IHILPort adapter directly.
 from k1.planner.events import (  # noqa: F401
     TOPIC_DELTA,
-    TOPIC_HIL_APPROVAL_REQ,
-    TOPIC_HIL_APPROVAL_RESP,
-    TOPIC_HIL_CLARIFICATION,
-    TOPIC_HIL_CLARIFICATION_RESP,
     TOPIC_MICRO_REPLAN_READY,
     TOPIC_PLAN_CANCEL,
     TOPIC_PLAN_CANCELLED,
     TOPIC_PLAN_FAILED,
     TOPIC_PLAN_READY,
     TOPIC_PLAN_REQUEST,
-    HILApprovalRequestPayload,
-    HILClarificationPayload,
     PlanCancelledPayload,
     PlanFailedPayload,
 )
@@ -96,7 +92,6 @@ from k1.planner.types import (  # noqa: F401
     ExpandFailedError,
     HealthStatus,
     HILBudgetExceededError,
-    HILCoordinatorLike,
     HILTimeoutError,
     HubRequest,
     HubResponse,
@@ -138,7 +133,6 @@ __all__ = [
     "ExpandedPlan",
     "ValidationVerdict",
     "ValidationIssue",
-    "HILCoordinatorLike",
     "SAFETY_SAFE",
     "SAFETY_CAUTION",
     "SAFETY_UNSAFE",
@@ -194,18 +188,12 @@ __all__ = [
     "TOPIC_PLAN_CANCELLED",
     "TOPIC_MICRO_REPLAN_READY",
     "TOPIC_DELTA",
-    "TOPIC_HIL_CLARIFICATION",
-    "TOPIC_HIL_APPROVAL_REQ",
     # Event topics -- subscribed
     "TOPIC_PLAN_REQUEST",
     "TOPIC_PLAN_CANCEL",
-    "TOPIC_HIL_CLARIFICATION_RESP",
-    "TOPIC_HIL_APPROVAL_RESP",
     # Event payloads
     "PlanFailedPayload",
     "PlanCancelledPayload",
-    "HILClarificationPayload",
-    "HILApprovalRequestPayload",
     # Config
     "PlannerConfig",
     # Port protocols

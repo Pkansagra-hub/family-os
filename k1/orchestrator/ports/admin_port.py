@@ -35,7 +35,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
-from k1.orchestrator.types import ActiveDAGInfo, CircuitBreakerState, DrainResult, HealthStatus
+from k1.orchestrator.types import (
+    ActiveDAGInfo,
+    CircuitBreakerState,
+    DrainResult,
+    HealthStatus,
+)
 
 
 @runtime_checkable
@@ -215,8 +220,7 @@ class IAdminPort(Protocol):
         """Return mailbox statistics.
 
         Returns:
-            {"depth": int, "capacity": int, "pending_plans": int,
-             "pending_hil": int}
+            {"depth": int, "capacity": int, "pending_plans": int}
         """
         ...
 

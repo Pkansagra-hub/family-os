@@ -71,7 +71,7 @@ class TestCreateStandalone:
         session = ConciergeFactory.create_standalone()
         assert session.experience_layer is None
         assert session.delta_aggregator is None
-        assert session.hitl_coordinator is None
+        assert session.hil_port is None
         assert session.orchestrator is None
         assert session.ledger is None
         assert session.dead_letter_consumer is None
@@ -332,17 +332,17 @@ class TestConfigFlagGating:
 
     def test_enable_hitl_true(self):
         # E4.M1.4: legacy `HILCoordinator` deleted; the factory no longer
-        # constructs a `runtime.hitl_coordinator` even when enable_hitl=True.
+        # constructs a `runtime.hil_port` even when enable_hitl=True.
         # The `hil_port` wiring lands in E4.M1.6, after which this test will
         # assert against `runtime.hil_port` (or the renamed field).
         cfg = ConciergeConfig.for_testing(enable_hitl=True)
         session = ConciergeFactory.create_for_testing(config=cfg)
-        assert session.hitl_coordinator is None
+        assert session.hil_port is None
 
     def test_enable_hitl_false(self):
         cfg = ConciergeConfig.for_testing(enable_hitl=False)
         session = ConciergeFactory.create_for_testing(config=cfg)
-        assert session.hitl_coordinator is None
+        assert session.hil_port is None
 
     def test_dead_letter_requires_both_flags(self):
         """Dead letter needs both enable_dead_letter_consumer AND dead_letter_enabled."""

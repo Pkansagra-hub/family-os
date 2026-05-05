@@ -82,6 +82,7 @@ tool_contract:
   provider_type: "MCP"
   provider_id: "find_prompts_handler"
   safety_band_min: "GREEN"
+  risk_class: "low"
   cost_per_call: 0.0
   avg_latency_ms: 20
   max_latency_ms: 200

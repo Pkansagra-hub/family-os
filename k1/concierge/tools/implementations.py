@@ -74,20 +74,30 @@ class ToolContext:
             through all mutations for observability.
         actor: "front" | "back" -- which actor is executing.
         recall_fn: Optional callback for K0 long-term memory retrieval.
-            Signature: (query: str, memory_types: list, max_results: int) -> list[dict]
-            None in POC (recall_memory returns empty results).
-        capability_fn: Optional callback for K0 capability registry.
-            Signature: (intent: str, domain: str|None, constraints: dict|None) -> list[dict]
-            None in POC.
-        invoke_fn: Optional callback for K0 capability invocation.
-            Signature: (name: str, params: dict, session_id: str|None) -> dict
-            None in POC.
-        fabric_fn: Optional callback for K0 agent fabric spawning.
-            Signature: (agent_type: str, task: str, constraints: dict|None, ...) -> dict
-            None in POC.
-        workflow_fn: Optional callback for K0 workflow execution.
-            Signature: (workflow_id: str, params: dict, timeout_ms: int) -> dict
-            None in POC.
+            Signature: ``(query: str, memory_types: list, max_results: int)
+            -> list[dict]``. Production wires this via
+            ``RecallMemoryAdapter`` (k1/concierge/adapters/recall_memory.py)
+            which in turn calls ``IBridgeClient.query`` against the K0
+            recall endpoint. The selfmodel handle wraps this in a
+            ``RecallCitationWrapper`` after factory wiring (P3.5 install).
+            ``None`` only in test contexts that build a bare ToolContext.
+        dispatch: ``IDispatchPort`` (Fabric LOW + Orchestrator MED/HIGH).
+            Production wires this via ``FabricDispatchAdapter``. The Back
+            tools ``invoke_capability``, ``batch_invoke_capabilities``,
+            ``spawn_via_fabric`` and ``execute_workflow`` all route
+            ``CapabilityRequest``s through ``dispatch.dispatch_direct``.
+            When ``None`` and ``allow_dispatch_passthrough=False`` (M17.E1.I1
+            default) the tools refuse to run and return a clear
+            ``dispatch_not_wired`` error. When the flag is True the legacy
+            POC fallback returns synthetic ``{"_poc": True, ...}`` data
+            (used by some test fixtures).
+
+    Note: Earlier drafts of this dataclass exposed ``invoke_fn``,
+    ``fabric_fn`` and ``workflow_fn`` as separate callable slots. They
+    were collapsed into the unified ``dispatch: IDispatchPort`` port and
+    no longer exist as attributes; the Back-actor tools route through
+    ``dispatch.dispatch_direct`` with capability_name prefixes
+    ``tool.*`` / ``agent.*`` / ``workflow.*``.
     """
 
     session_manager: Any  # SessionStateManager (avoid circular import)
@@ -103,6 +113,9 @@ class ToolContext:
     dispatch: IDispatchPort | None = None  # P4B.3: typed IDispatchPort (Fabric + Orchestrator)
     recall_fn: Callable | None = None
     capability_cache: dict | None = None  # Per-session cache for discover_capabilities results
+    # M17.E1.I1: hard-fail (False, default) vs legacy POC fallback (True)
+    # when ``dispatch`` is None for back-actor capability tools.
+    allow_dispatch_passthrough: bool = False
 
 
 # =========================================================================
@@ -935,9 +948,21 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
     # P3.4c: Tier is derived from `plan: bool` + multi-intent + depends_on
     # signals. The legacy `tier` arg is silently ignored. AUTO-from-SS path
     # has been removed (no SS read on dispatch).
+    #
+    # Optional `complexity` arg lets callers explicitly escalate to HIGH
+    # tier (planner-routed) when planning signals are present. Without
+    # `complexity="HIGH"`, behaviour is unchanged: needs_plan -> MEDIUM,
+    # else LOW. This is the LLM's only way to reach HIGH tier from the
+    # dispatch tool surface.
     explicit_plan = bool(args.get("plan", False))
+    explicit_complexity = str(args.get("complexity", "") or "").upper()
     needs_plan = explicit_plan or len(intents) > 1 or depends_on is not None
-    tier = ComplexityTier.MEDIUM if needs_plan else ComplexityTier.LOW
+    if needs_plan and explicit_complexity == "HIGH":
+        tier = ComplexityTier.HIGH
+    elif needs_plan:
+        tier = ComplexityTier.MEDIUM
+    else:
+        tier = ComplexityTier.LOW
     tier_raw = tier.value
     logger.info(
         "tool:dispatch_task  intents=%d urgency=%s tier=%s plan=%s safety=%s",
@@ -1154,6 +1179,30 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
             error="capability_name is required",
         )
 
+    # M13.E1.I3 -- Front-actor defense-in-depth: only whitelisted
+    # read-only / safe capabilities may be invoked directly from Front.
+    # Side-effecting / safety-sensitive acts must go through Back via
+    # `dispatch_task`. The policy gate enforces the same rule first;
+    # this is a belt-and-suspenders check for callers that bypass the
+    # gate (e.g. test harnesses).
+    if ctx.actor == "front":
+        from k1.concierge.tools.schemas_front import FRONT_READ_CAPABILITY_WHITELIST
+
+        if capability_name not in FRONT_READ_CAPABILITY_WHITELIST:
+            logger.warning(
+                "front_invoke_capability_denied capability=%s "
+                "(not in FRONT_READ_CAPABILITY_WHITELIST)",
+                capability_name,
+            )
+            return ToolResult(
+                tool_name="invoke_capability",
+                status="error",
+                error=(
+                    f"capability '{capability_name}' is not allowed for the "
+                    f"Front actor; route via dispatch_task instead"
+                ),
+            )
+
     start_ms = int(time.time() * 1000)
 
     # M2: K1 Fabric port path (preferred)
@@ -1190,6 +1239,22 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
 
     # No dispatch port wired
     duration = int(time.time() * 1000) - start_ms
+    if not getattr(ctx, "allow_dispatch_passthrough", False):
+        # M17.E1.I1: hard-fail when no IDispatchPort is wired in
+        # production. Mirrors the M16.E1.I3 ``allow_planner_passthrough``
+        # gate. Setting ``allow_dispatch_passthrough=True`` on the
+        # ToolContext (or via KernelConfig in tests) restores the legacy
+        # POC stub below.
+        return ToolResult(
+            tool_name="invoke_capability",
+            status="error",
+            error=(
+                "dispatch_not_wired: ToolContext.dispatch is None and "
+                "allow_dispatch_passthrough=False. Wire an IDispatchPort "
+                "(FabricDispatchAdapter) or enable the passthrough flag."
+            ),
+            data={"duration_ms": duration, "status": "error"},
+        )
     return ToolResult(
         tool_name="invoke_capability",
         status="ok",
@@ -1224,6 +1289,17 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
         len(invocations),
         ctx.dispatch is not None,
     )
+
+    # M17.E1.I1: hard-fail when no IDispatchPort is wired in production.
+    if ctx.dispatch is None and not getattr(ctx, "allow_dispatch_passthrough", False):
+        return ToolResult(
+            tool_name="batch_invoke_capabilities",
+            status="error",
+            error=(
+                "dispatch_not_wired: ToolContext.dispatch is None and "
+                "allow_dispatch_passthrough=False."
+            ),
+        )
 
     results = []
     succeeded = 0
@@ -1358,6 +1434,16 @@ async def execute_spawn_via_fabric(args: dict, ctx: ToolContext) -> ToolResult:
             )
 
     # No dispatch port wired
+    if not getattr(ctx, "allow_dispatch_passthrough", False):
+        # M17.E1.I2: hard-fail mirrors invoke_capability gate.
+        return ToolResult(
+            tool_name="spawn_via_fabric",
+            status="error",
+            error=(
+                "dispatch_not_wired: ToolContext.dispatch is None and "
+                "allow_dispatch_passthrough=False."
+            ),
+        )
     agent_id = f"agent-{uuid.uuid4().hex[:12]}"
     return ToolResult(
         tool_name="spawn_via_fabric",
@@ -1413,6 +1499,16 @@ async def execute_execute_workflow(args: dict, ctx: ToolContext) -> ToolResult:
             )
 
     # No dispatch port wired
+    if not getattr(ctx, "allow_dispatch_passthrough", False):
+        # M17.E1.I3: hard-fail mirrors invoke_capability gate.
+        return ToolResult(
+            tool_name="execute_workflow",
+            status="error",
+            error=(
+                "dispatch_not_wired: ToolContext.dispatch is None and "
+                "allow_dispatch_passthrough=False."
+            ),
+        )
     execution_id = f"exec-{uuid.uuid4().hex[:12]}"
     return ToolResult(
         tool_name="execute_workflow",

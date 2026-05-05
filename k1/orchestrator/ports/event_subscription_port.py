@@ -20,8 +20,6 @@ Required subscriptions (registered at startup by OrchestratorFactory):
   - k1.planner.plan.ready.v1      -> route to mailbox as CommittedPlan
   - k1.planner.plan.failed.v1     -> route to mailbox as PlanFailedEvent
   - k1.planner.plan.cancelled.v1  -> route to mailbox as PlanCancelledEvent
-  - k1.hil.override_response.v1   -> route to PendingHILContext resolver
-  - k1.hil.fallback_response.v1   -> route to PendingHILContext resolver
   - k1.fabric.contract.updated.v1 -> route to GapDetector
   - k1.fabric.agent.tool_call.v1  -> route to ExecutionMonitor
   - k1.fabric.agent.llm_call.v1   -> route to ExecutionMonitor

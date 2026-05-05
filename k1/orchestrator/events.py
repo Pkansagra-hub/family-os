@@ -29,6 +29,10 @@ ORCH_PLAN_REQUESTED: str = "k1.orchestration.plan.requested.v1"
 # DAG lifecycle
 ORCH_DAG_STARTED: str = "k1.orchestration.dag.started.v1"
 ORCH_DAG_MICRO_REPLAN: str = "k1.orchestration.dag.micro_replan.v1"
+# M16.E2.I2: emitted when a DAG node fails after dependents have been cancelled.
+# Carries enough context for FailureReplanCheckpoint (and external observers)
+# to decide whether to request a planner amend for the failed branch.
+ORCH_DAG_NODE_FAILED: str = "k1.orchestration.dag.node_failed.v1"
 ORCH_DAG_COMPLETED: str = "k1.orchestration.dag.completed.v1"
 # V1 REMOVED: ORCH_DAG_BUDGET_WARNING, ORCH_DAG_BUDGET_EXHAUSTED
 
@@ -88,10 +92,6 @@ AGENT_LLM_CALL: str = "k1.fabric.agent.llm_call.v1"
 # Workflow scheduler (self-emitted by scheduler for cron/event triggers)
 WORKFLOW_TRIGGER_DUE: str = "k1.orchestration.workflow.trigger_due.v1"
 
-# Human-in-the-loop responses
-HIL_OVERRIDE_RESPONSE: str = "k1.hil.override_response.v1"
-HIL_FALLBACK_RESPONSE: str = "k1.hil.fallback_response.v1"
-
 
 # ===========================================================================
 # Aggregate sets for bulk validation in tests
@@ -103,6 +103,7 @@ ALL_EMITTED: frozenset = frozenset(
         ORCH_PLAN_REQUESTED,
         ORCH_DAG_STARTED,
         ORCH_DAG_MICRO_REPLAN,
+        ORCH_DAG_NODE_FAILED,
         ORCH_DAG_COMPLETED,
         ORCH_STEP_STARTED,
         ORCH_STEP_COMPLETED,
@@ -133,7 +134,5 @@ ALL_CONSUMED: frozenset = frozenset(
         AGENT_TOOL_CALL,
         AGENT_LLM_CALL,
         WORKFLOW_TRIGGER_DUE,
-        HIL_OVERRIDE_RESPONSE,
-        HIL_FALLBACK_RESPONSE,
     }
 )

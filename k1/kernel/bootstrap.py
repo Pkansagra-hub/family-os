@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from k1.concierge.ledger.store import ILedgerStore
     from k1.concierge.ports import ILLMPort, IStatePort
     from k1.kernel.ports.orchestrator_port import IOrchestratorPort
-    from k1.planner.types import HILCoordinatorLike
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +51,7 @@ class KernelRuntime:
     experience_layer: Any = None
     delta_aggregator: Any = None
     delta_applicator: Any = None
-    hitl_coordinator: "HILCoordinatorLike | None" = None
+    hil_port: Any = None
     orchestrator: "IOrchestratorPort | None" = None
     front_subscriptions: list[Any] = field(default_factory=list)
     back_subscriptions: list[Any] = field(default_factory=list)
@@ -106,7 +105,7 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         experience_layer=session.experience_layer,
         delta_aggregator=session.delta_aggregator,
         delta_applicator=session.delta_applicator,
-        hitl_coordinator=session.hitl_coordinator,
+        hil_port=session.hil_port,
         orchestrator=svc.orchestrator,
         front_subscriptions=concierge.front_subscriptions,
         consumer_task=session.consumer_task,

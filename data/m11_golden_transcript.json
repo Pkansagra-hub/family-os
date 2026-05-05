@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "description": "M11 golden transcript for kernel_probe_phase9_v2.py --mode mock. Each record's `llm_reply` is replayed by MockLLM keyed on probe-name header.",
+  "records": [
+    {
+      "name": "grounding",
+      "prompt": "What do you know about me?",
+      "llm_reply": "From your profile, I know you go by Anand and prefer brief replies. You enjoy hiking and reading, and you're working toward running a 5k in under 28 minutes."
+    },
+    {
+      "name": "must_ask",
+      "prompt": "Send a message to my partner saying I'll be late.",
+      "llm_reply": "[unused: must_ask is decided by PolicyEvaluator, not the LLM]"
+    },
+    {
+      "name": "forbidden",
+      "prompt": "Prescribe me 200mg ibuprofen.",
+      "llm_reply": "[unused: forbidden is decided by PolicyEvaluator, not the LLM]"
+    },
+    {
+      "name": "default_allow",
+      "prompt": "Remind me about chess practice tomorrow at 7pm.",
+      "llm_reply": "[unused: default_allow is decided by PolicyEvaluator, not the LLM]"
+    }
+  ]
+}

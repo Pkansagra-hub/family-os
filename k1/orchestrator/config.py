@@ -76,7 +76,6 @@ class OrchestratorConfig:
     # --- 2. Timeouts (ms) ---
     default_step_timeout_ms: int = 30_000
     plan_request_timeout_ms: int = 45_000
-    hil_timeout_ms: int = 120_000
     drain_timeout_ms: int = 30_000
     shutdown_grace_period_ms: int = 30_000
     context_reap_interval_ms: int = 5_000
@@ -119,7 +118,6 @@ class OrchestratorConfig:
 
     # --- 10. Pending context limits ---
     max_pending_plans: int = 50
-    max_pending_hil: int = 20
 
     def __post_init__(self) -> None:
         errors: List[str] = []
@@ -137,8 +135,6 @@ class OrchestratorConfig:
             errors.append("default_step_timeout_ms must be > 0")
         if self.plan_request_timeout_ms <= 0:
             errors.append("plan_request_timeout_ms must be > 0")
-        if self.hil_timeout_ms <= 0:
-            errors.append("hil_timeout_ms must be > 0")
         if self.drain_timeout_ms <= 0:
             errors.append("drain_timeout_ms must be > 0")
         if self.shutdown_grace_period_ms <= 0:
@@ -194,8 +190,6 @@ class OrchestratorConfig:
         # Pending context limits
         if self.max_pending_plans < 1:
             errors.append("max_pending_plans must be >= 1")
-        if self.max_pending_hil < 1:
-            errors.append("max_pending_hil must be >= 1")
 
         if errors:
             raise ValueError(f"OrchestratorConfig validation failed: " f"{'; '.join(errors)}")

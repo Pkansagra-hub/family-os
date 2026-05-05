@@ -147,7 +147,10 @@ class FakeEventSubscriptionPort:
 # Helpers
 # ---------------------------------------------------------------------------
 
-_NO_DEDUP_CONFIG = MWConfig(filter_dedup_window_seconds=0)
+# Per-turn extraction mode required: these tests assert per-turn LLM call
+# counts (1 LLM call per turn). The default "session_batch" mode batches
+# all turns into one flush, breaking those assertions.
+_NO_DEDUP_CONFIG = MWConfig(filter_dedup_window_seconds=0, extraction_mode="per_turn")
 
 
 def _rich_snapshot() -> Dict[str, Any]:
@@ -282,7 +285,6 @@ class TestFabricRegistrationCreate:
     @pytest.mark.asyncio
     async def test_create_for_session_invariant_failure(self) -> None:
         """bad config -> InvariantViolation propagated."""
-        from k1.memory_writer.invariants import InvariantViolation
 
         sp, mh, bp, ep = _make_ports()
         # Providing None for a required port will trigger TypeError from factory

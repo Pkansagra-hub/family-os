@@ -102,7 +102,7 @@ class TestEnums:
         assert set(a.value for a in Availability) == {"ONLINE", "DEGRADED", "OFFLINE"}
 
     def test_provider_type_members(self) -> None:
-        expected = {"MCP", "WASM", "BRIDGE", "AGENT", "WORKFLOW", "CONCIERGE"}
+        expected = {"MCP", "WASM", "BRIDGE", "AGENT", "WORKFLOW", "CONCIERGE", "LOCAL_STUB"}
         assert {p.value for p in ProviderType} == expected
 
     def test_output_format_members(self) -> None:

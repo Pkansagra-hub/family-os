@@ -33,12 +33,10 @@ Exports:
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
 from typing import Any, Dict
 
 from k1.fabric.ports.delta_bus import IDeltaBusPort
 from k1.fabric.ports.event_port import IEventPort
-from k1.orchestrator.types import HILRequest
 
 logger = logging.getLogger(__name__)
 
@@ -131,21 +129,5 @@ class DeltaEmitAdapter:
         await self.emit(
             "k1.hil.progress.v1",
             {"step_id": step_id, "summary": summary},
-            trace_id,
-        )
-
-    # ------------------------------------------------------------------
-    # IDeltaEmitPort.emit_hil_request
-    # ------------------------------------------------------------------
-
-    async def emit_hil_request(
-        self,
-        hil_request: HILRequest,
-        trace_id: str,
-    ) -> None:
-        """Emit a human-in-the-loop request to the delta bus."""
-        await self.emit(
-            "k1.hil.request.v1",
-            asdict(hil_request),
             trace_id,
         )

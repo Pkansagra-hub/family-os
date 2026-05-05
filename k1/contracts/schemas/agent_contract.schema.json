@@ -246,6 +246,15 @@
               "description": {"type": "string"}
             }
           }
+        },
+        "risk_class": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "safety_sensitive"],
+          "description": "M9.E1 / M12.E2 — declared risk class consumed by IRiskCatalogPort."
+        },
+        "social_act": {
+          "type": ["string", "null"],
+          "description": "M9.E1 — constitution-level social act this agent manifests. null = infrastructure-only."
         }
       },
       "allOf": [

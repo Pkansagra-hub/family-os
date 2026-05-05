@@ -668,6 +668,7 @@ async def front_handler(
     all_tool_schemas: list[Any] | None = None,
     fsm_state: str | None = None,
     opp_pipeline: Any | None = None,
+    self_model: Any = None,
 ) -> ReactResult:
     """Front handler with mode-driven prompt assembly.
 
@@ -828,6 +829,23 @@ async def front_handler(
             logger.warning("front_handler: OPP prompt enrichment failed", exc_info=True)
 
     builder = DynamicPromptBuilder()
+
+    # M5.E4: render selfmodel grounding capsule (constitution + actor
+    # capabilities + family + freshness). When ``self_model`` is None
+    # (no SelfModelHandle attached, e.g. enable_self_model=False) we
+    # pass ``grounding_capsule=None`` and stage 9.5 is a no-op,
+    # matching the pre-M4 baseline.
+    grounding_capsule: Any = None
+    if self_model is not None:
+        try:
+            grounding_capsule = self_model.render_capsule()
+        except Exception:
+            logger.warning(
+                "front_handler: render_capsule() failed; falling back to None",
+                exc_info=True,
+            )
+            grounding_capsule = None
+
     context = builder.build(
         mode=mode,
         affect_band=affect_band,
@@ -839,6 +857,7 @@ async def front_handler(
         affect_confidence=affect_confidence,
         tier=tier,
         ss=ss,
+        grounding_capsule=grounding_capsule,
     )
 
     # 9. Run ReAct loop (Section 7)
@@ -1004,8 +1023,19 @@ async def front_handler(
 
     # 10b. Emit normal dispatches BEFORE response.final
     #       Include tier so FSM/Back can route correctly (Epic 6.1).
+    #
+    #       Per-task tier (set by execute_dispatch_task from plan/multi-intent
+    #       /depends_on signals) WINS over the front actor's session tier.
+    #       Falling back to the session tier (and then LOW) preserves prior
+    #       behaviour for tools that omit tier from their dispatch payload.
     for task_spec in normal_dispatches:
-        canonical_tier = tier if tier in {"LOW", "MEDIUM", "HIGH"} else "LOW"
+        per_task_tier = task_spec.get("tier")
+        if per_task_tier in {"LOW", "MEDIUM", "HIGH"}:
+            canonical_tier = per_task_tier
+        elif tier in {"LOW", "MEDIUM", "HIGH"}:
+            canonical_tier = tier
+        else:
+            canonical_tier = "LOW"
         tier_enum = ComplexityTier(canonical_tier)
         env = build_task_dispatch(
             payload={

@@ -1,0 +1,42 @@
+# Example seed -- guardian (Priya)
+#
+# A second guardian seed used to verify that distinct actors render
+# distinct capsules under the same household.
+
+actor_id: priya
+role: guardian
+
+core:
+  display_name: Priya
+  language: en
+
+identity:
+  age_band: adult
+  pronouns: she/her
+
+pattern:
+  preferences:
+    theme: dark
+    week_start: monday
+  hobbies:
+    - yoga
+    - gardening
+  likes:
+    - chai
+    - long walks
+  dislikes:
+    - loud music
+  goals:
+    - goal_id: g_yoga_certify
+      summary: Complete yoga teacher training
+      horizon: "12-months"
+      status: active
+  habits:
+    - habit_id: h_morning_yoga
+      summary: 30-min morning yoga practice
+      cadence: daily
+  routines:
+    - routine_id: r_school_run
+      name: School drop-off
+      schedule: "08:15 weekdays"
+  communication_style: warm

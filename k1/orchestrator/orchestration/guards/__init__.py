@@ -31,6 +31,7 @@ from .base import DAGGuard
 from .concurrency_guard import ConcurrencyGuard
 from .conditional_eval import ConditionalEdgeEvaluator
 from .execution_monitor import ExecutionMonitor, SubStepObserver
+from .failure_replan import FailureReplanCheckpoint
 from .micro_replan import MicroReplanCheckpoint
 from .output_schema_guard import OutputSchemaGuard
 
@@ -39,6 +40,7 @@ __all__ = [
     "ConditionalEdgeEvaluator",
     "DAGGuard",
     "ExecutionMonitor",
+    "FailureReplanCheckpoint",
     "MicroReplanCheckpoint",
     "OutputSchemaGuard",
     "SubStepObserver",

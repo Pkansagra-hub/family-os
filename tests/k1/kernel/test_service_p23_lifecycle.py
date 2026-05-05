@@ -17,7 +17,6 @@ existing TestS2ModelHubWiring class only verifies static port wiring.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import pytest
 
@@ -79,7 +78,8 @@ class TestStartupCallsFromConfig:
         """When model_mode != 'hub', hub is built but loader is skipped."""
         caplog.set_level(logging.INFO, logger="k1.kernel.service")
         # Anything other than "hub" exercises the else-branch.
-        svc = KernelService(config=KernelConfig(model_mode="legacy"))
+        # "test" is the canonical non-hub mode; "legacy" was renamed.
+        svc = KernelService(config=KernelConfig(model_mode="test"))
         try:
             await svc._startup_tier1()
             assert svc._model_hub is not None

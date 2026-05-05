@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "k1://schemas/orchestrator/events/emitted/dag_node_failed.v1.json",
+  "title": "dag.node_failed.v1",
+  "description": "Emitted by DAGExecutor when a step fails after dependent cancellation. Consumed by FailureReplanCheckpoint and external observers (M16.E2.I2).",
+  "type": "object",
+  "required": ["event_id", "topic", "timestamp", "trace_id", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event instance."
+    },
+    "topic": {
+      "type": "string",
+      "const": "k1.orchestration.dag.node_failed.v1"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "ORCH-09 cognitive trace identifier."
+    },
+    "source": {
+      "type": "string",
+      "const": "orchestrator"
+    },
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "payload": {
+      "type": "object",
+      "required": ["plan_id", "step_id", "capability", "error_code", "remaining_steps"],
+      "properties": {
+        "plan_id": {
+          "type": "string",
+          "description": "CommittedPlan.plan_id of the executing plan."
+        },
+        "step_id": {
+          "type": "string",
+          "description": "PlanStep.id of the failed step."
+        },
+        "capability": {
+          "type": "string",
+          "description": "Capability name attempted by the failed step."
+        },
+        "error_code": {
+          "type": "string",
+          "description": "Stable error code; V1 always 'STEP_FAILED'."
+        },
+        "error_detail": {
+          "type": ["string", "null"],
+          "description": "Free-form error detail surfaced from StepResult.error_detail."
+        },
+        "cancelled_dependents": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Step IDs cancelled in reaction to this failure (ORCH-07)."
+        },
+        "remaining_steps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of yet-to-execute non-cancelled steps available for amend."
+        }
+      }
+    }
+  }
+}

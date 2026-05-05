@@ -243,6 +243,8 @@ events:
       schema: "k1/contracts/schemas/orchestrator/events/emitted/dag_started.v1.json"
     - topic: "k1.orchestration.dag.micro_replan.v1"
       schema: "k1/contracts/schemas/orchestrator/events/emitted/dag_micro_replan.v1.json"
+    - topic: "k1.orchestration.dag.node_failed.v1"
+      schema: "k1/contracts/schemas/orchestrator/events/emitted/dag_node_failed.v1.json"
     - topic: "k1.orchestration.dag.completed.v1"
       schema: "k1/contracts/schemas/orchestrator/events/emitted/dag_completed.v1.json"
     # V1 REMOVED: dag.budget_warning.v1, dag.budget_exhausted.v1
@@ -336,15 +338,6 @@ events:
     - topic: "k1.orchestration.workflow.trigger_due.v1"
       schema: "k1/contracts/schemas/orchestrator/events/consumed/workflow_trigger_due.v1.json"
       handler: "k1.orchestrator.workflows.workflow_scheduler:WorkflowScheduler._fire_trigger"
-
-    # Human-in-the-loop responses
-    - topic: "k1.hil.override_response.v1"
-      schema: "k1/contracts/schemas/orchestrator/events/consumed/hil_override_response.v1.json"
-      handler: "k1.orchestrator.orchestration.orchestrator_service:OrchestratorService._on_hil_override"
-
-    - topic: "k1.hil.fallback_response.v1"
-      schema: "k1/contracts/schemas/orchestrator/events/consumed/hil_fallback_response.v1.json"
-      handler: "k1.orchestrator.orchestration.orchestrator_service:OrchestratorService._on_hil_fallback"
 
 # ---------------------------------------------------------------------------
 # State: Orchestrator NEVER writes SessionState (ORCH-01)

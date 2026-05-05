@@ -57,7 +57,7 @@ class ConciergeRuntime:
         experience_layer: Any | None = None,
         delta_aggregator: Any | None = None,
         delta_applicator: Any | None = None,
-        hitl_coordinator: Any | None = None,
+        hil_port: Any | None = None,
         orchestrator: Any | None = None,
         ledger: Any | None = None,
         ledger_store: Any | None = None,
@@ -78,13 +78,17 @@ class ConciergeRuntime:
         self._experience_layer = experience_layer
         self._delta_aggregator = delta_aggregator
         self._delta_applicator = delta_applicator
-        self._hitl_coordinator = hitl_coordinator
+        self._hil_port = hil_port
         self._orchestrator = orchestrator
         self._ledger = ledger
         self._ledger_store = ledger_store
         self._dead_letter_consumer = dead_letter_consumer
         self._consumer_task: asyncio.Task[None] | None = None
         self._started = False
+        # M5.E4: per-session SelfModelHandle (set by KernelService after
+        # P3.5 install). When None, front_handler runs with no grounding
+        # capsule (pre-M4 baseline).
+        self._self_model: Any = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -210,8 +214,8 @@ class ConciergeRuntime:
         return self._delta_applicator
 
     @property
-    def hitl_coordinator(self) -> Any | None:
-        return self._hitl_coordinator
+    def hil_port(self) -> Any | None:
+        return self._hil_port
 
     @property
     def orchestrator(self) -> Any | None:
@@ -232,6 +236,19 @@ class ConciergeRuntime:
     @property
     def back_ctx(self) -> Any | None:
         return self._back_ctx
+
+    @property
+    def self_model(self) -> Any | None:
+        """Per-session SelfModelHandle, or None when disabled."""
+        return self._self_model
+
+    def set_self_model(self, handle: Any) -> None:
+        """Attach a SelfModelHandle for stage 9.5 grounding capsules.
+
+        Idempotent. Safe to call before or after ``start()`` because
+        ``front_handler`` reads it per envelope.
+        """
+        self._self_model = handle
 
     @property
     def front_subscriptions(self) -> list[Any]:
@@ -299,6 +316,7 @@ class ConciergeRuntime:
                     tool_dispatcher=self._front_dispatcher,
                     all_tool_schemas=FRONT_TOOL_SCHEMAS,
                     fsm_state=self._fsm.state.name,
+                    self_model=self._self_model,
                 )
                 await self._tick_experience()
 

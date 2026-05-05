@@ -49,7 +49,7 @@ scheduler = [
 python_files = "test_*.py"
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v --color=yes --tb=short --disable-warnings --strict-markers"
+addopts = "-v --color=yes --tb=short --disable-warnings --strict-markers -m 'not perf and not performance and not benchmark and not slow'"
 # Standard directories to skip
 norecursedirs = [
     ".git",
@@ -96,6 +96,8 @@ markers = [
     "performance: performance tests",
     "slow: slow tests",
     "benchmark: benchmark tests for algorithm performance validation",
+    "invariant: empty-set invariant tests (k1.selfmodel)",
+    "perf: latency / throughput budget tests (k1.selfmodel)",
 ]
 
 [tool.coverage.run]

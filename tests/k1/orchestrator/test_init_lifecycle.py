@@ -21,8 +21,6 @@ Coverage targets:
   _on_plan_ready()      -- deserialize + enqueue
   _on_plan_failed()     -- pending cleanup + missing context
   _on_plan_cancelled()  -- pending cleanup + missing context
-  _on_hil_override()    -- pending cleanup + missing context
-  _on_hil_fallback()    -- pending cleanup + missing context
   _reap_loop()          -- periodic execution
   _mailbox_loop()       -- dequeue + process routing
   _process_one()        -- exception isolation
@@ -45,8 +43,6 @@ from k1.fabric.ports.state_reader import SessionSnapshot
 from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.connectors.mcp_registrar import RegistrationResult
 from k1.orchestrator.events import (
-    HIL_FALLBACK_RESPONSE,
-    HIL_OVERRIDE_RESPONSE,
     PLAN_CANCELLED,
     PLAN_FAILED,
     PLAN_READY,
@@ -56,7 +52,6 @@ from k1.orchestrator.types import (
     AggregatedResult,
     CommittedPlan,
     ErrorSeverity,
-    PendingHILContext,
     PendingPlanContext,
     PlanAck,
     PlanStep,
@@ -420,22 +415,6 @@ def _make_pending_plan(request_id: str, *, expired: bool = False) -> PendingPlan
     )
 
 
-def _make_pending_hil(request_id: str, *, expired: bool = False) -> PendingHILContext:
-    """Build PendingHILContext with correct fields."""
-    return PendingHILContext(
-        request_id=request_id,
-        dag_execution_id="dag-1",
-        current_wave_index=0,
-        completed_waves=[],
-        remaining_waves=[],
-        question="proceed?",
-        options=["yes", "no"],
-        timeout_fallback="CONTINUE",
-        created_at=time.time() - (300 if expired else 0),
-        timeout_ms=1_000 if expired else 120_000,
-    )
-
-
 async def _init_and_cleanup(svc: OrchestratorService) -> None:
     """Run init() and immediately stop background tasks for clean test teardown."""
     await svc.init()
@@ -487,14 +466,12 @@ class TestInitFullSequence:
         # Step 7: Scheduler started
         assert engine.scheduler.started is True
 
-        # Step 8: 5 event subscriptions
-        assert len(event.subscriptions) == 5
+        # Step 8: 3 event subscriptions
+        assert len(event.subscriptions) == 3
         topics = [topic for topic, _ in event.subscriptions]
         assert PLAN_READY in topics
         assert PLAN_FAILED in topics
         assert PLAN_CANCELLED in topics
-        assert HIL_OVERRIDE_RESPONSE in topics
-        assert HIL_FALLBACK_RESPONSE in topics
 
         # Step 9a: Gap detector started
         assert engine.gap_detector.started is True
@@ -506,7 +483,7 @@ class TestInitFullSequence:
         assert svc.initialized is True
 
         # Subscriptions stored for shutdown
-        assert len(svc._subscriptions) == 5
+        assert len(svc._subscriptions) == 3
 
     @pytest.mark.asyncio
     async def test_init_idempotent(self) -> None:
@@ -713,18 +690,18 @@ class TestSubscribeEvents:
 
     @pytest.mark.asyncio
     async def test_five_subscriptions_registered(self) -> None:
-        """_subscribe_events() registers exactly 5 subscriptions."""
+        """_subscribe_events() registers exactly 3 subscriptions."""
         event = FakeEventPort()
         svc = _build_service(event_port=event)
 
         svc._subscribe_events()
 
-        assert len(event.subscriptions) == 5
-        assert len(svc._subscriptions) == 5
+        assert len(event.subscriptions) == 3
+        assert len(svc._subscriptions) == 3
 
     @pytest.mark.asyncio
     async def test_subscription_topics_match_constants(self) -> None:
-        """All 5 subscribed topics match event constant values."""
+        """All 3 subscribed topics match event constant values."""
         event = FakeEventPort()
         svc = _build_service(event_port=event)
 
@@ -735,8 +712,6 @@ class TestSubscribeEvents:
             PLAN_READY,
             PLAN_FAILED,
             PLAN_CANCELLED,
-            HIL_OVERRIDE_RESPONSE,
-            HIL_FALLBACK_RESPONSE,
         }
         assert topics == expected
 
@@ -750,7 +725,7 @@ class TestSubscribeEvents:
 
         assert all(isinstance(h, SubscriptionHandle) for h in svc._subscriptions)
         ids = [h.subscription_id for h in svc._subscriptions]
-        assert len(set(ids)) == 5  # all unique
+        assert len(set(ids)) == 3  # all unique
 
 
 # ===========================================================================
@@ -832,52 +807,6 @@ class TestOnPlanCancelled:
         """_on_plan_cancelled handles missing context gracefully."""
         svc = _build_service()
         svc._on_plan_cancelled(PLAN_CANCELLED, {"request_id": "nope"})
-
-
-class TestOnHILOverride:
-    """Validate _on_hil_override handler."""
-
-    @pytest.mark.asyncio
-    async def test_resolves_pending_hil(self) -> None:
-        """_on_hil_override removes matching PendingHILContext."""
-        svc = _build_service()
-        svc._pending_hil["hil-1"] = _make_pending_hil("hil-1")
-
-        svc._on_hil_override(
-            HIL_OVERRIDE_RESPONSE,
-            {"request_id": "hil-1", "choice": "CONTINUE"},
-        )
-
-        assert "hil-1" not in svc._pending_hil
-
-    @pytest.mark.asyncio
-    async def test_missing_hil_context_does_not_crash(self) -> None:
-        """_on_hil_override handles missing HIL context."""
-        svc = _build_service()
-        svc._on_hil_override(HIL_OVERRIDE_RESPONSE, {"request_id": "nope"})
-
-
-class TestOnHILFallback:
-    """Validate _on_hil_fallback handler."""
-
-    @pytest.mark.asyncio
-    async def test_resolves_pending_hil(self) -> None:
-        """_on_hil_fallback removes matching PendingHILContext."""
-        svc = _build_service()
-        svc._pending_hil["hil-2"] = _make_pending_hil("hil-2")
-
-        svc._on_hil_fallback(
-            HIL_FALLBACK_RESPONSE,
-            {"request_id": "hil-2", "fallback_action": "CANCEL"},
-        )
-
-        assert "hil-2" not in svc._pending_hil
-
-    @pytest.mark.asyncio
-    async def test_missing_hil_context_does_not_crash(self) -> None:
-        """_on_hil_fallback handles missing HIL context."""
-        svc = _build_service()
-        svc._on_hil_fallback(HIL_FALLBACK_RESPONSE, {"request_id": "nope"})
 
 
 # ===========================================================================

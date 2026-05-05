@@ -13,13 +13,12 @@ Design -- ExecutionMonitor:
   - after_step (SPEC-5): checks ctx.interrupt_flag -> HARD_STOP.
     User waits max one step duration, not entire wave.
   - after_wave: (1) emit progress delta via IDeltaEmitPort,
-    (2) optionally emit override prompt when wave is significant
-    (step_count > 3 OR duration > 5s). Override options: CONTINUE
-    or CANCEL_DAG only (MODIFY_PARAMS removed V1, SEM-2).
-  - Override parking: PendingHILContext stored on service_ref.pending_hil.
-    Timeout 30s, fallback CONTINUE (silence = proceed).
-  - service_ref backreference creates circular dep with
-    OrchestratorService, resolved by lazy init in OrchestratorFactory.
+    (2) optionally AWAIT IHILPort.request_override when wave is
+    significant (step_count > 3 OR duration > 5s). Override options:
+    CONTINUE or CANCEL_DAG only (MODIFY_PARAMS removed V1, SEM-2).
+  - The await blocks the wave until the user responds. On
+    timed_out=True / choice == "override" -> CONTINUE; on
+    choice == "abort" -> HARD_STOP. No external parking dict required.
 
 Design -- SubStepObserver (3.2.7):
   - NOT a DAGGuard. Event subscriber managed by ExecutionMonitor.
@@ -45,11 +44,10 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from k1.hil.types import OverrideRequest
 from k1.orchestrator.types import (
     GuardAction,
     GuardDecision,
-    HILRequest,
-    PendingHILContext,
     ProcessingContext,
     StepResult,
     WaveResult,
@@ -59,7 +57,7 @@ from .base import DAGGuard
 
 if TYPE_CHECKING:
     from k1.fabric.ports.event_port import SubscriptionHandle
-    from k1.orchestrator.orchestration.orchestrator_service import OrchestratorService
+    from k1.kernel.ports.hil_port import IHILPort
     from k1.orchestrator.ports.delta_emit_port import IDeltaEmitPort
     from k1.orchestrator.ports.event_subscription_port import IEventSubscriptionPort
     from k1.orchestrator.types import PlanStep
@@ -118,10 +116,8 @@ class ExecutionMonitor(DAGGuard):
     """Post-step interrupt guard and post-wave progress emission (ORCH-09).
 
     Constructor:
-      delta: IDeltaEmitPort for progress and HIL request emission.
-      service_ref: OrchestratorService backreference for PendingHILContext parking.
-                   Optional for lazy init -- OrchestratorFactory sets this after
-                   OrchestratorService is constructed to break circular dependency.
+      delta: IDeltaEmitPort for progress emission.
+      hil_port: IHILPort for human-in-the-loop override prompts.
 
     Lifecycle hooks:
       after_step -- checks ctx.interrupt_flag -> HARD_STOP (SPEC-5).
@@ -131,16 +127,16 @@ class ExecutionMonitor(DAGGuard):
       Only emitted when wave is significant (step_count > 3 OR duration > 5s).
       Options: CONTINUE or CANCEL_DAG (MODIFY_PARAMS removed V1, SEM-2).
       Timeout: 30s, fallback: CONTINUE (silence = proceed).
-      PendingHILContext parked on service_ref.pending_hil[request_id].
+      The await blocks the wave; on response we either CONTINUE or HARD_STOP.
     """
 
     def __init__(
         self,
         delta: IDeltaEmitPort,
-        service_ref: Optional[OrchestratorService] = None,
+        hil_port: Optional[IHILPort] = None,
     ) -> None:
         self._delta = delta
-        self._service_ref = service_ref
+        self._hil_port = hil_port
 
     async def after_step(
         self,
@@ -186,12 +182,13 @@ class ExecutionMonitor(DAGGuard):
         remaining_steps: Optional[List[Any]] = None,
         plan_id: Optional[str] = None,
     ) -> GuardDecision:
-        """Emit progress delta and optionally prompt for override.
+        """Emit progress delta and optionally await an override decision.
 
         1. Always emit progress delta via IDeltaEmitPort.emit_progress().
-        2. If wave is significant (>3 steps OR >5s duration), emit
-           override prompt via IDeltaEmitPort.emit_hil_request() and
-           park PendingHILContext on service_ref.
+        2. If wave is significant (>3 steps OR >5s duration), AWAIT
+           ``IHILPort.request_override`` for a CONTINUE / CANCEL decision.
+           The coroutine blocks until the user responds (or HIL timeout
+           elapses, in which case ``timed_out=True`` -> CONTINUE).
 
         Args:
             wave_result: Completed wave results.
@@ -200,8 +197,8 @@ class ExecutionMonitor(DAGGuard):
             plan_id: Unused by this guard.
 
         Returns:
-            GuardDecision CONTINUE (always). Override response arrives
-            asynchronously via event bus.
+            GuardDecision CONTINUE on approval / timeout, HARD_STOP on
+            explicit user cancellation (choice == "abort").
         """
         # 1. Emit progress delta (best-effort, fire-and-forget)
         summary = _build_wave_summary(wave_result)
@@ -232,58 +229,85 @@ class ExecutionMonitor(DAGGuard):
                 reason=f"Wave {wave_result.wave_index} progress emitted (no override needed)",
             )
 
-        # 3. Emit override prompt
+        # 3. Await override decision via unified HIL service
         request_id = str(uuid.uuid4())
-        hil_request = HILRequest(
+
+        if self._hil_port is None:
+            logger.debug(
+                "[%s] Override prompt skipped for wave %d: no hil_port wired",
+                _GUARD_NAME,
+                wave_result.wave_index,
+            )
+            return GuardDecision(
+                guard_name=_GUARD_NAME,
+                action=GuardAction.CONTINUE,
+                reason="No hil_port; defaulting to CONTINUE",
+            )
+
+        override_req = OverrideRequest(
+            caller_key=f"orchestrator:monitor:{ctx.dag_id or ctx.trace_id}",
             request_id=request_id,
-            question="Continue or cancel?",
-            options=list(_OVERRIDE_OPTIONS),
+            trace_id=ctx.trace_id,
+            plan_id=plan_id or "",
+            unresolved_capabilities=[],
+            proposed_alternatives=[
+                {
+                    "wave_index": wave_result.wave_index,
+                    "step_count": step_count,
+                    "duration_ms": wave_result.duration_ms,
+                    "options": list(_OVERRIDE_OPTIONS),
+                }
+            ],
             timeout_ms=_OVERRIDE_TIMEOUT_MS,
         )
 
         try:
-            await self._delta.emit_hil_request(hil_request, ctx.trace_id)
+            response = await self._hil_port.request_override(override_req)
         except Exception as exc:
             logger.warning(
-                "[%s] Failed to emit override request: %s -- continuing",
+                "[%s] Override request raised: %s -- continuing",
                 _GUARD_NAME,
                 exc,
             )
             return GuardDecision(
                 guard_name=_GUARD_NAME,
                 action=GuardAction.CONTINUE,
-                reason="Override emission failed, continuing",
+                reason="Override request failed, continuing",
             )
 
-        # 4. Park PendingHILContext on service_ref
-        pending = PendingHILContext(
-            request_id=request_id,
-            dag_execution_id=ctx.dag_id or "unknown",
-            current_wave_index=wave_result.wave_index,
-            completed_waves=[],
-            remaining_waves=[],
-            question=hil_request.question,
-            options=list(_OVERRIDE_OPTIONS),
-            timeout_fallback="CONTINUE",
-            timeout_ms=_OVERRIDE_TIMEOUT_MS,
-        )
+        if response.timed_out or response.choice == "override":
+            # Silence (timeout) and explicit override approval both proceed.
+            logger.info(
+                "[%s] Override resolved (CONTINUE) for wave %d "
+                "(request_id=%s, timed_out=%s, choice=%s)",
+                _GUARD_NAME,
+                wave_result.wave_index,
+                response.hil_request_id or request_id,
+                response.timed_out,
+                response.choice,
+            )
+            return GuardDecision(
+                guard_name=_GUARD_NAME,
+                action=GuardAction.CONTINUE,
+                reason=(
+                    f"Override approved for wave {wave_result.wave_index} "
+                    f"(timed_out={response.timed_out})"
+                ),
+                metadata={"hil_request_id": response.hil_request_id or request_id},
+            )
 
-        pending_hil = getattr(self._service_ref, "pending_hil", None)
-        if pending_hil is not None:
-            pending_hil[request_id] = pending
-
+        # choice == "abort" (or anything else explicit) -> HARD_STOP
         logger.info(
-            "[%s] Override prompt emitted for wave %d (request_id=%s)",
+            "[%s] Override resolved (HARD_STOP) for wave %d (choice=%s)",
             _GUARD_NAME,
             wave_result.wave_index,
-            request_id,
+            response.choice,
         )
-
         return GuardDecision(
             guard_name=_GUARD_NAME,
-            action=GuardAction.CONTINUE,
-            reason=f"Override prompt emitted for wave {wave_result.wave_index}",
-            metadata={"hil_request_id": request_id},
+            action=GuardAction.HARD_STOP,
+            reason=f"Override rejected for wave {wave_result.wave_index} (choice={response.choice})",
+            metadata={"hil_request_id": response.hil_request_id or request_id},
         )
 
     def __repr__(self) -> str:

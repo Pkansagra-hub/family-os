@@ -149,6 +149,7 @@ def _register_provider_handlers(
     from k1.fabric.providers.agent_provider import AgentProvider
     from k1.fabric.providers.bridge_provider import BridgeProvider
     from k1.fabric.providers.concierge_provider import ConciergeProvider
+    from k1.fabric.providers.local import LocalStubProvider
     from k1.fabric.providers.mcp_provider import MCPProvider
     from k1.fabric.providers.wasm_provider import WASMProvider
     from k1.fabric.providers.workflow_provider import WorkflowProvider
@@ -176,13 +177,61 @@ def _register_provider_handlers(
         return BridgeProvider(config, bridge=bridge)
 
     # Agent: takes config + model_gateway + state_reader + delta_bus + context_builder
+    #
+    # M19.E1 (audit H-3 fix): the previous handler passed those four deps
+    # directly to AgentProvider as kwargs, but AgentProvider.__init__
+    # only accepts ``agent_factory`` and ``capability_names`` and silently
+    # discards everything else through ``**_kwargs``. The result was that
+    # production AgentProvider instances ran in stub mode (no factory ⇒
+    # health_check returns UNKNOWN, execute() fails) and ``agent.*``
+    # capability dispatch silently broke.
+    #
+    # The fix wires a real ``AgentFactory`` here, with:
+    #   * ``contract_loader`` closing over the CapabilityRegistry's
+    #     ``lookup`` method so ``AgentContract`` records authored under
+    #     ``k1/contracts/agents/`` are loaded on demand.
+    #   * ``capability_names`` populated from every AgentContract in the
+    #     registry that targets this ``provider_id`` (informational; used
+    #     by AgentProvider.capabilities() and health_check()).
+    #
+    # When ``model_gateway_port`` is missing the factory still constructs
+    # but its ``has_model_gateway`` flips to False; AgentProvider's
+    # health_check then surfaces a DEGRADED status instead of silently
+    # claiming healthy.
     def _create_agent(config: Any, **deps: Any) -> Any:
-        return AgentProvider(
-            config,
+        from k1.fabric.providers.agent_provider import AgentFactory
+        from k1.fabric.types import AgentContract
+
+        registry = deps.get("registry")
+        contract_loader: Any = None
+        capability_names: list[str] = []
+        if registry is not None:
+
+            def contract_loader(name: str) -> Any:  # noqa: E306 -- nested closure
+                ct = registry.lookup(name)
+                return ct if isinstance(ct, AgentContract) else None
+
+            try:
+                capability_names = [
+                    ct.name
+                    for ct in registry.list_all()
+                    if isinstance(ct, AgentContract)
+                    and getattr(ct, "provider_id", "") == config.provider_id
+                ]
+            except Exception:  # pragma: no cover -- defensive
+                capability_names = []
+
+        agent_factory = AgentFactory(
+            context_builder=deps.get("context_builder"),
             model_gateway=deps.get("model_gateway_port"),
             state_reader=deps.get("state_reader"),
             delta_bus=deps.get("delta_bus"),
-            context_builder=deps.get("context_builder"),
+            contract_loader=contract_loader,
+        )
+        return AgentProvider(
+            config,
+            agent_factory=agent_factory,
+            capability_names=capability_names,
         )
 
     # Workflow: takes config + workflow_registry + capability_lookup + orchestrator
@@ -209,12 +258,18 @@ def _register_provider_handlers(
             raise ValueError("ConciergeProvider requires concierge_router in port_deps")
         return ConciergeProvider(config, router=router)
 
+    # LocalStub (M12.E3): in-process deterministic stub for storyline
+    # capabilities. Takes only the config; no external port deps.
+    def _create_local_stub(config: Any, **deps: Any) -> Any:  # noqa: ARG001
+        return LocalStubProvider(config)
+
     provider_factory.register_handler(ProviderType.MCP.value, _create_mcp)
     provider_factory.register_handler(ProviderType.WASM.value, _create_wasm)
     provider_factory.register_handler(ProviderType.BRIDGE.value, _create_bridge)
     provider_factory.register_handler(ProviderType.AGENT.value, _create_agent)
     provider_factory.register_handler(ProviderType.WORKFLOW.value, _create_workflow)
     provider_factory.register_handler(ProviderType.CONCIERGE.value, _create_concierge)
+    provider_factory.register_handler(ProviderType.LOCAL_STUB.value, _create_local_stub)
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +381,7 @@ class FabricFactory:
         contracts_dir: Optional[str] = None,
         config: Optional[FabricConfig] = None,
         hil_port: Optional[Any] = None,
+        conscience_port: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with all test adapters, no external deps.
@@ -360,6 +416,7 @@ class FabricFactory:
             contracts_dir=contracts_dir,
             config=config,
             hil_port=hil_port,
+            conscience_port=conscience_port,
         )
 
     @staticmethod
@@ -371,6 +428,7 @@ class FabricFactory:
         mcp_transport: Optional[Any] = None,
         wasm_runtime: Optional[Any] = None,
         hil_port: Optional[Any] = None,
+        conscience_port: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with test adapters + event capture mode.
@@ -413,6 +471,7 @@ class FabricFactory:
             mcp_transport=mcp_transport,
             wasm_runtime=wasm_runtime,
             hil_port=hil_port,
+            conscience_port=conscience_port,
         )
 
     @staticmethod
@@ -434,6 +493,7 @@ class FabricFactory:
         mcp_transport: Optional[Any] = None,
         wasm_runtime: Optional[Any] = None,
         hil_port: Optional[Any] = None,
+        conscience_port: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with custom adapter injection.
@@ -476,6 +536,7 @@ class FabricFactory:
             mcp_transport=mcp_transport,
             wasm_runtime=wasm_runtime,
             hil_port=hil_port,
+            conscience_port=conscience_port,
         )
 
     @staticmethod
@@ -495,6 +556,7 @@ class FabricFactory:
         mcp_transport: Optional[Any] = None,
         wasm_runtime: Optional[Any] = None,
         hil_port: Optional[Any] = None,
+        conscience_port: Optional[Any] = None,
     ) -> Fabric:
         """
         Create a shared Fabric instance.
@@ -555,6 +617,7 @@ class FabricFactory:
             mcp_transport=mcp_transport,
             wasm_runtime=wasm_runtime,
             hil_port=hil_port,
+            conscience_port=conscience_port,
         )
 
 
@@ -578,6 +641,7 @@ def _construct_fabric(
     wasm_runtime: Optional[Any] = None,
     capability_registry: Optional[Any] = None,
     hil_port: Optional[Any] = None,
+    conscience_port: Optional[Any] = None,
 ) -> Fabric:
     """
     Internal: Build a Fabric instance in dependency-safe order.
@@ -791,6 +855,7 @@ def _construct_fabric(
         dispatcher=_dispatcher,
         config=fabric_config,
         hil_port=hil_port,
+        conscience_port=conscience_port,
     )
 
     # ===== STEP 18: FabricRetrieval =====

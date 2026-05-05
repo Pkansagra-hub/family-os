@@ -291,6 +291,10 @@ class HILResolvedEvent:
     decision_summary: str
     timestamp_ms: int
     duration_ms: int
+    # M13.E2.I3 -- attribution of the resolver (user_id / "system:timeout" /
+    # "system:cancel"). Empty string preserves wire compatibility with
+    # pre-M13 events.
+    resolver_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

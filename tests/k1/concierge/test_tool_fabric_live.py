@@ -55,6 +55,12 @@ def _create_wired_fabric() -> Fabric:
         production_mode=False,
     )
     for contract in convert_all_poc_capabilities():
+        # Canonical YAML contracts loaded by ModuleLoader (e.g.
+        # tool.execute.send_message, tool.execute.grocery_order) collide
+        # with POC fixtures by name+version. In tests we want the POC
+        # bridge bindings to win, so unregister the YAML version first.
+        if fabric.registry_api.lookup(contract.name) is not None:
+            fabric.registry_api.unregister(contract.name)
         fabric.register(contract)
 
     # Re-run auto-registration so poc-mock-bridge gets a ProviderConfig
@@ -303,7 +309,11 @@ class TestNoFabricFallback:
 
     @pytest.mark.asyncio
     async def test_invoke_poc_placeholder_without_fabric(self) -> None:
+        # M17.E1.I1: legacy POC fallback is now opt-in via
+        # ``allow_dispatch_passthrough=True``. Without the flag the
+        # implementation hard-fails with ``dispatch_not_wired``.
         ctx = _make_ctx(None)
+        ctx.allow_dispatch_passthrough = True  # type: ignore[attr-defined]
         result = await execute_invoke_capability(
             {"capability_name": "tool.execute.hotel_search", "params": {}},
             ctx,

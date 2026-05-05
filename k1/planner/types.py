@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional
 
 from k1.fabric.types import ScoredCapability
 from k1.orchestrator.types import PlanStep
@@ -368,67 +368,6 @@ class StageContext:
             )
         if not callable(self.cancel_check):
             raise ValueError("StageContext.cancel_check must be callable")
-
-
-# ---------------------------------------------------------------------------
-# Section 12 -- HILCoordinatorLike protocol (shared by SKETCH + VALIDATE)
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class HILCoordinatorLike(Protocol):
-    """Protocol for Human-in-the-Loop coordinator (Section 12).
-
-    Shared protocol used by both SketchService (clarification) and
-    ValidateService (approval).  The concrete HILCoordinator
-    (k1.planner.services.hil_coordinator, Epic 4.2) will satisfy
-    this structurally.
-
-    PLAN-10: max 2 HIL rounds per plan (clarification + approval combined).
-    """
-
-    @property
-    def round_count(self) -> int:
-        """Current HIL round count (PLAN-10)."""
-        ...  # pragma: no cover
-
-    def reset(self) -> None:
-        """Reset all HIL state (LC_PLAN_START)."""
-        ...  # pragma: no cover
-
-    async def request_clarification(
-        self,
-        request_id: str,
-        question_context: Dict[str, Any],
-    ) -> Optional[str]:
-        """Trigger clarification flow (Section 12.2).
-
-        Called by SketchService when ambiguity detected in LLM output
-        (needs_clarification == true).
-
-        Returns user response text, or None on timeout / budget
-        exhaustion.  Max 2 rounds per plan (PLAN-10).  60s timeout
-        per round.
-        """
-        ...  # pragma: no cover
-
-    async def request_approval(
-        self,
-        request_id: str,
-        plan_summary: str,
-        side_effects: List[str],
-        safety_assessment: str,
-        estimated_duration_ms: int,
-    ) -> str:
-        """Trigger approval flow (Section 8.4).
-
-        Called by ValidateService when plan has high-impact side effects
-        and non-GREEN safety band.
-
-        Returns one of: "approve", "modify", "reject".
-        Timeout: 120s.
-        """
-        ...  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------

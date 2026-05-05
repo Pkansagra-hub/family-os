@@ -61,7 +61,10 @@ from k1.orchestrator.events import (
     ORCH_WORKFLOW_SAVED,
 )
 from k1.orchestrator.factory import OrchestratorFactory
-from k1.orchestrator.orchestration.orchestrator_service import AdapterException, OrchestratorService
+from k1.orchestrator.orchestration.orchestrator_service import (
+    AdapterException,
+    OrchestratorService,
+)
 from k1.orchestrator.types import (
     AdapterError,
     AggregatedResult,
@@ -69,7 +72,6 @@ from k1.orchestrator.types import (
     CompensationRecord,
     ErrorSeverity,
     InterruptRequest,
-    PendingHILContext,
     PendingPlanContext,
     PlanAck,
     PlanStep,
@@ -1268,29 +1270,8 @@ class TestReapStaleContexts:
         assert "active1" in svc.pending_plans
 
     @pytest.mark.asyncio
-    async def test_reap_expired_hil_context(self) -> None:
-        """Expired PendingHILContext is reaped."""
-        svc, fabric, planner, delta, event, mailbox, state = await _svc()
-        svc._pending_hil["hil1"] = PendingHILContext(
-            request_id="hil1",
-            dag_execution_id="dag-1",
-            current_wave_index=0,
-            completed_waves=[],
-            remaining_waves=[],
-            question="Continue?",
-            options=["yes", "no"],
-            timeout_fallback="GRACEFUL_FAIL",
-            created_at=time.time() - 300,
-            timeout_ms=1000,
-        )
-
-        reaped = await svc.reap_stale_contexts()
-        assert reaped == 1
-        assert "hil1" not in svc.pending_hil
-
-    @pytest.mark.asyncio
-    async def test_reap_multiple_types(self) -> None:
-        """Both plan + HIL contexts reaped in single call."""
+    async def test_reap_multiple_plan_contexts(self) -> None:
+        """Multiple expired plan contexts reaped in single call."""
         svc, fabric, planner, delta, event, mailbox, state = await _svc()
         svc._pending_plans["p1"] = PendingPlanContext(
             request_id="p1",
@@ -1299,15 +1280,10 @@ class TestReapStaleContexts:
             created_at=time.time() - 60,
             timeout_ms=100,
         )
-        svc._pending_hil["h1"] = PendingHILContext(
-            request_id="h1",
-            dag_execution_id="dag-1",
-            current_wave_index=0,
-            completed_waves=[],
-            remaining_waves=[],
-            question="?",
-            options=[],
-            timeout_fallback="CONTINUE",
+        svc._pending_plans["p2"] = PendingPlanContext(
+            request_id="p2",
+            task_envelope=_make_envelope(tier="HIGH"),
+            state_snapshot=SessionSnapshot(session_id="s2"),
             created_at=time.time() - 60,
             timeout_ms=100,
         )
@@ -1804,11 +1780,6 @@ class TestServiceProperties:
     async def test_pending_plans_initially_empty(self) -> None:
         svc, *_ = await _svc()
         assert svc.pending_plans == {}
-
-    @pytest.mark.asyncio
-    async def test_pending_hil_initially_empty(self) -> None:
-        svc, *_ = await _svc()
-        assert svc.pending_hil == {}
 
     @pytest.mark.asyncio
     async def test_executed_plans_initially_empty(self) -> None:

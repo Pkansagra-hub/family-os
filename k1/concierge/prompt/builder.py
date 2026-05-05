@@ -780,6 +780,7 @@ class DynamicPromptBuilder:
         affect_confidence: float = 1.0,
         tier: str = "LOW",
         ss: Any = None,
+        grounding_capsule: Any = None,
     ) -> BuiltContext:
         """Assemble complete context for one Front LLM invocation.
 
@@ -798,6 +799,11 @@ class DynamicPromptBuilder:
             ss: SessionStateManager instance (duck typed). When provided,
                 stage 8 reads and renders SS sections per SS_READ_CONFIGS.
                 When None, stage 8 is a no-op (backward compatible).
+            grounding_capsule: Optional ``GroundingCapsule`` from
+                ``k1.selfmodel`` (M4). When provided, stage 9.5 appends
+                its ``as_prompt_text()`` output to ``prompt_parts`` so
+                every Front prompt is grounded in the actor's
+                SituationFrame. ``None`` keeps the pre-M4 baseline.
 
         Returns:
             BuiltContext with everything react_loop() needs.
@@ -897,6 +903,42 @@ class DynamicPromptBuilder:
             max_iter,
             modifiers.skip_refine_affect,
         )
+
+        # Stage 9.5: Append grounding capsule (k1.selfmodel M4)
+        # When ``grounding_capsule`` is None the pipeline is identical
+        # to the pre-M4 baseline. When provided, the capsule's
+        # prompt-safe blocks are appended last so the LLM sees them
+        # right before the assembled system_prompt boundary.
+        #
+        # M6 framing preamble: the LLM previously confused the
+        # ``[conscience]`` block (a *behavioural conscience*) with the
+        # ``tools=[]`` JSON-Schema list (a *capability menu*). The
+        # preamble below disambiguates them so the model neither
+        # refuses tools that are simply unmentioned by the conscience
+        # nor invokes acts that ARE listed under ``forbidden``.
+        if grounding_capsule is not None:
+            try:
+                capsule_text = grounding_capsule.as_prompt_text()
+            except Exception:
+                logger.exception("  Stage 9.5  grounding_capsule.as_prompt_text() raised; skipping")
+                capsule_text = ""
+            if capsule_text:
+                preamble = (
+                    "[grounding]\n"
+                    "The blocks below describe WHO the user is, WHAT family context "
+                    "applies, and WHICH social acts the constitution forbids or "
+                    "requires confirmation for. They are not a tool allowlist — your "
+                    "available tools are listed separately under `tools=[...]`. "
+                    "Use the [self] / [preferences] / [hobbies] / [goals] / "
+                    "[routines] / [household] / [context] blocks to ground your "
+                    "reply. Treat the [conscience] block as the only authoritative "
+                    "source of refusal: act ids in `forbidden` MUST NOT be performed; "
+                    "act ids in `must_ask` require explicit user confirmation; "
+                    "everything else is allowed by default."
+                )
+                prompt_parts.append(preamble)
+                prompt_parts.append(capsule_text)
+                logger.debug("  Stage 9.5  capsule appended (len=%d)", len(capsule_text))
 
         # Assemble and interpolate placeholders
         system_prompt = "\n\n".join(part for part in prompt_parts if part)
@@ -1001,19 +1043,63 @@ class DynamicPromptBuilder:
     def _compress_prompt(self, prompt: str) -> str:
         """Compress prompt to fit within token budget.
 
-        Compression strategy (V2 Section 26.9):
-          1. Truncate from the end (SS sections/scenario data are last,
-             lowest priority).
-          2. Mark truncation point.
+        M13.E4 — capsule-aware compression. The grounding capsule
+        (M4 ``[grounding]`` block + ``as_prompt_text()`` payload) is
+        appended LAST in the assembly pipeline (Stage 9.5). Naive
+        head-or-tail truncation would either drop it entirely
+        (tail-cut) or destroy mode framing (head-cut). Instead:
 
-        This is a LAST RESORT. Normal mode-driven assembly should stay
-        within budget. If compression is triggered, it indicates an
-        unusually large SS state or prompt section set.
+          1. Locate the ``[grounding]`` marker.
+          2. If found: keep the grounding tail intact and truncate
+             from the head of the pre-grounding region. The capsule
+             is the only authoritative source of conscience refusal,
+             so it must survive at all costs.
+          3. If not found: fall back to the legacy tail-cut.
+
+        A structured log line ``capsule_truncated.v1`` is emitted on
+        the path that preserves the capsule so downstream telemetry
+        can detect compression pressure.
         """
         target_chars = self._max_context_tokens * self._chars_per_token
         if len(prompt) <= target_chars:
             return prompt
-        return prompt[:target_chars] + "\n\n[Context truncated for budget]"
+
+        marker = "[grounding]"
+        idx = prompt.find(marker)
+        if idx == -1:
+            # No capsule present — legacy behaviour.
+            return prompt[:target_chars] + "\n\n[Context truncated for budget]"
+
+        capsule_block = prompt[idx:]
+        capsule_len = len(capsule_block)
+        # Reserve room for a one-line truncation marker (~64 chars).
+        truncation_marker = "\n\n[Context truncated for budget — capsule preserved]\n\n"
+        budget_for_head = target_chars - capsule_len - len(truncation_marker)
+        if budget_for_head <= 0:
+            # Capsule alone exceeds budget — preserve it whole and let
+            # the caller see an over-budget prompt rather than drop it.
+            logger.warning(
+                "capsule_truncated.v1 mode=capsule_only_overflow " "capsule_len=%d budget_chars=%d",
+                capsule_len,
+                target_chars,
+            )
+            return capsule_block
+
+        head = prompt[:idx]
+        if len(head) > budget_for_head:
+            head = head[:budget_for_head]
+            logger.warning(
+                "capsule_truncated.v1 mode=head_truncated "
+                "capsule_len=%d head_kept=%d budget_chars=%d",
+                capsule_len,
+                len(head),
+                target_chars,
+            )
+            return head + truncation_marker + capsule_block
+
+        # Should not happen (we already failed the size guard above)
+        # but stay safe.
+        return prompt
 
     def _get_history_window(self, mode: PromptMode) -> int:
         """Get history window for a mode from SS_READ_CONFIGS.

@@ -47,13 +47,25 @@ def _make_ctx(
     dispatch: IDispatchPort | None = None,
     actor: str = "back",
     active_task_id: str | None = None,
+    *,
+    allow_dispatch_passthrough: bool = True,
 ) -> ToolContext:
+    """Build a minimal ToolContext for tool-handler tests.
+
+    M17.E1.I1: ``allow_dispatch_passthrough`` defaults to True here so
+    that this test module's legacy ``TestBackwardCompat`` cases (which
+    deliberately exercise the POC stub via ``dispatch=None``) keep their
+    original semantics. The hard-fail behaviour with the production
+    default (False) is covered by
+    ``tests/unit/concierge/tools/test_dispatch_passthrough_gate.py``.
+    """
     return ToolContext(
         session_manager=_mock_session_manager(),
         cognitive_trace_id=f"test-{uuid.uuid4().hex[:6]}",
         actor=actor,
         dispatch=dispatch,
         active_task_id=active_task_id,
+        allow_dispatch_passthrough=allow_dispatch_passthrough,
     )
 
 

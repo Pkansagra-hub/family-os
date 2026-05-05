@@ -19,13 +19,16 @@ import pytest
 
 
 class TestTopicConstants:
-    """Topic constants are plain strings matching k1.* namespace."""
+    """Topic constants are plain strings matching k1.* namespace.
+
+    E5 (HIL Unification): TOPIC_HIL_* topics were removed; the planner
+    now consumes the unified ``IHILPort`` adapter directly. Only plan
+    lifecycle topics remain.
+    """
 
     def test_published_topics_are_strings(self):
         from k1.planner.events import (
             TOPIC_DELTA,
-            TOPIC_HIL_APPROVAL_REQ,
-            TOPIC_HIL_CLARIFICATION,
             TOPIC_MICRO_REPLAN_READY,
             TOPIC_PLAN_CANCELLED,
             TOPIC_PLAN_FAILED,
@@ -38,16 +41,12 @@ class TestTopicConstants:
             TOPIC_PLAN_CANCELLED,
             TOPIC_MICRO_REPLAN_READY,
             TOPIC_DELTA,
-            TOPIC_HIL_CLARIFICATION,
-            TOPIC_HIL_APPROVAL_REQ,
         ]:
             assert isinstance(topic, str)
             assert topic.startswith("k1.")
 
     def test_subscribed_topics_are_strings(self):
         from k1.planner.events import (
-            TOPIC_HIL_APPROVAL_RESP,
-            TOPIC_HIL_CLARIFICATION_RESP,
             TOPIC_PLAN_CANCEL,
             TOPIC_PLAN_REQUEST,
         )
@@ -55,8 +54,6 @@ class TestTopicConstants:
         for topic in [
             TOPIC_PLAN_REQUEST,
             TOPIC_PLAN_CANCEL,
-            TOPIC_HIL_CLARIFICATION_RESP,
-            TOPIC_HIL_APPROVAL_RESP,
         ]:
             assert isinstance(topic, str)
             assert topic.startswith("k1.")
@@ -64,10 +61,6 @@ class TestTopicConstants:
     def test_all_topics_unique(self):
         from k1.planner.events import (
             TOPIC_DELTA,
-            TOPIC_HIL_APPROVAL_REQ,
-            TOPIC_HIL_APPROVAL_RESP,
-            TOPIC_HIL_CLARIFICATION,
-            TOPIC_HIL_CLARIFICATION_RESP,
             TOPIC_MICRO_REPLAN_READY,
             TOPIC_PLAN_CANCEL,
             TOPIC_PLAN_CANCELLED,
@@ -82,20 +75,29 @@ class TestTopicConstants:
             TOPIC_PLAN_CANCELLED,
             TOPIC_MICRO_REPLAN_READY,
             TOPIC_DELTA,
-            TOPIC_HIL_CLARIFICATION,
-            TOPIC_HIL_APPROVAL_REQ,
             TOPIC_PLAN_REQUEST,
             TOPIC_PLAN_CANCEL,
-            TOPIC_HIL_CLARIFICATION_RESP,
-            TOPIC_HIL_APPROVAL_RESP,
         ]
         assert len(topics) == len(set(topics)), "Duplicate topic strings found"
 
-    def test_topic_count_is_11(self):
+    def test_topic_count(self):
         from k1.planner import events
 
         topic_attrs = [a for a in dir(events) if a.startswith("TOPIC_")]
-        assert len(topic_attrs) == 11
+        # E5: 5 published + 2 subscribed = 7 (HIL topics removed)
+        assert len(topic_attrs) == 7
+
+    def test_no_legacy_hil_topics(self):
+        """E5: TOPIC_HIL_* constants must be deleted from planner.events."""
+        from k1.planner import events
+
+        for name in (
+            "TOPIC_HIL_CLARIFICATION",
+            "TOPIC_HIL_APPROVAL_REQ",
+            "TOPIC_HIL_CLARIFICATION_RESP",
+            "TOPIC_HIL_APPROVAL_RESP",
+        ):
+            assert not hasattr(events, name), f"{name} should be removed in E5"
 
 
 class TestPlanFailedPayload:
@@ -179,36 +181,18 @@ class TestPlanCancelledPayload:
             PlanCancelledPayload(request_id="r1", reason="user", stage="", trace_id="t1")
 
 
-class TestHILClarificationPayload:
-    def test_valid_construction(self):
-        from k1.planner.events import HILClarificationPayload
+class TestNoLegacyHILPayloads:
+    """E5: HILClarificationPayload and HILApprovalRequestPayload deleted."""
 
-        p = HILClarificationPayload(request_id="r1", question="What?", trace_id="t1")
-        assert p.context == {}
+    def test_clarification_payload_removed(self):
+        from k1.planner import events
 
-    def test_empty_question_raises(self):
-        from k1.planner.events import HILClarificationPayload
+        assert not hasattr(events, "HILClarificationPayload")
 
-        with pytest.raises(ValueError, match="question"):
-            HILClarificationPayload(request_id="r1", question="", trace_id="t1")
+    def test_approval_payload_removed(self):
+        from k1.planner import events
 
-
-class TestHILApprovalRequestPayload:
-    def test_valid_construction(self):
-        from k1.planner.events import HILApprovalRequestPayload
-
-        p = HILApprovalRequestPayload(
-            request_id="r1",
-            summary="Do something risky",
-            options=["approve", "reject"],
-        )
-        assert p.side_effects == []
-
-    def test_empty_options_raises(self):
-        from k1.planner.events import HILApprovalRequestPayload
-
-        with pytest.raises(ValueError, match="options"):
-            HILApprovalRequestPayload(request_id="r1", summary="stuff", options=[])
+        assert not hasattr(events, "HILApprovalRequestPayload")
 
 
 # ===================================================================
@@ -532,7 +516,7 @@ class TestPlannerErrorSubclasses:
                 and getattr(mod, name) is not PlannerError
             )
         ]
-        assert len(subclasses) == 19
+        assert len(subclasses) == 18
 
 
 # ===================================================================

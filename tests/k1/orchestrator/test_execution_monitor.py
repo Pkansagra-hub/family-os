@@ -7,9 +7,8 @@ Test classes -- unit (local fakes):
   TestAfterStepInterrupt             -- interrupt_flag=True -> HARD_STOP.
   TestAfterWaveProgressEmit          -- Always emits progress delta.
   TestAfterWaveNoOverride            -- Small wave -> no override prompt.
-  TestAfterWaveOverrideStepCount     -- >3 steps -> override prompt emitted.
-  TestAfterWaveOverrideDuration      -- >5s duration -> override prompt emitted.
-  TestAfterWaveHILParking            -- PendingHILContext parked correctly.
+  TestAfterWaveOverrideStepCount     -- >3 steps -> hil_port.request_override called.
+  TestAfterWaveOverrideDuration      -- >5s duration -> hil_port.request_override called.
   TestAfterWaveDeltaFailure          -- Delta emission failure -> graceful.
   TestBuildWaveSummary               -- _build_wave_summary helper.
 
@@ -35,7 +34,12 @@ import pytest
 
 from k1.fabric.ports.event_port import SubscriptionHandle
 from k1.fabric.types import CapabilityResult
-from k1.orchestrator.orchestration.guards import DAGGuard, ExecutionMonitor, SubStepObserver
+from k1.hil.types import OverrideRequest, OverrideResponse
+from k1.orchestrator.orchestration.guards import (
+    DAGGuard,
+    ExecutionMonitor,
+    SubStepObserver,
+)
 from k1.orchestrator.orchestration.guards.execution_monitor import (
     _GUARD_NAME,
     _OVERRIDE_OPTIONS,
@@ -44,8 +48,6 @@ from k1.orchestrator.orchestration.guards.execution_monitor import (
 )
 from k1.orchestrator.types import (
     GuardAction,
-    HILRequest,
-    PendingHILContext,
     PlanStep,
     ProcessingContext,
     StepResult,
@@ -64,13 +66,10 @@ class FakeDelta:
     def __init__(
         self,
         raise_on_progress: bool = False,
-        raise_on_hil: bool = False,
     ) -> None:
         self.progress_calls: List[Dict[str, Any]] = []
-        self.hil_calls: List[Dict[str, Any]] = []
         self.emit_calls: List[Dict[str, Any]] = []
         self._raise_on_progress = raise_on_progress
-        self._raise_on_hil = raise_on_hil
 
     async def emit(self, event_topic: str, payload: Dict[str, Any], trace_id: str) -> None:
         self.emit_calls.append({"topic": event_topic, "payload": payload, "trace_id": trace_id})
@@ -80,17 +79,35 @@ class FakeDelta:
             raise RuntimeError("delta bus down")
         self.progress_calls.append({"step_id": step_id, "summary": summary, "trace_id": trace_id})
 
-    async def emit_hil_request(self, hil_request: HILRequest, trace_id: str) -> None:
-        if self._raise_on_hil:
-            raise RuntimeError("delta bus down for HIL")
-        self.hil_calls.append({"hil_request": hil_request, "trace_id": trace_id})
 
+class FakeHILPort:
+    """Stand-in for IHILPort.request_override (E6).
 
-class FakeService:
-    """Minimal OrchestratorService stand-in with pending_hil dict."""
+    Records every ``OverrideRequest`` and returns a configurable
+    ``OverrideResponse``. Defaults to ``timed_out=True`` (silence ->
+    CONTINUE), matching the pre-E6 fire-and-forget fallback semantics.
+    """
 
-    def __init__(self) -> None:
-        self.pending_hil: Dict[str, PendingHILContext] = {}
+    def __init__(
+        self,
+        response: Optional[OverrideResponse] = None,
+        raise_exc: bool = False,
+    ) -> None:
+        self.calls: List[OverrideRequest] = []
+        self._response = response
+        self._raise = raise_exc
+
+    async def request_override(self, req: OverrideRequest) -> OverrideResponse:
+        self.calls.append(req)
+        if self._raise:
+            raise RuntimeError("hil port unavailable")
+        if self._response is not None:
+            return self._response
+        return OverrideResponse(
+            hil_request_id=req.request_id,
+            choice="override",
+            timed_out=True,
+        )
 
 
 class FakeEvents:
@@ -251,11 +268,11 @@ class TestExecutionMonitorInit:
     """Constructor, isinstance, repr."""
 
     def test_is_dag_guard(self) -> None:
-        guard = ExecutionMonitor(delta=FakeDelta(), service_ref=FakeService())
+        guard = ExecutionMonitor(delta=FakeDelta(), hil_port=FakeHILPort())
         assert isinstance(guard, DAGGuard)
 
     def test_repr(self) -> None:
-        guard = ExecutionMonitor(delta=FakeDelta(), service_ref=FakeService())
+        guard = ExecutionMonitor(delta=FakeDelta(), hil_port=FakeHILPort())
         assert "ExecutionMonitor" in repr(guard)
 
 
@@ -269,7 +286,7 @@ class TestAfterStepNoInterrupt:
 
     @pytest.mark.asyncio
     async def test_no_interrupt(self) -> None:
-        guard = ExecutionMonitor(delta=FakeDelta(), service_ref=FakeService())
+        guard = ExecutionMonitor(delta=FakeDelta(), hil_port=FakeHILPort())
         step = _make_step()
         result = _make_step_result()
         ctx = _make_ctx(interrupt_flag=False)
@@ -281,7 +298,7 @@ class TestAfterStepNoInterrupt:
     @pytest.mark.asyncio
     async def test_default_ctx_no_interrupt(self) -> None:
         """ProcessingContext defaults interrupt_flag to False."""
-        guard = ExecutionMonitor(delta=FakeDelta(), service_ref=FakeService())
+        guard = ExecutionMonitor(delta=FakeDelta(), hil_port=FakeHILPort())
         ctx = ProcessingContext(trace_id="t", request_id="r", tier="standard")
         decision = await guard.after_step(_make_step(), _make_step_result(), ctx)
         assert decision.action == GuardAction.CONTINUE
@@ -297,7 +314,7 @@ class TestAfterStepInterrupt:
 
     @pytest.mark.asyncio
     async def test_interrupt_hard_stop(self) -> None:
-        guard = ExecutionMonitor(delta=FakeDelta(), service_ref=FakeService())
+        guard = ExecutionMonitor(delta=FakeDelta(), hil_port=FakeHILPort())
         ctx = _make_ctx(interrupt_flag=True)
 
         decision = await guard.after_step(_make_step(), _make_step_result(), ctx)
@@ -306,7 +323,7 @@ class TestAfterStepInterrupt:
 
     @pytest.mark.asyncio
     async def test_interrupt_guard_name(self) -> None:
-        guard = ExecutionMonitor(delta=FakeDelta(), service_ref=FakeService())
+        guard = ExecutionMonitor(delta=FakeDelta(), hil_port=FakeHILPort())
         ctx = _make_ctx(interrupt_flag=True)
         decision = await guard.after_step(_make_step(), _make_step_result(), ctx)
         assert decision.guard_name == _GUARD_NAME
@@ -314,7 +331,7 @@ class TestAfterStepInterrupt:
     @pytest.mark.asyncio
     async def test_interrupt_after_failed_step(self) -> None:
         """Interrupt check applies even for failed steps."""
-        guard = ExecutionMonitor(delta=FakeDelta(), service_ref=FakeService())
+        guard = ExecutionMonitor(delta=FakeDelta(), hil_port=FakeHILPort())
         ctx = _make_ctx(interrupt_flag=True)
         result = _make_step_result(status=StepStatus.FAILED)
         decision = await guard.after_step(_make_step(), result, ctx)
@@ -332,7 +349,7 @@ class TestAfterWaveProgressEmit:
     @pytest.mark.asyncio
     async def test_progress_emitted(self) -> None:
         delta = FakeDelta()
-        guard = ExecutionMonitor(delta=delta, service_ref=FakeService())
+        guard = ExecutionMonitor(delta=delta, hil_port=FakeHILPort())
         wr = _make_wave_result(step_count=1, duration_ms=100)
 
         await guard.after_wave(wr, _make_ctx(trace_id="t-42"))
@@ -345,7 +362,7 @@ class TestAfterWaveProgressEmit:
     @pytest.mark.asyncio
     async def test_progress_summary_contains_wave_info(self) -> None:
         delta = FakeDelta()
-        guard = ExecutionMonitor(delta=delta, service_ref=FakeService())
+        guard = ExecutionMonitor(delta=delta, hil_port=FakeHILPort())
         wr = _make_wave_result(step_count=2, wave_index=3, duration_ms=500)
 
         await guard.after_wave(wr, _make_ctx())
@@ -365,34 +382,35 @@ class TestAfterWaveNoOverride:
     @pytest.mark.asyncio
     async def test_small_wave_no_override(self) -> None:
         delta = FakeDelta()
-        service = FakeService()
-        guard = ExecutionMonitor(delta=delta, service_ref=service)
+        service = FakeHILPort()
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
         wr = _make_wave_result(step_count=2, duration_ms=1000)
 
         decision = await guard.after_wave(wr, _make_ctx())
 
         assert decision.action == GuardAction.CONTINUE
-        assert len(delta.hil_calls) == 0
-        assert len(service.pending_hil) == 0
+        assert len(service.calls) == 0
 
     @pytest.mark.asyncio
     async def test_exactly_threshold_no_override(self) -> None:
         """Exactly 3 steps and exactly 5000ms -> no override (> not >=)."""
         delta = FakeDelta()
-        guard = ExecutionMonitor(delta=delta, service_ref=FakeService())
+        service = FakeHILPort()
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
         wr = _make_wave_result(step_count=3, duration_ms=5000)
 
         decision = await guard.after_wave(wr, _make_ctx())
-        assert len(delta.hil_calls) == 0
+        assert len(service.calls) == 0
 
     @pytest.mark.asyncio
     async def test_single_step_no_override(self) -> None:
         delta = FakeDelta()
-        guard = ExecutionMonitor(delta=delta, service_ref=FakeService())
+        service = FakeHILPort()
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
         wr = _make_wave_result(step_count=1, duration_ms=100)
 
         await guard.after_wave(wr, _make_ctx())
-        assert len(delta.hil_calls) == 0
+        assert len(service.calls) == 0
 
 
 # ===========================================================================
@@ -401,45 +419,49 @@ class TestAfterWaveNoOverride:
 
 
 class TestAfterWaveOverrideStepCount:
-    """>3 steps -> override prompt emitted."""
+    """>3 steps -> hil_port.request_override called."""
 
     @pytest.mark.asyncio
     async def test_four_steps_triggers_override(self) -> None:
         delta = FakeDelta()
-        service = FakeService()
-        guard = ExecutionMonitor(delta=delta, service_ref=service)
+        service = FakeHILPort()
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
         wr = _make_wave_result(step_count=4, duration_ms=100)
 
         decision = await guard.after_wave(wr, _make_ctx())
 
         assert decision.action == GuardAction.CONTINUE
-        assert len(delta.hil_calls) == 1
-        assert len(service.pending_hil) == 1
+        assert len(service.calls) == 1
+        assert "hil_request_id" in decision.metadata
 
     @pytest.mark.asyncio
     async def test_override_options_correct(self) -> None:
         delta = FakeDelta()
-        guard = ExecutionMonitor(delta=delta, service_ref=FakeService())
+        service = FakeHILPort()
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
         wr = _make_wave_result(step_count=5, duration_ms=100)
 
         await guard.after_wave(wr, _make_ctx())
 
-        hil = delta.hil_calls[0]["hil_request"]
-        assert hil.options == list(_OVERRIDE_OPTIONS)
-        assert "CONTINUE" in hil.options
-        assert "CANCEL_DAG" in hil.options
-        assert "MODIFY_PARAMS" not in hil.options  # Removed V1
+        req = service.calls[0]
+        assert len(req.proposed_alternatives) == 1
+        options = req.proposed_alternatives[0]["options"]
+        assert options == list(_OVERRIDE_OPTIONS)
+        assert "CONTINUE" in options
+        assert "CANCEL_DAG" in options
+        assert "MODIFY_PARAMS" not in options  # Removed V1
 
     @pytest.mark.asyncio
     async def test_override_timeout(self) -> None:
         delta = FakeDelta()
-        guard = ExecutionMonitor(delta=delta, service_ref=FakeService())
+        service = FakeHILPort()
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
         wr = _make_wave_result(step_count=4, duration_ms=100)
 
         await guard.after_wave(wr, _make_ctx())
 
-        hil = delta.hil_calls[0]["hil_request"]
-        assert hil.timeout_ms == _OVERRIDE_TIMEOUT_MS
+        req = service.calls[0]
+        assert req.timeout_ms == _OVERRIDE_TIMEOUT_MS
 
 
 # ===========================================================================
@@ -448,87 +470,91 @@ class TestAfterWaveOverrideStepCount:
 
 
 class TestAfterWaveOverrideDuration:
-    """>5s duration -> override prompt emitted."""
+    """>5s duration -> hil_port.request_override called."""
 
     @pytest.mark.asyncio
     async def test_long_duration_triggers_override(self) -> None:
         delta = FakeDelta()
-        service = FakeService()
-        guard = ExecutionMonitor(delta=delta, service_ref=service)
+        service = FakeHILPort()
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
         wr = _make_wave_result(step_count=1, duration_ms=6000)
 
         decision = await guard.after_wave(wr, _make_ctx())
 
-        assert len(delta.hil_calls) == 1
-        assert len(service.pending_hil) == 1
+        assert decision.action == GuardAction.CONTINUE
+        assert len(service.calls) == 1
 
     @pytest.mark.asyncio
     async def test_5001ms_triggers_override(self) -> None:
         delta = FakeDelta()
-        guard = ExecutionMonitor(delta=delta, service_ref=FakeService())
+        service = FakeHILPort()
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
         wr = _make_wave_result(step_count=1, duration_ms=5001)
 
         await guard.after_wave(wr, _make_ctx())
-        assert len(delta.hil_calls) == 1
+        assert len(service.calls) == 1
 
 
 # ===========================================================================
-# TestAfterWaveHILParking
+# TestAfterWaveOverrideResponse
 # ===========================================================================
 
 
-class TestAfterWaveHILParking:
-    """PendingHILContext parked correctly."""
+class TestAfterWaveOverrideResponse:
+    """OverrideResponse drives the GuardAction (E6).
+
+    * timed_out=True -> CONTINUE (silence = proceed)
+    * choice=='override' -> CONTINUE
+    * choice=='abort'    -> HARD_STOP
+    """
 
     @pytest.mark.asyncio
-    async def test_pending_hil_context_fields(self) -> None:
+    async def test_timed_out_continues(self) -> None:
         delta = FakeDelta()
-        service = FakeService()
-        guard = ExecutionMonitor(delta=delta, service_ref=service)
-        wr = _make_wave_result(step_count=4, wave_index=2, duration_ms=100)
-        ctx = _make_ctx(dag_id="dag-42")
-
-        decision = await guard.after_wave(wr, ctx)
-
-        assert len(service.pending_hil) == 1
-        request_id = list(service.pending_hil.keys())[0]
-        pending = service.pending_hil[request_id]
-
-        assert pending.request_id == request_id
-        assert pending.dag_execution_id == "dag-42"
-        assert pending.current_wave_index == 2
-        assert pending.timeout_fallback == "CONTINUE"
-        assert pending.timeout_ms == _OVERRIDE_TIMEOUT_MS
-        assert pending.options == list(_OVERRIDE_OPTIONS)
-
-    @pytest.mark.asyncio
-    async def test_metadata_contains_request_id(self) -> None:
-        delta = FakeDelta()
-        service = FakeService()
-        guard = ExecutionMonitor(delta=delta, service_ref=service)
+        service = FakeHILPort(
+            response=OverrideResponse(
+                hil_request_id="r-x",
+                choice="override",
+                timed_out=True,
+            )
+        )
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
         wr = _make_wave_result(step_count=4, duration_ms=100)
 
         decision = await guard.after_wave(wr, _make_ctx())
-
-        assert "hil_request_id" in decision.metadata
-        assert decision.metadata["hil_request_id"] in service.pending_hil
+        assert decision.action == GuardAction.CONTINUE
 
     @pytest.mark.asyncio
-    async def test_unique_request_ids_per_wave(self) -> None:
+    async def test_explicit_override_continues(self) -> None:
         delta = FakeDelta()
-        service = FakeService()
-        guard = ExecutionMonitor(delta=delta, service_ref=service)
+        service = FakeHILPort(
+            response=OverrideResponse(
+                hil_request_id="r-x",
+                choice="override",
+                timed_out=False,
+            )
+        )
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
+        wr = _make_wave_result(step_count=4, duration_ms=100)
 
-        wr1 = _make_wave_result(step_count=4, wave_index=0, duration_ms=100)
-        wr2 = _make_wave_result(step_count=4, wave_index=1, duration_ms=100)
+        decision = await guard.after_wave(wr, _make_ctx())
+        assert decision.action == GuardAction.CONTINUE
 
-        d1 = await guard.after_wave(wr1, _make_ctx())
-        d2 = await guard.after_wave(wr2, _make_ctx())
+    @pytest.mark.asyncio
+    async def test_abort_hard_stops(self) -> None:
+        delta = FakeDelta()
+        service = FakeHILPort(
+            response=OverrideResponse(
+                hil_request_id="r-x",
+                choice="abort",
+                timed_out=False,
+            )
+        )
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
+        wr = _make_wave_result(step_count=4, duration_ms=100)
 
-        id1 = d1.metadata["hil_request_id"]
-        id2 = d2.metadata["hil_request_id"]
-        assert id1 != id2
-        assert len(service.pending_hil) == 2
+        decision = await guard.after_wave(wr, _make_ctx())
+        assert decision.action == GuardAction.HARD_STOP
 
 
 # ===========================================================================
@@ -537,12 +563,13 @@ class TestAfterWaveHILParking:
 
 
 class TestAfterWaveDeltaFailure:
-    """Delta emission failure -> graceful degradation."""
+    """Delta / HIL failure -> graceful degradation."""
 
     @pytest.mark.asyncio
     async def test_progress_failure_still_continues(self) -> None:
         delta = FakeDelta(raise_on_progress=True)
-        guard = ExecutionMonitor(delta=delta, service_ref=FakeService())
+        service = FakeHILPort()
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
         wr = _make_wave_result(step_count=1, duration_ms=100)
 
         decision = await guard.after_wave(wr, _make_ctx())
@@ -550,8 +577,9 @@ class TestAfterWaveDeltaFailure:
 
     @pytest.mark.asyncio
     async def test_hil_failure_still_continues(self) -> None:
-        delta = FakeDelta(raise_on_hil=True)
-        guard = ExecutionMonitor(delta=delta, service_ref=FakeService())
+        delta = FakeDelta()
+        service = FakeHILPort(raise_exc=True)
+        guard = ExecutionMonitor(delta=delta, hil_port=service)
         wr = _make_wave_result(step_count=4, duration_ms=100)
 
         decision = await guard.after_wave(wr, _make_ctx())
@@ -559,14 +587,11 @@ class TestAfterWaveDeltaFailure:
         assert "failed" in decision.reason.lower()
 
     @pytest.mark.asyncio
-    async def test_no_pending_hil_attr(self) -> None:
-        """service_ref without pending_hil attr -> still continues."""
+    async def test_no_hil_port(self) -> None:
+        """hil_port=None -> still continues with debug log."""
         delta = FakeDelta()
 
-        class BareService:
-            pass
-
-        guard = ExecutionMonitor(delta=delta, service_ref=BareService())
+        guard = ExecutionMonitor(delta=delta, hil_port=None)
         wr = _make_wave_result(step_count=4, duration_ms=100)
 
         decision = await guard.after_wave(wr, _make_ctx())
@@ -947,7 +972,7 @@ class TestExecutionMonitorPipeline:
     """ExecutionMonitor verified through OrchestratorService.process() pipeline.
 
     No guard imports. All assertions via adapter state (delta.progress_log,
-    delta.hil_requests, service.pending_hil).
+    delta.progress_log).
     """
 
     # -- pipeline position ------------------------------------------------
@@ -1032,71 +1057,6 @@ class TestExecutionMonitorPipeline:
         s3 = make_step("s3", "cap.c")
         plan = make_plan([s1, s2, s3])
         await process_plan(service, plan)
-
-        delta.assert_hil_requested(count=0)
-
-    # -- override on step count -------------------------------------------
-
-    @pytest.mark.asyncio
-    async def test_large_wave_triggers_hil_override(self) -> None:
-        """>3 parallel steps in a wave triggers HIL override prompt."""
-        service, adapters = await orchestrator_for_testing()
-        fabric = adapters["fabric"]
-        delta: TestDeltaAdapter = adapters["delta"]
-        caps = ["cap.a", "cap.b", "cap.c", "cap.d"]
-        register_capabilities(fabric, *caps)
-        for c in caps:
-            fabric.script_result(c, cap_result({"v": c}))
-
-        # 4 parallel steps -> single wave with >3 steps
-        steps = [make_step(f"s{i}", c) for i, c in enumerate(caps)]
-        plan = make_plan(steps)
-        await process_plan(service, plan)
-
-        delta.assert_hil_requested(count=1)
-        hil_req, trace = delta.hil_requests[0]
-        assert "CONTINUE" in hil_req.options
-        assert "CANCEL_DAG" in hil_req.options
-
-    @pytest.mark.asyncio
-    async def test_override_hil_timeout_30s(self) -> None:
-        """Override HIL requests have 30s timeout."""
-        service, adapters = await orchestrator_for_testing()
-        fabric = adapters["fabric"]
-        delta: TestDeltaAdapter = adapters["delta"]
-        caps = ["cap.a", "cap.b", "cap.c", "cap.d"]
-        register_capabilities(fabric, *caps)
-        for c in caps:
-            fabric.script_result(c, cap_result({"v": c}))
-
-        steps = [make_step(f"s{i}", c) for i, c in enumerate(caps)]
-        plan = make_plan(steps)
-        await process_plan(service, plan)
-
-        hil_req, _ = delta.hil_requests[0]
-        assert hil_req.timeout_ms == 30_000
-
-    @pytest.mark.asyncio
-    async def test_override_hil_parked_on_service(self) -> None:
-        """PendingHILContext stored in service.pending_hil."""
-        service, adapters = await orchestrator_for_testing()
-        fabric = adapters["fabric"]
-        delta: TestDeltaAdapter = adapters["delta"]
-        caps = ["cap.a", "cap.b", "cap.c", "cap.d"]
-        register_capabilities(fabric, *caps)
-        for c in caps:
-            fabric.script_result(c, cap_result({"v": c}))
-
-        steps = [make_step(f"s{i}", c) for i, c in enumerate(caps)]
-        plan = make_plan(steps)
-        await process_plan(service, plan)
-
-        # At least one PendingHILContext should be parked
-        assert len(service.pending_hil) >= 1
-        parked = next(iter(service.pending_hil.values()))
-        assert parked.timeout_fallback == "CONTINUE"
-        assert "CONTINUE" in parked.options
-        assert "CANCEL_DAG" in parked.options
 
     # -- progress summary format ------------------------------------------
 

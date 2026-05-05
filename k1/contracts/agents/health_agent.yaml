@@ -1,0 +1,84 @@
+# k1/contracts/agents/health_agent.yaml
+#
+# M19.E2.I1 -- Specialist agent for health/wellness tasks.
+#
+# Loaded by ``ModuleLoader`` (k1/fabric/core/module_loader.py) during
+# Fabric bootstrap; ``_CONTRACT_SUBDIRS`` already includes ``"agents"``.
+# Resolution path:
+#   Concierge dispatch_task (HIGH)
+#     -> Orchestrator -> Planner.expand
+#     -> LLM emits step.capability = "agent.execute.health_specialist"
+#     -> DAGExecutor -> StepRunner -> IFabricGatewayPort.execute
+#     -> CapabilityFabric -> AgentProvider (health_specialist_provider)
+#     -> AgentFactory.spawn_and_execute (8-step) -> Agent.execute
+#     -> CapabilityResult
+#
+# AMBER safety band: health-sensitive context but no diagnosis or
+# prescription; storyline write capabilities (prescribe_medication,
+# wellness_call) are gated by the Fabric capability gate (E3) and the
+# conscience digest, not by this contract.
+
+agent_contract:
+  name: "agent.execute.health_specialist"
+  version: "1.0.0"
+  domain:
+    - "HEALTH"
+    - "WELLNESS"
+  description: >
+    Family health specialist. Reads household health context (active
+    routines, medications, recent symptoms, wellness goals) and
+    produces a structured sub-plan: assessment + recommended next
+    actions. Does NOT diagnose, prescribe, or perform medical
+    interventions; those acts remain forbidden by the conscience.
+  capabilities:
+    - "symptom_triage"
+    - "wellness_summary"
+    - "routine_recommendation"
+  limitations:
+    - "no_diagnosis"
+    - "no_prescription"
+    - "no_emergency_response"
+  required_inputs:
+    - name: "concern"
+      type: "STRING"
+      description: "User-described health concern or query."
+  optional_inputs:
+    - name: "actor_id"
+      type: "STRING"
+      description: "Family member the concern is about."
+    - name: "time_window"
+      type: "STRING"
+      description: "Time window for trend analysis (e.g. 7d, 30d)."
+  required_context:
+    - "beliefs_active.health_metrics"
+  optional_context:
+    - "beliefs_active.routines"
+    - "beliefs_active.preferences"
+  output:
+    type: "object"
+    properties:
+      assessment:
+        type: "string"
+      next_actions:
+        type: "array"
+      escalate:
+        type: "boolean"
+    required:
+      - "assessment"
+      - "next_actions"
+  prompt_template: "health_specialist_v1"
+  tools_granted:
+    - "tool.execute.wellness_call"
+    - "tool.execute.set_routine"
+  llm_budget_tokens: 8192
+  max_tool_calls: 4
+  max_execution_time_ms: 30000
+  provider_type: "AGENT"
+  provider_id: "health_specialist_provider"
+  safety_band_min: "AMBER"
+  risk_class: "safety_sensitive"
+  social_act: "health_consult"
+  cost_per_call: 0.20
+  avg_latency_ms: 5000
+  max_latency_ms: 20000
+  availability: "ONLINE"

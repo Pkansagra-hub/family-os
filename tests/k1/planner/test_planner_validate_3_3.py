@@ -161,64 +161,93 @@ class FakeFabricRetrieval:
         return None
 
 
-class FakeHILCoordinator:
-    """Configurable fake HILCoordinator."""
+class FakeHILPort:
+    """E5: minimal IHILPort fake (renamed from FakeHILPort).
+
+    Exposes the unified k1.kernel.ports.hil_port.IHILPort surface.
+    Default behaviour: ask_clarification times out; request_approval
+    auto-approves. Tests that need other behaviour replace the
+    `_clar_response` / `_approval_response` attributes.
+    """
 
     def __init__(self) -> None:
-        self._round_count: int = 0
-        self.approval_calls: List[Dict[str, Any]] = []
-        self.approval_response: str = "approve"
-        self.approval_error: Optional[Exception] = None
-        self.reset_calls: int = 0
-        self.clarification_calls: List[Dict[str, Any]] = []
+        from k1.hil.types import ApprovalResponse, ClarificationResponse
 
-    @property
-    def round_count(self) -> int:
-        return self._round_count
-
-    def reset(self) -> None:
-        self._round_count = 0
-        self.reset_calls += 1
-
-    async def request_clarification(
-        self,
-        request_id: str,
-        question_context: Dict[str, Any],
-    ) -> Optional[str]:
-        self.clarification_calls.append(
-            {
-                "request_id": request_id,
-                "question_context": question_context,
-            }
+        self._budget: dict[str, int] = {}
+        self.clarification_calls: list = []
+        self.approval_calls: list = []
+        self.reset_calls: list[str] = []
+        self._clar_response = ClarificationResponse(
+            hil_request_id="fake",
+            answer=None,
+            timed_out=True,
+            round_budget_exhausted=False,
         )
+        self._approval_response = ApprovalResponse(
+            hil_request_id="fake",
+            decision="approve",
+            modifications=None,
+            timed_out=False,
+        )
+
+    async def ask_clarification(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import ClarificationResponse
+
+        self.clarification_calls.append(req)
+        used = self._budget.get(req.caller_key, 0)
+        if used >= 2:
+            return ClarificationResponse(
+                hil_request_id="",
+                answer=None,
+                timed_out=False,
+                round_budget_exhausted=True,
+            )
+        self._budget[req.caller_key] = used + 1
+        return self._clar_response
+
+    async def request_approval(self, req):  # type: ignore[no-untyped-def]
+        self.approval_calls.append(req)
+        return self._approval_response
+
+    async def needs_human(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import NeedsHumanResponse
+
+        return NeedsHumanResponse(
+            hil_request_id="fake",
+            decision="timeout",
+            resolution={},
+            raw_user_text=None,
+            timed_out=True,
+        )
+
+    async def request_override(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import OverrideResponse
+
+        return OverrideResponse(
+            hil_request_id="fake",
+            choice="abort",
+            selected_alternative=None,
+            fallback_action=None,
+            timed_out=True,
+        )
+
+    async def gate_capability(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import GateDecision, GateOutcome
+
+        return GateDecision(
+            outcome=GateOutcome.ALLOW,
+            hil_request_id=None,
+            reason="fake_allow",
+            user_approved=None,
+            audit_only=False,
+        )
+
+    def reset_round_budget(self, caller_key: str) -> None:
+        self.reset_calls.append(caller_key)
+        self._budget.pop(caller_key, None)
+
+    async def shutdown(self) -> None:
         return None
-
-    async def request_approval(
-        self,
-        request_id: str,
-        plan_summary: str,
-        side_effects: List[str],
-        safety_assessment: str,
-        estimated_duration_ms: int,
-    ) -> str:
-        self._round_count += 1
-        self.approval_calls.append(
-            {
-                "request_id": request_id,
-                "plan_summary": plan_summary,
-                "side_effects": side_effects,
-                "safety_assessment": safety_assessment,
-                "estimated_duration_ms": estimated_duration_ms,
-            }
-        )
-        if self.approval_error is not None:
-            raise self.approval_error
-        return self.approval_response
-
-
-# ===========================================================================
-# Helpers
-# ===========================================================================
 
 
 def _never_cancel() -> bool:
@@ -303,29 +332,29 @@ class TestConstructor:
     def test_constructor_stores_dependencies(self) -> None:
         llm = FakeLLMPort()
         fab = FakeFabricRetrieval()
-        hil = FakeHILCoordinator()
+        hil = FakeHILPort()
         svc = ValidateService(llm, fab, hil)
         assert svc.llm_port is llm
         assert svc.fabric_retrieval is fab
-        assert svc.hil_coord is hil
+        assert svc.hil_port is hil
 
     def test_constructor_rejects_none_llm(self) -> None:
         with pytest.raises(TypeError, match="llm_port"):
-            ValidateService(None, FakeFabricRetrieval(), FakeHILCoordinator())  # type: ignore[arg-type]
+            ValidateService(None, FakeFabricRetrieval(), FakeHILPort())  # type: ignore[arg-type]
 
     def test_constructor_rejects_none_fabric(self) -> None:
         with pytest.raises(TypeError, match="fabric_retrieval"):
-            ValidateService(FakeLLMPort(), None, FakeHILCoordinator())  # type: ignore[arg-type]
+            ValidateService(FakeLLMPort(), None, FakeHILPort())  # type: ignore[arg-type]
 
     def test_constructor_rejects_none_hil(self) -> None:
-        with pytest.raises(TypeError, match="hil_coord"):
+        with pytest.raises(TypeError, match="hil_port"):
             ValidateService(FakeLLMPort(), FakeFabricRetrieval(), None)  # type: ignore[arg-type]
 
     def test_uses_slots(self) -> None:
         assert "__slots__" in dir(ValidateService)
         assert "_llm_port" in ValidateService.__slots__
         assert "_fabric_retrieval" in ValidateService.__slots__
-        assert "_hil_coord" in ValidateService.__slots__
+        assert "_hil_port" in ValidateService.__slots__
 
 
 # ===========================================================================
@@ -338,7 +367,7 @@ class TestDAGCycleDetection:
 
     async def test_acyclic_dag_passes(self) -> None:
         """Linear DAG: s1 -> s2 -> s3."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1"), _step("s2"), _step("s3")]
         deps = {"s2": ["s1"], "s3": ["s2"]}
         passed, issues = svc._check_dag_acyclicity(steps, deps)
@@ -347,7 +376,7 @@ class TestDAGCycleDetection:
 
     async def test_simple_cycle_detected(self) -> None:
         """s1 -> s2 -> s1 cycle."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1"), _step("s2")]
         deps = {"s1": ["s2"], "s2": ["s1"]}
         passed, issues = svc._check_dag_acyclicity(steps, deps)
@@ -357,7 +386,7 @@ class TestDAGCycleDetection:
 
     async def test_three_node_cycle(self) -> None:
         """s1 -> s2 -> s3 -> s1 cycle."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1"), _step("s2"), _step("s3")]
         deps = {"s1": ["s3"], "s2": ["s1"], "s3": ["s2"]}
         passed, issues = svc._check_dag_acyclicity(steps, deps)
@@ -365,7 +394,7 @@ class TestDAGCycleDetection:
 
     async def test_self_reference_detected(self) -> None:
         """Step depends on itself."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1")]
         deps = {"s1": ["s1"]}
         passed, issues = svc._check_dag_acyclicity(steps, deps)
@@ -375,7 +404,7 @@ class TestDAGCycleDetection:
 
     async def test_dangling_dependency(self) -> None:
         """Dependency references non-existent step."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1"), _step("s2")]
         deps = {"s2": ["s99"]}
         passed, issues = svc._check_dag_acyclicity(steps, deps)
@@ -386,7 +415,7 @@ class TestDAGCycleDetection:
 
     async def test_duplicate_step_ids(self) -> None:
         """Duplicate step IDs detected."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1"), _step("s1", capability="tool.other")]
         deps = {}
         passed, issues = svc._check_dag_acyclicity(steps, deps)
@@ -396,7 +425,7 @@ class TestDAGCycleDetection:
 
     async def test_inter_step_ref_without_dep(self) -> None:
         """Param references $s1.result.x but s1 not in deps."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [
             _step("s1"),
             _step("s2", params={"input": "$s1.result.output"}),
@@ -409,7 +438,7 @@ class TestDAGCycleDetection:
 
     async def test_inter_step_ref_with_dep_passes(self) -> None:
         """Param references $s1.result.x AND s1 is in deps -- valid."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [
             _step("s1"),
             _step("s2", params={"input": "$s1.result.output"}),
@@ -430,7 +459,7 @@ class TestCapabilityExistence:
     """Capability existence check (PLAN-08)."""
 
     async def test_known_capability_passes(self) -> None:
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1", capability="tool.demo")]
         cached = [_scored_cap("tool.demo")]
         passed, issues = svc._check_capability_existence(steps, cached)
@@ -438,7 +467,7 @@ class TestCapabilityExistence:
         assert len([i for i in issues if i.severity == SEVERITY_ERROR]) == 0
 
     async def test_unknown_capability_fails(self) -> None:
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1", capability="tool.nonexistent")]
         cached = [_scored_cap("tool.demo")]
         passed, issues = svc._check_capability_existence(steps, cached)
@@ -449,7 +478,7 @@ class TestCapabilityExistence:
 
     async def test_dollar_prefix_skipped(self) -> None:
         """Inter-step reference capabilities ($s1.result.cap) are skipped."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1", capability="$s2.result.agent_name")]
         cached = [_scored_cap("tool.demo")]
         passed, issues = svc._check_capability_existence(steps, cached)
@@ -457,7 +486,7 @@ class TestCapabilityExistence:
 
     async def test_meta_build_agent_skipped(self) -> None:
         """Reserved meta-capability is always valid."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1", capability=_META_CAPABILITY_BUILD_AGENT)]
         cached = []
         passed, issues = svc._check_capability_existence(steps, cached)
@@ -469,7 +498,7 @@ class TestCapabilityExistence:
         This can't happen due to PlanStep.__post_init__ validation,
         but we test the method directly.
         """
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         # Create step with non-empty cap for PlanStep, then test method directly.
         # The method checks steps directly, so we simulate.
         step = PlanStep(id="s1", capability="x")
@@ -480,14 +509,14 @@ class TestCapabilityExistence:
 
     async def test_no_cache_skips_check(self) -> None:
         """Without cached capabilities, check is skipped (cannot verify)."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1", capability="tool.unknown")]
         passed, issues = svc._check_capability_existence(steps, None)
         assert passed is True  # No errors when no cache.
 
     async def test_unresolved_capability_warning(self) -> None:
         """UNRESOLVED capability from degraded EXPAND gets warning."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1", capability="UNRESOLVED")]
         cached = [_scored_cap("tool.demo")]
         passed, issues = svc._check_capability_existence(steps, cached)
@@ -498,7 +527,7 @@ class TestCapabilityExistence:
 
     async def test_multiple_capabilities_checked(self) -> None:
         """Multiple steps, mix of known and unknown."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [
             _step("s1", capability="tool.known"),
             _step("s2", capability="tool.unknown"),
@@ -522,7 +551,7 @@ class TestConstraintValidation:
 
     async def test_missing_required_param_error(self) -> None:
         """Step missing a required param from contract."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         cap = CapabilityContract(
             name="tool.demo",
             required_inputs=[
@@ -538,7 +567,7 @@ class TestConstraintValidation:
 
     async def test_provided_required_param_passes(self) -> None:
         """Step has required param -- no error."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         cap = CapabilityContract(
             name="tool.demo",
             required_inputs=[
@@ -553,7 +582,7 @@ class TestConstraintValidation:
 
     async def test_inter_step_ref_param_skipped(self) -> None:
         """Inter-step reference params ($s1.result.x) skip required check."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         cap = CapabilityContract(
             name="tool.demo",
             required_inputs=[
@@ -568,7 +597,7 @@ class TestConstraintValidation:
 
     async def test_unsafe_capability_warning(self) -> None:
         """Capability with non-GREEN safety_band_min gets warning."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         cap = CapabilityContract(name="tool.risky", safety_band_min="AMBER")
         cached = [ScoredCapability(contract=cap, score=0.9)]
         steps = [_step("s1", capability="tool.risky")]
@@ -579,7 +608,7 @@ class TestConstraintValidation:
 
     async def test_no_contract_skips_validation(self) -> None:
         """Steps without matching contract are skipped."""
-        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(FakeLLMPort(), FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1", capability="tool.unknown", params={})]
         issues = svc._validate_plan_constraints(steps, _ctx(), [])
         assert len(issues) == 0
@@ -606,7 +635,7 @@ class TestLLMArbiter:
                 "completeness": True,
             }
         )
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         result = await svc.execute(_plan(), _request(), _ctx())
         assert result.status == VERDICT_APPROVED
         assert result.confidence == pytest.approx(0.95)
@@ -626,7 +655,7 @@ class TestLLMArbiter:
                 "completeness": False,
             }
         )
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         result = await svc.execute(_plan(), _request(), _ctx())
         assert result.status == VERDICT_REVISE
         assert len(result.issues) >= 1
@@ -645,7 +674,7 @@ class TestLLMArbiter:
                 "completeness": False,
             }
         )
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         result = await svc.execute(_plan(), _request(), _ctx())
         assert result.status == VERDICT_REJECT
         error_issues = [i for i in result.issues if i.severity == SEVERITY_ERROR]
@@ -654,7 +683,7 @@ class TestLLMArbiter:
     async def test_structured_capability_used(self) -> None:
         """Arbiter uses STRUCTURED capability (not CHAT)."""
         llm = FakeLLMPort()
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         await svc.execute(_plan(), _request(), _ctx())
         assert len(llm.calls) == 1
         assert llm.calls[0].capability == "STRUCTURED"
@@ -662,21 +691,21 @@ class TestLLMArbiter:
     async def test_temperature_is_0_1(self) -> None:
         """Arbiter uses temperature=0.1 (lowest of all stages)."""
         llm = FakeLLMPort()
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         await svc.execute(_plan(), _request(), _ctx())
         assert llm.calls[0].constraints.temperature == pytest.approx(0.1)
 
     async def test_max_tokens_512(self) -> None:
         """Arbiter uses max_tokens=512."""
         llm = FakeLLMPort()
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         await svc.execute(_plan(), _request(), _ctx())
         assert llm.calls[0].constraints.max_tokens == _ARBITER_MAX_TOKENS
 
     async def test_prompt_contains_intent(self) -> None:
         """Arbiter prompt contains the user's intent."""
         llm = FakeLLMPort()
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         await svc.execute(_plan(), _request("book a restaurant"), _ctx())
         user_msg = llm.calls[0].payload["messages"][1]["content"]
         assert "book a restaurant" in user_msg
@@ -684,7 +713,7 @@ class TestLLMArbiter:
     async def test_prompt_contains_step_details(self) -> None:
         """Arbiter prompt includes step details."""
         llm = FakeLLMPort()
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1", capability="tool.search"), _step("s2", capability="tool.book")]
         plan = _plan(steps=steps, dependencies={"s2": ["s1"]})
         await svc.execute(plan, _request(), _ctx())
@@ -704,7 +733,7 @@ class TestHILApproval:
     async def test_no_side_effects_auto_approves(self) -> None:
         """No side-effect steps -- no HIL triggered."""
         llm = FakeLLMPort()
-        hil = FakeHILCoordinator()
+        hil = FakeHILPort()
         svc = ValidateService(llm, FakeFabricRetrieval(), hil)
         result = await svc.execute(
             _plan(steps=[_step("s1", has_side_effects=False)]),
@@ -727,7 +756,7 @@ class TestHILApproval:
                 "completeness": True,
             }
         )
-        hil = FakeHILCoordinator()
+        hil = FakeHILPort()
         svc = ValidateService(llm, FakeFabricRetrieval(), hil)
         result = await svc.execute(
             _plan(steps=[_step("s1", has_side_effects=True, safety_band_min="GREEN")]),
@@ -750,7 +779,7 @@ class TestHILApproval:
                 "completeness": True,
             }
         )
-        hil = FakeHILCoordinator()
+        hil = FakeHILPort()
         hil.approval_response = "approve"
         svc = ValidateService(llm, FakeFabricRetrieval(), hil)
         result = await svc.execute(
@@ -774,8 +803,15 @@ class TestHILApproval:
                 "completeness": True,
             }
         )
-        hil = FakeHILCoordinator()
-        hil.approval_response = "reject"
+        hil = FakeHILPort()
+        from k1.hil.types import ApprovalResponse
+
+        hil._approval_response = ApprovalResponse(
+            hil_request_id="fake",
+            decision="reject",
+            modifications=None,
+            timed_out=False,
+        )
         svc = ValidateService(llm, FakeFabricRetrieval(), hil)
         result = await svc.execute(
             _plan(steps=[_step("s1", has_side_effects=True, safety_band_min="AMBER")]),
@@ -799,8 +835,15 @@ class TestHILApproval:
                 "completeness": True,
             }
         )
-        hil = FakeHILCoordinator()
-        hil.approval_error = TimeoutError("HIL timeout")
+        hil = FakeHILPort()
+        from k1.hil.types import ApprovalResponse
+
+        hil._approval_response = ApprovalResponse(
+            hil_request_id="fake",
+            decision="approve",
+            modifications=None,
+            timed_out=True,
+        )
         svc = ValidateService(llm, FakeFabricRetrieval(), hil)
         result = await svc.execute(
             _plan(steps=[_step("s1", has_side_effects=True, safety_band_min="GREEN")]),
@@ -822,8 +865,15 @@ class TestHILApproval:
                 "completeness": True,
             }
         )
-        hil = FakeHILCoordinator()
-        hil.approval_error = TimeoutError("HIL timeout")
+        hil = FakeHILPort()
+        from k1.hil.types import ApprovalResponse
+
+        hil._approval_response = ApprovalResponse(
+            hil_request_id="fake",
+            decision="approve",
+            modifications=None,
+            timed_out=True,
+        )
         svc = ValidateService(llm, FakeFabricRetrieval(), hil)
         result = await svc.execute(
             _plan(steps=[_step("s1", has_side_effects=True, safety_band_min="AMBER")]),
@@ -845,7 +895,7 @@ class TestErrorRecovery:
         """Path 2: arbiter fails but deterministic checks passed -- auto-approve."""
         llm = FakeLLMPort()
         llm.error = TimeoutError("LLM timeout")
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         result = await svc.execute(_plan(), _request(), _ctx())
         assert result.status == VERDICT_APPROVED
         assert result.deterministic_pass is True
@@ -856,7 +906,7 @@ class TestErrorRecovery:
         """Path 3: arbiter fails AND deterministic checks failed -- reject."""
         llm = FakeLLMPort()
         llm.error = TimeoutError("LLM timeout")
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         # Create a plan with a cycle to fail deterministic checks.
         steps = [_step("s1"), _step("s2")]
         deps = {"s1": ["s2"], "s2": ["s1"]}
@@ -868,7 +918,7 @@ class TestErrorRecovery:
     async def test_cancel_during_validate_raises(self) -> None:
         """Cancellation check raises ValidateRejectedError."""
         llm = FakeLLMPort()
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         ctx = StageContext(
             request_id="req-1",
             trace_id="trace-1",
@@ -883,7 +933,7 @@ class TestErrorRecovery:
         """Arbiter returns garbage -- auto-approve on deterministic pass."""
         llm = FakeLLMPort()
         llm.set_response("this is not json at all!!")
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         result = await svc.execute(_plan(), _request(), _ctx())
         assert result.status == VERDICT_APPROVED
         assert "unparseable" in result.rationale.lower()
@@ -900,7 +950,7 @@ class TestErrorRecovery:
                 "completeness": True,
             }
         )
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         result = await svc.execute(_plan(), _request(), _ctx())
         assert result.status == VERDICT_APPROVED
 
@@ -926,7 +976,7 @@ class TestMicroValidate:
                 "completeness": True,
             }
         )
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         result = await svc.micro_execute(_plan(), _ctx())
         assert result.status == VERDICT_APPROVED
         assert "best-effort" in result.rationale.lower()
@@ -944,7 +994,7 @@ class TestMicroValidate:
                 "completeness": False,
             }
         )
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         result = await svc.micro_execute(_plan(), _ctx())
         assert result.status == VERDICT_REJECT
 
@@ -961,7 +1011,7 @@ class TestMicroValidate:
                 "completeness": True,
             }
         )
-        hil = FakeHILCoordinator()
+        hil = FakeHILPort()
         svc = ValidateService(llm, FakeFabricRetrieval(), hil)
         result = await svc.micro_execute(
             _plan(steps=[_step("s1", has_side_effects=True, safety_band_min="AMBER")]),
@@ -973,14 +1023,14 @@ class TestMicroValidate:
     async def test_micro_uses_reduced_budget(self) -> None:
         """Micro-validate uses reduced token budget."""
         llm = FakeLLMPort()
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         await svc.micro_execute(_plan(), _ctx())
         assert llm.calls[0].constraints.max_tokens == _MICRO_ARBITER_MAX_TOKENS
 
     async def test_micro_deterministic_fail_rejects(self) -> None:
         """Micro-validate with DAG cycle rejects without LLM call."""
         llm = FakeLLMPort()
-        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILCoordinator())
+        svc = ValidateService(llm, FakeFabricRetrieval(), FakeHILPort())
         steps = [_step("s1"), _step("s2")]
         deps = {"s1": ["s2"], "s2": ["s1"]}
         plan = _plan(steps=steps, dependencies=deps)

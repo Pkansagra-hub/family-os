@@ -26,14 +26,21 @@ import json
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 from k1.bus.ports.bus import IBus
 from k1.concierge.config import get_config
 from k1.concierge.llm.types import ToolCallResult, ToolSchema
 from k1.concierge.tools.implementations import ToolContext, execute_tool
 from k1.concierge.tools.result_protocol import ToolResult
+
+# Policy gate signature: returns None to pass through (ALLOW),
+# or a fully-formed ToolResult to short-circuit step-0.
+# Wired by k1.selfmodel.adapters.concierge_policy_gate.ConciergePolicyGate
+# at session bootstrap when ``KernelConfig.enable_self_model`` is True.
+PolicyGateFn = Callable[[ToolCallResult], Awaitable[Optional[ToolResult]]]
 
 # Optional bus import for tool lifecycle events
 try:
@@ -257,6 +264,7 @@ class ToolDispatcher:
         ctx: ToolContext,
         tier: str = "LOW",
         bus: IBus | None = None,
+        policy_gate: PolicyGateFn | None = None,
     ):
         self.actor = actor
         self.allowlist = frozenset(allowlist)
@@ -264,6 +272,9 @@ class ToolDispatcher:
         self.ctx = ctx
         self.tier = tier
         self._bus = bus
+        # Step-0 policy gate (k1.selfmodel.ConciergePolicyGate). When
+        # None the dispatcher behaves identically to its pre-M2 baseline.
+        self._policy_gate: PolicyGateFn | None = policy_gate
         self.call_count: int = 0
         self.call_history: list[DispatchRecord] = []
         self._budget_limit = get_config().tools.budget_limits.get(tier, 5)
@@ -276,6 +287,24 @@ class ToolDispatcher:
         )
 
     # -----------------------------------------------------------------
+    # M5.E3.I3: post-construction policy gate install
+    # -----------------------------------------------------------------
+    def set_policy_gate(self, policy_gate: PolicyGateFn | None) -> None:
+        """Install (or clear) the step-0 policy gate.
+
+        Used by ``KernelService.create_session`` at P3.5 when
+        ``KernelConfig.enable_self_model=True`` to wire the
+        per-session ``ConciergePolicyGate``. Passing ``None`` reverts
+        to the pre-M2 baseline pipeline.
+        """
+        self._policy_gate = policy_gate
+
+    @property
+    def policy_gate(self) -> PolicyGateFn | None:
+        """Current step-0 policy gate (``None`` when not wired)."""
+        return self._policy_gate
+
+    # -----------------------------------------------------------------
     # The 7-step dispatch pipeline
     # -----------------------------------------------------------------
 
@@ -283,6 +312,8 @@ class ToolDispatcher:
         """Execute the 7-step dispatch pipeline for a single tool call.
 
         Steps:
+          0. Policy gate (k1.selfmodel) -- only when wired; baseline
+             behaviour is unchanged when ``policy_gate is None``.
           1. Allowlist check
           2. Budget check
           3. Schema validation
@@ -311,6 +342,33 @@ class ToolDispatcher:
             name,
             str(args)[:200],
         )
+
+        # Step 0: Policy gate (selfmodel). Off by default; when wired,
+        # short-circuits with a structured ToolResult on DENY /
+        # REQUIRE_IDENTITY / REQUIRE_CONFIRMATION-rejected /
+        # DEFER_OFFLINE. ALLOW returns None and we proceed.
+        if self._policy_gate is not None:
+            try:
+                gated = await self._policy_gate(tool_call)
+            except Exception:
+                logger.exception(
+                    "dispatch  policy_gate raised actor=%s tool=%s; failing closed",
+                    self.actor,
+                    name,
+                )
+                return ToolResult(
+                    tool_name=name,
+                    status="error",
+                    error="policy gate error (failing closed)",
+                )
+            if gated is not None:
+                logger.info(
+                    "dispatch BLOCKED (policy_gate)  actor=%s tool=%s status=%s",
+                    self.actor,
+                    name,
+                    gated.status,
+                )
+                return gated
 
         # Step 1: Allowlist check
         if name not in self.allowlist:
