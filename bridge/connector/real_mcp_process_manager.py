@@ -40,6 +40,7 @@ import time
 import weakref
 from typing import Any, Iterable
 
+from ._tool_descriptor_helpers import to_tool_descriptors
 from .contracts import (
     AdapterHealth,
     AdapterQuarantinedError,
@@ -53,9 +54,7 @@ from .crash_budget import (
 )
 from .mcp_child import MCPChild
 from .mcp_process_manager import MCPProcessManager
-from ._tool_descriptor_helpers import to_tool_descriptors
 from .transport import MCPStdioTransport
-
 
 # Module-level registry of live managers; the atexit hook walks it on
 # parent shutdown to ensure no orphaned children survive a crash.
@@ -178,8 +177,7 @@ class RealMCPProcessManager:
 
             if child.state == "quarantined":
                 raise AdapterQuarantinedError(
-                    f"adapter {adapter_id!r} is quarantined; "
-                    "operator must reset before restart"
+                    f"adapter {adapter_id!r} is quarantined; " "operator must reset before restart"
                 )
 
             child.state = "starting"
@@ -188,14 +186,15 @@ class RealMCPProcessManager:
             transport = self._make_transport(command=command, args=args, cwd=cwd)
             try:
                 tools = await asyncio.wait_for(
-                    transport.open(env=env), timeout=self._init_timeout_s,
+                    transport.open(env=env),
+                    timeout=self._init_timeout_s,
                 )
             except asyncio.TimeoutError as exc:
                 child.crash_budget.record()
                 if child.crash_budget.is_over_budget():
                     child.mark_quarantined(
                         message=f"init timeout after "
-                                f"{self._init_timeout_s:g}s; crash budget exhausted",
+                        f"{self._init_timeout_s:g}s; crash budget exhausted",
                     )
                 else:
                     child.mark_unhealthy(message="init timeout")
@@ -212,8 +211,7 @@ class RealMCPProcessManager:
                 child.crash_budget.record()
                 if child.crash_budget.is_over_budget():
                     child.mark_quarantined(
-                        message=f"init failed: {type(exc).__name__}; "
-                                "crash budget exhausted",
+                        message=f"init failed: {type(exc).__name__}; " "crash budget exhausted",
                     )
                 else:
                     child.mark_unhealthy(message=f"init failed: {exc}")
@@ -256,12 +254,12 @@ class RealMCPProcessManager:
                 f"adapter {adapter_id!r} is quarantined ({child.message})"
             )
         if child.state != "ready" or child.transport is None:
-            raise OfflineAdapterError(
-                f"adapter {adapter_id!r} not ready (state={child.state})"
-            )
+            raise OfflineAdapterError(f"adapter {adapter_id!r} not ready (state={child.state})")
         try:
             return await child.transport.invoke(
-                tool=tool, args=args, timeout_s=self._invoke_timeout_s,
+                tool=tool,
+                args=args,
+                timeout_s=self._invoke_timeout_s,
             )
         except Exception as exc:  # noqa: BLE001
             # Don't quarantine on tool errors — the child may still be

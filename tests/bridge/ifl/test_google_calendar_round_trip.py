@@ -36,19 +36,15 @@ from bridge.connector import (
     RealMCPProcessManager,
 )
 from bridge.ifl.adapters.google_calendar.server import events_list_handler
-from k0.pipelines.p_ifl import ingest as ifl_ingest
 from k0.pipelines.p_ifl import google_calendar_normalizer as gcal_normalizer
+from k0.pipelines.p_ifl import ingest as ifl_ingest
 from tooling.contracts.sign_manifest import sign_manifest
 
 pytestmark = pytest.mark.asyncio
 
 _REPO = Path(__file__).resolve().parents[3]
 _GCAL_MANIFEST_PATH = (
-    _REPO
-    / "bridge"
-    / "contracts"
-    / "manifests"
-    / "ifl.google_calendar.events.list.v1.yaml"
+    _REPO / "bridge" / "contracts" / "manifests" / "ifl.google_calendar.events.list.v1.yaml"
 )
 _DEV_PRIV = _REPO / "tests" / "fixtures" / "dev_trust_anchor.priv.json"
 
@@ -64,10 +60,14 @@ def _fixture_payload() -> dict[str, Any]:
             {
                 "id": "evt_1",
                 "summary": "Coffee with Rachel",
-                "start": {"date_time": "2026-06-01T09:00:00-07:00",
-                          "time_zone": "America/Los_Angeles"},
-                "end": {"date_time": "2026-06-01T10:00:00-07:00",
-                        "time_zone": "America/Los_Angeles"},
+                "start": {
+                    "date_time": "2026-06-01T09:00:00-07:00",
+                    "time_zone": "America/Los_Angeles",
+                },
+                "end": {
+                    "date_time": "2026-06-01T10:00:00-07:00",
+                    "time_zone": "America/Los_Angeles",
+                },
                 "status": "confirmed",
                 "location": "Starbucks",
             },
@@ -97,33 +97,37 @@ def fixture_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 class TestEventsListHandler:
-    def test_returns_fixture_in_fixture_mode(
-        self, fixture_path: Path
-    ) -> None:
-        result = events_list_handler({
-            "account_id": "acc_1",
-            "time_min": "2026-06-01T00:00:00Z",
-            "time_max": "2026-06-30T00:00:00Z",
-        })
+    def test_returns_fixture_in_fixture_mode(self, fixture_path: Path) -> None:
+        result = events_list_handler(
+            {
+                "account_id": "acc_1",
+                "time_min": "2026-06-01T00:00:00Z",
+                "time_max": "2026-06-30T00:00:00Z",
+            }
+        )
         assert "events" in result
         assert len(result["events"]) == 2
         assert result["events"][0]["id"] == "evt_1"
 
     def test_requires_account_id(self, fixture_path: Path) -> None:
         with pytest.raises(ValueError, match="account_id"):
-            events_list_handler({
-                "account_id": "",
-                "time_min": "2026-06-01T00:00:00Z",
-                "time_max": "2026-06-30T00:00:00Z",
-            })
+            events_list_handler(
+                {
+                    "account_id": "",
+                    "time_min": "2026-06-01T00:00:00Z",
+                    "time_max": "2026-06-30T00:00:00Z",
+                }
+            )
 
     def test_requires_time_min_and_time_max(self, fixture_path: Path) -> None:
         with pytest.raises(ValueError, match="time_min"):
-            events_list_handler({
-                "account_id": "acc_1",
-                "time_min": "",
-                "time_max": "2026-06-30T00:00:00Z",
-            })
+            events_list_handler(
+                {
+                    "account_id": "acc_1",
+                    "time_min": "",
+                    "time_max": "2026-06-30T00:00:00Z",
+                }
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +152,8 @@ class TestNormalizerAndIngest:
         with pytest.raises(ValueError, match="event.id"):
             gcal_normalizer.normalize_event(
                 {"summary": "no id"},
-                account_id="acc_1", session_id="sess_1",
+                account_id="acc_1",
+                session_id="sess_1",
             )
 
     def test_text_includes_summary_and_start(self) -> None:
@@ -158,7 +163,8 @@ class TestNormalizerAndIngest:
                 "summary": "Coffee",
                 "start": {"date_time": "2026-06-01T09:00:00-07:00"},
             },
-            account_id="acc_1", session_id="sess_1",
+            account_id="acc_1",
+            session_id="sess_1",
         )
         assert "Coffee" in atom["text"]
         assert "2026-06-01" in atom["text"]
@@ -170,7 +176,8 @@ class TestNormalizerAndIngest:
                 "summary": "x",
                 "start": {"date_time": "2026-06-01T09:00:00-07:00"},
             },
-            account_id="acc_1", session_id="sess_outer",
+            account_id="acc_1",
+            session_id="sess_outer",
         )
         assert "ifl_gcal" in atom["session_id"]
         assert "acc_1" in atom["session_id"]
@@ -179,7 +186,8 @@ class TestNormalizerAndIngest:
     def test_ingest_atoms_returns_one_ack_per_atom(self) -> None:
         atoms = gcal_normalizer.normalize_response(
             _fixture_payload(),
-            account_id="acc_1", session_id="sess_1",
+            account_id="acc_1",
+            session_id="sess_1",
         )
         results = ifl_ingest.ingest_atoms(atoms)
         assert len(results) == 2
@@ -207,9 +215,7 @@ class TestMS5ExitGoogleCalendarRoundTrip:
         → real fastmcp stdio subprocess (GCal fixture mode)
         → events_list tool → response normalized → P02 ingest acks.
         """
-        manifest = yaml.safe_load(
-            _GCAL_MANIFEST_PATH.read_text(encoding="utf-8")
-        )
+        manifest = yaml.safe_load(_GCAL_MANIFEST_PATH.read_text(encoding="utf-8"))
         # Replace the manifest's server_command so we run the GCal
         # adapter using THIS interpreter (the manifest pins
         # ``python``, which on Windows CI may resolve to a different
@@ -223,16 +229,15 @@ class TestMS5ExitGoogleCalendarRoundTrip:
         # manifest's mcp.env block (RealMCPProcessManager._build_env
         # only forwards a tiny safelist plus mcp.env entries).
         manifest["mcp"].setdefault("env", {})
-        manifest["mcp"]["env"]["BRIDGE_GCAL_FIXTURE_PATH"] = (
-            os.environ["BRIDGE_GCAL_FIXTURE_PATH"]
-        )
+        manifest["mcp"]["env"]["BRIDGE_GCAL_FIXTURE_PATH"] = os.environ["BRIDGE_GCAL_FIXTURE_PATH"]
         # We mutated the manifest after loading it from disk, so the
         # baked-in signature no longer matches. Re-sign with the dev
         # trust anchor in a tmp file so the production verifier
         # (no trust_unsigned) accepts it.
         signed_path = tmp_path / "ifl.google_calendar.events.list.v1.yaml"
         signed_path.write_text(
-            yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8",
+            yaml.safe_dump(manifest, sort_keys=False),
+            encoding="utf-8",
         )
         sign_manifest(
             manifest_path=signed_path,
@@ -274,7 +279,8 @@ class TestMS5ExitGoogleCalendarRoundTrip:
 
             atoms = gcal_normalizer.normalize_response(
                 result.data,
-                account_id="acc_1", session_id="sess_exit",
+                account_id="acc_1",
+                session_id="sess_exit",
             )
             acks = ifl_ingest.ingest_atoms(atoms)
             assert len(acks) == 2
