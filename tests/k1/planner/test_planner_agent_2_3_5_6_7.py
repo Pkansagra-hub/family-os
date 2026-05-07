@@ -40,8 +40,6 @@ from k1.fabric.ports.event_port import SubscriptionHandle
 from k1.orchestrator.types import PlanRequest
 from k1.planner.config import PlannerConfig
 from k1.planner.events import (
-    TOPIC_HIL_APPROVAL_RESP,
-    TOPIC_HIL_CLARIFICATION_RESP,
     TOPIC_PLAN_CANCEL,
     TOPIC_PLAN_CANCELLED,
     TOPIC_PLAN_REQUEST,
@@ -257,7 +255,7 @@ class TestINITSubscriptions:
             pass
 
         # Exactly 4 subscriptions were created
-        assert len(ep.subscriptions) == 4
+        assert len(ep.subscriptions) == 2
 
     @pytest.mark.asyncio
     async def test_subscribes_to_plan_request(self) -> None:
@@ -305,51 +303,9 @@ class TestINITSubscriptions:
         topics = [t for t, _ in ep.subscriptions]
         assert TOPIC_PLAN_CANCEL in topics
 
-    @pytest.mark.asyncio
-    async def test_subscribes_to_hil_clarification(self) -> None:
-        """start() subscribes to TOPIC_HIL_CLARIFICATION_RESP."""
-        mailbox = QueueMailboxPort()
-        pipeline = RecordingPipelineController()
-        ep = RecordingEventPort()
-        agent = _make_agent(mailbox=mailbox, pipeline=pipeline, event_port=ep)
-
-        async def _stop() -> None:
-            await asyncio.sleep(0.05)
-            await agent.stop()
-
-        stop_task = asyncio.create_task(_stop())
-        await agent.start()
-        stop_task.cancel()
-        try:
-            await stop_task
-        except asyncio.CancelledError:
-            pass
-
-        topics = [t for t, _ in ep.subscriptions]
-        assert TOPIC_HIL_CLARIFICATION_RESP in topics
-
-    @pytest.mark.asyncio
-    async def test_subscribes_to_hil_approval(self) -> None:
-        """start() subscribes to TOPIC_HIL_APPROVAL_RESP."""
-        mailbox = QueueMailboxPort()
-        pipeline = RecordingPipelineController()
-        ep = RecordingEventPort()
-        agent = _make_agent(mailbox=mailbox, pipeline=pipeline, event_port=ep)
-
-        async def _stop() -> None:
-            await asyncio.sleep(0.05)
-            await agent.stop()
-
-        stop_task = asyncio.create_task(_stop())
-        await agent.start()
-        stop_task.cancel()
-        try:
-            await stop_task
-        except asyncio.CancelledError:
-            pass
-
-        topics = [t for t, _ in ep.subscriptions]
-        assert TOPIC_HIL_APPROVAL_RESP in topics
+    # E5 (HIL Unification): tests for HIL subscription removed -- planner
+    # no longer subscribes to TOPIC_HIL_CLARIFICATION_RESP / TOPIC_HIL_APPROVAL_RESP.
+    # HIL coordination flows through the unified IHILPort adapter.
 
     @pytest.mark.asyncio
     async def test_subscriptions_stored_in_agent(self) -> None:
@@ -376,7 +332,7 @@ class TestINITSubscriptions:
         except asyncio.CancelledError:
             pass
 
-        assert len(agent._subscriptions) == 4
+        assert len(agent._subscriptions) == 2
         for sub in agent._subscriptions:
             assert isinstance(sub, SubscriptionHandle)
 
@@ -408,8 +364,6 @@ class TestINITSubscriptions:
         expected = {
             TOPIC_PLAN_REQUEST,
             TOPIC_PLAN_CANCEL,
-            TOPIC_HIL_CLARIFICATION_RESP,
-            TOPIC_HIL_APPROVAL_RESP,
         }
         assert topics == expected
 
@@ -636,19 +590,12 @@ class TestEventHandlerPlanCancel:
 
 
 class TestEventHandlerHILStubs:
-    """HIL handlers are V1 stubs that do not crash."""
+    """E5 (HIL Unification): HIL response handlers were removed from PlannerAgent."""
 
-    @pytest.mark.asyncio
-    async def test_hil_clarification_does_not_crash(self) -> None:
+    def test_hil_handlers_removed(self) -> None:
         agent = _make_agent()
-        agent._on_hil_clarification(TOPIC_HIL_CLARIFICATION_RESP, {"data": "test"})
-        # No exception = pass
-
-    @pytest.mark.asyncio
-    async def test_hil_approval_does_not_crash(self) -> None:
-        agent = _make_agent()
-        agent._on_hil_approval(TOPIC_HIL_APPROVAL_RESP, {"data": "test"})
-        # No exception = pass
+        assert not hasattr(agent, "_on_hil_clarification")
+        assert not hasattr(agent, "_on_hil_approval")
 
 
 # ===========================================================================
@@ -836,7 +783,7 @@ class TestShutdownUnsubscribe:
         except asyncio.CancelledError:
             pass
 
-        assert len(unsubscribed) == 4
+        assert len(unsubscribed) == 2
 
 
 # ===========================================================================

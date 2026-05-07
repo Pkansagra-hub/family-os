@@ -1,8 +1,36 @@
 # Bridge Architecture
 
 > **Module:** `bridge`
-> **Status:** MS-2 Implementation
-> **Updated:** 2026-04-10
+> **Status:** MS-3a CLOSED · MS-3b PENDING
+> **Last code-reality sweep:** 2026-05-09
+>
+> **What MS-3a shipped (verified by `tests/bridge/client/`, `tests/tooling/ci/gates/test_bridge_client_construction_gate.py`, all 7 CI gates green):**
+>
+> - `HttpBridgeClient` (`bridge/client.py`) — real-HTTP composite client, slots-bound namespace bag exposing per-contract publishers (`client.memory_write_v1.publish(MemoryWriteV1)`). Construction is restricted to `BridgeRuntime.from_registry` via a private sentinel token; the new CI gate `bridge_client_construction_via_runtime_only` enforces the same property at AST-walk time.
+> - `HttpTransport.publish(*, topic, schema_uri, payload, …)` (`bridge/core/transport/__init__.py`) — builds a fully-signed K0 envelope via `EnvelopeBuilder`, POSTs to `/k0/command.submit`, raises `BridgeTransportError` on non-2xx. Matches the ASGI shape of `InProcessHttpTransport.publish` so generated K1 clients are transport-agnostic.
+> - `BridgeRuntime.from_registry()` extended — when `role == K1` and a `transport` is bound, walks the active manifests and instantiates the generated client for each `status: active` contract; assigns the result to `runtime.client` and `runtime.command`.
+> - First wall violation cleared (MS-3a Epic 3a.2): `k1/memory_writer/adapters/bridge_command_adapter.py` no longer imports `bridge.core.envelope_builder.CommandEnvelope`. The batch surface uses plain dicts; per-contract typed publishing flows through `HttpBridgeClient`. Allowlist line removed from `tooling/ci/known_violations/bridge_imports.txt`.
+> - Topic alias shim removed (MS-3a Epic 3a.4): `bridge/_topic_aliases.py` deleted; `BridgeRuntime.dispatch()` no longer translates `memory.write` → `memory.write.v1`. Callers must supply the canonical versioned topic.
+> - 7th CI gate added: `tooling/ci/gates/bridge_client_construction_via_runtime_only.py` (mode `fail`).
+>
+> **What MS-2.5 shipped (verified by `tests/bridge/contracts/test_ms_2_5_exit_criterion.py`):**
+>
+> - Contract registry under `bridge/contracts/manifests/` + `bridge/contracts/schemas/` + `bridge/contracts/_meta/` (meta-schema, feature flags).
+> - Codegen toolchain under `tooling/contracts/` (datamodel-code-generator Python API, deterministic).
+> - Vendored generated tree under `bridge/_generated/{k0,k1}/{models,handlers,clients,ports}/`.
+> - `BridgeRuntime` + `HandlerRegistry` (`bridge/runtime.py`) — manifest-driven, fail-loud on unbound contracts.
+> - First contract live: `memory.write.v1` round-trips end-to-end via `InProcessHttpTransport` (real httpx ASGI) → FastAPI dispatcher (`bridge/testing/dispatcher_app.py`) → hand-written impl in `bridge/handlers/k0/memory_write_v1.py` → K0 P02 ingest stub.
+> - 6/6 MS-2.5 CI gates GREEN at `--fail-on-violation` against the real repo (`python -m tooling.ci.run_all_gates --repo-root .`).
+> - `BridgeAwareLocalBus` proxy (`bridge/bus_guard.py`) — refuses `bus.publish(<bridge_topic>, …)` that bypasses the registry (R10 mitigation).
+> - Observability primitives (`bridge/obs/metrics.py`): `bridge_runtime_up`, `bridge_memory_write_v1_*` counters + latency histogram.
+>
+> **What is still pre-MS-3b (NOT yet shipped, tracked in [bridge_implementation_plan.md](../docs/architecture/whiteboard_k1/bridge_implementation_plan.md)):**
+>
+> - Outbox + DEGRADED state machine (MS-3b).
+> - Query / SSE / Obs / Feedback ports (MS-3c–3e).
+> - Connector Gateway (MS-5) and LAN device sync (MS-6).
+>
+> The diagrams and prose below describe the **target architecture**. Each section now flags `[shipped]`, `[partial]`, or `[planned]` against the MS-2.5 close.
 
 ---
 
@@ -81,14 +109,14 @@ Bridge is **device-side, co-located with K1**. It is NOT a cloud component and N
 
 ### 1.2 Deployment Modes
 
-| Mode | K1 | Bridge | K0 | Use Case |
-|------|-----|--------|----|----------|
-| **Dev Monolith** | `localhost` | `in-process` | `docker-compose :8080` | Local development |
-| **Device + Cloud** | Device process | Device process | Remote server | Production |
-| **Full Local** | Device process | Device process | Device Docker | Privacy-max / air-gapped |
-| **Offline** | Device process | Device process | `UNREACHABLE` | No internet, LocalOutbox queues |
+| Mode | K1 | Bridge | K0 | Transport | Status |
+|------|-----|--------|----|-----------|--------|
+| **Dev Monolith** | `localhost` | `in-process` | in-process FastAPI dispatcher | `InProcessHttpTransport` (httpx ASGI, no socket) | **[shipped MS-2.5]** — used by `memory.write.v1` round-trip test |
+| **Device + Cloud** | Device process | Device process | Remote server | `HttpTransport` (real httpx + uvicorn loopback in tests) | **[planned MS-3a]** |
+| **Full Local** | Device process | Device process | Device Docker | `HttpTransport` (LAN target) | **[planned MS-3a]** |
+| **Offline** | Device process | Device process | `UNREACHABLE` | `OnlineFirst[Port]` → `LocalOutbox` (SQLite WAL) | **[planned MS-3b]** |
 
-Only `TransportConfig.base_url` changes between modes. Everything else is identical.
+Only `TransportConfig.base_url` and the transport adapter selection change between modes. Everything else (manifest registry, codegen output, runtime wiring, signing, idem-keys) is identical across all four modes — that property is what the contract substrate buys.
 
 ```python
 # Dev Monolith
@@ -448,7 +476,13 @@ ConnectorGateway.execute(adapter_id, action, params)
     │  Envelope Signing   │──── Ed25519 signature on canonical envelope
     │  (Ed25519SHA512)    │     BLAKE3 idem_key for dedup
     └─────────┬───────────┘     ONE signing op (no request-level HMAC)
-              │                 K0 does NOT sign responses
+              │                 K0 does NOT sign responses (D-2.20)
+              │
+              │   Idem-key formula (code-reality, `bridge/core/envelope_builder.py`):
+              │     idem_key = BLAKE3(topic || \x00 || canonical_json(body) || \x00 || device_id).hex()
+              │   NOTE: differs from earlier prose draft `(tenant_id, space_id, atom_id, minute(ts))`.
+              │   Honored: deterministic per (topic, body bytes, device); replays within retention
+              │   collapse to a single committed receipt at K0 P02 ingest.
               ▼
     ┌─────────────────────┐
     │  Band Enforcement   │──── GREEN: public info
@@ -466,60 +500,91 @@ ConnectorGateway.execute(adapter_id, action, params)
 
 ## 6. Module Layout
 
+Reflects the **shipped tree** as of MS-2.5 close. `[shipped]` = code on disk + tests; `[planned]` = roadmap path under MS-3a/3b/3c/3d/3e/4/5/6.
+
 ```
 bridge/
-├── __init__.py
-├── ARCHITECTURE.md          ← this file
-├── README.md                ← overview + quick start
+├── __init__.py                           [shipped]
+├── ARCHITECTURE.md                       ← this file
+├── README.md
+├── client.py                             [shipped — thin facade; HttpBridgeClient lands MS-3a]
+├── runtime.py                            [shipped] BridgeRuntime + HandlerRegistry, manifest-bound
+├── runtime_errors.py                     [shipped] UnknownTopicError, ContractNotBoundError, ...
+├── bus_guard.py                          [shipped] BridgeAwareLocalBus proxy (R10 mitigation)
+├── _topic_aliases.py                     [shipped] {"memory.write": "memory.write.v1"} — pruned MS-3a
 │
-├── kernel/                  ← K0 port implementations
-│   ├── command_port.py      ← IKernelCommandPort (existing)
-│   ├── query_port.py        ← IKernelQueryPort (planned)
-│   ├── sse_port.py          ← IKernelSSEPort (planned)
-│   └── obs_port.py          ← IKernelObsPort (planned)
+├── contracts/                            [shipped] the SOURCE OF TRUTH — both teams own this
+│   ├── manifests/                        [shipped] one YAML per topic (memory.write.v1, k1.k0.sse.v1, ...)
+│   ├── schemas/                          [shipped] JSON Schemas; thin $ref wrappers allowed (memory.write.v1.json)
+│   ├── _meta/                            [shipped] meta-schema, feature_flags.yaml
+│   └── command_port.protocol.yaml        [legacy — superseded by manifests/]
 │
-├── core/                    ← Shared infrastructure
-│   ├── envelope_builder.py  ← CommandEnvelope construction (existing)
-│   ├── signing.py           ← Ed25519 + BLAKE3 (existing)
-│   ├── transport.py         ← HttpTransport (existing)
-│   ├── query_types.py       ← QueryEnvelope, RecallSelector (planned)
-│   ├── query_builder.py     ← Fluent query builder (planned)
-│   ├── sse_types.py         ← SSETraceEvent, backpressure (planned)
-│   ├── health_checker.py    ← K0 health polling (planned)
-│   └── degraded_mode.py     ← Offline mode manager (planned)
+├── _generated/                           [shipped] codegen output, vendored, AUTOGENERATED header
+│   ├── k0/{models,handlers}/             memory_write_v1.py, ...
+│   └── k1/{models,clients,ports}/        memory_write_v1.py, ...
 │
-├── connector/               ← IFL Connector Gateway
-│   ├── gateway.py           ← Security pipeline (planned)
-│   ├── tool_registry.py     ← Adapter registration (planned)
-│   └── credentials.py       ← OAuth + key store (planned)
+├── handlers/                             [shipped] hand-written impls OUTSIDE _generated/
+│   └── k0/                               memory_write_v1.py → calls k0.pipelines.p02_write_ingest
 │
-├── adapters/                ← IFL device adapters
-│   ├── homekit.py           ← Apple HomeKit (planned)
-│   ├── nest.py              ← Google Nest (planned)
-│   ├── tesla.py             ← Tesla Vehicle (planned)
-│   ├── mqtt.py              ← Generic MQTT (planned)
-│   └── family_sync.py       ← K0 P07 sync (planned)
+├── core/                                 [shipped — partial; query/sse/health expand MS-3b–3d]
+│   ├── envelope_builder.py               [shipped] CommandEnvelope build + BLAKE3 idem-key
+│   ├── signing.py                        [shipped] Ed25519SHA512 + HMAC-SHA256 backends
+│   ├── health.py                         [shipped — types only; HealthChecker lands MS-3b]
+│   └── transport/
+│       ├── in_process_http.py            [shipped] httpx ASGI — no socket; used MS-2.5 tests
+│       └── http.py                       [shipped — class exists; production wiring MS-3a]
 │
-├── sync/                    ← Offline queue + device sync
-│   └── local_outbox.py      ← SQLite WAL queue (existing)
+├── obs/                                  [shipped] Prometheus metrics + structured logs
+│   └── metrics.py                        bridge_runtime_up, bridge_memory_write_v1_*
 │
-├── codecs/                  ← Serialization
-│   └── json_codec.py        ← JSON envelope codec (planned)
+├── testing/                              [shipped] FastAPI dispatcher app for in-process tests
+│   └── dispatcher_app.py                 build_app(*, runtime) → POST /bridge/v1/dispatch
 │
-├── security/                ← Security core (planned)
-│   ├── tokens.py            ← CapabilityToken issue/verify
-│   ├── bands.py             ← Band enforcement (GREEN/AMBER/RED)
-│   └── audit.py             ← Audit logger + exporter
+├── ports/                                [shipped — Protocol shells; concrete impls MS-3a–3e]
 │
-├── contracts/               ← Protocol ABCs
-│   ├── ports.py             ← 5 port Protocols (planned)
-│   └── envelopes.py         ← Envelope type contracts (planned)
+├── kernel/                               [shipped — legacy stubs; replaced by _generated/k0/]
+│   ├── command_port.py
+│   ├── query_port.py                     [planned MS-3c]
+│   ├── sse_port.py                       [planned MS-3d]
+│   └── obs_port.py                       [planned MS-3e]
 │
-├── client.py                ← IBridgeClient facade (planned)
+├── adapters/                             [shipped — K1-side adapter shims; consolidate MS-4]
 │
-└── architecture_diagrams/   ← Mermaid diagrams
+├── connector/                            [planned MS-5] Connector Gateway + IFL
+│
+├── sync/                                 [shipped — local_outbox stub] [planned MS-3b: enriched]
+│   └── local_outbox.py                   SQLite WAL queue (TTL + dead-letter land MS-3b)
+│
+├── codecs/                               [shipped — JSON only] [planned MS-4: msgpack/CBOR]
+│
+└── architecture_diagrams/                Mermaid diagrams (see Section 9 corrections)
     ├── bridge_architecture.mmd
     └── interkernel_fabric_layer.mmd
+```
+
+**Removed from earlier draft (do not recreate):**
+
+- `bridge/security/` — capability tokens / bands / audit are folded into `bridge/core/signing.py` plus generated handlers; a separate `security/` package is YAGNI for v1. Capability-token pipeline lands in MS-5 alongside Connector Gateway.
+- `bridge/contracts/ports.py` and `bridge/contracts/envelopes.py` — superseded by `_generated/k1/ports/` and `_generated/{k0,k1}/models/` produced from the registry. Hand-written contract types are forbidden by the `bridge_not_imported_from_kernels` gate.
+
+**Tooling lives outside `bridge/`:**
+
+```
+tooling/
+├── contracts/                            [shipped MS-2.5]
+│   ├── codegen.py                        datamodel-code-generator Python API
+│   ├── manifest_loader.py                load + meta-schema validation
+│   ├── checksums.py                      schema_sha256 + manifest_sha256 stamping
+│   └── templates/                        Jinja2 (StrictUndefined) — contract_client.py.jinja
+└── ci/
+    ├── gates/                            [shipped] 6 gates, all --fail-on-violation
+    │   ├── no_cross_kernel_imports.py
+    │   ├── bridge_not_imported_from_kernels.py
+    │   ├── manifest_implementation_bound.py
+    │   ├── schema_checksum_stable.py
+    │   ├── bus_yaml_aligned_with_registry.py
+    │   └── single_ibridge_port_definition.py
+    └── run_all_gates.py                  orchestrator → CI exit code
 ```
 
 ---
@@ -532,10 +597,12 @@ bridge/
 ├────────────────────────────────────────────────────────────────────┤
 │                                                                    │
 │  Memory Write ──→ CMD Port ──→ POST /k0/command.submit             │
-│                       topic: memory.write                          │
+│                       topic: memory.write.v1   [shipped MS-2.5]    │
+│                       (legacy alias "memory.write" → v1; alias     │
+│                        removed at MS-3a EXIT, see _topic_aliases)  │
 │                                                                    │
 │  Session Save ──→ CMD Port ──→ POST /k0/command.submit             │
-│                       topic: session.snapshot                      │
+│                       topic: session.snapshot.v1   [planned MS-3b] │
 │                                                                    │
 │  Recall Query ──→ QRY Port ──→ POST /k0/query.recall               │
 │                       selectors: [episodic, semantic]              │
@@ -729,3 +796,60 @@ Target platforms: macOS, iOS, Android, Linux, Windows.
 | Linux | `libsecret` / Secret Service | TPM 2.0 (if available) |
 | Windows | DPAPI / Credential Manager | TPM 2.0 (if available) |
 | Fallback (any) | AES-256-GCM encrypted SQLite | PBKDF2 key from hardware ID |
+
+---
+
+## 11. Implementation Status & Roadmap
+
+This section is the **code-reality bridge** between the target architecture above and the milestone plan in [bridge_implementation_plan.md](../docs/architecture/whiteboard_k1/bridge_implementation_plan.md). It is updated at every milestone close.
+
+### 11.1 What is shipped (MS-2.5 close, 2026-04-25)
+
+| Capability | Source | Test |
+|-----------|--------|------|
+| Contract registry | [bridge/contracts/manifests/](contracts/manifests/), [bridge/contracts/schemas/](contracts/schemas/), [bridge/contracts/_meta/](contracts/_meta/) | `tests/tooling/contracts/test_*.py` |
+| Codegen toolchain | [tooling/contracts/codegen.py](../tooling/contracts/codegen.py) | `tests/tooling/contracts/test_codegen.py` |
+| Generated tree (k0+k1) | [bridge/_generated/](_generated/) | codegen `--check` zero drift |
+| `BridgeRuntime` + `HandlerRegistry` | [bridge/runtime.py](runtime.py) | `tests/bridge/test_runtime.py` |
+| `InProcessHttpTransport` | [bridge/core/transport/in_process_http.py](core/transport/in_process_http.py) | round-trip in exit-criterion test |
+| FastAPI dispatcher (testing) | [bridge/testing/dispatcher_app.py](testing/dispatcher_app.py) | exit-criterion test |
+| First contract live | `memory.write.v1` manifest + impl in [bridge/handlers/k0/memory_write_v1.py](handlers/k0/memory_write_v1.py) | 19 contract tests |
+| Topic aliases (legacy → v1) | [bridge/_topic_aliases.py](_topic_aliases.py) | alias resolution test (D-test) |
+| `BridgeAwareLocalBus` proxy (R10) | [bridge/bus_guard.py](bus_guard.py) | D7 in `test_ms_2_5_exit_criterion.py` |
+| Observability | [bridge/obs/metrics.py](obs/metrics.py) | metric-shape tests |
+| 6 CI gates @ `--fail-on-violation` | [tooling/ci/gates/](../tooling/ci/gates/) + [tooling/ci/run_all_gates.py](../tooling/ci/run_all_gates.py) | `tests/tooling/ci/gates/test_each_gate.py` (22 tests) |
+| MS-2.5 EXIT CRITERION | [tests/bridge/contracts/test_ms_2_5_exit_criterion.py](../tests/bridge/contracts/test_ms_2_5_exit_criterion.py) | 7 D-tests |
+
+### 11.2 Roadmap (per [bridge_implementation_plan.md](../docs/architecture/whiteboard_k1/bridge_implementation_plan.md))
+
+| MS | Scope | Architecture sections it activates |
+|----|-------|------------------------------------|
+| **MS-3a** | Real `HttpBridgeClient` + production `memory.write.v1` over real TCP + K0 receiver `/k0/command.submit` + alias removal | §1.2 (Device+Cloud, Full Local) · §2.1 · §3.1 |
+| **MS-3b** | `K0HealthChecker` + ONLINE/DEGRADED/OFFLINE FSM + `LocalOutbox` (TTL, dead-letter, drain pacing) + `OnlineFirst[Port]` decorator + priority-tier enforcement | §1.2 (Offline) · §4 |
+| **MS-3c** | Query port: `recall.request.v1` + `recall.response.v1` manifests, real `KernelQueryPort` over `POST /k0/query.recall` | §2.2 · §3.2 |
+| **MS-3d** | SSE port: 5–6 K0→K1 manifests (curiosity, advisory, proactive, p03.gap, p03.complete, memory.formed), real chunked streaming, cursor resume, backpressure protocol | §2.3 · §3.3 |
+| **MS-3e** | Obs/Feedback: `feedback.envelope.v1` + `observability.payload.v1`, P21 writes `st_feedback_signals` | §2.4 · §3.4 |
+| **MS-4** | Codec consolidation (msgpack/CBOR per manifest), hand-written K1 adapter consolidation (<100 LOC across 7 sites) | §6 codecs/ |
+| **MS-5** | Connector Gateway + IFL: capability tokens, signed device contracts, OS Keychain credentials, JWT pairing, X25519+AES-GCM E2EE keys generated | §2.5 · §5 · §10 |
+| **MS-6** | LAN device sync (mDNS + LWW CRDT + FlatBuffers wire), intra-person device mesh per Q14 ADR-0090c | §6 sync/ · §10 X25519 |
+
+### 11.3 Resolved drift items (cleared before MS-2.5 close)
+
+These appeared in earlier drafts of this document and have been **resolved by code, not just by editing prose**:
+
+| Drift | Status | Resolution |
+|-------|--------|------------|
+| Three colliding `IBridgePort` definitions | **RESOLVED** in Epic 2.5.3 | Renamed to `IBridgeRuntime` (lifecycle), `IFabricK0Port` (fabric K0 calls), `IPlannerWritePort` (planner local). Gate `single_ibridge_port_definition` enforces no regressions. |
+| Always-offline `SinkBridgeClient` | **PARTIALLY RESOLVED** in MS-2.5 | In-process round-trip via `InProcessHttpTransport` is real; out-of-process `HttpBridgeClient` lands MS-3a. `SinkBridgeClient` deletion happens at MS-3a Epic 3a.1. |
+| Topic name `memory.write` (un-versioned) | **RESOLVED** in Epic 2.5.5 | Migrated to `memory.write.v1`; legacy spelling resolved via `_topic_aliases.TOPIC_ALIASES`. Alias removed in MS-3a Epic 3a.4. |
+| BLAKE3 idem-key formula divergence | **RESOLVED, code is canonical** | Real impl: `BLAKE3(topic ‖ \x00 ‖ canonical_json(body) ‖ \x00 ‖ device_id)`. Earlier prose `(tenant_id, space_id, atom_id, minute(ts))` was speculative and is superseded. See §5 and `bridge/core/envelope_builder.py:_compute_idem_key`. |
+| `learning.feedback` topic | **DOES NOT EXIST** (D-2.22) | Feedback flows only via Obs port `kind=feedback`. Diagram correction #1 in §9. |
+| `bridge/security/` package | **WILL NOT BE CREATED** | Capability-token + audit pipeline ships as part of Connector Gateway in MS-5; signing already lives in `bridge/core/signing.py`. |
+
+### 11.4 Reading map for new contributors
+
+1. Read §1 (deployment topology) and §1.2 (4 modes table) for the why.
+2. Read §6 (module layout) for what files to open.
+3. Read [bridge_system_design.md](../docs/architecture/whiteboard_k1/bridge_system_design.md) for the *contract registry rationale* and the open Q1–Q15 design questions.
+4. Read [bridge_implementation_plan.md](../docs/architecture/whiteboard_k1/bridge_implementation_plan.md) §"Global rules" + the next pending milestone before opening any PR that touches `bridge/`.
+5. Run the exit-criterion test locally before any non-trivial change: `pytest tests/bridge/contracts/test_ms_2_5_exit_criterion.py -v`.

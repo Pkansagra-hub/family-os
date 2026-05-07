@@ -1,0 +1,176 @@
+{{ header }}
+{% if topic.is_sse %}
+"""Generated SSE subscriber for the ``{{ topic.topic }}`` contract.
+
+Consumer side. The K1 kernel reaches the live K0\u2192K1 stream through
+:class:`{{ topic.model_class }}Subscriber.subscribe(handler)`, which
+returns an async context manager backed by the real chunked SSE
+transport (:mod:`bridge.core.transport.sse_client`). Cursor resume,
+backpressure, and reconnect-with-jittered-backoff are handled there;
+the subscriber is the typed seam that decodes the on-the-wire JSON
+payload into a Pydantic ``{{ topic.model_class }}`` instance before
+calling the user handler.
+
+The legacy ``register_handlers(runtime, impl)`` shape used by HTTP
+request/response contracts does not apply to SSE: SSE is push-only
+and there is no idempotent dispatcher mapping topic\u2192handler. The
+:func:`register_subscriber` helper kept below records the subscriber
+class on the runtime under :attr:`runtime.sse` so callers can write
+``runtime.sse.{{ topic.method_name }}.subscribe(handler)``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
+
+from bridge._generated.{{ kernel }}.models.{{ topic.method_name }} import (
+    {{ topic.model_class }},
+)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import AsyncIterator
+
+    from bridge.core.transport.sse_client import SSEClient
+    from bridge.runtime import BridgeRuntime
+
+
+SubscriberHandler = Callable[[{{ topic.model_class }}], Awaitable[None]]
+"""Type alias for the user-supplied event handler."""
+
+
+class {{ topic.model_class }}Subscriber:
+    """Generated SSE subscriber for ``{{ topic.topic }}``.
+
+    The runtime supplies an :class:`SSEClient`. Direct construction
+    outside the runtime is forbidden by the
+    ``manifest_implementation_bound`` CI gate.
+    """
+
+    __transport__ = "{{ topic.transport }}"
+    __topic__ = "{{ topic.topic }}"
+    __schema_uri__ = "{{ topic.schema_uri }}"
+
+    def __init__(self, sse_client: "SSEClient") -> None:
+        self._sse_client = sse_client
+
+    @asynccontextmanager
+    async def subscribe(
+        self,
+        handler: SubscriberHandler,
+        *,
+        cursor: str | None = None,
+    ) -> "AsyncIterator[None]":
+        """Open a chunked SSE stream and pump events through ``handler``.
+
+        The async context manager owns the wire connection and the
+        backpressure-aware internal queue. On exit, the wire is closed
+        cleanly and the cursor (last successfully-handled envelope_id)
+        is persisted by the underlying :class:`SSEClient`.
+
+        ``handler`` receives a Pydantic-validated ``{{ topic.model_class }}``
+        instance per event. Exceptions raised by ``handler`` propagate
+        out of the context manager.
+        """
+        async with self._sse_client.subscribe(
+            topic=self.__topic__,
+            model={{ topic.model_class }},
+            handler=handler,
+            cursor=cursor,
+        ):
+            yield
+
+
+def register_subscriber(runtime: "BridgeRuntime") -> None:
+    """Bind a :class:`{{ topic.model_class }}Subscriber` onto ``runtime.sse``.
+
+    Called once at boot from :meth:`BridgeRuntime.from_registry`. The
+    runtime is responsible for constructing (and supplying) the shared
+    :class:`SSEClient`; this helper is the typed seam that knows the
+    topic / model / schema URI for ``{{ topic.topic }}``.
+    """
+    sse_client = getattr(runtime, "_sse_client", None)
+    if sse_client is None:
+        # SSE transport not bound \u2014 leave the slot None so callers can
+        # detect offline mode.
+        return
+    bag = runtime.sse if runtime.sse is not None else _SSEBag()
+    setattr(bag, "{{ topic.method_name }}", {{ topic.model_class }}Subscriber(sse_client))
+    object.__setattr__(runtime, "sse", bag)
+
+
+class _SSEBag:
+    """Plain attribute bag populated with one subscriber per SSE manifest."""
+
+
+__topic__ = "{{ topic.topic }}"
+{% elif topic.is_obs %}
+"""Generated obs-channel handler stub for the ``{{ topic.topic }}`` contract.
+
+Consumer side (K0). Obs/feedback dispatch happens inside
+:mod:`k0.ports.observe` directly — the ``/k0/obs.emit`` route routes
+by inner ``kind`` (feedback|metrics|logs) and writes either to
+``st_feedback_signals`` or to the ForwardedMetricsBuffer / log
+re-emitter. There is no per-topic handler registration on the bridge
+runtime: the K0 endpoint is the dispatcher.
+
+This stub exists only so the codegen layout stays uniform and so
+imports of ``bridge._generated.k0.handlers.{{ topic.method_name }}``
+do not fail. It provides the topic constant and the generated model
+class for tests that wish to validate fixtures end-to-end without
+booting K0.
+"""
+
+from __future__ import annotations
+
+from bridge._generated.{{ kernel }}.models.{{ topic.method_name }} import (
+    {{ topic.model_class }},
+)
+
+__topic__ = "{{ topic.topic }}"
+__model__ = {{ topic.model_class }}
+{% else %}
+"""Generated handler-registry stub for the ``{{ topic.topic }}`` contract.
+
+Consumer side. The hand-written implementation
+``bridge/_generated/{{ kernel }}/handlers/{{ topic.method_name }}_impl.py``
+provides the actual K0-side function; this file wires it into the
+:class:`bridge.runtime.BridgeRuntime` dispatcher.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
+
+from bridge._generated.{{ kernel }}.models.{{ topic.method_name }} import (
+    {{ topic.model_class }},
+)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from bridge.runtime import BridgeRuntime
+
+
+HandlerImpl = Callable[[{{ topic.model_class }}], Awaitable[object]]
+"""Type alias for the hand-written impl signature."""
+
+
+def register_handlers(runtime: "BridgeRuntime", *, impl: HandlerImpl) -> None:
+    """Register ``impl`` as the K0-side handler for ``{{ topic.topic }}``.
+
+    The dispatcher looks the topic up by exact match and routes Pydantic
+    payloads to ``impl``. Idempotency, signing verification, and audit
+    logging happen upstream of this call inside the runtime; ``impl`` may
+    assume the body has already been validated against
+    ``{{ topic.model_class }}``.
+    """
+    runtime.register_handler(
+        topic="{{ topic.topic }}",
+        model=  {{ topic.model_class }},
+        impl=impl,
+    )
+
+
+__topic__ = "{{ topic.topic }}"
+{% endif %}

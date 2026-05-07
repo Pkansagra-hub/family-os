@@ -19,7 +19,7 @@ k1.planner.ports
   -> k1.planner.ports.event_port        (IEventPort)
 """
 
-from k1.planner.ports.bridge_port import IBridgePort  # noqa: F401
+from k1.planner.ports.bridge_port import IPlannerWritePort  # noqa: F401
 from k1.planner.ports.delta_emit_port import IDeltaEmitPort  # noqa: F401
 from k1.planner.ports.event_port import IEventPort  # noqa: F401
 from k1.planner.ports.fabric_retrieval_port import IFabricRetrievalPort  # noqa: F401
@@ -32,7 +32,7 @@ __all__ = [
     "ILLMPort",
     "IFabricRetrievalPort",
     "IStateReadPort",
-    "IBridgePort",
+    "IPlannerWritePort",
     "IDeltaEmitPort",
     "IEventPort",
 ]

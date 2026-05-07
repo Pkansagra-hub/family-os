@@ -38,12 +38,12 @@ from k1.orchestrator.types import (
     PlanStep,
 )
 from k1.planner.ports import (
-    IBridgePort,
     IDeltaEmitPort,
     IEventPort,
     IFabricRetrievalPort,
     ILLMPort,
     IMailboxPort,
+    IPlannerWritePort,
     IStateReadPort,
 )
 from k1.planner.types import (
@@ -1204,7 +1204,7 @@ class TestBridgeAdapterProtocol:
     def test_isinstance_check(self) -> None:
         """TestBridgeAdapter satisfies IBridgePort Protocol."""
         adapter = TestBridgeAdapter()
-        assert isinstance(adapter, IBridgePort)
+        assert isinstance(adapter, IPlannerWritePort)
 
     def test_recall_method_exists(self) -> None:
         """recall() method is present."""
@@ -2196,10 +2196,10 @@ class TestAdaptersPackageReExports:
         assert TestEventAdapter is not None
 
     def test_adapters_all_has_seven_entries(self) -> None:
-        """__all__ in adapters package has 7 entries."""
+        """__all__ in adapters package has 8 entries (E5: added TestHILAdapter)."""
         import tests.k1.planner.adapters as pkg
 
-        assert len(pkg.__all__) == 7
+        assert len(pkg.__all__) == 8
 
 
 class TestNoMockImport:

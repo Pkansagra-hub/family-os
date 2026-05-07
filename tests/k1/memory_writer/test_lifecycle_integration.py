@@ -162,7 +162,9 @@ class FakeHealthPort:
 
 # Config with R3 dedup disabled so multi-turn tests aren't blocked by
 # the pipeline passing entities=[] topics=[] on every turn.
-_NO_DEDUP_CONFIG = MWConfig(filter_dedup_window_seconds=0)
+# Per-turn extraction mode required: these tests assert per-turn LLM call
+# counts. Default "session_batch" mode batches turns and breaks counts.
+_NO_DEDUP_CONFIG = MWConfig(filter_dedup_window_seconds=0, extraction_mode="per_turn")
 
 
 def _rich_snapshot() -> Dict[str, Any]:

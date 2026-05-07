@@ -80,10 +80,6 @@ class FakeDeltaEmitPort:
     async def emit_progress(self, step_id: str, summary: str, trace_id: str) -> None:
         self.emitted.append(("progress", {"step_id": step_id, "summary": summary}, trace_id))
 
-    async def emit_hil_request(self, hil_request: Any, trace_id: str) -> None:
-        self.emitted.append(("hil", {"request": str(hil_request)}, trace_id))
-
-
 class FakeFabricPort:
     """Fake IFabricGatewayPort."""
 
@@ -672,7 +668,6 @@ class TestAdminMailboxMethods:
         stats = await adapter.get_mailbox_stats()
         assert stats["depth"] == 0
         assert stats["pending_plans"] == 0
-        assert stats["pending_hil"] == 0
         assert "capacity" in stats
 
 

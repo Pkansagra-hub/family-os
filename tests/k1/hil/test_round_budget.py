@@ -14,8 +14,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import pytest
-
 from k1.hil.config import HILConfig
 from k1.hil.ledger import HILLedgerAdapter
 from k1.hil.safety import SafetyBandPolicy
@@ -69,14 +67,16 @@ def _svc(bus: FakeBus, *, config: HILConfig | None = None) -> HumanInTheLoopServ
     )
 
 
-async def _drive(bus: FakeBus, answer: str = "ok") -> None:
-    for _ in range(50):
+async def _drive(bus: FakeBus, answer: str = "ok", *, after_count: int = 0) -> int:
+    """Wait for envelope count to exceed `after_count`, then deliver response
+    to the newest envelope. Returns the new envelope count."""
+    for _ in range(200):
         envs = bus.request_envelopes()
-        if envs:
+        if len(envs) > after_count:
             await bus.deliver_response(envs[-1]["hil_request_id"], {"answer": answer})
-            return
+            return len(envs)
         await asyncio.sleep(0.01)
-    raise RuntimeError("no request published")
+    raise RuntimeError(f"no new request published (had {after_count})")
 
 
 def _req(caller_key: str = "planner:sketch:plan-1") -> ClarificationRequest:
@@ -96,14 +96,14 @@ async def test_max_rounds_enforced_per_caller_key() -> None:
 
     # Round 1
     task = asyncio.create_task(svc.ask_clarification(_req()))
-    await _drive(bus, "answer-1")
+    n = await _drive(bus, "answer-1", after_count=0)
     r1 = await task
     assert r1.answer == "answer-1"
     assert r1.round_budget_exhausted is False
 
     # Round 2
     task = asyncio.create_task(svc.ask_clarification(_req()))
-    await _drive(bus, "answer-2")
+    n = await _drive(bus, "answer-2", after_count=n)
     r2 = await task
     assert r2.answer == "answer-2"
     assert r2.round_budget_exhausted is False
@@ -123,14 +123,14 @@ async def test_separate_caller_keys_have_independent_budgets() -> None:
 
     # Caller A consumes its budget.
     task = asyncio.create_task(svc.ask_clarification(_req("planner:sketch:plan-A")))
-    await _drive(bus, "a")
+    n = await _drive(bus, "a", after_count=0)
     await task
     r_a2 = await svc.ask_clarification(_req("planner:sketch:plan-A"))
     assert r_a2.round_budget_exhausted is True
 
     # Caller B still has its full budget.
     task = asyncio.create_task(svc.ask_clarification(_req("planner:sketch:plan-B")))
-    await _drive(bus, "b")
+    n = await _drive(bus, "b", after_count=n)
     r_b = await task
     assert r_b.answer == "b"
     assert r_b.round_budget_exhausted is False
@@ -142,7 +142,7 @@ async def test_reset_round_budget_clears_single_caller() -> None:
 
     # Exhaust caller A.
     task = asyncio.create_task(svc.ask_clarification(_req("planner:sketch:plan-A")))
-    await _drive(bus, "a1")
+    n = await _drive(bus, "a1", after_count=0)
     await task
     r_exhausted = await svc.ask_clarification(_req("planner:sketch:plan-A"))
     assert r_exhausted.round_budget_exhausted is True
@@ -152,7 +152,7 @@ async def test_reset_round_budget_clears_single_caller() -> None:
 
     # Caller A should be able to ask again.
     task = asyncio.create_task(svc.ask_clarification(_req("planner:sketch:plan-A")))
-    await _drive(bus, "a2")
+    n = await _drive(bus, "a2", after_count=n)
     r_after_reset = await task
     assert r_after_reset.answer == "a2"
     assert r_after_reset.round_budget_exhausted is False
@@ -164,10 +164,10 @@ async def test_reset_round_budget_does_not_affect_other_callers() -> None:
 
     # Exhaust both A and B.
     task = asyncio.create_task(svc.ask_clarification(_req("planner:sketch:plan-A")))
-    await _drive(bus, "a")
+    n = await _drive(bus, "a", after_count=0)
     await task
     task = asyncio.create_task(svc.ask_clarification(_req("planner:sketch:plan-B")))
-    await _drive(bus, "b")
+    n = await _drive(bus, "b", after_count=n)
     await task
 
     # Reset only A.
@@ -179,7 +179,7 @@ async def test_reset_round_budget_does_not_affect_other_callers() -> None:
 
     # A can ask again.
     task = asyncio.create_task(svc.ask_clarification(_req("planner:sketch:plan-A")))
-    await _drive(bus, "a2")
+    n = await _drive(bus, "a2", after_count=n)
     r_a = await task
     assert r_a.round_budget_exhausted is False
 

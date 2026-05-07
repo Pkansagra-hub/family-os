@@ -35,7 +35,7 @@ def _make_session(**overrides) -> SessionInstance:
         experience_layer=MagicMock(),
         delta_aggregator=MagicMock(),
         delta_applicator=MagicMock(),
-        hitl_coordinator=MagicMock(),
+        hil_port=MagicMock(),
         consumer_task=None,
         dead_letter_consumer=MagicMock(),
         created_at=datetime.now(timezone.utc),
@@ -580,18 +580,22 @@ class TestOrchestratorMonitorBinding:
             svc._verify_orchestrator_monitor_binding()
 
     def test_raises_when_service_ref_none(self) -> None:
+        # E6 removed _service_ref late-binding; check now asserts that the
+        # 4th guard exposes the DAGGuard ``after_step`` callable instead.
         svc = KernelService(config=KernelConfig())
-        monitor = MagicMock(_service_ref=None)
+        monitor = object()  # no after_step attribute
         dag = MagicMock()
         dag._guards = [MagicMock(), MagicMock(), MagicMock(), monitor]
         svc._orchestrator = MagicMock(_dag_executor=dag)
-        with pytest.raises(RuntimeError, match="late-binding failed"):
+        with pytest.raises(RuntimeError, match="after_step"):
             svc._verify_orchestrator_monitor_binding()
 
     def test_passes_when_service_ref_set(self) -> None:
+        # E6 removed _service_ref; the verification now requires
+        # ``after_step`` to be callable on the 4th guard.
         svc = KernelService(config=KernelConfig())
-        mock_service = MagicMock()
-        monitor = MagicMock(_service_ref=mock_service)
+        monitor = MagicMock()
+        monitor.after_step = MagicMock()  # callable attribute
         dag = MagicMock()
         dag._guards = [MagicMock(), MagicMock(), MagicMock(), monitor]
         svc._orchestrator = MagicMock(_dag_executor=dag)
@@ -1075,11 +1079,11 @@ class TestS4BridgeWiring:
     @pytest.mark.asyncio
     async def test_bridge_satisfies_kernel_ibridge_protocol(self) -> None:
         """OfflineBridgeAdapter satisfies kernel IBridgePort protocol."""
-        from k1.kernel.ports.bridge_port import IBridgePort
+        from k1.kernel.ports.bridge_port import IBridgeRuntime
 
         svc = KernelService(config=KernelConfig())
         await svc._startup_tier1()
-        assert isinstance(svc._bridge, IBridgePort)
+        assert isinstance(svc._bridge, IBridgeRuntime)
 
     @pytest.mark.asyncio
     async def test_bridge_passes_port_validation(self) -> None:
@@ -1135,15 +1139,15 @@ class TestS4BridgeWiring:
     @pytest.mark.asyncio
     async def test_both_adapters_satisfy_ibridge_protocol(self) -> None:
         """Both SinkBridgeAdapter and OfflineBridgeAdapter satisfy IBridgePort."""
-        from k1.kernel.ports.bridge_port import IBridgePort
+        from k1.kernel.ports.bridge_port import IBridgeRuntime
 
         svc_on = KernelService(config=KernelConfig())
         await svc_on._startup_tier1()
-        assert isinstance(svc_on._bridge, IBridgePort)
+        assert isinstance(svc_on._bridge, IBridgeRuntime)
 
         svc_off = KernelService(config=KernelConfig(bridge_enabled=False))
         await svc_off._startup_tier1()
-        assert isinstance(svc_off._bridge, IBridgePort)
+        assert isinstance(svc_off._bridge, IBridgeRuntime)
 
 
 # ── S3: Shared Fabric Wiring (Issue 2.2.3) ──────────────────
@@ -1328,7 +1332,9 @@ class TestS5OrchestratorWiring:
     @pytest.mark.asyncio
     async def test_orchestrator_is_orchestrator_service(self) -> None:
         """_orchestrator is an OrchestratorService instance."""
-        from k1.orchestrator.orchestration.orchestrator_service import OrchestratorService
+        from k1.orchestrator.orchestration.orchestrator_service import (
+            OrchestratorService,
+        )
 
         svc = KernelService(config=KernelConfig())
         await svc._startup_tier1()
@@ -1365,24 +1371,27 @@ class TestS5OrchestratorWiring:
 
     @pytest.mark.asyncio
     async def test_orchestrator_has_4_guards(self) -> None:
-        """DAGExecutor has exactly 4 guards from _build_guards()."""
+        """DAGExecutor has exactly 5 guards from _build_guards() (M16.E2.I2 added FailureReplanCheckpoint)."""
         svc = KernelService(config=KernelConfig())
         await svc._startup_tier1()
         dag = svc._orchestrator._dag_executor
         guards = getattr(dag, "_guards", None)
         assert guards is not None
-        assert len(guards) == 4
+        assert len(guards) == 5
 
     @pytest.mark.asyncio
     async def test_orchestrator_guard_3_is_execution_monitor(self) -> None:
-        """guards[3] is ExecutionMonitor with service_ref set."""
+        """guards[3] is ExecutionMonitor exposing the DAGGuard surface."""
         from k1.orchestrator.orchestration.guards import ExecutionMonitor
 
         svc = KernelService(config=KernelConfig())
         await svc._startup_tier1()
         monitor = svc._orchestrator._dag_executor._guards[3]
         assert isinstance(monitor, ExecutionMonitor)
-        assert monitor._service_ref is svc._orchestrator
+        # E6: _service_ref was removed; the guard now relies on hil_port
+        # injected via OrchestratorFactory._build_guards. Verify the
+        # DAGGuard contract surface instead.
+        assert callable(getattr(monitor, "after_step", None))
 
     @pytest.mark.asyncio
     async def test_orchestrator_fabric_port_wraps_shared_fabric(self) -> None:
@@ -1425,7 +1434,9 @@ class TestS5OrchestratorWiring:
     @pytest.mark.asyncio
     async def test_orchestrator_event_port_is_prod_adapter(self) -> None:
         """Event port is EventSubscriptionAdapter wrapping S1 bus event port."""
-        from k1.orchestrator.adapters.event_subscription_adapter import EventSubscriptionAdapter
+        from k1.orchestrator.adapters.event_subscription_adapter import (
+            EventSubscriptionAdapter,
+        )
 
         svc = KernelService(config=KernelConfig())
         await svc._startup_tier1()
@@ -2188,7 +2199,9 @@ class TestP2SessionStateWiring:
             from k1.sessionstate.adapters.direct_writer import DirectWriterAdapter
             from k1.sessionstate.adapters.local_events import LocalEventAdapter
             from k1.sessionstate.adapters.sqlite_storage import SQLiteStorageAdapter
-            from k1.sessionstate.adapters.standalone_lifecycle import StandaloneLifecycle
+            from k1.sessionstate.adapters.standalone_lifecycle import (
+                StandaloneLifecycle,
+            )
             from k1.sessionstate.async_bridge import AsyncSSMBridge
             from k1.sessionstate.factory import SessionStateFactory
 
@@ -2362,14 +2375,18 @@ class TestP3PerSessionFabricWiring:
             from k1.fabric.adapters.bridge_connection import BridgeConnectionAdapter
             from k1.fabric.adapters.delta_bus_prod import DeltaBusProdAdapter
             from k1.fabric.adapters.event_port_prod import EventPortProdAdapter
-            from k1.fabric.adapters.model_gateway_bridge import ModelGatewayBridgeAdapter
+            from k1.fabric.adapters.model_gateway_bridge import (
+                ModelGatewayBridgeAdapter,
+            )
             from k1.fabric.adapters.prompt_system_prod import PromptSystemProdAdapter
             from k1.fabric.adapters.sessionstate_reader import SessionStateReaderAdapter
             from k1.fabric.factory import FabricFactory
             from k1.sessionstate.adapters.direct_writer import DirectWriterAdapter
             from k1.sessionstate.adapters.local_events import LocalEventAdapter
             from k1.sessionstate.adapters.sqlite_storage import SQLiteStorageAdapter
-            from k1.sessionstate.adapters.standalone_lifecycle import StandaloneLifecycle
+            from k1.sessionstate.adapters.standalone_lifecycle import (
+                StandaloneLifecycle,
+            )
             from k1.sessionstate.factory import SessionStateFactory
 
             s_bus = BusFactory.create_local_ordered(capture=False)
@@ -2539,14 +2556,18 @@ class TestP4ConciergeWiring:
             from k1.fabric.adapters.bridge_connection import BridgeConnectionAdapter
             from k1.fabric.adapters.delta_bus_prod import DeltaBusProdAdapter
             from k1.fabric.adapters.event_port_prod import EventPortProdAdapter
-            from k1.fabric.adapters.model_gateway_bridge import ModelGatewayBridgeAdapter
+            from k1.fabric.adapters.model_gateway_bridge import (
+                ModelGatewayBridgeAdapter,
+            )
             from k1.fabric.adapters.prompt_system_prod import PromptSystemProdAdapter
             from k1.fabric.adapters.sessionstate_reader import SessionStateReaderAdapter
             from k1.fabric.factory import FabricFactory
             from k1.sessionstate.adapters.direct_writer import DirectWriterAdapter
             from k1.sessionstate.adapters.local_events import LocalEventAdapter
             from k1.sessionstate.adapters.sqlite_storage import SQLiteStorageAdapter
-            from k1.sessionstate.adapters.standalone_lifecycle import StandaloneLifecycle
+            from k1.sessionstate.adapters.standalone_lifecycle import (
+                StandaloneLifecycle,
+            )
             from k1.sessionstate.factory import SessionStateFactory
 
             # P1
@@ -2756,12 +2777,16 @@ class TestP5MemoryWriterWiring:
             session = await super()._create_session_tier2(session_id, device_id)
             # Re-create P5 adapters for type-checking assertions
             from k1.bus.adapters.fabric_adapter import FabricBusAdapter
-            from k1.memory_writer.adapters.bridge_command_adapter import BridgeCommandAdapter
+            from k1.memory_writer.adapters.bridge_command_adapter import (
+                BridgeCommandAdapter,
+            )
             from k1.memory_writer.adapters.event_subscription_adapter import (
                 EventSubscriptionAdapter as MWEvtSub,
             )
             from k1.memory_writer.adapters.health_adapter import HealthAdapter
-            from k1.memory_writer.adapters.session_read_adapter import SessionReadAdapter
+            from k1.memory_writer.adapters.session_read_adapter import (
+                SessionReadAdapter,
+            )
             from k1.memory_writer.config import MWConfig
             from k1.memory_writer.factory import MemoryWriterFactory
             from k1.memory_writer.health.circuit_breaker import CircuitBreaker as MWCB
@@ -2843,7 +2868,9 @@ class TestP5MemoryWriterWiring:
     @pytest.mark.asyncio
     async def test_bridge_command_adapter(self, started_svc) -> None:
         """P5 creates BridgeCommandAdapter wrapping shared bridge."""
-        from k1.memory_writer.adapters.bridge_command_adapter import BridgeCommandAdapter
+        from k1.memory_writer.adapters.bridge_command_adapter import (
+            BridgeCommandAdapter,
+        )
 
         await started_svc._create_session_tier2("sess-1")
         assert isinstance(started_svc.p5_bridge_cmd, BridgeCommandAdapter)
@@ -2851,7 +2878,9 @@ class TestP5MemoryWriterWiring:
     @pytest.mark.asyncio
     async def test_event_subscription_adapter(self, started_svc) -> None:
         """P5 creates EventSubscriptionAdapter wrapping per-session bus."""
-        from k1.memory_writer.adapters.event_subscription_adapter import EventSubscriptionAdapter
+        from k1.memory_writer.adapters.event_subscription_adapter import (
+            EventSubscriptionAdapter,
+        )
 
         await started_svc._create_session_tier2("sess-1")
         assert isinstance(started_svc.p5_event_sub, EventSubscriptionAdapter)

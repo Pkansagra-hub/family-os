@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/_stub.json",
+  "title": "BridgeStubBody",
+  "description": "Placeholder schema used by ``status: proposed`` manifests whose concrete body schema has not yet been authored. Replace with a real schema before flipping ``status: active``.",
+  "type": "object",
+  "additionalProperties": true
+}

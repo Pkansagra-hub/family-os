@@ -51,7 +51,7 @@ References
 
 Exports
 -------
-SketchService, ToolCallRouterLike, HILCoordinatorLike,
+SketchService, ToolCallRouterLike,
 SKETCH_OUTPUT_SCHEMA, SKETCH_TOOL_DEFINITIONS
 """
 
@@ -61,10 +61,11 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
+from k1.hil.types import ClarificationRequest
+from k1.kernel.ports.hil_port import IHILPort
 from k1.orchestrator.types import MicroReplanRequest, PlanRequest
 from k1.planner.ports.llm_port import ILLMPort
 from k1.planner.types import (
-    HILCoordinatorLike,
     PlannerConstraints,
     PlannerLLMRequest,
     PlannerLLMResponse,
@@ -384,23 +385,6 @@ class ToolCallRouterLike(Protocol):
         ...  # pragma: no cover
 
 
-@runtime_checkable
-class _HILCoordinatorLike_DEPRECATED(Protocol):
-    """DEPRECATED: HILCoordinatorLike moved to k1.planner.types.
-
-    This stub exists only so that the local name ``HILCoordinatorLike``
-    (re-exported below) resolves to the canonical shared protocol.
-    """
-
-    ...  # pragma: no cover
-
-
-# Re-export from types.py for backward compatibility.
-# Tests that import ``from k1.planner.stages.sketch_service import HILCoordinatorLike``
-# will get the canonical protocol from k1.planner.types.
-# HILCoordinatorLike is already imported above.
-
-
 # ---------------------------------------------------------------------------
 # SketchService
 # ---------------------------------------------------------------------------
@@ -445,14 +429,14 @@ class SketchService:
     __slots__ = (
         "_llm_port",
         "_tool_router",
-        "_hil_coord",
+        "_hil_port",
     )
 
     def __init__(
         self,
         llm_port: ILLMPort,
         tool_router: ToolCallRouterLike,
-        hil_coord: HILCoordinatorLike,
+        hil_port: IHILPort,
     ) -> None:
         """Construct SketchService with injected dependencies.
 
@@ -465,9 +449,9 @@ class SketchService:
             tool_router: Deterministic tool call dispatcher (Section 11).
                 Routes discovery tool names to backend ports. Manages
                 monotonic call counter (PLAN-05).
-            hil_coord: Human-in-the-loop coordinator (Section 12).
-                Manages clarification flow during SKETCH. Max 2 rounds
-                per plan (PLAN-10).
+            hil_port: Unified Human-in-the-Loop port (k1.hil) used for
+                clarification during SKETCH. Round budget is enforced
+                per ``caller_key`` inside HumanInTheLoopService.
 
         Raises:
             TypeError: If any dependency is None.
@@ -476,12 +460,12 @@ class SketchService:
             raise TypeError("llm_port must not be None")
         if tool_router is None:
             raise TypeError("tool_router must not be None")
-        if hil_coord is None:
-            raise TypeError("hil_coord must not be None")
+        if hil_port is None:
+            raise TypeError("hil_port must not be None")
 
         self._llm_port = llm_port
         self._tool_router = tool_router
-        self._hil_coord = hil_coord
+        self._hil_port = hil_port
 
     # ------------------------------------------------------------------
     # Read-only property accessors
@@ -498,9 +482,9 @@ class SketchService:
         return self._tool_router
 
     @property
-    def hil_coord(self) -> HILCoordinatorLike:
-        """HIL coordinator (read-only)."""
-        return self._hil_coord
+    def hil_port(self) -> IHILPort:
+        """Unified HIL port (read-only)."""
+        return self._hil_port
 
     # ------------------------------------------------------------------
     # Prompt construction -- Agentic tool-use
@@ -1055,20 +1039,31 @@ class SketchService:
 
         # HIL clarification flow.
         if needs_clarification and allow_hil and clarification_question:
-            self._hil_coord.reset()
-            user_response = await self._hil_coord.request_clarification(
-                request_id=request.request_id,
-                question_context={
-                    "question": clarification_question,
-                    "intent": request.intent,
-                },
+            caller_key = f"planner:sketch:{request.request_id}"
+            clar_resp = await self._hil_port.ask_clarification(
+                ClarificationRequest(
+                    caller_key=caller_key,
+                    trace_id=request.request_id,
+                    pre_formed_question=clarification_question,
+                    synthesize_with_llm=False,
+                    question_context={
+                        "question": clarification_question,
+                        "intent": request.intent,
+                    },
+                )
             )
-            if user_response:
-                # Re-run with the user's clarification.
+            # ANSWERED -> re-run with addendum; TIMEOUT or
+            # MAX_ROUNDS_EXCEEDED (round_budget_exhausted) -> proceed
+            # with original parsed sketch (best-effort).
+            if (
+                clar_resp.answer
+                and not clar_resp.timed_out
+                and not clar_resp.round_budget_exhausted
+            ):
                 return await self._execute_attempt(
                     request,
                     ctx,
-                    hil_addendum=user_response,
+                    hil_addendum=clar_resp.answer,
                     allow_hil=False,  # Only 1 clarification round.
                 )
 

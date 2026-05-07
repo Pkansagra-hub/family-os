@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/_meta/ca_bundle.schema.json",
+  "title": "Bridge CA Bundle",
+  "description": "Trust root for IFL manifest signing. v1 ships exactly one active CA. See D3 closure in bridge_system_design.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ca_id",
+    "ed25519_public_key",
+    "status",
+    "valid_until"
+  ],
+  "properties": {
+    "ca_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "ed25519_public_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64url, no padding. Placeholder until pre-MS-5 ceremony."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "deprecated", "revoked"]
+    },
+    "valid_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "notes": { "type": "string" }
+  }
+}

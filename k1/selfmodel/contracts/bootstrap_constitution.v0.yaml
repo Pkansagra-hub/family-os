@@ -1,0 +1,101 @@
+# bootstrap_constitution.v0.yaml
+#
+# V0 default constitution for new family installations. Loaded by
+# k1.selfmodel.service.bootstrap_constitution at first run; replaced by
+# any onboarding amendment that activates against parent_version="".
+#
+# Schema mirrors k1.selfmodel.contracts.constitution_body. All keys are
+# default-deny / default-empty when absent — DO NOT add wildcards.
+#
+# Roles used here (V0 fixed set):
+#   self            the actor themselves
+#   guardian        adult with full caregiving authority
+#   caregiver       trusted adult with limited authority
+#   member          general household member
+#   child           minor
+#   visitor         non-resident with explicit invite
+
+constitution_id: "k1.selfmodel.bootstrap.v0"
+
+governance:
+  # V0 quorum: any single guardian can approve an onboarding amendment.
+  # Production households should raise this via amendment.
+  signing_quorum: 1
+  bootstrap_immutable: true
+
+visibility_rules:
+  self:
+    self: ["display_name", "role", "preferences", "schedule_summary"]
+    guardian: ["display_name", "role", "preferences", "schedule_summary"]
+    caregiver: ["display_name", "role"]
+    member: ["display_name", "role"]
+    child: ["display_name", "role"]
+    visitor: ["display_name"]
+  guardian:
+    self: ["display_name", "role"]
+    guardian: ["display_name", "role", "schedule_summary"]
+    caregiver: ["display_name", "role"]
+    member: ["display_name", "role"]
+    child: ["display_name", "role"]
+    visitor: ["display_name"]
+  member:
+    self: ["display_name", "role"]
+    guardian: ["display_name", "role"]
+    caregiver: ["display_name", "role"]
+    member: ["display_name", "role"]
+    child: ["display_name", "role"]
+    visitor: ["display_name"]
+
+autonomy_rules:
+  self:
+    can: ["recall_memory", "summarize_context", "complete_chore", "update_persona"]
+    must_ask: ["send_message", "set_routine"]
+    cannot: []
+  guardian:
+    can:
+      - "recall_memory"
+      - "summarize_context"
+      - "complete_chore"
+      - "update_persona"
+      - "set_routine"
+      - "send_message"
+    must_ask: ["share_location", "set_medication"]
+    cannot: []
+  caregiver:
+    can: ["recall_memory", "summarize_context", "complete_chore"]
+    must_ask: ["send_message", "set_routine", "share_location"]
+    cannot: ["set_medication"]
+  member:
+    can: ["recall_memory", "summarize_context", "complete_chore"]
+    must_ask: ["send_message"]
+    cannot: ["set_medication", "set_routine", "share_location"]
+  child:
+    can: ["recall_memory", "complete_chore"]
+    must_ask: ["send_message"]
+    cannot: ["set_medication", "set_routine", "share_location", "update_persona"]
+
+authority_rules:
+  recall_memory: 0
+  summarize_context: 0
+  complete_chore: 0
+  update_persona: 1
+  send_message: 2
+  set_routine: 2
+  share_location: 2
+  set_medication: 3
+
+protection_rules:
+  caregiver_context_briefing: ["redact_pii", "respect_quiet_hours"]
+  household_planning: ["respect_quiet_hours"]
+  child_safety_check: ["redact_pii", "audit_required"]
+
+consent_rules:
+  self:
+    family: "ask_first"
+    public: "deny"
+  guardian:
+    family: "ask_first"
+    public: "deny"
+  child:
+    family: "deny"
+    public: "deny"

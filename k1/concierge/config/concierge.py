@@ -29,6 +29,10 @@ class ConciergeConfig:
     enable_delta: bool = True
     enable_hitl: bool = True
     enable_orchestrator: bool = True
+    # M16.E1.I3: see ``KernelConfig.allow_planner_passthrough``.
+    allow_planner_passthrough: bool = False
+    # M17.E1.I1: see ``KernelConfig.allow_dispatch_passthrough``.
+    allow_dispatch_passthrough: bool = False
     auto_start_consumer: bool = True
     enable_ledger: bool = True
     enable_dead_letter_consumer: bool = True
@@ -60,6 +64,8 @@ class ConciergeConfig:
             enable_delta=getattr(kc, "enable_delta", True),
             enable_hitl=getattr(kc, "enable_hitl", True),
             enable_orchestrator=getattr(kc, "enable_orchestrator", True),
+            allow_planner_passthrough=getattr(kc, "allow_planner_passthrough", False),
+            allow_dispatch_passthrough=getattr(kc, "allow_dispatch_passthrough", False),
             auto_start_consumer=getattr(kc, "auto_start_consumer", True),
             enable_ledger=getattr(kc, "enable_ledger", True),
             enable_dead_letter_consumer=getattr(kc, "enable_dead_letter_consumer", True),
@@ -86,6 +92,9 @@ class ConciergeConfig:
             "enable_delta": False,
             "enable_hitl": False,
             "enable_orchestrator": False,
+            # M16.E1.I3: tests boot without an orchestrator, so allow
+            # the legacy PassthroughPlannerStub fallback by default.
+            "allow_planner_passthrough": True,
             "enable_ledger": False,
             "enable_dead_letter_consumer": False,
             "auto_start_consumer": False,

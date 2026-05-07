@@ -1,24 +1,22 @@
-"""kernel_probe_phase2_hil.py — Phase 2 HIL deep-dive probe.
+"""kernel_probe_phase2_hil.py -- Phase 2 HIL deep-dive probe (post-E7).
 
-Drives each HIL coordinator end-to-end (no real human, no LLM cost) and
-verifies request emission + programmatic resolve.
+Verifies the unified HumanInTheLoopService:
+  * is constructed exactly once at S2.5 and shared across every
+    subsystem that needs HIL (Concierge, Planner FSM, Fabric facade);
+  * actually exchanges request/response envelopes on the bus for each
+    of the 5 ``HILKind`` flavours.
 
-  Concierge HIL    : direct call to HILCoordinator.handle_needs_human +
-                     handle_user_response (FSM Back→Front cycle)
-  Planner HIL      : reach into PlannerAgent pipeline, get the bound
-                     HILCoordinator, drive request_clarification + emit
-                     correlated response on its IEventPort
-  Orchestrator HIL : trigger via constraint_resolver path; emit resolve
-                     on bus topic k1.hil.fallback_response.v1
+A scripted user (`_ScriptedUser`) subscribes to ``TOPIC_HIL_REQUEST``
+and replies on ``TOPIC_HIL_RESPONSE`` with canned payloads, mirroring
+the production wire shape (JSON-encoded ``HILEnvelope`` /
+``HILResponseEnvelope``).
 
-Confirms whether each subsystem's HIL surface actually works in the booted
-kernel — surfaces real bugs (correlation breaks, missing wiring, etc.)
-that pure introspection (Phase 1) cannot find.
+Run::
 
-Run:
-    $env:PYTHONPATH="D:\\familyos"; $env:PYTHONIOENCODING="utf-8"
-    python -m scripts.kernel_probe_phase2_hil
-    python -m scripts.kernel_probe_phase2_hil --json data/kernel_probe_hil.json
+    $env:PYTHONPATH = "D:\\familyos"
+    $env:PYTHONIOENCODING = "utf-8"
+    python scripts/kernel_probe_phase2_hil.py
+    python scripts/kernel_probe_phase2_hil.py --json data/kernel_probe_hil.json
 """
 
 from __future__ import annotations
@@ -27,316 +25,402 @@ import argparse
 import asyncio
 import json
 import sys
+import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 
+from k1.bus.envelope.envelope import Envelope, Priority
 from k1.concierge.config.kernel import KernelConfig
+from k1.hil.service import HumanInTheLoopService
+from k1.hil.topics import TOPIC_HIL_REQUEST, TOPIC_HIL_RESPONSE
+from k1.hil.types import (
+    ApprovalRequest,
+    CapabilityContractView,
+    CapabilityGateRequest,
+    ClarificationRequest,
+    HILEnvelope,
+    HILKind,
+    HILResponseEnvelope,
+    NeedsHumanRequest,
+    OverrideRequest,
+)
 from k1.kernel.bootstrap import start_kernel, stop_kernel
 from scripts._probe_common import _C_DIM, ProbeReport, _attr, _c
 
-# ── Concierge HIL ──────────────────────────────────────────────────────
+ResponseFn = Callable[[HILEnvelope], dict[str, Any]]
 
 
-async def probe_concierge_hil(session: Any, report: ProbeReport) -> None:
-    layer = "Concierge HIL"
-    coord = _attr(session, "hitl_coordinator")
-    if coord is None:
-        report.add(layer, "coordinator", "FAIL", None, "session.hitl_coordinator is None")
-        return
-
-    report.add(layer, "coordinator", "OK", type(coord).__name__)
-
-    task_id = f"probe-task-{uuid.uuid4().hex[:8]}"
-
-    # Step 1: submit a HIL ask
-    try:
-        req = await coord.handle_needs_human(
-            task_id=task_id,
-            hil_type="clarification",
-            question="Probe: which calendar to use?",
-            options=[{"label": "personal"}, {"label": "work"}],
-            context={"probe": True},
-        )
-    except Exception as exc:  # noqa: BLE001
-        report.add(layer, "handle_needs_human", "FAIL", None, f"raised {type(exc).__name__}: {exc}")
-        return
-    report.add(
-        layer,
-        "handle_needs_human",
-        "OK",
-        f"hil_type={req.hil_type} task_id={req.task_id[:12]}",
-    )
-
-    # Step 2: confirm pending registry has it
-    pending = _attr(coord, "_pending_requests", {})
-    if task_id in pending:
-        report.add(layer, "pending_registry", "OK", f"contains task_id (n={len(pending)})")
-    else:
-        report.add(
-            layer,
-            "pending_registry",
-            "FAIL",
-            None,
-            f"task_id NOT in _pending_requests (n={len(pending)})",
-        )
-
-    # Step 3: resolve programmatically
-    try:
-        resp = await coord.handle_user_response(
-            task_id=task_id,
-            decision="answered",
-            resolution={"choice": "personal"},
-            raw_user_text="personal",
-        )
-    except Exception as exc:  # noqa: BLE001
-        report.add(
-            layer, "handle_user_response", "FAIL", None, f"raised {type(exc).__name__}: {exc}"
-        )
-        return
-    if resp is None:
-        report.add(layer, "handle_user_response", "FAIL", None, "returned None")
-    else:
-        report.add(layer, "handle_user_response", "OK", type(resp).__name__)
-
-    # Step 4: pending should now be empty for this task
-    pending2 = _attr(coord, "_pending_requests", {})
-    if task_id not in pending2:
-        report.add(layer, "post_resolve_cleanup", "OK", f"task_id removed (n={len(pending2)})")
-    else:
-        report.add(
-            layer, "post_resolve_cleanup", "FAIL", None, "task_id still pending after resolve"
-        )
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
-# ── Planner HIL ────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Scripted user
+# ---------------------------------------------------------------------------
 
 
-def _find_planner_hil(svc: Any) -> Any:
-    """Walk PlannerAgent → PipelineController → SketchService → _hil_coord."""
-    planner = _attr(svc, "_planner")
-    if planner is None:
-        return None
-    pipeline = _attr(planner, "_pipeline")
-    if pipeline is None:
-        return None
-    # Pipeline holds stage services; sketch carries the same hil_coord as validate
-    for attr in ("_sketch", "sketch", "_sketch_service"):
-        sk = _attr(pipeline, attr)
-        if sk is not None:
-            hc = _attr(sk, "_hil_coord") or _attr(sk, "hil_coord")
-            if hc is not None:
-                return hc
-    for attr in ("_validate", "validate", "_validate_service"):
-        vs = _attr(pipeline, attr)
-        if vs is not None:
-            hc = _attr(vs, "_hil_coord") or _attr(vs, "hil_coord")
-            if hc is not None:
-                return hc
-    return None
+class _ScriptedUser:
+    """Minimal HIL responder: subscribe to REQUEST, publish RESPONSE."""
 
+    def __init__(self, bus: Any) -> None:
+        self._bus = bus
+        self._handle: Any = None
+        self._lock = threading.RLock()
+        self._scripts: dict[HILKind, ResponseFn] = {}
+        self.received: list[HILEnvelope] = []
 
-async def probe_planner_hil(svc: Any, report: ProbeReport) -> None:
-    layer = "Planner HIL"
-    hil = _find_planner_hil(svc)
-    if hil is None:
-        report.add(layer, "coordinator", "FAIL", None, "could not locate planner HILCoordinator")
-        return
-    report.add(layer, "coordinator", "OK", type(hil).__name__)
+    def script(self, kind: HILKind, fn: ResponseFn) -> None:
+        with self._lock:
+            self._scripts[kind] = fn
 
-    event_port = _attr(hil, "_event_port") or _attr(hil, "event_port")
-    if event_port is None:
-        report.add(layer, "event_port", "FAIL", None, "coordinator has no _event_port")
-        return
-    report.add(layer, "event_port", "OK", type(event_port).__name__)
+    def start(self) -> None:
+        if self._handle is None:
+            self._handle = self._bus.subscribe(TOPIC_HIL_REQUEST, self._on_request)
 
-    # Drive request_clarification — this emits k1.hil.clarification.v1 + waits
-    # for k1.hil.clarification_response.v1 correlated by request_id.
-    request_id = f"probe-clar-{uuid.uuid4().hex[:8]}"
-    captured: list[tuple[str, Any]] = []
+    def stop(self) -> None:
+        if self._handle is not None:
+            try:
+                self._bus.unsubscribe(self._handle)
+            except Exception:
+                pass
+            self._handle = None
 
-    # Subscribe (don't monkey-patch — event port slots forbid attr assign)
-    if not hasattr(event_port, "subscribe"):
-        report.add(layer, "subscribe_capability", "FAIL", None, "event_port has no subscribe()")
-        return
-
-    def _on_clar(evt: Any) -> None:
-        captured.append(("k1.hil.clarification.v1", evt))
-
-    try:
-        sub = event_port.subscribe("k1.hil.clarification.v1", _on_clar)
-    except Exception as exc:  # noqa: BLE001
-        report.add(layer, "subscribe", "FAIL", None, f"{type(exc).__name__}: {exc}")
-        return
-
-    async def _resolver() -> None:
-        await asyncio.sleep(0.10)
+    def _on_request(self, envelope: Any) -> None:
         try:
-            event_port.emit(
-                "k1.hil.clarification_response.v1",
-                {"request_id": request_id, "response": "probe answer"},
+            data = json.loads(envelope.payload.decode("utf-8"))
+            req = HILEnvelope.from_dict(data)
+        except Exception:
+            return
+
+        with self._lock:
+            self.received.append(req)
+            handler = self._scripts.get(req.kind)
+        if handler is None:
+            return
+
+        try:
+            payload = handler(req)
+        except Exception:
+            return
+
+        resp = HILResponseEnvelope(
+            hil_request_id=req.hil_request_id,
+            kind=req.kind,
+            responded_at_ms=_now_ms(),
+            payload=dict(payload),
+            timed_out=False,
+        )
+        raw = json.dumps(resp.to_dict(), separators=(",", ":"), default=str).encode("utf-8")
+        try:
+            self._bus.publish(
+                Envelope(
+                    topic=TOPIC_HIL_RESPONSE,
+                    payload=raw,
+                    cognitive_trace_id=req.trace_id,
+                    priority=Priority.INTERACTIVE,
+                )
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
-    try:
-        t0 = time.perf_counter()
-        clar_task = asyncio.create_task(
-            hil.request_clarification(
-                request_id=request_id,
-                question_context={"question": "probe q?", "trace_id": "probe"},
-            )
-        )
-        resolver_task = asyncio.create_task(_resolver())
-        try:
-            result = await asyncio.wait_for(clar_task, timeout=5.0)
-        except asyncio.TimeoutError:
-            result = None
-            clar_task.cancel()
-        await resolver_task
-        elapsed_ms = (time.perf_counter() - t0) * 1000
 
-        if result is None:
-            report.add(
-                layer,
-                "request_clarification",
-                "FAIL",
-                None,
-                f"timed out / returned None after {elapsed_ms:.0f}ms",
-            )
-        else:
-            report.add(
-                layer,
-                "request_clarification",
-                "OK",
-                f"{result!r} ({elapsed_ms:.0f}ms)",
-            )
-    except Exception as exc:  # noqa: BLE001
+# ---------------------------------------------------------------------------
+# Probes
+# ---------------------------------------------------------------------------
+
+
+def probe_hil_singleton(svc: Any, session: Any, report: ProbeReport) -> None:
+    """The same HumanInTheLoopService must be visible everywhere."""
+
+    layer = "HIL Singleton"
+
+    kernel_hil = _attr(svc, "_hil_service")
+    if kernel_hil is None:
         report.add(
             layer,
-            "request_clarification",
+            "kernel._hil_service",
             "FAIL",
             None,
-            f"raised {type(exc).__name__}: {exc}",
+            "S2.5 did not construct HumanInTheLoopService",
         )
-
-    # Verify topic emission was captured by subscribe
-    if captured:
+        return
+    if not isinstance(kernel_hil, HumanInTheLoopService):
         report.add(
             layer,
-            "topic_clarification_emitted",
-            "OK",
-            f"{len(captured)} event(s) on k1.hil.clarification.v1",
+            "kernel._hil_service",
+            "FAIL",
+            type(kernel_hil).__name__,
+            "expected HumanInTheLoopService",
         )
+        return
+    report.add(layer, "kernel._hil_service", "OK", type(kernel_hil).__name__)
+
+    # Concierge
+    concierge_hil = _attr(session, "hil_port") or _attr(session, "hitl_coordinator")
+    if concierge_hil is None:
+        report.add(layer, "session.hil_port", "FAIL", None, "concierge has no hil_port")
+    elif concierge_hil is kernel_hil:
+        report.add(layer, "session.hil_port", "OK", "is kernel._hil_service")
     else:
         report.add(
             layer,
-            "topic_clarification_emitted",
+            "session.hil_port",
             "FAIL",
-            None,
-            "no event captured on k1.hil.clarification.v1",
+            type(concierge_hil).__name__,
+            "concierge hil_port is NOT the kernel singleton",
         )
 
-    # Round budget
-    rc = _attr(hil, "round_count")
-    if rc is not None:
-        report.add(layer, "round_count_after_request", "INFO", rc)
+    # FSM
+    concierge = _attr(session, "concierge")
+    fsm = _attr(concierge, "controller") or _attr(concierge, "fsm")
+    fsm_hil = _attr(fsm, "_hil_port")
+    if fsm_hil is None:
+        report.add(layer, "fsm._hil_port", "FAIL", None, "FSM hil_port not wired")
+    elif fsm_hil is kernel_hil:
+        report.add(layer, "fsm._hil_port", "OK", "is kernel._hil_service")
+    else:
+        report.add(
+            layer,
+            "fsm._hil_port",
+            "FAIL",
+            type(fsm_hil).__name__,
+            "FSM hil_port is NOT the kernel singleton",
+        )
+
+    # Fabric facade (per-session fabric is a Fabric container -> .facade)
+    fabric = _attr(session, "fabric")
+    facade = _attr(fabric, "facade") or fabric
+    fabric_hil = _attr(facade, "_hil_port")
+    if fabric_hil is None:
+        report.add(
+            layer,
+            "fabric.facade._hil_port",
+            "FAIL",
+            None,
+            "session fabric facade has no _hil_port",
+        )
+    elif fabric_hil is kernel_hil:
+        report.add(layer, "fabric.facade._hil_port", "OK", "is kernel._hil_service")
+    else:
+        report.add(
+            layer,
+            "fabric.facade._hil_port",
+            "FAIL",
+            type(fabric_hil).__name__,
+            "fabric facade hil_port is NOT the kernel singleton",
+        )
+
+    # Shared fabric (S3-built)
+    shared = _attr(svc, "_shared_fabric")
+    shared_facade = _attr(shared, "facade") or shared
+    shared_hil = _attr(shared_facade, "_hil_port")
+    if shared_hil is None:
+        report.add(
+            layer,
+            "shared_fabric.facade._hil_port",
+            "WARN",
+            None,
+            "shared fabric facade has no _hil_port",
+        )
+    elif shared_hil is kernel_hil:
+        report.add(layer, "shared_fabric.facade._hil_port", "OK", "is kernel._hil_service")
+    else:
+        report.add(
+            layer,
+            "shared_fabric.facade._hil_port",
+            "FAIL",
+            type(shared_hil).__name__,
+            "shared fabric facade hil_port is NOT the kernel singleton",
+        )
 
 
-# ── Orchestrator HIL ───────────────────────────────────────────────────
+async def probe_round_trips(svc: Any, report: ProbeReport) -> None:
+    """Drive one real round-trip per HILKind through the singleton."""
 
-
-async def probe_orchestrator_hil(svc: Any, report: ProbeReport) -> None:
-    layer = "Orchestrator HIL"
-    orch = _attr(svc, "_orchestrator")
-    if orch is None:
-        report.add(layer, "service", "FAIL", None, "kernel._orchestrator is None")
+    layer = "HIL Round-Trips"
+    hil = _attr(svc, "_hil_service")
+    if hil is None:
+        report.add(layer, "service", "FAIL", None, "no _hil_service to drive")
         return
-    report.add(layer, "service", "OK", type(orch).__name__)
 
-    # Subscriptions — service should subscribe to override + fallback response topics
     bus = _attr(svc, "_bus")
     if bus is None:
-        report.add(layer, "bus", "FAIL", None, "kernel._bus is None")
+        report.add(layer, "bus", "FAIL", None, "no kernel._bus")
         return
 
-    # Probe the `pending_hil` property exists (audit BLOAT-1 side-effect)
+    user = _ScriptedUser(bus)
+    user.start()
     try:
-        pending = orch.pending_hil
+        # 1. CLARIFICATION
+        user.script(HILKind.CLARIFICATION, lambda req: {"answer": "use the personal calendar"})
+        try:
+            clar = await asyncio.wait_for(
+                hil.ask_clarification(
+                    ClarificationRequest(
+                        caller_key="probe.clar",
+                        trace_id=f"probe-{uuid.uuid4().hex[:8]}",
+                        question_context={"question": "which calendar?"},
+                        synthesize_with_llm=False,
+                        pre_formed_question="which calendar?",
+                        timeout_ms=5_000,
+                    )
+                ),
+                timeout=10.0,
+            )
+            if clar.answer == "use the personal calendar":
+                report.add(layer, "clarification", "OK", clar.answer)
+            else:
+                report.add(
+                    layer,
+                    "clarification",
+                    "FAIL",
+                    clar.answer,
+                    "answer mismatch / timed_out",
+                )
+        except Exception as exc:  # noqa: BLE001
+            report.add(layer, "clarification", "FAIL", None, f"{type(exc).__name__}: {exc}")
+
+        # 2. APPROVAL
+        user.script(
+            HILKind.APPROVAL,
+            lambda req: {"decision": "approve"},
+        )
+        try:
+            appr = await asyncio.wait_for(
+                hil.request_approval(
+                    ApprovalRequest(
+                        caller_key="probe.appr",
+                        trace_id=f"probe-{uuid.uuid4().hex[:8]}",
+                        summary="run probe plan",
+                        side_effects=["data_write"],
+                        safety_assessment="AMBER",
+                        timeout_ms=5_000,
+                    )
+                ),
+                timeout=10.0,
+            )
+            if appr.decision == "approve":
+                report.add(layer, "approval", "OK", appr.decision)
+            else:
+                report.add(layer, "approval", "FAIL", appr.decision, "decision mismatch")
+        except Exception as exc:  # noqa: BLE001
+            report.add(layer, "approval", "FAIL", None, f"{type(exc).__name__}: {exc}")
+
+        # 3. NEEDS_HUMAN
+        user.script(
+            HILKind.NEEDS_HUMAN,
+            lambda req: {
+                "decision": "answered",
+                "resolution": {"choice": "personal"},
+                "raw_user_text": "personal",
+            },
+        )
+        try:
+            nh = await asyncio.wait_for(
+                hil.needs_human(
+                    NeedsHumanRequest(
+                        caller_key="probe.nh",
+                        task_id=f"task-{uuid.uuid4().hex[:8]}",
+                        trace_id=f"probe-{uuid.uuid4().hex[:8]}",
+                        hil_type="clarification",
+                        question="probe needs human?",
+                        timeout_ms=5_000,
+                    )
+                ),
+                timeout=10.0,
+            )
+            if nh.decision == "answered":
+                report.add(layer, "needs_human", "OK", nh.decision)
+            else:
+                report.add(layer, "needs_human", "FAIL", nh.decision, "decision mismatch")
+        except Exception as exc:  # noqa: BLE001
+            report.add(layer, "needs_human", "FAIL", None, f"{type(exc).__name__}: {exc}")
+
+        # 4. OVERRIDE
+        user.script(
+            HILKind.OVERRIDE,
+            lambda req: {"choice": "override", "selected_alternative": {"capability": "alt"}},
+        )
+        try:
+            ov = await asyncio.wait_for(
+                hil.request_override(
+                    OverrideRequest(
+                        caller_key="probe.ov",
+                        request_id=f"req-{uuid.uuid4().hex[:8]}",
+                        trace_id=f"probe-{uuid.uuid4().hex[:8]}",
+                        plan_id=f"plan-{uuid.uuid4().hex[:8]}",
+                        unresolved_capabilities=["fake.cap"],
+                        timeout_ms=5_000,
+                    )
+                ),
+                timeout=10.0,
+            )
+            if ov.choice == "override":
+                report.add(layer, "override", "OK", ov.choice)
+            else:
+                report.add(layer, "override", "FAIL", ov.choice, "choice mismatch")
+        except Exception as exc:  # noqa: BLE001
+            report.add(layer, "override", "FAIL", None, f"{type(exc).__name__}: {exc}")
+
+        # 5. CAPABILITY_GATE (AMBER + side-effects -> forces real prompt)
+        user.script(
+            HILKind.CAPABILITY_GATE,
+            lambda req: {"approved": True, "reason": "probe approves"},
+        )
+        try:
+            view = CapabilityContractView(
+                name="probe.capability",
+                safety_band_min="AMBER",
+                requires_human_confirmation=True,
+                side_effects=[{"kind": "data_write", "description": "probe write"}],
+                description="probe capability gate",
+            )
+            gd = await asyncio.wait_for(
+                hil.gate_capability(
+                    CapabilityGateRequest(
+                        caller_key="probe.gate",
+                        trace_id=f"probe-{uuid.uuid4().hex[:8]}",
+                        capability_name="probe.capability",
+                        contract=view,
+                        params={},
+                        params_summary="",
+                        timeout_ms=5_000,
+                    )
+                ),
+                timeout=10.0,
+            )
+            if gd.user_approved is True:
+                report.add(layer, "capability_gate", "OK", gd.outcome.value)
+            else:
+                report.add(
+                    layer,
+                    "capability_gate",
+                    "FAIL",
+                    gd.outcome.value,
+                    f"user_approved={gd.user_approved}",
+                )
+        except Exception as exc:  # noqa: BLE001
+            report.add(layer, "capability_gate", "FAIL", None, f"{type(exc).__name__}: {exc}")
+
         report.add(
             layer,
-            "pending_hil_property",
-            "OK",
-            f"dict (n={len(pending) if hasattr(pending, '__len__') else '?'})",
+            "scripted_user_received",
+            "INFO",
+            len(user.received),
         )
-    except Exception as exc:  # noqa: BLE001
-        report.add(layer, "pending_hil_property", "FAIL", None, f"raised {type(exc).__name__}")
-
-    # Check the resolve handlers are wired — methods exist
-    for handler in ("_on_hil_override", "_on_hil_fallback"):
-        if hasattr(orch, handler):
-            report.add(layer, f"handler.{handler}", "OK", "exists")
-        else:
-            report.add(layer, f"handler.{handler}", "FAIL", None, "method missing")
-
-    # Try to find the constraint_resolver and verify trigger_hil_fallback exists
-    # (read-only — full e2e requires injecting a CommittedPlan with unresolved caps)
-    cr = _attr(orch, "_constraint_resolver") or _attr(orch, "constraint_resolver")
-    if cr is None:
-        report.add(layer, "constraint_resolver", "WARN", None, "not wired on orchestrator")
-    else:
-        report.add(layer, "constraint_resolver", "OK", type(cr).__name__)
-        if hasattr(cr, "trigger_hil_fallback"):
-            report.add(layer, "trigger_hil_fallback", "OK", "method exists")
-        else:
-            report.add(layer, "trigger_hil_fallback", "FAIL", None, "method missing")
-
-    # Delta port should expose emit_hil_request
-    dp = _attr(orch, "_delta_port") or _attr(orch, "delta_port")
-    if dp is None:
-        report.add(layer, "delta_port", "WARN", None, "not on orchestrator")
-    else:
-        if hasattr(dp, "emit_hil_request"):
-            report.add(layer, "delta_port.emit_hil_request", "OK", "method exists")
-        else:
-            report.add(
-                layer,
-                "delta_port.emit_hil_request",
-                "FAIL",
-                None,
-                "missing — orchestrator HIL emission broken",
-            )
+    finally:
+        user.stop()
 
 
-# ── HIL fragmentation summary ──────────────────────────────────────────
-
-
-def probe_hil_fragmentation(svc: Any, session: Any, report: ProbeReport) -> None:
-    layer = "HIL Fragmentation"
-    coords: list[tuple[str, Any]] = []
-    cc = _attr(session, "hitl_coordinator")
-    if cc is not None:
-        coords.append(("Concierge", cc))
-    pc = _find_planner_hil(svc)
-    if pc is not None:
-        coords.append(("Planner", pc))
-    report.add(
-        layer,
-        "coordinator_count",
-        "WARN" if len(coords) > 1 else "OK",
-        len(coords),
-        "audit BLOAT-1: 2 separate HILCoordinator classes" if len(coords) > 1 else "",
-    )
-    for name, c in coords:
-        report.add(layer, f"coord.{name}", "INFO", type(c).__name__)
-
-
-# ── runner ─────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
 
 
 async def run_probe(json_path: str | None) -> int:
     print("=" * 72)
-    print(_c("  K1 Kernel Probe — Phase 2 (HIL deep dive)", "\x1b[1m"))
+    print(_c("  K1 Kernel Probe -- Phase 2 (HIL deep dive)", "\x1b[1m"))
     print("=" * 72)
 
     cfg = KernelConfig(model_mode="test")
@@ -353,12 +437,10 @@ async def run_probe(json_path: str | None) -> int:
     if session is None:
         report.add("Boot", "session", "FAIL", None, "no session created")
     else:
-        await probe_concierge_hil(session, report)
-        await probe_planner_hil(svc, report)
-        await probe_orchestrator_hil(svc, report)
-        probe_hil_fragmentation(svc, session, report)
+        probe_hil_singleton(svc, session, report)
+        await probe_round_trips(svc, report)
 
-    report.render("K1 Kernel Probe — Phase 2 (HIL deep dive)")
+    report.render("K1 Kernel Probe -- Phase 2 (HIL deep dive)")
 
     if json_path:
         out = {

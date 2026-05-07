@@ -51,6 +51,19 @@ def _inject_test_mcp_transport(fabric: Any, report: ProbeReport) -> Any:
         report.add(layer, "provider_factory", "FAIL", None, "facade._provider_factory missing")
         return None
 
+    # E7.M1.1: facade should hold the kernel-owned HumanInTheLoopService.
+    fab_hil = _attr(facade, "_hil_port")
+    if fab_hil is None:
+        report.add(
+            layer,
+            "facade._hil_port",
+            "FAIL",
+            None,
+            "fabric facade has no _hil_port — E7 wiring broken",
+        )
+    else:
+        report.add(layer, "facade._hil_port", "OK", type(fab_hil).__name__)
+
     port_deps = _attr(pf, "_port_deps", {}) or {}
     existing = port_deps.get("mcp_transport")
     if existing is None:

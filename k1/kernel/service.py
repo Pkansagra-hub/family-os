@@ -47,10 +47,17 @@ from k1.fabric.adapters.event_port_prod import EventPortProdAdapter
 from k1.fabric.adapters.model_gateway_bridge import ModelGatewayBridgeAdapter
 from k1.fabric.adapters.prompt_system_prod import PromptSystemProdAdapter
 
-# Issue 2.3.3: Per-session Fabric state reader
+# Issue 2.3.ic.adapters.sessionstate_reader import SessionStateReaderAdapter
 from k1.fabric.adapters.sessionstate_reader import SessionStateReaderAdapter
 from k1.fabric.circuit_breaker.breaker import CircuitBreaker, CircuitBreakerConfig
 from k1.fabric.factory import FabricFactory
+
+# E7.M1.1: Unified HIL service + adapters
+from k1.hil.adapters import KernelHILEventAdapter
+from k1.hil.config import HILConfig
+from k1.hil.ledger import HILLedgerAdapter
+from k1.hil.safety import SafetyBandPolicy
+from k1.hil.service import HumanInTheLoopService
 from k1.kernel.adapters.bridge_adapter import OfflineBridgeAdapter, SinkBridgeAdapter
 
 # Issue 2.2.6: Planner adapters + factory
@@ -104,6 +111,14 @@ from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter
 from k1.planner.adapters.mailbox_adapter import MailboxAdapter as PlannerMailboxAdapter
 from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter as PlannerStateAdapter
 from k1.planner.factory import PlannerFactory
+
+# M5.E3.I2 + I3: k1.selfmodel kernel wiring (S2.6 + P3.5).
+from k1.selfmodel.kernel import (
+    SelfModelHandle,
+    SelfModelServiceBundle,
+    build_self_model_bundle,
+    build_self_model_handle,
+)
 
 # Issue 2.3.2: SessionState adapters + factory
 from k1.sessionstate.adapters.direct_writer import DirectWriterAdapter
@@ -180,6 +195,20 @@ class KernelService:
         self._planner: Any | None = None  # PlannerAgent
         self._planner_task: asyncio.Task[Any] | None = None
 
+        # E7.M1.1: Unified HIL service. Constructed at S2.5 (after S2 ModelHub
+        # and before S3 Fabric, so all four downstream subsystems can receive
+        # the same instance). ``None`` when ``KernelConfig.enable_hil_service``
+        # is False, in which case each factory falls back to its internal
+        # ``_NullHILAdapter``.
+        self._hil_service: Any | None = None  # HumanInTheLoopService
+
+        # M5.E3.I2: Shared k1.selfmodel bundle. Built at S2.6 when
+        # ``KernelConfig.enable_self_model`` is True. Per-session
+        # ``SelfModelHandle`` instances (built at P3.5) reference this
+        # bundle so every session shares one constitution / projection
+        # store / signature validator.
+        self._self_model_bundle: SelfModelServiceBundle | None = None
+
         # P4B.8: Shared Phase1 (UltraBERT) classification pipeline.
         # Built once during _startup_tier1, reused across every session.
         # familyos_ultrabert.Client is loaded lazily on first analyze() call
@@ -228,6 +257,27 @@ class KernelService:
         ``start_kernel`` backward-compat facade in ``bootstrap.py``).
         """
         return self._orchestrator
+
+    @property
+    def hil_service(self) -> Any | None:
+        """Shared ``HumanInTheLoopService`` instance, or ``None`` if disabled.
+
+        Populated at S2.5 when ``KernelConfig.enable_hil_service`` is True.
+        The same instance is wired into Fabric, Concierge, Planner, and
+        Orchestrator so they all share one set of pending HIL requests,
+        round budgets, and safety policy decisions.
+        """
+        return self._hil_service
+
+    @property
+    def self_model_bundle(self) -> SelfModelServiceBundle | None:
+        """Shared :class:`SelfModelServiceBundle`, or ``None`` if disabled.
+
+        Populated at S2.6 when ``KernelConfig.enable_self_model`` is
+        True. Every per-session :class:`SelfModelHandle` references
+        this bundle.
+        """
+        return self._self_model_bundle
 
     # ------------------------------------------------------------------
     # ILifecyclePort
@@ -328,6 +378,33 @@ class KernelService:
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: Orchestrator shutdown failed: %s", exc)
+
+        # ── Reverse S2.5: Shutdown HIL service (E7.M1.1) ──────
+        # Cancels every pending HIL future and unsubscribes from the bus.
+        # Run after orchestrator/planner so they cannot create new HIL
+        # requests after their teardown completes.
+        if self._hil_service is not None:
+            try:
+                await asyncio.wait_for(
+                    self._hil_service.shutdown(),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: HIL service shutdown failed: %s", exc)
+
+        # ── Reverse S2.6: Shutdown selfmodel bundle (M5.E3.I2) ──
+        # Closes the SQLite projection store handle when the bundle
+        # owns one. Sessions have already been destroyed (each
+        # destroy_session uninstalled its handle), so the bundle has
+        # no live consumers at this point.
+        if self._self_model_bundle is not None:
+            try:
+                self._self_model_bundle.shutdown()
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: selfmodel bundle shutdown failed: %s", exc)
+            self._self_model_bundle = None
 
         # ── Reverse S4: Disconnect Bridge ─────────────────────
         if self._bridge is not None:
@@ -555,6 +632,22 @@ class KernelService:
         session = self._sessions.pop(session_id)  # KeyError if missing
         errors: list[Exception] = []
 
+        # Reverse P3.5: uninstall selfmodel handle (M5.E3.I3).
+        # Done first so the gate is removed from dispatchers before
+        # Concierge is stopped, preventing in-flight calls from
+        # hitting a half-torn-down handle.
+        sm_handle = getattr(session, "self_model", None)
+        if sm_handle is not None:
+            try:
+                sm_handle.uninstall_from_session()
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "destroy_session(%s): selfmodel uninstall failed: %s",
+                    session_id,
+                    exc,
+                )
+
         # Reverse P5: Stop MemoryWriter
         try:
             await asyncio.wait_for(
@@ -615,6 +708,48 @@ class KernelService:
     def list_sessions(self) -> list[str]:
         """Return all active session IDs."""
         return list(self._sessions.keys())
+
+    # ------------------------------------------------------------------
+    # M5.E3.I3: per-session selfmodel helpers
+    # ------------------------------------------------------------------
+    def _derive_session_actor(
+        self,
+        ssm: Any,
+        session_id: str,
+        device_id: str | None,
+    ) -> tuple[str, str]:
+        """Resolve ``(actor_id, device_id)`` for selfmodel binding.
+
+        Reads ``MetaSection.identity`` from the session's
+        ``SessionStateManager`` for the canonical user/device pair.
+        Falls back to:
+
+        * ``actor_id``: ``meta.user_id`` -> ``"actor:{session_id}"``.
+        * ``device_id``: caller-provided ``device_id`` ->
+          ``meta.device_id`` -> ``""``.
+
+        Failures are swallowed so a missing meta section never blocks
+        session creation.
+        """
+        actor_id = f"actor:{session_id}"
+        device_resolved = device_id or ""
+        try:
+            meta = ssm.get_section("meta")
+        except Exception:
+            meta = None
+        if meta is None:
+            return actor_id, device_resolved
+        try:
+            identity = meta.identity
+        except Exception:
+            return actor_id, device_resolved
+        if identity is not None:
+            user = getattr(identity, "user_id", "") or ""
+            if user:
+                actor_id = user
+            if not device_resolved:
+                device_resolved = getattr(identity, "device_id", "") or ""
+        return actor_id, device_resolved
 
     # ------------------------------------------------------------------
     # Private helpers (stubs)
@@ -706,31 +841,18 @@ class KernelService:
             )
 
     def _verify_orchestrator_monitor_binding(self) -> None:
-        """Issue 2.1.7: Verify ExecutionMonitor late-binding completed.
+        """Verify ExecutionMonitor is wired into the DAG guard pipeline.
 
-        B-OR-3: ``OrchestratorFactory._construct_orchestrator()`` creates
-        ``ExecutionMonitor(delta, service_ref=None)`` in ``_build_guards()``
-        (factory L189), then patches ``monitor._service_ref = service``
-        post-construction (factory L453).  This happens INSIDE the factory
-        — ``KernelService`` does NOT do it manually.
-
-        This method verifies the factory completed the late-binding.
-        Call after ``OrchestratorFactory.create_production()`` returns.
-
-        Guard pipeline (4 guards at ``_dag_executor._guards``):
-            [0] OutputSchemaGuard
-            [1] ConditionalEdgeEvaluator
-            [2] MicroReplanCheckpoint
-            [3] ExecutionMonitor  ← ``_service_ref`` must be set
-
-        NOTE: Plan originally stated guards=[CostGuard, ConcurrencyGuard,
-        CircuitBreakerGuard, ExecutionMonitor].  Code audit proved this
-        WRONG — actual guards are above.  ConcurrencyGuard wraps
-        ``_process_one``, not a DAGGuard.
+        E6 removed the legacy ``_service_ref`` late-binding (the
+        OrchestratorService no longer reaps pending HIL requests, so
+        ExecutionMonitor needs only its ``hil_port`` injected via the
+        factory's ``_build_guards`` step). This method now checks only
+        that the guard pipeline is present and includes a 4th guard slot
+        that exposes a ``decide()`` method (the ExecutionMonitor surface).
 
         Raises:
-            RuntimeError: If ``_orchestrator`` is None or the monitor's
-                ``_service_ref`` is not set.
+            RuntimeError: If ``_orchestrator`` is None or the guard
+                pipeline is missing its monitor entry.
         """
         if self._orchestrator is None:
             raise RuntimeError(
@@ -750,11 +872,10 @@ class KernelService:
                 f"entries, expected >= 4."
             )
         monitor = guards[3]
-        service_ref = getattr(monitor, "_service_ref", None)
-        if service_ref is None:
+        if not callable(getattr(monitor, "after_step", None)):
             raise RuntimeError(
-                "ExecutionMonitor._service_ref is None after factory "
-                "construction.  B-OR-3 late-binding failed."
+                "ExecutionMonitor (guard slot 3) does not expose after_step(); "
+                "guard pipeline wiring failed."
             )
 
     def _verify_planner_mailbox_binding(self) -> None:
@@ -982,6 +1103,79 @@ class KernelService:
             self._router.close()
             raise
 
+        # ── S2.5: Unified HIL service (E7.M1.1) ───────────────
+        # Constructed after S2 (ModelHub) and before S4 (Bridge) so all four
+        # downstream subsystems (Fabric/Concierge/Planner/Orchestrator)
+        # receive the SAME instance via their factories. If
+        # ``enable_hil_service`` is False the factories receive ``None`` and
+        # each falls back to its internal _NullHILAdapter — preserving
+        # pre-E7 behaviour for tests that cannot reply to HIL requests.
+        if self._config.enable_hil_service:
+            try:
+                hil_event_port = KernelHILEventAdapter(bus, loop=asyncio.get_running_loop())
+                hil_config = HILConfig(
+                    max_clarification_rounds=self._config.hil_max_clarification_rounds,
+                    clarification_timeout_ms=self._config.hil_clarification_timeout_ms,
+                    approval_timeout_ms=self._config.hil_approval_timeout_ms,
+                    needs_human_timeout_ms=self._config.hil_needs_human_timeout_ms,
+                    override_timeout_ms=self._config.hil_override_timeout_ms,
+                    capability_gate_timeout_ms=self._config.hil_capability_gate_timeout_ms,
+                    enable_audit_topic=self._config.hil_enable_audit_topic,
+                    enable_llm_synthesis=self._config.hil_enable_llm_synthesis,
+                )
+                self._hil_service = HumanInTheLoopService(
+                    event_port=hil_event_port,
+                    ledger=HILLedgerAdapter(None),
+                    suspension_mgr=None,
+                    safety_policy=SafetyBandPolicy(),
+                    config=hil_config,
+                    llm_port=None,
+                )
+                logger.info(
+                    "HIL: HumanInTheLoopService constructed (clarification_rounds=%d)",
+                    hil_config.max_clarification_rounds,
+                )
+            except Exception:
+                self._bus.close()
+                self._router.close()
+                raise
+        else:
+            self._hil_service = None
+            logger.info("HIL: enable_hil_service=False — subsystems get None hil_port")
+
+        # ── S2.6: k1.selfmodel bundle (M5.E3.I2) ──────────────
+        # Constructed after S2.5 HIL and before S4 Bridge so the
+        # shared HIL service is available to per-session handles
+        # (P3.5). When ``enable_self_model`` is False, the field stays
+        # ``None`` and ``create_session`` skips P3.5 entirely.
+        if self._config.enable_self_model:
+            try:
+                self._self_model_bundle = build_self_model_bundle(
+                    bus=self._async_bus,
+                    hil_service=self._hil_service,
+                    projection_db_path=self._config.selfmodel_projection_db_path,
+                    family_space_id=self._config.selfmodel_family_space_id,
+                )
+                logger.info(
+                    "selfmodel: bundle ready (db=%s, family=%s, safe_mode=%s)",
+                    self._config.selfmodel_projection_db_path or "<memory>",
+                    self._config.selfmodel_family_space_id,
+                    self._self_model_bundle.safe_mode,
+                )
+            except Exception:
+                # S2.6 failure: tear down everything created above.
+                if self._hil_service is not None:
+                    try:
+                        await self._hil_service.shutdown()
+                    except Exception:
+                        pass
+                self._bus.close()
+                self._router.close()
+                raise
+        else:
+            self._self_model_bundle = None
+            logger.debug("selfmodel: enable_self_model=False; skipping S2.6")
+
         # ── S4: Bridge (kernel-level IBridgePort) ─────────
         # S4 before S3 because Fabric needs a bridge adapter.
         try:
@@ -1020,6 +1214,7 @@ class KernelService:
                 prompt_system=prompt_system,
                 delta_bus=delta_bus,
                 state_reader=session_routing_reader,
+                hil_port=self._hil_service,  # E7.M1.1
             )
             # W8: opt-in module loader hot-reload watcher. Off by default
             # (factory called start(watch=False)); flip on for prod
@@ -1082,6 +1277,7 @@ class KernelService:
                 bridge=orch_bridge,
                 event=orch_event,
                 storage=orch_storage,
+                hil_port=self._hil_service,  # E7.M1.1
             )
         except Exception:
             await self._shared_fabric.shutdown()
@@ -1116,6 +1312,7 @@ class KernelService:
                 delta_port=pl_delta,
                 event_port=pl_event,
                 mailbox_port=pl_mailbox,
+                hil_port=self._hil_service,  # E7.M1.1
             )
         except Exception:
             await self._orchestrator.shutdown()
@@ -1264,6 +1461,20 @@ class KernelService:
             except Exception:
                 pass
 
+        # E7.M1.1: HIL service constructed at S2.5.
+        if self._hil_service is not None:
+            try:
+                await self._hil_service.shutdown()
+            except Exception:
+                pass
+
+        # M5.E3.I2: selfmodel bundle constructed at S2.6.
+        if self._self_model_bundle is not None:
+            try:
+                self._self_model_bundle.shutdown()
+            except Exception:
+                pass
+
         if self._shared_fabric is not None:
             try:
                 await self._shared_fabric.shutdown()
@@ -1311,6 +1522,8 @@ class KernelService:
         self._orchestrator = None
         self._planner = None
         self._phase1_pipeline = None
+        self._hil_service = None  # E7.M1.1
+        self._self_model_bundle = None  # M5.E3.I2
 
     def _on_planner_task_done(self, task: asyncio.Task[Any]) -> None:
         """Issue 2.4.3 #9: Watchdog callback for planner background task.
@@ -1431,12 +1644,48 @@ class KernelService:
                 prompt_system=session_prompt_sys,
                 delta_bus=session_delta_bus,
                 production_mode=True,
+                hil_port=self._hil_service,  # E7.M1.1: per-session fabric gate
             )
         except Exception:
             ssm.stop()
             session_bus.close()
             session_router.close()
             raise
+
+        # ── P3.5: k1.selfmodel handle (M5.E3.I3) ──────────────
+        # Built after P3 (per-session Fabric) and before P4 (Concierge)
+        # so the Concierge factory can attach the handle's gate +
+        # capsule renderer at construction time. When
+        # ``enable_self_model`` is False (or the bundle failed to
+        # build at S2.6) the handle stays None and the session runs
+        # the pre-M5 baseline.
+        session_self_model: SelfModelHandle | None = None
+        if self._self_model_bundle is not None:
+            try:
+                actor_id, device_meta = self._derive_session_actor(ssm, session_id, device_id)
+                session_self_model = build_self_model_handle(
+                    self._self_model_bundle,
+                    session_id=session_id,
+                    actor_id=actor_id,
+                    device_id=device_meta,
+                    situation_kind=self._config.selfmodel_situation_kind,
+                    hil_service=self._hil_service,
+                )
+                logger.debug(
+                    "selfmodel P3.5 wired session=%s actor=%s device=%s",
+                    session_id,
+                    actor_id,
+                    device_meta,
+                )
+            except Exception:
+                # P3.5 failure must not abort session creation —
+                # selfmodel is an opt-in overlay. Log + continue.
+                logger.warning(
+                    "selfmodel P3.5 build failed for session=%s; continuing without handle",
+                    session_id,
+                    exc_info=True,
+                )
+                session_self_model = None
 
         # ── P4: Concierge (per-session) ──────────────────────
         session_concierge = None
@@ -1445,9 +1694,16 @@ class KernelService:
             session_input = BusInputAdapter(session_bus)
             session_output = BusOutputAdapter(session_bus)
             session_state_port = SSMStateAdapter(ssm)
+            # M17.E1.I3 -- forward workflow.* dispatch from concierge to the
+            # production WorkflowEngine. ``_workflow_engine`` is a private
+            # slot on OrchestratorService; we read it via getattr so older
+            # orchestrator stubs (which lack the engine) still boot.
+            workflow_engine = getattr(self._orchestrator, "_workflow_engine", None)
             session_dispatch = FabricDispatchAdapter(
                 fabric_port=session_fabric,
                 orchestrator=self._orchestrator,
+                bus=session_bus,
+                workflow_engine=workflow_engine,
             )
             port_bundle = PortBundle(
                 delta=session_bus,
@@ -1457,9 +1713,11 @@ class KernelService:
                 llm=self._model_hub,
                 classification=self._phase1_pipeline,
                 dispatch=session_dispatch,
-                # P5.2: Wire recall through Bridge query path. SinkBridgeClient
-                # returns RecallBundle.empty() when offline, so the adapter
-                # gracefully yields [] without falling back to _null_recall.
+                # P5.2 / MS-3c: Wire recall through the typed paired-contract
+                # surface (``recall.request.v1`` / ``recall.response.v1``).
+                # ``build_recall_fn`` resolves the typed client out of the
+                # bridge composite client (or returns an offline-graceful
+                # ``[]`` when no recall surface is bound).
                 memory=RecallMemoryAdapter(build_recall_fn(self._bridge.get_client())),
                 # P4B.6: pass IWriterPort explicitly (was reach-through in factory step 7)
                 writer=ss_writer,
@@ -1471,6 +1729,7 @@ class KernelService:
                 back_mailbox=back_mailbox,
                 ports=port_bundle,
                 config=concierge_config,
+                hil_port=self._hil_service,  # E7.M1.1
             )
         except Exception:
             # P3 Fabric has no teardown; clean up P2 + P1.
@@ -1520,6 +1779,42 @@ class KernelService:
             session_router.close()
             raise
 
+        # ── P3.5 (pre-start install): wire gate + recall wrapper ──
+        # M15.E1.I5 — install BEFORE ``session_concierge.start()`` so
+        # the policy gate is in place before the mailbox consumer can
+        # accept the first turn (closes the install/start race window).
+        # Dispatchers + per-side contexts are constructed in
+        # ``ConciergeRuntime.__init__`` and are therefore already
+        # available on the instance prior to ``start``.
+        if session_self_model is not None:
+            try:
+                session_self_model.install_into_session(
+                    front_dispatcher=getattr(session_concierge, "front_dispatcher", None),
+                    back_dispatcher=getattr(session_concierge, "back_dispatcher", None),
+                    front_ctx=getattr(session_concierge, "front_ctx", None),
+                    back_ctx=getattr(session_concierge, "back_ctx", None),
+                )
+            except Exception:
+                logger.warning(
+                    "selfmodel P3.5 install failed for session=%s",
+                    session_id,
+                    exc_info=True,
+                )
+
+            # M5.E4: also attach the handle to ConciergeRuntime so
+            # ``front_handler`` can pull ``render_capsule()`` per turn
+            # and inject it into ``DynamicPromptBuilder.build(stage 9.5)``.
+            setter = getattr(session_concierge, "set_self_model", None)
+            if callable(setter):
+                try:
+                    setter(session_self_model)
+                except Exception:
+                    logger.warning(
+                        "selfmodel: set_self_model failed for session=%s",
+                        session_id,
+                        exc_info=True,
+                    )
+
         # ── P6: Assemble SessionInstance + Start Lifecycle ────
         try:
             await session_concierge.start()
@@ -1556,7 +1851,7 @@ class KernelService:
             experience_layer=session_concierge.experience_layer,
             delta_aggregator=session_concierge.delta_aggregator,
             delta_applicator=session_concierge.delta_applicator,
-            hitl_coordinator=session_concierge.hitl_coordinator,
+            hil_port=session_concierge.hil_port,
             consumer_task=session_concierge.consumer_task,
             dead_letter_consumer=session_concierge.dead_letter_consumer,
             created_at=datetime.now(timezone.utc),
@@ -1565,6 +1860,7 @@ class KernelService:
             ledger=session_concierge.ledger,
             ledger_store=session_concierge.ledger_store,
             concierge_task=session_concierge.consumer_task,
+            self_model=session_self_model,
         )
         self._sessions[session_id] = session
         return session

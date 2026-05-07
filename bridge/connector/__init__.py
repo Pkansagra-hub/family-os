@@ -1,10 +1,69 @@
-"""bridge.connector -- External device connector security gateway.
+"""bridge/connector — IFL Connector Gateway tier (MS-5).
 
-Planned integration:
-    - Tool registration with capability-based access control
-    - OAuth2 device authorization for external APIs (Philips Hue, Nest)
-    - Request signing and rate limiting per connector
-    - Audit trail for all external device commands
+The connector tier owns:
+    * :class:`ConnectorGateway` — the concrete impl of
+      :class:`bridge.ports.IConnectorGatewayPort`.
+    * Three-stage security pipeline: ``TokenVerifier`` →
+      ``AdapterVerifier`` → ``RequestRouter``.
+    * MCP child-process supervision (``MCPProcessManager``).
+    * Per-adapter credential storage (``CredentialVault``).
+    * Typed boundary objects (:mod:`bridge.connector.contracts`).
 
-Status: placeholder -- implementation planned for MS-6 (device connectors).
+Layering: this tier sits *below* ``bridge/ifl/`` (the runtime that hosts
+adapter manifests + per-adapter MCP servers) and *above*
+``bridge/ports/`` (Protocols only). The ``bridge_not_imported_from_kernels``
+CI gate forbids K0/K1 from importing anything in this package directly;
+they must go through the port.
 """
+
+from __future__ import annotations
+
+from .adapter_verifier import AdapterVerifier, CABundleAdapterVerifier
+from .contracts import (
+    AdapterHealth,
+    AdapterQuarantinedError,
+    ConnectorCaller,
+    ConnectorGatewayError,
+    ConnectorResult,
+    InvalidAdapterSignatureError,
+    OfflineAdapterError,
+    TokenDeniedError,
+    ToolDescriptor,
+    UnknownAdapterError,
+)
+from .credential_vault import (
+    CredentialNotFoundError,
+    CredentialVault,
+    InMemoryCredentialVault,
+    VaultRecord,
+)
+from .gateway import ConnectorGateway
+from .mcp_process_manager import MCPProcessManager, SkeletonMCPProcessManager
+from .request_router import DefaultRequestRouter, RequestRouter
+from .token_verifier import PermissiveTokenVerifier, TokenVerifier
+
+__all__ = [
+    "AdapterHealth",
+    "AdapterQuarantinedError",
+    "AdapterVerifier",
+    "CABundleAdapterVerifier",
+    "ConnectorCaller",
+    "ConnectorGateway",
+    "ConnectorGatewayError",
+    "ConnectorResult",
+    "CredentialNotFoundError",
+    "CredentialVault",
+    "DefaultRequestRouter",
+    "InMemoryCredentialVault",
+    "InvalidAdapterSignatureError",
+    "MCPProcessManager",
+    "OfflineAdapterError",
+    "PermissiveTokenVerifier",
+    "RequestRouter",
+    "SkeletonMCPProcessManager",
+    "TokenDeniedError",
+    "TokenVerifier",
+    "ToolDescriptor",
+    "UnknownAdapterError",
+    "VaultRecord",
+]

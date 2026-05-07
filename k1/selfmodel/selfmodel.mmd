@@ -1,0 +1,49 @@
+%% k1.selfmodel — high-level component view (M0 placeholder).
+%% See docs/whiteboard/SERVICE_DESIGN_SELF_MODEL.md for the authoritative design.
+flowchart TB
+    subgraph Inputs["Inputs"]
+        SS["k1.sessionstate<br/>(MetaSection, PersonaSection)"]
+        Bridge["bridge<br/>(SSE: k0.sync.complete.v1)"]
+    end
+
+    subgraph SelfModel["k1.selfmodel"]
+        direction TB
+        ProjStore[("SQLiteProjectionStore<br/>~/.familyos/k1/selfmodel.db")]
+        SelfSvc["SelfModelService"]
+        FamSvc["FamilyModelService"]
+        ConstSvc["ConstitutionService"]
+        AmendSvc["AmendmentService"]
+        IdSvc["IdentitySessionManager"]
+        Composer["SituationFrameComposer<br/>S ∩ F ∩ C @ (T, D)"]
+        Policy["PolicyEvaluator"]
+        Capsule["GroundingCapsuleBuilder"]
+        Citation["CitationPackBuilder"]
+
+        ProjStore --> SelfSvc
+        ProjStore --> FamSvc
+        ProjStore --> ConstSvc
+        ConstSvc --> AmendSvc
+        SelfSvc --> Composer
+        FamSvc --> Composer
+        ConstSvc --> Composer
+        IdSvc --> Composer
+        Composer --> Policy
+        Composer --> Capsule
+    end
+
+    subgraph Outputs["Consumers"]
+        PromptB["k1.concierge<br/>DynamicPromptBuilder.build()"]
+        Dispatcher["k1.concierge<br/>ToolDispatcher (step 0 gate)"]
+        Recall["k1.concierge<br/>ToolContext.recall_fn"]
+        HIL["k1.hil<br/>HumanInTheLoopService.ask_approval"]
+        Bus["k1.bus<br/>k1.selfmodel.* topics"]
+    end
+
+    SS --> SelfSvc
+    Bridge --> ConstSvc
+    Capsule --> PromptB
+    Policy --> Dispatcher
+    Citation --> Recall
+    Policy -. REQUIRE_CONFIRMATION .-> HIL
+    AmendSvc -- sync.delta --> Bridge
+    SelfModel -- events --> Bus

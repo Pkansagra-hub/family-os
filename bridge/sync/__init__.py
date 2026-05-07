@@ -19,6 +19,7 @@ All sync operations route through K0 P07 Sync/CRDT pipeline.
 
 from __future__ import annotations
 
+from .drain_worker import DrainWorker
 from .local_outbox import LocalOutbox, OutboxQueueEntry
 
 # Phase 1 sync components (planned -- not yet implemented).
@@ -30,6 +31,7 @@ from .local_outbox import LocalOutbox, OutboxQueueEntry
 #   from .sync_port import ISyncPort, SyncPortImpl
 
 __all__ = [
+    "DrainWorker",
     "LocalOutbox",
     "OutboxQueueEntry",
 ]

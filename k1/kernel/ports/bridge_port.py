@@ -30,7 +30,7 @@ from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
-class IBridgePort(Protocol):
+class IBridgeRuntime(Protocol):
     """Kernel port for K0 Bridge connection lifecycle.
 
     Manages the optional K0 connection. Offline mode is normal

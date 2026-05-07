@@ -36,7 +36,7 @@ _PORT_METHODS: dict[str, list[str]] = {
     "IFabricGatewayPort": ["execute", "execute_batch", "query_registry"],
     "IPlannerPort": ["request_plan", "cancel_plan", "micro_replan"],
     "IStateReadPort": ["read_section", "read_sections", "get_snapshot"],
-    "IDeltaEmitPort": ["emit", "emit_progress", "emit_hil_request"],
+    "IDeltaEmitPort": ["emit", "emit_progress"],
     "IBridgeWritePort": ["submit_audit", "write_wal", "read_wal", "list_wal_ids"],
     "IEventSubscriptionPort": ["subscribe", "unsubscribe", "emit"],
     "IWorkflowStoragePort": ["save_workflow", "get_workflow", "list_workflows"],

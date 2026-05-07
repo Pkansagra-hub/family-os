@@ -14,6 +14,7 @@ from tests.k1.planner.adapters.test_event_adapter import TestEventAdapter
 from tests.k1.planner.adapters.test_fabric_retrieval_adapter import (
     TestFabricRetrievalAdapter,
 )
+from tests.k1.planner.adapters.test_hil_adapter import TestHILAdapter
 from tests.k1.planner.adapters.test_llm_adapter import TestLLMAdapter
 from tests.k1.planner.adapters.test_mailbox_adapter import TestMailboxAdapter
 from tests.k1.planner.adapters.test_state_read_adapter import TestStateReadAdapter
@@ -26,4 +27,5 @@ __all__ = [
     "TestBridgeAdapter",
     "TestDeltaAdapter",
     "TestEventAdapter",
+    "TestHILAdapter",
 ]

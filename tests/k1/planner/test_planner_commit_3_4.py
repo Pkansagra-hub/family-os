@@ -668,7 +668,7 @@ class TestPLAN03Enforcement:
 
     def test_imports_bridge_port_from_layer1(self) -> None:
         source = Path(inspect.getfile(CommitService)).read_text(encoding="utf-8")
-        assert "from k1.planner.ports.bridge_port import IBridgePort" in source
+        assert "from k1.planner.ports.bridge_port import IPlannerWritePort" in source
 
     def test_imports_delta_port_from_layer1(self) -> None:
         source = Path(inspect.getfile(CommitService)).read_text(encoding="utf-8")

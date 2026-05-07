@@ -386,8 +386,8 @@ async def test_714_constraint_resolver_hil_edge() -> None:
     )
     assert validation.valid is False
     assert validation.hil_required is True
-    assert validation.hil_request is not None
-    assert len(delta.hil_requests) >= 1
+    assert validation.hil_response is not None
+    assert validation.hil_response.timed_out is True
 
 
 @pytest.mark.asyncio

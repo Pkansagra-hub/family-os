@@ -55,7 +55,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import replace
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
 
 from k1.planner.config import PlannerConfig
 from k1.planner.events import (
@@ -69,6 +69,10 @@ from k1.planner.plan_fsm import PlanState, PlanStateMachine
 from k1.planner.ports.delta_emit_port import IDeltaEmitPort
 from k1.planner.ports.event_port import IEventPort
 from k1.planner.tracing import create_stage_context
+
+if TYPE_CHECKING:
+    from k1.kernel.ports.hil_port import IHILPort
+
 from k1.planner.types import (
     DELTA_MICRO_REPLAN,
     DELTA_PLAN_CANCELLED,
@@ -141,6 +145,7 @@ class PipelineController:
         "_commit",
         "_delta_port",
         "_event_port",
+        "_hil_port",
         "_config",
         "_fsm",
         "_stage_token_usage",
@@ -164,6 +169,7 @@ class PipelineController:
         delta_port: IDeltaEmitPort,
         event_port: IEventPort,
         config: PlannerConfig,
+        hil_port: "IHILPort | None" = None,
     ) -> None:
         # -- Validate injected dependencies --
         if sketch is None:
@@ -180,6 +186,8 @@ class PipelineController:
             raise ValueError("PipelineController: event_port must not be None")
         if config is None:
             raise ValueError("PipelineController: config must not be None")
+        # E5 (HIL Unification): hil_port is optional for backward compatibility;
+        # when omitted, reset_round_budget calls are no-ops.
 
         # -- Service references (injected, not created) --
         self._sketch: Any = sketch
@@ -190,6 +198,7 @@ class PipelineController:
         # -- Port references --
         self._delta_port: IDeltaEmitPort = delta_port
         self._event_port: IEventPort = event_port
+        self._hil_port: "IHILPort | None" = hil_port
 
         # -- Configuration --
         self._config: PlannerConfig = config
@@ -433,6 +442,14 @@ class PipelineController:
             # -- Step 1: Reset per-plan state (Section 23.2 step 4) --
             self.reset()
 
+            # E5.M1.3: clear HIL round budgets for the planner caller_keys
+            # so a re-used plan_id starts with a fresh budget.  hil_port is
+            # optional (E5 back-compat); skip when not wired.
+            plan_id = getattr(request, "request_id", None)
+            if plan_id and self._hil_port is not None:
+                self._hil_port.reset_round_budget(f"planner:sketch:{plan_id}")
+                self._hil_port.reset_round_budget(f"planner:validate:{plan_id}")
+
             # -- Step 2: Initialise plan --
             self._current_request = request
             self._plan_start_time = time.monotonic()
@@ -465,7 +482,7 @@ class PipelineController:
             while True:
                 # -- Step 6: EXPAND --
                 ctx = self._create_stage_context(StagePhase.EXPAND)
-                expanded_plan = await self._expand.execute(sketch_result, ctx)
+                expanded_plan = await self._expand.execute(sketch_result, request, ctx)
 
                 # -- Step 7: Cancel + timeout check --
                 self._check_cancel(cancel_check, StagePhase.EXPAND.value)
@@ -479,7 +496,7 @@ class PipelineController:
 
                 # -- Step 9: VALIDATE --
                 ctx = self._create_stage_context(StagePhase.VALIDATE)
-                verdict = await self._validate.execute(expanded_plan, ctx)
+                verdict = await self._validate.execute(expanded_plan, request, ctx)
 
                 # -- Step 10: Verdict routing (Section 5.2 step 15) --
                 verdict_status = getattr(verdict, "status", None)
@@ -525,6 +542,7 @@ class PipelineController:
             ctx = self._create_stage_context(StagePhase.COMMIT)
             committed = await self._commit.execute(
                 expanded_plan,
+                request,
                 verdict,
                 ctx,
             )
@@ -705,6 +723,7 @@ class PipelineController:
             )
             committed = await self._commit.execute(
                 micro_expanded,
+                request,
                 verdict,
                 commit_ctx,
             )

@@ -16,7 +16,7 @@ What it checks (NO traffic driven, NO LLM calls):
 - KernelService Tier-1: bus, router, model_hub, shared_fabric, bridge,
   orchestrator, planner, ledger
 - Per-session Tier-2: concierge, fabric, session_state, memory_writer,
-  experience_layer, delta_aggregator, delta_applicator, hitl_coordinator
+  experience_layer, delta_aggregator, delta_applicator, hil_port
 - Kernel ports: all 8 (bridge/bus/fabric/lifecycle/model_hub/orchestrator/
   planner/session_manager) — instantiated? adapter type?
 - HIL surface: count HILCoordinator instances + topics (Concierge/Planner/
@@ -25,7 +25,7 @@ What it checks (NO traffic driven, NO LLM calls):
   classes' state_reader injection, mcp_transport, ModuleLoader.watch
 - Model Hub: model_mode, plugin list, BudgetEnforcer, ResponseCache TTL,
   health query type
-- Orchestrator: DAGExecutor.guards, _compensate body, max_pending_hil
+- Orchestrator: DAGExecutor.guards, _compensate body, max_pending_plans
 - Planner: LLMGatewayAdapter type, HIL topics
 - SessionState: section count, tier counts, EvictionEngine.section_provider,
   DeltaApplicator callbacks (3× None pattern)
@@ -160,6 +160,7 @@ def probe_kernel_service(svc: Any, report: ProbeReport) -> None:
     _present(_attr(svc, "_bridge"), "bridge", layer, report)
     _present(_attr(svc, "_orchestrator"), "orchestrator", layer, report)
     _present(_attr(svc, "_planner"), "planner", layer, report)
+    _present(_attr(svc, "_hil_service"), "hil_service", layer, report)
     planner_task = _attr(svc, "_planner_task")
     if planner_task is None:
         report.add(layer, "planner_task", "WARN", None, "no asyncio task — planner not running")
@@ -187,7 +188,7 @@ def probe_session(session: Any, report: ProbeReport) -> None:
     _present(_attr(session, "experience_layer"), "experience_layer", layer, report)
     _present(_attr(session, "delta_aggregator"), "delta_aggregator", layer, report)
     _present(_attr(session, "delta_applicator"), "delta_applicator", layer, report)
-    _present(_attr(session, "hitl_coordinator"), "hitl_coordinator", layer, report)
+    _present(_attr(session, "hil_port"), "hil_port", layer, report)
     _present(_attr(session, "front_dispatcher"), "front_dispatcher", layer, report)
     _present(_attr(session, "back_dispatcher"), "back_dispatcher", layer, report)
     _present(_attr(session, "ledger"), "ledger", layer, report)
@@ -371,21 +372,22 @@ def probe_orchestrator(svc: Any, report: ProbeReport) -> None:
             "audit F45 — populate timeout + max-retries guards" if len(guards) == 0 else "",
         )
 
-    # HIL surface (audit §16 F141)
+    # HIL surface (audit §16 F141): post-E6 the delta-emit port no longer
+    # owns HIL emission — that responsibility moved to IHILPort.  Surface
+    # OK if the legacy method is GONE, FAIL if it has crept back.
     delta_emit = _attr(orch, "_delta_emit_port") or _attr(orch, "delta_emit_port")
     if delta_emit is not None:
         emit_hil = hasattr(delta_emit, "emit_hil_request")
         report.add(
             layer,
-            "delta_emit.emit_hil_request",
-            "OK" if emit_hil else "FAIL",
-            emit_hil,
-            "doesn't belong here — should be IHILPort (audit BLOAT-4)",
+            "delta_emit.emit_hil_request_removed",
+            "OK" if not emit_hil else "FAIL",
+            not emit_hil,
+            "post-E6 contract — emission moved to IHILPort",
         )
     config = _attr(orch, "_config") or _attr(orch, "config")
     if config is not None:
-        report.add(layer, "max_pending_hil", "INFO", _attr(config, "max_pending_hil"))
-        report.add(layer, "hil_timeout_ms", "INFO", _attr(config, "hil_timeout_ms"))
+        report.add(layer, "max_pending_plans", "INFO", _attr(config, "max_pending_plans"))
 
 
 # ── layer 7: Planner ───────────────────────────────────────────────────
@@ -414,29 +416,50 @@ def probe_planner(svc: Any, report: ProbeReport) -> None:
 
 def probe_hil(svc: Any, session: Any, report: ProbeReport) -> None:
     layer = "HIL (cross-subsystem)"
-    found = []
 
-    c_hil = _attr(session, "hitl_coordinator")
-    if c_hil is not None:
-        found.append(("concierge", type(c_hil).__name__))
+    # Post-E7: there is exactly one HumanInTheLoopService held by the kernel
+    # at S2.5 and shared via hil_port across concierge / planner / orchestrator
+    # / fabric.  Surface the singleton and verify each subsystem points at it.
+    kernel_hil = _attr(svc, "_hil_service")
+    if kernel_hil is None:
+        report.add(layer, "kernel._hil_service", "FAIL", None, "S2.5 produced no HIL service")
+    else:
+        report.add(layer, "kernel._hil_service", "OK", type(kernel_hil).__name__)
 
-    p = _attr(svc, "_planner")
-    p_hil = _attr(p, "_hil_coordinator") or _attr(p, "hil_coordinator") if p else None
-    if p_hil is not None:
-        found.append(("planner", type(p_hil).__name__))
+    def _is_singleton(obj: Any) -> str:
+        if obj is None:
+            return "missing"
+        if kernel_hil is not None and obj is kernel_hil:
+            return "singleton"
+        return f"diverged ({type(obj).__name__})"
 
-    o = _attr(svc, "_orchestrator")
-    o_hil = (
-        _attr(o, "_hil_coordinator") or _attr(o, "hil_coordinator") or _attr(o, "_delta_emit_port")
-        if o
-        else None
+    c_hil = _attr(session, "hil_port") or _attr(session, "hitl_coordinator")
+    report.add(
+        layer,
+        "concierge.hil_port",
+        "OK" if (c_hil is not None and c_hil is kernel_hil) else "WARN",
+        _is_singleton(c_hil),
     )
-    if o_hil is not None:
-        found.append(("orchestrator", type(o_hil).__name__))
 
-    report.add(layer, "coordinator_count", "WARN", len(found), "should be 1 (audit BLOAT-1)")
-    for subsys, name in found:
-        report.add(layer, f"{subsys}_coordinator_class", "INFO", name)
+    concierge = _attr(session, "concierge")
+    fsm = _attr(concierge, "controller") or _attr(concierge, "fsm")
+    fsm_hil = _attr(fsm, "_hil_port")
+    report.add(
+        layer,
+        "fsm._hil_port",
+        "OK" if (fsm_hil is not None and fsm_hil is kernel_hil) else "WARN",
+        _is_singleton(fsm_hil),
+    )
+
+    fabric = _attr(session, "fabric")
+    facade = _attr(fabric, "facade") or fabric
+    fab_hil = _attr(facade, "_hil_port")
+    report.add(
+        layer,
+        "fabric.facade._hil_port",
+        "OK" if (fab_hil is not None and fab_hil is kernel_hil) else "WARN",
+        _is_singleton(fab_hil),
+    )
 
     # F2/W10 fix: IHILPort Protocol now lives in k1/kernel/ports/hil_port.py.
     # The two HILCoordinator classes (concierge FSM-side + planner clarification)

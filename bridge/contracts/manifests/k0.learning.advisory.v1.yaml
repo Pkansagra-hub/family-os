@@ -1,0 +1,44 @@
+topic: k0.learning.advisory.v1
+direction: k0_to_k1
+owner_team: k0
+status: active
+producer:
+  kernel: k0
+  pipeline: p21.learning_loop
+  emitter: LearningAdvisoryEmitter
+consumer:
+  kernel: k1
+  pipeline: planner.learning_listener
+  state: learning_advisory_listener
+schema: schemas/k0.learning.advisory.v1.json
+delivery:
+  transport: sse
+  ordering: best_effort
+  ack_required: true
+  online_required: false
+  endpoint_class: cloud_k0
+  partition_mode: k0_primary
+  codec: json
+  retry: exponential_backoff
+  max_redelivery: 0
+semantics:
+  idempotent: true
+  duplicate_strategy: dedupe_by_envelope_id
+  retention: PT24H
+  description: 'P21 learning-loop advisory pushed to K1 over SSE so the planner /
+    orchestrator can retune local strategies in response to drift, regression, or
+    improvement signals. Cursor resume via Last-Event-ID; 24h replay window. Online_required=false
+    because advisories are eventually consistent.
+
+    '
+sla:
+  latency_p99_ms: 1000
+  availability: degrades_to_local_queue
+versioning:
+  semver: 1.0.0
+  compat: compatible
+  strategy: additive_only_within_v1
+  breaking_change_requires: new_topic_v2_with_dual_publish_window_30d
+checksums:
+  schema_sha256: 495b78166cd010343586f9d313858a1ad87551cdc89904ce9deee7328ddb477a
+  manifest_sha256: 3ef6fbce7e4d8a8e0acbdf16f2faa5ab20e2918d904d568a2a0add77199bed97

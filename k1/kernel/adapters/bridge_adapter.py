@@ -55,11 +55,11 @@ class SinkBridgeAdapter:
     """
 
     def __init__(self, outbox_path: str | Path) -> None:
-        from bridge.client import SinkBridgeClient
-        from bridge.sync.local_outbox import LocalOutbox
+        from bridge.client import create_sink_bridge_client
 
-        self._outbox = LocalOutbox(db_path=outbox_path)
-        self._client = SinkBridgeClient(outbox=self._outbox)
+        self._client = create_sink_bridge_client(outbox_path)
+        # Keep the outbox handle accessible for tests/observability.
+        self._outbox = self._client._outbox  # noqa: SLF001 - public seam exposes outbox
 
     async def connect(self) -> None:
         """No-op — SinkBridgeClient is always offline."""

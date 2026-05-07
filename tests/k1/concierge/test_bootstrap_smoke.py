@@ -8,7 +8,7 @@ Validates:
     3. runtime.started == True after boot.
     4. stop_kernel() completes cleanly and sets started = False.
     5. FSM late-wired setters were invoked (ledger, history_sink, session_state,
-       hitl_coordinator, weave_batcher, weave_policy, activity_tracker, orchestrator).
+       hil_port, weave_batcher, weave_policy, activity_tracker, orchestrator).
     6. Front/back dispatchers created with correct tool tier.
     7. Optional subsystem gating via KernelConfig flags.
 """
@@ -158,13 +158,11 @@ class TestFSMWiring:
         # set_session_state binds _task_bridge and _control_ext
         assert runtime.fsm._task_bridge is not None
 
-    async def test_hitl_coordinator_wired(self, runtime: KernelRuntime) -> None:
-        # E4.M1.4: legacy `HILCoordinator` deleted.  `runtime.hitl_coordinator`
-        # is no longer constructed by the concierge factory; the FSM's
-        # `_hil_port` slot remains None until E4.M1.6 threads the unified
-        # HIL service through the kernel.
-        assert runtime.hitl_coordinator is None
-        assert runtime.fsm._hil_port is None
+    async def test_hil_port_wired(self, runtime: KernelRuntime) -> None:
+        # E4.M1.6: unified HumanInTheLoopService is now always installed by
+        # the kernel and threaded into the FSM as `_hil_port`.
+        assert runtime.hil_port is not None
+        assert runtime.fsm._hil_port is not None
 
     async def test_weave_batcher_wired(self, runtime: KernelRuntime) -> None:
         assert hasattr(runtime, "weave_batcher")
@@ -220,10 +218,12 @@ class TestSubsystemGating:
             await stop_kernel(rt)
 
     async def test_disable_hitl(self) -> None:
+        # E4.M1.6: HIL is mandatory; `enable_hitl=False` no longer disables
+        # the unified HumanInTheLoopService -- the port is always wired.
         cfg = KernelConfig(test_mode=True, auto_start_consumer=False, enable_hitl=False)
         rt = await start_kernel(cfg)
         try:
-            assert rt.hitl_coordinator is None
+            assert rt.hil_port is not None
         finally:
             await stop_kernel(rt)
 
@@ -357,7 +357,7 @@ class TestKernelRuntimeFields:
             "experience_layer",
             "delta_aggregator",
             "delta_applicator",
-            "hitl_coordinator",
+            "hil_port",
             "orchestrator",
             "front_subscriptions",
             "back_subscriptions",

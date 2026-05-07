@@ -36,9 +36,17 @@ from k1.concierge.task.parallel_safety import classify_tool_batch
 from k1.concierge.tools.dispatcher import ToolDispatcher
 from k1.concierge.tools.result_protocol import ToolResult
 from k1.model_hub.ports import IModelHubPort
-from k1.model_hub.types import CapabilityType, ChatPayload, ChatResult
+from k1.model_hub.types import (
+    CapabilityType,
+    ChatPayload,
+    ChatResult,
+)
 from k1.model_hub.types import FinishReason as K1FinishReason
-from k1.model_hub.types import HubChunk, HubRequest, HubResponse
+from k1.model_hub.types import (
+    HubChunk,
+    HubRequest,
+    HubResponse,
+)
 from k1.model_hub.types import Message as K1Message
 from k1.model_hub.types import (
     ReasonResult,
@@ -49,7 +57,9 @@ from k1.model_hub.types import (
     ToolCallPayload,
 )
 from k1.model_hub.types import ToolCallResult as K1ToolCallResult
-from k1.model_hub.types import ToolCallResultSet
+from k1.model_hub.types import (
+    ToolCallResultSet,
+)
 from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -949,6 +959,72 @@ async def react_loop(
             # Append tool result as observation (ReAct pattern)
             messages.append(_tool_result_to_msg(tc, _result_to_dict(result)))
 
+        # ---- M13.E3 SAFETY SHORT-CIRCUIT ----
+        # Detect a safety / policy denial in this iteration's tool
+        # results and short-circuit the ReAct loop. Without this the
+        # loop will faithfully feed the denial observation back to
+        # the LLM, which often retries the same forbidden act and
+        # burns the entire iteration budget. Front returns a graceful
+        # apology; Back marks the task suspended for human review.
+        _SAFETY_REASONS = frozenset(
+            {
+                "front_capability_not_whitelisted",
+                "conscience_forbidden",
+                "policy_deny",
+                "policy_denied",
+            }
+        )
+        _safety_hit: tuple[Any, ToolResult] | None = None
+        for _tc, _r in paired_results:
+            if not _r.is_error():
+                continue
+            _data = _r.data if isinstance(_r.data, dict) else {}
+            _decision = str(_data.get("policy_decision", "")).upper()
+            _reason = str(_data.get("reason", "")).lower()
+            if _decision == "DENY" or _reason in _SAFETY_REASONS:
+                _safety_hit = (_tc, _r)
+                break
+        if _safety_hit is not None:
+            _tc, _r = _safety_hit
+            logger.warning(
+                "react_loop: SAFETY short-circuit on iter=%d actor=%s "
+                "tool=%s reason=%s -- aborting loop. trace=%s",
+                iteration,
+                actor,
+                _tc.name,
+                (_r.data or {}).get("reason") if isinstance(_r.data, dict) else "",
+                trace_id[:8] if trace_id else "",
+            )
+            _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+            _iteration_durations.append(_iter_dur)
+            if actor == "front":
+                _safety_text = "I can't help with that here. I've flagged it for review."
+                return ReactResult(
+                    status="complete",
+                    text=_safety_text,
+                    dispatched_tasks=dispatched_tasks,
+                    parallel_tool_calls=_parallel_count,
+                    sequential_tool_calls=_sequential_count,
+                    iteration_durations_ms=_iteration_durations,
+                )
+            # Back: mark suspended so the orchestrator surfaces to HIL.
+            return ReactResult(
+                status="suspended",
+                data={
+                    "safety_denial": True,
+                    "tool": _tc.name,
+                    "reason": (
+                        (_r.data or {}).get("reason")
+                        if isinstance(_r.data, dict)
+                        else "policy_deny"
+                    ),
+                },
+                dispatched_tasks=dispatched_tasks,
+                parallel_tool_calls=_parallel_count,
+                sequential_tool_calls=_sequential_count,
+                iteration_durations_ms=_iteration_durations,
+            )
+
         # Per-iteration timing for the tool-execution branch
         _iter_dur = int((time.monotonic() - _iter_start) * 1000)
         _iteration_durations.append(_iter_dur)
@@ -986,21 +1062,6 @@ async def react_loop(
             iteration_durations_ms=_iteration_durations,
         )
 
-    return ReactResult(
-        status="budget_exhausted",
-        dispatched_tasks=dispatched_tasks,
-        parallel_tool_calls=_parallel_count,
-        sequential_tool_calls=_sequential_count,
-        iteration_durations_ms=_iteration_durations,
-    )
-
-    return ReactResult(
-        status="budget_exhausted",
-        dispatched_tasks=dispatched_tasks,
-        parallel_tool_calls=_parallel_count,
-        sequential_tool_calls=_sequential_count,
-        iteration_durations_ms=_iteration_durations,
-    )
     return ReactResult(
         status="budget_exhausted",
         dispatched_tasks=dispatched_tasks,

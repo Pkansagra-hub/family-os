@@ -18,7 +18,6 @@ import pytest
 from bridge.client import IBridgeClient, SinkBridgeClient
 from bridge.core.health import K0AvailabilityStatus
 from bridge.ports.obs_port_protocol import FeedbackEnvelope
-from bridge.ports.query_port_protocol import QueryEnvelope, RecallBundle, RecallSelector
 from bridge.sync.local_outbox import LocalOutbox
 from bridge.testing import StubBridgeClient
 
@@ -60,35 +59,10 @@ class TestStubBridgeClient:
         await stub.submit_command_batch([{"topic": "t1", "body": {}}])
         assert stub.calls[0][0] == "submit_command_batch"
 
-    @pytest.mark.asyncio
-    async def test_query_returns_empty_bundle(self, stub: StubBridgeClient):
-        sel = RecallSelector(type="semantic", topic="t")
-        qe = QueryEnvelope(selectors=[sel])
-        result = await stub.query(qe)
-        assert isinstance(result, RecallBundle)
-        assert result.items == []
-
-    @pytest.mark.asyncio
-    async def test_query_single_returns_empty(self, stub: StubBridgeClient):
-        sel = RecallSelector(type="keyword", topic="t")
-        result = await stub.query_single(sel)
-        assert result.total_count == 0
-
-    @pytest.mark.asyncio
-    async def test_subscribe_returns_empty_iterator(self, stub: StubBridgeClient):
-        it = await stub.subscribe(["topic.a"])
-        items = [item async for item in it]
-        assert items == []
-
-    @pytest.mark.asyncio
-    async def test_ack_records_call(self, stub: StubBridgeClient):
-        await stub.ack("topic.a", "cursor-1")
-        assert stub.calls[0][0] == "ack"
-
-    @pytest.mark.asyncio
-    async def test_close_sse_records_call(self, stub: StubBridgeClient):
-        await stub.close_sse()
-        assert stub.calls[0][0] == "close_sse"
+    # MS-3c: ``query`` / ``query_single`` removed; recall is reachable only
+    # via the typed paired-contract surface (``runtime.query.recall_request_v1``).
+    # MS-3d: ``subscribe`` / ``ack`` / ``close_sse`` removed; SSE is reachable
+    # only via the typed per-contract surface (``runtime.sse.<topic>.subscribe``).
 
     @pytest.mark.asyncio
     async def test_emit_obs_records_call(self, stub: StubBridgeClient):
@@ -151,33 +125,10 @@ class TestSinkBridgeClient:
         topics = {e.topic for e in pending}
         assert topics == {"t1", "t2"}
 
-    @pytest.mark.asyncio
-    async def test_query_returns_empty(self, sink: SinkBridgeClient):
-        sel = RecallSelector(type="semantic", topic="t")
-        qe = QueryEnvelope(selectors=[sel])
-        result = await sink.query(qe)
-        assert result.items == []
-        assert result.total_count == 0
-
-    @pytest.mark.asyncio
-    async def test_query_single_returns_empty(self, sink: SinkBridgeClient):
-        sel = RecallSelector(type="keyword", topic="t")
-        result = await sink.query_single(sel)
-        assert result.total_count == 0
-
-    @pytest.mark.asyncio
-    async def test_subscribe_returns_empty_iterator(self, sink: SinkBridgeClient):
-        it = await sink.subscribe(["topic.a"])
-        items = [item async for item in it]
-        assert items == []
-
-    @pytest.mark.asyncio
-    async def test_ack_is_noop(self, sink: SinkBridgeClient):
-        await sink.ack("topic.a", "cursor-1")  # should not raise
-
-    @pytest.mark.asyncio
-    async def test_close_sse_is_noop(self, sink: SinkBridgeClient):
-        await sink.close_sse()  # should not raise
+    # MS-3c: ``query`` / ``query_single`` removed; recall is reachable only
+    # via the typed paired-contract surface (``runtime.query.recall_request_v1``).
+    # MS-3d: ``subscribe`` / ``ack`` / ``close_sse`` removed; SSE is reachable
+    # only via the typed per-contract surface (``runtime.sse.<topic>.subscribe``).
 
     @pytest.mark.asyncio
     async def test_emit_obs_drops_low_priority(self, sink: SinkBridgeClient):

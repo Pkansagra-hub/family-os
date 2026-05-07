@@ -21,7 +21,10 @@ from k1.concierge.llm.types import ToolSchema
 # P1.1 -- Front gains direct Fabric access for LOW-tier single-step lookups.
 # Both schemas live in schemas_fabric to avoid a cycle with schemas_back
 # (which imports RECALL_MEMORY_SCHEMA from this module).
-from k1.concierge.tools.schemas_fabric import DISCOVER_CAPABILITIES_SCHEMA, INVOKE_CAPABILITY_SCHEMA
+from k1.concierge.tools.schemas_fabric import (
+    DISCOVER_CAPABILITIES_SCHEMA,
+    INVOKE_CAPABILITY_SCHEMA,
+)
 
 # ===================================================================
 # COGNITIVE (6)
@@ -659,4 +662,56 @@ FRONT_TOOL_SCHEMAS: list[ToolSchema] = [
     # Fabric (P1.1) -- Front direct capability access for LOW-tier lookups
     DISCOVER_CAPABILITIES_SCHEMA,
     INVOKE_CAPABILITY_SCHEMA,
+]
+
+
+# ===================================================================
+# M13.E1 -- Front-allowed read-only / safe capability whitelist
+# ===================================================================
+#
+# Front is the user-facing voice and MUST NOT execute side-effecting,
+# safety-sensitive, or AMBER+/RED storyline acts directly. The Back
+# actor is the only path for those (via dispatch_task -> ReAct loop).
+#
+# This whitelist is the authoritative source for both:
+#   * the policy gate (k1.selfmodel.adapters.concierge_policy_gate),
+#     which DENIES `invoke_capability` from Front with an inner
+#     capability outside this set, and
+#   * the dispatcher handler defense-in-depth in
+#     k1.concierge.tools.implementations.execute_invoke_capability.
+#
+# Add ONLY genuinely read-only or low-risk discovery capabilities here.
+# When in doubt, route through Back via dispatch_task.
+FRONT_READ_CAPABILITY_WHITELIST: frozenset[str] = frozenset(
+    {
+        # Read-only lookups (LOW risk per k1/contracts/tools/*.yaml)
+        "tool.execute.weather_current",
+        "tool.execute.weather_forecast",
+        "tool.execute.unit_convert",
+        "tool.execute.recipe_search",
+        "tool.execute.notes_search",
+        "tool.execute.notes_list",
+        "tool.execute.find_prompts",
+        "tool.execute.discover_capabilities",
+        "tool.execute.date_calc",
+        "tool.execute.calendar_list_events",
+    }
+)
+
+
+__all__ = [
+    "FRONT_TOOL_SCHEMAS",
+    "FRONT_READ_CAPABILITY_WHITELIST",
+    "UPDATE_BELIEFS_SCHEMA",
+    "UPDATE_SCOREBOARD_SCHEMA",
+    "UPDATE_CLARIFICATIONS_SCHEMA",
+    "UPDATE_NARRATIVE_SCHEMA",
+    "REFINE_AFFECT_SCHEMA",
+    "PROMOTE_BELIEF_SCHEMA",
+    "UPDATE_SESSION_BUNDLE_SCHEMA",
+    "RECALL_MEMORY_SCHEMA",
+    "SUMMARIZE_CONTEXT_SCHEMA",
+    "DISPATCH_TASK_SCHEMA",
+    "DISCOVER_CAPABILITIES_SCHEMA",
+    "INVOKE_CAPABILITY_SCHEMA",
 ]

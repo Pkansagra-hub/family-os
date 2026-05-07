@@ -25,11 +25,11 @@ import ast
 import inspect
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import pytest
 
-from k1.planner.stages.sketch_service import HILCoordinatorLike, SketchService, ToolCallRouterLike
+from k1.planner.stages.sketch_service import SketchService, ToolCallRouterLike
 from k1.planner.types import StageContext
 
 # ---------------------------------------------------------------------------
@@ -92,34 +92,92 @@ class FakeToolRouter:
 
 
 class FakeHILCoordinator:
-    """Minimal HILCoordinatorLike implementation for constructor tests."""
+    """E5: minimal IHILPort fake (renamed from FakeHILCoordinator).
+
+    Exposes the unified k1.kernel.ports.hil_port.IHILPort surface.
+    Default behaviour: ask_clarification times out; request_approval
+    auto-approves. Tests that need other behaviour replace the
+    `_clar_response` / `_approval_response` attributes.
+    """
 
     def __init__(self) -> None:
-        self._round_count: int = 0
+        from k1.hil.types import ApprovalResponse, ClarificationResponse
 
-    @property
-    def round_count(self) -> int:
-        return self._round_count
+        self._budget: dict[str, int] = {}
+        self.clarification_calls: list = []
+        self.approval_calls: list = []
+        self.reset_calls: list[str] = []
+        self._clar_response = ClarificationResponse(
+            hil_request_id="fake",
+            answer=None,
+            timed_out=True,
+            round_budget_exhausted=False,
+        )
+        self._approval_response = ApprovalResponse(
+            hil_request_id="fake",
+            decision="approve",
+            modifications=None,
+            timed_out=False,
+        )
 
-    def reset(self) -> None:
-        self._round_count = 0
+    async def ask_clarification(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import ClarificationResponse
 
-    async def request_clarification(
-        self,
-        request_id: str,
-        question_context: Dict[str, Any],
-    ) -> Optional[str]:
+        self.clarification_calls.append(req)
+        used = self._budget.get(req.caller_key, 0)
+        if used >= 2:
+            return ClarificationResponse(
+                hil_request_id="",
+                answer=None,
+                timed_out=False,
+                round_budget_exhausted=True,
+            )
+        self._budget[req.caller_key] = used + 1
+        return self._clar_response
+
+    async def request_approval(self, req):  # type: ignore[no-untyped-def]
+        self.approval_calls.append(req)
+        return self._approval_response
+
+    async def needs_human(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import NeedsHumanResponse
+
+        return NeedsHumanResponse(
+            hil_request_id="fake",
+            decision="timeout",
+            resolution={},
+            raw_user_text=None,
+            timed_out=True,
+        )
+
+    async def request_override(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import OverrideResponse
+
+        return OverrideResponse(
+            hil_request_id="fake",
+            choice="abort",
+            selected_alternative=None,
+            fallback_action=None,
+            timed_out=True,
+        )
+
+    async def gate_capability(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import GateDecision, GateOutcome
+
+        return GateDecision(
+            outcome=GateOutcome.ALLOW,
+            hil_request_id=None,
+            reason="fake_allow",
+            user_approved=None,
+            audit_only=False,
+        )
+
+    def reset_round_budget(self, caller_key: str) -> None:
+        self.reset_calls.append(caller_key)
+        self._budget.pop(caller_key, None)
+
+    async def shutdown(self) -> None:
         return None
-
-    async def request_approval(
-        self,
-        request_id: str,
-        plan_summary: str,
-        side_effects: List[str],
-        safety_assessment: str,
-        estimated_duration_ms: int,
-    ) -> str:
-        return "approve"
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +209,7 @@ def sketch_svc(
     return SketchService(
         llm_port=llm_port,
         tool_router=tool_router,
-        hil_coord=hil_coord,
+        hil_port=hil_coord,
     )
 
 
@@ -205,18 +263,18 @@ class TestConstructorValid:
     def test_constructor_stores_hil_coord(
         self, sketch_svc: SketchService, hil_coord: FakeHILCoordinator
     ) -> None:
-        assert sketch_svc.hil_coord is hil_coord
+        assert sketch_svc.hil_port is hil_coord
 
     def test_constructor_keyword_only(self) -> None:
         """Constructor params must be passed as keywords (positional also OK)."""
         svc = SketchService(
             llm_port=FakeLLMPort(),
             tool_router=FakeToolRouter(),
-            hil_coord=FakeHILCoordinator(),
+            hil_port=FakeHILCoordinator(),
         )
         assert svc.llm_port is not None
         assert svc.tool_router is not None
-        assert svc.hil_coord is not None
+        assert svc.hil_port is not None
 
 
 # ===========================================================================
@@ -232,7 +290,7 @@ class TestConstructorNoneRejection:
             SketchService(
                 llm_port=None,  # type: ignore[arg-type]
                 tool_router=FakeToolRouter(),
-                hil_coord=FakeHILCoordinator(),
+                hil_port=FakeHILCoordinator(),
             )
 
     def test_none_tool_router_raises(self) -> None:
@@ -240,15 +298,15 @@ class TestConstructorNoneRejection:
             SketchService(
                 llm_port=FakeLLMPort(),
                 tool_router=None,  # type: ignore[arg-type]
-                hil_coord=FakeHILCoordinator(),
+                hil_port=FakeHILCoordinator(),
             )
 
     def test_none_hil_coord_raises(self) -> None:
-        with pytest.raises(TypeError, match="hil_coord must not be None"):
+        with pytest.raises(TypeError, match="hil_port must not be None"):
             SketchService(
                 llm_port=FakeLLMPort(),
                 tool_router=FakeToolRouter(),
-                hil_coord=None,  # type: ignore[arg-type]
+                hil_port=None,  # type: ignore[arg-type]
             )
 
 
@@ -267,7 +325,7 @@ class TestSlots:
         assert not hasattr(sketch_svc, "__dict__")
 
     def test_slots_contain_expected_names(self) -> None:
-        expected = {"_llm_port", "_tool_router", "_hil_coord"}
+        expected = {"_llm_port", "_tool_router", "_hil_port"}
         assert set(SketchService.__slots__) == expected
 
     def test_slots_exactly_three(self) -> None:
@@ -294,7 +352,7 @@ class TestProperties:
         assert sketch_svc.tool_router is not None
 
     def test_hil_coord_property_type(self, sketch_svc: SketchService) -> None:
-        assert sketch_svc.hil_coord is not None
+        assert sketch_svc.hil_port is not None
 
     def test_llm_port_property_same_instance(
         self, sketch_svc: SketchService, llm_port: FakeLLMPort
@@ -309,7 +367,7 @@ class TestProperties:
     def test_hil_coord_property_same_instance(
         self, sketch_svc: SketchService, hil_coord: FakeHILCoordinator
     ) -> None:
-        assert sketch_svc.hil_coord is hil_coord
+        assert sketch_svc.hil_port is hil_coord
 
 
 # ===========================================================================
@@ -417,41 +475,10 @@ class TestToolCallRouterLikeProtocol:
 
 
 # ===========================================================================
-# 9. Protocol structural checks -- HILCoordinatorLike
+# 9. HILCoordinatorLike protocol checks REMOVED in E5 (HIL Unification).
+# Planner stages now consume the unified IHILPort directly; the legacy
+# planner-local HILCoordinatorLike protocol has been deleted.
 # ===========================================================================
-
-
-class TestHILCoordinatorLikeProtocol:
-    """HILCoordinatorLike protocol defines the expected interface."""
-
-    def test_is_runtime_checkable(self) -> None:
-        """HILCoordinatorLike is @runtime_checkable."""
-        assert isinstance(FakeHILCoordinator(), HILCoordinatorLike)
-
-    def test_non_conforming_rejected(self) -> None:
-        """Objects missing required methods are NOT HILCoordinatorLike."""
-        assert not isinstance(object(), HILCoordinatorLike)
-
-    def test_has_round_count_property(self) -> None:
-        """Protocol declares round_count property."""
-        assert hasattr(HILCoordinatorLike, "round_count")
-
-    def test_has_reset_method(self) -> None:
-        """Protocol declares reset() method."""
-        assert hasattr(HILCoordinatorLike, "reset")
-        assert callable(getattr(HILCoordinatorLike, "reset", None))
-
-    def test_has_request_clarification_method(self) -> None:
-        """Protocol declares request_clarification() async method."""
-        assert hasattr(HILCoordinatorLike, "request_clarification")
-        assert inspect.iscoroutinefunction(
-            getattr(HILCoordinatorLike, "request_clarification", None)
-        )
-
-    def test_has_request_approval_method(self) -> None:
-        """Protocol declares request_approval() async method."""
-        assert hasattr(HILCoordinatorLike, "request_approval")
-        assert inspect.iscoroutinefunction(getattr(HILCoordinatorLike, "request_approval", None))
 
 
 # ===========================================================================
@@ -544,11 +571,6 @@ class TestModuleExports:
 
         assert _T is ToolCallRouterLike
 
-    def test_hil_coordinator_like_importable(self) -> None:
-        from k1.planner.stages.sketch_service import HILCoordinatorLike as _H
-
-        assert _H is HILCoordinatorLike
-
 
 # ===========================================================================
 # 12. Multiple instances -- isolation
@@ -563,12 +585,12 @@ class TestInstanceIsolation:
         svc_a = SketchService(
             llm_port=llm_a,
             tool_router=FakeToolRouter(),
-            hil_coord=FakeHILCoordinator(),
+            hil_port=FakeHILCoordinator(),
         )
         svc_b = SketchService(
             llm_port=llm_b,
             tool_router=FakeToolRouter(),
-            hil_coord=FakeHILCoordinator(),
+            hil_port=FakeHILCoordinator(),
         )
         assert svc_a.llm_port is llm_a
         assert svc_b.llm_port is llm_b
@@ -579,12 +601,12 @@ class TestInstanceIsolation:
         svc_a = SketchService(
             llm_port=FakeLLMPort(),
             tool_router=tr_a,
-            hil_coord=FakeHILCoordinator(),
+            hil_port=FakeHILCoordinator(),
         )
         svc_b = SketchService(
             llm_port=FakeLLMPort(),
             tool_router=tr_b,
-            hil_coord=FakeHILCoordinator(),
+            hil_port=FakeHILCoordinator(),
         )
         assert svc_a.tool_router is tr_a
         assert svc_b.tool_router is tr_b

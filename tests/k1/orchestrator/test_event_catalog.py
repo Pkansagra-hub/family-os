@@ -126,10 +126,11 @@ class TestEventCatalogConstants:
 
     def test_emitted_catalog_size(self) -> None:
         # V1 catalog after phantom-field removals.
-        assert len(ALL_EMITTED) == 19
+        # M16.E2.I2: +1 for ORCH_DAG_NODE_FAILED.
+        assert len(ALL_EMITTED) == 20
 
     def test_consumed_catalog_size(self) -> None:
-        assert len(ALL_CONSUMED) == 12
+        assert len(ALL_CONSUMED) == 10
 
 
 class TestEventContractAlignment:
@@ -266,18 +267,6 @@ class TestRoutingViaTestEventAdapter:
         service._pending_plans[request_id_cancelled] = object()  # type: ignore[assignment]
         event.fire(_EVENTS.PLAN_CANCELLED, {"request_id": request_id_cancelled})
         assert request_id_cancelled not in service._pending_plans
-
-        # HIL override/fallback -> pending HIL cleanup
-        hil_override_id = str(uuid4())
-        hil_fallback_id = str(uuid4())
-        service._pending_hil[hil_override_id] = object()  # type: ignore[assignment]
-        service._pending_hil[hil_fallback_id] = object()  # type: ignore[assignment]
-
-        event.fire(_EVENTS.HIL_OVERRIDE_RESPONSE, {"request_id": hil_override_id})
-        event.fire(_EVENTS.HIL_FALLBACK_RESPONSE, {"request_id": hil_fallback_id})
-
-        assert hil_override_id not in service._pending_hil
-        assert hil_fallback_id not in service._pending_hil
 
 
 class TestTracePropagationAndSchemaRuntime:

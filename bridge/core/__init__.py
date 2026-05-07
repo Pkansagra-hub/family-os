@@ -6,22 +6,36 @@ Cross-kernel security gateway providing:
 """
 
 from .envelope_builder import BridgeConfig, CommandEnvelope, EnvelopeBuilder
-from .health import DegradedModeManager, K0AvailabilityStatus, K0HealthChecker, K0HealthSnapshot
+from .events import EventBus, HealthTransition
+from .health import (
+    DegradedModeManager,
+    K0AvailabilityStatus,
+    K0HealthChecker,
+    K0HealthSnapshot,
+    K0HealthState,
+)
+from .online_first import OfflineError, OnlineFirstClient
 from .signing import Ed25519Signing, HmacSigning, SigningBackend, SigningResult
-from .transport import HttpResult, HttpTransport, TransportConfig
+from .transport import BridgeTransportError, HttpResult, HttpTransport, TransportConfig
 
 __all__ = [
     "BridgeConfig",
+    "BridgeTransportError",
     "CommandEnvelope",
     "DegradedModeManager",
     "Ed25519Signing",
     "EnvelopeBuilder",
+    "EventBus",
+    "HealthTransition",
     "HmacSigning",
     "HttpResult",
     "HttpTransport",
     "K0AvailabilityStatus",
     "K0HealthChecker",
     "K0HealthSnapshot",
+    "K0HealthState",
+    "OfflineError",
+    "OnlineFirstClient",
     "SigningBackend",
     "SigningResult",
     "TransportConfig",

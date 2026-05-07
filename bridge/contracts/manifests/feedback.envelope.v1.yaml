@@ -1,0 +1,49 @@
+topic: feedback.envelope.v1
+direction: k1_to_k0
+owner_team: bridge_infra
+status: active
+producer:
+  kernel: k1
+  pipeline: concierge.feedback_emitter
+  emitter: FeedbackEmitter
+consumer:
+  kernel: k0
+  pipeline: ports.observe
+  state: feedback_envelope_endpoint
+schema: schemas/feedback.envelope.v1.json
+delivery:
+  transport: obs
+  obs_kind: feedback
+  ordering: best_effort
+  ack_required: true
+  online_required: false
+  endpoint_class: cloud_k0
+  partition_mode: k0_primary
+  max_queue_age: PT24H
+  codec: json
+  retry: exponential_backoff
+  max_redelivery: 10
+semantics:
+  idempotent: true
+  duplicate_strategy: dedupe_by_envelope_id
+  retention: P30D
+  description: 'Pipeline-agnostic feedback envelope (FeedbackEnvelope per k0/feedback/envelope.py)
+    emitted by K1 detectors after every conversation turn. Body carries pipeline_id
+    (P02|P03|P08), signal_class (CORRECTION|VALIDATION|EXPLICIT|IMPLICIT|OUTCOME),
+    correlation linking K0 entities, and a pipeline-specific payload. K0 ports.observe
+    persists to st_feedback_signals; FeedbackWorker dispatches to the pipeline-scoped
+    bus topic feedback.signal.<pipeline>.v1. Queueable for 24h to survive K0 outage;
+    idempotent via dedupe_by_envelope_id.
+
+    '
+sla:
+  latency_p99_ms: 500
+  availability: degrades_to_local_outbox
+versioning:
+  semver: 1.0.0
+  compat: compatible
+  strategy: additive_only_within_v1
+  breaking_change_requires: new_topic_v2_with_dual_publish_window_30d
+checksums:
+  schema_sha256: ebd9d4cc0364124e42a8bc79f594fb6886e8561d8fd9e0924104f96c55664c1b
+  manifest_sha256: 0077b845ab88123e4984e8aa70ed0c616022ea6a8d0eb13ad9674fecd63b6278

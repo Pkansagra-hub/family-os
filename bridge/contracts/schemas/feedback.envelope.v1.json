@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/feedback.envelope.v1.json",
+  "title": "FeedbackEnvelopeV1",
+  "description": "Pipeline-agnostic feedback envelope. K1 detectors emit; K0 ports.observe ingests into st_feedback_signals. Wire shape mirrors k0.feedback.envelope.FeedbackEnvelope (Pydantic) with extra=forbid semantics; the K0 side re-validates to apply per-pipeline payload schemas via FeedbackSchemaRegistry.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pipeline_id", "signal_class", "payload"],
+  "properties": {
+    "feedback_id": {
+      "type": "string",
+      "description": "UUID stringified; if absent the K0 side mints one. Idempotency key for dedupe_by_envelope_id."
+    },
+    "feedback_version": {
+      "type": "string",
+      "default": "1.0",
+      "description": "Envelope schema version; forward-compat marker."
+    },
+    "pipeline_id": {
+      "type": "string",
+      "pattern": "^P\\d{2,3}$",
+      "description": "Target K0 pipeline (e.g. P02, P08, P03)."
+    },
+    "signal_class": {
+      "type": "string",
+      "enum": ["OUTCOME", "CORRECTION", "IMPLICIT", "EXPLICIT", "VALIDATION"],
+      "description": "Top-level classification."
+    },
+    "signal_subtype": {
+      "type": "string",
+      "description": "Optional finer-grained subtype, e.g. user_explicit_correction."
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Multi-tenant routing; required by K0 schema-registry validation."
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Tenant space id; required by K0 schema-registry validation."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["K1", "USER", "SYSTEM", "AGENT"],
+      "description": "Originating actor classification."
+    },
+    "source_component": {
+      "type": "string",
+      "description": "Component name (e.g. concierge.correction_detector)."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Conversation session correlation id."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Cognitive trace id."
+    },
+    "correlation": {
+      "$ref": "#/$defs/FeedbackCorrelation"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Audit trail; recall_context_hash, source_message_id, feedback_timestamp, etc."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Emission timestamp (UTC ISO-8601)."
+    },
+    "event_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Original event time (UTC ISO-8601), if different from emission."
+    },
+    "priority": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.5,
+      "description": "Scheduling weight; higher = more urgent."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Pipeline-specific payload validated by K0 FeedbackSchemaRegistry against pipeline_id."
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Optional free-form metadata."
+    }
+  },
+  "$defs": {
+    "FeedbackCorrelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Links feedback to originating K0/K1 operations and target entities.",
+      "properties": {
+        "session_id": { "type": "string" },
+        "message_id": { "type": "string" },
+        "query_id": { "type": "string" },
+        "receipt_id": { "type": "string" },
+        "recall_id": { "type": "string" },
+        "response_id": { "type": "string" },
+        "event_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "st_hipp_events.event_id values touched by the originating turn."
+        },
+        "wal_positions": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "wal_position": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Singular form (legacy); merged into wal_positions on the K0 side."
+        },
+        "target_entity_type": {
+          "type": "string",
+          "description": "Kind of entity the feedback targets, e.g. event."
+        },
+        "target_entity_id": {
+          "type": "string",
+          "description": "Entity id the feedback targets, e.g. st_hipp_events.event_id."
+        }
+      }
+    }
+  }
+}

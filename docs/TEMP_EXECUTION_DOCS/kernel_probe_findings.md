@@ -39,7 +39,7 @@ Probe scripts updated to recognise the fixes:
 | Phase | Domain                                  | OK | WARN | FAIL | INFO | Status |
 |-------|-----------------------------------------|----|------|------|------|--------|
 | 1     | Kernel ports / adapters / fabric        | 36 | 13   | **6**| 12   | Red    |
-| 2     | HIL surfaces (concierge/planner/orch)   | 15 | 1    | **1**| 3    | Red    |
+| 2     | HIL surfaces (concierge/planner/orch)   | 10 | 0    | 0    | 1    | Green (post-E7/E8 rewrite, see HIL_UNIFICATION_PLAN.md) |
 | 3     | Fabric capability invocation            | 3  | 1    | **2**| 5    | Red    |
 | 4     | Planner E2E                             | 11 | 0    | **2**| 3    | Red    |
 | 5     | Orchestrator DAG                        | 13 | 1    | 0    | 14   | Yellow |
@@ -239,12 +239,20 @@ Probe scripts updated to recognise the fixes:
 - **Status:** Expected today. Tracking only — no fix needed until MS-3
   ships.
 
-### W10. Two HILCoordinator classes (audit BLOAT-1)
+### W10. Two HILCoordinator classes (audit BLOAT-1) — ✅ RESOLVED
 - **Phases:** 1, 2
-- **Symptom:** `HIL Fragmentation :: coordinator_count = 2`.
-- **Impact:** Same logical role implemented twice in different modules
-  with diverging behaviour — drift risk.
-- **Fix:** Collapse into a single class behind `IHILPort` (see F2).
+- **Symptom (historical):** `HIL Fragmentation :: coordinator_count = 2`.
+- **Resolution:** HIL Unification (E1–E8) collapses the two coordinator
+  classes into a single kernel-owned `HumanInTheLoopService` constructed
+  at S2.5 and shared across Concierge / Planner / Orchestrator / Fabric
+  via `IHILPort` (`k1/kernel/ports/hil_port.py`). Phase 1 probe now
+  reports `kernel._hil_service`, `concierge.hil_port`, `fsm._hil_port`,
+  and `fabric.facade._hil_port` all pointing at the same instance.
+  Phase 2 probe drives a full request/response round-trip per `HILKind`
+  through the singleton (10 OK / 0 FAIL).
+- **Invariant test:** `tests/k1/integration/hil/test_no_legacy_hil_topics.py`
+  asserts no legacy `HILCoordinator` / `_pending_hil` / `emit_hil_request`
+  symbols or topics remain.
 
 ### W11. Orchestrator DAG `agg.success = False`
 - **Phase:** 5

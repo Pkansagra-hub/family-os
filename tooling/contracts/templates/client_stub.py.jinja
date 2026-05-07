@@ -1,0 +1,23 @@
+{{ header }}
+"""Auto-generated client stub for kernel ``{{ kernel }}``."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+class {{ kernel|capitalize }}{{ direction_label }}Client:
+    """Generated thin client. Real transport binding lands in MS-3a."""
+
+    __transport__ = "in_process"
+
+    def __init__(self, runtime: Any) -> None:
+        self._runtime = runtime
+
+    {% for topic in topics %}
+    async def {{ topic.method_name }}(self, payload: Any) -> Any:
+        """Publish to ``{{ topic.topic }}`` (transport={{ topic.transport }})."""
+        raise NotImplementedError(
+            "Generated stub: contract {{ topic.topic }} not wired yet."
+        )
+    {% endfor %}

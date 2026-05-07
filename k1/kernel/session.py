@@ -52,7 +52,7 @@ class SessionInstance:
     experience_layer: Any
     delta_aggregator: Any
     delta_applicator: Any
-    hitl_coordinator: Any
+    hil_port: Any
 
     # ── background tasks ────────────────────────────────────
     consumer_task: asyncio.Task[Any] | None
@@ -67,6 +67,15 @@ class SessionInstance:
     ledger: Any = None
     ledger_store: Any = None
     concierge_task: asyncio.Task[Any] | None = None
+
+    # ── M5.E3.I3: per-session selfmodel handle ──────────────
+    # ``None`` when ``KernelConfig.enable_self_model`` is False (the
+    # default). When True, ``create_session`` builds a
+    # :class:`k1.selfmodel.kernel.SelfModelHandle` at P3.5 and assigns
+    # it here so consumers (concierge prompt builder, dispatcher,
+    # bridge gates) can reach the bundle without hopping back through
+    # ``KernelService``.
+    self_model: Any = None  # SelfModelHandle | None
 
     # ── lifecycle helpers ───────────────────────────────────
 

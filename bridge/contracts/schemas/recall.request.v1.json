@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/recall.request.v1.json",
+  "title": "RecallRequestV1",
+  "description": "Request body for recall.request.v1 (K1\u2192K0). Carries one or more selectors plus QoS hints. Paired with recall.response.v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["selectors", "space_id"],
+  "properties": {
+    "selectors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/RecallSelector"
+      },
+      "description": "One or more recall selectors describing what to fetch from K0."
+    },
+    "space_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Tenant space identifier."
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier; defaults to space owner if absent."
+    },
+    "max_latency_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000,
+      "default": 250,
+      "description": "Client-provided bound on acceptable round-trip latency."
+    },
+    "fail_fast": {
+      "type": "boolean",
+      "default": false,
+      "description": "Return partial results when the latency budget is exhausted instead of waiting for every selector."
+    },
+    "max_results": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256,
+      "default": 10,
+      "description": "Aggregate cap across all selectors."
+    },
+    "vector_query": {
+      "type": "string",
+      "description": "Optional free-text vector query for semantic selectors."
+    },
+    "fts_query": {
+      "type": "string",
+      "description": "Optional full-text-search query for episodic/keyword selectors."
+    },
+    "time_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "after_utc_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Only return atoms created at or after this UTC epoch ms."
+        },
+        "before_utc_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Only return atoms created at or before this UTC epoch ms."
+        }
+      },
+      "description": "Optional UTC epoch-ms time window."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Cognitive trace identifier echoed back in the response."
+    }
+  },
+  "$defs": {
+    "RecallSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["episodic", "semantic", "session", "device", "belief", "graph"],
+          "description": "Selector kind."
+        },
+        "topic": {
+          "type": "string",
+          "description": "Optional topic filter within the selector kind."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256,
+          "default": 10,
+          "description": "Per-selector cap."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Pagination cursor (selector-specific)."
+        },
+        "after": {
+          "type": "string",
+          "description": "ISO-8601 timestamp \u2014 only return items after this time."
+        },
+        "query": {
+          "type": "string",
+          "description": "Free-text query for semantic/graph selectors."
+        }
+      }
+    }
+  }
+}

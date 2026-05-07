@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/ifl.google_calendar.events.list.v1.request.json",
+  "title": "IFLGoogleCalendarEventsListV1Request",
+  "description": "Request body for ifl.google_calendar.events.list.v1 (K1 -> Google Calendar). Lists events on the caller's primary calendar between time_min and time_max.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["account_id", "time_min", "time_max"],
+  "properties": {
+    "account_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Google account identifier; pairs with the per-account MCP child (mcp.multi_instance)."
+    },
+    "calendar_id": {
+      "type": "string",
+      "default": "primary",
+      "description": "Calendar id; defaults to the account's primary calendar."
+    },
+    "time_min": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Inclusive lower bound (RFC 3339)."
+    },
+    "time_max": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Exclusive upper bound (RFC 3339)."
+    },
+    "max_results": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 250,
+      "default": 50
+    },
+    "single_events": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether to expand recurring events into single instances."
+    }
+  }
+}

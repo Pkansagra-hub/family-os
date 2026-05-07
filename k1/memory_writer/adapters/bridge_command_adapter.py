@@ -11,6 +11,14 @@ MW-03: This is the ONLY output path from MW to K0.
 MW-09: KernelCommandPort already handles offline queueing via LocalOutbox.
 MW-10: trace_id extracted from envelope body and passed to Bridge.
 
+MS-3a remediation: removed direct ``bridge.core.envelope_builder.CommandEnvelope``
+import (wall violation). The batch surface is now declared in terms of plain
+dicts, matching the wire shape MW already passes. Per-contract typed
+publishing (``client.memory_write_v1.publish(MemoryWriteV1)``) is exposed by
+:class:`bridge.client.HttpBridgeClient` and used by adapter consolidation in
+MS-4; this MS-3a change clears the wall without altering MW's existing
+generic command shape.
+
 References:
   - E-MW-5.1: Production Adapters
   - k1/memory_writer/ports/bridge_command_port.py (IBridgeCommandPort)
@@ -21,8 +29,6 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Protocol, runtime_checkable
-
-from bridge.core.envelope_builder import CommandEnvelope
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +45,7 @@ class _IKernelCommandPort(Protocol):
         trace_id: str,
     ) -> Any: ...
 
-    async def submit_command_batch(
-        self, envelopes: list[CommandEnvelope | dict[str, Any]]
-    ) -> Any: ...
+    async def submit_command_batch(self, envelopes: list[dict[str, Any]]) -> Any: ...
 
 
 class BridgeCommandAdapter:

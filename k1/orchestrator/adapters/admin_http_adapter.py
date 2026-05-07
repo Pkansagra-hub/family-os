@@ -481,7 +481,6 @@ class AdminHttpAdapter:
             "depth": self._service._mailbox.depth(),
             "capacity": self._config.mailbox_capacity,
             "pending_plans": len(self._service.pending_plans),
-            "pending_hil": len(self._service.pending_hil),
         }
 
     async def _handle_mailbox_depth(self, request: web.Request) -> web.Response:
@@ -548,7 +547,6 @@ class AdminHttpAdapter:
             "uptime_ms": uptime_ms,
             "mailbox_depth": self._service._mailbox.depth(),
             "pending_plans": len(self._service.pending_plans),
-            "pending_hil": len(self._service.pending_hil),
             "executed_plans_count": len(self._service.executed_plans),
             "initialized": self._service.initialized,
             "running": self._service.running,

@@ -1,0 +1,45 @@
+topic: p03.gap.detected.v1
+direction: k0_to_k1
+owner_team: k0
+status: active
+producer:
+  kernel: k0
+  pipeline: p03.consolidation
+  emitter: GapEmitter
+consumer:
+  kernel: k1
+  pipeline: concierge.proactive_listener
+  state: gap_listener
+schema: schemas/p03.gap.detected.v1.json
+delivery:
+  transport: sse
+  ordering: best_effort
+  ack_required: true
+  online_required: false
+  endpoint_class: cloud_k0
+  partition_mode: k0_primary
+  codec: json
+  retry: exponential_backoff
+  max_redelivery: 0
+semantics:
+  idempotent: true
+  duplicate_strategy: dedupe_by_envelope_id
+  retention: PT24H
+  description: 'P03 knowledge-gap event pushed to K1 over SSE so P06 (and the K1 concierge
+    feeding it context) can decide which gaps to investigate. Cross-kernel projection
+    of the K0-internal ``p03.gap.detected.v1`` outbox topic; the K1 side carries only
+    the fields the concierge needs (gap_id, type, priority, optional question_template).
+    Cursor resume via Last-Event-ID; 24h replay window.
+
+    '
+sla:
+  latency_p99_ms: 500
+  availability: degrades_to_local_queue
+versioning:
+  semver: 1.0.0
+  compat: compatible
+  strategy: additive_only_within_v1
+  breaking_change_requires: new_topic_v2_with_dual_publish_window_30d
+checksums:
+  schema_sha256: 830b4fdea7b82f6ce31481b1e69d2b51f99f810294286191a1f5d93b009b1f23
+  manifest_sha256: f770dddda58c43293f52ec4cb2ce5f42052d48e5bceda41af74cea888a3010c0

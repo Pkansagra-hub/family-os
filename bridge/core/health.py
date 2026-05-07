@@ -15,12 +15,24 @@ Degradation policy:
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import logging
+import os
+import random
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .events import EventBus
 
 logger = logging.getLogger(__name__)
+
+# Default poll interval (s); override with BRIDGE_HEALTH_POLL_INTERVAL_S.
+_DEFAULT_POLL_INTERVAL_S = 30.0
+_DEFAULT_PROBE_TIMEOUT_S = 5.0
+_JITTER_FRACTION = 0.10  # ±10% jitter on poll cadence
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +46,13 @@ class K0AvailabilityStatus(enum.Enum):
     ONLINE = "ONLINE"
     DEGRADED = "DEGRADED"
     OFFLINE = "OFFLINE"
+
+
+# MS-3b plan-aligned alias. The plan and the auto-derived DEGRADED matrix
+# (Epic 3b.2) refer to the state machine as ``K0HealthState``; the legacy
+# name ``K0AvailabilityStatus`` is retained for backward-compat with
+# ``SinkBridgeClient`` and existing tests.
+K0HealthState = K0AvailabilityStatus
 
 
 # ---------------------------------------------------------------------------
@@ -91,10 +110,31 @@ class K0HealthChecker:
         *,
         failure_threshold: int = 3,
         degraded_threshold_ms: int = 2000,
+        event_bus: "EventBus | None" = None,
+        target_url: str | None = None,
+        poll_interval_s: float | None = None,
+        probe_timeout_s: float = _DEFAULT_PROBE_TIMEOUT_S,
+        rng: random.Random | None = None,
     ) -> None:
         self._failure_threshold = failure_threshold
         self._degraded_threshold_ms = degraded_threshold_ms
         self._snapshot = K0HealthSnapshot()
+        self._event_bus = event_bus
+        self._target_url = target_url
+        env_interval = os.getenv("BRIDGE_HEALTH_POLL_INTERVAL_S")
+        if poll_interval_s is not None:
+            self._poll_interval_s = poll_interval_s
+        elif env_interval:
+            try:
+                self._poll_interval_s = float(env_interval)
+            except ValueError:
+                self._poll_interval_s = _DEFAULT_POLL_INTERVAL_S
+        else:
+            self._poll_interval_s = _DEFAULT_POLL_INTERVAL_S
+        self._probe_timeout_s = probe_timeout_s
+        self._rng = rng or random.Random()
+        self._poll_task: asyncio.Task[None] | None = None
+        self._stop_event: asyncio.Event | None = None
 
     @property
     def snapshot(self) -> K0HealthSnapshot:
@@ -138,6 +178,7 @@ class K0HealthChecker:
                     latency_ms,
                     self._degraded_threshold_ms,
                 )
+                self._emit_transition(old, K0AvailabilityStatus.DEGRADED, reason="latency_high")
         else:
             old = self._snapshot.status
             self._snapshot.status = K0AvailabilityStatus.ONLINE
@@ -147,6 +188,7 @@ class K0HealthChecker:
                     old.value,
                     latency_ms,
                 )
+                self._emit_transition(old, K0AvailabilityStatus.ONLINE, reason="probe_success")
 
         return self._snapshot.status
 
@@ -174,9 +216,13 @@ class K0HealthChecker:
                     self._snapshot.consecutive_failures,
                     error,
                 )
+                self._emit_transition(
+                    old, K0AvailabilityStatus.OFFLINE, reason=error or "probe_failed"
+                )
         else:
             # Not enough failures yet — stay in current state or go DEGRADED
             if self._snapshot.status == K0AvailabilityStatus.ONLINE:
+                old = self._snapshot.status
                 self._snapshot.status = K0AvailabilityStatus.DEGRADED
                 logger.warning(
                     "K0 health: ONLINE → DEGRADED (failure %d/%d: %s)",
@@ -184,14 +230,115 @@ class K0HealthChecker:
                     self._failure_threshold,
                     error,
                 )
+                self._emit_transition(
+                    old, K0AvailabilityStatus.DEGRADED, reason=error or "probe_failed"
+                )
 
         return self._snapshot.status
 
     def force_offline(self, reason: str = "manual") -> None:
         """Force transition to OFFLINE (e.g. during shutdown)."""
+        old = self._snapshot.status
         self._snapshot.status = K0AvailabilityStatus.OFFLINE
         self._snapshot.error_message = reason
         logger.info("K0 health: forced OFFLINE (%s)", reason)
+        if old != K0AvailabilityStatus.OFFLINE:
+            self._emit_transition(old, K0AvailabilityStatus.OFFLINE, reason=reason)
+
+    # -- transition event emission ----------------------------------------
+
+    def _emit_transition(
+        self,
+        old: K0AvailabilityStatus,
+        new: K0AvailabilityStatus,
+        *,
+        reason: str = "",
+    ) -> None:
+        """Publish a :class:`HealthTransition` to the bus when one is wired.
+
+        Per the MS-3b spec the drain worker subscribes only to
+        ``OFFLINE → ONLINE``; we still publish every transition so the
+        DEGRADED matrix and observability metrics see the full picture.
+        """
+        if self._event_bus is None or old == new:
+            return
+        # Local import to keep tooling out of the cold-start graph.
+        from .events import HealthTransition, utc_now
+
+        evt = HealthTransition(
+            from_state=old.value,
+            to_state=new.value,
+            at_utc=utc_now(),
+            consecutive_failures=self._snapshot.consecutive_failures,
+            latency_ms=self._snapshot.latency_ms,
+            reason=reason,
+        )
+        self._event_bus.publish(evt)
+
+    # -- async poll loop --------------------------------------------------
+
+    async def _probe_once(self) -> None:
+        """Issue one ``HEAD /healthz`` and feed the result back in.
+
+        Imports ``httpx`` lazily so unit tests that drive the state
+        machine via ``record_success`` / ``record_failure`` do not pay
+        for the import.
+        """
+        if not self._target_url:
+            self.record_failure("no_target_url")
+            return
+        import httpx  # noqa: PLC0415 — lazy import (rule 3)
+
+        url = self._target_url.rstrip("/") + "/healthz"
+        start = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=self._probe_timeout_s) as client:
+                resp = await client.head(url)
+            latency_ms = int((time.monotonic() - start) * 1000)
+            if resp.status_code < 500:
+                self.record_success(latency_ms)
+            else:
+                self.record_failure(f"http_{resp.status_code}")
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            self.record_failure(f"transport_error: {type(exc).__name__}")
+        except Exception as exc:  # pragma: no cover — defensive
+            self.record_failure(f"unexpected: {type(exc).__name__}")
+
+    def _next_sleep_s(self) -> float:
+        """Jittered cadence (±10%) to avoid thundering herd on transitions."""
+        delta = self._poll_interval_s * _JITTER_FRACTION
+        return self._poll_interval_s + self._rng.uniform(-delta, delta)
+
+    async def _poll_loop(self) -> None:
+        assert self._stop_event is not None
+        while not self._stop_event.is_set():
+            await self._probe_once()
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=self._next_sleep_s())
+            except asyncio.TimeoutError:
+                continue
+
+    async def start(self) -> None:
+        """Spawn the background poll task. Idempotent."""
+        if self._poll_task is not None and not self._poll_task.done():
+            return
+        self._stop_event = asyncio.Event()
+        loop = asyncio.get_event_loop()
+        self._poll_task = loop.create_task(self._poll_loop())
+
+    async def stop(self) -> None:
+        """Cancel the poll task and wait for it to settle."""
+        if self._poll_task is None:
+            return
+        if self._stop_event is not None:
+            self._stop_event.set()
+        self._poll_task.cancel()
+        try:
+            await self._poll_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        self._poll_task = None
+        self._stop_event = None
 
 
 # ---------------------------------------------------------------------------

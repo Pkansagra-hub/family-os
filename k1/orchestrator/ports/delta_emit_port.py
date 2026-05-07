@@ -33,8 +33,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Protocol, runtime_checkable
 
-from k1.orchestrator.types import HILRequest
-
 # ---------------------------------------------------------------------------
 # Port protocol
 # ---------------------------------------------------------------------------
@@ -100,31 +98,6 @@ class IDeltaEmitPort(Protocol):
             step_id: The step this progress relates to.
             summary: Human-readable progress summary
                 (e.g. ``"Step 2 of 5 complete: calendar search done"``).
-            trace_id: Cognitive trace identifier for correlation.
-
-        Returns:
-            None. Fire-and-forget -- never raises.
-        """
-        ...  # pragma: no cover
-
-    async def emit_hil_request(
-        self,
-        hil_request: HILRequest,
-        trace_id: str,
-    ) -> None:
-        """
-        Surface a human-in-the-loop question to the user.
-
-        Used for constraint HIL (step needs user input) or override
-        HIL (execution monitor detects anomaly). The Concierge
-        subscribes and presents the question to the user.
-
-        The user's response arrives via event bus on topic
-        ``k1.hil.override_response.v1`` or ``k1.hil.fallback_response.v1``.
-
-        Args:
-            hil_request: The HIL request containing question, options,
-                and timeout.
             trace_id: Cognitive trace identifier for correlation.
 
         Returns:

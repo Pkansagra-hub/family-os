@@ -29,6 +29,10 @@ timing_rules:
   k1.arbiter: STRICT
   k1.backpool: STRICT
   k1.model_hub: STRICT  # P6.10: model selection / routing decisions must be ordered
+  k1.selfmodel.policy: STRICT
+  k1.selfmodel.constitution: STRICT
+  k1.selfmodel.identity: STRICT
+  k1.selfmodel.startup: STRICT
 
   # RELAXED: order-preferred but not critical
   k1.affect: RELAXED
@@ -39,3 +43,5 @@ timing_rules:
   # BEST_EFFORT: fire-and-forget, droppable
   k1.k0.sse: BEST_EFFORT
   k1.fabric.learning: BEST_EFFORT
+  feedback: RELAXED              # MS-3e: K1->K0 feedback envelopes (queueable, not strict)
+  observability: BEST_EFFORT     # MS-3e: K1->K0 metrics/logs forwarding

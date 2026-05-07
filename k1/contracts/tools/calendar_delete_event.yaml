@@ -52,6 +52,7 @@ tool_contract:
   provider_type: "MCP"
   provider_id: "calendar_mcp_stdio"
   safety_band_min: "AMBER"
+  risk_class: "medium"
   cost_per_call: 0.0
   avg_latency_ms: 20
   max_latency_ms: 200

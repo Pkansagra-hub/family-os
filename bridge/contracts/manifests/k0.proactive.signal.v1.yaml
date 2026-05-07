@@ -1,0 +1,44 @@
+topic: k0.proactive.signal.v1
+direction: k0_to_k1
+owner_team: k0
+status: active
+producer:
+  kernel: k0
+  pipeline: p05.proactive
+  emitter: ProactiveSignalEmitter
+consumer:
+  kernel: k1
+  pipeline: concierge.proactive_listener
+  state: proactive_signal_listener
+schema: schemas/k0.proactive.signal.v1.json
+delivery:
+  transport: sse
+  ordering: best_effort
+  ack_required: true
+  online_required: false
+  endpoint_class: cloud_k0
+  partition_mode: k0_primary
+  codec: json
+  retry: exponential_backoff
+  max_redelivery: 0
+semantics:
+  idempotent: true
+  duplicate_strategy: dedupe_by_envelope_id
+  retention: PT24H
+  description: 'P05 proactive-intelligence trigger pushed to K1 over SSE. Tells the
+    concierge to consider unprompted engagement (reminder, suggestion, nudge); concierge
+    filters by priority + attentional load before surfacing. Cursor resume via Last-Event-ID;
+    24h replay window.
+
+    '
+sla:
+  latency_p99_ms: 500
+  availability: degrades_to_local_queue
+versioning:
+  semver: 1.0.0
+  compat: compatible
+  strategy: additive_only_within_v1
+  breaking_change_requires: new_topic_v2_with_dual_publish_window_30d
+checksums:
+  schema_sha256: 508f18e04a9314f5868fe6aad0af0a61d6b8f34b0abdfac5fb4a4522e8e10ab6
+  manifest_sha256: d15be55b3ea6e7d08a6d48ad5756c9f729161b966b40eecc0f9e8c40100f407f

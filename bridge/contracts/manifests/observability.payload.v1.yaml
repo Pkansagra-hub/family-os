@@ -1,0 +1,48 @@
+topic: observability.payload.v1
+direction: k1_to_k0
+owner_team: bridge_infra
+status: active
+producer:
+  kernel: k1
+  pipeline: concierge.obs_forwarder
+  emitter: ObsForwarder
+consumer:
+  kernel: k0
+  pipeline: ports.observe
+  state: observability_payload_endpoint
+schema: schemas/observability.payload.v1.json
+delivery:
+  transport: obs
+  obs_kind: metrics
+  ordering: best_effort
+  ack_required: false
+  online_required: false
+  endpoint_class: cloud_k0
+  partition_mode: k0_primary
+  max_queue_age: PT24H
+  drain_rate_per_sec: 100
+  codec: json
+  retry: exponential_backoff
+  max_redelivery: 5
+semantics:
+  idempotent: true
+  duplicate_strategy: dedupe_by_envelope_id
+  retention: P7D
+  description: 'K1 forwards observability snapshots (metrics text or structured log
+    entries) to K0 /k0/obs.emit. Payload carries kind (metrics|logs) plus the type-specific
+    body. Throttled at 100/sec to avoid storm on recovery; queued up to 24h on K0
+    outage. Idempotent via dedupe_by_envelope_id. K0 ports.observe routes metrics
+    to ForwardedMetricsBuffer and logs to the log re-emitter.
+
+    '
+sla:
+  latency_p99_ms: 1000
+  availability: degrades_to_local_outbox
+versioning:
+  semver: 1.0.0
+  compat: compatible
+  strategy: additive_only_within_v1
+  breaking_change_requires: new_topic_v2_with_dual_publish_window_30d
+checksums:
+  schema_sha256: ea99918b5fe610bce382625e230425ca311cd2041d663a614a1f73d1ccc25e2f
+  manifest_sha256: 8bc68ebb3583f2a89da9d179ee1ea015b5b3bbc8d44573902b64f27f9c53d727

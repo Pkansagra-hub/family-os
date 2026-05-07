@@ -66,6 +66,8 @@ from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
 from k1.fabric.types import ScoredCapability
+from k1.hil.types import ApprovalRequest
+from k1.kernel.ports.hil_port import IHILPort
 from k1.orchestrator.types import PlanRequest, PlanStep
 from k1.planner.ports.fabric_retrieval_port import IFabricRetrievalPort
 from k1.planner.ports.llm_port import ILLMPort
@@ -89,7 +91,6 @@ from k1.planner.types import (
     VERDICT_REJECT,
     VERDICT_REVISE,
     ExpandedPlan,
-    HILCoordinatorLike,
     PlannerConstraints,
     PlannerLLMRequest,
     PlannerLLMResponse,
@@ -246,14 +247,14 @@ class ValidateService:
     __slots__ = (
         "_llm_port",
         "_fabric_retrieval",
-        "_hil_coord",
+        "_hil_port",
     )
 
     def __init__(
         self,
         llm_port: ILLMPort,
         fabric_retrieval: IFabricRetrievalPort,
-        hil_coord: HILCoordinatorLike,
+        hil_port: IHILPort,
     ) -> None:
         """Construct ValidateService with injected dependencies.
 
@@ -261,8 +262,8 @@ class ValidateService:
             llm_port: LLM gateway for structured arbiter call.
             fabric_retrieval: Fabric Registry access for capability
                 existence checks (direct, NOT via ToolCallRouter).
-            hil_coord: Human-in-the-loop coordinator for optional
-                approval flow (Section 8.4).
+            hil_port: Unified Human-in-the-Loop port (k1.hil) used for
+                optional approval flow (Section 8.4).
 
         Raises:
             TypeError: If any dependency is None.
@@ -271,11 +272,11 @@ class ValidateService:
             raise TypeError("llm_port must not be None")
         if fabric_retrieval is None:
             raise TypeError("fabric_retrieval must not be None")
-        if hil_coord is None:
-            raise TypeError("hil_coord must not be None")
+        if hil_port is None:
+            raise TypeError("hil_port must not be None")
         self._llm_port = llm_port
         self._fabric_retrieval = fabric_retrieval
-        self._hil_coord = hil_coord
+        self._hil_port = hil_port
 
     # -- read-only attribute access ----------------------------------------
 
@@ -290,9 +291,9 @@ class ValidateService:
         return self._fabric_retrieval
 
     @property
-    def hil_coord(self) -> HILCoordinatorLike:
-        """HIL coordinator (read-only)."""
-        return self._hil_coord
+    def hil_port(self) -> IHILPort:
+        """Unified HIL port (read-only)."""
+        return self._hil_port
 
     # ===================================================================
     # Public API
@@ -1138,18 +1139,27 @@ class ValidateService:
         estimated_duration = sum(s.timeout_ms for s in expanded_plan.steps)
 
         try:
-            hil_response = await self._hil_coord.request_approval(
-                request_id=ctx.request_id,
-                plan_summary=(
-                    f"Plan with {len(expanded_plan.steps)} steps, "
-                    f"{len(side_effect_steps)} with side effects."
-                ),
-                side_effects=side_effects_desc,
-                safety_assessment=verdict.safety_assessment,
-                estimated_duration_ms=estimated_duration,
+            approval = await self._hil_port.request_approval(
+                ApprovalRequest(
+                    caller_key=f"planner:validate:{ctx.request_id}",
+                    trace_id=ctx.request_id,
+                    summary=(
+                        f"Plan with {len(expanded_plan.steps)} steps, "
+                        f"{len(side_effect_steps)} with side effects."
+                    ),
+                    side_effects=side_effects_desc,
+                    safety_assessment=verdict.safety_assessment,
+                    estimated_duration_ms=estimated_duration,
+                )
             )
+            hil_response = approval.decision
+            timed_out = approval.timed_out
         except Exception:
-            # HIL timeout or error.
+            # Underlying transport error treated as timeout.
+            hil_response = ""
+            timed_out = True
+
+        if timed_out:
             if all_green:
                 log.warning(
                     "validate.hil_timeout_auto_approve request_id=%s",

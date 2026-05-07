@@ -114,8 +114,8 @@
         },
         "provider_type": {
           "type": "string",
-          "enum": ["MCP", "WASM", "BRIDGE"],
-          "description": "Tool provider type. Agents and Workflows have their own contract types."
+          "enum": ["MCP", "WASM", "BRIDGE", "LOCAL_STUB"],
+          "description": "Tool provider type. LOCAL_STUB = in-process deterministic stub used for storyline / demo capabilities (M12.E3)."
         },
         "provider_id": {
           "type": "string",
@@ -219,6 +219,15 @@
               "description": {"type": "string"}
             }
           }
+        },
+        "risk_class": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "safety_sensitive"],
+          "description": "M9.E1 / M12.E2 — declared risk class consumed by IRiskCatalogPort. Drives risk x freshness matrix in the policy gate. Reads = low; writes = medium; safety/medical/payments = high or safety_sensitive."
+        },
+        "social_act": {
+          "type": ["string", "null"],
+          "description": "M9.E1 — constitution-level social act this capability manifests (e.g. 'send_message', 'set_medication'). null = infrastructure-only (no conscience binding)."
         }
       },
       "allOf": [

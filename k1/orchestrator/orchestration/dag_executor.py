@@ -34,7 +34,12 @@ from collections import deque
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
-from k1.orchestrator.events import ORCH_DAG_COMPLETED, ORCH_DAG_STARTED, ORCH_STEP_COMPLETED
+from k1.orchestrator.events import (
+    ORCH_DAG_COMPLETED,
+    ORCH_DAG_NODE_FAILED,
+    ORCH_DAG_STARTED,
+    ORCH_STEP_COMPLETED,
+)
 from k1.orchestrator.metrics import OrchestratorMetrics
 from k1.orchestrator.tracing import trace_phase
 from k1.orchestrator.types import (
@@ -482,6 +487,37 @@ class DAGExecutor:
                             "[DAGExecutor] Step %s failed -- cancelled " "dependents: %s",
                             sr.step_id,
                             cancelled_ids,
+                        )
+
+                    # M16.E2.I2: surface DAG-level node failure so the
+                    # FailureReplanCheckpoint guard (and external
+                    # observers) can decide whether to amend the plan.
+                    # Computed lazily so we only walk waves on failure.
+                    try:
+                        wave_idx = waves.index(wave)
+                        remaining_after_failure = sum(
+                            1
+                            for fw in waves[wave_idx + 1 :]
+                            for s in fw.steps
+                            if s.id not in self._cancelled_steps
+                        )
+                        await self._delta_port.emit(
+                            ORCH_DAG_NODE_FAILED,
+                            {
+                                "plan_id": plan.plan_id,
+                                "step_id": sr.step_id,
+                                "capability": sr.capability_name,
+                                "error_code": "STEP_FAILED",
+                                "error_detail": sr.error_detail,
+                                "cancelled_dependents": list(cancelled_ids),
+                                "remaining_steps": remaining_after_failure,
+                            },
+                            plan.trace_id,
+                        )
+                    except Exception:
+                        log.warning(
+                            "[DAGExecutor] ORCH_DAG_NODE_FAILED emit failed",
+                            exc_info=True,
                         )
 
             # Check for abort conditions after wave

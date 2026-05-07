@@ -618,7 +618,12 @@ class ConciergeFactory:
         # Step 7: ToolContext for front + back
         # P4B.6: writer is now an explicit port on PortBundle (no more reach-through
         # into the IStatePort adapter's private _writer_port attribute).
+        # M17.E1.I1: ``allow_dispatch_passthrough`` controls whether back tools
+        # silently return ``{"_poc": True}`` when ctx.dispatch is None. Default
+        # False -- production must have a real IDispatchPort or get a clear
+        # ``dispatch_not_wired`` error.
         writer_port = ports.writer
+        allow_dispatch_passthrough = bool(getattr(config, "allow_dispatch_passthrough", False))
         front_ctx = ToolContext(
             session_manager=ports.state,
             cognitive_trace_id=f"k-front-{uuid.uuid4().hex[:6]}",
@@ -626,6 +631,7 @@ class ConciergeFactory:
             recall_fn=recall_fn,
             dispatch=ports.dispatch,
             writer_port=writer_port,
+            allow_dispatch_passthrough=allow_dispatch_passthrough,
         )
         back_ctx = ToolContext(
             session_manager=ports.state,
@@ -634,6 +640,7 @@ class ConciergeFactory:
             recall_fn=recall_fn,
             dispatch=ports.dispatch,
             writer_port=writer_port,
+            allow_dispatch_passthrough=allow_dispatch_passthrough,
         )
 
         # Step 8: Tool dispatchers (P3.4c: defaults to 'simple'; back actor
@@ -673,7 +680,10 @@ class ConciergeFactory:
         # and passes it through ``hil_port=``, attach it to the FSM here.
         # Until E7 wires real construction, callers may pass ``None`` and
         # the FSM HIL gates remain inert.
-        hitl = None
+        # E7.M1.1: also surface the unified port on the runtime as
+        # ``hil_port`` so KernelService.SessionInstance and
+        # KernelRuntime can reach it without crawling into the FSM.
+        hitl = hil_port
         if hil_port is not None:
             fsm.set_hil_port(hil_port)
             logger.info(
@@ -720,6 +730,14 @@ class ConciergeFactory:
             orchestrator = _DispatchPortFSMAdapter(ports.dispatch)
             fsm.set_orchestrator(orchestrator)
 
+        # M16.E1.I3: propagate the passthrough-stub gate to the FSM so
+        # HIGH-tier dispatch with no orchestrator surfaces loudly when
+        # the deployment did not opt into the legacy fallback.
+        if hasattr(fsm, "set_allow_planner_passthrough"):
+            fsm.set_allow_planner_passthrough(
+                bool(getattr(config, "allow_planner_passthrough", False))
+            )
+
         # Step 15: Subscribe front events
         front_subs: list[Any] = []
         if router is not None:
@@ -753,7 +771,7 @@ class ConciergeFactory:
             experience_layer=experience,
             delta_aggregator=delta_aggregator,
             delta_applicator=delta_applicator,
-            hitl_coordinator=hitl,
+            hil_port=hitl,
             orchestrator=orchestrator,
             ledger=ledger,
             ledger_store=ledger_store,

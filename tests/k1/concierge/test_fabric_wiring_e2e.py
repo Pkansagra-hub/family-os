@@ -8,9 +8,6 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fixtures.capabilities.registry import create_demo_registry
-from tests.fixtures.capabilities.contract_converter import convert_all_poc_capabilities
-from tests.fixtures.capabilities.poc_bridge_adapter import POCMockBridgeAdapter
 from k1.fabric.adapters.local_event import LocalEventAdapter
 from k1.fabric.adapters.test_delta_bus import TestDeltaBusAdapter
 from k1.fabric.adapters.test_model_gateway import TestModelGatewayAdapter
@@ -19,6 +16,9 @@ from k1.fabric.adapters.test_state_reader import TestSessionStateReaderAdapter
 from k1.fabric.fabric import Fabric
 from k1.fabric.factory import FabricFactory, _auto_register_providers
 from k1.fabric.types import CapabilityRequest, CapabilityResult, RetrievalResult
+from tests.fixtures.capabilities.contract_converter import convert_all_poc_capabilities
+from tests.fixtures.capabilities.poc_bridge_adapter import POCMockBridgeAdapter
+from tests.fixtures.capabilities.registry import create_demo_registry
 
 # =====================================================================
 # Fixtures
@@ -44,6 +44,12 @@ def _create_wired_fabric() -> Fabric:
     )
 
     for contract in convert_all_poc_capabilities():
+        # Canonical YAML contracts loaded by ModuleLoader (e.g.
+        # tool.execute.send_message, tool.execute.grocery_order) collide
+        # with POC fixtures by name+version. In tests we want the POC
+        # bridge bindings to win, so unregister the YAML version first.
+        if fabric.registry_api.lookup(contract.name) is not None:
+            fabric.registry_api.unregister(contract.name)
         fabric.register(contract)
 
     # Re-run auto-registration so poc-mock-bridge gets a ProviderConfig

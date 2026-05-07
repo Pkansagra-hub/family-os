@@ -76,6 +76,7 @@ if TYPE_CHECKING:
     # Imported only for typing -- runtime import would create a fabric -> kernel
     # cycle. The actual IHILPort instance is duck-typed at the call site.
     from k1.kernel.ports.hil_port import IHILPort
+    from k1.selfmodel.ports.conscience import IConsciencePort
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,7 @@ class CapabilityFabric:
         "_dispatcher",
         "_config",
         "_hil_port",
+        "_conscience_port",
     )
 
     def __init__(
@@ -293,6 +295,7 @@ class CapabilityFabric:
         dispatcher: Optional[FabricDispatcher] = None,
         config: Optional[FabricConfig] = None,
         hil_port: Optional["IHILPort"] = None,
+        conscience_port: Optional["IConsciencePort"] = None,
     ) -> None:
         self._resolver = resolver
         self._context_builder = context_builder
@@ -305,6 +308,8 @@ class CapabilityFabric:
         self._config = config or FabricConfig()
         # E3.M1.1 -- HIL gate port. None disables the gate (test/legacy harness).
         self._hil_port: Optional["IHILPort"] = hil_port
+        # M12.E4.I1 -- Conscience pre-HIL gate. None disables the gate.
+        self._conscience_port: Optional["IConsciencePort"] = conscience_port
 
     # ==================================================================
     # Properties
@@ -485,6 +490,54 @@ class CapabilityFabric:
             provider_id = resolved.provider_config.provider_id
             provider_type = resolved.provider_config.provider_type
             contract = resolved.contract
+
+            # --- Step 2.4: Conscience gate (M12.E4.I1) ---
+            # Runs BEFORE the HIL gate. If the contract carries a
+            # ``social_act`` and the actor's conscience digest forbids
+            # it, short-circuit with ``conscience_forbidden``. Returning
+            # ``None`` lets the HIL gate decide must-ask cases.
+            conscience_failure = self._run_conscience_gate(request, contract, trace_id)
+            if conscience_failure is not None:
+                elapsed_ms = _elapsed_ms(start_time)
+                conscience_failure = CapabilityResult.failure_result(
+                    request_id=request.request_id,
+                    error_code=(
+                        conscience_failure.error.code
+                        if conscience_failure.error
+                        else "conscience_forbidden"
+                    ),
+                    error_message=(
+                        conscience_failure.error.message
+                        if conscience_failure.error
+                        else "Capability forbidden by conscience"
+                    ),
+                    retriable=False,
+                    provider_id=provider_id,
+                    trace_id=trace_id,
+                    duration_ms=elapsed_ms,
+                    resolution_time_ms=resolve_ms,
+                )
+                self._emit_failure(request, conscience_failure, start_time, provider_id)
+                fabric_logger.result_return(
+                    trace_id=trace_id,
+                    request_id=request.request_id,
+                    capability_name=capability_name,
+                    provider_id=provider_id,
+                    duration_ms=elapsed_ms,
+                    success=False,
+                    error_code=(
+                        conscience_failure.error.code
+                        if conscience_failure.error
+                        else "conscience_forbidden"
+                    ),
+                )
+                self._update_metrics(capability_name, elapsed_ms, success=False)
+                return self._finalize_execution_metrics(
+                    request=request,
+                    result=conscience_failure,
+                    provider_type=provider_type,
+                    exec_start=exec_start,
+                )
 
             # --- Step 2.5: HIL gate (E3.M2.2) ---
             gate_start = time.perf_counter()
@@ -745,6 +798,74 @@ class CapabilityFabric:
     # ==================================================================
     # Internal: HIL pre-execution gate (E3.M2.1)
     # ==================================================================
+
+    def _run_conscience_gate(
+        self,
+        request: CapabilityRequest,
+        contract: Any,
+        trace_id: str,
+    ) -> Optional[CapabilityResult]:
+        """Pre-HIL conscience gate (M12.E4.I1).
+
+        Reads ``contract.social_act`` and asks the conscience port
+        whether the act is forbidden for ``request.caller_id``.
+
+        Returns ``None`` to allow execution to continue (and the HIL
+        gate to decide must-ask), otherwise a ``conscience_forbidden``
+        ``CapabilityResult.failure_result``.
+
+        Skips entirely (returns ``None``) when:
+
+        * ``self._conscience_port is None`` -- gate disabled (legacy /
+          test harness path), or
+        * the contract has no ``social_act`` -- there is nothing for
+          the conscience to forbid, or
+        * the request has no ``caller_id`` -- without an actor we
+          cannot resolve a digest; HIL gate may still apply.
+        """
+        if self._conscience_port is None:
+            return None
+        social_act = getattr(contract, "social_act", None)
+        if not social_act:
+            return None
+        caller_id = getattr(request, "caller_id", "") or ""
+        if not caller_id:
+            return None
+
+        try:
+            digest = self._conscience_port.get_digest(
+                caller_id,
+                T_ms=int(time.time() * 1000),
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.warning(
+                "conscience_gate trace_id=%s capability=%s: digest lookup failed; "
+                "allowing through to HIL",
+                trace_id,
+                getattr(contract, "name", ""),
+                exc_info=True,
+            )
+            return None
+
+        if digest.is_forbidden(social_act):
+            logger.info(
+                "conscience_gate trace_id=%s capability=%s social_act=%s decision=forbid",
+                trace_id,
+                getattr(contract, "name", ""),
+                social_act,
+            )
+            return CapabilityResult.failure_result(
+                request_id=request.request_id,
+                error_code="conscience_forbidden",
+                error_message=(
+                    f"social_act '{social_act}' is forbidden for actor "
+                    f"'{caller_id}' by conscience"
+                ),
+                retriable=False,
+                trace_id=trace_id,
+                duration_ms=0,
+            )
+        return None
 
     async def _run_hil_gate(
         self,

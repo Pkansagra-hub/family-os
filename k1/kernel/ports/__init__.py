@@ -13,7 +13,7 @@ Ports:
   IBusPort            (2.0.8) -- Bus infrastructure creation/access
   IModelHubPort       (2.0.8) -- LLM lifecycle management
   IFabricPort         (2.0.8) -- Shared and per-session Fabric lifecycle
-  IBridgePort         (2.0.8) -- K0 Cross-Kernel Bridge connection
+  IBridgeRuntime      (2.0.8) -- K0 Cross-Kernel Bridge connection
   IOrchestratorPort   (2.0.8) -- Shared Orchestrator lifecycle + S6b cross-wire
   IPlannerPort        (2.0.8) -- Shared Planner lifecycle
   ISessionManagerPort (2.0.8) -- Per-session component bag CRUD
@@ -34,7 +34,7 @@ Usage::
         IBusPort,
         IModelHubPort,
         IFabricPort,
-        IBridgePort,
+        IBridgeRuntime,
         IOrchestratorPort,
         IPlannerPort,
         ISessionManagerPort,
@@ -43,7 +43,7 @@ Usage::
     )
 """
 
-from k1.kernel.ports.bridge_port import IBridgePort
+from k1.kernel.ports.bridge_port import IBridgeRuntime
 from k1.kernel.ports.bus_port import IBusPort
 from k1.kernel.ports.fabric_port import IFabricPort
 from k1.kernel.ports.hil_port import IHILPort
@@ -55,7 +55,7 @@ from k1.kernel.ports.session_manager_port import ISessionManagerPort
 
 __all__ = [
     # --- 8 Kernel Port Protocols ---
-    "IBridgePort",
+    "IBridgeRuntime",
     "IBusPort",
     "IFabricPort",
     "IHILPort",
