@@ -25,12 +25,12 @@ import pytest
 from k1.fabric.ports.event_port import SubscriptionHandle
 from k1.orchestrator.types import CommittedPlan, MicroReplanRequest, PlanRequest
 from k1.planner.ports import (
-    IBridgePort,
     IDeltaEmitPort,
     IEventPort,
     IFabricRetrievalPort,
     ILLMPort,
     IMailboxPort,
+    IPlannerWritePort,
     IStateReadPort,
 )
 from k1.planner.types import (
@@ -82,7 +82,7 @@ ALL_PORTS = [
     ILLMPort,
     IFabricRetrievalPort,
     IStateReadPort,
-    IBridgePort,
+    IPlannerWritePort,
     IDeltaEmitPort,
     IEventPort,
 ]
@@ -293,26 +293,26 @@ class TestIBridgePort:
     """IBridgePort: recall(), persist_plan() match SS15.6."""
 
     def test_has_recall(self) -> None:
-        sig = inspect.signature(IBridgePort.recall)
+        sig = inspect.signature(IPlannerWritePort.recall)
         params = list(sig.parameters.keys())
         assert "query" in params
         assert "selectors" in params
         assert "trace_id" in params
 
     def test_has_persist_plan(self) -> None:
-        sig = inspect.signature(IBridgePort.persist_plan)
+        sig = inspect.signature(IPlannerWritePort.persist_plan)
         params = list(sig.parameters.keys())
         assert "plan" in params
         assert "trace_id" in params
 
     def test_recall_is_coroutine(self) -> None:
-        assert inspect.iscoroutinefunction(IBridgePort.recall)
+        assert inspect.iscoroutinefunction(IPlannerWritePort.recall)
 
     def test_persist_plan_is_coroutine(self) -> None:
-        assert inspect.iscoroutinefunction(IBridgePort.persist_plan)
+        assert inspect.iscoroutinefunction(IPlannerWritePort.persist_plan)
 
     def test_recall_defaults(self) -> None:
-        sig = inspect.signature(IBridgePort.recall)
+        sig = inspect.signature(IPlannerWritePort.recall)
         assert sig.parameters["selectors"].default is None
         assert sig.parameters["trace_id"].default == ""
 
@@ -406,7 +406,7 @@ PORT_FILES = {
     "llm_port.py": "ILLMPort",
     "fabric_retrieval_port.py": "IFabricRetrievalPort",
     "state_read_port.py": "IStateReadPort",
-    "bridge_port.py": "IBridgePort",
+    "bridge_port.py": "IPlannerWritePort",
     "delta_emit_port.py": "IDeltaEmitPort",
     "event_port.py": "IEventPort",
 }
@@ -466,7 +466,7 @@ class TestPortsInit:
             "ILLMPort",
             "IFabricRetrievalPort",
             "IStateReadPort",
-            "IBridgePort",
+            "IPlannerWritePort",
             "IDeltaEmitPort",
             "IEventPort",
         }
@@ -475,19 +475,19 @@ class TestPortsInit:
     def test_import_from_package(self) -> None:
         """Consumers import from k1.planner.ports, not individual files."""
         from k1.planner.ports import (
-            IBridgePort,
             IDeltaEmitPort,
             IEventPort,
             IFabricRetrievalPort,
             ILLMPort,
             IMailboxPort,
+            IPlannerWritePort,
             IStateReadPort,
         )
 
         assert all(
             p is not None
             for p in [
-                IBridgePort,
+                IPlannerWritePort,
                 IDeltaEmitPort,
                 IEventPort,
                 IFabricRetrievalPort,
@@ -640,7 +640,7 @@ class TestPlannerInitPortExports:
             "ILLMPort",
             "IFabricRetrievalPort",
             "IStateReadPort",
-            "IBridgePort",
+            "IPlannerWritePort",
             "IDeltaEmitPort",
             "IEventPort",
         }

@@ -94,6 +94,11 @@ class LocalEventAdapter(IEventPort):
         )
         self._dispatch_thread.start()
 
+        logger.info(
+            "LocalEventAdapter initialized (capture_mode=%s)",
+            capture_mode,
+        )
+
     @property
     def is_connected(self) -> bool:
         """

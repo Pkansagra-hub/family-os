@@ -42,10 +42,10 @@ from typing import Any, Callable, Dict, List, Optional
 import flatbuffers
 
 # Generated FlatBuffer types
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     HistoryRecentSection as FBHistoryRecentSection,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.CompressedTurn import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.CompressedTurn import (
     CompressedTurnAddArchivedToLocalCold,
     CompressedTurnAddArchiveId,
     CompressedTurnAddEmotion,
@@ -63,7 +63,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.CompressedTurn import
     CompressedTurnStartIntentsVector,
     CompressedTurnStartKeyPhrasesVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.HistoryRecentSection import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.HistoryRecentSection import (
     HistoryRecentSectionAddArchivedTurnIds,
     HistoryRecentSectionAddBytesEvictedTotal,
     HistoryRecentSectionAddCompressedTurns,
@@ -83,14 +83,14 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.HistoryRecentSection 
     HistoryRecentSectionStartCompressedTurnsVector,
     HistoryRecentSectionStartSummarizedTurnsVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
     SectionHeaderAddLastUpdatedMs,
     SectionHeaderAddSectionName,
     SectionHeaderAddSizeBytes,
     SectionHeaderEnd,
     SectionHeaderStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SummarizedTurn import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SummarizedTurn import (
     SummarizedTurnAddArchivedToLocalCold,
     SummarizedTurnAddArchiveId,
     SummarizedTurnAddPrimaryEntity,

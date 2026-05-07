@@ -50,11 +50,6 @@ from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     SalienceEntryAddScore,
     SalienceEntryEnd,
     SalienceEntryStart,
-)
-from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
-    ScoreboardSection as FBScoreboardSection,
-)
-from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     ScoreboardSectionAddCurrentTurn,
     ScoreboardSectionAddHeader,
     ScoreboardSectionAddLastUpdatedMs,
@@ -84,6 +79,9 @@ from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     TopicEnd,
     TopicStart,
 )
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
+    ScoreboardSection as FBScoreboardSection,
+)
 
 # =============================================================================
 # Enums matching FlatBuffer schema
@@ -97,6 +95,15 @@ class QuestionStatus(IntEnum):
     ANSWERED = 1  # Question has been answered
     ABANDONED = 2  # Question was dropped
     DEFERRED = 3  # Question pushed back for later
+
+
+class CommitmentStatus(IntEnum):
+    """Status of a deferred commitment / promise."""
+
+    OPEN = 0  # Commitment is active, waiting for trigger
+    FULFILLED = 1  # Commitment has been delivered
+    EXPIRED = 2  # Commitment is no longer relevant
+    CANCELLED = 3  # Commitment was explicitly cancelled
 
 
 # =============================================================================
@@ -174,6 +181,28 @@ class SalienceEntry:
     decay_rate: float = 0.1  # How fast salience decays per turn
 
 
+@dataclass
+class Commitment:
+    """A deferred promise or commitment the agent made to the user.
+
+    Tracks "I'll do X when Y happens" situations, e.g.:
+    - "I'll have the Iron Man story ready when Riley wakes up"
+    - "I'll remind you about the dentist when you leave work"
+
+    Linked entities allow cross-referencing: when an entity appears
+    in conversation, open commitments for that entity are surfaced.
+    """
+
+    id: str
+    description: str  # What was promised ("tell Iron Man story to Riley")
+    trigger_condition: str  # When to deliver ("when Riley wakes up")
+    status: CommitmentStatus = CommitmentStatus.OPEN
+    created_at_turn: int = 0
+    fulfilled_at_turn: int = 0
+    linked_entities: List[str] = field(default_factory=list)  # entity_ids
+    linked_content_summary: str = ""  # Brief note about prepared content
+
+
 # =============================================================================
 # ScoreboardSection - Production Implementation
 # =============================================================================
@@ -246,6 +275,9 @@ class ScoreboardSection:
 
         # Indexes
         self._referents_by_entity: Dict[str, str] = {}  # entity_id -> referent_id
+
+        # Commitments (deferred promises with trigger conditions)
+        self._commitments: Dict[str, Commitment] = {}
 
         # Cached serialization
         self._cached_bytes: Optional[bytes] = None
@@ -550,6 +582,7 @@ class ScoreboardSection:
         self._salience_map.clear()
         self._topic_stack.clear()
         self._referents_by_entity.clear()
+        self._commitments.clear()
         self._last_user_intent = ""
         self._last_user_intent_confidence = 0.0
         self._current_turn = 0
@@ -569,6 +602,8 @@ class ScoreboardSection:
             "qud_count": len(self._qud_stack),
             "salience_entry_count": len(self._salience_map),
             "topic_count": len(self._topic_stack),
+            "commitment_count": len(self._commitments),
+            "open_commitment_count": len(self.get_open_commitments()),
             "current_turn": self._current_turn,
             "last_user_intent": self._last_user_intent,
             "last_updated_ms": self._last_updated_ms,
@@ -994,6 +1029,88 @@ class ScoreboardSection:
         return self._last_user_intent, self._last_user_intent_confidence
 
     # =========================================================================
+    # Commitment Management
+    # =========================================================================
+
+    def add_commitment(
+        self,
+        description: str,
+        trigger_condition: str,
+        linked_entities: Optional[List[str]] = None,
+        linked_content_summary: str = "",
+    ) -> Commitment:
+        """
+        Record a deferred commitment / promise.
+
+        Call when the agent promises to do something when a condition is met.
+        E.g. "I'll have the Iron Man story ready when Riley wakes up."
+
+        Args:
+            description: What was promised
+            trigger_condition: When to deliver
+            linked_entities: Entity IDs involved (e.g. ["riley", "iron-man-story"])
+            linked_content_summary: Brief note about prepared content
+
+        Returns:
+            Commitment: Created commitment
+        """
+        commitment = Commitment(
+            id=str(uuid.uuid4()),
+            description=description,
+            trigger_condition=trigger_condition,
+            status=CommitmentStatus.OPEN,
+            created_at_turn=self._current_turn,
+            linked_entities=linked_entities or [],
+            linked_content_summary=linked_content_summary,
+        )
+        self._commitments[commitment.id] = commitment
+        self._touch()
+        return commitment
+
+    def fulfill_commitment(self, commitment_id: str) -> bool:
+        """
+        Mark a commitment as fulfilled.
+
+        Args:
+            commitment_id: Commitment UUID
+
+        Returns:
+            bool: True if found and updated
+        """
+        c = self._commitments.get(commitment_id)
+        if not c or c.status != CommitmentStatus.OPEN:
+            return False
+        c.status = CommitmentStatus.FULFILLED
+        c.fulfilled_at_turn = self._current_turn
+        self._touch()
+        return True
+
+    def cancel_commitment(self, commitment_id: str) -> bool:
+        """Mark a commitment as cancelled."""
+        c = self._commitments.get(commitment_id)
+        if not c or c.status != CommitmentStatus.OPEN:
+            return False
+        c.status = CommitmentStatus.CANCELLED
+        self._touch()
+        return True
+
+    def get_open_commitments(self) -> List[Commitment]:
+        """Get all open (unfulfilled) commitments."""
+        return [c for c in self._commitments.values() if c.status == CommitmentStatus.OPEN]
+
+    def get_commitments_for_entity(self, entity_id: str) -> List[Commitment]:
+        """Get open commitments linked to a specific entity."""
+        return [
+            c
+            for c in self._commitments.values()
+            if c.status == CommitmentStatus.OPEN and entity_id in c.linked_entities
+        ]
+
+    def get_commitment(self, commitment_id: str) -> Optional[Commitment]:
+        """Get commitment by ID."""
+        return self._commitments.get(commitment_id)
+
+    # =========================================================================
     # Turn Management
     # =========================================================================
 
@@ -1171,6 +1288,17 @@ class ScoreboardSection:
                 data["intent"],
                 data.get("confidence", 1.0),
             )
+        elif operation == "add_commitment":
+            return self.add_commitment(
+                data["description"],
+                data["trigger_condition"],
+                data.get("linked_entities", []),
+                data.get("linked_content_summary", ""),
+            )
+        elif operation == "fulfill_commitment":
+            return self.fulfill_commitment(data["commitment_id"])
+        elif operation == "cancel_commitment":
+            return self.cancel_commitment(data["commitment_id"])
         else:
             raise ValueError(f"Unknown operation: {operation}")
 
@@ -1239,7 +1367,9 @@ __all__ = [
     "Question",
     "Topic",
     "SalienceEntry",
+    "Commitment",
     "QuestionStatus",
+    "CommitmentStatus",
     # Legacy exports
     "Task",
     "TaskStatus",

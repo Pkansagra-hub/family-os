@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, List, Optional, Protocol, Tuple, runtime_check
 
 if TYPE_CHECKING:
     from k1.orchestrator.types import ProactiveGap, TriggerSpec
-    from k1.orchestrator.workflows.workflow_types import WorkflowSpec
+    from k1.orchestrator.workflows.workflow_types import RunManifest, WorkflowSpec
 
 
 # ---------------------------------------------------------------------------
@@ -106,15 +106,14 @@ class IWorkflowStoragePort(Protocol):
 
     # -- Run manifests -------------------------------------------------------
 
-    async def save_run(self, manifest: object) -> None:
+    async def save_run(self, manifest: "RunManifest") -> None:
         """Persist a RunManifest. Type is ``RunManifest`` (4.2.4).
 
-        Accepts ``object`` here to avoid circular import -- actual
-        type enforcement lives in adapter + tests.
+        Type uses TYPE_CHECKING forward ref to avoid runtime circular import.
         """
         ...  # pragma: no cover
 
-    async def get_runs(self, workflow_id: str, limit: int = 10) -> list:
+    async def get_runs(self, workflow_id: str, limit: int = 10) -> List["RunManifest"]:
         """Return recent RunManifests for a workflow (newest first)."""
         ...  # pragma: no cover
 

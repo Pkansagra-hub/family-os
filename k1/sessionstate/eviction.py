@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
 
+from .config import SessionStateConfig
 from .sizetracker import (
     NEVER_EVICT_SECTIONS,
     SECTION_BUDGETS,
@@ -68,17 +69,17 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# CONSTANTS
+# CONSTANTS (config-backed: sessionstate.eviction.*)
 # =============================================================================
 
 # Target utilization after eviction (give headroom)
-TARGET_UTILIZATION_AFTER_EVICTION: float = 0.70  # 70% utilization target
+TARGET_UTILIZATION_AFTER_EVICTION: float = 0.70  # config: sessionstate.eviction.target_utilization
 
 # Minimum bytes to evict per pass (avoid micro-evictions)
-MIN_EVICTION_BYTES: int = 1024  # 1KB minimum
+MIN_EVICTION_BYTES: int = 1024  # config: sessionstate.eviction.min_eviction_bytes
 
 # Maximum eviction iterations to prevent infinite loops
-MAX_EVICTION_ITERATIONS: int = 10
+MAX_EVICTION_ITERATIONS: int = 10  # config: sessionstate.eviction.max_eviction_iterations
 
 
 class EvictionPriority(IntEnum):
@@ -89,14 +90,16 @@ class EvictionPriority(IntEnum):
     """
 
     TELEMETRY = 1  # First to evict (lowest value = highest eviction priority)
-    BELIEFS_HISTORY = 2
-    HISTORY_RECENT = 3
+    ARTIFACTS_WARM = 2  # Evict after telemetry
+    BELIEFS_HISTORY = 3
+    HISTORY_RECENT = 4
     PERSONA = 10  # Last to evict (highest value)
 
 
 # Section to eviction priority mapping (WARM only)
 EVICTION_PRIORITIES: Dict[str, EvictionPriority] = {
     "telemetry": EvictionPriority.TELEMETRY,
+    "artifacts_warm": EvictionPriority.ARTIFACTS_WARM,
     "beliefs_history": EvictionPriority.BELIEFS_HISTORY,
     "history_recent": EvictionPriority.HISTORY_RECENT,
     "persona": EvictionPriority.PERSONA,
@@ -229,7 +232,7 @@ class EvictionResult:
 # =============================================================================
 
 
-class ISectionDataProvider(Protocol):
+class IEvictionSectionProvider(Protocol):
     """
     Protocol for accessing section data for eviction.
 
@@ -261,6 +264,11 @@ class ISectionDataProvider(Protocol):
     def remove_evicted_data(self, section: str, bytes_to_remove: int) -> int:
         """Remove data after archiving, return actual bytes freed."""
         ...
+
+
+# Deprecated alias for backward compatibility (was named ISectionDataProvider
+# before TD-cleanup; collided with sessionstate.migration.ISectionDataProvider).
+ISectionDataProvider = IEvictionSectionProvider
 
 
 # =============================================================================
@@ -316,6 +324,7 @@ class EvictionEngine:
     """
 
     __slots__ = (
+        "_ss_cfg",
         "_size_tracker",
         "_local_cold",
         "_mutation_guard",
@@ -329,8 +338,9 @@ class EvictionEngine:
         size_tracker: SizeTracker,
         local_cold: "LocalColdArchive",
         mutation_guard: Optional["MutationGuard"] = None,
-        section_provider: Optional[ISectionDataProvider] = None,
+        section_provider: Optional[IEvictionSectionProvider] = None,
         session_id: str = "",
+        config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
         Initialize EvictionEngine.
@@ -341,7 +351,9 @@ class EvictionEngine:
             mutation_guard: MutationGuard for section locking (optional for testing)
             section_provider: Provider for section data access (optional)
             session_id: Session ID for archive metadata
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._size_tracker = size_tracker
         self._local_cold = local_cold
         self._mutation_guard = mutation_guard
@@ -349,7 +361,11 @@ class EvictionEngine:
         self._eviction_in_progress = False
         self._session_id = session_id or str(uuid.uuid4())
 
-        logger.debug("EvictionEngine initialized for session %s", self._session_id[:8])
+        logger.info(
+            "EvictionEngine initialized (session=%s, target_util=%.0f%%)",
+            self._session_id[:8],
+            self._ss_cfg.eviction.target_utilization * 100,
+        )
 
     # =========================================================================
     # EVICTION CANDIDATES
@@ -508,7 +524,7 @@ class EvictionEngine:
             for candidate in candidates:
                 if remaining <= 0:
                     break
-                if iterations >= MAX_EVICTION_ITERATIONS:
+                if iterations >= self._ss_cfg.eviction.max_eviction_iterations:
                     logger.warning("Max eviction iterations reached")
                     break
 
@@ -516,11 +532,9 @@ class EvictionEngine:
 
                 # Calculate how much to evict from this section
                 to_evict = min(candidate.evictable_bytes, remaining)
-                if (
-                    to_evict < MIN_EVICTION_BYTES
-                    and candidate.evictable_bytes >= MIN_EVICTION_BYTES
-                ):
-                    to_evict = MIN_EVICTION_BYTES
+                _min_evict = self._ss_cfg.eviction.min_eviction_bytes
+                if to_evict < _min_evict and candidate.evictable_bytes >= _min_evict:
+                    to_evict = _min_evict
 
                 # Evict from section
                 result = self._evict_section(
@@ -745,7 +759,8 @@ class EvictionEngine:
             return 0
 
         # Target: 70% utilization (gives headroom)
-        target_bytes = int(TOTAL_SIZE_LIMIT_BYTES * TARGET_UTILIZATION_AFTER_EVICTION)
+        _cfg_evict = self._ss_cfg.eviction
+        target_bytes = int(TOTAL_SIZE_LIMIT_BYTES * _cfg_evict.target_utilization)
         needed = current_total - target_bytes
 
         return max(0, needed)
@@ -758,7 +773,8 @@ class EvictionEngine:
             int: Bytes that should be evicted from WARM
         """
         warm_total = self._size_tracker.get_tier_size("warm")
-        target = int(WARM_SIZE_LIMIT_BYTES * TARGET_UTILIZATION_AFTER_EVICTION)
+        _target_util = self._ss_cfg.eviction.target_utilization
+        target = int(WARM_SIZE_LIMIT_BYTES * _target_util)
         return max(0, warm_total - target)
 
     # =========================================================================
@@ -885,7 +901,8 @@ __all__ = [
     "EvictionReason",
     "EvictionResult",
     "EvictedItem",
-    "ISectionDataProvider",
+    "IEvictionSectionProvider",
+    "ISectionDataProvider",  # Deprecated alias for backward compat
     "TARGET_UTILIZATION_AFTER_EVICTION",
     "MIN_EVICTION_BYTES",
     "MAX_EVICTION_ITERATIONS",

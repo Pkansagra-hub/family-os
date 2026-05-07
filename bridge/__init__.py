@@ -15,4 +15,4 @@
 # - Device-to-device sync (LAN mDNS, P2P internet)
 
 __version__ = "0.1.0"
-__status__ = "planning"
+__status__ = "alpha"

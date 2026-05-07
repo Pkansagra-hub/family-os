@@ -158,15 +158,6 @@ class UltraBERTPhase1Pipeline:
         embedding = analysis.get("embedding")
         self._last_embedding = embedding if isinstance(embedding, list) else None
 
-        # Complexity tier (multi-factor)
-        complexity_tier = self._compute_complexity(
-            all_intents=all_intents,
-            active_domains=[primary_domain],
-            primary_intent=primary_intent,
-            entities=entities,
-            safety_band=safety_band,
-        )
-
         return Phase1Result(
             intents=all_intents,
             entities=entities,
@@ -178,7 +169,6 @@ class UltraBERTPhase1Pipeline:
             intent_classification=primary_intent,
             domain_context=primary_domain,
             safety_band=safety_band,
-            complexity_tier=complexity_tier,
             temporal_expressions=temporal_expressions,
             relations=relations,
         )
@@ -262,58 +252,8 @@ class UltraBERTPhase1Pipeline:
         return merged
 
     # ------------------------------------------------------------------
-    # Multi-factor complexity classifier (E10.1.2)
+    # P3.1: Multi-factor complexity classifier removed.
+    # The labelled tier (LOW/MEDIUM/HIGH) is no longer produced here.
+    # Downstream call sites (dispatch_task) derive a binary plan/no-plan
+    # signal from observable factors (multi-intent, depends_on) directly.
     # ------------------------------------------------------------------
-
-    def _compute_complexity(
-        self,
-        all_intents: list[str],
-        active_domains: list[str],
-        primary_intent: str,
-        entities: list[dict[str, Any]],
-        safety_band: str,
-    ) -> str:
-        """Multi-factor complexity scoring.
-
-        Factors:
-          1. Multi-Intent:  len(intents) > 1  -> +1
-          2. Cross-Domain:  len(domains) > 1  -> +1
-          3. Temporal ambiguity: primary_intent in temporal set AND
-             entities contain DATE_REL / TIME_REL -> +1
-          4. Safety override: RED/CRISIS -> force LOW
-
-        Score thresholds come from config ``phase1.complexity_thresholds``:
-          low_max   (default 0): score <= low_max  -> LOW
-          medium_max(default 2): score <= medium_max -> MEDIUM
-          else                                      -> HIGH
-        """
-        # Safety override first
-        if safety_band in ("RED", "CRISIS"):
-            return "LOW"
-
-        score = 0
-
-        # Factor 1: Multi-intent
-        if len(all_intents) > 1:
-            score += 1
-
-        # Factor 2: Cross-domain
-        if len(active_domains) > 1:
-            score += 1
-
-        # Factor 3: Temporal ambiguity
-        temporal_intents = {"set_reminder", "seek_advice", "reflect", "scheduling"}
-        temporal_labels = {"DATE_REL", "TIME_REL", "TEMPORAL"}
-        has_temporal = any(e.get("label") in temporal_labels for e in entities)
-        if primary_intent in temporal_intents and has_temporal:
-            score += 1
-
-        thresholds = self._cfg.complexity_thresholds
-        low_max = thresholds.get("low_max", 0)
-        medium_max = thresholds.get("medium_max", 2)
-
-        if score <= low_max:
-            return "LOW"
-        if score <= medium_max:
-            return "MEDIUM"
-        return "HIGH"

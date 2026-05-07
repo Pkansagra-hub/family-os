@@ -133,7 +133,6 @@ def test_metric_catalog_counters_and_gauges_emit() -> None:
     metrics.set_workflow_active_count(4)
     metrics.set_mcp_registered_capabilities(12)
     metrics.set_pending_plans(2)
-    metrics.set_pending_hil(1)
 
     counter_names = {c[0] for c in collector.counters}
     assert {
@@ -153,7 +152,6 @@ def test_metric_catalog_counters_and_gauges_emit() -> None:
         "orchestrator.workflow.active_count",
         "orchestrator.mcp.registered_capabilities",
         "orchestrator.pending_plans",
-        "orchestrator.pending_hil",
     }.issubset(gauge_names)
 
 

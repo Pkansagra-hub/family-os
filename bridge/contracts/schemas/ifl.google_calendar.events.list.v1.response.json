@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/ifl.google_calendar.events.list.v1.response.json",
+  "title": "IFLGoogleCalendarEventsListV1Response",
+  "description": "Response body for ifl.google_calendar.events.list.v1. Returns the matching events plus pagination state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["events"],
+  "properties": {
+    "events": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/CalendarEvent" }
+    },
+    "next_page_token": {
+      "type": "string",
+      "description": "Opaque pagination token; absent on the final page."
+    }
+  },
+  "$defs": {
+    "CalendarEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "summary", "start", "end"],
+      "properties": {
+        "id": { "type": "string" },
+        "summary": { "type": "string" },
+        "description": { "type": "string" },
+        "location": { "type": "string" },
+        "start": { "$ref": "#/$defs/EventTime" },
+        "end": { "$ref": "#/$defs/EventTime" },
+        "status": {
+          "type": "string",
+          "enum": ["confirmed", "tentative", "cancelled"]
+        },
+        "html_link": { "type": "string", "format": "uri" }
+      }
+    },
+    "EventTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "date": {
+          "type": "string",
+          "format": "date",
+          "description": "All-day events use this; dateTime is absent."
+        },
+        "date_time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "time_zone": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

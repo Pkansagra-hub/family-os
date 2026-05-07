@@ -219,4 +219,4 @@ This removes the chance a developer forgets to pass `stream=` parameter.
 - FEEDBACK-022: Implement stream routing (wal vs feedback) with enforcement
 - FEEDBACK-023: Add per-stream QoS isolation (separate scheduler ports)
 - [k0/bus/core.py](../../k0/bus/core.py) - Current BusDispatcher implementation
-- [docs/plans/FEEDBACK-issues-tracker.md](../../plans/FEEDBACK-issues-tracker.md) - M0.5 milestone
+- [docs/plans/FEEDBACK-issues-tracker.md](../../plans/defered/FEEDBACK-issues-tracker.md) - M0.5 milestone

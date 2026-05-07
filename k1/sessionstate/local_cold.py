@@ -49,6 +49,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .config import SessionStateConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -116,10 +118,10 @@ class RestoreResult:
     error: Optional[str] = None
 
 
-# Default database path
+# Default database path (config: sessionstate.storage.default_db_path)
 DEFAULT_DB_PATH = Path.home() / ".familyos" / "k1" / "sessionstate.db"
 
-# SLA threshold for restore operations (log warning if exceeded)
+# SLA threshold for restore operations (config: sessionstate.storage.sla_restore_ms)
 SLA_RESTORE_MS = 50.0
 
 # Section to table mapping
@@ -131,6 +133,7 @@ SECTION_TABLE_MAP: Dict[str, str] = {
     "narrative_active": "st_narrative_archive",
     "telemetry": "st_telemetry_archive",  # WARM eviction target
     "persona": "st_persona_archive",  # WARM eviction target
+    "artifacts_warm": "st_artifacts_archive",  # W6: WARM eviction target
     "checkpoint": "st_session_checkpoints",
 }
 
@@ -142,6 +145,7 @@ ARCHIVE_TABLES = [
     "st_narrative_archive",
     "st_telemetry_archive",
     "st_persona_archive",
+    "st_artifacts_archive",
 ]
 
 
@@ -186,15 +190,18 @@ class LocalColdArchive:
         )
     """
 
-    __slots__ = ("_db_path", "_conn", "_closed")
+    __slots__ = ("_ss_cfg", "_db_path", "_conn", "_closed")
 
-    def __init__(self, db_path: Optional[Path] = None) -> None:
+    def __init__(
+        self, db_path: Optional[Path] = None, config: Optional[SessionStateConfig] = None
+    ) -> None:
         """
         Initialize LocalColdArchive.
 
         Args:
             db_path: Path to SQLite database.
                      Default: ~/.familyos/k1/sessionstate.db
+            config: Optional SessionStateConfig (defaults used if None)
 
         Actions:
             1. Create directory if needed
@@ -202,7 +209,11 @@ class LocalColdArchive:
             3. Enable WAL mode for concurrency
             4. Initialize schema if needed
         """
-        self._db_path = db_path or DEFAULT_DB_PATH
+        self._ss_cfg = config or SessionStateConfig()
+        if db_path is not None:
+            self._db_path = db_path
+        else:
+            self._db_path = Path(self._ss_cfg.storage.default_db_path).expanduser()
         self._closed = False
 
         # Create parent directory if needed
@@ -225,7 +236,11 @@ class LocalColdArchive:
         # Initialize schema
         self._init_schema()
 
-        logger.debug("LocalColdArchive initialized at %s", self._db_path)
+        logger.info(
+            "LocalColdArchive initialized (path=%s, tables=%d)",
+            self._db_path,
+            len(ARCHIVE_TABLES),
+        )
 
     def _init_schema(self) -> None:
         """
@@ -387,6 +402,27 @@ class LocalColdArchive:
         """
         )
 
+        # W6: st_artifacts_archive - Evicted artifacts_warm data (WARM tier)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS st_artifacts_archive (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                section TEXT NOT NULL,
+                data BLOB NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                metadata TEXT
+            )
+        """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_artifacts_session
+            ON st_artifacts_archive(session_id)
+        """
+        )
+
         self._conn.commit()
         logger.debug("LocalColdArchive schema initialized")
 
@@ -525,8 +561,13 @@ class LocalColdArchive:
                         metadata_json,
                     ),
                 )
-            elif table in ("st_telemetry_archive", "st_persona_archive"):
-                # Generic archive for telemetry and persona (WARM eviction targets)
+            elif table in (
+                "st_telemetry_archive",
+                "st_persona_archive",
+                "st_artifacts_archive",
+            ):
+                # Generic archive for telemetry / persona / artifacts
+                # (WARM eviction targets, identical schema).
                 self._conn.execute(
                     f"""
                     INSERT INTO {table}
@@ -647,13 +688,14 @@ class LocalColdArchive:
 
             duration_ms = self._elapsed_ms(start_time)
 
-            if duration_ms > SLA_RESTORE_MS:
+            sla_ms = self._ss_cfg.storage.sla_restore_ms
+            if duration_ms > sla_ms:
                 logger.warning(
                     "Restore SLA breach: %s for session %s took %.2fms (>%.0fms)",
                     section,
                     session_id[:8],
                     duration_ms,
-                    SLA_RESTORE_MS,
+                    sla_ms,
                 )
 
             if row:

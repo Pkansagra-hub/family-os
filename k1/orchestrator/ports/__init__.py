@@ -1,10 +1,11 @@
 """
 k1.orchestrator.ports -- Port interface package for the Orchestrator.
 
-Re-exports all 8 port Protocols for the Orchestrator hexagonal architecture.
+Re-exports all 9 port Protocols for the Orchestrator hexagonal architecture
+(8 core + 1 admin).
 
 Ports 1-7 defined in Epic 1.4. Port 8 (IWorkflowStoragePort) defined in
-Epic 4.1 Issue 4.1.6.
+Epic 4.1 Issue 4.1.6. The 9th port (IAdminPort) was added post-plan.
 
 Usage::
 

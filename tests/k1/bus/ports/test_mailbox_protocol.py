@@ -161,6 +161,13 @@ class _ConformingRouter:
     def registered_actors(self) -> list[str]:
         return []
 
+    def close(self) -> None:
+        pass
+
+    @property
+    def is_closed(self) -> bool:
+        return False
+
 
 class _NonConformingRouter:
     """Missing registered_actors."""

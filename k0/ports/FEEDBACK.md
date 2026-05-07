@@ -2,7 +2,7 @@
 
 **Purpose**: Developer guide for wiring feedback between K1 (orchestration) and K0 (memory kernel).
 **Last Updated**: 2025-12-24
-**Related Plan**: [FEEDBACK-issues-tracker.md](../../docs/plans/FEEDBACK-issues-tracker.md)
+**Related Plan**: [FEEDBACK-issues-tracker.md](../../docs/plans/defered/FEEDBACK-issues-tracker.md)
 
 ---
 
@@ -1088,7 +1088,7 @@ When adding feedback support to a new K0 pipeline (PXX):
   - [ ] `_handle_explicit()` - direct ratings
   - [ ] `_handle_outcome()` - system outcomes
 - [ ] (Optional) Implement `AdaptiveParameter` for tunable thresholds
-- [ ] Update [FEEDBACK-issues-tracker.md](../../docs/plans/FEEDBACK-issues-tracker.md) with new issues
+- [ ] Update [FEEDBACK-issues-tracker.md](../../docs/plans/defered/FEEDBACK-issues-tracker.md) with new issues
 - [ ] Test with mock feedback via observe port
 
 ---
@@ -1132,8 +1132,8 @@ All feedback is subject to:
 
 ## Related Documents
 
-- [Issues Tracker](../../docs/plans/FEEDBACK-issues-tracker.md)
-- [Full Plan](../../docs/plans/PLAN-feedback-pipeline-system.md)
+- [Issues Tracker](../../docs/plans/defered/FEEDBACK-issues-tracker.md)
+- [Full Plan](../../docs/plans/defered/PLAN-feedback-pipeline-system.md)
 - [Active Learning Loop Idea](../../docs/architecture/ideas/0001-active-learning-loop.md)
 - [Observe Port](observe.py)
 - [K0 Ports README](README.md)

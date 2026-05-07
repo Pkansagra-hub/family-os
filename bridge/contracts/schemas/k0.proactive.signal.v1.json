@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/k0.proactive.signal.v1.json",
+  "title": "K0ProactiveSignalV1",
+  "description": "K0\u2192K1 SSE event payload: P05 proactive-intelligence trigger telling the K1 concierge to consider unprompted engagement (a reminder, suggestion, or nudge). The concierge filters by priority and current attentional load before surfacing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope_id", "trigger_type", "priority"],
+  "properties": {
+    "envelope_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Per-event ULID. Used as the SSE Last-Event-ID cursor token."
+    },
+    "trigger_type": {
+      "type": "string",
+      "enum": ["reminder", "suggestion", "nudge", "alert", "followup"],
+      "description": "Kind of proactive trigger."
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["LOW", "NORMAL", "HIGH", "CRITICAL"],
+      "default": "NORMAL",
+      "description": "Signal priority; concierge drops LOW under attentional load."
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Free-form contextual data accompanying the signal."
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier."
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Memory-space identifier."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Cognitive trace identifier."
+    }
+  }
+}

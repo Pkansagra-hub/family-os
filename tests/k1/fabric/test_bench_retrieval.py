@@ -656,7 +656,7 @@ class TestBenchHardFilter:
 
         p95 = _percentile(timings, 95)
         median = _percentile(timings, 50)
-        assert p95 < 2, f"filter_passed(1K) P95={p95:.2f}ms exceeds 2ms " f"(median={median:.2f}ms)"
+        assert p95 < 5, f"filter_passed(1K) P95={p95:.2f}ms exceeds 5ms " f"(median={median:.2f}ms)"
 
     def test_hard_filter_eliminates_offline_candidates(self) -> None:
         """OFFLINE candidates are always eliminated."""

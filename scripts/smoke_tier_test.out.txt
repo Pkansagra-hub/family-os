@@ -1,0 +1,29 @@
+Booting kernel (Model Hub + Gemini)...
+WARNING k1.fabric.adapters.prompt_system_prod: PromptSystemProdAdapter: prompts directory does not exist: k1\contracts\prompts
+ERROR k1.orchestrator.connectors.mcp_discovery: Failed to load MCP config: MCP config not found: k1\connectors\mcp_servers.yaml
+C:\Users\princ\AppData\Local\Programs\Python\Python313\Lib\site-packages\torch\cuda\__init__.py:65: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+WARNING familyos_ultrabert.pytorch_inference: Falling back to PreTrainedTokenizerFast for C:\Users\princ\.cache\familyos_ultrabert\encoder\v2\fp32 due to tokenizer metadata error: Tokenizer class TokenizersBackend does not exist or is not currently imported.
+WARNING k1.sessionstate.manager: SessionStateManager(session=kernel-e): tier engines constructed without section_provider ÔÇö HOT->WARM migration and CRITICAL eviction will operate in placeholder mode (no real section data movement). See audit Fix J in docs/edge_enhancement_opportunities.md.
+WARNING k1.fabric.adapters.prompt_system_prod: PromptSystemProdAdapter: prompts directory does not exist: k1\contracts\prompts
+Kernel ready in 8.31 s (session=kernel-e75a35cc)
+
+[driver] firing LOW-tier turn...
+WARNING k1.concierge.react.loop: stream_execute failed (Stream dispatch failed: Gemini stream error: 400 INVALID_ARGUMENT. {'error': {'code': 400, 'message': 'API key not valid. Please pass a valid API key.', 'status': 'INVALID_ARGUMENT', 'details': [{'@type': 'type.googleapis.com/google.rpc.ErrorInfo', 'reason': 'API_KEY_INVALID', 'domain': 'googleapis.com', 'metadata': {'service': 'generativelanguage.googleapis.com'}}, {'@type': 'type.googleapis.com/google.rpc.LocalizedMessage', 'locale': 'en-US', 'message': 'API key not valid. Please pass a valid API key.'}]}}), falling back to execute()
+
+========================================================================
+  LOW-tier turn (casual chat)
+========================================================================
+  Prompt      : Hi! In one short sentence, what's the capital of Japan?
+  Elapsed     : 30.07 s
+  FSM state   : DISPATCHING
+  Turn events : ['started']
+  Stream chunks: 0 (chars=0)
+  Task dispatches: 0
+  Topic hit counts:
+       1  k1.session.turn.started.v1
+  Final response:
+     | [TIMEOUT]
+
+[driver] firing MEDIUM-tier turn...
+WARNING k1.concierge.fsm.controller: FSM DEAD-LETTER: state=DISPATCHING topic=k1.session.user.input.v1 reason=user_input_invalid_state envelope_id=29

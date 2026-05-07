@@ -63,7 +63,6 @@ def _make_phase1(
     domain: str = "general",
     safety_band: str = "GREEN",
     entities: list[dict] | None = None,
-    complexity_tier: str = "LOW",
 ) -> Phase1Result:
     """Build a Phase1Result for testing."""
     return Phase1Result(
@@ -72,7 +71,6 @@ def _make_phase1(
         safety_band=safety_band,
         primary_emotion="neutral",
         emotion_confidence=0.5,
-        complexity_tier=complexity_tier,
         entities=entities or [],
     )
 

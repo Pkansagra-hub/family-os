@@ -84,7 +84,17 @@ tool_contract:
   provider_type: "MCP"
   provider_id: "recipes_mcp_sse"
   safety_band_min: "AMBER"
+  risk_class: "medium"
   cost_per_call: 0.0
   avg_latency_ms: 500
   max_latency_ms: 2000
   availability: "ONLINE"
+
+  # ---- HIL Policy (E2 -- HIL Unification) ----
+  # Multi-day meal plan affects shopping list and family calendar; confirm.
+  requires_human_confirmation: true
+  side_effects:
+    - kind: "data_write"
+      target: "meal_plan"
+      reversible: true
+      description: "Generates and persists a multi-day meal plan."

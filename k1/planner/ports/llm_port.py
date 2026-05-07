@@ -34,7 +34,7 @@ Adapters
 Import graph (Layer 1)
 ----------------------
 k1.planner.ports.llm_port
-  -> k1.planner.types  (HubRequest, HubResponse)
+  -> k1.planner.types  (PlannerLLMRequest, PlannerLLMResponse)
   -> typing, typing_extensions
 """
 
@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from k1.planner.types import HubRequest, HubResponse
+from k1.planner.types import PlannerLLMRequest, PlannerLLMResponse
 
 
 @runtime_checkable
@@ -54,22 +54,22 @@ class ILLMPort(Protocol):
 
     Budget enforcement (PLAN-11)
     ----------------------------
-    Every ``HubRequest`` carries ``constraints.max_tokens`` and
+    Every ``PlannerLLMRequest`` carries ``constraints.max_tokens`` and
     ``constraints.timeout_ms``.  The Planner sets these; the Model Hub
     enforces them.  There is no way to issue an unbounded LLM call
     through this port.
     """
 
-    async def execute(self, request: HubRequest) -> HubResponse:
+    async def execute(self, request: PlannerLLMRequest) -> PlannerLLMResponse:
         """Execute a single LLM inference call via the Model Hub.
 
         Args:
-            request: ``HubRequest`` envelope containing capability type,
+            request: ``PlannerLLMRequest`` envelope containing capability type,
                 payload (messages + schema), constraints (budget, timeout,
                 temperature), and trace_id.
 
         Returns:
-            ``HubResponse`` with the LLM result and response metadata
+            ``PlannerLLMResponse`` with the LLM result and response metadata
             (token usage, latency, model_id).
         """
         ...  # pragma: no cover

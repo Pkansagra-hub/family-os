@@ -311,7 +311,7 @@ class IModelGatewayPort(Protocol):
         """Create an LLM handle with the given budget."""
         ...  # pragma: no cover
 
-    def is_model_loaded(self, model_id: str) -> bool:
+    async def is_model_loaded(self, model_id: str) -> bool:
         """Check if a model is currently loaded."""
         ...  # pragma: no cover
 
@@ -1856,7 +1856,7 @@ class AgentProvider(BaseProvider):
             gw = getattr(factory, "_model_gateway", None)
             if gw is not None:
                 try:
-                    loaded = gw.is_model_loaded("")
+                    loaded = await gw.is_model_loaded("")
                     # No-op check -- we just verify the gateway is reachable
                 except Exception as exc:
                     issues.append(f"model_gateway unreachable: {exc}")

@@ -209,9 +209,9 @@ class TestBridgePortMethods:
     """IBridgePort Protocol methods."""
 
     def _get_port(self) -> Any:
-        from k1.fabric.ports.bridge_port import IBridgePort
+        from k1.fabric.ports.bridge_port import IFabricK0Port
 
-        return IBridgePort
+        return IFabricK0Port
 
     def test_has_send_command(self) -> None:
         assert hasattr(self._get_port(), "send_command")

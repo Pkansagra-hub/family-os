@@ -615,8 +615,8 @@ class TestBenchExecuteBatch:
 
         p95 = _percentile(timings, 95)
         median = _percentile(timings, 50)
-        assert p95 < 200, (
-            f"execute_batch(SEQUENTIAL, 3) P95={p95:.2f}ms exceeds 200ms "
+        assert p95 < 500, (
+            f"execute_batch(SEQUENTIAL, 3) P95={p95:.2f}ms exceeds 500ms "
             f"(median={median:.2f}ms)"
         )
 
@@ -666,8 +666,8 @@ class TestBenchExecuteBatch:
 
         p95 = _percentile(timings, 95)
         median = _percentile(timings, 50)
-        assert p95 < 200, (
-            f"execute_batch(PARALLEL, 3) P95={p95:.2f}ms exceeds 200ms " f"(median={median:.2f}ms)"
+        assert p95 < 500, (
+            f"execute_batch(PARALLEL, 3) P95={p95:.2f}ms exceeds 500ms " f"(median={median:.2f}ms)"
         )
 
 

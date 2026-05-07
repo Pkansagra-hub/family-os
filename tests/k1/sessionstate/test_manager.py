@@ -399,7 +399,7 @@ class TestSessionStateManagerSnapshot:
         """Snapshot includes info for all 12 sections."""
         snapshot = running_manager.get_snapshot()
 
-        assert len(snapshot.sections) == 12
+        assert len(snapshot.sections) == 15
         for section_name in ALL_SECTIONS:
             assert section_name in snapshot.sections
 

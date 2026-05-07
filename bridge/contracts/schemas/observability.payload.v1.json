@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/observability.payload.v1.json",
+  "title": "ObservabilityPayloadV1",
+  "description": "K1 -> K0 observability forwarding payload. Carries either a Prometheus-text metrics snapshot or a list of structured log entries. K0 ports.observe routes by the inner kind discriminator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["metrics", "logs"],
+      "description": "Inner ObservabilityPayload.kind discriminator. Selects the K0 routing branch in /k0/obs.emit."
+    },
+    "snapshot": {
+      "type": "string",
+      "description": "Prometheus exposition-format text. Required when kind=metrics."
+    },
+    "entries": {
+      "type": "array",
+      "description": "Structured log entries. Required when kind=logs.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["level", "message"],
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+          },
+          "message": { "type": "string", "minLength": 1 },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "logger": { "type": "string" },
+          "trace_id": { "type": "string" }
+        }
+      }
+    },
+    "envelope_id": {
+      "type": "string",
+      "description": "Optional idempotency key for dedupe_by_envelope_id."
+    },
+    "tenant_id": { "type": "string" },
+    "space_id": { "type": "string" },
+    "trace_id": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "kind": { "const": "metrics" } },
+        "required": ["kind"]
+      },
+      "then": { "required": ["snapshot"] }
+    },
+    {
+      "if": {
+        "properties": { "kind": { "const": "logs" } },
+        "required": ["kind"]
+      },
+      "then": { "required": ["entries"] }
+    }
+  ]
+}

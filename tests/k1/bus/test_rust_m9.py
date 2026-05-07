@@ -461,7 +461,7 @@ class TestSessionAdapterRustBus:
 
     def test_session_emit_raw_subscriber(self, rust_bus: Any, session: SessionBusAdapter) -> None:
         raw: list[Envelope] = []
-        rust_bus.subscribe("k1.session.>", raw.append)
+        rust_bus.subscribe("k1.sessionstate.>", raw.append)
         session.emit("sessionstate.mutation.approved", {"section": "plan"})
 
         assert len(raw) == 1
@@ -491,7 +491,7 @@ class TestSessionAdapterRustBus:
 
     def test_session_emit_batch(self, rust_bus: Any, session: SessionBusAdapter) -> None:
         raw: list[Envelope] = []
-        rust_bus.subscribe("k1.session.>", raw.append)
+        rust_bus.subscribe("k1.sessionstate.>", raw.append)
         session.emit_batch(
             [
                 ("sessionstate.a", {"v": 1}),
@@ -572,7 +572,7 @@ class TestMultiAdapterRustBus:
         # so filter to application topics only
         app_topics = {e.topic for e in all_envs if not e.topic.startswith("k1.bus.")}
         assert "k1.fabric.test" in app_topics
-        assert "k1.session.sessionstate.test" in app_topics
+        assert "k1.sessionstate.test" in app_topics
         assert "k1.agent.agent-1.delta.v1" in app_topics
         assert len(app_topics) == 3
 

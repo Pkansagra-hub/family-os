@@ -470,10 +470,11 @@ class TestExpandServiceConstruction:
             ExpandService(llm_port=llm, tool_router=None)
 
     def test_no_hil_parameter(self, llm: FakeLLMPort, router: FakeToolRouter) -> None:
-        """ExpandService does NOT accept hil_coord (EXPAND has no HIL)."""
+        """ExpandService does NOT accept hil_port (EXPAND has no HIL)."""
         import inspect
 
         sig = inspect.signature(ExpandService.__init__)
+        assert "hil_port" not in sig.parameters
         assert "hil_coord" not in sig.parameters
 
 

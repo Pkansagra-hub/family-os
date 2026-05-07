@@ -64,8 +64,6 @@ from k1.fabric.ports.event_port import SubscriptionHandle
 from k1.orchestrator.types import CommittedPlan, MicroReplanRequest, PlanRequest
 from k1.planner.config import PlannerConfig
 from k1.planner.events import (
-    TOPIC_HIL_APPROVAL_RESP,
-    TOPIC_HIL_CLARIFICATION_RESP,
     TOPIC_PLAN_CANCEL,
     TOPIC_PLAN_CANCELLED,
     TOPIC_PLAN_FAILED,
@@ -330,7 +328,12 @@ class PlannerAgent:
             if isinstance(payload, PlanRequest):
                 request = payload
             elif isinstance(payload, dict):
-                request = PlanRequest(**payload)
+                # PlanRequest envelopes ride the bus through
+                # EventPortProdAdapter, which JSON-encodes them. Use
+                # PlanRequest.from_dict so nested SessionSnapshot survives
+                # the round trip; ``PlanRequest(**payload)`` would silently
+                # explode on missing dataclass fields.
+                request = PlanRequest.from_dict(payload)
             else:
                 logger.warning(
                     "planner_agent.plan_request_invalid_payload",
@@ -383,27 +386,10 @@ class PlannerAgent:
                 exc_info=True,
             )
 
-    def _on_hil_clarification(self, topic: str, payload: Any) -> None:
-        """Handle hil.clarification_response.v1.
-
-        V1: stub -- HILCoordinator is not yet implemented (Epic 3+).
-        Logs a warning and discards the response.
-        """
-        logger.warning(
-            "planner_agent.hil_clarification_not_implemented",
-            extra={"topic": topic},
-        )
-
-    def _on_hil_approval(self, topic: str, payload: Any) -> None:
-        """Handle hil.approval_response.v1.
-
-        V1: stub -- HILCoordinator is not yet implemented (Epic 3+).
-        Logs a warning and discards the response.
-        """
-        logger.warning(
-            "planner_agent.hil_approval_not_implemented",
-            extra={"topic": topic},
-        )
+    # E5 (HIL Unification): _on_hil_clarification / _on_hil_approval handlers
+    # were removed. The planner no longer subscribes to TOPIC_HIL_*_RESP
+    # topics; HIL coordination flows through the unified IHILPort adapter
+    # injected via PlannerFactory.
 
     # -- Internal loop --
 
@@ -613,18 +599,6 @@ class PlannerAgent:
             self._event_port.subscribe(
                 TOPIC_PLAN_CANCEL,
                 self._on_plan_cancel,
-            )
-        )
-        self._subscriptions.append(
-            self._event_port.subscribe(
-                TOPIC_HIL_CLARIFICATION_RESP,
-                self._on_hil_clarification,
-            )
-        )
-        self._subscriptions.append(
-            self._event_port.subscribe(
-                TOPIC_HIL_APPROVAL_RESP,
-                self._on_hil_approval,
             )
         )
         logger.info(

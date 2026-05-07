@@ -1,0 +1,74 @@
+{
+  "boot_seconds": 10.128339300004882,
+  "counts": {
+    "OK": 5,
+    "WARN": 1,
+    "FAIL": 0,
+    "INFO": 3
+  },
+  "probes": [
+    {
+      "layer": "Fabric Wiring",
+      "name": "_port_deps[mcp_transport].pre_inject",
+      "status": "OK",
+      "value": "'AutoDiscoveryMCPTransport'",
+      "note": "transport wired by FabricFactory (F3 fix)"
+    },
+    {
+      "layer": "Policy Engine",
+      "name": "_cognitive",
+      "status": "OK",
+      "value": "'CognitiveLoadRouting'",
+      "note": ""
+    },
+    {
+      "layer": "Capability Registry",
+      "name": "registered_contracts",
+      "status": "INFO",
+      "value": "15",
+      "note": ""
+    },
+    {
+      "layer": "Capability Registry",
+      "name": "by_prefix",
+      "status": "INFO",
+      "value": "{'tool': 15}",
+      "note": ""
+    },
+    {
+      "layer": "Fabric Execute",
+      "name": "selected_capability",
+      "status": "INFO",
+      "value": "'tool.write.build_agent'",
+      "note": ""
+    },
+    {
+      "layer": "Fabric Execute",
+      "name": "execute",
+      "status": "WARN",
+      "value": "'success=False provider=build_agent_handler (98ms)'",
+      "note": "error=ErrorInfo(code='mcp_tool_error', message=\"Agent build failed with 5 error(s): Missing or invalid required input: 'agent_name' (str); Missing or invalid required input: 'description' (str); Missing or invalid required input: 'tools_granted' (list[str]); Missing or invalid required input: 'prompt_template' (str); Missing or invalid required input: 'domain' (list[str])\", retriable=False)"
+    },
+    {
+      "layer": "Fabric Execute",
+      "name": "events.invoked_captured",
+      "status": "OK",
+      "value": "1",
+      "note": ""
+    },
+    {
+      "layer": "Fabric Execute",
+      "name": "events.failed_captured",
+      "status": "OK",
+      "value": "1",
+      "note": ""
+    },
+    {
+      "layer": "Fabric Failure Path",
+      "name": "execute_unknown_cap",
+      "status": "OK",
+      "value": "'success=False error=ErrorInfo(code=\\'resolution_failed\\', message=\"Failed to resolve provider for \\'tool.nonexistent.67c82b\\'\", retriable=True)'",
+      "note": "graceful failure (audit-correct)"
+    }
+  ]
+}

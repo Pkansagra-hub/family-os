@@ -19,7 +19,7 @@ References
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
@@ -61,6 +61,16 @@ class FakeCommittedPlan:
     intent: str = "micro intent"
 
 
+@dataclass
+class FakeExpandedPlan:
+    """Minimal stand-in for ExpandedPlan with the attrs _enforce_plan12 reads."""
+
+    steps: List[Any] = field(default_factory=lambda: [_step("r1")])
+    dependencies: Dict[str, List[str]] = field(default_factory=dict)
+    tool_mappings: Dict[str, str] = field(default_factory=dict)
+    rationale: str = "test rationale"
+
+
 class FakeSketchService:
     def __init__(self, result: Any = None, error: Optional[Exception] = None) -> None:
         self._result = result if result is not None else {"replacement_steps": ["r1"]}
@@ -71,7 +81,7 @@ class FakeSketchService:
     async def execute(self, request: Any, ctx: StageContext) -> Any:
         return {"rough_steps": ["unused"]}
 
-    async def micro_execute(self, request: Any) -> Any:
+    async def micro_execute(self, request: Any, ctx: StageContext) -> Any:
         self.micro_call_count += 1
         self.micro_calls.append(request)
         if self._error is not None:
@@ -81,7 +91,7 @@ class FakeSketchService:
 
 class FakeExpandService:
     def __init__(self, result: Any = None, error: Optional[Exception] = None) -> None:
-        self._result = result if result is not None else {"steps": ["r1_expanded"]}
+        self._result = result if result is not None else FakeExpandedPlan()
         self._error = error
         self.micro_call_count = 0
         self.micro_calls: List[Tuple[Any, Dict[str, StepResult]]] = []
@@ -93,6 +103,7 @@ class FakeExpandService:
         self,
         micro_sketch_result: Any,
         completed_results: Dict[str, StepResult],
+        ctx: StageContext,
     ) -> Any:
         self.micro_call_count += 1
         self.micro_calls.append((micro_sketch_result, completed_results))
@@ -113,7 +124,13 @@ class FakeValidateService:
     async def execute(self, expanded_plan: Any, ctx: StageContext) -> Any:
         return _make_verdict(VERDICT_APPROVED)
 
-    async def micro_execute(self, micro_expanded: Any) -> Any:
+    async def micro_execute(
+        self,
+        micro_expanded: Any,
+        ctx: StageContext,
+        *,
+        completed_step_ids: Optional[set] = None,
+    ) -> Any:
         self.micro_call_count += 1
         self.micro_calls.append(micro_expanded)
         if self._error is not None:
@@ -488,7 +505,7 @@ class TestMicroReplanPropagation:
 
     @pytest.mark.asyncio
     async def test_commit_receives_micro_expanded_and_verdict(self) -> None:
-        expanded = {"steps": ["replacement-a"]}
+        expanded = FakeExpandedPlan(steps=[_step("replacement-a")])
         expand = FakeExpandService(result=expanded)
         verdict = _make_verdict(VERDICT_APPROVED)
         validate = FakeValidateService(verdicts=[verdict])

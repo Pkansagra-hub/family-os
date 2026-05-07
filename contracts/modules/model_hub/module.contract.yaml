@@ -1,0 +1,90 @@
+# Model Hub -- Module Contract
+# Metadata, exports, dependencies, invariants.
+
+module_id: model_hub
+owner: platform-team
+layer: "L2.5"
+pattern: capability-driven-plugin-registry
+
+exports:
+  types:
+    - IModelHubPort
+    - HubRequest
+    - HubResponse
+    - HubChunk
+    - RequestConstraints
+    - ResponseMetadata
+    - CapabilityType
+    - ModelInfo
+    - ModelPreference
+    - TokenUsage
+    - Priority
+    - FinishReason
+  errors:
+    - ModelHubError
+    - ProviderError
+    - BudgetExceededError
+    - NoEligibleProviderError
+    - RateLimitError
+    - CircuitOpenError
+    - HubTimeoutError
+    - ValidationError
+
+ports:
+  - IModelHubPort
+  - IEventPort
+  - IStateReadPort
+  - IMetricsPort
+  - IConfigPort
+  - ICredentialPort
+  - IHealthPort
+
+dependencies:
+  - name: K1 Event Bus
+    interaction: pub/sub
+  - name: SessionState
+    interaction: read-only
+  - name: CredentialStore
+    interaction: read-only
+  - name: K1 Config
+    interaction: read-only
+  - name: Observability Layer
+    interaction: outbound metrics/tracing
+
+invariants:
+  - id: MH-01
+    rule: "NEVER writes SessionState (read-only model preference access)"
+  - id: MH-02
+    rule: "ALL API keys in CredentialStore (never in config/env/manifest)"
+  - id: MH-03
+    rule: "Every request carries cognitive_trace_id (end-to-end tracing)"
+  - id: MH-04
+    rule: "Budget enforcement is HARD -- request rejected if budget exceeded"
+  - id: MH-05
+    rule: "Circuit breaker per provider (config from manifest, default 3/60s -> OPEN 30s)"
+  - id: MH-06
+    rule: "Fallback cascade is CAPABILITY-AWARE (only fail over to providers that support the capability)"
+  - id: MH-07
+    rule: "Cost tracking per request (token_count * model_cost from manifest)"
+  - id: MH-08
+    rule: "Daily budget enforcement ($5/day default, configurable per tenant)"
+  - id: MH-09
+    rule: "Response cache keyed by (capability, prompt_hash, model_id, temperature) -- TTL 5min"
+  - id: MH-10
+    rule: "Streaming responses validated chunk-by-chunk (partial output gating)"
+  - id: MH-11
+    rule: "All LLM calls audited: request_id, capability, model, tokens, latency, cost, trace_id"
+  - id: MH-12
+    rule: "Rate limiting per provider (from manifest, default 80% headroom)"
+  - id: MH-13
+    rule: "Model placement cascade: Local(NPU->GPU->CPU) -> Remote -> Cached -> Template"
+  - id: MH-14
+    rule: "Provider health checked per manifest interval (default 30s)"
+  - id: MH-15
+    rule: "Request timeout configurable per priority tier (REALTIME 10s, INTERACTIVE 30s, BACKGROUND 60s)"
+  - id: MH-16
+    rule: "ALL traffic through RequestRouter -- single funnel, no direct provider access"
+  - id: MH-17
+    rule: "Provider plugins are isolated -- one plugin crash does not affect others"
+  - id: MH-18
+    rule: "Manifest is SOLE source of truth for provider capabilities (no hardcoded checks)"

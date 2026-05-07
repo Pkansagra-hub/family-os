@@ -12,7 +12,12 @@ import pytest
 from k1.memory_writer.context_assembly import assemble_temporal_spatial, resolve_place_id
 from k1.memory_writer.events import TurnCompletePayload
 from k1.memory_writer.invariants import InvariantViolation, assert_mw13_place_id
-from k1.memory_writer.place_resolver import PlaceResolver, ResolvedPlace, _to_place_id
+from k1.memory_writer.place_resolver import (
+    GEOHASH_SENTINEL,
+    PlaceResolver,
+    ResolvedPlace,
+    _to_place_id,
+)
 from k1.memory_writer.types import MemoryAtom
 
 # ---------------------------------------------------------------------------
@@ -337,3 +342,93 @@ class TestAssembleTemporalSpatialPlaceId:
         beliefs = _beliefs_with_entities()
         result = assemble_temporal_spatial(p, beliefs_snapshot=beliefs)
         assert result["place_id"] is None
+
+
+# ===========================================================================
+# PlaceResolver -- resolve_with_geohash (E-MW-0.4)
+# ===========================================================================
+
+
+class TestResolveWithGeohash:
+    """resolve_with_geohash returns (place_id, geohash_6) tuples."""
+
+    def _resolver(self, *names: str) -> PlaceResolver:
+        entities = [
+            FakeEntity(id=f"e{i}", type="LOCATION", display_name=n) for i, n in enumerate(names)
+        ]
+        return PlaceResolver(entities)
+
+    def test_known_location(self):
+        resolver = self._resolver("Home")
+        result = resolver.resolve_with_geohash("Home", {"home": "9q8yyz"})
+        assert result == ("place_home", "9q8yyz")
+
+    def test_unknown_location_sentinel(self):
+        resolver = self._resolver("Olive Garden")
+        result = resolver.resolve_with_geohash("Olive Garden")
+        assert result == ("place_olive_garden", GEOHASH_SENTINEL)
+
+    def test_none_input(self):
+        resolver = self._resolver("Home")
+        assert resolver.resolve_with_geohash(None) == (None, None)
+
+    def test_empty_string_input(self):
+        resolver = self._resolver("Home")
+        assert resolver.resolve_with_geohash("") == (None, None)
+
+    def test_case_insensitive_known(self):
+        resolver = self._resolver("Home")
+        result = resolver.resolve_with_geohash("HOME", {"home": "9q8yyz"})
+        assert result == ("place_home", "9q8yyz")
+
+    def test_no_entity_match_no_known(self):
+        resolver = self._resolver("Olive Garden")
+        result = resolver.resolve_with_geohash("Central Park")
+        assert result == (None, None)
+
+    def test_entity_match_no_known_geohash(self):
+        resolver = self._resolver("Olive Garden")
+        result = resolver.resolve_with_geohash("Olive Garden", {"home": "9q8yyz"})
+        assert result == ("place_olive_garden", GEOHASH_SENTINEL)
+
+    def test_known_geohash_takes_priority(self):
+        """Known geohash returned even when entity also matches."""
+        resolver = self._resolver("Home")
+        result = resolver.resolve_with_geohash("Home", {"Home": "abcdef"})
+        assert result == ("place_home", "abcdef")
+
+    def test_geohash_format_6_chars(self):
+        resolver = self._resolver("Home", "Office")
+        known = {"home": "9q8yyz", "office": "9q8yyk"}
+        for name in ["Home", "Office"]:
+            _, ghash = resolver.resolve_with_geohash(name, known)
+            assert ghash is not None
+            assert len(ghash) == 6
+
+    def test_sentinel_is_6_chars(self):
+        assert len(GEOHASH_SENTINEL) == 6
+        assert GEOHASH_SENTINEL == "000000"
+
+    def test_resolve_still_works_unchanged(self):
+        """Backward compat: resolve() is unchanged."""
+        resolver = self._resolver("Olive Garden")
+        assert resolver.resolve("Olive Garden") == "place_olive_garden"
+        assert resolver.resolve("Central Park") is None
+        assert resolver.resolve(None) is None
+
+    def test_known_geohashes_empty_dict(self):
+        resolver = self._resolver("Olive Garden")
+        result = resolver.resolve_with_geohash("Olive Garden", {})
+        assert result == ("place_olive_garden", GEOHASH_SENTINEL)
+
+    def test_known_geohashes_prefix_match(self):
+        """'Olive Garden on Main St' matches 'olive garden' known entry via prefix."""
+        resolver = self._resolver("Olive Garden")
+        known = {"olive garden": "abc123"}
+        result = resolver.resolve_with_geohash("Olive Garden on Main St", known)
+        assert result == ("place_olive_garden", "abc123")
+        """'Olive Garden on Main St' matches 'olive garden' known entry via prefix."""
+        resolver = self._resolver("Olive Garden")
+        known = {"olive garden": "abc123"}
+        result = resolver.resolve_with_geohash("Olive Garden on Main St", known)
+        assert result == ("place_olive_garden", "abc123")

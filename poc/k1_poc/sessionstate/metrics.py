@@ -120,9 +120,11 @@ HOT_SECTIONS = frozenset(
         "history_active",
         "narrative_active",
         "beliefs_active",
-        "goals_active",
-        "tools_state",
-    }
+        "clarifications",
+        "affective_now",
+        "task_state",
+        "task_artifacts",
+            }
 )
 
 WARM_SECTIONS = frozenset(
@@ -131,6 +133,7 @@ WARM_SECTIONS = frozenset(
         "history_recent",
         "beliefs_history",
         "persona",
+        "artifacts_warm",
     }
 )
 

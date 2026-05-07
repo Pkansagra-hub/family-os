@@ -324,9 +324,6 @@ class TestEpic41Wiring:
         async def emit_progress(self, step_id: str, summary: str, trace_id: str) -> None:
             return None
 
-        async def emit_hil_request(self, hil_request: object, trace_id: str) -> None:
-            return None
-
     class _FakeState(IStateReadPort):
         async def read_section(self, session_id: str, section: str):
             return None

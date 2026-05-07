@@ -58,6 +58,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional, Set
 
+from .config import SessionStateConfig
 from .sizetracker import (
     ALL_SECTIONS,
     HOT_SECTIONS,
@@ -92,8 +93,16 @@ VALID_OPERATIONS: frozenset[str] = frozenset(
         "archive_thread",  # Narrative thread archive
         "update_thread",  # Narrative thread update
         "update",  # Modify existing entry
+        "update_confidence",  # Update belief confidence (M4 E4.2.3)
         "register_agent",  # Control section agent registration
         "add_referent",  # Scoreboard referent creation
+        "push_question",  # Scoreboard QUD push (M4 E4.2.3)
+        "pop_question",  # Scoreboard QUD pop (M4 E4.2.3)
+        "push_topic",  # Scoreboard topic shift (M4 E4.2.3)
+        "add_commitment",  # Scoreboard commitment creation (M12 commitment tracking)
+        "fulfill_commitment",  # Scoreboard commitment fulfillment (M12 commitment tracking)
+        "cancel_commitment",  # Scoreboard commitment cancellation (M12 commitment tracking)
+        "answer",  # Clarifications answer (M4 E4.2.3)
         "request",  # Clarifications request
         "add_compressed",  # History recent compressed turn
         "add_summarized",  # History recent summarized turn
@@ -293,26 +302,31 @@ class MutationGuard:
     """
 
     __slots__ = (
+        "_ss_cfg",
         "_size_tracker",
         "_emergency_mode",
         "_locked_sections",
         "_lock",
     )
 
-    def __init__(self, size_tracker: SizeTracker) -> None:
+    def __init__(
+        self, size_tracker: SizeTracker, config: Optional[SessionStateConfig] = None
+    ) -> None:
         """
         Initialize MutationGuard.
 
         Args:
             size_tracker: SizeTracker instance for capacity checks.
                          Must be the same instance used by SessionStateManager.
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._size_tracker = size_tracker
         self._emergency_mode: bool = False
         self._locked_sections: Set[str] = set()
         self._lock = threading.Lock()
 
-        logger.debug("MutationGuard initialized with SizeTracker")
+        logger.info("MutationGuard initialized (sections=%d, emergency=False)", len(ALL_SECTIONS))
 
     # =========================================================================
     # PREFLIGHT VALIDATION
@@ -525,10 +539,15 @@ class MutationGuard:
         # ALL CHECKS PASSED - APPROVED
         # -----------------------------------------------------------------
         logger.debug(
-            "Preflight approved: section='%s', operation='%s', bytes=%d",
+            "Preflight approved: section='%s', op='%s', delta=%dB, "
+            "section_avail=%dB, tier_avail=%dB, total_avail=%dB, tier=%s",
             section,
             operation,
             estimated_bytes,
+            section_available - estimated_bytes,
+            tier_available - estimated_bytes,
+            total_available - estimated_bytes,
+            tier,
         )
         return Approval.approve(
             section_available_bytes=section_available - estimated_bytes,
@@ -694,7 +713,8 @@ class MutationGuard:
             return 0
 
         base_size = self._estimate_data_size(data)
-        return int(base_size * FLATBUFFER_OVERHEAD_FACTOR)
+        overhead = self._ss_cfg.flatbuffer_overhead_factor
+        return int(base_size * overhead)
 
     def _estimate_data_size(self, data: Any) -> int:
         """

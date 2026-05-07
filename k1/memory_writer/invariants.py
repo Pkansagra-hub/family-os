@@ -321,11 +321,16 @@ def assert_mw11_no_ultrabert_import() -> None:
     """
     import sys
 
+    # Names that are part of this invariant check itself — not violations.
+    _self_names = frozenset({"assert_mw11_no_ultrabert_import"})
+
     mw_modules = [name for name in sys.modules if name.startswith("k1.memory_writer")]
     for mod_name in mw_modules:
         mod = sys.modules.get(mod_name)
         if mod and hasattr(mod, "__dict__"):
             for attr_name in mod.__dict__:
+                if attr_name in _self_names:
+                    continue
                 if "ultrabert" in attr_name.lower():
                     raise InvariantViolation(
                         "MW-11",

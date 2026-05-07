@@ -1,0 +1,144 @@
+# bootstrap_constitution.v1.yaml
+#
+# V1 conscience-first default constitution. Parsed via
+# k1.selfmodel.contracts.constitution_body.get_conscience_bucket().
+#
+# DESIGN INVERSION (vs v0):
+#   v0: "all doors locked until you get a key for a specific door" (IAM)
+#   v1: "all doors unlocked; the conscience names doors NOT to open"
+#
+# This means social-acts (NOT tool names) listed under `forbidden` are
+# the ONLY ones the actor must refrain from; everything else is allowed.
+# Tool→act mapping lives outside selfmodel (deferred to M9); for M6/M7
+# we accept that act_id == tool_name for the bootstrap content below.
+#
+# Schema mirrors k1.selfmodel.contracts.constitution_body. All keys are
+# default-empty when absent.
+#
+# Roles used here (V0 fixed set):
+#   self            the actor themselves
+#   guardian        adult with full caregiving authority
+#   caregiver       trusted adult with limited authority
+#   member          general household member
+#   child           minor
+#   visitor         non-resident with explicit invite
+
+constitution_id: "k1.selfmodel.bootstrap.v1"
+schema_version: 1
+
+governance:
+  signing_quorum: 1
+  bootstrap_immutable: true
+
+visibility_rules:
+  self:
+    self: ["display_name", "role", "preferences", "schedule_summary"]
+    guardian: ["display_name", "role", "preferences", "schedule_summary"]
+    caregiver: ["display_name", "role"]
+    member: ["display_name", "role"]
+    child: ["display_name", "role"]
+    visitor: ["display_name"]
+  guardian:
+    self: ["display_name", "role"]
+    guardian: ["display_name", "role", "schedule_summary"]
+    caregiver: ["display_name", "role"]
+    member: ["display_name", "role"]
+    child: ["display_name", "role"]
+    visitor: ["display_name"]
+  member:
+    self: ["display_name", "role"]
+    guardian: ["display_name", "role"]
+    caregiver: ["display_name", "role"]
+    member: ["display_name", "role"]
+    child: ["display_name", "role"]
+    visitor: ["display_name"]
+
+# CONSCIENCE — what NOT to do, what to ASK first, what tier is required.
+# Anything not mentioned is allowed by default (default-allow).
+#
+# Storyline social-acts (M12.E3.I4):
+#   prescribe_medication  RED, irreversible_op  — only self may invoke
+#   share_location        AMBER, location_share — guardian/caregiver only
+#   send_message          AMBER, comms          — must_ask everywhere
+#   set_routine           AMBER, schedule_op    — child cannot invoke
+#   wellness_call         AMBER, comms          — child cannot invoke
+#   grocery_order         AMBER, fin_op         — child cannot invoke
+conscience_rules:
+  self:
+    forbidden: []
+    must_ask: ["share_location", "set_medication", "send_message"]
+    tier_floor:
+      set_medication: 3
+      prescribe_medication: 3
+    risk_overrides: {}
+  guardian:
+    forbidden: ["prescribe_medication"]
+    must_ask: ["share_location", "set_medication", "send_message"]
+    soft_warn: ["share_purchase_history", "post_to_social"]
+    tier_floor:
+      set_medication: 3
+      send_message: 2
+      set_routine: 2
+    risk_overrides: {}
+  caregiver:
+    forbidden: ["set_medication", "prescribe_medication"]
+    must_ask: ["send_message", "set_routine", "share_location"]
+    soft_warn: ["share_purchase_history"]
+    tier_floor:
+      send_message: 2
+      set_routine: 2
+      share_location: 2
+    risk_overrides: {}
+  member:
+    forbidden:
+      - "set_medication"
+      - "set_routine"
+      - "share_location"
+      - "prescribe_medication"
+    must_ask: ["send_message"]
+    soft_warn: ["post_to_social"]
+    tier_floor:
+      send_message: 2
+    risk_overrides: {}
+  child:
+    forbidden:
+      - "set_medication"
+      - "set_routine"
+      - "share_location"
+      - "update_persona"
+      - "make_payment"
+      - "prescribe_medication"
+      - "grocery_order"
+      - "wellness_call"
+    must_ask: ["send_message"]
+    tier_floor: {}
+    risk_overrides: {}
+  visitor:
+    forbidden:
+      - "set_medication"
+      - "set_routine"
+      - "share_location"
+      - "update_persona"
+      - "make_payment"
+      - "send_message"
+      - "prescribe_medication"
+      - "grocery_order"
+      - "wellness_call"
+    must_ask: []
+    tier_floor: {}
+    risk_overrides: {}
+
+protection_rules:
+  caregiver_context_briefing: ["redact_pii", "respect_quiet_hours"]
+  household_planning: ["respect_quiet_hours"]
+  child_safety_check: ["redact_pii", "audit_required"]
+
+consent_rules:
+  self:
+    family: "ask_first"
+    public: "deny"
+  guardian:
+    family: "ask_first"
+    public: "deny"
+  child:
+    family: "deny"

@@ -96,14 +96,14 @@ class FakeModelGateway:
         mid = model_preference or "default-model"
         return FakeLLMHandle(model_id=mid, budget_tokens=budget_tokens)
 
-    def is_model_loaded(self, model_id: str) -> bool:
+    async def is_model_loaded(self, model_id: str) -> bool:
         info = self._models.get(model_id)
         return info.loaded if info else False
 
-    def list_models(self) -> List[ModelInfo]:
+    async def list_models(self) -> List[ModelInfo]:
         return list(self._models.values())
 
-    def find_model(self, required_capabilities: List[str]) -> Optional[str]:
+    async def find_model(self, required_capabilities: List[str]) -> Optional[str]:
         for info in self._models.values():
             if info.has_all_capabilities(required_capabilities):
                 return info.model_id
@@ -403,48 +403,48 @@ class TestIModelGatewayPortStructural:
         handle = gw.create_handle(budget_tokens=1000, trace_id="trace-abc")
         assert isinstance(handle, ILLMHandle)
 
-    def test_is_model_loaded_true(self) -> None:
+    async def test_is_model_loaded_true(self) -> None:
         gw = FakeModelGateway()
         gw.register_model(ModelInfo(model_id="m1", loaded=True))
-        assert gw.is_model_loaded("m1") is True
+        assert await gw.is_model_loaded("m1") is True
 
-    def test_is_model_loaded_false(self) -> None:
+    async def test_is_model_loaded_false(self) -> None:
         gw = FakeModelGateway()
         gw.register_model(ModelInfo(model_id="m1", loaded=False))
-        assert gw.is_model_loaded("m1") is False
+        assert await gw.is_model_loaded("m1") is False
 
-    def test_is_model_loaded_unknown(self) -> None:
+    async def test_is_model_loaded_unknown(self) -> None:
         gw = FakeModelGateway()
-        assert gw.is_model_loaded("unknown") is False
+        assert await gw.is_model_loaded("unknown") is False
 
-    def test_list_models_empty(self) -> None:
+    async def test_list_models_empty(self) -> None:
         gw = FakeModelGateway()
-        assert gw.list_models() == []
+        assert await gw.list_models() == []
 
-    def test_list_models_with_entries(self) -> None:
+    async def test_list_models_with_entries(self) -> None:
         gw = FakeModelGateway()
         gw.register_model(ModelInfo(model_id="m1"))
         gw.register_model(ModelInfo(model_id="m2"))
-        assert len(gw.list_models()) == 2
+        assert len(await gw.list_models()) == 2
 
-    def test_find_model_success(self) -> None:
+    async def test_find_model_success(self) -> None:
         gw = FakeModelGateway()
         gw.register_model(ModelInfo(model_id="m1", capabilities=["CHAT", "TOOL_CALL"]))
-        assert gw.find_model(["CHAT"]) == "m1"
+        assert await gw.find_model(["CHAT"]) == "m1"
 
-    def test_find_model_all_caps(self) -> None:
+    async def test_find_model_all_caps(self) -> None:
         gw = FakeModelGateway()
         gw.register_model(ModelInfo(model_id="m1", capabilities=["CHAT", "TOOL_CALL"]))
-        assert gw.find_model(["CHAT", "TOOL_CALL"]) == "m1"
+        assert await gw.find_model(["CHAT", "TOOL_CALL"]) == "m1"
 
-    def test_find_model_none_when_missing(self) -> None:
+    async def test_find_model_none_when_missing(self) -> None:
         gw = FakeModelGateway()
         gw.register_model(ModelInfo(model_id="m1", capabilities=["CHAT"]))
-        assert gw.find_model(["VISION"]) is None
+        assert await gw.find_model(["VISION"]) is None
 
-    def test_find_model_empty_registry(self) -> None:
+    async def test_find_model_empty_registry(self) -> None:
         gw = FakeModelGateway()
-        assert gw.find_model(["CHAT"]) is None
+        assert await gw.find_model(["CHAT"]) is None
 
     def test_tracks_created_handles(self) -> None:
         gw = FakeModelGateway()
@@ -473,10 +473,10 @@ class TestModelGatewayInlineCompat:
         )
         assert isinstance(handle, ILLMHandle)
 
-    def test_inline_is_model_loaded_signature(self) -> None:
+    async def test_inline_is_model_loaded_signature(self) -> None:
         """is_model_loaded(model_id) -> bool."""
         gw = FakeModelGateway()
-        result = gw.is_model_loaded("any")
+        result = await gw.is_model_loaded("any")
         assert isinstance(result, bool)
 
     async def test_inline_llm_handle_generate(self) -> None:

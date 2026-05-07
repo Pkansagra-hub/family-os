@@ -4,11 +4,13 @@
 
 import flatbuffers
 from flatbuffers.compat import import_numpy
+
 np = import_numpy()
+
 
 # Hot Core - Always in memory, never paged to disk
 class HotCore(object):
-    __slots__ = ['_tab']
+    __slots__ = ["_tab"]
 
     @classmethod
     def GetRootAsHotCore(cls, buf, offset):
@@ -102,36 +104,132 @@ class HotCore(object):
         return None
 
     # HotCore
-    def TotalSizeBytes(self):
+    def TaskState(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        if o != 0:
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from .TaskStateSection import TaskStateSection
+
+            obj = TaskStateSection()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # HotCore
+    def TaskArtifacts(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        if o != 0:
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from .TaskArtifactsSection import TaskArtifactsSection
+
+            obj = TaskArtifactsSection()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # HotCore
+    def TotalSizeBytes(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
         return 0
 
     # HotCore
     def BudgetBytes(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
         return 49152
 
     # HotCore
     def IsOverBudget(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
         return False
 
-def HotCoreStart(builder): builder.StartObject(11)
-def HotCoreAddControl(builder, control): builder.PrependUOffsetTRelativeSlot(0, flatbuffers.number_types.UOffsetTFlags.py_type(control), 0)
-def HotCoreAddBeliefsActive(builder, beliefsActive): builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(beliefsActive), 0)
-def HotCoreAddScoreboard(builder, scoreboard): builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(scoreboard), 0)
-def HotCoreAddHistoryActive(builder, historyActive): builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(historyActive), 0)
-def HotCoreAddClarifications(builder, clarifications): builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(clarifications), 0)
-def HotCoreAddAffectiveNow(builder, affectiveNow): builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(affectiveNow), 0)
-def HotCoreAddNarrativeActive(builder, narrativeActive): builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(narrativeActive), 0)
-def HotCoreAddMeta(builder, meta): builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(meta), 0)
-def HotCoreAddTotalSizeBytes(builder, totalSizeBytes): builder.PrependUint32Slot(8, totalSizeBytes, 0)
-def HotCoreAddBudgetBytes(builder, budgetBytes): builder.PrependUint32Slot(9, budgetBytes, 49152)
-def HotCoreAddIsOverBudget(builder, isOverBudget): builder.PrependBoolSlot(10, isOverBudget, 0)
-def HotCoreEnd(builder): return builder.EndObject()
+
+def HotCoreStart(builder):
+    builder.StartObject(13)
+
+
+def HotCoreAddControl(builder, control):
+    builder.PrependUOffsetTRelativeSlot(
+        0, flatbuffers.number_types.UOffsetTFlags.py_type(control), 0
+    )
+
+
+def HotCoreAddBeliefsActive(builder, beliefsActive):
+    builder.PrependUOffsetTRelativeSlot(
+        1, flatbuffers.number_types.UOffsetTFlags.py_type(beliefsActive), 0
+    )
+
+
+def HotCoreAddScoreboard(builder, scoreboard):
+    builder.PrependUOffsetTRelativeSlot(
+        2, flatbuffers.number_types.UOffsetTFlags.py_type(scoreboard), 0
+    )
+
+
+def HotCoreAddHistoryActive(builder, historyActive):
+    builder.PrependUOffsetTRelativeSlot(
+        3, flatbuffers.number_types.UOffsetTFlags.py_type(historyActive), 0
+    )
+
+
+def HotCoreAddClarifications(builder, clarifications):
+    builder.PrependUOffsetTRelativeSlot(
+        4, flatbuffers.number_types.UOffsetTFlags.py_type(clarifications), 0
+    )
+
+
+def HotCoreAddAffectiveNow(builder, affectiveNow):
+    builder.PrependUOffsetTRelativeSlot(
+        5, flatbuffers.number_types.UOffsetTFlags.py_type(affectiveNow), 0
+    )
+
+
+def HotCoreAddNarrativeActive(builder, narrativeActive):
+    builder.PrependUOffsetTRelativeSlot(
+        6, flatbuffers.number_types.UOffsetTFlags.py_type(narrativeActive), 0
+    )
+
+
+def HotCoreAddMeta(builder, meta):
+    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(meta), 0)
+
+
+def HotCoreAddTaskState(builder, taskState):
+    builder.PrependUOffsetTRelativeSlot(
+        8, flatbuffers.number_types.UOffsetTFlags.py_type(taskState), 0
+    )
+
+
+def HotCoreAddTaskArtifacts(builder, taskArtifacts):
+    builder.PrependUOffsetTRelativeSlot(
+        9, flatbuffers.number_types.UOffsetTFlags.py_type(taskArtifacts), 0
+    )
+
+
+def HotCoreAddTotalSizeBytes(builder, totalSizeBytes):
+    builder.PrependUint32Slot(10, totalSizeBytes, 0)
+
+
+def HotCoreAddBudgetBytes(builder, budgetBytes):
+    builder.PrependUint32Slot(11, budgetBytes, 49152)
+
+
+def HotCoreAddIsOverBudget(builder, isOverBudget):
+    builder.PrependBoolSlot(12, isOverBudget, 0)
+
+
+def HotCoreEnd(builder):
+    return builder.EndObject()
+
+
+def HotCoreEnd(builder):
+    return builder.EndObject()
+
+
+def HotCoreEnd(builder):
+    return builder.EndObject()

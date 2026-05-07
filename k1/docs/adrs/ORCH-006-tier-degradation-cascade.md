@@ -10,7 +10,7 @@ authors:
 related_adrs:
   - "ORCH-001"
   - "ORCH-004"
-  - "ADR-0028"
+# Originally referenced ADR-0028 (legacy K0 ADR, not migrated to K1).
 related_events:
   - "k1.orchestration.dag.completed.v1"
   - "k1.orchestration.task.degraded.v1"

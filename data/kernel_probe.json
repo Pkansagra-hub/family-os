@@ -1,0 +1,481 @@
+{
+  "boot_seconds": 8.95626770000672,
+  "session_id": "kernel-e2ac761e",
+  "counts": {
+    "OK": 36,
+    "WARN": 13,
+    "FAIL": 6,
+    "INFO": 12
+  },
+  "probes": [
+    {
+      "layer": "KernelService (Tier-1)",
+      "name": "bus",
+      "status": "OK",
+      "value": "LocalBus",
+      "note": ""
+    },
+    {
+      "layer": "KernelService (Tier-1)",
+      "name": "router",
+      "status": "OK",
+      "value": "RustMailboxRouterAdapter",
+      "note": ""
+    },
+    {
+      "layer": "KernelService (Tier-1)",
+      "name": "model_hub",
+      "status": "OK",
+      "value": "_HubCore",
+      "note": ""
+    },
+    {
+      "layer": "KernelService (Tier-1)",
+      "name": "shared_fabric",
+      "status": "OK",
+      "value": "Fabric",
+      "note": ""
+    },
+    {
+      "layer": "KernelService (Tier-1)",
+      "name": "bridge",
+      "status": "OK",
+      "value": "SinkBridgeAdapter",
+      "note": ""
+    },
+    {
+      "layer": "KernelService (Tier-1)",
+      "name": "orchestrator",
+      "status": "OK",
+      "value": "OrchestratorService",
+      "note": ""
+    },
+    {
+      "layer": "KernelService (Tier-1)",
+      "name": "planner",
+      "status": "OK",
+      "value": "PlannerAgent",
+      "note": ""
+    },
+    {
+      "layer": "KernelService (Tier-1)",
+      "name": "planner_task",
+      "status": "OK",
+      "value": "running",
+      "note": ""
+    },
+    {
+      "layer": "KernelService (Tier-1)",
+      "name": "session_count",
+      "status": "INFO",
+      "value": 1,
+      "note": ""
+    },
+    {
+      "layer": "SessionInstance (Tier-2)",
+      "name": "concierge",
+      "status": "OK",
+      "value": "ConciergeRuntime",
+      "note": ""
+    },
+    {
+      "layer": "SessionInstance (Tier-2)",
+      "name": "fabric",
+      "status": "OK",
+      "value": "Fabric",
+      "note": ""
+    },
+    {
+      "layer": "SessionInstance (Tier-2)",
+      "name": "session_state",
+      "status": "OK",
+      "value": "SessionStateManager",
+      "note": ""
+    },
+    {
+      "layer": "SessionInstance (Tier-2)",
+      "name": "memory_writer",
+      "status": "OK",
+      "value": "MemoryWriterService",
+      "note": ""
+    },
+    {
+      "layer": "SessionInstance (Tier-2)",
+      "name": "experience_layer",
+      "status": "OK",
+      "value": "ExperienceLayer",
+      "note": ""
+    },
+    {
+      "layer": "SessionInstance (Tier-2)",
+      "name": "delta_aggregator",
+      "status": "OK",
+      "value": "DeltaAggregator",
+      "note": ""
+    },
+    {
+      "layer": "SessionInstance (Tier-2)",
+      "name": "delta_applicator",
+      "status": "FAIL",
+      "value": null,
+      "note": "is None"
+    },
+    {
+      "layer": "SessionInstance (Tier-2)",
+      "name": "hitl_coordinator",
+      "status": "OK",
+      "value": "HILCoordinator",
+      "note": ""
+    },
+    {
+      "layer": "SessionInstance (Tier-2)",
+      "name": "front_dispatcher",
+      "status": "OK",
+      "value": "ToolDispatcher",
+      "note": ""
+    },
+    {
+      "layer": "SessionInstance (Tier-2)",
+      "name": "back_dispatcher",
+      "status": "OK",
+      "value": "ToolDispatcher",
+      "note": ""
+    },
+    {
+      "layer": "SessionInstance (Tier-2)",
+      "name": "ledger",
+      "status": "OK",
+      "value": "LedgerWriter",
+      "note": ""
+    },
+    {
+      "layer": "Kernel Ports",
+      "name": "bus_port",
+      "status": "OK",
+      "value": "LocalBus",
+      "note": ""
+    },
+    {
+      "layer": "Kernel Ports",
+      "name": "model_hub_port",
+      "status": "OK",
+      "value": "_HubCore",
+      "note": ""
+    },
+    {
+      "layer": "Kernel Ports",
+      "name": "orchestrator_port",
+      "status": "OK",
+      "value": "OrchestratorService",
+      "note": ""
+    },
+    {
+      "layer": "Kernel Ports",
+      "name": "planner_port",
+      "status": "OK",
+      "value": "PlannerAgent",
+      "note": ""
+    },
+    {
+      "layer": "Kernel Ports",
+      "name": "bridge_port",
+      "status": "OK",
+      "value": "SinkBridgeAdapter",
+      "note": ""
+    },
+    {
+      "layer": "Kernel Ports",
+      "name": "session_state_port",
+      "status": "OK",
+      "value": "SessionStateManager",
+      "note": ""
+    },
+    {
+      "layer": "Kernel Ports",
+      "name": "fabric_port",
+      "status": "OK",
+      "value": "Fabric",
+      "note": ""
+    },
+    {
+      "layer": "Kernel Ports",
+      "name": "hil_port",
+      "status": "FAIL",
+      "value": null,
+      "note": "k1/kernel/ports/hil_port.py does not exist (HIL fragmented across 3 subsystems)"
+    },
+    {
+      "layer": "Fabric",
+      "name": "facade (CapabilityFabric)",
+      "status": "OK",
+      "value": "CapabilityFabric",
+      "note": ""
+    },
+    {
+      "layer": "Fabric",
+      "name": "facade._resolver",
+      "status": "OK",
+      "value": "Resolver",
+      "note": ""
+    },
+    {
+      "layer": "Fabric",
+      "name": "registry.size",
+      "status": "INFO",
+      "value": null,
+      "note": ""
+    },
+    {
+      "layer": "Fabric",
+      "name": "facade._provider_factory",
+      "status": "OK",
+      "value": "ProviderFactory",
+      "note": ""
+    },
+    {
+      "layer": "Fabric",
+      "name": "provider_factory.mcp_transport",
+      "status": "FAIL",
+      "value": null,
+      "note": "mcp_transport=None \u2014 kills F101/F102/F103 (audit \u00a710)"
+    },
+    {
+      "layer": "Fabric",
+      "name": "event_emitter",
+      "status": "OK",
+      "value": "EventEmitter",
+      "note": ""
+    },
+    {
+      "layer": "Fabric",
+      "name": "resolver.policy_engine",
+      "status": "OK",
+      "value": "PolicyEngine",
+      "note": ""
+    },
+    {
+      "layer": "Fabric",
+      "name": "policy.affective",
+      "status": "OK",
+      "value": "AffectiveRouting",
+      "note": ""
+    },
+    {
+      "layer": "Fabric",
+      "name": "policy.cognitive_load",
+      "status": "WARN",
+      "value": null,
+      "note": "not wired"
+    },
+    {
+      "layer": "Fabric",
+      "name": "policy.qos",
+      "status": "WARN",
+      "value": "QoSIntegration",
+      "note": "state_reader not injected (audit F99/F100)"
+    },
+    {
+      "layer": "Fabric",
+      "name": "policy.security",
+      "status": "WARN",
+      "value": "SecurityContext",
+      "note": "state_reader not injected (audit F99/F100)"
+    },
+    {
+      "layer": "Model Hub",
+      "name": "model_mode",
+      "status": "INFO",
+      "value": "test",
+      "note": ""
+    },
+    {
+      "layer": "Orchestrator",
+      "name": "dag_executor.guards",
+      "status": "OK",
+      "value": 4,
+      "note": ""
+    },
+    {
+      "layer": "Orchestrator",
+      "name": "max_pending_hil",
+      "status": "INFO",
+      "value": 20,
+      "note": ""
+    },
+    {
+      "layer": "Orchestrator",
+      "name": "hil_timeout_ms",
+      "status": "INFO",
+      "value": 120000,
+      "note": ""
+    },
+    {
+      "layer": "Planner",
+      "name": "pipeline",
+      "status": "OK",
+      "value": "PipelineController",
+      "note": ""
+    },
+    {
+      "layer": "Planner",
+      "name": "config_class",
+      "status": "INFO",
+      "value": "PlannerConfig",
+      "note": ""
+    },
+    {
+      "layer": "Planner",
+      "name": "running",
+      "status": "WARN",
+      "value": false,
+      "note": ""
+    },
+    {
+      "layer": "Planner",
+      "name": "subscriptions",
+      "status": "INFO",
+      "value": 0,
+      "note": ""
+    },
+    {
+      "layer": "HIL (cross-subsystem)",
+      "name": "coordinator_count",
+      "status": "WARN",
+      "value": 1,
+      "note": "should be 1 (audit BLOAT-1)"
+    },
+    {
+      "layer": "HIL (cross-subsystem)",
+      "name": "concierge_coordinator_class",
+      "status": "INFO",
+      "value": "HILCoordinator",
+      "note": ""
+    },
+    {
+      "layer": "HIL (cross-subsystem)",
+      "name": "unified_IHILPort",
+      "status": "FAIL",
+      "value": null,
+      "note": "k1/kernel/ports/hil_port.py absent (audit \u00a716 headline)"
+    },
+    {
+      "layer": "SessionState",
+      "name": "sections",
+      "status": "WARN",
+      "value": null,
+      "note": "sections attr not found"
+    },
+    {
+      "layer": "SessionState",
+      "name": "eviction_engine.section_provider",
+      "status": "FAIL",
+      "value": null,
+      "note": "audit-J TODO unblocks F70/F71/F77"
+    },
+    {
+      "layer": "SessionState",
+      "name": "tier_hot",
+      "status": "OK",
+      "value": "HotTier",
+      "note": ""
+    },
+    {
+      "layer": "SessionState",
+      "name": "tier_warm",
+      "status": "OK",
+      "value": "WarmTier",
+      "note": ""
+    },
+    {
+      "layer": "SessionState",
+      "name": "tier_local_cold",
+      "status": "OK",
+      "value": "LocalColdTier",
+      "note": ""
+    },
+    {
+      "layer": "SessionState",
+      "name": "session.delta_applicator",
+      "status": "FAIL",
+      "value": null,
+      "note": "BUG: built in concierge factory step 10 but never stored on SessionInstance (service.py:1530 hard-codes None)"
+    },
+    {
+      "layer": "Bus",
+      "name": "backend",
+      "status": "INFO",
+      "value": "LocalBus",
+      "note": ""
+    },
+    {
+      "layer": "Bus",
+      "name": "trie.size (total subs)",
+      "status": "INFO",
+      "value": 11,
+      "note": ""
+    },
+    {
+      "layer": "Bus",
+      "name": "async_subs",
+      "status": "INFO",
+      "value": 0,
+      "note": ""
+    },
+    {
+      "layer": "Bus",
+      "name": "topics_seen",
+      "status": "INFO",
+      "value": 2,
+      "note": ""
+    },
+    {
+      "layer": "Bus",
+      "name": "subs[k1.capability.invoked.v1]",
+      "status": "WARN",
+      "value": 0,
+      "note": "publish-into-the-void (audit F132)"
+    },
+    {
+      "layer": "Bus",
+      "name": "subs[k1.capability.completed.v1]",
+      "status": "WARN",
+      "value": 0,
+      "note": "publish-into-the-void (audit F132)"
+    },
+    {
+      "layer": "Bus",
+      "name": "subs[k1.affect.update.v1]",
+      "status": "WARN",
+      "value": 0,
+      "note": "publish-into-the-void (audit F132)"
+    },
+    {
+      "layer": "Bus",
+      "name": "subs[k1.agent.delta.v1]",
+      "status": "WARN",
+      "value": 0,
+      "note": "publish-into-the-void (audit F132)"
+    },
+    {
+      "layer": "Bus",
+      "name": "bus_outbox",
+      "status": "WARN",
+      "value": null,
+      "note": "BusOutbox not wired (audit \u00a715 P1)"
+    },
+    {
+      "layer": "K0 Bridge",
+      "name": "online",
+      "status": "WARN",
+      "value": null,
+      "note": "K0 undeployed (MS-3) \u2014 bridge forces OFFLINE"
+    },
+    {
+      "layer": "Module Loader",
+      "name": "watch",
+      "status": "WARN",
+      "value": null,
+      "note": "watch=False in prod (audit F128)"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+topic: k1.k0.sse.v1
+direction: k1_to_k0
+owner_team: k1
+status: proposed
+producer:
+  kernel: k1
+  pipeline: k1.sse.client
+  emitter: SseClient
+consumer:
+  kernel: k0
+  pipeline: P_unassigned
+  state: sse_endpoint
+schema: schemas/_stub.json
+delivery:
+  transport: http
+  ordering: best_effort
+  ack_required: false
+  online_required: true
+  endpoint_class: cloud_k0
+  partition_mode: k0_primary
+  max_queue_age: PT5M
+  codec: json
+  retry: none
+  max_redelivery: 0
+semantics:
+  idempotent: false
+  duplicate_strategy: dedupe_by_envelope_id
+  retention: PT1H
+  description: 'Stub manifest registering the k1.k0.sse.v1 topic prefix referenced
+    by k1/config/bus.yaml. The concrete SSE wire contract lands in MS-3a once the
+    K0 SSE endpoint specification is finalised. Listed as ``status: proposed`` so
+    registry-based gates honour the prefix without requiring the (not-yet-existing)
+    generated artefacts.
+
+    '
+sla:
+  latency_p99_ms: 1500
+  availability: best_effort
+versioning:
+  semver: 0.1.0
+  compat: compatible
+  strategy: additive_only_within_v1
+  breaking_change_requires: revisit_when_concretized
+checksums:
+  schema_sha256: 60069516bbf322b0e194e948f7094237d42680e5758afa6e47dee22521a02e9e
+  manifest_sha256: 31772bd18ff5cbfb08a9a6b0eeaaf6c0420f821dce67f860195700483809a007

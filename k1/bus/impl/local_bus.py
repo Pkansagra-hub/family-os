@@ -220,6 +220,11 @@ class BusStats:
     subscriptions_total: int = 0
     unsubscribe_count: int = 0
     topics_seen: int = 0
+    # Async-dispatch counters (Phase 6 / P6.5)
+    mailbox_full_drops: int = 0
+    mailbox_high_water_mark: int = 0
+    async_handler_retries: int = 0
+    async_handler_dlq: int = 0
 
     def snapshot(self) -> dict[str, int]:
         """Return a point-in-time copy of all stats."""
@@ -231,7 +236,265 @@ class BusStats:
             "subscriptions_total": self.subscriptions_total,
             "unsubscribe_count": self.unsubscribe_count,
             "topics_seen": self.topics_seen,
+            "mailbox_full_drops": self.mailbox_full_drops,
+            "mailbox_high_water_mark": self.mailbox_high_water_mark,
+            "async_handler_retries": self.async_handler_retries,
+            "async_handler_dlq": self.async_handler_dlq,
         }
+
+
+# ---------------------------------------------------------------------------
+# Async dispatch subscription wrapper (Phase 6 / P6.5)
+# ---------------------------------------------------------------------------
+
+
+class _AsyncSubscription:
+    """
+    Per-subscription bounded mailbox + worker thread for async dispatch.
+
+    When ``LocalBus(async_dispatch=True)``, each subscription gets one
+    of these.  The trie stores ``self.enqueue`` as the "handler"; the
+    worker thread invokes the real user handler from a background
+    drain loop.
+
+    Slow or blocking handlers no longer stall publishers (M-1).  The
+    bounded mailbox provides backpressure (M-2/M-8); when full,
+    publish drops the envelope and increments ``mailbox_full_drops``.
+
+    A future Phase 6 issue (P6.6/P6.7) extends this with retry policy
+    and DLQ publishing.  For now the worker simply logs handler
+    exceptions (matching the synchronous-dispatch contract).
+    """
+
+    __slots__ = (
+        "subscription_id",
+        "pattern",
+        "handler",
+        "mailbox",
+        "_worker",
+        "_running",
+        "_inflight",
+        "_inflight_lock",
+        "_idle_event",
+        "_bus_stats",
+        "_retry_policy",
+        "_dlq_callback",
+    )
+
+    def __init__(
+        self,
+        subscription_id: str,
+        pattern: str,
+        handler: BusHandler,
+        capacity: int,
+        bus_stats: BusStats,
+        retry_policy: object | None = None,
+        dlq_callback: object | None = None,
+    ) -> None:
+        # Late import to avoid circular dependency at module load time
+        from k1.bus.impl.local_mailbox import LocalMailbox
+        from k1.bus.ports.mailbox import MailboxConfig
+
+        self.subscription_id = subscription_id
+        self.pattern = pattern
+        self.handler = handler
+        self.mailbox = LocalMailbox(
+            actor_id=f"sub:{subscription_id}",
+            config=MailboxConfig(capacity=capacity, priority_wfq=True),
+        )
+        self._running = True
+        # Single counter covers both queued and currently-running envelopes.
+        # Incremented at enqueue (publisher thread), decremented after handler
+        # completion (worker thread).  Eliminates the dequeue/active race that
+        # could let ``is_idle()`` flap to True between mailbox.pop and the
+        # handler invocation.
+        self._inflight = 0
+        self._inflight_lock = threading.Lock()
+        self._idle_event = threading.Event()
+        self._idle_event.set()
+        self._bus_stats = bus_stats
+        self._retry_policy = retry_policy
+        self._dlq_callback = dlq_callback
+
+        self._worker = threading.Thread(
+            target=self._drain_loop,
+            name=f"bus-sub-{subscription_id[:12]}",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def enqueue(self, envelope: Envelope) -> None:
+        """
+        Publisher-side enqueue.  Called from `LocalBus._dispatch_async`.
+
+        On backpressure, increments the bus-level drop counter and
+        logs at WARNING level.  Never raises.
+        """
+        from k1.bus.ports.mailbox import BackpressureError
+
+        # Reserve a slot in the inflight counter BEFORE delivery so that
+        # ``is_idle()`` cannot return True between the publisher returning
+        # and the worker thread starting to process.
+        with self._inflight_lock:
+            self._inflight += 1
+            self._idle_event.clear()
+        try:
+            self.mailbox._deliver(envelope)
+            depth = self.mailbox.pending()
+            if depth > self._bus_stats.mailbox_high_water_mark:
+                self._bus_stats.mailbox_high_water_mark = depth
+        except BackpressureError:
+            self._bus_stats.mailbox_full_drops += 1
+            self._dec_inflight()
+            logger.warning(
+                "Bus mailbox full for subscription=%s pattern=%s "
+                "topic=%s envelope_id=%d -- dropping envelope",
+                self.subscription_id,
+                self.pattern,
+                envelope.topic,
+                envelope.envelope_id,
+            )
+        except ValueError:
+            # Mailbox closed during teardown; silently drop
+            self._dec_inflight()
+
+    def _dec_inflight(self) -> None:
+        with self._inflight_lock:
+            self._inflight -= 1
+            if self._inflight <= 0:
+                self._inflight = 0
+                self._idle_event.set()
+
+    def _drain_loop(self) -> None:
+        """Worker thread loop: pull envelopes and invoke handler."""
+        while self._running:
+            envelope = self.mailbox.receive(timeout_ms=100)
+            if envelope is None:
+                continue
+            try:
+                self._invoke_handler(envelope)
+            finally:
+                self._dec_inflight()
+
+        # Drain anything left in the mailbox after shutdown signal
+        while True:
+            envelope = self.mailbox.receive(timeout_ms=0)
+            if envelope is None:
+                break
+            try:
+                self._invoke_handler(envelope)
+            finally:
+                self._dec_inflight()
+
+    def _invoke_handler(self, envelope: Envelope) -> None:
+        """
+        Invoke the user handler with retry + DLQ semantics.
+
+        Phase 6 / P6.6: per-topic ``RetryPolicy`` is consulted via the
+        injected ``_retry_policy`` resolver.  Default = no retry, matching
+        the synchronous-dispatch contract.
+
+        Phase 6 / P6.7: on retry exhaustion, hand off to the DLQ
+        callback if configured, otherwise log at ERROR level.
+        """
+        attempts = 1
+        max_attempts = 1
+        policy = None
+        if self._retry_policy is not None:
+            try:
+                policy = self._retry_policy(envelope.topic)  # type: ignore[operator]
+            except Exception:
+                policy = None
+        if policy is not None:
+            max_attempts = max(1, int(getattr(policy, "max_attempts", 0)) + 1)
+
+        last_exc: BaseException | None = None
+        while attempts <= max_attempts:
+            try:
+                self.handler(envelope)
+                self._bus_stats.envelopes_delivered += 1
+                return
+            except Exception as exc:
+                last_exc = exc
+                self._bus_stats.handler_errors += 1
+                if attempts < max_attempts and policy is not None:
+                    self._bus_stats.async_handler_retries += 1
+                    delay_ms = _compute_retry_delay_ms(policy, attempts)
+                    logger.warning(
+                        "Bus handler error (attempt %d/%d) for topic=%s "
+                        "envelope_id=%d sub=%s -- retrying in %dms",
+                        attempts,
+                        max_attempts,
+                        envelope.topic,
+                        envelope.envelope_id,
+                        self.subscription_id,
+                        delay_ms,
+                    )
+                    if delay_ms > 0:
+                        time.sleep(delay_ms / 1000.0)
+                    attempts += 1
+                    continue
+                # Exhausted (or no retry configured)
+                logger.exception(
+                    "Bus handler error for topic=%s envelope_id=%d sub=%s "
+                    "(attempt %d/%d) -- exception swallowed",
+                    envelope.topic,
+                    envelope.envelope_id,
+                    self.subscription_id,
+                    attempts,
+                    max_attempts,
+                )
+                break
+
+        # Retry exhausted: hand off to DLQ if configured
+        if self._dlq_callback is not None and last_exc is not None:
+            self._bus_stats.async_handler_dlq += 1
+            try:
+                self._dlq_callback(envelope, last_exc, attempts)  # type: ignore[operator]
+            except Exception:
+                logger.exception(
+                    "DLQ callback failed for envelope_id=%d topic=%s",
+                    envelope.envelope_id,
+                    envelope.topic,
+                )
+
+    def is_idle(self) -> bool:
+        """True if no envelopes are queued or in-flight."""
+        with self._inflight_lock:
+            return self._inflight == 0
+
+    def wait_idle(self, timeout_s: float) -> bool:
+        """Block up to ``timeout_s`` for this subscription to drain."""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self.is_idle():
+                return True
+            self._idle_event.wait(timeout=0.05)
+        return self.is_idle()
+
+    def shutdown(self, *, join_timeout_s: float = 1.0) -> None:
+        """Stop accepting work, drain remaining envelopes, join the worker."""
+        self._running = False
+        self.mailbox.close()
+        self._worker.join(timeout=join_timeout_s)
+
+
+def _compute_retry_delay_ms(policy: object, attempt: int) -> int:
+    """Compute the delay before the next retry attempt."""
+    base_ms = int(getattr(policy, "base_ms", 100))
+    backoff = str(getattr(policy, "backoff", "exponential"))
+    jitter = bool(getattr(policy, "jitter", True))
+    if backoff == "exponential":
+        delay = base_ms * (2 ** (attempt - 1))
+    else:  # fixed
+        delay = base_ms
+    if jitter:
+        # Bounded uniform jitter +/- 25%
+        import random
+
+        delay = int(delay * random.uniform(0.75, 1.25))
+    # Cap at 10 seconds to avoid pathological backoff
+    return max(0, min(delay, 10_000))
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +544,16 @@ class LocalBus:
         "_closed",
         "_timing_chain",
         "_middleware",
+        "_async_dispatch",
+        "_async_capacity",
+        "_async_subs",
+        "_async_subs_lock",
+        "_retry_resolver",
+        "_dlq_callback",
+        "_outbox",
+        "_durable_topics",
+        "_durable_consumers",
+        "_durable_consumers_lock",
     )
 
     def __init__(
@@ -289,6 +562,12 @@ class LocalBus:
         capture: bool = False,
         timing_chain: TimingChain | None = None,
         middleware: MiddlewareChain | None = None,
+        async_dispatch: bool = False,
+        subscription_mailbox_capacity: int = 1024,
+        retry_resolver: object | None = None,
+        dlq_callback: object | None = None,
+        outbox: object | None = None,
+        durable_topics: set[str] | None = None,
     ) -> None:
         """
         Create a new LocalBus.
@@ -305,6 +584,40 @@ class LocalBus:
                            Runs after bus stamping, before trie match + dispatch.
                            Middleware sees headers only, never payload.
                            If any middleware returns None, envelope is dropped.
+            async_dispatch:
+                Phase 6 / P6.5.  When True, each subscription gets a bounded
+                ``LocalMailbox`` and a worker thread; publish enqueues to all
+                matching mailboxes and returns immediately.  Slow handlers no
+                longer stall publishers.  When False (default), dispatch is
+                synchronous on the publisher's thread (legacy behavior).
+                Tests that publish then immediately assert handler side-effects
+                must call ``bus.flush()`` first when async_dispatch is True.
+            subscription_mailbox_capacity:
+                Per-subscription mailbox capacity when async_dispatch=True.
+                Default 1024.  Beyond this depth, publish drops envelopes and
+                increments ``stats.mailbox_full_drops``.
+            retry_resolver:
+                Phase 6 / P6.6.  Optional callable ``(topic: str) -> RetryPolicy | None``
+                consulted by the async-dispatch worker when a handler raises.
+                Returning None or omitting this argument preserves the legacy
+                "log + drop" behavior.  Ignored when async_dispatch=False.
+            dlq_callback:
+                Phase 6 / P6.7.  Optional callable
+                ``(envelope, exception, attempts) -> None`` invoked by the
+                async-dispatch worker after retry exhaustion.  Used by the
+                DLQ publisher.  Ignored when async_dispatch=False.
+            outbox:
+                Phase 6 / P6.13.  Optional ``BusOutbox`` instance.  When
+                provided together with ``durable_topics``, every published
+                envelope on a durable topic is appended to the outbox
+                BEFORE dispatch, and durable subscribers (those that pass
+                ``consumer_id=`` to ``subscribe``) ack envelopes after
+                their handler returns successfully.
+            durable_topics:
+                Phase 6 / P6.13.  Set of exact topic strings whose
+                envelopes must be persisted to ``outbox`` before
+                dispatch.  Topics not listed here behave as before
+                (RAM-only).  Ignored when ``outbox`` is None.
         """
         self._trie: TopicTrie[BusHandler] = TopicTrie()
         self._rw_lock = _ReadWriteLock()
@@ -317,6 +630,18 @@ class LocalBus:
         self._closed = False
         self._timing_chain: TimingChain | None = timing_chain
         self._middleware: MiddlewareChain | None = middleware
+        self._async_dispatch = async_dispatch
+        self._async_capacity = subscription_mailbox_capacity
+        self._async_subs: dict[str, _AsyncSubscription] = {}
+        self._async_subs_lock = threading.Lock()
+        self._retry_resolver = retry_resolver
+        self._dlq_callback = dlq_callback
+        # P6.13 durability state
+        self._outbox = outbox
+        self._durable_topics: set[str] = set(durable_topics) if durable_topics else set()
+        # consumer_id -> list of (topic_pattern, raw_handler)
+        self._durable_consumers: dict[str, list[tuple[str, BusHandler]]] = {}
+        self._durable_consumers_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # IBus.publish
@@ -362,6 +687,20 @@ class LocalBus:
         if topic not in self._topics_seen:
             self._topics_seen.add(topic)
             self._stats.topics_seen = len(self._topics_seen)
+
+        # P6.13: durability append BEFORE dispatch.  If a crash happens
+        # between the outbox write and the handler invocation, replay
+        # will redeliver on next startup (at-least-once for durable topics).
+        if self._outbox is not None and topic in self._durable_topics:
+            try:
+                self._outbox.append(stamped)  # type: ignore[attr-defined]
+            except Exception:
+                logger.exception(
+                    "Outbox append failed for topic=%s envelope_id=%d "
+                    "-- continuing with in-memory dispatch only",
+                    topic,
+                    stamped.envelope_id,
+                )
 
         # Run middleware chain (after stamping, before dispatch).
         # Middleware sees headers only.  None return = drop the envelope.
@@ -415,7 +754,13 @@ class LocalBus:
     # IBus.subscribe
     # ------------------------------------------------------------------
 
-    def subscribe(self, pattern: str, handler: BusHandler) -> SubscriptionHandle:
+    def subscribe(
+        self,
+        pattern: str,
+        handler: BusHandler,
+        *,
+        consumer_id: str | None = None,
+    ) -> SubscriptionHandle:
         """
         Subscribe a handler to a topic pattern.
 
@@ -426,14 +771,72 @@ class LocalBus:
 
         Thread-safe: takes WRITE lock on the trie (exclusive).
 
+        Args:
+            pattern:     Topic / pattern to subscribe to.
+            handler:     User callback.
+            consumer_id: Phase 6 / P6.13.  When the bus has an
+                ``outbox`` configured and ``pattern`` matches a durable
+                topic, supplying ``consumer_id`` opts in to at-least-once
+                delivery: the bus auto-acks the consumer's last seen
+                envelope_id on every successful handler return, and
+                ``replay_durable_topics()`` re-emits any envelope whose
+                id exceeds that watermark.  Without ``consumer_id``,
+                durable topics behave at-most-once for this subscriber.
+
         Returns:
             SubscriptionHandle for later unsubscribe().
         """
         sub_id = f"sub-{uuid.uuid4().hex[:12]}"
 
+        # P6.13: if a consumer_id is supplied AND the bus has an outbox,
+        # wrap the user handler so successful invocations ack to the outbox.
+        # The wrapper preserves exception propagation so retry/DLQ behavior
+        # in the async path remains unchanged.
+        effective_handler = handler
+        if consumer_id is not None and self._outbox is not None:
+            outbox = self._outbox
+            cid = consumer_id
+
+            def _acking_handler(env: Envelope, _user=handler, _cid=cid, _ob=outbox) -> None:
+                _user(env)
+                # Only acked on successful return -- exceptions skip ack.
+                try:
+                    _ob.ack(_cid, env.topic, env.envelope_id)  # type: ignore[attr-defined]
+                except Exception:
+                    logger.exception(
+                        "Outbox ack failed for consumer=%s topic=%s envelope_id=%d",
+                        _cid,
+                        env.topic,
+                        env.envelope_id,
+                    )
+
+            effective_handler = _acking_handler
+
+            # Track for replay_durable_topics()
+            with self._durable_consumers_lock:
+                self._durable_consumers.setdefault(cid, []).append((pattern, _acking_handler))
+
+        # Async-dispatch path: wrap handler in a per-sub mailbox + worker.
+        # The trie sees the mailbox-enqueue closure as the "handler".
+        if self._async_dispatch:
+            async_sub = _AsyncSubscription(
+                subscription_id=sub_id,
+                pattern=pattern,
+                handler=effective_handler,
+                capacity=self._async_capacity,
+                bus_stats=self._stats,
+                retry_policy=self._retry_resolver,
+                dlq_callback=self._dlq_callback,
+            )
+            with self._async_subs_lock:
+                self._async_subs[sub_id] = async_sub
+            trie_handler: BusHandler = async_sub.enqueue
+        else:
+            trie_handler = effective_handler
+
         self._rw_lock.acquire_write()
         try:
-            self._trie.insert(pattern, handler, sub_id)
+            self._trie.insert(pattern, trie_handler, sub_id)
         finally:
             self._rw_lock.release_write()
 
@@ -464,6 +867,12 @@ class LocalBus:
         if removed:
             self._stats.subscriptions_active -= 1
             self._stats.unsubscribe_count += 1
+            # Shut down the async worker (if any) outside the trie lock.
+            if self._async_dispatch:
+                with self._async_subs_lock:
+                    async_sub = self._async_subs.pop(handle.subscription_id, None)
+                if async_sub is not None:
+                    async_sub.shutdown()
 
         return removed
 
@@ -559,13 +968,131 @@ class LocalBus:
 
         Does NOT unsubscribe handlers -- they simply won't receive
         any more envelopes.
+
+        When ``async_dispatch=True``, also shuts down all per-subscription
+        worker threads after draining their mailboxes.
         """
         self._closed = True
+        if self._async_dispatch:
+            with self._async_subs_lock:
+                subs = list(self._async_subs.values())
+                self._async_subs.clear()
+            for sub in subs:
+                sub.shutdown()
+
+    def flush(self, timeout_ms: int = 5000) -> bool:
+        """
+        Block until every per-subscription mailbox is drained AND no
+        worker thread is mid-handler.
+
+        For synchronous-dispatch buses (``async_dispatch=False``) this is
+        a no-op and returns True immediately.
+
+        For async-dispatch buses, walks the registered subscriptions and
+        waits for each to become idle.  Returns False if the overall
+        timeout is exceeded.
+
+        Phase 6 / P6.5.
+        """
+        if not self._async_dispatch:
+            return True
+
+        # Snapshot subscriptions under lock; release before waiting so
+        # subscribe/unsubscribe can proceed concurrently.
+        with self._async_subs_lock:
+            subs = list(self._async_subs.values())
+
+        if not subs:
+            return True
+
+        deadline = time.monotonic() + (timeout_ms / 1000.0)
+        for sub in subs:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            if not sub.wait_idle(remaining):
+                return False
+        return True
 
     @property
     def closed(self) -> bool:
         """True if the bus has been closed."""
         return self._closed
+
+    @property
+    def is_closed(self) -> bool:
+        """Public alias of ``closed`` to satisfy ``IBus.is_closed``."""
+        return self._closed
+
+    # ------------------------------------------------------------------
+    # Durability replay (P6.13)
+    # ------------------------------------------------------------------
+
+    def replay_durable_topics(self, *, consumer_id: str | None = None) -> int:
+        """
+        Replay un-acked envelopes from the outbox to durable subscribers.
+
+        For each ``(consumer_id, pattern)`` registered via
+        ``subscribe(..., consumer_id=...)``, this method walks the
+        outbox for every durable topic that the pattern would match
+        (currently exact-topic patterns only) and re-invokes the
+        ack-wrapping handler with each envelope whose ``envelope_id``
+        is greater than the consumer's last ack watermark.
+
+        At-least-once semantics: handlers MUST be idempotent.  Use
+        ``IdempotencyMiddleware`` (P6.12) on the publish side and
+        application-level dedup on the consume side.
+
+        Args:
+            consumer_id: Optional filter -- replay only this consumer.
+                If None, replay all registered durable consumers.
+
+        Returns:
+            Total number of envelopes replayed.
+        """
+        if self._outbox is None:
+            return 0
+
+        with self._durable_consumers_lock:
+            if consumer_id is not None:
+                items = [(consumer_id, list(self._durable_consumers.get(consumer_id, [])))]
+            else:
+                items = [(cid, list(subs)) for cid, subs in self._durable_consumers.items()]
+
+        replayed = 0
+        for cid, subs in items:
+            for pattern, acking_handler in subs:
+                # Only exact-topic durable replay is supported; wildcard
+                # subscribers don't get replay (they'd need a topic-list
+                # discovery mechanism out of scope here).
+                if pattern not in self._durable_topics:
+                    continue
+                for record in self._outbox.unacked(cid, pattern):  # type: ignore[attr-defined]
+                    envelope = record.to_envelope()
+                    try:
+                        acking_handler(envelope)
+                        replayed += 1
+                    except Exception:
+                        logger.exception(
+                            "Replay handler error consumer=%s topic=%s envelope_id=%d",
+                            cid,
+                            pattern,
+                            record.envelope_id,
+                        )
+                        # Stop replay for this (consumer, topic) on error
+                        # so we don't skip past unprocessed envelopes.
+                        break
+        return replayed
+
+    @property
+    def durable_topics(self) -> set[str]:
+        """Read-only view of durable topic names."""
+        return frozenset(self._durable_topics)  # type: ignore[return-value]
+
+    @property
+    def outbox(self) -> object | None:
+        """The configured BusOutbox, if any (P6.13)."""
+        return self._outbox
 
     # ------------------------------------------------------------------
     # Observability

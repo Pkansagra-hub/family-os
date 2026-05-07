@@ -105,6 +105,7 @@ tool_contract:
   provider_type: "MCP"
   provider_id: "build_agent_handler"
   safety_band_min: "AMBER"
+  risk_class: "high"
   cost_per_call: 0.0
   avg_latency_ms: 50
   max_latency_ms: 500
@@ -113,3 +114,13 @@ tool_contract:
     - "meta"
     - "agent_creation"
     - "write_operation"
+
+  # ---- HIL Policy (E2 -- HIL Unification) ----
+  # Meta-level capability: creates a brand-new agent in the registry.
+  # Always confirm before adding new agents to the system.
+  requires_human_confirmation: true
+  side_effects:
+    - kind: "data_write"
+      target: "capability_registry.agent"
+      reversible: true
+      description: "Registers a new agent definition into the capability registry."

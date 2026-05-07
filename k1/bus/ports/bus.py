@@ -136,3 +136,51 @@ class IBus(Protocol):
             False if it was already removed or unknown.
         """
         ...
+
+    def flush(self, timeout_ms: int = 5000) -> bool:
+        """
+        Block until all in-flight envelopes have been delivered to handlers.
+
+        For implementations with synchronous dispatch (publish blocks the
+        publisher's thread until handlers complete), this is a no-op and
+        always returns True.
+
+        For implementations with asynchronous dispatch (per-subscription
+        mailboxes drained by worker threads), this waits until every
+        subscription mailbox is empty AND no worker is mid-handler.
+
+        Tests that publish then immediately assert handler side-effects
+        should call ``bus.flush()`` first when running against an async-
+        dispatch bus.
+
+        Args:
+            timeout_ms: Maximum time to wait. 0 = non-blocking check.
+
+        Returns:
+            True if drained within timeout; False on timeout.
+
+        Note:
+            ``flush()`` is additive (Phase 6 / P6.5).  Implementations
+            that pre-date this method satisfy the Protocol via duck
+            typing -- the default expectation is that synchronous
+            implementations may omit this method, but new implementations
+            should define it explicitly.
+        """
+        ...
+
+    def close(self) -> None:
+        """Shut the bus down. Subsequent ``publish`` calls MUST be rejected.
+
+        Idempotent: a second call MUST be a no-op.
+        """
+        ...
+
+    @property
+    def is_closed(self) -> bool:
+        """Public closed-state accessor.
+
+        Replaces external reads of the impl-private ``_closed`` slot so
+        callers (kernel health-check, tests) do not have to reach into
+        adapter internals.
+        """
+        ...

@@ -60,6 +60,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Tuple
 
+from .config import SessionStateConfig, TiersConfig
+
 if TYPE_CHECKING:
     pass
 
@@ -117,7 +119,7 @@ class SectionBudget:
 # Source: k1/sessionstate/README.md Sections 5-6
 
 SECTION_BUDGETS: Dict[str, SectionBudget] = {
-    # HOT CORE sections (48KB total)
+    # HOT CORE sections (52KB total, matches config hot_budget_bytes)
     "control": SectionBudget(
         name="control",
         tier=Tier.HOT,
@@ -163,7 +165,7 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
     "narrative_active": SectionBudget(
         name="narrative_active",
         tier=Tier.HOT,
-        max_bytes=8 * 1024,  # 8KB to reach 48KB HOT total
+        max_bytes=4 * 1024,  # 4KB (config: narrative_active)
         eviction_priority=9,
         can_migrate=True,
     ),
@@ -173,6 +175,20 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
         max_bytes=2 * 1024,
         eviction_priority=None,  # NEVER EVICT
         can_migrate=False,
+    ),
+    "task_state": SectionBudget(
+        name="task_state",
+        tier=Tier.HOT,
+        max_bytes=4 * 1024,
+        eviction_priority=None,  # NEVER EVICT (critical for HITL recovery)
+        can_migrate=False,
+    ),
+    "task_artifacts": SectionBudget(
+        name="task_artifacts",
+        tier=Tier.HOT,
+        max_bytes=4 * 1024,
+        eviction_priority=3,  # Demotes to artifacts_warm
+        can_migrate=True,
     ),
     # WARM TIER sections (48KB total)
     "beliefs_history": SectionBudget(
@@ -185,7 +201,7 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
     "history_recent": SectionBudget(
         name="history_recent",
         tier=Tier.WARM,
-        max_bytes=20 * 1024,
+        max_bytes=20 * 1024,  # 20KB (config: history_recent)
         eviction_priority=3,  # Summarize oldest, archive
         can_migrate=True,
     ),
@@ -199,8 +215,15 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
     "telemetry": SectionBudget(
         name="telemetry",
         tier=Tier.WARM,
-        max_bytes=8 * 1024,
+        max_bytes=8 * 1024,  # 8KB (config: telemetry)
         eviction_priority=1,  # FIRST to evict (lowest priority)
+        can_migrate=True,
+    ),
+    "artifacts_warm": SectionBudget(
+        name="artifacts_warm",
+        tier=Tier.WARM,
+        max_bytes=8 * 1024,
+        eviction_priority=2,  # Evict after telemetry
         can_migrate=True,
     ),
 }
@@ -218,17 +241,18 @@ NEVER_EVICT_SECTIONS: FrozenSet[str] = frozenset(
 ALL_SECTIONS: FrozenSet[str] = frozenset(SECTION_BUDGETS.keys())
 
 # =============================================================================
-# SIZE CONSTANTS
+# SIZE CONSTANTS (from TiersConfig defaults)
 # =============================================================================
 
-TOTAL_SIZE_LIMIT_BYTES: int = 96 * 1024  # 96KB
-HOT_SIZE_LIMIT_BYTES: int = 48 * 1024  # 48KB
-WARM_SIZE_LIMIT_BYTES: int = 48 * 1024  # 48KB
+_ss_tiers = TiersConfig()
+TOTAL_SIZE_LIMIT_BYTES: int = _ss_tiers.total_size_limit_bytes
+HOT_SIZE_LIMIT_BYTES: int = _ss_tiers.hot_budget_bytes
+WARM_SIZE_LIMIT_BYTES: int = _ss_tiers.warm_budget_bytes
 
-# Pressure thresholds (from common.fbs PressureLevel enum comments)
-NORMAL_THRESHOLD_PCT: float = 0.80  # <80%
-ELEVATED_THRESHOLD_PCT: float = 0.90  # 80-90%
-CRITICAL_THRESHOLD_PCT: float = 0.95  # 90-95%
+# Pressure thresholds (from TiersConfig defaults)
+NORMAL_THRESHOLD_PCT: float = _ss_tiers.normal_threshold_pct
+ELEVATED_THRESHOLD_PCT: float = _ss_tiers.elevated_threshold_pct
+CRITICAL_THRESHOLD_PCT: float = _ss_tiers.critical_threshold_pct
 # >95% = EMERGENCY
 
 
@@ -337,7 +361,7 @@ class SizeTracker:
         self._warm_total_cached: int = 0
         self._cache_valid: bool = True
 
-        logger.debug("SizeTracker initialized with %d sections", len(self._section_sizes))
+        logger.info("SizeTracker initialized: %d sections tracked", len(self._section_sizes))
 
     def _validate_section(self, section: str) -> None:
         """
@@ -685,6 +709,20 @@ class SizeTracker:
 
             self._section_sizes[section] = new_size
             self._invalidate_cache()
+
+            # Check for pressure transitions (detailed debugging)
+            budget = SECTION_BUDGETS[section]
+            old_pressure = self._calculate_pressure(old_size, budget.max_bytes)
+            new_pressure = self._calculate_pressure(new_size, budget.max_bytes)
+            if old_pressure != new_pressure:
+                logger.info(
+                    "Pressure transition: section='%s' %s -> %s (size=%dB/%dB)",
+                    section,
+                    old_pressure.value,
+                    new_pressure.value,
+                    new_size,
+                    budget.max_bytes,
+                )
 
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(

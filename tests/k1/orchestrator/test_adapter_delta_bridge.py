@@ -2,7 +2,7 @@
 Tests for DeltaEmitAdapter (6.1.5) and BridgeWriteAdapter (6.1.6).
 
 Covers:
-  - DeltaEmitAdapter: emit, emit_progress, emit_hil_request,
+  - DeltaEmitAdapter: emit, emit_progress,
     dual-publish semantics, fire-and-forget error swallowing, ORCH-09 trace_id.
   - BridgeWriteAdapter: submit_audit, write_wal, read_wal, list_wal_ids,
     submit_deferred_result, fire-and-forget writes, AdapterException reads.
@@ -21,7 +21,6 @@ import pytest
 from k1.orchestrator.adapters.bridge_write_adapter import BridgeWriteAdapter
 from k1.orchestrator.adapters.delta_emit_adapter import DeltaEmitAdapter
 from k1.orchestrator.orchestration.orchestrator_service import AdapterException
-from k1.orchestrator.types import HILRequest
 
 # ===================================================================
 # Fakes -- DeltaEmitAdapter
@@ -231,42 +230,6 @@ class TestDeltaEmitAdapterEmitProgress:
         adapter = DeltaEmitAdapter(event_port=ep, delta_bus=db)
 
         await adapter.emit_progress("s", "x", "t")  # No raise
-
-
-class TestDeltaEmitAdapterEmitHilRequest:
-    """Tests for DeltaEmitAdapter.emit_hil_request()."""
-
-    @pytest.mark.asyncio
-    async def test_emit_hil_request_basic(self) -> None:
-        ep = FakeEventPort()
-        db = FakeDeltaBus()
-        adapter = DeltaEmitAdapter(event_port=ep, delta_bus=db)
-
-        hil = HILRequest(
-            request_id="hil-1",
-            question="Continue?",
-            options=["yes", "no"],
-        )
-        await adapter.emit_hil_request(hil, "t-hil")
-
-        assert len(ep.emitted) == 1
-        topic, payload = ep.emitted[0]
-        assert topic == "k1.hil.request.v1"
-        assert payload["request_id"] == "hil-1"
-        assert payload["question"] == "Continue?"
-        assert payload["options"] == ["yes", "no"]
-        assert payload["trace_id"] == "t-hil"
-        # k1.hil. prefix -> dual-publish
-        assert len(db.deltas) == 1
-
-    @pytest.mark.asyncio
-    async def test_emit_hil_request_failure_swallowed(self) -> None:
-        ep = FakeEventPort(fail=True)
-        db = FakeDeltaBus()
-        adapter = DeltaEmitAdapter(event_port=ep, delta_bus=db)
-
-        hil = HILRequest(request_id="x", question="?")
-        await adapter.emit_hil_request(hil, "t")  # No raise
 
 
 class TestDeltaEmitSlots:

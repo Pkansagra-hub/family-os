@@ -16,13 +16,13 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from k1.hil.types import OverrideResponse
 from k1.orchestrator.adapters.mock_fabric_adapter import MockFabricAdapter
 from k1.orchestrator.adapters.test_delta_adapter import TestDeltaAdapter
 from k1.orchestrator.adapters.test_event_adapter import TestEventAdapter
 from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.orchestration.constraint_resolver import (
     HIGH_TIER_TIME_BUDGET_MS,
-    HIL_TIMEOUT_MS,
     ConstraintResolver,
     _derive_category,
     _name_similarity,
@@ -33,7 +33,6 @@ from k1.orchestrator.orchestration.constraint_resolver import (
 from k1.orchestrator.types import (
     CapabilityCheck,
     CommittedPlan,
-    HILRequest,
     PlanStep,
     RegistryEntry,
 )
@@ -120,7 +119,7 @@ class TestValidate:
         assert result.valid is True
         assert result.errors == []
         assert result.hil_required is False
-        assert result.hil_request is None
+        assert result.hil_response is None
 
     @pytest.mark.asyncio
     async def test_missing_capability_triggers_hil_request(self) -> None:
@@ -130,8 +129,10 @@ class TestValidate:
 
         assert result.valid is False
         assert result.hil_required is True
-        assert result.hil_request is not None
-        delta.assert_hil_requested(1)
+        # Without an injected hil_port the resolver returns a timed_out abort
+        # OverrideResponse, which the validate() flow surfaces.
+        assert result.hil_response is not None
+        assert result.hil_response.timed_out is True
 
     @pytest.mark.asyncio
     async def test_auto_resolution_with_alternative(self) -> None:
@@ -303,20 +304,16 @@ class TestResolveIteratively:
 
 class TestHILFallback:
     @pytest.mark.asyncio
-    async def test_trigger_hil_fallback_emits_request(self) -> None:
-        _, resolver, _, delta, _ = await _svc()
+    async def test_trigger_hil_fallback_returns_timed_out_when_no_hil_port(self) -> None:
+        """Standalone factory wires _NullHILAdapter; trigger returns timed_out abort."""
+        _, resolver, _, _, _ = await _svc()
         unresolved = [CapabilityCheck(step_id="s1", capability="tool.x", available=False)]
         plan = _plan([_step("s1", "tool.x")], trace_id="trace-hil")
 
-        hil = await resolver.trigger_hil_fallback(unresolved, plan)
+        response = await resolver.trigger_hil_fallback(unresolved, plan)
 
-        assert isinstance(hil, HILRequest)
-        assert hil.timeout_ms == HIL_TIMEOUT_MS
-        delta.assert_hil_requested(1)
-        req, trace_id = delta.hil_requests[0]
-        assert req.request_id == hil.request_id
-        assert trace_id == "trace-hil"
-        assert req.context["plan_id"] == "plan-1"
+        assert isinstance(response, OverrideResponse)
+        assert response.timed_out is True
 
 
 class TestHelpers:

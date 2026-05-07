@@ -192,19 +192,27 @@ class StepRunner:
         if step.tools_granted:
             context_override = {"tools_granted": list(step.tools_granted)}
 
-        return CapabilityRequest(
-            capability_name=step.capability,
-            params=dict(resolved_params),
-            prompt_template=step.prompt_template,
-            tier=Tier.HIGH.value,
-            caller="orchestrator",
-            caller_id=step.id,
-            trace_id=trace_id,
-            plan_id=step.id,
-            step_id=step.id,
-            timeout_ms=timeout_ms,
-            context_override=context_override,
-        )
+        # Propagate PlanStep.safety_band_min to the CapabilityRequest so the
+        # Fabric resolver permits providers whose minimum band exceeds GREEN.
+        # Without this, every step request defaults to GREEN even when the
+        # plan explicitly declared a higher band, causing band_denied errors.
+        request_kwargs: Dict[str, Any] = {
+            "capability_name": step.capability,
+            "params": dict(resolved_params),
+            "prompt_template": step.prompt_template,
+            "tier": Tier.HIGH.value,
+            "caller": "orchestrator",
+            "caller_id": step.id,
+            "trace_id": trace_id,
+            "plan_id": step.id,
+            "step_id": step.id,
+            "timeout_ms": timeout_ms,
+            "context_override": context_override,
+        }
+        if step.safety_band_min:
+            request_kwargs["safety_band"] = step.safety_band_min
+
+        return CapabilityRequest(**request_kwargs)
 
     # ------------------------------------------------------------------
     # Schema validation (2.3.3)

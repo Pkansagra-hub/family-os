@@ -12,12 +12,10 @@ CRITICAL INVARIANT (MW-02):
   Reads MUST be lock-free and complete in <1ms P99. Implementations
   must use the latest committed snapshot without triggering reconstruction.
 
-SessionState sections read by MW (13 of 15, skip telemetry + artifacts_warm):
-  Hot (10):  beliefs_active, beliefs_history, history_active, history_recent,
-             affective_now, affective_baseline, narrative_active, scoreboard,
-             control, persona
-  Warm (3):  task_state, ifl, meta
-  Skipped:   telemetry, artifacts_warm
+SessionState sections read by MW (section-agnostic via snapshot_all):
+  All sections from SessionState.ALL_SECTIONS are read EXCEPT those
+  in MWConfig.skip_sections (default: telemetry, artifacts_warm).
+  New sections are automatically included without config changes.
 
 Production adapter: SessionReadAdapter in adapters/session_read_adapter.py
 Test adapter: In adapters/test_adapters.py
@@ -30,7 +28,7 @@ References:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, FrozenSet, List, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -87,5 +85,78 @@ class ISessionReadPort(Protocol):
 
         Raises:
             AdapterError: If SessionState is unreachable.
+        """
+        ...  # pragma: no cover
+
+    async def list_sections(self) -> FrozenSet[str]:
+        """
+        Return the authoritative set of all SessionState section names.
+
+        Delegates to ALL_SECTIONS at the adapter level. MW uses this
+        to discover sections dynamically instead of hardcoding names.
+
+        Returns:
+            FrozenSet of section name strings.
+        """
+        ...  # pragma: no cover
+
+    async def snapshot_all(
+        self,
+        exclude: FrozenSet[str] = frozenset(),
+    ) -> Dict[str, Any]:
+        """
+        Read ALL SessionState sections in one call, minus excluded ones.
+
+        This is the section-agnostic replacement for snapshot(sections).
+        MW no longer enumerates section names — it reads everything except
+        the skip list (default: telemetry, artifacts_warm).
+
+        New sections added to SessionState are automatically included
+        without MW config changes.
+
+        Args:
+            exclude: Section names to skip (e.g. {"telemetry", "artifacts_warm"}).
+
+        Returns:
+            Dict mapping section name -> section data.
+            Missing or unavailable sections are omitted.
+        """
+        ...  # pragma: no cover
+
+    async def read_archived_history(
+        self,
+        session_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """
+        Read archived ``history_active`` turns from the LOCAL COLD tier.
+
+        This is the **enriched** read path for Memory Writer. It is
+        EXPLICITLY NOT bound by MW-02 (<1ms P99). The hot path already
+        delivers the live in-tier history via ``snapshot()`` /
+        ``snapshot_all()``; this method exists so the session-batch
+        extractor can recover archived turns that have been demoted
+        out of the 16KB ``history_active`` window into LOCAL COLD
+        SQLite, without bloating the hot/warm tier budgets.
+
+        Returned dicts have the same shape as
+        ``HistoryActiveSection.to_dict()["turns"][i]`` (turn_id,
+        turn_number, user_message, assistant_response, timestamp_ms,
+        ...). Order: oldest first. Duplicates across archive entries
+        are de-duplicated by ``turn_id``.
+
+        Implementations may return ``[]`` when no cold archive is
+        configured (test/standalone mode). Callers MUST treat this
+        path as best-effort and never fail on it.
+
+        Args:
+            session_id: Session whose archived history to fetch.
+            limit: Soft cap on the number of turns returned
+                (default 50, large enough for typical session-batch
+                extraction without going wild on memory).
+
+        Returns:
+            List of turn dicts, oldest first. Empty list if no
+            archive is available or the session has no archived turns.
         """
         ...  # pragma: no cover

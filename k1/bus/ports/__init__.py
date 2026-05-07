@@ -11,10 +11,12 @@ Exports:
     UnknownActorError -- Raised when actor is not registered
 """
 
+from .async_bus import AsyncBusHandler, IAsyncBus, IAsyncMailbox, IAsyncMailboxRouter
 from .bus import IBus, SubscriptionHandle
 from .mailbox import BackpressureError, IMailbox, IMailboxRouter, MailboxConfig, UnknownActorError
 
 __all__ = [
+    # Sync ports
     "IBus",
     "SubscriptionHandle",
     "IMailbox",
@@ -22,4 +24,9 @@ __all__ = [
     "MailboxConfig",
     "BackpressureError",
     "UnknownActorError",
+    # Async ports
+    "AsyncBusHandler",
+    "IAsyncBus",
+    "IAsyncMailbox",
+    "IAsyncMailboxRouter",
 ]

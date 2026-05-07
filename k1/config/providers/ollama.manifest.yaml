@@ -1,0 +1,85 @@
+# Ollama Provider Manifest
+# Verified against: https://github.com/ollama/ollama/blob/main/docs/api.md (2026-03-31)
+# MH-18: This manifest is the SOLE source of truth for Ollama capabilities.
+# NOTE: Ollama models are pulled on-demand. These are common reference models.
+
+provider_id: ollama
+display_name: Ollama (Local CPU)
+plugin_class: k1.model_hub.plugins.ollama_plugin.OllamaPlugin
+api_base: http://localhost:11434
+
+auth:
+  type: none
+
+capabilities:
+  - CHAT
+  - EMBED
+  - VISION
+  - TOKEN_COUNT
+
+models:
+  - id: llama3.3:8b-instruct-q4_K_M
+    capabilities: [CHAT, TOKEN_COUNT]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 131072
+    max_output: 4096
+    supports_streaming: true
+    tier: FAST
+
+  - id: phi3:latest
+    capabilities: [CHAT, TOKEN_COUNT]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 128000
+    max_output: 4096
+    supports_streaming: true
+    tier: FAST
+
+  - id: gemma2:latest
+    capabilities: [CHAT, TOKEN_COUNT]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 8192
+    max_output: 4096
+    supports_streaming: true
+    tier: FAST
+
+  - id: llava:7b
+    capabilities: [CHAT, VISION, TOKEN_COUNT]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 4096
+    max_output: 2048
+    supports_streaming: true
+    tier: FAST
+
+  - id: all-minilm:latest
+    capabilities: [EMBED]
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    max_context: 512
+    supports_streaming: false
+    embedding_dimensions: 384
+    tier: FAST
+
+circuit_breaker:
+  failure_threshold: 5
+  failure_window_s: 120
+  cooldown_s: 60
+
+health_check:
+  endpoint: http://localhost:11434
+  interval_s: 15
+  timeout_s: 3
+
+concurrency:
+  max_concurrent: 4
+
+rate_limits:
+  rpm: 120
+  tpm: 100000
+  headroom_pct: 0.90
+
+placement:
+  type: local_cpu

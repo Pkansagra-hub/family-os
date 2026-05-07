@@ -33,10 +33,11 @@ from k1.orchestrator.adapters.test_workflow_storage_adapter import (
     TestWorkflowStorageAdapter,
 )
 from k1.orchestrator.config import OrchestratorConfig
-from k1.orchestrator.factory import OrchestratorFactory
+from k1.orchestrator.factory import OrchestratorFactory, _NullHILAdapter
 from k1.orchestrator.orchestration.guards import (
     ConditionalEdgeEvaluator,
     ExecutionMonitor,
+    FailureReplanCheckpoint,
     MicroReplanCheckpoint,
     OutputSchemaGuard,
 )
@@ -134,26 +135,28 @@ class TestBuildTestAdapters:
 
 
 class TestBuildGuards:
-    """Guard list: 4 guards in correct order, ExecutionMonitor has service_ref=None."""
+    """Guard list: 4 guards in correct order with injected hil_port."""
 
     def test_guard_count_and_order(self) -> None:
         planner = MockPlannerAdapter()
         delta = TestDeltaAdapter()
-        guards = OrchestratorFactory._build_guards(planner, delta)
+        guards = OrchestratorFactory._build_guards(planner, delta, _NullHILAdapter())
 
-        assert len(guards) == 4
+        assert len(guards) == 5
         assert isinstance(guards[0], OutputSchemaGuard)
         assert isinstance(guards[1], ConditionalEdgeEvaluator)
         assert isinstance(guards[2], MicroReplanCheckpoint)
         assert isinstance(guards[3], ExecutionMonitor)
+        assert isinstance(guards[4], FailureReplanCheckpoint)
 
-    def test_execution_monitor_service_ref_none(self) -> None:
+    def test_execution_monitor_has_hil_port(self) -> None:
         planner = MockPlannerAdapter()
         delta = TestDeltaAdapter()
-        guards = OrchestratorFactory._build_guards(planner, delta)
+        hil = _NullHILAdapter()
+        guards = OrchestratorFactory._build_guards(planner, delta, hil)
 
         monitor: ExecutionMonitor = guards[3]
-        assert monitor._service_ref is None
+        assert monitor._hil_port is hil
 
     def test_custom_max_micro_replans(self) -> None:
         planner = MockPlannerAdapter()
@@ -161,6 +164,7 @@ class TestBuildGuards:
         guards = OrchestratorFactory._build_guards(
             planner,
             delta,
+            _NullHILAdapter(),
             max_micro_replans=3,
         )
 
@@ -213,15 +217,14 @@ class TestCreateStandalone:
         assert elapsed_ms < 10, f"create_standalone took {elapsed_ms:.1f}ms (limit 10ms)"
 
     @pytest.mark.asyncio
-    async def test_execution_monitor_service_ref_set(self) -> None:
-        """ExecutionMonitor._service_ref must point to the created service."""
+    async def test_execution_monitor_hil_port_wired(self) -> None:
+        """ExecutionMonitor receives a hil_port (defensive _NullHILAdapter)."""
         service = await OrchestratorFactory.create_standalone()
-        # Access DAGExecutor's guards through internal attributes.
         dag = service._dag_executor
         guards = dag._guards
         monitor = guards[3]
         assert isinstance(monitor, ExecutionMonitor)
-        assert monitor._service_ref is service
+        assert monitor._hil_port is not None
 
     @pytest.mark.asyncio
     async def test_uses_default_config(self) -> None:

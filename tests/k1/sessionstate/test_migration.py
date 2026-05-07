@@ -901,7 +901,7 @@ class TestPromote:
         tracker = SizeTracker()
         engine = MigrationEngine(tracker)
 
-        # Fill HOT to near capacity (48KB)
+        # Fill HOT to near capacity (52KB)
         tracker.update("control", 8 * 1024)
         tracker.update("beliefs_active", 8 * 1024)
         tracker.update("scoreboard", 6 * 1024)
@@ -909,7 +909,9 @@ class TestPromote:
         tracker.update("clarifications", 4 * 1024)
         tracker.update("affective_now", 4 * 1024)
         tracker.update("narrative_active", 4 * 1024)
-        tracker.update("meta", 2 * 1024)  # 44KB total, 4KB left
+        tracker.update("meta", 2 * 1024)
+        tracker.update("task_state", 4 * 1024)
+        tracker.update("task_artifacts", 4 * 1024)  # 52KB total, 0KB left
 
         items = [
             MigrationItem(
@@ -1397,7 +1399,7 @@ class TestEstimateDemoteNeeded:
         needed = engine.estimate_demote_needed()
 
         # Need to get from 40KB to 33.6KB
-        target = int(48 * 1024 * 0.70)  # 33,587
+        target = int(52 * 1024 * 0.70)  # 33,587
         expected = 40 * 1024 - target  # ~6.4KB
         assert needed == expected
 

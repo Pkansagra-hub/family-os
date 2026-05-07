@@ -224,7 +224,7 @@ class SessionStateLogger:
 
     def __init__(
         self,
-        name: str = "k1.sessionstate",
+        name: str = "poc.k1_poc.sessionstate",
         level: int = logging.DEBUG,
         stream: Optional[TextIO] = None,
         use_json_format: bool = True,

@@ -114,8 +114,8 @@
         },
         "provider_type": {
           "type": "string",
-          "enum": ["MCP", "WASM", "BRIDGE"],
-          "description": "Tool provider type. Agents and Workflows have their own contract types."
+          "enum": ["MCP", "WASM", "BRIDGE", "LOCAL_STUB"],
+          "description": "Tool provider type. LOCAL_STUB = in-process deterministic stub used for storyline / demo capabilities (M12.E3)."
         },
         "provider_id": {
           "type": "string",
@@ -179,8 +179,73 @@
             "minLength": 1
           },
           "description": "Free-form tags for categorization and filtering (e.g. meta, write_operation)"
+        },
+        "requires_human_confirmation": {
+          "type": ["boolean", "null"],
+          "description": "Explicit override for HIL gating. true -> always ask user; false -> never ask (overrides safety_band inference, except RED still asks). Omit / null -> infer from safety_band_min and side_effects."
+        },
+        "side_effects": {
+          "type": "array",
+          "description": "Structured declaration of side effects this capability produces. Used by HIL service to render approval prompts and by audit log. Empty/omitted -> no side effects.",
+          "items": {
+            "type": "object",
+            "required": ["kind", "target"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "data_write", "data_delete", "data_modify",
+                  "external_api_call", "payment", "physical_actuation",
+                  "notification_send", "irreversible_op", "third_party_share"
+                ],
+                "description": "Category of side effect"
+              },
+              "target": {
+                "type": "string",
+                "description": "What the side effect targets (e.g. 'calendar.event', 'payment.card.ending_4242', 'door.front')"
+              },
+              "reversible": {
+                "type": "boolean",
+                "default": false,
+                "description": "Whether this side effect can be undone after execution"
+              },
+              "cost_estimate": {
+                "type": "object",
+                "properties": {
+                  "currency": {"type": "string"},
+                  "amount": {"type": "number", "minimum": 0}
+                }
+              },
+              "description": {"type": "string"}
+            }
+          }
+        },
+        "risk_class": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "safety_sensitive"],
+          "description": "M9.E1 / M12.E2 — declared risk class consumed by IRiskCatalogPort. Drives risk x freshness matrix in the policy gate. Reads = low; writes = medium; safety/medical/payments = high or safety_sensitive."
+        },
+        "social_act": {
+          "type": ["string", "null"],
+          "description": "M9.E1 — constitution-level social act this capability manifests (e.g. 'send_message', 'set_medication'). null = infrastructure-only (no conscience binding)."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "requires_human_confirmation": {"const": false},
+              "side_effects": {"type": "array", "minItems": 1}
+            },
+            "required": ["requires_human_confirmation", "side_effects"]
+          },
+          "then": {
+            "properties": {
+              "safety_band_min": {"not": {"const": "GREEN"}}
+            }
+          }
+        }
+      ]
     }
   },
   "definitions": {

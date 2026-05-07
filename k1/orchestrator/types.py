@@ -33,12 +33,13 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from k1.fabric.ports.state_reader import SessionSnapshot
-from k1.fabric.types import CapabilityResult
-from k1.fabric.types import PlanStep as FabricPlanStep
-from k1.fabric.types import Tier
+from k1.fabric.types import CapabilityResult, FabricPlanStep, Tier
+
+if TYPE_CHECKING:
+    from k1.hil.types import OverrideResponse
 
 # ===========================================================================
 # Layer 1 -- Enums (1.2.9, 1.2.10, 1.2.12 partial, 1.2.24 partial)
@@ -423,6 +424,11 @@ class ValidationResult:
     time_pressure=True when estimated critical-path duration exceeds
     the tier time budget (per BUDGET-1). hil_required=True when
     unresolvable issues require human input.
+
+    hil_response carries the unified HIL service's OverrideResponse when
+    `trigger_hil_fallback` was awaited. Field is `None` when no HIL was
+    consulted. `hil_response.choice == "override"` means the user
+    approved a constraint override; otherwise validation remains failed.
     """
 
     valid: bool
@@ -431,7 +437,7 @@ class ValidationResult:
     alternatives_applied: List[AlternativeMapping] = field(default_factory=list)
     time_pressure: bool = False
     hil_required: bool = False
-    hil_request: Optional["HILRequest"] = None
+    hil_response: Optional["OverrideResponse"] = None
 
 
 @dataclass(frozen=True)
@@ -472,6 +478,7 @@ class RegistryEntry:
     """Capability registry entry from IFabricGatewayPort.query_registry().
 
     estimated_duration_ms used by BUDGET-1 time estimation.
+    P2.5: added required_inputs, output, cost_per_call for V2 constraint scoring.
     """
 
     name: str
@@ -480,20 +487,9 @@ class RegistryEntry:
     availability: str
     compensation_capability: Optional[str] = None
     estimated_duration_ms: Optional[int] = None
-
-
-@dataclass(frozen=True)
-class HILRequest:
-    """Human-in-the-loop request emitted via IDeltaEmitPort.
-
-    Surfaced by Concierge to the user.
-    """
-
-    request_id: str
-    question: str
-    options: List[str] = field(default_factory=list)
-    context: Dict[str, Any] = field(default_factory=dict)
-    timeout_ms: int = 120_000
+    required_inputs: List[str] = field(default_factory=list)
+    output: Dict[str, Any] = field(default_factory=dict)
+    cost_per_call: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -707,6 +703,8 @@ class PlanStep:
             result["timeout_ms"] = self.timeout_ms
         if self.required_context is not None:
             result["required_context"] = list(self.required_context)
+        if self.safety_band_min is not None:
+            result["safety_band_min"] = self.safety_band_min
         return result
 
     @classmethod
@@ -836,6 +834,48 @@ class PlanRequest:
             raise ValueError("PlanRequest.intent is required")
         if not self.trace_id:
             raise ValueError("PlanRequest.trace_id is required")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for event bus transport.
+
+        Required so EventPortProdAdapter does not fall through to its
+        ``{"value": repr(payload)}`` fallback when serialising the
+        ``k1.planner.plan.request.v1`` envelope.
+
+        ``context`` is serialised via ``SessionSnapshot.to_dict()`` when
+        present; receivers reconstruct it through ``from_dict``.
+        """
+        ctx = self.context.to_dict() if self.context is not None else None
+        return {
+            "intent": self.intent,
+            "trace_id": self.trace_id,
+            "context": ctx,
+            "request_id": self.request_id,
+            "constraints": dict(self.constraints),
+            "timeout_ms": self.timeout_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PlanRequest":
+        """Reconstruct ``PlanRequest`` from a dict produced by ``to_dict``.
+
+        Tolerates ``context`` being either ``None``, a dict, or an already
+        constructed ``SessionSnapshot`` (helper-call ergonomics).
+        """
+        ctx_raw = data.get("context")
+        if ctx_raw is None or isinstance(ctx_raw, SessionSnapshot):
+            context = ctx_raw
+        else:
+            context = SessionSnapshot.from_dict(ctx_raw)
+
+        return cls(
+            intent=data["intent"],
+            trace_id=data["trace_id"],
+            context=context,
+            request_id=data.get("request_id") or str(uuid.uuid4()),
+            constraints=dict(data.get("constraints") or {}),
+            timeout_ms=int(data.get("timeout_ms", 45_000)),
+        )
 
 
 @dataclass(frozen=True)
@@ -1263,27 +1303,6 @@ class PendingPlanContext:
     timeout_ms: int = 45_000
 
 
-@dataclass
-class PendingHILContext:
-    """Parked DAG state awaiting human-in-the-loop response.
-
-    Stored in OrchestratorService.pending_hil dict keyed by request_id.
-
-    timeout_fallback:
-      "CONTINUE"      -- for user override HIL (silence = proceed).
-      "GRACEFUL_FAIL"  -- for constraint HIL (silence = cannot proceed safely).
-    """
-
-    request_id: str
-    dag_execution_id: str
-    current_wave_index: int
-    completed_waves: List[WaveResult]
-    remaining_waves: List[Wave]
-    question: str
-    options: List[str]
-    timeout_fallback: str
-    created_at: float = field(default_factory=time.time)
-    timeout_ms: int = 120_000
 
 
 # ===========================================================================

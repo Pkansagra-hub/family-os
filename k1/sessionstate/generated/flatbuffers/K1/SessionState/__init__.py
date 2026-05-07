@@ -65,6 +65,24 @@ from .ArchivedFact import (
 )
 
 # -----------------------------------------------------------------------------
+# ArtifactsWarmSection - Type + Builder Functions
+# -----------------------------------------------------------------------------
+from .ArtifactsWarmSection import (
+    ArtifactsWarmSection,
+    ArtifactsWarmSectionAddArtifacts,
+    ArtifactsWarmSectionAddHeader,
+    ArtifactsWarmSectionAddLastUpdatedMs,
+    ArtifactsWarmSectionEnd,
+    ArtifactsWarmSectionStart,
+    ArtifactsWarmSectionStartArtifactsVector,
+)
+
+# -----------------------------------------------------------------------------
+# ArtifactType - Enum
+# -----------------------------------------------------------------------------
+from .ArtifactType import ArtifactType
+
+# -----------------------------------------------------------------------------
 # BeliefsActiveSection - Type + Builder Functions
 # -----------------------------------------------------------------------------
 from .BeliefsActiveSection import (
@@ -417,7 +435,24 @@ from .HistoryRecentSection import (
 # -----------------------------------------------------------------------------
 # HotCore - Type
 # -----------------------------------------------------------------------------
-from .HotCore import HotCore
+from .HotCore import (
+    HotCore,
+    HotCoreAddAffectiveNow,
+    HotCoreAddBeliefsActive,
+    HotCoreAddBudgetBytes,
+    HotCoreAddClarifications,
+    HotCoreAddControl,
+    HotCoreAddHistoryActive,
+    HotCoreAddIsOverBudget,
+    HotCoreAddMeta,
+    HotCoreAddNarrativeActive,
+    HotCoreAddScoreboard,
+    HotCoreAddTaskArtifacts,
+    HotCoreAddTaskState,
+    HotCoreAddTotalSizeBytes,
+    HotCoreEnd,
+    HotCoreStart,
+)
 
 # -----------------------------------------------------------------------------
 # IntentClassification - Type
@@ -831,6 +866,77 @@ from .SummarizedTurn import (
 )
 
 # -----------------------------------------------------------------------------
+# TaskArtifactEntry - Type + Builder Functions
+# -----------------------------------------------------------------------------
+from .TaskArtifactEntry import (
+    TaskArtifactEntry,
+    TaskArtifactEntryAddArtifactId,
+    TaskArtifactEntryAddArtifactType,
+    TaskArtifactEntryAddContent,
+    TaskArtifactEntryAddCreatedAtMs,
+    TaskArtifactEntryAddMetadata,
+    TaskArtifactEntryAddPresentedAtTurn,
+    TaskArtifactEntryAddSizeBytes,
+    TaskArtifactEntryAddTaskId,
+    TaskArtifactEntryEnd,
+    TaskArtifactEntryStart,
+)
+
+# -----------------------------------------------------------------------------
+# TaskArtifactsSection - Type + Builder Functions
+# -----------------------------------------------------------------------------
+from .TaskArtifactsSection import (
+    TaskArtifactsSection,
+    TaskArtifactsSectionAddArtifacts,
+    TaskArtifactsSectionAddEvictAfterTurns,
+    TaskArtifactsSectionAddHeader,
+    TaskArtifactsSectionAddLastUpdatedMs,
+    TaskArtifactsSectionEnd,
+    TaskArtifactsSectionStart,
+    TaskArtifactsSectionStartArtifactsVector,
+)
+
+# -----------------------------------------------------------------------------
+# TaskStateEntry - Type + Builder Functions
+# -----------------------------------------------------------------------------
+from .TaskStateEntry import (
+    TaskStateEntry,
+    TaskStateEntryAddAction,
+    TaskStateEntryAddCompletedAtMs,
+    TaskStateEntryAddDependsOn,
+    TaskStateEntryAddDispatchedAtMs,
+    TaskStateEntryAddHilSuspensionsCount,
+    TaskStateEntryAddPendingHil,
+    TaskStateEntryAddPendingHilData,
+    TaskStateEntryAddPresentedAtTurn,
+    TaskStateEntryAddProgressPct,
+    TaskStateEntryAddStatus,
+    TaskStateEntryAddTaskId,
+    TaskStateEntryEnd,
+    TaskStateEntryStart,
+    TaskStateEntryStartDependsOnVector,
+)
+
+# -----------------------------------------------------------------------------
+# TaskStateSection - Type + Builder Functions
+# -----------------------------------------------------------------------------
+from .TaskStateSection import (
+    TaskStateSection,
+    TaskStateSectionAddHeader,
+    TaskStateSectionAddLastUpdatedMs,
+    TaskStateSectionAddNeverEvict,
+    TaskStateSectionAddTasks,
+    TaskStateSectionEnd,
+    TaskStateSectionStart,
+    TaskStateSectionStartTasksVector,
+)
+
+# -----------------------------------------------------------------------------
+# TaskStatus - Enum
+# -----------------------------------------------------------------------------
+from .TaskStatus import TaskStatus as FBTaskStatus
+
+# -----------------------------------------------------------------------------
 # TelemetrySection - Type + Builder Functions
 # -----------------------------------------------------------------------------
 from .TelemetrySection import (
@@ -973,7 +1079,21 @@ from .VocabularyEntry import (
 # -----------------------------------------------------------------------------
 # WarmTier - Type
 # -----------------------------------------------------------------------------
-from .WarmTier import WarmTier
+from .WarmTier import (
+    WarmTier,
+    WarmTierAddArtifactsWarm,
+    WarmTierAddBeliefsHistory,
+    WarmTierAddBudgetBytes,
+    WarmTierAddEvictionCount,
+    WarmTierAddHistoryRecent,
+    WarmTierAddIsOverBudget,
+    WarmTierAddLastEviction,
+    WarmTierAddPersona,
+    WarmTierAddTelemetry,
+    WarmTierAddTotalSizeBytes,
+    WarmTierEnd,
+    WarmTierStart,
+)
 
 # =============================================================================
 # __all__ - Complete Export List
@@ -1393,8 +1513,93 @@ __all__ = [
     # === Kernel Types ===
     "SessionKernel",
     "HotCore",
+    "HotCoreStart",
+    "HotCoreAddControl",
+    "HotCoreAddBeliefsActive",
+    "HotCoreAddScoreboard",
+    "HotCoreAddHistoryActive",
+    "HotCoreAddClarifications",
+    "HotCoreAddAffectiveNow",
+    "HotCoreAddNarrativeActive",
+    "HotCoreAddMeta",
+    "HotCoreAddTaskState",
+    "HotCoreAddTaskArtifacts",
+    "HotCoreAddTotalSizeBytes",
+    "HotCoreAddBudgetBytes",
+    "HotCoreAddIsOverBudget",
+    "HotCoreEnd",
     "WarmTier",
+    "WarmTierStart",
+    "WarmTierAddBeliefsHistory",
+    "WarmTierAddHistoryRecent",
+    "WarmTierAddPersona",
+    "WarmTierAddTelemetry",
+    "WarmTierAddArtifactsWarm",
+    "WarmTierAddTotalSizeBytes",
+    "WarmTierAddBudgetBytes",
+    "WarmTierAddIsOverBudget",
+    "WarmTierAddEvictionCount",
+    "WarmTierAddLastEviction",
+    "WarmTierEnd",
     "VersionInfo",
+    # === TaskStateSection Types ===
+    "TaskStateSection",
+    "TaskStateSectionStart",
+    "TaskStateSectionAddHeader",
+    "TaskStateSectionAddTasks",
+    "TaskStateSectionStartTasksVector",
+    "TaskStateSectionAddLastUpdatedMs",
+    "TaskStateSectionAddNeverEvict",
+    "TaskStateSectionEnd",
+    # === TaskStateEntry Types ===
+    "TaskStateEntry",
+    "TaskStateEntryStart",
+    "TaskStateEntryAddTaskId",
+    "TaskStateEntryAddAction",
+    "TaskStateEntryAddStatus",
+    "TaskStateEntryAddDispatchedAtMs",
+    "TaskStateEntryAddCompletedAtMs",
+    "TaskStateEntryAddDependsOn",
+    "TaskStateEntryStartDependsOnVector",
+    "TaskStateEntryAddProgressPct",
+    "TaskStateEntryAddPendingHil",
+    "TaskStateEntryAddHilSuspensionsCount",
+    "TaskStateEntryAddPresentedAtTurn",
+    "TaskStateEntryAddPendingHilData",
+    "TaskStateEntryEnd",
+    # === TaskStatus Enum ===
+    "FBTaskStatus",
+    # === TaskArtifactsSection Types ===
+    "TaskArtifactsSection",
+    "TaskArtifactsSectionStart",
+    "TaskArtifactsSectionAddHeader",
+    "TaskArtifactsSectionAddArtifacts",
+    "TaskArtifactsSectionStartArtifactsVector",
+    "TaskArtifactsSectionAddLastUpdatedMs",
+    "TaskArtifactsSectionAddEvictAfterTurns",
+    "TaskArtifactsSectionEnd",
+    # === TaskArtifactEntry Types ===
+    "TaskArtifactEntry",
+    "TaskArtifactEntryStart",
+    "TaskArtifactEntryAddArtifactId",
+    "TaskArtifactEntryAddTaskId",
+    "TaskArtifactEntryAddArtifactType",
+    "TaskArtifactEntryAddContent",
+    "TaskArtifactEntryAddCreatedAtMs",
+    "TaskArtifactEntryAddPresentedAtTurn",
+    "TaskArtifactEntryAddSizeBytes",
+    "TaskArtifactEntryAddMetadata",
+    "TaskArtifactEntryEnd",
+    # === ArtifactType Enum ===
+    "ArtifactType",
+    # === ArtifactsWarmSection Types ===
+    "ArtifactsWarmSection",
+    "ArtifactsWarmSectionStart",
+    "ArtifactsWarmSectionAddHeader",
+    "ArtifactsWarmSectionAddArtifacts",
+    "ArtifactsWarmSectionStartArtifactsVector",
+    "ArtifactsWarmSectionAddLastUpdatedMs",
+    "ArtifactsWarmSectionEnd",
     # === NarrativeActiveSection Types ===
     "NarrativeActiveSection",
     "NarrativeActiveSectionStart",

@@ -35,12 +35,12 @@ from typing import Any, Dict, List, Optional
 import flatbuffers
 
 # Generated FlatBuffer types
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     ClarificationsSection as FBClarificationsSection,
 )
 
 # Import builder functions from individual files
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.Clarification import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.Clarification import (
     ClarificationAddAgentId,
     ClarificationAddAnswer,
     ClarificationAddAnsweredAtMs,
@@ -58,7 +58,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.Clarification import 
     ClarificationStart,
     ClarificationStartOptionsVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.ClarificationOption import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.ClarificationOption import (
     ClarificationOptionAddAction,
     ClarificationOptionAddConfidence,
     ClarificationOptionAddId,
@@ -66,7 +66,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.ClarificationOption i
     ClarificationOptionEnd,
     ClarificationOptionStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.ClarificationsSection import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.ClarificationsSection import (
     ClarificationsSectionAddAvgResolutionTimeMs,
     ClarificationsSectionAddBlockingClarificationId,
     ClarificationsSectionAddHeader,
@@ -80,7 +80,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.ClarificationsSection
     ClarificationsSectionStartPendingVector,
     ClarificationsSectionStartRecentlyResolvedVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
     SectionHeaderAddLastUpdatedMs,
     SectionHeaderAddSectionName,
     SectionHeaderAddSizeBytes,

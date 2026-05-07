@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="FamilyOS K1 Concierge Demo")
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Shared state -- initialized on first WebSocket connection
@@ -64,7 +65,10 @@ async def _ensure_coordinator() -> Any:
         if _initialized and _coordinator is not None:
             return _coordinator
 
-        from poc.k1_poc.demo.coordinator import get_k1_demo_coordinator, reset_coordinator
+        from poc.k1_poc.demo.coordinator import (
+            get_k1_demo_coordinator,
+            reset_coordinator,
+        )
 
         reset_coordinator()
         coord = get_k1_demo_coordinator(test_mode=_test_mode)
@@ -98,7 +102,14 @@ async def _ensure_coordinator() -> Any:
 
 @app.get("/")
 async def index() -> FileResponse:
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    return FileResponse(
+        str(STATIC_DIR / "index.html"),
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/api/family")
@@ -155,6 +166,66 @@ async def get_ledger_stats() -> dict:
         "dead_letter_events": dead_letter_count,
         "store_type": type(store).__name__,
     }
+
+
+# Session state snapshot -- all tiers
+@app.get("/api/session/state")
+async def get_session_state() -> dict:
+    """Return full session state snapshot with all tiers and section data."""
+    if _coordinator is None or _coordinator.session_state is None:
+        logger.warning(
+            "API /api/session/state: coordinator=%s session_state=%s",
+            _coordinator is not None,
+            getattr(_coordinator, "session_state", "N/A") is not None if _coordinator else False,
+        )
+        return {"available": False, "reason": "coordinator not ready"}
+    try:
+        ss = _coordinator.session_state
+
+        # Sync size tracker from actual section sizes (sections are often
+        # mutated directly, bypassing manager.mutate() which would update the
+        # tracker).  This ensures the snapshot reflects real sizes.
+        if hasattr(ss, "_sync_size_tracker"):
+            ss._sync_size_tracker()
+
+        snapshot = ss.get_snapshot()
+        result: dict = snapshot.to_dict()
+        result["available"] = True
+
+        # Enrich with per-section metadata (includes section-specific fields)
+        section_details: dict = {}
+        for section_name in list(result.get("sections", {})):
+            try:
+                section = ss.get_section(section_name)
+                if hasattr(section, "get_metadata"):
+                    meta = section.get_metadata()
+                    # Sanitize enum values
+                    section_details[section_name] = {
+                        k: (v.value if hasattr(v, "value") else v) for k, v in meta.items()
+                    }
+            except Exception as e:
+                section_details[section_name] = {"error": str(e)}
+        result["section_details"] = section_details
+
+        # Local cold stats
+        try:
+            cold = ss.get_local_cold()
+            if hasattr(cold, "count"):
+                result["local_cold_count"] = cold.count()
+            elif hasattr(cold, "_archive") and hasattr(cold._archive, "count"):
+                result["local_cold_count"] = cold._archive.count()
+            else:
+                result["local_cold_count"] = 0
+        except Exception:
+            result["local_cold_count"] = 0
+
+        # Validate JSON-serializable before returning
+        json.dumps(result)
+        logger.info("API /api/session/state: OK sections=%d", len(result.get("sections", {})))
+        return result
+    except Exception as exc:
+        logger.error("API /api/session/state error: %s", exc, exc_info=True)
+        return {"available": False, "error": str(exc)}
 
 
 # M4 E4.5.2: Control section diagnostics endpoint

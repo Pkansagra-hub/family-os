@@ -177,42 +177,92 @@ class FakeToolRouter:
 
 
 class FakeHILCoordinator:
-    """Configurable fake HILCoordinator."""
+    """E5: minimal IHILPort fake (renamed from FakeHILCoordinator).
+
+    Exposes the unified k1.kernel.ports.hil_port.IHILPort surface.
+    Default behaviour: ask_clarification times out; request_approval
+    auto-approves. Tests that need other behaviour replace the
+    `_clar_response` / `_approval_response` attributes.
+    """
 
     def __init__(self) -> None:
-        self._round_count: int = 0
-        self.response: Optional[str] = None
-        self.reset_calls: int = 0
-        self.clarification_calls: List[Dict[str, Any]] = []
+        from k1.hil.types import ApprovalResponse, ClarificationResponse
 
-    @property
-    def round_count(self) -> int:
-        return self._round_count
-
-    def reset(self) -> None:
-        self._round_count = 0
-        self.reset_calls += 1
-
-    async def request_clarification(
-        self,
-        request_id: str,
-        question_context: Dict[str, Any],
-    ) -> Optional[str]:
-        self._round_count += 1
-        self.clarification_calls.append(
-            {"request_id": request_id, "question_context": question_context},
+        self._budget: dict[str, int] = {}
+        self.clarification_calls: list = []
+        self.approval_calls: list = []
+        self.reset_calls: list[str] = []
+        self._clar_response = ClarificationResponse(
+            hil_request_id="fake",
+            answer=None,
+            timed_out=True,
+            round_budget_exhausted=False,
         )
-        return self.response
+        self._approval_response = ApprovalResponse(
+            hil_request_id="fake",
+            decision="approve",
+            modifications=None,
+            timed_out=False,
+        )
 
-    async def request_approval(
-        self,
-        request_id: str,
-        plan_summary: str,
-        side_effects: List[str],
-        safety_assessment: str,
-        estimated_duration_ms: int,
-    ) -> str:
-        return "approve"
+    async def ask_clarification(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import ClarificationResponse
+
+        self.clarification_calls.append(req)
+        used = self._budget.get(req.caller_key, 0)
+        if used >= 2:
+            return ClarificationResponse(
+                hil_request_id="",
+                answer=None,
+                timed_out=False,
+                round_budget_exhausted=True,
+            )
+        self._budget[req.caller_key] = used + 1
+        return self._clar_response
+
+    async def request_approval(self, req):  # type: ignore[no-untyped-def]
+        self.approval_calls.append(req)
+        return self._approval_response
+
+    async def needs_human(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import NeedsHumanResponse
+
+        return NeedsHumanResponse(
+            hil_request_id="fake",
+            decision="timeout",
+            resolution={},
+            raw_user_text=None,
+            timed_out=True,
+        )
+
+    async def request_override(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import OverrideResponse
+
+        return OverrideResponse(
+            hil_request_id="fake",
+            choice="abort",
+            selected_alternative=None,
+            fallback_action=None,
+            timed_out=True,
+        )
+
+    async def gate_capability(self, req):  # type: ignore[no-untyped-def]
+        from k1.hil.types import GateDecision, GateOutcome
+
+        return GateDecision(
+            outcome=GateOutcome.ALLOW,
+            hil_request_id=None,
+            reason="fake_allow",
+            user_approved=None,
+            audit_only=False,
+        )
+
+    def reset_round_budget(self, caller_key: str) -> None:
+        self.reset_calls.append(caller_key)
+        self._budget.pop(caller_key, None)
+
+    async def shutdown(self) -> None:
+        return None
 
 
 class FakeContract:
@@ -261,7 +311,7 @@ def sketch_svc(
     router: FakeToolRouter,
     hil: FakeHILCoordinator,
 ) -> SketchService:
-    return SketchService(llm_port=llm, tool_router=router, hil_coord=hil)
+    return SketchService(llm_port=llm, tool_router=router, hil_port=hil)
 
 
 @pytest.fixture
@@ -1524,7 +1574,7 @@ class TestMicroVsFullSketch:
         full_svc = SS(
             llm_port=llm2,
             tool_router=FakeToolRouter(),
-            hil_coord=FakeHILCoordinator(),
+            hil_port=FakeHILCoordinator(),
         )
         await full_svc.execute(
             PlanRequest(intent="Test", trace_id="t1"),

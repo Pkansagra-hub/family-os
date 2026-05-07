@@ -273,7 +273,7 @@ class TestTierProperties:
 
     def test_hot_tier_budget_is_48kb(self, testing_manager: SessionStateManager) -> None:
         """HOT tier has 48KB budget."""
-        assert HOT_SIZE_LIMIT_BYTES == 48 * 1024
+        assert HOT_SIZE_LIMIT_BYTES == 52 * 1024
 
     def test_warm_tier_budget_is_48kb(self, testing_manager: SessionStateManager) -> None:
         """WARM tier has 48KB budget."""
@@ -281,11 +281,11 @@ class TestTierProperties:
 
     def test_hot_tier_has_8_sections(self, testing_manager: SessionStateManager) -> None:
         """HOT tier has 8 sections."""
-        assert len(HOT_SECTIONS) == 8
+        assert len(HOT_SECTIONS) == 10
 
     def test_warm_tier_has_4_sections(self, testing_manager: SessionStateManager) -> None:
         """WARM tier has 4 sections."""
-        assert len(WARM_SECTIONS) == 4
+        assert len(WARM_SECTIONS) == 5
 
     def test_control_and_meta_never_evict(self, testing_manager: SessionStateManager) -> None:
         """control and meta sections never evict."""

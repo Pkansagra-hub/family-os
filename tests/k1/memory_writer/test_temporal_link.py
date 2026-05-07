@@ -246,7 +246,7 @@ class TestMemoryAtomFieldCount:
     def test_field_count(self):
         from dataclasses import fields
 
-        assert len(fields(MemoryAtom)) == 37
+        assert len(fields(MemoryAtom)) == 42
 
 
 # ===================================================================

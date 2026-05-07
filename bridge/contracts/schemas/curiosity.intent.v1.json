@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/curiosity.intent.v1.json",
+  "title": "CuriosityIntentV1",
+  "description": "K0\u2192K1 SSE event payload: a P06 Active-Learning curiosity question pushed to the K1 concierge so it can decide whether to surface it to the user. Carries the originating gap_id (so the answer can be back-correlated to the gap that prompted it), a natural-language question, and the remaining curiosity budget for the active session (the concierge throttles when budget is low).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope_id", "gap_id", "question_text"],
+  "properties": {
+    "envelope_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Per-event ULID. Used as the SSE Last-Event-ID cursor token (D13)."
+    },
+    "gap_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Knowledge gap identifier; correlates the answer back to the originating P03 gap."
+    },
+    "question_text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Natural-language question to surface to the user."
+    },
+    "budget_remaining": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Remaining curiosity budget for the active session."
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier; defaults to space owner if absent."
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Memory-space identifier the gap was detected in."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Cognitive trace identifier."
+    }
+  }
+}

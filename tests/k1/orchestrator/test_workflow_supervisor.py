@@ -105,10 +105,6 @@ class FakeDeltaPort:
     ) -> None:
         self.progress.append((step_id, summary, trace_id))
 
-    async def emit_hil_request(self, hil_request: object, trace_id: str) -> None:
-        self.hil_requests.append((hil_request, trace_id))
-
-
 class FakeBridgePort:
     """Fake IBridgeWritePort -- records deferred results."""
 

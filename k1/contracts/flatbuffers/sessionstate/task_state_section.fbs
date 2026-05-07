@@ -1,0 +1,96 @@
+// ============================================================================
+// task_state_section.fbs - Task State Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/task_state_section.fbs
+// Purpose: Active task tracking - dispatched, suspended, completed tasks
+// Size Budget: 4KB max
+// Tier: HOT CORE
+// Eviction: NEVER (task state must survive full session)
+// ADR: ADR-0017 (SessionState Design), M4 Extension
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+// ============================================================================
+// TASK STATUS ENUM
+// ============================================================================
+
+/// Task lifecycle status (7 states with defined transitions)
+///
+/// Transition graph:
+///   PENDING    -> {DISPATCHED, CANCELLED}
+///   DISPATCHED -> {ACTIVE, SUSPENDED, FAILED, CANCELLED}
+///   ACTIVE     -> {SUSPENDED, COMPLETED, FAILED, CANCELLED}
+///   SUSPENDED  -> {ACTIVE, CANCELLED, FAILED}
+///   COMPLETED  -> (terminal)
+///   FAILED     -> (terminal)
+///   CANCELLED  -> (terminal)
+enum TaskStatus : byte {
+    PENDING = 0,
+    DISPATCHED = 1,
+    ACTIVE = 2,
+    SUSPENDED = 3,
+    COMPLETED = 4,
+    FAILED = 5,
+    CANCELLED = 6
+}
+
+// ============================================================================
+// TASK STATE ENTRY
+// ============================================================================
+
+/// Single tracked task in HOT tier
+/// Single Writer: Back LLM (dispatches tasks, updates status)
+/// Readers: Front LLM (progress display), Orchestrator (dependency checks)
+table TaskStateEntry {
+    task_id: string (required);       // UUID
+    action: string;                   // Capability name (e.g. "order_food")
+    status: TaskStatus = PENDING;
+    dispatched_at_ms: int64 = 0;      // Epoch ms when dispatched
+    completed_at_ms: int64 = 0;       // Epoch ms when terminal
+    depends_on: [string];             // Task IDs this task depends on
+    progress_pct: uint8 = 0;          // 0-100
+    pending_hil: bool = false;        // Awaiting human-in-the-loop input
+    hil_suspensions_count: uint16 = 0;// Times suspended for HIL
+    presented_at_turn: uint16 = 0;    // Turn # when shown (0 = not yet)
+    pending_hil_data: string;         // M6 E6.1.2: JSON-serialized HILSubTask
+}
+
+// ============================================================================
+// TASK STATE SECTION ROOT
+// ============================================================================
+
+/// Task State Section - NEVER EVICT
+/// Tracks all active and recently-completed tasks.
+/// Completed entries pruned after 10 turns post-presentation.
+table TaskStateSection {
+    // Header (common to all sections)
+    header: SectionHeader;
+
+    // Active and recent tasks (max 20)
+    tasks: [TaskStateEntry];
+
+    // Section metadata
+    last_updated_ms: int64;
+
+    // Invariant: This section is NEVER evicted
+    never_evict: bool = true;
+}
+
+root_type TaskStateSection;
+
+// ============================================================================
+// SIZE BUDGET NOTES
+// ============================================================================
+// Target: 4KB (4096 bytes) max
+//
+// Breakdown:
+// - Header: ~100 bytes
+// - TaskStateEntry: ~120 bytes each x 20 tasks = 2400 bytes
+// - Metadata + overhead: ~200 bytes
+//
+// Typical usage: 1-2KB (3-5 active tasks)
+// Max with 20 tasks: ~3.5KB
+// ============================================================================

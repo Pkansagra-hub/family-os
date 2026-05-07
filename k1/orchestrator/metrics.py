@@ -242,9 +242,6 @@ class OrchestratorMetrics:
     def set_pending_plans(self, count: int) -> None:
         self._set_gauge("orchestrator.pending_plans", float(max(0, count)))
 
-    def set_pending_hil(self, count: int) -> None:
-        self._set_gauge("orchestrator.pending_hil", float(max(0, count)))
-
     @contextmanager
     def time_adapter_wait(self, *, adapter: str, operation: str) -> Iterator[None]:
         """Track adapter wait to subtract from total overhead measurement."""

@@ -248,24 +248,28 @@ class Phase1Classified(CanonicalEventMeta):
 
     event_type: str = field(default="k1.phase1.classified.v1", init=False)
     turn_number: int = 0
-    complexity_tier: str = ""
     intent_primary: str = ""
     domain_primary: str = ""
     safety_band: str = ""
     emotion_primary: str = ""
     classification_latency_ms: float = 0.0
     is_degraded: bool = False
+    # P3.3: derived "needs plan" flag computed at FSM/Phase 1 time. Mirrors the
+    # `_dispatch.plan` flag set by execute_dispatch_task; recorded here so the
+    # telemetry timeline captures the system's view of plan-need at
+    # classification time, separate from the LLM's view at dispatch time.
+    derived_plan: bool = False
 
     def to_payload(self) -> dict[str, Any]:
         d = super().to_payload()
         d["turn_number"] = self.turn_number
-        d["complexity_tier"] = self.complexity_tier
         d["intent_primary"] = self.intent_primary
         d["domain_primary"] = self.domain_primary
         d["safety_band"] = self.safety_band
         d["emotion_primary"] = self.emotion_primary
         d["classification_latency_ms"] = self.classification_latency_ms
         d["is_degraded"] = self.is_degraded
+        d["derived_plan"] = self.derived_plan
         return d
 
 

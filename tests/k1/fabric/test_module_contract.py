@@ -236,14 +236,14 @@ class TestPortInterfacesExist:
         [
             ("k1.fabric.ports.state_reader", "ISessionStateReader"),
             ("k1.fabric.ports.event_port", "IEventPort"),
-            ("k1.fabric.ports.bridge_port", "IBridgePort"),
+            ("k1.fabric.ports.bridge_port", "IFabricK0Port"),
             ("k1.fabric.ports.model_gateway", "IModelGatewayPort"),
             ("k1.fabric.ports.prompt_system", "IPromptSystemPort"),
         ],
         ids=[
             "ISessionStateReader",
             "IEventPort",
-            "IBridgePort",
+            "IFabricK0Port",
             "IModelGatewayPort",
             "IPromptSystemPort",
         ],
@@ -276,9 +276,9 @@ class TestPortInterfacesExist:
         assert hasattr(IEventPort, "subscribe")
 
     def test_bridge_port_has_send_command(self) -> None:
-        from k1.fabric.ports.bridge_port import IBridgePort
+        from k1.fabric.ports.bridge_port import IFabricK0Port
 
-        assert hasattr(IBridgePort, "send_command")
+        assert hasattr(IFabricK0Port, "send_command")
 
     def test_model_gateway_has_create_handle(self) -> None:
         from k1.fabric.ports.model_gateway import IModelGatewayPort

@@ -99,6 +99,7 @@ class ProviderType(str, Enum):
     AGENT = "AGENT"
     WORKFLOW = "WORKFLOW"
     CONCIERGE = "CONCIERGE"
+    LOCAL_STUB = "LOCAL_STUB"  # M12.E3 storyline / demo capabilities
 
 
 # ---------------------------------------------------------------------------
@@ -725,6 +726,25 @@ class CapabilityContract:
     created_at_iso: str = ""
     session_scoped: bool = True
 
+    # ---- HIL Policy Metadata (E2 -- HIL Unification) ----
+    # None = inferred from safety_band_min + side_effects via SafetyBandPolicy.
+    # True/False = explicit override (RED contracts still always ask).
+    requires_human_confirmation: Optional[bool] = None
+    side_effects: List[Dict[str, Any]] = field(default_factory=list)
+
+    # ---- Conscience Metadata (M9.E1.I1) ----
+    # ``risk_class``  -- per-capability declared risk; consumed by
+    #                    ``IRiskCatalogPort`` in selfmodel. Defaults to
+    #                    "safety_sensitive" so unmigrated contracts
+    #                    fail-closed.
+    # ``social_act``  -- the constitution-level act id this capability
+    #                    manifests (e.g. ``"send_message"``,
+    #                    ``"set_medication"``). ``None`` =
+    #                    infrastructure-only (no social binding); the
+    #                    conscience never gates such calls.
+    risk_class: str = "safety_sensitive"
+    social_act: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -755,6 +775,10 @@ class CapabilityContract:
             "created_by": self.created_by,
             "created_at_iso": self.created_at_iso,
             "session_scoped": self.session_scoped,
+            "requires_human_confirmation": self.requires_human_confirmation,
+            "side_effects": [dict(se) for se in self.side_effects],
+            "risk_class": self.risk_class,
+            "social_act": self.social_act,
         }
 
     @classmethod
@@ -788,6 +812,10 @@ class CapabilityContract:
             created_by=data.get("created_by", ""),
             created_at_iso=data.get("created_at_iso", ""),
             session_scoped=data.get("session_scoped", True),
+            requires_human_confirmation=data.get("requires_human_confirmation"),
+            side_effects=list(data.get("side_effects", [])),
+            risk_class=data.get("risk_class", "safety_sensitive"),
+            social_act=data.get("social_act"),
         )
 
 
@@ -878,6 +906,12 @@ class AgentContract(CapabilityContract):
             created_by=data.get("created_by", ""),
             created_at_iso=data.get("created_at_iso", ""),
             session_scoped=data.get("session_scoped", True),
+            # ---- HIL policy metadata (E2) ----
+            requires_human_confirmation=data.get("requires_human_confirmation"),
+            side_effects=list(data.get("side_effects", [])),
+            # ---- Conscience metadata (M9.E1.I1) ----
+            risk_class=data.get("risk_class", "safety_sensitive"),
+            social_act=data.get("social_act"),
             # ---- Agent-specific fields ----
             prompt_template=data.get("prompt_template", ""),
             tools_granted=data.get("tools_granted", []),
@@ -1093,7 +1127,7 @@ class TriggerSpec:
 
 
 @dataclass(frozen=True)
-class PlanStep:
+class FabricPlanStep:
     """
     A single step in a CommittedPlan or WorkflowContract.
 
@@ -1140,8 +1174,8 @@ class PlanStep:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PlanStep":
-        """Create PlanStep from dictionary."""
+    def from_dict(cls, data: Dict[str, Any]) -> "FabricPlanStep":
+        """Create FabricPlanStep from dictionary."""
         return cls(
             id=data.get("id", ""),
             capability=data.get("capability", ""),
@@ -1150,6 +1184,10 @@ class PlanStep:
             tools_granted=data.get("tools_granted", []),
             deps=data.get("deps", []),
         )
+
+
+# Backward-compatible alias (P2.4: disambiguate from Orchestrator's PlanStep)
+PlanStep = FabricPlanStep
 
 
 @dataclass(frozen=True)
@@ -1195,7 +1233,7 @@ class WorkflowContract:
     trigger: Optional[TriggerSpec] = None
 
     # ---- Execution Steps (DAG) ----
-    steps: List[PlanStep] = field(default_factory=list)
+    steps: List[FabricPlanStep] = field(default_factory=list)
     dependencies: Dict[str, List[str]] = field(default_factory=dict)
 
     # ---- Recursion & Sub-Workflow Control ----
@@ -1247,7 +1285,7 @@ class WorkflowContract:
             description=data.get("description", ""),
             source_plan_id=data.get("source_plan_id", ""),
             trigger=trigger,
-            steps=[PlanStep.from_dict(s) for s in data.get("steps", [])],
+            steps=[FabricPlanStep.from_dict(s) for s in data.get("steps", [])],
             dependencies=data.get("dependencies", {}),
             max_depth=data.get("max_depth", 3),
             allows_sub_workflows=data.get("allows_sub_workflows", True),

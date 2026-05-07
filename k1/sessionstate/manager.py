@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from .adapters.section_data_adapter import SectionDataAdapter
+from .events import EmergencyLevel, EventType, SessionStateEvents
 from .eviction import EvictionEngine
 from .guard import MutationGuard
 from .local_cold import LocalColdArchive
@@ -47,6 +49,7 @@ from .tiers.warm import WarmTier
 
 if TYPE_CHECKING:
     from .ports.events import IEventPort
+    from .ports.k0_sync import IK0SyncPort
     from .ports.lifecycle import ILifecyclePort
     from .ports.storage import IStoragePort
     from .ports.writer import IWriterPort
@@ -468,6 +471,7 @@ class SessionStateManager:
         "_event_port",
         "_writer_port",
         "_lifecycle_port",
+        "_k0_sync_port",
         "_hot",
         "_warm",
         "_local_cold",
@@ -476,6 +480,8 @@ class SessionStateManager:
         "_mutation_guard",
         "_eviction_engine",
         "_migration_engine",
+        "_section_provider",
+        "_emergency_active",
         "_state",
         "_write_lock",
         "_last_mutation_ms",
@@ -491,6 +497,7 @@ class SessionStateManager:
         writer_port: IWriterPort,
         lifecycle_port: ILifecyclePort,
         local_cold_archive: Optional[LocalColdArchive] = None,
+        k0_sync_port: Optional[IK0SyncPort] = None,
     ) -> None:
         """
         Initialize SessionStateManager with injected ports.
@@ -502,6 +509,7 @@ class SessionStateManager:
             writer_port: Writer adapter (DirectWriterAdapter for standalone)
             lifecycle_port: Lifecycle adapter (StandaloneLifecycle for standalone)
             local_cold_archive: Optional LocalColdArchive instance (for testing)
+            k0_sync_port: Optional K0 sync port for cross-device sync
 
         Note:
             Does NOT start lifecycle here. Call start() explicitly after construction.
@@ -511,6 +519,7 @@ class SessionStateManager:
         self._event_port = event_port
         self._writer_port = writer_port
         self._lifecycle_port = lifecycle_port
+        self._k0_sync_port = k0_sync_port
 
         # State
         self._state = ManagerState.CREATED
@@ -538,23 +547,33 @@ class SessionStateManager:
         )
 
         # Initialize engines with dependencies
+        # W5 (audit Fix J): SectionDataAdapter wires the live HOT + WARM tier
+        # objects into both engines so eviction can serialize+clear real
+        # section bytes and migration can move payloads between tiers.
+        self._section_provider = SectionDataAdapter(self._hot, self._warm)
         self._eviction_engine = EvictionEngine(
             size_tracker=self._size_tracker,
             local_cold=self._local_cold_archive,
             mutation_guard=self._mutation_guard,
             session_id=session_id,
+            section_provider=self._section_provider,
         )
 
         self._migration_engine = MigrationEngine(
             size_tracker=self._size_tracker,
             mutation_guard=self._mutation_guard,
             session_id=session_id,
+            section_provider=self._section_provider,
         )
 
-        logger.debug(
-            "SessionStateManager initialized (session=%s, state=%s)",
+        # W7: emergency activation tracking — only emit on rising edge.
+        self._emergency_active: bool = False
+
+        logger.info(
+            "SessionStateManager initialized (session=%s, state=%s, sections=hot:%d+warm)",
             session_id[:8] if session_id else "none",
             self._state.value,
+            len(HOT_SECTIONS),
         )
 
     # =========================================================================
@@ -653,7 +672,7 @@ class SessionStateManager:
 
     def get_hot(self) -> HotTier:
         """
-        Get the HOT tier (8 sections, 48KB max).
+        Get the HOT tier (8 sections, 52KB max).
 
         Returns:
             HotTier: HOT tier manager with all 8 sections
@@ -706,6 +725,15 @@ class SessionStateManager:
             LocalColdTier: LOCAL COLD tier manager
         """
         return self._local_cold
+
+    def get_local_cold_archive(self) -> LocalColdArchive:
+        """Return the underlying LocalColdArchive (raw storage layer).
+
+        Used by Memory Writer's enriched read path to fetch archived
+        ``history_active`` blobs across an arbitrary session_id without
+        needing the per-session ``LocalColdTier`` wrapper.
+        """
+        return self._local_cold_archive
 
     def get_snapshot(self) -> SessionSnapshot:
         """
@@ -866,23 +894,31 @@ class SessionStateManager:
             pressure = self._size_tracker.get_pressure()
 
             if pressure in (PressureLevel.CRITICAL, PressureLevel.EMERGENCY):
+                # W7: emit EmergencyActivated on rising edge.
+                if not self._emergency_active:
+                    self._emergency_active = True
+                    self._emit_emergency_activated(pressure, trace_id)
                 # Trigger eviction for WARM sections
                 if section in WARM_SECTIONS:
-                    self._trigger_eviction_if_needed()
+                    self._trigger_eviction_if_needed(trace_id=trace_id)
                 # Trigger migration for HOT sections
                 elif section in HOT_SECTIONS:
                     self._trigger_migration_if_needed()
+            elif self._emergency_active and pressure == PressureLevel.NORMAL:
+                # Pressure cleared; allow re-arming the emergency edge.
+                self._emergency_active = False
 
             # Get new size
             new_size = self._size_tracker.get_section_size(section)
             available = self._size_tracker.get_total_available_bytes()
 
-            logger.debug(
-                "Mutation applied: section=%s, op=%s, delta=%d, new_size=%d, trace_id=%s",
+            logger.info(
+                "Mutation applied: section=%s, op=%s, delta=%dB, new_size=%dB, pressure=%s, trace_id=%s",
                 section,
                 operation,
                 actual_bytes,
                 new_size,
+                pressure.value,
                 trace_id,
             )
 
@@ -1024,7 +1060,7 @@ class SessionStateManager:
             new_size = 0
         return new_size - old_size
 
-    def _trigger_eviction_if_needed(self) -> None:
+    def _trigger_eviction_if_needed(self, trace_id: str = "") -> None:
         """Trigger eviction if WARM tier is under pressure."""
         warm_pressure = self._size_tracker.get_pressure("warm")
         if warm_pressure in (PressureLevel.CRITICAL, PressureLevel.EMERGENCY):
@@ -1034,7 +1070,72 @@ class SessionStateManager:
             current = self._size_tracker.get_tier_size("warm")
             bytes_to_free = current - target_bytes
             if bytes_to_free > 0:
-                self._eviction_engine.evict(target_bytes=bytes_to_free)
+                # W7: emit EvictionTriggered before doing the work.
+                candidates = sorted(WARM_SECTIONS)
+                self._safe_emit(
+                    EventType.EVICTION_TRIGGERED.value,
+                    SessionStateEvents.eviction_triggered(
+                        session_id=self._session_id,
+                        cognitive_trace_id=trace_id,
+                        target_reduction_bytes=bytes_to_free,
+                        pressure_level=warm_pressure,
+                        candidates=candidates,
+                    ),
+                )
+                start_ms = time.perf_counter() * 1000.0
+                result = self._eviction_engine.evict(target_bytes=bytes_to_free)
+                duration_ms = (time.perf_counter() * 1000.0) - start_ms
+                # W7: emit EvictionCompleted with whatever the engine reports.
+                bytes_freed = getattr(result, "bytes_freed", 0) or 0
+                bytes_archived = getattr(result, "bytes_archived", 0) or 0
+                sections_evicted = getattr(result, "sections_evicted", []) or []
+                self._safe_emit(
+                    EventType.EVICTION_COMPLETED.value,
+                    SessionStateEvents.eviction_completed(
+                        session_id=self._session_id,
+                        cognitive_trace_id=trace_id,
+                        sections_evicted=list(sections_evicted),
+                        bytes_freed=int(bytes_freed),
+                        bytes_archived=int(bytes_archived),
+                        new_pressure_level=self._size_tracker.get_pressure("warm"),
+                        duration_ms=duration_ms,
+                    ),
+                )
+
+    def _emit_emergency_activated(self, pressure: PressureLevel, trace_id: str) -> None:
+        """W7: publish EmergencyActivatedEvent on rising-edge pressure."""
+        try:
+            level = (
+                EmergencyLevel.CRITICAL
+                if pressure == PressureLevel.EMERGENCY
+                else EmergencyLevel.WARNING
+            )
+            hot_size = self._size_tracker.get_tier_size("hot")
+            warm_size = self._size_tracker.get_tier_size("warm")
+            self._safe_emit(
+                EventType.EMERGENCY_ACTIVATED.value,
+                SessionStateEvents.emergency_activated(
+                    session_id=self._session_id,
+                    cognitive_trace_id=trace_id,
+                    level=level,
+                    total_size_bytes=hot_size + warm_size,
+                    hot_size_bytes=hot_size,
+                    warm_size_bytes=warm_size,
+                    writes_blocked=False,
+                ),
+            )
+        except Exception:  # pragma: no cover - never let observability break mutate()
+            logger.debug("EmergencyActivated emit failed", exc_info=True)
+
+    def _safe_emit(self, event_type: str, payload: Any) -> None:
+        """Fire-and-forget event emission; swallows errors."""
+        port = self._event_port
+        if port is None:
+            return
+        try:
+            port.emit(event_type, payload)
+        except Exception:  # pragma: no cover - emit must never raise upward
+            logger.debug("Event emit failed for %s", event_type, exc_info=True)
 
     def _trigger_migration_if_needed(self) -> None:
         """Trigger migration if HOT tier is under pressure."""
@@ -1108,6 +1209,10 @@ class SessionStateManager:
             )
 
         self._state = ManagerState.STARTING
+        logger.info(
+            "SessionState state transition: CREATED -> STARTING (session=%s)",
+            self._session_id[:8] if self._session_id else "none",
+        )
 
         try:
             restore_source = "fresh"
@@ -1197,6 +1302,11 @@ class SessionStateManager:
             )
 
         self._state = ManagerState.STOPPING
+        logger.info(
+            "SessionState state transition: RUNNING -> STOPPING (session=%s, mutations=%d)",
+            self._session_id[:8] if self._session_id else "none",
+            self._mutation_count,
+        )
 
         checkpoint_id: Optional[str] = None
 
@@ -1321,8 +1431,8 @@ class SessionStateManager:
             sla_met = duration_ms < 50.0
 
             if archive_result.success:
-                logger.debug(
-                    "Checkpoint created: id=%s, size=%d, took=%.2fms, sla_met=%s, trace_id=%s",
+                logger.info(
+                    "Checkpoint created: id=%s, size=%dB, took=%.2fms, sla_met=%s, trace_id=%s",
                     checkpoint_id[:8],
                     size_bytes,
                     duration_ms,

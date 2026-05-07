@@ -272,6 +272,12 @@ class FabricGatewayAdapter:
             availability=getattr(contract, "availability", "ONLINE"),
             compensation_capability=None,
             estimated_duration_ms=getattr(contract, "avg_latency_ms", None) or None,
+            required_inputs=[
+                inp.name if hasattr(inp, "name") else str(inp)
+                for inp in getattr(contract, "required_inputs", [])
+            ],
+            output=getattr(contract, "output", {}) or {},
+            cost_per_call=getattr(contract, "cost_per_call", 0.0) or 0.0,
         )
 
     async def _execute_single_safe(

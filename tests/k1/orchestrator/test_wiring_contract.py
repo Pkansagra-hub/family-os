@@ -40,7 +40,7 @@ _PORT_METHODS: dict[str, list[str]] = {
     ],
     "IPlannerPort": ["request_plan", "cancel_plan", "micro_replan"],
     "IStateReadPort": ["read_section", "read_sections", "get_snapshot"],
-    "IDeltaEmitPort": ["emit", "emit_progress", "emit_hil_request"],
+    "IDeltaEmitPort": ["emit", "emit_progress"],
     "IBridgeWritePort": [
         "submit_audit",
         "write_wal",
@@ -155,7 +155,10 @@ class TestProductionAdaptersImplementProtocols:
         assert isinstance(FabricGatewayAdapter(cast(Any, SimpleNamespace())), IFabricGatewayPort)
 
     def test_prod_planner_adapter(self) -> None:
-        from k1.fabric.circuit_breaker.breaker import CircuitBreaker, CircuitBreakerConfig
+        from k1.fabric.circuit_breaker.breaker import (
+            CircuitBreaker,
+            CircuitBreakerConfig,
+        )
         from k1.orchestrator import IPlannerPort
         from k1.orchestrator.adapters.planner_adapter import PlannerAdapter
 
@@ -182,7 +185,9 @@ class TestProductionAdaptersImplementProtocols:
 
     def test_prod_event_subscription_adapter(self) -> None:
         from k1.orchestrator import IEventSubscriptionPort
-        from k1.orchestrator.adapters.event_subscription_adapter import EventSubscriptionAdapter
+        from k1.orchestrator.adapters.event_subscription_adapter import (
+            EventSubscriptionAdapter,
+        )
 
         assert isinstance(EventSubscriptionAdapter(_DummyEventPort()), IEventSubscriptionPort)
 
@@ -208,7 +213,9 @@ class TestTestAdaptersImplementProtocols:
 
     def test_mock_state_read_adapter(self) -> None:
         from k1.orchestrator import IStateReadPort
-        from k1.orchestrator.adapters.mock_state_read_adapter import MockStateReadAdapter
+        from k1.orchestrator.adapters.mock_state_read_adapter import (
+            MockStateReadAdapter,
+        )
 
         assert isinstance(MockStateReadAdapter(), IStateReadPort)
 
@@ -252,7 +259,9 @@ class TestFactoryWiring:
             IStateReadPort,
         )
         from k1.orchestrator.factory import OrchestratorFactory
-        from k1.orchestrator.orchestration.orchestrator_service import OrchestratorService
+        from k1.orchestrator.orchestration.orchestrator_service import (
+            OrchestratorService,
+        )
 
         service = await OrchestratorFactory.create_for_testing()
         assert isinstance(service, OrchestratorService)

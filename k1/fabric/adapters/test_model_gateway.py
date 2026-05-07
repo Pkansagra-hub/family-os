@@ -223,18 +223,18 @@ class TestModelGatewayAdapter:
             self._handles.append(handle)
             return handle
 
-    def is_model_loaded(self, model_id: str) -> bool:
+    async def is_model_loaded(self, model_id: str) -> bool:
         """Check if a model is in the catalog and loaded."""
         with self._lock:
             info = self._models.get(model_id)
             return info is not None and info.loaded
 
-    def list_models(self) -> List[ModelInfo]:
+    async def list_models(self) -> List[ModelInfo]:
         """List all models in the catalog."""
         with self._lock:
             return list(self._models.values())
 
-    def find_model(self, required_capabilities: List[str]) -> Optional[str]:
+    async def find_model(self, required_capabilities: List[str]) -> Optional[str]:
         """Find a model supporting all required capabilities."""
         with self._lock:
             return self._find_model_internal(required_capabilities)

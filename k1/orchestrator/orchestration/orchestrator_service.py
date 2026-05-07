@@ -32,15 +32,23 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Optional, Protocol, cast, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    cast,
+    runtime_checkable,
+)
 from uuid import uuid4
 
 from k1.fabric.ports.event_port import SubscriptionHandle
+from k1.kernel.ports.hil_port import IHILPort
 from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.connectors.mcp_registrar import RegistrationResult
 from k1.orchestrator.events import (
-    HIL_FALLBACK_RESPONSE,
-    HIL_OVERRIDE_RESPONSE,
     ORCH_DAG_COMPLETED,
     ORCH_DELTA_V1,
     ORCH_PLAN_REQUESTED,
@@ -66,7 +74,6 @@ from k1.orchestrator.types import (
     CompensationRecord,
     ErrorSeverity,
     InterruptRequest,
-    PendingHILContext,
     PendingPlanContext,
     PlanRequest,
     ProcessingContext,
@@ -234,8 +241,6 @@ class OrchestratorService:
     Internal state:
       pending_plans   -- Dict[request_id, PendingPlanContext] for in-flight
                          HIGH tier requests awaiting Planner response.
-      pending_hil     -- Dict[request_id, PendingHILContext] for in-flight
-                         HIL questions awaiting user response.
       executed_plans  -- OrderedDict[plan_id, float] bounded LRU set for
                          RACE-3 deduplication (max 100 entries).
 
@@ -265,10 +270,10 @@ class OrchestratorService:
         "_delta_port",
         "_bridge_port",
         "_event_port",
+        "_hil_port",
         "_mailbox",
         "_config",
         "_pending_plans",
-        "_pending_hil",
         "_executed_plans",
         "_requeued_envelope_ids",
         "_started_at",
@@ -279,6 +284,7 @@ class OrchestratorService:
         "_subscriptions",
         "_admin",
         "_metrics",
+        "_handle_task_waiters",
     )
 
     def __init__(
@@ -299,6 +305,7 @@ class OrchestratorService:
         event_port: IEventSubscriptionPort,
         config: OrchestratorConfig,
         metrics: Optional[OrchestratorMetrics] = None,
+        hil_port: Optional[IHILPort] = None,
     ) -> None:
         # --- Collaborators (injected, never constructed here) ---
         self._mailbox = mailbox
@@ -316,6 +323,7 @@ class OrchestratorService:
         self._delta_port = delta_port
         self._bridge_port = bridge_port
         self._event_port = event_port
+        self._hil_port = hil_port
         self._metrics = metrics or OrchestratorMetrics(enabled=config.metrics_enabled)
 
         # --- Configuration ---
@@ -323,7 +331,6 @@ class OrchestratorService:
 
         # --- Internal mutable state ---
         self._pending_plans: Dict[str, PendingPlanContext] = {}
-        self._pending_hil: Dict[str, PendingHILContext] = {}
         self._executed_plans: OrderedDict[str, float] = OrderedDict()
         self._requeued_envelope_ids: OrderedDict[str, float] = OrderedDict()
         self._started_at: float = time.time()
@@ -336,6 +343,15 @@ class OrchestratorService:
         self._subscriptions: List[SubscriptionHandle] = []
         self._admin: Optional[Any] = None
 
+        # --- handle_task() HIGH-tier completion plumbing ---
+        # When handle_task() is called for a HIGH-tier envelope,
+        # _dispatch_high returns DEFERRED while the planner runs async.
+        # We register an asyncio.Future keyed by trace_id BEFORE calling
+        # process(), and resolve it from _emit_result() once the DAG
+        # actually completes. handle_task() awaits the future to return
+        # the true terminal ProcessResult to its caller.
+        self._handle_task_waiters: Dict[str, "asyncio.Future[ProcessResult]"] = {}
+
     # ======================================================================
     # Properties (read-only accessors for internal state -- used by tests
     # and admin API)
@@ -347,9 +363,9 @@ class OrchestratorService:
         return self._pending_plans
 
     @property
-    def pending_hil(self) -> Dict[str, PendingHILContext]:
-        """Active HIL questions awaiting user response."""
-        return self._pending_hil
+    def hil_port(self) -> Optional[IHILPort]:
+        """Unified HIL port (None until kernel boot wires it in E7)."""
+        return self._hil_port
 
     @property
     def executed_plans(self) -> OrderedDict[str, float]:
@@ -375,6 +391,31 @@ class OrchestratorService:
     def running(self) -> bool:
         """Whether the mailbox loop and reaper are active."""
         return self._running
+
+    # ======================================================================
+    # Cross-wiring (S6b)
+    # ======================================================================
+
+    def bind_planner(self, planner_port: IPlannerPort) -> None:
+        """Replace the planner port (S6b cross-wire).
+
+        Construction-time default is ``MockPlannerAdapter``. After the
+        real Planner has started, the kernel calls ``bind_planner()``
+        with a live ``PlannerAdapter`` so HIGH-tier requests are routed
+        to the real Planner mailbox.
+
+        Args:
+            planner_port: The new ``IPlannerPort`` implementation.
+
+        Raises:
+            TypeError: If ``planner_port`` does not satisfy
+                ``IPlannerPort`` (runtime-checked Protocol).
+        """
+        if not isinstance(planner_port, IPlannerPort):
+            raise TypeError(
+                f"bind_planner: expected IPlannerPort, got " f"{type(planner_port).__name__}"
+            )
+        self._planner_port = planner_port
 
     # ======================================================================
     # Lifecycle: init() -- 10-step startup sequence (6.2.2)
@@ -448,7 +489,6 @@ class OrchestratorService:
         workflows = await self._workflow_engine.registry.list_active()  # type: ignore[union-attr]
         self._metrics.set_workflow_active_count(len(workflows))
         self._metrics.set_pending_plans(len(self._pending_plans))
-        self._metrics.set_pending_hil(len(self._pending_hil))
         log.info("init.workflows_loaded", extra={"count": len(workflows)})
 
         # Step 7: Start scheduler
@@ -554,8 +594,6 @@ class OrchestratorService:
             (PLAN_READY, self._on_plan_ready),
             (PLAN_FAILED, self._on_plan_failed),
             (PLAN_CANCELLED, self._on_plan_cancelled),
-            (HIL_OVERRIDE_RESPONSE, self._on_hil_override),
-            (HIL_FALLBACK_RESPONSE, self._on_hil_fallback),
         ]
 
         for topic, handler in topic_handler_pairs:
@@ -725,14 +763,12 @@ class OrchestratorService:
         mailbox loop to pick up and route to _receive_plan().
         """
         try:
-            plan = CommittedPlan(
-                plan_id=payload.get("plan_id", str(uuid4())),
-                request_id=payload.get("request_id", ""),
-                intent=payload.get("intent", ""),
-                steps=payload.get("steps", []),
-                trace_id=payload.get("trace_id", ""),
-                dependencies=payload.get("dependencies", {}),
-            )
+            # PLAN_READY payload is CommittedPlan.to_dict() (planner
+            # commit_service._deliver_plan), so steps are list[dict] and
+            # MUST be deserialized via CommittedPlan.from_dict, NOT the
+            # raw dataclass constructor (which expects PlanStep instances
+            # and crashes in __post_init__ on `s.id`).
+            plan = CommittedPlan.from_dict(payload)
             self._mailbox.enqueue(plan, priority="INTERACTIVE")
             log.info(
                 "on_plan_ready.enqueued",
@@ -786,51 +822,6 @@ class OrchestratorService:
             "on_plan_cancelled.cleaned",
             extra={"request_id": request_id},
         )
-
-    def _on_hil_override(self, topic: str, payload: Dict[str, Any]) -> None:
-        """Handle HIL_OVERRIDE_RESPONSE: resolve pending HIL context.
-
-        Extracts request_id and user choice from payload. Full DAG
-        resumption is deferred to the DAG execution pipeline; this
-        handler records the resolution and cleans up the pending state.
-        """
-        request_id = payload.get("request_id", "")
-        choice = payload.get("choice", "CONTINUE")
-        pending = self._pending_hil.pop(request_id, None)
-        self._metrics.set_pending_hil(len(self._pending_hil))
-        if pending is None:
-            log.warning(
-                "on_hil_override.no_pending_context",
-                extra={"request_id": request_id},
-            )
-            return
-        log.info(
-            "on_hil_override.resolved",
-            extra={"request_id": request_id, "choice": choice},
-        )
-        self._metrics.increment_hil_request(outcome="responded")
-
-    def _on_hil_fallback(self, topic: str, payload: Dict[str, Any]) -> None:
-        """Handle HIL_FALLBACK_RESPONSE: resolve pending HIL context with fallback.
-
-        Same as override but the user chose a fallback action instead
-        of the primary choice.
-        """
-        request_id = payload.get("request_id", "")
-        fallback_action = payload.get("fallback_action", "CANCEL")
-        pending = self._pending_hil.pop(request_id, None)
-        self._metrics.set_pending_hil(len(self._pending_hil))
-        if pending is None:
-            log.warning(
-                "on_hil_fallback.no_pending_context",
-                extra={"request_id": request_id},
-            )
-            return
-        log.info(
-            "on_hil_fallback.resolved",
-            extra={"request_id": request_id, "fallback_action": fallback_action},
-        )
-        self._metrics.increment_hil_request(outcome="responded")
 
     # ======================================================================
     # Lifecycle: shutdown() -- 9-step teardown sequence (6.2.3)
@@ -959,15 +950,13 @@ class OrchestratorService:
         # Step 8: Final audit write.
         try:
             orphan_plans = len(self._pending_plans)
-            orphan_hil = len(self._pending_hil)
 
             # Gotcha #3: warn about orphaned contexts.
-            if orphan_plans > 0 or orphan_hil > 0:
+            if orphan_plans > 0:
                 log.warning(
                     "shutdown.step8.orphaned_contexts",
                     extra={
                         "pending_plans": orphan_plans,
-                        "pending_hil": orphan_hil,
                     },
                 )
 
@@ -975,7 +964,6 @@ class OrchestratorService:
                 {
                     "event": "orchestrator_shutdown",
                     "pending_plans": orphan_plans,
-                    "pending_hil": orphan_hil,
                     "trace_id": trace_id,
                 },
                 trace_id,
@@ -1254,6 +1242,146 @@ class OrchestratorService:
                 )
 
         return result
+
+    # ======================================================================
+    # External entry point (called by Concierge FabricDispatchAdapter)
+    # ======================================================================
+
+    async def handle_task(self, envelope: Any) -> ProcessResult:
+        """Drive a single MEDIUM/HIGH task to completion.
+
+        Called by ``FabricDispatchAdapter.dispatch_envelope`` (which is
+        invoked by ConciergeController.``_run_medium_orchestration``).
+        Translates a concierge-side ``k1.concierge.orchestrator.types.TaskEnvelope``
+        (fields: intent, task_id, tier as ComplexityTier, budget,
+        session_id, trace_id, context) into a production
+        ``k1.orchestrator.types.TaskEnvelope`` (fields: intent, trace_id,
+        tier as str, capabilities, params, ...) and routes it through
+        ``self.process()``.
+
+        Translation rules:
+          - ``concierge_envelope.intent`` becomes both the orchestrator
+            envelope's ``intent`` AND its single capability (MEDIUM tier
+            requires non-empty capabilities). Callers that need a
+            different capability mapping should pre-resolve before
+            calling.
+          - ``concierge_envelope.context`` carries any capability
+            parameters under key ``"params"`` (a dict keyed by capability
+            name). Absent ``params`` defaults to an empty dict per
+            capability.
+          - ComplexityTier.MEDIUM / .HIGH are mapped to the corresponding
+            string values. ComplexityTier.LOW is rejected (LOW never
+            reaches the Orchestrator).
+
+        Returns:
+            The ``ProcessResult`` from ``self.process(...)``. Completion
+            events (``ORCH_DAG_COMPLETED``) are still fired via
+            ``self._delta_port`` inside ``_emit_result``; the caller is
+            responsible for any session-bus bridging required.
+
+        Notes:
+            This method does NOT itself enqueue to the mailbox -- it
+            drives the task synchronously so the caller's ``await``
+            completes only after ``_emit_result`` has fired. This is
+            required by ``ConciergeController._run_medium_orchestration``
+            which catches exceptions from this call to emit
+            ``task.failed.v1``.
+        """
+        from k1.concierge.orchestrator.types import TaskEnvelope as _ConciergeTaskEnvelope
+        from k1.concierge.task.complexity import ComplexityTier as _CTier
+
+        if isinstance(envelope, TaskEnvelope):
+            return await self.process(envelope)
+
+        if not isinstance(envelope, _ConciergeTaskEnvelope):
+            log.error(
+                "handle_task.unknown_envelope_type",
+                extra={"envelope_type": type(envelope).__name__},
+            )
+            return ProcessResult.FAILED
+
+        if envelope.tier == _CTier.LOW:
+            log.error(
+                "handle_task.low_tier_rejected",
+                extra={"task_id": envelope.task_id},
+            )
+            return ProcessResult.FAILED
+
+        tier_str = "HIGH" if envelope.tier == _CTier.HIGH else "MEDIUM"
+        intent = envelope.intent or ""
+        capabilities: List[str] = [intent] if intent else []
+        params_in = (envelope.context or {}).get("params") or {}
+        if isinstance(params_in, dict):
+            params: Dict[str, Dict[str, Any]] = {
+                cap: dict(params_in.get(cap, {})) for cap in capabilities
+            }
+        else:
+            params = {cap: {} for cap in capabilities}
+
+        try:
+            translated = TaskEnvelope(
+                intent=intent,
+                trace_id=envelope.trace_id or f"trace-{envelope.task_id}",
+                caller_id=envelope.session_id or "",
+                context={
+                    **(envelope.context or {}),
+                    "session_id": envelope.session_id or "",
+                    "task_id": envelope.task_id,
+                },
+                tier=tier_str,
+                capabilities=capabilities,
+                params=params,
+            )
+        except ValueError as exc:
+            log.error(
+                "handle_task.translation_failed",
+                extra={
+                    "task_id": envelope.task_id,
+                    "intent": intent,
+                    "tier": tier_str,
+                    "error": str(exc),
+                },
+            )
+            return ProcessResult.FAILED
+
+        # For HIGH tier, _dispatch_high returns DEFERRED while the planner
+        # runs async. Register an asyncio.Future BEFORE process() so
+        # _emit_result can resolve it once the DAG completes. Then await
+        # the future (with a generous timeout) so the caller observes the
+        # true terminal ProcessResult.
+        waiter: Optional["asyncio.Future[ProcessResult]"] = None
+        if tier_str == "HIGH":
+            loop = asyncio.get_running_loop()
+            waiter = loop.create_future()
+            self._handle_task_waiters[translated.trace_id] = waiter
+
+        immediate = await self.process(translated)
+
+        if waiter is None:
+            return immediate
+        if immediate not in (ProcessResult.DEFERRED, ProcessResult.COMPLETED):
+            self._handle_task_waiters.pop(translated.trace_id, None)
+            if not waiter.done():
+                waiter.cancel()
+            return immediate
+        try:
+            terminal = await asyncio.wait_for(
+                waiter,
+                timeout=(self._config.plan_request_timeout_ms / 1000.0) + 5.0,
+            )
+            return terminal
+        except asyncio.TimeoutError:
+            self._handle_task_waiters.pop(translated.trace_id, None)
+            log.error(
+                "handle_task.high_tier_timeout",
+                extra={
+                    "task_id": envelope.task_id,
+                    "trace_id": translated.trace_id,
+                },
+            )
+            return ProcessResult.FAILED
+        finally:
+            self._handle_task_waiters.pop(translated.trace_id, None)
 
     # ======================================================================
     # Task routing (MEDIUM / HIGH)
@@ -1785,7 +1913,8 @@ class OrchestratorService:
                 extra={
                     "trace_id": ctx.trace_id,
                     "plan_id": plan.plan_id,
-                    "issues": validation.issues,
+                    "errors": validation.errors,
+                    "warnings": validation.warnings,
                 },
             )
             return ProcessResult.FAILED
@@ -2138,7 +2267,7 @@ class OrchestratorService:
     # ======================================================================
 
     async def reap_stale_contexts(self) -> int:
-        """Expire stale PendingPlanContext and PendingHILContext entries.
+        """Expire stale PendingPlanContext entries.
 
         Called periodically by the mailbox loop (every config.context_reap_interval_ms).
 
@@ -2147,9 +2276,9 @@ class OrchestratorService:
           - Emit a FAILED AggregatedResult.
           - Remove from pending_plans.
 
-        For each expired PendingHILContext:
-          - Apply timeout_fallback action.
-          - Remove from pending_hil.
+        HIL timeouts are handled inside the unified HIL service via the
+        coroutine that called `IHILPort.request_override` (E6); no
+        external reaping is required for HIL state.
 
         Returns:
             Number of contexts reaped.
@@ -2199,29 +2328,6 @@ class OrchestratorService:
             await self._emit_result(aggregated, ctx)
             reaped += 1
         self._metrics.set_pending_plans(len(self._pending_plans))
-
-        # Reap stale HIL contexts.
-        stale_hil_ids = [
-            rid
-            for rid, hctx in self._pending_hil.items()
-            if (now - hctx.created_at) > (hctx.timeout_ms / 1000.0)
-        ]
-        for rid in stale_hil_ids:
-            hctx = self._pending_hil.pop(rid, None)
-            if hctx is None:
-                continue
-
-            log.warning(
-                "reap_stale_contexts.hil_timeout",
-                extra={
-                    "request_id": rid,
-                    "fallback": hctx.timeout_fallback,
-                    "age_s": round(now - hctx.created_at, 2),
-                },
-            )
-            self._metrics.increment_hil_request(outcome="timed_out")
-            reaped += 1
-        self._metrics.set_pending_hil(len(self._pending_hil))
 
         return reaped
 
@@ -2440,6 +2546,12 @@ class OrchestratorService:
             run_manifest=aggregated.to_dict(),
             trace_id=ctx.trace_id,
         )
+
+        # Resolve any handle_task() HIGH-tier waiter for this trace_id.
+        waiter = self._handle_task_waiters.pop(ctx.trace_id, None)
+        if waiter is not None and not waiter.done():
+            terminal = ProcessResult.COMPLETED if aggregated.success else ProcessResult.FAILED
+            waiter.set_result(terminal)
 
     def _record_executed_plan(self, plan_id: str) -> None:
         """Add plan_id to the bounded LRU dedup set.

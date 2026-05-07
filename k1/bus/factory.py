@@ -39,6 +39,7 @@ Backend selection (V2-M9):
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional, Union
 
 from k1.bus.impl.local_bus import LocalBus
@@ -72,9 +73,33 @@ MailboxRouterType = Union[LocalMailboxRouter, "RustMailboxRouterAdapter"]  # typ
 
 _VALID_BACKENDS = ("auto", "rust", "python")
 
+_ENV_BUS_BACKEND = "K1_BUS_BACKEND"
+
 
 def _resolve_backend(backend: str) -> str:
-    """Resolve 'auto' to a concrete backend and validate the parameter."""
+    """Resolve 'auto' to a concrete backend and validate the parameter.
+
+    If the ``K1_BUS_BACKEND`` environment variable is set to a valid value
+    (``"auto"``, ``"python"``, ``"rust"``), it **overrides** the programmatic
+    *backend* parameter.  An invalid env var value is logged and ignored.
+    """
+    # Env var override (highest priority)
+    env_val = os.environ.get(_ENV_BUS_BACKEND, "").strip().lower()
+    if env_val:
+        if env_val in _VALID_BACKENDS:
+            logger.debug(
+                "K1_BUS_BACKEND=%r overrides programmatic backend=%r",
+                env_val,
+                backend,
+            )
+            backend = env_val
+        else:
+            logger.warning(
+                "K1_BUS_BACKEND=%r is invalid (must be one of %r), ignoring",
+                env_val,
+                _VALID_BACKENDS,
+            )
+
     if backend not in _VALID_BACKENDS:
         raise ValueError(f"Invalid backend {backend!r}. Must be one of {_VALID_BACKENDS!r}")
     if backend == "auto":
@@ -124,6 +149,12 @@ class BusFactory:
         timing_chain: Optional[TimingChain] = None,
         middleware: list[Middleware] | MiddlewareChain | None = None,
         backend: str = "auto",
+        async_dispatch: bool = False,
+        subscription_mailbox_capacity: int = 1024,
+        retry_resolver: object | None = None,
+        dlq_callback: object | None = None,
+        outbox: object | None = None,
+        durable_topics: set[str] | None = None,
     ) -> BusType:
         """
         Create an in-process bus.
@@ -139,6 +170,31 @@ class BusFactory:
             middleware:     Optional middleware chain or list of Middleware.
                            Runs after stamping, before dispatch.
             backend:       "auto" (default) / "rust" / "python".
+            async_dispatch:
+                Phase 6 / P6.5.  When True, each subscription gets a bounded
+                mailbox + worker thread; publish enqueues and returns
+                immediately.  Forces Python backend (Rust path keeps
+                synchronous semantics).  Default False preserves legacy
+                synchronous-on-publisher-thread behavior.
+            subscription_mailbox_capacity:
+                Per-subscription mailbox capacity when async_dispatch=True.
+                Default 1024.
+            retry_resolver:
+                Phase 6 / P6.6.  Optional ``(topic) -> RetryPolicy | None``
+                callable consulted when a handler raises.  No-op without
+                async_dispatch.
+            dlq_callback:
+                Phase 6 / P6.7.  Optional ``(envelope, exc, attempts) -> None``
+                callable invoked after retry exhaustion.  No-op without
+                async_dispatch.
+            outbox:
+                Phase 6 / P6.13.  Optional ``BusOutbox`` instance for
+                durable persistence of envelopes on ``durable_topics``.
+                Forces Python backend (Rust adapter has no outbox path).
+            durable_topics:
+                Phase 6 / P6.13.  Set of exact topic strings persisted
+                to ``outbox`` before dispatch.  Ignored when ``outbox``
+                is None.
 
         Returns:
             A ready-to-use bus instance (LocalBus or RustBusAdapter).
@@ -152,6 +208,17 @@ class BusFactory:
             logger.debug("TimingChain requested -- falling back to Python backend")
             resolved = "python"
 
+        # async_dispatch requires Python backend (per-sub mailboxes are
+        # implemented in Python LocalBus only).
+        if async_dispatch and resolved == "rust":
+            logger.debug("async_dispatch requested -- falling back to Python backend")
+            resolved = "python"
+
+        # P6.13: outbox / durable_topics also require Python backend.
+        if outbox is not None and resolved == "rust":
+            logger.debug("outbox requested -- falling back to Python backend")
+            resolved = "python"
+
         if resolved == "rust":
             return RustBusAdapter(
                 capture=capture,
@@ -163,6 +230,12 @@ class BusFactory:
             capture=capture,
             timing_chain=timing_chain,
             middleware=mw_chain,
+            async_dispatch=async_dispatch,
+            subscription_mailbox_capacity=subscription_mailbox_capacity,
+            retry_resolver=retry_resolver,
+            dlq_callback=dlq_callback,
+            outbox=outbox,
+            durable_topics=durable_topics,
         )
 
     @staticmethod
@@ -173,6 +246,8 @@ class BusFactory:
         capture: bool = False,
         middleware: list[Middleware] | MiddlewareChain | None = None,
         backend: str = "python",
+        outbox: object | None = None,
+        durable_topics: set[str] | None = None,
     ) -> LocalBus:
         """
         Create a LocalBus with ordering enforcement (TimingChain).
@@ -189,6 +264,13 @@ class BusFactory:
             capture:    If True, record all published envelopes.
             middleware: Optional middleware chain or list of Middleware.
             backend:    Must be "python" (default).  "rust" raises ValueError.
+            outbox:
+                Phase 6 / P6.13.  Optional ``BusOutbox`` instance for
+                durable persistence of envelopes on ``durable_topics``.
+            durable_topics:
+                Phase 6 / P6.13.  Set of exact topic strings persisted
+                to ``outbox`` before dispatch.  Ignored when ``outbox``
+                is None.
 
         Returns:
             LocalBus wired with a TimingChain.
@@ -206,7 +288,13 @@ class BusFactory:
 
         chain = TimingChain(config=config, timeout_ms=timeout_ms)
         mw_chain = _to_chain(middleware)
-        return LocalBus(capture=capture, timing_chain=chain, middleware=mw_chain)
+        return LocalBus(
+            capture=capture,
+            timing_chain=chain,
+            middleware=mw_chain,
+            outbox=outbox,
+            durable_topics=durable_topics,
+        )
 
     @staticmethod
     def create_for_testing(

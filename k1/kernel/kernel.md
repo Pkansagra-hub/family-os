@@ -7,10 +7,16 @@ Status: PLANNING -- fill as implementation proceeds.
 ## 1. Purpose
 
 This document is the single reference for wiring Bus, Fabric, SessionState,
-Orchestrator, and Planner into a unified K1 kernel runtime.  Each component is
-self-contained with hexagonal ports.  The kernel bootstrap creates shared
-infrastructure (Bus, MailboxRouter) and injects real adapters into each
-component's factory.  Five managed components total.
+Orchestrator, Planner, Model Hub, and Concierge into a unified K1 kernel runtime.  Each
+component is self-contained with hexagonal ports.  The kernel bootstrap creates
+shared infrastructure (Bus, MailboxRouter) and injects real adapters into each
+component's factory.  Seven managed components total.
+
+Concierge is the user-facing intelligence — the FSM, the LLM host, the
+conversation conductor.  It is the only K1 component that talks to the user
+and the only writer to SessionState (Single Writer Pattern, ADR-0017).  It
+consumes Bus, Fabric, SessionState, Orchestrator, and the LLM Model Hub
+through 8 hexagonal ports defined in `k1/concierge/concierge.mmd`.
 
 ---
 
@@ -23,6 +29,8 @@ component's factory.  Five managed components total.
 | SessionState | `SessionStateFactory.create_with_ports()` | 5 (4 mandatory + 1 optional) | Local/in-memory for all | `SessionBusAdapter` |
 | Orchestrator | `OrchestratorFactory.create_production()` | 9 (8 core + IAdminPort): IMailboxPort, IFabricGatewayPort, IPlannerPort, IStateReadPort, IDeltaEmitPort, IBridgeWritePort, IEventSubscriptionPort, IWorkflowStoragePort, IAdminPort | 17 adapters (8 production + 8 test + AdminHttpAdapter) | Reuses `FabricBusAdapter` via EventSubscriptionAdapter + DeltaEmitAdapter |
 | Planner | `PlannerFactory.create_production()` | 7: IMailboxPort, ILLMPort, IFabricRetrievalPort, IStateReadPort, IBridgePort, IDeltaEmitPort, IEventPort | 7 test adapters (all 7 slots) | Reuses `FabricBusAdapter` via EventBusAdapter + DeltaBusAdapter |
+| Model Hub | `ModelHubFactory.create_standalone()` / `create_for_testing()` / `create_with_ports()` | 7: IModelHubPort (facade), IEventPort, IStateReadPort, IMetricsPort, IConfigPort, ICredentialPort, IHealthPort | Test adapters for all 7 | n/a (consumers use LLMGatewayAdapter / ModelGatewayAdapter) |
+| Concierge | `ConciergeFactory.create_with_ports()` | 8: IInputPort, IOutputPort, IClassificationPort, ILLMPort, IStatePort, IDispatchPort, IDeltaPort, IMemoryPort | 8 test adapters (all 8 slots) | Reuses `FabricBusAdapter` via DeltaBusAdapter; owns front/back mailboxes via MailboxRouter |
 | Kernel | `k1/kernel/` | 0 | n/a | n/a |
 
 ---
@@ -59,6 +67,20 @@ k1.kernel.bootstrap
   |     model_gateway: TestModelGatewayAdapter() | real gateway
   |     prompt_system: TestPromptSystemAdapter() | real prompts
   |
+  +-- creates --> ModelHubFactory.create_standalone(config, plugins)
+  |     # Model Hub is Layer L2.5 -- created AFTER Fabric, BEFORE Orchestrator.
+  |     # Consumers (Planner, Concierge) wrap it via their own adapters:
+  |     #   Planner:   LLMGatewayAdapter(model_hub)    -> ILLMPort
+  |     #   Concierge: ModelGatewayAdapter(model_hub)   -> ILLMPort
+  |     config:         ModelHubConfig.from_dict(config.model_hub_overrides)
+  |     plugins:        {"openai": OpenAIPlugin(), "anthropic": AnthropicPlugin(), ...}
+  |     # Internal wiring (NOT injected by kernel):
+  |     #   RequestRouter (9-step pipeline), CapabilityRouter,
+  |     #   ModelSelector, BudgetEnforcer, ProviderDispatcher,
+  |     #   ProviderRegistry, RateLimiter, ResponseCache,
+  |     #   NormalizationLayer, CostTracker, AuditLogger,
+  |     #   CircuitBreakerManager, HealthReportAdapter
+  |
   +-- creates --> OrchestratorFactory.create_production(config)
   |     # Orchestrator reuses existing Bus, Fabric, SessionState instances:
   |     fabric_gateway: FabricGatewayAdapter(fabric)               <-- wraps Fabric facade from Phase 3
@@ -85,6 +107,26 @@ k1.kernel.bootstrap
   |     cb_planner = CircuitBreaker("CB_PLANNER", orch_config)     <-- Orchestrator owns CB
   |     planner_adapter = PlannerAdapter(planner_mailbox, cb_planner)
   |     orchestrator._planner_port = planner_adapter               <-- hot-swap MockPlannerAdapter
+  |
+  +-- creates --> ConciergeFactory.create_with_ports(...)
+  |     # Concierge is the user-facing intelligence. It receives ALL other
+  |     # components through ports -- never creates Bus, SS, Fabric, etc.
+  |     # 8 ports per concierge.mmd Epic 1.
+  |     input_port:      WebSocketInputAdapter(ws_server)           <-- Phase 2; Phase 1: TestInputAdapter
+  |     output_port:     SSEOutputAdapter(sse_server)               <-- Phase 2; Phase 1: TestOutputAdapter
+  |     classification:  UltraBERTv4Adapter()                       <-- Phase 2; Phase 1: MockClassificationAdapter / stub
+  |     llm_port:        ModelGatewayAdapter(model_hub)             <-- wraps Model Hub; Phase 1: ModelHubPOCBridge(GeminiAdapter)
+  |     state_port:      SessionKernelAdapter(session_manager)      <-- wraps SessionState from Phase 2; Phase 1: direct SS access
+  |     dispatch_port:   FabricOrchestratorAdapter(fabric, orch)    <-- routes by tier: LOW->Fabric, MED/HIGH->Orchestrator
+  |     delta_port:      DeltaBusAdapter(fabric_bus, bus)           <-- emit events + subscribe deltas via Bus
+  |     memory_port:     BridgeRecallAdapter(bridge_client)         <-- K0 long-term recall; Phase 1: recall_fn closure
+  |     config:          ConciergeConfig
+  |
+  |     # Concierge-internal wiring (NOT injected by kernel):
+  |     #   FSM (ConciergeController), Front/Back actors,
+  |     #   ToolDispatchers, ExperienceLayer, DeltaAggregator,
+  |     #   HILCoordinator, WeaveBatcher, OppPipeline,
+  |     #   DynamicPromptBuilder, MutationGuard, FrontLock
   |
   +-- exposes --> Kernel API surface
 ```
@@ -139,6 +181,45 @@ k1.kernel.bootstrap
 | `IBridgePort` | `Protocol` (structural) | `BridgeAdapter(bridge_client)` | `k1.planner.adapters.bridge_adapter` | Phase 1: `TestBridgeAdapter`. K0 long-term recall + plan persistence. |
 | `IDeltaEmitPort` | `Protocol` (structural) | `DeltaBusAdapter(fabric_bus)` | `k1.planner.adapters.delta_bus_adapter` | Wraps `FabricBusAdapter` delta bus. Fire-and-forget: `emit_delta(topic, payload)`. |
 | `IEventPort` | `Protocol` (structural) | `EventBusAdapter(fabric_bus)` | `k1.planner.adapters.event_bus_adapter` | Wraps `FabricBusAdapter` event port. `emit()`, `subscribe()`, `unsubscribe()`. Tracks handles for bulk cleanup at shutdown. |
+
+### 4.5 Concierge Ports (8 total)
+
+Architecture reference: `k1/concierge/concierge.mmd` Epic 1 (Hexagonal Architecture).
+POC implementation reference: `poc/k1_poc/concierge_poc_architecture.mmd`.
+Ported code: `k1/concierge/` (M5 Big Copy + M6 Fabric wiring).
+
+The Concierge is the conversation conductor — the only component that talks to
+the user and the only writer to SessionState (ADR-0017 Single Writer Pattern).
+It hosts: FSM (12 states), Front/Back dual-LLM actors, 16 tools (10 Front + 6 Back),
+ExperienceLayer (6 components), DynamicPromptBuilder (10 prompt modes),
+HILCoordinator (3 variants), WeaveBatcher, OppPipeline (8 primitives),
+DeltaAggregator, MutationGuard, FrontLock, and the ReAct loop.
+
+All external dependencies are accessed through ports. Internal services
+call ports, never external systems directly (INV-16).
+
+| Port | Protocol | Direction | Wired Adapter | Source Module | Phase 1 (POC) Stub | Notes |
+|------|----------|-----------|---------------|---------------|--------------------|----- |
+| `IInputPort` | `Protocol` (structural) | Inbound | `WebSocketInputAdapter(ws)` / `RESTInputAdapter(http)` | `k1.concierge.adapters.ws_input` | `TestInputAdapter` — inject messages programmatically | `receive() → UserMessage`. Entry point for all user input. |
+| `IOutputPort` | `Protocol` (structural) | Outbound | `SSEOutputAdapter(sse)` / `WebSocketOutputAdapter(ws)` | `k1.concierge.adapters.sse_output` | `TestOutputAdapter` — capture + assert on messages | `send(OutputEvent) → DeliveryReceipt`. All output goes through OUTPUT_CHANNEL. Priority routing: REALTIME (3 retries), PROGRESS (1 retry), BACKGROUND (0 retries). CB_SSE owner. |
+| `IClassificationPort` | `Protocol` (structural) | Outbound | `UltraBERTv4Adapter()` | `k1.concierge.adapters.ultrabert` | `MockClassificationAdapter` — scripted ClassificationResult | `classify(text) → ClassificationResult`. Phase 1 deterministic pre-LLM: intent classification, entity extraction, safety band, emotion, domain detection. 12 heads, 22ms target. Heuristic fallback when CB_MODEL open (<1ms). |
+| `ILLMPort` | `Protocol` (structural) | Outbound | `ModelGatewayAdapter(model_hub)` | `k1.concierge.adapters.model_gateway` | `ModelHubPOCBridge(GeminiConciergeAdapter)` — already ported (M1) | `execute(HubRequest) → HubResponse`, `stream_execute(HubRequest) → AsyncIterator[HubChunk]`. Capabilities: CHAT, TOOL_CALL, STRUCTURED, VISION, REASON. LLM cascade: RETRY → CB HALF-OPEN → CANNED_RESPONSE. Prompt injection boundary: LLM text is non-operative; side effects only via tool_call. |
+| `IStatePort` | `Protocol` (structural) | Both | `SessionKernelAdapter(session_manager)` | `k1.concierge.adapters.session_kernel` | Direct `session_state.get_section()` / `MutationGuard` writes | `read(sections[]) → Snapshot`, `write(section, op, data) → WriteResult`. Concierge is the ONLY writer (ADR-0017). MutationGuard inside adapter: 3-tier validation (section capacity → tier capacity → total capacity). Emergency mode at ≥95% pressure. CB_SESSIONSTATE owner. |
+| `IDispatchPort` | `Protocol` (structural) | Outbound | `FabricOrchestratorAdapter(fabric, orchestrator)` | `k1.concierge.adapters.fabric_orchestrator` | `OrchestratorStub` (185 lines, MEDIUM only, 1-2 Fabric calls) + `ToolContext.fabric_port` | `dispatch_direct(CapReq) → CapResult`, `dispatch_envelope(TaskEnv) → void`. Routes by tier: LOW → Fabric direct, MED/HIGH → Orchestrator. Tier degradation cascade: HIGH(CB_PLANNER open)→MED, MED(CB_ORCH open)→LOW, LOW(CB_FABRIC open)→canned. CB_ORCHESTRATOR + CB_PLANNER + CB_FABRIC + CB_MCP owner. |
+| `IDeltaPort` | `Protocol` (structural) | Both | `DeltaBusAdapter(fabric_bus, bus)` | `k1.concierge.adapters.delta_bus` | `DeltaAggregator` + direct `bus.publish()` | `subscribe(topics[]) → DeltaStream`, `publish(event) → void`, `errors() → ErrorStream`. Emit failure = log + skip (RECOVERABLE). Never TERMINAL (Edge-First: best-effort). |
+| `IMemoryPort` | `Protocol` (structural) | Outbound | `BridgeRecallAdapter(bridge_client)` | `k1.concierge.adapters.bridge_recall` | `recall_fn` closure — keyword-scoring over seed memories | `recall(query, selectors[]) → MemoryResult`. K0 long-term memory query via Bridge → K0 Query Port. Recall timeout = skip memory (RECOVERABLE). Never TERMINAL (Edge-First: respond without memory). |
+
+**Circuit Breakers (7 total, owned by Concierge adapters):**
+
+| CB Name | Owner Adapter | Trigger | Fallback |
+|---------|---------------|---------|----------|
+| `CB_SSE` | SSEOutputAdapter | SSE connection failure | Buffer 5 msgs, flush on reconnect |
+| `CB_MODEL` | UltraBERTv4Adapter / ModelGatewayAdapter | LLM timeout/5xx | Heuristic fallback (<1ms) / CANNED_RESPONSE |
+| `CB_SESSIONSTATE` | SessionKernelAdapter | SS read timeout | Stale cached data (DEGRADED) |
+| `CB_ORCHESTRATOR` | FabricOrchestratorAdapter | Orchestrator failure | Tier degradation HIGH→MED→LOW |
+| `CB_PLANNER` | FabricOrchestratorAdapter | Planner failure | Tier degradation HIGH→MED |
+| `CB_FABRIC` | FabricOrchestratorAdapter | Fabric failure | Canned response |
+| `CB_MCP` | FabricOrchestratorAdapter | MCP server failure | Mark tool unavailable |
 
 ---
 
@@ -201,6 +282,41 @@ k1.kernel.bootstrap
 - Delta loss is acceptable (observability signals, not control-plane)
 - Used by: PipelineController (stage transition deltas), CommitService (commit result delta)
 
+### 5.6 ConciergeSessionAdapter
+
+- Location: `k1/concierge/adapters/session_kernel.py` (TODO: extract from bootstrap)
+- Constructor: `SessionKernelAdapter(manager: SessionStateManager)`
+- Satisfies: Concierge `IStatePort` (structural)
+- Delegates: `read(sections)` → `manager.get_section(name)` for each section; `write(section, op, data)` → `MutationGuard.preflight()` → section method call
+- MutationGuard inside: 3-tier validation (section capacity → tier capacity → total capacity)
+- Emergency mode: ≥95% pressure → ALL writes rejected
+- CB_SESSIONSTATE owner: read timeout → stale cached data (DEGRADED)
+- ADR-0017 enforced: Concierge is the ONLY component wired with write access
+- POC Phase 1 stub: Direct `session_state.get_section()` + `MutationGuard` writes in tool implementations
+
+### 5.7 ConciergeDeltaBusAdapter
+
+- Location: `k1/concierge/adapters/delta_bus.py` (TODO: extract from bootstrap)
+- Constructor: `DeltaBusAdapter(event_port: FabricBusAdapter, bus: LocalBus)`
+- Satisfies: Concierge `IDeltaPort` (structural)
+- Subscribe side: `subscribe(topics)` → registers handlers via `bus.subscribe()` for each topic → returns DeltaStream
+- Publish side: `publish(event)` → `event_port.emit(topic, payload)` (fire-and-forget)
+- Error side: `errors()` → ErrorStream of failed deliveries (logged, never raised)
+- Used by: FSM Controller (subscribe to `k1.orchestration.task.*`, `k1.orchestration.dag.*`), DeltaAggregator (batch window 500ms → FSM.apply_deltas()), Front actor (subscribe to `k1.orchestration.task.complete.v1`, `task.failed.v1`, `task.suspended.v1`, `findings.ready.v1`)
+- POC Phase 1 stub: DeltaAggregator + direct `bus.publish()` + `subscribe_front_events()`
+
+### 5.8 ConciergeFabricOrchestratorAdapter
+
+- Location: `k1/concierge/adapters/fabric_orchestrator.py` (TODO: extract from bootstrap)
+- Constructor: `FabricOrchestratorAdapter(fabric: Fabric, orchestrator: OrchestratorService)`
+- Satisfies: Concierge `IDispatchPort` (structural)
+- Routing logic:
+  - `dispatch_direct(CapReq)` → `fabric.execute(request)` (LOW tier: direct Fabric call)
+  - `dispatch_envelope(TaskEnv)` → `orchestrator.mailbox.enqueue(envelope)` (MED/HIGH tier)
+- Circuit breakers: CB_ORCHESTRATOR, CB_PLANNER, CB_FABRIC, CB_MCP
+- Tier degradation: HIGH(CB_PLANNER open)→MED, MED(CB_ORCH open)→LOW, LOW(CB_FABRIC open)→canned
+- POC Phase 1 stub: `OrchestratorStub` (185 lines, MEDIUM only, 1-2 Fabric calls) + `ToolContext.fabric_port` for LOW tier
+
 ---
 
 ## 6. Topic Namespace Registry
@@ -225,6 +341,27 @@ k1.kernel.bootstrap
 | `k1.capability.*` | Fabric / Bus | Capability completion/failure events (consumed by Orchestrator via EventSubscriptionAdapter) |
 | `k1.bus.lifecycle.*` | RustBus/LocalBus | Internal bus lifecycle (subscribe/unsubscribe) |
 | `k1.kernel.*` | Kernel bootstrap | Kernel-level events (startup, shutdown, health) |
+| `k1.session.user.input.v1` | Concierge (FSM) | User input received; routed to Front actor mailbox (URGENT) |
+| `k1.response.ack.v1` | Concierge (Front) | Acknowledgment streamed to user (URGENT) |
+| `k1.response.final.v1` | Concierge (Front) | Final response to user (URGENT) |
+| `k1.response.clarification.v1` | Concierge (Front) | Clarification question to user (URGENT) |
+| `k1.response.stream.v1` | Concierge (Front) | Streaming text delta chunks to OutputChannel |
+| `k1.orchestration.task.dispatch.v1` | Concierge (Front) | Front dispatches task to Back actor (INTERACTIVE) |
+| `k1.orchestration.task.complete.v1` | Concierge (Back) | Task completed; consumed by Front (INTERACTIVE) |
+| `k1.orchestration.task.failed.v1` | Concierge (Back) | Task failed; consumed by Front (INTERACTIVE) |
+| `k1.orchestration.task.cancel.v1` | Concierge (Front) | Cancel in-flight task (URGENT) |
+| `k1.orchestration.task.suspended.v1` | Concierge (Back) | Task suspended for HITL; consumed by Front (INTERACTIVE) |
+| `k1.orchestration.task.resume.v1` | Concierge (Front) | Resume suspended task after HITL (INTERACTIVE) |
+| `k1.orchestration.task.accepted.v1` | Concierge (Orchestrator) | Orchestrator accepted TaskEnvelope (INTERACTIVE) |
+| `k1.orchestration.findings.ready.v1` | Concierge (Back) | Intermediate findings for Front (INTERACTIVE) |
+| `k1.affect.update.v1` | Concierge (Experience) | Affect update from ExperienceLayer (RELAXED/BACKGROUND) |
+| `k1.proactive.fill.v1` | Concierge (Experience) | Proactive fill message during idle (RELAXED/BACKGROUND) |
+| `k1.internal.weave.batch.v1` | Concierge (WeaveBatcher) | Internal: batched async results for weaving (INTERNAL) |
+| `k1.hil.request.v1` | Concierge (Front) | HITL relay to user (INTERACTIVE) |
+| `k1.hil.response.v1` | Concierge (Front) | HITL resolve from user answer (INTERACTIVE) |
+| `k1.tool.started.v1` | Concierge (Back) | Tool execution started; observability (INTERACTIVE) |
+| `k1.tool.completed.v1` | Concierge (Back) | Tool execution completed; observability (INTERACTIVE) |
+| `k1.concierge.turn.complete.v1` | Concierge (FSM) | Turn completed; consumed by Memory Writer, Learning Loop (BACKGROUND) |
 
 ---
 
@@ -261,6 +398,35 @@ fabric = FabricFactory.create_with_ports(
     production_mode=False,
     contracts_dir=str(config.contracts_dir),
 )
+
+# Phase 3.5: Model Hub (needs config + plugins; no bus/fabric/session deps)
+from k1.model_hub.factory import ModelHubFactory
+from k1.model_hub.config import ModelHubConfig
+from k1.model_hub.plugins.openai_plugin import OpenAIPlugin
+from k1.model_hub.plugins.anthropic_plugin import AnthropicPlugin
+from k1.model_hub.plugins.google_plugin import GooglePlugin
+from k1.model_hub.plugins.vllm_plugin import VLLMPlugin
+from k1.model_hub.plugins.ollama_plugin import OllamaPlugin
+
+model_hub_config = ModelHubConfig.from_dict(config.model_hub_overrides)
+model_hub = ModelHubFactory.create_standalone(
+    config=model_hub_config,
+    plugins={
+        "openai": OpenAIPlugin(),
+        "anthropic": AnthropicPlugin(),
+        "google": GooglePlugin(),
+        # Local providers (optional, enabled by config):
+        # "vllm": VLLMPlugin(),
+        # "ollama": OllamaPlugin(),
+    },
+)
+# model_hub implements IModelHubPort -- single gateway for ALL LLM traffic (MH-16).
+# Consumers wrap it in their own adapters:
+#   Planner:   LLMGatewayAdapter(model_hub)    -> Planner.ILLMPort
+#   Concierge: ModelGatewayAdapter(model_hub)   -> Concierge.ILLMPort
+# Model Hub is stateless w.r.t. kernel -- no bus subscriptions, no session writes (MH-01).
+# Internal services: RequestRouter (9-step pipeline), BudgetEnforcer ($5/day default),
+# CapabilityRouter, ModelSelector, ProviderDispatcher, CircuitBreakerManager, etc.
 
 # Phase 4: Orchestrator (needs bus + fabric + session_manager)
 from k1.orchestrator.factory import OrchestratorFactory
@@ -331,13 +497,93 @@ cb_planner = CircuitBreaker(
 planner_adapter = PlannerAdapter(planner_mailbox, cb_planner)
 orchestrator._planner_port = planner_adapter  # hot-swap MockPlannerAdapter -> real PlannerAdapter
 
-# Phase 6: Start lifecycle
+# Phase 5.5: Bridge Client (needs config; connects to K0 backend)
+# bridge_client is used by Concierge (IMemoryPort), Orchestrator (IBridgeWritePort),
+# and Planner (IBridgePort). Phase 1: None (stubs used). Phase 2: real connection.
+from k1.bridge.connector.client import BridgeClient
+from k1.bridge.connector.config import BridgeConfig
+
+bridge_config = BridgeConfig.from_dict(config.bridge_overrides)  # host, port, timeout, retry
+bridge_client = await BridgeClient.connect(bridge_config)         # Phase 1: None / TestBridgeClient
+# bridge_client implements query(), send_command(), subscribe(), close().
+# If K0 unreachable: bridge_client = None → adapters fall back to offline stubs.
+# Orchestrator bridge=MockBridgeAdapter() (Phase 1) → BridgeWriteAdapter(bridge_client) (Phase 2).
+# Planner bridge_port=TestBridgeAdapter() (Phase 1) → BridgeAdapter(bridge_client) (Phase 2).
+
+# Phase 6: Concierge (needs bus + fabric + session + orchestrator + planner)
+from k1.concierge.factory import ConciergeFactory
+from k1.concierge.config import ConciergeConfig
+from k1.concierge.adapters.ws_input import WebSocketInputAdapter
+from k1.concierge.adapters.sse_output import SSEOutputAdapter
+from k1.concierge.adapters.ultrabert import UltraBERTv4Adapter
+from k1.concierge.adapters.model_gateway import ModelGatewayAdapter
+from k1.concierge.adapters.session_kernel import SessionKernelAdapter
+from k1.concierge.adapters.fabric_orchestrator import FabricOrchestratorAdapter
+from k1.concierge.adapters.delta_bus import DeltaBusAdapter as ConciergeDeltaBusAdapter
+from k1.concierge.adapters.bridge_recall import BridgeRecallAdapter
+
+concierge_config = ConciergeConfig.from_dict(config.concierge_overrides)
+concierge = await ConciergeFactory.create_with_ports(
+    input_port=TestInputAdapter(),                                   # Phase 1 stub; Phase 2: WebSocketInputAdapter(ws)
+    output_port=TestOutputAdapter(),                                 # Phase 1 stub; Phase 2: SSEOutputAdapter(sse)
+    classification_port=MockClassificationAdapter(),                 # Phase 1 stub; Phase 2: UltraBERTv4Adapter()
+    llm_port=ModelGatewayAdapter(model_hub),                         # wraps Model Hub; Phase 1: ModelHubPOCBridge(Gemini)
+    state_port=SessionKernelAdapter(session_manager),                # wraps SessionState from Phase 2
+    dispatch_port=FabricOrchestratorAdapter(fabric, orchestrator),   # routes by tier: LOW->Fabric, MED/HIGH->Orchestrator
+    delta_port=ConciergeDeltaBusAdapter(fabric_bus, bus),             # emit events + subscribe deltas via Bus
+    memory_port=BridgeRecallAdapter(bridge_client),                  # Phase 1: TestBridgeAdapter; Phase 2: real Bridge
+    config=concierge_config,
+)
+# ConciergeFactory.create_with_ports() internally creates:
+#   - ConciergeController (FSM, 12 states)
+#   - Front/Back actors with ToolDispatchers (10 Front + 6 Back tools)
+#   - ExperienceLayer (6 components: EP, AM, NW, AR, PS, RC)
+#   - DeltaAggregator (500ms batch window → FSM.apply_deltas())
+#   - HILCoordinator (3 variants: clarification, approval, selection)
+#   - WeaveBatcher (async result batching for natural delivery)
+#   - OppPipeline (8 primitives, 9 lifecycle hooks)
+#   - DynamicPromptBuilder (10 prompt modes, 128K context window)
+#   - MutationGuard (3-tier validation for SS writes)
+#   - FrontLock (concurrency gate, priority queue)
+#   - front/back mailboxes via MailboxRouter
+#
+# All internal wiring uses only the 8 injected ports -- no direct dependencies.
+# Concierge is the ONLY writer to SessionState (ADR-0017, enforced structurally).
+
+# Concierge consumer task (dequeues front/back mailboxes, dispatches to actors):
+concierge_task = asyncio.create_task(concierge.start())
+
+# Phase 6.5: Household Projection Hydration (D-14, D-15, D-16)
+# Family identity, safety-critical health (allergies), access levels, device registry,
+# and household governance are NOT SessionState sections. They live in a frozen
+# HouseholdProjection cached in-memory inside Concierge.
+# See §126 for the full hydration protocol.
+if bridge_client is not None:
+    household_snapshot = await bridge_client.query(
+        "household.projection.v1",
+        params={"session_id": session_manager.session_id},
+    )
+    # Returns: members[], devices[], governance{}, version
+    await concierge.hydrate_household(household_snapshot)
+    # Subscribe to live deltas (member added/removed, governance changed, device registered)
+    await bridge_client.subscribe(
+        "household.delta.v1",
+        handler=concierge.apply_household_delta,
+    )
+else:
+    # Offline: load from LOCAL COLD (last known good) — edge-first (D-15)
+    await concierge.hydrate_household_from_local_cold()
+    # Flag: projection_stale = True → Concierge works fine but warns on safety-sensitive ops
+
+# Phase 7: Start lifecycle
 session_manager.start()
 
-# Phase 7: Expose kernel API
+# Phase 8: Expose kernel API
 return KernelRuntime(bus=bus, mailbox_router=mailbox_router,
                      session=session_manager, fabric=fabric,
-                     orchestrator=orchestrator, planner=planner)
+                     orchestrator=orchestrator, planner=planner,
+                     model_hub=model_hub, concierge=concierge,
+                     bridge=bridge_client)
 ```
 
 ---
@@ -345,18 +591,23 @@ return KernelRuntime(bus=bus, mailbox_router=mailbox_router,
 ## 8. Shutdown Sequence
 
 ```
-1. orchestrator.shutdown()    -- stop admin HTTP, drain active DAG (30s), stop scheduler, unsubscribe events, persist trigger states, cancel loops
-2. planner.stop()             -- set _running=False, drain mailbox (emit plan.cancelled for each), cancel in-flight plan (grace period), unsubscribe 4 events, log shutdown.complete
-3. planner_task.cancel()      -- cancel the background asyncio task spawned in Phase 5
-4. fabric.shutdown()          -- drain pending executions
-5. session_manager.stop()     -- final checkpoint, flush events
-6. bus.close()                -- drain subscribers, close ring buffer
-7. mailbox_router.close()     -- drain all mailboxes
+1. concierge.stop()           -- flush DeltaAggregator, cancel FrontLock queue, stop WeaveBatcher, teardown FSM, unsubscribe all bus topics, log dead-letter summary
+2. concierge_task.cancel()    -- cancel the background asyncio task spawned in Phase 6
+3. orchestrator.shutdown()    -- stop admin HTTP, drain active DAG (30s), stop scheduler, unsubscribe events, persist trigger states, cancel loops
+4. planner.stop()             -- set _running=False, drain mailbox (emit plan.cancelled for each), cancel in-flight plan (grace period), unsubscribe 4 events, log shutdown.complete
+5. planner_task.cancel()      -- cancel the background asyncio task spawned in Phase 5
+6. model_hub.close()          -- close all provider plugins (await plugin.close()), flush metrics, stop rate limiter, clear response cache, log shutdown summary
+7. fabric.shutdown()          -- drain pending executions
+8. session_manager.stop()     -- final checkpoint, flush events
+9. bus.close()                -- drain subscribers, close ring buffer
+10. mailbox_router.close()    -- drain all mailboxes
 ```
 
 Order matters: consumers shut down before infrastructure.
+Concierge is a consumer of Orchestrator (via IDispatchPort), Fabric (via IDispatchPort LOW tier), SessionState (via IStatePort), Bus (via IDeltaPort), and Model Hub (via ILLMPort).
 Orchestrator is a consumer of Planner (via PlannerAdapter).
-Planner is a consumer of Fabric (via FabricRetrievalAdapter) and Bus (via EventBusAdapter).
+Planner is a consumer of Fabric (via FabricRetrievalAdapter), Bus (via EventBusAdapter), and Model Hub (via ILLMPort → LLMGatewayAdapter).
+Model Hub is stateless infrastructure -- no upstream consumers to drain, but plugins hold connections to external APIs.
 Fabric is a consumer of SessionState.
 
 ---
@@ -503,6 +754,229 @@ Cancel path:
   --> Resets pipeline, releases lock, continues loop
 ```
 
+### 9.8 Concierge LOW Tier: User Input -> Front -> Back -> Fabric -> Response
+
+```
+User sends "What's the weather in Mumbai?"
+  --> IInputPort.receive() -> UserMessage
+  --> FSM LISTENING -> ACKING
+  --> IClassificationPort.classify(text) -> ClassificationResult(tier=LOW, domain=weather, safety=GREEN)
+  --> IStatePort.write("control", classification_result)
+  --> IStatePort.write("scoreboard", intents + entities)
+  --> Bus.publish(Envelope(topic="k1.session.user.input.v1", payload))
+  --> Front actor receives (subscribed via IDeltaPort)
+  --> Front ReAct loop iteration 1: acknowledge() tool call
+  --> IOutputPort.send(ack_event) -> k1.response.ack.v1
+  --> Front ReAct iteration 2: recall_memory() via IMemoryPort.recall()
+  --> Front ReAct iteration 3: update_beliefs() via IStatePort.write("beliefs_active", ...)
+  --> Front ReAct iteration 4: dispatch_task(intents=[weather_lookup])
+  --> FSM ACKING -> DISPATCHING
+  --> Bus.publish(Envelope(topic="k1.orchestration.task.dispatch.v1", payload))
+  --> Back actor receives via back mailbox
+  --> Back ReAct iteration 1: discover_capabilities() via IDispatchPort -> Fabric
+  --> Back ReAct iteration 2: invoke_capability("weather_lookup") via IDispatchPort.dispatch_direct(CapReq)
+  --> Fabric.execute(request) -> CapabilityResult(temperature=32C, ...)
+  --> Back ReAct iteration 3: submit_result(result_type="complete", data={...})
+  --> Bus.publish(Envelope(topic="k1.orchestration.task.complete.v1", payload))
+  --> Front actor receives task.complete
+  --> FSM DISPATCHING -> DELIVERING
+  --> Front generates natural language response with results
+  --> IOutputPort.send(final_event) -> k1.response.final.v1
+  --> FSM DELIVERING -> LISTENING
+```
+
+### 9.9 Concierge MEDIUM Tier: User Input -> Front -> Orchestrator -> Fabric -> Weave
+
+```
+User sends "Book a table at Taj and create a calendar event"
+  --> IInputPort.receive() -> UserMessage
+  --> IClassificationPort.classify() -> ClassificationResult(tier=MEDIUM, intents=2)
+  --> FSM LISTENING -> ACKING -> DISPATCHING
+  --> Front dispatches: dispatch_task(intents=[restaurant_booking, calendar_create])
+  --> IDispatchPort.dispatch_envelope(TaskEnvelope(tier=MEDIUM, intents=[...]))
+  --> OrchestratorService.mailbox.enqueue(envelope)
+  --> FSM DISPATCHING -> COMPANIONING (Front can accept new user input)
+  --> Orchestrator processes: 2 Fabric calls (sequential per MEDIUM rules)
+  --> FabricGatewayAdapter.execute(restaurant_booking_request) -> CapabilityResult
+  --> FabricGatewayAdapter.execute(calendar_create_request) -> CapabilityResult
+  --> DeltaEmitAdapter.emit("k1.orchestration.dag.completed.v1", AggregatedResult)
+  --> IDeltaPort subscription handler fires in Concierge
+  --> DeltaAggregator batches (500ms window)
+  --> If Front is busy (FrontLock.busy=True):
+        WeaveBatcher queues result
+        On FrontLock release: WeaveBatcher.flush() -> Front receives batched results
+  --> FSM COMPANIONING -> WEAVING (if pending_results)
+  --> Front generates weave response: addresses user's topic first, then presents results
+  --> IOutputPort.send(final_event)
+  --> FSM WEAVING -> LISTENING (queue drained)
+```
+
+### 9.10 Concierge HITL Flow: Back Suspends -> Front Translates -> User Answers -> Back Resumes
+
+```
+Back executing invoke_capability("hotel_booking")
+  --> Back detects: missing required param "checkout_date"
+  --> submit_result(result_type="needs_human", hil_type="clarification", question="When do you check out?")
+  --> Bus.publish(Envelope(topic="k1.orchestration.task.suspended.v1", payload))
+  --> FSM -> CLARIFYING_WORKER
+  --> Front receives task.suspended via IDeltaPort subscription
+  --> Front translates to natural language: "I'd love to help book that! When are you checking out?"
+  --> IOutputPort.send(clarification_event) -> k1.response.clarification.v1
+  --> User responds: "Sunday the 15th"
+  --> IInputPort.receive() -> UserMessage
+  --> Front parses answer, emits: Bus.publish(topic="k1.orchestration.task.resume.v1", resolution={checkout_date: "2026-06-15"})
+  --> FSM CLARIFYING_WORKER -> PROGRESSING
+  --> Back resumes from ReAct message history with resolution
+  --> Back retries invoke_capability("hotel_booking", {checkin: ..., checkout: "2026-06-15"})
+  --> Back: submit_result(result_type="complete", data={confirmation_number: ...})
+  --> Bus.publish(topic="k1.orchestration.task.complete.v1")
+  --> FSM -> DELIVERING -> Front presents result -> LISTENING
+```
+
+### 9.11 Concierge HIGH Tier: Front -> Orchestrator -> Planner -> DAG -> Agents via Fabric
+
+```
+User sends "Plan a weekend trip to Goa for the family — flights, hotel, and activities"
+  --> IInputPort.receive() -> UserMessage
+  --> IClassificationPort.classify() -> ClassificationResult(tier=HIGH, domain=travel, intents=3)
+  --> FSM LISTENING -> ACKING -> DISPATCHING
+  --> Front dispatches: dispatch_task(intents=[flight_search, hotel_booking, activity_planner])
+  --> Bus.publish(Envelope(topic="k1.orchestration.task.dispatch.v1", payload))
+
+FSM._on_task_dispatch():
+  --> route_task_sync(dispatch, tier=HIGH) -> DispatchRecord
+        Budget: max_fabric_calls=10, max_planner_tokens=3500, timeout from config
+  --> PassthroughPlannerStub wraps as 1-step committed plan (M10 E10.3.2)
+        committed_plan = {task_id, steps: [{intent, step_id}]}
+  --> Re-route as MEDIUM → asyncio.create_task(_run_medium_orchestration(TaskEnvelope))
+  --> Inject reference_context from scoreboard (Gap 6: pronoun resolution)
+  --> Inject narrative_thread from narrative_active (Gap 5: context drift prevention)
+
+OrchestratorStub.handle_task(TaskEnvelope):
+  --> Step 1: emit k1.orchestration.task.accepted
+  --> Step 2: state_read.snapshot(["beliefs_active", "task_artifacts"]) -> context
+  --> Step 3: CapabilityRequest(name=envelope.intent, params=context)
+  --> Step 4: fabric_gateway.execute(cap_request) → budget check via _check_budget()
+        |
+        |  Fabric 9-step pipeline:
+        |  1. emit k1.capability.invoked.v1
+        |  2. Resolve provider (Registry -> Policy -> Selector)
+        |  3. Build ExecutionContext (SessionState + prompts + budget)
+        |  4. ProviderFactory instantiates by ProviderType
+        |     |
+        |     |--> ProviderType.AGENT → AgentProvider.execute()
+        |     |      AgentFactory.spawn_and_execute():
+        |     |        Step 1: Load AgentContract via contract_loader
+        |     |        Step 2: Create MPSC Mailbox (WFQ INTERACTIVE priority)
+        |     |        Step 3: Grant LLM access via IModelGatewayPort.create_handle(budget_tokens)
+        |     |        Step 4: Grant SessionState read (scoped to declared sections)
+        |     |        Step 5: Scope tool access via ToolScope (from contract.tools_granted)
+        |     |        Step 6: Build ExecutionContext via ContextBuilder
+        |     |        Step 7: Instantiate Agent (lifecycle: PENDING → WARMING → ACTIVE)
+        |     |        Step 8: Agent.execute(params) → result
+        |     |        Agent emits deltas via DeltaEmitter → IDeltaBusPort (500ms batch, LWW merge)
+        |     |        On success: AgentPool.put(agent) → IDLE (60s TTL, FIFO reuse)
+        |     |      Returns AgentResult → CapabilityResult
+        |     |
+        |     |--> ProviderType.BRIDGE → BridgeProvider.execute() (K0 tools)
+        |     |--> ProviderType.MCP → MCPProvider.execute() (external tools)
+        |     |--> ProviderType.WORKFLOW → WorkflowProvider.execute()
+        |     |
+        |  5. Execute via CircuitBreaker (timeout FAB-04)
+        |  6. Validate output (3-tier: structural → schema → semantic)
+        |  7. emit k1.capability.completed.v1 or k1.capability.failed.v1
+        |
+  --> Step 5: AggregatedResult.from_medium(capability_result)
+  --> Step 6: emit k1.orchestration.dag.completed
+
+FSM._on_dag_completed():
+  --> Normalize to k1.orchestration.task.complete.v1
+  --> FSM routing: if FrontLock.busy → WeaveBatcher.on_task_complete(result)
+        |
+        WeavePolicy.decide(WeaveSignal) using 6 signal categories:
+          1. FSM state (COMPANIONING, LISTENING, etc.)
+          2. Urgency profile (pending urgency counts + has_critical)
+          3. User activity (typing? idle_ms?)
+          4. Queue depth (pending_count)
+          5. Affect band (emotional gate: OPEN, SUPPRESS_TRIVIAL, SUPPRESS_ALL_NON_SAFETY)
+          6. Backpool utilization + HITL pending
+        → WeaveDecision: IMMEDIATE | BATCH(200-5000ms) | DEFER | DIGEST(10-30s) | SUPPRESS
+        |
+  --> On FrontLock release: WeaveBatcher.flush() → deliver batched results
+  --> FSM → WEAVING → Front generates weave response → DELIVERING → LISTENING
+
+HITL branch (if capability has side_effects or safety_band >= AMBER):
+  --> HILCoordinator.handle_needs_human(task_id, hil_type, question, safety_band, ...)
+        Safety band escalation: GREEN + side_effects → AMBER
+        Suspension limits: check max_rounds (default 2)
+        TrustAccumulator: if trust >= 0.85 AND risk="low" → auto_approve (skip HITL)
+  --> on_emit_suspended() → Bus.publish(task.suspended)
+  --> FSM → CLARIFYING_USER or CLARIFYING_WORKER
+  --> User responds → HILPipeline.process_approval_response()
+        Decisions: approve | approve+mods | modify+mods (re-present) | cancel
+  --> on_emit_resume() → Bus.publish(task.resume)
+  --> Back resumes with resolution
+  --> TrustAccumulator.record(outcome) → adjusts future auto-approve threshold
+```
+
+### 9.12 Specialized Agent Invocation via Fabric
+
+```
+OrchestratorStub (or DAG executor) invokes capability "agent.execute.empathy_writer"
+  --> Fabric.execute(CapabilityRequest("agent.execute.empathy_writer", params))
+
+  Step 1: CapabilityRegistry resolves contract for "agent.execute.empathy_writer"
+  Step 2: ProviderMatcher finds AgentProvider (ProviderType.AGENT)
+  Step 3: ProviderSelector picks best available provider (circuit breaker, affinity)
+
+  AgentProvider.execute(request, context, trace_id):
+    --> AgentFactory.spawn_and_execute(request, context, trace_id)
+
+    Pool check: AgentPool.get("empathy_writer")
+      --> If IDLE agent available: reactivate (IDLE → ACTIVE), skip steps 1-7
+      --> If not: spawn fresh agent (8 steps below)
+
+    Step 1: Load AgentContract("empathy_writer")
+              - Declared sections: ["affective_now", "persona"]
+              - tools_granted: ["memory_recall", "tone_suggest"]
+              - llm_budget_tokens: 2000
+    Step 2: Create MPSC mailbox (WFQ INTERACTIVE priority)
+    Step 3: IModelGatewayPort.create_handle(budget_tokens=2000) → ILLMHandle
+    Step 4: SessionState reader scoped to ["affective_now", "persona"] only
+              # Family identity (name, role, allergies) comes from HouseholdProjection (§126), not SS
+    Step 5: ToolScope enforces only ["memory_recall", "tone_suggest"] callable
+    Step 6: ContextBuilder assembles ExecutionContext
+    Step 7: Agent instantiated (PENDING → WARMING → ACTIVE)
+
+    Agent.execute(params):
+      --> LLM generation with budget (via ILLMHandle)
+      --> Tool calls filtered by ToolScope
+      --> State deltas emitted (NEVER writes SS directly):
+            DeltaEmitter.queue(AgentDelta(section, key, value))
+            500ms batch window, LWW merge on (section, key) collisions
+            Flush → IDeltaBusPort → Delta Bus → Concierge → MutationGuard → SessionState
+
+    On success:
+      --> AgentPool.put(agent) → IDLE (60s TTL)
+      --> AgentPool: max 5 per contract, FIFO reuse, TTL sweep eviction
+      --> Return CapabilityResult to Fabric
+
+  Fabric pipeline continues:
+    --> Validate result (structural → schema → semantic)
+    --> emit k1.capability.completed.v1 with metrics
+    --> emit k1.fabric.learning.signal.v1 (capability quality feedback)
+    --> Return CapabilityResult to OrchestratorStub
+
+Agent Lifecycle FSM:
+  PENDING → WARMING → ACTIVE → IDLE (pooled, 60s TTL)
+                              → DRAINING → TERMINATED
+
+Invariants:
+  - FAB-01: Agent NEVER writes SessionState directly (deltas only)
+  - FAB-07: ToolScope enforced on ALL tool invocations
+  - Agent deltas flow: Agent → DeltaEmitter → Delta Bus → Concierge MutationGuard → SS
+```
+
 ---
 
 ## 10. Validation Checklist
@@ -542,6 +1016,36 @@ is considered wired.
 | W-28 | No Planner circular imports | `python -c "from k1.planner.factory import PlannerFactory"` succeeds | [ ] |
 | W-29 | Orchestrator IPlannerPort hot-swapped | After Phase 5b cross-wiring, `orchestrator._planner_port` is `PlannerAdapter` (not Mock) | [ ] |
 | W-30 | Planner get_mailbox() returns IMailboxPort | `planner.get_mailbox()` returns the injected mailbox_port instance | [ ] |
+| W-31 | Concierge factory completes < 500ms | `time ConciergeFactory.create_with_ports(...)` | [ ] |
+| W-32 | All 8 Concierge ports injected | All 8 port slots non-None after factory returns | [ ] |
+| W-33 | Concierge FSM starts in LISTENING | `concierge.fsm.state == LISTENING` after `start()` | [ ] |
+| W-34 | Concierge IStatePort reads real SessionState | `state_port.read(["cognitive"])` returns data after `session.start()` | [ ] |
+| W-35 | Concierge IStatePort writes via MutationGuard | `state_port.write("beliefs_active", op, data)` succeeds; verify section updated | [ ] |
+| W-36 | Concierge IDispatchPort LOW routes to Fabric | `dispatch_port.dispatch_direct(CapReq)` returns valid CapabilityResult from real Fabric | [ ] |
+| W-37 | Concierge IDispatchPort MED routes to Orchestrator | `dispatch_port.dispatch_envelope(TaskEnv)` enqueues to Orchestrator mailbox | [ ] |
+| W-38 | Concierge IDeltaPort receives bus events | Subscribe to `k1.orchestration.task.complete.v1`, emit via Bus, assert Concierge handler called | [ ] |
+| W-39 | Concierge ILLMPort calls real Model Hub | `llm_port.execute(HubRequest)` returns HubResponse via ModelGatewayAdapter | [ ] |
+| W-40 | Concierge IMemoryPort recalls via Bridge | `memory_port.recall(query)` returns MemoryResult (stub or real) | [ ] |
+| W-41 | Concierge Front actor processes user.input | Publish `k1.session.user.input.v1`, assert Front ReAct loop invoked | [ ] |
+| W-42 | Concierge Back actor processes task.dispatch | Publish `k1.orchestration.task.dispatch.v1`, assert Back ReAct loop invoked | [ ] |
+| W-43 | Concierge HITL flow round-trips | Trigger HITL suspension, provide user answer, assert task resumes | [ ] |
+| W-44 | Concierge Weave merges async results | Complete task while Front busy, assert WeaveBatcher delivers after FrontLock release | [ ] |
+| W-45 | Concierge shutdown drains cleanly | `concierge.stop()` flushes DeltaAggregator, unsubscribes bus topics, no errors | [ ] |
+| W-46 | No Concierge circular imports | `python -c "from k1.concierge.factory import ConciergeFactory"` succeeds | [ ] |
+| W-47 | Concierge single-writer enforced | Only Concierge's IStatePort has write access; Orchestrator/Planner have read-only adapters | [ ] |
+| W-48 | Model Hub factory completes < 200ms | `time ModelHubFactory.create_standalone(config, plugins)` | [ ] |
+| W-49 | All 7 Model Hub ports satisfied | IModelHubPort, IEventPort, IStateReadPort, IMetricsPort, IConfigPort, ICredentialPort, IHealthPort non-None after factory | [ ] |
+| W-50 | Model Hub implements IModelHubPort | `isinstance(model_hub, IModelHubPort)` is True | [ ] |
+| W-51 | BudgetEnforcer active on startup | `model_hub.execute(HubRequest(...))` with budget=0 raises `BudgetExceededError` (MH-04) | [ ] |
+| W-52 | RequestRouter processes E2E | `model_hub.execute(HubRequest(capability=CHAT, ...))` returns HubResponse via full 9-step pipeline | [ ] |
+| W-53 | Provider plugins initialize | Each registered plugin `supports(capability)` returns True for declared capabilities | [ ] |
+| W-54 | Circuit breaker per provider | `circuit_mgr.get_state(provider_id)` returns CLOSED after startup | [ ] |
+| W-55 | Model Hub NEVER writes session state | No IStateWritePort in Model Hub dependency graph (MH-01) | [ ] |
+| W-56 | No Model Hub circular imports | `python -c "from k1.model_hub.factory import ModelHubFactory"` succeeds | [ ] |
+| W-57 | Planner LLMGatewayAdapter wraps real Model Hub | `planner_llm_port.execute(req)` delegates to `model_hub.execute(req)` | [ ] |
+| W-58 | Concierge ModelGatewayAdapter wraps real Model Hub | `concierge_llm_port.execute(req)` delegates to `model_hub.execute(req)` | [ ] |
+| W-59 | Model Hub shutdown drains cleanly | `model_hub.close()` closes all plugins, flushes metrics, no errors | [ ] |
+| W-60 | All 1010 Model Hub tests pass | `pytest tests/k1/model_hub/ -q` | [ ] |
 
 ---
 
@@ -555,6 +1059,10 @@ is considered wired.
 | Q-04 | Does the MailboxRouter need to be wired to Fabric agents? | Yes -- each agent could have a dedicated mailbox for ordered delivery. Not wired yet. | -- |
 | Q-05 | How does K0 enter the picture? | Via `IBridgePort` (Fabric) and `IK0SyncPort` (SessionState). Stubs until Bridge is live. | -- |
 | Q-06 | Is a single Bus instance shared or do we need isolated bus domains? | Single shared bus with topic namespacing. Revisit if topic collision risk grows. | -- |
+| Q-07 | When does Concierge bootstrap move from monolith to ConciergeFactory? | After M10 (Integration & Hardening). Current `k1/concierge/kernel/bootstrap.py` is the Phase 1 monolith; `ConciergeFactory` is the production target. | -- |
+| Q-08 | Should Concierge IStatePort be split into IStateReadPort + IStateWritePort? | No for now — Concierge is the ONLY writer (ADR-0017), so a combined bidirectional port is cleaner. Revisit if another component ever needs write access. | -- |
+| Q-09 | How does Concierge Front/Back actor mailbox wiring work with MailboxRouter? | Concierge creates its own front/back mailboxes via MailboxRouter. These are Concierge-internal; the kernel does not manage them. | -- |
+| Q-10 | Does the Concierge need a direct Planner port? | No — Concierge talks to Planner indirectly via IDispatchPort → Orchestrator → IPlannerPort. No direct coupling. | -- |
 
 ---
 
@@ -608,6 +1116,98 @@ is considered wired.
 | PipelineController | `k1/planner/pipeline_controller.py` |
 | Stage services | `k1/planner/stages/*.py` (4 files: sketch, expand, validate, commit) |
 | Leaf services | `k1/planner/services/*.py` (tool_call_router, hil_coordinator) |
+| Concierge architecture spec | `k1/concierge/concierge.mmd` |
+| Concierge POC architecture | `poc/k1_poc/concierge_poc_architecture.mmd` |
+| Concierge factory (TODO) | `k1/concierge/factory.py` |
+| Concierge config | `k1/concierge/config/` (shimmed to `poc.k1_poc.config`) |
+| Concierge bootstrap (Phase 1 monolith) | `k1/concierge/kernel/bootstrap.py` |
+| Concierge kernel runner | `k1/concierge/kernel/runner.py` |
+| Concierge FSM controller | `k1/concierge/fsm/controller.py` |
+| Concierge FSM states | `k1/concierge/fsm/states.py` |
+| Concierge FSM transition table | `k1/concierge/fsm/transition_table.py` |
+| Concierge FSM FrontLock | `k1/concierge/fsm/front_lock.py` |
+| Concierge FSM dead letter | `k1/concierge/fsm/dead_letter_consumer.py` |
+| Concierge Front actor | `k1/concierge/actors/front.py` |
+| Concierge Back actor | `k1/concierge/actors/back.py` |
+| Concierge Back router | `k1/concierge/actors/back_router.py` |
+| Concierge ReAct loop | `k1/concierge/react/loop.py` |
+| Concierge tools (implementations) | `k1/concierge/tools/implementations.py` |
+| Concierge tools (dispatcher) | `k1/concierge/tools/dispatcher.py` |
+| Concierge tools (front schemas) | `k1/concierge/tools/schemas_front.py` |
+| Concierge tools (back schemas) | `k1/concierge/tools/schemas_back.py` |
+| Concierge LLM port | `k1/concierge/llm/ports.py` (IConciergeModelPort) |
+| Concierge LLM types | `k1/concierge/llm/types.py` |
+| Concierge LLM bridge (POC) | `k1/concierge/llm/model_hub_bridge.py` (ModelHubPOCBridge) |
+| Concierge LLM adapter (Gemini) | `k1/concierge/llm/gemini_adapter.py` |
+| Concierge LLM validator | `k1/concierge/llm/validator.py` |
+| Concierge Orchestrator stub | `k1/concierge/orchestrator/stub.py` |
+| Concierge Orchestrator ports | `k1/concierge/orchestrator/ports.py` |
+| Concierge Orchestrator types | `k1/concierge/orchestrator/types.py` |
+| Concierge Orchestrator routing | `k1/concierge/orchestrator/routing.py` |
+| Concierge DeltaAggregator | `k1/concierge/delta/aggregator.py` |
+| Concierge DeltaApplicator | `k1/concierge/delta/applicator.py` |
+| Concierge ExperienceLayer | `k1/concierge/experience/layer.py` |
+| Concierge EmotionalProcessor | `k1/concierge/experience/emotional_processor.py` |
+| Concierge AffectiveMirror | `k1/concierge/experience/affective_mirror.py` |
+| Concierge RhythmController | `k1/concierge/experience/rhythm_controller.py` |
+| Concierge ProactiveAgent | `k1/concierge/experience/proactive_agent.py` |
+| Concierge HILCoordinator | `k1/concierge/protocols/hitl_coordinator.py` |
+| Concierge HITL pipeline | `k1/concierge/protocols/hitl_pipeline.py` |
+| Concierge TrustAccumulator | `k1/concierge/protocols/trust_accumulator.py` |
+| Concierge WeaveBatcher | `k1/concierge/protocols/weave_batcher.py` |
+| Concierge WeavePolicy | `k1/concierge/protocols/weave_policy.py` |
+| Concierge OppPipeline | `k1/concierge/protocols/opp_pipeline.py` |
+| Concierge DeliveryStrategy | `k1/concierge/protocols/delivery_strategy.py` |
+| Concierge Cancellation | `k1/concierge/protocols/cancellation.py` |
+| Concierge Fabric contracts | `k1/concierge/fabric/contract_converter.py` |
+| Concierge POC bridge adapter | `k1/concierge/fabric/poc_bridge_adapter.py` |
+| Concierge capability registry | `k1/concierge/fabric/capability_registry.py` |
+| Concierge UltraBERT adapter | `k1/concierge/fsm/ultrabert_adapter.py` |
+| Concierge UltraBERT Phase1 | `k1/concierge/fsm/ultrabert_phase1.py` |
+| Concierge Ledger writer | `k1/concierge/ledger/writer.py` |
+| Concierge bus builders | `k1/concierge/bus/builders.py` |
+| Model Hub factory | `k1/model_hub/factory.py` |
+| Model Hub config | `k1/model_hub/config.py` |
+| Model Hub types | `k1/model_hub/types.py` |
+| Model Hub events | `k1/model_hub/events.py` |
+| Model Hub metrics | `k1/model_hub/metrics.py` |
+| Model Hub tracing | `k1/model_hub/tracing.py` |
+| Model Hub manifest | `k1/model_hub/manifest.py` |
+| Model Hub architecture diagram | `k1/model_hub/model_hub.mmd` |
+| IModelHubPort (facade) | `k1/model_hub/ports/hub_port.py` |
+| IEventPort | `k1/model_hub/ports/event_port.py` |
+| IStateReadPort | `k1/model_hub/ports/state_read_port.py` |
+| IMetricsPort | `k1/model_hub/ports/metrics_port.py` |
+| IConfigPort | `k1/model_hub/ports/config_port.py` |
+| ICredentialPort | `k1/model_hub/ports/credential_port.py` |
+| IHealthPort | `k1/model_hub/ports/health_port.py` |
+| RequestRouter (9-step pipeline) | `k1/model_hub/services/request_router.py` |
+| CapabilityRouter | `k1/model_hub/services/capability_router.py` |
+| ModelSelector | `k1/model_hub/services/model_selector.py` |
+| BudgetEnforcer | `k1/model_hub/services/budget_enforcer.py` |
+| ProviderDispatcher | `k1/model_hub/services/provider_dispatcher.py` |
+| ProviderRegistry | `k1/model_hub/services/provider_registry.py` |
+| RateLimiter | `k1/model_hub/services/rate_limiter.py` |
+| ResponseCache | `k1/model_hub/services/response_cache.py` |
+| NormalizationLayer | `k1/model_hub/services/normalization_layer.py` |
+| CostTracker | `k1/model_hub/services/cost_tracker.py` |
+| AuditLogger | `k1/model_hub/services/audit_logger.py` |
+| CircuitBreakerManager | `k1/model_hub/services/circuit_breaker_manager.py` |
+| IProviderPlugin (base protocol) | `k1/model_hub/plugins/base.py` |
+| OpenAIPlugin | `k1/model_hub/plugins/openai_plugin.py` |
+| AnthropicPlugin | `k1/model_hub/plugins/anthropic_plugin.py` |
+| GooglePlugin | `k1/model_hub/plugins/google_plugin.py` |
+| VLLMPlugin | `k1/model_hub/plugins/vllm_plugin.py` |
+| OllamaPlugin | `k1/model_hub/plugins/ollama_plugin.py` |
+| TestPlugin | `k1/model_hub/plugins/test_plugin.py` |
+| ConfigAdapter | `k1/model_hub/adapters/config_adapter.py` |
+| CredentialStoreAdapter | `k1/model_hub/adapters/credential_store_adapter.py` |
+| EventBusAdapter (Model Hub) | `k1/model_hub/adapters/event_bus_adapter.py` |
+| HealthReportAdapter | `k1/model_hub/adapters/health_report_adapter.py` |
+| LLMRequestBusAdapter | `k1/model_hub/adapters/llm_request_bus_adapter.py` |
+| PrometheusAdapter | `k1/model_hub/adapters/prometheus_adapter.py` |
+| SessionStateReadAdapter (Model Hub) | `k1/model_hub/adapters/session_state_read_adapter.py` |
+| Model Hub README | `k1/model_hub/README.md` |
 
 ---
 
@@ -4687,6 +5287,7 @@ Retry policy:
 | `recall_for_planning` | 100ms | 0 |
 
 Key methods:
+
 - `call(tool_name, **params)` -- route + dispatch + increment `_tool_call_count`
 - `discover(intent, *, domain, safety_band, top_k)` -- convenience
 - `find_prompts(intent, *, domain, top_k)` -- convenience
@@ -4911,3 +5512,2159 @@ original plan). Micro-replan bypasses the mailbox queue.
 | Service: HILCoordinator | `k1/planner/services/hil_coordinator.py` |
 | Test Adapters | `tests/k1/planner/adapters/` |
 | Factory Tests | `tests/k1/planner/test_factory.py` |
+
+---
+
+## 88. Concierge Architecture Overview
+
+The Concierge is the user-facing conversational agent in K1. It owns the
+entire request–response lifecycle: receive user input, classify intent,
+dispatch to the correct tier (LOW / MEDIUM / HIGH), stream responses back,
+manage affect and proactive fills, and coordinate human-in-the-loop (HITL)
+approvals.
+
+### 88.1 Dual-LLM Architecture
+
+```text
+┌─────────────────────────────────────────────────────┐
+│                   Concierge                         │
+│                                                     │
+│  ┌──────────┐         ┌──────────┐                  │
+│  │  Front    │  ──→──  │  Back     │                │
+│  │  (Voice)  │  topic  │  (Worker) │                │
+│  │  10 tools │  route  │  6 tools  │                │
+│  └──────────┘         └──────────┘                  │
+│       │                    │                         │
+│       │                    ├─── LOW: Back → Fabric   │
+│       │                    ├─── MED: Orchestrator    │
+│       │                    └─── HIGH: Planner → DAG  │
+│       │                                              │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  FSM Controller (12 states, FrontLock)       │   │
+│  │  ExperienceLayer (6 components)              │   │
+│  │  DeltaAggregator → DeltaApplicator           │   │
+│  │  WeaveBatcher (500ms) + WeavePolicy          │   │
+│  │  HILCoordinator (3 variants)                 │   │
+│  │  OppPipeline (8 primitives, 9 hooks)         │   │
+│  │  Ledger (event sourcing)                     │   │
+│  └──────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────┘
+```
+
+- **Front actor** ("voice"): Faces the user. Runs ReAct loop with 10 tool schemas.
+  Produces streaming responses, affect updates, proactive fills.
+- **Back actor** ("worker"): Handles dispatched tasks. Runs separate ReAct loop with
+  6 tool schemas. Routes by complexity tier to Fabric, Orchestrator, or Planner.
+
+### 88.2 Complexity Tiers
+
+| Tier | Route | Budget | Latency Target | Example |
+| ---- | ----- | ------ | -------------- | ------- |
+| LOW | Front → Back → Fabric direct | 1 Fabric call, 0 planner tokens | < 2 s | "Turn on the lights" |
+| MEDIUM | Front → OrchestratorStub (1–2 Fabric calls) | 2 Fabric calls, 0 planner tokens | 2–10 s | "Set a reminder for tomorrow" |
+| HIGH | Front → PassthroughPlannerStub → reroute as MEDIUM (Phase 1) | 10 Fabric calls, 3500 planner tokens | 10–60 s | "Plan a trip to Paris" |
+
+**Phase 1 HIGH tier behavior**: `route_task_sync()` wraps HIGH as a 1-step committed plan
+via `PassthroughPlannerStub`, then re-routes as MEDIUM through `OrchestratorStub`.
+Production HIGH tier (Epic 2+) will use the real Planner for multi-step DAG execution.
+
+**Budget enforcement**: `OrchestratorStub._check_budget()` enforces max Fabric calls per
+tier. Budget is frozen in `Budget(frozen=True)` dataclass, immutable after creation.
+
+### 88.3 Eight Hexagonal Ports
+
+| # | Port | Direction | Protocol | Purpose |
+| - | ---- | --------- | -------- | ------- |
+| 1 | IInputPort | Inbound | `receive() → UserMessage` | Receive user input |
+| 2 | IOutputPort | Outbound | `send(OutputEvent) → DeliveryReceipt` | Stream responses to user |
+| 3 | IClassificationPort | Outbound | `classify(text) → ClassificationResult` | Intent + tier classification |
+| 4 | ILLMPort | Outbound | `execute(HubRequest) → HubResponse` / `stream_execute → AsyncIterator[HubChunk]` | LLM calls via Model Hub |
+| 5 | IStatePort | Both | `read(sections[]) → Snapshot` / `write(section, op, data) → WriteResult` | SessionState read/write |
+| 6 | IDispatchPort | Outbound | `dispatch_direct(CapReq) → CapResult` / `dispatch_envelope(TaskEnv) → void` | Fabric + Orchestrator dispatch |
+| 7 | IDeltaPort | Both | `subscribe(topics[]) → DeltaStream` / `publish(event) → void` | Bus events + deltas |
+| 8 | IMemoryPort | Outbound | `recall(query, selectors[]) → MemoryResult` | Memory recall for context |
+
+### 88.4 Seven Circuit Breakers
+
+| CB Name | Owner Adapter | Trip Condition | Degraded Behavior |
+| ------- | ------------- | -------------- | ------------------ |
+| CB_SSE | SSEOutputAdapter | 3 consecutive send failures | Buffer up to 5 messages, flush on reconnect |
+| CB_MODEL | ModelGatewayAdapter | LLM timeout / 5xx | Canned response in DEGRADED mode |
+| CB_SESSIONSTATE | SessionKernelAdapter | Read timeout | Return stale cached data |
+| CB_ORCHESTRATOR | FabricOrchestratorAdapter | Orchestrator unresponsive | Tier degradation HIGH → MED → LOW |
+| CB_PLANNER | FabricOrchestratorAdapter | Planner timeout | Fall back to MED tier |
+| CB_FABRIC | FabricOrchestratorAdapter | Fabric capability failure | Mark capability unavailable |
+| CB_MCP | FabricOrchestratorAdapter | MCP tool timeout | Mark tool unavailable |
+
+---
+
+## 89. Concierge Ports (8 total)
+
+### 89.1 IInputPort
+
+```python
+@runtime_checkable
+class IInputPort(Protocol):
+    async def receive(self) -> UserMessage:
+        """Block until next user message arrives."""
+        ...
+```
+
+**Production adapter**: `WebSocketInputAdapter` / `RESTInputAdapter`
+**Test adapter**: `TestInputAdapter` (inject messages programmatically)
+
+### 89.2 IOutputPort
+
+```python
+@runtime_checkable
+class IOutputPort(Protocol):
+    async def send(self, event: OutputEvent) -> DeliveryReceipt:
+        """Send response chunk/event to user. Returns delivery confirmation."""
+        ...
+```
+
+**Production adapter**: `SSEOutputAdapter` / `WebSocketOutputAdapter`
+**Test adapter**: `TestOutputAdapter` (capture + assert on messages)
+**Circuit breaker**: CB_SSE (3 retries for REALTIME, 1 for PROGRESS, 0 for BACKGROUND)
+
+### 89.3 IClassificationPort
+
+```python
+@runtime_checkable
+class IClassificationPort(Protocol):
+    async def classify(self, text: str) -> ClassificationResult:
+        """Classify user intent and complexity tier (LOW/MEDIUM/HIGH)."""
+        ...
+```
+
+**Production adapter**: `UltraBERTv4Adapter` (12 heads, 22ms)
+**Test adapter**: `MockClassificationAdapter` (scripted results)
+**Circuit breaker**: CB_MODEL (heuristic fallback when open)
+**Heuristic fallback** (< 1ms): CRISIS keywords → hardcoded scan; question + < 20 words →
+conversational/LOW; remind/schedule/set → task/MED; plan/help → planning/HIGH; default → LOW.
+
+### 89.4 ILLMPort (IConciergeModelPort in Phase 1)
+
+```python
+@runtime_checkable
+class ILLMPort(Protocol):
+    async def execute(self, request: HubRequest) -> HubResponse:
+        """Single-shot LLM call. Capabilities: CHAT, TOOL_CALL, STRUCTURED, VISION, REASON."""
+        ...
+
+    async def stream_execute(self, request: HubRequest) -> AsyncIterator[HubChunk]:
+        """Streaming LLM call. Yields chunks as they arrive."""
+        ...
+```
+
+**Phase 1 implementation**: `IConciergeModelPort` (`k1/concierge/llm/ports.py`)
+  with methods `generate()` and `generate_stream()` wrapping Gemini directly.
+**Production adapter**: `ModelGatewayAdapter` (routes via Model Hub LLM Request Bus)
+**Test adapter**: `MockLLMAdapter` (scripted responses + tool calls)
+**Circuit breaker**: CB_MODEL (L1: retry once, L2: half-open probe 30s, L3: canned response)
+
+### 89.5 IStatePort
+
+```python
+@runtime_checkable
+class IStatePort(Protocol):
+    async def read(self, sections: list[str]) -> Snapshot:
+        """Read one or more SessionState sections."""
+        ...
+
+    async def write(self, section: str, op: str, data: Any) -> WriteResult:
+        """Write to a SessionState section with mutation guard."""
+        ...
+```
+
+**Production adapter**: `SessionKernelAdapter` (wraps SessionStateManager, MutationGuard inside)
+**Test adapter**: `InMemoryStateAdapter` (dict-based, tracks writes)
+**Circuit breaker**: CB_SESSIONSTATE (read timeout → stale cache, emergency mode at ≥ 95KB)
+
+**Phase 1 status**: Concierge directly holds `SessionStateManager` reference. The port
+boundary does not yet exist; reads/writes go through `session_state.get_section()` and
+section-specific methods.
+
+### 89.6 IDispatchPort
+
+```python
+@runtime_checkable
+class IDispatchPort(Protocol):
+    async def dispatch_direct(self, request: CapabilityRequest) -> CapabilityResult:
+        """Execute a single capability via Fabric (LOW tier)."""
+        ...
+
+    async def dispatch_envelope(self, envelope: TaskEnvelope) -> None:
+        """Submit a task envelope to Orchestrator (MEDIUM/HIGH tier)."""
+        ...
+```
+
+**Production adapter**: `FabricOrchestratorAdapter` (routes by tier)
+**Test adapter**: `MockDispatchAdapter` (captures envelopes + requests)
+**Circuit breakers**: CB_ORCHESTRATOR, CB_PLANNER, CB_FABRIC, CB_MCP
+**Tier degradation**: HIGH → MED → LOW → canned response
+
+**Phase 1 status**: `OrchestratorStub` (`k1/concierge/orchestrator/stub.py`) implements
+dispatch for LOW tier via `IFabricGatewayPort`. MEDIUM/HIGH stubs return mock results.
+
+### 89.7 IDeltaPort
+
+```python
+@runtime_checkable
+class IDeltaPort(Protocol):
+    async def subscribe(self, topics: list[str]) -> DeltaStream:
+        """Subscribe to bus topics for delta events."""
+        ...
+
+    async def publish(self, event: Any) -> None:
+        """Publish a delta event to the bus."""
+        ...
+
+    async def errors(self) -> ErrorStream:
+        """Get error stream for diagnostic routing."""
+        ...
+```
+
+**Production adapter**: `DeltaBusAdapter` (subscription + error routing)
+**Test adapter**: `TestDeltaAdapter` (emit test deltas on demand)
+**Emit failure policy**: log + skip (RECOVERABLE, never TERMINAL — Edge-First best-effort)
+
+**Phase 1 status**: `DeltaAggregator` + `DeltaApplicator` are directly wired. Bus
+publish/subscribe is done through the `IBus` reference held by bootstrap.
+
+### 89.8 IMemoryPort
+
+```python
+@runtime_checkable
+class IMemoryPort(Protocol):
+    async def recall(self, query: str, selectors: list[str]) -> MemoryResult:
+        """Recall memories matching query and selector filters."""
+        ...
+```
+
+**Production adapter**: `BridgeRecallAdapter` (QueryPort + offline fallback)
+**Test adapter**: `MockMemoryAdapter` (canned recall results)
+**Timeout policy**: skip memory (RECOVERABLE, never TERMINAL — respond without memory)
+
+**Phase 1 status**: `recall_fn` callback built by `_build_recall_fn()` in bootstrap.
+Returns empty results when no memory backend is configured.
+
+---
+
+## 90. Concierge Adapters (8 production + 8 test)
+
+| Port | Production Adapter | Test Adapter |
+| ---- | ------------------ | ------------ |
+| IInputPort | WebSocketInputAdapter, RESTInputAdapter | TestInputAdapter |
+| IOutputPort | SSEOutputAdapter, WebSocketOutputAdapter | TestOutputAdapter |
+| IClassificationPort | UltraBERTv4Adapter | MockClassificationAdapter |
+| ILLMPort | ModelGatewayAdapter | MockLLMAdapter |
+| IStatePort | SessionKernelAdapter | InMemoryStateAdapter |
+| IDispatchPort | FabricOrchestratorAdapter | MockDispatchAdapter |
+| IDeltaPort | DeltaBusAdapter | TestDeltaAdapter |
+| IMemoryPort | BridgeRecallAdapter | MockMemoryAdapter |
+
+**Phase 1 note**: Production adapters are not yet implemented. The POC uses direct
+references to internal objects (model, session_state, bus, fabric_instance). Production
+adapters will be created during Epic 1 (Hexagonal Boundary) of the Concierge roadmap.
+
+---
+
+## 91. Concierge FSM Controller
+
+The `ConciergeController` is the central state machine governing all concierge behavior.
+
+### 91.1 Twelve States
+
+| State | Description | Entry Condition |
+| ----- | ----------- | --------------- |
+| LISTENING | Idle, awaiting user input | Initial state / after response delivered |
+| ACKING | Acknowledged input, classifying | User message received |
+| DISPATCHING | Routing to correct tier handler | Classification complete |
+| COMPANIONING | Generating conversational (LOW) response | LOW tier dispatch |
+| PROGRESSING | Reporting progress on multi-step task | MEDIUM/HIGH tier in progress |
+| DELIVERING | Streaming final response to user | Response ready |
+| CLARIFYING_USER | Asking user for clarification | Ambiguous input detected |
+| CLARIFYING_WORKER | Asking back worker for details | Back needs more context |
+| CANCELLING | Handling user cancellation request | User says "cancel" / "stop" |
+| INTERRUPT_HANDLING | Processing user interrupt mid-task | New input while task running |
+| PROACTIVE_WAKE | Sending proactive notification | Timer/event-triggered fill |
+| WEAVING | Batching multiple background results | WeaveBatcher flush triggers delivery |
+
+### 91.2 FrontLock
+
+The FSM enforces a `FrontLock` to ensure only one Front actor turn executes at a time.
+This prevents concurrent LLM calls from producing interleaved streaming output.
+
+```text
+FrontLock rules:
+- acquire() before any Front ReAct loop iteration
+- release() after response fully streamed or tool call completed
+- Interrupt: new user message while locked → INTERRUPT_HANDLING state
+- WeaveBatcher: queues results until FrontLock released → WEAVING state
+```
+
+### 91.3 Phase 1 Pipeline (UltraBERT)
+
+When `config.phase1.pipeline == "ultrabert"`, the FSM uses `UltraBERTPhase1Pipeline`
+for fast intent classification at the ACKING → DISPATCHING transition:
+
+```text
+K1UltraBERTAdapter.classify(text) → ClassificationResult
+  ├── Available: 12-head model, ~22ms latency
+  └── Unavailable: Heuristic fallback (<1ms, keyword-based)
+```
+
+---
+
+## 92. Concierge Actors (Front + Back)
+
+### 92.1 Front Actor
+
+**File**: `k1/concierge/actors/front.py`
+**Function**: `front_handler(envelope, model, ss, bus, tool_dispatcher, all_tool_schemas, fsm_state)`
+
+The Front actor is the user-facing conversational agent:
+
+1. Receives user message envelope from front mailbox
+2. Builds prompt from SessionState sections (history, affective_now, scoreboard, etc.)
+3. Runs ReAct loop: LLM call → tool calls → LLM call → ... → final response
+4. Emits response via bus (`concierge.response.*` topics)
+5. Triggers ExperienceLayer tick for affect updates
+
+**10 Front tool schemas** (from `schemas_front.py`): conversation, memory recall,
+session read, classification, affect update, proactive scheduling, weave control,
+HITL initiation, context switching, and metacognitive reflection.
+
+### 92.2 Back Actor + Back Router
+
+**File**: `k1/concierge/actors/back.py` (topic router: `back_router.py`)
+**Function**: `route_back_envelope(envelope, model, ss, bus, tool_dispatcher, fsm_state)`
+
+The Back actor handles dispatched work via a topic-based router:
+
+**Back Router topic routing table** (M7 E7.3):
+
+| Topic | Handler | Async? | Notes |
+| ----- | ------- | ------ | ----- |
+| `task.dispatch.v1` | `back_handler` | Yes (pool worker) | Main task execution |
+| `task.resume.v1` | `back_resume_handler` | Yes (pool worker) | Resume after HITL response |
+| `task.cancel.v1` | `back_cancel_handler` | **No (sync)** | Immediate, bypasses pool |
+| `clarification.response.v1` | `back_resume_handler` | Yes (pool worker) | Resume after clarification |
+
+**Cancel bypass**: Cancel envelopes are dispatched synchronously (no pool worker needed)
+for immediate termination. `CancellationToken` is extracted from `TaskLease` and injected
+into the handler. Back checks `token.check()` at tool boundaries (cooperative cancellation).
+
+**Late-envelope discard** (E7.3.4): If the task's `TaskLease` status is already
+`RELEASED` or `CANCELLED`, the envelope is discarded silently.
+
+**6 Back tool schemas** (from `schemas_back.py`): fabric execute, orchestrator dispatch,
+planner request, state write, delta publish, and result packaging.
+
+**Max iterations by tier** (from config):
+
+- LOW: 10 iterations
+- MEDIUM: 14 iterations
+- HIGH: 24 iterations
+- Budget floor: 4 iterations (minimum regardless of tier)
+
+**GOTCHA**: Back actor subscriptions are NOT wired directly to bus. The FSM is the sole
+routing authority — it delivers to back via `_route_via_orchestrator → _deliver_to_back`.
+Direct subscription would cause duplicate deliveries.
+
+---
+
+## 93. Concierge ReAct Loop
+
+**File**: `k1/concierge/react/loop.py`
+
+Both Front and Back actors use a shared ReAct (Reason + Act) loop implementation.
+
+### 93.1 Loop Steps
+
+```text
+1. Build prompt (system + history + tools + user message)
+2. LLM call (generate or generate_stream)
+3. Parse response:
+   a. If tool_call → validate schema → execute tool → append result → goto 2
+   b. If text response → emit to bus → done
+   c. If max iterations reached → emit partial response → done
+4. Tool execution:
+   a. Validate against ToolDispatcher (tier + safety + state checks)
+   b. Execute tool function
+   c. Append tool result to conversation history
+   d. Return to step 2
+```
+
+### 93.2 Tool Dispatch
+
+**File**: `k1/concierge/tools/dispatcher.py`
+
+```python
+create_front_dispatcher(tier: str, ctx: ToolContext, bus: IBus) -> ToolDispatcher
+create_back_dispatcher(tier: str, ctx: ToolContext, bus: IBus) -> ToolDispatcher
+```
+
+Each dispatcher filters available tools by:
+
+- **Tier**: LOW exposes basic tools, MEDIUM adds orchestrator tools, HIGH adds planner tools
+- **Safety**: MutationGuard checks prevent dangerous state writes
+- **State**: FSM state determines which tools are allowed (e.g., no dispatch during CANCELLING)
+
+### 93.3 ToolContext
+
+```python
+@dataclass
+class ToolContext:
+    session_manager: Any           # SessionStateManager reference
+    cognitive_trace_id: str        # Trace correlation ID
+    actor: str                     # "front" or "back"
+    recall_fn: Callable | None     # Memory recall function
+    fabric_port: Any               # Fabric instance for capability execution
+    writer_port: Any               # SessionState writer port for mutations
+```
+
+---
+
+## 94. Concierge Internal Components
+
+### 94.1 DeltaAggregator
+
+**File**: `k1/concierge/delta/aggregator.py`
+
+Batches delta events before flushing to the DeltaApplicator. Reduces bus chatter
+by coalescing multiple small updates into a single batch.
+
+```text
+Config: batch_window_ms (from config.delta.batch_window_ms)
+Flow:  event → buffer → timer expires → flush_fn(batch) → DeltaApplicator.apply()
+```
+
+### 94.2 DeltaApplicator
+
+**File**: `k1/concierge/delta/applicator.py`
+
+Applies batched deltas to SessionState sections. Built by `_build_delta_applicator()`
+in bootstrap.
+
+### 94.3 ExperienceLayer (6 Components)
+
+**File**: `k1/concierge/experience/layer.py`
+
+The ExperienceLayer provides emotional intelligence and conversational quality:
+
+| Component | File | Purpose |
+| --------- | ---- | ------- |
+| ExperienceLayer | `layer.py` | Orchestrator for all experience components |
+| EmotionalProcessor | `emotional_processor.py` | Process user emotion signals |
+| AffectiveMirror | `affective_mirror.py` | Mirror appropriate emotional responses |
+| RhythmController | `rhythm_controller.py` | Control response pacing and style |
+| ProactiveAgent | `proactive_agent.py` | Generate proactive notifications |
+| ToneGenerator | (internal to ExperienceLayer) | Generate tone adjustments |
+
+**Tick cycle**: After each Front actor response, `ExperienceLayer.tick(fsm_state, context)`
+is called. Returns `{emotional, tone, fill}` outputs that are routed to bus topics
+and SessionState sections.
+
+### 94.4 HILCoordinator (3 Variants + Safety Bands + Trust Integration)
+
+**File**: `k1/concierge/protocols/hitl_coordinator.py`
+
+Manages human-in-the-loop approvals with three variants:
+
+| Variant | Trigger | User Sees |
+| ------- | ------- | --------- |
+| Clarification | Ambiguous input | "Did you mean X or Y?" |
+| Confirmation | Destructive/expensive action | "This will cost $50. Proceed?" |
+| Override | System suggests, user decides | "I recommend A. You can choose B." |
+
+**`handle_needs_human()` signature** (V2 Section 9.1):
+
+```python
+async def handle_needs_human(
+    self,
+    task_id: str,
+    hil_type: str,           # clarification | approval | selection
+    question: str,
+    options: list[dict] | None = None,
+    side_effects: list[str] | None = None,
+    context: dict | None = None,
+    safety_band: SafetyBand | str = SafetyBand.GREEN,
+    react_history: list[dict] | None = None,
+    ledger: Any = None,
+) -> HILRequest
+```
+
+**Internal steps**:
+
+1. Safety band escalation: `GREEN + side_effects → AMBER`
+2. RED band check: Block if `config.block_red=True`
+3. Suspension limits: Check `max_rounds` (default 2)
+4. Build `HILRequest` with type-specific timeout
+5. Persist to `_pending_requests[task_id]`
+6. Delegate to `SuspensionManager` for timeout tracking
+7. Write-before-mutate: Emit `HILRequested` to ledger
+8. Callback: `on_emit_suspended()` → bus emission
+
+**Safety band escalation** (V2 Section 9.3):
+
+| Input Band | Side Effects? | Result Band |
+| ---------- | ------------- | ----------- |
+| GREEN | No | GREEN (safe, no HITL needed) |
+| GREEN | Yes | AMBER (escalate, requires approval) |
+| AMBER | Any | AMBER (requires approval) |
+| RED | Any | RED (blocked if config.block_red) |
+
+**Callbacks** (injected by bootstrap):
+
+- `on_emit_suspended(request)` → publishes `task.suspended` envelope
+- `on_emit_resume(response)` → publishes `task.resume` envelope
+- `on_timeout(task_id)` → publishes `task.failed` envelope with `HITL_TIMEOUT`
+
+**HIL Pipeline** (`k1/concierge/protocols/hitl_pipeline.py`):
+
+```python
+detect_approval_required(capability_contract) -> bool
+    # True if: has_side_effects OR safety_band >= AMBER
+
+process_approval_response(response, original_params) -> ApprovalResult
+    # Decisions:
+    #   approve           → execute with original params
+    #   approve + mods    → execute with merged params (mods applied BEFORE execution)
+    #   modify + mods     → re-present for approval
+    #   cancel            → do NOT execute
+```
+
+### 94.5 WeaveBatcher (500ms Window + Overflow Eviction)
+
+**File**: `k1/concierge/protocols/weave_batcher.py`
+
+Queues background task results when the Front actor is busy (FrontLock held).
+Flushes after a configurable window (default 500ms) to deliver batched results
+as a single coherent response instead of interleaved fragments.
+
+**`on_task_complete()` logic**:
+
+```text
+If Front busy (FrontLock held):
+  → Queue result in _queued[]
+  → If overflow (len >= max_queued_depth): evict oldest (FIFO, dead-letter)
+Otherwise:
+  → Add to _pending[] batch
+  → Start 500ms timer if not running → flush_fn(batch) on expiry
+```
+
+**WeaveResult**:
+
+```python
+@dataclass
+class WeaveResult:
+    task_id: str
+    task_description: str
+    result_data: dict[str, Any]
+    completed_at_ns: int
+
+    def to_prompt_block(self) -> str:
+        """Format as [ASYNC RESULT ARRIVED] injection for Front prompt."""
+```
+
+### 94.6 WeavePolicy + UserActivityTracker (6-Signal Decision Engine)
+
+**File**: `k1/concierge/protocols/weave_policy.py`
+
+Adaptive delivery strategy based on 6 signal categories:
+
+| # | Signal Category | Source | Examples |
+| - | --------------- | ------ | -------- |
+| 1 | FSM state | ConciergeController | COMPANIONING, LISTENING, WEAVING |
+| 2 | Urgency profile | Pending results | urgency counts, has_critical flag |
+| 3 | User activity | UserActivityTracker | is_typing, idle_ms |
+| 4 | Queue depth | WeaveBatcher | pending_count |
+| 5 | Affect band | ExperienceLayer | valence, emotional_gate |
+| 6 | Pool + HITL | BackPool, HILCoordinator | backpool_utilization, hitl_pending |
+
+**WeaveDecision enum**:
+
+| Decision | Behavior | When |
+| -------- | -------- | ---- |
+| IMMEDIATE | Deliver now | Critical result, user idle > threshold |
+| BATCH | Dynamic window (200–5000ms) | Multiple results arriving, user not typing |
+| DEFER | Hold until next user input | User actively typing |
+| DIGEST | Accumulate 10–30s, synthesize | Many low-priority results |
+| SUPPRESS | Do not deliver | Emotional gate SUPPRESS_ALL_NON_SAFETY |
+
+**Emotional gate thresholds**:
+
+```text
+OPEN                    ← valence >= 0 (deliver normally)
+SUPPRESS_TRIVIAL        ← valence < -0.5 (skip low-priority)
+SUPPRESS_ALL_NON_SAFETY ← crisis | RED band (only safety-critical)
+```
+
+**UserActivityTracker** (E8.1.2–E8.1.3):
+
+```python
+class UserActivityTracker:
+    def on_typing_start(self) -> None
+    def on_typing_stop(self) -> None
+    def on_user_input(self) -> None
+
+    @property
+    def is_typing(self) -> bool
+    @property
+    def idle_ms(self) -> int
+```
+
+**Pacing strategy** (OPP-1):
+
+| Strategy | Behavior |
+| -------- | -------- |
+| NONE | No pacing, deliver as-is |
+| STAGGER | Inter-result delay |
+| GROUP_BY_DOMAIN | Group related results together |
+| PRIORITY_CASCADE | High-priority first, then others |
+
+### 94.7 OPP Pipeline (8 Primitives wired to FSM Lifecycle Hooks)
+
+**File**: `k1/concierge/protocols/opp_pipeline.py`
+
+Output Post-Processing pipeline wires 8 OPP primitives into FSM lifecycle hooks:
+
+| OPP | Primitive | Hook | Returns |
+| --- | --------- | ---- | ------- |
+| OPP-1 | Paced Delivery | `on_weave_flush()` | `PacingResult` (strategy + group delays) |
+| OPP-2 | Recency Bias Decay | `on_classify()` | `ClassifyEnrichment` (recency decay flag) |
+| OPP-3 | Affect Hard Caps | `on_pre_llm_call()` | `LlmParamOverrides` (token caps, vocab tier, tool budget) |
+| OPP-4 | Trust Accumulator | `on_hitl_outcome()`, `on_pre_invoke()` | `TrustGate` (auto_approved, dynamic_max_rounds) |
+| OPP-5 | Proactive Scheduler | `on_idle_tick()` | `ProactiveTriggerResult` (should_trigger, trigger_type) |
+| OPP-6 | Episodic Compression | `on_pre_prompt_build()` | `PromptEnrichment` (compressed context) |
+| OPP-7 | Dynamic Identity | `on_pre_prompt_build()` | `PromptEnrichment` (identity block) |
+| OPP-8 | Natural Flow Delivery | `on_task_complete()` | `DeliveryDecision` (delivery_mode, prompt_mode_hint) |
+
+**Hook result dataclasses**:
+
+```python
+ClassifyEnrichment    # recency_decay_applied: bool
+PromptEnrichment      # compressed_context: str, identity_block: str
+LlmParamOverrides     # max_tokens: int, vocabulary_tier: str, tool_budget: int
+DeliveryDecision      # delivery_mode: DeliveryMode, prompt_mode_hint: str
+TrustGate             # auto_approved: bool, dynamic_max_rounds: int
+ProactiveTriggerResult # should_trigger: bool, trigger_type: str
+PacingResult          # strategy: PacingStrategy, groups: list, inter_group_delay_ms: list
+```
+
+### 94.8 MutationGuard (3-Tier)
+
+Embedded in SessionKernelAdapter, prevents dangerous state mutations:
+
+| Tier | Policy | Example |
+| ---- | ------ | ------- |
+| ALLOW | Write proceeds | Updating conversation history |
+| WARN | Write proceeds + log warning | Modifying user preferences |
+| BLOCK | Write rejected (RECOVERABLE) | Deleting critical sections |
+
+### 94.9 Ledger (Event Sourcing)
+
+**File**: `k1/concierge/ledger/writer.py`
+
+Optional event sourcing for audit trail. `LedgerWriter` records all FSM transitions,
+tool calls, and LLM interactions into an `InMemoryLedgerStore` (Phase 1).
+
+---
+
+## 95. Concierge Bootstrap (Phase 1 Monolith)
+
+**File**: `k1/concierge/kernel/bootstrap.py`
+
+Phase 1 uses a monolith bootstrap that creates all dependencies internally.
+Future phases will replace this with `ConciergeFactory` receiving ports from
+the kernel bootstrap.
+
+### 95.1 KernelConfig Fields
+
+| Field | Type | Default | Purpose |
+| ----- | ---- | ------- | ------- |
+| ordered_bus | bool | True | Use ordered bus delivery |
+| capture_bus | bool | False | Enable bus message capture for testing |
+| test_mode | bool | False | Enable test mode |
+| tool_tier | str | "LOW" | Tool tier (LOW / MEDIUM / HIGH) |
+| session_mode | str | "standalone" | standalone / testing |
+| session_id | str \| None | None | Explicit session ID (auto-generated if None) |
+| enable_experience | bool | True | Enable ExperienceLayer |
+| enable_delta | bool | True | Enable DeltaAggregator + DeltaApplicator |
+| enable_hitl | bool | True | Enable HILCoordinator |
+| enable_orchestrator | bool | True | Enable OrchestratorStub |
+| auto_start_consumer | bool | True | Auto-start mailbox consumer task |
+| enable_ledger | bool | True | Enable LedgerWriter |
+| enable_dead_letter_consumer | bool | True | Enable DeadLetterConsumer |
+| seed_memories | list[dict] | [] | Seed memories for testing |
+
+### 95.2 start_kernel() Wiring Order (Phase 1)
+
+```text
+Step 1:   boot() → {bus, router, adapter, front_mailbox, back_mailbox}
+Step 2:   _create_model(cfg) → IConciergeModelPort (Gemini adapter)
+Step 3:   _create_session_state(cfg) → SessionStateManager
+Step 4:   _create_capability_registry() → CapabilityRegistry
+Step 5:   _create_fabric(capability_registry) → Fabric (M6: real K1 Fabric via FabricFactory)
+Step 6:   Create LedgerWriter + InMemoryLedgerStore (if enable_ledger)
+Step 7:   ConciergeController(bus, router) → FSM
+Step 8:   Wire Phase 1 pipeline (UltraBERT if configured)
+Step 9:   Wire ledger into FSM (set_ledger)
+Step 10:  Wire history_active section into FSM (set_history_sink)
+Step 11:  Wire SessionStateManager into FSM (set_session_state)
+Step 12:  Build ToolContext (front + back) with recall_fn, fabric_port, writer_port
+Step 13:  Create ToolDispatchers (front + back) via create_*_dispatcher()
+Step 14:  Build KernelRuntime dataclass
+Step 15:  Wire ExperienceLayer (if enable_experience)
+Step 16:  Wire DeltaAggregator + DeltaApplicator (if enable_delta)
+Step 17:  Wire HILCoordinator with 3 callbacks (if enable_hitl)
+Step 18:  Wire WeaveBatcher + WeavePolicy + UserActivityTracker
+Step 19:  Wire DeadLetterConsumer (if enable_dead_letter_consumer + config.fsm.dead_letter_enabled)
+Step 20:  Wire OrchestratorStub with FabricGateway/StateRead/DeltaEmit adapters (if enable_orchestrator)
+Step 21:  Subscribe front events via subscribe_front_events(bus, route_fn)
+Step 22:  Start mailbox consumer task (if auto_start_consumer)
+```
+
+### 95.3 stop_kernel() Teardown Order
+
+```text
+Step 1:   Cancel consumer_task
+Step 2:   Flush ledger + log entry count
+Step 3:   Log dead-letter summary
+Step 4:   Flush DeltaAggregator
+Step 5:   FSM teardown
+Step 6:   Close SessionStateManager
+Step 7:   Close model
+Step 8:   Set started = False
+```
+
+### 95.4 KernelRuntime Dataclass
+
+The `KernelRuntime` holds all live references for the running concierge:
+
+```python
+@dataclass
+class KernelRuntime:
+    config: KernelConfig
+    bus: IBus
+    router: IMailboxRouter
+    adapter: Any
+    front_mailbox: IMailbox
+    back_mailbox: IMailbox
+    session_state: Any
+    capability_registry: Any
+    model: Any
+    fsm: ConciergeController
+    front_dispatcher: Any
+    back_dispatcher: Any
+    experience_layer: Any = None
+    delta_aggregator: Any = None
+    delta_applicator: Any = None
+    hitl_coordinator: Any = None
+    orchestrator: Any = None
+    front_subscriptions: list[Any] = field(default_factory=list)
+    back_subscriptions: list[Any] = field(default_factory=list)
+    consumer_task: asyncio.Task | None = None
+    ledger: Any = None
+    ledger_store: Any = None
+    dead_letter_consumer: Any = None
+    started: bool = False
+```
+
+---
+
+## 96. Concierge Mailbox Consumer
+
+**File**: `k1/concierge/kernel/bootstrap.py` (`_mailbox_consumer`)
+
+The mailbox consumer is an async task that polls front and back mailboxes:
+
+```text
+Loop:
+  1. front_mailbox.receive(timeout_ms=0) → front_env
+  2. Dedup check (seen_front_ids, bounded set, cleared at dedup_cache_size)
+  3. If front_env: await front_handler(...) → await _tick_experience(runtime)
+  4. back_mailbox.receive(timeout_ms=0) → back_env
+  5. Dedup check (seen_back_ids)
+  6. If back_env: await route_back_envelope(...)
+  7. If did_work: yield (sleep 0)  else: sleep poll_interval
+```
+
+**Config**: `kernel.poll_interval_s`, `kernel.dedup_cache_size`
+
+---
+
+## 97. Concierge Session Data
+
+The Concierge reads and writes the following SessionState sections.
+See §46 for the canonical 12-section data model.
+
+**Family context note (D-14, D-15):** Family member identity, allergies, access
+levels, and device registry are NOT SessionState sections. They live in the
+`HouseholdProjection` — hydrated at boot from K0 via Bridge (Phase 6.5),
+cached in-memory, and kept current via `household.delta.v1` SSE subscription.
+See §126 for the hydration protocol.
+
+### 97.1 HOT Tier (~52KB)
+
+| Section | Access | Purpose |
+| ------- | ------ | ------- |
+| history_active | Read + Write | Recent conversation turns (Front context window) |
+| affective_now | Read + Write | Current emotional state, tone, response style |
+| scoreboard | Read | Active task status and progress |
+| narrative_active | Read | Long-running family narrative context |
+| control | Read | Mode, turn counter, focus agent, capabilities |
+| beliefs_active | Read + Write | Active belief facts with confidence scores |
+| clarifications | Read + Write | Pending clarification questions |
+| meta | Read | Schema version, session metadata |
+
+### 97.2 WARM Tier (~48KB)
+
+| Section | Access | Purpose |
+| ------- | ------ | ------- |
+| telemetry | Read | Performance metrics, error counts |
+| beliefs_history | Read | Archived beliefs demoted from HOT |
+| history_recent | Read | Summarized conversation history |
+| persona | Read | Stable personality traits, vocabulary |
+
+### 97.3 Prompt Modes (10 total)
+
+The Front actor selects from 10 prompt modes based on FSM state and classification:
+conversational, task_dispatch, progress_report, clarification, confirmation, override,
+cancellation, interrupt, proactive, and weave_delivery.
+
+---
+
+## 98. Concierge Event Reference
+
+### 98.1 Published Topics
+
+| Topic | Publisher | Payload Summary |
+| ----- | --------- | --------------- |
+| concierge.session.started.v1 | bootstrap | session_id, timestamp |
+| concierge.session.ended.v1 | bootstrap | session_id, duration, turn_count |
+| concierge.response.text.v1 | Front actor | text, turn_id, latency_ms |
+| concierge.response.stream_chunk.v1 | Front actor | chunk, sequence, turn_id |
+| concierge.response.tool_result.v1 | Front/Back actor | tool_name, result, duration_ms |
+| concierge.orchestration.dispatched.v1 | FSM | task_id, tier, envelope |
+| concierge.orchestration.completed.v1 | Back actor | task_id, tier, result |
+| concierge.orchestration.failed.v1 | Back actor | task_id, error_code, reason |
+| concierge.affect.updated.v1 | ExperienceLayer | emotional state, tone |
+| concierge.affect.tone_shift.v1 | RhythmController | old_tone, new_tone, trigger |
+| concierge.proactive.scheduled.v1 | ProactiveAgent | fill_id, trigger, delay_ms |
+| concierge.proactive.delivered.v1 | Front actor | fill_id, text |
+| concierge.proactive.suppressed.v1 | WeavePolicy | fill_id, reason |
+| concierge.weave.queued.v1 | WeaveBatcher | batch_id, item_count |
+| concierge.weave.flushed.v1 | WeaveBatcher | batch_id, item_count, latency_ms |
+| concierge.hitl.suspended.v1 | HILCoordinator | task_id, hil_type, question |
+| concierge.hitl.resumed.v1 | HILCoordinator | task_id, decision, answer |
+| concierge.hitl.timeout.v1 | HILCoordinator | task_id, timeout_ms |
+| concierge.tool.invoked.v1 | ToolDispatcher | tool_name, actor, tier |
+| concierge.tool.completed.v1 | ToolDispatcher | tool_name, duration_ms, success |
+| concierge.turn.started.v1 | Front actor | turn_id, user_message_preview |
+| concierge.turn.completed.v1 | Front actor | turn_id, response_length, tool_count |
+| concierge.turn.error.v1 | Front actor | turn_id, error_code, fallback_used |
+
+### 98.2 Subscribed Topics
+
+| Topic | Handler | Purpose |
+| ----- | ------- | ------- |
+| k1.orchestrator.task.completed.v1 | FSM routing | Task completion from Orchestrator |
+| k1.orchestrator.task.failed.v1 | FSM routing | Task failure from Orchestrator |
+| k1.orchestrator.task.progress.v1 | FSM routing | Progress updates for PROGRESSING state |
+| k1.planner.plan.ready.v1 | FSM routing | Plan ready for HIGH tier execution |
+| k1.hil.override_response.v1 | HILCoordinator | User override decision |
+| k1.hil.fallback_response.v1 | HILCoordinator | User fallback selection |
+| k1.fabric.provider.health.changed.v1 | Capability registry | Provider health for tier degradation |
+| k1.sessionstate.eviction.v1 | DeltaApplicator | Section eviction notification |
+
+---
+
+## 99. Concierge Concurrency Model
+
+### 99.1 FrontLock Semantics
+
+```text
+- Single async lock per Concierge instance
+- Acquired: before Front ReAct loop iteration
+- Released: after response delivery or tool call completion
+- Interrupt detection: new user message while lock held → INTERRUPT_HANDLING
+- Weave queuing: background results while lock held → buffer in WeaveBatcher
+```
+
+### 99.2 Mailbox Isolation
+
+```text
+- Front mailbox: user-originated messages only
+- Back mailbox: FSM-routed task dispatches only
+- No cross-posting between mailboxes
+- Back does NOT subscribe directly to bus topics (FSM routes)
+```
+
+### 99.3 Async Task Inventory
+
+| Task | Created By | Lifecycle |
+| ---- | ---------- | --------- |
+| consumer_task | start_kernel() | Lives until stop_kernel() |
+| WeaveBatcher timer | WeaveBatcher | Per-batch, auto-cancels on flush |
+| HITL timeout timer | HILCoordinator | Per-request, auto-cancels on response |
+| ExperienceLayer tick | _tick_experience() | Per-turn, completes synchronously |
+| DeltaAggregator flush | DeltaAggregator | Timer-based, batch_window_ms |
+
+---
+
+## 100. Concierge Shutdown Sequence
+
+```text
+Step 1:  Cancel consumer_task (stops mailbox polling)
+Step 2:  Flush LedgerWriter (persist event trail)
+Step 3:  Log DeadLetterConsumer summary
+Step 4:  Flush DeltaAggregator (apply pending deltas)
+Step 5:  FSM teardown (release FrontLock, cancel timers)
+Step 6:  Close SessionStateManager (flush dirty sections)
+Step 7:  Close model (release LLM connections)
+Step 8:  Set runtime.started = False
+```
+
+**Order rationale**: Consumer stops first (no new work), then internal components
+flush in dependency order (ledger → delta → FSM → state → model). Model closes
+last because FSM teardown may need to emit a final response.
+
+---
+
+## 101. Concierge Bootstrap Gotchas
+
+1. **Back subscriptions are intentionally empty** — `runtime.back_subscriptions = []`.
+   The FSM is the sole routing authority for back-bound topics. Subscribing back directly
+   to bus topics causes duplicate deliveries (learned during M3 E3.1.3).
+
+2. **Phase 1 pipeline fallback** — If `familyos_ultrabert` package is unavailable, the
+   FSM falls back to STUB classification. The heuristic fallback only activates when
+   UltraBERT adapter reports `is_available() == False` at boot.
+
+3. **LedgerWriter has no async flush** — `InMemoryLedgerStore` is synchronous. The
+   `stop_kernel()` shutdown guard handles this safely.
+
+4. **DeadLetterConsumer requires config flag** — Both `enable_dead_letter_consumer=True`
+   in KernelConfig AND `config.fsm.dead_letter_enabled=True` in YAML config must be
+   set for the consumer to be created.
+
+5. **Fabric is real since M6** — `_create_fabric()` now creates a real K1 Fabric instance
+   via `FabricFactory` with `POCMockBridgeAdapter`. This is NOT a stub.
+
+6. **OrchestratorStub internal adapters** — `_FabricGatewayAdapter`, `_StateReadAdapter`,
+   `_DeltaEmitAdapter` are private adapter classes defined at module level in bootstrap.py.
+   They will be replaced by kernel-level port injection in Epic 1.
+
+7. **Experience tick is synchronous** — `_tick_experience()` is awaited inline after every
+   Front handler call. If ExperienceLayer becomes expensive, consider making it async with
+   a dedicated task.
+
+---
+
+## 102. Concierge File Locations Reference
+
+| What | Path |
+| ---- | ---- |
+| Architecture spec | `k1/concierge/concierge.mmd` |
+| POC architecture ref | `poc/k1_poc/concierge_poc_architecture.mmd` |
+| Bootstrap (Phase 1) | `k1/concierge/kernel/bootstrap.py` |
+| Kernel runner | `k1/concierge/kernel/runner.py` |
+| Config (shimmed) | `k1/concierge/config/` |
+| FSM controller | `k1/concierge/fsm/controller.py` |
+| FSM states | `k1/concierge/fsm/states.py` |
+| FSM transition table | `k1/concierge/fsm/transition_table.py` |
+| FSM FrontLock | `k1/concierge/fsm/front_lock.py` |
+| FSM dead letter | `k1/concierge/fsm/dead_letter_consumer.py` |
+| UltraBERT adapter | `k1/concierge/fsm/ultrabert_adapter.py` |
+| UltraBERT Phase 1 | `k1/concierge/fsm/ultrabert_phase1.py` |
+| Front actor | `k1/concierge/actors/front.py` |
+| Back actor | `k1/concierge/actors/back.py` |
+| Back router | `k1/concierge/actors/back_router.py` |
+| ReAct loop | `k1/concierge/react/loop.py` |
+| Tool implementations | `k1/concierge/tools/implementations.py` |
+| Tool dispatcher | `k1/concierge/tools/dispatcher.py` |
+| Front tool schemas | `k1/concierge/tools/schemas_front.py` |
+| Back tool schemas | `k1/concierge/tools/schemas_back.py` |
+| LLM port (Phase 1) | `k1/concierge/llm/ports.py` |
+| LLM types | `k1/concierge/llm/types.py` |
+| LLM bridge (POC) | `k1/concierge/llm/model_hub_bridge.py` |
+| LLM adapter (Gemini) | `k1/concierge/llm/gemini_adapter.py` |
+| LLM validator | `k1/concierge/llm/validator.py` |
+| Orchestrator stub | `k1/concierge/orchestrator/stub.py` |
+| Orchestrator ports | `k1/concierge/orchestrator/ports.py` |
+| Orchestrator types | `k1/concierge/orchestrator/types.py` |
+| Orchestrator routing | `k1/concierge/orchestrator/routing.py` |
+| DeltaAggregator | `k1/concierge/delta/aggregator.py` |
+| DeltaApplicator | `k1/concierge/delta/applicator.py` |
+| ExperienceLayer | `k1/concierge/experience/layer.py` |
+| EmotionalProcessor | `k1/concierge/experience/emotional_processor.py` |
+| AffectiveMirror | `k1/concierge/experience/affective_mirror.py` |
+| RhythmController | `k1/concierge/experience/rhythm_controller.py` |
+| ProactiveAgent | `k1/concierge/experience/proactive_agent.py` |
+| HILCoordinator | `k1/concierge/protocols/hitl_coordinator.py` |
+| HITL pipeline | `k1/concierge/protocols/hitl_pipeline.py` |
+| TrustAccumulator | `k1/concierge/protocols/trust_accumulator.py` |
+| WeaveBatcher | `k1/concierge/protocols/weave_batcher.py` |
+| WeavePolicy | `k1/concierge/protocols/weave_policy.py` |
+| OppPipeline | `k1/concierge/protocols/opp_pipeline.py` |
+| DeliveryStrategy | `k1/concierge/protocols/delivery_strategy.py` |
+| Cancellation | `k1/concierge/protocols/cancellation.py` |
+| Fabric contract converter | `k1/concierge/fabric/contract_converter.py` |
+| POC bridge adapter | `k1/concierge/fabric/poc_bridge_adapter.py` |
+| Capability registry | `k1/concierge/fabric/capability_registry.py` |
+| Ledger writer | `k1/concierge/ledger/writer.py` |
+| Bus builders | `k1/concierge/bus/builders.py` |
+
+---
+
+## 103. Concierge Delivery Strategy
+
+**File**: `k1/concierge/protocols/delivery_strategy.py`
+
+Determines HOW to present results to the user based on WHAT arrived and WHERE
+the conversation is.
+
+### 103.1 Result Classification (WHAT arrived)
+
+| Classification | Meaning | Example |
+| -------------- | ------- | ------- |
+| AWAITED | User explicitly asked for this (in active dispatch) | "Book that hotel" → booking confirmation |
+| FOLLOW_UP | Chained/dependent task from user's initiated sequence | Calendar event after hotel booking |
+| BACKGROUND | Speculative or low-priority task | Proactive weather check |
+| TIME_SENSITIVE | Urgent task with deadline | Reminder about to expire |
+| INFORMATIONAL | Status update / FYI | "Your booking was confirmed" |
+
+### 103.2 Delivery Modes (HOW to present)
+
+| Mode | Prompt Mode | Behavior |
+| ---- | ----------- | -------- |
+| DIRECT_PRESENT | PRESENT | Result is focus, user was waiting |
+| CONVERSATIONAL_WEAVE | WEAVE | Weave into ongoing conversation |
+| CONTEXTUAL_INJECT | STANDARD + silent async_context | Don't present explicitly, available in context |
+| BRIEF_NOTIFY | PRESENT + brief flag | One-liner confirmation |
+| DEFERRED_QUEUE | None (no LLM call) | Store for later presentation |
+
+### 103.3 Conversation Flow Signals
+
+```python
+@dataclass
+class ConversationFlowSignal:
+    topic_match_score: float        # 0.0-1.0: how related is result to current topic
+    conversation_depth: int         # Consecutive turns on same topic
+    is_natural_pause: bool          # Topic shift, lull, or explicit "what else?"
+    user_awaiting_result: bool      # From last user message pattern
+    turns_since_dispatch: int       # Delivery freshness
+```
+
+The delivery strategy combines result classification, conversation flow signals,
+and WeavePolicy decisions to select the optimal delivery mode.
+
+---
+
+## 104. Concierge Cancellation Protocol
+
+**File**: `k1/concierge/protocols/cancellation.py`
+
+### 104.1 Cooperative Cancellation (Not Preemptive)
+
+The Back actor uses cooperative cancellation — it checks a `CancellationToken` at
+tool boundaries rather than being forcibly killed:
+
+```text
+1. User says "cancel that" or "stop"
+2. FSM → CANCELLING state
+3. CancellationToken.cancel(reason) called
+4. Back checks token.check() between tool invocations
+5. If is_cancelled=True: raise TaskCancelledError
+6. Back aborts ReAct loop → emits task.failed
+7. FSM → LISTENING
+```
+
+### 104.2 Cancel Reasons
+
+| Reason | Trigger | Behavior |
+| ------ | ------- | -------- |
+| USER_REQUESTED | User said "cancel" / "stop" | Immediate token cancellation |
+| TIMEOUT | Task exceeded time budget | Timer-triggered cancellation |
+| SUPERSEDED | New task replaces current | Old task cancelled, new task dispatched |
+
+### 104.3 Race Condition Handling
+
+If task completes before cancel is checked, `completed_before_cancel=True`. The FSM
+deduplicates: shows "it went through" to the user instead of "cancelled".
+
+### 104.4 Cancel in Back Router
+
+Cancel envelopes (`task.cancel.v1`) bypass the pool worker and are dispatched
+**synchronously** for immediate termination. This is the only sync handler in
+the back router — all other topics use async pool workers.
+
+---
+
+## 105. Concierge Trust Accumulator (OPP-4)
+
+**File**: `k1/concierge/protocols/trust_accumulator.py`
+
+Reduces HITL interruptions over time based on interaction outcomes. As the system
+builds trust with the user, low-risk actions can be auto-approved.
+
+### 105.1 Trust Config
+
+| Parameter | Default | Description |
+| --------- | ------- | ----------- |
+| initial_trust | 0.5 | Starting trust level |
+| reward_approve | +0.05 | User approves HITL request |
+| penalty_reject | -0.10 | User rejects HITL request |
+| penalty_cancel | -0.07 | User cancels during HITL |
+| penalty_modify | -0.03 | User modifies before approving |
+| reward_auto_success | +0.08 | Auto-approved action succeeds |
+| auto_approve_threshold | 0.85 | Trust level for auto-approval |
+
+### 105.2 Auto-Approve Logic
+
+```python
+def should_auto_approve(self, risk_level: str) -> bool:
+    """Auto-approve if trust >= threshold AND risk is 'low'."""
+    return self.trust >= self.config.auto_approve_threshold and risk_level == "low"
+```
+
+### 105.3 Events Tracked
+
+| Event | Trust Change | Example |
+| ----- | ------------ | ------- |
+| approve | +0.05 | User confirms hotel booking |
+| reject | -0.10 | User declines suggested action |
+| cancel | -0.07 | User cancels mid-approval |
+| modify | -0.03 | User changes params before approving |
+| auto_success | +0.08 | Auto-approved action completed without issue |
+| timeout | -0.05 | HITL request timed out (no user response) |
+
+### 105.4 Integration with HILCoordinator
+
+Before presenting a HITL request, the pipeline checks `TrustAccumulator.should_auto_approve()`.
+If trust is high enough and risk is low, the request is auto-approved (no user interruption).
+After each HITL outcome, `TrustAccumulator.record(outcome)` adjusts the trust score.
+
+---
+
+## 106. Agent-as-Provider Pattern (Fabric Integration)
+
+**File**: `k1/fabric/providers/agent_provider.py`
+
+Specialized agents are first-class Fabric providers. They are invoked through the
+standard Fabric capability pipeline, not through Concierge directly.
+
+### 106.1 AgentProvider
+
+```python
+class AgentProvider(BaseProvider):
+    """Wraps agents as Fabric providers for capabilities like 'agent.execute.empathy_writer'."""
+
+    async def execute(
+        self,
+        request: CapabilityRequest,
+        context: ExecutionContext,
+        trace_id: str,
+    ) -> CapabilityResult:
+        return await self.agent_factory.spawn_and_execute(request, context, trace_id)
+```
+
+Registered in Fabric factory:
+
+```python
+provider_factory.register(ProviderType.AGENT, _create_agent)
+```
+
+### 106.2 AgentFactory (8-Step Spawn)
+
+```text
+Step 1: Load AgentContract via contract_loader
+          - Declared sections, tools_granted, llm_budget_tokens
+Step 2: Create MPSC Mailbox (WFQ INTERACTIVE priority)
+Step 3: Grant LLM access via IModelGatewayPort.create_handle(budget_tokens)
+Step 4: Grant SessionState read (scoped to declared sections ONLY)
+Step 5: Scope tool access via ToolScope (from contract.tools_granted)
+Step 6: Build ExecutionContext via ContextBuilder
+Step 7: Instantiate Agent (lifecycle: PENDING → WARMING → ACTIVE)
+Step 8: Agent.execute(params) → AgentResult
+```
+
+### 106.3 Agent Lifecycle FSM
+
+```text
+PENDING → WARMING → ACTIVE → IDLE (pooled, 60s TTL)
+                             → DRAINING → TERMINATED
+```
+
+### 106.4 AgentPool
+
+| Property | Value |
+| -------- | ----- |
+| Key | Contract name (fungible agents) |
+| Max per contract | 5 |
+| Reuse strategy | FIFO (oldest IDLE first) |
+| TTL | 60s (sweep evicts expired) |
+| Thread safety | RLock |
+
+### 106.5 DeltaEmitter (Agent State Output)
+
+Agents NEVER write SessionState directly (FAB-01). State changes flow through:
+
+```text
+Agent → DeltaEmitter.queue(AgentDelta(section, key, value))
+  → 500ms batch window
+  → LWW merge on (section, key) collisions
+  → Flush → IDeltaBusPort
+  → Delta Bus
+  → Concierge MutationGuard
+  → SessionState
+```
+
+### 106.6 Agent Invariants
+
+| Invariant | Rule |
+| --------- | ---- |
+| FAB-01 | Agent NEVER writes SessionState directly (deltas only) |
+| FAB-07 | ToolScope enforced on ALL tool invocations |
+| Budget | LLM token budget enforced per AgentContract |
+| Sections | Read access scoped to declared sections only |
+
+### 106.7 Capability Types
+
+```python
+class CapabilityType:
+    AGENT_SPAWN = "agent.spawn."     # Spawn transient agent
+    AGENT_EXECUTE = "agent.execute."  # Execute agent capability
+    TOOL_EXECUTE = "tool.execute."    # Direct tool execution
+    WORKFLOW_RUN = "workflow.run."    # Workflow orchestration
+```
+
+Domain agent definitions live in `k1/modules/*/agents/*.yaml` and are loaded by
+the kernel at startup. The `k1/agents/` module is the L4 (Workers) runtime layer
+for ephemeral agent instances and dynamic mailbox allocation.
+
+---
+
+## 107. Concierge OrchestratorStub Reference
+
+**File**: `k1/concierge/orchestrator/stub.py`
+
+### 107.1 Constructor (3 Ports — Structural Enforcement)
+
+```python
+class OrchestratorStub:
+    def __init__(
+        self,
+        fabric_gateway: IFabricGatewayPort,  # ORCH-04: only execution path
+        state_read: IStateReadPort,           # ORCH-01: read-only
+        delta_emit: IDeltaEmitPort,           # Fire-and-forget events
+    ) -> None
+```
+
+### 107.2 Structural Invariants
+
+| Code | Invariant | Enforcement |
+| ---- | --------- | ----------- |
+| ORCH-01 | No write port → no session state mutations | Constructor has no write port |
+| ORCH-02 | No LLM port → no LLM calls | Constructor has no LLM port |
+| ORCH-03 | No tool executor → no tool execution | Constructor has no tool port |
+| ORCH-04 | All execution through Fabric only | Only `fabric_gateway` port |
+| ORCH-10 | Max 2 Fabric calls (MEDIUM) | `_check_budget()` enforcement |
+
+### 107.3 handle_task() (6-Step Flow)
+
+```text
+Step 1: emit k1.orchestration.task.accepted
+Step 2: state_read.snapshot(["beliefs_active", "task_artifacts"]) → context
+Step 3: CapabilityRequest(name=envelope.intent, params=context)
+Step 4: fabric_gateway.execute(cap_request) [budget check enforced]
+Step 5: AggregatedResult.from_medium(capability_result)
+Step 6: emit k1.orchestration.dag.completed with full result payload
+```
+
+### 107.4 Type System
+
+```python
+@dataclass(frozen=True)
+class Budget:
+    max_fabric_calls: int = 2
+    max_planner_tokens: int = 0
+    timeout_ms: int = 0  # Resolved from config in __post_init__
+
+@dataclass(frozen=True)
+class TaskEnvelope:
+    intent: str                    # Required, non-empty
+    task_id: str                   # Auto: "task-{uuid8}"
+    context: dict                  # Enriched by FSM (referents, narrative)
+    tier: ComplexityTier           # MEDIUM (after HIGH reroute)
+    budget: Budget                 # Frozen, immutable
+    session_id: str
+    trace_id: str                  # Auto: "trace-{uuid8}"
+
+@dataclass(frozen=True)
+class AggregatedResult:
+    total_steps: int
+    completed: int
+    failed: int
+    results: list
+    success: bool
+    step_results: list[StepResult]
+    duration_ms: int
+    plan_id: Optional[str]
+
+    @classmethod
+    def from_medium(cls, capability_result, trace_id, duration_ms) -> AggregatedResult
+    @classmethod
+    def from_multi_step(cls, capability_results, trace_id, duration_ms) -> AggregatedResult
+```
+
+### 107.5 HIGH Tier Deferred Ports (Interface Only — Not Implemented)
+
+```python
+@runtime_checkable
+class IPlannerPort(Protocol):
+    async def request_plan(self, request: PlanRequest) -> str    # Returns request_id
+    async def cancel_plan(self, request_id: str) -> None
+
+@runtime_checkable
+class IWorkflowPort(Protocol):
+    async def run(self, request: Any) -> Any
+
+@runtime_checkable
+class ISagaPort(Protocol):
+    # Compensate on partial failure (interface only)
+```
+
+These ports exist as interfaces in `k1/concierge/orchestrator/ports.py` but have no
+implementations yet. They will be wired when the real K1 Orchestrator replaces the stub.
+
+---
+
+## 108. Concierge FSM Routing Deep-Dive
+
+**File**: `k1/concierge/fsm/controller.py`
+
+### 108.1 Task Dispatch Entry Point
+
+```python
+def _on_task_dispatch(self, envelope: Envelope) -> None:
+    """Receives k1.orchestration.task.dispatch.v1 from Front.
+    Routes to orchestrator if tier is MEDIUM/HIGH.
+    Falls back to Back if orchestrator unavailable."""
+    payload = _parse_payload(envelope)
+    task = _task_dispatch_from_payload(payload)
+    self._route_via_orchestrator(envelope, task)
+```
+
+### 108.2 Single Routing Authority: _route_via_orchestrator()
+
+```text
+1. route_task_sync(dispatch, dispatch.tier) → DispatchRecord
+2. If HIGH: PassthroughPlannerStub wraps as 1-step committed plan
+     committed_plan = {task_id, steps: [{intent, step_id}]}
+     Re-route as MEDIUM
+3. Inject scoreboard referents (Gap 6: pronoun resolution)
+     reference_context = {referent.text: referent.entity_id}
+4. Inject narrative thread (Gap 5: context drift prevention)
+     narrative_thread = narrative_active.get_active_thread_name()
+5. If MEDIUM + orchestrator available:
+     asyncio.create_task(_run_medium_orchestration(task_envelope))
+6. If LOW or orchestrator unavailable:
+     _deliver_to_back(envelope)
+```
+
+### 108.3 route_task_sync() Budget Table
+
+**File**: `k1/concierge/orchestrator/routing.py`
+
+```python
+TIER_FABRIC_BUDGET = {LOW: 1, MEDIUM: 2, HIGH: 10}
+TIER_PLANNER_TOKEN_BUDGET = {LOW: 0, MEDIUM: 0, HIGH: 3500}
+```
+
+### 108.4 Completion Normalization
+
+```python
+def _on_dag_completed(self, envelope: Envelope) -> None:
+    """Receives k1.orchestration.dag.completed from OrchestratorStub.
+    Normalizes to k1.orchestration.task.complete.v1 for FSM state transitions."""
+```
+
+### 108.5 Error Handling
+
+```python
+async def _run_medium_orchestration(self, task_envelope, parent_envelope_id) -> None:
+    """On OrchestratorStub failure: emit k1.orchestration.task.failed.v1
+    with error_code=ORCH_MEDIUM_FAILED."""
+```
+
+---
+
+## 109. Concierge Bus Builders Reference
+
+**File**: `k1/concierge/bus/builders.py`
+
+28 POC topic envelope builders. Each produces a ready-to-publish `Envelope` with correct
+topic, Priority (per V2 Section 3), and JSON payload.
+
+### 109.1 Envelope ID Generation
+
+```python
+next_synthetic_envelope_id() -> int
+    # Starts at 1_000_000_000 for synthetic (non-bus) envelopes
+    # Used for direct mailbox delivery
+```
+
+### 109.2 Payload Enrichment
+
+All payloads auto-enriched with canonical metadata:
+
+```python
+{
+    "event_id": str,              # UUID
+    "ts_utc": str,                # ISO 8601
+    "payload_schema_version": int  # Schema version
+}
+```
+
+### 109.3 Causal Chain Rules
+
+| Event | parent_id |
+| ----- | --------- |
+| User input | 0 (root) |
+| Task dispatch | User input envelope_id |
+| Task complete/failed | Task dispatch envelope_id |
+| Tool started | Parent tool/task envelope_id |
+| Tool completed | Tool started envelope_id |
+
+---
+
+## 110. Concierge Config Reference
+
+**File**: `k1/concierge/config/defaults.yaml` (shimmed from `poc.k1_poc.config.loader`)
+
+### 110.1 Back Actor Config
+
+| Key | Default | Description |
+| --- | ------- | ----------- |
+| actors.back.max_iterations.LOW | 10 | Max ReAct loop iterations for LOW tier |
+| actors.back.max_iterations.MEDIUM | 14 | Max ReAct loop iterations for MEDIUM tier |
+| actors.back.max_iterations.HIGH | 24 | Max ReAct loop iterations for HIGH tier |
+| actors.back.hitl_timeout_s | 60 | HITL request timeout |
+| actors.back.budget_floor | 4 | Minimum iterations regardless of tier |
+
+### 110.2 Front Actor Config
+
+| Key | Default | Description |
+| --- | ------- | ----------- |
+| actors.front.history_window_fallback | 20 | Max conversation turns in prompt context |
+| actors.front.default_tier | "LOW" | Default tier if classification fails |
+
+### 110.3 Back Pool Config
+
+| Key | Default | Description |
+| --- | ------- | ----------- |
+| back_pool.pool_size | 3 | Max concurrent back workers |
+| back_pool.max_concurrent_per_session | 2 | Max concurrent tasks per session |
+| back_pool.lease_ttl_s | 300 | Task lease timeout |
+| back_pool.grace_period_s | 5 | Grace period before lease expiry |
+
+### 110.4 Bus Config
+
+| Key | Default | Description |
+| --- | ------- | ----------- |
+| bus.mailbox_capacity | 64 | Max messages per mailbox |
+| bus.gap_timeout_ms | 5000 | Gap detection timeout |
+| bus.validate_canonical_events | false | Skip validation for performance |
+
+### 110.5 Delta Config
+
+| Key | Default | Description |
+| --- | ------- | ----------- |
+| delta.batch_window_ms | 500 | DeltaAggregator flush interval |
+| delta.overflow.hot_budget_total | 53248 | HOT tier total bytes (52KB) |
+
+### 110.6 Kernel Config
+
+| Key | Default | Description |
+| --- | ------- | ----------- |
+| kernel.poll_interval_s | 0.05 | Mailbox consumer poll interval |
+| kernel.dedup_cache_size | 1000 | Dedup set size before clear |
+
+---
+
+## PART F: Model Hub Deep Dive
+
+---
+
+## 111. Model Hub Architecture Overview
+
+The Model Hub is the **unified LLM access gateway** of K1 (Layer L2.5). All LLM
+traffic flows through a single facade (`IModelHubPort`) into a 9-step request
+pipeline backed by provider plugins. The hub handles capability routing, model
+selection, cost management, caching, normalization, circuit breaking, rate
+limiting, and audit logging. It is consumed by Planner (via `LLMGatewayAdapter`)
+and Concierge (via `ModelGatewayAdapter`) — no other component talks to LLM
+providers directly.
+
+### 111.1 Layered Architecture
+
+```
+Layer 0 (types):   types.py, config.py, events.py, metrics.py, manifest.py, tracing.py
+Layer 1 (ports):   ports/*.py (7 port protocols)
+Layer 2 (services): services/*.py (12 services)
+Layer 3 (factory): factory.py (DI wiring)
+Layer 4 (plugins): plugins/*.py (5 provider plugins + 1 test plugin)
+Layer 5 (adapters): adapters/*.py (7 adapters bridging to Bus, SessionState, etc.)
+```
+
+Import rules:
+
+- Layer N may import from Layer N-1 or below, never from N+1.
+- Plugins (Layer 4) import only from types + base protocol.
+- Factory (Layer 3) imports everything to wire the object graph.
+
+### 111.2 Hub Container
+
+Unlike Fabric (dataclass) or Planner (agent), the Model Hub is organised around
+`_HubCore` as the IModelHubPort implementation. The factory builds the full
+service graph and returns `_HubCore` wrapping `RequestRouter` + `ProviderRegistry`
+\+ `HealthReportAdapter`.
+
+```python
+class _HubCore:
+    """IModelHubPort implementation bridging RequestRouter + Registry."""
+    _router: RequestRouter      # 9-step pipeline
+    _registry: ProviderRegistry # provider manifest index
+    _health: HealthReportAdapter
+
+    async def execute(request: HubRequest) -> HubResponse
+    async def stream_execute(request: HubRequest) -> AsyncIterator[HubChunk]
+    async def discover_capabilities() -> Dict[CapabilityType, List[str]]
+    async def discover_models(capability?) -> List[ModelInfo]
+    async def health() -> HubHealthReport
+```
+
+### 111.3 Kernel Integration Points
+
+| Consumer | Adapter | Wraps | Purpose |
+|----------|---------|-------|---------|
+| Planner | `LLMGatewayAdapter(model_hub)` | Planner's `ILLMPort` | Plan generation, expansion, validation LLM calls |
+| Concierge | `ModelGatewayAdapter(model_hub)` | Concierge's `ILLMPort` | Conversation, tool calling, structured output |
+| Fabric | `IModelGatewayPort` (test stub Phase 1) | Fabric port | Agent-based LLM invocation (Phase 2) |
+
+---
+
+## 112. Model Hub Ports (7)
+
+All ports are `@runtime_checkable Protocol` classes in `k1/model_hub/ports/`.
+
+### 112.1 IModelHubPort (Facade)
+
+**File**: `k1/model_hub/ports/hub_port.py`
+
+THE single gateway for all LLM traffic (MH-16). All LLM consumers call
+`execute()` or `stream_execute()`. No direct provider access allowed.
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `execute` | `async (HubRequest) -> HubResponse` | Request-reply LLM call |
+| `stream_execute` | `async (HubRequest) -> AsyncIterator[HubChunk]` | Streaming LLM call |
+| `discover_capabilities` | `async () -> Dict[CapabilityType, List[str]]` | Available capabilities → provider IDs |
+| `discover_models` | `async (capability?) -> List[ModelInfo]` | Available models, optionally filtered |
+| `health` | `async () -> HubHealthReport` | Aggregate health report |
+
+### 112.2 IEventPort
+
+**File**: `k1/model_hub/ports/event_port.py`
+
+Event bus integration for publishing hub lifecycle and operational events.
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `publish` | `async (topic: str, payload: Any) -> None` | Publish integration event |
+| `subscribe` | `async (topics: List[str], handler) -> Subscription` | Subscribe to event topics |
+
+### 112.3 IStateReadPort
+
+**File**: `k1/model_hub/ports/state_read_port.py`
+
+Read-only session state access (MH-01: Model Hub NEVER writes session state).
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `read` | `async (sections: List[str]) -> StateSnapshot` | Read session state sections |
+
+### 112.4 IMetricsPort
+
+**File**: `k1/model_hub/ports/metrics_port.py`
+
+Synchronous fire-and-forget metrics emission.
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `emit` | `(metric_name: str, value: float, labels?) -> None` | Emit metric datapoint |
+
+### 112.5 IConfigPort
+
+**File**: `k1/model_hub/ports/config_port.py`
+
+Read hub configuration with optional hot-reload watch.
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `get` | `(key: str) -> Any` | Read config value |
+| `watch` | `(key: str, callback) -> ConfigSubscription` | Watch for config changes |
+
+### 112.6 ICredentialPort
+
+**File**: `k1/model_hub/ports/credential_port.py`
+
+Credential store access (MH-02: API keys from CredentialStore only, never
+from config, env, or manifest).
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `get_key` | `async (provider_id: str) -> str` | Retrieve API key for provider |
+| `refresh_key` | `async (provider_id: str) -> str` | Force-refresh API key |
+
+### 112.7 IHealthPort
+
+**File**: `k1/model_hub/ports/health_port.py`
+
+Health reporting to Fabric/Observability.
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `report_health` | `(component: str, status: HealthStatus) -> None` | Report component health |
+| `check_health` | `() -> HealthReport` | Get aggregate health report |
+
+---
+
+## 113. Model Hub Adapters (7)
+
+All adapters are in `k1/model_hub/adapters/`. Each implements one port
+protocol and bridges to a kernel infrastructure component.
+
+| Adapter | Port | Bridges To | Notes |
+|---------|------|------------|-------|
+| `ConfigAdapter` | `IConfigPort` | `ModelHubConfig` | Read-only config access |
+| `CredentialStoreAdapter` | `ICredentialPort` | Kernel credential store | API key retrieval (MH-02) |
+| `EventBusAdapter` | `IEventPort` | K1 Bus (`IBus`) | Publishes hub events to bus topics |
+| `HealthReportAdapter` | `IHealthPort` | Internal health aggregation | Used by `_HubCore.health()` |
+| `LLMRequestBusAdapter` | `IModelHubPort` | K1 Bus | Forwards LLM requests over bus (optional) |
+| `PrometheusAdapter` | `IMetricsPort` | Prometheus client | Exposes 12 metrics as Prometheus gauges/counters/histograms |
+| `SessionStateReadAdapter` | `IStateReadPort` | SessionState reader | Read-only session data for context enrichment |
+
+---
+
+## 114. Model Hub Factory Internal Wiring
+
+**File**: `k1/model_hub/factory.py`
+
+`ModelHubFactory` provides three creation modes. All modes follow the same
+11-step wiring sequence.
+
+### 114.1 Creation Modes
+
+| Mode | Method | Returns | Use Case |
+|------|--------|---------|----------|
+| Standalone | `create_standalone(config, plugins)` | `IModelHubPort` | Production: kernel bootstrap (Phase 3.5) |
+| Testing | `create_for_testing(overrides?)` | `(IModelHubPort, dict)` | Tests: facade + all services for inspection |
+| Custom | `create_with_ports(ports, config, plugins)` | `IModelHubPort` | Integration: caller supplies ports |
+
+### 114.2 Wiring Sequence (11 steps)
+
+```
+Step  1: Load config (ModelHubConfig.from_dict or default)
+Step  2: Initialize CredentialStore (CredentialStoreAdapter)
+Step  3: Create ProviderRegistry (cfg)
+Step  4: Create resilience services
+          - CircuitBreakerManager (per-provider state machine)
+          - RateLimiter (token bucket with headroom_pct)
+Step  5: Create cost/cache/budget services
+          - CostTracker
+          - ResponseCache (LRU, TTL=5min default)
+          - BudgetEnforcer ($5/day default, MH-08)
+Step  6: Create routing services
+          - HealthReportAdapter → _DefaultHealthQuery
+          - CapabilityRouter (registry, circuit_breaker, rate_limiter, health_monitor)
+          - ModelSelector (weighted scoring)
+Step  7: Create NormalizationLayer
+Step  8: Create ProviderDispatcher (circuit_mgr, rate_limiter, credential_port, plugins)
+Step  9: Create RequestRouter wiring all services
+          - capability_router, model_selector, budget_enforcer,
+            response_cache, normalization_layer, dispatcher,
+            cost_tracker, audit_logger, [metrics_port]
+Step 10: Create HealthMonitor + AuditLogger
+Step 11: Return _HubCore(router, registry, health_adapter)
+```
+
+### 114.3 DI Validation
+
+All 7 ports are checked via `isinstance(port, Protocol)` at factory creation
+time. Invalid ports raise `TypeError` immediately — no silent wiring failures.
+
+---
+
+## 115. Request Pipeline (9 Steps)
+
+**File**: `k1/model_hub/services/request_router.py`
+
+ALL traffic flows through `RequestRouter.route()` or `.stream_route()` (MH-16).
+No shortcut paths exist.
+
+### 115.1 Pipeline Steps
+
+```
+HubRequest
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│ Step 1: _validate()                                      │
+│   Schema validation, trace_id enforcement (MH-03)        │
+├─────────────────────────────────────────────────────────┤
+│ Step 2: BudgetEnforcer.check()                           │
+│   ALLOW / ALLOW_DEGRADED / REJECT (MH-04, MH-08)        │
+├─────────────────────────────────────────────────────────┤
+│ Step 3: Priority classification                          │
+│   Timeout from RequestConstraints.priority (MH-15)       │
+├─────────────────────────────────────────────────────────┤
+│ Step 4: CapabilityRouter.route()                         │
+│   5-step filtering → eligible providers (MH-06, MH-18)   │
+├─────────────────────────────────────────────────────────┤
+│ Step 5: ModelSelector.select()                           │
+│   Weighted scoring → provider + model + fallback (MH-13) │
+├─────────────────────────────────────────────────────────┤
+│ Step 6: ResponseCache.get()                              │
+│   Cache hit → return immediately (MH-09)                 │
+├─────────────────────────────────────────────────────────┤
+│ Step 7: NormalizationLayer.normalize()                   │
+│   HubRequest → NormalizedRequest (provider-agnostic)     │
+├─────────────────────────────────────────────────────────┤
+│ Step 8: ProviderDispatcher.dispatch()                    │
+│   Plugin execute + circuit breaker + rate limiter (MH-05)│
+├─────────────────────────────────────────────────────────┤
+│ Step 9: Post-process                                     │
+│   Denormalize, cache store, cost tracking, audit log     │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+HubResponse
+```
+
+### 115.2 Service Reference
+
+| Step | Service | File | Key Method |
+|------|---------|------|------------|
+| 1 | `RequestRouter` | `services/request_router.py` | `_validate(request)` |
+| 2 | `BudgetEnforcer` | `services/budget_enforcer.py` | `check(request) -> BudgetDecision` |
+| 3 | (inline) | `services/request_router.py` | Priority → timeout mapping |
+| 4 | `CapabilityRouter` | `services/capability_router.py` | `route(request) -> List[EligibleProvider]` |
+| 5 | `ModelSelector` | `services/model_selector.py` | `select(eligible, request) -> Selection` |
+| 6 | `ResponseCache` | `services/response_cache.py` | `get(cache_key) -> CachedResponse?` |
+| 7 | `NormalizationLayer` | `services/normalization_layer.py` | `normalize(request, provider) -> NormalizedRequest` |
+| 8 | `ProviderDispatcher` | `services/provider_dispatcher.py` | `dispatch(normalized, selection) -> ProviderResponse` |
+| 9 | `CostTracker` / `AuditLogger` | `services/cost_tracker.py`, `services/audit_logger.py` | `compute_cost()`, `log()` |
+
+---
+
+## 116. Provider Plugin System
+
+**File**: `k1/model_hub/plugins/base.py`
+
+Every provider implements `IProviderPlugin` (7 methods). Plugins are isolated —
+one crash doesn't affect others (MH-17).
+
+### 116.1 IProviderPlugin Protocol
+
+```python
+class IProviderPlugin(Protocol):
+    async def initialize(self, manifest: ProviderManifest) -> None: ...
+    def supports(self, capability: CapabilityType) -> bool: ...
+    async def execute(self, request: NormalizedRequest) -> ProviderResponse: ...
+    async def stream_execute(self, request: NormalizedRequest) -> AsyncIterator[ProviderChunk]: ...
+    def estimate_tokens(self, messages: list) -> int: ...
+    async def health_check(self) -> ProviderHealth: ...
+    async def close(self) -> None: ...
+```
+
+### 116.2 Day-1 Plugins
+
+| Plugin | File | Provider | Capabilities |
+|--------|------|----------|-------------|
+| `OpenAIPlugin` | `plugins/openai_plugin.py` | OpenAI (GPT-4o, etc.) | CHAT, TOOL_CALL, STRUCTURED, VISION, EMBED |
+| `AnthropicPlugin` | `plugins/anthropic_plugin.py` | Anthropic (Claude) | CHAT, TOOL_CALL, STRUCTURED, REASON |
+| `GooglePlugin` | `plugins/google_plugin.py` | Google (Gemini) | CHAT, TOOL_CALL, STRUCTURED, VISION |
+| `VLLMPlugin` | `plugins/vllm_plugin.py` | vLLM (local GPU) | CHAT, EMBED |
+| `OllamaPlugin` | `plugins/ollama_plugin.py` | Ollama (local CPU) | CHAT, EMBED |
+| `TestPlugin` | `plugins/test_plugin.py` | Test harness | All (configurable) |
+
+### 116.3 Adding a New Provider
+
+1. Create `k1/model_hub/plugins/my_plugin.py` implementing `IProviderPlugin`
+2. Create a `ProviderManifest` YAML/dict with capabilities, models, costs
+3. Register via `ProviderRegistry.register(manifest, plugin)`
+4. The hub automatically routes traffic based on manifest capabilities
+
+No hub service code changes required — the manifest is the sole source of truth
+for capabilities (MH-18).
+
+---
+
+## 117. Model Hub Invariants (18)
+
+| ID | Invariant | Enforcement |
+|----|-----------|-------------|
+| MH-01 | Hub NEVER writes session state | No `IStateWritePort` dependency |
+| MH-02 | API keys from CredentialStore only | `ICredentialPort`, never from manifest |
+| MH-03 | trace_id required on every request | `HubRequest.__post_init__` raises `ValueError` |
+| MH-04 | HARD rejection on budget exceeded | `BudgetEnforcer.check()` → `BudgetExceededError` |
+| MH-05 | Circuit breaker per provider | `CircuitBreakerManager` per-provider state machine |
+| MH-06 | Fallback chain from capability routing | `ModelSelector` builds ordered fallback list |
+| MH-07 | Cost from manifest model cost tables | `CostTracker.compute_cost()` uses `ModelSpec` |
+| MH-08 | $5/day default daily budget | `ModelHubConfig.daily_budget_usd = 5.0` |
+| MH-09 | Cache TTL 5min default, LRU eviction | `ResponseCache` with configurable TTL |
+| MH-10 | Streaming via async generators | `stream_execute()` yields `HubChunk` |
+| MH-11 | Full audit trail per request | `AuditLogger.log()` captures all metadata |
+| MH-12 | Rate limiting per provider 80% headroom | `RateLimiter` token bucket with headroom |
+| MH-13 | Model selection by priority-weighted scoring | `ModelSelector` with per-priority weights |
+| MH-14 | No hardcoded model names in hub code | All model references via manifest `ModelSpec` |
+| MH-15 | Priority-based timeouts | `RequestConstraints.priority` → timeout_ms |
+| MH-16 | ALL traffic through RequestRouter | Single entry point, no bypass |
+| MH-17 | Plugin isolation (one crash doesn't affect others) | Exception handling in `_try_provider()` |
+| MH-18 | Manifest sole source of truth for capabilities | `ProviderManifest` drives all routing |
+
+---
+
+## 118. Model Hub Event Reference (11 Topics)
+
+All events published via `IEventPort.publish(topic, payload)`.
+Topic pattern: `k1.model_hub.{domain}.{action}.v1`.
+
+| Topic | Payload Class | Key Fields | When |
+|-------|---------------|------------|------|
+| `k1.model_hub.request.received.v1` | `RequestReceivedPayload` | request_id, consumer_id, capability | Step 1: request enters pipeline |
+| `k1.model_hub.request.routed.v1` | `RequestRoutedPayload` | request_id, provider_id, model_id | Step 5: model selected |
+| `k1.model_hub.response.complete.v1` | `ResponseCompletePayload` | request_id, tokens_used, cost_usd, latency_ms | Step 9: response returned |
+| `k1.model_hub.cache.hit.v1` | `CacheHitPayload` | request_id, cache_key, age_ms | Step 6: cache hit |
+| `k1.model_hub.provider.failure.v1` | `ProviderFailurePayload` | request_id, provider_id, error_type, will_fallback | Step 8: provider error |
+| `k1.model_hub.fallback.triggered.v1` | `FallbackTriggeredPayload` | request_id, from_provider, to_provider | Step 8: fallback chain activated |
+| `k1.model_hub.circuit.state.v1` | `CircuitStatePayload` | provider_id, old_state, new_state | Circuit breaker state change |
+| `k1.model_hub.budget.alert.v1` | `BudgetAlertPayload` | tenant_id, level (WARNING/EXCEEDED), pct | Budget threshold crossed |
+| `k1.model_hub.provider.health.v1` | `ProviderHealthPayload` | provider_id, status, latency_p50, error_rate | Health check result |
+| `k1.model_hub.provider.registered.v1` | `ProviderRegisteredPayload` | provider_id, capabilities, model_count | Plugin registration |
+| `k1.model_hub.capability.available.v1` | `CapabilityAvailablePayload` | capability, provider_ids, model_count | Capability becomes available |
+
+---
+
+## 119. Model Hub Metrics (12 Definitions)
+
+**File**: `k1/model_hub/metrics.py`
+
+All metrics emitted via `IMetricsPort.emit()` (fire-and-forget).
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `model_hub.requests_total` | Counter | consumer_id, capability | Total requests received |
+| `model_hub.errors_total` | Counter | error_type | Total errors |
+| `model_hub.cache_hits_total` | Counter | capability | Response cache hits |
+| `model_hub.fallbacks_total` | Counter | from_provider, to_provider | Provider fallback events |
+| `model_hub.budget_rejections_total` | Counter | tenant_id | Budget-rejected requests |
+| `model_hub.latency_ms` | Histogram | capability, provider_id | End-to-end hub latency |
+| `model_hub.provider_latency_ms` | Histogram | provider_id, model_id | Provider plugin latency |
+| `model_hub.tokens_used` | Histogram | capability, model_id | Tokens per request |
+| `model_hub.cost_usd` | Histogram | provider_id | Cost per request in USD |
+| `model_hub.active_requests` | Gauge | — | Currently active requests |
+| `model_hub.provider_circuit_state` | Gauge | provider_id | Circuit breaker state (0=CLOSED, 1=HALF_OPEN, 2=OPEN) |
+| `model_hub.budget_pct` | Gauge | tenant_id | Daily budget usage percentage |
+
+---
+
+## 120. Model Hub Config Reference
+
+**File**: `k1/model_hub/config.py`
+
+`ModelHubConfig` is a frozen dataclass with `__post_init__` validation.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `daily_budget_usd` | 5.0 | Daily budget cap (MH-08) |
+| `monthly_budget_usd` | 100.0 | Monthly budget cap |
+| `max_concurrent_requests` | 50 | Max concurrent hub requests |
+| `cache_max_entries` | 1000 | LRU cache capacity |
+| `cache_ttl_s` | 300 | Cache TTL in seconds (MH-09) |
+| `realtime_timeout_ms` | 10000 | REALTIME priority timeout |
+| `interactive_timeout_ms` | 30000 | INTERACTIVE priority timeout |
+| `background_timeout_ms` | 60000 | BACKGROUND priority timeout |
+| `rate_limit_headroom_pct` | 0.80 | Rate limit headroom (MH-12) |
+| `health_check_interval_s` | 30 | Health check poll interval |
+| `manifest_dir` | `k1/config/providers` | Provider manifest YAML directory |
+| `shutdown_grace_period_ms` | 10000 | Plugin close grace period |
+
+All fields validated in `__post_init__`: positive numerics, headroom in (0, 1].
+
+---
+
+## 121. Model Hub Shutdown
+
+Model Hub shutdown sequence (called as step 6 in kernel shutdown):
+
+```
+1. Stop accepting new requests (set _accepting = False)
+2. Wait for active requests to drain (up to shutdown_grace_period_ms)
+3. Close all provider plugins (await plugin.close() for each)
+4. Flush metrics (final emit of active_requests=0)
+5. Clear response cache
+6. Log shutdown summary (total_requests, total_cost, uptime)
+```
+
+Invariant: No requests in-flight after step 2 completes. Step 3 closes
+external API connections (HTTP sessions, gRPC channels). Plugin close
+failures are logged but don't block shutdown.
+
+---
+
+## 122. Model Hub Bootstrap Gotchas
+
+| # | Gotcha | Consequence if Ignored |
+|---|--------|----------------------|
+| MH-G01 | Model Hub must be created BEFORE Planner and Concierge (Phase 3.5). If created after, `LLMGatewayAdapter(model_hub)` and `ModelGatewayAdapter(model_hub)` receive a None reference. | `NoneType` errors on first LLM call |
+| MH-G02 | Plugin initialization is synchronous in `create_standalone()`. Long plugin init (e.g., loading local models for vLLM/Ollama) blocks the bootstrap thread. Consider deferring heavy plugins to a background task. | Bootstrap latency > 500ms target |
+| MH-G03 | `BudgetEnforcer` starts tracking from creation time. If kernel restarts mid-day, the daily budget resets to $0 spent. Persist budget state to survive restarts. | Budget overspend after restart |
+| MH-G04 | `ResponseCache` is in-memory (not shared). Each kernel instance has its own cache. If running multiple instances, cache hit rate drops. | Duplicate LLM calls across instances |
+| MH-G05 | `ICredentialPort.get_key()` is async. Factory creation is sync. Credential retrieval happens on first request, not at startup. If the credential store is down, the first request fails. | First request latency spike or error |
+| MH-G06 | Model Hub does NOT subscribe to bus events. It's purely request-driven. Integration events are published (outbound) only. | No gotcha per se, but don't expect hub to react to bus events |
+| MH-G07 | The `model_hub` variable must be passed to BOTH Planner and Concierge adapters. Forgetting one means that component falls back to its test stub (which may return canned responses). | Silent wrong behavior — LLM calls return stubs |
+
+---
+
+## 123. Model Hub Types Reference
+
+**File**: `k1/model_hub/types.py`
+
+All types are frozen dataclasses with no I/O and no port references.
+
+### 123.1 Enums
+
+| Enum | Values | Purpose |
+|------|--------|---------|
+| `CapabilityType` | CHAT, TOOL_CALL, STRUCTURED, REASON, EMBED, VISION, BATCH, MODERATE, TOKEN_COUNT, CACHE_PROMPT, AUDIO_IN, TTS, IMAGE_GEN, WEB_SEARCH, CODE_EXEC | 15-member capability taxonomy |
+| `Priority` | REALTIME, INTERACTIVE, BACKGROUND | Request priority tier (MH-15) |
+| `FinishReason` | stop, tool_calls, length, error, safety | Provider response completion reason |
+| `HealthStatus` | HEALTHY, DEGRADED, UNHEALTHY | Component/provider health |
+| `CircuitState` | CLOSED, OPEN, HALF_OPEN | Circuit breaker state (MH-05) |
+| `BudgetDecision` | ALLOW, ALLOW_DEGRADED, REJECT | Budget enforcement decision |
+| `PlacementType` | remote, local_gpu, local_cpu | Provider placement (ADR-0027) |
+| `ModelTier` | FAST, STANDARD, PREMIUM | Performance tier hint |
+
+### 123.2 Request/Response Types
+
+| Type | Key Fields | Purpose |
+|------|------------|---------|
+| `HubRequest` | capability, messages, consumer_id, trace_id, constraints | Inbound LLM request |
+| `HubResponse` | content, finish_reason, tokens_used, cost_usd, model_id, provider_id | LLM response |
+| `HubChunk` | delta, is_final, accumulated_tokens | Streaming chunk |
+| `RequestConstraints` | priority, max_tokens, temperature, tools, response_format | Request parameters |
+| `NormalizedRequest` | messages, provider_config, timeout_ms | Provider-agnostic normalized request |
+| `ProviderResponse` | content, finish_reason, usage, raw_response | Raw provider response |
+| `ModelInfo` | id, provider_id, capabilities, cost, max_context, supports_streaming | Model discovery result |
+| `HubHealthReport` | status (HealthStatus) | Aggregate hub health |
+
+---
+
+## 124. Model Hub Tracing (34 Phases)
+
+**File**: `k1/model_hub/tracing.py`
+
+All log events use structured logging with fields:
+`trace_id`, `request_id`, `consumer_id`, `capability`, `model_id`, `provider_id`,
+`timestamp`, `level`, `phase`.
+
+**Privacy**: Raw prompts and API keys are NEVER logged. All message content
+passes through `redact_messages()`. Labels pass through `safe_labels()`.
+
+---
+
+## 125. Model Hub Performance Targets
+
+| Operation | Target | Notes |
+|-----------|--------|-------|
+| Budget check | < 1ms | In-memory arithmetic |
+| Capability routing | < 2ms | Registry index lookup + 5-step filter |
+| Model selection | < 5ms | Weighted scoring over eligible models |
+| Cache lookup | < 2ms | LRU dict lookup |
+| Normalization | < 1ms | Dataclass construction |
+| **Total hub overhead** | **< 12ms** | Excludes LLM inference time |
+
+These targets ensure the hub adds negligible latency to LLM calls.
+Benchmarked via `tests/k1/model_hub/benchmarks/`.
+
+---
+
+## PART G: Family Context & Household Projection
+
+---
+
+## 126. Household Projection Hydration Protocol (D-14, D-15, D-16)
+
+Family member identity, safety-critical health data, access levels, device registry,
+and household governance are NOT stored in SessionState sections. They live in a
+frozen `HouseholdProjection` cached in-memory inside Concierge.
+
+### 126.1 Design Principle — Data Ownership Separation
+
+> **Profile knows WHO. Tools know WHAT. K0 knows WHY/WHEN/HOW.**
+
+| Category | Owner | Storage | Swappable? |
+|----------|-------|---------|------------|
+| Identity & Safety | HouseholdProjection | K1 local (hydrated from K0 at boot) | No — core contract |
+| Operational Data | M11 MCP Tools (44 contracts) | Per-tool SQLite (provider-swappable) | Yes — MCP → IFL |
+| Learned Knowledge | K0 Memory Layers (st_sem, st_epi, st_procedural, st_social, st_kg) | K0 PostgreSQL | No — canonical |
+| Session Persona | PersonaSection (.fbs) | SessionState WARM tier | No — already exists |
+
+### 126.2 What Lives in HouseholdProjection
+
+```python
+@dataclass(frozen=True)
+class MemberProfile:
+    member_id: str              # stable UUID, maps to K0 actor_id
+    display_name: str           # "Alex"
+    nicknames: list[str]        # ["Al", "Dad"]
+    date_of_birth: str          # ISO 8601
+    role_in_family: str         # "parent", "child", "grandparent", "caretaker"
+    languages: list[str]        # ["en", "es"]
+    access_level: str           # "full_adult", "supervised", "child", "limited", "guest"
+    # Safety-critical (always in-memory, 0ms lookup):
+    allergies: list[Allergy]    # substance, category, severity
+    chronic_conditions: list[str]
+    emergency_contact: str | None
+
+@dataclass(frozen=True)
+class DeviceRegistration:
+    device_id: str              # maps to K0 device_id
+    owner_member_id: str
+    device_type: str            # "iPhone", "iPad", "Hub"
+    is_shared: bool             # kitchen_hub = True
+
+@dataclass(frozen=True)
+class HouseholdGovernance:
+    screen_time_rules: dict[str, Any]
+    quiet_hours: str | None
+    content_policies: dict[str, str]
+    financial_authority: list[str]  # member_ids
+    data_sharing_policy: str
+
+@dataclass(frozen=True)
+class HouseholdProjection:
+    household_id: str           # maps to K0 tenant_id + space_id
+    family_name: str
+    timezone: str
+    members: dict[str, MemberProfile]         # member_id -> profile
+    devices: dict[str, DeviceRegistration]     # device_id -> registration
+    governance: HouseholdGovernance
+    version: int                               # monotonic, incremented on each delta
+    stale: bool = False                        # True when K0 unreachable at boot
+```
+
+### 126.3 Boot-Time Hydration (Phase 6.5)
+
+```
+SESSION BOOT (after ConciergeFactory.create_with_ports, before Phase 7):
+
+  1. bridge_client.query("household.projection.v1", session_id)
+     → K0 responds with versioned HouseholdProjection snapshot
+     → Concierge caches in-memory as frozen dataclass
+     → Persisted to LOCAL COLD (SQLite) as backup
+
+  2. If K0 unreachable (bridge_client is None or timeout):
+     → Load from LOCAL COLD (last known good)
+     → Flag: projection.stale = True
+     → Concierge works fine — edge-first (D-15)
+
+  3. bridge_client.subscribe("household.delta.v1", handler)
+     → K0 pushes member/device/governance changes via SSE
+     → Concierge applies deltas to in-memory cache + LOCAL COLD
+     → projection.version increments monotonically
+```
+
+### 126.4 Per-Turn Usage (Fast, Local Only)
+
+```
+turn_start:
+  device_id (from WebSocket / IInputPort metadata)
+    → projection.devices[device_id] → owner_member_id  (0ms, in-memory)
+    → projection.members[member_id] → access_level      (0ms, in-memory)
+    → Safety gate: allergies, chronic_conditions          (0ms, in-memory)
+
+during turn:
+  "What's for dinner?"
+    → Recipes MCP serves meal plan (tool's own SQLite)
+    → projection.members[member_id].allergies for safety filter (0ms)
+
+NEVER per-turn:
+  ✗ bridge_client.query(anything)
+  ✗ K0 round-trip for family context
+  ✗ Full HouseholdProjection reload
+```
+
+### 126.5 K0 Deep-Query Pattern (IMemoryPort.recall)
+
+K0 is NOT for per-turn lookups. K0 is invoked via `IMemoryPort.recall()` when
+Concierge needs cross-session patterns that no tool or profile field can answer.
+
+**When K0 IS invoked:**
+
+| Trigger | K0 Query | Returns |
+|---------|----------|---------|
+| Multi-day mood pattern | `recall(mood, last_7d)` | Affect trajectory from st_epi |
+| "Remember when we..." | `recall(event, semantic)` | Episodic + semantic matches |
+| Behavioral change | `recall(routine, member)` | st_procedural lifecycle state |
+| Relationship question | `recall(person, social)` | st_social relationship strength |
+| Gift suggestion | `recall(preferences, member)` | st_sem learned preferences |
+
+**When K0 is NOT invoked:**
+
+| Request | Served By | Latency |
+|---------|-----------|---------|
+| "What's Jordan's allergy?" | HouseholdProjection (in-memory) | 0ms |
+| "What's on the calendar?" | Calendar MCP (local SQLite) | < 5ms |
+| "Add milk to grocery list" | Tasks MCP (local SQLite) | < 5ms |
+| "Who's picking up Riley?" | Transport MCP (local SQLite) | < 5ms |
+
+### 126.6 What Does NOT Belong in HouseholdProjection
+
+Operational data (calendar events, medication schedules, chores, budget) lives in
+M11 MCP tool servers. Learned data (preferences, routines, relationships) lives in
+K0 memory layers. See whiteboard §13.3 for the full 20+ item mapping.
+
+| Data | NOT HouseholdProjection Because | Actual Owner |
+|------|--------------------------------|--------------|
+| Medication schedules | Tool data; swappable | Health MCP (E11.9) |
+| Calendar events | Tool data; swappable to Google/Apple | Calendar MCP (E11.1) |
+| Favorite foods | Learned from conversations | K0 st_sem |
+| Morning routines | Auto-detected patterns | K0 st_procedural |
+| Communication style | Per-session calibration | PersonaSection (.fbs) |
+
+### 126.7 Shutdown
+
+```
+concierge.stop():
+  → Unsubscribe from household.delta.v1
+  → Final LOCAL COLD checkpoint of HouseholdProjection
+  → (projection is frozen dataclass — no flush needed)
+```
+
+### 126.8 Validation Checklist
+
+| # | Check | How to Verify | Status |
+|---|-------|---------------|--------|
+| W-50 | HouseholdProjection hydrated at boot | `concierge.household.members` non-empty after Phase 6.5 | [ ] |
+| W-51 | Offline fallback works | Start with bridge_client=None, verify LOCAL COLD load + stale flag | [ ] |
+| W-52 | SSE deltas apply | Emit household.delta.v1, verify projection.version incremented | [ ] |
+| W-53 | Per-turn device→member lookup | `projection.devices[device_id].owner_member_id` resolves | [ ] |
+| W-54 | Allergies available without K0 | `projection.members[id].allergies` returns data when K0 offline | [ ] |
+| W-55 | No SessionState identity_core section | `session_manager.list_sections()` has no "identity_core" | [ ] |

@@ -421,6 +421,11 @@ class LocalMailboxRouter:
         """True if the router has been closed."""
         return self._closed
 
+    @property
+    def is_closed(self) -> bool:
+        """Public alias of ``closed`` to satisfy ``IMailboxRouter.is_closed``."""
+        return self._closed
+
     # ------------------------------------------------------------------
     # Observability
     # ------------------------------------------------------------------

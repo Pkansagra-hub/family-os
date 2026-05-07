@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional
 
 from k1.fabric.types import ScoredCapability
 from k1.orchestrator.types import PlanStep
@@ -349,7 +349,7 @@ class StageContext:
     timeout_remaining_ms: int
     token_budget_remaining: int
     cancel_check: Callable[[], bool]
-    stage_budget: Optional["RequestConstraints"] = None
+    stage_budget: Optional["PlannerConstraints"] = None
 
     def __post_init__(self) -> None:
         if not self.request_id:
@@ -368,67 +368,6 @@ class StageContext:
             )
         if not callable(self.cancel_check):
             raise ValueError("StageContext.cancel_check must be callable")
-
-
-# ---------------------------------------------------------------------------
-# Section 12 -- HILCoordinatorLike protocol (shared by SKETCH + VALIDATE)
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class HILCoordinatorLike(Protocol):
-    """Protocol for Human-in-the-Loop coordinator (Section 12).
-
-    Shared protocol used by both SketchService (clarification) and
-    ValidateService (approval).  The concrete HILCoordinator
-    (k1.planner.services.hil_coordinator, Epic 4.2) will satisfy
-    this structurally.
-
-    PLAN-10: max 2 HIL rounds per plan (clarification + approval combined).
-    """
-
-    @property
-    def round_count(self) -> int:
-        """Current HIL round count (PLAN-10)."""
-        ...  # pragma: no cover
-
-    def reset(self) -> None:
-        """Reset all HIL state (LC_PLAN_START)."""
-        ...  # pragma: no cover
-
-    async def request_clarification(
-        self,
-        request_id: str,
-        question_context: Dict[str, Any],
-    ) -> Optional[str]:
-        """Trigger clarification flow (Section 12.2).
-
-        Called by SketchService when ambiguity detected in LLM output
-        (needs_clarification == true).
-
-        Returns user response text, or None on timeout / budget
-        exhaustion.  Max 2 rounds per plan (PLAN-10).  60s timeout
-        per round.
-        """
-        ...  # pragma: no cover
-
-    async def request_approval(
-        self,
-        request_id: str,
-        plan_summary: str,
-        side_effects: List[str],
-        safety_assessment: str,
-        estimated_duration_ms: int,
-    ) -> str:
-        """Trigger approval flow (Section 8.4).
-
-        Called by ValidateService when plan has high-impact side effects
-        and non-GREEN safety band.
-
-        Returns one of: "approve", "modify", "reject".
-        Timeout: 120s.
-        """
-        ...  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
@@ -552,12 +491,12 @@ class ToolCallStatus(str, Enum):
 
 
 @dataclass(frozen=True)
-class RequestConstraints:
+class PlannerConstraints:
     """Per-call LLM constraints forwarded to ModelHub (Section 13.2.3).
 
-    Encapsulated by PipelineController and injected into each stage call.
-    When model_hub/types.py is created, this type should migrate there; for
-    now it is defined locally to avoid a circular dependency.
+    Planner-local simplified constraints.  The LLMGatewayAdapter translates
+    these to ``k1.model_hub.types.RequestConstraints`` before dispatching
+    to the Model Hub.
 
     Attributes
     ----------
@@ -607,8 +546,12 @@ class RequestConstraints:
 
 
 @dataclass(frozen=True)
-class HubRequest:
-    """Model Hub request envelope (Section 13.2, SS15.3).
+class PlannerLLMRequest:
+    """Planner-local LLM request envelope (Section 13.2, SS15.3).
+
+    Simplified request type used within the Planner pipeline.  The
+    ``LLMGatewayAdapter`` translates this to ``k1.model_hub.types.HubRequest``
+    before dispatching to the Model Hub.
 
     Constructed by pipeline stage services (SketchService, ExpandService,
     ValidateService, HILCoordinator) and passed through ``ILLMPort.execute()``.
@@ -621,7 +564,7 @@ class HubRequest:
         ChatPayload or StructuredOutputPayload serialised to dict.
         ChatPayload keys: ``messages``, ``temperature``.
         StructuredOutputPayload keys: ``messages``, ``output_schema``, ``temperature``.
-    constraints : RequestConstraints
+    constraints : PlannerConstraints
         Per-call budget / timeout / temperature constraints (PLAN-11).
     trace_id : str
         Cognitive trace ID for end-to-end observability (FAB-09).
@@ -629,7 +572,7 @@ class HubRequest:
 
     capability: str
     payload: Dict[str, Any]
-    constraints: RequestConstraints
+    constraints: PlannerConstraints
     trace_id: str = ""
 
     def __post_init__(self) -> None:
@@ -642,8 +585,12 @@ class HubRequest:
 
 
 @dataclass(frozen=True)
-class HubResponse:
-    """Model Hub response envelope (Section 13.2, SS15.3).
+class PlannerLLMResponse:
+    """Planner-local LLM response envelope (Section 13.2, SS15.3).
+
+    Simplified response type used within the Planner pipeline.  The
+    ``LLMGatewayAdapter`` translates ``k1.model_hub.types.HubResponse``
+    back into this type.
 
     Returned by ``ILLMPort.execute()`` after Model Hub processes the request.
 
@@ -660,6 +607,13 @@ class HubResponse:
     result: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+
+# ---------------------------------------------------------------------------
+# Backward-compat aliases (E-0.5.1) — remove once all imports updated
+# ---------------------------------------------------------------------------
+RequestConstraints = PlannerConstraints
+HubRequest = PlannerLLMRequest
+HubResponse = PlannerLLMResponse
 
 # ---------------------------------------------------------------------------
 # Section 15.6 -- Bridge recall response
@@ -813,10 +767,6 @@ class HILBudgetExceededError(PlannerError):
 
 class LLMTimeoutError(PlannerError):
     """Model Hub timed out processing an LLM request (Section 13, SS16.1.2)."""
-
-
-class BudgetExceededError(PlannerError):
-    """Model Hub rejected the request -- token budget exceeded (MH-04)."""
 
 
 class AdapterException(PlannerError):

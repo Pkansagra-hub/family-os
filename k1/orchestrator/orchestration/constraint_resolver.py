@@ -38,17 +38,16 @@ import uuid
 from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 if TYPE_CHECKING:
-    from k1.orchestrator.ports.delta_emit_port import IDeltaEmitPort
-    from k1.orchestrator.ports.event_subscription_port import IEventSubscriptionPort
+    from k1.kernel.ports.hil_port import IHILPort
     from k1.orchestrator.ports.fabric_gateway_port import IFabricGatewayPort
 
+from k1.hil.types import OverrideRequest, OverrideResponse
 from k1.orchestrator.tracing import trace_phase
 from k1.orchestrator.types import (
     AlternativeCapability,
     AlternativeMapping,
     CapabilityCheck,
     CommittedPlan,
-    HILRequest,
     PlanStep,
     RegistryEntry,
     ResolutionResult,
@@ -226,23 +225,20 @@ class ConstraintResolver:
 
     Constructor injection:
       fabric: IFabricGatewayPort -- for query_registry() / query_registry_by_category()
-      delta: IDeltaEmitPort -- for HIL request emission (3.1.5)
-      events: IEventSubscriptionPort -- for HIL response subscription
+      hil_port: IHILPort -- unified HIL service for constraint override fallback (3.1.5)
       max_cycles: int -- max auto-resolution cycles (default 3)
     """
 
-    __slots__ = ("_fabric", "_delta", "_events", "_max_cycles")
+    __slots__ = ("_fabric", "_hil_port", "_max_cycles")
 
     def __init__(
         self,
         fabric: IFabricGatewayPort,
-        delta: Optional[IDeltaEmitPort] = None,
-        events: Optional[IEventSubscriptionPort] = None,
+        hil_port: Optional[IHILPort] = None,
         max_cycles: int = DEFAULT_MAX_CYCLES,
     ) -> None:
         self._fabric = fabric
-        self._delta = delta
-        self._events = events
+        self._hil_port = hil_port
         self._max_cycles = max_cycles
 
     # ------------------------------------------------------------------
@@ -296,7 +292,7 @@ class ConstraintResolver:
 
         # Step 2: Attempt auto-resolution for unavailable capabilities
         hil_required = False
-        hil_request = None
+        hil_response: Optional[OverrideResponse] = None
         if checks:
             unavailable = [c for c in checks if not c.available]
             if unavailable:
@@ -313,8 +309,16 @@ class ConstraintResolver:
                             )
                     if resolution.hil_requested:
                         hil_required = True
-                        # Step 2b: Trigger HIL fallback (3.1.5)
-                        hil_request = await self.trigger_hil_fallback(resolution.unresolved, plan)
+                        # Step 2b: Await unified HIL service for override (3.1.5)
+                        hil_response = await self.trigger_hil_fallback(resolution.unresolved, plan)
+                        # If user approved an override, treat as resolved.
+                        if (
+                            hil_response is not None
+                            and hil_response.choice == "override"
+                            and not hil_response.timed_out
+                        ):
+                            errors = []
+                            hil_required = False
 
         # Step 3: Compute time budget estimation (BUDGET-1)
         time_pressure = self._compute_time_budget(plan)
@@ -333,7 +337,7 @@ class ConstraintResolver:
             alternatives_applied=alternatives_applied,
             time_pressure=time_pressure,
             hil_required=hil_required,
-            hil_request=hil_request,
+            hil_response=hil_response,
         )
         trace_phase(
             logger,
@@ -473,67 +477,83 @@ class ConstraintResolver:
         self,
         unresolved: List[CapabilityCheck],
         plan: CommittedPlan,
-    ) -> HILRequest:
-        """Build and emit HIL request for unresolved constraints (3.1.5).
+    ) -> OverrideResponse:
+        """Await unified HIL service for constraint override (3.1.5).
 
-        Non-blocking: builds HILRequest, emits via delta_port, and
-        returns immediately. Caller (DAGExecutor / OrchestratorService)
-        is responsible for parking PendingHILContext with the returned
-        request_id.
+        Awaits ``IHILPort.request_override`` and returns the user's
+        decision. The coroutine blocks until the user responds (or the
+        request times out per ``HIL_TIMEOUT_MS``); no out-of-band
+        parking is required because the call is naturally suspended.
 
-        Async pattern (ADR-1.1.12):
+        Async pattern (post-E6 / ADR-1.1.12):
           1. format_constraint_question() -- human-readable summary
           2. build_options() -- skip / choose alternative / cancel
-          3. HILRequest construction with uuid4 request_id
-          4. delta_port.emit_hil_request() -- fire-and-forget
-          5. Return HILRequest for caller to park context
+          3. OverrideRequest construction with caller_key for budget tracking
+          4. await IHILPort.request_override() -- blocks until decision
+          5. Return OverrideResponse
 
         Args:
             unresolved: CapabilityChecks that could not be auto-resolved.
             plan: CommittedPlan for context (plan_id, trace_id).
 
         Returns:
-            HILRequest that was emitted. Caller uses request_id
-            to create PendingHILContext and park in pending_hil dict.
+            OverrideResponse from the unified HIL service.
 
         Gotchas:
-          - Does NOT block waiting for user response.
-          - Does NOT park PendingHILContext (caller responsibility).
-          - trace_id from plan.trace_id for correlation.
-          - Timeout 60s (HIL_TIMEOUT_MS). Default action: GRACEFUL_FAIL.
+          - Unlike pre-E6 (fire-and-forget), this BLOCKS the calling
+            coroutine until the user responds.
+          - caller_key is ``orchestrator:resolver:{plan_id}`` for
+            per-plan round budget scoping.
+          - timed_out=True OverrideResponse is returned on HIL timeout.
         """
         question = format_constraint_question(unresolved)
         options = build_options(unresolved)
+        request_id = str(uuid.uuid4())
 
-        hil_request = HILRequest(
-            request_id=str(uuid.uuid4()),
-            question=question,
-            options=options,
-            context={
-                "plan_id": plan.plan_id,
-                "unresolved_capabilities": [c.capability for c in unresolved],
-                "unresolved_step_ids": [c.step_id for c in unresolved],
-            },
-            timeout_ms=HIL_TIMEOUT_MS,
-        )
-
-        if self._delta is not None:
-            await self._delta.emit_hil_request(hil_request, plan.trace_id)
-            logger.info(
-                "[ConstraintResolver] HIL fallback emitted: request_id=%s, "
-                "unresolved=%d capabilities, timeout=%dms",
-                hil_request.request_id,
-                len(unresolved),
-                HIL_TIMEOUT_MS,
-            )
-        else:
+        if self._hil_port is None:
             logger.warning(
-                "[ConstraintResolver] HIL fallback skipped: no delta_port "
+                "[ConstraintResolver] HIL fallback skipped: no hil_port "
                 "configured. %d unresolved capabilities.",
                 len(unresolved),
             )
+            return OverrideResponse(
+                hil_request_id=request_id,
+                choice="abort",
+                selected_alternative=None,
+                fallback_action=None,
+                timed_out=True,
+            )
 
-        return hil_request
+        override_req = OverrideRequest(
+            caller_key=f"orchestrator:resolver:{plan.plan_id}",
+            request_id=request_id,
+            trace_id=plan.trace_id,
+            plan_id=plan.plan_id,
+            unresolved_capabilities=[c.capability for c in unresolved],
+            proposed_alternatives=[
+                {
+                    "step_id": c.step_id,
+                    "capability": c.capability,
+                    "alternatives": list(c.alternatives),
+                }
+                for c in unresolved
+            ],
+            timeout_ms=HIL_TIMEOUT_MS,
+        )
+
+        # Annotate question/options on log line so operators can correlate
+        # with the unified HIL ledger.
+        logger.info(
+            "[ConstraintResolver] HIL override requested: request_id=%s, "
+            "unresolved=%d capabilities, timeout=%dms, question=%r, options=%r",
+            request_id,
+            len(unresolved),
+            HIL_TIMEOUT_MS,
+            question,
+            options,
+        )
+
+        return await self._hil_port.request_override(override_req)
 
     # ------------------------------------------------------------------
     # find_alternatives (3.1.3)

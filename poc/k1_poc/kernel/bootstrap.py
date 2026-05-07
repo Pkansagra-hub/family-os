@@ -17,6 +17,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from k1.bus.ports.bus import IBus
+from k1.bus.ports.mailbox import IMailbox, IMailboxRouter
+
 # Auto-load .env for GOOGLE_API_KEY if not already set
 try:
     from dotenv import load_dotenv
@@ -62,7 +65,6 @@ class KernelConfig:
     ordered_bus: bool = True
     capture_bus: bool = False
     test_mode: bool = False
-    tool_tier: str = "LOW"
     session_mode: str = "standalone"  # standalone | testing
     session_id: str | None = None
     enable_experience: bool = True
@@ -82,11 +84,11 @@ class KernelRuntime:
     """Live kernel runtime object returned by start_kernel()."""
 
     config: KernelConfig
-    bus: Any
-    router: Any
+    bus: IBus
+    router: IMailboxRouter
     adapter: Any
-    front_mailbox: Any
-    back_mailbox: Any
+    front_mailbox: IMailbox
+    back_mailbox: IMailbox
     session_state: Any
     capability_registry: Any
     model: Any
@@ -126,6 +128,11 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
     model = _create_model(cfg)
     session_state = _create_session_state(cfg)
     capability_registry = _create_capability_registry()
+
+    # M2 E2.4: Create typed FabricPOCBridge wrapping the POC registry
+    from poc.k1_poc.fabric.fabric_bridge import FabricPOCBridge
+
+    fabric_bridge = FabricPOCBridge(capability_registry)
 
     # M1 E1.4.1: Create ledger before FSM so it can be injected
     _ledger_writer = None
@@ -187,6 +194,7 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         cognitive_trace_id=f"k-front-{uuid.uuid4().hex[:6]}",
         actor="front",
         recall_fn=recall_fn,
+        fabric_port=fabric_bridge,
         capability_fn=_capability_discover(capability_registry),
         invoke_fn=_capability_invoke(capability_registry),
         writer_port=_writer_port,
@@ -196,13 +204,16 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         cognitive_trace_id=f"k-back-{uuid.uuid4().hex[:6]}",
         actor="back",
         recall_fn=recall_fn,
+        fabric_port=fabric_bridge,
         capability_fn=_capability_discover(capability_registry),
         invoke_fn=_capability_invoke(capability_registry),
         writer_port=_writer_port,
     )
 
-    front_dispatcher = create_front_dispatcher(tier=cfg.tool_tier, ctx=front_ctx, bus=bus)
-    back_dispatcher = create_back_dispatcher(tier=cfg.tool_tier, ctx=back_ctx, bus=bus)
+    # P3.3: dispatchers boot at canonical 'simple' tier; back upgrades to 'plan'
+    # per-task inside back_handler based on TaskDispatch.tier (MEDIUM/HIGH -> plan).
+    front_dispatcher = create_front_dispatcher(tier="simple", ctx=front_ctx, bus=bus)
+    back_dispatcher = create_back_dispatcher(tier="simple", ctx=back_ctx, bus=bus)
 
     runtime = KernelRuntime(
         config=cfg,
@@ -319,7 +330,7 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         from poc.k1_poc.orchestrator.stub import OrchestratorStub
 
         runtime.orchestrator = OrchestratorStub(
-            fabric_gateway=_FabricGatewayAdapter(capability_registry),
+            fabric_gateway=_FabricGatewayAdapter(fabric_bridge),
             state_read=_StateReadAdapter(session_state),
             delta_emit=_DeltaEmitAdapter(aggregator=runtime.delta_aggregator, bus=bus),
         )
@@ -351,10 +362,9 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
     runtime.started = True
 
     logger.info(
-        "Kernel started (ordered=%s, session_mode=%s, tool_tier=%s)",
+        "Kernel started (ordered=%s, session_mode=%s)",
         cfg.ordered_bus,
         cfg.session_mode,
-        cfg.tool_tier,
     )
     return runtime
 
@@ -641,20 +651,26 @@ def _build_experience_context(runtime: KernelRuntime) -> dict[str, Any]:
 
 
 def _create_model(cfg: KernelConfig) -> Any:
-    if cfg.test_mode:
-        from poc.k1_poc.llm.test_adapter import TestConciergeAdapter
+    """Create LLM model wrapped in K1 ModelHub bridge.
 
-        return TestConciergeAdapter()
+    Returns an IModelHubPort-compatible bridge that translates K1
+    HubRequest/HubResponse to/from the underlying POC adapter.
+    """
+    if cfg.test_mode:
+        from poc.k1_poc.llm.test_model_hub_bridge import TestModelHubBridge
+
+        return TestModelHubBridge()
 
     api_key = os.getenv("GOOGLE_API_KEY")
     if api_key:
         from poc.k1_poc.llm.gemini_adapter import GeminiConciergeAdapter
+        from poc.k1_poc.llm.model_hub_bridge import ModelHubPOCBridge
 
-        return GeminiConciergeAdapter(api_key=api_key)
+        return ModelHubPOCBridge(GeminiConciergeAdapter(api_key=api_key))
 
-    from poc.k1_poc.llm.test_adapter import TestConciergeAdapter
+    from poc.k1_poc.llm.test_model_hub_bridge import TestModelHubBridge
 
-    return TestConciergeAdapter()
+    return TestModelHubBridge()
 
 
 def _create_session_state(cfg: KernelConfig) -> Any:
@@ -845,25 +861,44 @@ def _capability_invoke(registry: Any):
 
 
 class _FabricGatewayAdapter:
-    """Capability registry adapter for OrchestratorStub fabric port."""
+    """Capability registry adapter for OrchestratorStub fabric port.
 
-    def __init__(self, registry: Any) -> None:
-        self._registry = registry
+    M2 E2.4 / E2.5 Option A: Accepts a FabricPOCBridge and translates
+    between POC orchestrator types and K1 fabric types.  The POC
+    orchestrator still emits/consumes its own CapabilityRequest/Result;
+    the adapter converts to K1 types for the bridge call and converts
+    the K1 result back to the POC type.
+    """
+
+    def __init__(self, bridge: Any) -> None:
+        self._bridge = bridge
 
     async def execute(self, request: Any) -> Any:
-        from poc.k1_poc.orchestrator.types import CapabilityResult
+        from k1.fabric.types import CapabilityRequest
+        from poc.k1_poc.orchestrator.types import CapabilityResult as POCCapabilityResult
 
-        result = await self._registry.invoke(
-            request.name,
-            request.params or {},
-            request.session_id,
-        )
-        success = bool(result.get("success", result.get("status") == "ok"))
-        return CapabilityResult(
-            success=success,
-            data=result if success else {},
-            error="" if success else str(result.get("error", "invoke_failed")),
+        # Translate POC orchestrator request → K1 CapabilityRequest
+        k1_request = CapabilityRequest(
             capability_name=request.name,
+            params=request.params or {},
+            session_id=request.session_id or "",
+            trace_id=getattr(request, "trace_id", "") or "",
+            caller="orchestrator",
+            caller_id="orchestrator.stub",
+        )
+        k1_result = await self._bridge.execute(k1_request)
+
+        # Translate K1 CapabilityResult → POC CapabilityResult
+        return POCCapabilityResult(
+            success=k1_result.success,
+            data=k1_result.data if k1_result.success else {},
+            error=(
+                ""
+                if k1_result.success
+                else (k1_result.error.message if k1_result.error else "invoke_failed")
+            ),
+            capability_name=k1_request.capability_name,
+            duration_ms=k1_result.duration_ms,
         )
 
     async def execute_batch(self, requests: list[Any]) -> list[Any]:
@@ -896,7 +931,7 @@ class _StateReadAdapter:
             return None
 
 
-def _build_delta_applicator(session_state: Any, bus: Any) -> Any:
+def _build_delta_applicator(session_state: Any, bus: IBus) -> Any:
     """Build a DeltaApplicator wired to session state and bus notification."""
     from poc.k1_poc.delta.applicator import DeltaApplicator
     from poc.k1_poc.delta.topics import STATE_UPDATED
@@ -998,7 +1033,7 @@ class _DeltaEmitAdapter:
     def __init__(
         self,
         aggregator: Any = None,
-        bus: Any = None,
+        bus: IBus | None = None,
     ) -> None:
         self._aggregator = aggregator
         self._bus = bus

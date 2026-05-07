@@ -211,7 +211,7 @@ class IFLRoute:
 
 
 @runtime_checkable
-class IBridgePort(Protocol):
+class IFabricK0Port(Protocol):
     """
     K0 access port via the Cross-Kernel Bridge.
 

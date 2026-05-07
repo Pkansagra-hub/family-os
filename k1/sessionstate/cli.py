@@ -22,14 +22,14 @@ COMMANDS:
     demo        Run interactive demo
 
 USAGE:
-    python -m k1.sessionstate.cli start --session-id dev-001
-    python -m k1.sessionstate.cli status
-    python -m k1.sessionstate.cli mutate beliefs_active add '{"subject": "user"}'
-    python -m k1.sessionstate.cli snapshot
-    python -m k1.sessionstate.cli stop
+    python -m poc.k1_poc.sessionstate.cli start --session-id dev-001
+    python -m poc.k1_poc.sessionstate.cli status
+    python -m poc.k1_poc.sessionstate.cli mutate beliefs_active add '{"subject": "user"}'
+    python -m poc.k1_poc.sessionstate.cli snapshot
+    python -m poc.k1_poc.sessionstate.cli stop
 
 INTERACTIVE MODE:
-    python -m k1.sessionstate.cli demo
+    python -m poc.k1_poc.sessionstate.cli demo
 """
 
 from __future__ import annotations

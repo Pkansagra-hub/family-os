@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from k1.fabric.ports.delta_bus import IDeltaBusPort
 from k1.planner.types import DeltaPayload
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ class DeltaBusAdapter:
 
     def __init__(
         self,
-        delta_bus: Any,
+        delta_bus: IDeltaBusPort,
         agent_id: str = "planner",
     ) -> None:
         """Initialize DeltaBusAdapter.

@@ -326,7 +326,11 @@ FAMILY_CAPABILITIES: list[dict[str, Any]] = [
         "name": "tool.execute.smart_home_control",
         "description": (
             "Control smart home devices: lights, thermostat, locks, "
-            "appliances, speakers, cameras, and other IoT devices."
+            "appliances, speakers, cameras, and other IoT devices. "
+            "Start, stop, or adjust washing machine, dryer, dishwasher, "
+            "oven, coffee maker, robot vacuum, fan, heater, air conditioner, "
+            "garage door, sprinklers, and any connected home appliance. "
+            "Play music or audio on smart speakers and media devices."
         ),
         "required_inputs": ["device", "action"],
         "optional_inputs": ["value", "room", "schedule"],

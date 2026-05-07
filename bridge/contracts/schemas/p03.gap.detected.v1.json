@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/p03.gap.detected.v1.json",
+  "title": "P03GapDetectedV1",
+  "description": "K0\u2192K1 SSE event payload: a knowledge-gap detected during P03 consolidation that P06 may want to investigate. Mirrors the K0-internal ``p03.gap.detected.v1`` outbox topic, narrowed to the cross-kernel surface; fields beyond what K1 needs (e.g. ``cycle_id``) are stripped on the K0 emit boundary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope_id", "gap_id", "gap_type", "detected_at_utc_ms"],
+  "properties": {
+    "envelope_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Per-event ULID. Used as the SSE Last-Event-ID cursor token."
+    },
+    "gap_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable gap identifier (st_learning_queue.gap_id)."
+    },
+    "gap_type": {
+      "type": "string",
+      "enum": [
+        "MISSING_CONTEXT",
+        "AMBIGUOUS_REFERENCE",
+        "LOW_CONFIDENCE",
+        "CONTRADICTION",
+        "INCOMPLETE_SEQUENCE",
+        "UNKNOWN_RELATIONSHIP"
+      ],
+      "description": "Type of knowledge gap."
+    },
+    "detected_at_utc_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "UTC epoch milliseconds when the gap was detected."
+    },
+    "question_template": {
+      "type": "string",
+      "description": "Suggested natural-language question for P06."
+    },
+    "priority_score": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Gap priority score (0\u20131)."
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier."
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Memory-space identifier."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Cognitive trace identifier."
+    }
+  }
+}

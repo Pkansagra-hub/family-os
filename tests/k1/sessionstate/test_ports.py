@@ -1488,6 +1488,7 @@ class MockSessionStateManager:
         self._success = success
         self._error = error
         self.mutate_calls = []
+        self.session_id = "test-session"
 
     def mutate(self, section: str, operation: str, data, estimated_bytes: int = None):
         self.mutate_calls.append((section, operation, data, estimated_bytes))

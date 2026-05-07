@@ -6,7 +6,7 @@ This script compiles the SessionState FlatBuffers schemas (.fbs) into Python
 bindings. It's part of the build pipeline for the K1 SessionState module.
 
 Usage:
-    python -m k1.sessionstate.scripts.compile_flatbuffers
+    python -m poc.k1_poc.sessionstate.scripts.compile_flatbuffers
 
 Requirements:
     - flatc (FlatBuffers compiler) must be installed and in PATH

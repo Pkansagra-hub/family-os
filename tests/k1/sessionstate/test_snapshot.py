@@ -736,7 +736,7 @@ class TestDataclasses:
             name="hot",
             sections=["control", "meta"],
             size_bytes=2048,
-            limit_bytes=49152,
+            limit_bytes=53248,
             utilization_pct=4.17,
             pressure=PressureLevel.NORMAL,
         )

@@ -47,7 +47,7 @@ from k1.sessionstate.sections import (
 # =============================================================================
 
 SECTION_BUDGETS = {
-    # HOT CORE (46KB total: 8+8+6+8+4+4+4+2 = 44KB + overhead)
+    # HOT CORE (46KB total: 8+8+6+8+4+4+4+2+4+4 = 52KB + overhead)
     "control": 8192,
     "beliefs_active": 8192,
     "scoreboard": 6144,

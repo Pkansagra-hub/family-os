@@ -69,6 +69,7 @@ tool_contract:
   provider_type: "WASM"
   provider_id: "date_calc_wasm"
   safety_band_min: "GREEN"
+  risk_class: "low"
   cost_per_call: 0.0
   avg_latency_ms: 5
   max_latency_ms: 100

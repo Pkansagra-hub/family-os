@@ -827,21 +827,25 @@ class ControlSection:
         self,
         fsm_state: str,
         active_task_ids: List[str],
-        complexity_tier: str,
+        complexity_tier: str = "",
     ) -> None:
         """Set FSM overlay fields mirrored from ConciergeControlExtension.
 
         Called by the control extension after every FSM state mutation
         so that actors reading ControlSection from SessionState see
-        the current FSM state, active task list, and complexity tier.
+        the current FSM state and active task list.
 
         M4 E4.1.2 -- avoids FlatBuffer schema churn by storing in a
         metadata sub-dict rather than adding schema-level fields.
 
+        P3.1 -- ``complexity_tier`` is retained for backward-compat with
+        existing dispatch_task AUTO callers (P3.3 deletes the AUTO path).
+        Phase 1 no longer produces it; new callers should omit it.
+
         Args:
             fsm_state:       Current ConciergeState name.
             active_task_ids: Currently active task ID list.
-            complexity_tier: "LOW", "MEDIUM", or "HIGH".
+            complexity_tier: Legacy tier (kept for AUTO dispatch fallback).
         """
         self._fsm_overlay = {
             "fsm_state": fsm_state,
@@ -1349,7 +1353,7 @@ class ControlSection:
             return self.set_fsm_overlay(
                 data["fsm_state"],
                 data["active_task_ids"],
-                data["complexity_tier"],
+                data.get("complexity_tier", ""),
             )
         else:
             raise ValueError(f"Unknown operation: {operation}")

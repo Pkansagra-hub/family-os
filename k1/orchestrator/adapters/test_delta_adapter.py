@@ -20,8 +20,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from k1.orchestrator.types import HILRequest
-
 # ---------------------------------------------------------------------------
 # 6.1.12 -- TestDeltaAdapter
 # ---------------------------------------------------------------------------
@@ -38,7 +36,6 @@ class TestDeltaAdapter:
     def __init__(self) -> None:
         self.emitted: List[Tuple[str, Dict[str, Any], str]] = []
         self.progress_log: List[Tuple[str, str, str]] = []
-        self.hil_requests: List[Tuple[HILRequest, str]] = []
 
     # ------------------------------------------------------------------
     # IDeltaEmitPort.emit
@@ -67,18 +64,6 @@ class TestDeltaAdapter:
         self.progress_log.append((step_id, summary, trace_id))
 
     # ------------------------------------------------------------------
-    # IDeltaEmitPort.emit_hil_request
-    # ------------------------------------------------------------------
-
-    async def emit_hil_request(
-        self,
-        hil_request: HILRequest,
-        trace_id: str,
-    ) -> None:
-        """Capture HIL request. Never raises."""
-        self.hil_requests.append((hil_request, trace_id))
-
-    # ------------------------------------------------------------------
     # Test helpers -- assertions
     # ------------------------------------------------------------------
 
@@ -99,13 +84,7 @@ class TestDeltaAdapter:
             f"got {[s for s, _, _ in self.progress_log]}"
         )
 
-    def assert_hil_requested(self, count: int = 1) -> None:
-        """Assert that *count* HIL requests were emitted."""
-        actual = len(self.hil_requests)
-        assert actual == count, f"Expected {count} HIL request(s), got {actual}"
-
     def reset(self) -> None:
         """Clear all logs."""
         self.emitted.clear()
         self.progress_log.clear()
-        self.hil_requests.clear()

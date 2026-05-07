@@ -13,7 +13,6 @@ from k1.orchestrator.adapters.mock_bridge_adapter import MockBridgeAdapter
 from k1.orchestrator.adapters.mock_state_read_adapter import MockStateReadAdapter
 from k1.orchestrator.adapters.test_delta_adapter import TestDeltaAdapter
 from k1.orchestrator.adapters.test_event_adapter import TestEventAdapter
-from k1.orchestrator.types import HILRequest
 
 # ===================================================================
 # MockStateReadAdapter (6.1.11)
@@ -183,18 +182,6 @@ class TestDeltaAdapterEmitProgress:
         assert adapter.progress_log[0] == ("step-1", "done", "t-1")
 
 
-class TestDeltaAdapterEmitHIL:
-    """6.1.12 -- emit_hil_request behavior."""
-
-    @pytest.mark.asyncio
-    async def test_hil_captured(self):
-        adapter = TestDeltaAdapter()
-        hil = HILRequest(request_id="h-1", question="Choose?", options=["A", "B"])
-        await adapter.emit_hil_request(hil, "t-1")
-        assert len(adapter.hil_requests) == 1
-        assert adapter.hil_requests[0] == (hil, "t-1")
-
-
 class TestDeltaAdapterAssertions:
     """6.1.12 -- assertion helpers."""
 
@@ -231,19 +218,6 @@ class TestDeltaAdapterAssertions:
         with pytest.raises(AssertionError):
             adapter.assert_progress("s1")
 
-    @pytest.mark.asyncio
-    async def test_assert_hil_requested_passes(self):
-        adapter = TestDeltaAdapter()
-        hil = HILRequest(request_id="h-1", question="Q?")
-        await adapter.emit_hil_request(hil, "t")
-        adapter.assert_hil_requested(count=1)
-
-    @pytest.mark.asyncio
-    async def test_assert_hil_requested_fails(self):
-        adapter = TestDeltaAdapter()
-        with pytest.raises(AssertionError):
-            adapter.assert_hil_requested(count=1)
-
 
 class TestDeltaAdapterReset:
     """6.1.12 -- reset clears all logs."""
@@ -253,12 +227,9 @@ class TestDeltaAdapterReset:
         adapter = TestDeltaAdapter()
         await adapter.emit("t", {}, "x")
         await adapter.emit_progress("s", "ok", "x")
-        hil = HILRequest(request_id="h", question="Q?")
-        await adapter.emit_hil_request(hil, "x")
         adapter.reset()
         assert adapter.emitted == []
         assert adapter.progress_log == []
-        assert adapter.hil_requests == []
 
 
 # ===================================================================

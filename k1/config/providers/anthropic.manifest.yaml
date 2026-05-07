@@ -1,0 +1,72 @@
+# Anthropic Provider Manifest
+# Verified against: https://docs.anthropic.com/en/api (2026-03-31)
+# MH-18: This manifest is the SOLE source of truth for Anthropic capabilities.
+
+provider_id: anthropic
+display_name: Anthropic
+plugin_class: k1.model_hub.plugins.anthropic_plugin.AnthropicPlugin
+api_base: https://api.anthropic.com/v1
+
+auth:
+  type: api_key_header
+  credential_key: ANTHROPIC_API_KEY
+  header_name: x-api-key
+
+capabilities:
+  - CHAT
+  - TOOL_CALL
+  - STRUCTURED
+  - REASON
+  - VISION
+  - BATCH
+  - TOKEN_COUNT
+  - CACHE_PROMPT
+
+models:
+  - id: claude-opus-4-6
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, BATCH, TOKEN_COUNT, CACHE_PROMPT]
+    cost_per_1m_input: 5.00
+    cost_per_1m_output: 25.00
+    max_context: 1000000
+    max_output: 128000
+    supports_streaming: true
+    tier: PREMIUM
+
+  - id: claude-sonnet-4-6
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, BATCH, TOKEN_COUNT, CACHE_PROMPT]
+    cost_per_1m_input: 3.00
+    cost_per_1m_output: 15.00
+    max_context: 1000000
+    max_output: 64000
+    supports_streaming: true
+    tier: STANDARD
+
+  - id: claude-haiku-4-5
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, VISION, TOKEN_COUNT, CACHE_PROMPT]
+    cost_per_1m_input: 1.00
+    cost_per_1m_output: 5.00
+    max_context: 200000
+    max_output: 64000
+    supports_streaming: true
+    tier: FAST
+
+circuit_breaker:
+  failure_threshold: 3
+  failure_window_s: 60
+  cooldown_s: 30
+
+health_check:
+  endpoint: https://api.anthropic.com/v1/messages
+  interval_s: 30
+  timeout_s: 5
+
+concurrency:
+  max_concurrent: 50
+
+rate_limits:
+  rpm: 1000
+  tpm: 400000
+  headroom_pct: 0.80
+
+placement:
+  type: remote

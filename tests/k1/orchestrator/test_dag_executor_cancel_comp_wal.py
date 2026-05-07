@@ -103,10 +103,6 @@ class FakeDeltaPort:
     async def emit_progress(self, step_id: str, summary: str, trace_id: str) -> None:
         self.progress.append((step_id, summary, trace_id))
 
-    async def emit_hil_request(self, *args: Any, **kwargs: Any) -> None:
-        pass
-
-
 class FakeStepRunner:
     """Fake step_runner -- configurable per-step results."""
 

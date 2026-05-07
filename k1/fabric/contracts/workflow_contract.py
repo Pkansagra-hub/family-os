@@ -36,7 +36,8 @@ from typing import Any, Dict, Optional, Union
 import yaml
 
 from k1.fabric.core.contract_validator import ContractValidator
-from k1.fabric.types import PlanStep, TriggerSpec, WorkflowContract
+from k1.fabric.types import FabricPlanStep as PlanStep
+from k1.fabric.types import TriggerSpec, WorkflowContract
 
 logger = logging.getLogger(__name__)
 

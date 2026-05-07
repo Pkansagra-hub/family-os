@@ -498,14 +498,14 @@ class TestSessionStateLoggerLifecycle:
         logger.lifecycle_started(
             session_id="sess-123",
             trace_id="trace-456",
-            hot_sections=8,
+            hot_sections=10,
             warm_sections=4,
             total_size_bytes=45000,
         )
         output = log_stream.getvalue()
         parsed = json.loads(output.strip())
         assert parsed["event"] == "lifecycle.started"
-        assert parsed["hot_sections"] == 8
+        assert parsed["hot_sections"] == 10
         assert parsed["warm_sections"] == 4
         assert parsed["total_size_bytes"] == 45000
 
@@ -699,7 +699,7 @@ class TestTraceIdPropagation:
         logger.lifecycle_started(
             session_id="sess-123",
             trace_id="cognitive-trace-start",
-            hot_sections=8,
+            hot_sections=10,
             warm_sections=4,
             total_size_bytes=50000,
         )

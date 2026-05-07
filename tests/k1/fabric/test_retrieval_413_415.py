@@ -642,7 +642,7 @@ class TestRetrievalEngineDiscoverCapabilities:
             FakeContract(name="tool.weather", description="weather service", domain=["weather"]),
         ]
         engine = _make_engine(contracts)
-        result = engine.discover_capabilities(intent="math calculator", domain=["math"])
+        result = engine.discover_capabilities(intent="math calculator")
         assert result.total_matched == 2  # both pass hard filter with GREEN
         assert len(result.capabilities) > 0
         assert len(result.capabilities) <= 2
@@ -742,7 +742,6 @@ class TestRetrievalEngineSoftRankIntegration:
         engine = _make_engine(contracts)
         result = engine.discover_capabilities(
             intent="math calculator add numbers",
-            domain=["math"],
         )
         assert len(result.capabilities) == 2
         # The first result should be the better match

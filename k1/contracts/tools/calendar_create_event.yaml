@@ -67,7 +67,17 @@ tool_contract:
   provider_type: "MCP"
   provider_id: "calendar_mcp_stdio"
   safety_band_min: "AMBER"
+  risk_class: "medium"
   cost_per_call: 0.0
   avg_latency_ms: 30
   max_latency_ms: 200
   availability: "ONLINE"
+
+  # ---- HIL Policy (E2 -- HIL Unification) ----
+  # Creating an event commits to the family's calendar; ask before write.
+  requires_human_confirmation: true
+  side_effects:
+    - kind: "data_write"
+      target: "calendar.event"
+      reversible: true
+      description: "Inserts a new calendar event into the family calendar."

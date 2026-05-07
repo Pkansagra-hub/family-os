@@ -12,6 +12,9 @@ Usage::
     from poc.k1_poc.bus import TOPIC_USER_INPUT, build_user_input
 """
 
+# M3 E3.2: Re-export K1 bus protocols so POC modules can import from here
+from k1.bus.ports.bus import BusHandler, IBus, SubscriptionHandle  # noqa: F401
+from k1.bus.ports.mailbox import IMailbox, IMailboxRouter, MailboxConfig  # noqa: F401
 from poc.k1_poc.bus.builders import (  # noqa: F401
     BUILDERS,
     BuilderEntry,

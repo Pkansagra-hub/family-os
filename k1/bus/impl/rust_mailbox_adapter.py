@@ -95,7 +95,7 @@ class RustMailboxAdapter:
         self._actor_id = actor_id
         self._capacity = capacity
 
-    def receive(self, *, timeout_ms: int = 0) -> Envelope | None:
+    def receive(self, timeout_ms: int = 0) -> Envelope | None:
         """
         Receive the next envelope, optionally blocking.
 
@@ -238,6 +238,11 @@ class RustMailboxRouterAdapter:
     @property
     def closed(self) -> bool:
         """True if the router has been closed."""
+        return self._router.closed
+
+    @property
+    def is_closed(self) -> bool:
+        """Public alias of ``closed`` to satisfy ``IMailboxRouter.is_closed``."""
         return self._router.closed
 
     @property

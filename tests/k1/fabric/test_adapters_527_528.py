@@ -30,7 +30,7 @@ from k1.fabric.adapters.test_delta_bus import CapturedDelta
 from k1.fabric.adapters.test_delta_bus import TestDeltaBusAdapter as DeltaBusPkg
 
 # -- Port protocols --------------------------------------------------------
-from k1.fabric.ports.bridge_port import IBridgePort, IFLRoute
+from k1.fabric.ports.bridge_port import IFabricK0Port, IFLRoute
 from k1.fabric.ports.delta_bus import IDeltaBusPort
 
 # ===========================================================================
@@ -364,7 +364,7 @@ class TestBridgeConnProtocol:
 
     def test_satisfies_protocol(self) -> None:
         adapter = BridgeConnPkg()
-        assert isinstance(adapter, IBridgePort)
+        assert isinstance(adapter, IFabricK0Port)
 
     def test_has_send_command(self) -> None:
         assert hasattr(BridgeConnPkg, "send_command")
@@ -382,7 +382,7 @@ class TestBridgeConnProtocol:
         assert hasattr(BridgeConnPkg, "get_health")
 
     def test_runtime_checkable(self) -> None:
-        assert isinstance(BridgeConnPkg(), IBridgePort)
+        assert isinstance(BridgeConnPkg(), IFabricK0Port)
 
 
 class TestBridgeConnNoClient:

@@ -28,6 +28,7 @@ from k1.fabric.ports.event_port import SubscriptionHandle
 from k1.orchestrator.adapters.admin_http_adapter import AdminHttpAdapter
 from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.connectors.mcp_registrar import RegistrationResult
+from k1.orchestrator.degradation import CircuitBreaker
 from k1.orchestrator.orchestration.orchestrator_service import OrchestratorService
 from k1.orchestrator.ports.admin_port import IAdminPort
 from k1.orchestrator.types import (
@@ -78,10 +79,6 @@ class FakeDeltaEmitPort:
 
     async def emit_progress(self, step_id: str, summary: str, trace_id: str) -> None:
         self.emitted.append(("progress", {"step_id": step_id, "summary": summary}, trace_id))
-
-    async def emit_hil_request(self, hil_request: Any, trace_id: str) -> None:
-        self.emitted.append(("hil", {"request": str(hil_request)}, trace_id))
-
 
 class FakeFabricPort:
     """Fake IFabricGatewayPort."""
@@ -526,6 +523,54 @@ class TestAdminCBMethods:
         assert cbs == {}
 
     @pytest.mark.asyncio
+    async def test_list_cbs_returns_cb_when_present(self) -> None:
+        """list_circuit_breakers returns non-empty dict when CB exists."""
+        pp = FakePlannerPort()
+        pp._cb = CircuitBreaker("CB_PLANNER", failure_threshold=3)
+        adapter = _build_adapter(planner_port=pp)
+        cbs = await adapter.list_circuit_breakers()
+        assert "CB_PLANNER" in cbs
+        cb_state = cbs["CB_PLANNER"]
+        assert cb_state.state == "CLOSED"
+        assert cb_state.failure_count == 0
+        assert cb_state.config.name == "CB_PLANNER"
+
+    @pytest.mark.asyncio
+    async def test_list_cbs_reflects_open_state(self) -> None:
+        """CB in OPEN state is reflected in the returned state."""
+        pp = FakePlannerPort()
+        cb = CircuitBreaker("CB_PLANNER", failure_threshold=2)
+        cb.record_failure()
+        cb.record_failure()
+        pp._cb = cb
+        adapter = _build_adapter(planner_port=pp)
+        cbs = await adapter.list_circuit_breakers()
+        assert cbs["CB_PLANNER"].state == "OPEN"
+        assert cbs["CB_PLANNER"].failure_count == 2
+
+    @pytest.mark.asyncio
+    async def test_set_cb_state_open_trips_breaker(self) -> None:
+        """set_cb_state('OPEN') trips the circuit breaker."""
+        pp = FakePlannerPort()
+        pp._cb = CircuitBreaker("CB_PLANNER")
+        adapter = _build_adapter(planner_port=pp)
+        ok = await adapter.set_cb_state("CB_PLANNER", "OPEN")
+        assert ok is True
+        assert pp._cb.state.value == "OPEN"
+
+    @pytest.mark.asyncio
+    async def test_set_cb_state_closed_resets_breaker(self) -> None:
+        """set_cb_state('CLOSED') resets the circuit breaker."""
+        pp = FakePlannerPort()
+        cb = CircuitBreaker("CB_PLANNER", failure_threshold=2)
+        cb.trip()
+        pp._cb = cb
+        adapter = _build_adapter(planner_port=pp)
+        ok = await adapter.set_cb_state("CB_PLANNER", "CLOSED")
+        assert ok is True
+        assert pp._cb.state.value == "CLOSED"
+
+    @pytest.mark.asyncio
     async def test_set_cb_unknown_name_returns_false(self) -> None:
         adapter = _build_adapter()
         ok = await adapter.set_cb_state("CB_UNKNOWN", "OPEN")
@@ -623,7 +668,6 @@ class TestAdminMailboxMethods:
         stats = await adapter.get_mailbox_stats()
         assert stats["depth"] == 0
         assert stats["pending_plans"] == 0
-        assert stats["pending_hil"] == 0
         assert "capacity" in stats
 
 

@@ -36,10 +36,10 @@ from typing import Any, Dict, List, Optional
 import flatbuffers
 
 # Generated FlatBuffer types
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     NarrativeActiveSection as FBNarrativeActiveSection,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.ConversationThread import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.ConversationThread import (
     ConversationThreadAddContextSummary,
     ConversationThreadAddGoal,
     ConversationThreadAddId,
@@ -57,7 +57,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.ConversationThread im
     ConversationThreadStartRelatedEntitiesVector,
     ConversationThreadStartRelatedIntentsVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.NarrativeActiveSection import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.NarrativeActiveSection import (
     NarrativeActiveSectionAddActiveThreadCount,
     NarrativeActiveSectionAddArc,
     NarrativeActiveSectionAddArchivedThreadIds,
@@ -73,7 +73,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.NarrativeActiveSectio
     NarrativeActiveSectionStartArchivedThreadIdsVector,
     NarrativeActiveSectionStartPausedThreadsVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.NarrativeArc import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.NarrativeArc import (
     NarrativeArcAddClimaxEnd,
     NarrativeArcAddClimaxTurn,
     NarrativeArcAddExpositionEnd,
@@ -84,7 +84,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.NarrativeArc import (
     NarrativeArcEnd,
     NarrativeArcStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
     SectionHeaderAddLastUpdatedMs,
     SectionHeaderAddSectionName,
     SectionHeaderAddSizeBytes,
@@ -841,6 +841,17 @@ class NarrativeActiveSection:
     def get_active_threads(self) -> List[ConversationThread]:
         """Get active and paused threads (resumable)."""
         return [t for t in self.get_all_threads() if t.can_resume()]
+
+    def get_active_thread_name(self) -> str:
+        """Return the title of the currently active primary thread.
+
+        Used by Front handler (WEAVE mode scenario_data) and FSM for
+        injecting narrative context into Back dispatch payloads.
+        Returns empty string if no primary thread exists.
+        """
+        if self._primary_thread:
+            return self._primary_thread.title
+        return ""
 
     def get_threads_by_entity(self, entity_id: str) -> List[ConversationThread]:
         """Get threads related to an entity."""

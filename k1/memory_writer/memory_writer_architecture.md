@@ -838,7 +838,37 @@ This is the exact JSON body that Memory Writer v2 sends to K0. It must conform t
 | 29 | `embedding_text` | string | NO | Null in v2 (K0 computes embeddings) | Always null |
 | 30 | `operation` | string | NO | Default "UPSERT" | Constant |
 
-### Constraints Summary (v2)
+### v2.2 Fields (Correction Signals + K0 Observation Context)
+
+These fields were added in v2.2 to support K0 P03 reconciliation and the observation
+context loop. See §35 for correction signal details.
+
+| # | Field | Type | Default | K0 Use |
+| --- | --- | --- | --- | --- |
+| 31 | `correction_signal` | bool | `false` | **M9.4 Tier 1 EVOLVE override** — bypasses all similarity |
+| 32 | `contradiction_signal` | bool | `false` | **M9.4 Tier 1 CONTRADICT** — routes to st_learning_queue |
+| 33 | `supersedes_concept` | string | `null` | "domain:value" key for targeted truth lookup |
+| 34 | `correction_source` | string | `null` | user_explicit / user_implicit / context_change |
+| 35 | `session_context_id` | string | `null` | Session UUID for audit trail |
+| 36 | `conversation_anchor_ms` | int | — | Gold-standard turn timestamp (MW-13, NEVER overwritten by K0 M08) |
+| 37 | `temporal_links` | object[] | `[]` | Multi-temporal references (max 5) with uncertainty window |
+
+### K0-Required Derived Fields (FieldMapper Responsibility)
+
+These fields are NOT extracted by the LLM but derived in the FieldMapper from existing
+atom data. K0's st_observations and P03 algorithms require them:
+
+| Derived Field | Type | Source | K0 Use |
+| --- | --- | --- | --- |
+| `sentiment_score` | float -1.0 to 1.0 | Map from `sentiment_label` (same mapping as `k0/runtime/ultrabert_adapter.py`) | SRE social enrichment |
+| `dominant_emotion` | enum | `emotion_tags[0]` | SRE, st_observations |
+| `dominant_emotions_json` | JSON objects | Reshape from `emotion_tags` with confidence | M9.4 reconciliation |
+| `affect_valence` | float | `affect.valence` (flattened) | st_observations |
+| `num_participants` | int | `len(participants)` | st_observations |
+| `geohash_6` | 6-char str | PlaceResolver from `location_name` | st_observations, proximity |
+| `place_id` | str | PlaceResolver (geohash-derived) | Location reconciliation |
+
+### Constraints Summary (v2.2)
 
 - `text` is the PRIMARY field. All other fields are cognitive dimensions or metadata.
 - `text` must be self-contained (readable without context) and max 50 words (MW-04).
@@ -848,6 +878,9 @@ This is the exact JSON body that Memory Writer v2 sends to K0. It must conform t
 - `affect` triple is ALWAYS required -- sourced from affective_now VAD dimensions.
 - 12 cognitive dimensions provide rich metadata for K0 P02 enrichment and P03 consolidation.
 - `embedding_text` is always null -- K0 P02 computes embeddings, not K1.
+- `conversation_anchor_ms` is NEVER overwritten by K0 M08 (MW-13, GAP-002).
+- `correction_signal` must be set accurately — false positives cause incorrect truth evolution.
+- K0 observation fields (sentiment_score, dominant_emotion, geohash_6, etc.) derived in FieldMapper.
 - Authoritative schema: `k1/contracts/schemas/memory_writer/memory_atom.v2.schema.json`
 
 ---
@@ -1096,48 +1129,115 @@ UltraBERT does NOT run in K1. It runs exclusively in K0's P02 pipeline AFTER rec
 
 K1 (Memory Writer LLM):
   Produces: text, sentiment_label, emotion_tags, participants, topics,
-            activity_type, location_name, categories
-  Via: GPT-4o-mini (cheapest model, 500 token budget)
+            activity_type, location_name, categories, correction signals
+  Via: GPT-4o-mini (cheapest model, 2000 token budget)
   Quality: Good but not perfect. LLMs occasionally miss tags or hallucinate.
+  Unique strengths: correction detection, temporal reasoning, narrative arcs
 
           ---- BRIDGE BOUNDARY (Ed25519 signed envelope) ----
 
-K0 (P02 Pipeline, Module M04: Affect Analysis):
+K0 (P02 v2 Pipeline -- Trust-Then-Fill):
   Receives: MW envelope body
-  Runs: UltraBERT (familyos-ultrabert v4.0.1, max_length=512 tokens)
-  Role: VALIDATION safety net
+  Dual path:
+    FAST PATH (~80ms):   MW present -> validate + passthrough
+    FALLBACK PATH (~140ms): MW absent -> full UltraBERT (same as v1)
+  UltraBERT: 149M params, 12 heads, 20ms forward pass
+  Role: VALIDATION safety net + gap filler
   On MW body text (~15-30 tokens): well within UltraBERT sweet spot
 
 ```
+
+### P02 v2 Trust-Then-Fill Architecture
+
+K0's P02 write pipeline v2 (`k0/contracts/pipelines/p02_write.v2.yaml`) uses a
+trust-then-fill waterfall. When MW provides signals (~85% of traffic), P02 validates
+and passes through. When MW signals are absent or malformed (~15%), P02 falls back
+to full UltraBERT inference — same as P02 v1, **no regression**.
+
+6 of 16 P02 stages use trust-then-fill:
+
+| P02 Stage | Module | MW Field Used | Fast Path | Fallback Path |
+| --- | --- | --- | --- | --- |
+| stage_20 (M02) | CA1 Semantic Projection | *Always runs* | Full UltraBERT NER+embed (150ms) | Same — primary gap-filler |
+| stage_30 (M04) | Affect Analysis | `body.affect` | Passthrough VAD, safety only (10ms) | Full UltraBERT inference (70ms) |
+| stage_32 (M07) | Social Graph Resolve | `body.participant_relationships` | Map relationships + write st_kg_edges (3ms) | st_kg_edges READ + NER + heuristics (12ms) |
+| stage_33 (M08) | Temporal Profile | `body.temporal` | Use MW resolved_epoch_ms (4ms) | NER temporal + event_time chain (6ms) |
+| stage_55 (M06) | Salience Scoring | Cross-validation only | Correct social inputs (5ms) | Same formula, upstream data (5ms) |
+| stage_60 (M13) | Row Builder | Group 12 (11 MW cols) | All 12 groups populated (10ms) | Group 12 = migration defaults (10ms) |
+
+**M02 is the primary gap-filler**: It always runs full UltraBERT regardless of MW signals.
+All other stages can fall back to M02's NER/embedding/temporal output.
 
 ### UltraBERT Validation Matrix
 
 | Field | LLM Writer Produces | UltraBERT Validates | If Mismatch |
 | --- | --- | --- | --- |
-| `sentiment_label` | `"positive"` | Sentiment head confirms or corrects | UltraBERT value wins |
-| `emotion_tags` | `["joy"]` | Emotions 44-class enriches (may add missing) | Union of both |
+| `sentiment_label` | `"positive"` | Sentiment head confirms or corrects | **UltraBERT value wins** |
+| `emotion_tags` | `["joy"]` | Emotions 44-class enriches (may add missing) | **Union of both** |
 | `participants` | `["person_mom", "person_emma"]` | ner_family KINSHIP check | Flag unresolved |
 | `topics` | `["family", "dining"]` | Ingress head validates topic relevance | UltraBERT may adjust |
-| `activity_type` | `"MEAL"` | Intent head confirms | UltraBERT value wins |
+| `activity_type` | `"MEAL"` | Intent head confirms | **UltraBERT value wins** |
 | `location_name` | `"Olive Garden"` | ner_general LOC extraction | Confirm or extract |
-| `safety` | (inferred from band) | safety_familyos head validates | Block if unsafe |
+| `temporal` | temporal_links | Temporal head span extraction | **Merged** |
+| `relations` | participant_relationships | Relation head (15 types) | **UltraBERT enriches** |
+| `safety` | (inferred from band) | safety_familyos 4-band + safety_generic | Block if unsafe |
 
-### UltraBERT Model Details
+### UltraBERT Model Details (v4)
 
-- Package: `familyos-ultrabert` v4.0.1
-- Installed: editable from `D:\Modeling_studio\familyos_ultrabert`
+- Package: `familyos-ultrabert` v4.0.7
+- Repository: `D:\Modeling_studio` (ModernBERT-base)
+- Architecture: 22 layers, 768-dim hidden, 12 attention heads, 149M params
+- Context: 8192 tokens, Flash Attention 2, RoPE positional encoding
 - Backends: ONNX (`onnx_inference.py`) and PyTorch (`pytorch_inference.py`)
-- Max length: 512 tokens in both backends
-- Embedding dim: 768
-- Heads: sentiment (5-class), emotions (44-class), safety_familyos, ner_family (KINSHIP), ner_general, ingress, intent, and more (12 capabilities total)
+- K0 adapter: `k0/runtime/ultrabert_adapter.py` (singleton, thread-safe, single-pass cache)
+- Latency: ~20ms all 12 heads in single forward pass
+- FCCS (holistic coherence): 89.12%
+
+**12 Task Heads (all run in single forward pass):**
+
+| # | Head | Type | Output | K0 Use |
+| --- | --- | --- | --- | --- |
+| 1 | `ner_general` | Span (4 entities) | PERSON, ORG, LOC, DATE | M02 entity extraction |
+| 2 | `ner_family` | Span (10 entities) | KINSHIP, FAMILY_EVENT | M02 + M07 social resolve |
+| 3 | `sentiment` | 5-class | very_negative..very_positive | M04 affect validation |
+| 4 | `emotions` | 44 multi-label | Emotion tags + intensity | M04 affect enrichment |
+| 5 | `safety_familyos` | 4-band | GREEN/AMBER/RED/CRISIS | M04 safety override |
+| 6 | `safety_generic` | Multi-label (8 types) | Toxicity detection | M04 safety net |
+| 7 | `nli` | 3-class | Entailment/neutral/contradiction | Cross-validation |
+| 8 | `embedding` | 768-dim L2-norm | Dense vector | st_vec for pgvector ANN |
+| 9 | `temporal` | Span (6 time types) | DATE_REL, TIME_REL, etc. | M08 temporal fallback |
+| 10 | `relation` | 15 types | parent_of, spouse_of, etc. | M07 relationship enrichment |
+| 11 | `intent` | 8 classes | User intent classification | M10 ingress classify |
+| 12 | `ingress` | 12 domains | Message routing category | M10 ingress classify |
+
+### K0 UltraBERT Adapter (`k0/runtime/ultrabert_adapter.py`)
+
+The adapter provides module-specific interfaces:
+
+- `analyze_affect(text)` → `AffectResult` (valence from weighted 5-class distribution, arousal from top-3 emotion intensities, safety override)
+- `extract_entities(text)` → `list[EntityResult]` (filtered: min 3 chars, min 0.65 confidence, word boundary check, stop word exclusion)
+- `extract_temporal(text)` → `list[TemporalResult]` (DATE_REL, TIME_REL spans)
+- `classify_activity(text)` → `ActivityResult` (ingress → activity_type mapping)
+- `extract_ner_for_storage(text)` → `dict` (merged ner_family + ner_general, relations, safety band, NLI for st_hipp_events)
+
+Single-pass caching: ONE `client.analyze(text)` per unique text (LRU, 30s TTL, max 64). All adapter functions read from cache. Eliminates repeated inference for multi-module access.
 
 ### Why UltraBERT is Safety Net (Not Primary)
 
 1. **LLM is better at context**: Memory Writer LLM sees the full conversation context (history, beliefs, scoreboard). UltraBERT sees only the extracted text body (~15-30 tokens without context).
 2. **LLM handles ambiguity**: "Panda" in a family context = person_panda. UltraBERT might classify it as ANIMAL without conversation context.
-3. **UltraBERT fills gaps**: If LLM forgot an emotion tag, UltraBERT's 44-class head catches it.
-4. **UltraBERT catches hallucination**: If LLM tags sentiment as "positive" but the text says "hospital emergency", UltraBERT corrects it.
-5. **Defense in depth**: Two independent classifiers (LLM + UltraBERT) are more reliable than either alone.
+3. **LLM detects corrections**: Only K1's LLM can identify EVOLVE/CONTRADICT signals — UltraBERT embedding cosine has ~0.92 similarity floor for family-diary data, making corrections indistinguishable from similar facts.
+4. **UltraBERT fills gaps**: If LLM forgot an emotion tag, UltraBERT's 44-class head catches it.
+5. **UltraBERT catches hallucination**: If LLM tags sentiment as "positive" but the text says "hospital emergency", UltraBERT corrects it.
+6. **Defense in depth**: Two independent classifiers (LLM + UltraBERT) are more reliable than either alone.
+
+### Design Consequence for MW
+
+MW should focus on what LLMs are uniquely good at — understanding conversation context,
+detecting corrections/contradictions, resolving temporal references across turns, and narrative
+arc reasoning. UltraBERT handles the mechanical NLU tasks (NER, sentiment, safety) as a safety
+net. **MW does NOT need to extract NER entities** — UltraBERT does it with 95.2% F1 (general)
+and 80.0% F1 (family). MW can pass entities pre-extracted by Concierge in SS turns as hints.
 
 ---
 
@@ -1255,31 +1355,84 @@ Bridge: LocalOutbox Drain
 
 ## 16. K0 Processing After Receipt
 
-From Memory Writer's perspective, K0 processing is a black box. But understanding P02 is important for validating MW output quality.
+From Memory Writer's perspective, K0 processing is opaque. But understanding P02 v2's
+trust-then-fill architecture is critical for validating MW output quality and knowing
+which fields MW must prioritize vs which UltraBERT handles as fallback.
 
-### P02 Module Pipeline (18 Stages)
+### P02 v2 Module Pipeline (16 Stages, Trust-Then-Fill)
 
-After K0's hot path commits the envelope to `st_wal` and queues it in `st_outbox`, P02 processes it:
+After K0's hot path commits the envelope to `st_wal` and queues it in `st_outbox`, P02
+processes it through 16 stages. 6 use trust-then-fill (MW-dependent); 10 are MW-independent.
 
-| Stage | Module | What It Does | MW Field Used |
+See: `k0/contracts/pipelines/p02_write.v2.yaml`
+
+| Stage | Module | Trust-Then-Fill | MW Field | Fast Path | Fallback |
+| --- | --- | --- | --- | --- | --- |
+| stage_10 | DG Pattern Separation | No | `text` | 5ms | 5ms |
+| stage_20 | CA1 Semantic Projection | **No (always runs)** | `text`, `participants` | 150ms | 150ms |
+| stage_22 | Embedding Cache Extract | No | — | 0ms (cache hit) | 0ms |
+| stage_30 | **Affect Analysis** | **Yes** | `body.affect` | 10ms | 70ms |
+| stage_31 | Space Resolution | No | — | 2ms | 2ms |
+| stage_32 | **Social Graph Resolve** | **Yes** | `body.participant_relationships` | 3ms | 12ms |
+| stage_33 | **Temporal Profile** | **Yes** | `body.temporal` | 4ms | 6ms |
+| stage_40 | Device Profile | No | — | — | — |
+| stage_41 | Ingress Classify | No | — | — | — |
+| stage_42 | Geo Metadata | No | — | — | — |
+| stage_43 | Spatial Minimal | No | — | — | — |
+| stage_50 | Retention Lookup | No | — | 2ms | 2ms |
+| stage_55 | **Salience Scoring** | **Yes** | Cross-validation | 5ms | 5ms |
+| stage_60 | **Row Builder** | **Yes** | Group 12 (11 MW cols) | 10ms | 10ms |
+| stage_70 | Atomic Writer | No | Complete row | 15ms | 15ms |
+| stage_80 | Event Emitter | No | — | 2ms | 2ms |
+
+### P02 v2 Performance (Dual-Path)
+
+| Path | When | Total Latency | Notes |
 | --- | --- | --- | --- |
-| M01 | DG Pattern Separation | Computes fingerprints for dedup | `text` |
-| M02 | Semantic Projection | Extracts entities, KG triples | `text`, `participants` |
-| M04 | Affect Analysis (UltraBERT) | Validates sentiment, emotions, safety | `text`, `sentiment_label`, `emotion_tags` |
-| M06 | Salience Scoring | Computes importance score | All fields |
-| M07 | Social Graph Resolve | Maps to `st_relationships` | `participants` |
-| M08 | Temporal Profiling | Extracts time patterns | `event_time_utc` |
-| M16 | Atomic Writer | Writes to `st_hipp_events` | Complete enriched event |
+| **FAST PATH** | MW signals present (~85%) | **~80ms** | Validate + passthrough |
+| **FALLBACK PATH** | MW absent/malformed (~15%) | **~140ms** | Full UltraBERT (same as v1) |
 
-### P02 Performance (Background, NOT Hot Path)
+**Key**: P02 always produces complete output. The source varies but the shape is constant.
+MW saves ~60ms per event when it provides good signals. No regression when MW is bad.
 
-| Metric | P50 | P95 |
+P02 adds ~80-140ms AFTER the hot path's 93ms.
+
+### After P02: P03 Consolidation Pipeline
+
+Once in st_hipp_events, events are processed by P03 (Universal Consolidation Pipeline)
+in batches of 300. P03 uses the URE (Universal Reconciliation Engine, M9.1-M9.5):
+
+| P03 Phase | What It Does | MW Fields Critical |
 | --- | --- | --- |
-| Total P02 pipeline | ~50ms | ~100ms |
-| UltraBERT inference | ~20ms | ~40ms |
-| Atomic write | ~10ms | ~20ms |
+| R0 | Load batch from st_hipp_events | All fields |
+| R1 | Salience scoring (ImportanceScorer) | sentiment, social, novelty |
+| R2 | Episode clustering (HDBSCAN) | embedding (from P02) |
+| R3 | **Reconciliation (URE M9.4)** | **correction_signal, contradiction_signal** (Tier 1 override) |
+| R4 | KG extraction | ner_entities_json (from UltraBERT) |
+| R5 | Observation-driven algorithms (14 new) | **All 32 st_observations columns** |
+| R6 | Knowledge graph merge | entities |
+| R7 | Truth layer commit | All — writes to 7 truth layers |
 
-P02 adds ~50-100ms AFTER the hot path's 93ms. Total K0 time from receipt to permanent storage: ~143-193ms.
+See §35 for correction signal details. See `docs/plans/MEMORY_WRITER_IMPLEMENTATION_PLAN.md` §5 for full K0 output contract.
+
+### Observation Context Loop (st_observations)
+
+P03 R7 writes to `st_observations` (32-column append-only table) after committing to
+truth layers. R5's 14 observation-driven algorithms read st_observations next cycle.
+This creates a reinforcement loop: more evidence → stronger updates.
+
+MW must provide ALL observation context fields per event:
+
+| Group | Fields | MW Source |
+| --- | --- | --- |
+| Temporal | time_of_day_bucket, circadian_slot, is_weekend | context_assembly.py |
+| Emotional | sentiment_score, sentiment_label, dominant_emotion, affect_valence | LLM + FieldMapper |
+| Spatial | location_name, geohash_6 | LLM + PlaceResolver |
+| Social | social_context, num_participants | LLM + len(participants) |
+| Metadata | ingress_channel, device_kind | Session meta |
+| K1 Signals | correction_signal, contradiction_signal, supersedes_concept | LLM detection |
+
+See: `docs/pipelines/UNIVERSAL_RECONCILIATION_ENGINE.md`, `docs/pipelines/p03/stage5_refinement_proposal.md`
 
 ### Total End-to-End: Turn to Permanent Memory
 
@@ -1289,9 +1442,10 @@ Turn delivery (user sees response)
   + MW background pipeline:   ~815ms (P95)
   + Bridge transport:         ~50ms
   + K0 hot path:              ~93ms
-  + K0 P02 background:        ~100ms
+  + K0 P02 background (fast): ~80ms   (when MW signals present)
+  + K0 P02 background (fall): ~140ms  (when MW signals absent)
   -----------------------------------------------
-  = ~1058ms from turn delivery to st_hipp_events
+  = ~1038ms (fast) to ~1098ms (fallback)
 
 Memory is permanently stored within ~1 second of the user receiving their response.
 

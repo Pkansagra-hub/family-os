@@ -100,6 +100,46 @@
           "type": "string",
           "format": "date-time",
           "description": "ISO 8601 timestamp of last update"
+        },
+        "requires_human_confirmation": {
+          "type": ["boolean", "null"],
+          "description": "Explicit override for HIL gating. true -> always ask user; false -> never ask. Omit / null -> infer (prompts have no safety_band, so default is no HIL)."
+        },
+        "side_effects": {
+          "type": "array",
+          "description": "Structured declaration of side effects (rare for prompts; reserved for future prompt-driven side-effecting templates). NOTE: this schema does NOT enforce the cross-field invariant that any side_effect with kind in {data_delete, data_modify, payment, physical_actuation, irreversible_op, third_party_share} should imply requires_human_confirmation=true. The HIL gate (k1/fabric/_run_hil_gate) and the unified HumanInTheLoopService apply that policy at runtime via CapabilityContractView.requires_human_confirmation. An allOf guard could be added here for static validation, but is intentionally omitted to keep the schema permissive while runtime policy remains authoritative.",
+          "items": {
+            "type": "object",
+            "required": ["kind", "target"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "data_write", "data_delete", "data_modify",
+                  "external_api_call", "payment", "physical_actuation",
+                  "notification_send", "irreversible_op", "third_party_share"
+                ],
+                "description": "Category of side effect"
+              },
+              "target": {
+                "type": "string",
+                "description": "What the side effect targets"
+              },
+              "reversible": {
+                "type": "boolean",
+                "default": false,
+                "description": "Whether this side effect can be undone after execution"
+              },
+              "cost_estimate": {
+                "type": "object",
+                "properties": {
+                  "currency": {"type": "string"},
+                  "amount": {"type": "number", "minimum": 0}
+                }
+              },
+              "description": {"type": "string"}
+            }
+          }
         }
       }
     }

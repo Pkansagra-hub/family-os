@@ -4,11 +4,13 @@
 
 import flatbuffers
 from flatbuffers.compat import import_numpy
+
 np = import_numpy()
+
 
 # Warm Tier - In memory but evictable to COLD
 class WarmTier(object):
-    __slots__ = ['_tab']
+    __slots__ = ["_tab"]
 
     @classmethod
     def GetRootAsWarmTier(cls, buf, offset):
@@ -62,36 +64,48 @@ class WarmTier(object):
         return None
 
     # WarmTier
-    def TotalSizeBytes(self):
+    def ArtifactsWarm(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        if o != 0:
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from .ArtifactsWarmSection import ArtifactsWarmSection
+
+            obj = ArtifactsWarmSection()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # WarmTier
+    def TotalSizeBytes(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
         return 0
 
     # WarmTier
     def BudgetBytes(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
         return 49152
 
     # WarmTier
     def IsOverBudget(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
         return False
 
     # WarmTier
     def EvictionCount(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
         return 0
 
     # WarmTier
     def LastEviction(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         if o != 0:
             x = o + self._tab.Pos
             obj = Timestamp()
@@ -99,14 +113,68 @@ class WarmTier(object):
             return obj
         return None
 
-def WarmTierStart(builder): builder.StartObject(9)
-def WarmTierAddBeliefsHistory(builder, beliefsHistory): builder.PrependUOffsetTRelativeSlot(0, flatbuffers.number_types.UOffsetTFlags.py_type(beliefsHistory), 0)
-def WarmTierAddHistoryRecent(builder, historyRecent): builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(historyRecent), 0)
-def WarmTierAddPersona(builder, persona): builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(persona), 0)
-def WarmTierAddTelemetry(builder, telemetry): builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(telemetry), 0)
-def WarmTierAddTotalSizeBytes(builder, totalSizeBytes): builder.PrependUint32Slot(4, totalSizeBytes, 0)
-def WarmTierAddBudgetBytes(builder, budgetBytes): builder.PrependUint32Slot(5, budgetBytes, 49152)
-def WarmTierAddIsOverBudget(builder, isOverBudget): builder.PrependBoolSlot(6, isOverBudget, 0)
-def WarmTierAddEvictionCount(builder, evictionCount): builder.PrependUint32Slot(7, evictionCount, 0)
-def WarmTierAddLastEviction(builder, lastEviction): builder.PrependStructSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(lastEviction), 0)
-def WarmTierEnd(builder): return builder.EndObject()
+
+def WarmTierStart(builder):
+    builder.StartObject(10)
+
+
+def WarmTierAddBeliefsHistory(builder, beliefsHistory):
+    builder.PrependUOffsetTRelativeSlot(
+        0, flatbuffers.number_types.UOffsetTFlags.py_type(beliefsHistory), 0
+    )
+
+
+def WarmTierAddHistoryRecent(builder, historyRecent):
+    builder.PrependUOffsetTRelativeSlot(
+        1, flatbuffers.number_types.UOffsetTFlags.py_type(historyRecent), 0
+    )
+
+
+def WarmTierAddPersona(builder, persona):
+    builder.PrependUOffsetTRelativeSlot(
+        2, flatbuffers.number_types.UOffsetTFlags.py_type(persona), 0
+    )
+
+
+def WarmTierAddTelemetry(builder, telemetry):
+    builder.PrependUOffsetTRelativeSlot(
+        3, flatbuffers.number_types.UOffsetTFlags.py_type(telemetry), 0
+    )
+
+
+def WarmTierAddArtifactsWarm(builder, artifactsWarm):
+    builder.PrependUOffsetTRelativeSlot(
+        4, flatbuffers.number_types.UOffsetTFlags.py_type(artifactsWarm), 0
+    )
+
+
+def WarmTierAddTotalSizeBytes(builder, totalSizeBytes):
+    builder.PrependUint32Slot(5, totalSizeBytes, 0)
+
+
+def WarmTierAddBudgetBytes(builder, budgetBytes):
+    builder.PrependUint32Slot(6, budgetBytes, 49152)
+
+
+def WarmTierAddIsOverBudget(builder, isOverBudget):
+    builder.PrependBoolSlot(7, isOverBudget, 0)
+
+
+def WarmTierAddEvictionCount(builder, evictionCount):
+    builder.PrependUint32Slot(8, evictionCount, 0)
+
+
+def WarmTierAddLastEviction(builder, lastEviction):
+    builder.PrependStructSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(lastEviction), 0)
+
+
+def WarmTierEnd(builder):
+    return builder.EndObject()
+
+
+def WarmTierEnd(builder):
+    return builder.EndObject()
+
+
+def WarmTierEnd(builder):
+    return builder.EndObject()

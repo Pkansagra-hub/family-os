@@ -43,7 +43,7 @@ from poc.k1_poc.bus.builders import (
     build_task_resume,
 )
 from poc.k1_poc.config import get_config
-from poc.k1_poc.llm.ports import IConciergeModelPort
+from poc.k1_poc.llm.hub_types import IModelHubPort
 from poc.k1_poc.llm.types import ModelMessage
 from poc.k1_poc.llm.validator import LLMOutputValidator
 from poc.k1_poc.prompt.affect import compute_affect_band
@@ -144,6 +144,44 @@ def _strip_leaked_reasoning(text: str) -> str:
             )
         return clean
     return text
+
+
+# Patterns matching raw system/HIL blocks that LLMs sometimes pass through
+# instead of rephrasing.  Covers:
+#   [HIL Request] Type: ... Question: ... Options: ... Side effects: ...
+#   Note: The generate_story task is suspended because ...
+#   == WORKER NEEDS USER INPUT ==  (scenario template echoed verbatim)
+_SYSTEM_BLOCK_RE = re.compile(
+    r"(?:"
+    # [HIL Request] block (may span multiple lines)
+    r"\[HIL\s*Request\][^\n]*(?:\n(?:Type|Question|Options|Side\s*effects)[^\n]*)*" r"|"
+    # Note about task suspension
+    r"Note:\s*The\s+\S+\s+task\s+is\s+suspended\b[^\n]*" r"|"
+    # Echoed scenario template header
+    r"==\s*WORKER NEEDS USER INPUT\s*==[^\n]*" r")",
+    re.IGNORECASE,
+)
+
+
+def _strip_leaked_system_blocks(text: str) -> str:
+    """Remove raw HIL/system blocks that leaked into the response text.
+
+    LLMs in HITL_RELAY mode sometimes pass through structured data from
+    the scenario template instead of rephrasing it naturally.  This
+    function strips those blocks so only conversational text remains.
+    """
+    if not text:
+        return text
+    cleaned = _SYSTEM_BLOCK_RE.sub("", text)
+    # Collapse runs of blank lines left by removed blocks
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    if cleaned != text.strip():
+        removed = len(text) - len(cleaned)
+        logger.info(
+            "front_handler: stripped %d chars of leaked system blocks from response",
+            removed,
+        )
+    return cleaned if cleaned else text
 
 
 # =========================================================================
@@ -616,7 +654,7 @@ def _extract_current_user_text(mode: PromptMode, envelope: Envelope) -> str:
 
 async def front_handler(
     envelope: Envelope,
-    model: IConciergeModelPort,
+    model: IModelHubPort,
     ss: Any,
     bus: IBus,
     tool_dispatcher: ToolDispatcher,
@@ -632,7 +670,7 @@ async def front_handler(
 
     Args:
         envelope: The incoming bus Envelope triggering this invocation.
-        model: LLM adapter implementing IConciergeModelPort.
+        model: LLM adapter implementing IModelHubPort.
         ss: SessionStateManager instance (duck typed for section access).
         bus: IBus instance for publishing response events.
         tool_dispatcher: Front ToolDispatcher for tool execution.
@@ -713,8 +751,11 @@ async def front_handler(
     # 5. Extract domain from Phase 1 classification (V2 Section 6.1 step 3)
     control_section = _safe_get_section(ss, "control")
     domain: str | None = None
-    if control_section and hasattr(control_section, "domain_context"):
-        domain = (control_section.domain_context or {}).get("domain")
+    if control_section and hasattr(control_section, "get_domains"):
+        _dc = control_section.get_domains()
+        _pd = getattr(_dc, "primary_domain", None) or ""
+        if _pd and _pd != "general":
+            domain = _pd
 
     # 5a. Extract affect confidence and tier for conditional tool inclusion
     _front_cfg = get_config().actors.front
@@ -767,7 +808,6 @@ async def front_handler(
             opp_enrichment = opp_pipeline.on_pre_prompt_build(
                 turns=turns_for_opp,
                 affect_band=affect_band,
-                complexity_tier=tier,
                 active_domains=[domain] if domain else [],
             )
             if opp_enrichment.compressed_context:
@@ -978,6 +1018,7 @@ async def front_handler(
     #      For STANDARD/PRESENT modes, emit stream chunks first (Epic 4.2).
     if result.text:
         clean_text = _strip_leaked_reasoning(result.text)
+        clean_text = _strip_leaked_system_blocks(clean_text)
         if mode in (PromptMode.STANDARD, PromptMode.PRESENT):
             await _emit_streaming_response(
                 bus=bus,

@@ -21,7 +21,7 @@ Invariants enforced
 -------------------
 - PLAN-03: CommitService is last stage; no LLM call in commit path.
 - PLAN-04: Checks elapsed time at each stage transition (45s default).
-- PLAN-11: Injects per-stage budget into HubRequest.constraints.
+- PLAN-11: Injects per-stage budget into PlannerLLMRequest.constraints.
 - PLAN-12: Wraps execute() in try/except; uncaught -> FAILED + emit.
 
 Import graph (Layer 5)
@@ -55,7 +55,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import replace
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
 
 from k1.planner.config import PlannerConfig
 from k1.planner.events import (
@@ -69,6 +69,10 @@ from k1.planner.plan_fsm import PlanState, PlanStateMachine
 from k1.planner.ports.delta_emit_port import IDeltaEmitPort
 from k1.planner.ports.event_port import IEventPort
 from k1.planner.tracing import create_stage_context
+
+if TYPE_CHECKING:
+    from k1.kernel.ports.hil_port import IHILPort
+
 from k1.planner.types import (
     DELTA_MICRO_REPLAN,
     DELTA_PLAN_CANCELLED,
@@ -82,8 +86,8 @@ from k1.planner.types import (
     DeltaPayload,
     ExpandedPlan,
     PlanCancelledError,
+    PlannerConstraints,
     PlannerError,
-    RequestConstraints,
     StageContext,
     StagePhase,
     ValidateRejectedError,
@@ -141,6 +145,7 @@ class PipelineController:
         "_commit",
         "_delta_port",
         "_event_port",
+        "_hil_port",
         "_config",
         "_fsm",
         "_stage_token_usage",
@@ -164,6 +169,7 @@ class PipelineController:
         delta_port: IDeltaEmitPort,
         event_port: IEventPort,
         config: PlannerConfig,
+        hil_port: "IHILPort | None" = None,
     ) -> None:
         # -- Validate injected dependencies --
         if sketch is None:
@@ -180,6 +186,8 @@ class PipelineController:
             raise ValueError("PipelineController: event_port must not be None")
         if config is None:
             raise ValueError("PipelineController: config must not be None")
+        # E5 (HIL Unification): hil_port is optional for backward compatibility;
+        # when omitted, reset_round_budget calls are no-ops.
 
         # -- Service references (injected, not created) --
         self._sketch: Any = sketch
@@ -190,6 +198,7 @@ class PipelineController:
         # -- Port references --
         self._delta_port: IDeltaEmitPort = delta_port
         self._event_port: IEventPort = event_port
+        self._hil_port: "IHILPort | None" = hil_port
 
         # -- Configuration --
         self._config: PlannerConfig = config
@@ -433,6 +442,14 @@ class PipelineController:
             # -- Step 1: Reset per-plan state (Section 23.2 step 4) --
             self.reset()
 
+            # E5.M1.3: clear HIL round budgets for the planner caller_keys
+            # so a re-used plan_id starts with a fresh budget.  hil_port is
+            # optional (E5 back-compat); skip when not wired.
+            plan_id = getattr(request, "request_id", None)
+            if plan_id and self._hil_port is not None:
+                self._hil_port.reset_round_budget(f"planner:sketch:{plan_id}")
+                self._hil_port.reset_round_budget(f"planner:validate:{plan_id}")
+
             # -- Step 2: Initialise plan --
             self._current_request = request
             self._plan_start_time = time.monotonic()
@@ -465,7 +482,7 @@ class PipelineController:
             while True:
                 # -- Step 6: EXPAND --
                 ctx = self._create_stage_context(StagePhase.EXPAND)
-                expanded_plan = await self._expand.execute(sketch_result, ctx)
+                expanded_plan = await self._expand.execute(sketch_result, request, ctx)
 
                 # -- Step 7: Cancel + timeout check --
                 self._check_cancel(cancel_check, StagePhase.EXPAND.value)
@@ -479,7 +496,7 @@ class PipelineController:
 
                 # -- Step 9: VALIDATE --
                 ctx = self._create_stage_context(StagePhase.VALIDATE)
-                verdict = await self._validate.execute(expanded_plan, ctx)
+                verdict = await self._validate.execute(expanded_plan, request, ctx)
 
                 # -- Step 10: Verdict routing (Section 5.2 step 15) --
                 verdict_status = getattr(verdict, "status", None)
@@ -525,6 +542,7 @@ class PipelineController:
             ctx = self._create_stage_context(StagePhase.COMMIT)
             committed = await self._commit.execute(
                 expanded_plan,
+                request,
                 verdict,
                 ctx,
             )
@@ -705,6 +723,7 @@ class PipelineController:
             )
             committed = await self._commit.execute(
                 micro_expanded,
+                request,
                 verdict,
                 commit_ctx,
             )
@@ -912,10 +931,10 @@ class PipelineController:
     def _get_stage_budget(
         self,
         stage: StagePhase,
-    ) -> Optional[RequestConstraints]:
+    ) -> Optional[PlannerConstraints]:
         """Return per-stage LLM budget from PlannerConfig (PLAN-11).
 
-        Returns ``RequestConstraints`` for LLM-calling stages (SKETCH,
+        Returns ``PlannerConstraints`` for LLM-calling stages (SKETCH,
         EXPAND, VALIDATE) and ``None`` for COMMIT (PLAN-03: no LLM calls
         in commit path).
 
@@ -929,7 +948,7 @@ class PipelineController:
 
         Returns
         -------
-        Optional[RequestConstraints]
+        Optional[PlannerConstraints]
             Per-stage LLM constraints, or ``None`` for COMMIT.
 
         References
@@ -939,19 +958,19 @@ class PipelineController:
         """
         cfg = self._config
         if stage == StagePhase.SKETCH:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.sketch_max_tokens,
                 timeout_ms=cfg.sketch_timeout_ms,
                 temperature=cfg.sketch_temperature,
             )
         if stage == StagePhase.EXPAND:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.expand_max_tokens,
                 timeout_ms=cfg.expand_timeout_ms,
                 temperature=cfg.expand_temperature,
             )
         if stage == StagePhase.VALIDATE:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.validate_max_tokens,
                 timeout_ms=cfg.validate_timeout_ms,
                 temperature=cfg.validate_temperature,
@@ -962,7 +981,7 @@ class PipelineController:
     def _get_micro_stage_budget(
         self,
         stage: StagePhase,
-    ) -> Optional[RequestConstraints]:
+    ) -> Optional[PlannerConstraints]:
         """Return per-stage LLM budget for micro-replan (Section 10.3.6).
 
         Micro-replan uses a separate, tighter budget table.  Temperatures
@@ -975,24 +994,24 @@ class PipelineController:
 
         Returns
         -------
-        Optional[RequestConstraints]
+        Optional[PlannerConstraints]
             Per-stage micro-replan constraints, or ``None`` for COMMIT.
         """
         cfg = self._config
         if stage == StagePhase.SKETCH:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.micro_sketch_max_tokens,
                 timeout_ms=cfg.micro_sketch_timeout_ms,
                 temperature=cfg.sketch_temperature,
             )
         if stage == StagePhase.EXPAND:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.micro_expand_max_tokens,
                 timeout_ms=cfg.micro_expand_timeout_ms,
                 temperature=cfg.expand_temperature,
             )
         if stage == StagePhase.VALIDATE:
-            return RequestConstraints(
+            return PlannerConstraints(
                 max_tokens=cfg.micro_validate_max_tokens,
                 timeout_ms=cfg.micro_validate_timeout_ms,
                 temperature=cfg.validate_temperature,
@@ -1008,7 +1027,7 @@ class PipelineController:
         """Record token usage from an LLM response (Section 13.3.3).
 
         Updates ``_stage_token_usage``, ``_total_plan_tokens``, and
-        ``_stage_latency`` from the HubResponse metadata.
+        ``_stage_latency`` from the PlannerLLMResponse metadata.
 
         Expected metadata structure (dict):
             ``{"usage": {"total_tokens": int}, "latency_ms": int}``
@@ -1017,7 +1036,7 @@ class PipelineController:
         ----------
         stage : StagePhase
             The pipeline stage that made the LLM call.
-        response : HubResponse
+        response : PlannerLLMResponse
             Model Hub response containing ``metadata`` dict with
             ``usage.total_tokens`` and ``latency_ms``.
         """
@@ -1025,7 +1044,7 @@ class PipelineController:
         if metadata is None:
             return
 
-        # HubResponse.metadata is Dict[str, Any]
+        # PlannerLLMResponse.metadata is Dict[str, Any]
         if isinstance(metadata, dict):
             usage = metadata.get("usage", {})
             total_tokens = usage.get("total_tokens", 0) if isinstance(usage, dict) else 0

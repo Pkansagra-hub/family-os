@@ -106,7 +106,7 @@ class FakeModelGateway:
             raise RuntimeError("Model gateway unavailable")
         return self._handle
 
-    def is_model_loaded(self, model_id: str) -> bool:
+    async def is_model_loaded(self, model_id: str) -> bool:
         return True
 
 

@@ -564,7 +564,7 @@ class TestSectionInfoAccuracy:
     """Test that section info is accurate."""
 
     def test_all_12_sections_in_snapshot(self, db_path: Path, session_id: str) -> None:
-        """All 12 sections are in the snapshot."""
+        """All 15 sections are in the snapshot."""
         manager = SessionStateFactory.create_standalone(
             session_id=session_id,
             db_path=db_path,
@@ -582,7 +582,7 @@ class TestSectionInfoAccuracy:
             assert section in snapshot.sections, f"Missing WARM section: {section}"
 
         # Total should be 12
-        assert len(snapshot.sections) == 12
+        assert len(snapshot.sections) == 15
 
         manager.stop()
 
@@ -802,7 +802,7 @@ class TestSnapshotSerialization:
         d = snapshot.to_dict()
 
         assert isinstance(d["sections"], dict)
-        assert len(d["sections"]) == 12
+        assert len(d["sections"]) == 15
 
         # Each section should be a dict
         for section_name, section_data in d["sections"].items():
@@ -853,7 +853,7 @@ class TestSnapshotEdgeCases:
         assert snapshot.total_size_bytes >= 0
         assert snapshot.total_size_bytes < 5000  # Under 5KB baseline
         assert snapshot.pressure == PressureLevel.NORMAL
-        assert len(snapshot.sections) == 12
+        assert len(snapshot.sections) == 15
 
         manager.stop()
 

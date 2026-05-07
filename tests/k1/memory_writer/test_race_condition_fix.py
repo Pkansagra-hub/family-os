@@ -242,11 +242,12 @@ class TestAssembleTemporalSpatial:
     """Combined temporal + spatial assembly for ExtractionContext."""
 
     def test_returns_9_keys(self):
-        """assemble_temporal_spatial returns dict with exactly 9 keys (8 + place_id)."""
+        """assemble_temporal_spatial returns dict with exactly 10 keys (8 + place_id + turn_timestamp_ms)."""
         p = _payload()
         result = assemble_temporal_spatial(p)
 
-        assert len(result) == 9
+        assert len(result) == 10
+        assert "turn_timestamp_ms" in result
         assert "mentioned_time_raw" in result
         assert "mentioned_time_resolved_ms" in result
         assert "mentioned_time_confidence" in result
@@ -438,7 +439,6 @@ class TestRaceConditionSimulation:
 
         fields = assemble_temporal_spatial(p, beliefs_snapshot=_beliefs_cleared())
         ctx = ExtractionContext(
-            turn_timestamp_ms=p.timestamp_ms,
             session_id=p.session_id,
             conversation_turn=p.turn_number,
             **fields,

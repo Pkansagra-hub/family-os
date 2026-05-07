@@ -44,11 +44,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
+from .config import SessionStateConfig
+
 if TYPE_CHECKING:
-    from k1.sessionstate.local_cold import LocalColdArchive
-    from k1.sessionstate.ports.k0_sync import IK0SyncPort
-    from k1.sessionstate.tiers.hot import HotTier
-    from k1.sessionstate.tiers.warm import WarmTier
+    from poc.k1_poc.sessionstate.local_cold import LocalColdArchive
+    from poc.k1_poc.sessionstate.ports.k0_sync import IK0SyncPort
+    from poc.k1_poc.sessionstate.tiers.hot import HotTier
+    from poc.k1_poc.sessionstate.tiers.warm import WarmTier
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +91,12 @@ class ReconstructionResult:
     error: Optional[str] = None
 
 
-# SLA constants
-SLA_LOCAL_COLD_MS = 50.0  # <50ms from LOCAL COLD
-SLA_K0_FALLBACK_MS = 100.0  # <100ms fallback to K0
+# SLA constants (config-backed: sessionstate.reconstruction.*)
+SLA_LOCAL_COLD_MS = 50.0
+SLA_K0_FALLBACK_MS = 100.0
 
 # K0 fallback timeout
-K0_TIMEOUT_MS = 80.0  # Leave margin for SLA
+K0_TIMEOUT_MS = 80.0
 
 # HOT section hydration priority (lower = higher priority)
 HOT_HYDRATION_PRIORITY: List[str] = [
@@ -125,11 +127,11 @@ WARM_SECTIONS: FrozenSet[str] = frozenset(WARM_HYDRATION_PRIORITY)
 # All sections
 ALL_SECTIONS: FrozenSet[str] = HOT_SECTIONS | WARM_SECTIONS
 
-# Estimation constants
-ESTIMATE_LOCAL_COLD_BASE_MS = 5.0  # Base latency for SQLite access
-ESTIMATE_LOCAL_COLD_PER_KB_MS = 0.5  # Per KB of data
-ESTIMATE_K0_BASE_MS = 30.0  # Network latency estimate
-ESTIMATE_K0_PER_KB_MS = 1.0  # Per KB over network
+# Estimation constants (config-backed: sessionstate.reconstruction.*)
+ESTIMATE_LOCAL_COLD_BASE_MS = 5.0
+ESTIMATE_LOCAL_COLD_PER_KB_MS = 0.5
+ESTIMATE_K0_BASE_MS = 30.0
+ESTIMATE_K0_PER_KB_MS = 1.0
 
 
 @dataclass
@@ -205,6 +207,7 @@ class ReconstructionSLA:
         hot: Optional[HotTier] = None,
         warm: Optional[WarmTier] = None,
         deserializer: Optional[Callable[[str, bytes], Any]] = None,
+        config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
         Initialize ReconstructionSLA.
@@ -215,7 +218,9 @@ class ReconstructionSLA:
             hot: HotTier to hydrate (optional for testing)
             warm: WarmTier to hydrate (optional for testing)
             deserializer: Function to deserialize section data (section_name, bytes) -> object
+            config: Optional SessionStateConfig (defaults used if None)
         """
+        self._ss_cfg = config or SessionStateConfig()
         self._local_cold = local_cold
         self._k0_sync_port = k0_sync_port
         self._hot = hot
@@ -231,6 +236,13 @@ class ReconstructionSLA:
             ReconstructionSource.K0: 0,
             ReconstructionSource.FRESH: 0,
         }
+
+        logger.info(
+            "ReconstructionSLA initialized (local_cold=%s, k0=%s, sla_target=%.0fms)",
+            "available" if local_cold else "none",
+            "available" if k0_sync_port else "none",
+            self._ss_cfg.reconstruction.sla_local_cold_ms,
+        )
 
     @property
     def total_reconstructions(self) -> int:
@@ -343,14 +355,15 @@ class ReconstructionSLA:
         sla_met = self._check_sla(source, total_duration_ms)
         if not sla_met:
             self._sla_breaches += 1
+            _cfg_recon = self._ss_cfg.reconstruction
             logger.warning(
                 "SLA breach: %s reconstruction took %.2fms (limit: %.2fms)",
                 source.value,
                 total_duration_ms,
                 (
-                    SLA_LOCAL_COLD_MS
+                    _cfg_recon.sla_local_cold_ms
                     if source == ReconstructionSource.LOCAL_COLD
-                    else SLA_K0_FALLBACK_MS
+                    else _cfg_recon.sla_k0_fallback_ms
                 ),
             )
 
@@ -482,11 +495,11 @@ class ReconstructionSLA:
             restore_result = self._k0_sync_port.restore_from_k0(session_id)
             elapsed_ms = (time.perf_counter() - start) * 1000
 
-            if elapsed_ms > K0_TIMEOUT_MS:
+            if elapsed_ms > self._ss_cfg.reconstruction.k0_timeout_ms:
                 logger.warning(
                     "K0 restore took %.2fms (timeout: %.2fms)",
                     elapsed_ms,
-                    K0_TIMEOUT_MS,
+                    self._ss_cfg.reconstruction.k0_timeout_ms,
                 )
 
             if not restore_result.success:
@@ -665,9 +678,9 @@ class ReconstructionSLA:
         if source == ReconstructionSource.FRESH:
             return True
         elif source == ReconstructionSource.LOCAL_COLD:
-            return duration_ms < SLA_LOCAL_COLD_MS
+            return duration_ms < self._ss_cfg.reconstruction.sla_local_cold_ms
         elif source == ReconstructionSource.K0:
-            return duration_ms < SLA_K0_FALLBACK_MS
+            return duration_ms < self._ss_cfg.reconstruction.sla_k0_fallback_ms
         else:
             return True  # Unknown source, assume OK
 
@@ -702,8 +715,10 @@ class ReconstructionSLA:
                 if archives:
                     # Calculate total size
                     total_size_kb = sum(a.size_bytes for a in archives) / 1024
+                    _cfg_r = self._ss_cfg.reconstruction
                     return (
-                        ESTIMATE_LOCAL_COLD_BASE_MS + total_size_kb * ESTIMATE_LOCAL_COLD_PER_KB_MS
+                        _cfg_r.estimate_local_cold_base_ms
+                        + total_size_kb * _cfg_r.estimate_local_cold_per_kb_ms
                     )
             except Exception:
                 pass
@@ -713,7 +728,8 @@ class ReconstructionSLA:
             try:
                 if self._k0_sync_port.is_available:
                     # Assume average session size (~50KB)
-                    return ESTIMATE_K0_BASE_MS + 50 * ESTIMATE_K0_PER_KB_MS
+                    _cfg_r = self._ss_cfg.reconstruction
+                    return _cfg_r.estimate_k0_base_ms + 50 * _cfg_r.estimate_k0_per_kb_ms
             except Exception:
                 pass
 

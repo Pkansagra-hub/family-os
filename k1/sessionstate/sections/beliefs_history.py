@@ -43,10 +43,10 @@ from typing import Any, Dict, List, Optional
 import flatbuffers
 
 # Generated FlatBuffer types
-from k1.sessionstate.generated.flatbuffers.K1.SessionState import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState import (
     BeliefsHistorySection as FBBeliefsHistorySection,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.ArchivedFact import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.ArchivedFact import (
     ArchivedFactAddAccessCount,
     ArchivedFactAddFact,
     ArchivedFactAddIsStale,
@@ -56,7 +56,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.ArchivedFact import (
     ArchivedFactEnd,
     ArchivedFactStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.BeliefsHistorySection import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.BeliefsHistorySection import (
     BeliefsHistorySectionAddArchivedCount,
     BeliefsHistorySectionAddArchivePointer,
     BeliefsHistorySectionAddEntityIndex,
@@ -74,7 +74,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.BeliefsHistorySection
     BeliefsHistorySectionStartFactsVector,
     BeliefsHistorySectionStartNextEvictionCandidatesVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.EntityFactIndex import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.EntityFactIndex import (
     EntityFactIndexAddEntityId,
     EntityFactIndexAddFactIndices,
     EntityFactIndexAddLastUpdatedTurn,
@@ -82,7 +82,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.EntityFactIndex impor
     EntityFactIndexStart,
     EntityFactIndexStartFactIndicesVector,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.Fact import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.Fact import (
     FactAddConfidence,
     FactAddId,
     FactAddObject,
@@ -94,7 +94,7 @@ from k1.sessionstate.generated.flatbuffers.K1.SessionState.Fact import (
     FactEnd,
     FactStart,
 )
-from k1.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
+from poc.k1_poc.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
     SectionHeaderAddLastUpdatedMs,
     SectionHeaderAddSectionName,
     SectionHeaderAddSizeBytes,

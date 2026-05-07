@@ -1,0 +1,422 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/_meta/manifest.schema.json",
+  "title": "Bridge Contract Manifest",
+  "description": "Meta-schema for every bridge contract manifest under bridge/contracts/manifests/. Validated in CI; failures block merge. See docs/architecture/whiteboard_k1/bridge_system_design.md (MS-2.5 substrate decisions).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "topic",
+    "direction",
+    "owner_team",
+    "producer",
+    "consumer",
+    "schema",
+    "delivery",
+    "semantics",
+    "sla",
+    "versioning",
+    "status"
+  ],
+  "properties": {
+    "topic": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+\\.v[0-9]+$",
+      "description": "Dotted topic name with version suffix, e.g. memory.write.v1."
+    },
+    "direction": {
+      "type": "string",
+      "enum": [
+        "k0_to_k1",
+        "k1_to_k0",
+        "k0_to_k0",
+        "k1_to_k1",
+        "device_to_k0",
+        "k0_to_device"
+      ]
+    },
+    "owner_team": {
+      "type": "string",
+      "enum": ["k0", "k1", "bridge_infra"]
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kernel"],
+      "properties": {
+        "kernel": { "type": "string", "enum": ["k0", "k1", "device"] },
+        "module": { "type": "string" },
+        "pipeline": { "type": "string" },
+        "emitter": { "type": "string" }
+      }
+    },
+    "consumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kernel"],
+      "properties": {
+        "kernel": { "type": "string", "enum": ["k0", "k1", "device"] },
+        "module": { "type": "string" },
+        "pipeline": { "type": "string" },
+        "state": { "type": "string" }
+      }
+    },
+    "schema": {
+      "type": "string",
+      "description": "Path relative to bridge/contracts/, must point at an existing JSON Schema file."
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "ordering",
+        "ack_required",
+        "online_required",
+        "endpoint_class",
+        "partition_mode"
+      ],
+      "properties": {
+        "transport": {
+          "type": "string",
+          "enum": ["http", "sse", "obs", "in_process", "e2ee_lan", "https", "mcp_stdio"]
+        },
+        "obs_kind": {
+          "type": "string",
+          "enum": ["feedback", "metrics", "logs"],
+          "description": "Required for delivery.transport=obs. Selects the inner ObservabilityPayload.kind dispatch on /k0/obs.emit. MS-3e."
+        },
+        "ordering": {
+          "type": "string",
+          "enum": ["strict", "best_effort", "causal"]
+        },
+        "ack_required": { "type": "boolean" },
+        "online_required": { "type": "boolean" },
+        "endpoint_class": {
+          "type": "string",
+          "enum": ["cloud_k0", "home_k0", "peer_k1", "device_local"]
+        },
+        "partition_mode": {
+          "type": "string",
+          "enum": ["k0_primary", "k1_mesh_fallback", "k1_mesh_only"]
+        },
+        "max_queue_age": {
+          "type": "string",
+          "description": "ISO 8601 duration, e.g. PT5M. Optional; bridge default applies if absent."
+        },
+        "drain_rate_per_sec": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "codec": {
+          "type": "string",
+          "enum": ["json", "msgpack", "cbor", "flatbuffers"]
+        },
+        "codecs_allowed": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["json", "msgpack", "cbor", "flatbuffers"]
+          },
+          "description": "Codecs this contract may negotiate. Defaults to [delivery.codec] when absent. The first entry is the preferred codec; clients may request any of the others via Accept."
+        },
+        "codec_negotiation": {
+          "type": "string",
+          "enum": ["fixed", "client_choice_in_allowed"],
+          "description": "MS-4: 'fixed' rejects any Accept that does not match codec with HTTP 406; 'client_choice_in_allowed' (default) falls back to delivery.codec when Accept does not match codecs_allowed."
+        },
+        "retry": {
+          "type": "string",
+          "enum": ["none", "exponential_backoff", "linear_backoff", "fixed_interval"]
+        },
+        "max_redelivery": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "semantics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "idempotent",
+        "duplicate_strategy",
+        "retention",
+        "description"
+      ],
+      "properties": {
+        "idempotent": { "type": "boolean" },
+        "duplicate_strategy": {
+          "type": "string",
+          "enum": [
+            "dedupe_by_envelope_id",
+            "last_write_wins",
+            "application_resolved"
+          ]
+        },
+        "retention": {
+          "type": "string",
+          "description": "ISO 8601 duration."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 40,
+          "description": "Free-form human description; minLength enforces R6 (no empty placeholders)."
+        }
+      }
+    },
+    "sla": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["latency_p99_ms"],
+      "properties": {
+        "latency_p99_ms": { "type": "integer", "minimum": 0 },
+        "throughput_per_sec": { "type": "number", "minimum": 0 },
+        "availability": { "type": "string" }
+      }
+    },
+    "versioning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["semver", "compat"],
+      "properties": {
+        "semver": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "compat": {
+          "type": "string",
+          "enum": ["breaking", "compatible", "patch"]
+        },
+        "deprecates": { "type": "string" },
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "additive_only_within_v1",
+            "additive_only",
+            "frozen",
+            "deprecating"
+          ]
+        },
+        "breaking_change_requires": { "type": "string" }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["proposed", "experimental", "active", "deprecated", "deferred"]
+    },
+    "sync": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer"],
+      "properties": {
+        "layer": {
+          "type": "string",
+          "enum": [
+            "l1_family_memory",
+            "l2_family_tool_state",
+            "l3_intra_person_devices"
+          ]
+        },
+        "tool_class": {
+          "type": "string",
+          "enum": ["shared_family", "shared_subset", "personal"]
+        }
+      }
+    },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_source"],
+      "properties": {
+        "algorithm": { "type": "string", "enum": ["ed25519"] },
+        "key_source": {
+          "type": "string",
+          "enum": ["device_provisioning_ledger", "ca_bundle"]
+        },
+        "ca_id": { "type": "string" },
+        "signature": {
+          "type": "string",
+          "description": "MS-5 IFL: base64url-encoded Ed25519 signature over the canonical manifest payload (excluding the signing block). Verified by bridge/connector/adapter_verifier.py at registration time."
+        },
+        "payload_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "MS-5 IFL: optional SHA-256 (hex) of the canonical signing payload; integrity check before signature verification."
+        }
+      }
+    },
+    "checksums": {
+      "type": "object",
+      "description": "Filled by CI tooling, not authors.",
+      "additionalProperties": false,
+      "properties": {
+        "schema_sha256": { "type": "string" },
+        "manifest_sha256": { "type": "string" }
+      }
+    },
+    "paired_with": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+\\.v[0-9]+$",
+      "description": "Topic name of the paired response manifest. Set on the request side of a request/response pair (e.g. recall.request.v1 sets paired_with: recall.response.v1). The response manifest is emitted as a model-only artifact; codegen synthesises a typed return on the request client. Cross-manifest existence is enforced by tooling.contracts.manifest_loader."
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["server_command", "sandbox", "health"],
+      "description": "MS-5 IFL: child-process MCP adapter configuration. Required when delivery.transport=mcp_stdio.",
+      "properties": {
+        "server_command": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "argv for spawning the MCP server child process."
+        },
+        "multi_instance": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, the MCP Process Manager fans out one child per account/instance; combine with adapter_id_pattern."
+        },
+        "adapter_id_pattern": {
+          "type": "string",
+          "description": "Templated adapter id (e.g. google_calendar_<account_id>) when multi_instance=true."
+        },
+        "sandbox": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["memory_max", "cpu_quota_percent", "network"],
+          "properties": {
+            "memory_max": {
+              "type": "string",
+              "pattern": "^[0-9]+[KMG]$",
+              "description": "Max RSS, e.g. 256M, 1G."
+            },
+            "cpu_quota_percent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "network": {
+              "type": "string",
+              "enum": ["none", "outbound_only", "full"]
+            },
+            "filesystem_read": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": []
+            },
+            "filesystem_write": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": []
+            }
+          }
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ping_interval_s", "max_missed_pings"],
+          "properties": {
+            "ping_interval_s": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60
+            },
+            "max_missed_pings": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            }
+          }
+        }
+      }
+    },
+    "rate_limit": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "RESERVED for v1.1 (D18). Validated by shape but ignored at runtime in v1; emits 'reserved' warning at boot if present.",
+      "properties": {
+        "requests_per_minute": { "type": "integer", "minimum": 1 },
+        "burst": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "circuit_breaker": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "RESERVED for v1.1 (D18). Validated by shape but ignored at runtime in v1; emits 'reserved' warning at boot if present.",
+      "properties": {
+        "failure_threshold": { "type": "integer", "minimum": 1 },
+        "timeout_s": { "type": "integer", "minimum": 1 },
+        "half_open_probes": { "type": "integer", "minimum": 1 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "direction": {
+            "enum": ["k0_to_k0", "k1_to_k1"]
+          }
+        },
+        "required": ["direction"]
+      },
+      "then": {
+        "required": ["sync"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "sync": {
+            "type": "object",
+            "properties": {
+              "layer": { "const": "l2_family_tool_state" }
+            },
+            "required": ["layer"]
+          }
+        },
+        "required": ["sync"]
+      },
+      "then": {
+        "properties": {
+          "sync": {
+            "required": ["tool_class"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "direction": {
+            "enum": ["device_to_k0", "k0_to_device"]
+          }
+        },
+        "required": ["direction"]
+      },
+      "then": {
+        "required": ["signing"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "transport": { "const": "mcp_stdio" }
+            },
+            "required": ["transport"]
+          }
+        },
+        "required": ["delivery"]
+      },
+      "then": {
+        "required": ["mcp", "signing"]
+      }
+    }
+  ]
+}

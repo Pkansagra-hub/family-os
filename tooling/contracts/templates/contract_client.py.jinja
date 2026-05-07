@@ -1,0 +1,242 @@
+{{ header }}
+{% if topic.is_sse %}
+"""Generated SSE emitter for the ``{{ topic.topic }}`` contract.
+
+Producer side (K0). Real K0 emit goes through the K0 SSE replay buffer
+(see :mod:`k0.sse.replay_buffer`, MS-3d Epic 3d.3) before fanning out
+to live SSE subscribers. The :meth:`{{ topic.client_class }}.emit`
+method is the typed seam K0 emitters call once the body is built.
+
+In Epic 3d.1 the runtime binding is intentionally left for Epic 3d.3
+to fill in: until then, ``emit`` raises :class:`NotImplementedError`
+so accidental cross-kernel calls fail loudly rather than silently
+dropping events.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from bridge._generated.{{ kernel }}.models.{{ topic.method_name }} import (
+    {{ topic.model_class }},
+)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from bridge.runtime import BridgeRuntime
+
+
+class {{ topic.client_class }}:
+    """Generated K0-side emitter for ``{{ topic.topic }}``.
+
+    Direct construction outside the runtime is forbidden by the
+    ``manifest_implementation_bound`` CI gate. The replay-buffer wiring
+    lands in MS-3d Epic 3d.3.
+    """
+
+    __transport__ = "{{ topic.transport }}"
+    __topic__ = "{{ topic.topic }}"
+    __schema_uri__ = "{{ topic.schema_uri }}"
+
+    def __init__(self, runtime: "BridgeRuntime") -> None:
+        self._runtime = runtime
+
+    async def emit(self, payload: {{ topic.model_class }}) -> Any:
+        """Emit ``payload`` on the ``{{ topic.topic }}`` SSE stream.
+
+        K0-only call site. Wiring to the replay buffer + live fanout
+        ships in MS-3d Epic 3d.3.
+        """
+        emitter = getattr(self._runtime, "_sse_emitter", None)
+        if emitter is None:
+            raise NotImplementedError(
+                "{{ topic.client_class }}.emit: K0 SSE emitter not bound "
+                "(MS-3d Epic 3d.3)."
+            )
+        return await emitter.emit(
+            topic=self.__topic__,
+            schema_uri=self.__schema_uri__,
+            payload=payload,
+        )
+{% elif topic.is_obs %}
+"""Generated obs/feedback client for the ``{{ topic.topic }}`` contract.
+
+Producer side (K1). MS-3e: this client posts ``{kind, body}`` to
+``/k0/obs.emit`` via a runtime-bound :class:`bridge.core.transport.obs_emitter.ObsHttpEmitter`.
+Bypasses the signed-envelope path used by ``/k0/command.submit`` because
+observability/feedback ingestion is unsigned and queueable. The K0 side
+dispatches by ``kind`` directly inside :mod:`k0.ports.observe`; no
+codegen handler is emitted (the consumer-side stub is a no-op).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from bridge._generated.{{ kernel }}.models.{{ topic.method_name }} import (
+    {{ topic.model_class }},
+)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from bridge.runtime import BridgeRuntime
+
+
+class {{ topic.client_class }}:
+    """Generated K1-side obs/feedback client for ``{{ topic.topic }}``.
+
+    Direct construction outside the runtime is forbidden by the
+    ``manifest_implementation_bound`` CI gate.
+    """
+
+    __transport__ = "{{ topic.transport }}"
+    __topic__ = "{{ topic.topic }}"
+    __schema_uri__ = "{{ topic.schema_uri }}"
+    __obs_kind__ = "{{ topic.obs_kind }}"
+
+    def __init__(self, runtime: "BridgeRuntime") -> None:
+        self._runtime = runtime
+
+    async def publish(self, payload: {{ topic.model_class }}) -> Any:
+        """Publish ``payload`` to ``/k0/obs.emit`` with kind=``{{ topic.obs_kind }}``.
+
+        Wraps the Pydantic body as ``{"kind": "{{ topic.obs_kind }}", "body": payload}``
+        before posting. Raises :class:`NotImplementedError` if the runtime
+        has no ``_obs_emitter`` bound (boot-time wiring fault).
+        """
+        emitter = getattr(self._runtime, "_obs_emitter", None)
+        if emitter is None:
+            raise NotImplementedError(
+                "{{ topic.client_class }}.publish: K1 obs emitter not bound "
+                "(MS-3e). Ensure BridgeRuntime.from_registry was called with "
+                "an HttpTransport so _obs_emitter could be wired."
+            )
+        return await emitter.emit(
+            topic=self.__topic__,
+            kind=self.__obs_kind__,
+            schema_uri=self.__schema_uri__,
+            payload=payload,
+        )
+{% elif topic.paired_response_method_name %}
+"""Generated client for the ``{{ topic.topic }}`` contract.
+
+Producer side. Imported by the {{ kernel }} kernel as the only legitimate
+publishing interface for this contract. The bridge runtime injects a real
+transport at boot; in-process tests use ``InProcessHttpTransport``.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from bridge._generated.{{ kernel }}.models.{{ topic.method_name }} import (
+    {{ topic.model_class }},
+)
+from bridge._generated.{{ kernel }}.models.{{ topic.paired_response_method_name }} import (
+    {{ topic.paired_response_model_class }},
+)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from bridge.runtime import BridgeRuntime
+
+
+class {{ topic.client_class }}:
+    """Generated client for ``{{ topic.topic }}``.
+
+    The runtime supplies the transport. Direct construction outside the
+    runtime is forbidden by the
+    ``manifest_implementation_bound`` CI gate.
+    """
+
+    __transport__ = "{{ topic.transport }}"
+    __topic__ = "{{ topic.topic }}"
+    __schema_uri__ = "{{ topic.schema_uri }}"
+    __codec__ = "{{ topic.codec }}"
+    __codecs_allowed__ = ({% for c in topic.codecs_allowed %}"{{ c }}",{% endfor %})
+    __codec_negotiation__ = "{{ topic.codec_negotiation }}"
+
+    def __init__(self, runtime: "BridgeRuntime") -> None:
+        self._runtime = runtime
+
+    async def request(self, payload: {{ topic.model_class }}) -> {{ topic.paired_response_model_class }}:
+        """Send ``payload`` on ``{{ topic.topic }}`` and return the paired response.
+
+        Synchronous request/response: ``transport.publish`` returns the
+        parsed HTTP response body as a ``dict``; we validate it through
+        the paired ``{{ topic.paired_response_model_class }}`` model so the
+        caller never sees raw dicts. Raises ``RuntimeError`` if no
+        transport is bound.
+        """
+        if self._runtime.transport is None:
+            raise RuntimeError(
+                "{{ topic.client_class }}: no transport bound on BridgeRuntime"
+            )
+        body = await self._runtime.transport.publish(
+            topic=self.__topic__,
+            schema_uri=self.__schema_uri__,
+            payload=payload,
+            codec=self.__codec__,
+        )
+        if isinstance(body, {{ topic.paired_response_model_class }}):
+            return body
+        return {{ topic.paired_response_model_class }}.model_validate(body)
+
+    async def publish(self, payload: {{ topic.model_class }}) -> Any:
+        """Compatibility alias for :meth:`request`. Prefer ``request``."""
+        return await self.request(payload)
+{% else %}
+"""Generated client for the ``{{ topic.topic }}`` contract.
+
+Producer side. Imported by the {{ kernel }} kernel as the only legitimate
+publishing interface for this contract. The bridge runtime injects a real
+transport at boot; in-process tests use ``InProcessHttpTransport``.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from bridge._generated.{{ kernel }}.models.{{ topic.method_name }} import (
+    {{ topic.model_class }},
+)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from bridge.runtime import BridgeRuntime
+
+
+class {{ topic.client_class }}:
+    """Generated client for ``{{ topic.topic }}``.
+
+    The runtime supplies the transport. Direct construction outside the
+    runtime is forbidden by the
+    ``manifest_implementation_bound`` CI gate.
+    """
+
+    __transport__ = "{{ topic.transport }}"
+    __topic__ = "{{ topic.topic }}"
+    __schema_uri__ = "{{ topic.schema_uri }}"
+    __codec__ = "{{ topic.codec }}"
+    __codecs_allowed__ = ({% for c in topic.codecs_allowed %}"{{ c }}",{% endfor %})
+    __codec_negotiation__ = "{{ topic.codec_negotiation }}"
+
+    def __init__(self, runtime: "BridgeRuntime") -> None:
+        self._runtime = runtime
+
+    async def publish(self, payload: {{ topic.model_class }}) -> Any:
+        """Publish ``payload`` on ``{{ topic.topic }}``.
+
+        ``payload`` is a Pydantic v2 ``{{ topic.model_class }}`` instance;
+        the runtime serialises it to bytes via the manifest-declared codec
+        (``self.__codec__``), wraps non-JSON bodies as ``{_codec, _b64}``
+        inside the canonical-JSON envelope, signs the envelope, and hands
+        the bytes to the transport.
+        """
+        if self._runtime.transport is None:
+            raise RuntimeError(
+                "{{ topic.client_class }}: no transport bound on BridgeRuntime"
+            )
+        return await self._runtime.transport.publish(
+            topic=self.__topic__,
+            schema_uri=self.__schema_uri__,
+            payload=payload,
+            codec=self.__codec__,
+        )
+{% endif %}

@@ -49,9 +49,9 @@ def section_with_turns():
 
 @pytest.fixture
 def full_section():
-    """Create section at max capacity (10 turns)."""
+    """Create section at max capacity (25 turns)."""
     s = HistoryActiveSection(session_id="test-session")
-    for i in range(10):
+    for i in range(25):
         s.add_turn(
             user_message=f"User message {i + 1}",
             assistant_response=f"Assistant response {i + 1}",
@@ -90,7 +90,7 @@ class TestISection:
 
     def test_budget_bytes_property(self, section):
         """Section has 8KB budget."""
-        assert section.budget_bytes == 8192
+        assert section.budget_bytes == 16384
 
     def test_can_evict_property(self, section):
         """Section cannot be evicted (items demote instead)."""
@@ -119,7 +119,7 @@ class TestISection:
         meta = section.get_metadata()
         assert meta["name"] == "history_active"
         assert meta["tier"] == "hot"
-        assert meta["budget_bytes"] == 8192
+        assert meta["budget_bytes"] == 16384
         assert "current_size_bytes" in meta
         assert "utilization_pct" in meta
         assert "turn_count" in meta
@@ -477,7 +477,7 @@ class TestCapacityManagement:
 
     def test_max_turns(self, section):
         """MAX_TURNS is 10."""
-        assert section.MAX_TURNS == 10
+        assert section.MAX_TURNS == 25
 
     def test_is_full_empty(self, section):
         """Empty section is not full."""
@@ -517,11 +517,11 @@ class TestCapacityManagement:
         """Get overflow removes and returns excess turns."""
         full_section.add_turn("Extra 1", "Turn 1")
         full_section.add_turn("Extra 2", "Turn 2")
-        assert full_section.count() == 12
+        assert full_section.count() == 27
 
         overflow = full_section.get_overflow()
         assert len(overflow) == 2
-        assert full_section.count() == 10
+        assert full_section.count() == 25
         assert overflow[0].turn_number == 1
         assert overflow[1].turn_number == 2
 
@@ -559,7 +559,7 @@ class TestCapacityManagement:
 
     def test_get_available_capacity(self, section_with_turns):
         """Get available capacity."""
-        assert section_with_turns.get_available_capacity() == 5
+        assert section_with_turns.get_available_capacity() == 20
 
     def test_get_available_capacity_full(self, full_section):
         """No capacity when full."""
@@ -903,6 +903,66 @@ class TestSearchAndQuery:
 
         turns = section.search_messages("hello")
         assert len(turns) == 1
+
+
+# =============================================================================
+# CLASS: TestToDict - dict serialization for SessionReadAdapter / MW
+# =============================================================================
+
+
+class TestToDict:
+    """Tests for to_dict() consumed by SessionReadAdapter / Memory Writer."""
+
+    def test_to_dict_empty_section(self, section):
+        """Empty section serializes with zero turns."""
+        d = section.to_dict()
+        assert d["turns"] == []
+        assert d["turn_count"] == 0
+        assert d["max_turns"] == 25
+
+    def test_to_dict_includes_assistant_response(self, section):
+        """Each turn dict carries both user_message AND assistant_response."""
+        section.add_turn(
+            user_message="What's the weather?",
+            assistant_response="Sunny and 72.",
+            turn_id="turn-x",
+        )
+        d = section.to_dict()
+        assert len(d["turns"]) == 1
+        t = d["turns"][0]
+        assert t["turn_id"] == "turn-x"
+        assert t["user_message"] == "What's the weather?"
+        assert t["assistant_response"] == "Sunny and 72."
+
+    def test_to_dict_preserves_order(self, section_with_turns):
+        """Turn order matches insertion."""
+        d = section_with_turns.to_dict()
+        nums = [t["turn_number"] for t in d["turns"]]
+        assert nums == sorted(nums)
+
+    def test_to_dict_includes_metadata_fields(self, section):
+        """Per-turn intents, entities, emotion, and metadata round-trip."""
+        section.add_turn(
+            user_message="Hi mom",
+            assistant_response="Hello!",
+            entities=["mom"],
+            intents=["greet"],
+            emotion="warm",
+        )
+        d = section.to_dict()
+        t = d["turns"][0]
+        assert t["entities"] == ["mom"]
+        assert t["intents"] == ["greet"]
+        assert t["emotion"] == "warm"
+
+    def test_to_dict_aggregates(self, section_with_turns):
+        """Aggregate counters reflect populated turns."""
+        d = section_with_turns.to_dict()
+        assert d["turn_count"] == 5
+        assert d["total_user_tokens"] > 0
+        assert d["total_response_tokens"] > 0
+        assert d["current_turn_number"] == 5
+        assert d["oldest_turn_number"] == 1
 
 
 # =============================================================================

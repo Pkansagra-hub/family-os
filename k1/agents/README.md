@@ -1,5 +1,33 @@
 # K1 Agents Module (L4: The Workers)
 
+> **Status (M19, May 2026):** This package is currently **scaffolding only**
+> (`__init__.py`, `dynamic/`, `mailboxes/`). The actual agent runtime ships
+> from `k1/fabric/providers/agent_provider.py` (`AgentProvider`,
+> `AgentFactory`, `AgentPool`, `DeltaEmitter`) and agents are authored as
+> YAML `AgentContract` records under `k1/contracts/agents/*.yaml`. The
+> `lifecycle.py`, `base.py`, `factory.py` modules described below are
+> **planned future work** for the L4 supervisor / mailbox / lifecycle FSM
+> layer (ADR-0005, ADR-0086) and do not yet exist.
+>
+> **Where to author a new specialist agent today:**
+>
+> 1. Create `k1/contracts/agents/<name>_agent.yaml` with `provider_type: "AGENT"`,
+>    `prompt_template`, `tools_granted`, `llm_budget_tokens`. The
+>    `ModuleLoader` (`_CONTRACT_SUBDIRS` includes `"agents"`) auto-discovers
+>    it at Fabric bootstrap.
+> 2. Resolution path is already wired:
+>    `Concierge dispatch_task → Orchestrator → Planner.expand → DAGExecutor →
+>     IFabricGatewayPort → CapabilityFabric → AgentProvider →
+>     AgentFactory.spawn_and_execute (8-step) → CapabilityResult`.
+> 3. Do **not** create a Python class under `k1/agents/<domain>/agent.py`
+>    or define an `ISpecialistAgent` port — the existing `AgentProvider`
+>    pipeline already covers all of this.
+>
+> Examples currently in tree: `health_agent.yaml`, `finance_agent.yaml`,
+> `travel_agent.yaml` under `k1/contracts/agents/`.
+
+---
+
 ## Overview
 
 The `agents/` module implements the **L4: The Workers** layer of the K1 Cognitive Architecture. This layer provides the **agent runtime infrastructure**: spawning, lifecycle management, mailboxes, supervision, and generic execution scaffolding for dynamic agent instances. All agents follow the Actor Model (ADR-0002) with a 6-state lifecycle FSM (ADR-0005).

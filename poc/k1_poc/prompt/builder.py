@@ -300,7 +300,7 @@ def _render_beliefs_active_slim(section: Any, cfg: SSReadConfig) -> str:
 
 
 def _render_scoreboard_full(section: Any, cfg: SSReadConfig) -> str:
-    """Format referents, current topic, QUD stack."""
+    """Format referents, current topic, QUD stack, and open commitments."""
     lines: list[str] = []
     # Referents
     if hasattr(section, "_referents"):
@@ -318,11 +318,22 @@ def _render_scoreboard_full(section: Any, cfg: SSReadConfig) -> str:
         for q in section._qud_stack:
             status = getattr(q, "status", "")
             lines.append(f"- QUD: {q.text} [{status}]")
+    # Open commitments
+    if hasattr(section, "get_open_commitments"):
+        open_commitments = section.get_open_commitments()
+        if open_commitments:
+            lines.append("== OPEN COMMITMENTS ==")
+            for c in open_commitments:
+                lines.append(f"- [{c.id[:8]}] {c.description} | TRIGGER: {c.trigger_condition}")
+                if c.linked_entities:
+                    lines.append(f"  entities: {', '.join(c.linked_entities)}")
+                if c.linked_content_summary:
+                    lines.append(f"  content: {c.linked_content_summary}")
     return "\n".join(lines)
 
 
 def _render_scoreboard_slim(section: Any, cfg: SSReadConfig) -> str:
-    """Slim: current topic + referent count."""
+    """Slim: current topic + referent count + open commitment count."""
     parts: list[str] = []
     if hasattr(section, "get_primary_topic"):
         topic = section.get_primary_topic()
@@ -330,6 +341,12 @@ def _render_scoreboard_slim(section: Any, cfg: SSReadConfig) -> str:
             parts.append(f"Topic: {topic.name}")
     ref_count = len(section._referents) if hasattr(section, "_referents") else 0
     parts.append(f"Referents: {ref_count}")
+    if hasattr(section, "get_open_commitments"):
+        open_c = section.get_open_commitments()
+        if open_c:
+            parts.append(f"Open commitments: {len(open_c)}")
+            for c in open_c:
+                parts.append(f"  - {c.description} (trigger: {c.trigger_condition})")
     return "\n".join(parts)
 
 
@@ -544,7 +561,9 @@ def _render_temporal_context_full(section: Any, cfg: SSReadConfig) -> str:
         anchor = section.get_temporal_anchor()
     if anchor is None:
         # Lazy fallback: compute from Persona timezone if Phase 1 not run
-        from poc.k1_poc.sessionstate.sections.temporal_context import compute_temporal_anchor
+        from poc.k1_poc.sessionstate.sections.temporal_context import (
+            compute_temporal_anchor,
+        )
 
         tz = "UTC"
         if hasattr(section, "get_all_preferences"):
@@ -579,7 +598,9 @@ def _render_temporal_context_slim(section: Any, cfg: SSReadConfig) -> str:
     if hasattr(section, "get_temporal_anchor"):
         anchor = section.get_temporal_anchor()
     if anchor is None:
-        from poc.k1_poc.sessionstate.sections.temporal_context import compute_temporal_anchor
+        from poc.k1_poc.sessionstate.sections.temporal_context import (
+            compute_temporal_anchor,
+        )
 
         anchor = compute_temporal_anchor("UTC").to_dict()
     if not anchor:

@@ -52,14 +52,14 @@ from poc.k1_poc.bus.builders import (
     build_tool_started,
 )
 from poc.k1_poc.config import get_config
-from poc.k1_poc.llm.ports import IConciergeModelPort
+from poc.k1_poc.llm.hub_types import IModelHubPort
 from poc.k1_poc.llm.types import ModelMessage
 from poc.k1_poc.llm.validator import LLMOutputValidator
 from poc.k1_poc.prompt.back_prompt import build_back_prompt
 from poc.k1_poc.protocols.cancellation import CancellationToken, CancelReason
 from poc.k1_poc.react.history import build_chat_history_for_back
 from poc.k1_poc.react.loop import ReactResult, react_loop
-from poc.k1_poc.tools.dispatcher import ToolDispatcher
+from poc.k1_poc.tools.dispatcher import ToolDispatcher, create_back_dispatcher
 from poc.k1_poc.tools.schemas_back import BACK_TIER_ALLOWLISTS, BACK_TOOL_SCHEMAS
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,48 @@ BACK_MAX_ITERATIONS: dict[str, int] = {"LOW": 4, "MEDIUM": 8, "HIGH": 12}
 # =========================================================================
 # Budget / tier helpers
 # =========================================================================
+
+
+def _resolve_back_tier_bucket(task_tier: str) -> str:
+    """P3.3: Map a per-task ComplexityTier value to the dispatcher tier bucket.
+
+    LOW  -> "simple"
+    MEDIUM/HIGH -> "plan"
+    Unknown -> "simple" (safe fallback).
+    """
+    upper = str(task_tier).upper()
+    if upper in ("MEDIUM", "HIGH"):
+        return "plan"
+    return "simple"
+
+
+def _maybe_rebind_back_dispatcher(
+    tool_dispatcher: ToolDispatcher,
+    task_tier: str,
+    bus: IBus,
+) -> ToolDispatcher:
+    """P3.3: Per-task back dispatcher upgrade.
+
+    The boot-time back dispatcher is constructed at the "simple" tier. If a
+    task arrives with MEDIUM/HIGH complexity, build a fresh dispatcher with
+    the "plan" allowlist (which adds spawn_via_fabric + execute_workflow)
+    sharing the same ToolContext and bus. Otherwise return the existing
+    dispatcher unchanged.
+    """
+    desired_bucket = _resolve_back_tier_bucket(task_tier)
+    if tool_dispatcher.tier == desired_bucket:
+        return tool_dispatcher
+    logger.info(
+        "back_handler: rebinding dispatcher tier %s -> %s for task tier %s",
+        tool_dispatcher.tier,
+        desired_bucket,
+        task_tier,
+    )
+    return create_back_dispatcher(
+        tier=desired_bucket,
+        ctx=tool_dispatcher.ctx,
+        bus=bus,
+    )
 
 
 def _budget_to_iterations(budget_hint: int) -> int:
@@ -406,7 +448,7 @@ def _emit_back_result(
 
 async def back_handler(
     envelope: Envelope,
-    model: IConciergeModelPort,
+    model: IModelHubPort,
     ss: Any,
     bus: IBus,
     tool_dispatcher: ToolDispatcher,
@@ -455,6 +497,9 @@ async def back_handler(
     task = _parse_payload(envelope)
     task_id = task.get("task_id", "")
     tier = task.get("tier", "LOW")
+
+    # P3.3: rebind dispatcher to per-task tier bucket (simple/plan).
+    tool_dispatcher = _maybe_rebind_back_dispatcher(tool_dispatcher, tier, bus)
 
     logger.info(
         "back_handler: task_id=%s tier=%s trace=%s",
@@ -593,7 +638,7 @@ async def back_handler(
 
 async def back_resume_handler(
     envelope: Envelope,
-    model: IConciergeModelPort,
+    model: IModelHubPort,
     ss: Any,
     bus: IBus,
     tool_dispatcher: ToolDispatcher,
@@ -701,6 +746,9 @@ async def back_resume_handler(
             return ReactResult(status="cancelled", data={"reason": "no_pending_context"})
 
     tier = original_task.get("tier", "LOW")
+
+    # P3.3: rebind dispatcher to per-task tier bucket on resume too.
+    tool_dispatcher = _maybe_rebind_back_dispatcher(tool_dispatcher, tier, bus)
 
     # 2. Re-read SS at resume time (may have changed during suspension)
     snapshot = _read_ss_snapshot(ss)

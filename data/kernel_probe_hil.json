@@ -1,0 +1,151 @@
+{
+  "boot_seconds": 8.770394999999553,
+  "counts": {
+    "OK": 15,
+    "WARN": 1,
+    "FAIL": 1,
+    "INFO": 3
+  },
+  "probes": [
+    {
+      "layer": "Concierge HIL",
+      "name": "coordinator",
+      "status": "OK",
+      "value": "'HILCoordinator'",
+      "note": ""
+    },
+    {
+      "layer": "Concierge HIL",
+      "name": "handle_needs_human",
+      "status": "OK",
+      "value": "'hil_type=clarification task_id=probe-task-3'",
+      "note": ""
+    },
+    {
+      "layer": "Concierge HIL",
+      "name": "pending_registry",
+      "status": "OK",
+      "value": "'contains task_id (n=1)'",
+      "note": ""
+    },
+    {
+      "layer": "Concierge HIL",
+      "name": "handle_user_response",
+      "status": "OK",
+      "value": "'HILResponse'",
+      "note": ""
+    },
+    {
+      "layer": "Concierge HIL",
+      "name": "post_resolve_cleanup",
+      "status": "OK",
+      "value": "'task_id removed (n=0)'",
+      "note": ""
+    },
+    {
+      "layer": "Planner HIL",
+      "name": "coordinator",
+      "status": "OK",
+      "value": "'HILCoordinator'",
+      "note": ""
+    },
+    {
+      "layer": "Planner HIL",
+      "name": "event_port",
+      "status": "OK",
+      "value": "'EventBusAdapter'",
+      "note": ""
+    },
+    {
+      "layer": "Planner HIL",
+      "name": "request_clarification",
+      "status": "OK",
+      "value": "\"'probe answer' (112ms)\"",
+      "note": ""
+    },
+    {
+      "layer": "Planner HIL",
+      "name": "topic_clarification_emitted",
+      "status": "FAIL",
+      "value": "None",
+      "note": "no event captured on k1.hil.clarification.v1"
+    },
+    {
+      "layer": "Planner HIL",
+      "name": "round_count_after_request",
+      "status": "INFO",
+      "value": "1",
+      "note": ""
+    },
+    {
+      "layer": "Orchestrator HIL",
+      "name": "service",
+      "status": "OK",
+      "value": "'OrchestratorService'",
+      "note": ""
+    },
+    {
+      "layer": "Orchestrator HIL",
+      "name": "pending_hil_property",
+      "status": "OK",
+      "value": "'dict (n=0)'",
+      "note": ""
+    },
+    {
+      "layer": "Orchestrator HIL",
+      "name": "handler._on_hil_override",
+      "status": "OK",
+      "value": "'exists'",
+      "note": ""
+    },
+    {
+      "layer": "Orchestrator HIL",
+      "name": "handler._on_hil_fallback",
+      "status": "OK",
+      "value": "'exists'",
+      "note": ""
+    },
+    {
+      "layer": "Orchestrator HIL",
+      "name": "constraint_resolver",
+      "status": "OK",
+      "value": "'ConstraintResolver'",
+      "note": ""
+    },
+    {
+      "layer": "Orchestrator HIL",
+      "name": "trigger_hil_fallback",
+      "status": "OK",
+      "value": "'method exists'",
+      "note": ""
+    },
+    {
+      "layer": "Orchestrator HIL",
+      "name": "delta_port.emit_hil_request",
+      "status": "OK",
+      "value": "'method exists'",
+      "note": ""
+    },
+    {
+      "layer": "HIL Fragmentation",
+      "name": "coordinator_count",
+      "status": "WARN",
+      "value": "2",
+      "note": "audit BLOAT-1: 2 separate HILCoordinator classes"
+    },
+    {
+      "layer": "HIL Fragmentation",
+      "name": "coord.Concierge",
+      "status": "INFO",
+      "value": "'HILCoordinator'",
+      "note": ""
+    },
+    {
+      "layer": "HIL Fragmentation",
+      "name": "coord.Planner",
+      "status": "INFO",
+      "value": "'HILCoordinator'",
+      "note": ""
+    }
+  ]
+}

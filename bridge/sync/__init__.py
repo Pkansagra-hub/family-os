@@ -19,30 +19,19 @@ All sync operations route through K0 P07 Sync/CRDT pipeline.
 
 from __future__ import annotations
 
+from .drain_worker import DrainWorker
 from .local_outbox import LocalOutbox, OutboxQueueEntry
 
-# Phase 1 sync components (planned -- not yet implemented)
-try:
-    from .certificates import CertificateManager
-    from .crdt import CRDTMerge
-    from .discovery import DeviceDiscovery
-    from .e2ee import E2EEncryption
-    from .sync_port import ISyncPort, SyncPortImpl
-except ImportError:
-    CertificateManager = None  # type: ignore[assignment,misc]
-    CRDTMerge = None  # type: ignore[assignment,misc]
-    DeviceDiscovery = None  # type: ignore[assignment,misc]
-    E2EEncryption = None  # type: ignore[assignment,misc]
-    ISyncPort = None  # type: ignore[assignment,misc]
-    SyncPortImpl = None  # type: ignore[assignment,misc]
+# Phase 1 sync components (planned -- not yet implemented).
+# These will be real imports once the sync modules are built (MS-6):
+#   from .certificates import CertificateManager
+#   from .crdt import CRDTMerge
+#   from .discovery import DeviceDiscovery
+#   from .e2ee import E2EEncryption
+#   from .sync_port import ISyncPort, SyncPortImpl
 
 __all__ = [
-    "CRDTMerge",
-    "CertificateManager",
-    "DeviceDiscovery",
-    "E2EEncryption",
-    "ISyncPort",
+    "DrainWorker",
     "LocalOutbox",
     "OutboxQueueEntry",
-    "SyncPortImpl",
 ]

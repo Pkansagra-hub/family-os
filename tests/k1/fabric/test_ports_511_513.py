@@ -30,8 +30,8 @@ import pytest
 from k1.fabric.ports import (
     BridgeCommandResult,
     BridgeHealth,
-    IBridgePort,
     IEventPort,
+    IFabricK0Port,
     IFLRoute,
     ISessionStateReader,
     SessionSnapshot,
@@ -643,28 +643,28 @@ class TestIBridgePortProtocol:
 
     def test_runtime_checkable(self) -> None:
         port = FakeBridgePort()
-        assert isinstance(port, IBridgePort)
+        assert isinstance(port, IFabricK0Port)
 
     def test_has_send_command_method(self) -> None:
-        assert callable(getattr(IBridgePort, "send_command", None))
+        assert callable(getattr(IFabricK0Port, "send_command", None))
 
     def test_has_query_method(self) -> None:
-        assert callable(getattr(IBridgePort, "query", None))
+        assert callable(getattr(IFabricK0Port, "query", None))
 
     def test_has_route_ifl_method(self) -> None:
-        assert callable(getattr(IBridgePort, "route_ifl", None))
+        assert callable(getattr(IFabricK0Port, "route_ifl", None))
 
     def test_has_is_available_method(self) -> None:
-        assert callable(getattr(IBridgePort, "is_available", None))
+        assert callable(getattr(IFabricK0Port, "is_available", None))
 
     def test_has_get_health_method(self) -> None:
-        assert callable(getattr(IBridgePort, "get_health", None))
+        assert callable(getattr(IFabricK0Port, "get_health", None))
 
     def test_non_conforming_rejected(self) -> None:
         class NotABridge:
             pass
 
-        assert not isinstance(NotABridge(), IBridgePort)
+        assert not isinstance(NotABridge(), IFabricK0Port)
 
 
 class TestIBridgePortStructural:
@@ -766,7 +766,7 @@ class TestInlineProtocolCompatibility:
 
         # Both should have send_command, query, is_available
         for method_name in ("send_command", "query", "is_available"):
-            assert callable(getattr(IBridgePort, method_name, None))
+            assert callable(getattr(IFabricK0Port, method_name, None))
             assert callable(getattr(InlineBridgePort, method_name, None))
 
     def test_agent_provider_isessionstatereader_compatible(self) -> None:
@@ -799,7 +799,7 @@ class TestPortsExports:
             "SessionSnapshot",
             "IEventPort",
             "SubscriptionHandle",
-            "IBridgePort",
+            "IFabricK0Port",
             "BridgeHealth",
             "BridgeCommandResult",
             "IFLRoute",
@@ -830,11 +830,11 @@ class TestPortsExports:
         from k1.fabric.ports.bridge_port import (
             BridgeCommandResult,
             BridgeHealth,
-            IBridgePort,
+            IFabricK0Port,
             IFLRoute,
         )
 
-        assert IBridgePort is not None
+        assert IFabricK0Port is not None
         assert BridgeHealth is not None
         assert BridgeCommandResult is not None
         assert IFLRoute is not None

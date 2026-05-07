@@ -11,9 +11,14 @@ Adapter catalog:
   LocalEventAdapter (5.2.3) -- In-process event dispatch + capture mode
   TestBridgeAdapter (5.2.4) -- Canned K0 responses
   TestModelGatewayAdapter (5.2.5) -- Canned LLM responses
+  ModelGatewayBridgeAdapter (5.2.9) -- Production Model Hub bridge
+  LLMHandleBridge (5.2.9) -- Production ILLMHandle via Model Hub
   TestPromptSystemAdapter (5.2.6) -- Static prompt templates
   TestDeltaBusAdapter (5.2.7) -- Delta capture for assertions
   BridgeConnectionAdapter (5.2.8) -- Production Bridge connection
+  PromptSystemProdAdapter (5.2.10) -- Production YAML prompt loader
+  DeltaBusProdAdapter (5.2.11) -- Production delta bus via IBus
+  EventPortProdAdapter (5.2.12) -- Production event port via IBus
 
 Pattern:
   Adapters implement port protocols via structural subtyping (no ABC).
@@ -26,6 +31,8 @@ Exports:
   TestBridgeAdapter
   TestModelGatewayAdapter
   TestLLMHandle
+  ModelGatewayBridgeAdapter
+  LLMHandleBridge
   TestPromptSystemAdapter
   CapturedBridgeCall
   TestDeltaBusAdapter
@@ -34,15 +41,20 @@ Exports:
   BridgeConnectionConfig
   AutoDiscoveryMCPTransport
   AutoDiscoveryWASMRuntime
+  PromptSystemProdAdapter
+  DeltaBusProdAdapter
+  EventPortProdAdapter
 """
 
 from k1.fabric.adapters.auto_mcp_transport import AutoDiscoveryMCPTransport
 from k1.fabric.adapters.auto_wasm_runtime import AutoDiscoveryWASMRuntime
-from k1.fabric.adapters.bridge_connection import (
-    BridgeConnectionAdapter,
-    BridgeConnectionConfig,
-)
+from k1.fabric.adapters.bridge_connection import BridgeConnectionAdapter, BridgeConnectionConfig
+from k1.fabric.adapters.delta_bus_prod import DeltaBusProdAdapter
+from k1.fabric.adapters.event_port_prod import EventPortProdAdapter
 from k1.fabric.adapters.local_event import LocalEventAdapter
+from k1.fabric.adapters.model_gateway_bridge import LLMHandleBridge, ModelGatewayBridgeAdapter
+from k1.fabric.adapters.null_state_reader import NullSessionStateReaderAdapter
+from k1.fabric.adapters.prompt_system_prod import PromptSystemProdAdapter
 from k1.fabric.adapters.sessionstate_reader import SessionStateReaderAdapter
 from k1.fabric.adapters.test_bridge import CapturedBridgeCall, TestBridgeAdapter
 from k1.fabric.adapters.test_delta_bus import CapturedDelta, TestDeltaBusAdapter
@@ -66,6 +78,9 @@ __all__ = [
     # --- 5.2.5 Test Model Gateway ---
     "TestModelGatewayAdapter",
     "TestLLMHandle",
+    # --- 5.2.9 Production Model Gateway Bridge ---
+    "ModelGatewayBridgeAdapter",
+    "LLMHandleBridge",
     # --- 5.2.6 Test Prompt System ---
     "TestPromptSystemAdapter",
     # --- 5.2.7 Test Delta Bus ---
@@ -74,4 +89,12 @@ __all__ = [
     # --- 5.2.8 Production Bridge ---
     "BridgeConnectionAdapter",
     "BridgeConnectionConfig",
+    # --- 5.2.10 Production Prompt System ---
+    "PromptSystemProdAdapter",
+    # --- 5.2.11 Production Delta Bus ---
+    "DeltaBusProdAdapter",
+    # --- 5.2.12 Production Event Port ---
+    "EventPortProdAdapter",
+    # --- Null / startup-tier adapter (Issue 2.0.12) ---
+    "NullSessionStateReaderAdapter",
 ]

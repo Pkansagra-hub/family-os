@@ -164,13 +164,13 @@ class TestEvictionPriorityEnum:
         """Telemetry has highest eviction priority (lowest number)."""
         assert EvictionPriority.TELEMETRY == 1
 
-    def test_beliefs_history_is_priority_2(self) -> None:
+    def test_beliefs_history_is_priority_3(self) -> None:
         """beliefs_history is second to evict."""
-        assert EvictionPriority.BELIEFS_HISTORY == 2
+        assert EvictionPriority.BELIEFS_HISTORY == 3
 
-    def test_history_recent_is_priority_3(self) -> None:
+    def test_history_recent_is_priority_4(self) -> None:
         """history_recent is third to evict."""
-        assert EvictionPriority.HISTORY_RECENT == 3
+        assert EvictionPriority.HISTORY_RECENT == 4
 
     def test_persona_is_priority_10(self) -> None:
         """Persona has lowest eviction priority (highest number)."""

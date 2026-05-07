@@ -15,7 +15,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..core.transport import HttpTransport
@@ -49,6 +49,21 @@ CREATE TABLE IF NOT EXISTS outbox_queue (
 _CREATE_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_outbox_pending
     ON outbox_queue (status, priority DESC, created_at ASC);
+"""
+
+# MS-3b epic 3b.3 \u2014 enriched dead-letter routing + per-row TTL.
+_CREATE_DEAD_LETTER_SQL = """
+CREATE TABLE IF NOT EXISTS dead_letter (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    original_id     INTEGER NOT NULL,
+    topic           TEXT    NOT NULL,
+    envelope_json   TEXT    NOT NULL,
+    enqueued_at     TEXT    NOT NULL,
+    moved_at        TEXT    NOT NULL,
+    reason          TEXT    NOT NULL,
+    response_code   INTEGER,
+    response_body   TEXT
+);
 """
 
 
@@ -96,7 +111,15 @@ class LocalOutbox:
         self._conn = sqlite3.connect(str(self._db_path))
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
-        self._conn.executescript(f"{_CREATE_TABLE_SQL}\n{_CREATE_INDEX_SQL}")
+        self._conn.executescript(
+            f"{_CREATE_TABLE_SQL}\n{_CREATE_INDEX_SQL}\n{_CREATE_DEAD_LETTER_SQL}"
+        )
+        # MS-3b additive migration: add ``max_queue_age_s`` column for
+        # per-row TTL. Use a defensive ALTER \u2014 SQLite has no IF NOT
+        # EXISTS for columns, so we read the schema and skip when set.
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(outbox_queue)")}
+        if "max_queue_age_s" not in cols:
+            self._conn.execute("ALTER TABLE outbox_queue ADD COLUMN max_queue_age_s INTEGER")
         self._conn.commit()
 
     # -- public API ----------------------------------------------------------
@@ -106,6 +129,8 @@ class LocalOutbox:
         envelope_json: str,
         topic: str,
         priority: int = 2,
+        *,
+        max_queue_age_s: int | None = None,
     ) -> int:
         """Persist an envelope to the offline queue.
 
@@ -117,6 +142,10 @@ class LocalOutbox:
             Command topic for logging/ordering.
         priority : int
             Numeric priority (1=HIGH, 2=NORMAL, 3=LOW).
+        max_queue_age_s : int | None
+            Per-row TTL in seconds. When set, :meth:`prune_expired`
+            will remove rows whose ``created_at + max_queue_age_s`` lies
+            in the past. ``None`` disables TTL for this row.
 
         Returns
         -------
@@ -135,8 +164,10 @@ class LocalOutbox:
 
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         cursor = self._conn.execute(
-            "INSERT INTO outbox_queue (topic, envelope_json, priority, created_at) VALUES (?, ?, ?, ?)",
-            (topic, envelope_json, priority, now),
+            "INSERT INTO outbox_queue "
+            "(topic, envelope_json, priority, created_at, max_queue_age_s) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (topic, envelope_json, priority, now, max_queue_age_s),
         )
         self._conn.commit()
         row_id = cursor.lastrowid
@@ -203,6 +234,116 @@ class LocalOutbox:
     def close(self) -> None:
         """Close the SQLite connection."""
         self._conn.close()
+
+    # -- MS-3b epic 3b.3: dead-letter + TTL ---------------------------------
+
+    def move_to_dead_letter(
+        self,
+        entry_id: int,
+        *,
+        reason: str,
+        response_code: int | None = None,
+        response_body: str | None = None,
+    ) -> None:
+        """Atomically move ``entry_id`` from ``outbox_queue`` to ``dead_letter``.
+
+        Used by :class:`bridge.sync.drain_worker.DrainWorker` when a
+        4xx contract-violation response is observed: the envelope is
+        unrecoverable and must not retry, but operators must still see
+        it for the dead-letter replay procedure.
+        """
+        row = self._conn.execute(
+            "SELECT topic, envelope_json, created_at FROM outbox_queue WHERE id = ?",
+            (entry_id,),
+        ).fetchone()
+        if row is None:
+            return
+        topic, envelope_json, created_at = row
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO dead_letter "
+                "(original_id, topic, envelope_json, enqueued_at, moved_at, "
+                " reason, response_code, response_body) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    entry_id,
+                    topic,
+                    envelope_json,
+                    created_at,
+                    now,
+                    reason,
+                    response_code,
+                    response_body,
+                ),
+            )
+            self._conn.execute("DELETE FROM outbox_queue WHERE id = ?", (entry_id,))
+        logger.warning(
+            "LocalOutbox: id=%d topic=%s \u2192 dead_letter (reason=%s code=%s)",
+            entry_id,
+            topic,
+            reason,
+            response_code,
+        )
+
+    def dead_letter_count(self) -> int:
+        """Return the number of rows in the ``dead_letter`` table."""
+        row = self._conn.execute("SELECT COUNT(*) FROM dead_letter").fetchone()
+        return row[0] if row else 0
+
+    def list_dead_letter(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return dead-letter rows for operator inspection / replay."""
+        rows = self._conn.execute(
+            "SELECT id, original_id, topic, envelope_json, enqueued_at, moved_at, "
+            "reason, response_code, response_body "
+            "FROM dead_letter ORDER BY moved_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        keys = (
+            "id",
+            "original_id",
+            "topic",
+            "envelope_json",
+            "enqueued_at",
+            "moved_at",
+            "reason",
+            "response_code",
+            "response_body",
+        )
+        return [dict(zip(keys, r, strict=False)) for r in rows]
+
+    def prune_expired(self, *, now_iso: str | None = None) -> int:
+        """Remove pending rows whose ``created_at + max_queue_age_s`` lies
+        in the past. Returns the number of rows pruned.
+
+        Rows whose ``max_queue_age_s`` is NULL are exempt.
+        """
+        now_dt = (
+            datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+            if now_iso is not None
+            else datetime.now(timezone.utc)
+        )
+        rows = self._conn.execute(
+            "SELECT id, created_at, max_queue_age_s FROM outbox_queue "
+            "WHERE max_queue_age_s IS NOT NULL AND status = 'PENDING'"
+        ).fetchall()
+        expired_ids: list[int] = []
+        for row_id, created_at, ttl_s in rows:
+            try:
+                created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            age_s = (now_dt - created_dt).total_seconds()
+            if age_s >= ttl_s:
+                expired_ids.append(row_id)
+        if expired_ids:
+            self._conn.executemany(
+                "DELETE FROM outbox_queue WHERE id = ?",
+                [(i,) for i in expired_ids],
+            )
+            self._conn.commit()
+            logger.info("LocalOutbox: pruned %d expired row(s)", len(expired_ids))
+        return len(expired_ids)
 
     # -- drain internals -----------------------------------------------------
 

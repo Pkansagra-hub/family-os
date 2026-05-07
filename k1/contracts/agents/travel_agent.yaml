@@ -1,0 +1,79 @@
+# k1/contracts/agents/travel_agent.yaml
+#
+# M19.E2.I3 -- Specialist agent for travel and trip planning.
+#
+# See health_agent.yaml header for the full resolution path. Travel
+# specialists may produce sub-plans that reference downstream
+# capabilities (calendar create, messaging send, future flight_search /
+# flight_price_track contracts). Those callees are governed by the
+# capability gate; this contract just declares the LLM agent that
+# composes the trip plan.
+
+agent_contract:
+  name: "agent.execute.travel_specialist"
+  version: "1.0.0"
+  domain:
+    - "TRAVEL"
+    - "PLANNING"
+    - "FAMILY"
+  description: >
+    Family travel specialist. Composes structured trip plans
+    (destinations, dates, lodging hints, calendar holds) from
+    household calendar context, member preferences, and budget
+    constraints. Produces a sub-plan ready for downstream capability
+    invocations (calendar.create, messaging.send_message). Does NOT
+    book or pay; downstream tools are gated.
+  capabilities:
+    - "trip_outline"
+    - "calendar_hold_suggestion"
+    - "itinerary_compose"
+  limitations:
+    - "no_booking"
+    - "no_payment"
+    - "estimate_only_pricing"
+  required_inputs:
+    - name: "destination"
+      type: "STRING"
+      description: "Trip destination (city, region, or 'open')."
+  optional_inputs:
+    - name: "dates"
+      type: "STRING"
+      description: "Date range hint (e.g. 'next weekend', '2026-07-10..15')."
+    - name: "party"
+      type: "ARRAY[STRING]"
+      description: "Family members travelling."
+    - name: "budget_hint"
+      type: "STRING"
+      description: "Loose budget guidance (e.g. 'modest', 'flexible')."
+  required_context:
+    - "beliefs_active.calendar"
+  optional_context:
+    - "beliefs_active.preferences"
+    - "beliefs_active.finance"
+  output:
+    type: "object"
+    properties:
+      plan:
+        type: "object"
+      calendar_holds:
+        type: "array"
+      followup_capabilities:
+        type: "array"
+    required:
+      - "plan"
+  prompt_template: "travel_specialist_v1"
+  tools_granted:
+    - "tool.execute.calendar_create_event"
+    - "tool.execute.messaging_send_message"
+  llm_budget_tokens: 8192
+  max_tool_calls: 6
+  max_execution_time_ms: 30000
+  provider_type: "AGENT"
+  provider_id: "travel_specialist_provider"
+  safety_band_min: "GREEN"
+  risk_class: "low"
+  social_act: "trip_plan"
+  cost_per_call: 0.20
+  avg_latency_ms: 5000
+  max_latency_ms: 20000
+  availability: "ONLINE"

@@ -17,33 +17,27 @@ Import graph: k1.memory_writer.config imports from stdlib only.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, FrozenSet
 
-# SessionState sections read by MW (13 of 15)
-_DEFAULT_HOT_SECTIONS: List[str] = [
-    "beliefs_active",
-    "beliefs_history",
-    "history_active",
-    "history_recent",
-    "affective_now",
-    "affective_baseline",
-    "narrative_active",
-    "scoreboard",
-    "control",
-    "persona",
-]
+# Sections MW SKIPS (not relevant for memory extraction).
+# MW reads ALL sections from SessionState.ALL_SECTIONS EXCEPT these.
+# New sections added to SessionState are automatically included.
+_DEFAULT_SKIP_SECTIONS: FrozenSet[str] = frozenset(
+    {
+        "telemetry",
+        "artifacts_warm",
+    }
+)
 
-_DEFAULT_WARM_SECTIONS: List[str] = [
-    "task_state",
-    "ifl",
-    "meta",
-]
-
-# Sections MW never reads (not relevant for memory extraction)
-_SKIPPED_SECTIONS: List[str] = [
-    "telemetry",
-    "artifacts_warm",
-]
+# Documented phantom sections: config.py previously listed these as
+# readable sections but they do not exist in SessionState.ALL_SECTIONS.
+# Kept as documentation only, not used at runtime.
+_PHANTOM_SECTIONS: FrozenSet[str] = frozenset(
+    {
+        "affective_baseline",
+        "ifl",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -85,13 +79,26 @@ class MWConfig:
     circuit_breaker_recovery_probe_seconds: int = 30
 
     # --- 6. SessionState Sections (MW-01: read-only, MW-02: <1ms) ---
-    session_sections_hot: List[str] = field(default_factory=lambda: list(_DEFAULT_HOT_SECTIONS))
-    session_sections_warm: List[str] = field(default_factory=lambda: list(_DEFAULT_WARM_SECTIONS))
+    # Section-agnostic: MW reads ALL sections except skip_sections.
+    # No hardcoded section name lists — new SS sections auto-included.
+    skip_sections: FrozenSet[str] = field(default_factory=lambda: _DEFAULT_SKIP_SECTIONS)
 
     # --- 7. Model Hub Routing ---
     model_hint: str = "cheapest"
 
-    @property
-    def all_sections(self) -> List[str]:
-        """Return all sections MW reads (hot + warm). 13 total."""
-        return self.session_sections_hot + self.session_sections_warm
+    # --- 7b. Session-Batch Extraction (Option B) ---
+    # Replaces per-turn LLM call with buffered + threshold + idle flush.
+    # extraction_mode="session_batch" = SessionBatchDispatcher (default, prod path)
+    # extraction_mode="per_turn"      = legacy TurnDispatcher (kept for back-compat tests)
+    extraction_mode: str = "session_batch"
+    flush_turn_threshold: int = 20      # flush buffer when N turns accumulated
+    flush_idle_seconds: int = 300       # flush buffer after N seconds of inactivity
+    max_atoms_per_session: int = 30     # hard cap on atoms returned by one session-batch LLM call
+    llm_token_budget_session: int = 4000  # token budget for session-batch extraction call
+
+    # --- 8. Known Location Geohashes (K0 G5/G6) ---
+    # Per-tenant mapping of location names to 6-char geohash strings.
+    # Default empty — populated from deployment config.
+    # K0 stage_42 geo_metadata handles enrichment for unknown locations;
+    # MW only provides seed values for known places.
+    known_location_geohashes: Dict[str, str] = field(default_factory=dict)

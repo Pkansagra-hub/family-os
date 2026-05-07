@@ -13,7 +13,9 @@ SessionState's IEventPort differs from Fabric's:
 
 Topic mapping:
     event_type "sessionstate.mutation.approved"
-    -> bus topic "k1.session.sessionstate.mutation.approved"
+    -> bus topic "k1.sessionstate.mutation.approved"  (P6.9: flattened)
+    event_type "lifecycle.started"
+    -> bus topic "k1.session.lifecycle.started"      (legacy fallback)
 
 Serialization (V1): JSON wraps payload as {"payload": <value>}.
 
@@ -51,6 +53,29 @@ logger = logging.getLogger(__name__)
 
 # Topic prefix for session state events on the bus
 _SESSION_PREFIX = "k1.session."
+
+# Event-type prefixes that already carry their own first segment.
+# For these we map directly to ``k1.<event_type>`` instead of double-nesting
+# under ``k1.session.<event_type>``.
+#
+# Phase 6 / P6.9: ``sessionstate.*`` events used to map to
+# ``k1.session.sessionstate.*`` (4 segments after k1, double-nested).  The
+# adapter now flattens them to ``k1.sessionstate.*`` so the wire topic
+# matches the namespace convention and the timing rule for the
+# ``k1.sessionstate`` prefix applies.  Caller-facing event_type strings are
+# unchanged.
+_FLATTEN_PREFIXES = ("sessionstate.",)
+
+
+def _map_topic(event_type: str) -> str:
+    """Map an IEventPort event_type to a bus topic string.
+
+    See ``_FLATTEN_PREFIXES`` for the flattening rule (P6.9).
+    """
+    for prefix in _FLATTEN_PREFIXES:
+        if event_type.startswith(prefix):
+            return f"k1.{event_type}"
+    return f"{_SESSION_PREFIX}{event_type}"
 
 
 def _serialize_payload(payload: Any) -> bytes:
@@ -127,7 +152,7 @@ class SessionBusAdapter(IEventPort):
             event_type: Event type string (e.g. "sessionstate.mutation.approved").
             payload:    Event payload (any serializable value).
         """
-        topic = f"{_SESSION_PREFIX}{event_type}"
+        topic = _map_topic(event_type)
         raw = _serialize_payload(payload)
         self._bus.publish(
             Envelope(
@@ -159,7 +184,7 @@ class SessionBusAdapter(IEventPort):
         Returns:
             Subscription ID string (for unsubscribe).
         """
-        topic = f"{_SESSION_PREFIX}{event_type}"
+        topic = _map_topic(event_type)
 
         def _wrapper(env: Envelope) -> None:
             try:

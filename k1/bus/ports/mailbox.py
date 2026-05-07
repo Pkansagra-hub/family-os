@@ -174,3 +174,15 @@ class IMailboxRouter(Protocol):
     def registered_actors(self) -> list[str]:
         """Return the list of currently registered actor IDs."""
         ...
+
+    def close(self) -> None:
+        """Close the router and all mailboxes. Idempotent."""
+        ...
+
+    @property
+    def is_closed(self) -> bool:
+        """Public closed-state accessor.
+
+        Replaces external reads of the impl-private ``_closed`` slot.
+        """
+        ...

@@ -180,7 +180,7 @@ class TestArbiterMetadataAttachment:
         assert last.entry_type == "user"
         # Phase 1 metadata keys (to_metadata uses 'intent' not 'intent_classification')
         assert "intent" in last.metadata
-        assert "complexity_tier" in last.metadata
+        # P3.1: complexity_tier no longer in Phase1 metadata
 
     def test_history_has_arbiter_metadata(self) -> None:
         """User history entry contains Arbiter metadata dict."""
@@ -240,7 +240,7 @@ class TestArbiterMetadataAttachment:
         assert "routing_metadata" in payload
 
     def test_envelope_payload_has_complexity_tier(self) -> None:
-        """Enriched envelope contains complexity_tier."""
+        """P3.1: complexity_tier dropped from envelope payload."""
         fsm, bus = _make_fsm()
         delivered = []
         original_deliver = fsm._deliver_to_front
@@ -254,7 +254,7 @@ class TestArbiterMetadataAttachment:
         fsm._on_user_input(env)
         assert len(delivered) >= 1
         payload = _payload(delivered[0])
-        assert "complexity_tier" in payload
+        assert "complexity_tier" not in payload
 
     def test_envelope_payload_has_safety_band(self) -> None:
         """Enriched envelope contains safety_band."""

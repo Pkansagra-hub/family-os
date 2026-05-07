@@ -244,4 +244,10 @@ class ToolContractParser:
             last_updated=body.get("last_updated", ""),
             success_rate_30d=float(body.get("success_rate_30d", 0.0)),
             total_invocations_30d=int(body.get("total_invocations_30d", 0)),
+            # HIL Policy Metadata (E2 -- HIL Unification)
+            requires_human_confirmation=body.get("requires_human_confirmation"),
+            side_effects=list(body.get("side_effects", [])),
+            # Self-model conscience metadata (M9.E1 / M12.E2.I0)
+            risk_class=body.get("risk_class", "safety_sensitive"),
+            social_act=body.get("social_act"),
         )

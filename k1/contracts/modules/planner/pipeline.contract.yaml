@@ -14,7 +14,9 @@
 #   No runtime behaviour is implemented here. Contract validation
 #   logic is part of M2 (PipelineController) and M6 (PlannerFactory).
 # ---------------------------------------------------------------------------
-$schema: "k1://schemas/pipeline/pipeline.contract.schema.yaml"
+# NOTE: No formal $schema is published for pipeline contracts yet.
+# When ``k1/contracts/schemas/pipeline/pipeline.contract.schema.yaml`` lands,
+# re-add the ``$schema`` key pointing at the ``k1://`` URI for it.
 
 metadata:
   module_id: "planner"

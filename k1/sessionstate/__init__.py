@@ -5,14 +5,14 @@ SessionState Package - K1 Session Memory Management
 IMPLEMENTATION PLAN: docs/plans/sessionstate-implementation-plan.md
 
 SessionState provides:
-- 96KB session memory (48KB HOT + 48KB WARM)
+- 100KB session memory (52KB HOT + 48KB WARM)
 - 40-turn conversation retention
 - Edge-first offline support (LOCAL COLD)
 - Single-writer pattern (Concierge)
 - FlatBuffer serialization (<100μs)
 
 Quick Start (Standalone Mode):
-    from k1.sessionstate import SessionStateFactory
+    from poc.k1_poc.sessionstate import SessionStateFactory
 
     # Create standalone manager
     manager = SessionStateFactory.create_standalone()
@@ -42,7 +42,7 @@ Architecture:
     │                   SessionStateManager                    │
     │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────────────┐│
     │  │ HotTier │ │WarmTier │ │LocalCold│ │ MutationGuard   ││
-    │  │  48KB   │ │  48KB   │ │ SQLite  │ │ SizeTracker     ││
+    │  │  52KB   │ │  48KB   │ │ SQLite  │ │ SizeTracker     ││
     │  └─────────┘ └─────────┘ └─────────┘ │ EvictionEngine  ││
     │       ↓           ↓           ↓      │ MigrationEngine ││
     │    8 sections  4 sections  Archive   └─────────────────┘│
@@ -68,6 +68,9 @@ from .adapters import (
     SQLiteStorageAdapter,
     StandaloneLifecycle,
 )
+
+# Async bridge
+from .async_bridge import AsyncSSMBridge
 
 # Event types
 from .events import (
@@ -239,4 +242,6 @@ __all__ = [
     "HotTier",
     "WarmTier",
     "LocalColdTier",
+    # Async bridge
+    "AsyncSSMBridge",
 ]

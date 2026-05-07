@@ -1,0 +1,22 @@
+{{ header }}
+"""Auto-generated port protocol for kernel ``{{ kernel }}``."""
+
+from __future__ import annotations
+
+from typing import Any, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class I{{ kernel|capitalize }}{{ direction_label }}Port(Protocol):
+    """Generated facade. Methods are added once contracts ship payloads."""
+
+    {% if topics %}
+    {% for topic in topics %}
+    async def {{ topic.method_name }}(self, payload: Any) -> Any:
+        """Handle topic ``{{ topic.topic }}``."""
+        ...
+    {% endfor %}
+    {% else %}
+    # No active contracts route through this port yet (MS-2.5 placeholder).
+    pass
+    {% endif %}

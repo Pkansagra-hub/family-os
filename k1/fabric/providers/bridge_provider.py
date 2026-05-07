@@ -67,8 +67,8 @@ from typing import Any, Dict, FrozenSet, List, Optional, Protocol
 from k1.fabric.ports.bridge_port import (
     BridgeCommandResult,
     BridgeHealth,
-    IBridgePort as CanonicalIBridgePort,
 )
+from k1.fabric.ports.bridge_port import IFabricK0Port as CanonicalIBridgePort
 from k1.fabric.providers.base_provider import BaseProvider, ProviderExecutionError
 from k1.fabric.types import (
     CapabilityRequest,
@@ -149,7 +149,7 @@ class BridgeResponse:
 # Kept as alias for backward compatibility in type hints.
 IBridgePort = CanonicalIBridgePort
 
-    # health_mode() removed -- use canonical get_health() from IBridgePort.
+# health_mode() removed -- use canonical get_health() from IBridgePort.
 
 
 # ---------------------------------------------------------------------------

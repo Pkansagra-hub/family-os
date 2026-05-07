@@ -1,0 +1,71 @@
+# k1/contracts/agents/finance_agent.yaml
+#
+# M19.E2.I2 -- Specialist agent for finance/budget/share-tracking tasks.
+#
+# See health_agent.yaml header for the full resolution path. Same
+# pipeline; finance scope. AMBER safety band: financial context is
+# sensitive but read-only here. Any actual transaction (e.g. order
+# placement, account transfer) routes through a separate gated
+# capability and the conscience.
+
+agent_contract:
+  name: "agent.execute.finance_specialist"
+  version: "1.0.0"
+  domain:
+    - "FINANCE"
+    - "PLANNING"
+  description: >
+    Family finance specialist. Reads household budget context, share
+    holdings, recent transactions, and recurring expense patterns to
+    produce structured briefings: position summaries, budget warnings,
+    and recommended adjustments. Read-only by default; any state
+    mutation must route through a gated tool.
+  capabilities:
+    - "budget_summary"
+    - "share_briefing"
+    - "spending_trend_analysis"
+  limitations:
+    - "no_brokerage_execution"
+    - "no_account_transfer"
+    - "read_only_default"
+  required_inputs:
+    - name: "query"
+      type: "STRING"
+      description: "User-described finance question."
+  optional_inputs:
+    - name: "horizon"
+      type: "STRING"
+      description: "Time horizon for analysis (e.g. 1d, 30d, 1y)."
+    - name: "scope"
+      type: "STRING"
+      description: "Scope filter: portfolio | budget | spending."
+  required_context:
+    - "beliefs_active.finance"
+  optional_context:
+    - "beliefs_active.goals"
+    - "beliefs_active.preferences"
+  output:
+    type: "object"
+    properties:
+      summary:
+        type: "string"
+      figures:
+        type: "array"
+      recommendations:
+        type: "array"
+    required:
+      - "summary"
+  prompt_template: "finance_specialist_v1"
+  tools_granted: []
+  llm_budget_tokens: 8192
+  max_tool_calls: 0
+  max_execution_time_ms: 30000
+  provider_type: "AGENT"
+  provider_id: "finance_specialist_provider"
+  safety_band_min: "AMBER"
+  risk_class: "safety_sensitive"
+  social_act: "finance_briefing"
+  cost_per_call: 0.20
+  avg_latency_ms: 5000
+  max_latency_ms: 20000
+  availability: "ONLINE"

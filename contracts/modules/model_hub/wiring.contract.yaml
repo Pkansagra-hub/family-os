@@ -1,0 +1,107 @@
+# Model Hub -- Wiring Contract
+# Lists all required files, emitted events, subscribed events, and port specs.
+# Validated by contract CI gate.
+
+module_id: model_hub
+version: "1.0"
+
+required_files:
+  # Layer 0: Types, Events, Config
+  - k1/model_hub/types.py                    # [F01] All domain types
+  - k1/model_hub/config.py                   # [F02] ModelHubConfig
+  - k1/model_hub/manifest.py                 # [F03] ProviderManifest, ModelSpec, load_manifest
+  - k1/model_hub/events.py                   # [F04] 11 event topics + payloads
+  - k1/model_hub/metrics.py                  # [F05] 12 metric definitions
+
+  # Layer 1: Port Protocols
+  - k1/model_hub/ports/__init__.py           # [F09] Re-exports
+  - k1/model_hub/ports/hub_port.py           # [F10] IModelHubPort
+  - k1/model_hub/ports/event_port.py         # [F11] IEventPort
+  - k1/model_hub/ports/state_read_port.py    # [F12] IStateReadPort
+  - k1/model_hub/ports/metrics_port.py       # [F13] IMetricsPort
+  - k1/model_hub/ports/config_port.py        # [F14] IConfigPort
+  - k1/model_hub/ports/credential_port.py    # [F15] ICredentialPort
+  - k1/model_hub/ports/health_port.py        # [F16] IHealthPort
+
+  # Layer 2: Plugin Interface
+  - k1/model_hub/plugins/__init__.py         # Re-exports
+  - k1/model_hub/plugins/base.py             # [F20] IProviderPlugin, NormalizedRequest, ProviderResponse
+
+  # Layer 3: Internal Services
+  - k1/model_hub/services/__init__.py        # Re-exports
+  - k1/model_hub/services/request_router.py         # [F40] RequestRouter
+  - k1/model_hub/services/capability_router.py      # [F41] CapabilityRouter
+  - k1/model_hub/services/model_selector.py         # [F42] ModelSelector
+  - k1/model_hub/services/provider_registry.py      # [F43] ProviderRegistry
+  - k1/model_hub/services/provider_dispatcher.py    # [F44] ProviderDispatcher
+  - k1/model_hub/services/normalization_layer.py    # [F45] NormalizationLayer
+  - k1/model_hub/services/budget_enforcer.py        # [F46] BudgetEnforcer
+  - k1/model_hub/services/response_cache.py         # [F47] ResponseCache
+  - k1/model_hub/services/circuit_breaker_manager.py # [F48] CircuitBreakerManager
+  - k1/model_hub/services/rate_limiter.py           # [F49] RateLimiter
+  - k1/model_hub/services/cost_tracker.py           # [F50] CostTracker
+  - k1/model_hub/services/provider_health_monitor.py # [F51] ProviderHealthMonitor
+  - k1/model_hub/services/audit_logger.py           # [F52] AuditLogger
+
+  # Layer 4: Provider Plugins
+  - k1/model_hub/plugins/openai_plugin.py    # [F21] OpenAIPlugin
+  - k1/model_hub/plugins/anthropic_plugin.py # [F22] AnthropicPlugin
+  - k1/model_hub/plugins/google_plugin.py    # [F23] GoogleGeminiPlugin
+  - k1/model_hub/plugins/vllm_plugin.py      # [F24] VLLMPlugin
+  - k1/model_hub/plugins/ollama_plugin.py    # [F25] OllamaPlugin
+  - k1/model_hub/plugins/test_plugin.py      # [F26] TestProviderPlugin
+
+  # Layer 5: Factory
+  - k1/model_hub/factory.py                  # [F60] ModelHubFactory
+
+  # Layer 6: Module Init
+  - k1/model_hub/__init__.py
+
+  # Layer 2: Production Adapters
+  - k1/model_hub/adapters/__init__.py
+  - k1/model_hub/adapters/llm_request_bus_adapter.py    # [F30]
+  - k1/model_hub/adapters/event_bus_adapter.py          # [F31]
+  - k1/model_hub/adapters/session_state_read_adapter.py # [F32]
+  - k1/model_hub/adapters/prometheus_adapter.py         # [F33]
+  - k1/model_hub/adapters/config_adapter.py             # [F34]
+  - k1/model_hub/adapters/credential_store_adapter.py   # [F35]
+  - k1/model_hub/adapters/health_report_adapter.py      # [F36]
+
+emitted_events:
+  - k1.model_hub.request.received.v1
+  - k1.model_hub.request.routed.v1
+  - k1.model_hub.response.complete.v1
+  - k1.model_hub.cache.hit.v1
+  - k1.model_hub.provider.failure.v1
+  - k1.model_hub.fallback.triggered.v1
+  - k1.model_hub.circuit.state.v1
+  - k1.model_hub.budget.alert.v1
+  - k1.model_hub.provider.health.v1
+  - k1.model_hub.provider.registered.v1
+  - k1.model_hub.capability.available.v1
+
+subscribed_events:
+  - k1.model_hub.config_update.v1
+
+port_specs:
+  - name: IModelHubPort
+    direction: inbound
+    file: k1/model_hub/ports/hub_port.py
+  - name: IEventPort
+    direction: both
+    file: k1/model_hub/ports/event_port.py
+  - name: IStateReadPort
+    direction: inbound
+    file: k1/model_hub/ports/state_read_port.py
+  - name: IMetricsPort
+    direction: outbound
+    file: k1/model_hub/ports/metrics_port.py
+  - name: IConfigPort
+    direction: inbound
+    file: k1/model_hub/ports/config_port.py
+  - name: ICredentialPort
+    direction: inbound
+    file: k1/model_hub/ports/credential_port.py
+  - name: IHealthPort
+    direction: outbound
+    file: k1/model_hub/ports/health_port.py

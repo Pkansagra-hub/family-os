@@ -358,8 +358,8 @@ class TestEvictionPriorityOrder:
     def test_priority_order_constants(self) -> None:
         """Eviction priority constants should be correct."""
         assert EvictionPriority.TELEMETRY == 1
-        assert EvictionPriority.BELIEFS_HISTORY == 2
-        assert EvictionPriority.HISTORY_RECENT == 3
+        assert EvictionPriority.BELIEFS_HISTORY == 3
+        assert EvictionPriority.HISTORY_RECENT == 4
         assert EvictionPriority.PERSONA == 10
 
     def test_eviction_order_telemetry_first(self, session: SessionStateManager) -> None:
@@ -713,7 +713,7 @@ class TestEvictionComponentVerification:
             size_tracker.set_section_size(section, 1000)
 
         candidates = eviction_engine.get_eviction_candidates()
-        assert len(candidates) == 4
+        assert len(candidates) == 5
 
         # Should be in priority order
         assert candidates[0].section == "telemetry"

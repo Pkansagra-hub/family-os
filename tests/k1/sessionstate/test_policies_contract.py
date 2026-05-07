@@ -98,8 +98,8 @@ class TestCapacitySLITargets:
 
     def test_hot_tier_limit_is_48kb(self):
         """HOT tier limit is 48KB (49152 bytes)."""
-        HOT_LIMIT = 49152
-        assert HOT_LIMIT == 48 * 1024
+        HOT_LIMIT = 53248
+        assert HOT_LIMIT == 52 * 1024
 
     def test_warm_tier_limit_is_48kb(self):
         """WARM tier limit is 48KB (49152 bytes)."""

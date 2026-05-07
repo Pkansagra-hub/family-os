@@ -1,0 +1,46 @@
+# k1/contracts/tools/grocery_order.yaml
+# Storyline capability (M12.E3.I1) — backed by LocalStubProvider.
+
+tool_contract:
+  name: "tool.execute.grocery_order"
+  version: "1.0.0"
+  domain:
+    - "COMMERCE"
+    - "FAMILY"
+  description: >
+    Place a grocery order for delivery to the household. Storyline
+    capability for M12 conscience activation; backed by a
+    deterministic local stub.
+  capabilities:
+    - "online_purchase"
+  limitations:
+    - "stub_implementation"
+  required_inputs:
+    - name: "items"
+      type: "ARRAY[STRING]"
+      description: "Items to order."
+    - name: "store"
+      type: "STRING"
+      description: "Store / vendor identifier."
+  output:
+    type: "object"
+    properties:
+      receipt_id: {type: "string"}
+      status: {type: "string"}
+      timestamp: {type: "string"}
+    required: ["receipt_id", "status", "timestamp"]
+  provider_type: "LOCAL_STUB"
+  provider_id: "grocery_order_stub"
+  safety_band_min: "AMBER"
+  risk_class: "high"
+  social_act: "grocery_order"
+  cost_per_call: 0.0
+  avg_latency_ms: 5
+  max_latency_ms: 50
+  availability: "ONLINE"
+  requires_human_confirmation: true
+  side_effects:
+    - kind: "payment"
+      target: "commerce.grocery"
+      reversible: false
+      description: "Initiates a purchase that charges the household account."

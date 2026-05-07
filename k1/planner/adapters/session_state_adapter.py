@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from typing import Any, List
 
-from k1.fabric.ports.state_reader import SessionSnapshot
+from k1.fabric.ports.state_reader import ISessionStateReader, SessionSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class SessionStateReadAdapter:
 
     def __init__(
         self,
-        reader: Any,
+        reader: ISessionStateReader,
         session_id: str,
     ) -> None:
         self._reader = reader

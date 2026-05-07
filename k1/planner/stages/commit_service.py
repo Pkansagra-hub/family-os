@@ -60,7 +60,7 @@ from typing import Dict, List
 
 from k1.orchestrator.types import CommittedPlan, PlanRequest, PlanStep
 from k1.planner.events import TOPIC_PLAN_READY
-from k1.planner.ports.bridge_port import IBridgePort
+from k1.planner.ports.bridge_port import IPlannerWritePort
 from k1.planner.ports.delta_emit_port import IDeltaEmitPort
 from k1.planner.ports.event_port import IEventPort
 from k1.planner.types import (
@@ -124,7 +124,7 @@ class CommitService:
 
     def __init__(
         self,
-        bridge_port: IBridgePort,
+        bridge_port: IPlannerWritePort,
         delta_port: IDeltaEmitPort,
         event_port: IEventPort,
     ) -> None:
@@ -154,7 +154,7 @@ class CommitService:
     # -- read-only attribute access ----------------------------------------
 
     @property
-    def bridge_port(self) -> IBridgePort:
+    def bridge_port(self) -> IPlannerWritePort:
         """Bridge port (read-only)."""
         return self._bridge_port
 

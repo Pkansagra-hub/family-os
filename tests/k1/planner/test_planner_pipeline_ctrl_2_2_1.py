@@ -701,6 +701,7 @@ class TestSlots:
             "_commit",
             "_delta_port",
             "_event_port",
+            "_hil_port",
             "_config",
             "_fsm",
             "_stage_token_usage",

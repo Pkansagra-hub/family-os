@@ -28,8 +28,8 @@ References
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 # ---------------------------------------------------------------------------
 # Topic constants (Section 28 -- Complete Event Catalog)
@@ -41,14 +41,10 @@ TOPIC_PLAN_FAILED = "k1.planner.plan.failed.v1"
 TOPIC_PLAN_CANCELLED = "k1.planner.plan.cancelled.v1"
 TOPIC_MICRO_REPLAN_READY = "k1.planner.micro_replan.ready.v1"
 TOPIC_DELTA = "k1.planner.delta.v1"
-TOPIC_HIL_CLARIFICATION = "k1.hil.clarification.v1"
-TOPIC_HIL_APPROVAL_REQ = "k1.hil.approval_request.v1"
 
 # Subscribed by Planner
 TOPIC_PLAN_REQUEST = "k1.planner.plan.request.v1"
 TOPIC_PLAN_CANCEL = "k1.planner.plan.cancel.v1"
-TOPIC_HIL_CLARIFICATION_RESP = "k1.hil.clarification_response.v1"
-TOPIC_HIL_APPROVAL_RESP = "k1.hil.approval_response.v1"
 
 
 # ---------------------------------------------------------------------------
@@ -106,55 +102,6 @@ class PlanCancelledPayload:
             raise ValueError("PlanCancelledPayload.trace_id must be non-empty")
 
 
-@dataclass(frozen=True)
-class HILClarificationPayload:
-    """Payload for TOPIC_HIL_CLARIFICATION event (Section 12.2).
-
-    Published by HILCoordinator during SKETCH when ambiguity is detected.
-    Concierge subscribes and presents the question to the user.
-
-    Response payloads are owned by Concierge (not defined here).
-    """
-
-    request_id: str
-    question: str
-    context: Dict[str, Any] = field(default_factory=dict)
-    trace_id: str = ""
-
-    def __post_init__(self) -> None:
-        if not self.request_id:
-            raise ValueError("HILClarificationPayload.request_id must be non-empty")
-        if not self.question:
-            raise ValueError("HILClarificationPayload.question must be non-empty")
-        if not self.trace_id:
-            raise ValueError("HILClarificationPayload.trace_id must be non-empty")
-
-
-@dataclass(frozen=True)
-class HILApprovalRequestPayload:
-    """Payload for TOPIC_HIL_APPROVAL_REQ event (Section 12.3).
-
-    Published by HILCoordinator during VALIDATE for high-risk plans
-    (steps with has_side_effects=true and safety_band_min above GREEN).
-
-    Response payloads are owned by Concierge (not defined here).
-    """
-
-    request_id: str
-    summary: str
-    options: List[str] = field(default_factory=list)
-    side_effects: List[str] = field(default_factory=list)
-    safety_assessment: str = ""
-
-    def __post_init__(self) -> None:
-        if not self.request_id:
-            raise ValueError("HILApprovalRequestPayload.request_id must be non-empty")
-        if not self.summary:
-            raise ValueError("HILApprovalRequestPayload.summary must be non-empty")
-        if not self.options:
-            raise ValueError("HILApprovalRequestPayload.options must be non-empty")
-
-
 __all__ = [
     # Topic constants -- published
     "TOPIC_PLAN_READY",
@@ -162,16 +109,10 @@ __all__ = [
     "TOPIC_PLAN_CANCELLED",
     "TOPIC_MICRO_REPLAN_READY",
     "TOPIC_DELTA",
-    "TOPIC_HIL_CLARIFICATION",
-    "TOPIC_HIL_APPROVAL_REQ",
     # Topic constants -- subscribed
     "TOPIC_PLAN_REQUEST",
     "TOPIC_PLAN_CANCEL",
-    "TOPIC_HIL_CLARIFICATION_RESP",
-    "TOPIC_HIL_APPROVAL_RESP",
     # Payload dataclasses
     "PlanFailedPayload",
     "PlanCancelledPayload",
-    "HILClarificationPayload",
-    "HILApprovalRequestPayload",
 ]

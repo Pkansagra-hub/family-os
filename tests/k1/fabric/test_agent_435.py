@@ -90,7 +90,7 @@ class FakeModelGateway:
             raise RuntimeError("Model creation failed")
         return FakeLLMHandle()
 
-    def is_model_loaded(self, model_id: str) -> bool:
+    async def is_model_loaded(self, model_id: str) -> bool:
         if self._fail_loaded:
             raise RuntimeError("Gateway unreachable")
         return True

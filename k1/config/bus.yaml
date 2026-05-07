@@ -1,0 +1,47 @@
+# k1/config/bus.yaml -- Bus timing rules and default delivery mode.
+#
+# Loaded by k1.bus.config.load_bus_config().
+# If this file is missing, hardcoded defaults from k1.bus.timing.defaults
+# are used instead (see DEFAULT_RULES).
+#
+# Format:
+#   default_mode: STRICT | RELAXED | BEST_EFFORT
+#   timing_rules:
+#     "<topic_prefix>": <mode>
+#
+# Longest-prefix match is used: "k1.agent" matches "k1.agent.abc.delta.v1".
+# Any topic not matching a rule falls back to default_mode.
+
+default_mode: RELAXED
+
+timing_rules:
+  # STRICT: correctness-critical ordering
+  k1.capability: STRICT
+  k1.orchestration: STRICT
+  k1.planner: STRICT
+  k1.hil: STRICT
+  k1.hitl: STRICT
+  k1.response: STRICT
+  k1.session: STRICT
+  k1.agent: STRICT
+  k1.internal: STRICT
+  k1.tool: STRICT
+  k1.arbiter: STRICT
+  k1.backpool: STRICT
+  k1.model_hub: STRICT  # P6.10: model selection / routing decisions must be ordered
+  k1.selfmodel.policy: STRICT
+  k1.selfmodel.constitution: STRICT
+  k1.selfmodel.identity: STRICT
+  k1.selfmodel.startup: STRICT
+
+  # RELAXED: order-preferred but not critical
+  k1.affect: RELAXED
+  k1.constraint: RELAXED
+  k1.proactive: RELAXED
+  k1.workflow: RELAXED
+
+  # BEST_EFFORT: fire-and-forget, droppable
+  k1.k0.sse: BEST_EFFORT
+  k1.fabric.learning: BEST_EFFORT
+  feedback: RELAXED              # MS-3e: K1->K0 feedback envelopes (queueable, not strict)
+  observability: BEST_EFFORT     # MS-3e: K1->K0 metrics/logs forwarding

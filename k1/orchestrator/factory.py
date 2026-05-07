@@ -40,6 +40,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
+from k1.kernel.ports.hil_port import IHILPort
 from k1.orchestrator.adapters.admin_http_adapter import AdminHttpAdapter
 
 # -----------------------------------------------------------------------
@@ -52,7 +53,9 @@ from k1.orchestrator.adapters.mock_state_read_adapter import MockStateReadAdapte
 from k1.orchestrator.adapters.test_delta_adapter import TestDeltaAdapter
 from k1.orchestrator.adapters.test_event_adapter import TestEventAdapter
 from k1.orchestrator.adapters.test_mailbox_adapter import TestMailboxAdapter
-from k1.orchestrator.adapters.test_workflow_storage_adapter import TestWorkflowStorageAdapter
+from k1.orchestrator.adapters.test_workflow_storage_adapter import (
+    TestWorkflowStorageAdapter,
+)
 
 # -----------------------------------------------------------------------
 # Config + domain types
@@ -81,6 +84,7 @@ from k1.orchestrator.orchestration.guards import (
     ConcurrencyGuard,
     ConditionalEdgeEvaluator,
     ExecutionMonitor,
+    FailureReplanCheckpoint,
     MicroReplanCheckpoint,
     OutputSchemaGuard,
 )
@@ -221,6 +225,7 @@ class OrchestratorFactory:
     def _build_guards(
         planner_port: IPlannerPort,
         delta_port: IDeltaEmitPort,
+        hil_port: IHILPort,
         *,
         max_micro_replans: int = 1,
     ) -> list:
@@ -239,7 +244,8 @@ class OrchestratorFactory:
 
         Args:
             planner_port: For MicroReplanCheckpoint.
-            delta_port: For ExecutionMonitor.
+            delta_port: For ExecutionMonitor.emit_progress.
+            hil_port: For ExecutionMonitor.after_wave override prompts.
             max_micro_replans: MicroReplanCheckpoint limit (default 1).
 
         Returns:
@@ -249,7 +255,13 @@ class OrchestratorFactory:
             OutputSchemaGuard(),
             ConditionalEdgeEvaluator(),
             MicroReplanCheckpoint(planner_port, max_replans=max_micro_replans),
-            ExecutionMonitor(delta_port, service_ref=None),
+            ExecutionMonitor(delta_port, hil_port=hil_port),
+            # M16.E2.I2: failure-driven replan runs LAST so the kernel's
+            # ``_verify_orchestrator_monitor_binding`` (slot 3 ==
+            # ExecutionMonitor) stays satisfied. ExecutionMonitor only
+            # emits progress + override prompts and does not consume
+            # downstream metadata, so this ordering is semantically safe.
+            FailureReplanCheckpoint(planner_port, max_replans=max_micro_replans),
         ]
 
     # ==================================================================
@@ -260,6 +272,7 @@ class OrchestratorFactory:
     def _construct_orchestrator(
         config: OrchestratorConfig,
         adapters: Dict[str, Any],
+        hil_port: Optional[IHILPort] = None,
     ) -> OrchestratorService:
         """Wire all components in dependency-safe order (15 steps).
 
@@ -302,6 +315,9 @@ class OrchestratorFactory:
         policies = OrchestratorFactory._build_policies(config)
         metrics = OrchestratorMetrics(enabled=config.metrics_enabled)
 
+        # -- HIL port (use defensive null adapter when caller did not wire one) ---
+        effective_hil_port: IHILPort = hil_port or _NullHILAdapter()
+
         # =====================================================================
         # STEP 1: ErrorRouter (depends only on delta_port)
         # =====================================================================
@@ -324,6 +340,7 @@ class OrchestratorFactory:
         guards = OrchestratorFactory._build_guards(
             planner_port,
             delta_port,
+            effective_hil_port,
             max_micro_replans=config.max_micro_replans,
         )
 
@@ -350,8 +367,7 @@ class OrchestratorFactory:
         # =====================================================================
         constraint_resolver = ConstraintResolver(
             fabric_port,
-            delta_port,
-            event_port,
+            hil_port=effective_hil_port,
         )
 
         # =====================================================================
@@ -443,14 +459,12 @@ class OrchestratorFactory:
             event_port=event_port,
             config=config,
             metrics=metrics,
+            hil_port=effective_hil_port,
         )
 
         # =====================================================================
-        # POST: Resolve ExecutionMonitor circular dependency (lazy init)
-        #   guards[3] is ExecutionMonitor -- verified by _build_guards order.
+        # POST: ExecutionMonitor no longer needs service back-reference (E6.M1.3).
         # =====================================================================
-        execution_monitor: ExecutionMonitor = guards[3]
-        execution_monitor._service_ref = service
 
         # =====================================================================
         # STEP 15.5: Admin HTTP adapter (6.3.3)
@@ -501,6 +515,7 @@ class OrchestratorFactory:
         overrides: Optional[Dict[str, Any]] = None,
         *,
         config: Optional[OrchestratorConfig] = None,
+        hil_port: Optional[IHILPort] = None,
     ) -> OrchestratorService:
         """Create an OrchestratorService with test adapters, allowing overrides.
 
@@ -536,7 +551,7 @@ class OrchestratorFactory:
         if overrides:
             adapters.update(overrides)
 
-        return OrchestratorFactory._construct_orchestrator(effective_config, adapters)
+        return OrchestratorFactory._construct_orchestrator(effective_config, adapters, hil_port)
 
     # ==================================================================
     # Public: create_with_ports(**ports) -- caller provides adapters
@@ -554,6 +569,7 @@ class OrchestratorFactory:
         bridge: IBridgeWritePort,
         event: IEventSubscriptionPort,
         storage: IWorkflowStoragePort,
+        hil_port: Optional[IHILPort] = None,
     ) -> OrchestratorService:
         """Create an OrchestratorService with explicitly provided adapters.
 
@@ -587,7 +603,7 @@ class OrchestratorFactory:
             _PORT_EVENT: event,
             _PORT_STORAGE: storage,
         }
-        return OrchestratorFactory._construct_orchestrator(effective_config, adapters)
+        return OrchestratorFactory._construct_orchestrator(effective_config, adapters, hil_port)
 
     # ==================================================================
     # Public: create_production(config) -- full prod stack
@@ -605,6 +621,7 @@ class OrchestratorFactory:
         bridge: IBridgeWritePort,
         event: IEventSubscriptionPort,
         storage: IWorkflowStoragePort,
+        hil_port: Optional[IHILPort] = None,
     ) -> OrchestratorService:
         """Create a fully initialized production OrchestratorService.
 
@@ -640,7 +657,7 @@ class OrchestratorFactory:
             _PORT_EVENT: event,
             _PORT_STORAGE: storage,
         }
-        service = OrchestratorFactory._construct_orchestrator(config, adapters)
+        service = OrchestratorFactory._construct_orchestrator(config, adapters, hil_port)
 
         # Production is the ONLY path that calls init().
         # Test methods leave init() to the caller for lifecycle control.
@@ -652,3 +669,79 @@ class OrchestratorFactory:
         )
 
         return service
+
+
+# ---------------------------------------------------------------------------
+# _NullHILAdapter -- defensive fallback when caller does not supply hil_port.
+# Mirrors k1.planner.factory._NullHILAdapter (E5). Returns timed_out responses
+# so production paths remain importable without requiring kernel-owned
+# HumanInTheLoopService until E7 wires it through KernelService.
+# ---------------------------------------------------------------------------
+
+
+class _NullHILAdapter:
+    """In-process IHILPort that always times out. See OrchestratorFactory."""
+
+    __slots__ = ()
+
+    async def ask_clarification(self, req: Any) -> Any:
+        from k1.hil.types import ClarificationResponse
+
+        return ClarificationResponse(
+            hil_request_id="",
+            answer=None,
+            timed_out=True,
+            round_budget_exhausted=False,
+        )
+
+    async def request_approval(self, req: Any) -> Any:
+        from k1.hil.types import ApprovalResponse
+
+        return ApprovalResponse(
+            hil_request_id="",
+            decision="reject",
+            modifications=None,
+            timed_out=True,
+        )
+
+    async def needs_human(self, req: Any) -> Any:
+        from k1.hil.types import NeedsHumanResponse
+
+        return NeedsHumanResponse(
+            hil_request_id="",
+            decision="timeout",
+            resolution={},
+            raw_user_text=None,
+            timed_out=True,
+        )
+
+    async def request_override(self, req: Any) -> Any:
+        from k1.hil.types import OverrideResponse
+
+        return OverrideResponse(
+            hil_request_id="",
+            choice="abort",
+            selected_alternative=None,
+            fallback_action=None,
+            timed_out=True,
+        )
+
+    async def gate_capability(self, req: Any) -> Any:
+        from k1.hil.types import GateDecision, GateOutcome
+
+        return GateDecision(
+            outcome=GateOutcome.ALLOW,
+            hil_request_id=None,
+            reason="null_hil_default_allow",
+            user_approved=None,
+            audit_only=False,
+        )
+
+    def reset_round_budget(self, caller_key: str) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        return None
+
+
+__all__ = ["OrchestratorFactory"]
