@@ -1,0 +1,45 @@
+topic: p03.complete.v1
+direction: k0_to_k1
+owner_team: k0
+status: active
+producer:
+  kernel: k0
+  pipeline: p03.consolidation
+  emitter: ConsolidationCompleteEmitter
+consumer:
+  kernel: k1
+  pipeline: concierge.consolidation_listener
+  state: consolidation_complete_listener
+schema: schemas/p03.complete.v1.json
+delivery:
+  transport: sse
+  ordering: strict
+  ack_required: true
+  online_required: false
+  endpoint_class: cloud_k0
+  partition_mode: k0_primary
+  codec: json
+  retry: exponential_backoff
+  max_redelivery: 0
+semantics:
+  idempotent: true
+  duplicate_strategy: dedupe_by_envelope_id
+  retention: PT24H
+  description: 'P03 consolidation-cycle completion pushed to K1 over SSE. Lets K1
+    react (invalidate concierge caches, refresh KG-derived facts) without polling.
+    Cross-kernel projection of the K0-internal ``p03.consolidation.complete.v1`` outbox
+    topic. Cursor resume via Last-Event-ID; 24h replay window. Strict ordering because
+    consumers may sequence cache invalidations against cycle_id order.
+
+    '
+sla:
+  latency_p99_ms: 1000
+  availability: degrades_to_local_queue
+versioning:
+  semver: 1.0.0
+  compat: compatible
+  strategy: additive_only_within_v1
+  breaking_change_requires: new_topic_v2_with_dual_publish_window_30d
+checksums:
+  schema_sha256: d6c3b198ccf3edf3d5d92c4381d69b89de6dc2789f0ba4b9f7fdcf79d0605b59
+  manifest_sha256: 9a49e4c6599f22e4bc3eebff2ba0bd20ec87b7fbcb90135e8f68886d87ea23ab

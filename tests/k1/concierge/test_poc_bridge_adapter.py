@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fixtures.capabilities.registry import CapabilityRegistry
+from k1.fabric.ports.bridge_port import BridgeCommandResult, BridgeHealth, IFabricK0Port, IFLRoute
 from tests.fixtures.capabilities.poc_bridge_adapter import POCMockBridgeAdapter
-from k1.fabric.ports.bridge_port import BridgeCommandResult, BridgeHealth, IBridgePort, IFLRoute
+from tests.fixtures.capabilities.registry import CapabilityRegistry
 
 # =====================================================================
 # Fixtures
@@ -83,7 +83,7 @@ class TestStructural:
 
     def test_isinstance_check(self) -> None:
         adapter = POCMockBridgeAdapter(CapabilityRegistry())
-        assert isinstance(adapter, IBridgePort)
+        assert isinstance(adapter, IFabricK0Port)
 
     def test_has_send_command(self) -> None:
         assert hasattr(POCMockBridgeAdapter, "send_command")

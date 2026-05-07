@@ -69,12 +69,12 @@ from k1.planner.planner_agent import PlannerAgent  # noqa: F401
 
 # -- Port protocols (source of truth: k1/planner/ports/ [F11-F18]) --
 from k1.planner.ports import (  # noqa: F401
-    IBridgePort,
     IDeltaEmitPort,
     IEventPort,
     IFabricRetrievalPort,
     ILLMPort,
     IMailboxPort,
+    IPlannerWritePort,
     IStateReadPort,
 )
 
@@ -201,7 +201,7 @@ __all__ = [
     "ILLMPort",
     "IFabricRetrievalPort",
     "IStateReadPort",
-    "IBridgePort",
+    "IPlannerWritePort",
     "IDeltaEmitPort",
     "IEventPort",
 ]

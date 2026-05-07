@@ -1,0 +1,20 @@
+# Bridge contract substrate feature flags.
+#
+# Reversibility per global rule #6: every milestone-flip toggles a flag here so
+# we can roll back without reverting code.
+#
+# MS-2.5 has CLOSED. The original two gating flags
+# (``codegen_enforced`` and ``exit_criterion_active``) were *deleted* at
+# exit-criterion because their behaviour is now permanent: the codegen
+# drift check is enforced via the ``codegen_no_diff`` workflow, and the
+# round-trip test runs unconditionally on every push.
+#
+# New flags land here per future milestone.
+
+ms_2_5:
+  # Marker only; MS-2.5 closed and its substrate is permanent.
+  closed: true
+
+ms_3a:
+  # Reserved namespace for the next milestone's reversibility flags.
+  reserved: true

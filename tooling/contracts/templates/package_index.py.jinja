@@ -1,0 +1,13 @@
+{{ header }}
+"""Auto-generated package index for kernel ``{{ kernel }}``.
+
+Lists every contract topic routed to / from this kernel.
+"""
+
+from __future__ import annotations
+
+TOPICS: tuple[str, ...] = (
+    {% for topic in topics %}
+    "{{ topic.topic }}",
+    {% endfor %}
+)

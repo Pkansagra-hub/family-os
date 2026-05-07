@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/k0.learning.advisory.v1.json",
+  "title": "K0LearningAdvisoryV1",
+  "description": "K0\u2192K1 SSE event payload: P21 learning-loop advisory describing drift, regression, or improvement of a K0 pipeline algorithm. Consumed by the K1 planner/orchestrator to retune local strategies. Free-form ``details`` payload because the advisory shape varies per signal class; the producer guarantees ``signal_class`` selects the schema sub-shape.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope_id", "advisory_id", "pipeline_id", "signal_class"],
+  "properties": {
+    "envelope_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Per-event ULID. Used as the SSE Last-Event-ID cursor token."
+    },
+    "advisory_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable advisory identifier."
+    },
+    "pipeline_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Pipeline that generated the advisory (e.g. P02, P08)."
+    },
+    "signal_class": {
+      "type": "string",
+      "enum": ["drift", "regression", "improvement", "calibration", "saturation"],
+      "description": "Class of learning signal."
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Advisory-specific detail payload; the producer-side schema is governed by ``signal_class``."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Cognitive trace identifier."
+    }
+  }
+}

@@ -3529,6 +3529,7 @@ Capability metadata moved into the agent fabric: every `CapabilityContract` now 
 Onboarding (M10) is YAML-seedable via [scripts/onboarding_seed.py](scripts/onboarding_seed.py), with example seeds under [examples/seeds/](examples/seeds). The four M11 scripted prompts — *introspection, must_ask send_message, forbidden prescribe_medication, default-allow create_reminder* — are recorded in [data/m11_golden_transcript.json](data/m11_golden_transcript.json) and replayed in CI by [scripts/kernel_probe_phase9_v2.py](scripts/kernel_probe_phase9_v2.py) `--mode mock`.
 
 **Deferred from Part B** (intentional, tracked as transitional):
+
 - M9.E1.I3 — `risk_class_registry.py` retained as `FabricRiskCatalog` fallback.
 - M9.E2.I2 — legacy `Capabilities` / `autonomy_rules` not yet deleted; back-compat tests still ship under [tests/k1/selfmodel/invariants/test_e6_capabilities.py](tests/k1/selfmodel/invariants/test_e6_capabilities.py) and [tests/k1/selfmodel/integration/test_identity_to_amendment.py](tests/k1/selfmodel/integration/test_identity_to_amendment.py). Removal is gated on migrating remaining v0 fixture writers.
 - M11.E2.I2 — IAM-style test deletion deferred with M9.E2.I2 (deleting tests for code that still ships would create coverage gaps).

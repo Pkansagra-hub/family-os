@@ -44,7 +44,7 @@ Exports:
   IDeltaBusPort, DeltaPayload,
 """
 
-from k1.fabric.ports.bridge_port import BridgeCommandResult, BridgeHealth, IBridgePort, IFLRoute
+from k1.fabric.ports.bridge_port import BridgeCommandResult, BridgeHealth, IFabricK0Port, IFLRoute
 from k1.fabric.ports.delta_bus import DeltaPayload, IDeltaBusPort
 from k1.fabric.ports.event_port import IEventPort, SubscriptionHandle
 from k1.fabric.ports.model_gateway import ILLMHandle, IModelGatewayPort, ModelCapability, ModelInfo
@@ -59,7 +59,7 @@ __all__ = [
     "IEventPort",
     "SubscriptionHandle",
     # --- 5.1.3 IBridgePort ---
-    "IBridgePort",
+    "IFabricK0Port",
     "BridgeHealth",
     "BridgeCommandResult",
     "IFLRoute",

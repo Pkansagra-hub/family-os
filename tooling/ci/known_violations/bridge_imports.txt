@@ -1,0 +1,16 @@
+# Wall violations scheduled for remediation in later milestones.
+# Format: <relpath>:<lineno>  # comment
+# Path separators are normalised to forward slashes.
+#
+# Each line below is excluded from the bridge_not_imported_from_kernels gate
+# until the remediation milestone clears the import. New entries require
+# explicit team approval; the goal is for this file to shrink over time.
+#
+# MS-3a (closed): k1/memory_writer/adapters/bridge_command_adapter.py:25 cleared.
+# The adapter no longer imports bridge.core.envelope_builder.CommandEnvelope; the
+# batch surface uses plain dicts and per-contract typed publishing flows through
+# bridge.client.HttpBridgeClient.
+#
+# MS-3b (closed): k1/kernel/adapters/bridge_adapter.py:59 cleared.
+# SinkBridgeAdapter no longer imports bridge.sync.local_outbox directly; it uses
+# the bridge.client.create_sink_bridge_client() factory seam.

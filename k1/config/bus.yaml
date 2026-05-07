@@ -43,3 +43,5 @@ timing_rules:
   # BEST_EFFORT: fire-and-forget, droppable
   k1.k0.sse: BEST_EFFORT
   k1.fabric.learning: BEST_EFFORT
+  feedback: RELAXED              # MS-3e: K1->K0 feedback envelopes (queueable, not strict)
+  observability: BEST_EFFORT     # MS-3e: K1->K0 metrics/logs forwarding

@@ -60,12 +60,12 @@ from k1.planner.planner_agent import PlannerAgent
 
 # -- Layer 1: port protocols ----------------------------------------------
 from k1.planner.ports import (
-    IBridgePort,
     IDeltaEmitPort,
     IEventPort,
     IFabricRetrievalPort,
     ILLMPort,
     IMailboxPort,
+    IPlannerWritePort,
     IStateReadPort,
 )
 
@@ -94,7 +94,7 @@ _PORT_REGISTRY: List[Tuple[str, Type[Any]]] = [
     ("llm_port", ILLMPort),
     ("fabric_port", IFabricRetrievalPort),
     ("state_port", IStateReadPort),
-    ("bridge_port", IBridgePort),
+    ("bridge_port", IPlannerWritePort),
     ("delta_port", IDeltaEmitPort),
     ("event_port", IEventPort),
     ("mailbox_port", IMailboxPort),
@@ -308,7 +308,7 @@ class PlannerFactory:
         llm_port: ILLMPort,
         fabric_port: IFabricRetrievalPort,
         state_port: IStateReadPort,
-        bridge_port: IBridgePort,
+        bridge_port: IPlannerWritePort,
         delta_port: IDeltaEmitPort,
         event_port: IEventPort,
         mailbox_port: IMailboxPort,
@@ -374,7 +374,11 @@ class PlannerFactory:
         logger.info("planner_factory.create_with_ports.start")
         PlannerFactory._validate_config(effective_config)
         PlannerFactory._validate_ports(ports)
-        effective_hil = hil_port if hil_port is not None else PlannerFactory._build_default_hil(event_port, llm_port)
+        effective_hil = (
+            hil_port
+            if hil_port is not None
+            else PlannerFactory._build_default_hil(event_port, llm_port)
+        )
         agent = await PlannerFactory._wire(ports, effective_config, effective_hil)
         logger.info("planner_factory.create_with_ports.complete")
         return agent
@@ -389,7 +393,7 @@ class PlannerFactory:
         llm_port: ILLMPort,
         fabric_port: IFabricRetrievalPort,
         state_port: IStateReadPort,
-        bridge_port: IBridgePort,
+        bridge_port: IPlannerWritePort,
         delta_port: IDeltaEmitPort,
         event_port: IEventPort,
         mailbox_port: IMailboxPort,
@@ -461,7 +465,11 @@ class PlannerFactory:
         logger.info("planner_factory.create_production.start")
         PlannerFactory._validate_config(effective_config)
         PlannerFactory._validate_ports(ports)
-        effective_hil = hil_port if hil_port is not None else PlannerFactory._build_default_hil(event_port, llm_port)
+        effective_hil = (
+            hil_port
+            if hil_port is not None
+            else PlannerFactory._build_default_hil(event_port, llm_port)
+        )
         agent = await PlannerFactory._wire(ports, effective_config, effective_hil)
         logger.info("planner_factory.create_production.complete")
         return agent

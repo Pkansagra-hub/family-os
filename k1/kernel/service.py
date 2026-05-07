@@ -1713,9 +1713,11 @@ class KernelService:
                 llm=self._model_hub,
                 classification=self._phase1_pipeline,
                 dispatch=session_dispatch,
-                # P5.2: Wire recall through Bridge query path. SinkBridgeClient
-                # returns RecallBundle.empty() when offline, so the adapter
-                # gracefully yields [] without falling back to _null_recall.
+                # P5.2 / MS-3c: Wire recall through the typed paired-contract
+                # surface (``recall.request.v1`` / ``recall.response.v1``).
+                # ``build_recall_fn`` resolves the typed client out of the
+                # bridge composite client (or returns an offline-graceful
+                # ``[]`` when no recall surface is bound).
                 memory=RecallMemoryAdapter(build_recall_fn(self._bridge.get_client())),
                 # P4B.6: pass IWriterPort explicitly (was reach-through in factory step 7)
                 writer=ss_writer,

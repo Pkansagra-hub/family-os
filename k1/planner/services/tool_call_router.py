@@ -46,7 +46,7 @@ from typing import Any, Dict, Optional
 
 from k1.fabric.types import RetrievalResult
 from k1.planner.config import PlannerConfig
-from k1.planner.ports.bridge_port import IBridgePort
+from k1.planner.ports.bridge_port import IPlannerWritePort
 from k1.planner.ports.fabric_retrieval_port import IFabricRetrievalPort
 from k1.planner.ports.state_read_port import IStateReadPort
 from k1.planner.types import BudgetExhaustedError, RecallResponse, UnknownToolError
@@ -123,7 +123,7 @@ class ToolCallRouter:
         self,
         fabric_retrieval: IFabricRetrievalPort,
         state_read: IStateReadPort,
-        bridge_port: IBridgePort,
+        bridge_port: IPlannerWritePort,
         *,
         config: Optional[PlannerConfig] = None,
     ) -> None:

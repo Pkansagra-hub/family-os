@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/recall.response.v1.json",
+  "title": "RecallResponseV1",
+  "description": "Response body for recall.request.v1 (K0\u2192K1). Carries the recalled hits plus aggregate latency/truncation flags. Returned synchronously on the same HTTP request \u2014 never published independently.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["hits", "total", "latency_ms", "truncated"],
+  "properties": {
+    "hits": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RecallHit"
+      },
+      "description": "Recalled atoms, ordered by relevance/recency depending on selector mix."
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total matching atoms across selectors (may exceed len(hits) when truncated)."
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "K0-side wall-clock latency for the aggregate query."
+    },
+    "truncated": {
+      "type": "boolean",
+      "description": "True when fail_fast or max_results truncated the bundle."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Echoed cognitive trace identifier."
+    }
+  },
+  "$defs": {
+    "RecallHit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["atom_id", "content", "score", "source"],
+      "properties": {
+        "atom_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable identifier of the recalled atom."
+        },
+        "content": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Atom content (shape depends on the selector type)."
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Relevance/similarity score (0.0\u20131.0)."
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "K0 storage layer / selector that produced this hit (e.g. wal, pgvector, kg)."
+        },
+        "selector_type": {
+          "type": "string",
+          "description": "Optional selector kind that produced this hit."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Optional continuation cursor for fetching more from this point."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,63 @@
+topic: ifl.google_calendar.events.list.v1
+direction: k0_to_device
+owner_team: bridge_infra
+status: proposed
+producer:
+  kernel: k1
+  pipeline: concierge.calendar_lookup
+  emitter: GoogleCalendarAdapter
+consumer:
+  kernel: device
+  pipeline: ifl.google_calendar.events.list
+  state: external_calendar_api
+schema: schemas/ifl.google_calendar.events.list.v1.request.json
+delivery:
+  transport: mcp_stdio
+  ordering: best_effort
+  ack_required: true
+  online_required: true
+  endpoint_class: device_local
+  partition_mode: k1_mesh_only
+  codec: json
+  retry: none
+  max_redelivery: 0
+mcp:
+  server_command:
+    - python
+    - "-m"
+    - bridge.ifl.adapters.google_calendar.server
+  multi_instance: true
+  adapter_id_pattern: google_calendar_<account_id>
+  sandbox:
+    memory_max: 256M
+    cpu_quota_percent: 25
+    network: outbound_only
+    filesystem_read: []
+    filesystem_write: []
+  health:
+    ping_interval_s: 10
+    max_missed_pings: 3
+signing:
+  algorithm: ed25519
+  key_source: ca_bundle
+  ca_id: familyos_root_v1
+  signature: PLACEHOLDER_SIGN_BEFORE_REGISTER
+semantics:
+  idempotent: true
+  duplicate_strategy: dedupe_by_envelope_id
+  retention: PT0S
+  description: |
+    Read-only IFL call: list events from a Google Calendar account between
+    a `time_min` and `time_max` window. The MCP server is launched per
+    account (see mcp.multi_instance) and authenticates with an OAuth
+    refresh token fetched from the bridge credential vault at
+    `mcp/initialize` time per D17. PR#1 of MS-5 ships only the manifest
+    + JSON Schemas; the live MCP server lands in PR#5.
+sla:
+  latency_p99_ms: 1500
+  availability: requires_device_online
+versioning:
+  semver: 1.0.0
+  compat: compatible
+  strategy: additive_only_within_v1
+  breaking_change_requires: new_topic_v2_with_dual_publish_window_30d

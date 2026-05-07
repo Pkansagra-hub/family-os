@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge://contracts/schemas/p03.complete.v1.json",
+  "title": "P03CompleteV1",
+  "description": "K0\u2192K1 SSE event payload: P03 consolidation cycle completion. Mirrors the K0-internal ``p03.consolidation.complete.v1`` outbox topic on the cross-kernel surface; lets K1 react (e.g. invalidate concierge caches, refresh KG-derived facts) without polling.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope_id", "cycle_id", "completed_at_utc_ms"],
+  "properties": {
+    "envelope_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Per-event ULID. Used as the SSE Last-Event-ID cursor token."
+    },
+    "cycle_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Consolidation cycle identifier."
+    },
+    "completed_at_utc_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "UTC epoch milliseconds when the cycle completed."
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Wall-clock duration of the consolidation cycle."
+    },
+    "atoms_consolidated": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of atoms folded into long-term memory this cycle."
+    },
+    "patterns_discovered": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of new patterns discovered."
+    },
+    "gaps_emitted": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of p03.gap.detected.v1 events emitted during this cycle."
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier."
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Memory-space identifier."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Cognitive trace identifier."
+    }
+  }
+}

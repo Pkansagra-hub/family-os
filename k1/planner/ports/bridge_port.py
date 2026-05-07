@@ -41,7 +41,7 @@ from k1.planner.types import RecallResponse
 
 
 @runtime_checkable
-class IBridgePort(Protocol):
+class IPlannerWritePort(Protocol):
     """K0 Bridge access port -- recall and persist.
 
     This is a structural protocol (``typing.Protocol``).  Any object with
@@ -102,4 +102,4 @@ class IBridgePort(Protocol):
         ...  # pragma: no cover
 
 
-__all__ = ["IBridgePort"]
+__all__ = ["IPlannerWritePort"]

@@ -1,0 +1,46 @@
+topic: recall.response.v1
+direction: k0_to_k1
+owner_team: bridge_infra
+status: active
+producer:
+  kernel: k0
+  pipeline: query.recall_aggregator
+  emitter: QueryAggregator
+consumer:
+  kernel: k1
+  pipeline: concierge.recall_service
+  state: recall_response_consumer
+schema: schemas/recall.response.v1.json
+delivery:
+  transport: http
+  ordering: strict
+  ack_required: false
+  online_required: true
+  endpoint_class: cloud_k0
+  partition_mode: k0_primary
+  codec: json
+  retry: none
+  max_redelivery: 0
+semantics:
+  idempotent: true
+  duplicate_strategy: last_write_wins
+  retention: PT0S
+  description: 'Synchronous recall response paired with recall.request.v1. Returned
+    on the same HTTP request body — never published as a fire-and-forget event and
+    never streamed via SSE. Codegen treats this manifest as model-only: the Pydantic
+    model is emitted under both kernels, but no client/handler/port files are generated
+    for it. The request-side client deserialises HTTP 200 bodies into RecallResponseV1
+    instances.
+
+    '
+sla:
+  latency_p99_ms: 250
+  availability: requires_k0_online
+versioning:
+  semver: 1.0.0
+  compat: compatible
+  strategy: additive_only_within_v1
+  breaking_change_requires: new_topic_v2_with_dual_publish_window_30d
+checksums:
+  schema_sha256: 439d01591ae81a7eedabd854963b0f456700eb6c1ff1d15a1222e8f8b5f0a0db
+  manifest_sha256: 3cd1505cb8b24f197408381ba38a19c5a4fc2147689cf6a22bba41a9750ab00f

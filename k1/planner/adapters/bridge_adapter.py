@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from k1.fabric.ports.bridge_port import IBridgePort
+from k1.fabric.ports.bridge_port import IFabricK0Port
 from k1.planner.types import RecallResponse
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ class BridgeAdapter:
 
     __slots__ = ("_bridge",)
 
-    def __init__(self, bridge_port: IBridgePort) -> None:
+    def __init__(self, bridge_port: IFabricK0Port) -> None:
         """Initialize BridgeAdapter.
 
         Args:

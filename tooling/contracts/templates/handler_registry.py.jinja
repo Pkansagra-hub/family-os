@@ -1,0 +1,30 @@
+{{ header }}
+"""Auto-generated handler registry for kernel ``{{ kernel }}``."""
+
+from __future__ import annotations
+
+from typing import Any, Callable
+
+
+def register_handlers(runtime: Any, impl: Any) -> None:
+    """Wire ``impl`` methods into ``runtime`` for kernel ``{{ kernel }}``.
+
+    Compile-time check: every topic listed in the manifests for this kernel
+    must have a corresponding ``impl.<method>`` callable.
+    """
+    {% if topics %}
+    expected_methods = [
+        {% for topic in topics %}
+        "{{ topic.method_name }}",
+        {% endfor %}
+    ]
+    missing = [m for m in expected_methods if not callable(getattr(impl, m, None))]
+    if missing:
+        raise TypeError(
+            "impl is missing required methods for kernel '{{ kernel }}': "
+            + ", ".join(missing)
+        )
+    {% else %}
+    # No topics yet for this kernel.
+    return
+    {% endif %}

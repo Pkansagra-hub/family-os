@@ -22,14 +22,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
 from .core.envelope_builder import CommandEnvelope
 from .core.health import DegradedModeManager, K0HealthChecker, K0HealthSnapshot
 from .ports.obs_port_protocol import FeedbackEnvelope
-from .ports.query_port_protocol import QueryEnvelope, RecallBundle, RecallSelector
-from .ports.sse_port_protocol import SSETraceEvent
 
 logger = logging.getLogger(__name__)
 
@@ -65,28 +62,22 @@ class IBridgeClient(Protocol):
     ) -> None: ...
 
     # -- Query (request / response) ----------------------------------------
-
-    async def query(self, envelope: QueryEnvelope) -> RecallBundle: ...
-
-    async def query_single(
-        self,
-        selector: RecallSelector,
-        *,
-        trace_id: str | None = None,
-    ) -> RecallBundle: ...
+    #
+    # MS-3c: the legacy hand-written ``query`` / ``query_single`` Protocol
+    # methods (and their ``QueryEnvelope`` / ``RecallBundle`` types) were
+    # deleted in favour of the typed paired-contract surface exposed by
+    # ``BridgeRuntime.query.recall_request_v1.request(...)``. Callers reach
+    # through ``runtime.query`` directly; the bridge client no longer
+    # carries a hand-rolled query facade.
 
     # -- SSE (K0 → K1 streaming) -------------------------------------------
-
-    async def subscribe(
-        self,
-        topics: list[str],
-        *,
-        cursor: str | None = None,
-    ) -> AsyncIterator[SSETraceEvent]: ...
-
-    async def ack(self, topic: str, cursor: str) -> None: ...
-
-    async def close_sse(self) -> None: ...
+    #
+    # MS-3d: the legacy hand-written ``subscribe`` / ``ack`` / ``close_sse``
+    # Protocol methods (and their ``SSETraceEvent`` type) were removed in
+    # favour of the typed per-contract subscriber surface exposed by
+    # ``BridgeRuntime.sse.<topic>.subscribe(handler)``. Callers reach
+    # through ``runtime.sse`` directly; the bridge client no longer
+    # carries a hand-rolled SSE facade.
 
     # -- Observability (K1 → K0 telemetry) ---------------------------------
 
@@ -128,8 +119,16 @@ class SinkBridgeClient:
 
     Behaviour per port:
       Command  → enqueue to LocalOutbox (deferred delivery)
-      Query    → RecallBundle.empty()  (no K0 available)
-      SSE      → empty async iterator  (no stream)
+      Query    → not exposed here; recall is request/response and lives
+                 on the typed paired-contract surface
+                 ``runtime.query.recall_request_v1`` instead. ``recall``
+                 attribute is set to ``None`` so adapter wiring can
+                 detect the offline case and yield an empty bundle.
+      SSE      → not exposed here; subscription lives on the typed
+                 per-contract surface
+                 ``runtime.sse.<topic>.subscribe(...)``. Offline
+                 subscribers detect the absent surface and yield no
+                 events themselves (MS-3d).
       Obs      → drop LOW priority; log NORMAL/HIGH
       IFL      → NotImplementedError   (MS-3)
 
@@ -198,35 +197,17 @@ class SinkBridgeClient:
                 trace_id=env.get("trace_id"),
             )
 
-    async def query(self, envelope: QueryEnvelope) -> RecallBundle:
-        """Return empty recall — K0 not available."""
-        logger.debug("SinkBridgeClient: query → empty (offline)")
-        return RecallBundle.empty()
+    # MS-3c: ``query``/``query_single`` removed — recall is now reachable
+    # only through the typed paired-contract surface
+    # ``runtime.query.recall_request_v1.request(...)``. Offline callers
+    # detect the missing surface and return an empty list themselves.
+    recall_request_v1: Any = None
 
-    async def query_single(
-        self,
-        selector: RecallSelector,
-        *,
-        trace_id: str | None = None,
-    ) -> RecallBundle:
-        """Return empty recall — K0 not available."""
-        return RecallBundle.empty()
-
-    async def subscribe(
-        self,
-        topics: list[str],
-        *,
-        cursor: str | None = None,
-    ) -> AsyncIterator[SSETraceEvent]:
-        """Return empty stream — no SSE connection."""
-        logger.debug("SinkBridgeClient: subscribe → empty stream (offline)")
-        return _empty_async_iter()
-
-    async def ack(self, topic: str, cursor: str) -> None:
-        """No-op — nothing to acknowledge."""
-
-    async def close_sse(self) -> None:
-        """No-op — no stream to close."""
+    # MS-3d: ``subscribe``/``ack``/``close_sse`` removed — SSE is now
+    # reachable only through the typed per-contract surface
+    # ``runtime.sse.<topic>.subscribe(...)``. Offline callers detect the
+    # missing surface and yield no events themselves.
+    sse: Any = None
 
     async def emit_obs(
         self,
@@ -267,11 +248,106 @@ class SinkBridgeClient:
 
 
 # ---------------------------------------------------------------------------
-# helpers
+# HttpBridgeClient (MS-3a — real HTTP, contract-bound)
 # ---------------------------------------------------------------------------
 
 
-async def _empty_async_iter() -> AsyncIterator[SSETraceEvent]:
-    """Yield nothing — empty async iterator for SSE stubs."""
-    return
-    yield  # noqa: E, RET504 — makes this an async generator
+_RUNTIME_CONSTRUCTION_TOKEN: object = object()
+"""Sentinel that ``BridgeRuntime.from_registry`` passes when constructing
+:class:`HttpBridgeClient`. Direct callers cannot fabricate this value
+(it is a private module-level object), so the class enforces "constructed
+via the runtime" at runtime *and* via the
+``bridge_client_construction_via_runtime_only`` CI gate at build-time
+(belt-and-braces per the bridge implementation plan §3a.1)."""
+
+
+class HttpBridgeClient:
+    """Real-HTTP composite bridge client — contract-bound port surface.
+
+    MS-3a wires the **command** slot (currently exposing the generated
+    ``memory_write_v1`` client). Subsequent milestones populate the
+    remaining slots:
+
+    * ``query`` — MS-3b query port surface
+    * ``sse`` — MS-3b SSE port surface
+    * ``obs`` — MS-3b observability port surface
+    * ``gateway`` — MS-3c connector gateway
+
+    The ``memory_write_v1`` slot is exposed at the top level (not nested
+    under ``command``) so callers can write
+    ``client.memory_write_v1.publish(payload)`` — the natural shape that
+    falls out of per-contract code generation.
+
+    Construction is restricted to :meth:`BridgeRuntime.from_registry`
+    via the ``_runtime_token`` sentinel. The matching CI gate
+    ``bridge_client_construction_via_runtime_only`` AST-walks ``bridge/``,
+    ``k0/``, and ``k1/`` (excluding this module + ``bridge/runtime.py``)
+    and fails the build on any direct ``HttpBridgeClient(...)`` call.
+    """
+
+    __slots__ = (
+        "memory_write_v1",
+        "recall_request_v1",
+        "query",
+        "sse",
+        "obs",
+        "gateway",
+    )
+
+    def __init__(
+        self,
+        *,
+        _runtime_token: object,
+        memory_write_v1: Any = None,
+        recall_request_v1: Any = None,
+        query: Any = None,
+        sse: Any = None,
+        obs: Any = None,
+        gateway: Any = None,
+    ) -> None:
+        if _runtime_token is not _RUNTIME_CONSTRUCTION_TOKEN:
+            raise RuntimeError(
+                "HttpBridgeClient may only be constructed via "
+                "BridgeRuntime.from_registry(). Direct construction is "
+                "rejected at runtime and by the "
+                "bridge_client_construction_via_runtime_only CI gate."
+            )
+        self.memory_write_v1 = memory_write_v1
+        self.recall_request_v1 = recall_request_v1
+        self.query = query
+        self.sse = sse
+        self.obs = obs
+        self.gateway = gateway
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        slots = [s for s in self.__slots__ if getattr(self, s) is not None]
+        return f"HttpBridgeClient(active_slots={slots})"
+
+
+# ---------------------------------------------------------------------------
+# Public factory - MS-3b Epic 3b.5
+# ---------------------------------------------------------------------------
+
+
+def create_sink_bridge_client(outbox_path: Any) -> "SinkBridgeClient":
+    """Construct a fully wired offline ``SinkBridgeClient``.
+
+    Used by the kernel ``SinkBridgeAdapter`` so it never has to import
+    ``bridge.sync.local_outbox`` directly. The seam keeps the
+    bridge/kernel wall (enforced by
+    ``tooling.ci.gates.bridge_not_imported_from_kernels``) intact: the
+    kernel depends only on the public ``bridge.client`` module.
+
+    Parameters
+    ----------
+    outbox_path:
+        Path-like to the SQLite outbox database file.
+
+    Returns
+    -------
+    SinkBridgeClient
+        Ready-to-use client backed by a fresh ``LocalOutbox`` instance.
+    """
+    from .sync.local_outbox import LocalOutbox
+
+    return SinkBridgeClient(outbox=LocalOutbox(db_path=outbox_path))

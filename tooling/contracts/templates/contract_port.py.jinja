@@ -1,0 +1,93 @@
+{{ header }}
+"""Generated Protocol for the ``{{ topic.topic }}`` contract.
+
+Imported by the {{ kernel }} kernel where strong typing on the
+publish/handle surface is needed (e.g. memory_writer batch emitters
+type-checking against the published shape).
+"""
+
+from __future__ import annotations
+{% if topic.is_sse %}
+
+from collections.abc import AsyncContextManager, Awaitable, Callable
+from typing import Protocol, runtime_checkable
+
+from bridge._generated.{{ kernel }}.models.{{ topic.method_name }} import (
+    {{ topic.model_class }},
+)
+
+
+SubscriberHandler = Callable[[{{ topic.model_class }}], Awaitable[None]]
+
+
+@runtime_checkable
+class I{{ topic.protocol_class }}(Protocol):
+    """Per-contract emit interface for ``{{ topic.topic }}`` (SSE)."""
+
+    __topic__: str
+    __schema_uri__: str
+
+    async def emit(self, payload: {{ topic.model_class }}) -> object: ...
+
+
+@runtime_checkable
+class I{{ topic.model_class }}Subscriber(Protocol):
+    """Per-contract subscribe interface for ``{{ topic.topic }}`` (SSE)."""
+
+    __topic__: str
+    __schema_uri__: str
+
+    def subscribe(
+        self,
+        handler: SubscriberHandler,
+        *,
+        cursor: str | None = None,
+    ) -> AsyncContextManager[None]: ...
+{% elif topic.is_obs %}
+
+from typing import Protocol, runtime_checkable
+
+from bridge._generated.{{ kernel }}.models.{{ topic.method_name }} import (
+    {{ topic.model_class }},
+)
+
+
+@runtime_checkable
+class I{{ topic.protocol_class }}(Protocol):
+    """Per-contract obs publishing interface for ``{{ topic.topic }}``.
+
+    MS-3e: posts ``{kind=``{{ topic.obs_kind }}``, body}`` to ``/k0/obs.emit``.
+    """
+
+    __topic__: str
+    __schema_uri__: str
+    __obs_kind__: str
+
+    async def publish(self, payload: {{ topic.model_class }}) -> object: ...
+{% else %}
+
+from typing import Protocol, runtime_checkable
+
+from bridge._generated.{{ kernel }}.models.{{ topic.method_name }} import (
+    {{ topic.model_class }},
+)
+{% if topic.paired_response_method_name %}
+from bridge._generated.{{ kernel }}.models.{{ topic.paired_response_method_name }} import (
+    {{ topic.paired_response_model_class }},
+)
+{% endif %}
+
+
+@runtime_checkable
+class I{{ topic.protocol_class }}(Protocol):
+    """Per-contract publishing interface for ``{{ topic.topic }}``."""
+
+    __topic__: str
+    __schema_uri__: str
+
+{% if topic.paired_response_method_name %}
+    async def request(self, payload: {{ topic.model_class }}) -> {{ topic.paired_response_model_class }}: ...
+{% else %}
+    async def {{ topic.method_name }}(self, payload: {{ topic.model_class }}) -> object: ...
+{% endif %}
+{% endif %}

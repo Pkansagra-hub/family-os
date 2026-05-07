@@ -1079,11 +1079,11 @@ class TestS4BridgeWiring:
     @pytest.mark.asyncio
     async def test_bridge_satisfies_kernel_ibridge_protocol(self) -> None:
         """OfflineBridgeAdapter satisfies kernel IBridgePort protocol."""
-        from k1.kernel.ports.bridge_port import IBridgePort
+        from k1.kernel.ports.bridge_port import IBridgeRuntime
 
         svc = KernelService(config=KernelConfig())
         await svc._startup_tier1()
-        assert isinstance(svc._bridge, IBridgePort)
+        assert isinstance(svc._bridge, IBridgeRuntime)
 
     @pytest.mark.asyncio
     async def test_bridge_passes_port_validation(self) -> None:
@@ -1139,15 +1139,15 @@ class TestS4BridgeWiring:
     @pytest.mark.asyncio
     async def test_both_adapters_satisfy_ibridge_protocol(self) -> None:
         """Both SinkBridgeAdapter and OfflineBridgeAdapter satisfy IBridgePort."""
-        from k1.kernel.ports.bridge_port import IBridgePort
+        from k1.kernel.ports.bridge_port import IBridgeRuntime
 
         svc_on = KernelService(config=KernelConfig())
         await svc_on._startup_tier1()
-        assert isinstance(svc_on._bridge, IBridgePort)
+        assert isinstance(svc_on._bridge, IBridgeRuntime)
 
         svc_off = KernelService(config=KernelConfig(bridge_enabled=False))
         await svc_off._startup_tier1()
-        assert isinstance(svc_off._bridge, IBridgePort)
+        assert isinstance(svc_off._bridge, IBridgeRuntime)
 
 
 # ── S3: Shared Fabric Wiring (Issue 2.2.3) ──────────────────

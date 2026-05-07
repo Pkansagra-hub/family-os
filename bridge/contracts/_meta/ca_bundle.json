@@ -1,0 +1,7 @@
+{
+  "ca_id": "familyos_root_v1",
+  "ed25519_public_key": "PLACEHOLDER_REPLACE_BEFORE_MS5",
+  "status": "active",
+  "valid_until": "2099-01-01T00:00:00Z",
+  "notes": "Placeholder bundle. Real key generated via 3-of-5 Shamir ceremony in air-gapped Tails environment before MS-5. See D3 closure in bridge_system_design.md."
+}

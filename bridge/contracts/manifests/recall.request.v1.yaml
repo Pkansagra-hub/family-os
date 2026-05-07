@@ -1,0 +1,46 @@
+topic: recall.request.v1
+direction: k1_to_k0
+owner_team: bridge_infra
+status: active
+paired_with: recall.response.v1
+producer:
+  kernel: k1
+  pipeline: concierge.recall_service
+  emitter: RecallService
+consumer:
+  kernel: k0
+  pipeline: query.recall_aggregator
+  state: query_recall_endpoint
+schema: schemas/recall.request.v1.json
+delivery:
+  transport: http
+  ordering: best_effort
+  ack_required: true
+  online_required: true
+  endpoint_class: cloud_k0
+  partition_mode: k0_primary
+  codec: json
+  retry: none
+  max_redelivery: 0
+semantics:
+  idempotent: true
+  duplicate_strategy: dedupe_by_envelope_id
+  retention: PT0S
+  description: 'Synchronous request/response recall against K0. Body carries one or
+    more selectors plus QoS hints (max_latency_ms, fail_fast, max_results). Paired
+    with recall.response.v1 returned on the same HTTP request — NOT SSE. The bridge
+    raises OfflineError when K0 is unreachable; queries do not queue to the local
+    outbox because consumers expect synchronous bundles.
+
+    '
+sla:
+  latency_p99_ms: 250
+  availability: requires_k0_online
+versioning:
+  semver: 1.0.0
+  compat: compatible
+  strategy: additive_only_within_v1
+  breaking_change_requires: new_topic_v2_with_dual_publish_window_30d
+checksums:
+  schema_sha256: f687b2e87f0240c83b88331677d02de7113ca1fbeab34b5e39ec8fdadca421c0
+  manifest_sha256: fbb44f1721c79d85b2100381f1828d5b983b7e9a437d3545f196557280369811

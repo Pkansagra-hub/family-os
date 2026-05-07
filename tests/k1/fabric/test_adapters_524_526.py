@@ -31,7 +31,7 @@ from k1.fabric.adapters.test_model_gateway import TestModelGatewayAdapter as Tes
 from k1.fabric.adapters.test_prompt_system import TestPromptSystemAdapter as TestPromptPkg
 
 # -- Port protocols (for isinstance checks) --------------------------------
-from k1.fabric.ports.bridge_port import BridgeCommandResult, BridgeHealth, IBridgePort, IFLRoute
+from k1.fabric.ports.bridge_port import BridgeCommandResult, BridgeHealth, IFabricK0Port, IFLRoute
 from k1.fabric.ports.model_gateway import ILLMHandle, IModelGatewayPort, ModelInfo
 from k1.fabric.ports.prompt_system import IPromptSystemPort, PromptTemplate
 
@@ -45,7 +45,7 @@ class TestBridgeAdapterProtocol:
 
     def test_satisfies_protocol(self) -> None:
         adapter = TestBridgePkg()
-        assert isinstance(adapter, IBridgePort)
+        assert isinstance(adapter, IFabricK0Port)
 
     def test_has_send_command(self) -> None:
         assert hasattr(TestBridgePkg, "send_command")
@@ -63,7 +63,7 @@ class TestBridgeAdapterProtocol:
         assert hasattr(TestBridgePkg, "get_health")
 
     def test_runtime_checkable(self) -> None:
-        assert isinstance(TestBridgePkg(), IBridgePort)
+        assert isinstance(TestBridgePkg(), IFabricK0Port)
 
 
 class TestBridgeAdapterAvailability:

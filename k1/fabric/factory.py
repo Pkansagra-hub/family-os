@@ -78,9 +78,9 @@ from k1.fabric.policy.policy_engine import PolicyEngine
 from k1.fabric.policy.qos_integration import QoSIntegration
 from k1.fabric.policy.security_context import SecurityContext
 from k1.fabric.ports import (
-    IBridgePort,
     IDeltaBusPort,
     IEventPort,
+    IFabricK0Port,
     IModelGatewayPort,
     IPromptSystemPort,
     ISessionStateReader,
@@ -478,7 +478,7 @@ class FabricFactory:
     def create_with_ports(
         state_reader: ISessionStateReader,
         event_port: IEventPort,
-        bridge: IBridgePort,
+        bridge: IFabricK0Port,
         model_gateway: IModelGatewayPort,
         prompt_system: IPromptSystemPort,
         delta_bus: IDeltaBusPort,

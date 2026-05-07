@@ -8,20 +8,11 @@ fixtures.  Tests should import ``StubBridgeClient`` from
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import Any
 
 from ..core.envelope_builder import CommandEnvelope
 from ..core.health import K0AvailabilityStatus, K0HealthSnapshot
 from ..ports.obs_port_protocol import FeedbackEnvelope
-from ..ports.query_port_protocol import QueryEnvelope, RecallBundle, RecallSelector
-from ..ports.sse_port_protocol import SSETraceEvent
-
-
-async def _empty_async_iter() -> AsyncIterator[SSETraceEvent]:
-    """Yield nothing — empty async iterator for SSE stubs."""
-    return
-    yield  # noqa: E, RET504 — makes this an async generator
 
 
 class StubBridgeClient:
@@ -54,33 +45,19 @@ class StubBridgeClient:
     async def submit_command_batch(self, envelopes: list[CommandEnvelope | dict[str, Any]]) -> None:
         self._record("submit_command_batch", envelopes)
 
-    async def query(self, envelope: QueryEnvelope) -> RecallBundle:
-        self._record("query", envelope)
-        return RecallBundle.empty()
+    # MS-3c: ``query`` / ``query_single`` were removed in favour of the
+    # typed paired-contract surface (``runtime.query.recall_request_v1``).
+    # Tests that need a stub recall surface should attach a minimal
+    # async ``request(payload)`` callable to the ``recall_request_v1``
+    # attribute below.
+    recall_request_v1: Any = None
 
-    async def query_single(
-        self,
-        selector: RecallSelector,
-        *,
-        trace_id: str | None = None,
-    ) -> RecallBundle:
-        self._record("query_single", selector, trace_id=trace_id)
-        return RecallBundle.empty()
-
-    async def subscribe(
-        self,
-        topics: list[str],
-        *,
-        cursor: str | None = None,
-    ) -> AsyncIterator[SSETraceEvent]:
-        self._record("subscribe", topics, cursor=cursor)
-        return _empty_async_iter()
-
-    async def ack(self, topic: str, cursor: str) -> None:
-        self._record("ack", topic, cursor)
-
-    async def close_sse(self) -> None:
-        self._record("close_sse")
+    # MS-3d: ``subscribe``/``ack``/``close_sse`` removed — SSE is now
+    # reachable only through the typed per-contract surface
+    # ``runtime.sse.<topic>.subscribe(...)``. Tests that need a stub SSE
+    # surface should attach a minimal ``subscribe(handler)`` async context
+    # manager to the ``sse`` attribute below.
+    sse: Any = None
 
     async def emit_obs(
         self,
