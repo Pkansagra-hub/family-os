@@ -1,7 +1,7 @@
 {
-  "ca_id": "familyos_root_v1",
-  "ed25519_public_key": "PLACEHOLDER_REPLACE_BEFORE_MS5",
+  "ca_id": "dev_familyos_root_v1",
+  "ed25519_public_key": "3hXPoj9SLWaHmnyxkUP_9sbjxv4oWxyt82Q5d6EOWbs",
   "status": "active",
   "valid_until": "2099-01-01T00:00:00Z",
-  "notes": "Placeholder bundle. Real key generated via 3-of-5 Shamir ceremony in air-gapped Tails environment before MS-5. See D3 closure in bridge_system_design.md."
+  "notes": "DEV trust anchor (MS-5 PR#3). The 'dev_' prefix is enforced by the ca_bundle_not_placeholder gate to refuse merging this bundle into production unless CI_ALLOW_DEV_TRUST_ANCHOR=1. Real production bundles will be replaced via the 3-of-5 Shamir ceremony in an air-gapped Tails environment per D3 closure in bridge_system_design.md."
 }

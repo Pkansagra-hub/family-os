@@ -60,7 +60,8 @@ datamodel-code-generator>=0.25,<0.26
 geohash2>=1.1
 
 # MCP
-fastmcp>=2.14.0
+fastmcp>=2.14.0,<3
+keyring>=24,<26  # MS-5 PR#2: Windows DPAPI / macOS Keychain credential vault
 
 # HTTP & Async
 aiohttp>=3.9.0

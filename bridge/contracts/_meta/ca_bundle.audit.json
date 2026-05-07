@@ -1,0 +1,11 @@
+{
+  "ceremony": "MS-5 PR#3 dev anchor minting (in-process)",
+  "ca_id": "dev_familyos_root_v1",
+  "performed_at": "2026-05-17T00:00:00Z",
+  "performed_by": "Pair (Prince + Copilot)",
+  "method": "PyNaCl SigningKey.generate() (single-host, NOT air-gapped, NOT Shamir-split)",
+  "fingerprint_sha256_pubkey": "see tooling/contracts/fingerprint_pubkey.py",
+  "shamir_shards": "N/A (dev anchor) — production ceremony will be 3-of-5",
+  "key_storage": "tests/fixtures/dev_trust_anchor.priv.json (DEV ONLY; never copied off-repo)",
+  "purpose": "Stub for the production ceremony audit. The real production audit lives outside the repo (operator-signed PDF) per D19 closure. This stub exists so the ca_bundle_not_placeholder gate has audit metadata to point at when running in development."
+}

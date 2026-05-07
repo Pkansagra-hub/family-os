@@ -39,6 +39,9 @@ _GATES: tuple[tuple[str, str], ...] = (
     ("tooling.ci.gates.bridge_client_construction_via_runtime_only", "fail"),
     ("tooling.ci.gates.degraded_mode_derived_only", "fail"),
     ("tooling.ci.gates.adapter_loc_budget", "fail"),
+    ("tooling.ci.gates.ca_bundle_not_placeholder", "fail"),
+    ("tooling.ci.gates.manifest_signatures_valid", "fail"),
+    ("tooling.ci.gates.dev_trust_anchor_audit_present", "fail"),
 )
 
 

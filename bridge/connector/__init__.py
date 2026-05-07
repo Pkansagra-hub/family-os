@@ -35,10 +35,13 @@ from .credential_vault import (
     CredentialNotFoundError,
     CredentialVault,
     InMemoryCredentialVault,
+    VaultHealth,
     VaultRecord,
 )
 from .gateway import ConnectorGateway
+from .mcp_child import MCPChild
 from .mcp_process_manager import MCPProcessManager, SkeletonMCPProcessManager
+from .real_mcp_process_manager import RealMCPProcessManager
 from .request_router import DefaultRequestRouter, RequestRouter
 from .token_verifier import PermissiveTokenVerifier, TokenVerifier
 
@@ -56,14 +59,17 @@ __all__ = [
     "DefaultRequestRouter",
     "InMemoryCredentialVault",
     "InvalidAdapterSignatureError",
+    "MCPChild",
     "MCPProcessManager",
     "OfflineAdapterError",
     "PermissiveTokenVerifier",
+    "RealMCPProcessManager",
     "RequestRouter",
     "SkeletonMCPProcessManager",
     "TokenDeniedError",
     "TokenVerifier",
     "ToolDescriptor",
     "UnknownAdapterError",
+    "VaultHealth",
     "VaultRecord",
 ]

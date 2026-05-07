@@ -1,0 +1,6 @@
+{
+  "ca_id": "dev_familyos_root_v1",
+  "ed25519_public_key_b64url": "3hXPoj9SLWaHmnyxkUP_9sbjxv4oWxyt82Q5d6EOWbs",
+  "purpose": "Public component of the DEV-ONLY trust anchor (see dev_trust_anchor.priv.json). Used by the manifest signing CLI and the bridge ca_bundle.json so dev manifests can be signed + verified end-to-end without the air-gapped production ceremony.",
+  "generated_at": "2026-05-17T00:00:00Z"
+}

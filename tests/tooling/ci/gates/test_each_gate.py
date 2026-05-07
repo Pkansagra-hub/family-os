@@ -16,6 +16,7 @@ clean vs. violating fixtures.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -44,6 +45,11 @@ def _make_minimal_repo(root: Path, *, with_bridge: bool = True) -> Path:
         repo_root = Path(__file__).resolve().parents[4]
         real_meta = repo_root / "bridge" / "contracts" / "_meta" / "manifest.schema.json"
         shutil.copy2(real_meta, root / "bridge" / "contracts" / "_meta" / "manifest.schema.json")
+        # Copy the real ca_bundle + audit so PR#3 signing gates pass.
+        for fname in ("ca_bundle.json", "ca_bundle.audit.json"):
+            src = repo_root / "bridge" / "contracts" / "_meta" / fname
+            if src.exists():
+                shutil.copy2(src, root / "bridge" / "contracts" / "_meta" / fname)
         (root / "bridge" / "contracts" / "manifests").mkdir()
         (root / "bridge" / "contracts" / "schemas").mkdir()
     # Provide a bus.yaml so the bus_yaml gate has something to read.
@@ -62,12 +68,15 @@ def _run(
     if extra:
         cmd.extend(extra)
     real_repo = Path(__file__).resolve().parents[4]
+    env = dict(os.environ)
+    env.setdefault("CI_ALLOW_DEV_TRUST_ANCHOR", "1")
     return subprocess.run(
         cmd,
         cwd=str(real_repo),  # so ``tooling.ci`` resolves
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
@@ -417,6 +426,9 @@ class TestRunAllGates:
             "bridge_client_construction_via_runtime_only",
             "degraded_mode_derived_only",
             "adapter_loc_budget",
+            "ca_bundle_not_placeholder",
+            "manifest_signatures_valid",
+            "dev_trust_anchor_audit_present",
         }
 
     def test_aggregates_failures_when_two_gates_fail(self, tmp_path: Path) -> None:
