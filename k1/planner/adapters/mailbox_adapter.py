@@ -12,7 +12,9 @@ Properties:
     - Bounded at ``max_depth`` (default 5)
     - ``enqueue()`` is task-safe (``asyncio.Queue.put_nowait``)
     - ``dequeue()`` blocks until a request is available
-    - ``micro_replan()`` acquires ``_plan_lock`` -- serialises with in-flight plans
+    - ``micro_replan()`` acquires ``_micro_replan_lock`` -- serialises micro-replan calls
+      against any in-flight micro_replan inside this adapter (NOT the same lock as
+      ``PlannerAgent._plan_lock``, which serialises full pipeline runs)
     - Shutdown: rejects with ``ShutdownError`` after shutdown signal
 
 Import graph (Layer 2)
@@ -46,7 +48,7 @@ class MailboxAdapter:
     __slots__ = (
         "_queue",
         "_cancel_set",
-        "_plan_lock",
+        "_micro_replan_lock",
         "_max_depth",
         "_priority_class",
         "_shutdown",
@@ -60,7 +62,12 @@ class MailboxAdapter:
     ) -> None:
         self._queue: asyncio.Queue[PlanRequest] = asyncio.Queue(maxsize=max_depth)
         self._cancel_set: Set[str] = set()
-        self._plan_lock: asyncio.Lock = asyncio.Lock()
+        # NOTE: ``_micro_replan_lock`` is a *distinct* lock instance from
+        # ``PlannerAgent._plan_lock``. They serialise different concerns:
+        #   - PlannerAgent._plan_lock: one full pipeline run at a time per agent
+        #   - MailboxAdapter._micro_replan_lock: one micro_replan() call at a time
+        # Do not collapse or share these locks.
+        self._micro_replan_lock: asyncio.Lock = asyncio.Lock()
         self._max_depth: int = max_depth
         self._priority_class: str = priority_class
         self._shutdown: bool = False
@@ -119,7 +126,8 @@ class MailboxAdapter:
     async def micro_replan(self, request: MicroReplanRequest) -> CommittedPlan:
         """Synchronous micro-replan bypassing the mailbox queue.
 
-        Acquires ``_plan_lock`` to wait for an in-flight plan to complete,
+        Acquires ``_micro_replan_lock`` to serialise concurrent micro_replan
+        calls inside this adapter,
         then delegates to ``PipelineController.micro_replan()``.
 
         The caller (PlannerAdapter) wraps this with
@@ -130,7 +138,7 @@ class MailboxAdapter:
                 "Mailbox is shutting down, not accepting micro-replan",
                 stage="MICRO_REPLAN",
             )
-        async with self._plan_lock:
+        async with self._micro_replan_lock:
             if self._pipeline_controller is None:
                 raise RuntimeError(
                     "PipelineController not set on MailboxAdapter -- "

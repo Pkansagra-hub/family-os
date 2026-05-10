@@ -21,8 +21,40 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict
 from typing import Any, Dict, List, Optional
+
+import flatbuffers
+
+from k1.sessionstate.generated.flatbuffers.K1.SessionState.ArtifactsWarmSection import (
+    ArtifactsWarmSection as _FBArtifactsWarmSectionClass,
+)
+from k1.sessionstate.generated.flatbuffers.K1.SessionState.ArtifactsWarmSection import (
+    ArtifactsWarmSectionAddArtifacts,
+    ArtifactsWarmSectionAddHeader,
+    ArtifactsWarmSectionAddLastUpdatedMs,
+    ArtifactsWarmSectionEnd,
+    ArtifactsWarmSectionStart,
+    ArtifactsWarmSectionStartArtifactsVector,
+)
+from k1.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
+    SectionHeaderAddLastUpdatedMs,
+    SectionHeaderAddSectionName,
+    SectionHeaderAddSizeBytes,
+    SectionHeaderEnd,
+    SectionHeaderStart,
+)
+from k1.sessionstate.generated.flatbuffers.K1.SessionState.TaskArtifactEntry import (
+    TaskArtifactEntryAddArtifactId,
+    TaskArtifactEntryAddArtifactType,
+    TaskArtifactEntryAddContent,
+    TaskArtifactEntryAddCreatedAtMs,
+    TaskArtifactEntryAddMetadata,
+    TaskArtifactEntryAddPresentedAtTurn,
+    TaskArtifactEntryAddSizeBytes,
+    TaskArtifactEntryAddTaskId,
+    TaskArtifactEntryEnd,
+    TaskArtifactEntryStart,
+)
 
 from .task_artifacts import TaskArtifactEntry
 
@@ -85,34 +117,81 @@ class ArtifactsWarmSection:
         return 50 + sum(a.size_bytes + 80 for a in self._artifacts.values())
 
     def to_flatbuffer(self) -> bytes:
-        """Serialize to JSON bytes (POC)."""
-        payload = {
-            "section": self.SECTION_NAME,
-            "last_updated_ms": self._last_updated_ms,
-            "artifacts": [asdict(a) for a in self._artifacts.values()],
-        }
-        data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        builder = flatbuffers.Builder(512)
+
+        artifacts = list(self._artifacts.values())
+
+        # Pre-create all offsets before any StartObject
+        entry_offsets: List[int] = []
+        for a in artifacts:
+            artifact_id_off = builder.CreateString(a.artifact_id or "")
+            task_id_off = builder.CreateString(a.task_id or "")
+            content_off = builder.CreateString(a.content or "")
+            metadata_off = builder.CreateString(json.dumps(a.metadata) if a.metadata else "{}")
+
+            TaskArtifactEntryStart(builder)
+            TaskArtifactEntryAddArtifactId(builder, artifact_id_off)
+            TaskArtifactEntryAddTaskId(builder, task_id_off)
+            TaskArtifactEntryAddArtifactType(builder, int(a.artifact_type))
+            TaskArtifactEntryAddContent(builder, content_off)
+            TaskArtifactEntryAddCreatedAtMs(builder, a.created_at_ms)
+            TaskArtifactEntryAddPresentedAtTurn(builder, a.presented_at_turn)
+            TaskArtifactEntryAddSizeBytes(builder, a.size_bytes)
+            TaskArtifactEntryAddMetadata(builder, metadata_off)
+            entry_offsets.append(TaskArtifactEntryEnd(builder))
+
+        # Artifacts vector
+        ArtifactsWarmSectionStartArtifactsVector(builder, len(entry_offsets))
+        for off in reversed(entry_offsets):
+            builder.PrependUOffsetTRelative(off)
+        artifacts_vec = builder.EndVector(len(entry_offsets))
+
+        # Header
+        section_name_off = builder.CreateString(self.SECTION_NAME)
+        SectionHeaderStart(builder)
+        SectionHeaderAddSectionName(builder, section_name_off)
+        SectionHeaderAddSizeBytes(builder, self.get_size_bytes())
+        SectionHeaderAddLastUpdatedMs(builder, self._last_updated_ms)
+        header_off = SectionHeaderEnd(builder)
+
+        # Root table
+        ArtifactsWarmSectionStart(builder)
+        ArtifactsWarmSectionAddHeader(builder, header_off)
+        ArtifactsWarmSectionAddArtifacts(builder, artifacts_vec)
+        ArtifactsWarmSectionAddLastUpdatedMs(builder, self._last_updated_ms)
+        root = ArtifactsWarmSectionEnd(builder)
+
+        builder.Finish(root)
+        data = bytes(builder.Output())
         self._cached_bytes = data
         self._cache_valid = True
         return data
 
     def from_flatbuffer(self, data: bytes) -> None:
-        """Deserialize from JSON bytes."""
-        payload = json.loads(data)
-        self._last_updated_ms = payload.get("last_updated_ms", int(time.time() * 1000))
+        buf = bytearray(data)
+        section = _FBArtifactsWarmSectionClass.GetRootAsArtifactsWarmSection(buf, 0)
+        self._last_updated_ms = section.LastUpdatedMs() or int(time.time() * 1000)
         self._artifacts.clear()
-        for a in payload.get("artifacts", []):
+        for i in range(section.ArtifactsLength()):
+            fb_entry = section.Artifacts(i)
+            if fb_entry is None:
+                continue
+            artifact_id = (fb_entry.ArtifactId() or b"").decode("utf-8")
+            task_id = (fb_entry.TaskId() or b"").decode("utf-8")
+            content = (fb_entry.Content() or b"").decode("utf-8")
+            raw_meta = fb_entry.Metadata()
+            metadata: Dict[str, Any] = json.loads(raw_meta.decode("utf-8")) if raw_meta else {}
             entry = TaskArtifactEntry(
-                artifact_id=a["artifact_id"],
-                task_id=a["task_id"],
-                artifact_type=a.get("artifact_type", 0),
-                content=a.get("content", ""),
-                created_at_ms=a.get("created_at_ms", 0),
-                presented_at_turn=a.get("presented_at_turn", 0),
-                size_bytes=a.get("size_bytes", 0),
-                metadata=a.get("metadata", {}),
+                artifact_id=artifact_id,
+                task_id=task_id,
+                artifact_type=fb_entry.ArtifactType(),
+                content=content,
+                created_at_ms=fb_entry.CreatedAtMs(),
+                presented_at_turn=fb_entry.PresentedAtTurn(),
+                size_bytes=fb_entry.SizeBytes(),
+                metadata=metadata,
             )
-            self._artifacts[entry.artifact_id] = entry
+            self._artifacts[artifact_id] = entry
         self._cache_valid = False
 
     def clear(self) -> None:

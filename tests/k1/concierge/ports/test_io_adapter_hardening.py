@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from k1.bus.envelope import Envelope, Priority
 from k1.bus.factory import BusFactory
 from k1.concierge.adapters.bus_input import BusInputAdapter
@@ -48,7 +46,7 @@ class TestBusInputAdapterReceive:
         adapter = BusInputAdapter(bus)
         env = build_user_input({"text": "hello", "device_id": "d1"})
         bus.publish(env)
-        result = asyncio.get_event_loop().run_until_complete(adapter.receive())
+        result = asyncio.run(adapter.receive())
         assert result.topic == TOPIC_USER_INPUT
         adapter.close()
 
@@ -59,9 +57,11 @@ class TestBusInputAdapterReceive:
         e2 = build_user_input({"text": "second", "device_id": "d1"})
         bus.publish(e1)
         bus.publish(e2)
-        loop = asyncio.get_event_loop()
-        r1 = loop.run_until_complete(adapter.receive())
-        r2 = loop.run_until_complete(adapter.receive())
+
+        async def _recv_two():
+            return await adapter.receive(), await adapter.receive()
+
+        r1, r2 = asyncio.run(_recv_two())
         assert r1.payload == e1.payload
         assert r2.payload == e2.payload
         adapter.close()
@@ -98,7 +98,7 @@ class TestBusInputAdapterHasBuffered:
         adapter = BusInputAdapter(bus)
         env = build_user_input({"text": "hi", "device_id": "d1"})
         bus.publish(env)
-        asyncio.get_event_loop().run_until_complete(adapter.receive())
+        asyncio.run(adapter.receive())
         assert adapter.has_buffered() is False
         adapter.close()
 
@@ -152,7 +152,7 @@ class TestBusOutputAdapterSend:
         received: list[Envelope] = []
         bus.subscribe("k1.response.final.v1", lambda e: received.append(e))
         env = _make_envelope(topic="k1.response.final.v1")
-        asyncio.get_event_loop().run_until_complete(adapter.send(env))
+        asyncio.run(adapter.send(env))
         assert len(received) == 1
         assert received[0].payload == env.payload
 
@@ -162,7 +162,7 @@ class TestBusOutputAdapterSend:
         received: list[Envelope] = []
         bus.subscribe("k1.response.stream.v1", lambda e: received.append(e))
         env = _make_envelope(topic="k1.response.stream.v1", payload=b'{"chunk":"data"}')
-        asyncio.get_event_loop().run_until_complete(adapter.send(env))
+        asyncio.run(adapter.send(env))
         assert received[0].topic == "k1.response.stream.v1"
 
     def test_send_multiple_envelopes(self) -> None:
@@ -172,7 +172,7 @@ class TestBusOutputAdapterSend:
         bus.subscribe("k1.test.v1", lambda e: received.append(e))
         for i in range(5):
             env = _make_envelope(payload=f'{{"n":{i}}}'.encode())
-            asyncio.get_event_loop().run_until_complete(adapter.send(env))
+            asyncio.run(adapter.send(env))
         assert len(received) == 5
 
     def test_send_preserves_payload(self) -> None:
@@ -182,7 +182,7 @@ class TestBusOutputAdapterSend:
         bus.subscribe("k1.test.v1", lambda e: received.append(e))
         payload = b'{"response":"hello world"}'
         env = _make_envelope(payload=payload)
-        asyncio.get_event_loop().run_until_complete(adapter.send(env))
+        asyncio.run(adapter.send(env))
         assert received[0].payload == payload
 
     def test_send_preserves_priority(self) -> None:
@@ -191,5 +191,5 @@ class TestBusOutputAdapterSend:
         received: list[Envelope] = []
         bus.subscribe("k1.test.v1", lambda e: received.append(e))
         env = Envelope(topic="k1.test.v1", priority=Priority.URGENT, payload=b"{}")
-        asyncio.get_event_loop().run_until_complete(adapter.send(env))
+        asyncio.run(adapter.send(env))
         assert received[0].priority == Priority.URGENT

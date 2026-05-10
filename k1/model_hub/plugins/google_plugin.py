@@ -26,6 +26,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import queue as _queue_mod
+import threading as _threading_mod
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 from uuid import uuid4
@@ -180,33 +182,45 @@ class GooglePlugin:
         contents = self._to_genai_contents(request, types)
         config = self._build_config(request, types)
 
+        # Bridge the synchronous google-genai streaming iterator into async
+        # using a thread + queue so chunks are yielded progressively.
+        _SENTINEL = object()
+        chunk_queue: _queue_mod.Queue = _queue_mod.Queue()
+
+        def _produce() -> None:
+            try:
+                for raw_chunk in client.models.generate_content_stream(
+                    model=request.model_id,
+                    contents=contents,
+                    config=config,
+                ):
+                    chunk_queue.put(raw_chunk)
+            except Exception as exc:
+                chunk_queue.put(exc)
+            finally:
+                chunk_queue.put(_SENTINEL)
+
         loop = asyncio.get_event_loop()
-        try:
-            all_chunks = await loop.run_in_executor(
-                None,
-                lambda: list(
-                    client.models.generate_content_stream(
-                        model=request.model_id,
-                        contents=contents,
-                        config=config,
+        _threading_mod.Thread(target=_produce, daemon=True).start()
+
+        while True:
+            item = await loop.run_in_executor(None, chunk_queue.get)
+            if item is _SENTINEL:
+                break
+            if isinstance(item, BaseException):
+                exc_str = str(item)
+                if "RESOURCE_EXHAUSTED" in exc_str or "429" in exc_str:
+                    raise RateLimitError(
+                        f"Gemini rate limited: {exc_str}",
+                        provider_id="google",
+                        request_id=request.trace_id,
                     )
-                ),
-            )
-        except Exception as exc:
-            exc_str = str(exc)
-            if "RESOURCE_EXHAUSTED" in exc_str or "429" in exc_str:
-                raise RateLimitError(
-                    f"Gemini rate limited: {exc_str}",
+                raise ProviderError(
+                    f"Gemini stream error: {exc_str}",
                     provider_id="google",
                     request_id=request.trace_id,
                 )
-            raise ProviderError(
-                f"Gemini stream error: {exc_str}",
-                provider_id="google",
-                request_id=request.trace_id,
-            )
-
-        for chunk in all_chunks:
+            chunk = item
             if not chunk.candidates:
                 continue
             candidate = chunk.candidates[0]
@@ -238,11 +252,20 @@ class GooglePlugin:
             if thought_text:
                 metadata["thought_text"] = thought_text
 
+            prompt_tokens = 0
+            completion_tokens = 0
+            if finish and hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                um = chunk.usage_metadata
+                prompt_tokens = int(getattr(um, "prompt_token_count", 0) or 0)
+                completion_tokens = int(getattr(um, "candidates_token_count", 0) or 0)
+
             yield ProviderChunk(
                 text="".join(text_parts),
                 done=finish,
                 tool_calls=tool_calls if tool_calls else None,
                 metadata=metadata if metadata else None,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
             )
 
     def estimate_tokens(self, messages: List[Message]) -> int:

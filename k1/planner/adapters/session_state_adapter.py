@@ -60,22 +60,30 @@ class SessionStateReadAdapter:
         self,
         sections: List[str],
         trace_id: str = "",
+        session_id: str = "",
     ) -> SessionSnapshot:
         """Read specified SessionState sections.
 
-        Delegates to ``ISessionStateReader.read_sections(session_id, names)``
-        with the pre-bound ``session_id``.
+        Delegates to ``ISessionStateReader.read_sections(session_id, names)``.
+
+        ``session_id`` resolution (3.2.2):
+            - Caller-provided ``session_id`` (per-request, threaded from
+              ``PlanRequest.context.session_id``) wins.
+            - Empty caller ``session_id`` falls back to the pre-bound
+              ``self._session_id`` for back-compat with legacy fixtures
+              that constructed the adapter with a fixed session.
 
         Error handling:
             - SessionState unavailable -> empty ``SessionSnapshot``
             - Individual section missing -> omitted from result
         """
+        effective_sid = session_id or self._session_id
         try:
-            raw = self._reader.read_sections(self._session_id, sections)
+            raw = self._reader.read_sections(effective_sid, sections)
             # If the reader returns a dict, wrap in SessionSnapshot
             if isinstance(raw, dict):
                 return SessionSnapshot(
-                    session_id=self._session_id,
+                    session_id=effective_sid,
                     sections=raw,
                 )
             # If the reader already returns SessionSnapshot, return as-is
@@ -83,19 +91,19 @@ class SessionStateReadAdapter:
                 return raw
             # Fallback: wrap whatever we got
             return SessionSnapshot(
-                session_id=self._session_id,
+                session_id=effective_sid,
                 sections=raw if isinstance(raw, dict) else {},
             )
         except Exception:
             logger.exception(
                 "read_sections failed, returning empty snapshot",
                 extra={
-                    "session_id": self._session_id,
+                    "session_id": effective_sid,
                     "sections": sections,
                     "trace_id": trace_id,
                 },
             )
-            return SessionSnapshot(session_id=self._session_id)
+            return SessionSnapshot(session_id=effective_sid)
 
     async def get_snapshot(
         self,

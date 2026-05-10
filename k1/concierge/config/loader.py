@@ -1,22 +1,9 @@
 """
-poc.k1_poc.config.loader -- YAML-based central configuration loader.
+k1.concierge.config.loader -- YAML-based central configuration loader.
 
-Loads POC knobs from ``defaults.yaml`` with optional per-environment
+Loads knobs from ``defaults.yaml`` with optional per-environment
 override files.  All values are exposed through typed dataclass trees
 so call-sites get IDE completion and static-analysis safety.
-
-Usage::
-
-    from poc.k1_poc.config import get_config
-    cfg = get_config()                          # singleton, loads once
-    cfg.actors.back.history_window              # -> 5
-    cfg.bus.mailbox_capacity                    # -> 64
-    cfg.delta.batch_window_ms                   # -> 500
-
-Override at startup::
-
-    from poc.k1_poc.config import load_config
-    cfg = load_config("path/to/override.yaml")  # replaces singleton
 """
 
 from __future__ import annotations
@@ -295,6 +282,12 @@ class ReactConfig:
     front_degenerate_fallback: str = "Let me think about that for a moment."
     front_budget_fallback: str = "Let me get back to you on that."
     parallel_tools_enabled: bool = True
+    # M6 E6.2 (C03): Per-tool dispatch timeout to prevent hung tool calls
+    # from blocking the ReAct loop indefinitely.  Wraps each
+    # tool_dispatcher.dispatch(tc) call in asyncio.wait_for; on timeout the
+    # ToolResult is replaced with status="error" error="tool_timeout" so
+    # the LLM gets a real observation and can recover.
+    tool_timeout_ms: int = 30_000
 
 
 @dataclass

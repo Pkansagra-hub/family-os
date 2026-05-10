@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 # Issue 2.4.3: Default timeout for component teardown (seconds).
@@ -83,6 +84,9 @@ from k1.memory_writer.health.circuit_breaker import CircuitBreaker as MWCircuitB
 from k1.model_hub.adapters.config_adapter import ConfigAdapter
 from k1.model_hub.adapters.credential_store_adapter import CredentialStoreAdapter
 from k1.model_hub.adapters.event_bus_adapter import EventBusAdapter as MHEventBusAdapter
+from k1.model_hub.adapters.health_report_adapter import (
+    HealthReportAdapter as MHHealthReportAdapter,
+)
 from k1.model_hub.adapters.prometheus_adapter import PrometheusAdapter
 from k1.model_hub.adapters.session_state_prod import SessionStateProdAdapter
 from k1.model_hub.factory import ModelHubFactory
@@ -104,12 +108,19 @@ from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.workflows.persistence import SQLiteWorkflowAdapter
 from k1.planner.adapters.bridge_adapter import BridgeAdapter as PlannerBridgeAdapter
-from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter as PlannerDeltaBusAdapter
-from k1.planner.adapters.event_bus_adapter import EventBusAdapter as PlannerEventBusAdapter
+from k1.planner.adapters.delta_bus_adapter import (
+    DeltaBusAdapter as PlannerDeltaBusAdapter,
+)
+from k1.planner.adapters.event_bus_adapter import (
+    EventBusAdapter as PlannerEventBusAdapter,
+)
+from k1.planner.adapters.fabric_registry_adapter import FabricRegistryAdapter
 from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
 from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter
 from k1.planner.adapters.mailbox_adapter import MailboxAdapter as PlannerMailboxAdapter
-from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter as PlannerStateAdapter
+from k1.planner.adapters.session_state_adapter import (
+    SessionStateReadAdapter as PlannerStateAdapter,
+)
 from k1.planner.factory import PlannerFactory
 
 # M5.E3.I2 + I3: k1.selfmodel kernel wiring (S2.6 + P3.5).
@@ -131,33 +142,36 @@ from k1.sessionstate.factory import SessionStateFactory
 logger = logging.getLogger(__name__)
 
 
-class _FirstSessionSSMShim:
-    """P5.5: Adapt the multi-session ``self._sessions`` map to the
-    ``manager.get_section(name)`` shape that ``SessionStateProdAdapter``
-    expects.
+class _NullSSMShim:
+    """3.1.2: Explicit null SSM shim for ModelHub's ``state_read_port``.
 
-    ModelHub builds its ``IStateReadPort`` once at S2, before any session
-    exists. ModelHub uses the port for hub-level reads (``persona``,
-    ``control``) to drive routing/policy decisions. We pick the first
-    active session's SSM as a degraded but useful default. If no session
-    is active yet, ``get_section()`` returns ``None`` and the prod adapter
-    yields an empty ``StateSnapshot`` — which the hub already tolerates.
+    Replaces the prior ``_FirstSessionSSMShim`` which returned the *first*
+    active session's data regardless of which session triggered the
+    request -- an actively-wrong behaviour the moment multiple sessions
+    coexist (M01-C / 3.1.x).
+
+    Until per-request session_id is threaded through ``IStateReadPort``
+    (a larger refactor than M3 needs since ``RequestRouter`` has no
+    state-driven consumer today), this shim returns ``None`` for every
+    section and logs a single WARNING so the degradation is visible.
+    ``SessionStateProdAdapter.read()`` already tolerates ``None`` and
+    yields an empty ``StateSnapshot``.
     """
 
-    __slots__ = ("_sessions",)
+    __slots__ = ("_warned",)
 
-    def __init__(self, sessions: dict[str, Any]) -> None:
-        self._sessions = sessions
+    def __init__(self) -> None:
+        self._warned: bool = False
 
     def get_section(self, name: str) -> Any | None:
-        for session in self._sessions.values():
-            ssm = getattr(session, "session_state", None)
-            if ssm is None:
-                continue
-            try:
-                return ssm.get_section(name)
-            except KeyError:
-                return None
+        if not self._warned:
+            logger.warning(
+                "ModelHub state_read_port is bound to _NullSSMShim -- "
+                "SessionState reads return None. Per-session wiring "
+                "requires threading HubRequest.session_id through "
+                "IStateReadPort (3.1.x follow-up)."
+            )
+            self._warned = True
         return None
 
 
@@ -590,6 +604,11 @@ class KernelService:
             raise RuntimeError("Kernel not running")
         if session_id in self._sessions:
             raise ValueError(f"Session '{session_id}' already exists")
+        if len(self._sessions) >= self._config.max_sessions:
+            raise RuntimeError(
+                f"Maximum session limit reached ({self._config.max_sessions}). "
+                "Destroy an existing session before creating a new one."
+            )
         session = await self._create_session_tier2(session_id, device_id)
         try:
             self._validate_session(session)
@@ -668,11 +687,48 @@ class KernelService:
             errors.append(exc)
             logger.warning("destroy_session(%s): Concierge stop failed: %s", session_id, exc)
 
-        # Reverse P3: Per-session Fabric has no explicit teardown
-
-        # Reverse P2: Stop SessionState
+        # 3.3.3: Cancel any in-flight DeltaAggregator batch timer.
+        # ``flush()`` cancels ``_timer`` and emits any pending batch.
         try:
-            session.session_state.stop()
+            agg = getattr(session, "delta_aggregator", None)
+            if agg is not None and hasattr(agg, "flush"):
+                await asyncio.wait_for(agg.flush(), timeout=_TEARDOWN_TIMEOUT)
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning("destroy_session(%s): DeltaAggregator flush failed: %s", session_id, exc)
+
+        # 3.3.4: Explicitly unsubscribe DeadLetterConsumer before bus.close()
+        # so the subscription handle is released cleanly.
+        try:
+            dlc = getattr(session, "dead_letter_consumer", None)
+            if dlc is not None and hasattr(dlc, "stop"):
+                dlc.stop()
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning(
+                "destroy_session(%s): DeadLetterConsumer stop failed: %s", session_id, exc
+            )
+
+        # 3.3.1: Reverse P3 -- shutdown per-session Fabric (was previously
+        # documented as "no explicit teardown"; Fabric.shutdown() exists and
+        # stops the health checker + module loader).
+        try:
+            fabric = getattr(session, "fabric", None)
+            if fabric is not None and hasattr(fabric, "shutdown"):
+                await asyncio.wait_for(fabric.shutdown(), timeout=_TEARDOWN_TIMEOUT)
+        except Exception as exc:
+            errors.append(exc)
+            logger.warning("destroy_session(%s): Fabric shutdown failed: %s", session_id, exc)
+
+        # 3.3.2: Reverse P2 -- Stop SessionState. ``stop()`` is synchronous and
+        # performs SQLite WAL checkpoint writes; offload to a worker thread
+        # with a timeout so it cannot block the event loop (and freeze every
+        # other active session's I/O) during shutdown.
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(session.session_state.stop),
+                timeout=_TEARDOWN_TIMEOUT,
+            )
         except Exception as exc:
             errors.append(exc)
             logger.warning("destroy_session(%s): SessionState stop failed: %s", session_id, exc)
@@ -790,6 +846,15 @@ class KernelService:
 
         # Structural checks for components without a unified Protocol.
         # Each tuple is (field_name, value, required_attr).
+        #
+        # K8: ``k1.kernel.ports`` defines lifecycle Protocols (startup/
+        # shutdown/get_hub, get_service, start) for KernelService's *intended*
+        # hexagonal boundary. The production objects returned by the factories
+        # expose a different runtime surface (execute/stream_execute for
+        # ModelHub, process for Orchestrator, start for Planner). Until the
+        # Protocols are updated to match the factory outputs, we use structural
+        # ``hasattr`` checks against the methods that KernelService itself
+        # invokes, rather than isinstance against the kernel port Protocols.
         structural_checks: list[tuple[str, object, str]] = [
             ("_model_hub", self._model_hub, "execute"),
             ("_shared_fabric", self._shared_fabric, "execute"),
@@ -1042,15 +1107,22 @@ class KernelService:
                 # P5.4: bind ModelHub IEventPort to K1 bus.
                 "event_port": MHEventBusAdapter(bus=self._bus),
                 # P5.5: real per-session SS via shim. ModelHub reads
-                # ``persona``/``control`` for routing decisions; the shim
-                # picks the first active session's SSM (or returns None
-                # if no session is active yet, which the prod adapter
-                # handles by yielding an empty StateSnapshot).
+                # 3.1.2: Replace _FirstSessionSSMShim (which silently
+                # returned an arbitrary session's data when multiple
+                # sessions exist) with an explicit null shim. Logs WARNING
+                # once so the degradation is visible. Real per-session
+                # wiring requires threading HubRequest.session_id through
+                # IStateReadPort -- deferred since RequestRouter has no
+                # state-driven consumer today.
                 "state_read_port": SessionStateProdAdapter(
-                    manager=_FirstSessionSSMShim(self._sessions),
+                    manager=_NullSSMShim(),
                 ),
                 "metrics_port": PrometheusAdapter(),
                 "config_port": ConfigAdapter(),
+                # M01-B: health adapter injected so the kernel can inspect
+                # hub health and so the factory uses this instance rather
+                # than constructing a fresh HealthReportAdapter internally.
+                "health_port": MHHealthReportAdapter(),
             }
             if self._config.model_mode == "hub":
                 self._model_hub, load_result = await ModelHubFactory.from_config(
@@ -1183,8 +1255,14 @@ class KernelService:
                 self._bridge = SinkBridgeAdapter(
                     outbox_path=self._config.bridge_outbox_path,
                 )
+                logger.info(
+                    "K1 Kernel S4: bridge=OFFLINE (SinkBridgeClient / outbox mode). "
+                    "K0 ops will queue to %s. Live K0 requires HttpBridgeClient.",
+                    self._config.bridge_outbox_path,
+                )
             else:
                 self._bridge = OfflineBridgeAdapter()
+                logger.info("K1 Kernel S4: bridge=DISABLED (OfflineBridgeAdapter).")
         except Exception:
             self._bus.close()
             self._router.close()
@@ -1294,10 +1372,22 @@ class KernelService:
             pl_fabric = FabricRetrievalAdapter(
                 fabric_retrieval=self._shared_fabric.retrieval,
             )
-            # P1.3: Wire real session-routing reader (was reader=None)
+            # P03 fix: deterministic exact-name capability lookup for
+            # ToolCallRouter.get_schema() in EXPAND. Wraps the same Fabric
+            # facade the orchestrator and concierge use; <5ms in-process call.
+            pl_fabric_registry = FabricRegistryAdapter(
+                registry=self._shared_fabric,
+            )
+            # 3.2.2: Bind the real per-session routing reader. Now that
+            # IStateReadPort.read_sections() accepts session_id per call,
+            # the Planner singleton can serve all sessions correctly. The
+            # pre-bound session_id is kept as an empty fallback for
+            # legacy fixtures only; production callers thread session_id
+            # via PlanRequest.context.session_id -> ToolCallRouter ->
+            # SessionStateReadAdapter.read_sections(..., session_id=...).
             pl_state = PlannerStateAdapter(
                 reader=self._session_routing_reader,
-                session_id="__shared__",
+                session_id="",
             )
             pl_bridge = PlannerBridgeAdapter(bridge_port=bridge_adapter)
             pl_delta = PlannerDeltaBusAdapter(delta_bus=delta_bus)
@@ -1313,6 +1403,7 @@ class KernelService:
                 event_port=pl_event,
                 mailbox_port=pl_mailbox,
                 hil_port=self._hil_service,  # E7.M1.1
+                fabric_registry_port=pl_fabric_registry,  # P03 fix
             )
         except Exception:
             await self._orchestrator.shutdown()
@@ -1394,7 +1485,7 @@ class KernelService:
             warmup path that ``Client`` runs after first load.
         """
         from k1.concierge.config.loader import get_config
-        from k1.concierge.fsm.phase1 import StubPhase1Pipeline
+        from k1.concierge.fsm.phase1 import KeywordPhase1Pipeline, StubPhase1Pipeline
 
         pipeline_kind = getattr(self._config, "phase1_pipeline", "stub").lower()
         if pipeline_kind != "ultrabert":
@@ -1416,9 +1507,21 @@ class KernelService:
             cache_size=phase1_cfg.cache_size,
             cache_ttl_s=phase1_cfg.cache_ttl_s,
         )
+        # 4.3.2: Availability gate. If the UltraBERT model failed to
+        # load (missing weights, unsupported backend, GPU OOM, etc.),
+        # fall back to the richer KeywordPhase1Pipeline rather than the
+        # minimal StubPhase1Pipeline. Surface that we degraded so ops
+        # has a clear signal in logs.
+        if not adapter.is_available():
+            logger.warning(
+                "Phase1 pipeline: ultrabert requested but adapter unavailable; "
+                "falling back to KeywordPhase1Pipeline (richer keyword baseline)"
+            )
+            return KeywordPhase1Pipeline()
+
         pipeline = UltraBERTPhase1Pipeline(
             adapter=adapter,
-            fallback=StubPhase1Pipeline() if phase1_cfg.degradation_fallback_enabled else None,
+            fallback=KeywordPhase1Pipeline() if phase1_cfg.degradation_fallback_enabled else None,
             config=phase1_cfg,
         )
         logger.info(
@@ -1616,6 +1719,7 @@ class KernelService:
                 writer=ss_writer,
                 lifecycle=ss_lifecycle,
                 k0_sync=None,
+                db_path=Path(self._config.sessionstate_db_path),
             )
             ss_writer.bind_manager(ssm, ssm.mutation_guard)
             ss_lifecycle.bind_manager(ssm)
@@ -1761,6 +1865,11 @@ class KernelService:
                 # Reflects actual MW lifecycle state instead of constant False.
                 get_started=lambda: (
                     session_memory_writer.is_started if session_memory_writer is not None else False
+                ),
+                get_last_extraction_ms=lambda: (  # MW-05-C
+                    session_memory_writer.last_extraction_ms
+                    if session_memory_writer is not None
+                    else 0.0
                 ),
             )
             session_memory_writer = MemoryWriterFactory.create(

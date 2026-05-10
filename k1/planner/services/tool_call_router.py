@@ -47,6 +47,7 @@ from typing import Any, Dict, Optional
 from k1.fabric.types import RetrievalResult
 from k1.planner.config import PlannerConfig
 from k1.planner.ports.bridge_port import IPlannerWritePort
+from k1.planner.ports.fabric_registry_port import IFabricRegistryPort
 from k1.planner.ports.fabric_retrieval_port import IFabricRetrievalPort
 from k1.planner.ports.state_read_port import IStateReadPort
 from k1.planner.types import BudgetExhaustedError, RecallResponse, UnknownToolError
@@ -103,6 +104,7 @@ class ToolCallRouter:
         "_fabric_retrieval",
         "_state_read",
         "_bridge_port",
+        "_fabric_registry",
         "_tool_call_count",
         "_config",
     )
@@ -125,6 +127,7 @@ class ToolCallRouter:
         state_read: IStateReadPort,
         bridge_port: IPlannerWritePort,
         *,
+        fabric_registry: Optional[IFabricRegistryPort] = None,
         config: Optional[PlannerConfig] = None,
     ) -> None:
         if fabric_retrieval is None:
@@ -137,6 +140,7 @@ class ToolCallRouter:
         self._fabric_retrieval = fabric_retrieval
         self._state_read = state_read
         self._bridge_port = bridge_port
+        self._fabric_registry = fabric_registry
         self._tool_call_count: int = 0
         self._config: PlannerConfig = config or PlannerConfig()
 
@@ -235,12 +239,13 @@ class ToolCallRouter:
         """Query planning context via IStateReadPort (SS11.3).
 
         Returns ``SessionSnapshot.sections`` dict (section name ->
-        section data).  ``session_id`` is passed as documentation;
-        the adapter already knows the active session.
+        section data). ``session_id`` is forwarded to the port so the
+        adapter resolves the correct session per call (3.2.2).
         """
         return await self.call(
             "query_planning_context",
             sections=sections,
+            session_id=session_id,
         )
 
     async def recall_memory(
@@ -274,15 +279,36 @@ class ToolCallRouter:
         registry lookup (<5ms, 0 retries) used exclusively by
         ExpandService via ``ExpandToolRouterLike``.
 
-        The backing implementation uses
-        ``IFabricRetrievalPort.discover_capabilities`` with a narrow
-        exact-name intent as a pragmatic bridge until a dedicated
-        ``IFabricRegistryPort`` is introduced.
+        The backing implementation prefers a deterministic
+        ``IFabricRegistryPort.lookup(name, version)`` when one is
+        injected. When no registry port is wired (legacy callers in
+        tests), it falls back to ``IFabricRetrievalPort.discover_capabilities``
+        with the capability name as the intent -- the historical pragmatic
+        bridge.
 
         Note: Does NOT increment ``_tool_call_count``.
         """
-        # Pragmatic bridge: use discover with exact capability_name as intent.
-        # Future: replace with IFabricRegistryPort.lookup(name, version).
+        # P03 fix: prefer deterministic registry lookup when available.
+        if self._fabric_registry is not None:
+            try:
+                contract = await self._fabric_registry.lookup(capability_name, version=version)
+            except Exception:
+                log.exception(
+                    "tool_call_router.registry_lookup_failed",
+                    extra={
+                        "capability_name": capability_name,
+                        "version": version,
+                    },
+                )
+                contract = None
+            if contract is not None:
+                return contract
+            # Registry returned None -- fall through to semantic fallback so
+            # near-miss names still surface a candidate during early bring-up.
+
+        # Legacy semantic fallback: discover with exact capability_name as
+        # intent. Will be removed once IFabricRegistryPort is wired in all
+        # call paths.
         result = await self._fabric_retrieval.discover_capabilities(
             intent=capability_name,
             top_k=1,
@@ -396,6 +422,7 @@ class ToolCallRouter:
         if tool_name == "query_planning_context":
             return port.read_sections, {
                 "sections": params.get("sections", []),
+                "session_id": params.get("session_id", ""),  # 3.2.2
             }
         if tool_name == "recall_for_planning":
             return port.recall, {

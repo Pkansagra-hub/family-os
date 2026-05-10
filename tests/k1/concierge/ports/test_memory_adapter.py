@@ -18,7 +18,7 @@ class TestMockMemoryAdapterBehaviour:
         from k1.concierge.adapters.test_memory import MockMemoryAdapter
 
         adapter = MockMemoryAdapter()
-        result = asyncio.get_event_loop().run_until_complete(adapter.recall("anything"))
+        result = asyncio.run(adapter.recall("anything"))
         assert result == []
 
     def test_recall_returns_seeded(self) -> None:
@@ -29,7 +29,7 @@ class TestMockMemoryAdapterBehaviour:
             {"type": "event", "content": "birthday", "tags": ["family"]},
         ]
         adapter = MockMemoryAdapter(memories=memories)
-        result = asyncio.get_event_loop().run_until_complete(adapter.recall("query"))
+        result = asyncio.run(adapter.recall("query"))
         assert len(result) == 2
 
     def test_recall_filters_by_type(self) -> None:
@@ -40,7 +40,7 @@ class TestMockMemoryAdapterBehaviour:
             {"type": "event", "content": "birthday"},
         ]
         adapter = MockMemoryAdapter(memories=memories)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             adapter.recall("query", memory_types=["fact"])
         )
         assert len(result) == 1
@@ -51,14 +51,14 @@ class TestMockMemoryAdapterBehaviour:
 
         memories = [{"type": "fact", "content": f"item {i}"} for i in range(10)]
         adapter = MockMemoryAdapter(memories=memories)
-        result = asyncio.get_event_loop().run_until_complete(adapter.recall("query", max_results=3))
+        result = asyncio.run(adapter.recall("query", max_results=3))
         assert len(result) == 3
 
     def test_recall_records_calls(self) -> None:
         from k1.concierge.adapters.test_memory import MockMemoryAdapter
 
         adapter = MockMemoryAdapter()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             adapter.recall("q", memory_types=["fact"], max_results=2)
         )
         assert len(adapter.recall_calls) == 1
@@ -81,7 +81,8 @@ class TestRecallMemoryAdapterBehaviour:
             return [{"type": "fact", "content": "result"}]
 
         adapter = RecallMemoryAdapter(tracked_recall)
-        result = asyncio.get_event_loop().run_until_complete(adapter.recall("test query"))
+        result = asyncio.run(adapter.recall("test query"))
         assert len(calls) == 1
         assert calls[0][0] == "test query"
         assert len(result) == 1
+

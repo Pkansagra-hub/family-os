@@ -98,12 +98,20 @@ class WorkflowCompiler:
         storage: IWorkflowStoragePort,
         state_port: IStateReadPort,
         clock: SystemClock,
+        plan_cache_max_age_ms: int = 0,
     ) -> None:
         self._fabric = fabric
         self._delta = delta
         self._storage = storage
         self._state_port = state_port
         self._clock = clock
+        # M5.3.2: in-memory cache keyed by (workflow_id, version, session_id)
+        # mapping to (timestamp_seconds, CompilationResult). When the entry is
+        # younger than ``plan_cache_max_age_ms`` and the spec hasn't changed
+        # (same version), compile() returns it directly with the current
+        # trace_id stamped onto the plan.
+        self._plan_cache_max_age_s: float = max(0, int(plan_cache_max_age_ms)) / 1000.0
+        self._plan_cache: Dict[Tuple[str, str, str], Tuple[float, CompilationResult]] = {}
 
     # ===================================================================
     # Public API
@@ -138,6 +146,27 @@ class WorkflowCompiler:
             extra={"workflow_id": spec.workflow_id},
             level=logging.DEBUG,
         )
+
+        # -- M5.3.2: short-circuit on fresh cached compile ---------------
+        cache_key = (spec.workflow_id, spec.version, session_id)
+        if self._plan_cache_max_age_s > 0:
+            entry = self._plan_cache.get(cache_key)
+            if entry is not None:
+                ts, cached = entry
+                age = self._clock.utc_now() - ts
+                if 0 <= age <= self._plan_cache_max_age_s and cached.success and cached.compiled_plan is not None:
+                    refreshed_plan = replace(
+                        cached.compiled_plan, trace_id=effective_trace_id
+                    )
+                    return CompilationResult(
+                        success=True,
+                        compiled_plan=refreshed_plan,
+                        gaps=list(cached.gaps),
+                        auto_resolved=list(cached.auto_resolved),
+                        compiled_hash=cached.compiled_hash,
+                    )
+                # Stale -> drop
+                self._plan_cache.pop(cache_key, None)
 
         # -- Step 1 + 2: deep-copy steps + resolve DynamicExpr -----------
         resolved_steps = await self._resolve_steps(spec.steps, session_id)
@@ -232,6 +261,10 @@ class WorkflowCompiler:
             auto_resolved=auto_resolved,
             compiled_hash=compiled_hash,
         )
+        # M5.3.2: store on success only; failed compiles must always
+        # re-evaluate so caller sees fresh gap classifications.
+        if self._plan_cache_max_age_s > 0:
+            self._plan_cache[cache_key] = (self._clock.utc_now(), result)
         trace_phase(
             logger,
             "workflow_compile",

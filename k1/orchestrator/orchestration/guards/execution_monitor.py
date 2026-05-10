@@ -220,6 +220,8 @@ class ExecutionMonitor(DAGGuard):
         is_significant = (
             step_count > _OVERRIDE_STEP_THRESHOLD
             or wave_result.duration_ms > _OVERRIDE_DURATION_THRESHOLD_MS
+            # M5.3.5: planner-asserted HIL requirement always forces a prompt
+            or bool(getattr(ctx, "requires_hitl", False))
         )
 
         if not is_significant:

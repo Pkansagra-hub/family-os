@@ -115,7 +115,7 @@ class FakeExpandService:
         self.call_count: int = 0
         self.calls: List[Tuple[Any, StageContext]] = []
 
-    async def execute(self, sketch_result: Any, ctx: StageContext) -> Any:
+    async def execute(self, sketch_result: Any, request: Any, ctx: StageContext) -> Any:
         self.call_count += 1
         self.calls.append((sketch_result, ctx))
         if self._error is not None:
@@ -142,7 +142,7 @@ class FakeValidateService:
         self.call_count: int = 0
         self.calls: List[Tuple[Any, StageContext]] = []
 
-    async def execute(self, expanded_plan: Any, ctx: StageContext) -> Any:
+    async def execute(self, expanded_plan: Any, request: Any, ctx: StageContext) -> Any:
         self.call_count += 1
         self.calls.append((expanded_plan, ctx))
         if self._error is not None:
@@ -167,6 +167,7 @@ class FakeCommitService:
     async def execute(
         self,
         expanded_plan: Any,
+        request: Any,
         verdict: Any,
         ctx: StageContext,
     ) -> Any:
@@ -373,19 +374,19 @@ class TestExecuteHappyPath:
                 return await super().execute(r, c)
 
         class OrderedExpand(FakeExpandService):
-            async def execute(self, r: Any, c: Any) -> Any:
+            async def execute(self, r: Any, req: Any, c: Any) -> Any:
                 call_order.append("expand")
-                return await super().execute(r, c)
+                return await super().execute(r, req, c)
 
         class OrderedValidate(FakeValidateService):
-            async def execute(self, r: Any, c: Any) -> Any:
+            async def execute(self, r: Any, req: Any, c: Any) -> Any:
                 call_order.append("validate")
-                return await super().execute(r, c)
+                return await super().execute(r, req, c)
 
         class OrderedCommit(FakeCommitService):
-            async def execute(self, e: Any, v: Any, c: Any) -> Any:
+            async def execute(self, e: Any, req: Any, v: Any, c: Any) -> Any:
                 call_order.append("commit")
-                return await super().execute(e, v, c)
+                return await super().execute(e, req, v, c)
 
         ctrl = _make_controller(
             sketch=OrderedSketch(),
@@ -834,10 +835,10 @@ class TestCancelBetweenStages:
                 return await super().execute(r, c)
 
         class CountingExpand(FakeExpandService):
-            async def execute(self, r: Any, c: Any) -> Any:
+            async def execute(self, r: Any, req: Any, c: Any) -> Any:
                 nonlocal stage_count
                 stage_count += 1
-                return await super().execute(r, c)
+                return await super().execute(r, req, c)
 
         ctrl = _make_controller(
             sketch=CountingSketch(),
@@ -1186,7 +1187,7 @@ class TestResetAtPlanStart:
         call_idx = 0
 
         class MultiCommit(FakeCommitService):
-            async def execute(self, e: Any, v: Any, c: Any) -> Any:
+            async def execute(self, e: Any, req: Any, v: Any, c: Any) -> Any:
                 nonlocal call_idx
                 result = commit_results[call_idx]
                 call_idx += 1
@@ -1544,7 +1545,7 @@ class TestEdgeCases:
         expand_idx = 0
 
         class MultiExpand(FakeExpandService):
-            async def execute(self, r: Any, c: Any) -> Any:
+            async def execute(self, r: Any, req: Any, c: Any) -> Any:
                 nonlocal expand_idx
                 result = expand_results[expand_idx]
                 expand_idx += 1

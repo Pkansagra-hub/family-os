@@ -164,8 +164,11 @@ class TestEd25519Signing:
     def test_verify_rejects_tampered_signature(self, ed25519_signer: Ed25519Signing) -> None:
         message = b"ed25519 data"
         sig = ed25519_signer.sign(message)
-        # Flip a character
-        tampered = sig[:-1] + ("A" if sig[-1] != "A" else "B")
+        # Corrupt a byte in the MIDDLE of the base64url-encoded signature
+        # (not the last char whose low 4 bits are zero padding and can be
+        # changed without altering the decoded bytes).
+        mid = len(sig) // 2
+        tampered = sig[:mid] + ("A" if sig[mid] != "A" else "B") + sig[mid + 1 :]
         assert ed25519_signer.verify(message, tampered) is False
 
     def test_deterministic_signature(self, ed25519_signer: Ed25519Signing) -> None:
@@ -185,7 +188,7 @@ class TestEd25519Signing:
         assert signer_a.sign(msg) != signer_b.sign(msg)
 
     def test_algorithm_property(self, ed25519_signer: Ed25519Signing) -> None:
-        assert ed25519_signer.algorithm == "ed25519"
+        assert ed25519_signer.algorithm == "Ed25519SHA512"
 
     def test_key_id_property(self, ed25519_signer: Ed25519Signing) -> None:
         assert ed25519_signer.key_id == "did:device:test-001#ed-001"

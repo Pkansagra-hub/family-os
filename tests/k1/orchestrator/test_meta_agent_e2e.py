@@ -425,7 +425,8 @@ class TestMetaAgentE2E:
                 "agent.builder.destroy",
             ]
             wal = bridge.get_wal(plan.plan_id)
-            assert any(e["entry_type"] == "COMPENSATION" for e in wal)
+            # M5.2.3: COMPENSATION split into STARTED + COMPLETE phases.
+            assert any(e["entry_type"] == "COMPENSATION_COMPLETE" for e in wal)
         finally:
             await service.shutdown()
 

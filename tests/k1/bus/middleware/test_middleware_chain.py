@@ -234,15 +234,27 @@ class TestLocalBusMiddlewareIntegration:
     """Middleware chain integrated into LocalBus.publish()."""
 
     def test_middleware_runs_after_stamping(self) -> None:
-        """Middleware sees bus-stamped envelope (envelope_id > 0)."""
+        """Middleware sees bus-stamped envelope_id and created_ns.
+
+        Per M7.1.3 / B02: ``sequence`` is a placeholder (0) inside
+        middleware and is only allocated after middleware passes, so
+        that middleware-dropped envelopes do not consume sequence
+        numbers (which would create gaps for STRICT timing chains).
+        Handlers downstream still see ``sequence > 0``.
+        """
         recorder = RecordingMiddleware()
+        delivered: list[Envelope] = []
         chain = MiddlewareChain([recorder])
         bus = LocalBus(capture=True, middleware=chain)
+        bus.subscribe("k1.test", delivered.append)
         bus.publish(Envelope(topic="k1.test", payload=b"x"))
         assert len(recorder.seen) == 1
         assert recorder.seen[0].envelope_id > 0
-        assert recorder.seen[0].sequence > 0
+        assert recorder.seen[0].sequence == 0  # placeholder during middleware
         assert recorder.seen[0].created_ns > 0
+        # Handler sees the final stamped envelope with real sequence.
+        assert len(delivered) == 1
+        assert delivered[0].sequence > 0
 
     def test_middleware_drop_prevents_handler_dispatch(self) -> None:
         """When middleware drops, handlers are NOT called."""

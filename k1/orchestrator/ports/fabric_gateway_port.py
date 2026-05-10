@@ -31,6 +31,7 @@ Exports:
 
 from __future__ import annotations
 
+import asyncio
 from typing import List, Optional, Protocol, runtime_checkable
 
 from k1.fabric.types import CapabilityRequest, CapabilityResult
@@ -63,12 +64,17 @@ class IFabricGatewayPort(Protocol):
     async def execute(
         self,
         request: CapabilityRequest,
+        cancellation_token: Optional[asyncio.Event] = None,
     ) -> CapabilityResult:
         """
         Execute a single capability via Fabric.
 
         Args:
             request: The capability request to execute.
+            cancellation_token: Optional asyncio.Event. If set during
+                execution, the adapter SHOULD cooperatively cancel the
+                in-flight call (M5.1.2). Adapters that do not support
+                mid-flight cancellation MAY ignore this parameter.
 
         Returns:
             CapabilityResult from Fabric.

@@ -65,7 +65,6 @@ async def test_publish_posts_signed_envelope_to_command_path() -> None:
                 "receipt_id": "00000000-0000-0000-0000-000000000001",
                 "commit_ts": "2026-05-08T00:00:00Z",
                 "offsets": {"memory.write.v1": 1},
-                "idem_key": captured["body"]["idem_key"],
                 "obligations": [],
             },
         )
@@ -98,12 +97,12 @@ async def test_publish_posts_signed_envelope_to_command_path() -> None:
         "body",
         "payload_sha256",
         "envelope_sha256",
-        "idem_key",
         "sig",
         "sig_alg",
         "sig_kid",
     ):
         assert field in env, f"envelope missing required field: {field}"
+    assert "idem_key" not in env, "bridge must not supply idem_key; K0 owns it"
     assert env["topic"] == "memory.write.v1"
     assert env["sig_alg"] == "hmac-sha256"
     assert env["sig_kid"] == "dev:test"

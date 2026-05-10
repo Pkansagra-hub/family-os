@@ -45,6 +45,23 @@ gate_topic_validation:
       validation_level: "STRICT"
 
     # -------------------------------------------------------------------------
+    # memory.write.v1 -- Versioned alias (bridge generated K1 client)
+    # -------------------------------------------------------------------------
+    - topic_pattern: "memory.write.v1"
+      match_type: "exact"
+      body_required: true
+      body_schema: "k0/contracts/jsonschema/topics/memory_write.body.json"
+      max_body_bytes: 8192
+      allowed_bands:
+        - "GREEN"
+        - "AMBER"
+        - "RED"
+      required_envelope_fields:
+        - "schema_uri"
+        - "schema_version"
+      validation_level: "STRICT"
+
+    # -------------------------------------------------------------------------
     # session.snapshot
     # -------------------------------------------------------------------------
     - topic_pattern: "session.snapshot"

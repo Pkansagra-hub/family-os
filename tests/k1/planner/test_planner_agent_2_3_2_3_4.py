@@ -33,13 +33,19 @@ References
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional, Tuple
 
 import pytest
 
 from k1.fabric.ports.event_port import SubscriptionHandle
-from k1.orchestrator.types import CommittedPlan, MicroReplanRequest, PlanRequest, PlanStep
+from k1.orchestrator.types import (
+    CommittedPlan,
+    MicroReplanRequest,
+    PlanRequest,
+    PlanStep,
+)
 from k1.planner.config import PlannerConfig
 from k1.planner.events import (
     TOPIC_PLAN_CANCELLED,
@@ -264,7 +270,7 @@ async def _run_loop_with_requests(
             await asyncio.sleep(0.01)
         agent._running = False
         # Pre-cancel sentinel so it skips execution
-        agent._cancel_set.add("__sentinel__")
+        agent._cancel_set["__sentinel__"] = time.monotonic()
         try:
             mailbox.put_nowait(_make_request(request_id="__sentinel__"))
         except asyncio.QueueFull:
@@ -309,7 +315,7 @@ async def _start_agent_with_requests(
             reset_count = getattr(pipeline, "reset_count", 0)
             if reset_count >= len(requests):
                 agent._running = False
-                agent._cancel_set.add("__sentinel__")
+                agent._cancel_set["__sentinel__"] = time.monotonic()
                 try:
                     mailbox.put_nowait(_make_request(request_id="__sentinel__"))
                 except asyncio.QueueFull:
@@ -344,7 +350,8 @@ class TestOnCancel:
         agent = _make_agent()
         await agent.on_cancel("req-001")
         await agent.on_cancel("req-002")
-        assert agent._cancel_set == {"req-001", "req-002"}
+        # 4.2.5 / P06: _cancel_set is Dict[str, float]; compare key set.
+        assert set(agent._cancel_set.keys()) == {"req-001", "req-002"}
 
     @pytest.mark.asyncio
     async def test_on_cancel_idempotent(self) -> None:
@@ -352,7 +359,7 @@ class TestOnCancel:
         agent = _make_agent()
         await agent.on_cancel("req-001")
         await agent.on_cancel("req-001")
-        assert agent._cancel_set == {"req-001"}
+        assert set(agent._cancel_set.keys()) == {"req-001"}
 
     @pytest.mark.asyncio
     async def test_on_cancel_returns_none(self) -> None:
@@ -418,7 +425,7 @@ class TestCancelPreCheck:
         agent = _make_agent(mailbox=mailbox, pipeline=pipeline, event_port=ep)
 
         # Pre-populate cancel set before enqueue
-        agent._cancel_set.add("req-001")
+        agent._cancel_set["req-001"] = time.monotonic()
 
         req1 = _make_request("req-001")
         req2 = _make_request("req-002")
@@ -458,7 +465,7 @@ class TestCancelPreCheck:
         ep = FakeEventPort()
         agent = _make_agent(mailbox=mailbox, pipeline=pipeline, event_port=ep)
 
-        agent._cancel_set.add("req-001")
+        agent._cancel_set["req-001"] = time.monotonic()
         req = _make_request("req-001")
         mailbox.put_nowait(req)
 
@@ -497,7 +504,7 @@ class TestCancelPreCheck:
         pipeline = RecordingPipelineController()
         agent = _make_agent(mailbox=mailbox, pipeline=pipeline)
 
-        agent._cancel_set.add("req-001")
+        agent._cancel_set["req-001"] = time.monotonic()
         mailbox.put_nowait(_make_request("req-001"))
 
         agent._running = True
@@ -527,7 +534,7 @@ class TestCancelPreCheck:
         pipeline = RecordingPipelineController()
         agent = _make_agent(mailbox=mailbox, pipeline=pipeline)
 
-        agent._cancel_set.add("req-001")
+        agent._cancel_set["req-001"] = time.monotonic()
         mailbox.put_nowait(_make_request("req-001"))
 
         agent._running = True
@@ -1016,7 +1023,7 @@ class TestCancelSetCleanup:
         agent = _make_agent(mailbox=mailbox, pipeline=pipeline)
 
         # Simulate cancel arriving during execution
-        agent._cancel_set.add("req-001")
+        agent._cancel_set["req-001"] = time.monotonic()
 
         mailbox.put_nowait(_make_request("req-002"))
         agent._running = True
@@ -1051,7 +1058,7 @@ class TestCancelSetCleanup:
         agent = _make_agent(mailbox=mailbox, pipeline=pipeline)
 
         async def add_cancel_during_execute() -> None:
-            agent._cancel_set.add("req-001")
+            agent._cancel_set["req-001"] = time.monotonic()
 
         pipeline._execute_hook = add_cancel_during_execute
 
@@ -1142,7 +1149,7 @@ class TestCancelCheckClosure:
             cancel_check = pipeline.execute_calls[-1].cancel_check
             check_result_before = cancel_check()
             # Simulate on_cancel arriving mid-plan
-            agent._cancel_set.add("req-001")
+            agent._cancel_set["req-001"] = time.monotonic()
             check_result_after = cancel_check()
 
         pipeline._execute_hook = test_closure
@@ -1183,7 +1190,7 @@ class TestCancelCheckClosure:
             nonlocal check_result
             cancel_check = pipeline.execute_calls[-1].cancel_check
             # Add a DIFFERENT request_id to cancel_set
-            agent._cancel_set.add("req-OTHER")
+            agent._cancel_set["req-OTHER"] = time.monotonic()
             check_result = cancel_check()
 
         pipeline._execute_hook = test_scope
@@ -1321,7 +1328,7 @@ class TestMicroReplan:
         # Not cancelled -> False
         assert cancel_check() is False
         # Add to cancel set -> True
-        agent._cancel_set.add("micro-001")
+        agent._cancel_set["micro-001"] = time.monotonic()
         assert cancel_check() is True
 
     @pytest.mark.asyncio

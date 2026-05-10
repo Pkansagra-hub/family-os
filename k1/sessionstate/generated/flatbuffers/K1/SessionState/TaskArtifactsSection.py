@@ -108,5 +108,3 @@ def TaskArtifactsSectionAddEvictAfterTurns(builder, evictAfterTurns):
 
 def TaskArtifactsSectionEnd(builder):
     return builder.EndObject()
-    return builder.EndObject()
-    return builder.EndObject()

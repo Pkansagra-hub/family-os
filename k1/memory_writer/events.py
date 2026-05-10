@@ -34,7 +34,7 @@ from typing import Optional
 # ===========================================================================
 
 # --- Consumed ---
-TOPIC_TURN_COMPLETE = "k1.session.turn.complete.v1"
+TOPIC_TURN_COMPLETE = "k1.session.turn.completed.v1"  # fixed: was missing 'd' (MW-01-B)
 
 # --- Produced (observability) ---
 TOPIC_FILTER_DECISION = "k1.mw.filter.decision.v1"
@@ -84,6 +84,10 @@ class TurnCompletePayload:
     mentioned_location_type: str = ""
     mentioned_location_entity_id: str = ""
     mentioned_location_confidence: float = 0.0
+    # Priority flags: if True, this turn must not be dropped by the
+    # "newest wins" backpressure strategy in TurnDispatcher (MW-06)
+    correction_signal: bool = False
+    contradiction_signal: bool = False
 
 
 # ===========================================================================

@@ -315,6 +315,117 @@ class ValidationVerdict:
                 "ValidationVerdict with status 'approved' must have " "deterministic_pass=True"
             )
 
+    # ------------------------------------------------------------------
+    # P04 fix -- explicit two-phase composition helpers.
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_components(
+        cls,
+        deterministic: "DeterministicValidationResult",
+        arbiter: "ArbiterVerdict",
+    ) -> "ValidationVerdict":
+        """Compose a ``ValidationVerdict`` from the two distinct phases.
+
+        Enforces invariants that prevent partial-construction bugs (P04):
+          * If deterministic Phase 1 fails (``passed=False``), the
+            verdict must be ``reject`` -- regardless of what the arbiter
+            said.
+          * The arbiter cannot promote a plan with deterministic
+            ``severity=error`` issues to ``approved``.
+
+        Direct construction via ``ValidationVerdict(...)`` remains
+        supported for backward compatibility (existing test fixtures and
+        legacy call sites), but new callers should prefer this helper.
+        """
+        # Hard gate: deterministic failure -> reject regardless of arbiter.
+        if not deterministic.passed:
+            return cls(
+                status=VERDICT_REJECT,
+                issues=list(deterministic.issues),
+                confidence=1.0,
+                rationale=(
+                    arbiter.rationale
+                    if arbiter.rationale
+                    else "Deterministic structural checks failed"
+                ),
+                deterministic_pass=False,
+                safety_assessment=SAFETY_UNKNOWN,
+                suggested_fixes=[
+                    i.detail for i in deterministic.issues if i.severity == SEVERITY_ERROR
+                ],
+            )
+
+        # Phase 1 passed -> arbiter verdict drives status. Combine issues
+        # (deterministic warnings + arbiter issues).
+        merged_issues: List[ValidationIssue] = list(deterministic.issues) + list(arbiter.issues)
+        return cls(
+            status=arbiter.status,
+            issues=merged_issues,
+            confidence=arbiter.confidence,
+            rationale=arbiter.rationale,
+            deterministic_pass=True,
+            safety_assessment=arbiter.safety_assessment,
+            suggested_fixes=list(arbiter.suggested_fixes),
+        )
+
+
+@dataclass(frozen=True)
+class DeterministicValidationResult:
+    """Output of the deterministic Phase 1 of VALIDATE (P04 split).
+
+    Captures the result of structural checks (DAG acyclicity, capability
+    existence, parameter type checks). Distinct from the LLM arbiter
+    judgement so that the two phases cannot be silently conflated.
+    """
+
+    issues: List[ValidationIssue] = field(default_factory=list)
+    passed: bool = True
+
+    def __post_init__(self) -> None:
+        has_errors = any(i.severity == SEVERITY_ERROR for i in self.issues)
+        if self.passed and has_errors:
+            raise ValueError(
+                "DeterministicValidationResult.passed=True is inconsistent "
+                "with the presence of severity='error' issues"
+            )
+
+
+@dataclass(frozen=True)
+class ArbiterVerdict:
+    """Output of the LLM arbiter Phase 2 of VALIDATE (P04 split).
+
+    The arbiter judges *quality and safety* of a plan whose deterministic
+    structural checks have already passed. It never overrides a
+    deterministic failure -- ``ValidationVerdict.from_components`` enforces
+    that gating.
+    """
+
+    status: str
+    rationale: str
+    confidence: float = 0.0
+    safety_assessment: str = SAFETY_UNKNOWN
+    issues: List[ValidationIssue] = field(default_factory=list)
+    suggested_fixes: List[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.status not in _VALID_VERDICT_STATUSES:
+            raise ValueError(
+                f"ArbiterVerdict.status must be one of {_VALID_VERDICT_STATUSES}, "
+                f"got '{self.status}'"
+            )
+        if not self.rationale:
+            raise ValueError("ArbiterVerdict.rationale must be non-empty")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(
+                f"ArbiterVerdict.confidence must be in [0.0, 1.0], got {self.confidence}"
+            )
+        if self.safety_assessment not in _VALID_SAFETY_ASSESSMENTS:
+            raise ValueError(
+                f"ArbiterVerdict.safety_assessment must be one of "
+                f"{_VALID_SAFETY_ASSESSMENTS}, got '{self.safety_assessment}'"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Section 30.5.1 F05 -- StageContext (passed to every pipeline stage)
@@ -384,6 +495,7 @@ DELTA_PLAN_END = "plan_end"
 DELTA_PLAN_CANCELLED = "plan_cancelled"
 DELTA_MICRO_REPLAN = "micro_replan"
 DELTA_CRASH_RECOVERY = "crash_recovery"
+DELTA_WAL_WRITE_FAILED = "wal_write_failed"
 
 _VALID_DELTA_TYPES = frozenset(
     {
@@ -395,6 +507,7 @@ _VALID_DELTA_TYPES = frozenset(
         DELTA_PLAN_CANCELLED,
         DELTA_MICRO_REPLAN,
         DELTA_CRASH_RECOVERY,
+        DELTA_WAL_WRITE_FAILED,
     }
 )
 

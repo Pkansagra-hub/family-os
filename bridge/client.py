@@ -150,6 +150,19 @@ class SinkBridgeClient:
         # Force OFFLINE since Sink is the offline implementation
         self._health_checker.force_offline("SinkBridgeClient: K0 not connected")
 
+    def is_connected(self) -> bool:
+        """Always False — SinkBridgeClient is the offline/outbox implementation."""
+        return False
+
+    def connect(self) -> None:  # noqa: D401
+        """No-op — SinkBridgeClient queues commands to LocalOutbox; no live K0 TCP.\n\n        Callers (e.g. BridgeConnectionAdapter._probe_connection) will see
+        ``is_connected() == False`` and correctly mark the bridge as offline.
+        """
+        logger.warning(
+            "SinkBridgeClient.connect() called — bridge is OFFLINE (outbox mode)."
+            " Live K0 requires HttpBridgeClient via BridgeRuntime.from_registry()."
+        )
+
     async def submit_command(
         self,
         topic: str,

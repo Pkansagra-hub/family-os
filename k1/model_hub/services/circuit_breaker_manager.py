@@ -21,6 +21,7 @@ References
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -82,6 +83,7 @@ class CircuitBreakerManager:
     def __init__(self) -> None:
         self._circuits: Dict[str, _ProviderCircuit] = {}
         self._transitions: List[CircuitTransition] = []
+        self._lock = threading.RLock()
 
     # -- Registration ----------------------------------------------------------
 
@@ -118,13 +120,14 @@ class CircuitBreakerManager:
         if circuit is None:
             return CircuitState.CLOSED
 
-        # Check OPEN -> HALF_OPEN transition on cooldown expiry
-        if circuit.state == CircuitState.OPEN:
-            elapsed = time.monotonic() - circuit.opened_at
-            if elapsed >= circuit.config.cooldown_s:
-                self._transition(circuit, provider_id, CircuitState.HALF_OPEN)
+        with self._lock:
+            # Check OPEN -> HALF_OPEN transition on cooldown expiry
+            if circuit.state == CircuitState.OPEN:
+                elapsed = time.monotonic() - circuit.opened_at
+                if elapsed >= circuit.config.cooldown_s:
+                    self._transition(circuit, provider_id, CircuitState.HALF_OPEN)
 
-        return circuit.state
+            return circuit.state
 
     # -- Acquire / Record ------------------------------------------------------
 
@@ -137,16 +140,17 @@ class CircuitBreakerManager:
         Returns:
             Current CircuitState after any auto-transitions.
         """
-        state = self.get_state(provider_id)
-        circuit = self._circuits.get(provider_id)
+        with self._lock:
+            state = self.get_state(provider_id)
+            circuit = self._circuits.get(provider_id)
 
-        if circuit and state == CircuitState.HALF_OPEN:
-            if circuit.half_open_in_flight:
-                # Only one probe at a time; treat as OPEN
-                return CircuitState.OPEN
-            circuit.half_open_in_flight = True
+            if circuit and state == CircuitState.HALF_OPEN:
+                if circuit.half_open_in_flight:
+                    # Only one probe at a time; treat as OPEN
+                    return CircuitState.OPEN
+                circuit.half_open_in_flight = True
 
-        return state
+            return state
 
     def record_success(self, provider_id: str) -> None:
         """Record a successful request.
@@ -158,13 +162,14 @@ class CircuitBreakerManager:
         if circuit is None:
             return
 
-        if circuit.state == CircuitState.HALF_OPEN:
-            circuit.failure_timestamps.clear()
-            circuit.half_open_in_flight = False
-            self._transition(circuit, provider_id, CircuitState.CLOSED)
-        elif circuit.state == CircuitState.CLOSED:
-            # Optionally clear old failures on success
-            pass
+        with self._lock:
+            if circuit.state == CircuitState.HALF_OPEN:
+                circuit.failure_timestamps.clear()
+                circuit.half_open_in_flight = False
+                self._transition(circuit, provider_id, CircuitState.CLOSED)
+            elif circuit.state == CircuitState.CLOSED:
+                # Optionally clear old failures on success
+                pass
 
     def record_failure(self, provider_id: str, error: Optional[str] = None) -> None:
         """Record a failed request.
@@ -178,24 +183,25 @@ class CircuitBreakerManager:
 
         now = time.monotonic()
 
-        if circuit.state == CircuitState.HALF_OPEN:
-            circuit.half_open_in_flight = False
-            circuit.opened_at = now
-            self._transition(circuit, provider_id, CircuitState.OPEN)
-
-        elif circuit.state == CircuitState.CLOSED:
-            circuit.failure_timestamps.append(now)
-
-            # Prune failures outside the window
-            window_start = now - circuit.config.failure_window_s
-            circuit.failure_timestamps = [
-                t for t in circuit.failure_timestamps if t >= window_start
-            ]
-
-            # Check threshold
-            if len(circuit.failure_timestamps) >= circuit.config.failure_threshold:
+        with self._lock:
+            if circuit.state == CircuitState.HALF_OPEN:
+                circuit.half_open_in_flight = False
                 circuit.opened_at = now
                 self._transition(circuit, provider_id, CircuitState.OPEN)
+
+            elif circuit.state == CircuitState.CLOSED:
+                circuit.failure_timestamps.append(now)
+
+                # Prune failures outside the window
+                window_start = now - circuit.config.failure_window_s
+                circuit.failure_timestamps = [
+                    t for t in circuit.failure_timestamps if t >= window_start
+                ]
+
+                # Check threshold
+                if len(circuit.failure_timestamps) >= circuit.config.failure_threshold:
+                    circuit.opened_at = now
+                    self._transition(circuit, provider_id, CircuitState.OPEN)
 
     # -- Query -----------------------------------------------------------------
 

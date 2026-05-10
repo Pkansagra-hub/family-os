@@ -7,12 +7,15 @@ Falls back gracefully if sections are missing.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from k1.memory_writer.config import MWConfig
 from k1.memory_writer.context_assembly import assemble_temporal_spatial
 from k1.memory_writer.events import TurnCompletePayload
 from k1.memory_writer.types import Affect, CompressedTurn, ExtractionContext
+
+log = logging.getLogger(__name__)
 
 
 class ContextBuilder:
@@ -43,6 +46,11 @@ class ContextBuilder:
 
         current_affect = self._extract_affect(snapshot.get("affective_now"))
         baseline_affect = self._extract_affect(snapshot.get("affective_baseline"))
+        if baseline_affect is None:
+            log.warning(
+                "MW: affective_baseline section absent from snapshot \u2014 "
+                "no writer populates it yet (MW-07)"
+            )
 
         active_topics, topic_salience = self._extract_topics(snapshot.get("scoreboard"))
 
@@ -53,6 +61,10 @@ class ContextBuilder:
         control_context = snapshot.get("control", {}) or {}
         persona_context = snapshot.get("persona", {}) or {}
         device_context = snapshot.get("ifl", {}) or {}
+        if not device_context:
+            log.warning(
+                "MW: ifl section absent from snapshot \u2014 " "no writer populates it yet (MW-07)"
+            )
 
         active_persons = self._extract_persons(beliefs)
 

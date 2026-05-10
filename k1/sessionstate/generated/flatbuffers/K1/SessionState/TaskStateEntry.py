@@ -178,5 +178,3 @@ def TaskStateEntryAddPendingHilData(builder, pendingHilData):
 
 def TaskStateEntryEnd(builder):
     return builder.EndObject()
-    return builder.EndObject()
-    return builder.EndObject()

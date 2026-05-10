@@ -56,6 +56,7 @@ class TestFileExistence:
         "mailbox_port.py",
         "llm_port.py",
         "fabric_retrieval_port.py",
+        "fabric_registry_port.py",
         "state_read_port.py",
         "bridge_port.py",
         "delta_emit_port.py",
@@ -68,8 +69,10 @@ class TestFileExistence:
         assert os.path.isfile(path), f"Missing port file: {filename}"
 
     def test_exactly_8_files(self) -> None:
+        # P03 fix: 8 ports + __init__.py = 9 .py files total.
+        # Test name retained for git history continuity.
         py_files = [f for f in os.listdir(self.PORTS_DIR) if f.endswith(".py")]
-        assert len(py_files) == 8, f"Expected 8 .py files, got {py_files}"
+        assert len(py_files) == 9, f"Expected 9 .py files, got {py_files}"
 
 
 # =========================================================================

@@ -31,19 +31,27 @@ class HealthAdapter:
         circuit_breaker: CircuitBreaker instance.
         get_pending_count: Callable returning pending batch count.
         get_started: Callable returning whether service is started.
+        get_last_extraction_ms: Callable returning last LLM extraction latency in ms.
     """
 
-    __slots__ = ("_circuit_breaker", "_get_pending_count", "_get_started")
+    __slots__ = (
+        "_circuit_breaker",
+        "_get_pending_count",
+        "_get_started",
+        "_get_last_extraction_ms",
+    )
 
     def __init__(
         self,
         circuit_breaker: _ICircuitBreaker,
         get_pending_count: Callable[[], int],
         get_started: Callable[[], bool],
+        get_last_extraction_ms: Callable[[], float] = lambda: 0.0,  # MW-05-C
     ) -> None:
         self._circuit_breaker = circuit_breaker
         self._get_pending_count = get_pending_count
         self._get_started = get_started
+        self._get_last_extraction_ms = get_last_extraction_ms
 
     async def is_ready(self) -> bool:
         """MW is ready if started and circuit breaker is not open."""
@@ -58,6 +66,6 @@ class HealthAdapter:
             is_healthy=started and not cb_open,
             llm_circuit_open=cb_open,
             pending_batch_count=self._get_pending_count(),
-            last_extraction_ms=0.0,
+            last_extraction_ms=self._get_last_extraction_ms(),  # MW-05-C
             detail="running" if started else "stopped",
         )

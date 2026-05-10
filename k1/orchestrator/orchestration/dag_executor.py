@@ -740,7 +740,7 @@ class DAGExecutor:
 
         async def _run_guarded(s: PlanStep, params: Dict[str, Any]) -> StepResult:
             async with semaphore:
-                return await self._execute_step(s, params, plan.trace_id, snapshot)
+                return await self._execute_step(s, params, plan.trace_id, snapshot, plan.plan_id)
 
         # Create tasks for all resolved steps
         tasks: Dict[asyncio.Task, str] = {}  # task -> step_id
@@ -844,6 +844,7 @@ class DAGExecutor:
         resolved_params: Dict[str, Any],
         trace_id: str,
         snapshot: SessionSnapshot,
+        plan_id: str,
     ) -> StepResult:
         """Execute a single step by delegating to step_runner.
 
@@ -952,10 +953,12 @@ class DAGExecutor:
                             exc_info=True,
                         )
 
-        # WAL write STEP_COMPLETE (fire-and-forget)
+        # WAL write STEP_COMPLETE (fire-and-forget).
+        # M5.2.5: keyed by plan_id (was step.id) so recover_from_wal()
+        # can actually retrieve these entries via read_wal(plan_id).
         try:
             await self._bridge_port.write_wal(
-                step.id,
+                plan_id,
                 "STEP_COMPLETE",
                 {
                     "step_id": step.id,
@@ -1292,6 +1295,27 @@ class DAGExecutor:
                 status="PENDING",
             )
 
+            # M5.2.3: write COMPENSATION_STARTED breadcrumb BEFORE executing
+            # the compensation. If the orchestrator crashes mid-compensation,
+            # recover_from_wal() can detect the in-flight record and avoid
+            # re-running side-effect compensations on restart.
+            try:
+                await self._bridge_port.write_wal(
+                    plan.plan_id,
+                    "COMPENSATION_STARTED",
+                    {
+                        "record_id": record.record_id,
+                        "step_id": step.id,
+                        "compensation_capability": comp_cap,
+                    },
+                    plan.trace_id,
+                )
+            except Exception:
+                log.warning(
+                    "[DAGExecutor] WAL write COMPENSATION_STARTED failed",
+                    exc_info=True,
+                )
+
             try:
                 # Execute compensation via fabric_port
                 from k1.fabric.types import CapabilityRequest
@@ -1336,11 +1360,12 @@ class DAGExecutor:
 
             compensations.append(record)
 
-            # WAL write compensation record (fire-and-forget)
+            # M5.2.3: write COMPENSATION_COMPLETE with terminal status so
+            # recover_from_wal() can mark the step as already-compensated.
             try:
                 await self._bridge_port.write_wal(
                     plan.plan_id,
-                    "COMPENSATION",
+                    "COMPENSATION_COMPLETE",
                     {
                         "record_id": record.record_id,
                         "step_id": step.id,
@@ -1351,7 +1376,7 @@ class DAGExecutor:
                 )
             except Exception:
                 log.warning(
-                    "[DAGExecutor] WAL write COMPENSATION failed",
+                    "[DAGExecutor] WAL write COMPENSATION_COMPLETE failed",
                     exc_info=True,
                 )
 
@@ -1455,6 +1480,11 @@ class DAGExecutor:
         completed_steps: List[str] = []
         dag_complete_status: Optional[str] = None
         steps_after_last_wave: List[str] = []
+        # M5.2.4: track compensations so recovery can skip already-
+        # compensated steps and report any in-flight (started but not
+        # completed) compensation that may have crashed mid-flight.
+        compensated_steps: List[str] = []
+        in_flight_compensations: Dict[str, str] = {}  # record_id -> step_id
 
         for entry in entries:
             entry_type = entry.get("entry_type", entry.get("type", ""))
@@ -1477,6 +1507,22 @@ class DAGExecutor:
                 if step_id:
                     steps_after_last_wave.append(step_id)
 
+            elif entry_type == "COMPENSATION_STARTED":
+                payload = entry.get("payload", {})
+                record_id = payload.get("record_id", "")
+                step_id = payload.get("step_id", "")
+                if record_id and step_id:
+                    in_flight_compensations[record_id] = step_id
+
+            elif entry_type == "COMPENSATION_COMPLETE":
+                payload = entry.get("payload", {})
+                record_id = payload.get("record_id", "")
+                step_id = payload.get("step_id", "")
+                if step_id and step_id not in compensated_steps:
+                    compensated_steps.append(step_id)
+                # Pair the breadcrumb -- this compensation is no longer in flight.
+                in_flight_compensations.pop(record_id, None)
+
         # Determine recovery action
         if dag_complete_status is not None:
             return {
@@ -1484,6 +1530,8 @@ class DAGExecutor:
                 "resume_wave_index": -1,
                 "completed_steps": completed_steps,
                 "dag_status": dag_complete_status,
+                "compensated_steps": compensated_steps,
+                "in_flight_compensations": dict(in_flight_compensations),
             }
 
         if last_wave_complete_index >= 0:
@@ -1495,6 +1543,8 @@ class DAGExecutor:
                 "resume_wave_index": last_wave_complete_index + 1,
                 "completed_steps": completed_steps,
                 "dag_status": None,
+                "compensated_steps": compensated_steps,
+                "in_flight_compensations": dict(in_flight_compensations),
             }
 
         # No wave completed, but we have PLAN_START or individual steps
@@ -1503,6 +1553,8 @@ class DAGExecutor:
             "resume_wave_index": 0,
             "completed_steps": [],
             "dag_status": None,
+            "compensated_steps": compensated_steps,
+            "in_flight_compensations": dict(in_flight_compensations),
         }
 
     def __repr__(self) -> str:

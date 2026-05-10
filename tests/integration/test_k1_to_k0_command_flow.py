@@ -192,27 +192,23 @@ class TestEnvelopeIntegrity:
         expected_sha = hashlib.sha256(k0_body_json.encode("utf-8")).hexdigest()
         assert envelope["payload_sha256"] == expected_sha
 
-    def test_idem_key_deterministic_across_builders(
+    def test_idem_key_not_client_supplied(
         self, bridge_config: BridgeConfig, hmac_signer: HmacSigning
     ) -> None:
-        """Two separate builders with same config produce same idem_key."""
+        """Bridge must not send idem_key; K0 gate owns derivation via HMAC."""
         builder_a = EnvelopeBuilder(config=bridge_config, signer=hmac_signer)
-        builder_b = EnvelopeBuilder(config=bridge_config, signer=hmac_signer)
         body = _valid_memory_write_body()
-        env_a = builder_a.build("memory.write", body, trace_id="t1")
-        env_b = builder_b.build("memory.write", body, trace_id="t2")
-        assert env_a["idem_key"] == env_b["idem_key"]
+        env = builder_a.build("memory.write", body)
+        assert "idem_key" not in env
 
     def test_envelope_sha256_excludes_sig_fields(self, hmac_builder: EnvelopeBuilder) -> None:
         body = _valid_memory_write_body()
         envelope = hmac_builder.build("memory.write", body)
 
-        # Reconstruct pre-sig envelope
-        pre_sig = {
-            k: v
-            for k, v in envelope.items()
-            if k not in ("envelope_sha256", "sig", "sig_alg", "sig_kid")
-        }
+        # Reconstruct pre-sig envelope: exclude only sig and envelope_sha256.
+        # sig_alg and sig_kid are INCLUDED in the canonical hash (same as K0's
+        # compute_envelope_sha256 which uses canonical_envelope(exclude_signature=True)).
+        pre_sig = {k: v for k, v in envelope.items() if k not in ("envelope_sha256", "sig")}
         canonical = json.dumps(pre_sig, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         expected = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         assert envelope["envelope_sha256"] == expected
@@ -222,9 +218,11 @@ class TestEnvelopeIntegrity:
     ) -> None:
         body = _valid_memory_write_body()
         envelope = hmac_builder.build("memory.write", body)
+        pre_sig = {k: v for k, v in envelope.items() if k not in ("envelope_sha256", "sig")}
+        canonical_bytes = _canonical_json(pre_sig).encode("utf-8")
         assert (
             hmac_signer.verify(
-                envelope["envelope_sha256"].encode("utf-8"),
+                canonical_bytes,
                 envelope["sig"],
             )
             is True
@@ -248,10 +246,12 @@ class TestEd25519EndToEnd:
         body = _valid_memory_write_body()
         envelope = ed25519_builder.build("memory.write", body)
 
-        # Verify signature
+        # Verify signature over canonical bytes (same as builder)
+        pre_sig = {k: v for k, v in envelope.items() if k not in ("envelope_sha256", "sig")}
+        canonical_bytes = _canonical_json(pre_sig).encode("utf-8")
         assert (
             ed25519_signer.verify(
-                envelope["envelope_sha256"].encode("utf-8"),
+                canonical_bytes,
                 envelope["sig"],
             )
             is True

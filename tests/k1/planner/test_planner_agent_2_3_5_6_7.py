@@ -32,6 +32,7 @@ References
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pytest
@@ -437,7 +438,7 @@ class TestINITState:
         agent = _make_agent(mailbox=mailbox, pipeline=pipeline)
 
         # Pre-populate cancel set
-        agent._cancel_set.add("stale-cancel")
+        agent._cancel_set["stale-cancel"] = time.monotonic()
 
         async def _stop() -> None:
             await asyncio.sleep(0.05)

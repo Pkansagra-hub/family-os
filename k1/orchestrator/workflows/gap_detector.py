@@ -64,6 +64,9 @@ logger = logging.getLogger(__name__)
 
 _CONTRACT_UPDATED_TOPIC = "k1.fabric.capability.contract_updated.v1"
 _DEBOUNCE_SECONDS = 5.0
+# M5.4.3: bound the in-memory queue so that a misbehaving publisher (or a
+# very chatty test harness) cannot cause unbounded memory growth.
+_QUEUE_MAXSIZE = 1024
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +96,8 @@ class ProactiveGapDetector:
         storage: IWorkflowStoragePort,
         events: IEventSubscriptionPort,
         delta: IDeltaEmitPort,
+        gap_scan_cooldown_s: float = 0.0,
+        gap_scan_concurrency: int = 5,
     ) -> None:
         self._registry = registry
         self._compiler = compiler
@@ -100,10 +105,20 @@ class ProactiveGapDetector:
         self._events = events
         self._delta = delta
 
-        # Internal async queue for capability names from sync handler
-        self._queue: asyncio.Queue[str] = asyncio.Queue()
+        # Internal async queue for capability names from sync handler.
+        # M5.4.3: bounded so a runaway publisher cannot OOM the kernel.
+        self._queue: asyncio.Queue[str] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
         # Debounce tracker: capability_name -> last_enqueued_timestamp
         self._last_seen: Dict[str, float] = {}
+        # M5.4.3: per-workflow cooldown so a single capability change
+        # cannot retrigger a dry-run compile for the same workflow within
+        # this window. Independent from the per-capability debounce above.
+        self._workflow_last_checked: Dict[str, float] = {}
+        self._gap_scan_cooldown_s: float = max(0.0, float(gap_scan_cooldown_s))
+        # M5.4.4: bound _check_workflow() fan-out concurrency.
+        self._gap_scan_semaphore: asyncio.Semaphore = asyncio.Semaphore(
+            max(1, int(gap_scan_concurrency))
+        )
         # Subscription handle for cleanup
         self._subscription_handle: Optional[object] = None
         # Background processing task
@@ -245,7 +260,9 @@ class ProactiveGapDetector:
         )
 
         for spec in affected:
-            await self._check_workflow(spec, capability_name)
+            # M5.4.4: bound concurrent dry-run compiles.
+            async with self._gap_scan_semaphore:
+                await self._check_workflow(spec, capability_name)
 
     async def _check_workflow(
         self,
@@ -257,6 +274,23 @@ class ProactiveGapDetector:
         WorkflowSpec is frozen, so compile() creates new instances
         internally -- no mutation of stored data.
         """
+        # M5.4.3: per-workflow cooldown gate. Prevents a single
+        # capability event from triggering rescans across closely-spaced
+        # contract updates affecting the same workflow.
+        if self._gap_scan_cooldown_s > 0:
+            now_ts = time.time()
+            last_check = self._workflow_last_checked.get(spec.workflow_id, 0.0)
+            if now_ts - last_check < self._gap_scan_cooldown_s:
+                logger.debug(
+                    "ProactiveGapDetector: cooldown skip for workflow '%s' "
+                    "(%.1fs since last check, cooldown=%.1fs)",
+                    spec.workflow_id,
+                    now_ts - last_check,
+                    self._gap_scan_cooldown_s,
+                )
+                return
+            self._workflow_last_checked[spec.workflow_id] = now_ts
+
         trace_id = str(uuid.uuid4())
 
         compilation = await self._compiler.compile(spec)

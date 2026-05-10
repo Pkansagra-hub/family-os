@@ -34,7 +34,6 @@ is documented in ``docs/edge_enhancement_opportunities.md`` (audit Fix J+).
 from __future__ import annotations
 
 import logging
-import pickle
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from k1.sessionstate.migration import MigrationItem
@@ -75,18 +74,26 @@ class SectionDataAdapter:
 
     @staticmethod
     def _serialize(sec: Any) -> bytes:
-        """Best-effort serialization of a section to bytes."""
-        to_dict = getattr(sec, "to_dict", None)
-        if callable(to_dict):
+        """Serialize a section to bytes via its ISection contract.
+
+        Every section must implement ``to_flatbuffer() -> bytes``.
+        Falling back to pickle is not allowed (RCE risk — SS-SECURITY-01).
+        """
+        to_fb = getattr(sec, "to_flatbuffer", None)
+        if callable(to_fb):
             try:
-                return pickle.dumps(to_dict())
-            except Exception:  # pragma: no cover - defensive
-                logger.debug("to_dict() serialization failed; falling back to pickle")
-        try:
-            return pickle.dumps(sec)
-        except Exception:
-            logger.warning("Section %r is not picklable; returning empty bytes", sec)
-            return b""
+                return to_fb()
+            except Exception:
+                logger.warning(
+                    "to_flatbuffer() failed for section %r; returning empty bytes",
+                    type(sec).__name__,
+                    exc_info=True,
+                )
+                return b""
+        raise TypeError(
+            f"Section {type(sec)!r} does not implement to_flatbuffer(). "
+            "All sections must have an explicit FlatBuffer serializer."
+        )
 
     # ------------------------------------------------------------------ #
     # IEvictionSectionProvider

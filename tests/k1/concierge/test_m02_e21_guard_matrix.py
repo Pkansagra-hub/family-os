@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import json
 
-from k1.concierge.bus.builders import build_task_cancel, build_tool_started, build_user_input
+from k1.concierge.bus.builders import (
+    build_task_cancel,
+    build_tool_started,
+    build_user_input,
+)
 from k1.concierge.bus.setup import ACTOR_BACK, ACTOR_FRONT
 from k1.concierge.bus.topics import (
     ALL_TOPICS,
@@ -429,15 +433,15 @@ class TestNoDuplicateDagSubscription:
     def test_no_bare_string_dag_subscription(self) -> None:
         """Subscription count confirms bare string DAG duplicate removed."""
         fsm, bus = self._make_fsm()
-        # With dup removed: 19 subscriptions (was 20 with bare string dup)
+        # With dup removed + M6 E6.4 config-update topic: 20 subscriptions
         assert (
-            len(fsm._subscription_handles) == 19
-        ), f"Expected 19 subscriptions (dup removed), got {len(fsm._subscription_handles)}"
+            len(fsm._subscription_handles) == 20
+        ), f"Expected 20 subscriptions (dup removed), got {len(fsm._subscription_handles)}"
 
     def test_dag_completed_subscription_via_constant(self) -> None:
         """Subscription count confirms no bare string duplicate."""
         fsm, bus = self._make_fsm()
-        assert len(fsm._subscription_handles) == 19
+        assert len(fsm._subscription_handles) == 20
 
 
 # =============================================================================

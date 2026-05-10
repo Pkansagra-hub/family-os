@@ -248,6 +248,444 @@ class StubPhase1Pipeline:
 
 
 # ---------------------------------------------------------------------------
+# KeywordPhase1Pipeline (richer keyword baseline for production fallback)
+# ---------------------------------------------------------------------------
+
+# Domain → keywords. Used by KeywordPhase1Pipeline when UltraBERT is
+# unavailable. ~200 keywords across home/finance/health/calendar/travel
+# plus greeting/cancel/safety lexicons. Multi-domain matches surface
+# multiple intents in Phase1Result.intents[].
+_KEYWORD_DOMAINS: dict[str, tuple[str, ...]] = {
+    "home": (
+        "home",
+        "house",
+        "apartment",
+        "kitchen",
+        "living room",
+        "bedroom",
+        "bathroom",
+        "garage",
+        "garden",
+        "yard",
+        "lawn",
+        "driveway",
+        "vacuum",
+        "dishwasher",
+        "laundry",
+        "dishes",
+        "sweep",
+        "mop",
+        "clean",
+        "tidy",
+        "fridge",
+        "refrigerator",
+        "oven",
+        "stove",
+        "thermostat",
+        "heater",
+        "ac",
+        "air conditioner",
+        "lights",
+        "lamp",
+        "outlet",
+        "plug",
+        "switch",
+        "wifi",
+        "router",
+        "doorbell",
+        "lock",
+        "alarm",
+        "smoke detector",
+        "trash",
+        "recycling",
+        "groceries",
+        "shopping list",
+        "household",
+        "chore",
+        "repair",
+        "plumber",
+        "electrician",
+        "leaking",
+        "broken",
+    ),
+    "finance": (
+        "money",
+        "cash",
+        "bank",
+        "account",
+        "deposit",
+        "withdraw",
+        "transfer",
+        "wire",
+        "balance",
+        "statement",
+        "credit card",
+        "debit card",
+        "loan",
+        "mortgage",
+        "rent",
+        "bill",
+        "invoice",
+        "payment",
+        "pay",
+        "paid",
+        "owe",
+        "debt",
+        "interest",
+        "apr",
+        "savings",
+        "investment",
+        "stock",
+        "share",
+        "portfolio",
+        "dividend",
+        "tax",
+        "irs",
+        "refund",
+        "deduction",
+        "salary",
+        "paycheck",
+        "income",
+        "expense",
+        "budget",
+        "spending",
+        "subscription",
+        "venmo",
+        "paypal",
+        "zelle",
+        "transaction",
+        "fee",
+        "charge",
+        "insurance",
+        "premium",
+        "claim",
+        "401k",
+        "ira",
+        "retirement",
+    ),
+    "health": (
+        "doctor",
+        "dentist",
+        "physician",
+        "specialist",
+        "clinic",
+        "hospital",
+        "er",
+        "emergency",
+        "ambulance",
+        "urgent care",
+        "appointment",
+        "checkup",
+        "exam",
+        "physical",
+        "blood test",
+        "x-ray",
+        "mri",
+        "scan",
+        "biopsy",
+        "surgery",
+        "operation",
+        "prescription",
+        "pharmacy",
+        "refill",
+        "medication",
+        "med",
+        "pill",
+        "dose",
+        "dosage",
+        "antibiotic",
+        "vaccine",
+        "shot",
+        "flu",
+        "cold",
+        "fever",
+        "cough",
+        "headache",
+        "migraine",
+        "pain",
+        "ache",
+        "sore",
+        "injury",
+        "hurt",
+        "wound",
+        "rash",
+        "allergy",
+        "asthma",
+        "diabetes",
+        "blood pressure",
+        "cholesterol",
+        "therapy",
+        "therapist",
+        "counselor",
+        "mental health",
+        "anxiety",
+        "depression",
+        "sleep",
+        "insomnia",
+        "diet",
+        "nutrition",
+        "exercise",
+        "workout",
+        "gym",
+        "yoga",
+    ),
+    "calendar": (
+        "calendar",
+        "schedule",
+        "reschedule",
+        "appointment",
+        "meeting",
+        "event",
+        "remind",
+        "reminder",
+        "alarm",
+        "wake up",
+        "today",
+        "tomorrow",
+        "tonight",
+        "morning",
+        "afternoon",
+        "evening",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "weekend",
+        "weekday",
+        "next week",
+        "this week",
+        "last week",
+        "next month",
+        "this month",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+        "noon",
+        "midnight",
+        "am",
+        "pm",
+        "deadline",
+        "due date",
+        "agenda",
+        "rsvp",
+        "invite",
+        "invitation",
+        "birthday",
+        "anniversary",
+        "holiday",
+        "vacation day",
+    ),
+    "travel": (
+        "hotel",
+        "flight",
+        "airline",
+        "airport",
+        "boarding pass",
+        "passport",
+        "visa",
+        "tsa",
+        "luggage",
+        "baggage",
+        "suitcase",
+        "carry on",
+        "trip",
+        "travel",
+        "vacation",
+        "holiday",
+        "getaway",
+        "cruise",
+        "resort",
+        "airbnb",
+        "booking",
+        "reservation",
+        "itinerary",
+        "destination",
+        "departure",
+        "arrival",
+        "layover",
+        "rental car",
+        "uber",
+        "lyft",
+        "taxi",
+        "train",
+        "subway",
+        "tour",
+        "sightseeing",
+        "tourist",
+    ),
+}
+
+_GREETING_KEYWORDS: tuple[str, ...] = (
+    "hi",
+    "hello",
+    "hey",
+    "hiya",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "howdy",
+    "yo",
+    "greetings",
+)
+_CANCEL_KEYWORDS: tuple[str, ...] = (
+    "cancel",
+    "stop",
+    "nevermind",
+    "never mind",
+    "abort",
+    "scratch that",
+    "forget it",
+    "drop it",
+    "quit",
+)
+_RED_SAFETY_KEYWORDS: tuple[str, ...] = (
+    "suicide",
+    "kill myself",
+    "self harm",
+    "self-harm",
+    "overdose",
+    "abuse",
+    "violence",
+)
+_AMBER_SAFETY_KEYWORDS: tuple[str, ...] = (
+    "emergency",
+    "er ",
+    "911",
+    "ambulance",
+    "bleeding",
+    "chest pain",
+    "stroke",
+    "heart attack",
+    "unconscious",
+)
+
+
+class KeywordPhase1Pipeline:
+    """Richer deterministic Phase 1 baseline (production fallback).
+
+    Used when the UltraBERT adapter is unavailable. Compared to
+    ``StubPhase1Pipeline``, this:
+      * Covers home / finance / health / calendar / travel domains
+        (~200 keywords total).
+      * Detects bundled multi-domain requests by populating
+        ``intents[]`` with one entry per matched domain.
+      * Performs a coarse safety-band sweep (RED on self-harm,
+        AMBER on emergencies, GREEN otherwise).
+
+    Same shape as ``Phase1Pipeline`` -- drop-in replacement.
+    """
+
+    __slots__ = ("_call_count", "_last_text", "_last_result")
+
+    def __init__(self) -> None:
+        self._call_count = 0
+        self._last_text: str = ""
+        self._last_result: Phase1Result | None = None
+        logger.info(
+            "KeywordPhase1Pipeline initialized " "(richer keyword baseline; UltraBERT fallback)"
+        )
+
+    @property
+    def call_count(self) -> int:
+        return self._call_count
+
+    @property
+    def last_text(self) -> str:
+        return self._last_text
+
+    @property
+    def last_result(self) -> Phase1Result | None:
+        return self._last_result
+
+    @staticmethod
+    def _matches_any(lower: str, kws: tuple[str, ...]) -> bool:
+        return any(kw in lower for kw in kws)
+
+    def classify(self, text: str) -> Phase1Result:
+        self._call_count += 1
+        self._last_text = text
+        lower = text.lower()
+
+        # Detect domains with at least one keyword hit.
+        matched_domains: list[str] = []
+        for domain, kws in _KEYWORD_DOMAINS.items():
+            if self._matches_any(lower, kws):
+                matched_domains.append(domain)
+
+        # Greeting / cancel intents are independent of domain.
+        is_greeting = self._matches_any(lower, _GREETING_KEYWORDS)
+        is_cancel = self._matches_any(lower, _CANCEL_KEYWORDS)
+
+        # Build intents[] -- multi-domain hits surface multiple entries
+        # (downstream uses len(intents) >= 2 as the BUNDLED signal).
+        intents: list[str] = []
+        if is_cancel:
+            intents.append("cancel")
+        if is_greeting and not intents:
+            intents.append("greeting")
+        for d in matched_domains:
+            intents.append(self._domain_intent(d))
+        if not intents:
+            intents.append("general")
+
+        primary_domain = matched_domains[0] if matched_domains else "general"
+        primary_intent = intents[0]
+
+        # Safety band sweep.
+        if self._matches_any(lower, _RED_SAFETY_KEYWORDS):
+            safety_band = "RED"
+        elif self._matches_any(lower, _AMBER_SAFETY_KEYWORDS):
+            safety_band = "AMBER"
+        else:
+            safety_band = "GREEN"
+
+        result = Phase1Result(
+            intents=intents,
+            entities=[],
+            salience_map={},
+            primary_emotion="neutral",
+            emotion_confidence=0.5,
+            valence=0.0,
+            arousal=0.0,
+            intent_classification=primary_intent,
+            domain_context=primary_domain,
+            safety_band=safety_band,
+        )
+        self._last_result = result
+        logger.debug(
+            "KeywordPhase1: '%s' -> intents=%s, domain=%s, safety=%s",
+            text[:50],
+            intents,
+            primary_domain,
+            safety_band,
+        )
+        return result
+
+    @staticmethod
+    def _domain_intent(domain: str) -> str:
+        # Map a matched domain to a coarse-grained intent label.
+        return {
+            "home": "home_task",
+            "finance": "finance_task",
+            "health": "health_task",
+            "calendar": "calendar_task",
+            "travel": "booking",
+        }.get(domain, "general")
+
+
+# ---------------------------------------------------------------------------
 # TurnLock
 # ---------------------------------------------------------------------------
 

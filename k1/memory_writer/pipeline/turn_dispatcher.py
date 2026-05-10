@@ -1,9 +1,9 @@
 """
-k1.memory_writer.pipeline.turn_dispatcher -- Routes turn.complete.v1 events to pipeline.
+k1.memory_writer.pipeline.turn_dispatcher -- Routes turn.completed.v1 events to pipeline.
 
 Glue between the K1 Bus and MemoryWriterPipeline.
 
-1. Subscribes to turn.complete.v1 via IEventSubscriptionPort
+1. Subscribes to turn.completed.v1 via IEventSubscriptionPort
 2. Deserializes raw event payloads into TurnCompletePayload
 3. Deduplicates by turn_id (at-most-once guarantee)
 4. Routes to MemoryWriterPipeline.process()
@@ -13,6 +13,7 @@ Glue between the K1 Bus and MemoryWriterPipeline.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import Optional
 
 from k1.memory_writer.events import TurnCompletePayload
@@ -24,7 +25,7 @@ log = logging.getLogger(__name__)
 
 
 class TurnDispatcher:
-    """Routes turn.complete.v1 events to MemoryWriterPipeline.
+    """Routes turn.completed.v1 events to MemoryWriterPipeline.
 
     Guarantees at-most-once processing per turn_id within a session.
     In-memory dedup set cleared on session end (stop).
@@ -34,7 +35,7 @@ class TurnDispatcher:
     replaced (newest wins — older context is stale anyway).
     """
 
-    TOPIC = "k1.session.turn.complete.v1"
+    TOPIC = "k1.session.turn.completed.v1"  # fixed: was missing 'd' (MW-01-A)
     MAX_QUEUE_DEPTH = 2  # processing + 1 queued
 
     def __init__(
@@ -45,7 +46,7 @@ class TurnDispatcher:
         self._pipeline = pipeline
         self._event_port = event_port
         self._subscription: Optional[Subscription] = None
-        self._processed_ids: set[str] = set()
+        self._processed_ids: deque[str] = deque(maxlen=200)  # bounded: MW-02-A
         self._processing: bool = False
         self._queued_payload: Optional[TurnCompletePayload] = None
 
@@ -85,7 +86,19 @@ class TurnDispatcher:
 
         # Backpressure: if already processing, queue (replace if full)
         if self._processing:
-            self._queued_payload = payload  # newest wins
+            # Do not overwrite a queued correction/contradiction with a routine turn (MW-06)
+            existing = self._queued_payload
+            if existing is not None and (
+                getattr(existing, "correction_signal", False)
+                or getattr(existing, "contradiction_signal", False)
+            ):
+                log.info(
+                    "MW: skipping overwrite of queued correction/contradiction turn, "
+                    "keeping turn_id=%s",
+                    existing.turn_id,
+                )
+                return
+            self._queued_payload = payload  # newest wins (non-correction)
             log.info(
                 "MW: turn queued (processing in progress), turn_id=%s",
                 payload.turn_id,
@@ -105,7 +118,7 @@ class TurnDispatcher:
         """Process a turn through the pipeline with dedup tracking."""
         self._processing = True
         try:
-            self._processed_ids.add(payload.turn_id)
+            self._processed_ids.append(payload.turn_id)
             result = await self._pipeline.process(payload)
             log.info(
                 "MW: turn processed, turn_id=%s, trace_id=%s, skipped=%s, atoms=%d, submitted=%d",

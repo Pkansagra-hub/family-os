@@ -46,7 +46,7 @@ class MWSessionReader:
     async def read_snapshot_enriched(
         self,
         session_id: str,
-        history_limit: int = 50,
+        history_limit: int | None = None,  # MW-08-A: defaults to config.archive_history_limit
     ) -> Dict[str, Any]:
         """Read snapshot AND merge cold-archived ``history_active`` turns.
 
@@ -74,10 +74,12 @@ class MWSessionReader:
         """
         snapshot = await self._port.snapshot_all(exclude=self._config.skip_sections)
 
+        limit = history_limit if history_limit is not None else self._config.archive_history_limit
+
         # Best-effort: recover cold turns.
         try:
             archived: List[Dict[str, Any]] = await self._port.read_archived_history(
-                session_id, limit=history_limit
+                session_id, limit=limit
             )
         except Exception as exc:  # pragma: no cover - defensive
             log.debug("enriched read: archived history fetch failed: %s", exc)
@@ -92,14 +94,10 @@ class MWSessionReader:
             snapshot["history_active"] = history
         live_turns = history.get("turns", []) if isinstance(history.get("turns"), list) else []
         live_ids = {
-            t.get("turn_id")
-            for t in live_turns
-            if isinstance(t, dict) and t.get("turn_id")
+            t.get("turn_id") for t in live_turns if isinstance(t, dict) and t.get("turn_id")
         }
         # Cold first, dedupe against live.
-        merged: List[Dict[str, Any]] = [
-            t for t in archived if t.get("turn_id") not in live_ids
-        ]
+        merged: List[Dict[str, Any]] = [t for t in archived if t.get("turn_id") not in live_ids]
         merged.extend(live_turns)
         history["turns"] = merged
         history["turn_count"] = len(merged)

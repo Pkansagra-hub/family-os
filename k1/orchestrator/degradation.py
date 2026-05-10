@@ -192,16 +192,15 @@ class CircuitBreaker:
 # =========================================================================
 # Named circuit breakers (per design doc Section 11.6)
 # =========================================================================
-
-cb_planner = CircuitBreaker("CB_PLANNER")
-cb_orchestrator = CircuitBreaker("CB_ORCHESTRATOR")
-cb_fabric = CircuitBreaker("CB_FABRIC")
+#
+# M5.4.2: previously this module exported singleton CircuitBreaker
+# instances (``cb_planner``, ``cb_orchestrator``, ``cb_fabric``). Those
+# singletons leaked state across OrchestratorService instances inside
+# the same Python process (notably in test suites) and made test
+# isolation brittle. Each owner now constructs its own CircuitBreaker.
 
 
 __all__ = [
     "CircuitBreaker",
     "CircuitBreakerState",
-    "cb_planner",
-    "cb_orchestrator",
-    "cb_fabric",
 ]

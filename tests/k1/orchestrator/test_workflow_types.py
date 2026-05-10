@@ -210,8 +210,8 @@ class TestTriggerSpecDefaults:
         assert t.enabled is True
 
     def test_triggerspec_field_count(self) -> None:
-        """TriggerSpec has 5 fields per 4.1.2 spec."""
-        assert len(fields(TriggerSpec)) == 5
+        """TriggerSpec has 6 fields (M5.2.1: added last_triggered_at)."""
+        assert len(fields(TriggerSpec)) == 6
 
 
 # ===========================================================================
@@ -249,10 +249,10 @@ class TestTriggerSpecFrozen:
 
 
 class TestWorkflowSpecFields:
-    """WorkflowSpec frozen dataclass with 11 fields."""
+    """WorkflowSpec frozen dataclass with 12 fields (M5.3.1: +metadata)."""
 
     def test_field_count(self) -> None:
-        assert len(fields(WorkflowSpec)) == 11
+        assert len(fields(WorkflowSpec)) == 12
 
     def test_required_fields(self) -> None:
         spec = _spec()

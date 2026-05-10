@@ -37,7 +37,20 @@ from k1.orchestrator.types import AdapterError, ErrorSeverity
 logger = logging.getLogger(__name__)
 
 # Valid WAL entry types for runtime validation.
-_VALID_WAL_ENTRY_TYPES = frozenset({"PLAN_START", "WAVE_COMPLETE", "STEP_COMPLETE", "DAG_COMPLETE"})
+# M5.2.2: COMPENSATION_STARTED / COMPENSATION_COMPLETE added so that
+# DAGExecutor._compensate() can record both phases of a compensation
+# action (pre-execution breadcrumb + post-execution outcome) and
+# recover_from_wal() can detect already-compensated steps after a crash.
+_VALID_WAL_ENTRY_TYPES = frozenset(
+    {
+        "PLAN_START",
+        "WAVE_COMPLETE",
+        "STEP_COMPLETE",
+        "DAG_COMPLETE",
+        "COMPENSATION_STARTED",
+        "COMPENSATION_COMPLETE",
+    }
+)
 
 
 # ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ class TestOutputAdapterBehaviour:
 
         adapter = TestOutputAdapter()
         env = _make_envelope()
-        asyncio.get_event_loop().run_until_complete(adapter.send(env))
+        asyncio.run(adapter.send(env))
         assert len(adapter.sent) == 1
         assert adapter.sent[0] is env
 
@@ -34,17 +34,17 @@ class TestOutputAdapterBehaviour:
         from k1.concierge.adapters.test_output import TestOutputAdapter
 
         adapter = TestOutputAdapter()
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope("t1")))
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope("t2")))
+        asyncio.run(adapter.send(_make_envelope("t1")))
+        asyncio.run(adapter.send(_make_envelope("t2")))
         assert len(adapter.get_sent()) == 2
 
     def test_get_sent_with_topic_filter(self) -> None:
         from k1.concierge.adapters.test_output import TestOutputAdapter
 
         adapter = TestOutputAdapter()
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope("t1")))
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope("t2")))
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope("t1")))
+        asyncio.run(adapter.send(_make_envelope("t1")))
+        asyncio.run(adapter.send(_make_envelope("t2")))
+        asyncio.run(adapter.send(_make_envelope("t1")))
         assert len(adapter.get_sent("t1")) == 2
         assert len(adapter.get_sent("t2")) == 1
 
@@ -54,8 +54,8 @@ class TestOutputAdapterBehaviour:
         adapter = TestOutputAdapter()
         e1 = _make_envelope(payload=b'{"n":1}')
         e2 = _make_envelope(payload=b'{"n":2}')
-        asyncio.get_event_loop().run_until_complete(adapter.send(e1))
-        asyncio.get_event_loop().run_until_complete(adapter.send(e2))
+        asyncio.run(adapter.send(e1))
+        asyncio.run(adapter.send(e2))
         assert adapter.last() is e2
 
     def test_last_empty(self) -> None:
@@ -68,7 +68,7 @@ class TestOutputAdapterBehaviour:
         from k1.concierge.adapters.test_output import TestOutputAdapter
 
         adapter = TestOutputAdapter()
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope()))
+        asyncio.run(adapter.send(_make_envelope()))
         adapter.clear()
         assert len(adapter.sent) == 0
 
@@ -88,3 +88,4 @@ class TestBusOutputAdapterBehaviour:
 
         adapter = BusOutputAdapter(bus)
         assert isinstance(adapter, IOutputPort)
+

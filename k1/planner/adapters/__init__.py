@@ -11,6 +11,7 @@ Adapter registry (SS16.1):
     MailboxAdapter          [F28] -- IMailboxPort      -> asyncio.Queue
     LLMGatewayAdapter       [F29] -- ILLMPort          -> ILLMRequestBus (V2)
     FabricRetrievalAdapter  [F30] -- IFabricRetrievalPort -> FabricRetrieval
+    FabricRegistryAdapter   [F30b] -- IFabricRegistryPort  -> Fabric (lookup)
     SessionStateReadAdapter [F31] -- IStateReadPort    -> ISessionStateReader
     BridgeAdapter           [F32] -- IBridgePort       -> Fabric IBridgePort
     DeltaBusAdapter         [F33] -- IDeltaEmitPort    -> IDeltaBusPort
@@ -20,6 +21,7 @@ Adapter registry (SS16.1):
 from k1.planner.adapters.bridge_adapter import BridgeAdapter
 from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter
 from k1.planner.adapters.event_bus_adapter import EventBusAdapter
+from k1.planner.adapters.fabric_registry_adapter import FabricRegistryAdapter
 from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
 from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter
 from k1.planner.adapters.mailbox_adapter import MailboxAdapter
@@ -29,6 +31,7 @@ __all__ = [
     "BridgeAdapter",
     "DeltaBusAdapter",
     "EventBusAdapter",
+    "FabricRegistryAdapter",
     "FabricRetrievalAdapter",
     "LLMGatewayAdapter",
     "MailboxAdapter",

@@ -141,6 +141,13 @@ hub_fallbacks_total = MetricDef(
     labels=["from_provider", "to_provider", "capability"],
 )
 
+hub_budget_rejections_total = MetricDef(
+    name="model_hub.budget_rejections_total",
+    type=MetricType.COUNTER,
+    description="Total number of requests rejected due to budget limits",
+    labels=["consumer", "capability"],
+)
+
 
 # ===========================================================================
 # Histogram Definitions
@@ -170,6 +177,14 @@ hub_tokens_used = MetricDef(
     buckets=TOKEN_BUCKETS,
 )
 
+hub_cost_usd = MetricDef(
+    name="model_hub.cost_usd",
+    type=MetricType.HISTOGRAM,
+    description="Cost in USD per request",
+    labels=STANDARD_LABELS,
+    buckets=COST_BUCKETS,
+)
+
 
 # ===========================================================================
 # Gauge Definitions
@@ -189,6 +204,13 @@ provider_circuit_state = MetricDef(
     labels=["provider"],
 )
 
+hub_budget_pct = MetricDef(
+    name="model_hub.budget_pct",
+    type=MetricType.GAUGE,
+    description="Current budget utilization as a percentage (0-100)",
+    labels=["period"],
+)
+
 
 # ===========================================================================
 # All metrics registry (for adapter iteration)
@@ -201,11 +223,14 @@ ALL_METRICS: Dict[str, MetricDef] = {
         hub_errors_total,
         hub_cache_hits_total,
         hub_fallbacks_total,
+        hub_budget_rejections_total,
         hub_latency_ms,
         provider_latency_ms,
         hub_tokens_used,
+        hub_cost_usd,
         hub_active_requests,
         provider_circuit_state,
+        hub_budget_pct,
     ]
 }
 
@@ -224,13 +249,16 @@ __all__ = [
     "hub_errors_total",
     "hub_cache_hits_total",
     "hub_fallbacks_total",
+    "hub_budget_rejections_total",
     # Histograms
     "hub_latency_ms",
     "provider_latency_ms",
     "hub_tokens_used",
+    "hub_cost_usd",
     # Gauges
     "hub_active_requests",
     "provider_circuit_state",
+    "hub_budget_pct",
     # Registry
     "ALL_METRICS",
 ]

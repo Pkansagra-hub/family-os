@@ -62,6 +62,7 @@ from k1.concierge.bus.topics import (
     TOPIC_CLARIFICATION_OUT,
     TOPIC_CLARIFICATION_REQUEST,
     TOPIC_CLARIFICATION_RESPONSE,
+    TOPIC_CONCIERGE_CONFIG_UPDATE,
     TOPIC_DAG_COMPLETED,
     TOPIC_DEAD_LETTER,
     TOPIC_FINAL_RESPONSE,
@@ -472,6 +473,21 @@ def build_metric_session_summary(payload: dict[str, Any], parent_id: int = 0) ->
 
 
 # ===================================================================
+# Concierge control plane (STRICT) -- M6 E6.4 (C06)
+# ===================================================================
+
+
+def build_concierge_config_update(payload: dict[str, Any], parent_id: int = 0) -> Envelope:
+    """M6 E6.4: Runtime config update for concierge components.
+
+    Payload schema: {"weave_policy": {"enabled": bool}, ...}
+    Subscribed to by ConciergeController to apply runtime toggles
+    (e.g. WeavePolicy.set_enabled) without session restart.
+    """
+    return _build(TOPIC_CONCIERGE_CONFIG_UPDATE, Priority.INTERACTIVE, payload, parent_id)
+
+
+# ===================================================================
 # Arbiter topics (STRICT) -- M5 E5.1.5
 # ===================================================================
 
@@ -517,7 +533,10 @@ def _lazy_canonical_types() -> dict[str, type | None]:
     Imported lazily so the events package can import builders
     without circular dependency.
     """
-    from k1.concierge.events.conversation import IntentArbitrated, UserInputReceived  # noqa: F811
+    from k1.concierge.events.conversation import (  # noqa: F811
+        IntentArbitrated,
+        UserInputReceived,
+    )
     from k1.concierge.events.hitl import (
         HILRequested,
         HILResolved,
@@ -528,7 +547,12 @@ def _lazy_canonical_types() -> dict[str, type | None]:
     )
     from k1.concierge.events.hitl import TaskResumed as TaskResumedEvt
     from k1.concierge.events.hitl import TaskSuspended as TaskSuspendedEvt
-    from k1.concierge.events.task import TaskCancelled, TaskCompleted, TaskCreated, TaskFailed
+    from k1.concierge.events.task import (
+        TaskCancelled,
+        TaskCompleted,
+        TaskCreated,
+        TaskFailed,
+    )
 
     return {
         TOPIC_USER_INPUT: UserInputReceived,
@@ -605,6 +629,8 @@ BUILDERS: dict[str, Any] = {
     TOPIC_METRIC_EMITTED: build_metric_emitted,
     TOPIC_METRIC_ALERT: build_metric_alert,
     TOPIC_METRIC_SESSION_SUMMARY: build_metric_session_summary,
+    # M6 E6.4 (C06): concierge runtime config control plane
+    TOPIC_CONCIERGE_CONFIG_UPDATE: build_concierge_config_update,
 }
 
 
@@ -665,6 +691,8 @@ def get_builder_registry() -> dict[str, "BuilderEntry"]:
         TOPIC_METRIC_EMITTED: Priority.BACKGROUND,
         TOPIC_METRIC_ALERT: Priority.BACKGROUND,
         TOPIC_METRIC_SESSION_SUMMARY: Priority.BACKGROUND,
+        # M6 E6.4 (C06): concierge runtime config
+        TOPIC_CONCIERGE_CONFIG_UPDATE: Priority.INTERACTIVE,
     }
     return {
         topic: BuilderEntry(
@@ -743,4 +771,6 @@ __all__ = [
     "build_metric_emitted",
     "build_metric_alert",
     "build_metric_session_summary",
+    # M6 E6.4 (C06): concierge runtime config
+    "build_concierge_config_update",
 ]

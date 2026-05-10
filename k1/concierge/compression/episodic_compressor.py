@@ -38,6 +38,10 @@ class CompressionStrategy:
     KEY_FACTS = "key_facts"
     EXTRACTIVE = "extractive"
     TOPIC_SUMMARY = "topic_summary"
+    # M6 E6.1 (C01): LLM-backed abstractive compression strategy.
+    # Dispatched in compress_segment() when configured; falls back to
+    # extractive heuristics when no LLM port is wired (default).
+    LLM = "llm"
 
 
 @dataclass
@@ -119,16 +123,25 @@ class EpisodicCompressor:
         "_config",
         "_episodes",
         "_compression_count",
+        "_llm_port",
     )
 
-    def __init__(self, config: CompressionConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: CompressionConfig | None = None,
+        llm_port: Any | None = None,
+    ) -> None:
         self._config = config or CompressionConfig()
         self._episodes: list[CompressedEpisode] = []
         self._compression_count: int = 0
+        # M6 E6.1 (C01): Optional LLM port for `CompressionStrategy.LLM`.
+        # When None, LLM strategy gracefully falls back to extractive.
+        self._llm_port = llm_port
         logger.info(
-            "EpisodicCompressor initialised  recent_window=%d episode_size=%d",
+            "EpisodicCompressor initialised  recent_window=%d episode_size=%d strategy=%s",
             self._config.recent_window,
             self._config.episode_size,
+            self._config.compression_strategy,
         )
 
     def should_compress(self, total_turns: int) -> bool:
@@ -206,6 +219,23 @@ class EpisodicCompressor:
                 original_count=0,
             )
 
+        # M6 E6.1 (C01): Strategy dispatch.  LLM strategy delegates to
+        # _compress_with_llm when a port is wired; otherwise transparently
+        # falls back to the extractive key-facts path.  TOPIC_SUMMARY uses
+        # a topic-only summary without enumerated key_facts.  EXTRACTIVE
+        # and KEY_FACTS share the existing implementation.
+        strategy = self._config.compression_strategy
+
+        if strategy == CompressionStrategy.LLM and self._llm_port is not None:
+            try:
+                return self._compress_with_llm(segment, episode_id)
+            except Exception:
+                logger.warning(
+                    "EpisodicCompressor: LLM strategy failed, falling back to extractive",
+                    exc_info=True,
+                )
+                # Fall through to extractive
+
         turn_numbers = [t.get("turn_number", 0) for t in segment]
         turn_range = (min(turn_numbers), max(turn_numbers))
 
@@ -236,11 +266,68 @@ class EpisodicCompressor:
 
         self._compression_count += 1
 
+        # M6 E6.1 (C01): TOPIC_SUMMARY drops enumerated key_facts and keeps
+        # only the topic+summary line.  KEY_FACTS / EXTRACTIVE keep the
+        # bounded key_facts list (top 5).
+        if strategy == CompressionStrategy.TOPIC_SUMMARY:
+            episode_key_facts: list[str] = []
+        else:
+            episode_key_facts = key_facts[:5]
+
         return CompressedEpisode(
             episode_id=episode_id,
             turn_range=turn_range,
             summary=summary,
-            key_facts=key_facts[:5],
+            key_facts=episode_key_facts,
+            topic=topic,
+            original_count=len(segment),
+        )
+
+    def _compress_with_llm(
+        self,
+        segment: list[dict[str, Any]],
+        episode_id: str,
+    ) -> CompressedEpisode:
+        """LLM-backed abstractive compression (M6 E6.1 C01).
+
+        Synchronous wrapper around the configured LLM port.  Falls back
+        to the extractive path on any error (handled by caller).
+
+        Expects `self._llm_port` to expose a synchronous `summarize(prompt: str) -> str`
+        method.  Async ports should be adapted by the caller.
+        """
+        turn_numbers = [t.get("turn_number", 0) for t in segment]
+        turn_range = (min(turn_numbers), max(turn_numbers))
+
+        # Build a compact prompt
+        lines: list[str] = []
+        for turn in segment:
+            user = (turn.get("user_message") or "").strip()
+            resp = (turn.get("response") or "").strip()
+            if user:
+                lines.append(f"U: {user[:200]}")
+            if resp:
+                lines.append(f"A: {resp[:200]}")
+        prompt = "Summarize the following conversation turns concisely:\n" + "\n".join(lines)
+
+        port = self._llm_port
+        summarize = getattr(port, "summarize", None)
+        if not callable(summarize):
+            raise AttributeError("llm_port has no callable summarize()")
+        summary = str(summarize(prompt)).strip() or "Conversation segment."
+
+        if not episode_id:
+            episode_id = f"ep_{turn_range[0]}_{turn_range[1]}"
+
+        self._compression_count += 1
+        topics = [t.get("intent", "") for t in segment if t.get("intent")]
+        topic = topics[0] if topics else "general conversation"
+
+        return CompressedEpisode(
+            episode_id=episode_id,
+            turn_range=turn_range,
+            summary=summary,
+            key_facts=[],
             topic=topic,
             original_count=len(segment),
         )

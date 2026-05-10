@@ -76,6 +76,7 @@ class FabricGatewayAdapter:
     async def execute(
         self,
         request: CapabilityRequest,
+        cancellation_token: Optional[asyncio.Event] = None,
     ) -> CapabilityResult:
         """
         Execute a single capability via Fabric.
@@ -85,6 +86,13 @@ class FabricGatewayAdapter:
 
         Args:
             request: The capability request to execute.
+            cancellation_token: M5.1.2 -- optional cooperative cancel
+                signal. The Fabric facade does not expose mid-flight
+                cancellation in V1, so we honor the token by polling
+                briefly via asyncio.wait between the await call and
+                a short token-watch task. If cancellation is signalled,
+                we raise asyncio.CancelledError which the caller
+                (StepRunner) maps to a structured failure result.
 
         Returns:
             CapabilityResult from Fabric.
@@ -94,7 +102,24 @@ class FabricGatewayAdapter:
                 TERMINAL on unknown errors.
         """
         try:
-            return await self._fabric.execute(request)
+            if cancellation_token is None:
+                return await self._fabric.execute(request)
+            # Race the actual execute against the cancellation token. If the
+            # token fires first, cancel the underlying task. This is best-effort
+            # cooperative cancellation since Fabric itself may continue running
+            # internally; we surface the cancel to the orchestrator immediately.
+            exec_task = asyncio.create_task(self._fabric.execute(request))
+            cancel_task = asyncio.create_task(cancellation_token.wait())
+            done, pending = await asyncio.wait(
+                {exec_task, cancel_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for p in pending:
+                p.cancel()
+            if exec_task in done:
+                return exec_task.result()
+            # Cancellation token fired first.
+            raise asyncio.CancelledError("fabric.execute cancelled by token")
         except (FabricError, asyncio.TimeoutError) as exc:
             raise AdapterException(
                 AdapterError(

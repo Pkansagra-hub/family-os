@@ -118,8 +118,11 @@ class FakeStateRead:
         self,
         sections: List[str],
         trace_id: str = "",
+        session_id: str = "",
     ) -> SessionSnapshot:
-        self.read_calls.append({"sections": sections, "trace_id": trace_id})
+        self.read_calls.append(
+            {"sections": sections, "trace_id": trace_id, "session_id": session_id}
+        )
         if self.read_delay_s:
             await asyncio.sleep(self.read_delay_s)
         if self.read_error:

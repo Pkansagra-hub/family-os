@@ -27,7 +27,7 @@ class TestInputAdapterBehaviour:
         adapter = TestInputAdapter()
         env = _make_envelope()
         adapter.inject(env)
-        result = asyncio.get_event_loop().run_until_complete(adapter.receive())
+        result = asyncio.run(adapter.receive())
         assert result is env
 
     def test_has_buffered_empty(self) -> None:
@@ -49,7 +49,7 @@ class TestInputAdapterBehaviour:
         adapter = TestInputAdapter()
         adapter.inject_text("hello world")
         assert adapter.has_buffered() is True
-        env = asyncio.get_event_loop().run_until_complete(adapter.receive())
+        env = asyncio.run(adapter.receive())
         assert env.topic == "k1.session.user.input.v1"
 
     def test_fifo_ordering(self) -> None:
@@ -60,9 +60,13 @@ class TestInputAdapterBehaviour:
         e2 = _make_envelope(payload=b'{"n":2}')
         adapter.inject(e1)
         adapter.inject(e2)
-        loop = asyncio.get_event_loop()
-        assert loop.run_until_complete(adapter.receive()) is e1
-        assert loop.run_until_complete(adapter.receive()) is e2
+
+        async def _recv_two():
+            return await adapter.receive(), await adapter.receive()
+
+        r1, r2 = asyncio.run(_recv_two())
+        assert r1 is e1
+        assert r2 is e2
 
 
 # ===================================================================
@@ -81,6 +85,6 @@ class TestBusInputAdapterBehaviour:
         env = build_user_input({"text": "hello", "device_id": "test"})
         bus.publish(env)
         assert adapter.has_buffered() is True
-        result = asyncio.get_event_loop().run_until_complete(adapter.receive())
+        result = asyncio.run(adapter.receive())
         assert result.topic == "k1.session.user.input.v1"
         adapter.close()

@@ -52,6 +52,7 @@ class MemoryWriterService:
         self._health_port = health_port
         self._config = config
         self._started: bool = False
+        self._last_extraction_ms: float = 0.0  # MW-05-C: updated per pipeline call
 
     async def start(self) -> None:
         """Start the MW service. Subscribe to events.
@@ -78,6 +79,11 @@ class MemoryWriterService:
         log.info("MW: MemoryWriterService stopped")
 
     @property
+    def last_extraction_ms(self) -> float:
+        """Most recent LLM extraction latency in ms (MW-05-C)."""
+        return self._pipeline.last_latency_ms
+
+    @property
     def is_started(self) -> bool:
         return self._started
 
@@ -96,6 +102,6 @@ class MemoryWriterService:
             is_healthy=self._started and not self._circuit_breaker.is_open,
             llm_circuit_open=self._circuit_breaker.is_open,
             pending_batch_count=self._pipeline._aggregator.pending_count,
-            last_extraction_ms=0.0,  # tracked via metrics, not here
+            last_extraction_ms=self._last_extraction_ms,  # MW-05-C
             detail="running" if self._started else "stopped",
         )

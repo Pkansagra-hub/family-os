@@ -11,6 +11,7 @@ Returns PipelineResult with summary of what happened.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -25,6 +26,7 @@ from k1.memory_writer.events import TurnCompletePayload
 from k1.memory_writer.extraction.extraction_validator import ExtractionValidator
 from k1.memory_writer.extraction.writer_agent import MemoryWriterAgent
 from k1.memory_writer.filter.relevance_filter import RelevanceFilter
+from k1.memory_writer.place_resolver import PlaceResolver
 from k1.memory_writer.ports.event_subscription_port import IEventSubscriptionPort
 from k1.memory_writer.types import FilterDecision
 
@@ -45,6 +47,7 @@ class PipelineResult:
     envelopes_submitted: int = 0
     llm_tokens_used: int = 0
     llm_latency_ms: float = 0.0
+    dropped_confidence: int = 0  # MW-05-A: atoms below confidence floor
     trace_id: str = ""
     error: Optional[str] = None
 
@@ -66,6 +69,7 @@ class MemoryWriterPipeline:
         # Stage 2
         session_reader: MWSessionReader,
         context_builder: ContextBuilder,
+        place_resolver: PlaceResolver,  # MW-04-A: updated per-turn before Stage 4
         # Stage 3
         writer_agent: MemoryWriterAgent,
         extraction_validator: ExtractionValidator,
@@ -83,6 +87,7 @@ class MemoryWriterPipeline:
         self._filter = relevance_filter
         self._session_reader = session_reader
         self._context_builder = context_builder
+        self._place_resolver = place_resolver  # MW-04-A
         self._writer_agent = writer_agent
         self._validator = extraction_validator
         self._circuit_breaker = circuit_breaker
@@ -92,6 +97,7 @@ class MemoryWriterPipeline:
         self._emitter = batch_emitter
         self._event_port = event_port
         self._config = config
+        self.last_latency_ms: float = 0.0  # MW-05-C: updated after each LLM call
 
     async def process(self, payload: TurnCompletePayload) -> PipelineResult:
         """Process a single turn through the 5-stage pipeline.
@@ -148,6 +154,15 @@ class MemoryWriterPipeline:
         # ── Stage 2: Context Assembly ──
         try:
             snapshot = await self._session_reader.read_snapshot()
+            # MW-04-A: refresh PlaceResolver with current snapshot entities
+            beliefs = snapshot.get("beliefs_active", {}) or {}
+            location_entities = beliefs.get("mentioned_entities", [])
+            if not location_entities and payload.mentioned_location_raw:
+                log.debug(
+                    "MW: place_resolver has no entities but location present in turn "
+                    "(mentioned_entities not written by any concierge component yet)"
+                )
+            self._place_resolver.set_entities(location_entities)
             context = self._context_builder.build(snapshot, payload)
         except Exception as exc:
             log.warning(
@@ -179,7 +194,10 @@ class MemoryWriterPipeline:
             return PipelineResult(trace_id=trace_id, error="circuit_breaker_open")
 
         try:
+            _t0 = time.perf_counter_ns()
             raw_extractions = await self._writer_agent.extract(context, trace_id)
+            llm_latency_ms = (time.perf_counter_ns() - _t0) / 1_000_000
+            self.last_latency_ms = llm_latency_ms  # MW-05-C
         except Exception as exc:
             log.warning(
                 "MW: extraction failed",
@@ -191,7 +209,7 @@ class MemoryWriterPipeline:
         if raw_extractions:
             self._circuit_breaker.record_success()
 
-        atoms = self._validator.validate(raw_extractions, context)
+        atoms, dropped_confidence = self._validator.validate(raw_extractions, context)  # MW-05-A
 
         if not atoms:
             await self._publish_safe(
@@ -199,15 +217,21 @@ class MemoryWriterPipeline:
                 {
                     "trace_id": trace_id,
                     "atom_count": 0,
+                    "dropped_confidence": dropped_confidence,
+                    "raw_atom_count": len(raw_extractions),
                 },
             )
-            return PipelineResult(atoms_extracted=0, trace_id=trace_id)
+            return PipelineResult(
+                atoms_extracted=0, dropped_confidence=dropped_confidence, trace_id=trace_id
+            )
 
         await self._publish_safe(
             "k1.mw.extraction.complete.v1",
             {
                 "trace_id": trace_id,
                 "atom_count": len(atoms),
+                "dropped_confidence": dropped_confidence,
+                "raw_atom_count": len(raw_extractions),
             },
         )
 
@@ -240,6 +264,8 @@ class MemoryWriterPipeline:
         return PipelineResult(
             atoms_extracted=len(atoms),
             envelopes_submitted=submitted,
+            dropped_confidence=dropped_confidence,
+            llm_latency_ms=llm_latency_ms,
             trace_id=trace_id,
         )
 
@@ -253,9 +279,7 @@ class MemoryWriterPipeline:
             return await self._emitter.emit(batch)
         return 0
 
-    async def process_session(
-        self, turns: list[TurnCompletePayload]
-    ) -> PipelineResult:
+    async def process_session(self, turns: list[TurnCompletePayload]) -> PipelineResult:
         """Process a buffered batch of turns with ONE LLM call (Option B).
 
         Used by SessionBatchDispatcher. Skips per-turn relevance filtering
@@ -280,8 +304,18 @@ class MemoryWriterPipeline:
         # snapshot if cold archive is not wired (test/standalone).
         try:
             snapshot = await self._session_reader.read_snapshot_enriched(
-                anchor.session_id
+                anchor.session_id,
+                history_limit=self._config.archive_history_limit,  # MW-08-A
             )
+            # MW-04-A: refresh PlaceResolver with current snapshot entities
+            beliefs = snapshot.get("beliefs_active", {}) or {}
+            location_entities = beliefs.get("mentioned_entities", [])
+            if not location_entities and anchor.mentioned_location_raw:
+                log.debug(
+                    "MW: place_resolver has no entities but location present in turn "
+                    "(mentioned_entities not written by any concierge component yet)"
+                )
+            self._place_resolver.set_entities(location_entities)
             context = self._context_builder.build(snapshot, anchor)
         except Exception as exc:
             log.warning(
@@ -304,15 +338,14 @@ class MemoryWriterPipeline:
                 "MW: circuit breaker open, skipping session batch",
                 extra={"trace_id": trace_id},
             )
-            await self._publish_safe(
-                "k1.mw.circuit.open.v1", {"trace_id": trace_id}
-            )
+            await self._publish_safe("k1.mw.circuit.open.v1", {"trace_id": trace_id})
             return PipelineResult(trace_id=trace_id, error="circuit_breaker_open")
 
         try:
-            raw_extractions = await self._writer_agent.extract_session(
-                turns, context, trace_id
-            )
+            _t0 = time.perf_counter_ns()
+            raw_extractions = await self._writer_agent.extract_session(turns, context, trace_id)
+            llm_latency_ms = (time.perf_counter_ns() - _t0) / 1_000_000
+            self.last_latency_ms = llm_latency_ms  # MW-05-C
         except Exception as exc:
             log.warning(
                 "MW: session extraction failed",
@@ -324,14 +357,22 @@ class MemoryWriterPipeline:
         if raw_extractions:
             self._circuit_breaker.record_success()
 
-        atoms = self._validator.validate(raw_extractions, context)
+        atoms, dropped_confidence = self._validator.validate(raw_extractions, context)  # MW-05-A
 
         if not atoms:
             await self._publish_safe(
                 "k1.mw.extraction.complete.v1",
-                {"trace_id": trace_id, "atom_count": 0, "turn_count": len(turns)},
+                {
+                    "trace_id": trace_id,
+                    "atom_count": 0,
+                    "turn_count": len(turns),
+                    "dropped_confidence": dropped_confidence,
+                    "raw_atom_count": len(raw_extractions),
+                },
             )
-            return PipelineResult(atoms_extracted=0, trace_id=trace_id)
+            return PipelineResult(
+                atoms_extracted=0, dropped_confidence=dropped_confidence, trace_id=trace_id
+            )
 
         await self._publish_safe(
             "k1.mw.extraction.complete.v1",
@@ -339,6 +380,8 @@ class MemoryWriterPipeline:
                 "trace_id": trace_id,
                 "atom_count": len(atoms),
                 "turn_count": len(turns),
+                "dropped_confidence": dropped_confidence,
+                "raw_atom_count": len(raw_extractions),
             },
         )
 
@@ -372,6 +415,8 @@ class MemoryWriterPipeline:
         return PipelineResult(
             atoms_extracted=len(atoms),
             envelopes_submitted=submitted,
+            dropped_confidence=dropped_confidence,
+            llm_latency_ms=llm_latency_ms,
             trace_id=trace_id,
         )
 

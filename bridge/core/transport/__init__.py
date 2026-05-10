@@ -239,7 +239,7 @@ class HttpTransport:
                 "construct HttpTransport(config=..., envelope_builder=...)"
             )
         await self.open()
-        body_dict = payload.model_dump(mode="json", by_alias=True)
+        body_dict = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
         accept = "application/json"
         if codec != "json":
             codec_obj = _DEFAULT_CODEC_REGISTRY.get(codec)
@@ -288,7 +288,7 @@ class HttpTransport:
         """
         if self._envelope_builder is None:
             raise RuntimeError("HttpTransport.build_envelope_bytes requires an envelope_builder")
-        body_dict = payload.model_dump(mode="json", by_alias=True)
+        body_dict = payload.model_dump(mode="json", by_alias=True, exclude_none=True)
         if codec != "json":
             codec_obj = _DEFAULT_CODEC_REGISTRY.get(codec)
             body_dict = encode_wrapped_body(codec=codec_obj, body=body_dict)

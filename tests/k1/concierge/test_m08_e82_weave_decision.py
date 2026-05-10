@@ -16,8 +16,17 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from k1.concierge.bus.builders import BUILDERS, build_weave_decided, get_builder_registry
-from k1.concierge.bus.topics import ALL_TOPICS, RELAXED_TOPICS, STRICT_TOPICS, TOPIC_WEAVE_DECIDED
+from k1.concierge.bus.builders import (
+    BUILDERS,
+    build_weave_decided,
+    get_builder_registry,
+)
+from k1.concierge.bus.topics import (
+    ALL_TOPICS,
+    RELAXED_TOPICS,
+    STRICT_TOPICS,
+    TOPIC_WEAVE_DECIDED,
+)
 from k1.concierge.config.loader import WeavePolicyConfig
 from k1.concierge.events.weave import WeaveDecisionMade
 from k1.concierge.fsm.states import ConciergeState
@@ -717,8 +726,8 @@ class TestWeaveDecidedTopicWiring:
         assert TOPIC_WEAVE_DECIDED not in STRICT_TOPICS
 
     def test_all_topics_count(self) -> None:
-        """ALL_TOPICS has 46 topics after E8.5.1 + E11.x."""
-        assert len(ALL_TOPICS) == 46
+        """ALL_TOPICS has 47 topics after E8.5.1 + E11.x + M6 E6.4."""
+        assert len(ALL_TOPICS) == 47
 
     def test_relaxed_topics_count(self) -> None:
         """RELAXED_TOPICS has 10 topics after E8.5.1 + E11.x."""

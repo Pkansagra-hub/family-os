@@ -34,7 +34,7 @@ class FakeExpandService:
     def __init__(self) -> None:
         self.calls: List[StageContext] = []
 
-    async def execute(self, sketch_result: Any, ctx: StageContext) -> Any:
+    async def execute(self, sketch_result: Any, request: Any, ctx: StageContext) -> Any:
         self.calls.append(ctx)
         return {"steps": [{"id": "st1"}]}
 
@@ -51,7 +51,9 @@ class FakeValidateService:
         ]
         self._idx = 0
 
-    async def execute(self, expanded_plan: Any, ctx: StageContext) -> ValidationVerdict:
+    async def execute(
+        self, expanded_plan: Any, request: Any, ctx: StageContext
+    ) -> ValidationVerdict:
         self.calls.append(ctx)
         idx = min(self._idx, len(self._verdicts) - 1)
         self._idx += 1
@@ -62,7 +64,9 @@ class FakeCommitService:
     def __init__(self) -> None:
         self.calls: List[StageContext] = []
 
-    async def execute(self, expanded_plan: Any, verdict: Any, ctx: StageContext) -> Any:
+    async def execute(
+        self, expanded_plan: Any, request: Any, verdict: Any, ctx: StageContext
+    ) -> Any:
         self.calls.append(ctx)
         return {
             "plan_id": "plan-ctx-001",

@@ -287,6 +287,7 @@ class SessionStateFactory:
         writer: IWriterPort,
         lifecycle: ILifecyclePort,
         k0_sync: Optional[IK0SyncPort] = None,
+        db_path: Optional[Path] = None,
     ) -> SessionStateManager:
         """
         Create SessionStateManager with injected ports.
@@ -301,6 +302,11 @@ class SessionStateFactory:
             writer: Writer port implementation (e.g., ConciergeAdapter)
             lifecycle: Lifecycle port implementation (e.g., FabricLifecycle)
             k0_sync: Optional K0 sync port for cross-device sync
+            db_path: Optional path for the local cold archive SQLite database.
+                When None, ``LocalColdArchive`` uses its default path
+                (``~/.familyos/k1/sessionstate.db``).  Pass
+                ``KernelConfig.sessionstate_db_path`` here to ensure
+                checkpoints land in the configured location (SS-02).
 
         Returns:
             SessionStateManager: Configured with provided ports
@@ -329,10 +335,15 @@ class SessionStateFactory:
             SessionStateFactory._validate_port(k0_sync, IK0SyncPort, "k0_sync")
 
         logger.info(
-            "Creating wired SessionStateManager (session=%s, storage=%s)",
+            "Creating wired SessionStateManager (session=%s, storage=%s, db_path=%s)",
             session_id[:16] if session_id else "none",
             storage.storage_type if hasattr(storage, "storage_type") else "unknown",
+            db_path,
         )
+
+        # SS-02: Build LocalColdArchive with the configured path so
+        # checkpoints go to the right location, not the default home-dir path.
+        local_cold_archive = LocalColdArchive(db_path=db_path) if db_path is not None else None
 
         # Create manager with injected ports
         manager = SessionStateManager(
@@ -342,6 +353,7 @@ class SessionStateFactory:
             writer_port=writer,
             lifecycle_port=lifecycle,
             k0_sync_port=k0_sync,
+            local_cold_archive=local_cold_archive,
         )
 
         return manager

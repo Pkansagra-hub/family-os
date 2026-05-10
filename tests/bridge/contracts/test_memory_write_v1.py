@@ -8,8 +8,8 @@ criteria for the first contract:
    of the 14 required fields, parametrised one-per-field.
 3. Envelope builder produces an envelope that can be signed with a real
    Ed25519 key and verified end-to-end.
-4. The idempotency key matches the documented BLAKE3 formula
-   ``BLAKE3(topic \\x00 canonical_json(body) \\x00 device_id)``.
+4. The envelope does NOT contain a client-supplied idem_key; K0 gate
+   owns derivation via HMAC-SHA256(device_secret, envelope_sha256|device_id|bucket).
 5. The legacy alias ``memory.write`` resolves to ``memory.write.v1`` at
    dispatch time (no breaking rename for legacy producers).
 6. Round-trip: K1 client → in-process HTTP transport → bridge dispatcher
@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from blake3 import blake3
 from pydantic import ValidationError
 
 from bridge._generated.k0.handlers.memory_write_v1 import register_handlers as register_k0_handlers
@@ -150,29 +149,25 @@ def test_memory_write_v1_envelope_signs_and_verifies(
     """A built envelope's signature verifies against the same Ed25519 key."""
     atom = _valid_atom()
     env = envelope_builder.build(topic="memory.write.v1", body=atom)
-    assert env["sig_alg"] == "ed25519"
+    assert env["sig_alg"] == "Ed25519SHA512"
     assert env["sig_kid"] == "test-kid-ms25"
-    # Verify the signature against envelope_sha256 (what the builder signs).
-    assert signer.verify(
-        env["envelope_sha256"].encode("utf-8"),
-        env["sig"],
-    )
+    # Builder signs canonical envelope bytes (all fields except sig+envelope_sha256).
+    import json
+
+    canonical = {k: v for k, v in env.items() if k not in ("sig", "envelope_sha256")}
+    canonical_bytes = json.dumps(
+        canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    assert signer.verify(canonical_bytes, env["sig"])
 
 
-def test_memory_write_v1_envelope_idem_key_is_blake3_of_canonical_fields(
+def test_memory_write_v1_envelope_idem_key_not_present(
     envelope_builder: EnvelopeBuilder,
 ) -> None:
-    """Idempotency key matches the documented BLAKE3 formula exactly."""
+    """Bridge must not send idem_key; K0 owns derivation via HMAC-SHA256."""
     atom = _valid_atom()
     env = envelope_builder.build(topic="memory.write.v1", body=atom)
-    canonical_body = json.dumps(atom, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    digest = blake3()
-    digest.update(b"memory.write.v1")
-    digest.update(b"\x00")
-    digest.update(canonical_body.encode("utf-8"))
-    digest.update(b"\x00")
-    digest.update(b"device-ms25")
-    assert env["idem_key"] == digest.hexdigest()
+    assert "idem_key" not in env
 
 
 @pytest.mark.asyncio

@@ -194,7 +194,7 @@ class TestProviderChunk:
 
     def test_field_count(self) -> None:
         fields = dataclasses.fields(ProviderChunk)
-        assert len(fields) == 4
+        assert len(fields) == 6
 
 
 # ===========================================================================

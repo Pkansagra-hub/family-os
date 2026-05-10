@@ -784,7 +784,14 @@ async def front_handler(
         (c.history_window for c in ss_configs if c.section == "history_active"),
         _front_cfg.history_window_fallback,
     )
-    messages = build_chat_history(history_active, window=history_window)
+    messages = build_chat_history(
+        history_active,
+        window=history_window,
+        # M6 E6.2 (C10): In WEAVE mode the LLM needs to see prior weave
+        # entries (deferred async results) so it can build on them
+        # rather than repeating them.
+        include_weave=(mode == PromptMode.WEAVE),
+    )
 
     # 7b. Add current-turn user input as an explicit user message.
     #     This is NOT history; it's the active query for this invocation.

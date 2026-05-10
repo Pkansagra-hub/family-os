@@ -559,7 +559,9 @@ class TestBridgeOffline:
         bridge.persist_error = ConnectionError("K0 unreachable")
         svc, _, delta, _ = _svc(bridge=bridge)
         await svc.execute(_plan(), _request(), _verdict(), _ctx())
-        assert len(delta.deltas) == 2  # stage + plan_end.
+        # P07 fix: WAL failure now emits a wal_write_failed delta in
+        # addition to the stage + plan_end deltas. 3 total.
+        assert len(delta.deltas) == 3
 
     async def test_bridge_timeout_plan_proceeds(self) -> None:
         bridge = FakeBridgePort()

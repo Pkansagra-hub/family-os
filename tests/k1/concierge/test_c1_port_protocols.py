@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from k1.bus.envelope import Envelope, Priority
 from k1.bus.ports.bus import IBus
 
@@ -39,9 +37,7 @@ from k1.concierge.ports import (
     IClassificationPort,
     IDeltaPort,
     IDispatchPort,
-    IFabricPort,
     IInputPort,
-    ILLMPort,
     IMemoryPort,
     IOutputPort,
     IStatePort,
@@ -75,7 +71,7 @@ class TestInputAdapterCompliance:
         adapter = TestInputAdapter()
         env = _make_envelope()
         adapter.inject(env)
-        result = asyncio.get_event_loop().run_until_complete(adapter.receive())
+        result = asyncio.run(adapter.receive())
         assert result is env
 
     def test_has_buffered_empty(self) -> None:
@@ -91,7 +87,7 @@ class TestInputAdapterCompliance:
         adapter = TestInputAdapter()
         adapter.inject_text("hello world")
         assert adapter.has_buffered() is True
-        env = asyncio.get_event_loop().run_until_complete(adapter.receive())
+        env = asyncio.run(adapter.receive())
         assert env.topic == "k1.session.user.input.v1"
 
     def test_fifo_ordering(self) -> None:
@@ -100,9 +96,13 @@ class TestInputAdapterCompliance:
         e2 = _make_envelope(payload=b'{"n":2}')
         adapter.inject(e1)
         adapter.inject(e2)
-        loop = asyncio.get_event_loop()
-        assert loop.run_until_complete(adapter.receive()) is e1
-        assert loop.run_until_complete(adapter.receive()) is e2
+
+        async def _recv_two():
+            return await adapter.receive(), await adapter.receive()
+
+        r1, r2 = asyncio.run(_recv_two())
+        assert r1 is e1
+        assert r2 is e2
 
 
 class TestOutputAdapterCompliance:
@@ -113,21 +113,21 @@ class TestOutputAdapterCompliance:
     def test_send_captures_envelope(self) -> None:
         adapter = TestOutputAdapter()
         env = _make_envelope()
-        asyncio.get_event_loop().run_until_complete(adapter.send(env))
+        asyncio.run(adapter.send(env))
         assert len(adapter.sent) == 1
         assert adapter.sent[0] is env
 
     def test_get_sent_no_filter(self) -> None:
         adapter = TestOutputAdapter()
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope("t1")))
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope("t2")))
+        asyncio.run(adapter.send(_make_envelope("t1")))
+        asyncio.run(adapter.send(_make_envelope("t2")))
         assert len(adapter.get_sent()) == 2
 
     def test_get_sent_with_topic_filter(self) -> None:
         adapter = TestOutputAdapter()
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope("t1")))
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope("t2")))
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope("t1")))
+        asyncio.run(adapter.send(_make_envelope("t1")))
+        asyncio.run(adapter.send(_make_envelope("t2")))
+        asyncio.run(adapter.send(_make_envelope("t1")))
         assert len(adapter.get_sent("t1")) == 2
         assert len(adapter.get_sent("t2")) == 1
 
@@ -135,8 +135,8 @@ class TestOutputAdapterCompliance:
         adapter = TestOutputAdapter()
         e1 = _make_envelope(payload=b'{"n":1}')
         e2 = _make_envelope(payload=b'{"n":2}')
-        asyncio.get_event_loop().run_until_complete(adapter.send(e1))
-        asyncio.get_event_loop().run_until_complete(adapter.send(e2))
+        asyncio.run(adapter.send(e1))
+        asyncio.run(adapter.send(e2))
         assert adapter.last() is e2
 
     def test_last_empty(self) -> None:
@@ -145,7 +145,7 @@ class TestOutputAdapterCompliance:
 
     def test_clear_resets(self) -> None:
         adapter = TestOutputAdapter()
-        asyncio.get_event_loop().run_until_complete(adapter.send(_make_envelope()))
+        asyncio.run(adapter.send(_make_envelope()))
         adapter.clear()
         assert len(adapter.sent) == 0
 
@@ -195,7 +195,7 @@ class TestDispatchAdapterCompliance:
 
         adapter = MockDispatchAdapter()
         req = CapabilityRequest(capability_name="test_cap", params={"x": 1})
-        asyncio.get_event_loop().run_until_complete(adapter.dispatch_direct(req))
+        asyncio.run(adapter.dispatch_direct(req))
         assert len(adapter.direct_calls) == 1
         assert adapter.direct_calls[0] is req
 
@@ -204,19 +204,19 @@ class TestDispatchAdapterCompliance:
 
         adapter = MockDispatchAdapter()
         req = CapabilityRequest(capability_name="test_cap")
-        result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_direct(req))
+        result = asyncio.run(adapter.dispatch_direct(req))
         assert result.success is True
 
     def test_dispatch_envelope_records_call(self) -> None:
         adapter = MockDispatchAdapter()
         env = object()  # adapter does not introspect envelope
-        asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
+        asyncio.run(adapter.dispatch_envelope(env))
         assert len(adapter.envelope_calls) == 1
 
     def test_dispatch_envelope_returns_aggregated(self) -> None:
         adapter = MockDispatchAdapter()
         env = object()
-        result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
+        result = asyncio.run(adapter.dispatch_envelope(env))
         assert result.success is True
 
 
@@ -227,7 +227,7 @@ class TestMemoryAdapterCompliance:
 
     def test_recall_empty(self) -> None:
         adapter = MockMemoryAdapter()
-        result = asyncio.get_event_loop().run_until_complete(adapter.recall("anything"))
+        result = asyncio.run(adapter.recall("anything"))
         assert result == []
 
     def test_recall_returns_seeded(self) -> None:
@@ -236,7 +236,7 @@ class TestMemoryAdapterCompliance:
             {"type": "event", "content": "birthday", "tags": ["family"]},
         ]
         adapter = MockMemoryAdapter(memories=memories)
-        result = asyncio.get_event_loop().run_until_complete(adapter.recall("query"))
+        result = asyncio.run(adapter.recall("query"))
         assert len(result) == 2
 
     def test_recall_filters_by_type(self) -> None:
@@ -245,23 +245,19 @@ class TestMemoryAdapterCompliance:
             {"type": "event", "content": "birthday"},
         ]
         adapter = MockMemoryAdapter(memories=memories)
-        result = asyncio.get_event_loop().run_until_complete(
-            adapter.recall("query", memory_types=["fact"])
-        )
+        result = asyncio.run(adapter.recall("query", memory_types=["fact"]))
         assert len(result) == 1
         assert result[0]["type"] == "fact"
 
     def test_recall_max_results(self) -> None:
         memories = [{"type": "fact", "content": f"item {i}"} for i in range(10)]
         adapter = MockMemoryAdapter(memories=memories)
-        result = asyncio.get_event_loop().run_until_complete(adapter.recall("query", max_results=3))
+        result = asyncio.run(adapter.recall("query", max_results=3))
         assert len(result) == 3
 
     def test_recall_records_calls(self) -> None:
         adapter = MockMemoryAdapter()
-        asyncio.get_event_loop().run_until_complete(
-            adapter.recall("q", memory_types=["fact"], max_results=2)
-        )
+        asyncio.run(adapter.recall("q", memory_types=["fact"], max_results=2))
         assert len(adapter.recall_calls) == 1
         assert adapter.recall_calls[0] == ("q", ["fact"], 2)
 
@@ -315,7 +311,7 @@ class TestProductionInputAdapterCompliance:
         env = build_user_input({"text": "hello", "device_id": "test"})
         bus.publish(env)
         assert adapter.has_buffered() is True
-        result = asyncio.get_event_loop().run_until_complete(adapter.receive())
+        result = asyncio.run(adapter.receive())
         assert result.topic == "k1.session.user.input.v1"
         adapter.close()
 
@@ -366,7 +362,7 @@ class TestProductionMemoryAdapterCompliance:
             return [{"type": "fact", "content": "result"}]
 
         adapter = RecallMemoryAdapter(tracked_recall)
-        result = asyncio.get_event_loop().run_until_complete(adapter.recall("test query"))
+        result = asyncio.run(adapter.recall("test query"))
         assert len(calls) == 1
         assert calls[0][0] == "test query"
         assert len(result) == 1

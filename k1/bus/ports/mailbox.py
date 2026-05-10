@@ -36,6 +36,24 @@ class BackpressureError(Exception):
         super().__init__(f"Mailbox for actor '{actor_id}' is full (capacity={capacity})")
 
 
+class TtlExpiredError(Exception):
+    """Raised/recorded when an envelope's TTL has expired before delivery.
+
+    Used as the error passed to the DLQ callback when the bus drops an
+    envelope whose ``ttl_ms`` window has elapsed (M7.1 / B01).
+    """
+
+    def __init__(self, envelope_id: int, topic: str, age_ms: int, ttl_ms: int) -> None:
+        self.envelope_id = envelope_id
+        self.topic = topic
+        self.age_ms = age_ms
+        self.ttl_ms = ttl_ms
+        super().__init__(
+            f"Envelope {envelope_id} on topic '{topic}' expired "
+            f"(age_ms={age_ms} ttl_ms={ttl_ms})"
+        )
+
+
 class UnknownActorError(Exception):
     """Raised when delivery is attempted to an unregistered actor."""
 
@@ -59,14 +77,29 @@ class MailboxConfig:
                       Must be > 0.  Default 256.
         priority_wfq: Whether to use WFQ scheduling across priority
                       levels within this mailbox.  Default True.
+        wfq_quantum:  M7.3 / B08.  When set, switches the WFQ scheduler
+                      from strict priority to deficit round-robin (DRR)
+                      with the given per-priority quantum tuple in
+                      ``(URGENT, REALTIME, INTERACTIVE, BACKGROUND)``
+                      order (e.g. ``(4, 3, 2, 1)``).  Strict-priority
+                      semantics are preserved when ``None`` (default).
+                      Only honoured when ``priority_wfq=True``.
     """
 
     capacity: int = 256
     priority_wfq: bool = True
+    wfq_quantum: Optional[tuple[int, int, int, int]] = None
 
     def __post_init__(self) -> None:
         if self.capacity <= 0:
             raise ValueError(f"capacity must be > 0, got {self.capacity}")
+        if self.wfq_quantum is not None:
+            if len(self.wfq_quantum) != 4:
+                raise ValueError(
+                    f"wfq_quantum must be a 4-tuple, got length {len(self.wfq_quantum)}"
+                )
+            if any(q <= 0 for q in self.wfq_quantum):
+                raise ValueError(f"wfq_quantum values must all be > 0, got {self.wfq_quantum}")
 
 
 # ---------------------------------------------------------------------------

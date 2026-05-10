@@ -199,7 +199,10 @@ class TestConfigToggle:
         verify they are dispatched one at a time (not gathered).
         """
         from k1.concierge.react.loop import react_loop
-        from tests.k1.concierge.conftest import make_hub_text_response, make_hub_tool_response
+        from tests.k1.concierge.conftest import (
+            make_hub_text_response,
+            make_hub_tool_response,
+        )
 
         # Mock model returns 2 tool calls then text
         resp_tools = make_hub_tool_response(
@@ -240,6 +243,7 @@ class TestConfigToggle:
             cfg.react.parallel_tools_enabled = False
             cfg.react.front_degenerate_fallback = "fallback"
             cfg.react.front_budget_fallback = "budget"
+            cfg.react.tool_timeout_ms = 30_000
             cfg.llm.default_timeout_ms = 30000
             mock_cfg.return_value = cfg
 
@@ -322,7 +326,10 @@ class TestStaleConstants:
 
     def test_package_re_exports_accessors(self):
         """react/__init__.py re-exports the new accessor functions."""
-        from k1.concierge.react import get_crisis_max_iterations, get_mode_max_iterations
+        from k1.concierge.react import (
+            get_crisis_max_iterations,
+            get_mode_max_iterations,
+        )
 
         assert callable(get_mode_max_iterations)
         assert callable(get_crisis_max_iterations)
@@ -412,7 +419,10 @@ class TestReactLoopClassifiedExecution:
     async def test_parallel_safe_tools_gathered(self):
         """Parallel-safe tools execute via asyncio.gather when enabled."""
         from k1.concierge.react.loop import react_loop
-        from tests.k1.concierge.conftest import make_hub_text_response, make_hub_tool_response
+        from tests.k1.concierge.conftest import (
+            make_hub_text_response,
+            make_hub_tool_response,
+        )
 
         # Two parallel-safe tools
         resp_tools = make_hub_tool_response(
@@ -460,7 +470,10 @@ class TestReactLoopClassifiedExecution:
     async def test_sequential_tools_dispatched_individually(self):
         """Sequential tools are dispatched one at a time."""
         from k1.concierge.react.loop import react_loop
-        from tests.k1.concierge.conftest import make_hub_text_response, make_hub_tool_response
+        from tests.k1.concierge.conftest import (
+            make_hub_text_response,
+            make_hub_tool_response,
+        )
 
         resp_tools = make_hub_tool_response(
             [
@@ -506,7 +519,10 @@ class TestReactLoopClassifiedExecution:
     async def test_mixed_batch_splits_correctly(self):
         """Mixed batch: parallel-safe gathered, sequential one-at-a-time."""
         from k1.concierge.react.loop import react_loop
-        from tests.k1.concierge.conftest import make_hub_text_response, make_hub_tool_response
+        from tests.k1.concierge.conftest import (
+            make_hub_text_response,
+            make_hub_tool_response,
+        )
 
         resp_tools = make_hub_tool_response(
             [
@@ -552,7 +568,10 @@ class TestReactLoopClassifiedExecution:
     async def test_classification_logged(self, caplog):
         """Tool batch classification is logged at INFO level."""
         from k1.concierge.react.loop import react_loop
-        from tests.k1.concierge.conftest import make_hub_text_response, make_hub_tool_response
+        from tests.k1.concierge.conftest import (
+            make_hub_text_response,
+            make_hub_tool_response,
+        )
 
         resp_tools = make_hub_tool_response(
             [

@@ -147,6 +147,14 @@ TOPIC_METRIC_EMITTED = "k1.metrics.emitted.v1"  # M11 E11.1.3: raw metric envelo
 TOPIC_METRIC_ALERT = "k1.metrics.alert.v1"  # M11 E11.5: alert engine trigger
 TOPIC_METRIC_SESSION_SUMMARY = "k1.metrics.session_summary.v1"  # M11 E11.5.3: session summary
 
+# ---------------------------------------------------------------------------
+# Concierge control-plane topics (prefix: k1.concierge -> STRICT) -- M6 E6.4
+#
+# Control-plane messages for runtime configuration toggles.  Distinct from
+# data-plane events.  Payload schema: {"weave_policy": {"enabled": bool}, ...}
+# ---------------------------------------------------------------------------
+TOPIC_CONCIERGE_CONFIG_UPDATE = "k1.internal.concierge.config.update.v1"  # M6 E6.4 (C06)
+
 
 # ===================================================================
 # Classification sets
@@ -200,6 +208,7 @@ ALL_TOPICS: frozenset[str] = frozenset(
         TOPIC_METRIC_EMITTED,
         TOPIC_METRIC_ALERT,
         TOPIC_METRIC_SESSION_SUMMARY,
+        TOPIC_CONCIERGE_CONFIG_UPDATE,
     }
 )
 
@@ -277,6 +286,8 @@ FSM_ROUTED_TOPICS: frozenset[str] = frozenset(
         TOPIC_DAG_COMPLETED,
         TOPIC_WEAVE_BATCH,
         TOPIC_PROACTIVE_FILL,
+        # M6 E6.4: runtime config-update topic delivered to FSM
+        TOPIC_CONCIERGE_CONFIG_UPDATE,
     }
 )
 
@@ -391,6 +402,8 @@ __all__ = [
     "TOPIC_METRIC_EMITTED",
     "TOPIC_METRIC_ALERT",
     "TOPIC_METRIC_SESSION_SUMMARY",
+    # Concierge control plane (M6 E6.4)
+    "TOPIC_CONCIERGE_CONFIG_UPDATE",
     # Sets
     "ALL_TOPICS",
     "STRICT_TOPICS",

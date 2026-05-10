@@ -37,6 +37,12 @@ class KernelConfig:
     # P3.4c: tool_tier removed; tier is per-task derived in dispatch_task.
     session_mode: str = "standalone"  # standalone | testing
     session_id: str | None = None
+    # These four flags gate ConciergeFactory component wiring only.
+    # They do NOT suppress the corresponding KernelService Tier 1/2
+    # startup stages (S5 Orchestrator, S6 Planner, etc.).  Setting
+    # enable_orchestrator=False disables orchestrator dispatch inside
+    # Concierge but the KernelService still instantiates and starts the
+    # OrchestratorService in S5.
     enable_experience: bool = True
     enable_delta: bool = True
     enable_hitl: bool = True
@@ -76,7 +82,9 @@ class KernelConfig:
     # Issue 2.1.3: Tier 1 boot/wiring config for multi-session KernelService
     max_sessions: int = 100  # SIM-D-02 session limit
     idle_timeout_minutes: int = 30  # session idle eviction
-    bridge_enabled: bool = True  # enable/disable K0 connection
+    bridge_enabled: bool = (
+        True  # True = enable LocalOutbox queueing (SinkBridgeClient, OFFLINE mode); does NOT establish a live K0 connection — for live K0 use bridge_live when HttpBridgeClient is wired
+    )
     bridge_offline_ok: bool = True  # allow startup without K0 (SIM-D-32)
     bridge_outbox_path: str = "./data/bridge_outbox.db"  # SinkBridgeClient SQLite queue
     model_hub_plugins: list[str] = field(default_factory=lambda: ["openai"])

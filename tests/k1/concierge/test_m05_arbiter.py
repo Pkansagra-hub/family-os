@@ -856,4 +856,4 @@ class TestEdgeCases:
         """ALL_TOPICS now has 30 topics (29 original + arbiter)."""
         from k1.concierge.bus.topics import ALL_TOPICS
 
-        assert len(ALL_TOPICS) == 46
+        assert len(ALL_TOPICS) == 47

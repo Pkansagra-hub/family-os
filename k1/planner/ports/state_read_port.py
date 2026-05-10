@@ -8,9 +8,13 @@ Design decisions (SS15.5)
 -------------------------
 - Read-only by design: NO write/update/set/delete methods exist.
   PLAN-01 is enforced at the interface level.
-- Session ID is NOT a parameter -- the adapter knows the active session.
-  This is the Planner's simplified abstraction over the Fabric's
-  ``ISessionStateReader`` which takes ``session_id`` explicitly.
+- ``session_id`` is threaded per call (3.2.2). The Planner is a singleton
+  that serves multiple sessions; binding session_id at construction
+  caused every plan to read from one fixed (or sentinel) session. Callers
+  pass the requesting session's id via ``PlanRequest.context.session_id``
+  (already extracted by Orchestrator at dispatch_high()).
+  Implementations MAY accept an empty ``session_id`` and fall back to
+  a pre-bound default (back-compat for legacy fixtures).
 - Returns ``SessionSnapshot`` (atomic capture of requested sections).
 
 Canonical read set (SKETCH stage)
@@ -63,16 +67,21 @@ class IStateReadPort(Protocol):
         self,
         sections: List[str],
         trace_id: str = "",
+        session_id: str = "",
     ) -> SessionSnapshot:
         """Read specified SessionState sections.
 
-        The adapter maps sections to the active session and returns an
+        The adapter maps sections to the requested session and returns an
         atomic snapshot of the requested data.
 
         Args:
             sections: List of section names to read (e.g.
                 ``["beliefs_active", "control", "history_recent"]``).
             trace_id: Distributed trace ID for observability (FAB-09).
+            session_id: The session whose state to read (3.2.2). When
+                empty, the adapter MAY fall back to a pre-bound default;
+                production callers should always pass the requesting
+                session id from ``PlanRequest.context.session_id``.
 
         Returns:
             ``SessionSnapshot`` containing the requested sections.

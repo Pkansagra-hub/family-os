@@ -136,6 +136,7 @@ class MemoryWriterFactory:
             relevance_filter=relevance_filter,
             session_reader=session_reader,
             context_builder=context_builder,
+            place_resolver=place_resolver,  # MW-04-A
             writer_agent=writer_agent,
             extraction_validator=extraction_validator,
             circuit_breaker=circuit_breaker,

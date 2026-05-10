@@ -17,7 +17,7 @@ After all checks: cap at config.max_atoms_per_turn (MW-05).
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import List, Tuple
 
 from k1.memory_writer.config import MWConfig
 from k1.memory_writer.context.person_resolver import PersonResolver
@@ -66,7 +66,7 @@ class ExtractionValidator:
         self,
         extractions: List[RawExtraction],
         context: ExtractionContext,
-    ) -> List[MemoryAtom]:
+    ) -> Tuple[List[MemoryAtom], int]:
         """Validate and convert RawExtractions → MemoryAtom list.
 
         Args:
@@ -74,10 +74,12 @@ class ExtractionValidator:
             context: ExtractionContext for PersonResolver and metadata.
 
         Returns:
-            List of validated, frozen MemoryAtom objects.
-            May be empty if all extractions fail validation.
+            Tuple of (validated_atoms, dropped_confidence_count).
+            ``dropped_confidence_count`` is the number of atoms dropped
+            solely because their confidence fell below the floor (MW-05-A).
         """
         validated: List[MemoryAtom] = []
+        dropped_confidence: int = 0
 
         for ext in extractions:
             # Check 1: Text length (MW-04) — truncate, don't drop
@@ -122,6 +124,7 @@ class ExtractionValidator:
                         "floor": self._config.confidence_floor,
                     },
                 )
+                dropped_confidence += 1  # MW-05-A: track dropped count
                 continue
 
             # Check 5: temporal_links validation (MW-12)
@@ -142,7 +145,7 @@ class ExtractionValidator:
             )
             validated = validated[: self._config.max_atoms_per_turn]
 
-        return validated
+        return validated, dropped_confidence
 
     def _validate_temporal_links(
         self,

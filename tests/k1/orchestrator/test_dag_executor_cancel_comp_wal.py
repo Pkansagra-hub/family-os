@@ -929,11 +929,15 @@ class TestCompensateUnit:
 
         await exe._compensate(wr, plan)
 
-        comp_wals = [w for w in bridge.wal_writes if w[1] == "COMPENSATION"]
-        assert len(comp_wals) == 1
-        assert comp_wals[0][2]["step_id"] == "s1"
-        assert comp_wals[0][2]["compensation_capability"] == "cap.undo_s1"
-        assert comp_wals[0][2]["status"] == "EXECUTED"
+        # M5.2.3: COMPENSATION split into STARTED + COMPLETE phases.
+        started = [w for w in bridge.wal_writes if w[1] == "COMPENSATION_STARTED"]
+        completed = [w for w in bridge.wal_writes if w[1] == "COMPENSATION_COMPLETE"]
+        assert len(started) == 1
+        assert len(completed) == 1
+        assert started[0][2]["step_id"] == "s1"
+        assert completed[0][2]["step_id"] == "s1"
+        assert completed[0][2]["compensation_capability"] == "cap.undo_s1"
+        assert completed[0][2]["status"] == "EXECUTED"
 
     @pytest.mark.asyncio
     async def test_failed_step_itself_not_compensated(self) -> None:
@@ -1103,8 +1107,13 @@ class TestCompensateIntegration:
 
         await exe.execute(plan, FakeSnapshot())
 
-        comp_wals = [w for w in bridge.wal_writes if w[1] == "COMPENSATION"]
-        assert len(comp_wals) >= 1
+        # M5.2.3: COMPENSATION split into STARTED + COMPLETE phases.
+        comp_wals = [
+            w
+            for w in bridge.wal_writes
+            if w[1] in ("COMPENSATION_STARTED", "COMPENSATION_COMPLETE")
+        ]
+        assert len(comp_wals) >= 2
 
 
 # ===========================================================================

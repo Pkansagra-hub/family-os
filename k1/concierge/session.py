@@ -22,6 +22,7 @@ from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
 from k1.bus.ports.mailbox import IMailbox, IMailboxRouter
 from k1.concierge.fsm.controller import ConciergeController
+from k1.concierge.protocols.suspension import SuspensionResolutionNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -334,14 +335,25 @@ class ConciergeRuntime:
 
             if back_env is not None:
                 did_work = True
-                await route_back_envelope(
-                    envelope=back_env,
-                    model=self._model,
-                    ss=self._session_state,
-                    bus=self._bus,
-                    tool_dispatcher=self._back_dispatcher,
-                    fsm_state=self._fsm,
-                )
+                try:
+                    await route_back_envelope(
+                        envelope=back_env,
+                        model=self._model,
+                        ss=self._session_state,
+                        bus=self._bus,
+                        tool_dispatcher=self._back_dispatcher,
+                        fsm_state=self._fsm,
+                    )
+                except SuspensionResolutionNotFound as exc:
+                    # M6 E6.2 (C08): back_resume_handler raises this when
+                    # no resume_context is available for the task. The
+                    # handler has already published `task_failed` on the
+                    # bus before raising, so observers see the failure.
+                    # Absorb here to keep the session loop alive.
+                    logger.warning(
+                        "session: back resume failed -- " "SuspensionResolutionNotFound task_id=%s",
+                        exc.task_id,
+                    )
 
             if did_work:
                 await asyncio.sleep(0)

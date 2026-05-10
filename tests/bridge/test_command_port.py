@@ -232,7 +232,7 @@ class TestSubmitEnvelopeCorrectness:
         assert env["tenant_id"] == "tenant-test"
         assert env["body"] == SAMPLE_BODY
         assert env["cognitive_trace_id"] == "trace-check"
-        assert "idem_key" in env
+        assert "idem_key" not in env
         assert "sig" in env
         await transport.close()
 

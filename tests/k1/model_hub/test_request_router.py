@@ -278,7 +278,7 @@ class TestFullPipeline:
         """Full 7-step pipeline: validate -> ... -> response."""
         router = _build_router(plugin_text="pipeline-ok")
         response = await router.route(_make_request())
-        assert response.result.text == "pipeline-ok"
+        assert response.result == "pipeline-ok"
         assert response.metadata.provider_id == "openai"
         assert response.metadata.trace_id == "trace-1"
         assert response.metadata.cache_hit is False
@@ -311,12 +311,12 @@ class TestCacheIntegration:
 
         # First call fills cache
         resp1 = await router.route(req)
-        assert resp1.result.text == "cached-text"
+        assert resp1.result == "cached-text"
 
         # Second call should hit cache (same capability, payload, model, temp)
         req2 = _make_request(temperature=0.5)
         resp2 = await router.route(req2)
-        assert resp2.result.text == "cached-text"
+        assert resp2.result == "cached-text"
 
     @pytest.mark.asyncio
     async def test_high_temp_not_cached(self) -> None:
@@ -324,7 +324,7 @@ class TestCacheIntegration:
         router = _build_router(plugin_text="not-cached")
         req = _make_request(temperature=1.5)
         resp1 = await router.route(req)
-        assert resp1.result.text == "not-cached"
+        assert resp1.result == "not-cached"
         # ResponseCache skips caching for temp > 0.9
 
 

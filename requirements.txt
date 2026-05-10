@@ -100,6 +100,8 @@ tiktoken>=0.5.0
 # ==================== DEVELOPMENT & TESTING ====================
 # Testing Frameworks
 hypothesis>=6.98.0
+# Live-system integration harness (MS-7 Epic 7.1)
+psutil>=5.9,<6
 
 # Infrastructure-as-Code
 pulumi>=3.115.0

@@ -88,6 +88,11 @@ W_SCHEMA: float = 0.6
 W_SAFETY: float = 0.2
 W_NAME: float = 0.2
 
+# M5.3.4: additive boost applied to candidates whose intent_tags overlap
+# with the step's intent_tags. Only applied when both sides are non-empty;
+# the score is clamped to <= 1.0 after the boost.
+INTENT_TAG_BOOST: float = 0.15
+
 # HIL constraint fallback timeout (3.1.5).
 HIL_TIMEOUT_MS: int = 60_000
 
@@ -639,6 +644,13 @@ class ConstraintResolver:
             name_score = _name_similarity(missing_capability, candidate.name)
 
             total = W_SCHEMA * schema_score + W_SAFETY * safety_score + W_NAME * name_score
+
+            # M5.3.4: additive intent_tag overlap boost (clamped at 1.0).
+            step_tags = getattr(step, "intent_tags", None) or []
+            cand_tags = getattr(candidate, "intent_tags", None) or []
+            if step_tags and cand_tags and set(step_tags) & set(cand_tags):
+                total = min(1.0, total + INTENT_TAG_BOOST)
+
             scored.append((candidate, total))
 
         # 6. Sort descending, filter below minimum score

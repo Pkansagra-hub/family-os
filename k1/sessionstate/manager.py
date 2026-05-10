@@ -15,6 +15,13 @@ ADRs:
 - ADR-0017 series: SessionState 6-Section Design
 - ADR-0018 series: 3-Tier Eviction Strategy
 - ADR-0020: Multi-Tier Storage Architecture
+
+LOCK HIERARCHY (must be acquired in this order to prevent deadlock):
+  1. DirectWriterAdapter._lock  (RLock — reentrant)
+  2. SessionStateManager._write_lock  (RLock — reentrant)
+  3. MutationGuard._lock  (plain Lock — NON-reentrant)
+  Events must be emitted AFTER all locks are released to avoid callbacks
+  re-entering DirectWriterAdapter while the lock chain is held.
 """
 
 from __future__ import annotations
@@ -922,7 +929,7 @@ class SessionStateManager:
                 trace_id,
             )
 
-            return MutationResult(
+            result = MutationResult(
                 success=True,
                 section=section,
                 operation=operation,
@@ -932,6 +939,22 @@ class SessionStateManager:
                 pressure=pressure,
                 cognitive_trace_id=trace_id,
             )
+
+        # Emit after lock is released to avoid reentrant deadlock risk
+        self._safe_emit(
+            EventType.MUTATION_APPROVED.value,
+            SessionStateEvents.mutation_approved(
+                session_id=self._session_id,
+                cognitive_trace_id=trace_id,
+                section=section,
+                operation=operation,
+                previous_size_bytes=new_size - actual_bytes,
+                new_size_bytes=new_size,
+                tier_utilization_pct=0.0,
+                total_utilization_pct=0.0,
+            ),
+        )
+        return result
 
     def _estimate_bytes(self, data: Any) -> int:
         """Estimate size of data in bytes."""

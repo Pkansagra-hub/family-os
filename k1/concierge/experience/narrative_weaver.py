@@ -55,5 +55,40 @@ class NarrativeWeaver:
         conversation_history: list[dict],
         memory_recalls: list[dict],
     ) -> NarrativeContext:
-        pass
-        return NarrativeContext()
+        """Heuristic narrative thread extraction (M6 E6.1).
+
+        Conservative defensive heuristic -- 10ms budget, no LLM.
+
+        Activation criteria: at least 2 entries in `conversation_history`
+        carry an explicit narrative signal (`thread`, `topic`, or `intent`
+        key).  Trivial / unstructured input falls through to defaults so
+        callers can rely on `result.active_threads == []` as "no signal".
+
+        Returns top-5 threads ranked by frequency, with normalized
+        salience and a `weave_suggestion` pointing at the dominant thread.
+        """
+        if not isinstance(conversation_history, list):
+            return NarrativeContext()
+
+        counts: dict[str, int] = {}
+        for entry in conversation_history:
+            if not isinstance(entry, dict):
+                continue
+            key = entry.get("thread") or entry.get("topic") or entry.get("intent")
+            if isinstance(key, str) and key:
+                counts[key] = counts.get(key, 0) + 1
+
+        if len(counts) < 1 or sum(counts.values()) < 2:
+            # Not enough narrative signal -- defer.
+            return NarrativeContext()
+
+        # Top-5 by frequency
+        threads = sorted(counts.keys(), key=lambda k: -counts[k])[:5]
+        total = float(sum(counts[k] for k in threads)) or 1.0
+        salience = {k: counts[k] / total for k in threads}
+        suggestion = f"Continue thread: {threads[0]}" if threads else ""
+        return NarrativeContext(
+            active_threads=threads,
+            thread_salience=salience,
+            weave_suggestion=suggestion,
+        )

@@ -118,6 +118,8 @@ class OpenAIPlugin:
                 self._raise_for_status(resp.status, text, request)
 
             accumulated_text = ""
+            _pending_finish = False
+            _pending_tool_calls: "Optional[List[ToolCallResult]]" = None
             async for line in resp.content:
                 decoded = line.decode("utf-8").strip()
                 if not decoded or not decoded.startswith("data:"):
@@ -129,6 +131,18 @@ class OpenAIPlugin:
                 chunk_data = json.loads(payload)
                 choices = chunk_data.get("choices", [])
                 if not choices:
+                    # Usage-only final chunk sent when include_usage=True.
+                    usage = chunk_data.get("usage") or {}
+                    if _pending_finish or usage:
+                        yield ProviderChunk(
+                            text="",
+                            done=True,
+                            tool_calls=_pending_tool_calls,
+                            prompt_tokens=int(usage.get("prompt_tokens", 0)),
+                            completion_tokens=int(usage.get("completion_tokens", 0)),
+                        )
+                        _pending_finish = False
+                        _pending_tool_calls = None
                     continue
 
                 delta = choices[0].get("delta", {})
@@ -140,11 +154,22 @@ class OpenAIPlugin:
 
                 tool_calls = self._parse_delta_tool_calls(delta)
 
-                yield ProviderChunk(
-                    text=content or "",
-                    done=finish is not None,
-                    tool_calls=tool_calls,
-                )
+                if finish is not None:
+                    # Defer the done=True chunk until the usage-only chunk arrives.
+                    _pending_finish = True
+                    _pending_tool_calls = tool_calls
+                    if content:
+                        yield ProviderChunk(text=content, done=False)
+                else:
+                    yield ProviderChunk(
+                        text=content or "",
+                        done=False,
+                        tool_calls=tool_calls,
+                    )
+
+            # Guard: emit pending done if no usage chunk arrived (e.g. include_usage off).
+            if _pending_finish:
+                yield ProviderChunk(text="", done=True, tool_calls=_pending_tool_calls)
 
     def estimate_tokens(self, messages: List[Message]) -> int:
         total = 0

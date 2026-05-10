@@ -133,6 +133,10 @@ class WorkflowSpec:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     created_by: str = "system"
+    # M5.3.1/5.3.3: free-form metadata (intent_tags, success_metrics,
+    # description, owner) propagated at save-time so observability and
+    # planning subsystems can attribute workflows back to their use-case.
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.name:

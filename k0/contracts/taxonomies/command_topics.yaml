@@ -39,6 +39,29 @@ command_topics:
         Gap answers (P06 curiosity responses) also use this topic with gap_id in body.
 
     # -------------------------------------------------------------------------
+    # memory.write.v1 -- Versioned alias for bridge generated K1 client
+    # -------------------------------------------------------------------------
+    # Reconciles topic-naming seam between bridge codegen (versioned topics)
+    # and K0 historic convention (bare topics, version via schema_uri).
+    # Same body schema, same outbox driver, same pipeline. (MS-7 Epic 7.1, 2026-05-18)
+    - topic_id: "memory.write.v1"
+      description: "Versioned alias of memory.write for bridge K1 generated client"
+      producer: "k1.memory_writer"
+      body_schema_ref: "k0/contracts/jsonschema/topics/memory_write.body.json"
+      outbox_driver: "st_epi"
+      bus_topic: "cognitive.memory.write.committed.v1"
+      target_pipeline: "P02"
+      required_band:
+        - "GREEN"
+        - "AMBER"
+        - "RED"
+      max_payload_bytes: 8192
+      notes: >
+        Alias entry. Bridge generated clients emit versioned topic ids
+        (memory.write.v1). This entry routes them to the same outbox/pipeline
+        as the bare "memory.write" topic.
+
+    # -------------------------------------------------------------------------
     # session.snapshot -- Session state archival
     # -------------------------------------------------------------------------
     - topic_id: "session.snapshot"

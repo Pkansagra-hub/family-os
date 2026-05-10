@@ -191,6 +191,16 @@ class RustBusAdapter:
             # Invalid topic -- match LocalBus behavior (silently drop)
             return
 
+    def publish_batch(self, envelopes: list[Envelope]) -> None:
+        """Publish a batch of envelopes (M7.2 / B06).
+
+        Rust core does not currently expose a native batch publish, so
+        this loops through ``publish``.  Per-envelope semantics
+        (middleware, Rust stamping, dispatch) are unchanged.
+        """
+        for envelope in envelopes:
+            self.publish(envelope)
+
     # ------------------------------------------------------------------
     # IBus.subscribe
     # ------------------------------------------------------------------

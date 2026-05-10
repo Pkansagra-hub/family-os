@@ -74,7 +74,7 @@ class OrchestratorConfig:
     mailbox_capacity: int = 100
 
     # --- 2. Timeouts (ms) ---
-    default_step_timeout_ms: int = 30_000
+    default_step_timeout_ms: int = 10_000  # M5.1.3: lowered 30k->10k
     plan_request_timeout_ms: int = 45_000
     drain_timeout_ms: int = 30_000
     shutdown_grace_period_ms: int = 30_000
@@ -84,6 +84,10 @@ class OrchestratorConfig:
     step_max_retries: int = 2
     step_retry_base_delay_ms: int = 100
     step_retry_max_delay_ms: int = 5_000
+    # M5.1.4: max times a CommittedPlan may be re-enqueued when the
+    # ConcurrencyGuard rejects acquisition. After this, the plan's
+    # waiter is resolved with FAILED so callers don't hang.
+    max_deferred_plan_retries: int = 5
 
     # --- 4. Guards ---
     guard_order: List[str] = field(default_factory=lambda: list(_DEFAULT_GUARD_ORDER))
@@ -94,6 +98,18 @@ class OrchestratorConfig:
     max_workflow_depth: int = 3  # ORCH-12
     workflow_db_path: str = "data/orchestrator_workflows.db"
     scheduler_tick_interval_ms: int = 1_000
+    # M5.3.2: TTL for the WorkflowCompiler in-memory plan cache. A value
+    # of 0 disables caching entirely. Compiled plans for the same
+    # (workflow_id, version, session_id) within this window short-circuit
+    # the registry/gap-detection pass and reuse the previous CommittedPlan.
+    workflow_plan_max_age_ms: int = 30_000
+    # M5.4.3: minimum interval between proactive gap scans for a single
+    # workflow_id. Prevents tight loops when capability_contract_updated
+    # events fire for many capabilities used by the same workflow.
+    gap_scan_cooldown_ms: int = 5_000
+    # M5.4.4: max concurrent _check_workflow() invocations issued by
+    # ProactiveGapDetector. Bounds the dry-run compile fan-out.
+    gap_scan_concurrency: int = 5
 
     # --- 6. MCP (thin discovery layer config) ---
     mcp_config_path: str = "k1/connectors/mcp_servers.yaml"
@@ -163,6 +179,12 @@ class OrchestratorConfig:
             errors.append("max_workflow_depth must be 1-10")
         if self.scheduler_tick_interval_ms <= 0:
             errors.append("scheduler_tick_interval_ms must be > 0")
+        if self.workflow_plan_max_age_ms < 0:
+            errors.append("workflow_plan_max_age_ms must be >= 0")
+        if self.gap_scan_cooldown_ms < 0:
+            errors.append("gap_scan_cooldown_ms must be >= 0")
+        if self.gap_scan_concurrency < 1:
+            errors.append("gap_scan_concurrency must be >= 1")
 
         # MCP
         if self.mcp_max_servers < 1:
@@ -190,6 +212,8 @@ class OrchestratorConfig:
         # Pending context limits
         if self.max_pending_plans < 1:
             errors.append("max_pending_plans must be >= 1")
+        if self.max_deferred_plan_retries < 0:
+            errors.append("max_deferred_plan_retries must be >= 0")
 
         if errors:
             raise ValueError(f"OrchestratorConfig validation failed: " f"{'; '.join(errors)}")

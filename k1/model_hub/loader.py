@@ -25,6 +25,7 @@ from k1.model_hub.manifest import ProviderManifest, load_manifest
 if TYPE_CHECKING:
     from k1.model_hub.factory import _HubCore
     from k1.model_hub.plugins.base import IProviderPlugin
+    from k1.model_hub.ports.event_port import IEventPort
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +113,11 @@ class ProviderLoader:
         hub: "_HubCore",
         *,
         manifest_root: Path | None = None,
+        event_port: "IEventPort | None" = None,
     ) -> None:
         self._hub = hub
         self._manifest_root = manifest_root or _DEFAULT_MANIFEST_ROOT
+        self._event_port = event_port
 
     async def load(self, config: ProviderConfig) -> ProviderLoadResult:
         registered: list[str] = []
@@ -199,6 +202,11 @@ class ProviderLoader:
         api_key = os.environ.get(env_var) if env_var else None
         if manifest.auth.type != "none":
             if not api_key:
+                logger.warning(
+                    "ProviderLoader: %s skipped — env var %r not set",
+                    entry.provider_id,
+                    env_var,
+                )
                 return ("skipped", f"env var {env_var!r} not set")
             set_api_key = getattr(plugin, "set_api_key", None)
             if callable(set_api_key):
@@ -225,5 +233,27 @@ class ProviderLoader:
             self._hub.register_plugin(manifest, plugin)
         except Exception as exc:
             return ("failed", f"register_plugin: {exc!r}")
+
+        # Emit provider registered event if an event port is wired.
+        if self._event_port is not None:
+            from k1.model_hub.events import (  # local import: avoid cycle
+                TOPIC_PROVIDER_REGISTERED,
+                ProviderRegisteredPayload,
+            )
+
+            all_caps = set(manifest.capabilities)
+            for model in manifest.models:
+                all_caps.update(model.capabilities)
+            try:
+                self._event_port.emit(
+                    TOPIC_PROVIDER_REGISTERED,
+                    ProviderRegisteredPayload(
+                        provider_id=manifest.provider_id,
+                        capabilities=sorted(all_caps, key=lambda c: c.value),
+                        model_count=len(manifest.models),
+                    ),
+                )
+            except Exception:  # pragma: no cover -- event emission must not block load
+                pass
 
         return ("registered", "")

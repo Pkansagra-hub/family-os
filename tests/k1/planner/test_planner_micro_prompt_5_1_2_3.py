@@ -965,11 +965,11 @@ class TestMicroSketchEndToEnd:
                     },
                     {
                         "intent": "Book the alternative",
-                        "depends_on": [0],
+                        "depends_on": ["Search for alternative restaurant"],
                     },
                     {
                         "intent": "Send updated confirmation",
-                        "depends_on": [1],
+                        "depends_on": ["Book the alternative"],
                     },
                 ],
                 "rationale": "Original restaurant closed; find alternative",

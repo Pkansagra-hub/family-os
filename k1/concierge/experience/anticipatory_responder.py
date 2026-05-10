@@ -63,5 +63,42 @@ class AnticipatoryResponder:
         task_state: dict,
         user_patterns: dict,
     ) -> Anticipation:
-        pass
-        return Anticipation()
+        """Heuristic intent prediction (M6 E6.1).
+
+        Conservative -- no LLM, no external IO, 15ms budget.
+
+        Activation criteria: `user_patterns["recent_intents"]` is a list
+        with at least 2 string entries.  Confidence is derived from the
+        repetition rate of the most-recent intent.  Lacking signal,
+        returns defaults (`Anticipation()`).
+
+        Optional `user_patterns["capabilities_for_intent"]` is a dict
+        mapping intent -> list[str] of capabilities to pre-warm.
+        """
+        if not isinstance(user_patterns, dict):
+            return Anticipation()
+
+        intents = user_patterns.get("recent_intents")
+        if not isinstance(intents, list) or len(intents) < 2:
+            return Anticipation()
+
+        last = intents[-1]
+        if not isinstance(last, str) or not last:
+            return Anticipation()
+
+        repeats = sum(1 for i in intents if i == last)
+        confidence = float(min(0.9, repeats / max(1, len(intents))))
+
+        cap_map = user_patterns.get("capabilities_for_intent")
+        capabilities: list[str] = []
+        if isinstance(cap_map, dict):
+            raw = cap_map.get(last)
+            if isinstance(raw, list):
+                capabilities = [c for c in raw if isinstance(c, str)]
+
+        return Anticipation(
+            predicted_intent=last,
+            confidence=confidence,
+            pre_fetch_capabilities=capabilities,
+            suggested_prompt_hint=f"User may want '{last}' next",
+        )
